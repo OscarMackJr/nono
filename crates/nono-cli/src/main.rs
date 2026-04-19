@@ -14,6 +14,7 @@ mod command_blocking_deprecation;
 mod command_runtime;
 mod config;
 mod credential_runtime;
+mod deprecated_policy;
 mod exec_identity;
 #[cfg(target_os = "windows")]
 mod exec_identity_windows;
@@ -40,7 +41,6 @@ mod output;
 mod package;
 mod package_cmd;
 mod policy;
-mod policy_cmd;
 mod profile;
 mod profile_cmd;
 mod profile_runtime;

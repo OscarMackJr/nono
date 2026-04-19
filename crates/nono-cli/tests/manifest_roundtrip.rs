@@ -705,7 +705,7 @@ fn rollback_enabled_with_supervised_is_accepted() {
 use proptest::prelude::*;
 
 /// Groups that are safe to use on this platform (no platform filter needed —
-/// `nono policy show` skips non-matching groups automatically).
+/// `nono profile show` skips non-matching groups automatically).
 const AVAILABLE_GROUPS: &[&str] = &[
     "deny_credentials",
     "deny_shell_configs",
@@ -929,7 +929,7 @@ proptest! {
         // (e.g., /proc/<PID>/fd) may reference ephemeral paths that no longer
         // exist. The structural completeness assertion above is the key property.
         // The deterministic `test_show_format_manifest_round_trip` test in
-        // policy_cmd.rs covers the full --config round-trip for known-good paths.
+        // profile_cli.rs covers the full --config round-trip for known-good paths.
     }
 }
 

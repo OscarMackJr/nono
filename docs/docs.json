@@ -48,7 +48,8 @@
           "cli/features/supervisor",
           "cli/features/networking",
           "cli/features/credential-injection",
-          "cli/features/policy-introspection",
+          "cli/features/environment",
+          "cli/features/profile-introspection",
           "cli/features/learn",
           "cli/features/trust"
         ]
