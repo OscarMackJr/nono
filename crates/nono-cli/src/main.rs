@@ -70,6 +70,8 @@ mod session_commands;
 #[path = "session_commands_windows.rs"]
 mod session_commands;
 mod setup;
+#[cfg(not(target_os = "windows"))]
+mod startup_prompt;
 mod startup_runtime;
 mod supervised_runtime;
 mod terminal_approval;
