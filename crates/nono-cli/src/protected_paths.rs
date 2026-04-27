@@ -87,6 +87,9 @@ pub fn validate_requested_path_against_protected_roots(
     source: &str,
     protected_roots: &[PathBuf],
 ) -> Result<()> {
+    // Fork divergence: retain resolve_path (Windows `\\?\` verbatim-prefix
+    // normalization) — semantically equivalent to nono::try_canonicalize on
+    // non-Windows; superset on Windows for safe component-wise comparison.
     let requested_path = resolve_path(path);
     let resolved_roots: Vec<PathBuf> = protected_roots.iter().map(|p| resolve_path(p)).collect();
 
@@ -114,6 +117,9 @@ pub fn overlapping_protected_root(
     is_file: bool,
     protected_roots: &[PathBuf],
 ) -> Option<PathBuf> {
+    // Fork divergence: retain resolve_path (Windows `\\?\` verbatim-prefix
+    // normalization) — semantically equivalent to nono::try_canonicalize on
+    // non-Windows; superset on Windows for safe component-wise comparison.
     let requested_path = resolve_path(path);
     let resolved_roots: Vec<PathBuf> = protected_roots.iter().map(|p| resolve_path(p)).collect();
 
@@ -130,6 +136,12 @@ pub fn overlapping_protected_root(
 
 /// Resolve path by canonicalizing the full path, or canonicalizing the longest
 /// existing ancestor and appending remaining components.
+///
+/// Fork divergence (Plan 22 + Windows long-path handling): retains
+/// `normalize_for_compare` to strip Windows `\\?\` and `\\??\\` verbatim
+/// prefixes for safe component-wise comparison. Functionally equivalent to
+/// upstream's `nono::try_canonicalize` (introduced by `bb3f512d`) on
+/// non-Windows targets; superset on Windows.
 fn resolve_path(path: &Path) -> PathBuf {
     if let Ok(canonical) = path.canonicalize() {
         return normalize_for_compare(&canonical);
@@ -179,6 +191,51 @@ fn normalize_for_compare(path: &Path) -> PathBuf {
 fn normalize_for_compare(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
+
+/// Emit Seatbelt deny rules for all protected roots.
+///
+/// On macOS, this adds `(deny file-read-data ...)` and `(deny file-write* ...)`
+/// platform rules for each protected root, preventing the sandboxed child from
+/// accessing `~/.nono` even when a parent directory is granted.
+///
+/// Upstream-only as of Plan 34-04: the fork does not yet wire callers
+/// (`proxy_runtime`, `sandbox_prepare`, `sandbox/macos`). Marked `dead_code`
+/// allow because the surface is preserved for future macOS plans that will
+/// adopt the caller side.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+pub(crate) fn emit_protected_root_deny_rules(
+    protected_roots: &[PathBuf],
+    caps: &mut CapabilitySet,
+) -> Result<()> {
+    for root in protected_roots {
+        let resolved = nono::try_canonicalize(root);
+        emit_deny_rules_for_path(&resolved, caps)?;
+
+        // Also emit for the canonical path if it differs (important on macOS
+        // where paths like /var resolve to /private/var).
+        if let Ok(canonical) = resolved.canonicalize() {
+            if canonical != resolved {
+                emit_deny_rules_for_path(&canonical, caps)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Emit Seatbelt deny rules for a single path.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn emit_deny_rules_for_path(path: &Path, caps: &mut CapabilitySet) -> Result<()> {
+    let escaped = crate::policy::escape_seatbelt_path(crate::policy::path_to_utf8(path)?)?;
+    let filter = format!("subpath \"{}\"", escaped);
+    caps.add_platform_rule(format!("(allow file-read-metadata ({}))", filter))?;
+    caps.add_platform_rule(format!("(deny file-read-data ({}))", filter))?;
+    caps.add_platform_rule(format!("(deny file-write* ({}))", filter))?;
+    Ok(())
+}
+
 
 #[cfg(target_os = "windows")]
 fn path_starts_with(path: &Path, prefix: &Path) -> bool {

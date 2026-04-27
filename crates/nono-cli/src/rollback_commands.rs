@@ -29,7 +29,10 @@ type SessionChanges<'a> = (&'a SessionInfo, (usize, usize, usize));
 fn canonical_candidates(path: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::with_capacity(2);
 
-    // Primary: canonicalize if possible, otherwise use as-is
+    // Primary: canonicalize if possible, otherwise use as-is.
+    // Fork divergence: retains normalize_path_for_compare for Windows long-path
+    // verbatim-prefix stripping; functionally equivalent to upstream's
+    // nono::try_canonicalize on non-Windows.
     let primary =
         normalize_path_for_compare(&path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     candidates.push(primary.clone());

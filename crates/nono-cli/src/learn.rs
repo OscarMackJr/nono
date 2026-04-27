@@ -10,6 +10,8 @@ use nono::AccessMode;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 use nono::NonoError;
 use nono::Result;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use nono::try_canonicalize;
 use std::collections::BTreeSet;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -1575,7 +1577,7 @@ fn process_accesses(
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn canonicalize_existing_path(path: &Path) -> PathBuf {
-    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    try_canonicalize(path)
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

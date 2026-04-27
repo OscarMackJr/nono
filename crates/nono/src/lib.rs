@@ -52,6 +52,7 @@ pub mod keystore;
 pub mod manifest;
 pub mod manifest_convert;
 pub mod net_filter;
+pub mod path;
 pub mod query;
 pub mod sandbox;
 pub mod state;
@@ -76,6 +77,7 @@ pub use keystore::{
     validate_env_uri, validate_file_uri, validate_keyring_uri, validate_op_uri, LoadedSecret,
 };
 pub use net_filter::{FilterResult, HostFilter};
+pub use path::try_canonicalize;
 #[cfg(target_os = "windows")]
 pub use sandbox::windows::{
     create_low_integrity_primary_token, label_mask_for_access_mode, low_integrity_label_and_mask,
