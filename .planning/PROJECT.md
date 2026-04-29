@@ -2,48 +2,29 @@
 
 ## Current State
 
-**Shipped:** v2.1 — Resource Limits, Extended IPC, Attach-Streaming & Cleanup (2026-04-21, tag `v2.1`).
+**Shipped:** v2.2 — Windows/macOS Parity Sweep (2026-04-29, tag `v2.2`).
 
-v2.1 closed the live `nono run --profile claude-code` path on Windows end-to-end: per-file Low-IL mandatory-label filesystem grants (unblocking the profile's `git_config` group), AIPC handle brokering for Socket/Pipe/JobObject/Event/Mutex with `capabilities.aipc` profile widening wired end-to-end, anonymous-pipe-stdio `nono attach` on detached sessions, Job Object resource caps (CPU/memory/timeout/process-count) surfaced in `nono inspect`, upstream v0.37.1 parity sync (including RUSTSEC-2026-0098/0099 `rustls-webpki` fix), and a cleanup workstream that paid down v2.0 fmt/test/WIP/session-file debt.
+v2.2 closed the Windows-vs-macOS drift opened by upstream `always-further/nono` shipping v0.38.0–v0.40.1 without Windows ports: profile struct alignment with `unsafe_macos_seatbelt_rules` / `packs` / `command_args` / `custom_credentials.oauth2` fields and the `claude-no-keychain` builtin; policy tightening with orphan-`override_deny` fail-closed and `--rollback`/`--no-audit` mutex; `nono pull/remove/update/search/list` flat-shape package subcommand tree on Windows; OAuth2 client-credentials Bearer-token injection in `nono-proxy` with reverse-proxy HTTP upstream loopback-only gating; hash-chained Merkle-rooted audit ledger with cryptographic DSSE attestation, Windows Authenticode exec-identity discriminant, AIPC broker emissions with WR-01 reject-stage discriminator on the wire, and `prune` → `session cleanup` rename preserving v2.1 CLEAN-04 invariants byte-identically; and parity-drift prevention via `make check-upstream-drift` twin scripts + GSD upstream-sync template. 21 v2.2 requirements closed (19 fully + 2 complete-partial: PKG-01 streaming and AUD-03 Authenticode chain-walker subject extraction deferred to v2.3 backlog).
 
-## Current Milestone: v2.2 Windows/macOS Parity Sweep
+## Next Milestone
 
-**Goal:** When v2.2 ships, a Windows user and a macOS user have the same `nono` commands available with the same flags and the same security guarantees. Close the current Windows-vs-macOS drift caused by upstream shipping v0.38 → v0.40 (+v0.41) without Windows ports, and establish a drift-prevention mechanism so v0.42+ don't recreate the gap.
+The next milestone has not been scoped. Run `/gsd-new-milestone` to scope v2.3.
 
-**Target features:**
-- **Profile struct alignment** — deserialize upstream's new fields (`unsafe_macos_seatbelt_rules`, `packs`, `command_args`, `oauth2.custom_credentials`) without breaking Windows profile parse; add `claude-no-keychain` built-in.
-- **Policy tightening** — `override_deny` requires matching grant (fail-closed); `--rollback` + `--no-audit` conflict; `.claude.lock` moved to `allow_file`.
-- **Package manager + packs** — `nono package pull/remove/search/list` subcommand tree with Windows `install_dir` resolution, hook registration/unregistration, signed-artifact streaming download.
-- **OAuth2 proxy credential injection** — `OAuth2Config` + client-credentials token exchange in `nono-proxy`; `custom_credentials.oauth2` in profile; reverse-proxy HTTP upstream restricted to local-only targets.
-- **Audit integrity + attestation** — `--audit-integrity` hash-chained Merkle-rooted event ledger; `--audit-sign-key` DSSE/in-toto attestation; `nono audit verify`; exec identity recording; `prune` → `session cleanup` rename (preserves v2.1 CLEAN-04 invariants). Windows supervisor emits capability-decision + URL-open events.
-- **Parity-drift prevention** — `scripts/check-upstream-drift` tooling + GSD template for upstream-sync quick tasks so v0.42, v0.43 get absorbed within weeks of release.
+**Candidate focus areas surfaced during v2.2:**
+- **PKG streaming follow-up** — upstream `58b5a24e` + `9ebad89a` + `115b5cfa` + `ArtifactType::Plugin` enum variant + `bundle_json` field on `DownloadedArtifact` + Rule-4 architectural call on `validate_path_within` belt-and-suspenders alongside upstream's `validate_relative_path`.
+- **Audit-attestation hardening sweep** — re-enable 2 `#[ignore]`'d fixture-driven tests in `crates/nono-cli/tests/audit_attestation.rs` (sigstore-rs `KeyPair::from_pkcs8` re-enablement); required before publishing v2.2 attestation as production-ready.
+- **Authenticode chain-walker subject extraction** — `parse_signer_subject` + `parse_thumbprint` chain walkers in `exec_identity_windows.rs` (needs `Win32_Security_Cryptography_Catalog` + `Win32_Security_Cryptography_Sip` features in `windows-sys`); companion to the audit-attestation sweep.
+- **WR-01 reject-stage unification** — align all 5 AIPC HandleKinds on the same reject stage. Now also locked on the wire by Plan 23-01's `RejectStage` discriminator.
+- **AIPC G-04 wire-protocol compile-time tightening** — `Approved(ResourceGrant)` inline at the wire type so `(Approved, grant=None)` becomes a compile-time error.
+- **Cross-platform RESL Unix backends** — cgroup v2 / rlimit ports of Windows Job Object caps (reverse-direction drift; Windows shipped first).
+- **`windows-squash` → `main` merge** — currently re-deferred per quick-260428-rsu (2026-04-29, commit 7911ef0e) pending maintainer response on PRs 725/726.
 
-**Key context:**
-- Upstream is `always-further/nono`. macOS (upstream-maintained) gets new features via rebase; Windows fork does not. Every upstream release opens a gap — this milestone closes the current one and installs a process to prevent future accumulation.
-- `windows-squash` branch → `main` merge is a **pre-milestone quick task**, not a v2.2 phase. UPST2 cherry-picks should land on stable mainline.
-- Per-commit port strategy (preserving `Upstream-commit:` trailer) matches v2.1 Phase 20 UPST-01..04 pattern.
-
-**Out of scope (explicit deferrals):**
-- **WR-01 reject-stage unification** — deferred to v2.3. Windows-internal consistency issue, not a Windows-vs-macOS gap.
-- **AIPC G-04 wire-protocol compile-time tightening** — deferred to v2.3. Same reasoning.
-- **Cross-platform RESL Unix backends** — deferred to v2.3+. Reverse-direction drift (Windows shipped first, Unix behind); not v2.2's focus.
-- **WR-02 EDR HUMAN-UAT item** — remains v3.0-deferred pending EDR-instrumented runner.
-
-<details>
-<summary>Deferred candidate areas (not v2.2 scope)</summary>
-
-These surfaced during v2.1 close-out but are explicitly deferred per the "Windows/macOS parity first" prioritization (2026-04-24 decision):
-
-- **WR-01 reject-stage unification** — align all 5 AIPC HandleKinds on the same reject stage.
-- **AIPC G-04 wire-protocol compile-time tightening** — `Approved(ResourceGrant)` inline at the wire type.
-- **Cross-platform RESL Unix backends** — cgroup v2 / rlimit ports of Windows Job Object caps.
-- **WR-02 EDR telemetry item 3** — rerun HUMAN-UAT on an EDR-instrumented host.
-
-</details>
+**v3.0-deferred:** WR-02 EDR HUMAN-UAT item (requires EDR-instrumented runner).
 
 <details>
 <summary>Previously Shipped</summary>
 
+- **v2.2 Windows/macOS Parity Sweep** (2026-04-29, tag `v2.2`) — 3 phases (22–24), 9 plans, 21 requirements (PROF, POLY, PKG, OAUTH, AUD, DRIFT). 146 commits since `v2.1`.
 - **v2.1 Resource Limits, Extended IPC, Attach-Streaming & Cleanup** (2026-04-21, tag `v2.1`) — 7 phases (16–21 + 18.1), 25 plans, 13 requirements (RESL, AIPC, ATCH, CLEAN, UPST, WSFG).
 - **v2.0 Windows Gap Closure** (2026-04-18, tag `v2.0`; closed 2026-04-18 with Phase 15) — 7 Windows feature gaps closed (`nono wrap`, session commands, ConPTY shell, port-level WFP, proxy credential injection, ETW `learn`, runtime capability expansion stretch). Phase 15 closed the detached-console-grandchild `0xC0000142` carry-forward via direction-b fix (gated PTY-disable + null-token + AppID WFP on detached path only).
 - **v1.0 Windows Alpha** (2026-03-31, tag `v1.0`) — signed release artifacts, WFP service packaging, supervisor parity, snapshot/rollback, MSI packaging.
@@ -111,9 +92,9 @@ Windows security must be as structurally impossible and feature-complete as Unix
 - ✔ **DRIFT-02** — GSD upstream-sync template at `.planning/templates/upstream-sync-quick.md` with diff-range spec, cherry-pick-per-commit pattern with `Upstream-commit:` 6-line trailer block, conflict-file inventory, Windows-specific retrofit checklist. Cross-linked from `PROJECT.md § Upstream Parity Process`. — v2.2 Phase 24 (Plan 24-02).
 - ✔ **AUD-05** — Windows AIPC broker audit emissions. `handle_windows_supervisor_message` accepts `Option<&Arc<Mutex<AuditRecorder>>>` and emits a `capability_decision` ledger event at all 5 `audit_log.push` sites (File + 5 AIPC HandleKinds: Event, Mutex, Pipe, Socket, JobObject). New `RejectStage` discriminator (`BeforePrompt` / `AfterPrompt`) on `AuditEventPayload::CapabilityDecision` locks the WR-01 verdict-matrix asymmetry on the wire (Event/Mutex/JobObject mask gate → BeforePrompt; Pipe/Socket G-04 broker-failure flip → AfterPrompt; Approved + pre-stage rejections → None). `nono audit show <id>` surfaces a "Capability Decisions: N (M before-prompt, K after-prompt rejections)" counter line + `capability_decisions` JSON array via `read_capability_decisions_from_ledger` (BufReader+lines, best-effort degrade). Token redaction regression-guarded by `recorded_ledger_redacts_session_token`. D-19 (cross-platform byte-identical), D-21 (non-Windows behavior unchanged), D-03 (`SupervisorMessage::OpenUrl` arm untouched), and `AppliedLabelsGuard::Drop` ordering invariants all hold. — v2.2 Phase 23 (Plan 23-01, 3 commits 427e1283/a9307802/263795a9, 60 tests passing).
 
-### Active (v2.2)
+### Active
 
-(All v2.2 requirements validated — milestone ready for `/gsd-complete-milestone v2.2`.)
+(No active milestone — run `/gsd-new-milestone` to scope v2.3.)
 
 ### Deferred (v2.3+)
 
@@ -211,4 +192,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-04-29 after Phase 23 closure. Phase 23 (Windows Audit-Event Retrofit) shipped end-to-end: 3 atomic commits (427e1283 RejectStage enum + field, a9307802 dispatcher wiring at 5 push sites, 263795a9 audit show rendering + WR-01 ledger assertions). Code review clean (3 info-only doc-line-number drifts). Verification PASSED (8/8 must-haves; D-19/D-21/D-03 invariants hold; 60 tests passing across audit_integrity / capability_handler_tests / audit_commands / aipc_handle_brokering_integration / audit_flush_before_drop). AUD-05 moved to Validated. v2.2 milestone (3/3 phases, 9/9 plans) ready for `/gsd-complete-milestone v2.2`. Pre-existing main-branch issues out of scope (clippy in `nono::manifest`, fmt drift in `audit_attestation.rs`) tracked in `.planning/phases/23-windows-audit-event-retrofit/deferred-items.md`. Earlier Phase 22 closure 2026-04-28: SECURITY 41/41 closed, code review 7/7 in-scope, UAT 10/10 + 1 spec-error skipped, 18 v2.2 requirements validated. Phase 24 (DRIFT-01/02) shipped 2026-04-27. v2.3 backlog: PKG streaming follow-up, audit-attestation hardening sweep, Authenticode chain-walker, WR-01 reject-stage unification, AIPC G-04 compile-time tightening, cross-platform RESL Unix backends. v3.0-deferred: WR-02 EDR HUMAN-UAT.*
+*Last updated: 2026-04-29 after v2.2 milestone close. v2.2 — Windows/macOS Parity Sweep — shipped 2026-04-29 (tag `v2.2`). 3 phases (22–24), 9 plans, 21 requirements (PROF + POLY + PKG + OAUTH + AUD + DRIFT) — 19 fully closed + 2 complete-partial (PKG-01 streaming and AUD-03 Authenticode chain-walker subject extraction deferred to v2.3 backlog). 146 commits since `v2.1`; +33,153 / −835 LOC across 154 files. v2.3 backlog: PKG streaming follow-up, audit-attestation hardening sweep, Authenticode chain-walker, WR-01 reject-stage unification, AIPC G-04 compile-time tightening, cross-platform RESL Unix backends. v3.0-deferred: WR-02 EDR HUMAN-UAT. Run `/gsd-new-milestone` to scope v2.3.*

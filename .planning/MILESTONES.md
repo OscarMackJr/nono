@@ -1,5 +1,57 @@
 # Milestones
 
+## v2.2 — Windows/macOS Parity Sweep
+
+**Status:** ✅ SHIPPED 2026-04-29
+**Started:** 2026-04-24
+**Shipped:** 2026-04-29
+**Branch:** `windows-squash` (continuing from v2.1; merge-to-main pending per quick-260428-rsu)
+
+**Goal:** When v2.2 ships, a Windows user and a macOS user have the same `nono` commands available with the same flags and the same security guarantees. Close the Windows-vs-macOS drift opened by upstream `always-further/nono` shipping v0.38.0–v0.40.1 without Windows ports, and install drift-prevention tooling so v0.41+ becomes a maintenance task instead of a milestone-scale sync.
+
+**Phases:** 3 phases (Phases 22–24).
+**Plans shipped:** 9 plans (22 → 6 plans including the 22-05a/b split; 23 → 1 plan; 24 → 2 plans).
+**Requirements:** 21 — PROF-01..04, POLY-01..03, PKG-01..04, OAUTH-01..03, AUD-01..05, DRIFT-01..02. Closed: 19 fully + 2 complete-partial (PKG-01 has 2 streaming cherry-picks deferred; AUD-03 has Authenticode chain-walker subject extraction deferred).
+
+**Stats:**
+- 146 commits since `v2.1` tag (29 `feat(...)` commits across phases 22/23/24).
+- 154 files changed; +33,153 / −835 LOC across code + docs + planning artifacts.
+- ~+8.4k LOC of Rust code (53 source files in `crates/`).
+
+**Key accomplishments:**
+- **Profile struct alignment (PROF-01..04)** — `unsafe_macos_seatbelt_rules`, `packs`, `command_args`, `custom_credentials.oauth2` deserialize on Windows; `claude-no-keychain` builtin profile shipped (Phase 22 Plan 22-01, 12 commits, `d7fc4ed8`).
+- **Policy tightening (POLY-01..03)** — orphan `override_deny` fails closed at profile load; `--rollback`/`--no-audit` clap-level mutex with CL-01-M `--no-audit-integrity` carve-out preserved; `.claude.lock` moved to `allow_file` for both `claude-code` and `claude-no-kc` (Phase 22 Plan 22-02, 7 commits, `490a8a5c`).
+- **Package manager (PKG-01..04, partial)** — `nono pull/remove/update/search/list` flat-shape subcommand tree with Windows `%LOCALAPPDATA%\nono\packages\<name>` storage, Claude-Code hook registration via fork's `hooks.rs`, signed-artifact verification at install time (Phase 22 Plan 22-03; 6/8 cherry-picks landed, 2 deferred to v2.3 backlog).
+- **OAuth2 proxy + reverse-proxy gating (OAUTH-01..03)** — `nono-proxy/src/oauth2.rs` client-credentials Bearer-token injection; reverse-proxy HTTP upstream restricted to loopback-only by default with `--allow-domain` strict-proxy composition; CL-03-M literal `client_secret` warning + CL-04-M manifest-export skip + HG-01-M Debug redaction (Phase 22 Plan 22-04, 14 commits, `5c8df06a`).
+- **Audit integrity + DSSE attestation (AUD-01, AUD-02, AUD-03 SHA-256, AUD-04)** — hash-chained Merkle-rooted ledger; cryptographic DSSE bundle verification (HG-01-H upgrade, commit `cffb43b1`); `prune` → `session cleanup` rename with formal `applied_labels_guard::audit_flush_before_drop` regression test (83 LOC) guaranteeing v2.1 CLEAN-04 byte-identical preservation; hidden `nono prune` deprecation alias; `nono audit cleanup` peer subcommand (Phase 22 Plans 22-05a + 22-05b after CONTEXT-STOP-3 split, `d15a3ab6` + `b5640cd4`).
+- **Windows Authenticode exec-identity discriminant (AUD-03 Windows portion)** — `WinVerifyTrust` records `Valid` / `Unsigned` / `InvalidSignature{hresult}`; chain-walker subject extraction deferred to v2.3 pending `Win32_Security_Cryptography_Catalog` + `Win32_Security_Cryptography_Sip` features in `windows-sys` (Phase 22 Plan 22-05b, commit `cb34a82a`).
+- **Windows AIPC ledger emissions (AUD-05)** — `RejectStage` enum (`BeforePrompt | AfterPrompt`) on `AuditEventPayload::CapabilityDecision` locks the WR-01 verdict-matrix asymmetry on the wire; `handle_windows_supervisor_message` emits `capability_decision` events at all 5 push sites (File + 5 AIPC HandleKinds); `nono audit show <id>` surfaces a `Capability Decisions: N (M before-prompt, K after-prompt rejections)` counter + `capability_decisions` JSON array (Phase 23 Plan 23-01, 3 commits `427e1283` / `a9307802` / `263795a9`, 60 tests passing).
+- **Parity-drift prevention (DRIFT-01, DRIFT-02)** — `make check-upstream-drift` twin scripts with `$(OS)==Windows_NT` Makefile dispatch + 6-category path-prefix lookup + 3 frozen golden JSON fixtures; GSD upstream-sync template at `.planning/templates/upstream-sync-quick.md` with byte-exact 6-line D-19 trailer; Mintlify long-form runbook at `docs/cli/development/upstream-drift.mdx`; PROJECT.md `## Upstream Parity Process` cross-link (Phase 24, 2026-04-27).
+
+**Plan splits & deviations:**
+- **Plan 22-05 → 22-05a + 22-05b** at CONTEXT STOP trigger #3 on upstream cherry-pick `4f9552ec`. T-22-05-04 ABSOLUTE STOP guard required CLEAN-04 invariants byte-identical AFTER every source-code commit; the split honored that gate and installed a permanent regression test as a future-regression guard.
+- **Phase 23 layer-2 deviation** authorized by plan Step 7 — `aipc_handle_brokering_integration` cannot reach `pub(super)` `handle_windows_supervisor_message`; layer-1 multi-kind E2E in `capability_handler_tests` (`audit_integrity_records_5_handle_kinds_in_ledger`) provides the substitute coverage per the plan's authorized fallback clause.
+
+**Known deferred items at close:** 20 (6 UAT bookkeeping gaps, 4 verification human_needed flags, 10 stale or pending quick-task index pointers including the 260428-rsu re-deferral pending PR-583 maintainer response). See STATE.md `## Deferred Items` for the full table. None block release.
+
+**Deferred to v2.3 backlog:**
+- PKG streaming follow-up (`58b5a24e` + `9ebad89a` + `115b5cfa` + `ArtifactType::Plugin` + `bundle_json` field).
+- Audit-attestation hardening sweep (sigstore-rs `KeyPair::from_pkcs8` re-enablement; 2 `#[ignore]`'d fixture-driven tests).
+- Authenticode chain-walker subject extraction (`Win32_Security_Cryptography_Catalog` + `Win32_Security_Cryptography_Sip` features).
+- WR-01 reject-stage unification.
+- AIPC G-04 wire-protocol compile-time tightening.
+- Cross-platform RESL Unix backends.
+
+**Deferred to v3.0:** WR-02 EDR HUMAN-UAT item.
+
+**Archive files:**
+- `.planning/milestones/v2.2-ROADMAP.md`
+- `.planning/milestones/v2.2-REQUIREMENTS.md`
+
+Git tag: `v2.2`.
+
+---
+
 ## v2.1 — Resource Limits, Extended IPC, Attach-Streaming & Cleanup
 
 **Status:** ✅ SHIPPED 2026-04-21

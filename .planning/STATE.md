@@ -1,28 +1,28 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.2
-milestone_name: Windows/macOS Parity Sweep
-status: Phase 23 complete (commits 427e1283, a9307802, 263795a9 on 2026-04-29). v2.2 milestone (3/3 phases, 9/9 plans) ready for `/gsd-complete-milestone v2.2`.
-stopped_at: Phase 23 plan 23-01 executed end-to-end. SUMMARY.md created, all invariance gates pass, all tests pass.
+milestone: (unscoped)
+milestone_name: ""
+status: v2.2 — Windows/macOS Parity Sweep — shipped 2026-04-29 (tag `v2.2`). All 3 phases (22, 23, 24) and 9 plans complete. Awaiting `/gsd-new-milestone` to scope v2.3.
+stopped_at: v2.2 milestone close complete. ROADMAP.md collapsed; REQUIREMENTS.md archived; PROJECT.md evolved; MILESTONES.md + RETROSPECTIVE.md appended.
 last_updated: "2026-04-29T00:00:00.000Z"
 last_activity: 2026-04-29
 progress:
   total_phases: 29
-  completed_phases: 25
+  completed_phases: 26
   total_plans: 82
-  completed_plans: 81
-  percent: 99
+  completed_plans: 82
+  percent: 100
 ---
 
-# Project State: nono — v2.2 Windows/macOS Parity Sweep
+# Project State: nono — between milestones (v2.2 shipped, v2.3 unscoped)
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-04-24 at v2.2 milestone start)
+See: .planning/PROJECT.md (updated 2026-04-29 after v2.2 milestone close)
 
 **Core Value:** Every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 22 complete (2026-04-28). Phase 23 (Windows Audit-Event Retrofit, AUD-05) is the only outstanding phase in v2.2.
+**Current Focus:** v2.2 shipped. Run `/gsd-new-milestone` to scope v2.3. Candidate focus areas in PROJECT.md § Next Milestone.
 
 ## Current Position
 
@@ -162,15 +162,17 @@ Progress: [██████████] 100% (Phase 23 complete 2026-04-29; v
 
 ## Deferred Items
 
-Items acknowledged and deferred at milestone close on 2026-04-21 during `/gsd-complete-milestone` v2.1 (user chose "Acknowledge all, proceed"):
+Items acknowledged and deferred at milestone close on 2026-04-29 during `/gsd-complete-milestone` v2.2 (user chose "Acknowledge all & proceed"). Supersedes the v2.1-close acknowledgment from 2026-04-21.
 
 | Category | Item | Status | Notes |
 |----------|------|--------|-------|
+| uat_gap | phase 01 (01-HUMAN-UAT.md) | partial — 3 pending scenarios | v1.0 alpha bookkeeping; release shipped with these as documented carry-forward 2026-03-31 |
 | uat_gap | phase 07 (07-HUMAN-UAT.md) | partial — 3 pending scenarios | SESS-03 scenarios waived as v2.0-known-issue; closed in spirit by Phase 15 direction-b fix but bookkeeping not retro-flipped |
 | uat_gap | phase 13 (13-UAT.md) | unknown — 0 pending scenarios | Pre-existing v2.0 UAT; resolved 2026-04-18 with 3 pass / 7 waived (4 as v2.0-known-issue closed by Phase 15); bookkeeping artifact only |
 | uat_gap | phase 17 (17-HUMAN-UAT.md) | partial — 4 pending scenarios | Deferred-by-design per Phase 17 pragmatic-PASS verdict; resize on detached path structurally infeasible (ATCH-01 acceptance #3 downgraded per D-07) |
 | uat_gap | phase 18 (18-HUMAN-UAT.md) | complete-with-issues — 0 pending | G-02..G-06 all closed by Phase 18.1; G-01 resolved by debug session (commits 3c68377/938887f/e4c1bfa) |
 | uat_gap | phase 18.1 (18.1-HUMAN-UAT.md) | resolved — 0 pending | Items 1+2 pass 2026-04-21; item 3 (WR-02 EDR) deferred to v3.0 per 18.1-CONTEXT.md § Deferred |
+| verification_gap | phase 01 (01-VERIFICATION.md) | human_needed | v1.0 alpha bookkeeping; release shipped with this as documented carry-forward 2026-03-31 |
 | verification_gap | phase 17 (17-VERIFICATION.md) | human_needed | Verifier completed; human_needed state reflects deferred-by-design HUMAN-UAT items (not gaps) |
 | verification_gap | phase 18 (18-VERIFICATION.md) | human_needed | Superseded by Phase 18.1 which closed the surfaced gaps |
 | verification_gap | phase 18.1 (18.1-VERIFICATION.md) | human_needed | Verifier passed 36/36 must-haves 2026-04-21; human_needed state reflects WR-02 EDR deferral |
@@ -183,15 +185,23 @@ Items acknowledged and deferred at milestone close on 2026-04-21 during `/gsd-co
 | quick_task | 260417-kem-fix-envvarguard-migration-migrate-48-fla | missing | Dead pointer — directory removed; listed in STATE.md Completed table |
 | quick_task | 260417-wla-fix-windows-createprocess-handle-uaf | missing | Dead pointer — directory removed; listed in STATE.md Completed table |
 | quick_task | 260419-cmp-upstream-036-windows-parity | missing | Research quick-task that produced COMPARISON.md input for Phase 20; directory removed after Phase 20 shipped |
+| quick_task | 260428-rsu-refresh-stack-onto-upstream-tip | missing | Re-deferred 2026-04-29 (commit 7911ef0e) pending maintainer response on PRs 725/726; quick-task index entry retained as a re-trigger anchor |
 
-Known deferred items at close: 17 (5 UAT bookkeeping gaps, 3 verification human_needed flags, 9 stale quick-task index pointers to already-removed directories). None block release; all tracked above for v2.2+ follow-up if relevant.
+Known deferred items at close: 20 (6 UAT bookkeeping gaps, 4 verification human_needed flags, 10 stale or pending quick-task index pointers). None block release; all tracked above for v2.3+ follow-up if relevant.
 
 ## Session Continuity
 
-**Current Milestone:** (unscoped) — v2.1 shipped 2026-04-21 (tag `v2.1`).
-**Last Activity:** 2026-04-28
-**Stopped At:** v2.1 milestone close complete. All planning docs updated and committed. Awaiting next milestone scope.
-**Next Steps:** Run `/gsd-new-milestone` to scope v2.2. Candidate focus areas documented in PROJECT.md § Next Milestone Goals.
+**Current Milestone:** (unscoped) — v2.2 shipped 2026-04-29 (tag `v2.2`).
+**Last Activity:** 2026-04-29
+**Stopped At:** v2.2 milestone close complete. ROADMAP.md collapsed with v2.2 phases archived; REQUIREMENTS.md archived to `milestones/v2.2-REQUIREMENTS.md` and removed via `git rm`; PROJECT.md evolved (v2.2 → Validated + v2.3 backlog surfaced); MILESTONES.md + RETROSPECTIVE.md appended; STATE.md Deferred Items refreshed (20 items acknowledged).
+**Next Steps:** Run `/gsd-new-milestone` to scope v2.3. Candidate focus areas documented in PROJECT.md § Next Milestone:
+- PKG streaming follow-up (`58b5a24e` + `9ebad89a` + `115b5cfa` + `ArtifactType::Plugin` + `bundle_json` field)
+- Audit-attestation hardening sweep (sigstore-rs `KeyPair::from_pkcs8` re-enablement)
+- Authenticode chain-walker subject extraction (`Win32_Security_Cryptography_Catalog` + `Win32_Security_Cryptography_Sip` features)
+- WR-01 reject-stage unification
+- AIPC G-04 wire-protocol compile-time tightening
+- Cross-platform RESL Unix backends
+- `windows-squash` → `main` merge (re-deferred per quick-260428-rsu pending PR-583 maintainer response)
 
 **Status of Phase 19 CLEAN items:**
 
