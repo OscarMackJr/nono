@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Windows/macOS Parity Sweep
-status: Awaiting `/gsd-discuss-phase 23` or `/gsd-plan-phase 23`. Depends on Phase 22's audit ledger (now landed); wires AIPC broker audit emissions into the 5 `handle_*_request` paths in `crates/nono-cli/src/exec_strategy_windows/supervisor.rs`.
-stopped_at: v2.1 milestone close complete. All planning docs updated and committed. Awaiting next milestone scope.
-last_updated: "2026-04-29T03:18:15.896Z"
+status: Ready to execute. Plan 23-01 (AIPC broker audit emissions) drafted and verified on 2026-04-28; 3 tasks across 1 wave. Run `/gsd-execute-phase 23` to ship.
+stopped_at: Phase 23 planning complete (commit d3c8825d after 1 revision cycle, plan-checker PASSED). Awaiting execution.
+last_updated: "2026-04-28T00:00:00.000Z"
 last_activity: 2026-04-28
 progress:
   total_phases: 29
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-24 at v2.2 milestone start)
 
 ## Current Position
 
-Phase: 23 (windows-audit-event-retrofit) — Ready to plan
-Plan: 0 of 1 (not started)
-Status: Awaiting `/gsd-discuss-phase 23` or `/gsd-plan-phase 23`. Depends on Phase 22's audit ledger (now landed); wires AIPC broker audit emissions into the 5 `handle_*_request` paths in `crates/nono-cli/src/exec_strategy_windows/supervisor.rs`.
+Phase: 23 (windows-audit-event-retrofit) — Ready to execute
+Plan: 0 of 1 complete (23-01 drafted and verified, awaiting execution)
+Status: Plan 23-01 (AIPC broker audit emissions) committed at d3c8825d after 1 revision cycle (plan-checker PASSED). 3 tasks in 1 wave: Task 1 = `RejectStage` enum + `AuditEventPayload::CapabilityDecision` field, Task 2 = recorder threading + 5-site emission + `Arc<Mutex<AuditRecorder>>` cross-platform plumbing, Task 3 = `audit show` rendering + dispatcher unit tests + E2E `aipc_handle_brokering_integration` extension. Run `/gsd-execute-phase 23`.
 Milestone: v2.2 — 2/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 24 ✓ 2026-04-27), 8/9 plans complete. Phase 23 is the last gate to v2.2 ship.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
