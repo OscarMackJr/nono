@@ -119,7 +119,9 @@ Full details: `.planning/milestones/v2.1-ROADMAP.md`.
 
 **Rationale:** Kept as a real phase in the roadmap (not collapsed into 22-05) because AUD-05 is a Windows-specific retrofit with a distinct acceptance shape — upstream's ledger covers supervisor events generically, but Windows' AIPC broker paths are fork-only surfaces that need explicit wiring. If Plan 22-05 discovers that the upstream ledger shape already covers AIPC HandleKinds cleanly, Phase 23 may collapse to a no-op closure during `/gsd-plan-phase 23`; for now, landing the requirement in a dedicated phase gives AUD-05 a home and avoids orphaning it.
 
-**Plans:** TBD (drafted during `/gsd-plan-phase 23`)
+**Plans:** 1 plan (locked 2026-04-28 by /gsd-plan-phase 23)
+
+- [ ] 23-01-PLAN.md — AIPC broker audit emissions: thread `audit_recorder` into `handle_windows_supervisor_message`, emit ledger events at all 5 push sites, encode reject_stage per WR-01 verdict matrix (AUD-05)
 
 ### Phase 24: Parity-Drift Prevention
 
