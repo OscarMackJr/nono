@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.2
 milestone_name: Windows/macOS Parity Sweep
-status: Ready to execute. Plan 23-01 (AIPC broker audit emissions) drafted and verified on 2026-04-28; 3 tasks across 1 wave. Run `/gsd-execute-phase 23` to ship.
-stopped_at: Phase 23 planning complete (commit d3c8825d after 1 revision cycle, plan-checker PASSED). Awaiting execution.
-last_updated: "2026-04-28T00:00:00.000Z"
-last_activity: 2026-04-28
+status: Phase 23 complete (commits 427e1283, a9307802, 263795a9 on 2026-04-29). v2.2 milestone (3/3 phases, 9/9 plans) ready for `/gsd-complete-milestone v2.2`.
+stopped_at: Phase 23 plan 23-01 executed end-to-end. SUMMARY.md created, all invariance gates pass, all tests pass.
+last_updated: "2026-04-29T00:00:00.000Z"
+last_activity: 2026-04-29
 progress:
   total_phases: 29
-  completed_phases: 24
+  completed_phases: 25
   total_plans: 82
-  completed_plans: 80
-  percent: 98
+  completed_plans: 81
+  percent: 99
 ---
 
 # Project State: nono — v2.2 Windows/macOS Parity Sweep
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-04-24 at v2.2 milestone start)
 
 ## Current Position
 
-Phase: 23 (windows-audit-event-retrofit) — Ready to execute
-Plan: 0 of 1 complete (23-01 drafted and verified, awaiting execution)
-Status: Plan 23-01 (AIPC broker audit emissions) committed at d3c8825d after 1 revision cycle (plan-checker PASSED). 3 tasks in 1 wave: Task 1 = `RejectStage` enum + `AuditEventPayload::CapabilityDecision` field, Task 2 = recorder threading + 5-site emission + `Arc<Mutex<AuditRecorder>>` cross-platform plumbing, Task 3 = `audit show` rendering + dispatcher unit tests + E2E `aipc_handle_brokering_integration` extension. Run `/gsd-execute-phase 23`.
-Milestone: v2.2 — 2/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 24 ✓ 2026-04-27), 8/9 plans complete. Phase 23 is the last gate to v2.2 ship.
+Phase: 23 (windows-audit-event-retrofit) — COMPLETE (2026-04-29)
+Plan: 1 of 1 complete (23-01 executed via `/gsd-execute-phase 23`; SUMMARY landed; 14 plan success_criteria gates pass)
+Status: Plan 23-01 shipped end-to-end. 3 atomic feat commits (`427e1283` Task 1: RejectStage enum + reject_stage field on AuditEventPayload; `a9307802` Task 2: recorder threading + 5-site emission with WR-01-matching reject_stage + Arc<Mutex<AuditRecorder>> cross-platform plumbing; `263795a9` Task 3: capability_decisions in audit show + WR-01 ledger assertions + sanitization regression + multi-kind layer-1 E2E). REQ-AUD-05 closed. v2.2 ready for `/gsd-complete-milestone v2.2`.
+Milestone: v2.2 — 3/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 23 ✓ 2026-04-29, Phase 24 ✓ 2026-04-27), 9/9 plans complete. v2.2 ready to ship.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
   - v2.0 Windows Gap Closure — shipped 2026-04-18 (tag `v2.0` local; merge-to-main pending on pre-milestone quick task).
@@ -48,10 +48,12 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
+Last activity: 2026-04-29 — Phase 23 closed end-to-end via `/gsd-execute-phase 23`. 3 atomic commits (427e1283, a9307802, 263795a9). REQ-AUD-05 closed. v2.2 ready for `/gsd-complete-milestone v2.2`.
+
+Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
 ```
-Progress: [██████████] 100% (71/71 plans complete — Phase 22 closed 2026-04-28 via UAT 10/10; SECURITY 41/41 closed; REVIEW-FIX 7/7 in-scope landed)
+Progress: [██████████] 100% (Phase 23 complete 2026-04-29; v2.2 milestone 9/9 plans, 3/3 phases — ready for /gsd-complete-milestone)
 ```
 
 ## Accumulated Context
@@ -85,6 +87,10 @@ Progress: [██████████] 100% (71/71 plans complete — Phase 
 - **Phase 09 unreachable!() scoped to Unix:** On Windows, execute_direct returns Ok(i32); unreachable!() moved inside cfg(not(windows)) block; Windows Direct branch captures exit code and calls std::process::exit(exit_code) (2026-04-10).
 - **Phase 09 stale test replaced:** apply_rejects_unsupported_proxy_with_ports removed; apply_accepts_port_level_wfp_caps asserts Ok(()) for port-level caps post-Phase-09 semantics (2026-04-10).
 - **Phase 12-03 STOP on pre-existing CI failure:** `make ci` fallback surfaced 48 `disallowed_methods` clippy errors in `profile/mod.rs`, `config/mod.rs`, `sandbox_state.rs`. Root-caused to revert `cf5a60a` (2026-04-10), predates Phase 12. Phase 12's own files (`crates/nono/src/sandbox/windows.rs`, `crates/nono-cli/tests/wfp_port_integration.rs`) produce zero clippy diagnostics. Did NOT auto-fix per plan STOP directive (2026-04-11).
+
+### Key Decisions (v2.2)
+
+- **Phase 23 Plan 23-01 (REQ-AUD-05) Windows AIPC ledger emission:** Wires `Option<&Arc<Mutex<AuditRecorder>>>` end-to-end through `supervised_runtime.rs:235` (Mutex::new → Arc::new(Mutex::new(...))) → `exec_strategy.rs:486` → `rollback_runtime.rs:46` → `exec_strategy_windows/mod.rs:695` → `WindowsSupervisorRuntime::initialize` → field on the runtime → cloned into the capability-pipe-server thread closure → passed as 11th parameter to `handle_windows_supervisor_message`. New `RejectStage` enum (`BeforePrompt | AfterPrompt`) on `audit_integrity::AuditEventPayload::CapabilityDecision` with `#[serde(default, skip_serializing_if = "Option::is_none")]` for backward-compat with Phase-22-shaped NDJSON files. New local `emit_to_ledger` closure in the dispatcher emits one capability_decision NDJSON line at each of the 5 existing `audit_log.push` sites with the WR-01-locked stage (Site 1-3 = None pre-stage rejections; Site 4 mask gate = `Some(BeforePrompt)`; Site 5 G-04 broker-failure flip on Pipe|Socket = `Some(AfterPrompt)`; all other site-5 outcomes = None). `record_capability_decision` is now LIVE (no `#[allow(dead_code)]`) with a single 2-arg API shape `(entry, reject_stage)`. `nono audit show <id>` text surface gains `Capability Decisions: N (M before-prompt, K after-prompt rejections)` counter line; JSON surface gains `capability_decisions` array via new `read_capability_decisions_from_ledger` helper (BufReader+lines pattern mirroring `verify_audit_log`; best-effort `Ok(vec![])` on missing/malformed). 5 wr01_* tests extended in-place with on-disk `reject_stage` assertions matching the WR-01 verdict matrix. New tests: 4 audit_integrity serde tests (Task 1), 3 dispatcher TDD tests (`recorder_emits_one_capability_decision_per_dispatched_request`, `recorder_does_not_abort_dispatcher_on_lock_poison`, `recorder_emission_is_optional_when_none` — Task 2), 1 ledger sanitization regression (`recorded_ledger_redacts_session_token` — T-23-01 mitigation), 1 multi-kind layer-1 E2E (`audit_integrity_records_5_handle_kinds_in_ledger` — AUD-05 #1 acceptance), 2 audit_commands surface tests. **Layer-2 deviation (authorized by plan Step 7):** `tests/aipc_handle_brokering_integration.rs` calls lower-level broker functions and CANNOT call `handle_windows_supervisor_message` (which is `pub(super)`); the layer-1 multi-kind test in `capability_handler_tests` provides the authorized substitute coverage per plan's explicit fallback clause. **D-19 cross-phase byte-identical preservation verified:** `git diff --stat HEAD~3 HEAD -- crates/nono/src/ crates/nono-cli/src/terminal_approval.rs crates/nono-cli/src/profile/ crates/nono-cli/data/` returns empty across all 3 Phase 23 commits. **D-21 invariance preserved:** `grep -c "RejectStage" crates/nono-cli/src/exec_strategy.rs crates/nono-cli/src/supervised_runtime.rs crates/nono-cli/src/rollback_runtime.rs` returns 0 for each — RejectStage stays Windows-AIPC-local. **D-03 preserved:** `SupervisorMessage::OpenUrl` arm at supervisor.rs:2010 untouched (Windows OpenUrl audit emission deferred until Windows grows a delegated-browser broker). **T-23-01 mitigation:** `recorded_ledger_redacts_session_token` test reads on-disk NDJSON and asserts no raw session token bytes appear (single-path `audit_entry_with_redacted_token` invariant). **T-23-03 mitigation:** `recorder_does_not_abort_dispatcher_on_lock_poison` — recorder errors must NOT abort the supervisor; `tracing::warn!` and continue (warn-and-continue idiom, not `?` propagation). **Pre-existing main-branch issues** (clippy in `nono::manifest.rs:95+103` collapsible_match; rustfmt drift in `audit_attestation.rs`) tracked in `.planning/phases/23-windows-audit-event-retrofit/deferred-items.md` — out of scope per CLAUDE.md. Commits: `427e1283` (Task 1: RejectStage enum + field) + `a9307802` (Task 2: 5-site emission + Arc plumbing) + `263795a9` (Task 3: audit show surface + WR-01 ledger assertions). 41 capability_handler_tests, 8 audit_integrity tests, 5 audit_commands tests, 5 aipc_handle_brokering_integration tests, 1 audit_flush_before_drop test all PASS. Phase 23 closes REQ-AUD-05 and is the last v2.2 phase — milestone ready for `/gsd-complete-milestone v2.2` (2026-04-29).
 
 ### Key Decisions (v2.1)
 

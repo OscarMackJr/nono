@@ -121,7 +121,7 @@ Full details: `.planning/milestones/v2.1-ROADMAP.md`.
 
 **Plans:** 1 plan (locked 2026-04-28 by /gsd-plan-phase 23)
 
-- [ ] 23-01-PLAN.md — AIPC broker audit emissions: thread `audit_recorder` into `handle_windows_supervisor_message`, emit ledger events at all 5 push sites, encode reject_stage per WR-01 verdict matrix (AUD-05)
+- [x] 23-01-PLAN.md — AIPC broker audit emissions: thread `audit_recorder` into `handle_windows_supervisor_message`, emit ledger events at all 5 push sites, encode reject_stage per WR-01 verdict matrix (AUD-05) — completed 2026-04-29 (commits 427e1283, a9307802, 263795a9)
 
 ### Phase 24: Parity-Drift Prevention
 
