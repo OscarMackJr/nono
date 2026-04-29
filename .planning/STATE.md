@@ -48,7 +48,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093).
+Last activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
 ```
 Progress: [██████████] 100% (71/71 plans complete — Phase 22 closed 2026-04-28 via UAT 10/10; SECURITY 41/41 closed; REVIEW-FIX 7/7 in-scope landed)
@@ -152,6 +152,7 @@ Progress: [██████████] 100% (71/71 plans complete — Phase 
 | 260421-inv | Flip inverted status check on FwpmGetAppIdFromFileName0 (gemini critical — PR 726) | 2026-04-21 | e4a9919 | [260421-inv-fix-fwpmgetappid-inverted-check](./quick/260421-inv-fix-fwpmgetappid-inverted-check/) |
 | 260424-upr | Review upstream v0.37.1 → v0.40.1 changes and assess Windows-native plan impact (research-only) | 2026-04-24 | — | [260424-upr-review-upstream-037-to-040](./quick/260424-upr-review-upstream-037-to-040/) |
 | 260424-mrg | Merge windows-squash → main (fast-forward, local-only; Path C; nothing pushed; 46 DCO-missing commits preserved) | 2026-04-24 | 8213da64 | [260424-mrg-merge-windows-squash-to-main](./quick/260424-mrg-merge-windows-squash-to-main/) |
+| 260428-rsu | DEFERRED — Refresh PR 725/726 stack onto upstream/main (v0.43.0). Runbook ready; awaiting trigger: #785 merge OR #777+#778 merge OR human-review engagement OR 2026-05-12 deadline | 2026-04-28 | — (deferred) | [260428-rsu-refresh-stack-onto-upstream-tip](./quick/260428-rsu-refresh-stack-onto-upstream-tip/) |
 
 ## Deferred Items
 
