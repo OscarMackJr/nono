@@ -7,7 +7,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-const AUDIT_EVENTS_FILENAME: &str = "audit-events.ndjson";
+// Phase 23 Task 3: pub(crate) so `audit_commands::read_capability_decisions_from_ledger`
+// can join the canonical filename without re-deriving it.
+pub(crate) const AUDIT_EVENTS_FILENAME: &str = "audit-events.ndjson";
 // Plan 22-05a Task 5 (upstream 7b7815f7): unified Alpha integrity schema.
 // All audit-integrity hashing now flows through a single "alpha" domain
 // separator across event leaf, hash-chain, and Merkle root computation.

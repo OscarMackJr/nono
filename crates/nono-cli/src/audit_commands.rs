@@ -307,6 +307,46 @@ fn print_list_json(sessions: &[SessionInfo]) -> Result<()> {
 // nono audit show
 // ---------------------------------------------------------------------------
 
+/// Phase 23 D-04 layer-2 surface: re-read the per-session NDJSON ledger and
+/// return one `serde_json::Value` per `capability_decision` event. Mirrors
+/// the BufReader+lines reader pattern from `audit_integrity::verify_audit_log`
+/// to avoid a parallel NDJSON parser.
+///
+/// Best-effort: on file-missing or per-line parse error, returns
+/// `Ok(vec![])` (empty list) rather than failing the audit-show command.
+/// The integrity summary path (already-rendered by `cmd_show`) is the
+/// load-bearing failure surface; this function is a UX add and must
+/// degrade gracefully.
+fn read_capability_decisions_from_ledger(
+    session_dir: &std::path::Path,
+) -> Result<Vec<serde_json::Value>> {
+    let events_path = session_dir.join(crate::audit_integrity::AUDIT_EVENTS_FILENAME);
+    let file = match std::fs::File::open(&events_path) {
+        Ok(f) => f,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut decisions = Vec::new();
+    for line_result in std::io::BufRead::lines(reader) {
+        let Ok(line) = line_result else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(record) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        if record
+            .get("event")
+            .and_then(|e| e.get("type"))
+            .and_then(|t| t.as_str())
+            == Some("capability_decision")
+        {
+            decisions.push(record);
+        }
+    }
+    Ok(decisions)
+}
+
 fn cmd_show(args: AuditShowArgs) -> Result<()> {
     let session = load_session(&args.session_id)?;
 
@@ -370,6 +410,32 @@ fn cmd_show(args: AuditShowArgs) -> Result<()> {
         eprintln!(
             "  Audit Events:   {} (no integrity summary)",
             session.metadata.audit_event_count
+        );
+    }
+
+    // Phase 23 D-04: Capability Decisions counter (Windows AIPC ledger
+    // surface). Per-event browsing intentionally deferred to --json
+    // (counter is enough for AUD-05 acceptance #1; future v2.3 backlog
+    // item may add a `nono audit show <id> --stage before-prompt` filter
+    // — see CONTEXT.md § Deferred Ideas).
+    let decisions = read_capability_decisions_from_ledger(&session.dir).unwrap_or_default();
+    if !decisions.is_empty() {
+        let total = decisions.len();
+        let before_prompt = decisions
+            .iter()
+            .filter(|d| {
+                d.pointer("/event/reject_stage").and_then(|v| v.as_str()) == Some("before-prompt")
+            })
+            .count();
+        let after_prompt = decisions
+            .iter()
+            .filter(|d| {
+                d.pointer("/event/reject_stage").and_then(|v| v.as_str()) == Some("after-prompt")
+            })
+            .count();
+        eprintln!();
+        eprintln!(
+            "  Capability Decisions: {total} ({before_prompt} before-prompt, {after_prompt} after-prompt rejections)"
         );
     }
     eprintln!();
@@ -498,6 +564,16 @@ fn print_show_json(session: &SessionInfo) -> Result<()> {
         })
     });
 
+    // Phase 23 D-04: include the per-event `capability_decision` array
+    // (re-read from `<session_dir>/audit-events.ndjson` via the same
+    // helper as the human-readable counter line). `null` when the ledger
+    // is missing or contains no capability_decision events — preserving
+    // the established Phase 22-05a `audit_integrity` precedent for
+    // optional fields.
+    let capability_decisions_json = read_capability_decisions_from_ledger(&session.dir)
+        .ok()
+        .filter(|v| !v.is_empty());
+
     let output = serde_json::json!({
         "session_id": session.metadata.session_id,
         "started": session.metadata.started,
@@ -510,6 +586,7 @@ fn print_show_json(session: &SessionInfo) -> Result<()> {
         "network_events": &session.metadata.network_events,
         "audit_event_count": session.metadata.audit_event_count,
         "audit_integrity": audit_integrity_json,
+        "capability_decisions": capability_decisions_json,
         "snapshots": snapshots,
     });
 
@@ -752,5 +829,82 @@ mod tests {
         assert!(!sanitized.contains('\x07'));
         assert!(sanitized.contains("x"));
         assert!(sanitized.contains("path"));
+    }
+
+    /// Phase 23 Task 3 Step 8: surface test for the
+    /// `read_capability_decisions_from_ledger` helper. Constructs a
+    /// hand-rolled NDJSON ledger with 3 capability_decision records (1
+    /// before-prompt, 1 after-prompt, 1 no reject_stage) plus 2
+    /// session-lifecycle records, then asserts the helper filters to
+    /// exactly the 3 capability_decision records and the per-stage
+    /// counts (1, 1, 1) match.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn read_capability_decisions_returns_filtered_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ledger_path = dir
+            .path()
+            .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME);
+        // Hand-roll 5 NDJSON lines: 1 session_started, 3 capability_decision
+        // (1 before-prompt, 1 after-prompt, 1 no reject_stage), 1
+        // session_ended. The helper only filters by `event.type ==
+        // "capability_decision"`, so the per-line entry shape is irrelevant
+        // to the test (we use serde_json::Value end-to-end, not typed
+        // AuditEntry).
+        let lines = vec![
+            r#"{"sequence":0,"timestamp":"2026-04-28T00:00:00Z","event":{"type":"session_started","started":"2026-04-28T00:00:00Z","command":["test"]}}"#,
+            r#"{"sequence":1,"timestamp":"2026-04-28T00:00:01Z","event":{"type":"capability_decision","entry":{"timestamp":"2026-04-28T00:00:01Z","request":{"request_id":"a"},"decision":{"Denied":{"reason":"x"}},"backend":"t","duration_ms":0},"reject_stage":"before-prompt"}}"#,
+            r#"{"sequence":2,"timestamp":"2026-04-28T00:00:02Z","event":{"type":"capability_decision","entry":{"timestamp":"2026-04-28T00:00:02Z","request":{"request_id":"b"},"decision":{"Denied":{"reason":"y"}},"backend":"t","duration_ms":0},"reject_stage":"after-prompt"}}"#,
+            r#"{"sequence":3,"timestamp":"2026-04-28T00:00:03Z","event":{"type":"capability_decision","entry":{"timestamp":"2026-04-28T00:00:03Z","request":{"request_id":"c"},"decision":{"Approved":null},"backend":"t","duration_ms":0}}}"#,
+            r#"{"sequence":4,"timestamp":"2026-04-28T00:00:04Z","event":{"type":"session_ended","ended":"2026-04-28T00:00:04Z","exit_code":0}}"#,
+        ];
+        std::fs::write(&ledger_path, lines.join("\n") + "\n").expect("write ledger");
+
+        let decisions =
+            super::read_capability_decisions_from_ledger(dir.path()).expect("read ledger");
+        assert_eq!(
+            decisions.len(),
+            3,
+            "expected 3 capability_decision records, got: {decisions:?}",
+        );
+        let before = decisions
+            .iter()
+            .filter(|d| {
+                d.pointer("/event/reject_stage").and_then(|v| v.as_str()) == Some("before-prompt")
+            })
+            .count();
+        let after = decisions
+            .iter()
+            .filter(|d| {
+                d.pointer("/event/reject_stage").and_then(|v| v.as_str()) == Some("after-prompt")
+            })
+            .count();
+        let unstaged = decisions
+            .iter()
+            .filter(|d| d.pointer("/event/reject_stage").is_none())
+            .count();
+        assert_eq!(before, 1, "1 before-prompt record expected");
+        assert_eq!(after, 1, "1 after-prompt record expected");
+        assert_eq!(
+            unstaged, 1,
+            "1 record without reject_stage expected (Approved path)",
+        );
+    }
+
+    /// Phase 23 Task 3 Step 8 part 2: helper degrades gracefully on missing
+    /// ledger file — returns `Ok(vec![])` rather than failing the
+    /// audit-show command (the integrity-summary path is the load-bearing
+    /// failure surface).
+    #[test]
+    fn read_capability_decisions_returns_empty_on_missing_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No ledger file is written. The helper must return Ok(vec![]),
+        // not Err.
+        let decisions = super::read_capability_decisions_from_ledger(dir.path())
+            .expect("missing ledger MUST be Ok(vec![])");
+        assert!(
+            decisions.is_empty(),
+            "missing ledger MUST yield empty Vec, got: {decisions:?}",
+        );
     }
 }

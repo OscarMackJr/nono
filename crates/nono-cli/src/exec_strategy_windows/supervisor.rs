@@ -4323,6 +4323,13 @@ mod capability_handler_tests {
         let mut seen = HashSet::new();
         let mut audit_log = Vec::new();
 
+        // Phase 23 D-04 layer-1: construct a recorder over a tempdir so the
+        // post-dispatch assertions can read `<dir>/audit-events.ndjson`.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
+
         let token = "testtoken12345678";
         // 0x10000000 is unambiguously outside EVENT_DEFAULT_MASK.
         let out_of_mask: u32 = 0x1000_0000;
@@ -4346,7 +4353,7 @@ mod capability_handler_tests {
             "testaipc12345678",
             std::ptr::null_mut(),
             &AipcResolvedAllowlist::default(),
-            None,
+            Some(&recorder_arc),
         )
         .expect("dispatch");
 
@@ -4376,6 +4383,29 @@ mod capability_handler_tests {
             other => panic!("expected Denied, got {other:?}"),
         }
         let _ = child.recv_response().expect("drain");
+
+        // Phase 23 D-04 ledger assertion: the on-disk NDJSON line carries
+        // reject_stage = "before-prompt" matching the WR-01 verdict matrix.
+        drop(recorder_arc);
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        let last_record: serde_json::Value =
+            serde_json::from_str(ledger.trim().lines().last().expect("at least one record"))
+                .expect("parse final NDJSON record");
+        let event = &last_record["event"];
+        assert_eq!(
+            event["type"], "capability_decision",
+            "expected capability_decision event, got: {last_record}",
+        );
+        assert_eq!(
+            event["reject_stage"],
+            serde_json::Value::String("before-prompt".to_string()),
+            "WR-01 invariant: Event mask-gate rejection MUST carry \
+             reject_stage=before-prompt; got record: {last_record}",
+        );
     }
 
     /// WR-01 G-05 regression: Mutex with a mask outside `MUTEX_DEFAULT_MASK`
@@ -4390,6 +4420,11 @@ mod capability_handler_tests {
         let (mut supervisor, mut child) = new_pair();
         let mut seen = HashSet::new();
         let mut audit_log = Vec::new();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
 
         let token = "testtoken12345678";
         // 0x10000000 is unambiguously outside MUTEX_DEFAULT_MASK.
@@ -4414,7 +4449,7 @@ mod capability_handler_tests {
             "testaipc12345678",
             std::ptr::null_mut(),
             &AipcResolvedAllowlist::default(),
-            None,
+            Some(&recorder_arc),
         )
         .expect("dispatch");
 
@@ -4444,6 +4479,25 @@ mod capability_handler_tests {
             other => panic!("expected Denied, got {other:?}"),
         }
         let _ = child.recv_response().expect("drain");
+
+        // Phase 23 D-04 ledger assertion.
+        drop(recorder_arc);
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        let last_record: serde_json::Value =
+            serde_json::from_str(ledger.trim().lines().last().expect("at least one record"))
+                .expect("parse final NDJSON record");
+        let event = &last_record["event"];
+        assert_eq!(event["type"], "capability_decision");
+        assert_eq!(
+            event["reject_stage"],
+            serde_json::Value::String("before-prompt".to_string()),
+            "WR-01 invariant: Mutex mask-gate rejection MUST carry \
+             reject_stage=before-prompt; got record: {last_record}",
+        );
     }
 
     /// WR-01 G-05 regression: JobObject with `JOB_OBJECT_TERMINATE`
@@ -4464,6 +4518,11 @@ mod capability_handler_tests {
         let (mut supervisor, mut child) = new_pair();
         let mut seen = HashSet::new();
         let mut audit_log = Vec::new();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
 
         let token = "testtoken12345678";
         // TERMINATE (0x0008) is outside JOB_OBJECT_DEFAULT_MASK (=QUERY=0x0004).
@@ -4487,7 +4546,7 @@ mod capability_handler_tests {
             "testaipc12345678",
             std::ptr::null_mut(),
             &AipcResolvedAllowlist::default(),
-            None,
+            Some(&recorder_arc),
         )
         .expect("dispatch");
 
@@ -4517,6 +4576,25 @@ mod capability_handler_tests {
             other => panic!("expected Denied, got {other:?}"),
         }
         let _ = child.recv_response().expect("drain");
+
+        // Phase 23 D-04 ledger assertion.
+        drop(recorder_arc);
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        let last_record: serde_json::Value =
+            serde_json::from_str(ledger.trim().lines().last().expect("at least one record"))
+                .expect("parse final NDJSON record");
+        let event = &last_record["event"];
+        assert_eq!(event["type"], "capability_decision");
+        assert_eq!(
+            event["reject_stage"],
+            serde_json::Value::String("before-prompt".to_string()),
+            "WR-01 invariant: JobObject mask-gate rejection MUST carry \
+             reject_stage=before-prompt; got record: {last_record}",
+        );
     }
 
     /// WR-01 G-05 regression: Pipe ReadWrite under the default allowlist
@@ -4544,6 +4622,11 @@ mod capability_handler_tests {
         let mut seen = HashSet::new();
         let mut audit_log = Vec::new();
 
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
+
         let token = "testtoken12345678";
         let req = make_request_aipc(
             token,
@@ -4565,7 +4648,7 @@ mod capability_handler_tests {
             "testaipc12345678",
             std::ptr::null_mut(),
             &AipcResolvedAllowlist::default(),
-            None,
+            Some(&recorder_arc),
         )
         .expect("dispatch");
 
@@ -4592,6 +4675,25 @@ mod capability_handler_tests {
             other => panic!("expected Denied, got {other:?}"),
         }
         let _ = child.recv_response().expect("drain");
+
+        // Phase 23 D-04 ledger assertion: AFTER-prompt for Pipe G-04 flip.
+        drop(recorder_arc);
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        let last_record: serde_json::Value =
+            serde_json::from_str(ledger.trim().lines().last().expect("at least one record"))
+                .expect("parse final NDJSON record");
+        let event = &last_record["event"];
+        assert_eq!(event["type"], "capability_decision");
+        assert_eq!(
+            event["reject_stage"],
+            serde_json::Value::String("after-prompt".to_string()),
+            "WR-01 invariant: Pipe G-04 broker-failure flip MUST carry \
+             reject_stage=after-prompt; got record: {last_record}",
+        );
     }
 
     /// WR-01 G-05 empirical verification: Socket request with a
@@ -4623,6 +4725,11 @@ mod capability_handler_tests {
         let mut seen = HashSet::new();
         let mut audit_log = Vec::new();
 
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
+
         let token = "testtoken12345678";
         let req = make_request_aipc(
             token,
@@ -4647,7 +4754,7 @@ mod capability_handler_tests {
             "testaipc12345678",
             std::ptr::null_mut(),
             &AipcResolvedAllowlist::default(),
-            None,
+            Some(&recorder_arc),
         )
         .expect("dispatch");
 
@@ -4676,6 +4783,40 @@ mod capability_handler_tests {
             other => panic!("expected Denied, got {other:?}"),
         }
         let _ = child.recv_response().expect("drain");
+
+        // Phase 23 D-04 ledger assertion: AFTER-prompt for Socket G-04 flip
+        // + Phase 23 acceptance criterion 2: ledger entry preserves both
+        // "broker failed:" and "privileged port" substrings in the reason.
+        drop(recorder_arc);
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        let last_record: serde_json::Value =
+            serde_json::from_str(ledger.trim().lines().last().expect("at least one record"))
+                .expect("parse final NDJSON record");
+        let event = &last_record["event"];
+        assert_eq!(event["type"], "capability_decision");
+        assert_eq!(
+            event["reject_stage"],
+            serde_json::Value::String("after-prompt".to_string()),
+            "WR-01 invariant: Socket privileged-port G-04 flip MUST carry \
+             reject_stage=after-prompt; got record: {last_record}",
+        );
+        // Phase 23 AC#2: substring-search the JSON-stringified event so the
+        // assertion is robust against the specific serde tag layout of
+        // ApprovalDecision::Denied (which can vary based on the enum's
+        // serialization).
+        let event_string = serde_json::to_string(&event).expect("stringify event");
+        assert!(
+            event_string.contains("broker failed:"),
+            "Phase 23 AC#2: ledger event MUST contain 'broker failed:'; got: {event_string}",
+        );
+        assert!(
+            event_string.contains("privileged port"),
+            "Phase 23 AC#2: ledger event MUST contain 'privileged port'; got: {event_string}",
+        );
     }
 
     // -----------------------------------------------------------------
@@ -4867,6 +5008,200 @@ mod capability_handler_tests {
              found unexpected file at {}",
             ledger_path.display(),
         );
+    }
+
+    /// Phase 23 Task 3 Step 6: ledger-side sanitization regression. The
+    /// in-memory `audit_entry_with_redacted_token` (supervisor.rs:1279)
+    /// is the load-bearing scrub; this test reads the persistent NDJSON
+    /// ledger and asserts the raw session token never appears on disk —
+    /// mirroring the existing in-memory regression
+    /// `handle_redacts_token_in_audit_entry_json` for the Phase 23
+    /// recorder path. T-23-01 mitigation regression guard.
+    #[test]
+    fn recorded_ledger_redacts_session_token() {
+        let backend = CountingGrantBackend::new();
+        let (mut supervisor, mut child) = new_pair();
+        let mut seen = HashSet::new();
+        let mut audit_log = Vec::new();
+        let sensitive_token = "TOPSECRET_TOKEN_DO_NOT_LEAK_42";
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
+
+        let req = make_request_aipc(
+            sensitive_token,
+            "redact-test-001",
+            HandleKind::Event,
+            Some(HandleTarget::EventName {
+                name: "redact-test".to_string(),
+            }),
+            policy::EVENT_DEFAULT_MASK,
+        );
+        handle_windows_supervisor_message(
+            &mut supervisor,
+            nono::supervisor::SupervisorMessage::Request(req),
+            &backend,
+            nono::BrokerTargetProcess::current(),
+            &mut seen,
+            &mut audit_log,
+            sensitive_token,
+            "testaipc12345678",
+            std::ptr::null_mut(),
+            &AipcResolvedAllowlist::default(),
+            Some(&recorder_arc),
+        )
+        .expect("dispatch");
+        let _ = child.recv_response().expect("drain");
+        drop(recorder_arc);
+
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        assert!(
+            !ledger.contains(sensitive_token),
+            "Phase 23 sanitization invariant: NDJSON ledger MUST NOT contain \
+             raw session token. Ledger:\n{ledger}",
+        );
+    }
+
+    /// Phase 23 Task 3 Step 7 layer-1: dispatching one request per
+    /// HandleKind through the same recorder produces 5 ledger entries
+    /// (or 4 for HandleKinds that pre-emptively reject before the broker
+    /// runs). Locks AUD-05 acceptance #1 at the dispatcher boundary.
+    ///
+    /// Note: this layer-1 test exercises the dispatcher's emit-on-push
+    /// invariant for all 5 AIPC HandleKinds. Some of these requests will
+    /// be denied (mask-gate / role-gate / etc) and some will reach the
+    /// broker. The test asserts on the COUNT of ledger entries (one per
+    /// dispatch, regardless of decision) — this is the core invariant
+    /// AUD-05 #1 locks.
+    #[test]
+    fn audit_integrity_records_5_handle_kinds_in_ledger() {
+        let backend = CountingGrantBackend::new();
+        let (mut supervisor, mut child) = new_pair();
+        let mut seen = HashSet::new();
+        let mut audit_log = Vec::new();
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let recorder_arc = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::audit_integrity::AuditRecorder::new(dir.path().to_path_buf()).expect("recorder"),
+        ));
+
+        let token = "phase23-multi-token";
+
+        // 5 requests: one per AIPC HandleKind. Use the per-kind default
+        // mask + a known-bad target so each fires deterministically. The
+        // test does NOT care about Approved vs Denied — the invariant is
+        // that each dispatch produces exactly 1 ledger entry.
+        let requests = [
+            make_request_aipc(
+                token,
+                "multi-event-001",
+                HandleKind::Event,
+                Some(HandleTarget::EventName {
+                    name: "multi-event".to_string(),
+                }),
+                policy::EVENT_DEFAULT_MASK,
+            ),
+            make_request_aipc(
+                token,
+                "multi-mutex-001",
+                HandleKind::Mutex,
+                Some(HandleTarget::MutexName {
+                    name: "multi-mutex".to_string(),
+                }),
+                policy::MUTEX_DEFAULT_MASK,
+            ),
+            make_request_aipc(
+                token,
+                "multi-pipe-001",
+                HandleKind::Pipe,
+                Some(HandleTarget::PipeName {
+                    name: "multi-pipe".to_string(),
+                }),
+                policy::GENERIC_READ,
+            ),
+            make_request_aipc(
+                token,
+                "multi-socket-001",
+                HandleKind::Socket,
+                Some(HandleTarget::SocketEndpoint {
+                    protocol: SocketProtocol::Tcp,
+                    host: "127.0.0.1".to_string(),
+                    port: 8080, // non-privileged
+                    role: SocketRole::Connect,
+                }),
+                0,
+            ),
+            make_request_aipc(
+                token,
+                "multi-jobobj-001",
+                HandleKind::JobObject,
+                Some(HandleTarget::JobObjectName {
+                    name: "multi-jobobj".to_string(),
+                }),
+                policy::JOB_OBJECT_DEFAULT_MASK,
+            ),
+        ];
+
+        for req in requests {
+            handle_windows_supervisor_message(
+                &mut supervisor,
+                nono::supervisor::SupervisorMessage::Request(req),
+                &backend,
+                nono::BrokerTargetProcess::current(),
+                &mut seen,
+                &mut audit_log,
+                token,
+                "testaipc12345678",
+                std::ptr::null_mut(),
+                &AipcResolvedAllowlist::default(),
+                Some(&recorder_arc),
+            )
+            .expect("dispatch");
+            let _ = child.recv_response().expect("drain");
+        }
+
+        drop(recorder_arc);
+
+        let ledger = std::fs::read_to_string(
+            dir.path()
+                .join(crate::audit_integrity::AUDIT_EVENTS_FILENAME),
+        )
+        .expect("ledger file");
+        let cap_lines: Vec<&str> = ledger
+            .lines()
+            .filter(|l| l.contains("\"type\":\"capability_decision\""))
+            .collect();
+        assert_eq!(
+            cap_lines.len(),
+            5,
+            "AUD-05 #1: expected 5 capability_decision ledger entries (one per \
+             HandleKind dispatched), got {}: {ledger}",
+            cap_lines.len(),
+        );
+        // AUD-05 #1: assert union of HandleKind discriminators in the
+        // ledger covers {Event, Mutex, Pipe, Socket, JobObject}. Use
+        // substring search on the JSON-stringified line so the assertion
+        // is robust against the specific serde tag layout of
+        // CapabilityRequest.kind.
+        for kind_token in [
+            "\"Event\"",
+            "\"Mutex\"",
+            "\"Pipe\"",
+            "\"Socket\"",
+            "\"JobObject\"",
+        ] {
+            let found = cap_lines.iter().any(|l| l.contains(kind_token));
+            assert!(
+                found,
+                "AUD-05 #1: ledger missing HandleKind {kind_token}; ledger:\n{ledger}",
+            );
+        }
     }
 }
 
