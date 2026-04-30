@@ -1644,7 +1644,7 @@ pub(crate) fn finalize_profile(mut profile: Profile) -> Result<Profile> {
 
 /// Resolve inheritance and apply implicit default-group merging for a raw profile.
 pub(crate) fn resolve_and_finalize_profile(profile: Profile) -> Result<Profile> {
-    finalize_profile(resolve_extends(profile, &mut Vec::new(), 0)?)
+    finalize_profile(resolve_extends(profile, &mut Vec::new(), 0, None)?)
 }
 
 /// Get the implicit default groups for a finalized profile.
@@ -1721,10 +1721,12 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
     Ok(profile)
 }
 
-/// Load a profile from a JSON file, resolving inheritance.
+/// Load a profile from a JSON file, resolving inheritance. The parent
+/// directory is passed as context so `extends` can resolve sibling profiles.
 fn load_from_file(path: &Path) -> Result<Profile> {
     let profile = parse_profile_file(path)?;
-    resolve_extends(profile, &mut Vec::new(), 0)
+    let context_dir = path.parent();
+    resolve_extends(profile, &mut Vec::new(), 0, context_dir)
 }
 
 // ============================================================================
@@ -1738,15 +1740,22 @@ const MAX_INHERITANCE_DEPTH: usize = 10;
 ///
 /// If the profile declares `extends` (one or more base names), each base is
 /// loaded and resolved recursively, then they are fold-merged left-to-right.
-/// The accumulated base is finally merged with the child. The `visited` vec
-/// tracks profile names already in the chain to detect circular dependencies.
+/// The accumulated base is finally merged with the child. When `context_dir`
+/// is set, sibling `<name>.json` files are checked first so project-local
+/// profiles can reference each other by name. The `visited` vec tracks
+/// profile names already in the chain to detect circular dependencies.
 ///
 /// Shared transitive bases are handled naturally: `visited` tracks only the
 /// current ancestor chain (push before recurse, pop after). When two siblings
 /// share a transitive base, it is resolved once per sibling; because
 /// `merge_profiles` is idempotent, the result is correct. Only true cycles
 /// (a profile extending one of its own ancestors) are rejected.
-fn resolve_extends(child: Profile, visited: &mut Vec<String>, depth: usize) -> Result<Profile> {
+fn resolve_extends(
+    child: Profile,
+    visited: &mut Vec<String>,
+    depth: usize,
+    context_dir: Option<&Path>,
+) -> Result<Profile> {
     let base_names = match child.extends {
         Some(ref names) => names.clone(),
         None => return Ok(child),
@@ -1773,8 +1782,12 @@ fn resolve_extends(child: Profile, visited: &mut Vec<String>, depth: usize) -> R
 
         visited.push(base_name.clone());
 
-        let base = load_base_profile_raw(base_name)?;
-        let resolved_base = resolve_extends(base, visited, depth + 1)?;
+        let resolved = load_base_profile_raw(base_name, context_dir)?;
+        let (base, next_context) = match resolved {
+            ResolvedBase::Sibling(p) => (p, context_dir),
+            ResolvedBase::Global(p) => (p, None),
+        };
+        let resolved_base = resolve_extends(base, visited, depth + 1, next_context)?;
         // Pop to restore the stack to the pre-base state. On the error path
         // above (? propagation), visited is abandoned so the missing pop is harmless.
         visited.pop();
@@ -1791,12 +1804,30 @@ fn resolve_extends(child: Profile, visited: &mut Vec<String>, depth: usize) -> R
     }
 }
 
+/// Distinguishes where a base profile was resolved from so `resolve_extends`
+/// can propagate `context_dir` only for sibling-resolved profiles. Global
+/// sources (user dir, pack-store, built-in) clear the context to prevent
+/// project-local files from hijacking built-in inheritance chains.
+enum ResolvedBase {
+    Sibling(Profile),
+    Global(Profile),
+}
+
 /// Load a base profile by name WITHOUT applying implicit default-group merging.
 ///
-/// Checks user profiles first, then built-in profiles. Built-in profiles
-/// are loaded as raw profile definitions so inheritance can resolve before
-/// implicit default groups are merged.
-fn load_base_profile_raw(name: &str) -> Result<Profile> {
+/// Checks sibling profiles in `context_dir` first (so project-local profiles
+/// can reference each other by name), then user profiles, and built-in
+/// profiles. Built-in profiles are loaded as raw profile definitions so
+/// inheritance can resolve before implicit default groups are merged.
+///
+/// Fork-divergence note: upstream's commit `bc443928` adds two additional
+/// resolver branches — pack-store lookup (`find_pack_store_profile`) and
+/// pack-provided rescue (`crate::migration::check_and_run`). The fork does
+/// not have the pack-store subsystem or `migration::check_and_run` in the
+/// same shape; those branches are omitted here and remain out of scope for
+/// Plan 34-04 (C7 cluster). The sibling-resolution behavior (the actual
+/// "fix" in the commit subject) is adopted in full.
+fn load_base_profile_raw(name: &str, context_dir: Option<&Path>) -> Result<ResolvedBase> {
     if !is_valid_profile_name(name) {
         return Err(NonoError::ProfileInheritance(format!(
             "invalid base profile name '{}'",
@@ -1804,16 +1835,29 @@ fn load_base_profile_raw(name: &str) -> Result<Profile> {
         )));
     }
 
-    // 1. Check user profiles first
-    let profile_path = get_user_profile_path(name)?;
-    if profile_path.exists() {
-        return parse_profile_file(&profile_path);
+    // 0. Sibling in the same directory as the child profile.
+    if let Some(dir) = context_dir {
+        let sibling_path = dir.join(format!("{name}.json"));
+        if sibling_path.is_file() {
+            tracing::debug!(
+                "Resolved '{}' from sibling: {}",
+                name,
+                sibling_path.display()
+            );
+            return Ok(ResolvedBase::Sibling(parse_profile_file(&sibling_path)?));
+        }
     }
 
-    // 2. Fall back to built-in profile from embedded policy
+    // 1. User profiles take precedence.
+    let profile_path = get_user_profile_path(name)?;
+    if profile_path.exists() {
+        return Ok(ResolvedBase::Global(parse_profile_file(&profile_path)?));
+    }
+
+    // 2. Built-in profile from embedded policy.
     let policy = crate::policy::load_embedded_policy()?;
     if let Some(def) = policy.profiles.get(name) {
-        return Ok(def.to_raw_profile());
+        return Ok(ResolvedBase::Global(def.to_raw_profile()));
     }
 
     Err(NonoError::ProfileInheritance(format!(
@@ -3763,7 +3807,7 @@ mod tests {
         };
 
         // Resolve B first
-        let resolved_b = resolve_extends(b_profile, &mut Vec::new(), 0).expect("resolve b");
+        let resolved_b = resolve_extends(b_profile, &mut Vec::new(), 0, None).expect("resolve b");
         // Then merge A on top
         let merged = merge_profiles(resolved_b, a_profile);
 
@@ -3779,7 +3823,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_extends(profile, &mut Vec::new(), 0);
+        let result = resolve_extends(profile, &mut Vec::new(), 0, None);
         assert!(result.is_err());
         let err = result.expect_err("missing base should error");
         assert!(
@@ -3798,7 +3842,7 @@ mod tests {
         };
 
         let mut visited = vec!["a".to_string(), "b".to_string()];
-        let result = resolve_extends(profile, &mut visited, 2);
+        let result = resolve_extends(profile, &mut visited, 2, None);
         assert!(result.is_err());
         let err = result.expect_err("circular dep should error");
         assert!(
@@ -3816,7 +3860,7 @@ mod tests {
         };
 
         let mut visited = vec!["self-ref".to_string()];
-        let result = resolve_extends(profile, &mut visited, 1);
+        let result = resolve_extends(profile, &mut visited, 1, None);
         assert!(result.is_err());
         let err = result.expect_err("self-reference should error");
         assert!(
@@ -3836,7 +3880,7 @@ mod tests {
         let visited: Vec<String> = (0..MAX_INHERITANCE_DEPTH)
             .map(|i| format!("level-{}", i))
             .collect();
-        let result = resolve_extends(profile, &mut visited.clone(), MAX_INHERITANCE_DEPTH);
+        let result = resolve_extends(profile, &mut visited.clone(), MAX_INHERITANCE_DEPTH, None);
         assert!(result.is_err());
         let err = result.expect_err("depth limit should error");
         assert!(
@@ -4154,7 +4198,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_extends(profile, &mut Vec::new(), 0);
+        let result = resolve_extends(profile, &mut Vec::new(), 0, None);
         assert!(result.is_err());
         let err = result.expect_err("empty string base should error");
         assert!(
@@ -4283,7 +4327,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = resolve_extends(profile, &mut Vec::new(), 0);
+        let result = resolve_extends(profile, &mut Vec::new(), 0, None);
         assert!(
             result.is_ok(),
             "duplicate base should be deduplicated, not error: {:?}",
@@ -4337,6 +4381,29 @@ mod tests {
         );
         let profile = result.expect("shared base profile");
         assert_eq!(profile.meta.name, "shared-base-test");
+    }
+
+    #[test]
+    fn test_extends_resolves_sibling_in_same_directory() {
+        let dir = tempdir().expect("tmpdir");
+        std::fs::write(
+            dir.path().join("shared.json"),
+            r#"{ "meta": { "name": "shared" }, "filesystem": { "allow": ["/tmp/shared"] } }"#,
+        )
+        .expect("write");
+        let child_path = dir.path().join("child.json");
+        std::fs::write(
+            &child_path,
+            r#"{ "extends": "shared", "meta": { "name": "child" } }"#,
+        )
+        .expect("write");
+
+        let profile = load_from_file(&child_path).expect("resolve");
+        assert_eq!(profile.meta.name, "child");
+        assert!(profile
+            .filesystem
+            .allow
+            .contains(&"/tmp/shared".to_string()));
     }
 
     #[test]
