@@ -608,7 +608,7 @@ impl SetupRunner {
             #[cfg(not(target_os = "windows"))]
             println!("  # Check why a sensitive path is blocked");
             #[cfg(not(target_os = "windows"))]
-            println!("  nono why ~/.ssh/id_rsa");
+            println!("  nono why --path ~/.ssh/id_rsa");
             println!();
 
             #[cfg(not(target_os = "windows"))]
