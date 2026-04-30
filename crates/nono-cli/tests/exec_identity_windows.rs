@@ -5,37 +5,31 @@
 //! file compiles to nothing via the top-of-file `#![cfg(target_os = "windows")]`
 //! attribute (documented-skip per phase posture per VALIDATION 22-05-T3).
 //!
-//! ## Coverage relationship to unit tests
+//! ## Coverage relationship to unit tests (Phase 28 update)
 //!
-//! The unit-test module inside `crates/nono-cli/src/exec_identity_windows.rs`
-//! already exercises `query_authenticode_status` directly for two key
-//! shapes (`Unsigned`/`InvalidSignature` for tempfile; the
-//! `QueryFailed`/`InvalidSignature`/`Unsigned`/`Err` umbrella for missing
-//! paths). This integration suite layers two additional high-level
-//! regressions on top:
+//! Phase 28 (v2.3) lit up the Authenticode chain walker by enabling the
+//! `Win32_Security_Cryptography_Catalog` + `Win32_Security_Cryptography_Sip`
+//! features on `windows-sys`. The deferred substring-match test
+//! `authenticode_signed_records_subject` previously lived in this file
+//! deferred behind a v2.2 ignore message; per Phase 28 28-CONTEXT.md
+//! PATH-4 it has been MOVED to live inline alongside the other unit
+//! tests in `crates/nono-cli/src/exec_identity_windows.rs::tests`, where
+//! it has direct access to `query_authenticode_status` without needing
+//! a lib+bin refactor of `nono-cli` (the bin-only crate cannot re-expose
+//! internal modules to integration test targets without major
+//! restructuring).
 //!
-//! 1. `authenticode_signed_records_subject` — Decision 4 fallback: this
-//!    substring-match test against a known-signed system binary
-//!    (`C:\Windows\System32\notepad.exe`) is `#[ignore]`'d because
-//!    `windows-sys 0.59` does not expose
-//!    `WTHelperProvDataFromStateData` / `WTHelperGetProvSignerFromChain`
-//!    chain walkers without the Catalog/Sip features (whose
-//!    `CRYPT_PROVIDER_DATA` shape is gated). The test will be flipped
-//!    to active alongside the v2.3 backlog row "Audit-attestation D-13
-//!    fixtures re-enablement (deferred from Plan 22-05b)".
-//! 2. `authenticode_unsigned_falls_back` — duplicates the unit test
-//!    against the same tempfile shape but at the integration boundary
-//!    so the ledger-side discriminant emission is always covered when
-//!    the audit-show pipeline lands the AuthenticodeStatus sibling
-//!    field.
+//! What remains in THIS file: subprocess-boundary regressions that probe
+//! the linkage of the Authenticode subsystem from outside the bin process
+//! tree:
 //!
-//! Implementation note: this file imports `query_authenticode_status`
-//! through the same module path the unit tests use because, unlike
-//! `nono-cli` which is a `[[bin]]` target, integration tests at this
-//! path historically reach across into the bin module tree via
-//! Cargo's standard test harness. If a future restructure converts
-//! `nono-cli` into a `lib.rs` + `bin/main.rs` split, this `use` line
-//! is the only line that needs updating.
+//! 1. `nono_binary_loads_without_unresolved_authenticode_symbols` — the
+//!    cheapest end-to-end probe; a `nono --version` invocation that would
+//!    fail at link time if any windows-sys feature flag was dropped.
+//! 2. `nono_prune_help_still_functions_post_authenticode_addition` —
+//!    cross-references the prune_alias_deprecation suite and probes that
+//!    the new Authenticode features did not break the `nono prune --help`
+//!    surface.
 
 #![cfg(target_os = "windows")]
 #![allow(clippy::unwrap_used)]
@@ -53,26 +47,13 @@ fn nono_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_nono"))
 }
 
-/// Decision 4 fallback: substring match against a known-signed system
-/// binary requires the chain walkers (`WTHelperGetProvSignerFromChain` +
-/// `CertGetNameStringW`) which are unreachable without the Catalog/Sip
-/// features. Re-enable alongside the v2.3 backlog row.
-#[test]
-#[ignore = "Decision 4 fallback: chain walkers gated behind \
-            Win32_Security_Cryptography_Catalog/Sip; deferred to v2.3 \
-            backlog 'Audit-attestation D-13 fixtures re-enablement'."]
-fn authenticode_signed_records_subject() {
-    // Shape this test will assume once the v2.3 backlog row lands:
-    //   1. Compute Authenticode for C:\Windows\System32\notepad.exe.
-    //   2. Assert the result is `AuthenticodeStatus::Valid { signer_subject, .. }`.
-    //   3. Assert `signer_subject.to_lowercase().contains("microsoft")`.
-    //
-    // Because the helpers are currently unreachable, this test would
-    // observe `signer_subject == "<unknown>"` and fail. It stays
-    // `#[ignore]`'d until the v2.3 backlog row enables Catalog/Sip
-    // features OR an in-tree pkcs8 parser provides equivalent walking.
-    panic!("must remain ignored until v2.3 backlog re-enables chain walkers");
-}
+// `authenticode_signed_records_subject` was MOVED to
+// `crates/nono-cli/src/exec_identity_windows.rs::tests` in Phase 28 Plan
+// 28-01 per 28-CONTEXT.md PATH-4. The relocated test exercises the same
+// substring assertion against the same fixture binary directly via
+// `query_authenticode_status`, sidestepping the bin-only-crate visibility
+// constraint that previously kept the integration-target version
+// inactive. REQ-AUDC-02 acceptance #1 closes via the relocated unit test.
 
 /// Plan 22-05b Task 5 acceptance: the prune-alias regression test runs
 /// at the integration boundary. This test verifies the Authenticode

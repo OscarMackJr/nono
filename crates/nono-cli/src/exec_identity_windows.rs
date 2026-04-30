@@ -31,18 +31,18 @@
 //! `CertGetCertificateContextProperty` returning false) causes
 //! `query_authenticode_status` to return `Err(NonoError::SandboxInit(..))`
 //! carrying the failure cause and the original `WinVerifyTrust` HRESULT —
-//! NEVER a silent `<unknown>` fallback.
+//! NEVER a silent sentinel fallback.
 //!
 //! `Unsigned` (`HRESULT == TRUST_E_NOSIGNATURE`) and `InvalidSignature`
 //! (`HRESULT != 0 && != TRUST_E_NOSIGNATURE`) paths are unchanged — chain
 //! walk is NOT attempted; the discriminant alone is recorded.
 //!
-//! Behavior change vs v2.2: callers previously seeing
+//! Behavior change vs v2.2: callers previously seeing the sentinel
 //! `AuthenticodeStatus::Valid { signer_subject: "<unknown>", thumbprint: "" }`
-//! now see either `AuthenticodeStatus::Valid { signer_subject: <RDN>,
-//! thumbprint: <40-char-hex> }` (success) or `Err(NonoError::SandboxInit)`
-//! (chain-walk failure on Valid signature). This is intentional per
-//! REQ-AUDC-03 acceptance #2 (fail-closed audit-recording).
+//! now see either real populated values (success) or
+//! `Err(NonoError::SandboxInit)` (chain-walk failure on Valid signature).
+//! This is intentional per REQ-AUDC-03 acceptance #2 (fail-closed
+//! audit-recording).
 
 #![cfg(target_os = "windows")]
 
@@ -188,7 +188,7 @@ pub fn query_authenticode_status(path: &Path) -> Result<AuthenticodeStatus> {
     let status = if verify_result == 0 {
         // Per REQ-AUDC-03 fail-closed contract: chain-walk failure on a
         // Valid signature returns Err(NonoError::SandboxInit) — NEVER a
-        // silent <unknown> fallback. The `_close_guard` constructed above
+        // silent sentinel fallback. The `_close_guard` constructed above
         // dominates this branch, so its RAII Drop fires on the early-Err
         // path (T-22-05b-05 mitigation preserved; Drop runs the matching
         // WTD_STATEACTION_CLOSE call even on `?` propagation).
@@ -569,7 +569,7 @@ mod tests {
 
     /// REQ-AUDC-01 acceptance: chain walker extracts a populated, RDN-shaped
     /// subject from a known-Microsoft-signed system binary. Replaces the
-    /// v2.2 "<unknown>" sentinel with a real CN= prefix.
+    /// v2.2 sentinel value with a real CN= prefix.
     #[test]
     fn signed_system_binary_extracts_cn_subject() {
         let path = Path::new(FIXTURE_PATH);
