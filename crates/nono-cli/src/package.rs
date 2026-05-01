@@ -337,4 +337,35 @@ mod tests {
         let err = parse_package_ref("broken").expect_err("must fail");
         assert!(err.to_string().contains("expected <namespace>/<name>"));
     }
+
+    #[test]
+    fn artifact_type_plugin_round_trips() {
+        // REQ-PKGS-03 truth #8: ArtifactType::Plugin serializes as "plugin"
+        // (lowercase) and round-trips. The #[serde(rename_all = "snake_case")]
+        // attribute handles the shape automatically.
+        let json = serde_json::to_string(&ArtifactType::Plugin).expect("serialize");
+        assert_eq!(json, "\"plugin\"");
+        let parsed: ArtifactType =
+            serde_json::from_str("\"plugin\"").expect("deserialize");
+        assert_eq!(parsed, ArtifactType::Plugin);
+    }
+
+    #[test]
+    fn artifact_type_unknown_fails_closed() {
+        // REQ-PKGS-03 truth #9: Unknown artifact_type values fail-closed.
+        // Schema-rejection on the JSON deserializer (NOT the filename-based
+        // fallback at package_cmd.rs:967-972, which is a different code path
+        // operating on filenames not on user-supplied JSON).
+        let bad: std::result::Result<ArtifactType, _> =
+            serde_json::from_str("\"made_up_variant\"");
+        assert!(bad.is_err());
+        let bad2: std::result::Result<ArtifactType, _> =
+            serde_json::from_str("\"PLUGIN\"");
+        assert!(bad2.is_err()); // case-sensitive — uppercase is not "plugin"
+        let bad3: std::result::Result<ArtifactType, _> = serde_json::from_str("42");
+        assert!(bad3.is_err()); // non-string fails
+        let bad4: std::result::Result<ArtifactType, _> =
+            serde_json::from_str("\"nonexistent-variant\"");
+        assert!(bad4.is_err()); // hyphenated variant rejected (snake_case enforced)
+    }
 }

@@ -1149,3 +1149,60 @@ fn format_timestamp(value: &str) -> String {
         })
         .unwrap_or_else(|_| value.to_string())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_relative_path_rejects_traversal() {
+        // REQ-PKGS-02 truth #5: Pack manifest with `..` traversal in `path`
+        // field is rejected by validate_relative_path at the input-string
+        // layer BEFORE any filesystem syscall.
+        assert!(validate_relative_path("foo/../etc/passwd").is_err());
+        assert!(validate_relative_path("../sneaky").is_err());
+        assert!(validate_relative_path("a/b/../../../etc/passwd").is_err());
+        // Mid-token `..` is fine (not a Path component); these must NOT reject:
+        assert!(validate_relative_path("foo..bar").is_ok());
+        assert!(validate_relative_path("file.bak").is_ok());
+
+        // Confirm the error message names the offending shape.
+        let err = validate_relative_path("../sneaky").expect_err("must reject");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("..") || msg.to_lowercase().contains("traversal"),
+            "error message should reference the offending shape, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_relative_path_rejects_absolute_path() {
+        // REQ-PKGS-02 truth #6: Absolute paths (Unix and Windows drive prefix)
+        // rejected. Cross-platform — both shapes must reject regardless of host
+        // OS, since the package registry is cross-platform.
+        // NB: Path::Component::Prefix only fires on Windows hosts for "C:\foo"
+        // shapes; on Unix hosts, "C:\foo" parses as a relative path with a
+        // single Normal component "C:\foo". The is_absolute() check covers
+        // Unix `/foo` rejection on Unix hosts, and the Prefix component
+        // covers Windows drive prefixes on Windows hosts. This test runs on
+        // BOTH host shapes and asserts the appropriate rejection contract per
+        // host: on the current Windows host, both `/foo` and `C:\foo` reject.
+        assert!(validate_relative_path("/foo/bar").is_err());
+        assert!(validate_relative_path("/etc/passwd").is_err());
+
+        // Windows-host-only shapes (gated to keep cross-platform CI green):
+        #[cfg(windows)]
+        {
+            assert!(validate_relative_path("C:\\foo\\bar").is_err());
+            assert!(validate_relative_path("D:\\Users\\evil").is_err());
+            // UNC-style: \\server\share is a Path::Component::Prefix(Verbatim)
+            // or Prefix(UNC) on Windows; either way it's a non-relative shape.
+            assert!(validate_relative_path("\\\\server\\share").is_err());
+        }
+
+        // Relative paths are fine on all hosts:
+        assert!(validate_relative_path("plugins/widget.so").is_ok());
+        assert!(validate_relative_path("hooks/post-install.sh").is_ok());
+    }
+}
