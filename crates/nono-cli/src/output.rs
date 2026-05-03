@@ -11,7 +11,6 @@ use nono::{AccessMode, CapabilitySet, NetworkMode, NonoError, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -19,8 +18,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Dark foreground for badge text (works on both light and dark bg colors)
 const BADGE_FG_DARK: Rgb = Rgb(30, 30, 46);
-static PENDING_STATUS_LINE: AtomicBool = AtomicBool::new(false);
-
 /// Print a thin horizontal rule using overlay color
 fn rule() {
     let t = theme::current();
@@ -348,24 +345,18 @@ fn render_diagnostic_footer(footer: &str) -> String {
 
 fn print_terminal_block(message: &str, leading_blank_line: bool) {
     let mut stderr = std::io::stderr();
-    let had_pending_status = take_pending_status_line();
-    let needs_leading_break = had_pending_status || leading_blank_line;
     if stderr.is_terminal() {
         let normalized = normalize_terminal_line_endings(message);
-        if needs_leading_break {
+        if leading_blank_line {
             let _ = write!(stderr, "\r\n");
         }
         let _ = write!(stderr, "\r{}\r\n", normalized);
     } else {
-        if needs_leading_break {
+        if leading_blank_line {
             let _ = writeln!(stderr);
         }
         let _ = writeln!(stderr, "{}", message);
     }
-}
-
-fn take_pending_status_line() -> bool {
-    PENDING_STATUS_LINE.swap(false, Ordering::SeqCst)
 }
 
 fn normalize_terminal_line_endings(message: &str) -> String {
