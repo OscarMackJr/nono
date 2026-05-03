@@ -27,8 +27,6 @@ fn apply_pre_fork_sandbox(
         {
             Sandbox::apply(caps)?;
         }
-
-        output::print_sandbox_active(silent);
     }
     Ok(())
 }
