@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
-status: completed
+status: executing
 stopped_at: Phase 27.1 context gathered
-last_updated: "2026-05-04T18:07:49.544Z"
-last_activity: 2026-04-29
+last_updated: "2026-05-04T18:56:39.091Z"
+last_activity: 2026-05-04
 progress:
   total_phases: 6
   completed_phases: 3
-  total_plans: 7
+  total_plans: 10
   completed_plans: 5
-  percent: 71
+  percent: 50
 ---
 
 # Project State: nono — v2.3 Linux POC Unblock + Deferreds Closure
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-04-29 at v2.3 milestone scope-lock)
 
 Phase: 23 (windows-audit-event-retrofit) — COMPLETE (2026-04-29)
 Plan: 1 of 1 complete (23-01 executed via `/gsd-execute-phase 23`; SUMMARY landed; 14 plan success_criteria gates pass)
-Status: Plan 23-01 shipped end-to-end. 3 atomic feat commits (`427e1283` Task 1: RejectStage enum + reject_stage field on AuditEventPayload; `a9307802` Task 2: recorder threading + 5-site emission with WR-01-matching reject_stage + Arc<Mutex<AuditRecorder>> cross-platform plumbing; `263795a9` Task 3: capability_decisions in audit show + WR-01 ledger assertions + sanitization regression + multi-kind layer-1 E2E). REQ-AUD-05 closed. v2.2 ready for `/gsd-complete-milestone v2.2`.
+Status: Ready to execute
 Milestone: v2.2 — 3/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 23 ✓ 2026-04-29, Phase 24 ✓ 2026-04-27), 9/9 plans complete. v2.2 ready to ship.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
@@ -48,7 +48,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-04-29 — Phase 23 closed end-to-end via `/gsd-execute-phase 23`. 3 atomic commits (427e1283, a9307802, 263795a9). REQ-AUD-05 closed. v2.2 ready for `/gsd-complete-milestone v2.2`.
+Last activity: 2026-05-04 -- Phase 27.1 planning complete
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
@@ -194,7 +194,7 @@ Known deferred items at close: 20 (6 UAT bookkeeping gaps, 4 verification human_
 ## Session Continuity
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress).
-**Last Activity:** 2026-04-29
+**Last Activity:** 2026-05-04
 **Stopped At:** Phase 27.1 context gathered
 
 **Next Steps (when on Linux/macOS host):**

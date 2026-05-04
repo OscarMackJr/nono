@@ -8,7 +8,7 @@ This roadmap tracks the path to full Windows/Unix parity and ongoing quality-of-
 - ✅ **v2.0 Windows Gap Closure** — Phases 5–15 (shipped 2026-04-18; tag `v2.0`)
 - ✅ **v2.1 Resource Limits, Extended IPC, Attach-Streaming & Cleanup** — Phases 16–21 + 18.1 (shipped 2026-04-21; tag `v2.1`)
 - ✅ **v2.2 Windows/macOS Parity Sweep** — Phases 22–24 (shipped 2026-04-29; tag `v2.2`)
-- 🏗️ **v2.3 Linux POC Unblock + Deferreds Closure** — Phases 25–29 (started 2026-04-29)
+- 🏗️ **v2.3 Linux POC Unblock + Deferreds Closure** — Phases 25–29 + 27.1 (started 2026-04-29)
 
 ## Phases
 
@@ -139,6 +139,30 @@ Full details: `.planning/milestones/v2.2-ROADMAP.md`.
 2. Architectural decision documented in CONTEXT.md with cascade impact for future readers.
 3. `cargo test -p nono-cli --test audit_attestation` exits 0 with no ignored tests.
 
+### Phase 27.1: NONO_TEST_HOME Seam (INSERTED)
+
+**Goal:** Add `NONO_TEST_HOME` env-var override to `dirs::home_dir()` callsites in `crates/nono-cli/src/` so Windows integration tests can redirect HOME without LOCALAPPDATA/USERPROFILE drift. Unblocks REQ-AAH-01 (Phase 27) and the queued v2.3 plans (Phase 26-02 PKGS-01/04, etc.) for Windows-host execution.
+
+**Depends on:** v2.3 Phase 27 (partial close at 2026-04-29 surfaced this as the cleanest cross-platform unblock; Rule-4 architectural decision recorded in Phase 27 SUMMARY).
+
+**Requirements:** REQ-NTH-01, REQ-NTH-02, REQ-NTH-03 (3 reqs; locked at `/gsd-plan-phase 27.1` 2026-05-04). See `.planning/REQUIREMENTS.md` § NTH for full acceptance criteria.
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 27.1-01-PLAN.md — `nono_home_dir()` helper + `user_state_dir()` extension + 4 unit tests (REQ-NTH-01 + REQ-NTH-02; foundation, Wave 1)
+- [ ] 27.1-02-PLAN.md — Migrate 15 home-dir callsites + remove `xdg-home` dep (REQ-NTH-01 reachability; Wave 2, depends on 27.1-01)
+- [ ] 27.1-03-PLAN.md — Re-enable Phase 27 audit-attestation tests via `NONO_TEST_HOME` seam (REQ-NTH-03; Wave 3, depends on 27.1-01 + 27.1-02; closes REQ-AAH-01 transitively)
+
+**Cross-cutting constraints:**
+- crates/nono/ remains byte-identical (D-19 invariant).
+
+**Success Criteria:**
+
+1. `dirs::home_dir()` callsites in `crates/nono-cli/src/` honor `NONO_TEST_HOME` when set, fall through to platform default otherwise.
+2. Phase 27 redesigned Test 1 body (preserved under `#[ignore]`) runs to completion on Windows host with `NONO_TEST_HOME` set.
+3. No production-path behavior change when `NONO_TEST_HOME` is unset (security-equivalent to status quo).
+
 ### Phase 28: Authenticode Chain-Walker Subject Extraction
 
 **Goal:** Light up `parse_signer_subject` + `parse_thumbprint` on Windows; upgrade AUD-03 acceptance to require populated subject + non-empty thumbprint on `Valid` Authenticode signatures.
@@ -204,6 +228,7 @@ Full details: `.planning/milestones/v2.2-ROADMAP.md`.
 | 25. Cross-Platform RESL + AIPC Unix Design | v2.3 | 1/2 | In progress (25-02 ADR done; 25-01 RESL Unix deferred to Linux/macOS host) | 25-02: 2026-04-29 |
 | 26. PKG Streaming Follow-Up | v2.3 | 1/2 | Partial — Plan 26-01 PKGS-02 + PKGS-03 closed (D-20 manual replay; defense-in-depth preserved); Plan 26-02 PKGS-01 + PKGS-04 queued for Linux/macOS host | 26-01: 2026-05-01 |
 | 27. Audit-Attestation Hardening | v2.3 | 0/1 | PARTIAL — Path B attempt 2026-04-29 surfaced 3 Windows-host test-harness blockers; REQ-AAH-01 deferred to v2.4 (production code byte-identical preserved; redesigned test body preserved in-tree under `#[ignore]` for v2.4 resumption) | 2026-04-29 (deferred) |
+| 27.1. NONO_TEST_HOME Seam (INSERTED) | v2.3 | 0/3 | Plans committed 2026-05-04 (3 plans, 3 waves); execution queued — Wave 3 needs Windows host for REQ-NTH-03 verification | — |
 | 28. Authenticode Chain-Walker Subject Extraction | v2.3 | 1/1 | Complete (REQ-AUDC-01..03 closed; D-AUDC-02 SandboxInit fallback + D-AUDC-03 explorer.exe fixture switch) | 2026-04-30 |
 | 29. WR-01 Reject-Stage Unification | v2.3 | 1/1 | Complete (REQ-WRU-01..02 closed; Option c locked as permanent design property) | 2026-04-30 |
 

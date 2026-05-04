@@ -12,7 +12,7 @@ created: 2026-04-29
 
 **Context:** v2.2 closed the upstream-v0.38–v0.40 cross-platform feature gap on Windows + installed a parity-drift prevention process. Three requirement clusters remained partially-deferred (PKG-01 streaming, AUD-03 Windows Authenticode chain-walker, audit-attestation fixture re-enablement). Plus the gap analysis at `.planning/quick/260429-gap-v039-linux-poc-vs-windows-fork-tip/PLAN.md` surfaced that fork-Linux-build's `--memory` / `--cpu-percent` / `--timeout` / `--max-processes` flags are silent no-ops with stderr warnings — a credibility issue for a Linux POC. v2.3 closes those + lands the WR-01 product decision that's been deferred since v2.1.
 
-**Scope shape:** 5 phases (25–29), 14 requirements across 5 categories (RESL-NIX, AIPC-NIX, PKGS, AAH, AUDC, WRU). Cross-platform-first by construction. Mostly small/medium plans; longest is Phase 26 PKG streaming.
+**Scope shape:** 6 phases (25–29 + 27.1 inserted 2026-05-04), 17 requirements across 7 categories (RESL-NIX, AIPC-NIX, PKGS, AAH, AUDC, WRU, NTH). Cross-platform-first by construction. Mostly small/medium plans; longest is Phase 26 PKG streaming.
 
 **Out of scope (explicit deferrals to v2.4 backlog):**
 - Upstream v0.41–v0.43 ingestion (DRIFT tooling stays warm; first real load deferred one cycle).
@@ -147,6 +147,57 @@ Context: v2.2 Plan 22-05a landed cryptographic DSSE bundle verification (HG-01-H
   3. `cargo test -p nono-cli --test audit_attestation` exits 0 with no ignored tests.
   4. Threat model entry covers the new parsing surface (if path b) or the upgrade's known-issue ingestion (if path a).
 - **Maps to:** v2.2 backlog "Audit-attestation D-13 fixtures re-enablement" (subsumed verbatim from PROJECT.md § Next Milestone).
+- **Cross-link:** Phase 27 Plan 01 surfaced 3 Windows-host blockers and was re-deferred to v2.4. **Phase 27.1 (REQ-NTH-01..03, inserted 2026-05-04) lands the production-code `NONO_TEST_HOME` seam that closes those blockers** and re-enables the deferred tests via REQ-NTH-03. REQ-AAH-01 is closed transitively when Phase 27.1 Plan 03 verification passes on the Windows host.
+
+---
+
+## NTH — NONO_TEST_HOME Test-Harness Seam (INSERTED 2026-05-04)
+
+Context: Phase 27 (REQ-AAH-01) attempted Path B fixture redesign on a Windows host on 2026-04-29 and surfaced 3 systemic Windows-host test-harness blockers documented in `.planning/phases/27-audit-attestation-hardening/27-01-SUMMARY.md`:
+1. `dirs::home_dir()` on Windows ignores `USERPROFILE` env override (uses `SHGetKnownFolderPath` directly).
+2. `LOCALAPPDATA`/`USERPROFILE` path-mismatch under partial env redirection causes audit/rollback co-location bugs.
+3. (Independent) audit-integrity exit-cleanup `Session not found` on Windows.
+
+The cleanest cross-platform unblock — explicitly proposed at Phase 27 SUMMARY § "v2.4 Resumption Path" item 2 — is a production-code `NONO_TEST_HOME` env-var seam that overrides home-dir resolution at a single chokepoint in `crates/nono-cli/src/`. v2.3 promotes this from v2.4 backlog into Phase 27.1 (inserted between Phases 27 and 28) so the deferred tests can re-enable in v2.3.
+
+### REQ-NTH-01 — `nono_home_dir()` helper with `NONO_TEST_HOME` validation
+
+- **What:** Add `pub fn nono_home_dir() -> Result<PathBuf>` to `crates/nono-cli/src/config/mod.rs` that honors `NONO_TEST_HOME` (when set, validates it is absolute; on miss, falls through to `dirs::home_dir()`). Always-on production seam (no `#[cfg(test)]` gating per CONTEXT D-27.1-08). Migrates all 15 home-dir callsites in `crates/nono-cli/src/` (10 `dirs::home_dir()` + 5 `xdg_home::home_dir()`) per CONTEXT D-27.1-02.
+- **Enforcement:** Cross-platform. Validation matches existing `validated_home()` pattern: non-absolute `NONO_TEST_HOME` returns `NonoError::EnvVarValidation { var: "NONO_TEST_HOME", reason: "must be an absolute path, got: ..." }`. Fail-closed; no silent fallthrough (CONTEXT D-27.1-10). On first override resolution, emits exactly one `tracing::warn!("NONO_TEST_HOME override active: {path}")` per process via `OnceLock<()>` guard (CONTEXT D-27.1-09).
+- **Security:** Mirrors `validated_home()`'s threat model. The override is structurally equivalent to existing `HOME`/`USERPROFILE` env-var trust (always-on in production, env-var validation is the security boundary). `tracing::warn!` provides forensic mark in logs without changing the security model. Production path behavior is byte-identical to status quo when `NONO_TEST_HOME` is unset (ROADMAP.md Phase 27.1 success criterion #3).
+- **Acceptance:**
+  1. `pub fn nono_home_dir() -> Result<PathBuf>` exists in `crates/nono-cli/src/config/mod.rs` and validates `NONO_TEST_HOME` per D-27.1-10.
+  2. All 15 callsites in `crates/nono-cli/src/` route through the helper (10 `dirs::home_dir().ok_or(NonoError::HomeNotFound)?` swaps + 5 `xdg_home::home_dir().ok_or(...)` swaps + 5 deviation-shape sites covered per CONTEXT D-27.1-02 / PATTERNS.md migration table).
+  3. `tracing::warn!` fires exactly once per process on override use (`OnceLock` guard).
+  4. 4 dedicated unit tests (`nono_home_dir_returns_override_when_set`, `nono_home_dir_rejects_non_absolute_override`, `nono_home_dir_falls_through_when_unset`, plus Windows-only `user_state_dir_honors_nono_test_home`) pass under `cargo test -p nono-cli --bin nono config::tests` (CONTEXT D-27.1-15; `nono-cli` is binary-only, so `--bin nono` is required, not `--lib`).
+  5. `crates/nono/` byte-identical (D-19 cross-phase invariant; satisfied because `NonoError::EnvVarValidation` and `NonoError::HomeNotFound` both already exist).
+  6. `xdg-home` workspace dependency removed from `crates/nono-cli/Cargo.toml` once all 5 `xdg_home` callsites migrate (CONTEXT D-27.1-04 housekeeping; verified pre-flight that no other crate depends on it).
+- **Maps to:** Phase 27 SUMMARY § "v2.4 Resumption Path" item 2 (verbatim proposal, promoted from v2.4 backlog into v2.3 Phase 27.1).
+
+### REQ-NTH-02 — `user_state_dir()` Windows redirection under `NONO_TEST_HOME`
+
+- **What:** Extend `pub fn user_state_dir() -> Option<PathBuf>` in `crates/nono-cli/src/config/mod.rs` so that when `NONO_TEST_HOME` is set, it returns `Some(<NONO_TEST_HOME>/.nono)` (CONTEXT D-27.1-05, D-27.1-06). Closes Phase 27 Blocker 2 (`audit_root()` and `rollback_root()` path mismatch on Windows under partial env redirection) by ensuring both roots co-locate under the same parent when the override is active.
+- **Enforcement:** Cross-platform code path (the `NONO_TEST_HOME` short-circuit fires on all platforms); the practical effect is most pronounced on Windows where `user_state_dir()` and `dirs::home_dir()` previously diverged. Layout under override mirrors production (`.nono/audit` + `.nono/rollbacks`), NOT a new test-only hierarchy (D-27.1-06).
+- **Security:** Signature stays `Option<PathBuf>` (callers expect `None`-semantics for missing platform — D-27.1-05 invariant b). When `NONO_TEST_HOME` is unset, behavior is byte-identical to the status quo.
+- **Acceptance:**
+  1. With `NONO_TEST_HOME=<abs>` set on Windows, `crate::config::user_state_dir()` returns `Some(PathBuf::from(<abs>).join(".nono"))`.
+  2. With `NONO_TEST_HOME` unset, behavior matches status quo (`dirs::state_dir().or_else(dirs::data_local_dir).map(|p| p.join("nono"))`).
+  3. `crates/nono-cli/src/rollback_session.rs::rollback_root()` Windows branch lands at `<NONO_TEST_HOME>/.nono/rollbacks` when override is active; `crates/nono-cli/src/audit_session.rs::audit_root()` lands at `<NONO_TEST_HOME>/.nono/audit` (co-located).
+  4. Windows-only unit test `user_state_dir_honors_nono_test_home` passes.
+- **Maps to:** Phase 27 Blocker 2 (closure of audit/rollback path-mismatch); CONTEXT D-27.1-05.
+
+### REQ-NTH-03 — Phase 27 audit-attestation tests re-enabled and adapted
+
+- **What:** Remove the 2 `#[ignore]` attributes from `crates/nono-cli/tests/audit_attestation.rs` (currently at lines 290 and 456 — `audit_verify_reports_signed_attestation_with_pinned_public_key` and `rollback_signed_session_verifies_from_audit_dir_bundle`) and adapt the bodies to use `NONO_TEST_HOME`-driven isolation instead of the Windows set-difference workaround (Phase 27 commit `16bae9ca` body preserved verbatim except for the workaround swap). Modify the `run_nono` helper at lines 12-43 to pass `NONO_TEST_HOME=<home>` to the spawned subprocess (CONTEXT D-27.1-12, D-27.1-13).
+- **Enforcement:** Windows host verification (the original Phase 27 attempt happened on Windows; success on Windows closes the gap end-to-end). Linux/macOS execution is also expected to pass since the seam is cross-platform.
+- **Security:** No new security surface — the seam already covered by REQ-NTH-01's threat model. Test mutation of parent-process env vars at lines 310/330 (for `env://` keystore URI seeding) uses a per-invocation `{pid}_{nanos}` suffix to avoid collisions across parallel test runs (Phase 27 D-AAH-01 pattern preserved).
+- **Acceptance:**
+  1. Both `#[ignore]` attributes removed from `crates/nono-cli/tests/audit_attestation.rs` (lines 290 and 456).
+  2. `cargo test -p nono-cli --test audit_attestation` exits 0 with `2 passed; 0 failed; 0 ignored` on Windows host.
+  3. Test 1 uses `only_audit_session_id(&home)` (the simple production-layout helper) instead of the Windows set-difference workaround (`audit_root_for_supervisor` + `new_session_id_after_run`).
+  4. Test 2 uses `run_command_args()` (cross-platform) instead of `/bin/pwd` (Unix-only).
+  5. **Blocker 3 contingency (D-27.1-14):** If audit-integrity exit-cleanup `Session not found` resurfaces with the seam in place, the failure is handled per the contingency tree: small localized fix in scope, larger investigation re-`#[ignore]`'d with Phase 27.1-Blocker-3 note + surfaced as v2.4 follow-up. Partial closure (1 test passing + 1 re-deferred) is acceptable for REQ-NTH-03 if Blocker 3 proves architecturally non-trivial — the seam landing is the deliverable; tests are the proof.
+- **Maps to:** Phase 27 REQ-AAH-01 (closes by proxy through Phase 27.1); ROADMAP.md Phase 27.1 success criterion #2.
 
 ---
 
@@ -247,7 +298,10 @@ To be filled by gsd-roadmapper at v2.3 phase scope-lock (currently at REQUIREMEN
 | PKGS-02 | Phase 26 (Plan 26-01) | Complete (2026-05-01; commits e5e1f2d7/8ff89923) — D-20 manual replay of upstream `58b5a24e` (cherry-pick would have deleted fork's `validate_path_within`, a security regression); both validators preserved as defense-in-depth; 2 unit tests (`validate_relative_path_rejects_traversal` + `validate_relative_path_rejects_absolute_path`) pass |
 | PKGS-03 | Phase 26 (Plan 26-01) | Complete (2026-05-01; commits dd7b28b3/797f3295/8ff89923) — `ArtifactType::Plugin` added as 7th variant (Script was missed in v2.3 REQUIREMENTS.md scope-lock; Plugin is 7th not 6th); plumbed via 1 match-arm site (cargo build cascade-driven); deferred-divergence comment removed atomically with the variant addition; 2 unit tests (`artifact_type_plugin_round_trips` + `artifact_type_unknown_fails_closed`) pass |
 | PKGS-04 | Phase 26 (Plan 26-02) | Active — plan + CONTEXT committed (commit 86efcdeb); execution queued for Linux/macOS host (auto-pull e2e tests hit Phase 27 Windows blocker) |
-| AAH-01 | Phase 27 (PARTIAL) | Re-deferred to v2.4 (2026-04-29) — Path B Windows attempt surfaced 3 systemic test-harness blockers; production code byte-identical preserved; redesigned Test 1 body preserved in-tree under `#[ignore]` for v2.4 resumption. See `.planning/phases/27-audit-attestation-hardening/27-01-SUMMARY.md`. |
+| AAH-01 | Phase 27 (PARTIAL) → re-routed via Phase 27.1 (Plans 27.1-01..03) | PROMOTED 2026-05-04 — closure rerouted through Phase 27.1 NONO_TEST_HOME seam (REQ-NTH-01..03). Phase 27 Plan 01 production code stays byte-identical; Phase 27.1 Plan 03 re-enables both deferred tests via the seam. Status will flip to Complete when Plan 27.1-03 verification passes on Windows host (D-27.1-14 contingency may yield partial closure). See `.planning/phases/27.1-nono-test-home-seam/27.1-CONTEXT.md`. |
+| NTH-01 | Phase 27.1 (Plan 27.1-01) | Active — plan committed 2026-05-04; helper `nono_home_dir()` + `user_state_dir()` extension + 4 unit tests; foundation for Plan 27.1-02 callsite migration |
+| NTH-02 | Phase 27.1 (Plan 27.1-01) | Active — plan committed 2026-05-04; bundled with REQ-NTH-01 in Plan 27.1-01 (`user_state_dir()` extension closes Phase 27 Blocker 2) |
+| NTH-03 | Phase 27.1 (Plan 27.1-03) | Active — plan committed 2026-05-04; re-enables Phase 27 audit-attestation tests via the seam; closes REQ-AAH-01 transitively when Plan 27.1-03 verification passes on Windows host |
 | AUDC-01 | Phase 28 (Plan 28-01) | Complete (2026-04-30; commits 67ba4a99/70593110/5a4a8443) — chain walker live; `parse_signer_subject` returns CERT_X500_NAME_STR keyed-RDN; `parse_thumbprint` returns 40-char UPPERCASE hex SHA-1 |
 | AUDC-02 | Phase 28 (Plan 28-01) | Complete (2026-04-30; commit 279c1b86) — `authenticode_signed_records_subject` test relocated inline (PATH-4 per CONTEXT override) and re-enabled; #[ignore] count → 0 |
 | AUDC-03 | Phase 28 (Plan 28-01) | Complete (2026-04-30; commit 70593110) — fail-closed `?` propagation in `query_authenticode_status` Valid branch; `<unknown>` sentinel fallback removed; reuses `NonoError::SandboxInit` (D-AUDC-02 deviation: `AuditIntegrity` variant doesn't exist on fork) |
@@ -255,10 +309,11 @@ To be filled by gsd-roadmapper at v2.3 phase scope-lock (currently at REQUIREMEN
 | WRU-02 | Phase 29 (Plan 29-01) | Complete (2026-04-30; commit 9fcdf123) — chosen verdict matrix is the EXISTING matrix; all 5 `wr01_*` regression tests pass with assertions UNCHANGED; Phase 23 `RejectStage` wire shape preserved verbatim. |
 
 **Coverage target:**
-- v2.3 requirements: 14 total
-- Mapped to phases: 14
+- v2.3 requirements: 17 total (14 original + 3 NTH inserted 2026-05-04)
+- Mapped to phases: 17
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-29.*
 *Scope-lock: 2026-04-29 at v2.3 milestone start (option Scope A from /gsd-new-milestone).*
+*Phase 27.1 NTH category inserted: 2026-05-04 (3 reqs added; total 17). Promoted from v2.4 backlog per Phase 27 SUMMARY § "v2.4 Resumption Path" item 2.*
