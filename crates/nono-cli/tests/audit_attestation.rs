@@ -436,34 +436,28 @@ fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
     assert_eq!(json["attestation_valid"], true);
 }
 
-// See Phase 27 Path B note above on
-// `audit_verify_reports_signed_attestation_with_pinned_public_key` for
-// the Windows-blocker and v2.4 resumption path. This test was not yet
-// redesigned during the Phase 27 attempt; its original body remains and
-// will be redesigned alongside Test 1 on the v2.4 Linux/macOS verification
-// pass.
 #[test]
-#[ignore = "Phase 27 Plan 01 deferred to v2.4: Windows audit-integrity exit-cleanup issue + dirs::home_dir() not env-overridable on Windows; Test 2 redesign queued behind Test 1 verification"]
 fn rollback_signed_session_verifies_from_audit_dir_bundle() {
     let (_tmp, home, workspace) = setup_isolated_home();
     fs::write(workspace.join("tracked.txt"), "before\n").expect("write tracked file");
     let key_path = generate_file_signing_key(&home, &workspace);
     let keyref = format!("file://{}", key_path.display());
 
-    let run_output = run_nono(
-        &[
-            "run",
-            "--allow-cwd",
-            "--rollback",
-            "--no-rollback-prompt",
-            "--audit-sign-key",
-            &keyref,
-            "--",
-            "/bin/pwd",
-        ],
-        &home,
-        &workspace,
-    );
+    // Phase 27.1: use the cross-platform run_command_args() helper
+    // (Unix `/bin/pwd` vs Windows `cmd /c echo nono-test`) instead of the
+    // Unix-only `/bin/pwd`.
+    let cmd_args = run_command_args();
+    let mut args = vec![
+        "run",
+        "--allow-cwd",
+        "--rollback",
+        "--no-rollback-prompt",
+        "--audit-sign-key",
+        &keyref,
+        "--",
+    ];
+    args.extend(cmd_args.iter().copied());
+    let run_output = run_nono(&args, &home, &workspace);
     assert_success(&run_output);
 
     let session_id = only_audit_session_id(&home);
