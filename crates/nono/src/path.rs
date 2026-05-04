@@ -84,6 +84,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("test setup");
         let real_file = dir.path().join("real.txt");
         fs::write(&real_file, "hello").expect("test setup");
+        #[cfg(unix)]
         let link = dir.path().join("link.txt");
         #[cfg(unix)]
         std::os::unix::fs::symlink(&real_file, &link).expect("test setup");
