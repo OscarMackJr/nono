@@ -281,7 +281,10 @@ fn synthetic_subjects(
             "audit/session_id".to_string(),
             sha256_hex(session_id.as_bytes()),
         ),
-        ("audit/chain_head".to_string(), integrity.chain_head.to_string()),
+        (
+            "audit/chain_head".to_string(),
+            integrity.chain_head.to_string(),
+        ),
         (
             "audit/merkle_root".to_string(),
             integrity.merkle_root.to_string(),
@@ -418,14 +421,8 @@ mod tests {
         let integrity = fake_summary();
         let attestation =
             sign_session_attestation(&signer, tmp.path(), session_id, &integrity).unwrap();
-        let ok = verify_audit_attestation(
-            tmp.path(),
-            &attestation,
-            session_id,
-            &integrity,
-            None,
-        )
-        .unwrap();
+        let ok = verify_audit_attestation(tmp.path(), &attestation, session_id, &integrity, None)
+            .unwrap();
         assert!(ok, "freshly signed bundle must verify");
     }
 
@@ -447,14 +444,8 @@ mod tests {
         let bundle_path = tmp.path().join(&attestation.bundle_filename);
         std::fs::write(&bundle_path, b"this is not a valid bundle").unwrap();
 
-        let ok = verify_audit_attestation(
-            tmp.path(),
-            &attestation,
-            session_id,
-            &integrity,
-            None,
-        )
-        .unwrap();
+        let ok = verify_audit_attestation(tmp.path(), &attestation, session_id, &integrity, None)
+            .unwrap();
         assert!(!ok, "tampered bundle bytes must fail-close (HG-01-H fix)");
     }
 
@@ -471,14 +462,8 @@ mod tests {
         // Attempt to verify against a different session_id — the
         // synthetic subjects will differ, so the (recomputed) subject
         // list won't match the bundle's embedded subjects.
-        let ok = verify_audit_attestation(
-            tmp.path(),
-            &attestation,
-            "session-B",
-            &integrity,
-            None,
-        )
-        .unwrap();
+        let ok = verify_audit_attestation(tmp.path(), &attestation, "session-B", &integrity, None)
+            .unwrap();
         assert!(
             !ok,
             "bundle signed for one session must not verify against another (HG-01-H fix)"
