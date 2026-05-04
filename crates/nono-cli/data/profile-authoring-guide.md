@@ -132,17 +132,24 @@ Define a custom reverse proxy credential route for services not in `network-poli
 }
 ```
 
-| Field               | Type   | Required    | Description |
-|---------------------|--------|-------------|-------------|
-| `upstream`          | string | yes         | Upstream URL. Must be HTTPS (HTTP only for loopback). |
-| `credential_key`    | string | yes         | Keystore account name, `op://` URI, or `apple-password://` URI. |
-| `inject_mode`       | string | no          | One of: `"header"` (default), `"url_path"`, `"query_param"`, `"basic_auth"`. |
-| `inject_header`     | string | header mode | HTTP header name. Default: `"Authorization"`. |
-| `credential_format` | string | header mode | Format string with `{}` placeholder. Default: `"Bearer {}"`. |
-| `path_pattern`      | string | url_path    | Pattern to match in URL path. Use `{}` for placeholder. |
-| `path_replacement`  | string | url_path    | Replacement pattern. Defaults to `path_pattern`. |
-| `query_param_name`  | string | query_param | Query parameter name for credential injection. |
-| `env_var`           | string | URI keys    | Environment variable name for SDK API key. Required when `credential_key` is a URI. |
+| Field               | Type            | Required    | Description |
+|---------------------|-----------------|-------------|-------------|
+| `upstream`          | string          | yes         | Upstream URL. Must be HTTPS (HTTP only for loopback). |
+| `credential_key`    | string          | yes         | Keystore account name, `op://` URI, `apple-password://` URI, `file://` URI, or `env://` URI. |
+| `inject_mode`       | string          | no          | One of: `"header"` (default), `"url_path"`, `"query_param"`, `"basic_auth"`. |
+| `inject_header`     | string          | header mode | HTTP header name. Default: `"Authorization"`. |
+| `credential_format` | string          | header mode | Format string with `{}` placeholder. Default: `"Bearer {}"`. |
+| `path_pattern`      | string          | url_path    | Pattern to match in URL path. Use `{}` for placeholder. |
+| `path_replacement`  | string          | url_path    | Replacement pattern. Defaults to `path_pattern`. |
+| `query_param_name`  | string          | query_param | Query parameter name for credential injection. |
+| `proxy`             | object          | no          | Optional proxy-side overrides for phantom token parsing. Omitted fields inherit from top-level values. |
+| `env_var`           | string          | URI keys    | Environment variable name for SDK API key. Required when `credential_key` is `op://`, `apple-password://`, or `file://`. Optional for `env://`. |
+| `endpoint_rules`    | array           | no          | L7 allow-list of `{"method": "GET", "path": "/**"}` rules. When non-empty, only matching requests are forwarded (default-deny). |
+| `tls_ca`            | string (path)   | no          | Path to a PEM-encoded CA certificate. Use for upstreams with self-signed or private CA certs (e.g. a Kubernetes API server). |
+| `tls_client_cert`   | string (path)   | no          | Path to a PEM-encoded client certificate for mutual TLS (mTLS). Must be set together with `tls_client_key`. |
+| `tls_client_key`    | string (path)   | no          | Path to the PEM-encoded private key matching `tls_client_cert`. |
+
+`proxy` overrides apply only to how the local proxy validates incoming phantom tokens from the sandboxed process. Outbound upstream credential injection continues to use top-level fields.
 
 ### env_credentials (alias: secrets)
 

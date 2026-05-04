@@ -432,7 +432,7 @@
             { "type": "string" },
             { "type": "null" }
           ],
-          "description": "Keystore account name for the credential (e.g., \"telegram_bot_token\"), or a 1Password op:// URI, or an apple-password:// URI. PROF-03 (Phase 22): Optional — set `auth` instead for OAuth2 client_credentials flows. Mutually exclusive with `auth`."
+          "description": "Keystore account name for the credential (e.g., \"telegram_bot_token\"), or a 1Password op:// URI, apple-password:// URI, file:// URI, or env:// URI (e.g., \"env://MY_TOKEN\"). PROF-03 (Phase 22): Optional — set `auth` instead for OAuth2 client_credentials flows. Mutually exclusive with `auth`."
         },
         "auth": {
           "oneOf": [
@@ -482,7 +482,7 @@
             { "type": "string" },
             { "type": "null" }
           ],
-          "description": "Explicit environment variable name for the phantom token (e.g., \"OPENAI_API_KEY\"). Required when credential_key is a URI manager reference (op:// or apple-password://)."
+          "description": "Explicit environment variable name for the phantom token (e.g., \"OPENAI_API_KEY\"). Required when credential_key is a URI manager reference (op://, apple-password://, or file://). Optional for env:// (derived from the URI)."
         },
         "endpoint_rules": {
           "type": "array",

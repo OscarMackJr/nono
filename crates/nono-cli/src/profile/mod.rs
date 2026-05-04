@@ -575,6 +575,7 @@ fn is_http_token_char(c: char) -> bool {
 /// - A 1Password `op://` URI (validated by `nono::keystore::validate_op_uri`)
 /// - An Apple Passwords `apple-password://` URI
 /// - A `file://` URI pointing to an absolute path (validated by `nono::keystore::validate_file_uri`)
+/// - An `env://` URI referencing a host environment variable (validated by `nono::keystore::validate_env_uri`)
 fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(NonoError::ProfileParse(format!(
@@ -584,7 +585,6 @@ fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
     }
 
     if nono::keystore::is_op_uri(key) {
-        // Validate as 1Password URI
         nono::keystore::validate_op_uri(key).map_err(|e| {
             NonoError::ProfileParse(format!(
                 "invalid 1Password URI for custom credential '{}': {}",
@@ -605,12 +605,18 @@ fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
                 context_name, e
             ))
         })
+    } else if nono::keystore::is_env_uri(key) {
+        nono::keystore::validate_env_uri(key).map_err(|e| {
+            NonoError::ProfileParse(format!(
+                "invalid env:// URI for custom credential '{}': {}",
+                context_name, e
+            ))
+        })
     } else {
-        // Validate as keyring account name (alphanumeric + underscore)
         if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
             return Err(NonoError::ProfileParse(format!(
                 "credential_key '{}' for custom credential '{}' must contain only \
-                 alphanumeric characters and underscores (or use op:// / apple-password:// / file:// URI)",
+                 alphanumeric characters and underscores (or use op:// / apple-password:// / file:// / env:// URI)",
                 key, context_name
             )));
         }
@@ -622,7 +628,7 @@ fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
 ///
 /// Checks:
 /// - `credential_key` must be alphanumeric + underscores only, or a valid
-///   `op://` / `apple-password://` / `file://` URI
+///   `op://` / `apple-password://` / `file://` / `env://` URI
 /// - `upstream` must be HTTPS (or HTTP for loopback only)
 /// - Mode-specific validation:
 ///   - `header`: inject_header must be valid HTTP token, credential_format no CRLF
@@ -658,9 +664,9 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
     if let Some(ref key) = cred.credential_key {
         validate_credential_key(name, key)?;
 
-        // When credential_key is a URI manager reference, env_var is required because the URI
-        // cannot be meaningfully uppercased into an env var name (e.g.,
-        // "op://vault/item/field" -> "OP://VAULT/ITEM/FIELD" is nonsensical).
+        // URI manager references (except env://) cannot be meaningfully
+        // uppercased into an env var name, so env_var is required for them.
+        // env:// is exempt: the var name is derived from the URI itself.
         if (nono::keystore::is_op_uri(key)
             || nono::keystore::is_apple_password_uri(key)
             || nono::keystore::is_file_uri(key))
@@ -5278,6 +5284,45 @@ mod tests {
             "error should mention file://, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn test_validate_custom_credential_env_uri_accepted() {
+        let cred = CustomCredentialDef {
+            upstream: "https://api.example.com".to_string(),
+            credential_key: Some("env://MY_API_TOKEN".to_string()),
+            auth: None,
+            inject_mode: InjectMode::Header,
+            inject_header: "Authorization".to_string(),
+            credential_format: "Bearer {}".to_string(),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            endpoint_rules: vec![],
+            env_var: None,
+            tls_ca: None,
+        };
+        assert!(validate_custom_credential("example", &cred).is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_credential_env_uri_dangerous_var_rejected() {
+        let cred = CustomCredentialDef {
+            upstream: "https://api.example.com".to_string(),
+            credential_key: Some("env://LD_PRELOAD".to_string()),
+            auth: None,
+            inject_mode: InjectMode::Header,
+            inject_header: "Authorization".to_string(),
+            credential_format: "Bearer {}".to_string(),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            endpoint_rules: vec![],
+            env_var: None,
+            tls_ca: None,
+        };
+        let result = validate_custom_credential("example", &cred);
+        assert!(result.is_err(), "env://LD_PRELOAD should be rejected");
     }
 
     // End-to-end: parse a profile JSON with a file:// custom credential

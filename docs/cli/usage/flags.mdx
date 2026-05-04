@@ -303,7 +303,7 @@ nono run --allow-cwd --network-profile minimal --allow-domain custom-api.example
 
 #### `--credential`
 
-Enable credential injection for a named service via the reverse proxy. The service must be either a built-in service (`openai`, `anthropic`, `gemini`, `google-ai`) or defined as a custom credential in your profile. Credentials are loaded from the system keyring under the `nono` service name, from 1Password when `credential_key` is an `op://` URI, or from Apple Passwords on macOS when `credential_key` is an `apple-password://` URI.
+Enable credential injection for a named service via the reverse proxy. The service must be either a built-in service (`openai`, `anthropic`, `gemini`, `google-ai`) or defined as a custom credential in your profile. Credentials are loaded from the system keyring under the `nono` service name, from 1Password when `credential_key` is an `op://` URI, from Apple Passwords on macOS when `credential_key` is an `apple-password://` URI, from a file when `credential_key` is a `file://` URI, or from the host environment when `credential_key` is an `env://` URI.
 
 ```bash
 # Inject OpenAI credentials (loads from keyring account "openai_api_key")
