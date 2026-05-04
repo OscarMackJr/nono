@@ -150,9 +150,33 @@ pub fn user_config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("nono"))
 }
 
-/// Get the user state directory path (for version tracking)
+/// Get the user state directory path (for version tracking).
+///
+/// When `NONO_TEST_HOME` is set, returns `<NONO_TEST_HOME>/.nono` so that
+/// `rollback_root()` and `audit_root()` co-locate under one parent (Phase
+/// 27.1 D-27.1-05 — closes the Windows path-mismatch bug class surfaced
+/// by Phase 27 Blocker 2). The `.nono` segment mirrors the production
+/// layout that the `dirs::home_dir()`-based callsites already use, so
+/// tests get predictable production-mirroring paths (D-27.1-06).
+///
+/// When `NONO_TEST_HOME` is unset, behavior is byte-identical to the
+/// status quo: `dirs::state_dir()` falling through to
+/// `dirs::data_local_dir()`, with `nono` appended.
 #[allow(dead_code)]
 pub fn user_state_dir() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("NONO_TEST_HOME") {
+        let path = PathBuf::from(&value);
+        if path.is_absolute() {
+            return Some(path.join(".nono"));
+        }
+        // Non-absolute override: fall through to platform default rather
+        // than panicking. The next call to nono_home_dir() will emit
+        // NonoError::EnvVarValidation, which is the fail-closed surface
+        // for invalid overrides. Returning None here would mask the error
+        // upstream; falling through to the platform default at least
+        // keeps the system functional while the validation error fires
+        // on the actual home-dir lookup.
+    }
     dirs::state_dir()
         .or_else(dirs::data_local_dir)
         .map(|p| p.join("nono"))
