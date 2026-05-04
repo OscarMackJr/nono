@@ -4,7 +4,7 @@ milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
 stopped_at: Phase 27.1 context gathered
-last_updated: "2026-05-04T18:56:39.091Z"
+last_updated: "2026-05-04T21:54:12.049Z"
 last_activity: 2026-05-04
 progress:
   total_phases: 6
@@ -22,13 +22,13 @@ See: .planning/PROJECT.md (updated 2026-04-29 at v2.3 milestone scope-lock)
 
 **Core Value:** Every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Two v2.3 phases attempted, both partially-blocked on host platform: Phase 25 (Plan 25-02 ADR shipped; Plan 25-01 RESL Unix needs Linux/macOS host) and Phase 27 (Path B attempt surfaced Windows test-harness blockers; REQ-AAH-01 re-deferred to v2.4). The systemic blocker is the `run_nono` integration-test pattern relying on `dirs::home_dir()` which ignores `USERPROFILE` on Windows. v2.4 candidate phase: "Windows test-harness HOME redirection" via a `NONO_TEST_HOME` production-code seam. Planning Phases 26/28/29 on Windows is fine; execution likely needs Linux/macOS host until the harness gap is closed.
+**Current Focus:** Phase 27.1 — nono-test-home-seam
 
 ## Current Position
 
-Phase: 23 (windows-audit-event-retrofit) — COMPLETE (2026-04-29)
-Plan: 1 of 1 complete (23-01 executed via `/gsd-execute-phase 23`; SUMMARY landed; 14 plan success_criteria gates pass)
-Status: Ready to execute
+Phase: 27.1 (nono-test-home-seam) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 27.1
 Milestone: v2.2 — 3/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 23 ✓ 2026-04-29, Phase 24 ✓ 2026-04-27), 9/9 plans complete. v2.2 ready to ship.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
@@ -48,7 +48,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-04 -- Phase 27.1 planning complete
+Last activity: 2026-05-04 -- Phase 27.1 execution started
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
