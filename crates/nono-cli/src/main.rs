@@ -13,6 +13,7 @@ mod cli_bootstrap;
 mod command_blocking_deprecation;
 mod command_display;
 mod command_runtime;
+mod completions;
 mod config;
 mod credential_runtime;
 mod deprecated_policy;
@@ -385,6 +386,17 @@ mod tests {
 
         let wrap = Cli::parse_from(["nono", "wrap", "--allow", "/tmp", "--", "/bin/sh"]);
         assert!(!allows_pre_exec_update_check(&wrap.command));
+    }
+
+    #[test]
+    fn test_pre_exec_update_check_disabled_for_completions() {
+        // `nono completions` is used in shell init scripts such as
+        // `eval "$(nono completions zsh)"`.  It never shows an update
+        // notification (it is dispatched directly without
+        // run_command_with_update), so spawning the background update-check
+        // thread would incur network I/O with no benefit.
+        let completions = Cli::parse_from(["nono", "completion", "zsh"]);
+        assert!(!allows_pre_exec_update_check(&completions.command));
     }
 
     #[test]

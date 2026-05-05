@@ -43,6 +43,7 @@ test-trust-overrides = []
 nono = { version = "0.37.1", path = "../nono", default-features = false }
 nono-proxy = { version = "0.37.1", path = "../nono-proxy", default-features = false }
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 colored = "3"
 similar = "2"
 rand = "0.10"

@@ -176,7 +176,8 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Update(_)
         | Commands::Search(_)
         | Commands::List(_)
-        | Commands::OpenUrlHelper(_) => 0,
+        | Commands::OpenUrlHelper(_)
+        | Commands::Completions(_) => 0,
     }
 }
 
