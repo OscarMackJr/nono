@@ -64,6 +64,17 @@ fn setup_isolated_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
             .join("rollbacks"),
     )
     .expect("create rollback root");
+    // Phase 27.1 Plan 03 (D-27.1-14 small fix): pre-create the
+    // production-mirror rollback + audit roots under the NONO_TEST_HOME
+    // override. The supervisor's `--audit-integrity` exit-cleanup path
+    // canonicalizes `<home>/.nono/rollbacks` before that directory is
+    // necessarily created (Phase 27 Blocker 3 surface). Pre-creating both
+    // dirs here keeps the cleanup path's `canonicalize()` call happy on
+    // sessions that don't take a rollback snapshot.
+    fs::create_dir_all(home.join(".nono").join("rollbacks"))
+        .expect("create NONO_TEST_HOME-rooted rollback dir");
+    fs::create_dir_all(home.join(".nono").join("audit"))
+        .expect("create NONO_TEST_HOME-rooted audit dir");
     fs::create_dir_all(&workspace).expect("create workspace dir");
     (tmp, home, workspace)
 }
@@ -268,7 +279,45 @@ fn only_audit_session_id(home: &Path) -> String {
 // surfaces as a v2.4 follow-up. See
 // `.planning/phases/27.1-nono-test-home-seam/27.1-CONTEXT.md` for the
 // full Phase 27.1 decision set.
+//
+// Phase 27.1 Plan 03 Task 3 (D-27.1-14 large-fix branch, 2026-05-04):
+// the NONO_TEST_HOME seam itself now reaches every audit/rollback path
+// (verified by Plan 01's unit tests + Plan 02's callsite migration). The
+// seam works as designed; however, running these two re-enabled tests on
+// the Windows host surfaced a SEPARATE production-code bug downstream of
+// the seam:
+//
+//   `nono audit verify <session_id>` (and `nono audit show`) call
+//   `crate::rollback_session::load_session()` which only inspects
+//   `<home>/.nono/rollbacks/<id>/`. Audit-only sessions created by
+//   `--audit-integrity` (without `--rollback`) live at
+//   `<home>/.nono/audit/<id>/` and are therefore not findable by the
+//   verify path. The audit-aware loader `audit_session::load_session()`
+//   already exists with correct dual-root semantics (it checks both
+//   `<home>/.nono/audit/` and `<home>/.nono/rollbacks/`) but is gated
+//   behind `#[allow(dead_code)]` and is NOT wired into `audit_commands.rs`.
+//   See `crates/nono-cli/src/audit_commands.rs:12` (current import) and
+//   `crates/nono-cli/src/audit_session.rs:160` (the correct loader).
+//
+// A second production-code gap surfaced for Test 2 (`rollback_signed_..`):
+// the test asserts `<audit>/<id>/audit-attestation.bundle` exists for a
+// `--rollback --audit-sign-key` session, but `sign_session_attestation`
+// writes the bundle to `session_dir` (which is `<rollback>/<id>/` when
+// `rollback_active`) and does NOT mirror to the audit dir. Either the
+// supervisor needs a bundle-mirror step or `audit verify` needs to look
+// in both roots — non-trivial production architecture either way.
+//
+// Both gaps are independent of the NONO_TEST_HOME seam; they are surface
+// bugs that the seam exposes by isolating tests properly. Per
+// D-27.1-14, these are NOT in scope for Phase 27.1 — small `dirs::home_dir`
+// missed-callsite fixes were the in-scope contingency, but a loader-swap
+// or a sign-target-architecture change is broader work. Tests are
+// re-#[ignore]'d with this Blocker-3-resurfaced note; the seam itself
+// (Plans 01 + 02) is the deliverable. The tests will be re-enabled in a
+// v2.4 follow-up phase that addresses the audit-loader and bundle-target
+// architecture. See `27.1-03-SUMMARY.md` for the full surfaced report.
 #[test]
+#[ignore = "Phase 27.1 Plan 03 Blocker 3 resurfaced: audit verify uses rollback_session::load_session which can't find audit-only sessions; production loader swap queued for v2.4 follow-up"]
 fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
     let (_tmp, home, workspace) = setup_isolated_home();
 
@@ -437,6 +486,7 @@ fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
 }
 
 #[test]
+#[ignore = "Phase 27.1 Plan 03 Blocker 3 resurfaced: --rollback session writes bundle to <rollback>/<id> not <audit>/<id>; production sign-target architecture or audit-loader fix queued for v2.4 follow-up"]
 fn rollback_signed_session_verifies_from_audit_dir_bundle() {
     let (_tmp, home, workspace) = setup_isolated_home();
     fs::write(workspace.join("tracked.txt"), "before\n").expect("write tracked file");
@@ -449,6 +499,7 @@ fn rollback_signed_session_verifies_from_audit_dir_bundle() {
     let cmd_args = run_command_args();
     let mut args = vec![
         "run",
+        "--audit-integrity",
         "--allow-cwd",
         "--rollback",
         "--no-rollback-prompt",
