@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
-stopped_at: Phase 27.1 context gathered
-last_updated: "2026-05-05T19:17:51.763Z"
+stopped_at: Phase 27.2 context gathered
+last_updated: "2026-05-06T03:19:53.178Z"
 last_activity: 2026-05-05
 progress:
-  total_phases: 6
+  total_phases: 7
   completed_phases: 4
   total_plans: 10
   completed_plans: 8
@@ -195,7 +195,7 @@ Known deferred items at close: 20 (6 UAT bookkeeping gaps, 4 verification human_
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress).
 **Last Activity:** 2026-05-05
-**Stopped At:** Phase 27.1 context gathered
+**Stopped At:** Phase 27.2 context gathered
 
 **Next Steps (when on Linux/macOS host):**
 
