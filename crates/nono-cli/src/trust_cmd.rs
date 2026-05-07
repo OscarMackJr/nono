@@ -818,7 +818,13 @@ fn run_verify(args: TrustVerifyArgs) -> Result<()> {
         std::collections::HashSet::new();
 
     for bundle_path in &multi_bundles {
-        let scan_root = bundle_path.parent().unwrap_or_else(|| Path::new("."));
+        // Path::parent() returns Some("") for a bare filename (e.g.
+        // ".nono-trust.bundle" with no directory component).  An empty path
+        // cannot be canonicalized; treat it as the current directory.
+        let scan_root = bundle_path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         match verify_multi_subject_file(
             bundle_path,
             scan_root,
