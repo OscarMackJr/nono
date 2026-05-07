@@ -8,7 +8,12 @@ Use this cookbook to validate a Windows nono build with Claude Code on your own 
 Scope: the **current** Windows supported command surface (`run`, `shell`, `wrap` via ConPTY, file/network grants enforced by Job Objects + per-path mandatory integrity labels). For the broader contract and what is intentionally unsupported, see [Windows Filesystem Parity Contract](/cli/development/windows-filesystem-parity-contract) and [Windows Feature Gap Matrix](/cli/development/windows-feature-gap-matrix).
 
 <Note>
-**Doc-vs-binary drift check.** Some legacy Windows docs still describe profile-backed runs and `nono shell`/`nono wrap` as intentionally blocked on Windows. The 0.37.x binary's own `setup --check-only` reports the opposite: profile-backed runs go live, and both `shell` and `wrap` are supported on Windows 10 build 17763+ via ConPTY. **Trust the binary.** When in doubt, run `nono setup --check-only` on the actual artifact you are shipping and quote its output, not the docs.
+**Two facts that affect the POC happy path on Windows:**
+
+1. **Profile-backed runs work**, and both `nono shell` and `nono wrap` are supported on Windows 10 build 17763+ via ConPTY. The 0.37.x binary's `setup --check-only` confirms this. Some legacy docs imply otherwise — those docs are stale on the profile/shell/wrap question.
+2. **`nono run -- <TUI>` cannot host an interactive TUI agent on Windows.** The Windows supervised path opens anonymous pipes for the child, not a ConPTY (see `crates/nono-cli/src/supervised_runtime.rs:105-111` and `.planning/debug/resolved/windows-supervised-exec-cascade.md` for the historical `STATUS_DLL_INIT_FAILED` constraint that drove this). Non-interactive children (`cmd /c echo`, `cargo build`, `claude --version`) work fine through pipes; full-screen TUIs like `claude` need a real terminal and will appear to hang.
+
+For interactive Claude sessions on Windows, use `nono shell --profile claude-code` and start `claude` from inside the sandboxed shell. That's the path this cookbook recommends throughout.
 </Note>
 
 ## Prerequisites
@@ -147,13 +152,15 @@ nono v0.37.x
 
 The `Updating claude-code hook` line indicates that `~/.claude/hooks/nono-hook.sh` and the upfront sandbox section in `~/.claude/CLAUDE.md` were written. The install is idempotent and is skipped on subsequent runs unless the hook version changed.
 
-Then go live:
+Then go live. **Use `nono shell`, not `nono run`** — `nono run` cannot host an interactive TUI on Windows (see the top-of-doc Note). `nono shell` allocates a real ConPTY:
 
 ```powershell
-nono run --profile claude-code -- claude
+nono shell --profile claude-code --allow-cwd
+# Inside the sandboxed shell:
+claude
 ```
 
-You should land in the Claude Code TUI with the sandbox active. Try a benign blocked operation (e.g. ask Claude to read `C:\Users\<u>\.ssh\id_rsa`) and confirm the hook injects the `[NONO SANDBOX - PERMISSION DENIED]` text instead of a bare error message — that confirms the hook is wired correctly.
+You should land in the Claude Code TUI with the sandbox active. Try a benign blocked operation (e.g. ask Claude to read `C:\Users\<u>\.ssh\id_rsa`) and confirm the hook injects the `[NONO SANDBOX - PERMISSION DENIED]` text instead of a bare error message — that confirms the hook is wired correctly. Type `exit` to leave the sandboxed shell.
 
 ## Step 5 — Smoke checklist
 
@@ -171,19 +178,22 @@ nono setup --check-only
 nono run --dry-run --profile claude-code -- claude
 nono run --dry-run --allow . --read $env:USERPROFILE\.claude -- claude
 
-# Live, narrowest grant — works without profile
+# Live, narrowest grant — works without profile (non-interactive child, pipes are fine)
 nono run --allow . -- cmd /c echo hello
 
-# Live with profile
-nono run --profile claude-code -- claude --version
+# Live with profile, non-interactive (exercises policy + spawn through anonymous pipes)
+nono run --profile claude-code -- cmd /c echo "claude-code profile spawned ok"
 
 # Exact-file grant (Windows supports this)
 $tmp = New-TemporaryFile
 "hello" | Out-File $tmp.FullName
 nono run --read-file $tmp.FullName -- cmd /c type $tmp.FullName
 
-# Block-net works on Windows without WFP service (Job Object + token-level)
-nono run --profile claude-code --block-net -- claude --version
+# Block-net works on Windows without WFP service (Job Object + token-level).
+# Use a non-interactive child so the smoke is a one-liner; for an actual claude
+# session under block-net, use `nono shell --profile claude-code --allow-cwd --block-net` and run claude inside.
+nono run --profile claude-code --block-net -- cmd /c "echo block-net ok && curl -m 3 https://example.com"
+# The curl call should fail/timeout since outbound is blocked. Verify exit and no body returned.
 
 # Why-query: structured policy introspection
 nono why --path $env:USERPROFILE\.ssh\id_rsa --op read
@@ -204,6 +214,30 @@ nono run --profile claude-code --allow-domain api.openai.com -- claude --version
 
 If either of those silently runs, **stop the POC**. That is a fail-closed regression and worth a bug report before any user sees it.
 
+### Interactive verification (manual)
+
+The automated smokes above only exercise the spawn path through anonymous pipes. A full TUI Claude session needs a real terminal, which means `nono shell`:
+
+```powershell
+# Launch sandboxed shell, then start claude inside.
+nono shell --profile claude-code --allow-cwd
+# Inside the sandboxed shell:
+claude
+# Once claude's TUI is up, ask it to read `~/.ssh/id_rsa`. It should see the
+# [NONO SANDBOX - PERMISSION DENIED] hook output, not a bare OS error.
+# Type /quit to exit claude, then `exit` to leave the sandboxed shell.
+```
+
+If `claude` brings up its TUI cleanly inside the sandboxed shell and the hook fires on a blocked path, the interactive Windows happy path is verified.
+
+## Known limitation: `nono run` cannot host TUI agents on Windows
+
+`nono run` on Windows always opens anonymous pipes for the child process — never a ConPTY. Non-interactive children (`cmd /c echo`, `cargo build`, `python -c '...'`, `claude --version`) work fine through pipes. Full-screen TUI agents (`claude`, `codex`, anything that needs cursor positioning, alternate screen buffer, or interactive stdin) cannot render and will appear to hang.
+
+The constraint is documented in `crates/nono-cli/src/supervised_runtime.rs:101-111`: combining `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` with `DETACHED_PROCESS` historically crashed grandchildren with `STATUS_DLL_INIT_FAILED (0xC0000142)` (see `.planning/debug/resolved/windows-supervised-exec-cascade.md`). The conservative fix at the time disabled PTY allocation entirely on the Windows supervised path. Restoring PTY allocation for non-detached `nono run` is feasible but needs a regression-proof debug session — out of scope for the POC cookbook.
+
+**For the POC: use `nono shell --profile <name>` for any interactive agent on Windows.** The sandbox boundary is identical to `nono run` with the same profile; only the launch shape differs.
+
 ## Step 6 — POC user handoff content
 
 Drop the table below into the README you ship alongside the MSI. These are the items POC users will hit and need to know about.
@@ -212,9 +246,11 @@ Drop the table below into the README you ship alongside the MSI. These are the i
 |------|---|
 | Install | `msiexec /i nono-vX-x86_64-pc-windows-msvc-user.msi`, then open a fresh PowerShell |
 | First-time symlink warning | Enable Developer Mode (`Settings → System → For developers`); benign if skipped, but token refresh writes leak outside `~/.claude\` |
-| Happy path | `nono run --profile claude-code -- claude` |
-| Read-only review mode | `nono run --read . --read $env:USERPROFILE\.claude --allow-file $env:USERPROFILE\.claude.json -- claude` |
-| Offline | `nono run --profile claude-code --block-net -- claude` |
+| Happy path | `nono shell --profile claude-code --allow-cwd`, then run `claude` inside the sandboxed shell |
+| TUI agents (claude, codex, etc.) | Always use `nono shell` on Windows — `nono run -- <agent>` cannot host a TUI on this platform, so it appears to hang. The sandbox boundary is identical with either launch shape. |
+| Non-TUI commands (cargo, npm, scripts) | `nono run --profile claude-code -- <command>` is fine for non-interactive children |
+| Read-only review mode | `nono shell --read . --read $env:USERPROFILE\.claude --allow-file $env:USERPROFILE\.claude.json`, then `claude` inside |
+| Offline | `nono shell --profile claude-code --allow-cwd --block-net`, then `claude` inside |
 | Triage payload on a bug | Exact command line, full stdout, full stderr, `nono --version` output, `nono setup --check-only` output, whether WFP was reported missing |
 | Not yet supported on this build | Domain-level network filtering (`--network-profile`, `--allow-domain`) — needs WFP service, which the per-user MSI does not ship today. Use `--block-net` for offline or unrestricted network for online. |
 | Uninstall | Apps & Features → "nono" → Uninstall (MSI). For zip: delete the extracted directory and remove from PATH. |
