@@ -17,6 +17,7 @@ binary: target/x86_64-pc-windows-msvc/release/nono.exe
 binary_built: 2026-05-07T15:06
 binary_commit: 48a2abcb
 related_phases: [14, 15, 17, 21, 27.1]
+related_phase: 30-windows-nono-shell-architecture
 related_commits:
   - 48a2abcb (today: apply_unlink_overrides Seatbelt-only)
   - da25619 (Phase 21: ownership-skip in try_set_mandatory_label)
