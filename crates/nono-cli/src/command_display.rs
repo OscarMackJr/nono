@@ -60,10 +60,11 @@ pub(crate) fn format_command_line(command: &[String]) -> String {
 /// do — there is no shorter way to signal truncation. Callers should pass
 /// `max_len >= 3`.
 pub(crate) fn truncate_chars(s: &str, max_len: usize) -> String {
-    // Fast path: byte length is always >= char count, so when bytes fit, we
-    // know the char count fits too and no truncation (or char counting) is
-    // needed.
-    if s.len() <= max_len {
+    // Fast path: byte length >= char count always, so if bytes fit, chars fit
+    // too. When bytes exceed max_len we still need to check char count —
+    // a short string of multi-byte chars may have fewer chars than max_len
+    // and must not be truncated.
+    if s.len() <= max_len || s.chars().count() <= max_len {
         return s.to_string();
     }
     let keep = max_len.saturating_sub(3);
@@ -185,24 +186,43 @@ mod tests {
 
     #[test]
     fn truncate_chars_handles_multibyte_utf8_at_byte_boundary() {
-        // Mirrors the panic shape that bit `truncate_str` in
-        // `rollback_commands::print_side_by_side_diff`: `col_width` defaults
-        // to `(120 - 3) / 2 = 58`, so byte slicing at index 55 panics when a
-        // 4-byte UTF-8 sequence straddles that boundary.
+        // Regression: `print_side_by_side_diff` calls `truncate_chars` on
+        // diff lines with `col_width = (120-3)/2 = 58`. Byte-slicing at
+        // index `max_len - 3 = 54` panics when a 4-byte UTF-8 sequence
+        // straddles that boundary.
         //
-        // 53 ASCII bytes + 😀 (bytes 53..57) → byte 55 is mid-character.
+        // Build a 58-char / 61-byte line where byte 54 is inside an emoji:
+        //   53 ASCII bytes + 😀 (bytes 53..57) + "tail" → 58 chars, 61 bytes.
+        //   Byte 54 is a continuation byte (0x9F) inside the emoji.
         let prefix: String = "x".repeat(53);
         let line = format!("{prefix}\u{1F600}tail");
-        assert!(line.len() > 58);
-        assert!(!line.is_char_boundary(55));
+        assert_eq!(line.chars().count(), 58);
+        assert_eq!(line.len(), 61);
+        assert!(!line.is_char_boundary(54)); // byte 54 is mid-emoji
 
-        let result = truncate_chars(&line, 58);
+        // max_len = 57 < 58 chars → truncation must fire.
+        // Old byte-slicing code slices at byte 54 (= 57-3) → panic.
+        // New char-aware code takes 54 chars safely.
+        let result = truncate_chars(&line, 57);
         assert!(result.ends_with("..."));
-        assert!(result.chars().count() <= 58);
+        assert!(result.chars().count() <= 57);
     }
 
     #[test]
     fn truncate_chars_max_len_smaller_than_ellipsis() {
         assert_eq!(truncate_chars("hello world", 2), "...");
+    }
+
+    #[test]
+    fn truncate_chars_no_spurious_truncation_of_multibyte_string() {
+        // Regression for the Gemini review finding: a string of 5 emojis is
+        // 20 bytes but only 5 chars. With max_len = 10, the byte fast-path
+        // (20 > 10) falls through — but the char check (5 <= 10) must catch
+        // it and return the string unmodified. Without the `|| chars().count()
+        // <= max_len` guard, this would be spuriously truncated.
+        let s = "\u{1F600}".repeat(5); // 5 chars, 20 bytes
+        assert_eq!(s.len(), 20);
+        assert_eq!(s.chars().count(), 5);
+        assert_eq!(truncate_chars(&s, 10), s); // must NOT truncate
     }
 }
