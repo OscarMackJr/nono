@@ -36,3 +36,7 @@ host.nono_binary.commit
 # Sysinternals ProcMon traces (Phase 30 Plan 30-05) — large binaries, evidence is in CSV/MD
 *.pml
 
+# PoC build artifacts (quick-task 260508-m99 broker-process PoC; user builds locally on Windows)
+.planning/quick/*/poc-broker/Cargo.lock
+.planning/quick/*/poc-broker/target/
+
