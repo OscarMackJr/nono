@@ -232,7 +232,7 @@ Plans:
 
 **Requirements:** No formal REQ-IDs at scope-lock; phase tracked via CONTEXT.md decisions D-01..D-10 (token shape, investigation gating, TUI/security envelope acceptance, POC ship gating, bookkeeping correction). Decision-coverage gate enforces D-01..D-10 through plans.
 
-**Plans:** 2/5 plans executed
+**Plans:** 3/5 plans executed
 
 Plans:
 **Wave 1**
@@ -240,7 +240,7 @@ Plans:
 - [x] 30-02-PLAN.md — Token cascade 6th arm: WindowsTokenArm enum + select_windows_token_arm helper + pty_token_gate_tests (6 tests) + low_integrity_primary_token_sets_low_il (Windows-only FFI test, first runtime exercise of create_low_integrity_primary_token) (D-01 + D-02 + D-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 30-03-PLAN.md — Field-smoke harness: scripts/test-windows-shell-write-deny.ps1 + scripts/test-windows-shell-tui.ps1 + 30-FIELD-SMOKE.md runbook (D-05 + D-06 + D-09 hygiene; manual-only, runs on Windows test box)
+- [x] 30-03-PLAN.md — Field-smoke harness: scripts/test-windows-shell-write-deny.ps1 + scripts/test-windows-shell-tui.ps1 + 30-FIELD-SMOKE.md runbook (D-05 + D-06 + D-09 hygiene; manual-only, runs on Windows test box)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 30-04-PLAN.md — Field-smoke execution + outcome flip (3 human checkpoints): runs Plan 30-03 harnesses; on success-path adds cookbook security-envelope paragraph + flips SHELL-01 → ✔ validated v2.X Phase 30 + moves debug session to resolved/; on Wave 2 trigger leaves cookbook unchanged + flags Plan 30-05 (D-05 + D-06 + D-07 + D-10 second half)
@@ -294,7 +294,7 @@ Plans:
 | 27.1. NONO_TEST_HOME Seam (INSERTED) | v2.3 | 3/3 | Complete    | 2026-05-05 |
 | 28. Authenticode Chain-Walker Subject Extraction | v2.3 | 1/1 | Complete (REQ-AUDC-01..03 closed; D-AUDC-02 SandboxInit fallback + D-AUDC-03 explorer.exe fixture switch) | 2026-04-30 |
 | 29. WR-01 Reject-Stage Unification | v2.3 | 1/1 | Complete (REQ-WRU-01..02 closed; Option c locked as permanent design property) | 2026-04-30 |
-| 30. Windows nono shell Interactive Enforcement Architecture | v2.3 | 2/5 | In Progress|  |
+| 30. Windows nono shell Interactive Enforcement Architecture | v2.3 | 3/5 | In Progress|  |
 
 ## Backlog (v2.4 carry-forward)
 
