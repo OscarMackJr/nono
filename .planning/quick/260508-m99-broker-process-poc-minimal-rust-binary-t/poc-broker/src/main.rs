@@ -10,18 +10,20 @@ use std::{ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
 #[cfg(windows)]
 use windows_sys::Win32::Security::{
-    CreateWellKnownSid, DuplicateTokenEx, OpenProcessToken, SecurityAnonymous,
+    CreateWellKnownSid, DuplicateTokenEx, SecurityAnonymous,
     SetTokenInformation, TokenIntegrityLevel, TokenPrimary, WinLowLabelSid,
-    SECURITY_IMPERSONATION_LEVEL, SECURITY_MAX_SID_SIZE, SE_GROUP_INTEGRITY,
+    SECURITY_IMPERSONATION_LEVEL, SECURITY_MAX_SID_SIZE,
     TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL,
     TOKEN_QUERY,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::Console::AllocConsole;
 #[cfg(windows)]
+use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
+#[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, WaitForSingleObject,
-    INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
+    CreateProcessAsUserW, GetCurrentProcess, GetExitCodeProcess, OpenProcessToken,
+    WaitForSingleObject, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
 };
 
 #[cfg(not(windows))]
