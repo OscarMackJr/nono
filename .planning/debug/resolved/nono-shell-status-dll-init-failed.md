@@ -1,10 +1,11 @@
 ---
 slug: nono-shell-status-dll-init-failed
-status: architecture-decided-wave-2-investigating
-resolution_doc: .planning/phases/30-windows-nono-shell-architecture/30-CONTEXT.md
+status: resolved
+resolved_by: phase-30-plan-05
+resolution_doc: .planning/phases/30-windows-nono-shell-architecture/30-WAVE-2-PROCMON.md
 trigger: "nono shell --profile claude-code --allow-cwd silently exits on Windows test box with STATUS_DLL_INIT_FAILED (0xC0000142, decimal -1073741502). Field validation per HANDOFF.json after today's apply_unlink_overrides fix (commit 48a2abcb)."
 created: 2026-05-07T19:30:00Z
-updated: 2026-05-08T02:40:00Z
+updated: 2026-05-08T14:15:00Z
 host: windows-test-box
 binary: target/x86_64-pc-windows-msvc/release/nono.exe
 binary_built: 2026-05-07T15:06
@@ -419,3 +420,53 @@ The supervisor printed the capability banner, applied filesystem capabilities (l
 **Log files:** `ci-logs-local/test-windows-shell-write-deny-20260507-214336.log` (harness's INDETERMINATE first attempt, before manual override).
 
 **Plan 30-05 input:** ProcMon trace `nono shell --profile claude-code --allow-cwd` against the current binary (commit `a496734b`). Watch for `\Device\ConDrv` ALPC + ImageLoad chain in conhost.exe; cross-check whether the Low-IL primary token's CreateProcess succeeds at all (process create event with the supervisor as parent and conhost/powershell as child) versus failing pre-create. The diagnostic that the supervisor itself exits — not just the child — narrows the hypothesis to a parent-side failure after capability application: pipe-server bring-up, ConPTY allocation, or the cascade-arm decision producing a token shape that fails downstream.
+
+## Resolution
+
+**Resolved by:** Phase 30 Plan 30-05 — Wave 2 ProcMon investigation exhausted without surfacing a workable user-mode option within the D-04 3-5 working day timebox.
+
+**Outcome:** `nono shell --profile claude-code --allow-cwd` on Windows 10/11 is structurally incompatible with simultaneous WRITE_RESTRICTED + ConPTY + Low-IL primary token at user-mode. The Wave 2 ProcMon investigation localized the failure precisely:
+
+- powershell.exe child (PID 35976 in trace) created under Plan 30-02's Low-IL primary token cascade arm.
+- Process exits with `STATUS_DLL_INIT_FAILED (0xC0000142, decimal -1073741502)` after a ~35 ms lifespan.
+- Process loaded its own image + `ntdll` + `kernel32` + `KernelBase`, then died within 6.8 ms after KernelBase Load Image notification fired.
+- **Zero further Load Image events** in the death window — failure is in the static-init / DllMain chain of those four DLLs.
+- Sub-classification: **CSRSS console-subsystem ALPC handshake denied at Low-IL** during `KernelBase!BaseDllInitialize` → `ConClntInitialize`. The CSRSS ALPC port DACL excludes Low-IL clients; the connect call fails synchronously; KernelBase's DllMain returns FALSE; the loader sets `STATUS_DLL_INIT_FAILED` and the process exits before reaching `main()`.
+- The PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE inherited handles do NOT bypass this — they're a separate communication path (terminal I/O between `nono.exe` ↔ `conhost.exe`).
+
+This is RESEARCH Pitfall 2 (Microsoft-documented integrity-mismatch failure) confirmed in the field on the supervised+ConPTY path. Phase 15 fixed the same `STATUS_DLL_INIT_FAILED` signature for the **detached** `nono run` path via `should_allocate_pty` gate at `supervised_runtime.rs:88-94`; Phase 30 cannot apply Phase 15's gate because `nono shell` requires interactive ConPTY by definition (D-04 explicitly rejected the Phase 15 detached waiver).
+
+**Phase 30 ships failure-mode finding:**
+- SHELL-01 PROJECT.md row → ✘ deferred to v3.0.
+- Cookbook (`docs/cli/development/windows-poc-handoff.mdx`) reverted per RESEARCH §"Cookbook Rollback Path" Option Rev-B (text replacement, NOT git revert): stripped the `<Note>` recommendation, Step 4 `nono shell` instruction, Step 5 "Interactive verification (manual)" block, and Step 6 `nono shell` rows; KEPT the "Known limitation" section (factually correct); ADDED new "`nono shell` on Windows is deferred to v3.0" section with the four-failure-mode evidence.
+- POC users get `nono run -- claude --version` (and similar non-TUI invocations) on Windows until v3.0 kernel mini-filter driver work or a Phase 31 broker-process pattern lands.
+- Wave 1 cascade arm code stays in tree — the `WindowsTokenArm::LowIlPrimary` enum + `select_windows_token_arm` helper + `pty_token_gate_tests` (6/6) + Windows-only `low_integrity_primary_token_sets_low_il` runtime test all pass; the helpers are guards on the underlying mechanism for whenever v3.0 / Phase 31 activates this path.
+
+**Six sixth-option candidates analyzed in `30-WAVE-2-PROCMON.md`** (all viable user-mode paths exceed D-04 timebox):
+
+- **6a — AppContainer model** (1-2 weeks): replace Low-IL primary token with LOWBOX SID + capabilities; CSRSS works for AppContainers natively. Phase 31 candidate.
+- **6b — Broker-process pattern** (~1 week): small Medium-IL intermediary attaches to CSRSS, lowers self to Low-IL, spawns PowerShell as Low-IL child inheriting attached console. Microsoft-documented; **strongest Phase 31 candidate**.
+- **6c — Pre-AllocConsole sequencing** (1-2 days experimental): theoretically fails because PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE replaces inherited console; KernelBase still calls CSRSS attach. Not chosen.
+- **6d — Job Object UI restrictions instead of mandatory-label IL**: violates CONTEXT D-06 (mandatory-label NO_WRITE_UP requirement). Not viable for Phase 30 contract.
+- **6e — Defer to v3.0 / kernel-driver** (~1 day): chosen path. Honest disposition; preserves evidence.
+- **6f — Pipe-stdio instead of ConPTY**: violates CONTEXT D-05 (TUI rendering requirement). Not viable for Phase 30 contract.
+
+**Cross-references:**
+- Phase 30 CONTEXT: `.planning/phases/30-windows-nono-shell-architecture/30-CONTEXT.md`
+- Phase 30 RESEARCH: `.planning/phases/30-windows-nono-shell-architecture/30-RESEARCH.md`
+- Phase 30 Wave 1 field smoke: `.planning/phases/30-windows-nono-shell-architecture/30-FIELD-SMOKE.md`
+- Phase 30 Wave 2 ProcMon evidence: `.planning/phases/30-windows-nono-shell-architecture/30-WAVE-2-PROCMON.md`
+- Cookbook revert: `docs/cli/development/windows-poc-handoff.mdx` § "`nono shell` on Windows is deferred to v3.0"
+- PROJECT.md SHELL-01 row (✘ deferred): `.planning/PROJECT.md` § "Validated requirements"
+- STATE.md Key Decisions Phase 30 entry: `.planning/STATE.md` § "Key Decisions (v2.3)"
+- Phase 15 parallel-pattern resolution (detached path; Phase 30 cannot reuse): `.planning/debug/resolved/windows-supervised-exec-cascade.md`
+
+**v3.0 / Phase 31 follow-up scope:**
+
+The deferred work is the broker-process pattern (6b) or a kernel mini-filter driver. Either delivers `nono shell` on Windows with full TUI + write-deny. CONTEXT.md `<deferred>` block enumerates the shape; this Resolution doesn't pre-bind to a v3.0 architecture — Phase 31 will re-discuss-phase based on which option proves viable.
+
+**Out-of-scope sibling concerns** (not closed by this resolution):
+
+- **D-08:** Claude Code PreToolUse hook not firing — separate debug session at `.planning/debug/claude-code-hook-not-firing.md` (not yet created; v2.4 candidate per CONTEXT.md `<deferred>` block).
+- **D-09:** AppliedLabelsGuard label leak (9 leaked Low-IL paths in user home — Plan 30-04 + Plan 30-05 evidence both observe `prior_rid="0x1000"` on `.cache\claude`, `.cargo`, `.claude`, `.config\git\ignore`, `.gitconfig`, `.local\bin`, `.rustup`, `AppData\Roaming\nono\profiles`, `Nono`). The harness's `icacls /setintegritylevel "(NX)Medium"` clear in `test-windows-shell-write-deny.ps1` Step 2 returns "The parameter is incorrect" — separate debug session at `.planning/debug/nono-labels-guard-leak.md` (not yet created; v2.4 candidate per CONTEXT.md `<deferred>` block).
+- **Field-smoke harness collateral (Plan 30-05 inheritance for Phase 31):** (a) `nono shell` does not accept positional/trailing args after `--` — `scripts/test-windows-shell-write-deny.ps1` invocation is structurally incompatible with the current CLI; (b) `Out-File '<path>' '<content>'` invalid PowerShell syntax in same harness. Both surfaced and documented in `30-WAVE-2-PROCMON.md`; Phase 31 inherits the rework.

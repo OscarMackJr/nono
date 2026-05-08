@@ -180,3 +180,34 @@ Wave 2 investigation timeboxed to 3-5 working days per CONTEXT.md D-04. Day coun
 
 - **Day 1: 2026-05-08** — Task 1 ProcMon trace setup + capture; Task 2 trace analysis localized failure to `STATUS_DLL_INIT_FAILED` in PowerShell child after KernelBase load + 6.8 ms; Task 3 (this document) + Task 4 sixth-option synthesis. Recommendation: 6e (defer to v3.0) with 6b (broker pattern) as Phase 31 candidate. Awaiting user decision on Tasks 5-6 implementation path.
 - **Day 2-N:** TBD — depends on user decision in Task 4. If 6e: ~1 day for Tasks 5-6 (cookbook revert + final bookkeeping). If 6b: 1+ week, exceeds timebox; would split into Phase 31.
+
+## Final outcome
+
+**Result:** Wave 2 EXHAUSTED — no workable user-mode option surfaced within the 3-5 working day timebox.
+
+**Investigation activities:**
+- **Day 1 (2026-05-08):** Task 1 ProcMon trace setup; Task 2 trace analysis localized failure to `STATUS_DLL_INIT_FAILED (0xC0000142)` inside KernelBase.dll DllMain at the CSRSS console-subsystem ALPC handshake. Task 3 (this document) captured findings. Task 4 sixth-option synthesis examined six candidates (6a AppContainer 1-2 weeks, 6b broker-process 1+ week, 6c pre-AllocConsole likely fails, 6d JobObject UI restrictions violates D-06, 6e v3.0 deferral, 6f pipe-stdio violates D-05) — all viable user-mode paths exceed timebox. Task 5 SKIPPED per `exhaust-without-fix` decision. Task 6 ships failure-path bookkeeping.
+
+**Phase 30 ships:** failure-mode finding; SHELL-01 → ✘ deferred to v3.0 / Phase 31.
+
+**Cookbook reverted:** Option Rev-B (text replacement, NOT git revert):
+- Top-of-doc `<Note>` block recommendation stripped; replaced with a limited Note pointing to "Known limitation" + new "deferred to v3.0" section.
+- Step 4 `nono shell` instruction stripped; replaced with `nono run -- <command>` recommendation.
+- Step 5 "Interactive verification (manual)" block removed.
+- Step 6 user-handoff table rows mentioning `nono shell` removed; replaced with non-TUI `nono run` recommendations.
+- "Known limitation: `nono run` cannot host TUI agents on Windows" section RETAINED (factually correct).
+- New section "`nono shell` on Windows is deferred to v3.0" added with the four-failure-mode evidence and pointer to this document.
+
+**Debug session:** moved to `.planning/debug/resolved/nono-shell-status-dll-init-failed.md` with `## Resolution` section preserving the four-failure-mode finding and Phase 31 follow-up scope.
+
+**v3.0 / Phase 31 follow-up:** strongest candidate is option 6b (broker-process pattern) — Microsoft-documented workaround where a small Medium-IL intermediary attaches to CSRSS, lowers itself to Low-IL via `SetTokenInformation(TokenIntegrityLevel, Low)`, then spawns PowerShell as a Low-IL child inheriting the already-attached console. Phase 31 will re-discuss-phase based on whether 6b proves viable in that scope's larger budget. CONTEXT.md `<deferred>` block enumerates the kernel-driver alternative.
+
+**Wave 1 cascade arm code stays in tree:** `WindowsTokenArm::LowIlPrimary` enum + `select_windows_token_arm` helper + `pty_token_gate_tests` (6/6 truth-table) + Windows-only `low_integrity_primary_token_sets_low_il` runtime test all pass. The unit tests + helper enum are guards on the underlying mechanism for whenever v3.0 / Phase 31 activates this path. The code is deliberately NOT removed — Phase 30's investigation IS the institutional knowledge that future work builds on.
+
+**Commits:**
+- `baebc3f0`+`ccf28720`+`5a91e40c`+`aef4a2c3` (30-01 bookkeeping prelude)
+- `a496734b`+`09e8ffb9` (30-02 cascade arm + tests)
+- `c8e31388` (30-03 SUMMARY only — scripts deferred to 30-04 commit)
+- `a86e6db3`+`b79a4839` (30-04 wave2-trigger-launch + harness ship)
+- `d9030cc5` (30-05 ProcMon analysis — Tasks 2+3)
+- _(this commit ships Tasks 5+6 terminal close — failure path)_
