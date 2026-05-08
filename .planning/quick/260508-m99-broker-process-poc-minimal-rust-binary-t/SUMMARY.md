@@ -47,28 +47,78 @@ All `unsafe` blocks carry `// SAFETY:` comments. Non-Windows stub included for L
 
 ## Build Status
 
-Build not run by executor — Windows-only binary. The `cfg(not(windows))` stub compiles on Linux/macOS
-but Win32 wiring activates only on `x86_64-pc-windows-msvc`.
+**Build:** clean — `cargo build --release --target x86_64-pc-windows-msvc` from `poc-broker/` succeeds on Windows host. Initial build had 2 import-path errors (`OpenProcessToken` lives in `Win32::System::Threading`, `SE_GROUP_INTEGRITY` lives in `Win32::System::SystemServices`) — fixed in commit `17d87c7f`.
 
-**Field test pending:** User runs on Windows 10/11 test box.
+**Cargo.toml feature additions:** `Win32_System_SystemServices` added alongside `Win32_System_Threading` / `Win32_Security` / `Win32_Foundation` / `Win32_System_Console` per windows-sys 0.59 module layout.
 
-```powershell
-cd .planning\quick\260508-m99-broker-process-poc-minimal-rust-binary-t\poc-broker
-cargo build --release --target x86_64-pc-windows-msvc
-.\target\release\poc-broker.exe
+## Field-Test Result: ✅ PASS — A1 EMPIRICALLY VALIDATED (2026-05-08)
+
+User ran the PoC on the Windows test box (Windows 10/11, normal Medium-IL PowerShell). Verbatim output:
+
+```
+[POC] AllocConsole rc=0 (0=inherited parent console, non-zero=new console)
+[POC] Mechanism: AllocConsole + DuplicateTokenEx(SecurityAnonymous,TokenPrimary) + SetTokenInformation(Low) + CreateProcessAsUserW(dwCreationFlags=0)
+[POC] Child PID: 29996
+[POC] Waiting for child...
+PS C:\...\poc-broker> $PID
+29996
+PS C:\...\poc-broker> whoami /groups | Select-String "Mandatory Label"
+Mandatory Label\Low Mandatory Level        Label            S-1-16-4096
+PS C:\...\poc-broker> exit
+[POC] Child exit code: 0x00000000 (0)
+[POC] PASS — broker pattern viable; child survived KernelBase DllMain at Low-IL
 ```
 
-## Next Step
+### Diagnostic evidence
 
-User runs `poc-broker.exe` on Windows test box (normal Medium-IL PowerShell, not Administrator)
-and reports the exit code. Consult RESEARCH.md §8 decision matrix for the full decision path:
-`.planning/quick/260508-lqh-scope-phase-31-broker-process-implementa/RESEARCH.md`
+| Probe | Outcome | Significance |
+|---|---|---|
+| `[POC] Child PID: 29996` | child spawned successfully | broker → child CreateProcessAsUserW worked |
+| `$PID` (in spawned shell) = `29996` | matches reported child PID | user IS interacting with the spawned Low-IL child, not the outer Medium-IL shell |
+| `whoami /groups` Mandatory Label | `Low Mandatory Level S-1-16-4096` | child is at Low IL — token integrity drop succeeded and persisted to the child |
+| Spawned shell renders prompt + accepts input | interactive | KernelBase DllMain completed (no `STATUS_DLL_INIT_FAILED`) and the console attach worked via inheritance |
+| PSReadLine `Access to the path '...ConsoleHost_history.txt' is denied` | OS-level write-deny | mandatory-label NO_WRITE_UP enforcement active — Low-IL child cannot write to Medium-IL `AppData\Roaming` path. **This is the security envelope working as designed.** |
+| `[POC] Child exit code: 0x00000000 (0)` | clean exit | child ran to completion (user typed `exit`); no crash, no NTSTATUS abort |
 
-| Result | Exit code    | Decision                                                              |
-|--------|--------------|-----------------------------------------------------------------------|
-| PASS   | 0x00000000   | Commit to Phase 31 broker-process implementation (~7 days)           |
-| FAIL-A | 0xC0000142   | Escalate discuss-phase: AppContainer (6a) vs deferral (7c/7d)        |
-| FAIL-B | other        | Capture ProcMon trace; new failure mode to investigate               |
+### What this validates
+
+**RESEARCH.md Assumption A1** — *"KernelBase's `ConClntInitialize` skips the CSRSS ALPC connect when the child inherits the parent's console (no CREATE_NEW_CONSOLE flag)"* — is **empirically confirmed on this Windows test box**. The Phase 30 ProcMon evidence localized the failure to CSRSS console-subsystem ALPC denial during KernelBase DllMain at Low-IL; the broker pattern (Medium-IL parent holds console, Low-IL child inherits) bypasses that denial path because KernelBase short-circuits the CSRSS attach when a console handle is already inherited.
+
+### Architecture confirmed
+
+```
+outer PowerShell (Medium IL — holds CSRSS console attachment from session start)
+  └── poc-broker.exe (Medium IL, inherits console — does NOT need to call AllocConsole; rc=0)
+       └── powershell.exe -NoLogo (Low IL via duplicated token, inherits broker's console;
+            KernelBase DllMain detects inherited console → skips CSRSS attach → survives)
+```
+
+For Phase 31 production lift: the broker MUST be a Medium-IL process spawned by `nono.exe` (which is itself Medium-IL). Only the broker's CHILD gets the Low-IL token. A Low-IL broker would re-trigger the CSRSS denial.
+
+## Next Step (UPDATED post-PASS)
+
+**Phase 31 broker-process pattern is now de-risked.** Recommended path:
+
+1. **Today:** Update `30-WAVE-2-PROCMON.md` and the resolved debug session with the A1 validation evidence (this commit). Update `PROJECT.md` to flag SHELL-01 ✘→Phase 31 candidate (was v3.0 deferral).
+2. **Next session:** `/gsd-phase add 31 "Windows nono shell broker-process pattern"` then `/gsd-discuss-phase 31` with this PoC outcome + RESEARCH.md as locked scoping inputs.
+3. **Phase 31 execution:** ~7 days per RESEARCH.md effort estimate (PoC eliminates the 1.5-day de-risking step). Lift mechanism into `crates/nono-shell-broker/`, wire `launch.rs` to dispatch, fix harness `Out-File` false-PASS, re-run field smoke for Acceptance #1-#4, ship cookbook update flipping SHELL-01 ✘→✔.
+
+## Deviations from Plan
+
+1. Build encountered 2 import-path errors not anticipated by planner; fixed inline (commit `17d87c7f`).
+2. 3 unsafe blocks lacked `// SAFETY:` annotations from initial executor pass; added in commit `9282cd34` for hygiene parity with production code Phase 31 will lift.
+
+Both deviations are documentation/correctness fixes, not architectural changes. The mechanism the plan specified is exactly what shipped and what the user ran successfully.
+
+## Self-Check: PASSED
+
+- poc-broker/Cargo.toml: FOUND (with corrected feature list)
+- poc-broker/src/main.rs: FOUND (196 lines + 2-line SAFETY hygiene)
+- README.md: FOUND
+- Build clean on Windows: VERIFIED
+- Field-test outcome: **PASS** (child exit code 0; Low-IL confirmed; write-deny confirmed)
+- Parent Cargo.toml members: UNCHANGED (no poc-broker added)
+- A1 assumption status: **EMPIRICALLY VALIDATED**
 
 ## Deviations from Plan
 

@@ -253,3 +253,74 @@ Wave 2 investigation timeboxed to 3-5 working days per CONTEXT.md D-04. Day coun
 - `a86e6db3`+`b79a4839` (30-04 wave2-trigger-launch + harness ship)
 - `d9030cc5` (30-05 ProcMon analysis — Tasks 2+3)
 - _(this commit ships Tasks 5+6 terminal close — failure path)_
+
+---
+
+## Postscript: A1 empirically validated same-day (2026-05-08)
+
+After Phase 30 closed as failure-mode finding, the user spawned quick-task `260508-m99-broker-process-poc-minimal-rust-binary-t` to de-risk RESEARCH Assumption A1 with a 50-100 line standalone Rust binary that executes the broker-process pattern's core mechanism. The PoC ran successfully on the user's Windows test box.
+
+**PoC outcome: PASS** — `[POC] Child exit code: 0x00000000 (0)`.
+
+### Field-test evidence
+
+```
+[POC] AllocConsole rc=0 (0=inherited parent console, non-zero=new console)
+[POC] Mechanism: AllocConsole + DuplicateTokenEx(SecurityAnonymous,TokenPrimary) + SetTokenInformation(Low) + CreateProcessAsUserW(dwCreationFlags=0)
+[POC] Child PID: 29996
+[POC] Waiting for child...
+PS C:\...\poc-broker> $PID
+29996                                                       # ← matches PoC's reported child PID
+PS C:\...\poc-broker> whoami /groups | Select-String "Mandatory Label"
+Mandatory Label\Low Mandatory Level        Label            S-1-16-4096   # ← Low IL confirmed
+PS C:\...\poc-broker> exit
+[POC] Child exit code: 0x00000000 (0)
+[POC] PASS — broker pattern viable; child survived KernelBase DllMain at Low-IL
+```
+
+PSReadLine error during interaction confirmed mandatory-label NO_WRITE_UP enforcement: `Access to the path 'C:\Users\OMack\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' is denied.` — the Low-IL child cannot write to Medium-IL `AppData\Roaming` paths, exactly as designed.
+
+### What this validates
+
+- **Assumption A1 (KernelBase!ConClntInitialize skips CSRSS attach when child inherits console):** EMPIRICALLY VALIDATED on Windows 10/11 (user's test box).
+- **Broker-process pattern viability:** CONFIRMED for the Plan 30-05 6b option.
+- **OS-level write-deny under broker arch:** CONFIRMED (PSReadLine history write denied).
+- **Console inheritance through IL drop:** WORKS — child inherits broker's already-attached console; KernelBase short-circuits the CSRSS connect because `STARTF_USESTDHANDLES` is not set and no new console is being requested.
+
+### Architecture confirmed for Phase 31
+
+```
+nono.exe (Medium IL, holds CSRSS console attachment)
+  └── nono-shell-broker.exe (Medium IL, inherits console — does NOT call AllocConsole or CreatePseudoConsole)
+       └── powershell.exe -NoLogo (Low IL via duplicated+lowered token, inherits broker console;
+            KernelBase DllMain detects inherited console → skips CSRSS attach → survives)
+```
+
+The broker MUST be Medium-IL (else broker itself hits CSRSS denial). Only the broker's CHILD gets Low-IL.
+
+### Implications for Phase 30 v3.0-deferral framing
+
+The Phase 30 conclusion that "no user-mode token shape can deliver WRITE_RESTRICTED + ConPTY + Low-IL primary token simultaneously" remains correct **for the direct CreateProcessAsUserW path** (the one Plan 30-02 wired into `launch.rs`). The PoC validates that the *broker-mediated* path bypasses this — but it requires:
+
+1. A Medium-IL intermediary process (the broker) that inherits CSRSS console attachment
+2. The intermediary spawning the Low-IL shell as its own child
+3. No `CREATE_NEW_CONSOLE` flag (so the child inherits the intermediary's console)
+
+This is option 6b from §"Hypothesis space" above. The PoC confirms 6b works on the same hardware Phase 30 ProcMon-traced. Phase 30's "FAILURE PATH" bookkeeping (cookbook revert per Option Rev-B; SHELL-01 → ✘ deferred to v3.0) was the disciplined call for the timebox — but the v3.0 framing is now obsolete: **SHELL-01 should be re-classified from "v3.0 deferral" to "Phase 31 candidate"** in subsequent updates to PROJECT.md and STATE.md.
+
+### What stays correct from the Phase 30 close
+
+- Wave 1 cascade arm code (`WindowsTokenArm::LowIlPrimary` etc.) preserved in tree as guards; Phase 31 lifts the broker mechanism on top of these helpers.
+- The 4 "failure modes span the user-mode token shape space" claim is correct **for the direct-spawn path**. The broker-mediated path is a different mechanism that bypasses the shape constraints.
+- Cookbook v3.0-deferral language is still accurate for `nono shell --profile claude-code` users *today*, because Phase 31 hasn't shipped yet. Update the cookbook when Phase 31 lands the production broker.
+- Debug session `## Resolution` section accurately records that no user-mode token shape works *via the direct path*. Phase 31 will close the debug session via the indirect (broker) path.
+
+### Cross-references
+
+- PoC plan: `.planning/quick/260508-m99-broker-process-poc-minimal-rust-binary-t/PLAN.md`
+- PoC binary: `.planning/quick/260508-m99-broker-process-poc-minimal-rust-binary-t/poc-broker/src/main.rs` (196 lines)
+- PoC SUMMARY (with field-test outcome): `.planning/quick/260508-m99-broker-process-poc-minimal-rust-binary-t/SUMMARY.md`
+- Scoping research: `.planning/quick/260508-lqh-scope-phase-31-broker-process-implementa/RESEARCH.md` §6 (PoC scope), §Assumptions Log A1
+- PoC commit chain: `2cb4071b`+`0095ab4a`+`f5eebfc3`+`a66dc606`+`9282cd34`+`17d87c7f`
+
+**Phase 31 effort revised:** ~7 days (was 7-9 in RESEARCH.md). The 1.5-day PoC step is now complete; remaining work is the production lift of the validated mechanism into `crates/nono-shell-broker/`, harness rework, and field smoke re-run.

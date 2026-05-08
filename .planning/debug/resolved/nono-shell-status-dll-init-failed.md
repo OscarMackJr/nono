@@ -470,3 +470,20 @@ The deferred work is the broker-process pattern (6b) or a kernel mini-filter dri
 - **D-08:** Claude Code PreToolUse hook not firing — separate debug session at `.planning/debug/claude-code-hook-not-firing.md` (not yet created; v2.4 candidate per CONTEXT.md `<deferred>` block).
 - **D-09:** AppliedLabelsGuard label leak (9 leaked Low-IL paths in user home — Plan 30-04 + Plan 30-05 evidence both observe `prior_rid="0x1000"` on `.cache\claude`, `.cargo`, `.claude`, `.config\git\ignore`, `.gitconfig`, `.local\bin`, `.rustup`, `AppData\Roaming\nono\profiles`, `Nono`). The harness's `icacls /setintegritylevel "(NX)Medium"` clear in `test-windows-shell-write-deny.ps1` Step 2 returns "The parameter is incorrect" — separate debug session at `.planning/debug/nono-labels-guard-leak.md` (not yet created; v2.4 candidate per CONTEXT.md `<deferred>` block).
 - **Field-smoke harness collateral (Plan 30-05 inheritance for Phase 31):** (a) `nono shell` does not accept positional/trailing args after `--` — `scripts/test-windows-shell-write-deny.ps1` invocation is structurally incompatible with the current CLI; (b) `Out-File '<path>' '<content>'` invalid PowerShell syntax in same harness. Both surfaced and documented in `30-WAVE-2-PROCMON.md`; Phase 31 inherits the rework.
+
+---
+
+## Postscript: broker-pattern PoC validated A1 same-day (2026-05-08)
+
+After this session was resolved as failure-mode finding, quick-task `260508-m99` shipped a standalone Rust binary that executes the broker-process pattern's core mechanism (Plan 30-05 Wave 2 option 6b). User ran it on Windows test box: child PID matches `$PID` from spawned shell; `whoami /groups` confirms `Mandatory Label\Low Mandatory Level S-1-16-4096`; child ran interactively to clean exit; `[POC] Child exit code: 0x00000000 (0)`. PSReadLine `Access to the path '...' is denied` on `AppData\Roaming\...\ConsoleHost_history.txt` confirmed mandatory-label NO_WRITE_UP enforcement is firing as designed.
+
+**RESEARCH.md A1 empirically validated:** KernelBase's `ConClntInitialize` does skip the CSRSS ALPC connect when the Low-IL child inherits its parent's already-attached console — provided the parent (the broker) is at Medium-IL and holds the console attachment. The CSRSS denial that this debug session originally surfaced applies to the *direct* CreateProcessAsUserW path that Plan 30-02 wired into `launch.rs`, NOT to the broker-mediated indirect path.
+
+**Resolution updated:** This debug session stays at `status: resolved` with the failure-mode finding intact for the direct path (which is the path Phase 30 production code took). The follow-up mechanism integration — wiring `nono.exe` to dispatch through a Medium-IL broker that spawns the Low-IL `powershell.exe` — is **Phase 31's deliverable**, not a re-opening of this session. PROJECT.md SHELL-01 row revised from `✘ deferred to v3.0` to `⚠ Phase 31 candidate (broker-process PoC validated 2026-05-08)`.
+
+**PoC artifacts (preserved as Phase 31 reference):**
+- `.planning/quick/260508-m99-broker-process-poc-minimal-rust-binary-t/poc-broker/src/main.rs` (196 lines, working broker mechanism)
+- `.planning/quick/260508-m99-broker-process-poc-minimal-rust-binary-t/SUMMARY.md` (field-test outcome with verbatim user transcript)
+- `.planning/quick/260508-lqh-scope-phase-31-broker-process-implementa/RESEARCH.md` §6 + §Assumptions Log A1 (the assumption now validated)
+
+**Phase 31 effort estimate** (from RESEARCH.md, revised post-PoC): ~7 days for the production lift (was 7-9; the 1.5-day PoC step is complete). Lift broker mechanism into `crates/nono-shell-broker/`, dispatch from `launch.rs`, fix harness `Out-File` false-PASS bug, re-run field smoke for Acceptance #1-#4, ship cookbook update flipping SHELL-01 ✘→✔.
