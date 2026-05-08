@@ -107,8 +107,11 @@ fn main() {
         .encode_wide()
         .chain(Some(0))
         .collect();
+    // SAFETY: STARTUPINFOW and PROCESS_INFORMATION are #[repr(C)] POD structs;
+    // all-zero is a valid representation. Required init pattern per Win32 docs.
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = size_of::<STARTUPINFOW>() as u32;
+    // SAFETY: PROCESS_INFORMATION zero-init is the documented Win32 idiom.
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
 
     println!("[POC] Mechanism: AllocConsole + DuplicateTokenEx(SecurityAnonymous,TokenPrimary) + SetTokenInformation(Low) + CreateProcessAsUserW(dwCreationFlags=0)");
@@ -186,10 +189,11 @@ fn main() {
 #[cfg(windows)]
 fn fatal_if_zero(result: i32, ctx: &str) {
     if result == 0 {
+        // SAFETY: GetLastError() takes no arguments and is always safe to call from any thread.
+        let err = unsafe { GetLastError() };
         eprintln!(
             "[POC] FATAL: {} failed (GetLastError={})",
-            ctx,
-            unsafe { GetLastError() }
+            ctx, err
         );
         std::process::exit(1);
     }
