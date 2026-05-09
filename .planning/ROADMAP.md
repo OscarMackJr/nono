@@ -172,13 +172,13 @@ Plans:
 
 **Requirements:** REQ-AAHX-01 (audit-loader correctness for audit-only sessions), REQ-AAHX-02 (bundle-target architecture decision + ADR), REQ-AAHX-03 (audit-attestation test re-enablement closes REQ-AAH-01 + REQ-NTH-03 transitively). To be locked at `/gsd-plan-phase 27.2` per the planning-time requirements convention. See `.planning/REQUIREMENTS.md` § AAHX for full acceptance criteria.
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans complete (STRUCTURALLY); functional closure of Plan 27.2-04 BLOCKED on a tracing-stdout pollution bug surfaced by `#[ignore]` removal — see Plan 27.2-04 SUMMARY § "Test Execution Results". Recommend follow-up plan 27.2-05 / fix-01 reroute `tracing_subscriber::fmt()` writer in `cli_bootstrap.rs::init_tracing()` to stderr (≈1-2 lines; out of D-27.2-12 scope).
 
 Plans:
 - [x] 27.2-01-PLAN.md — `cmd_verify` audit-loader swap + one-shot legacy-bundle warning helper (REQ-AAHX-01; FU-1; Wave 1)
 - [x] 27.2-02-PLAN.md — `create_audit_state` bundle-target migration to `<audit_root>/<id>/` (REQ-AAHX-02 implementation half; FU-2; Wave 1)
 - [x] 27.2-03-PLAN.md — `docs/architecture/audit-bundle-target.md` ADR + v2.5 follow-up entries in `deferred-items.md` (REQ-AAHX-02 documentation half; FU-2; Wave 1)
-- [ ] 27.2-04-PLAN.md — Re-enable both `#[ignore]`'d audit-attestation tests + ScopedEnvVar RAII guard (WR-05) + Test 2 flat-JSON assertions (WR-04) (REQ-AAHX-03; FU-3; Wave 2 — depends on 27.2-01 + 27.2-02)
+- [x] 27.2-04-PLAN.md — Re-enable both `#[ignore]`'d audit-attestation tests + ScopedEnvVar RAII guard (WR-05) + Test 2 flat-JSON assertions (WR-04) (REQ-AAHX-03; FU-3; Wave 2 — depends on 27.2-01 + 27.2-02). **Structural close OK; Task 4 human-verify FAILED on tracing-stdout pollution; functional REQ-AAHX-03 closure deferred to follow-up plan.**
 
 **Cross-cutting constraints:**
 - `crates/nono/` remains byte-identical (D-19 invariant).

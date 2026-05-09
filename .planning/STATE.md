@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
-last_updated: "2026-05-09T16:57:26.936Z"
+last_updated: "2026-05-09T17:16:11.030Z"
 last_activity: 2026-05-09
 progress:
   total_phases: 8
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 19
-  completed_plans: 16
-  percent: 84
+  completed_plans: 17
+  percent: 89
 ---
 
 # Project State: nono — v2.3 Linux POC Unblock + Deferreds Closure
@@ -25,9 +25,9 @@ See: .planning/PROJECT.md (updated 2026-04-29 at v2.3 milestone scope-lock)
 
 ## Current Position
 
-Phase: 27.2 (audit-attestation-test-re-enablement) — EXECUTING
-Plan: 1 of 4
-Status: Executing Phase 27.2
+Phase: 27.2 (audit-attestation-test-re-enablement) — STRUCTURALLY COMPLETE; FUNCTIONAL CLOSURE BLOCKED
+Plan: 4 of 4
+Status: All 4 plans landed (Plans 27.2-01..04 all have SUMMARY.md). Plan 27.2-04 (this plan) re-enabled both `#[ignore]`'d audit-attestation tests + folded in WR-04 (Test 2 flat JSON shape) + WR-05 (ScopedEnvVar RAII guard). Task 4 human-verify on Windows host FAILED: `cargo test -p nono-cli --test audit_attestation` returns `0 passed; 2 failed; 0 ignored` due to a NEW production-code bug surfaced by `#[ignore]` removal — `tracing_subscriber::fmt()` defaults to `io::stdout()`, so Phase 27.1's `warn_once_test_home` WARN line contaminates `audit verify --json` stdout and breaks `serde_json::from_slice`. Bug is OUT OF SCOPE for Plan 27.2-04 per D-27.2-12 (`crates/nono-cli/src/` byte-identical). Surfaced for orchestrator routing — recommend follow-up plan (27.2-05 or fix-01) reroutes `init_tracing()` subscriber to stderr (≈1-2 line fix in `crates/nono-cli/src/cli_bootstrap.rs`). REQ-AAHX-03 is structurally closed (code matches plan spec; both `#[ignore]` attributes removed; test target compiles green; clippy clean) but functional closure blocked on the tracing-stdout fix.
 Milestone: v2.2 — 3/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 23 ✓ 2026-04-29, Phase 24 ✓ 2026-04-27), 9/9 plans complete. v2.2 ready to ship.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
@@ -47,12 +47,12 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-09 -- Phase 27.2 execution started
+Last activity: 2026-05-09
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
 ```
-Progress: [██████████] 100% (Phase 23 complete 2026-04-29; v2.2 milestone 9/9 plans, 3/3 phases — ready for /gsd-complete-milestone)
+Progress: [█████████░] 89%
 ```
 
 ## Accumulated Context
@@ -141,7 +141,9 @@ Progress: [██████████] 100% (Phase 23 complete 2026-04-29; v
 
 ### Blockers
 
-(none)
+()
+
+- Phase 27.2-04 human-verify failed: tracing-subscriber default writer is io::stdout(); warn_once_test_home WARN line contaminates audit-verify --json output. Tests un-ignore'd structurally but run-time blocked. Fix needed in cli_bootstrap.rs::init_tracing() to reroute to stderr; recommend follow-up plan 27.2-05.
 
 ### Quick Tasks Completed
 
