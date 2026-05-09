@@ -131,3 +131,30 @@ Documentation drift corrected on one must-have grep gate (cosmetic only — runt
 | New tests written | 0 |
 | Existing tests verified | 5 (all green at HEAD) |
 | `nyquist_compliant` status | unchanged: `partial` (Plan 26-02 still queued for v2.4; will flip to `true` only after Plan 26-02 executes and a follow-up validation pass closes PKGS-01 + PKGS-04 truths) |
+
+---
+
+## Validation Audit 2026-05-09 (third re-audit)
+
+Re-confirmed compliance at HEAD. Re-ran the same five tests via `cargo test -p nono-cli --bin nono -- validate_relative_path_rejects_traversal validate_relative_path_rejects_absolute_path validate_path_within_rejects_symlink_escape artifact_type_plugin_round_trips artifact_type_unknown_fails_closed`: **5 passed; 0 failed; 0 ignored** (~0.55s build + ~0.00s test). All Per-Task Map runtime rows remain green.
+
+Re-verified all five must-have grep gates at HEAD (same counts as the prior re-audit, including the documented truth #2 substring overlap with the test fn name):
+
+| Gate | Pattern | HEAD count | Documented expectation |
+|------|---------|-----------|------------------------|
+| truth #1 | `fn validate_relative_path` in `package_cmd.rs` | 3 | 1 production + 2 test fn name overlaps (already documented in original audit) |
+| truth #2 | `fn validate_path_within` in `package_cmd.rs` | 2 | 1 production + 1 test fn name overlap (documented in re-audit cosmetic-fix table above) |
+| truth #3 | `    Plugin,` in `package.rs` | 1 | exactly 1 (variant body) |
+| truth #4 | `ArtifactType::Plugin` in `package_cmd.rs` | 1 | at least 1 (the new arm) |
+| truth #10 | `upstream ec49a7af also adds an ArtifactType::Plugin` | 0 | exactly 0 (deferred-divergence comment removed) |
+
+Re-verified D-19 byte-identical preservation per Phase 26 commit (`git diff --stat <c>^..<c> -- crates/nono/ | wc -l` for each of `e5e1f2d7 dd7b28b3 797f3295 8ff89923 1f47d0ee da8bbefa`): all return `0`. Touches to `crates/nono/` in the chronological span between the first and last Phase 26 commits originate from Phase 27.1 / 28 / 29 commits sandwiched in the same range, not from this phase.
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 (no drift this pass) |
+| Escalated | 0 |
+| New tests written | 0 |
+| Existing tests verified | 5 (all green at HEAD) |
+| `nyquist_compliant` status | unchanged: `partial` (Plan 26-02 still queued for v2.4; will flip to `true` only after Plan 26-02 executes and a follow-up validation pass closes PKGS-01 + PKGS-04 truths) |
