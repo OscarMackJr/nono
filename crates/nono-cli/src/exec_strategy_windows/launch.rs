@@ -2433,4 +2433,98 @@ mod broker_dispatch_tests {
             let _ = CloseHandle(job);
         }
     }
+
+    // ------------------------------------------------------------------
+    // Phase 31 Plan 31-03 — Nyquist gap-fill: pin `build_broker_command_line`'s
+    // quoting + UTF-16 encoding behavior. The end-to-end shape is exercised by
+    // Plan 31-05's field-test; these tests guard against regressions at the
+    // unit-test layer.
+    //
+    // `quote_windows_arg` only quotes args containing whitespace, tabs, or
+    // quotes (and quotes empty strings). Non-whitespace paths pass through
+    // unquoted — the broker path with spaces (`C:\Program Files\...`) IS
+    // quoted, but the system32 powershell path is not.
+    // ------------------------------------------------------------------
+
+    /// Decode the trailing-null UTF-16 buffer back to a `String` for
+    /// human-readable assertions. Drops the trailing 0 terminator.
+    fn decode_wide(wide: &[u16]) -> String {
+        assert!(
+            !wide.is_empty(),
+            "command line must have at least the null terminator"
+        );
+        String::from_utf16_lossy(&wide[..wide.len() - 1])
+    }
+
+    /// D-08: a broker path containing whitespace (typical Windows install
+    /// location `C:\Program Files\...`) MUST be enclosed in literal
+    /// double-quotes so `CreateProcessW` parses the executable token
+    /// correctly. Without quoting, the path would be split at the first
+    /// space, picking up the wrong executable.
+    #[test]
+    fn build_broker_command_line_emits_quoted_broker_path() {
+        let broker = std::path::Path::new(r"C:\Program Files\nono\nono-shell-broker.exe");
+        let wide = super::build_broker_command_line(broker, &[]);
+        let s = decode_wide(&wide);
+        assert!(
+            s.starts_with("\"C:\\Program Files\\nono\\nono-shell-broker.exe\""),
+            "whitespace-bearing broker path must be enclosed in literal quotes; got: {s}"
+        );
+    }
+
+    /// D-08: argv values are appended in order, each independently quoted
+    /// per `quote_windows_arg` rules. A `--cwd` value containing whitespace
+    /// (e.g. `C:\Users\u name`) MUST be quoted; a `--shell` value without
+    /// whitespace (e.g. `C:\Windows\System32\powershell.exe`) is appended
+    /// raw. This pins both branches of the quoting policy in one assertion.
+    #[test]
+    fn build_broker_command_line_appends_argv_args_with_quoting() {
+        let broker = std::path::Path::new(r"C:\Program Files\nono\nono-shell-broker.exe");
+        let argv = vec![
+            std::ffi::OsString::from("--shell"),
+            std::ffi::OsString::from(r"C:\Windows\System32\powershell.exe"),
+            std::ffi::OsString::from("--cwd"),
+            std::ffi::OsString::from(r"C:\Users\u name"),
+        ];
+        let wide = super::build_broker_command_line(broker, &argv);
+        let s = decode_wide(&wide);
+
+        // The flag tokens themselves contain no whitespace — appended raw.
+        assert!(
+            s.contains(" --shell "),
+            "--shell flag must be appended unquoted; got: {s}"
+        );
+        assert!(
+            s.contains(" --cwd "),
+            "--cwd flag must be appended unquoted; got: {s}"
+        );
+        // Whitespace-free shell path passes through unquoted per
+        // `quote_windows_arg`'s policy.
+        assert!(
+            s.contains(r"C:\Windows\System32\powershell.exe"),
+            "whitespace-free shell path must appear in command line; got: {s}"
+        );
+        assert!(
+            !s.contains("\"C:\\Windows\\System32\\powershell.exe\""),
+            "whitespace-free path MUST NOT be quoted by quote_windows_arg; got: {s}"
+        );
+        // Whitespace-bearing cwd MUST be quoted.
+        assert!(
+            s.contains("\"C:\\Users\\u name\""),
+            "whitespace-bearing cwd value must be quoted; got: {s}"
+        );
+    }
+
+    /// Win32 CommandLine MUST be null-terminated UTF-16. Without the
+    /// trailing null, `CreateProcessW` reads past the buffer end.
+    #[test]
+    fn build_broker_command_line_terminates_with_null() {
+        let broker = std::path::Path::new(r"C:\nono\nono-shell-broker.exe");
+        let wide = super::build_broker_command_line(broker, &[]);
+        assert_eq!(
+            wide.last(),
+            Some(&0),
+            "command line buffer must be null-terminated UTF-16"
+        );
+    }
 }
