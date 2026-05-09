@@ -16,7 +16,8 @@ pub(crate) fn run_learn(args: LearnArgs, silent: bool) -> Result<()> {
     // D-02 / UAT Gap 1 (fork-only, Phase 10 admin gate contract): on Windows,
     // reject non-admin invocations immediately, BEFORE the interactive warning
     // prompt. Users should never see "Continue? [y/N]" if they cannot run learn
-    // in the first place.
+    // in the first place. D-34-B2 surgical posture: gate stays on cross-platform
+    // surface; learn_windows.rs ETW path remains byte-identical.
     #[cfg(target_os = "windows")]
     {
         if !crate::learn_windows::is_admin() {
@@ -25,6 +26,11 @@ pub(crate) fn run_learn(args: LearnArgs, silent: bool) -> Result<()> {
             ));
         }
     }
+
+    // Upstream `b34c2af6` (v0.52.0): print deprecation banner to stderr on
+    // every platform (cross-platform surface; D-34-B2 invariant — no Windows
+    // arm, no learn_windows.rs touch).
+    print_learn_deprecation(&args, silent);
 
     // Upstream `b5f0a3ab` (v0.52.0): on macOS, redirect users from legacy
     // unsandboxed tracing to sandboxed `nono run` workflow. Legacy path preserved
@@ -100,6 +106,47 @@ pub(crate) fn run_learn(args: LearnArgs, silent: bool) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_learn_deprecation(args: &LearnArgs, silent: bool) {
+    if silent {
+        return;
+    }
+
+    eprintln!(
+        "{}",
+        "DEPRECATED: nono learn is deprecated in v0.50.1; use `nono run` instead. Removal target: v1.0.0 (#445).".yellow()
+    );
+    if let Some(profile) = args.profile.as_deref() {
+        eprintln!(
+            "{}",
+            format!(
+                "Use: nono run --profile {} -- {}",
+                profile,
+                crate::command_display::format_command_line(&args.command)
+            )
+            .yellow()
+        );
+    } else {
+        eprintln!(
+            "{}",
+            format!(
+                "Use: nono run --profile <profile> -- {}",
+                crate::command_display::format_command_line(&args.command)
+            )
+            .yellow()
+        );
+    }
+    eprintln!(
+        "{}",
+        "`nono run` keeps the command sandboxed, reports denials, and offers to save profile updates."
+            .yellow()
+    );
+    // Note (P34-DEFER-08b-1): the upstream `--trace` flag (`LearnArgs.trace` field)
+    // is part of `b5f0a3ab`'s deferred cli.rs scope. When that lands, restore the
+    // upstream `if args.trace { eprintln!("Continuing with legacy unsandboxed
+    // trace mode for compatibility.") }` arm here.
+    eprintln!();
 }
 
 #[cfg(target_os = "macos")]
