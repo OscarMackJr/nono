@@ -219,3 +219,47 @@ cargo test -p nono-cli --bin nono -- validate_relative_path_rejects_traversal va
 | Operator-accepted deviations (not gaps) | 3 (Path B, VerifiedDownloads wrapper, no mockito) |
 | Gaps found | 0 |
 | `nyquist_compliant` status | unchanged: `partial` (Plan 26-02 production code is in; auto-pull e2e tests deferred to Linux/macOS host pass — flip to `compliant` after that pass) |
+
+---
+
+## Validation Audit 2026-05-09 (post-UAT re-audit)
+
+Re-confirmed compliance at HEAD (`dc94ce09`) after UAT close (10 passed, 1 blocked) and Phase 26 SECURITY artifact landing.
+
+**Test surface re-verified (all 16 named tests):**
+
+```
+cargo test -p nono-cli --bin nono -- \
+  validate_relative_path_rejects_traversal validate_relative_path_rejects_absolute_path \
+  validate_path_within_rejects_symlink_escape \
+  artifact_type_plugin_round_trips artifact_type_unknown_fails_closed \
+  compare_versions_honors_prerelease_ordering remove_external_artifacts \
+  download_artifact_to_path registry_client_connect_timeout tempdir_cleanup_runs_on_panic \
+  registry_client_constructor enforce_content_length
+→ 16 passed; 0 failed; 0 ignored; 836 filtered out (~10.02s; includes 10s connect-timeout budget)
+```
+
+**D-19 preservation:** `git diff --stat 57be91a9..HEAD -- crates/nono/` returns `0` lines.
+
+**Grep gates re-verified at HEAD:**
+
+| Gate | Pattern | HEAD count |
+|------|---------|-----------|
+| ureq Agent timeouts | `timeout_connect\|timeout_recv` in `registry_client.rs` | 3 lines (connect, recv_response, recv_body) |
+| Auto-pull surface | `load_registry_profile\|is_registry_ref` in `profile/mod.rs` | 4 lines (call site at L1507-1508 + defs at L1542, L1556) |
+| semver dep | `^semver = "1"` in `crates/nono-cli/Cargo.toml` | 1 |
+| Plugin variant | `    Plugin,` in `package.rs` | 1 (line 94) |
+| Plugin arm | `ArtifactType::Plugin` in `package_cmd.rs` | 1 |
+
+**UAT cross-reference:** Phase 26 UAT (`26-UAT.md`) reports 10 passed, 1 blocked. Test 11 (Linux RSS) blocked on host-mismatch — same host_blocker rationale already documented in Manual-Only above; portable proxy (Test 9 Content-Length oversize rejection) passed. Test 10 (Live Auto-Pull) passed via 2-step manual smoke (routing + idempotency); full registry pull against a real Sigstore-signed pack remains deferred to a Linux/macOS host pass.
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 (no new drift) |
+| Resolved | 0 |
+| Escalated | 0 |
+| New tests written | 0 |
+| Existing tests verified | 16 (all green at HEAD) |
+| UAT items passed | 10 |
+| UAT items blocked (host-mismatch, documented) | 1 |
+| `nyquist_compliant` status | unchanged: `partial` (auto-pull e2e tests for REQ-PKGS-04 acceptance #1–#3 still deferred to Linux/macOS host pass — Manual-Only entry remains authoritative; flip to `compliant` after those e2e tests land) |
