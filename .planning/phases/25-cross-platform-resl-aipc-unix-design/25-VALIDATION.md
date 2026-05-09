@@ -91,3 +91,21 @@ created: 2026-05-09
 - [⚠] `nyquist_compliant: partial` — REQ-AIPC-NIX-01 has automated coverage; REQ-RESL-NIX-01..03 await v2.4 host-resident execution. Set to `true` when Plan 25-01 lands and its integration tests join the Per-Task Map.
 
 **Approval:** approved 2026-05-09 (partial — ADR coverage automated; RESL-NIX carry-forward to v2.4 documented).
+
+---
+
+## Validation Audit 2026-05-09T20:33Z
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Findings:**
+- REQ-AIPC-NIX-01: COVERED. `cargo test -p nono-cli --test adr_aipc_unix_futures` reports `6 passed; 0 failed; 0 ignored` at HEAD.
+- REQ-RESL-NIX-01..03: Correctly classified Manual-Only (Plan 25-01 deferred to v2.4; host-blocked Linux/macOS execution). Plan + CONTEXT committed (`3ed80d38`); test files (`resl_nix_linux_integration.rs`, `resl_nix_linux_timeout.rs`, `resl_nix_macos_integration.rs`) authored alongside v2.4 implementation.
+
+**Status:** `nyquist_compliant: partial` retained — the executed surface (Plan 25-02 ADR) is fully automated; the deferred surface (Plan 25-01) is structurally Manual-Only until v2.4 lands the cgroup v2 / setrlimit backends. No fillable gaps in v2.3 scope.
+
+**Verifier:** Claude (gsd-validate-phase, State A audit).
