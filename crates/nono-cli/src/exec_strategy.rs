@@ -902,12 +902,43 @@ pub fn execute_supervised(
                     // T-25-01-05: guard against overflow on 32-bit (belt-and-suspenders).
                     let limit: nix::libc::rlim_t =
                         bytes.try_into().unwrap_or(nix::libc::rlim_t::MAX);
-                    // Non-fatal in the child: we've already validated this in the parent.
-                    let _ = setrlimit(Resource::RLIMIT_AS, limit, limit);
+                    // WR-02: fail closed — if setrlimit fails the sandbox MUST NOT
+                    // continue without the requested --memory enforcement.
+                    // MacosResourceLimits::new() in the parent does not pre-validate
+                    // RLIMIT_AS against the system hard limit, so EINVAL/EPERM at
+                    // setrlimit() time would otherwise silently degrade enforcement.
+                    if setrlimit(Resource::RLIMIT_AS, limit, limit).is_err() {
+                        const MSG_RLIMIT_AS_FAIL: &[u8] =
+                            b"nono: setrlimit(RLIMIT_AS) failed in pre-exec child; aborting\n";
+                        // SAFETY: write and _exit are async-signal-safe; we are in
+                        // the post-fork child branch where heap allocation is unsafe.
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_RLIMIT_AS_FAIL.as_ptr().cast::<libc::c_void>(),
+                                MSG_RLIMIT_AS_FAIL.len(),
+                            );
+                            libc::_exit(126);
+                        }
+                    }
                 }
                 if let Some(n) = resource_limits.max_processes {
                     let limit = u64::from(n);
-                    let _ = setrlimit(Resource::RLIMIT_NPROC, limit, limit);
+                    // WR-02: fail closed — if setrlimit fails the sandbox MUST NOT
+                    // continue without the requested --max-processes enforcement.
+                    if setrlimit(Resource::RLIMIT_NPROC, limit, limit).is_err() {
+                        const MSG_RLIMIT_NPROC_FAIL: &[u8] =
+                            b"nono: setrlimit(RLIMIT_NPROC) failed in pre-exec child; aborting\n";
+                        // SAFETY: write and _exit are async-signal-safe.
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_RLIMIT_NPROC_FAIL.as_ptr().cast::<libc::c_void>(),
+                                MSG_RLIMIT_NPROC_FAIL.len(),
+                            );
+                            libc::_exit(126);
+                        }
+                    }
                 }
             }
 
