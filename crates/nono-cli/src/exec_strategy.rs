@@ -105,23 +105,22 @@ pub(crate) fn apply_resource_limits_unix(
 /// Spawn a watchdog thread that atomically kills the Linux cgroup at `deadline`.
 ///
 /// Writes `"1\n"` to `<cgroup_path>/cgroup.kill` after sleeping until `deadline`.
-/// Sets `timeout_fired` to `true` before writing so the parent's wait loop can
-/// record `timeout_kill: true` in inspect data.
+/// `cgroup.kill` is the cgroup v2 atomic-multi-process-kill primitive — writing
+/// "1" delivers SIGKILL to every PID in the cgroup tree atomically.
 ///
 /// If the child has already exited (and the cgroup removed by Drop), the write
-/// fails silently — this is the normal harmless race.
+/// fails with ENOENT — this is the normal harmless race and is silently ignored.
+/// Other write failures emit a warning.
 #[cfg(target_os = "linux")]
 pub(crate) fn spawn_linux_timeout_watchdog(
     deadline: std::time::Instant,
     cgroup_path: std::path::PathBuf,
-    timeout_fired: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let now = std::time::Instant::now();
         if let Some(remaining) = deadline.checked_duration_since(now) {
             std::thread::sleep(remaining);
         }
-        timeout_fired.store(true, std::sync::atomic::Ordering::Release);
         let kill_path = cgroup_path.join("cgroup.kill");
         if let Err(e) = std::fs::write(&kill_path, "1\n") {
             // ENOENT means the cgroup was already removed (child exited before deadline).
@@ -829,8 +828,6 @@ pub fn execute_supervised(
     let timeout_deadline = resource_limits
         .timeout
         .map(|d| std::time::Instant::now() + d);
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let timeout_fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Clear any stale forwarding target before forking.
     clear_signal_forwarding_target();
@@ -1342,8 +1339,7 @@ pub fn execute_supervised(
                 .map(|deadline| {
                     if let Some(ref session) = unix_resource_guard {
                         let cgroup_path = session.path.clone();
-                        let fired = timeout_fired.clone();
-                        Some(spawn_linux_timeout_watchdog(deadline, cgroup_path, fired))
+                        Some(spawn_linux_timeout_watchdog(deadline, cgroup_path))
                     } else {
                         None
                     }
@@ -1360,12 +1356,9 @@ pub fn execute_supervised(
                     // entirely (return None). There is no PID fallback to avoid
                     // wrong-pgrp kill under PID reuse.
                     match getpgid(Some(child)) {
-                        Ok(child_pgrp) => {
-                            let fired = timeout_fired.clone();
-                            Some(supervisor_macos::spawn_macos_timeout_watchdog(
-                                deadline, child_pgrp, fired,
-                            ))
-                        }
+                        Ok(child_pgrp) => Some(supervisor_macos::spawn_macos_timeout_watchdog(
+                            deadline, child_pgrp,
+                        )),
                         Err(e) => {
                             warn!(
                                 "getpgid({}) failed ({}); skipping timeout watchdog — \

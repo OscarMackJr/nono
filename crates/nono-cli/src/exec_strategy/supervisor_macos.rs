@@ -148,9 +148,7 @@ impl MacosResourceLimits {
 /// # Watchdog behaviour
 ///
 /// 1. Sleeps until `deadline` (using `Instant::checked_duration_since`).
-/// 2. Sends `SIGKILL` to the entire process group `child_pgrp`.
-/// 3. Sets `timeout_fired` to `true` via `AtomicBool` so the caller can record
-///    `timeout_kill: true` in inspect data.
+/// 2. Sends `SIGKILL` to the entire process group `child_pgrp` via `kill(-pgrp, SIGKILL)`.
 ///
 /// # Harmless after child exit
 ///
@@ -167,16 +165,12 @@ impl MacosResourceLimits {
 pub(crate) fn spawn_macos_timeout_watchdog(
     deadline: std::time::Instant,
     child_pgrp: nix::unistd::Pid,
-    timeout_fired: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         let now = std::time::Instant::now();
         if let Some(remaining) = deadline.checked_duration_since(now) {
             std::thread::sleep(remaining);
         }
-        // Set the flag BEFORE sending SIGKILL so the parent's wait loop sees
-        // it even if SIGKILL is delivered instantly.
-        timeout_fired.store(true, std::sync::atomic::Ordering::Release);
         // Negative PID = process group. SIGKILL = ungraceful, atomic to the group.
         // Ignore ESRCH (process already exited) — that's the normal race.
         let _ = nix::sys::signal::kill(
