@@ -8,7 +8,7 @@ This roadmap tracks the path to full Windows/Unix parity and ongoing quality-of-
 - ✅ **v2.0 Windows Gap Closure** — Phases 5–15 (shipped 2026-04-18; tag `v2.0`)
 - ✅ **v2.1 Resource Limits, Extended IPC, Attach-Streaming & Cleanup** — Phases 16–21 + 18.1 (shipped 2026-04-21; tag `v2.1`)
 - ✅ **v2.2 Windows/macOS Parity Sweep** — Phases 22–24 (shipped 2026-04-29; tag `v2.2`)
-- 🏗️ **v2.3 Linux POC Unblock + Deferreds Closure** — Phases 25–30 + 27.1 (started 2026-04-29)
+- 🏗️ **v2.3 Linux POC Unblock + Deferreds Closure** — Phases 25–32 + 27.1 (started 2026-04-29)
 
 ## Phases
 
@@ -69,7 +69,7 @@ Full details: `.planning/milestones/v2.2-ROADMAP.md`.
 
 </details>
 
-### 🏗️ v2.3 Linux POC Unblock + Deferreds Closure (Phases 25–30) — IN PROGRESS
+### 🏗️ v2.3 Linux POC Unblock + Deferreds Closure (Phases 25–32) — IN PROGRESS
 
 **Goal:** A Linux user running fork-Linux-build sees real enforcement (not silent no-ops) for `--memory` / `--cpu-percent` / `--timeout` / `--max-processes`, and v2.2's deferred items (PKG streaming, audit-attestation hardening, Authenticode chain-walker) ship as production-ready surfaces.
 
@@ -83,6 +83,8 @@ Full details: `.planning/milestones/v2.2-ROADMAP.md`.
 - [x] **Phase 28: Authenticode Chain-Walker Subject Extraction** (1/1 plan, 2026-04-30) — REQ-AUDC-01..03 all closed. 5 commits (`67ba4a99`/`70593110`/`5a4a8443`/`279c1b86`/`91a3f64a`). Chain walker live; replaces v2.2 Plan 22-05b Decision 4 `<unknown>` sentinel with `WTHelperProvDataFromStateData` → `WTHelperGetProvSignerFromChain` → `CertGetNameStringW(CERT_X500_NAME_STR)` + `CertGetCertificateContextProperty(CERT_HASH_PROP_ID)`. Fail-closed `?` propagation on chain-walk failure when `WinVerifyTrust=Valid` (REQ-AUDC-03 acceptance #2). Deferred test moved inline (PATH-4 per CONTEXT override; closes REQ-AUDC-02 fully). 4 new unit tests pass against `C:\Windows\explorer.exe` fixture (`notepad.exe` is catalog-signed on Win11 — D-AUDC-03 fixture switch). Reuses `NonoError::SandboxInit` (D-AUDC-02: `AuditIntegrity` variant doesn't exist on fork). 11 SAFETY blocks; D-19/D-21 invariants hold.
 - [x] **Phase 29: WR-01 Reject-Stage Unification** (1/1 plan, 2026-04-30) — REQ-WRU-01..02 closed. 3 commits (`a3734bb3`/`9fcdf123` + SUMMARY). Locked as permanent design property (Option c): mask-gate vs broker-failure-flip is O(1) profile lookup vs O(syscall) post-approval; asymmetry is structural, not unifiable without security or UX regression. No behavior change, no wire-shape change, no test-assertion change — chosen verdict matrix is the existing matrix. All 5 `wr01_*` regression tests preserved as guards on the locked matrix.
 - [x] **Phase 30: Windows nono shell Interactive Enforcement Architecture** (planning, 2026-05-07) — Driver: debug session `nono-shell-status-dll-init-failed.md` (`nono shell --profile claude-code` on Windows fails with `STATUS_DLL_INIT_FAILED (0xC0000142)`); SHELL-01's "validated" claim is wrong and must be reality-checked. Wave 1 = Option 3 field-test (Low-IL primary token + ConPTY, no WRITE_RESTRICTED, no session-SID). Wave 2 (conditional) = ProcMon-driven Win32 investigation if Wave 1 fails. Either ships a working `nono shell` Windows path with mandatory-label NO_WRITE_UP write-deny intact, OR documents evidence that no user-mode token shape can deliver both ConPTY + write-deny (deferred to v3.0 kernel-driver work). See `.planning/phases/30-windows-nono-shell-architecture/30-CONTEXT.md` for D-01..D-10. (completed 2026-05-08)
+- [x] **Phase 31: Broker-Process Architecture (SHELL-01)** (6/6 plans, completed 2026-05-09) — Productionized broker-pattern PoC validated 2026-05-08; SHELL-01 → ✔ validated v2.3 Phase 31. Full detail in Phase Details section below.
+- [ ] **Phase 32: Sigstore Integration** (not planned yet)
 
 ## Phase Details (v2.3)
 
@@ -342,3 +344,13 @@ The four major v2.2-deferred items (PKG streaming, audit-attestation hardening, 
   5. PROJECT.md SHELL-01 entry reflects ✔ validated v2.3 Phase 31.
   6. Cookbook describes the security envelope honestly (broker→Low-IL-child token shape; OS-level mandatory-label NO_WRITE_UP enforcement; Claude Code `PreToolUse` hook as defense-in-depth UX + audit, NOT primary boundary).
   7. Harness `Out-File` → `Set-Content` fix verified by passing the corrected write-deny test in the live broker shell.
+
+### Phase 32: Sigstore Integration
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 31
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 32 to break down)

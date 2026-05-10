@@ -47,7 +47,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-09 -- Completed quick task 260509-rib: clean up windows-poc-handoff.mdx (9 review fixes)
+Last activity: 2026-05-09 -- Added Phase 32: Sigstore Integration to v2.3 milestone
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
@@ -120,6 +120,7 @@ Progress: [█████████░] 89%
 
 ### Roadmap Evolution
 
+- 2026-05-09: Phase 32 (Sigstore Integration) added after Phase 31. Description-only stub at this point — scope/requirements TBD during `/gsd-plan-phase 32`. Note: SDK numbering bug surfaced during add — milestone bullet list at lines 80-85 stopped at Phase 30, so the SDK calculated next phase as 31 and collided with the existing Phase 31 (Broker-Process). Manually corrected: directory `31-sigstore-integration` → `32-sigstore-integration`, ROADMAP.md detail header renumbered, Phase 31 (Broker-Process) bullet entry backfilled to the v2.3 milestone summary list, milestone span updated from "Phases 25-30" → "Phases 25-32".
 - 2026-05-08: Phase 31 (Broker-Process Architecture (SHELL-01)) added after Phase 30. Productionizes the broker-pattern PoC validated on the Windows test box (commits e15fbed9, 98d38ed9, 17d87c7f) — SHELL-01 follow-up to Phase 30's Windows nono shell interactive enforcement architecture. Plans TBD during `/gsd-plan-phase 31`.
 - 2026-05-09: Phase 31 (Broker-Process Architecture, SHELL-01) SHIPPED — broker pattern landed via crates/nono-shell-broker/; WindowsTokenArm::BrokerLaunch dispatch active; Acceptance #1-#4 + #7 verified on user's Windows test box (2026-05-09). SHELL-01 → ✔ validated v2.3 Phase 31. Phase 30 debug session nono-shell-status-dll-init-failed marked fully resolved.
 - 2026-05-02: Phase 27.1 (NONO_TEST_HOME Seam) inserted after Phase 27 (URGENT). Pulls forward the v2.4 candidate identified at Phase 27's 2026-04-29 partial close — small Rule-4 production-code change adding `NONO_TEST_HOME` env-var override to `dirs::home_dir()` callsites in `crates/nono-cli/src/`. Once landed, Phase 27 redesigned Test 1 (under `#[ignore]`) plus queued v2.3 plans (Phase 26-02 PKGS-01/04 and similar) execute on Windows host. Plans TBD during `/gsd-plan-phase 27.1`.
