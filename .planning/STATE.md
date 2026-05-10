@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
-status: completed
-last_updated: "2026-05-10T02:09:49.198Z"
-last_activity: 2026-05-09
+status: executing
+last_updated: "2026-05-10T04:00:27.989Z"
+last_activity: 2026-05-10
 progress:
   total_phases: 8
   completed_phases: 7
@@ -27,7 +27,7 @@ See: .planning/PROJECT.md (updated 2026-04-29 at v2.3 milestone scope-lock)
 
 Phase: 26 — COMPLETE
 Plan: Not started
-Status: Phase 26 complete
+Status: Ready to execute
 Milestone: v2.2 — 3/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 23 ✓ 2026-04-29, Phase 24 ✓ 2026-04-27), 9/9 plans complete. v2.2 ready to ship.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
@@ -47,7 +47,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-10 -- Phase 32 (Sigstore Integration) context gathered via /gsd-discuss-phase. 14 decisions across 4 scope areas (A+C TUF root refresh & test unblock, B keyless CLI hardening, H broker.exe Authenticode verification at launch). CONTEXT.md + DISCUSSION-LOG.md committed at e0d8f7c6. Ready for /gsd-plan-phase 32.
+Last activity: 2026-05-10 -- Phase 32 planning complete
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
@@ -210,7 +210,7 @@ Known deferred items at close: 20 (6 UAT bookkeeping gaps, 4 verification human_
 ## Session Continuity
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-05-09
+**Last Activity:** 2026-05-10
 **Resumed:** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.
 **Stopped At (prior session, retained for context):** Phase 30 (Windows nono shell Interactive Enforcement Architecture) context gathered. The `nono shell` 0xC0000142 field-failure became a planning checkpoint via `/gsd-discuss-phase`; CONTEXT.md captures the locked decisions: Wave 1 is Option 3 (Low-IL primary token + ConPTY), Wave 2 is ProcMon investigation conditional on Wave 1 failure. TUI rendering and OS-level write-deny are both locked acceptance criteria; Phase 15's detached-path waiver is explicitly rejected for the long-lived interactive shell. Phase 30 is NOT yet in ROADMAP.md — user decides v2.3 vs v2.4 placement via `/gsd-phase add 30`.
 
