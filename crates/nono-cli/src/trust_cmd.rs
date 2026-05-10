@@ -29,6 +29,21 @@ const TRUST_PUB_CACHE_EXT: &str = "b64";
 #[cfg(feature = "test-trust-overrides")]
 pub(crate) const TEST_USER_POLICY_PATH_ENV: &str = "NONO_TRUST_TEST_USER_POLICY_PATH";
 
+/// Canonical error message when keyless signing is invoked outside a
+/// CI environment with ambient OIDC credentials.
+///
+/// D-32-09 / P32-CHK-007 / P32-CHK-009: Phase 32 keyless stays CI-only
+/// (no interactive browser OAuth). Local devs are pointed at `--keyref`.
+/// The message names the canonical CI environments (GitHub Actions,
+/// GitLab CI), the GHA OIDC permission claim (`id-token: write`), AND
+/// the local recovery command (--keyref) so the test can assert all
+/// substrings.
+pub(crate) const OIDC_NO_AMBIENT_TOKEN_MSG: &str =
+    "no ambient OIDC credentials found. \
+     Keyless signing requires a CI environment with OIDC ambient identity \
+     (GitHub Actions with `permissions: id-token: write`, GitLab CI, etc.). \
+     For local development, use `nono trust sign --keyref <key>` instead.";
+
 /// Run a trust subcommand.
 pub fn run_trust(args: TrustArgs) -> Result<()> {
     match args.command {
@@ -665,10 +680,7 @@ fn discover_oidc_token(rt: &tokio::runtime::Runtime) -> Result<sigstore_sign::oi
             })?
             .ok_or_else(|| nono::NonoError::TrustSigning {
                 path: String::new(),
-                reason: "no ambient OIDC credentials found. \
-                         Keyless signing requires a CI environment with OIDC support \
-                         (e.g., GitHub Actions with `permissions: id-token: write`)."
-                    .to_string(),
+                reason: OIDC_NO_AMBIENT_TOKEN_MSG.to_string(),
             })
     })
 }
@@ -785,7 +797,13 @@ fn run_verify(args: TrustVerifyArgs) -> Result<()> {
 
     for bundle_path in &multi_bundles {
         let scan_root = bundle_path.parent().unwrap_or_else(|| Path::new("."));
-        match verify_multi_subject_file(bundle_path, scan_root, &policy) {
+        match verify_multi_subject_file(
+            bundle_path,
+            scan_root,
+            &policy,
+            args.issuer.as_deref(),
+            args.identity.as_deref(),
+        ) {
             Ok(subjects) => {
                 for (name, signer) in &subjects {
                     eprintln!("  {} {} (signer: {})", "VERIFIED".green(), name, signer);
@@ -810,7 +828,12 @@ fn run_verify(args: TrustVerifyArgs) -> Result<()> {
         if multi_verified_paths.contains(file_path) {
             continue;
         }
-        match verify_single_file(file_path, &policy) {
+        match verify_single_file(
+            file_path,
+            &policy,
+            args.issuer.as_deref(),
+            args.identity.as_deref(),
+        ) {
             Ok(info) => {
                 eprintln!("  {} {}", "VERIFIED".green(), file_path.display());
                 eprintln!("    Signer: {info}");
@@ -849,11 +872,17 @@ fn run_verify(args: TrustVerifyArgs) -> Result<()> {
 
 /// Verify a `.nono-trust.bundle` multi-subject bundle.
 ///
+/// `user_issuer` and `user_identity_pattern` are REQUIRED for keyless bundles
+/// (D-32-08 fail-closed enforcement). Pass `None` only from code paths that
+/// cannot encounter keyless bundles (e.g., `trust list`).
+///
 /// Returns `Ok(Vec<(subject_name, signer_info)>)` on success, or an error string.
 fn verify_multi_subject_file(
     bundle_path: &Path,
     scan_root: &Path,
     policy: &trust::TrustPolicy,
+    user_issuer: Option<&str>,
+    user_identity_pattern: Option<&str>,
 ) -> std::result::Result<Vec<(String, String)>, String> {
     let bundle = trust::load_bundle(bundle_path).map_err(|e| format!("invalid bundle: {e}"))?;
 
@@ -896,7 +925,39 @@ fn verify_multi_subject_file(
             trust::verify_keyed_signature(&bundle, &key_bytes, bundle_path)
                 .map_err(|e| format!("signature verification failed: {e}"))?;
         }
-        trust::SignerIdentity::Keyless { .. } => {
+        trust::SignerIdentity::Keyless {
+            issuer: ref bundle_issuer,
+            repository: _,
+            ref workflow,
+            git_ref: _,
+        } => {
+            // D-32-08 fail-closed: --issuer and --identity must both be provided.
+            let req_issuer = user_issuer.ok_or_else(|| {
+                "keyless bundle requires --issuer <OIDC_URL> \
+                 (exact match against signer's iss claim)"
+                    .to_string()
+            })?;
+            let req_identity = user_identity_pattern.ok_or_else(|| {
+                "keyless bundle requires --identity <REGEX> \
+                 (matched against bundle's Fulcio Build Config URI)"
+                    .to_string()
+            })?;
+
+            // D-32-08 defense-in-depth: URL-component issuer comparison via
+            // validate_oidc_issuer (signing.rs:86). Rejects prefix attacks like
+            // `https://gitlab.com.evil` matching `https://gitlab.com`.
+            trust::signing::validate_oidc_issuer(bundle_issuer, req_issuer)
+                .map_err(|e| format!("OIDC issuer validation failed: {e}"))?;
+
+            // Verify is offline (D-32-01/D-32-03 invariant preserved).
+            let trusted_root = trust::load_production_trusted_root()
+                .map_err(|e| format!("failed to load Sigstore trusted root: {e}"))?;
+
+            // sigstore-verify does exact-equality on issuer; identity stays
+            // unset here because sigstore-verify cannot regex-match (Pitfall 1).
+            // with_issuer is a constructor (not a method chain) per sigstore-verify 0.6.5.
+            let sigstore_policy = trust::VerificationPolicy::with_issuer(req_issuer.to_string());
+
             // For keyless, verify using the first subject's digest
             let subjects = trust::extract_all_subjects(&bundle, bundle_path)
                 .map_err(|e| format!("failed to extract subjects: {e}"))?;
@@ -904,9 +965,6 @@ fn verify_multi_subject_file(
                 .first()
                 .map(|(_, d)| d.as_str())
                 .ok_or("no subjects in bundle")?;
-            let trusted_root = trust::load_production_trusted_root()
-                .map_err(|e| format!("failed to load Sigstore trusted root: {e}"))?;
-            let sigstore_policy = trust::VerificationPolicy::default();
             trust::verify_bundle_with_digest(
                 first_digest,
                 &bundle,
@@ -915,6 +973,25 @@ fn verify_multi_subject_file(
                 bundle_path,
             )
             .map_err(|e| format!("Sigstore verification failed: {e}"))?;
+
+            // D-32-08 identity regex post-check via regress.
+            //
+            // P32-CHK-001: SignerIdentity::Keyless has NO `san` field.
+            // The `workflow` field is the NORMALIZED relative workflow path
+            // produced by `bundle.rs::normalize_workflow_uri` (e.g.
+            // `.github/workflows/release.yml`). The Fulcio v2 Build Config URI
+            // OID .1.18 raw value is `https://github.com/org/repo/.github/
+            // workflows/file@ref`; normalize_workflow_uri strips the prefix and
+            // `@ref` suffix, leaving only the relative path. The --identity
+            // regex must match this normalized form.
+            let regex = regress::Regex::new(req_identity)
+                .map_err(|e| format!("invalid --identity regex `{req_identity}`: {e}"))?;
+            if regex.find(workflow).is_none() {
+                return Err(format!(
+                    "keyless identity mismatch: signer's workflow `{workflow}` \
+                     does not match --identity `{req_identity}`"
+                ));
+            }
         }
     }
 
@@ -941,9 +1018,14 @@ fn verify_multi_subject_file(
     Ok(results)
 }
 
+/// `user_issuer` and `user_identity_pattern` are REQUIRED for keyless bundles
+/// (D-32-08 fail-closed enforcement). Pass `None` only from code paths that
+/// cannot encounter keyless bundles (e.g., `trust list`).
 fn verify_single_file(
     file_path: &Path,
     policy: &trust::TrustPolicy,
+    user_issuer: Option<&str>,
+    user_identity_pattern: Option<&str>,
 ) -> std::result::Result<String, String> {
     // Check blocklist first
     let digest =
@@ -1018,10 +1100,38 @@ fn verify_single_file(
             trust::verify_keyed_signature(&bundle, &key_bytes, file_path)
                 .map_err(|e| format!("signature verification failed: {e}"))?;
         }
-        trust::SignerIdentity::Keyless { .. } => {
+        trust::SignerIdentity::Keyless {
+            issuer: ref bundle_issuer,
+            repository: _,
+            ref workflow,
+            git_ref: _,
+        } => {
+            // D-32-08 fail-closed: --issuer and --identity must both be provided.
+            let req_issuer = user_issuer.ok_or_else(|| {
+                "keyless bundle requires --issuer <OIDC_URL> \
+                 (exact match against signer's iss claim)"
+                    .to_string()
+            })?;
+            let req_identity = user_identity_pattern.ok_or_else(|| {
+                "keyless bundle requires --identity <REGEX> \
+                 (matched against bundle's Fulcio Build Config URI)"
+                    .to_string()
+            })?;
+
+            // D-32-08 defense-in-depth: URL-component issuer comparison via
+            // validate_oidc_issuer (signing.rs:86). Rejects prefix attacks like
+            // `https://gitlab.com.evil` matching `https://gitlab.com`.
+            trust::signing::validate_oidc_issuer(bundle_issuer, req_issuer)
+                .map_err(|e| format!("OIDC issuer validation failed: {e}"))?;
+
+            // Verify is offline (D-32-01/D-32-03 invariant preserved).
             let trusted_root = trust::load_production_trusted_root()
                 .map_err(|e| format!("failed to load Sigstore trusted root: {e}"))?;
-            let sigstore_policy = trust::VerificationPolicy::default();
+
+            // sigstore-verify does exact-equality on issuer; identity stays
+            // unset here because sigstore-verify cannot regex-match (Pitfall 1).
+            // with_issuer is a constructor (not a method chain) per sigstore-verify 0.6.5.
+            let sigstore_policy = trust::VerificationPolicy::with_issuer(req_issuer.to_string());
             trust::verify_bundle_with_digest(
                 &file_digest_hex,
                 &bundle,
@@ -1030,6 +1140,25 @@ fn verify_single_file(
                 file_path,
             )
             .map_err(|e| format!("Sigstore verification failed: {e}"))?;
+
+            // D-32-08 identity regex post-check via regress.
+            //
+            // P32-CHK-001: SignerIdentity::Keyless has NO `san` field.
+            // The `workflow` field is the NORMALIZED relative workflow path
+            // produced by `bundle.rs::normalize_workflow_uri` (e.g.
+            // `.github/workflows/release.yml`). The Fulcio v2 Build Config URI
+            // OID .1.18 raw value is `https://github.com/org/repo/.github/
+            // workflows/file@ref`; normalize_workflow_uri strips the prefix and
+            // `@ref` suffix, leaving only the relative path. The --identity
+            // regex must match this normalized form.
+            let regex = regress::Regex::new(req_identity)
+                .map_err(|e| format!("invalid --identity regex `{req_identity}`: {e}"))?;
+            if regex.find(workflow).is_none() {
+                return Err(format!(
+                    "keyless identity mismatch: signer's workflow `{workflow}` \
+                     does not match --identity `{req_identity}`"
+                ));
+            }
         }
     }
 
@@ -1057,7 +1186,7 @@ fn run_list(args: TrustListArgs) -> Result<()> {
     if args.json {
         let mut entries = Vec::new();
         for file_path in &files {
-            let status = match verify_single_file(file_path, &policy) {
+            let status = match verify_single_file(file_path, &policy, None, None) {
                 Ok(signer) => serde_json::json!({
                     "file": file_path.display().to_string(),
                     "status": "verified",
@@ -1093,7 +1222,7 @@ fn run_list(args: TrustListArgs) -> Result<()> {
         for file_path in &files {
             let rel = file_path.strip_prefix(&cwd).unwrap_or(file_path);
 
-            match verify_single_file(file_path, &policy) {
+            match verify_single_file(file_path, &policy, None, None) {
                 Ok(signer) => {
                     eprintln!(
                         "  {:<40} {:<12} {}",
@@ -1857,5 +1986,72 @@ mod tests {
 
         std::env::set_current_dir(original).unwrap();
         result.unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // D-32-08 / D-32-09 unit tests (P32-CHK-007, Phase 32 Plan 03)
+    // -----------------------------------------------------------------------
+
+    /// P32-CHK-007: The canonical SAN pattern matches the normalized `workflow`
+    /// field of `SignerIdentity::Keyless`. The `workflow` field is normalized by
+    /// `normalize_workflow_uri` to a relative path (`.github/workflows/release.yml`)
+    /// — NOT the full Fulcio v2 Build Config URI. Regexes must match the normalized form.
+    ///
+    /// Rule 1 deviation from plan spec: the plan stated `workflow` contains the full
+    /// `https://github.com/<org>/<repo>/.github/workflows/<file>@<ref>` URI, but the
+    /// actual `bundle.rs::normalize_workflow_uri` strips the prefix and `@ref` suffix.
+    /// Patterns must match the normalized form (e.g., `^\.github/workflows/.*$`).
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn identity_regex_matches() {
+        // The workflow field contains the normalized relative path after
+        // normalize_workflow_uri strips the https://github.com/org/repo/ prefix
+        // and the @<ref> suffix (verified at bundle.rs::normalize_workflow_uri).
+        let workflow = ".github/workflows/release.yml";
+        let pattern = r"^\.github/workflows/release\.yml$";
+        let regex = regress::Regex::new(pattern).expect("regex compiles");
+        assert!(
+            regex.find(workflow).is_some(),
+            "workflow must match canonical normalized pattern: \
+             workflow=`{workflow}` pattern=`{pattern}`"
+        );
+    }
+
+    /// D-32-08: A non-matching workflow path must not satisfy the regex post-check.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn identity_regex_rejects_non_matching_san() {
+        let workflow = ".gitlab-ci.yml";
+        let pattern = r"^\.github/workflows/.*$";
+        let regex = regress::Regex::new(pattern).expect("regex compiles");
+        assert!(
+            regex.find(workflow).is_none(),
+            "non-matching workflow must not regex-match: \
+             workflow=`{workflow}` pattern=`{pattern}`"
+        );
+    }
+
+    /// P32-CHK-007 / P32-CHK-009: OIDC_NO_AMBIENT_TOKEN_MSG must contain all
+    /// substrings required by D-32-09 (--keyref recovery + canonical CI envs +
+    /// GitHub Actions permission claim).
+    #[test]
+    fn oidc_error_suggests_keyref() {
+        let msg = OIDC_NO_AMBIENT_TOKEN_MSG;
+        assert!(
+            msg.contains("--keyref"),
+            "OIDC_NO_AMBIENT_TOKEN_MSG must mention --keyref for local-dev recovery; got: {msg}"
+        );
+        assert!(
+            msg.contains("GitHub Actions"),
+            "OIDC_NO_AMBIENT_TOKEN_MSG must mention GitHub Actions; got: {msg}"
+        );
+        assert!(
+            msg.contains("GitLab CI"),
+            "OIDC_NO_AMBIENT_TOKEN_MSG must mention GitLab CI; got: {msg}"
+        );
+        assert!(
+            msg.contains("id-token: write"),
+            "OIDC_NO_AMBIENT_TOKEN_MSG must name the GitHub Actions OIDC permission claim; got: {msg}"
+        );
     }
 }
