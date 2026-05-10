@@ -916,8 +916,8 @@ fn print_self_authenticode_status() {
     use crate::exec_identity::AuthenticodeStatus;
     use crate::exec_identity_windows::query_authenticode_status;
 
-    let exe_path = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from("<unknown>"));
+    let exe_path =
+        std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("<unknown>"));
     match query_authenticode_status(&exe_path) {
         Ok(AuthenticodeStatus::Valid {
             signer_subject,

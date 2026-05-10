@@ -22,9 +22,7 @@ fn run_nono(args: &[&str], home: &Path, cwd: &Path) -> Output {
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("NONO_TEST_HOME", home);
-    cmd.current_dir(cwd)
-        .output()
-        .expect("failed to run nono")
+    cmd.current_dir(cwd).output().expect("failed to run nono")
 }
 
 fn setup_isolated_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
@@ -51,7 +49,10 @@ fn setup_isolated_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
         .join("tests")
         .join("fixtures")
         .join("trust-root-frozen.json");
-    let cache_path = home.join(".nono").join("trust-root").join("trusted_root.json");
+    let cache_path = home
+        .join(".nono")
+        .join("trust-root")
+        .join("trusted_root.json");
     fs::copy(&frozen, &cache_path).expect("seed cache from frozen fixture");
     (tmp, home, workspace)
 }
@@ -167,11 +168,17 @@ fn verify_rejects_san_mismatch() {
     // Either the keyless-arm SAN-regex error fires (if the bundle parsed),
     // or the bundle-parse / bundle-missing error fires (if the stub is
     // unparseable). Both are acceptable fail-closed outcomes.
-    assert!(!output.status.success(), "SAN mismatch or no-bundle must fail");
+    assert!(
+        !output.status.success(),
+        "SAN mismatch or no-bundle must fail"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stderr}{stdout}");
-    assert!(!combined.is_empty(), "stderr/stdout must contain a diagnostic");
+    assert!(
+        !combined.is_empty(),
+        "stderr/stdout must contain a diagnostic"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +198,7 @@ fn der_utf8string(s: &str) -> Vec<u8> {
     let len = bytes.len();
     let mut result = Vec::new();
     result.push(0x0C); // UTF8String tag
-    // DER definite-length encoding
+                       // DER definite-length encoding
     if len <= 127 {
         result.push(len as u8);
     } else if len <= 255 {
@@ -225,8 +232,7 @@ fn der_utf8string(s: &str) -> Vec<u8> {
 /// After `normalize_workflow_uri`, `workflow` becomes `.github/workflows/release.yml`.
 fn make_hermetic_keyless_bundle() -> (nono::trust::Bundle, PathBuf) {
     let bundle_json = hermetic_keyless_bundle_json();
-    let bundle =
-        nono::trust::Bundle::from_json(&bundle_json).expect("hermetic fixture must parse");
+    let bundle = nono::trust::Bundle::from_json(&bundle_json).expect("hermetic fixture must parse");
     let fixture_path = PathBuf::from("keyless-bundle-known-san.bundle");
     (bundle, fixture_path)
 }
@@ -349,10 +355,7 @@ fn verify_accepts_san_match() {
 
     let workflow = match &identity {
         nono::trust::SignerIdentity::Keyless { workflow, .. } => workflow.clone(),
-        other => panic!(
-            "expected SignerIdentity::Keyless, got {:?}",
-            other
-        ),
+        other => panic!("expected SignerIdentity::Keyless, got {:?}", other),
     };
 
     // After normalize_workflow_uri, the full build-config URI

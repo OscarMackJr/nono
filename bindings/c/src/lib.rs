@@ -132,6 +132,10 @@ pub(crate) fn map_error(e: &nono::NonoError) -> types::NonoErrorCode {
         // PathNotFound, just specifically named for the broker discovery
         // call site.
         nono::NonoError::BrokerNotFound { .. } => NonoErrorCode::ErrPathNotFound,
+        // Phase 25-01: platform-specific feature rejection (e.g., --cpu-percent on macOS).
+        // Maps to ErrUnsupportedPlatform so FFI consumers see the same code as
+        // UnsupportedPlatform but with a structured feature field in the message.
+        nono::NonoError::NotSupportedOnPlatform { .. } => NonoErrorCode::ErrUnsupportedPlatform,
     }
 }
 

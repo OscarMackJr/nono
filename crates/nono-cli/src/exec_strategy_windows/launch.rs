@@ -1837,22 +1837,16 @@ mod broker_authenticode_layout_tests {
             "Windows release target path should be detected as dev-build"
         );
         assert!(
-            is_dev_build_layout(std::path::Path::new(
-                "/home/dev/nono/target/debug/nono"
-            )),
+            is_dev_build_layout(std::path::Path::new("/home/dev/nono/target/debug/nono")),
             "Unix debug target path should be detected as dev-build"
         );
         assert!(
-            is_dev_build_layout(std::path::Path::new(
-                "/home/dev/nono/target/release/nono"
-            )),
+            is_dev_build_layout(std::path::Path::new("/home/dev/nono/target/release/nono")),
             "Unix release target path should be detected as dev-build"
         );
         // Production install paths (should NOT match → false)
         assert!(
-            !is_dev_build_layout(std::path::Path::new(
-                r"C:\Program Files\nono\nono.exe"
-            )),
+            !is_dev_build_layout(std::path::Path::new(r"C:\Program Files\nono\nono.exe")),
             "Program Files install path must NOT be detected as dev-build"
         );
         assert!(

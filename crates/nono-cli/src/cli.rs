@@ -80,6 +80,46 @@ pub(crate) fn parse_duration(s: &str) -> std::result::Result<std::time::Duration
     Ok(std::time::Duration::from_secs(secs))
 }
 
+/// Parse `--cpu-percent` at clap time, with platform-level gating.
+///
+/// On macOS, this function rejects the flag immediately with a message referencing
+/// REQ-RESL-NIX-03 acceptance criterion 3. No child is spawned and no cgroup or
+/// rlimit syscall is issued.
+///
+/// On Linux and Windows, the value is validated as a `u16` in `1..=100` and returned.
+///
+/// # macOS rejection rationale
+///
+/// macOS does not have a per-process CPU-quota equivalent (no cgroup-style `cpu.max`).
+/// `RLIMIT_CPU` measures aggregate CPU time, not rate, and is not a useful substitute.
+/// Accepting the flag silently on macOS would give a false sense of security.
+///
+/// The `MacosResourceLimits::new` function in `supervisor_macos.rs` also rejects
+/// `cpu_percent` as a defense-in-depth check for programmatic callers.
+pub(crate) fn parse_cpu_percent(s: &str) -> std::result::Result<u16, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = s;
+        return Err(
+            "--cpu-percent is not supported on macOS: there is no per-process \
+             CPU-quota equivalent (no cgroup cpu.max). See REQUIREMENTS.md \
+             § REQ-RESL-NIX-03 acceptance criterion 3 (cpu_percent_macos)."
+                .into(),
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let n: u16 = s
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid cpu_percent '{s}': expected an integer in 1..=100"))?;
+        if !(1..=100).contains(&n) {
+            return Err(format!("--cpu-percent must be in 1..=100; got {n}"));
+        }
+        Ok(n)
+    }
+}
+
 /// Validate an environment-variable filter pattern for `--env-allow` /
 /// `--env-deny`.
 ///
@@ -1509,7 +1549,7 @@ impl SandboxArgs {
     ///   primitive exists. The flag is accepted for CLI parity so scripts
     ///   are portable, but a warning is emitted so operators do not falsely
     ///   assume GPU passthrough is sandboxed. Mirrors the Phase 16
-    ///   RESL-01..04 pattern (`collect_unix_resource_limit_warnings`) for
+    ///   RESL-01..04 pattern (per-flag warning for unsupported flags) for
     ///   unsupported flags, but lives at the CLI layer — per D-21, the
     ///   Windows sandbox backend (`crates/nono/src/sandbox/windows.rs`) is
     ///   NOT touched by this port and receives no GPU-related capability
@@ -1895,12 +1935,13 @@ pub struct RunArgs {
     // ── Resource Limits ──────────────────────────────────────────────
     /// Cap the sandboxed agent tree's CPU to this percentage of one logical core.
     /// Kernel-enforced on Windows via `JOB_OBJECT_CPU_RATE_CONTROL_ENABLE` with hard-cap.
-    /// Range: 1..=100. On Linux/macOS: accepted with a "not enforced on this platform"
-    /// warning pending a cross-platform follow-up. See REQUIREMENTS.md § RESL-01.
+    /// On Linux: enforced via cgroup v2 `cpu.max` (requires systemd delegation).
+    /// On macOS: rejected at parse time — no per-process CPU-quota equivalent exists.
+    /// See REQUIREMENTS.md § REQ-RESL-NIX-03 for the macOS constraint.
     #[arg(
         long,
         value_name = "PERCENT",
-        value_parser = clap::value_parser!(u16).range(1..=100),
+        value_parser = parse_cpu_percent,
         help_heading = "RESOURCE LIMITS"
     )]
     pub cpu_percent: Option<u16>,
