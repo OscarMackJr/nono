@@ -39,6 +39,18 @@ pub enum NonoError {
     #[error("Platform not supported: {0}")]
     UnsupportedPlatform(String),
 
+    /// A feature is not supported on this specific platform.
+    ///
+    /// This is distinct from [`UnsupportedPlatform`] in that the platform itself
+    /// is supported, but a specific feature within that platform is not available.
+    /// For example, `--cpu-percent` is not supported on macOS because there is no
+    /// per-process CPU-quota equivalent, but nono itself runs fine on macOS.
+    ///
+    /// The `feature` field contains a stable machine-readable identifier (e.g.
+    /// `"cpu_percent_macos"`) that tests and callers can match on.
+    #[error("Feature not supported on this platform: {feature}")]
+    NotSupportedOnPlatform { feature: String },
+
     #[error("Command '{command}' is blocked: {reason}")]
     BlockedCommand { command: String, reason: String },
 

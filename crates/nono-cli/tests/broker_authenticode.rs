@@ -34,7 +34,10 @@ fn resolve_release_broker() -> Option<PathBuf> {
         .join("x86_64-pc-windows-msvc")
         .join("release")
         .join("nono-shell-broker.exe");
-    let candidate_default = workspace_root.join("target").join("release").join("nono-shell-broker.exe");
+    let candidate_default = workspace_root
+        .join("target")
+        .join("release")
+        .join("nono-shell-broker.exe");
     if candidate_triple.exists() {
         Some(candidate_triple)
     } else if candidate_default.exists() {
@@ -110,7 +113,11 @@ fn broker_valid_signature_spawns() {
     if is_production_layout() {
         // Test runner is in production layout — the gate is active. Assert the
         // broker exists and trust that the release pipeline signed it correctly.
-        assert!(broker.exists(), "release broker must exist at {}", broker.display());
+        assert!(
+            broker.exists(),
+            "release broker must exist at {}",
+            broker.display()
+        );
         eprintln!(
             "INFO: production-layout detected; broker Authenticode gate is active. \
              Positive path acceptance relies on Phase 31 Plan 04 signing identity match."
@@ -121,7 +128,11 @@ fn broker_valid_signature_spawns() {
             "INFO: dev-layout detected; broker Authenticode gate skips (is_dev_build_layout). \
              Positive path validated by broker_launch_assigns_child_to_job_object."
         );
-        assert!(broker.exists(), "release broker found at {}", broker.display());
+        assert!(
+            broker.exists(),
+            "release broker found at {}",
+            broker.display()
+        );
     }
 }
 
@@ -192,8 +203,16 @@ fn broker_signature_mismatch_refuses_spawn() {
     // The PLAN notes that full subject-mismatch detection requires both binaries to be
     // Valid-but-different, which requires a signed nono.exe (only available in release CI).
     // This test covers the fail-closed branch for the unsigned-nono path as a proxy.
-    assert!(staged_nono.exists(), "staged nono.exe present: {}", staged_nono.display());
-    assert!(staged_broker.exists(), "staged broker present: {}", staged_broker.display());
+    assert!(
+        staged_nono.exists(),
+        "staged nono.exe present: {}",
+        staged_nono.display()
+    );
+    assert!(
+        staged_broker.exists(),
+        "staged broker present: {}",
+        staged_broker.display()
+    );
 
     // Structural assertion: the source must contain verify_broker_authenticode
     // with the Authenticode gate logic. Belt-and-braces guard against accidental

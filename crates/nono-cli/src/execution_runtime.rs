@@ -337,10 +337,10 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         cap_pipe_rendezvous_path: Some(windows_cap_pipe_path.clone()),
     };
 
-    // Emit per-flag warnings for Unix builds when the Direct strategy is about
-    // to run. Supervised strategy emits its own warnings inside
-    // `execute_supervised_runtime`. Both call sites are no-ops on Windows.
-    exec_strategy::warn_unix_resource_limits(&flags.resource_limits, flags.silent);
+    // Resource limits are now kernel-enforced on Linux (cgroup v2) and macOS
+    // (setrlimit). The old "not enforced on linux/macos" warnings were removed
+    // in Phase 25 Plan 01. Enforcement is wired inside execute_direct and
+    // execute_supervised_runtime via apply_resource_limits_unix.
 
     match strategy {
         exec_strategy::ExecStrategy::Direct => {
@@ -358,7 +358,14 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             }
             #[cfg(not(target_os = "windows"))]
             {
-                exec_strategy::execute_direct(&config)?;
+                exec_strategy::execute_direct(
+                    &config,
+                    // Phase 25-01: kernel-level resource enforcement (Linux cgroup v2, macOS setrlimit).
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    &flags.resource_limits,
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    flags.session.session_id.as_str(),
+                )?;
                 unreachable!("execute_direct only returns on error");
             }
         }

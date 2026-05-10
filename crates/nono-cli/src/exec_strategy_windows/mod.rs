@@ -1,16 +1,14 @@
 // `dead_code` is allowed at module scope because this module hosts a small
 // number of intentionally-unused-on-Windows symbols whose ownership lives
 // outside the Phase 16 scope:
-//   * `collect_unix_resource_limit_warnings` — Windows shim of the Unix
-//     warning collector kept for cross-platform call-site symmetry.
 //   * `WindowsSupervisorDenyAllApprovalBackend` — fallback approval backend
 //     for SC #4 callers that build a `SupervisorConfig` without an
 //     interactive backend.
 //   * `set_windows_wfp_test_force_ready` — debug-only WFP readiness toggle
 //     pair (the matching reader is wired in `network.rs`).
-// These pre-date Phase 16 and should be addressed in a follow-up cleanup.
-// The Phase 16 dead helpers in `launch.rs` were removed (16-WR-02); do NOT
-// re-introduce broad allow scopes there.
+// Phase 25-01 removed `collect_unix_resource_limit_warnings` and
+// `warn_unix_resource_limits` (Phase 16 stubs, now dead since Unix enforcement
+// is kernel-level via cgroup v2 / setrlimit).
 #![allow(dead_code)]
 
 //! Windows execution strategy placeholder.
@@ -21,30 +19,6 @@
 
 #[path = "../exec_strategy/env_sanitization.rs"]
 mod env_sanitization;
-
-/// Windows no-op stub of the Unix warning collector. On Windows, resource
-/// limits are kernel-enforced by `apply_resource_limits` inside
-/// `spawn_windows_child`, so there's nothing to warn about.
-///
-/// Always returns an empty `Vec`. The signature matches the Unix version in
-/// `exec_strategy.rs` so cross-platform callers can invoke
-/// `exec_strategy::collect_unix_resource_limit_warnings` without `#[cfg]` gating.
-pub(crate) fn collect_unix_resource_limit_warnings(
-    _limits: &crate::launch_runtime::ResourceLimits,
-    _silent: bool,
-) -> Vec<String> {
-    Vec::new()
-}
-
-/// Windows no-op stub of the Unix warning emitter. On Windows this is a
-/// compile-time no-op — resource limits are kernel-enforced in
-/// `apply_resource_limits`.
-pub(crate) fn warn_unix_resource_limits(
-    _limits: &crate::launch_runtime::ResourceLimits,
-    _silent: bool,
-) {
-    // No-op on Windows.
-}
 
 use crate::pty_proxy;
 use crate::rollback_runtime::{

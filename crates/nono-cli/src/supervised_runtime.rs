@@ -40,10 +40,10 @@ pub(crate) struct SupervisedRuntimeContext<'a> {
     pub(crate) executable_identity: Option<&'a nono::undo::ExecutableIdentity>,
     pub(crate) silent: bool,
     /// Resource limits (CPU / memory / timeout / process-count) populated from
-    /// `ExecutionFlags.resource_limits`. On Windows, Task 2 of Plan 16-01 will
-    /// consume these via `apply_resource_limits`; Plan 16-02 Task 1 uses the
-    /// `timeout` field for the supervisor-side wall-clock timer. On Unix this
-    /// is read only by `warn_unix_resource_limits` at run start.
+    /// `ExecutionFlags.resource_limits`. On Windows, consumed via
+    /// `apply_resource_limits` (Job Objects, Plan 16-01). On Unix, enforced
+    /// via cgroup v2 on Linux and setrlimit on macOS (Phase 25-01); passed
+    /// directly into `execute_supervised` as kernel-level enforcement parameters.
     pub(crate) resource_limits: &'a ResourceLimits,
     /// Plan 18.1-03 G-06: the loaded profile (if any) that resolves the
     /// per-handle-type AIPC allowlist widening. `None` means no profile →
@@ -207,10 +207,11 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
     #[cfg(not(target_os = "windows"))]
     let _ = &aipc_allowlist;
 
-    // Emit per-flag "not enforced on this platform" warnings on Unix before any
-    // spawn work. On Windows this is a no-op — Task 2 of Plan 16-01 applies the
-    // kernel limits via `apply_resource_limits` inside `spawn_windows_child`.
-    exec_strategy::warn_unix_resource_limits(resource_limits, silent);
+    // Resource limits are now kernel-enforced on Linux (cgroup v2) and macOS
+    // (setrlimit). The old "not enforced on linux/macos" warnings were removed
+    // in Phase 25 Plan 01; enforcement is wired via apply_resource_limits_unix
+    // inside execute_supervised. On Windows, apply_resource_limits inside
+    // spawn_windows_child applies the kernel limits.
 
     output::print_applying_sandbox(silent);
 
@@ -405,6 +406,11 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
                 &started,
                 silent,
                 rollback.prompt_disabled,
+                // Phase 25-01: kernel-level resource enforcement (Linux cgroup v2, macOS setrlimit).
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                resource_limits,
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
+                &short_session_id,
             )?
         }
         #[cfg(target_os = "windows")]

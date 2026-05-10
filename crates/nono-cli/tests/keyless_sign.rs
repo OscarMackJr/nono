@@ -66,7 +66,10 @@ fn setup_isolated_home() -> (tempfile::TempDir, PathBuf, PathBuf) {
         .join("tests")
         .join("fixtures")
         .join("trust-root-frozen.json");
-    let cache_path = home.join(".nono").join("trust-root").join("trusted_root.json");
+    let cache_path = home
+        .join(".nono")
+        .join("trust-root")
+        .join("trusted_root.json");
     fs::copy(&frozen, &cache_path).expect("seed cache");
     (tmp, home, workspace)
 }

@@ -38,8 +38,7 @@ pub(crate) const TEST_USER_POLICY_PATH_ENV: &str = "NONO_TRUST_TEST_USER_POLICY_
 /// GitLab CI), the GHA OIDC permission claim (`id-token: write`), AND
 /// the local recovery command (--keyref) so the test can assert all
 /// substrings.
-pub(crate) const OIDC_NO_AMBIENT_TOKEN_MSG: &str =
-    "no ambient OIDC credentials found. \
+pub(crate) const OIDC_NO_AMBIENT_TOKEN_MSG: &str = "no ambient OIDC credentials found. \
      Keyless signing requires a CI environment with OIDC ambient identity \
      (GitHub Actions with `permissions: id-token: write`, GitLab CI, etc.). \
      For local development, use `nono trust sign --keyref <key>` instead.";

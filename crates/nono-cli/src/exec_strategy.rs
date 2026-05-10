@@ -13,6 +13,8 @@
 mod env_sanitization;
 #[cfg(target_os = "linux")]
 mod supervisor_linux;
+#[cfg(target_os = "macos")]
+mod supervisor_macos;
 
 use crate::rollback_runtime::{
     finalize_supervised_exit, AuditState, RollbackExitContext, RollbackRuntimeState,
@@ -41,76 +43,93 @@ use tracing::{debug, info, warn};
 pub(crate) use env_sanitization::is_dangerous_env_var;
 use env_sanitization::should_skip_env_var;
 
-/// Collect "not enforced on this platform" warnings for each set resource-limit
-/// field. Pure (returns `Vec<String>`) so unit tests don't need to capture stderr.
+/// Platform-specific guard returned by [`apply_resource_limits_unix`].
 ///
-/// On Windows this returns an empty `Vec` — the limits are kernel-enforced by
-/// `apply_resource_limits` in `exec_strategy_windows::launch`. On Linux/macOS,
-/// one warning line is produced per `Some(_)` field.
+/// Holds platform-specific state for the duration of the child's execution.
+/// On Linux, holds the [`supervisor_linux::cgroup::CgroupSession`] RAII guard
+/// which removes the cgroup on drop. On macOS, holds the limit configuration
+/// (which is stateless after `pre_exec`; the watchdog is spawned separately).
+/// On Windows or when no limits are set, this is a no-op.
+#[allow(dead_code)]
+pub(crate) enum UnixResourceLimitGuard {
+    /// No limits requested or platform is Windows.
+    Noop,
+    /// Linux: cgroup v2 session with RAII cleanup.
+    #[cfg(target_os = "linux")]
+    Linux(supervisor_linux::cgroup::CgroupSession),
+    /// macOS: setrlimit applier (stateless after pre_exec).
+    #[cfg(target_os = "macos")]
+    Macos(supervisor_macos::MacosResourceLimits),
+}
+
+/// Apply Unix resource limits before spawning the child process.
 ///
-/// Callers that want to print the warnings should call [`warn_unix_resource_limits`]
-/// which delegates to this helper and `eprintln!`s each line. Honors `silent`:
-/// when `silent` is true, returns an empty `Vec` regardless of platform.
-pub(crate) fn collect_unix_resource_limit_warnings(
+/// On Linux, creates a cgroup v2 session and installs a `pre_exec` hook that
+/// places the child PID in the cgroup. On macOS, installs a `pre_exec` hook
+/// that calls `setrlimit` in the forked child.
+///
+/// Returns a [`UnixResourceLimitGuard`] that must be kept alive until after
+/// the child is reaped (so RAII cleanup runs at the right time on Linux).
+///
+/// # Errors
+///
+/// - Linux: `NonoError::UnsupportedPlatform("cgroup_v2: ...")` if cgroup v2
+///   is not available. The child is NOT spawned.
+/// - macOS: `NonoError::NotSupportedOnPlatform { feature: "cpu_percent_macos" }`
+///   if `--cpu-percent` was somehow set (defense-in-depth; clap rejects it first).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn apply_resource_limits_unix(
     limits: &crate::launch_runtime::ResourceLimits,
-    silent: bool,
-) -> Vec<String> {
-    if silent {
-        return Vec::new();
+    cmd: &mut std::process::Command,
+    session_id: &str,
+) -> Result<UnixResourceLimitGuard> {
+    if limits.is_empty() {
+        return Ok(UnixResourceLimitGuard::Noop);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     {
-        let os_name = if cfg!(target_os = "linux") {
-            "linux"
-        } else {
-            "macos"
-        };
-        let mut out = Vec::new();
-        if limits.cpu_percent.is_some() {
-            out.push(format!(
-                "warning: --cpu-percent is not enforced on {os_name}; \
-                 the native backend is a follow-up cross-platform milestone \
-                 (see REQUIREMENTS.md § Cross-platform note). The flag is \
-                 accepted for CLI parity with Windows."
-            ));
-        }
-        if limits.memory_bytes.is_some() {
-            out.push(format!(
-                "warning: --memory is not enforced on {os_name}; \
-                 the native backend is a follow-up cross-platform milestone."
-            ));
-        }
-        if limits.timeout.is_some() {
-            out.push(format!(
-                "warning: --timeout is not enforced on {os_name}; \
-                 the native backend is a follow-up cross-platform milestone."
-            ));
-        }
-        if limits.max_processes.is_some() {
-            out.push(format!(
-                "warning: --max-processes is not enforced on {os_name}; \
-                 the native backend is a follow-up cross-platform milestone."
-            ));
-        }
-        out
+        let cgroup = supervisor_linux::cgroup::CgroupSession::new(session_id, limits)?;
+        cgroup.apply_limits()?;
+        cgroup.install_pre_exec(cmd);
+        return Ok(UnixResourceLimitGuard::Linux(cgroup));
     }
-    #[cfg(target_os = "windows")]
+    #[cfg(target_os = "macos")]
     {
-        let _ = limits;
-        Vec::new()
+        let _ = session_id;
+        let macos = supervisor_macos::MacosResourceLimits::new(limits)?;
+        macos.install_pre_exec(cmd);
+        return Ok(UnixResourceLimitGuard::Macos(macos));
     }
 }
 
-/// Emit one warning line per active resource-limit flag on Unix builds.
-/// On Windows this is a no-op (limits are kernel-enforced in `apply_resource_limits`).
-/// Honors `--silent` by delegating to [`collect_unix_resource_limit_warnings`].
-pub(crate) fn warn_unix_resource_limits(
-    limits: &crate::launch_runtime::ResourceLimits,
-    silent: bool,
-) {
-    for line in collect_unix_resource_limit_warnings(limits, silent) {
-        eprintln!("{line}");
-    }
+/// Spawn a watchdog thread that atomically kills the Linux cgroup at `deadline`.
+///
+/// Writes `"1\n"` to `<cgroup_path>/cgroup.kill` after sleeping until `deadline`.
+/// Sets `timeout_fired` to `true` before writing so the parent's wait loop can
+/// record `timeout_kill: true` in inspect data.
+///
+/// If the child has already exited (and the cgroup removed by Drop), the write
+/// fails silently — this is the normal harmless race.
+#[cfg(target_os = "linux")]
+pub(crate) fn spawn_linux_timeout_watchdog(
+    deadline: std::time::Instant,
+    cgroup_path: std::path::PathBuf,
+    timeout_fired: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let now = std::time::Instant::now();
+        if let Some(remaining) = deadline.checked_duration_since(now) {
+            std::thread::sleep(remaining);
+        }
+        timeout_fired.store(true, std::sync::atomic::Ordering::Release);
+        let kill_path = cgroup_path.join("cgroup.kill");
+        if let Err(e) = std::fs::write(&kill_path, "1\n") {
+            // ENOENT means the cgroup was already removed (child exited before deadline).
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!("cgroup watchdog: failed to write to {kill_path:?}: {e}");
+            }
+        }
+    })
 }
 
 /// Resolve a program name to its absolute path.
@@ -405,7 +424,26 @@ const fn linux_child_requires_dumpable(
 ///
 /// This is the original behavior: apply sandbox, then exec into the command.
 /// nono ceases to exist after exec() succeeds.
-pub fn execute_direct(config: &ExecConfig<'_>) -> Result<()> {
+///
+/// # Resource limits (Linux + macOS)
+///
+/// When `resource_limits` is non-empty, a [`UnixResourceLimitGuard`] is
+/// installed via a `pre_exec` hook that runs in the forked child process before
+/// `execve`. On Linux this places the child PID into a cgroup v2 hierarchy;
+/// on macOS it calls `setrlimit`. The guard is intentionally kept alive until
+/// `cmd.exec()` replaces the process, at which point the kernel owns the cgroup.
+/// The cgroup directory is cleaned up by the kernel once the last process exits
+/// (the RAII Drop never fires here because exec replaces the Rust runtime).
+///
+/// `--timeout` in Direct strategy: no supervisor watchdog is available. The flag
+/// is accepted but the timeout is NOT enforced in Direct mode — use Supervised
+/// mode for wall-clock enforcement.
+pub fn execute_direct(
+    config: &ExecConfig<'_>,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    resource_limits: &crate::launch_runtime::ResourceLimits,
+    #[cfg(any(target_os = "linux", target_os = "macos"))] resource_session_id: &str,
+) -> Result<()> {
     let cmd_args = &config.command[1..];
 
     info!(
@@ -432,6 +470,12 @@ pub fn execute_direct(config: &ExecConfig<'_>) -> Result<()> {
     for (key, value) in &config.env_vars {
         cmd.env(key, value);
     }
+
+    // Apply resource limits via pre_exec hook (Linux: cgroup v2; macOS: setrlimit).
+    // The guard is kept alive until exec() replaces the process.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let _resource_guard =
+        apply_resource_limits_unix(resource_limits, &mut cmd, resource_session_id)?;
 
     let err = cmd.exec();
 
@@ -494,6 +538,15 @@ pub fn execute_supervised(
     started: &str,
     silent: bool,
     rollback_prompt_disabled: bool,
+    /// Resource limits to enforce on the child process tree. On Linux, enforced via
+    /// cgroup v2 (requires systemd delegation); on macOS via setrlimit.
+    /// Pass `&ResourceLimits::default()` to skip enforcement.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    resource_limits: &crate::launch_runtime::ResourceLimits,
+    /// Session identifier used for naming the cgroup (Linux) or correlation.
+    /// Typically the audit session ID or a generated UUID.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    resource_session_id: &str,
 ) -> Result<i32> {
     let program = &config.command[0];
     let cmd_args = &config.command[1..];
@@ -720,6 +773,48 @@ pub fn execute_supervised(
     // Compute max FD in parent (get_max_fd may allocate on Linux)
     let max_fd = get_max_fd();
 
+    // Set up resource limits BEFORE fork. On Linux, the cgroup session is created
+    // here (in the parent) so `apply_limits` runs before `fork()`. The child then
+    // places its own PID into cgroup.procs via `place_self_in_cgroup_raw`. On macOS,
+    // the setrlimit calls happen in the child's std::process::Command::pre_exec hook,
+    // but for the raw-fork path, we handle them inline in the child branch below.
+    //
+    // The guard must live until after the child is reaped (RAII cleanup on Linux).
+    #[cfg(target_os = "linux")]
+    let (unix_resource_guard, linux_cgroup_procs_path_nul) = {
+        use std::sync::{atomic::AtomicBool, Arc};
+        if resource_limits.is_empty() {
+            (None::<supervisor_linux::cgroup::CgroupSession>, Vec::new())
+        } else {
+            let session =
+                supervisor_linux::cgroup::CgroupSession::new(resource_session_id, resource_limits)?;
+            session.apply_limits()?;
+            let procs_nul = session.procs_path_nul();
+            (Some(session), procs_nul)
+        }
+    };
+    // Silence "unused" if limits are not set.
+    #[cfg(target_os = "linux")]
+    let _ = &unix_resource_guard;
+
+    // macOS setrlimit: validate at runtime (clap rejects --cpu-percent, but
+    // this is a defense-in-depth check). The actual setrlimit call happens in
+    // the child fork branch below.
+    #[cfg(target_os = "macos")]
+    let macos_resource_limits = if resource_limits.is_empty() {
+        None
+    } else {
+        Some(supervisor_macos::MacosResourceLimits::new(resource_limits)?)
+    };
+
+    // Pre-compute the deadline for the timeout watchdog (spawned after fork).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let timeout_deadline = resource_limits
+        .timeout
+        .map(|d| std::time::Instant::now() + d);
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let timeout_fired = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Clear any stale forwarding target before forking.
     clear_signal_forwarding_target();
 
@@ -755,6 +850,45 @@ pub fn execute_supervised(
             // Sandbox::apply() allocates (Seatbelt profile generation, Landlock
             // PathFd opens) but this is safe because we validated single-threaded
             // execution before fork, giving us a clean heap.
+
+            // Place this process in the cgroup (Linux) or apply rlimits (macOS)
+            // BEFORE applying the sandbox. The cgroup placement uses only
+            // async-signal-safe libc calls.
+            #[cfg(target_os = "linux")]
+            if !linux_cgroup_procs_path_nul.is_empty() {
+                if let Err(e) = supervisor_linux::cgroup::CgroupSession::place_self_in_cgroup_raw(
+                    &linux_cgroup_procs_path_nul,
+                ) {
+                    let detail = format!("nono: failed to place child in cgroup: {}\n", e);
+                    let msg = detail.as_bytes();
+                    unsafe {
+                        libc::write(
+                            libc::STDERR_FILENO,
+                            msg.as_ptr().cast::<libc::c_void>(),
+                            msg.len(),
+                        );
+                        libc::_exit(126);
+                    }
+                }
+            }
+
+            // On macOS, apply setrlimit BEFORE the sandbox is applied.
+            // setrlimit is async-signal-safe per POSIX. No allocation.
+            #[cfg(target_os = "macos")]
+            if macos_resource_limits.is_some() {
+                use nix::sys::resource::{setrlimit, Resource};
+                if let Some(bytes) = resource_limits.memory_bytes {
+                    // T-25-01-05: guard against overflow on 32-bit (belt-and-suspenders).
+                    let limit: nix::libc::rlim_t =
+                        bytes.try_into().unwrap_or(nix::libc::rlim_t::MAX);
+                    // Non-fatal in the child: we've already validated this in the parent.
+                    let _ = setrlimit(Resource::RLIMIT_AS, limit, limit);
+                }
+                if let Some(n) = resource_limits.max_processes {
+                    let limit = u64::from(n);
+                    let _ = setrlimit(Resource::RLIMIT_NPROC, limit, limit);
+                }
+            }
 
             // The supervisor socket must survive exec into the sandboxed command,
             // and later into any helper (`open-url-helper`) that needs to speak
@@ -1139,6 +1273,33 @@ pub fn execute_supervised(
             // Set up signal forwarding.
             setup_signal_forwarding(child, pty_proxy.as_ref().map(|p| p.poll_fds().0));
             let _signal_forwarding_guard = SignalForwardingGuard;
+
+            // Spawn timeout watchdog AFTER child is spawned.
+            // Linux: writes "1\n" to cgroup.kill at deadline (atomically kills all descendants).
+            // macOS: sends SIGKILL to child process group at deadline.
+            #[cfg(target_os = "linux")]
+            let _timeout_watchdog = timeout_deadline
+                .map(|deadline| {
+                    if let Some(ref session) = unix_resource_guard {
+                        let cgroup_path = session.path.clone();
+                        let fired = timeout_fired.clone();
+                        Some(spawn_linux_timeout_watchdog(deadline, cgroup_path, fired))
+                    } else {
+                        None
+                    }
+                })
+                .flatten();
+            #[cfg(target_os = "macos")]
+            let _timeout_watchdog = timeout_deadline
+                .map(|deadline| {
+                    use nix::unistd::getpgid;
+                    let child_pgrp = getpgid(Some(child)).unwrap_or(child);
+                    let fired = timeout_fired.clone();
+                    Some(supervisor_macos::spawn_macos_timeout_watchdog(
+                        deadline, child_pgrp, fired,
+                    ))
+                })
+                .flatten();
 
             // NOTE: peer_pid() is NOT called here. For socketpair() created
             // before fork, LOCAL_PEERPID/SO_PEERCRED return the parent's own PID
@@ -3078,70 +3239,6 @@ fn open_canonical_path_no_symlinks(
 
     let file_fd = unsafe { OwnedFd::from_raw_fd(file_fd) };
     Ok(std::fs::File::from(file_fd))
-}
-
-#[cfg(test)]
-mod unix_warning_tests {
-    use super::*;
-    use crate::launch_runtime::ResourceLimits;
-    use std::time::Duration;
-
-    fn limits_all_set() -> ResourceLimits {
-        ResourceLimits {
-            cpu_percent: Some(25),
-            memory_bytes: Some(512 * 1024 * 1024),
-            timeout: Some(Duration::from_secs(300)),
-            max_processes: Some(10),
-        }
-    }
-
-    #[test]
-    fn silent_always_returns_empty() {
-        let out = collect_unix_resource_limit_warnings(&limits_all_set(), true);
-        assert!(out.is_empty());
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_returns_empty_even_when_not_silent() {
-        let out = collect_unix_resource_limit_warnings(&limits_all_set(), false);
-        assert!(out.is_empty());
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn unix_emits_one_line_per_set_field() {
-        let out = collect_unix_resource_limit_warnings(&limits_all_set(), false);
-        assert_eq!(out.len(), 4);
-        assert!(out.iter().any(|s| s.contains("--cpu-percent")));
-        assert!(out.iter().any(|s| s.contains("--memory")));
-        assert!(out.iter().any(|s| s.contains("--timeout")));
-        assert!(out.iter().any(|s| s.contains("--max-processes")));
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn unix_emits_only_for_set_fields() {
-        let limits = ResourceLimits {
-            cpu_percent: Some(50),
-            memory_bytes: None,
-            timeout: Some(Duration::from_secs(60)),
-            max_processes: None,
-        };
-        let out = collect_unix_resource_limit_warnings(&limits, false);
-        assert_eq!(out.len(), 2);
-        assert!(out.iter().any(|s| s.contains("--cpu-percent")));
-        assert!(out.iter().any(|s| s.contains("--timeout")));
-        assert!(out.iter().all(|s| !s.contains("--memory")));
-        assert!(out.iter().all(|s| !s.contains("--max-processes")));
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn unix_empty_limits_emits_nothing() {
-        let out = collect_unix_resource_limit_warnings(&ResourceLimits::default(), false);
-        assert!(out.is_empty());
-    }
 }
 
 #[cfg(test)]

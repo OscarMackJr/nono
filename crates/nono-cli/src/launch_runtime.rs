@@ -111,18 +111,22 @@ pub(crate) struct ProxyLaunchOptions {
     pub(crate) allow_launch_services_active: bool,
 }
 
-/// Optional resource caps applied to the sandboxed agent tree's Job Object.
+/// Optional resource caps applied to the sandboxed agent tree.
 /// All fields are `None` by default; `Some(_)` opts into enforcement on that dimension.
 ///
-/// **Windows:** CPU, memory, and process-count limits are applied via
-/// `SetInformationJobObject` **before `ResumeThread`** (see
-/// `exec_strategy_windows::launch::apply_resource_limits`). The timeout is
-/// enforced by a supervisor-side wall-clock timer that calls `TerminateJobObject`
-/// on expiry.
-///
-/// **Linux / macOS:** Each `Some(_)` field emits a per-flag "not enforced on this
-/// platform" warning (see `exec_strategy::warn_unix_resource_limits`). The native
-/// cgroup/rlimit backends are a follow-up cross-platform milestone.
+/// - **Windows:** kernel-enforced via Job Object (CPU, memory, process-count via
+///   `SetInformationJobObject`; timeout via supervisor-side `TerminateJobObject`).
+///   See `exec_strategy_windows::launch::apply_resource_limits`.
+/// - **Linux:** kernel-enforced via cgroup v2 delegated hierarchy (see
+///   `exec_strategy::apply_resource_limits_unix` → `supervisor_linux::cgroup::CgroupSession`).
+///   Requires cgroup v2 + systemd delegation; fails fast on cgroup v1 hosts with
+///   `NonoError::UnsupportedPlatform("cgroup_v2: ...")`.
+/// - **macOS:** kernel-enforced for memory + max_processes via
+///   `setrlimit(RLIMIT_AS, RLIMIT_NPROC)` in a `pre_exec` hook.
+///   `--cpu-percent` is rejected at clap parse time (no per-process CPU-quota
+///   equivalent on macOS; see `cli.rs::parse_cpu_percent`).
+///   `--timeout` enforced via supervisor-side `Instant` deadline +
+///   `kill(pgrp, SIGKILL)` watchdog.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub(crate) struct ResourceLimits {
     /// CPU percentage cap (1..=100). `JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | HARD_CAP`.
