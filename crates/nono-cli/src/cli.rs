@@ -2690,6 +2690,17 @@ pub struct TrustVerifyArgs {
     #[arg(long, value_name = "FILE")]
     pub policy: Option<PathBuf>,
 
+    /// OIDC issuer URL (REQUIRED for keyless verify; exact match against signer's iss claim).
+    /// Example: https://token.actions.githubusercontent.com
+    #[arg(long, value_name = "URL")]
+    pub issuer: Option<String>,
+
+    /// OIDC identity regex (REQUIRED for keyless verify; matched via `regress` against the
+    /// bundle's Fulcio Build Config URI). Example:
+    /// '^https://github\\.com/org/repo/\\.github/workflows/release\\.yml@refs/tags/v.*$'
+    #[arg(long, value_name = "REGEX")]
+    pub identity: Option<String>,
+
     /// Print help
     #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
     pub help: Option<bool>,
