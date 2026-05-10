@@ -100,7 +100,7 @@ Make the public-good (Sigstore Fulcio + Rekor) signing and verification path pro
 - `crates/nono-cli/src/trust_cmd.rs` — the existing `run_sign`, `run_sign_keyless` (:375), `sign_file_keyless` (:520), `discover_oidc_token` (:658), `run_verify` (:740), `run_sign_multi_keyless` (:449), `build_keyless_predicate` (:575), `gitlab_keyless_predicate` (:613). Phase 32 hardens these in place; doesn't rewrite them.
 - `crates/nono-cli/src/setup.rs` — the existing `nono setup` flow; D-32-01 extends it with `--refresh-trust-root`.
 - `crates/nono-cli/src/cli.rs` — `nono setup --install-wfp-service` etc. flag definitions; new `--refresh-trust-root` flag added here.
-- `crates/nono-cli/src/exec_strategy_windows/launch.rs` § `WindowsTokenArm::BrokerLaunch` (:2173+) — broker dispatch arm. D-32-13 + D-32-14 add Authenticode verification here before the `CreateProcessAsUserW` call.
+- `crates/nono-cli/src/exec_strategy_windows/launch.rs` § `WindowsTokenArm::BrokerLaunch` (:1246-1438) — broker dispatch arm. D-32-13 + D-32-14 add Authenticode verification here before the `CreateProcessAsUserW` call. (Original CONTEXT.md cited a line range past 2000 that pointed into the test module; corrected during planning per PATTERNS.md verification — see 32-PATTERNS.md anchor-correction note. P32-CHK-014 backfill landed in Phase 32 Plan 05.)
 - `crates/nono-cli/src/audit_attestation.rs` — Phase 28's Authenticode chain-walker primitives reused by D-32-11. Specifically the `parse_signer_subject` + `parse_thumbprint` extraction path.
 - `crates/nono-cli/Cargo.toml` — `sigstore-sign = "0.6.5"` pin (D-32-04 stays on 0.6.5).
 
@@ -128,7 +128,7 @@ Make the public-good (Sigstore Fulcio + Rekor) signing and verification path pro
 - **Existing keyless CLI flow** (`crates/nono-cli/src/trust_cmd.rs:259-1008`): `run_sign`, `run_sign_keyless`, `sign_file_keyless`, `run_sign_multi_keyless`, `discover_oidc_token`, `build_keyless_predicate`, `gitlab_keyless_predicate`, `run_verify`. Phase 32 ADDS test coverage + polish; does NOT rewrite these. The `--keyless` flag on `TrustSignArgs` already exists.
 - **Existing `nono setup` flow** (`crates/nono-cli/src/setup.rs`): D-32-01 extends this with `--refresh-trust-root` following the existing pattern of `--install-wfp-service` / `--start-wfp-service` / `--check-only`. Likely a new function `refresh_trust_root() -> Result<()>` plus a CLI flag wire-up in `cli.rs`.
 - **Existing `<NONO_TEST_HOME>/.nono/` convention** (Phase 27.1 D-27.1-08): `nono_home_dir()` returns the per-user nono home directory honoring `NONO_TEST_HOME`. D-32-01 uses this same helper to locate the trust-root cache directory: `<nono_home_dir()>/.nono/trust-root/`. No new HOME-resolution code needed.
-- **Existing `WindowsTokenArm::BrokerLaunch` dispatch site** (`launch.rs:2173+`): D-32-13/14 wrap a verification call around the existing `CreateProcessAsUserW` invocation. The site already does sibling-resolution via `current_exe()`; Phase 32 just adds an Authenticode-verify gate before the spawn.
+- **Existing `WindowsTokenArm::BrokerLaunch` dispatch site** (`launch.rs:1246-1438`): D-32-13/14 wrap a verification call around the existing `CreateProcessAsUserW` invocation. The site already does sibling-resolution via `current_exe()`; Phase 32 just adds an Authenticode-verify gate before the spawn.
 - **`NonoError::TrustPolicy` + `NonoError::TrustVerification` + `NonoError::TrustSigning`** variants: D-32-03/05/09/12 use these existing error variants; no new error types needed.
 
 ### Established Patterns
@@ -143,7 +143,7 @@ Make the public-good (Sigstore Fulcio + Rekor) signing and verification path pro
 
 - **Phase 27.2 audit-attestation surface (D-27.2-01..16)**: Phase 32 does NOT modify it. The keyless work in `nono trust sign --keyless` is a separate code path; audit-attestation continues using its keyed bundle path with the FU-2 architecture intact.
 - **Phase 28 chain-walker (REQ-AUDC-01..03)**: Phase 32 reuses its primitives for D-32-11/12/13 broker verification. No changes to the chain-walker itself.
-- **Phase 31 broker dispatch (D-31-04..15)**: Phase 32 wraps a verification gate around the existing dispatch site at `launch.rs:2173+` — the broker resolution / Job Object containment / spawn flow is unchanged; D-32-13/14 just adds an Authenticode check before the spawn.
+- **Phase 31 broker dispatch (D-31-04..15)**: Phase 32 wraps a verification gate around the existing dispatch site at `launch.rs:1246-1438` — the broker resolution / Job Object containment / spawn flow is unchanged; D-32-13/14 just adds an Authenticode check before the spawn.
 - **Phase 31 Plan 04 release pipeline** (`.github/workflows/release.yml`): both `nono.exe` and `nono-shell-broker.exe` are signed by the same identity. D-32-13's "match nono.exe's own subject" assumes this; D-32-10 audits release.yml and may decide to migrate to keyless (recorded as a v2.4+ candidate, not a Phase 32 deliverable).
 - **MSI install layout** (per-user Windows MSI): D-32-01's cache directory is per-user (no admin required for trust-root refresh). MSI doesn't need any new install-time action; cache initializes on first `nono setup --refresh-trust-root` call. POC handoff cookbook (per `260509-stb` precedent) gets a new prereq line: "Run `nono setup --refresh-trust-root` once before any `nono trust verify --keyless` smoke."
 
