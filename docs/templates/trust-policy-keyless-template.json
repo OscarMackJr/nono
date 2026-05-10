@@ -22,7 +22,8 @@
     }
   ],
   "blocklist": {
-    "digests": []
+    "digests": [],
+    "publishers": []
   },
   "enforcement": "deny"
 }

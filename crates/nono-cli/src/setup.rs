@@ -19,8 +19,6 @@ pub struct SetupRunner {
     refresh_trust_root: bool,
     generate_profiles: bool,
     show_shell_integration: bool,
-    #[allow(dead_code)]
-    verbose: u8,
 }
 
 impl SetupRunner {
@@ -35,7 +33,6 @@ impl SetupRunner {
             refresh_trust_root: args.refresh_trust_root,
             generate_profiles: args.profiles,
             show_shell_integration: args.shell_integration,
-            verbose: args.verbose,
         }
     }
 
@@ -1214,7 +1211,6 @@ mod tests {
             refresh_trust_root: false,
             generate_profiles: true,
             show_shell_integration: false,
-            verbose: 0,
         };
         runner.setup_profiles().expect("setup_profiles failed");
 

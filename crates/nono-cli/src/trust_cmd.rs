@@ -1007,7 +1007,17 @@ fn verify_multi_subject_file(
             // workflows/file@ref`; normalize_workflow_uri strips the prefix and
             // `@ref` suffix, leaving only the relative path. The --identity
             // regex must match this normalized form.
-            let regex = regress::Regex::new(req_identity)
+            // CR-03 D-32-08: the --identity regex MUST be a full-string match.
+            // `regress::Regex::find` does substring matching, so an unanchored
+            // pattern like `release.yml` would match `release.yml.evil@refs/...`
+            // — a security control bypass. We wrap the user pattern in
+            // `^(?:USER_PATTERN)$` to force full-string match transparently,
+            // regardless of whether the user supplied their own anchors.
+            // Existing anchored patterns (e.g. `^.../release\.yml$`) remain
+            // logically equivalent because the inner anchors are redundant
+            // when the outer wrapper is present.
+            let anchored = format!("^(?:{req_identity})$");
+            let regex = regress::Regex::new(&anchored)
                 .map_err(|e| format!("invalid --identity regex `{req_identity}`: {e}"))?;
             if regex.find(workflow).is_none() {
                 return Err(format!(
@@ -1174,7 +1184,17 @@ fn verify_single_file(
             // workflows/file@ref`; normalize_workflow_uri strips the prefix and
             // `@ref` suffix, leaving only the relative path. The --identity
             // regex must match this normalized form.
-            let regex = regress::Regex::new(req_identity)
+            // CR-03 D-32-08: the --identity regex MUST be a full-string match.
+            // `regress::Regex::find` does substring matching, so an unanchored
+            // pattern like `release.yml` would match `release.yml.evil@refs/...`
+            // — a security control bypass. We wrap the user pattern in
+            // `^(?:USER_PATTERN)$` to force full-string match transparently,
+            // regardless of whether the user supplied their own anchors.
+            // Existing anchored patterns (e.g. `^.../release\.yml$`) remain
+            // logically equivalent because the inner anchors are redundant
+            // when the outer wrapper is present.
+            let anchored = format!("^(?:{req_identity})$");
+            let regex = regress::Regex::new(&anchored)
                 .map_err(|e| format!("invalid --identity regex `{req_identity}`: {e}"))?;
             if regex.find(workflow).is_none() {
                 return Err(format!(

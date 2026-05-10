@@ -245,10 +245,19 @@ fn home_dir_from_env() -> Option<std::path::PathBuf> {
 /// Returns `Err(TrustVerification)` when ALL tlog keys have an explicit
 /// `valid_for.end` that is in the past.
 fn check_trusted_root_freshness(root: &TrustedRoot, cache_path: &std::path::Path) -> Result<()> {
+    // Fail-closed on clock failure (CR-02): if SystemTime is before UNIX_EPOCH
+    // we cannot reason about expiry. Returning Ok(0) here would silently pass
+    // every freshness gate (1970-01-01 < every real cert end date), so a
+    // backwards clock would defeat the entire D-32-03 expiry mechanism.
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_err(|_| {
+            NonoError::TrustPolicy(
+                "system clock is before Unix epoch; cannot verify Sigstore trusted root freshness"
+                    .to_string(),
+            )
+        })?
+        .as_secs();
     let now_iso10 = current_date_iso_prefix_for_secs(now_secs);
 
     let any_active = root.tlogs.iter().any(|tlog| {
