@@ -842,6 +842,14 @@ pub fn execute_supervised(
 
     match fork_result {
         Ok(ForkResult::Child) => {
+            // CR-01-CHILD-ARM-START — DO NOT REMOVE.
+            // The regression test cr_01_no_format_macro_in_post_fork_child_branch
+            // scopes its scan from this sentinel to the matching closing sentinel
+            // at the end of this match arm body.
+            // Adding `format!()`, `println!()`, `eprintln!()`, or any heap-allocating
+            // call between these two sentinels is forbidden — the post-fork child
+            // runs in async-signal-unsafe context and may inherit a locked allocator
+            // mutex from the parent. See tests/resl_nix_async_signal_safety.rs.
             #[cfg(target_os = "linux")]
             let mut child_caps = config.caps.clone();
             #[cfg(target_os = "linux")]
@@ -1193,6 +1201,7 @@ pub fn execute_supervised(
 
             // execve only returns on error - exit without cleanup
             unsafe { libc::_exit(127) }
+            // CR-01-CHILD-ARM-END — DO NOT REMOVE. See sentinel above for rationale.
         }
         Ok(ForkResult::Parent { child }) => {
             if let Some(callback) = on_fork {
