@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: completed
-last_updated: "2026-05-09T22:29:10.172Z"
+last_updated: "2026-05-10T02:09:49.198Z"
 last_activity: 2026-05-09
 progress:
   total_phases: 8
@@ -47,7 +47,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-10 -- Completed quick task 260509-stb: fix windows-poc-handoff.mdx block-net section (false "Job Object + token-level" claim removed; install-wfp-service / start-wfp-service prereq documented inline)
+Last activity: 2026-05-10 -- Phase 32 (Sigstore Integration) context gathered via /gsd-discuss-phase. 14 decisions across 4 scope areas (A+C TUF root refresh & test unblock, B keyless CLI hardening, H broker.exe Authenticode verification at launch). CONTEXT.md + DISCUSSION-LOG.md committed at e0d8f7c6. Ready for /gsd-plan-phase 32.
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
