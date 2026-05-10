@@ -452,6 +452,23 @@ pub fn execute_direct(
         cmd_args
     );
 
+    // CR-02: --timeout is not enforced in Direct strategy mode (no supervisor
+    // watchdog available). Warn the user explicitly rather than silently
+    // ignoring. The eprintln!() ensures the warning reaches stderr even when
+    // RUST_LOG is not set — this matches the project's "Fail Secure" UX
+    // principle: at minimum the user must know enforcement is not active.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if resource_limits.timeout.is_some() {
+        warn!(
+            "--timeout is not enforced in Direct strategy mode; \
+             use --strategy supervised for wall-clock deadline enforcement"
+        );
+        eprintln!(
+            "nono: warning: --timeout is not enforced in Direct strategy mode; \
+             use --strategy supervised"
+        );
+    }
+
     let mut cmd = Command::new(config.resolved_program);
     cmd.env_clear();
     cmd.current_dir(config.current_dir);
