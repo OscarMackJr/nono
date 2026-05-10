@@ -1344,11 +1344,29 @@ pub fn execute_supervised(
             let _timeout_watchdog = timeout_deadline
                 .map(|deadline| {
                     use nix::unistd::getpgid;
-                    let child_pgrp = getpgid(Some(child)).unwrap_or(child);
-                    let fired = timeout_fired.clone();
-                    Some(supervisor_macos::spawn_macos_timeout_watchdog(
-                        deadline, child_pgrp, fired,
-                    ))
+                    // WR-04: Do NOT fall back to child PID on getpgid failure.
+                    // If the child has already exited and its PID was reused, falling
+                    // back to kill(-child_pid, SIGKILL) could target the wrong process
+                    // group. Instead: if getpgid fails, log and skip the watchdog
+                    // entirely (return None). There is no PID fallback to avoid
+                    // wrong-pgrp kill under PID reuse.
+                    match getpgid(Some(child)) {
+                        Ok(child_pgrp) => {
+                            let fired = timeout_fired.clone();
+                            Some(supervisor_macos::spawn_macos_timeout_watchdog(
+                                deadline, child_pgrp, fired,
+                            ))
+                        }
+                        Err(e) => {
+                            warn!(
+                                "getpgid({}) failed ({}); skipping timeout watchdog — \
+                                 no PID fallback to avoid wrong-pgrp kill under PID reuse",
+                                child.as_raw(),
+                                e
+                            );
+                            None
+                        }
+                    }
                 })
                 .flatten();
 
