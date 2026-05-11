@@ -5,6 +5,24 @@
 ### Changed
 - Bump fork workspace version 0.37.1 → 0.53.0. Reflects milestone v2.1/v2.2/v2.3 progress and signals fork has reached upstream v0.52 parity (v0.52.0 CHANGELOG absorbed in Phase 34-08b; v0.53.0 divergence ledger written in Phase 39-01). Fork continues to track its own version separately from upstream per Phase 34 convention.
 
+### Bug Fixes (absorbed from upstream v0.53.0 - 2026-05-11)
+
+- Return full failure diagnostic
+
+- *(sandbox)* Cache Landlock ABI detection with OnceLock
+
+Note: upstream's v0.53.0 also lists "Absolute match / 2 matches = deny / no match = passthrough w no creds" (8ddb143) and "Review comments" — these are part of Cluster C5 (fork-preserve) and will be replayed via Plan 40-06-FP-PROXY-TLS, not cherry-picked here.
+
+### Features (absorbed from upstream v0.53.0 - 2026-05-11)
+
+- *(core)* Scrub command arguments for secrets
+
+Note: upstream's v0.53.0 also lists "Fix upstream TLS trust, intercept auth, and multi-route dispatch." — this is part of Cluster C5 (fork-preserve) and will be replayed via Plan 40-06-FP-PROXY-TLS.
+
+### Refactoring (absorbed from upstream v0.53.0 - 2026-05-11)
+
+- *(scrub)* Optimize and simplify scrubbing logic
+
 ## [0.52.2] - 2026-05-11
 
 ### Bug Fixes
