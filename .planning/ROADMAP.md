@@ -299,10 +299,13 @@ Plans:
 | 26. PKG Streaming Follow-Up | v2.3 | 1/2 | Partial — Plan 26-01 PKGS-02 + PKGS-03 closed (D-20 manual replay; defense-in-depth preserved); Plan 26-02 PKGS-01 + PKGS-04 queued for Linux/macOS host | 26-01: 2026-05-01 |
 | 27. Audit-Attestation Hardening | v2.3 | 0/1 | PARTIAL — Path B attempt 2026-04-29 surfaced 3 Windows-host test-harness blockers; REQ-AAH-01 deferred to v2.4 (production code byte-identical preserved; redesigned test body preserved in-tree under `#[ignore]` for v2.4 resumption) | 2026-04-29 (deferred) |
 | 27.1. NONO_TEST_HOME Seam (INSERTED) | v2.3 | 3/3 | Complete    | 2026-05-05 |
+| 27.2. Audit-Attestation Test Re-Enablement (INSERTED) | v2.3 | 4/4 | Complete (REQ-AAHX-01..03 closed; closes REQ-AAH-01 + REQ-NTH-03 transitively) | 2026-05-09 |
 | 28. Authenticode Chain-Walker Subject Extraction | v2.3 | 1/1 | Complete (REQ-AUDC-01..03 closed; D-AUDC-02 SandboxInit fallback + D-AUDC-03 explorer.exe fixture switch) | 2026-04-30 |
 | 29. WR-01 Reject-Stage Unification | v2.3 | 1/1 | Complete (REQ-WRU-01..02 closed; Option c locked as permanent design property) | 2026-04-30 |
 | 30. Windows nono shell Interactive Enforcement Architecture | v2.3 | 5/5 | Complete    | 2026-05-08 |
 | 31. Broker-Process Architecture (SHELL-01) | v2.3 | 6/6 | Complete    | 2026-05-09 |
+| 32. Sigstore Integration | v2.3 | 5/5 | Complete (D-32-01..16 closed; 2 deferred items recorded as P32-DEFER-001/002 mock-Fulcio fixture + release.yml keyless migration; v2.4+ carry-forward) | 2026-05-10 |
+| 33. Windows parity with upstream 0.52 features and divergence decision | v2.4 | 0/0 | Not planned yet | — |
 
 ## Backlog (v2.4 carry-forward)
 
@@ -387,3 +390,28 @@ Plans:
 7. Verify-is-offline invariant holds (httpmock asserts zero hits during keyless verify per D-32-03).
 8. All 23 VALIDATION.md rows transition ❌ → ✅ where structurally testable; remaining 2-3 rows (full mock-Fulcio roundtrip + broker-mismatch with two-publisher fixture) deferred to v2.4+ as documented in Plan 05's deferred-items entries.
 9. Two ADRs (`broker-trust-anchor.md` + `sigstore-tuf-cache.md`) document the novel decisions; cookbook lists `nono setup --refresh-trust-root` prereq + canonical `--issuer`/`--identity` examples.
+
+### Phase 33: Windows parity with upstream 0.52 features and divergence decision
+
+**Goal:** [To be planned] — close the v0.52 upstream-parity gap surfaced after v0.41 baseline (Phase 25's G-25-DRIFT-01 + RESL-flag rename in upstream v0.52) AND decide whether continued parity is sustainable in this repo or warrants splitting Windows off into a dedicated repo (`always-further/nono`).
+
+**Trigger:** Upstream baseline at v0.52 has accumulated feature divergence we have not yet absorbed; Phase 25 surfaced G-25-DRIFT-01 (RESL flags renamed in upstream v0.52) as an UPST3 follow-up. The repo-split question is a strategic decision, not just a code merge.
+
+**Requirements:** REQ-1 (drift audit + DIVERGENCE-LEDGER.md), REQ-2 (strategic ADR with scored 3-option matrix), REQ-3 (PROJECT.md key-decisions row), REQ-4 (G-25-DRIFT-01 cross-reference), REQ-5 (UPST3-sync placeholder in ROADMAP) — locked in 33-SPEC.md 2026-05-10.
+
+**Depends on:** Phase 25 (RESL Unix backends + G-25-DRIFT-01), Phase 32 (Sigstore Integration; closes Windows-only trust-anchor surface).
+
+**Plans:** 4 plans
+
+Plans:
+**Wave 1**
+- [ ] 33-00-PLAN.md — Wave 0 prep: fetch upstream tags, capture drift-tool + upstream HEAD shas for ledger provenance, lock RESEARCH Open Questions 1 + 2 (project-md-target + adr-commit-pattern)
+- [ ] 33-01-PLAN.md — REQ-1 drift audit: run `make check-upstream-drift ARGS="--from v0.40.1 --to v0.52.0 --format json"` and curate DIVERGENCE-LEDGER.md (two-tier cluster + nested row table) with manual fork-only surface enumeration (D-33-A3)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 33-02-PLAN.md — REQ-2 strategic ADR: write docs/architecture/upstream-parity-strategy.md (plain-text `**Status:** Accepted` header per D-33-C4; 3 options × 5 criteria L/M/H scoring per D-33-C1/C2/C3)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 33-03-PLAN.md — REQ-3 + REQ-4 + REQ-5 downstream updates: PROJECT.md Key Decisions row + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section (D-33-D2) + ROADMAP Phase 34 UPST3 stub (D-33-D1) + Phase 33 entry flipped to complete
+
+**Reference:** Upstream repo — https://github.com/always-further/nono

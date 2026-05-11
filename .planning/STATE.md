@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
-last_updated: "2026-05-10T22:00:30.449Z"
-last_activity: 2026-05-10
+last_updated: "2026-05-11T02:55:45.947Z"
+last_activity: 2026-05-11
 progress:
   total_phases: 8
   completed_phases: 8
@@ -47,7 +47,7 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-10
+Last activity: 2026-05-11 -- Phase 33 planning complete
 
 Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
@@ -120,6 +120,7 @@ Progress: [██████████] 100%
 
 ### Roadmap Evolution
 
+- 2026-05-10: Phase 33 (Windows parity with upstream 0.52 features and divergence decision) added after Phase 32. Tentatively v2.4. Two-pronged scope: (1) close upstream v0.52 parity gap (Phase 25 G-25-DRIFT-01 RESL-flag rename + accumulated features since the v0.41 baseline) and (2) strategic decision on whether continued in-repo Windows parity is sustainable vs splitting Windows off into the `always-further/nono` repo. SDK numbering bug recurred during add (computed phase 31 again despite Phase 32 row already in the table); resolved by manual edit — table row + details section + `33-windows-parity-upstream-0-52-divergence/` directory created by hand. Also reconciled pre-existing ROADMAP table↔details drift: backfilled missing table rows for Phase 27.2 (Audit-Attestation Test Re-Enablement, 4/4, 2026-05-09) and Phase 32 (Sigstore Integration, 5/5, 2026-05-10). Plans TBD during `/gsd-spec-phase 33` + `/gsd-plan-phase 33`.
 - 2026-05-09: Phase 32 (Sigstore Integration) added after Phase 31. Description-only stub at this point — scope/requirements TBD during `/gsd-plan-phase 32`. Note: SDK numbering bug surfaced during add — milestone bullet list at lines 80-85 stopped at Phase 30, so the SDK calculated next phase as 31 and collided with the existing Phase 31 (Broker-Process). Manually corrected: directory `31-sigstore-integration` → `32-sigstore-integration`, ROADMAP.md detail header renumbered, Phase 31 (Broker-Process) bullet entry backfilled to the v2.3 milestone summary list, milestone span updated from "Phases 25-30" → "Phases 25-32".
 - 2026-05-08: Phase 31 (Broker-Process Architecture (SHELL-01)) added after Phase 30. Productionizes the broker-pattern PoC validated on the Windows test box (commits e15fbed9, 98d38ed9, 17d87c7f) — SHELL-01 follow-up to Phase 30's Windows nono shell interactive enforcement architecture. Plans TBD during `/gsd-plan-phase 31`.
 - 2026-05-09: Phase 31 (Broker-Process Architecture, SHELL-01) SHIPPED — broker pattern landed via crates/nono-shell-broker/; WindowsTokenArm::BrokerLaunch dispatch active; Acceptance #1-#4 + #7 verified on user's Windows test box (2026-05-09). SHELL-01 → ✔ validated v2.3 Phase 31. Phase 30 debug session nono-shell-status-dll-init-failed marked fully resolved.
@@ -211,7 +212,7 @@ Known deferred items at close: 20 (6 UAT bookkeeping gaps, 4 verification human_
 ## Session Continuity
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-05-10
+**Last Activity:** 2026-05-11
 **Resumed:** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.
 **Stopped At (prior session, retained for context):** Phase 30 (Windows nono shell Interactive Enforcement Architecture) context gathered. The `nono shell` 0xC0000142 field-failure became a planning checkpoint via `/gsd-discuss-phase`; CONTEXT.md captures the locked decisions: Wave 1 is Option 3 (Low-IL primary token + ConPTY), Wave 2 is ProcMon investigation conditional on Wave 1 failure. TUI rendering and OS-level write-deny are both locked acceptance criteria; Phase 15's detached-path waiver is explicitly rejected for the long-lived interactive shell. Phase 30 is NOT yet in ROADMAP.md — user decides v2.3 vs v2.4 placement via `/gsd-phase add 30`.
 
