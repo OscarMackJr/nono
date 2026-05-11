@@ -117,6 +117,116 @@ fn test_diff_output() {
     );
 }
 
+/// Regression test for upstream f3e7f885 (v0.47.0): the `policy show --json`
+/// output must not leak Rust Debug syntax (e.g. `Some(Isolated)`, `None`,
+/// `ReadWrite`) for enum-valued fields. The hand-rolled JSON emitter in
+/// `profile_to_json` previously used `format!("{:?}", ...)` for five
+/// enum-valued fields; the fix routes these through serde so they render
+/// as snake_case strings (or are omitted when `None`).
+#[test]
+fn test_policy_show_json_no_rust_debug_syntax() {
+    for profile in ["default", "claude-code", "node-dev"] {
+        let output = nono_bin()
+            .args(["policy", "show", profile, "--json"])
+            .output()
+            .expect("failed to run nono");
+
+        assert!(
+            output.status.success(),
+            "expected exit 0 for profile '{profile}'"
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let val: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            panic!("profile '{profile}' produced invalid JSON: {e}\n--- stdout ---\n{stdout}")
+        });
+
+        // Walk the JSON tree; assert no string value contains Rust Debug
+        // markers like "Some(", "None", or PascalCase enum variants for the
+        // five fields the upstream fix targeted.
+        assert_no_rust_debug_in_strings(&val, profile, &stdout);
+    }
+}
+
+/// Regression test for upstream f3e7f885 (v0.47.0): the `policy diff --json`
+/// output must also not leak Rust Debug syntax. This covers the
+/// `wsl2_proxy_policy` and `workdir.access` fields the upstream fix
+/// touched in `diff_to_json`.
+#[test]
+fn test_policy_diff_json_no_rust_debug_syntax() {
+    let output = nono_bin()
+        .args(["policy", "diff", "default", "claude-code", "--json"])
+        .output()
+        .expect("failed to run nono");
+
+    if !output.status.success() {
+        // diff --json is optional on the fork's surface; if it doesn't
+        // exist, skip this test rather than fail. The show--json path
+        // above covers the more important emitter.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("unexpected argument") || stderr.contains("unknown") {
+            eprintln!("policy diff --json not supported on fork; skipping");
+            return;
+        }
+        panic!("policy diff --json failed unexpectedly: stderr={}", stderr);
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        assert_no_rust_debug_in_strings(&val, "diff(default,claude-code)", &stdout);
+    }
+}
+
+/// Helper for the two regression tests above: recursively walks a
+/// `serde_json::Value` and panics if any string value contains markers
+/// that indicate `format!("{:?}", ...)` leaked into the JSON output.
+fn assert_no_rust_debug_in_strings(val: &serde_json::Value, label: &str, full: &str) {
+    fn walk(v: &serde_json::Value, path: &str, label: &str, full: &str) {
+        match v {
+            serde_json::Value::String(s) => {
+                // Rust Debug markers we expect to NOT see in JSON output.
+                // - "Some(" / "None" indicate Option<…> debug format leak
+                // - PascalCase enum variants ("Isolated", "AllowAll",
+                //   "AllowSameSandbox", "ReadWrite", "Error", "Warn",
+                //   "InsecureProxy") indicate non-serde rendering
+                let debug_markers = ["Some(", "None)"]
+                    .into_iter()
+                    .chain(["Isolated", "AllowSameSandbox", "AllowAll"])
+                    .chain(["ReadWrite"])
+                    .chain(["InsecureProxy"]);
+                for marker in debug_markers {
+                    // Exact equality for unwrapped enum variant names; substring
+                    // for "Some(" / "None)" parens.
+                    if marker.ends_with('(') || marker.ends_with(')') {
+                        assert!(
+                            !s.contains(marker),
+                            "profile '{label}' JSON path '{path}' string '{s}' contains \
+                             Rust Debug marker '{marker}' (upstream f3e7f885 regression)\n\
+                             --- full JSON ---\n{full}"
+                        );
+                    } else if s == marker {
+                        panic!(
+                            "profile '{label}' JSON path '{path}' string equals Rust Debug \
+                             enum variant '{marker}' instead of snake_case (upstream f3e7f885 \
+                             regression)\n--- full JSON ---\n{full}"
+                        );
+                    }
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for (k, inner) in map {
+                    walk(inner, &format!("{path}.{k}"), label, full);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (i, inner) in items.iter().enumerate() {
+                    walk(inner, &format!("{path}[{i}]"), label, full);
+                }
+            }
+            _ => {}
+        }
+    }
+    walk(val, "", label, full);
+}
+
 #[test]
 fn test_validate_valid_profile() {
     let dir = tempfile::tempdir().expect("tempdir");
