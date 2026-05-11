@@ -98,11 +98,23 @@ no handler can run.
 ## Out of scope (this task)
 
 - Actually fixing the bug. Tracking-only artifact for v2.4 backlog.
-- Cleanup-tool fix. Separate concern: how operators recover from leaked labels. icacls
-  `/setintegritylevel M` is the wrong knob (creates explicit Medium ACE instead of removing).
-  Right approach: PowerShell .NET `[System.Security.AccessControl.FileSecurity]` SACL
-  manipulation, or a `nono trust labels-cleanup` subcommand. Track separately if v2.4
-  decides operator-facing cleanup tooling is in scope.
+- Cleanup-tool fix. Separate concern: how operators recover from leaked labels. The
+  knobs available to a standard (non-admin) user are *insufficient*:
+  - `icacls /setintegritylevel M` — overwrites with explicit Medium ACE rather than
+    removing. Result: nono's pre-existing-label check (correctly) skips apply on any
+    subsequent run, so the user's grants have no observable enforcement effect.
+  - PowerShell `Set-Acl -Audit` — fails for non-admin sessions with `Access Denied`
+    because writing the SACL requires `SeSecurityPrivilege`, which standard users don't
+    have. Verified during POC smoke 2026-05-11: 8 paths, all 8 failed cleanup attempts.
+  - Direct Win32 `SetNamedSecurityInfoW` with `LABEL_SECURITY_INFORMATION` would work
+    (it's the same special path the fork uses for label *apply*), but requires P/Invoke
+    that's not approachable from a one-liner.
+
+  **v2.4 fix recommendation:** ship a `nono trust labels-cleanup` (or `nono setup
+  --reset-mandatory-labels`) subcommand that wraps the same `LABEL_SECURITY_INFORMATION`
+  Win32 path the apply side uses, with a NULL/empty mandatory-label SACL. This lets the
+  path owner remove leaked labels without admin elevation. Right primitive, right
+  privilege model, right ergonomics.
 
 ## Acceptance (when picked up for v2.4)
 
