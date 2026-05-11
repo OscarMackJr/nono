@@ -6,7 +6,7 @@ slug: env-deny
 cluster_id: C12
 type: execute
 wave: 2
-depends_on: ["34-04", "34-01", "34-02", "34-05", "34-07"]
+depends_on: ["34-04", "34-04b", "34-01", "34-02", "34-05", "34-07"]
 blocks: []
 files_modified:
   - crates/nono-cli/src/cli.rs

@@ -426,10 +426,33 @@ Plans:
 
 **Depends on:** Phase 33 (audit ledger + parity-strategy ADR).
 
-**Plans:** 1/11 plans executed
+**Plans:** 1/12 plans executed (34-04 partial: 17 of 23 commits landed — STOP at canonical-schema restructure; D-20 manual-replay continuation deferred to Plan 34-04b)
 
 Plans:
-- [ ] TBD (run `/gsd-spec-phase 34` then `/gsd-plan-phase 34`)
+
+**Wave -1**
+- [x] 34-00-G25DRIFT-CLOSURE-PLAN.md — Plan 34-00 (G-25-DRIFT-01 no-divergence closure)
+
+**Wave 0** *(blocked on Wave -1 completion)*
+- [⚠] 34-04-PATH-CANON-SCHEMA-PLAN.md — Plan 34-04 (C7 v0.46–v0.47.1 path canon + canonical JSON schema; 17/23 commits landed; STOP at `f0abd413`)
+
+**Wave 0.5** *(blocked on Wave 0 completion; D-20 manual-replay split per Phase 22-05a/22-05b precedent)*
+- [ ] 34-04b-FP-CANONICAL-SCHEMA-PLAN.md — Plan 34-04b (C7-residual `f0abd413` + 5 dependents; canonical schema restructure manual replay)
+
+**Wave 1** *(blocked on Wave 0.5 completion)*
+- [ ] 34-01-CLI-CONSOLIDATION-PLAN.md — Plan 34-01 (C2 v0.41–v0.43 `nono policy` → `nono profile` rename + CLI consolidation)
+- [ ] 34-03-KEYRING-PLAN.md — Plan 34-03 (C5 v0.45 keyring + display)
+- [ ] 34-06-TRUST-SCAN-PLAN.md — Plan 34-06 (C9 v0.49 trust scan + YAML merge)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 34-02-PROXY-NET-PLAN.md — Plan 34-02 (C4 v0.43–v0.44 proxy net hardening; D-34-B2: no Phase 09 WFP retrofit)
+- [ ] 34-05-COMPLETION-PLAN.md — Plan 34-05 (C8 v0.48 `nono completion`; D-34-B2: no MSI integration)
+- [ ] 34-07-PS-ENVURI-PLAN.md — Plan 34-07 (C10 v0.50 `nono ps` + `env://`)
+- [ ] 34-08-ENV-DENY-PLAN.md — Plan 34-08 (C12 v0.52 env deny_vars + `nono learn` deprecation; D-34-B2: no Windows-specific docstring)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 34-09-FP-PACKS-PLAN.md — Plan 34-09 (C6 v0.44 pack migration D-20 manual replay; `autonomous: false`)
+- [ ] 34-10-FP-PROXY-TLS-PLAN.md — Plan 34-10 (C11 v0.51 proxy TLS + audit-context D-20 manual replay; produces 34-PHASE-OUTCOMES.md addendum for C1+C3 won't-sync; `autonomous: false`)
 
 **Cross-cutting constraints:**
 - D-34-E1 invariant: zero edits to `*_windows.rs` for every commit

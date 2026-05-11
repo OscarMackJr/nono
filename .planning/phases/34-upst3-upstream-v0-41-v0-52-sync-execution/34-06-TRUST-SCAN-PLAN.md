@@ -6,7 +6,7 @@ slug: trust-scan
 cluster_id: C9
 type: execute
 wave: 1
-depends_on: ["34-04"]
+depends_on: ["34-04", "34-04b"]
 blocks: []
 files_modified:
   - crates/nono/src/trust/scan.rs

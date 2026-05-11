@@ -6,7 +6,7 @@ slug: proxy-net
 cluster_id: C4
 type: execute
 wave: 2
-depends_on: ["34-04", "34-01"]
+depends_on: ["34-04", "34-04b", "34-01"]
 blocks: ["34-10"]
 files_modified:
   - crates/nono-proxy/src/server.rs

@@ -6,7 +6,7 @@ slug: fp-packs
 cluster_id: C6
 type: execute
 wave: 3
-depends_on: ["34-04"]
+depends_on: ["34-04", "34-04b"]
 blocks: ["34-10"]
 files_modified:
   - crates/nono-cli/src/package_cmd.rs

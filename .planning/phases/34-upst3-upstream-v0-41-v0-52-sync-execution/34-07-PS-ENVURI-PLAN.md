@@ -6,7 +6,7 @@ slug: ps-envuri
 cluster_id: C10
 type: execute
 wave: 2
-depends_on: ["34-04", "34-01", "34-02", "34-05"]
+depends_on: ["34-04", "34-04b", "34-01", "34-02", "34-05"]
 blocks: []
 files_modified:
   - crates/nono-cli/src/cli.rs
