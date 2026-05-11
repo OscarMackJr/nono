@@ -70,6 +70,8 @@ enum AuditEventPayload {
     SessionStarted {
         started: String,
         command: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        redaction_policy: Option<nono::ScrubPolicyDiff>,
     },
     SessionEnded {
         ended: String,
@@ -151,10 +153,19 @@ pub(crate) struct AuditRecorder {
     next_sequence: u64,
     previous_chain: Option<ContentHash>,
     leaf_hashes: Vec<ContentHash>,
+    redaction_policy: nono::ScrubPolicy,
 }
 
 impl AuditRecorder {
+    #[cfg(test)]
     pub(crate) fn new(session_dir: PathBuf) -> Result<Self> {
+        Self::new_with_policy(session_dir, nono::ScrubPolicy::secure_default())
+    }
+
+    pub(crate) fn new_with_policy(
+        session_dir: PathBuf,
+        redaction_policy: nono::ScrubPolicy,
+    ) -> Result<Self> {
         let path = session_dir.join(AUDIT_EVENTS_FILENAME);
         let file = OpenOptions::new()
             .create(true)
@@ -171,6 +182,7 @@ impl AuditRecorder {
             next_sequence: 0,
             previous_chain: None,
             leaf_hashes: Vec::new(),
+            redaction_policy,
         })
     }
 
@@ -179,7 +191,14 @@ impl AuditRecorder {
         started: String,
         command: Vec<String>,
     ) -> Result<()> {
-        self.append_event(AuditEventPayload::SessionStarted { started, command })
+        self.append_event(AuditEventPayload::SessionStarted {
+            started,
+            command: nono::scrub_argv_with_policy(&command, &self.redaction_policy),
+            redaction_policy: self
+                .redaction_policy
+                .diff_from_secure_default()
+                .into_option(),
+        })
     }
 
     pub(crate) fn record_session_ended(&mut self, ended: String, exit_code: i32) -> Result<()> {
@@ -452,7 +471,132 @@ mod tests {
     }
 
     #[test]
-    fn verify_audit_log_accepts_untampered_session() {
+    fn record_session_started_scrubs_command_secrets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = AuditRecorder::new(dir.path().to_path_buf()).unwrap();
+        recorder
+            .record_session_started(
+                "2026-04-21T00:00:00Z".to_string(),
+                vec![
+                    "curl".to_string(),
+                    "--password".to_string(),
+                    "real-password".to_string(),
+                    "-H".to_string(),
+                    "Authorization: Bearer real-token".to_string(),
+                    "https://example.com/api?token=query-secret".to_string(),
+                ],
+            )
+            .unwrap();
+
+        let contents = std::fs::read_to_string(dir.path().join(AUDIT_EVENTS_FILENAME)).unwrap();
+
+        assert!(contents.contains("[REDACTED]"));
+        assert!(!contents.contains("real-password"));
+        assert!(!contents.contains("real-token"));
+        assert!(!contents.contains("query-secret"));
+    }
+
+    #[test]
+    fn record_session_started_uses_configured_redaction_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut redactions = nono::ScrubPolicy::secure_default();
+        redactions.add_flag("--private-token");
+        redactions.remove_query_key("state");
+        let mut recorder =
+            AuditRecorder::new_with_policy(dir.path().to_path_buf(), redactions).unwrap();
+        recorder
+            .record_session_started(
+                "2026-04-21T00:00:00Z".to_string(),
+                vec![
+                    "curl".to_string(),
+                    "--private-token=private-secret".to_string(),
+                    "https://example.com/callback?state=visible&token=hidden".to_string(),
+                ],
+            )
+            .unwrap();
+
+        let contents = std::fs::read_to_string(dir.path().join(AUDIT_EVENTS_FILENAME)).unwrap();
+
+        assert!(contents.contains("--private-token=[REDACTED]"));
+        assert!(contents.contains("state=visible"));
+        assert!(contents.contains("\"added_flags\":[\"--private-token\"]"));
+        assert!(contents.contains("\"removed_query_keys\":[\"state\"]"));
+        assert!(!contents.contains("private-secret"));
+        assert!(!contents.contains("token=hidden"));
+    }
+
+    #[test]
+    fn verifier_round_trips_all_current_audit_event_payload_variants() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = AuditRecorder::new(dir.path().to_path_buf()).unwrap();
+        recorder
+            .record_session_started(
+                "2026-04-21T00:00:00Z".to_string(),
+                vec!["claude".to_string(), "--debug".to_string()],
+            )
+            .unwrap();
+        recorder
+            .record_capability_decision(AuditEntry {
+                timestamp: UNIX_EPOCH + Duration::from_secs(5),
+                request: CapabilityRequest {
+                    request_id: "req-1".to_string(),
+                    path: PathBuf::from("/tmp/example"),
+                    access: AccessMode::ReadWrite,
+                    reason: Some("need scratch space".to_string()),
+                    child_pid: 42,
+                    session_id: "sess-1".to_string(),
+                },
+                decision: ApprovalDecision::Denied {
+                    reason: "outside policy".to_string(),
+                },
+                backend: "terminal".to_string(),
+                duration_ms: 12,
+            })
+            .unwrap();
+        recorder
+            .record_open_url(
+                UrlOpenRequest {
+                    request_id: "open-1".to_string(),
+                    url: "https://example.com/callback".to_string(),
+                    child_pid: 42,
+                    session_id: "sess-1".to_string(),
+                },
+                false,
+                Some("blocked".to_string()),
+            )
+            .unwrap();
+        recorder
+            .record_network_event(NetworkAuditEvent {
+                timestamp_unix_ms: 123,
+                mode: NetworkAuditMode::Reverse,
+                decision: NetworkAuditDecision::Deny,
+                route_id: None,
+                auth_mechanism: None,
+                auth_outcome: None,
+                managed_credential_active: None,
+                injection_mode: None,
+                denial_category: None,
+                target: "api.example.com".to_string(),
+                port: Some(443),
+                method: Some("POST".to_string()),
+                path: Some("/v1/chat".to_string()),
+                status: Some(403),
+                reason: Some("policy".to_string()),
+            })
+            .unwrap();
+        recorder
+            .record_session_ended("2026-04-21T00:00:01Z".to_string(), 7)
+            .unwrap();
+
+        let summary = recorder.finalize().unwrap();
+        let verified = verify_audit_log(dir.path(), Some(&summary)).unwrap();
+        assert_eq!(verified.event_count, 5);
+        assert_eq!(verified.merkle_scheme, "alpha");
+        assert!(verified.records_verified);
+    }
+
+    #[test]
+    fn verifier_rejects_alpha_records_missing_event_json() {
         let dir = tempfile::tempdir().unwrap();
         let mut recorder = AuditRecorder::new(dir.path().to_path_buf()).unwrap();
         recorder

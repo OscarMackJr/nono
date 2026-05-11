@@ -448,13 +448,28 @@ fn render_diagnostic_line(idx: usize, line: &str, t: &theme::Theme) -> String {
 pub fn print_dry_run(
     program: &OsStr,
     cmd_args: &[OsString],
-    support: &nono::SupportInfo,
+    redaction_policy: &nono::ScrubPolicy,
     silent: bool,
 ) {
     if silent {
         return;
     }
     let t = theme::current();
+    let command_line = dry_run_command_line(program, cmd_args, redaction_policy);
+
+    eprintln!(
+        "  {} {}",
+        fg("dry-run", t.yellow).bold(),
+        fg("sandbox would be applied with above capabilities", t.subtext),
+    );
+    eprintln!("  {} {}", fg("$", t.subtext), fg(&command_line, t.text));
+}
+
+fn dry_run_command_line(
+    program: &OsStr,
+    cmd_args: &[OsString],
+    redaction_policy: &nono::ScrubPolicy,
+) -> String {
     let mut command = Vec::with_capacity(1 + cmd_args.len());
     command.push(program.to_string_lossy().into_owned());
     command.extend(
@@ -463,20 +478,7 @@ pub fn print_dry_run(
             .map(|arg| arg.to_string_lossy().into_owned()),
     );
 
-    eprintln!(
-        "  {} {}",
-        fg("dry-run", t.yellow).bold(),
-        fg(dry_run_summary(support), t.subtext),
-    );
-    eprintln!(
-        "  {} {}",
-        fg("$", t.subtext),
-        fg(&format_command_line(&command), t.text)
-    );
-}
-
-fn dry_run_summary(_support: &nono::SupportInfo) -> &'static str {
-    "sandbox would be applied with above capabilities"
+    format_command_line(&nono::scrub_argv_with_policy(&command, redaction_policy))
 }
 
 // ---------------------------------------------------------------------------
@@ -710,7 +712,14 @@ pub fn print_profile_hint(program: &str, profile: &str, silent: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_terminal_line_endings, print_profile_hint, render_diagnostic_footer};
+    use super::{
+        dry_run_command_line, format_unix_socket_mode_badge, normalize_terminal_line_endings,
+        print_capabilities, print_profile_hint, render_diagnostic_footer,
+        render_terminal_block_for_tty,
+    };
+    use nono::{CapabilitySet, UnixSocketMode};
+    use std::ffi::{OsStr, OsString};
+    use tempfile::tempdir;
 
     #[test]
     fn normalize_terminal_line_endings_uses_crlf() {
@@ -730,5 +739,69 @@ mod tests {
     #[test]
     fn print_profile_hint_is_noop_when_silent() {
         print_profile_hint("claude", "claude-code", true);
+    }
+
+    #[test]
+    fn dry_run_command_line_redacts_default_secrets() {
+        let line = dry_run_command_line(
+            OsStr::new("curl"),
+            &[
+                OsString::from("--token"),
+                OsString::from("real-token"),
+                OsString::from("https://example.com/api?token=real-secret"),
+            ],
+            &nono::ScrubPolicy::secure_default(),
+        );
+
+        assert!(line.contains("[REDACTED]"));
+        assert!(!line.contains("real-token"));
+        assert!(!line.contains("real-secret"));
+    }
+
+    #[test]
+    fn dry_run_command_line_uses_configured_redaction_policy() {
+        let mut redactions = nono::ScrubPolicy::secure_default();
+        redactions.add_flag("--private-token");
+
+        let line = dry_run_command_line(
+            OsStr::new("curl"),
+            &[OsString::from("--private-token=private-secret")],
+            &redactions,
+        );
+
+        assert_eq!(line, "curl '--private-token=[REDACTED]'");
+        assert!(!line.contains("private-secret"));
+    }
+
+    #[test]
+    fn unix_socket_mode_badges_are_fixed_width_and_distinct() {
+        let connect = format_unix_socket_mode_badge(UnixSocketMode::Connect);
+        let bind = format_unix_socket_mode_badge(UnixSocketMode::ConnectBind);
+        // Same rendered-width contract as format_access_badge (5 chars).
+        // We can't `strip_ansi` cleanly here, so check the printable payload
+        // is present rather than the raw length.
+        assert!(connect.contains("sock "));
+        assert!(bind.contains("sock+"));
+        assert_ne!(connect, bind);
+    }
+
+    #[test]
+    fn print_capabilities_with_unix_socket_does_not_panic() {
+        // Smoke test: constructing a CapabilitySet with both connect and
+        // connect+bind unix socket grants (one file, one directory) and
+        // rendering it must not panic. Silent=true keeps stderr quiet in
+        // test output. Dry-run-style `verbose=1` path is also exercised.
+        let dir = tempdir().expect("tempdir");
+        let sock = dir.path().join("a.sock");
+        std::fs::write(&sock, b"").expect("create socket stub");
+
+        let caps = CapabilitySet::new()
+            .allow_unix_socket(&sock, UnixSocketMode::Connect)
+            .expect("connect grant")
+            .allow_unix_socket_dir(dir.path(), UnixSocketMode::ConnectBind)
+            .expect("bind dir grant");
+
+        print_capabilities(&caps, 0, true);
+        print_capabilities(&caps, 1, true);
     }
 }

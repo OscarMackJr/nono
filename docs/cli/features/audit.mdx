@@ -40,7 +40,7 @@ Each session records:
 
 | Field | Meaning |
 |--------|---------|
-| **Command** | The exact command and arguments |
+| **Command** | The command and arguments, with best-effort redaction for common secret-bearing argv, header, and URL patterns |
 | **Timestamps** | Start time, end time, duration |
 | **Exit code** | How the process terminated |
 | **Audit events** | Session start/end plus supervisor-observed events such as capability decisions and URL opens |
@@ -160,6 +160,31 @@ nono run --audit-sign-key op://Development/Nono/audit-key --profile claude-code 
 ```
 
 The signing key is loaded by the trusted supervisor before sandbox activation. After the session ends, the resulting keyed DSSE bundle is written into the audit session directory as `audit-attestation.bundle`, and a summary is stored in `session.json`.
+
+<Note>
+  Command arguments included in session metadata and audit attestations are best-effort redacted before they are written. This protects common forms such as `--token VALUE`, `--api-key=VALUE`, `Authorization: ...`, URL userinfo, and sensitive query parameters, but it is not a complete secret detector. Prefer nono's credential injection features instead of passing secrets on the command line.
+</Note>
+
+### Redaction Policy
+
+The default redaction policy covers common secret-bearing command flags, HTTP headers, URL userinfo, and URL query keys. You can extend it for local tools in `~/.config/nono/config.toml`:
+
+```toml
+[redaction]
+extra_flags = ["--private-token", "--pat"]
+extra_headers = ["Private-Token"]
+extra_query_keys = ["sig", "signature"]
+```
+
+Removing a built-in default is allowed only for explicit debugging:
+
+```toml
+[redaction]
+unsafe_redaction_overrides = true
+allow_unredacted_defaults = ["state"]
+```
+
+When a run uses a non-default redaction policy, the session audit event log and audit attestation predicate include the policy diff so reviewers can see which names were added or removed.
 
 ## Commands
 

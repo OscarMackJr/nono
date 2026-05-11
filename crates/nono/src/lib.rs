@@ -55,6 +55,7 @@ pub mod net_filter;
 pub mod path;
 pub mod query;
 pub mod sandbox;
+pub mod scrub;
 pub mod state;
 pub mod supervisor;
 pub mod trust;
@@ -92,6 +93,10 @@ pub use sandbox::{
     WindowsNetworkLaunchSupport, WindowsNetworkPolicy, WindowsNetworkPolicyMode,
     WindowsPreviewContext, WindowsPreviewEntryPoint, WindowsSupervisorContext,
     WindowsSupervisorFeatureKind, WindowsSupervisorSupport,
+};
+pub use scrub::{
+    scrub_argv, scrub_argv_with_policy, scrub_header, scrub_header_with_policy, scrub_value,
+    scrub_value_with_policy, ScrubPolicy, ScrubPolicyDiff,
 };
 pub use state::SandboxState;
 #[cfg(target_os = "windows")]

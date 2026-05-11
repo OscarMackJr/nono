@@ -51,6 +51,27 @@ NONO_THEME=latte nono run --allow-cwd -- codex
 
 If an unknown theme is supplied, nono falls back to `mocha`.
 
+### Redaction Policy
+
+Command arguments persisted in sessions, audit logs, rollback metadata, and audit attestations are redacted with a secure default policy. You can extend the policy in `~/.config/nono/config.toml`:
+
+```toml
+[redaction]
+extra_flags = ["--private-token", "--pat"]
+extra_headers = ["Private-Token"]
+extra_query_keys = ["sig", "signature"]
+```
+
+To stop redacting a built-in default for debugging, you must opt in explicitly:
+
+```toml
+[redaction]
+unsafe_redaction_overrides = true
+allow_unredacted_defaults = ["state"]
+```
+
+Non-default redaction policies are recorded as a diff in audit event logs and audit attestations.
+
 ## Commands
 
 ### `nono run`
@@ -843,7 +864,7 @@ The supervisor:
 
 1. records audit events during the session
 2. computes the session's final audit Merkle root
-3. signs that final root plus session context
+3. signs that final root plus redacted session context
 4. writes the resulting keyed DSSE attestation to `audit-attestation.bundle`
 
 A summary is also recorded in `session.json`.
@@ -875,7 +896,7 @@ nono audit verify <session-id> --public-key-file ./audit-signing-key.pub
 ```
 
 <Note>
-  `--audit-sign-key` signs the session audit Merkle root and session context once, after the session completes. It does not, by itself, add an external timestamp, Rekor entry, or full runtime-closure attestation.
+  `--audit-sign-key` signs the session audit Merkle root and session context once, after the session completes. Command arguments in that context are best-effort redacted for common secret-bearing flags, headers, and URLs. This does not, by itself, add an external timestamp, Rekor entry, or full runtime-closure attestation.
 </Note>
 
 #### `--rollback-exclude`

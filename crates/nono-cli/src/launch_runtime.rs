@@ -188,6 +188,7 @@ pub(crate) struct ExecutionFlags {
     pub(crate) rollback: RollbackLaunchOptions,
     pub(crate) trust: TrustLaunchOptions,
     pub(crate) proxy: ProxyLaunchOptions,
+    pub(crate) redaction_policy: nono::ScrubPolicy,
     pub(crate) resource_limits: ResourceLimits,
 }
 
@@ -214,6 +215,7 @@ impl ExecutionFlags {
                 ..TrustLaunchOptions::default()
             },
             proxy: ProxyLaunchOptions::default(),
+            redaction_policy: nono::ScrubPolicy::secure_default(),
             resource_limits: ResourceLimits::default(),
         })
     }
@@ -226,6 +228,7 @@ pub(crate) fn prepare_run_launch_plan(
     silent: bool,
 ) -> Result<LaunchPlan> {
     let detach_sequence = load_configured_detach_sequence()?;
+    let redaction_policy = load_configured_redaction_policy()?;
     // Capture resource-limit fields BEFORE `run_args.sandbox` moves out of `run_args`
     // below — `RunArgs` is partially consumed by moving `sandbox`, and the resource-
     // limit fields are still owned by `run_args` at this point. `ResourceLimits`
@@ -343,6 +346,7 @@ pub(crate) fn prepare_run_launch_plan(
             },
             trust,
             proxy,
+            redaction_policy,
             resource_limits,
         },
     })
@@ -352,6 +356,13 @@ pub(crate) fn load_configured_detach_sequence() -> Result<Option<Vec<u8>>> {
     Ok(config::user::load_user_config()?
         .and_then(|user_config| user_config.ui.detach_sequence)
         .map(|sequence| sequence.bytes().to_vec()))
+}
+
+pub(crate) fn load_configured_redaction_policy() -> Result<nono::ScrubPolicy> {
+    config::user::load_user_config()?.map_or_else(
+        || Ok(nono::ScrubPolicy::secure_default()),
+        |user_config| user_config.redaction.to_scrub_policy(),
+    )
 }
 
 fn prepare_trust_launch_options(

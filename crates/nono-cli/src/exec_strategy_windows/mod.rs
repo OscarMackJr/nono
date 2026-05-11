@@ -814,6 +814,9 @@ pub fn execute_supervised(
         .map_err(|err| runtime.command_failure(err.to_string()))?;
 
     let ended = chrono::Local::now().to_rfc3339();
+    // Windows SupervisorConfig does not carry redaction_policy yet (Phase 40 D-40-E6:
+    // no Windows-specific scrub rules). Use the secure default for session metadata.
+    let win_default_redaction_policy = nono::ScrubPolicy::secure_default();
     finalize_supervised_exit(RollbackExitContext {
         audit_state: audit_state.as_ref(),
         rollback_state,
@@ -823,6 +826,7 @@ pub fn execute_supervised(
         executable_identity,
         audit_signer,
         proxy_handle,
+        redaction_policy: &win_default_redaction_policy,
         started,
         ended: &ended,
         command,

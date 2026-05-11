@@ -459,6 +459,11 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
                 proxy,
                 proxy_handle: proxy_handle.as_ref(),
                 executable_identity: executable_identity.as_ref(),
+                // audit_signer is created inside execute_supervised_runtime from
+                // rollback.audit_sign_key (fork pattern: signer lifetime is local to
+                // execute_supervised_runtime, not pre-computed by execution_runtime).
+                audit_signer: None,
+                redaction_policy: &flags.redaction_policy,
                 silent: flags.silent,
                 resource_limits: &flags.resource_limits,
                 // Plan 18.1-03 G-06: pass a reference to the owned

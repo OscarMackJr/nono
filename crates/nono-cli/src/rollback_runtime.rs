@@ -76,6 +76,7 @@ pub(crate) struct RollbackExitContext<'a> {
     /// not requested.
     pub(crate) audit_signer: Option<&'a AuditSigner>,
     pub(crate) proxy_handle: Option<&'a nono_proxy::server::ProxyHandle>,
+    pub(crate) redaction_policy: &'a nono::ScrubPolicy,
     pub(crate) started: &'a str,
     pub(crate) ended: &'a str,
     pub(crate) command: &'a [String],
@@ -580,6 +581,7 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
         executable_identity,
         audit_signer,
         proxy_handle,
+        redaction_policy,
         started,
         ended,
         command,
@@ -626,6 +628,8 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
             _ => None,
         };
 
+    // Scrub command argv before persisting to session metadata (upstream 6472011).
+    let scrubbed_command = nono::scrub_argv_with_policy(command, redaction_policy);
     let mut audit_saved = false;
 
     if let Some((mut manager, baseline, tracked_paths, atomic_temp_before)) = rollback_state {
@@ -638,7 +642,7 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
                 .unwrap_or_default(),
             started: started.to_string(),
             ended: Some(ended.to_string()),
-            command: command.to_vec(),
+            command: scrubbed_command.clone(),
             executable_identity: executable_identity.clone(),
             tracked_paths,
             snapshot_count: manager.snapshot_count(),
@@ -693,7 +697,7 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
                 session_id: audit_state.session_id.clone(),
                 started: started.to_string(),
                 ended: Some(ended.to_string()),
-                command: command.to_vec(),
+                command: scrubbed_command,
                 executable_identity,
                 tracked_paths,
                 snapshot_count: 0,

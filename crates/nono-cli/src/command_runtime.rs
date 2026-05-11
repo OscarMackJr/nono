@@ -2,8 +2,8 @@ use crate::cli::{RunArgs, SandboxArgs, ShellArgs, WrapArgs};
 use crate::exec_strategy;
 use crate::execution_runtime::execute_sandboxed;
 use crate::launch_runtime::{
-    load_configured_detach_sequence, prepare_run_launch_plan, resolve_requested_workdir,
-    ExecutionFlags, LaunchPlan, SessionLaunchOptions,
+    load_configured_detach_sequence, load_configured_redaction_policy, prepare_run_launch_plan,
+    resolve_requested_workdir, ExecutionFlags, LaunchPlan, SessionLaunchOptions,
 };
 use crate::output;
 use crate::sandbox_prepare::{
@@ -36,7 +36,8 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
                 prepared.secrets.len()
             );
         }
-        output::print_dry_run(&program, &cmd_args, &Sandbox::support_info(), silent);
+        let redaction_policy = load_configured_redaction_policy()?;
+        output::print_dry_run(&program, &cmd_args, &redaction_policy, silent);
         return Ok(());
     }
 
@@ -80,12 +81,8 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
                 prepared.secrets.len()
             );
         }
-        output::print_dry_run(
-            shell_path.as_os_str(),
-            &[],
-            &Sandbox::support_info(),
-            silent,
-        );
+        let redaction_policy = load_configured_redaction_policy()?;
+        output::print_dry_run(shell_path.as_os_str(), &[], &redaction_policy, silent);
         return Ok(());
     }
 
@@ -128,6 +125,7 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
             bypass_protection_paths: prepared.bypass_protection_paths,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
+            redaction_policy: load_configured_redaction_policy()?,
             session: SessionLaunchOptions {
                 session_name: args.name,
                 detach_sequence: load_configured_detach_sequence()?,
@@ -160,7 +158,8 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
                 prepared.secrets.len()
             );
         }
-        output::print_dry_run(&program, &cmd_args, &Sandbox::support_info(), silent);
+        let redaction_policy = load_configured_redaction_policy()?;
+        output::print_dry_run(&program, &cmd_args, &redaction_policy, silent);
         return Ok(());
     }
 

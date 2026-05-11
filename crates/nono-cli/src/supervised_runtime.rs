@@ -1,4 +1,4 @@
-use crate::audit_attestation::prepare_audit_signer;
+use crate::audit_attestation::{prepare_audit_signer, AuditSigner};
 use crate::audit_integrity::AuditRecorder;
 use crate::launch_runtime::{
     ProxyLaunchOptions, ResourceLimits, RollbackLaunchOptions, SessionLaunchOptions,
@@ -38,6 +38,8 @@ pub(crate) struct SupervisedRuntimeContext<'a> {
     /// of the launched binary, computed in `execution_runtime` before
     /// sandbox apply. `None` for Direct/Monitor strategies.
     pub(crate) executable_identity: Option<&'a nono::undo::ExecutableIdentity>,
+    pub(crate) audit_signer: Option<&'a AuditSigner>,
+    pub(crate) redaction_policy: &'a nono::ScrubPolicy,
     pub(crate) silent: bool,
     /// Resource limits (CPU / memory / timeout / process-count) populated from
     /// `ExecutionFlags.resource_limits`. On Windows, consumed via
@@ -116,6 +118,7 @@ fn create_session_runtime_state(
     session: &SessionLaunchOptions,
     audit_state: Option<&AuditState>,
     resource_limits: &crate::launch_runtime::ResourceLimits,
+    redaction_policy: &nono::ScrubPolicy,
 ) -> Result<SessionRuntimeState> {
     let started = chrono::Local::now().to_rfc3339();
     let short_session_id = std::env::var(DETACHED_SESSION_ID_ENV)
@@ -141,7 +144,7 @@ fn create_session_runtime_state(
             session::SessionAttachment::Attached
         },
         exit_code: None,
-        command: command.to_vec(),
+        command: nono::scrub_argv_with_policy(command, redaction_policy),
         profile: session.profile_name.clone(),
         workdir: std::env::current_dir().unwrap_or_default(),
         network: match caps.network_mode() {
@@ -184,10 +187,15 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         proxy,
         proxy_handle,
         executable_identity,
+        audit_signer: _audit_signer_ctx,
+        redaction_policy,
         silent,
         resource_limits,
         loaded_profile,
     } = ctx;
+    // audit_signer is computed locally from rollback.audit_sign_key (fork pattern).
+    // _audit_signer_ctx from ctx is reserved for future API surface alignment.
+    let _ = _audit_signer_ctx;
 
     // Plan 18.1-03 G-06 wiring: UNION the hard-coded D-05 defaults with the
     // loaded profile's `capabilities.aipc` widening. No profile → pure
@@ -238,11 +246,13 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
     // capability-pipe thread boundary (per 23-PATTERNS.md § 3b).
     // Cross-platform consumers see only the additional `Arc` wrapper
     // (D-21 invariance preserved).
+    // Upstream 6472011: use new_with_policy to attach the redaction_policy
+    // to the recorder for argv scrubbing before event persistence.
     let audit_recorder = if rollback.audit_integrity {
         audit_state
             .as_ref()
             .map(|state| {
-                AuditRecorder::new(state.session_dir.clone())
+                AuditRecorder::new_with_policy(state.session_dir.clone(), redaction_policy.clone())
                     .map(|r| std::sync::Arc::new(Mutex::new(r)))
             })
             .transpose()?
@@ -293,6 +303,8 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         detach_sequence: session.detach_sequence.as_deref(),
         open_url_origins: &proxy.open_url_origins,
         open_url_allow_localhost: proxy.open_url_allow_localhost,
+        audit_recorder: audit_recorder.as_ref(),
+        redaction_policy,
         allow_launch_services_active: proxy.allow_launch_services_active,
         #[cfg(target_os = "linux")]
         proxy_port: match caps.network_mode() {
@@ -356,6 +368,7 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         session,
         audit_state.as_ref(),
         resource_limits,
+        redaction_policy,
     )?;
     let SessionRuntimeState {
         started,

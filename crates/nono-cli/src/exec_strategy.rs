@@ -32,6 +32,7 @@ use nono::{
 };
 use std::collections::HashSet;
 use std::ffi::{CString, OsStr};
+use std::sync::Mutex;
 use std::os::fd::FromRawFd;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
@@ -370,6 +371,10 @@ pub struct SupervisorConfig<'a> {
     pub open_url_origins: &'a [String],
     /// Whether to allow http://localhost and http://127.0.0.1 URLs.
     pub open_url_allow_localhost: bool,
+    /// Optional append-only audit recorder for supervisor events.
+    pub audit_recorder: Option<&'a Mutex<crate::audit_integrity::AuditRecorder>>,
+    /// Redaction policy for command context in diagnostics.
+    pub redaction_policy: &'a nono::ScrubPolicy,
     /// Whether direct LaunchServices opening is enabled for this session.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub allow_launch_services_active: bool,
@@ -1474,6 +1479,13 @@ pub fn execute_supervised(
             };
 
             let ended = chrono::Local::now().to_rfc3339();
+            let finalize_default_redaction_policy;
+            let finalize_redaction_policy = if let Some(sup) = supervisor {
+                sup.redaction_policy
+            } else {
+                finalize_default_redaction_policy = nono::ScrubPolicy::secure_default();
+                &finalize_default_redaction_policy
+            };
             finalize_supervised_exit(RollbackExitContext {
                 audit_state: audit_state.as_ref(),
                 rollback_state,
@@ -1483,6 +1495,7 @@ pub fn execute_supervised(
                 executable_identity,
                 audit_signer,
                 proxy_handle,
+                redaction_policy: finalize_redaction_policy,
                 started,
                 ended: &ended,
                 command,
@@ -1551,6 +1564,14 @@ pub fn execute_supervised(
                     None
                 };
 
+                let default_redaction_policy;
+                let redaction_policy = if let Some(supervisor_config) = supervisor {
+                    supervisor_config.redaction_policy
+                } else {
+                    default_redaction_policy = nono::ScrubPolicy::secure_default();
+                    &default_redaction_policy
+                };
+
                 let mut formatter = DiagnosticFormatter::new(config.caps)
                     .with_mode(mode)
                     .with_denials(&denials)
@@ -1564,7 +1585,7 @@ pub fn execute_supervised(
                     formatter = formatter.with_command(nono::diagnostic::CommandContext {
                         program: program.clone(),
                         resolved_path: config.resolved_program.to_path_buf(),
-                        args: config.command.to_vec(),
+                        args: nono::scrub_argv_with_policy(config.command, redaction_policy),
                     });
                 }
                 let footer = formatter.format_footer(exit_code);
@@ -3792,6 +3813,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
@@ -3890,6 +3913,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 8080,
@@ -3964,6 +3989,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &origins,
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
@@ -3996,6 +4023,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
@@ -4026,6 +4055,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: true,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
@@ -4040,6 +4071,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
@@ -4075,6 +4108,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: false,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
@@ -4213,6 +4248,8 @@ mod tests {
             detach_sequence: None,
             open_url_origins: &[],
             open_url_allow_localhost: false,
+            audit_recorder: None,
+            redaction_policy: &nono::ScrubPolicy::secure_default(),
             allow_launch_services_active: true,
             #[cfg(target_os = "linux")]
             proxy_port: 0,
