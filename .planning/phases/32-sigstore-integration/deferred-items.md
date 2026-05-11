@@ -270,3 +270,86 @@ A follow-up plan should pick one based on the broader Windows trust roadmap.
 
 - `crates/nono-cli/src/trust_intercept.rs` (the file with the masked code)
 - `.planning/phases/32-sigstore-integration/32-REVIEW.md` § CR-04 (full review writeup)
+
+---
+
+## P32-DEFER-005: sigstore-verify 0.6.5 → 0.6.6 upgrade (TUF root rotation)
+
+**Tracking ID:** P32-DEFER-005
+**Plan:** carry-forward from Phase 32 D-32-01 / D-32-15 verify-is-offline design
+**Deferred to:** v2.4+ candidate
+**Status:** open
+**Surfaced:** 2026-05-11 (POC user smoke test, quick task `260511-fpn-sigstore-tuf-rotation`)
+
+### What is deferred
+
+Upgrade the fork's `sigstore-verify` workspace dep from `0.6.5` → `0.6.6` (and the
+sibling crates that ship in the same release train: `sigstore-sign`, `sigstore-bundle`,
+`sigstore-trust-root`, `sigstore-fulcio`, `sigstore-oidc`, `sigstore-rekor`,
+`sigstore-tsa`, `sigstore-types`, `sigstore-cache`). All released 2026-04-29 from
+`github.com/prefix-dev/sigstore-rust`. The headline change in 0.6.6 is PR #69
+"API for fetching / using the trust root" — which refreshes the embedded TUF anchor that
+0.6.5 carried.
+
+### Why deferred
+
+The 0.6.5 embedded TUF trust anchor has been rotated out by Sigstore. Symptom is
+`nono setup --refresh-trust-root` failing with `Signature threshold of 3 not met for role
+root (0 valid signatures)` — the TUF fetch succeeds, then validation fails because zero of
+the embedded anchor's keys appear in the current published root.
+
+The upgrade itself is mechanical (`Cargo.toml` version bumps + `cargo update`) but the blast
+radius spans the entire keyless sign + verify code path:
+
+- `crates/nono/src/trust/bundle.rs` (TrustedRoot, Bundle types, VerificationPolicy)
+- `crates/nono/src/trust/mod.rs` (re-exports)
+- `crates/nono-cli/src/trust_cmd.rs` (sign + verify subcommands)
+- `crates/nono-cli/src/setup.rs` (TUF refresh, `nono setup --refresh-trust-root`)
+- `crates/nono-cli/src/package_cmd.rs` (signed-artifact verification)
+- `crates/nono-cli/src/trust_intercept.rs` (file-instruction trust interception)
+- `crates/nono-cli/src/trust_scan.rs` (trust scan)
+
+Plus the test suites that exercise these:
+`crates/nono-cli/tests/keyless_sign.rs`, `crates/nono-cli/tests/keyless_verify.rs`,
+`crates/nono-cli/tests/keyless_offline_invariant.rs`, `crates/nono-cli/tests/setup_trust_root.rs`,
+`crates/nono-cli/tests/trust_*.rs` (~6 files).
+
+### Workaround (in production today)
+
+Until the upgrade lands, the verify path remains usable via manual cache placement.
+`load_production_trusted_root()` at `crates/nono/src/trust/bundle.rs:147` reads the cached
+`trusted_root.json` via plain JSON deserialization (NOT TUF re-verification — only an expiry
+gate). So a maintainer-captured `trusted_root.json` placed at
+`%USERPROFILE%\.nono\trust-root\trusted_root.json` (Windows) or
+`~/.nono/trust-root/trusted_root.json` (Unix) unblocks `nono trust verify` immediately.
+
+The repo ships such a fixture at `crates/nono/tests/fixtures/trust-root-frozen.json`
+(captured 2026-05-10 from `sigstore/root-signing@main`, commit `d9969978`). Documented for
+POC users in `docs/cli/development/windows-poc-handoff.mdx` § "Known issue: Sigstore TUF
+root rotation".
+
+### How to complete
+
+1. Bump every `sigstore-*` dep in `crates/nono/Cargo.toml` and `crates/nono-cli/Cargo.toml`
+   from `0.6.5` → `0.6.6`. Refresh `Cargo.lock` via `cargo update -p sigstore-verify
+   -p sigstore-sign ...` (full set).
+2. Run `make ci` on Linux + macOS + Windows; expect compile-time fallout from any
+   `TrustedRoot::production()` signature changes (PR #69 introduces a new "API for fetching /
+   using the trust root").
+3. Confirm `nono setup --refresh-trust-root` succeeds end-to-end on all three platforms
+   against the live `tuf-repo-cdn.sigstore.dev`.
+4. Confirm `nono trust verify --issuer ... --identity ...` against a real-world bundle
+   (e.g., a Sigstore-signed artifact from a recent public release).
+5. Verify the verify-is-offline invariant still holds (no inline network calls on the
+   verify path — `tests/integration/test_upstream_drift.sh:257` sentinel + the
+   `keyless_offline_invariant` test).
+6. Update `docs/cli/development/windows-poc-handoff.mdx` to remove the "Known issue" callout
+   added by quick task `260511-fpn-sigstore-tuf-rotation`.
+
+### Related files
+
+- `crates/nono/Cargo.toml:38` (current `sigstore-verify = "0.6.5"` pin)
+- `crates/nono-cli/Cargo.toml` (sibling `sigstore-*` pins)
+- `Cargo.lock` (resolved versions)
+- `.planning/quick/260511-fpn-sigstore-tuf-rotation/` (the POC-unblock workaround quick task)
+- `docs/cli/development/windows-poc-handoff.mdx` § "Known issue: Sigstore TUF root rotation"

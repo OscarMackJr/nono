@@ -174,6 +174,47 @@ writes the verified trusted root to your per-user cache. Subsequent keyless
 for the design rationale (Phase 32 D-32-01). Verify-is-offline is structural
 and dynamic — there is no inline network call on the verify path at all.
 
+#### Known issue: Sigstore TUF root rotation (sigstore-verify 0.6.5)
+
+If `nono setup --refresh-trust-root` fails with:
+
+```
+ERROR Setup error: Failed to fetch Sigstore trusted root from
+  https://tuf-repo-cdn.sigstore.dev: TUF error: TUF repository load failed:
+  Failed to verify trusted root metadata:
+  Signature threshold of 3 not met for role root (0 valid signatures)
+```
+
+…then your binary is hitting a known upstream issue: `sigstore-verify 0.6.5`
+(the fork's pinned dependency) embeds a TUF trust anchor that Sigstore has
+since rotated out. The TUF fetch succeeds; signature validation fails because
+zero of the embedded anchor keys are present in the current published root.
+
+The verify path is structurally offline (Phase 32 D-32-15), so a manually-placed
+`trusted_root.json` works around this. The repo ships a maintainer-captured
+known-good root at `crates/nono/tests/fixtures/trust-root-frozen.json`
+(captured 2026-05-10 from `sigstore/root-signing@main`). Drop it into your
+cache directly:
+
+```powershell
+# Workaround until the fork upgrades to sigstore-verify 0.6.6+ (tracked as
+# P32-DEFER-005 in .planning/phases/32-sigstore-integration/deferred-items.md).
+$cacheDir = "$env:USERPROFILE\.nono\trust-root"
+New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
+Invoke-WebRequest -UseBasicParsing `
+  -Uri "https://raw.githubusercontent.com/oscarmackjr-twg/nono/281f71ab/crates/nono/tests/fixtures/trust-root-frozen.json" `
+  -OutFile "$cacheDir\trusted_root.json"
+```
+
+After that, `nono trust verify` with `--issuer` + `--identity` works offline
+against the cached file. `nono setup --check-only` should report
+`Trust root cache: OK` once the file is in place.
+
+The `--refresh-trust-root` path will start working again once the fork's
+`sigstore-verify` dep is upgraded to 0.6.6+ (which embeds the rotated TUF
+anchor); until then, the manual file drop is the supported workaround for
+POC use.
+
 **Check status:**
 
 ```powershell
