@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
-last_updated: "2026-05-11T04:10:00.000Z"
+last_updated: "2026-05-11T05:00:00.000Z"
 last_activity: 2026-05-11
 progress:
   total_phases: 8
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-04-29 at v2.3 milestone scope-lock)
 ## Current Position
 
 Phase: 33 (windows-parity-upstream-0-52-divergence) — EXECUTING
-Plan: 2 of 4 (33-00 ✓ + 33-01 ✓; 33-02 ADR + 33-03 downstream-updates remain)
+Plan: 3 of 4 (33-00 ✓ + 33-01 ✓ + 33-02 ✓; 33-03 downstream-updates remains)
 Status: Executing Phase 33
 Milestone: v2.2 — 3/3 phases complete (Phase 22 ✓ 2026-04-28, Phase 23 ✓ 2026-04-29, Phase 24 ✓ 2026-04-27), 9/9 plans complete. v2.2 ready to ship.
 
@@ -47,9 +47,11 @@ Next actions:
   - After Phase 23 closes, `/gsd-complete-milestone v2.2` to archive the milestone.
   - Pre-merge `windows-squash` → `main` quick task remains a candidate for milestone-close timing.
 
-Last activity: 2026-05-11 -- Phase 33 Plan 33-01 closed; DIVERGENCE-LEDGER.md (12 clusters / 97 commits) committed (5fa0dca4); SUMMARY committed (63a37d17); CRITICAL audit finding contradicts G-25-DRIFT-01 (zero RESL flag rename commits in v0.40.1..v0.52.0)
+Last activity: 2026-05-11 -- Phase 33 Plan 33-02 closed; docs/architecture/upstream-parity-strategy.md (Accepted ADR; 3 options x 5 criteria L/M/H) committed (7107b88d); SUMMARY committed (2f3307ed); operator selected Option A (continue bidirectional parity) with aggregate shape (3H/2M/0L) dominating Option B (1H/0M/4L) and Option C (1H/2M/2L) without invoking D-33-C3 tiebreaker
 
-Prior activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
+Prior activity: 2026-05-11 -- Phase 33 Plan 33-01 closed; DIVERGENCE-LEDGER.md (12 clusters / 97 commits) committed (5fa0dca4); SUMMARY committed (63a37d17); CRITICAL audit finding contradicts G-25-DRIFT-01 (zero RESL flag rename commits in v0.40.1..v0.52.0)
+
+Earlier activity: 2026-04-28 — Phase 22 closed end-to-end (UAT 10/10 + 1 spec-error skipped, commit e60ab093). Quick task 260428-rsu created as deferred runbook for upstream-stack rebase (awaiting trigger).
 
 ```
 Progress: [██████████] 100%

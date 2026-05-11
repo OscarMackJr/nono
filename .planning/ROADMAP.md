@@ -401,17 +401,17 @@ Plans:
 
 **Depends on:** Phase 25 (RESL Unix backends + G-25-DRIFT-01), Phase 32 (Sigstore Integration; closes Windows-only trust-anchor surface).
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
 - [x] 33-00-PLAN.md — Wave 0 prep: fetch upstream tags, capture drift-tool + upstream HEAD shas for ledger provenance, lock RESEARCH Open Questions 1 + 2 (project-md-target + adr-commit-pattern)
 - [x] 33-01-PLAN.md — REQ-1 drift audit: ran `make check-upstream-drift ARGS="--from v0.40.1 --to v0.52.0 --format json"` and curated DIVERGENCE-LEDGER.md (12 themed clusters / 97 commits — 8 will-sync, 3 fork-preserve, 1 won't-sync) with manual fork-only surface enumeration (D-33-A3); CRITICAL audit finding contradicts G-25-DRIFT-01 hypothesis (zero RESL-flag-rename commits in range); commits `5fa0dca4` (ledger) + `63a37d17` (SUMMARY)
 
-**Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 33-02-PLAN.md — REQ-2 strategic ADR: write docs/architecture/upstream-parity-strategy.md (plain-text `**Status:** Accepted` header per D-33-C4; 3 options × 5 criteria L/M/H scoring per D-33-C1/C2/C3)
+**Wave 2**
+- [x] 33-02-PLAN.md — REQ-2 strategic ADR: wrote docs/architecture/upstream-parity-strategy.md (plain-text `**Status:** Accepted` header per D-33-C4; 3 options × 5 criteria L/M/H scoring per D-33-C1/C2/C3); operator selected Option A (`continue` bidirectional parity); aggregate L/M/H shape (3H/2M/0L) dominates Option B (1H/0M/4L) and Option C (1H/2M/2L) without invoking D-33-C3 tiebreaker; commits `7107b88d` (ADR) + `2f3307ed` (SUMMARY)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 33-03-PLAN.md — REQ-3 + REQ-4 + REQ-5 downstream updates: PROJECT.md Key Decisions row + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section (D-33-D2) + ROADMAP Phase 34 UPST3 stub (D-33-D1) + Phase 33 entry flipped to complete
+- [ ] 33-03-PLAN.md — REQ-3 + REQ-4 + REQ-5 downstream updates: PROJECT.md Key Decisions row + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section (D-33-D2) + ROADMAP Phase 34 UPST3-sync stub (D-33-D1; title stays "UPST3 -- Upstream v0.41-v0.52 Sync Execution" — NO flip per D-33-D1 base case since Option A was chosen) + Phase 33 entry flipped to complete
 
 **Reference:** Upstream repo — https://github.com/always-further/nono
