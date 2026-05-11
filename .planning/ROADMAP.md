@@ -305,7 +305,7 @@ Plans:
 | 30. Windows nono shell Interactive Enforcement Architecture | v2.3 | 5/5 | Complete    | 2026-05-08 |
 | 31. Broker-Process Architecture (SHELL-01) | v2.3 | 6/6 | Complete    | 2026-05-09 |
 | 32. Sigstore Integration | v2.3 | 5/5 | Complete (D-32-01..16 closed; 2 deferred items recorded as P32-DEFER-001/002 mock-Fulcio fixture + release.yml keyless migration; v2.4+ carry-forward) | 2026-05-10 |
-| 33. Windows parity with upstream 0.52 features and divergence decision | v2.4 | 0/0 | Not planned yet | — |
+| 33. Windows parity with upstream 0.52 features and divergence decision | v2.4 | 1/4 | In Progress|  |
 
 ## Backlog (v2.4 carry-forward)
 
@@ -401,11 +401,11 @@ Plans:
 
 **Depends on:** Phase 25 (RESL Unix backends + G-25-DRIFT-01), Phase 32 (Sigstore Integration; closes Windows-only trust-anchor surface).
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
-- [ ] 33-00-PLAN.md — Wave 0 prep: fetch upstream tags, capture drift-tool + upstream HEAD shas for ledger provenance, lock RESEARCH Open Questions 1 + 2 (project-md-target + adr-commit-pattern)
+- [x] 33-00-PLAN.md — Wave 0 prep: fetch upstream tags, capture drift-tool + upstream HEAD shas for ledger provenance, lock RESEARCH Open Questions 1 + 2 (project-md-target + adr-commit-pattern)
 - [ ] 33-01-PLAN.md — REQ-1 drift audit: run `make check-upstream-drift ARGS="--from v0.40.1 --to v0.52.0 --format json"` and curate DIVERGENCE-LEDGER.md (two-tier cluster + nested row table) with manual fork-only surface enumeration (D-33-A3)
 
 **Wave 2** *(blocked on Wave 1 completion)*
