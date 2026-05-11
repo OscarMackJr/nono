@@ -110,7 +110,7 @@ impl ProxyHandle {
         vars.push(("https_proxy".to_string(), proxy_url));
         vars.push(("no_proxy".to_string(), no_proxy));
 
-        // Node.js 26+ needs an explicit hint to use HTTPS_PROXY for built-in
+        // Node.js 20.6+ needs an explicit hint to use HTTPS_PROXY for built-in
         // fetch(). Without it, Node-based clients can bypass the proxy and hit
         // the sandboxed network directly.
         // NODE_USE_ENV_PROXY tells Node's built-in fetch() to read HTTPS_PROXY
