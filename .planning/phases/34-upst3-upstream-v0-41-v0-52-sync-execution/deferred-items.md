@@ -186,6 +186,20 @@ version-number changes themselves should never be replayed.
 **Tracking:** Plan 34-06 SUMMARY documents this deferral; no impact on
 fork's release cadence.
 
+## P34-DEFER-08a-1: Windows execution-path env-filter wiring
+
+**Discovered during:** Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7` v0.37.0 env-filter surface)
+
+**Date:** 2026-05-12
+
+**Scope:** ExecConfig in `crates/nono-cli/src/exec_strategy_windows/mod.rs` is unchanged. The new `allowed_env_vars` / `denied_env_vars` fields are wired only into the Unix `ExecConfig` in `exec_strategy.rs`. `ExecutionFlags.allowed_env_vars` / `.denied_env_vars` are forwarded cross-platform but the Windows execution path doesn't consume them yet (`#[cfg_attr(target_os = "windows", allow(dead_code))]`). Linux/macOS gets full env-filter; Windows retains existing `should_skip_env_var`-only behaviour.
+
+**Justification:** D-34-E1 invariant explicitly forbids touching `*_windows.rs` / `exec_strategy_windows/` files during Phase 34. Windows env-filter parity tracked for a future phase.
+
+**Effort estimate:** 3-5 days (Windows ExecConfig wiring + env-filter integration into the Windows execution path + Windows-specific tests for allowed_env_vars / denied_env_vars precedence).
+
+**Tracking:** Plan 34-08a SUMMARY § D-34-08a-WINDOWS-DEFER documents the deferral. Should be folded into the v2.4 "Complete the partial ports" theme if user adopts the verifier's strategic recommendation.
+
 ## P34-DEFER-08b-1: `b5f0a3ab` deep refactor of exec_strategy + execution_runtime
 
 **Discovered during:** Plan 34-08b Task 2 commit 2/5 (cherry-pick of upstream
