@@ -426,7 +426,7 @@ Plans:
 
 **Depends on:** Phase 33 (audit ledger + parity-strategy ADR).
 
-**Plans:** 1/12 plans executed (34-04 partial: 17 of 23 commits landed — STOP at canonical-schema restructure; D-20 manual-replay continuation deferred to Plan 34-04b)
+**Plans:** 3/12 plans executed
 
 Plans:
 
@@ -437,7 +437,7 @@ Plans:
 - [⚠] 34-04-PATH-CANON-SCHEMA-PLAN.md — Plan 34-04 (C7 v0.46–v0.47.1 path canon + canonical JSON schema; 17/23 commits landed; STOP at `f0abd413`)
 
 **Wave 0.5** *(blocked on Wave 0 completion; D-20 manual-replay split per Phase 22-05a/22-05b precedent)*
-- [ ] 34-04b-FP-CANONICAL-SCHEMA-PLAN.md — Plan 34-04b (C7-residual `f0abd413` + 5 dependents; canonical schema restructure manual replay)
+- [x] 34-04b-FP-CANONICAL-SCHEMA-PLAN.md — Plan 34-04b (C7-residual `f0abd413` + 5 dependents; canonical schema restructure manual replay)
 
 **Wave 1** *(blocked on Wave 0.5 completion)*
 - [ ] 34-01-CLI-CONSOLIDATION-PLAN.md — Plan 34-01 (C2 v0.41–v0.43 `nono policy` → `nono profile` rename + CLI consolidation)
