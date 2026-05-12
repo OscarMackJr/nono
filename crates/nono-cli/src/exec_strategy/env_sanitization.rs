@@ -341,10 +341,8 @@ mod tests {
     fn test_validate_deny_vars_field_name_in_error() {
         let patterns: Vec<String> = vec!["A*B".into()];
         let err = validate_env_var_patterns(&patterns, "deny_vars");
-        assert!(err.is_some());
-        let msg = err.expect("validation error");
-        assert!(msg.contains("deny_vars"));
-        assert!(msg.contains("A*B"));
+        assert!(err.as_ref().is_some_and(|e| e.contains("deny_vars")));
+        assert!(err.as_ref().is_some_and(|e| e.contains("A*B")));
     }
 
     // ============================================================================
