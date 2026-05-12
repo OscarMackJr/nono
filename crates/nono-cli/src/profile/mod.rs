@@ -4668,7 +4668,7 @@ mod tests {
         let profile = load_from_file(&self_path).expect("should not be circular");
         assert_eq!(profile.meta.name, "my-default");
         assert!(
-            !profile.groups.include.is_empty(),
+            !profile.security.groups.is_empty(),
             "should inherit default groups"
         );
         assert!(profile.filesystem.read.contains(&"/tmp/mine".to_string()));
@@ -4694,7 +4694,7 @@ mod tests {
         let profile = load_from_file(&self_path).expect("should resolve both bases");
         assert_eq!(profile.meta.name, "my-combo");
         assert!(
-            !profile.groups.include.is_empty(),
+            !profile.security.groups.is_empty(),
             "should inherit default groups"
         );
         assert!(profile.filesystem.allow.contains(&"/tmp/extra".to_string()));
