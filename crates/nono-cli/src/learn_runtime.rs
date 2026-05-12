@@ -1,12 +1,12 @@
 use crate::cli::LearnArgs;
+use crate::learn;
+#[cfg(not(target_os = "windows"))]
+use crate::profile;
 #[cfg(not(target_os = "windows"))]
 use crate::profile_save_runtime::{
     command_name, confirm, patch_has_policy_overrides, print_patch_preview, print_profile_save,
     suggested_profile_name, write_profile, PreparedProfileSave, SaveAction,
 };
-use crate::learn;
-#[cfg(not(target_os = "windows"))]
-use crate::profile;
 use colored::Colorize;
 use nono::{NonoError, Result};
 
