@@ -123,3 +123,65 @@ Plan 34-01 close.
 **Tracking:** Plan 34-01 SUMMARY records the gate-1 single-test failure as
 out-of-scope per the executor's "auto-fix scope boundary" rule (only fix
 issues directly caused by current-task changes; this was pre-existing).
+
+## P34-DEFER-06-1: yaml_merge wiring trio (upstream v0.49.0)
+
+**Discovered during:** Plan 34-06 Cluster C9 cherry-pick (3 of 8 commits
+modify a file that does not exist in the fork).
+
+**Date:** 2026-05-12
+
+**Deferred commits:**
+- `242d4917` — fix(yaml-merge): pin serde_yaml_ng to 0.10.0 and add reversal failure test
+- `802c8566` — style: apply rustfmt (over wiring.rs)
+- `d44f5541` — feat(wiring): add yaml_merge directive for YAML config patching
+
+**Scope:** All three commits modify `crates/nono-cli/src/wiring.rs`. The
+fork does **not** have this file. Upstream's `wiring.rs` was first created
+in `24d8b924` (`feat(profile, migration): move codex, claude-code to
+registry pack`) which is well outside the v0.49.0 cluster scope and was
+never adopted by the fork. At parent-of-`d44f5541` upstream's `wiring.rs`
+is 1761 lines (the `d44f5541` commit then adds ~360 lines on top of
+that). Adopting the prerequisite wiring infrastructure is multi-week
+scope.
+
+**Why deferred:** Mirrors P34-DEFER-04b-1 (deprecated_schema module
+port, multi-week) and P34-DEFER-04b-2 (profile drafts + package status,
+feature-development scope) — both deferred upstream work that demands
+multi-week prerequisite porting that exceeds a single sync-plan scope.
+
+**Estimated scope:** multi-week to land upstream's wiring infrastructure
+base (`24d8b924` + intermediate commits), after which `242d4917` +
+`802c8566` + `d44f5541` apply cleanly as a chain.
+
+**Tracking:** Plan 34-06 SUMMARY records 4 of 8 planned upstream commits
+landed (security-critical trust-scan hardening preserved); 3 wiring
+commits deferred here; 1 release-bump deferred as P34-DEFER-06-2.
+
+## P34-DEFER-06-2: v0.49.0 release-bump (upstream chore commit)
+
+**Discovered during:** Plan 34-06 Cluster C9 cherry-pick (1 of 8 commits
+bumps Cargo.toml versions from 0.48.x → 0.49.0).
+
+**Date:** 2026-05-12
+
+**Deferred commit:**
+- `587d98de` — chore: release v0.49.0
+
+**Scope:** Touches CHANGELOG.md (+34 lines) and 5 Cargo.toml files
+(bindings/c, crates/nono, crates/nono-cli, crates/nono-proxy, plus
+Cargo.lock). Version bumps 0.48.x → 0.49.0.
+
+**Why deferred:** Fork tracks its own version (currently `0.37.1`)
+independent of upstream's version increments. The 0.48.x → 0.49.0
+version changes conflict with fork's 0.37.1 baseline. Established fork
+pattern — same posture taken on prior Phase 34 release-bump commits.
+
+**Future port path:** When the fork performs its own version increment,
+the upstream v0.49.0 CHANGELOG stanza (only the first ~34 lines of
+`587d98de`'s CHANGELOG.md diff — the entries describing what landed in
+v0.49.0) can be ported as a docs-only contribution. The Cargo.toml
+version-number changes themselves should never be replayed.
+
+**Tracking:** Plan 34-06 SUMMARY documents this deferral; no impact on
+fork's release cadence.

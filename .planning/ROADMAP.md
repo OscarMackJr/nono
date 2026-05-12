@@ -426,7 +426,7 @@ Plans:
 
 **Depends on:** Phase 33 (audit ledger + parity-strategy ADR).
 
-**Plans:** 3/12 plans executed
+**Plans:** 6/12 plans executed
 
 Plans:
 
@@ -440,9 +440,9 @@ Plans:
 - [x] 34-04b-FP-CANONICAL-SCHEMA-PLAN.md — Plan 34-04b (C7-residual `f0abd413` + 5 dependents; canonical schema restructure manual replay)
 
 **Wave 1** *(blocked on Wave 0.5 completion)*
-- [ ] 34-01-CLI-CONSOLIDATION-PLAN.md — Plan 34-01 (C2 v0.41–v0.43 `nono policy` → `nono profile` rename + CLI consolidation)
-- [ ] 34-03-KEYRING-PLAN.md — Plan 34-03 (C5 v0.45 keyring + display)
-- [ ] 34-06-TRUST-SCAN-PLAN.md — Plan 34-06 (C9 v0.49 trust scan + YAML merge)
+- [x] 34-01-CLI-CONSOLIDATION-PLAN.md — Plan 34-01 (C2 v0.41–v0.43 `nono policy` → `nono profile` rename + CLI consolidation)
+- [x] 34-03-KEYRING-PLAN.md — Plan 34-03 (C5 v0.45 keyring + display)
+- [⚠] 34-06-TRUST-SCAN-PLAN.md — Plan 34-06 (C9 v0.49 trust scan + YAML merge; 4/8 commits landed; security-critical trust-scan hardening preserved; yaml_merge trio deferred as P34-DEFER-06-1 + v0.49.0 release-bump deferred as P34-DEFER-06-2)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 34-02-PROXY-NET-PLAN.md — Plan 34-02 (C4 v0.43–v0.44 proxy net hardening; D-34-B2: no Phase 09 WFP retrofit)

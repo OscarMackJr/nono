@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
-last_updated: "2026-05-12T00:38:48.052Z"
-last_activity: 2026-05-11
+last_updated: "2026-05-12T01:27:49.751Z"
+last_activity: 2026-05-12
 progress:
   total_phases: 8
   completed_phases: 8
@@ -26,9 +26,9 @@ See: .planning/PROJECT.md (updated 2026-04-29 at v2.3 milestone scope-lock)
 ## Current Position
 
 Phase: 34
-Plan: 34-01 closed (2026-05-11); 34-00 + 34-04 + 34-04b previously closed; next ready: 34-02 (Wave 2) once 34-03 + 34-06 wave-1 plans close
-Status: In progress — Wave 1 partial
-Milestone: v2.3 — Phase 34 in progress (4 of 12 plans closed: 34-00 G-25-DRIFT-01 closure, 34-04 PATH-CANON-SCHEMA, 34-04b FP-CANONICAL-SCHEMA, 34-01 CLI-CONSOLIDATION). Wave 1 remaining: 34-03 KEYRING, 34-06 TRUST-SCAN.
+Plan: 34-06 closed (2026-05-12, with 2 deferrals: P34-DEFER-06-1 yaml_merge-wiring trio, P34-DEFER-06-2 v0.49.0 release-bump); 34-01 + 34-03 + 34-04 + 34-04b + 34-00 previously closed. **Wave 1 COMPLETE** (3/3 plans closed). Next ready: Wave 2 (34-02 PROXY-NET).
+Status: In progress — Wave 1 complete; Wave 2 ready to dispatch
+Milestone: v2.3 — Phase 34 in progress (6 of 12 plans closed: 34-00 G-25-DRIFT-01, 34-04 PATH-CANON-SCHEMA, 34-04b FP-CANONICAL-SCHEMA, 34-01 CLI-CONSOLIDATION, 34-03 KEYRING, 34-06 TRUST-SCAN). Wave 1 COMPLETE.
 
   - v1.0 Windows Alpha — shipped 2026-03-31 (tag `v1.0`).
   - v2.0 Windows Gap Closure — shipped 2026-04-18 (tag `v2.0` local; merge-to-main pending on pre-milestone quick task).
