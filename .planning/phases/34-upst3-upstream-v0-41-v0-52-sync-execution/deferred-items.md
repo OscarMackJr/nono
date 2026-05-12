@@ -484,3 +484,98 @@ Phase 22-04 OAuth2 / WSAStartup surface should refresh the
 `upstream-sync-quick.md` Fork-divergence catalog entry to point at the
 current symbol name (if it has been renamed) or note that the
 WSAStartup wiring was inlined / moved to a different module.
+
+---
+
+## Phase 35 closure
+
+Phase 35 (UPST3-closure quick wins, completed 2026-05-12) closed the
+following Phase 34 deferrals via three wave-parallel plans
+(35-01-WIN-ENV-FILTER, 35-02-LINUX-LANDLOCK-PROFILES,
+35-03-WIN-TEST-HYGIENE). Per D-35-D4, Plan 35-03 (last to close in
+Phase 35) owns this consolidated append.
+
+### P34-DEFER-01-1 — closed-by-Plan-35-03
+
+**Closing commit:** `d8cb250b` (Plan 35-03 Task 1 —
+production-code UNC verbatim-prefix strip in
+`query_ext::query_path::suggested_flag` emission).
+
+**Closure shape:** Wrapped both `suggested_flag_for_path(&canonical, ...)`
+call sites at `crates/nono-cli/src/query_ext.rs` (insufficient_access +
+path_not_granted branches) with the existing `strip_verbatim_prefix`
+helper (originally introduced by in-fork commit `400f8c90` for the
+sensitive-path check). Updated `test_query_path_denied` and
+`test_query_path_reports_near_miss_with_source_and_fix` to compute
+expected flags using the same helper, making them cross-platform
+deterministic with no `#[cfg]` gate on the test itself; platform
+dispatch is internal to the helper.
+
+### P34-DEFER-08a-1 — closed-by-Plan-35-01
+
+**Closing commit:** `6a4d9932` (Plan 35-01 — Windows execution-path
+env-filter wiring; D-20 manual replay shape per D-35-A4).
+
+**Closure shape:** Added `allowed_env_vars` / `denied_env_vars` to
+Windows `ExecConfig` in `exec_strategy_windows/mod.rs`; wired into
+`build_child_env` (`launch.rs`) with deny-before-allow precedence
+mirroring the Unix call-site at `exec_strategy.rs:435-457`; removed
+the two `#[allow(dead_code)]` attributes on `is_env_var_allowed` /
+`is_env_var_denied` in `env_sanitization.rs`. Locked by Windows-gated
+regression test `test_windows_empty_allow_denies_all_env_vars`
+(fail-closed invariant from upstream `780965d7`) plus three sibling
+tests covering deny precedence, allow filtering, and nono-injected
+credential bypass.
+
+### P34-DEFER-09-1 — closed-by-Plan-35-02
+
+**Closing commit:** `327fe104` (Plan 35-02 Task 1 — D-19
+cherry-pick of upstream `bdf183e9` v0.44.0).
+
+**Closure shape:** Cherry-picked the 15-line `profile_runtime.rs`
+Landlock pre-create hunk only; upstream's `wiring.rs` work (188/239
+LOC) is Phase 36 REQ-PORT-CLOSURE-04 territory. Commit carries the
+verbatim D-19 6-line trailer block (`Upstream-commit: bdf183e9`,
+lowercase `'a'` in `Upstream-author:`, two `Signed-off-by:` lines
+per template). Linux integration test
+`test_pre_create_landlock_profiles_dir_idempotent` ships in a
+companion commit; CI Linux lane is the functional verification
+surface per D-35-D3.
+
+### P34-DEFER-09-3 — closed-by-Plan-35-03 (transitive)
+
+**Closing commit:** `d8cb250b` (same as P34-DEFER-01-1).
+
+**Closure shape:** Carry-forward duplicate of P34-DEFER-01-1 (same
+test, same failure shape). The Plan 35-03 Task 1 UNC strip closes
+both tickets in one fix. Recorded explicitly here for ledger
+traceability per D-35-C4.
+
+### P34-DEFER-10-1 — closed-by-Plan-35-03
+
+**Closing commit:** `66d7a386` (Plan 35-03 Task 2 — full
+`format!("{:?}")` audit + replacement with `serde_json::Map` insertion
+in `profile_cmd.rs` JSON-emission helpers).
+
+**Closure shape:** Replaced every in-scope Debug-format JSON-emission
+site in `profile_to_json` (line 1041), `diff_to_json` (line 1777),
+and `diff_custom_credentials_json` (line 1991) with
+`serde_json::Map::new` + `serde_json::to_value` calls. Applied
+omit-when-None semantics for the four Option<...> security fields
+(`signal_mode`, `process_info_mode`, `ipc_mode`, `wsl2_proxy_policy`)
+— JSON key absent when None, snake_case string when Some. The four
+PascalCase enum sites (workdir.access, plus paired profile1/profile2
+in diff_to_json) use `serde_json::to_value` against existing
+`#[serde(rename_all = ...)]` attributes — no enum-attribute changes
+needed. Out-of-scope sites in `cmd_diff` body (lines ~1297-1318 —
+`diff_scalar_option` stdout printer, NOT JSON emission) preserved per
+D-35-C3. Function signature changes propagated through `cmd_show` and
+`cmd_diff` call sites via `?`. Both regression tests
+(`test_policy_show_json_no_rust_debug_syntax` +
+`test_policy_diff_json_no_rust_debug_syntax`) pass deterministically
+on Windows + Linux + macOS. Restores the upstream `f3e7f885` (v0.47.0)
+shape that Plan 34-04b adopted but later Wave-3 plans regressed —
+closes the entire `format!("{:?}")` JSON-leak regression class via
+full audit per D-35-C3.
+
+---
