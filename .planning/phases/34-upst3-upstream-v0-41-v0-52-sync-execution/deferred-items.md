@@ -185,3 +185,118 @@ version-number changes themselves should never be replayed.
 
 **Tracking:** Plan 34-06 SUMMARY documents this deferral; no impact on
 fork's release cadence.
+
+## P34-DEFER-08b-1: `b5f0a3ab` deep refactor of exec_strategy + execution_runtime
+
+**Discovered during:** Plan 34-08b Task 2 commit 2/5 (cherry-pick of upstream
+`b5f0a3ab` — `feat(cli): enhance macos learn and run diagnostics`)
+
+**Date:** 2026-05-12
+
+**Scope:** Upstream commit `b5f0a3ab` (Luke Hinds, v0.52.0) is an 11-file /
+721-insertion / 118-deletion refactor of nono's CLI diagnostic, profile-save,
+and PTY-quiet-period machinery. Trial cherry-pick with
+`--strategy-option=theirs` produced 17 compile errors from `ExecConfig`
+field-shape mismatch (fork's `ExecConfig` carries 8+ fork-side fields:
+`capability_elevation`, `resource_limits`, `audit_signer`, `no_diagnostics`,
+`threading`, `protected_paths`, `profile_save_base`, `startup_timeout`,
+`allowed_env_vars`, `denied_env_vars`, `bypass_protection_paths`).
+
+**Plan 34-08b absorbed (surgical port):**
+- `crates/nono-cli/src/learn_runtime.rs`: macOS `print_macos_run_guidance`
+  helper + `command_display::format_command_line` import (PRESERVES Phase
+  10/D-02 Windows admin gate).
+- `crates/nono/src/diagnostic.rs` (~64 net lines after later scope-trim in
+  commit 4/5): cross-platform diagnostic surface improvements that don't
+  touch the fork-side `ExecConfig` or `analyze_error_output` wiring.
+- `docs/cli/usage/flags.mdx` + `docs/cli/usage/troubleshooting.mdx`: updated
+  `nono learn` deprecation-direction docs.
+
+**Plan 34-08b deferred:**
+- `crates/nono-cli/src/exec_strategy.rs` (244 lines of changes):
+  - `should_offer_profile_save()` predicate guarding the profile-save offer.
+  - `clear_signal_forwarding_target()` call before profile-save prompt.
+  - `POST_EXIT_PTY_DRAIN_TIMEOUT` constant (250ms → 100ms quiet period).
+  - Startup-timeout machinery integration.
+- `crates/nono-cli/src/execution_runtime.rs` (46 lines):
+  - `should_apply_startup_timeout()` helper.
+  - `startup_timeout_profile()` helper.
+  - `compute_executable_identity()` helper.
+  - New tests for startup-timeout interactive-vs-non-interactive arms.
+- `crates/nono-cli/src/cli.rs` `LearnArgs.trace` field (referenced by the
+  Plan 34-08b commit 3/5 `print_learn_deprecation` helper; that reference
+  was inline-removed with a TODO marker pointing to this deferral).
+- `crates/nono-cli/src/profile_save_runtime.rs` minor refinements.
+- `crates/nono-cli/src/pty_proxy.rs` minor refinements.
+- `crates/nono-cli/src/sandbox_log.rs` minor refinements.
+- `crates/nono-cli/src/startup_prompt.rs` minor refinements (likely paired
+  with the startup-timeout work in `execution_runtime.rs`).
+
+**Why deferred:** Fork's `ExecConfig` and `SupervisedRuntimeContext` shapes
+diverge structurally from upstream's. The 8+ fork-side ExecConfig fields are
+load-bearing for fork's audit-attestation surface (Plan 26), capability
+elevation (Plan 18), resource limits (D-09), bypass_protection (Plan 26),
+env_sanitization (Plan 34-08a), and PTY threading. Restructuring the
+`ExecConfig` accommodation requires a dedicated D-20 manual-replay plan with
+explicit per-field migration guidance to avoid regressing each of the listed
+fork-defense surfaces. The user-visible improvements (better profile-save
+UX, faster PTY drain, startup-timeout for stuck agents) are non-critical
+and can land via a follow-up plan.
+
+**Estimated scope:** 1-2 weeks (per-field migration audit + integration
+testing + macOS/Linux/Windows cross-platform verification of the PTY and
+profile-save flows).
+
+**Tracking:** Plan 34-08b SUMMARY commit 2/5 records this deferral; Wave 2
+closes with the trimmed scope landed.
+
+## P34-DEFER-08b-2: `bbdf7b85` escape-quote wiring + structured-property pipeline
+
+**Discovered during:** Plan 34-08b Task 2 commit 4/5 (cherry-pick of upstream
+`bbdf7b85` — `fix(diagnostic): parse escaped quotes in structured properties`)
+
+**Date:** 2026-05-12
+
+**Scope:** Upstream commit `bbdf7b85` (Luke Hinds, v0.52.0) is a function-body
+rewrite of `extract_structured_string_property` to handle escape-quoted
+characters in structured diagnostic output (e.g., `path: '/Users/luke/it\'s/pkg'`).
+The function and its 3 sibling helpers (`extract_path_after_syscall_word`,
+`infer_access_from_structured_syscall_line`, `extract_structured_path_property`)
+were introduced by `b5f0a3ab`, AS WAS their wiring into `analyze_error_output`.
+Without the wiring (deferred per P34-DEFER-08b-1 above), the 4 helper functions
+are dead code AND the 3 upstream tests that exercise them fail.
+
+**Plan 34-08b absorbed (surgical port):**
+- `crates/nono/src/diagnostic.rs`: the small additive fallback
+  `extract_path_from_segment(prefix).or_else(|| extract_path_from_segment(line))`
+  in `extract_denied_path_from_error_line` (which doesn't require structured
+  parsing).
+- A comment block above `extract_relative_write_path_from_line` and inside
+  the test module documenting this deferral for the future restorer.
+
+**Plan 34-08b deferred:**
+- Restore `extract_path_after_syscall_word`, `infer_access_from_structured_syscall_line`,
+  `extract_structured_path_property`, `extract_structured_string_property`
+  (4 helper functions removed during commit 4/5 to avoid `-D warnings`
+  dead-code failures).
+- Restore `test_analyze_error_output_detects_node_eperm_mkdir_as_write`
+  (test landed in commit 2/5 but failed without the wiring).
+- Restore `test_analyze_error_output_detects_structured_node_eperm_mkdir_path`
+  (would have landed in commit 2/5).
+- Restore `test_analyze_error_output_detects_structured_path_with_escaped_quote`
+  (would have landed in commit 4/5 — this is `bbdf7b85`'s native test).
+- Apply the `bbdf7b85` escape-quote-aware function body rewrite of
+  `extract_structured_string_property` (semantically empty until the wiring
+  lands).
+- Wire all 4 helpers into `analyze_error_output` (per `b5f0a3ab`'s
+  `analyze_error_output` refactor).
+
+**Why deferred:** The wiring is part of the same `b5f0a3ab` deep refactor
+deferred as P34-DEFER-08b-1. P34-DEFER-08b-2 is the matching tail to
+P34-DEFER-08b-1; the two should be picked up together by a single D-20
+manual-replay follow-up plan.
+
+**Estimated scope:** Subsumed by P34-DEFER-08b-1's 1-2 week budget; no
+incremental cost.
+
+**Tracking:** Plan 34-08b SUMMARY commit 4/5 records this deferral.

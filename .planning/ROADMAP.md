@@ -426,7 +426,7 @@ Plans:
 
 **Depends on:** Phase 33 (audit ledger + parity-strategy ADR).
 
-**Plans:** 9/13 plans executed (34-08 split into 34-08a + 34-08b after empirical discovery; phase count 12 → 13)
+**Plans:** 11/13 plans executed
 
 Plans:
 
@@ -449,8 +449,8 @@ Plans:
 - [x] 34-05-COMPLETION-PLAN.md — Plan 34-05 (C8 v0.48 `nono completion`; D-34-B2: no MSI integration) — 8 cherry-picks + 3 fork-fixups landed; gates 1/2/5 PASS; 3/4 deferred-to-CI; P34-DEFER-01-1 carry-forward acceptable.
 - [x] 34-07-PS-ENVURI-PLAN.md — Plan 34-07 (C10 v0.50 `nono ps` + `env://`)
 - [archived] 34-08-ENV-DENY-PLAN.archive.md — Plan 34-08 split into 34-08a + 34-08b after empirical discovery of partial Phase 20-03 env_sanitization port (cherry-pick blocked at commit 1/10 `3657c935`); precedent: 34-04 → 34-04b split.
-- [ ] 34-08a-ENV-SURFACE-PORT-PLAN.md — Plan 34-08a (C12-env-surface: D-20 manual port of v0.37.0 env-filter surface + 4 v0.52 env-touching cherry-picks; security-critical deny_vars + empty-allow fail-closed; `autonomous: false`)
-- [ ] 34-08b-LEARN-DEPRECATION-PLAN.md — Plan 34-08b (C12-non-env: 5 non-env-touching cherry-picks from v0.52 — macOS learn, interactive prompt, `nono learn` deprecation per D-34-B2, escaped quotes, release; `autonomous: true`)
+- [x] 34-08a-ENV-SURFACE-PORT-PLAN.md — Plan 34-08a (C12-env-surface: D-20 manual port of v0.37.0 env-filter surface + 4 v0.52 env-touching cherry-picks; security-critical deny_vars + empty-allow fail-closed; `autonomous: false`)
+- [x] 34-08b-LEARN-DEPRECATION-PLAN.md — Plan 34-08b (C12-non-env: 5 non-env-touching cherry-picks from v0.52 — 5 commits landed with D-34-A2 escalation scope-trim; D-34-B2 surgical posture preserved (`learn_windows.rs` byte-identical, fork-version invariant `0.37.1`); gates 1/2/5 PASS; 3/4 deferred-to-CI; P34-DEFER-08b-1 + P34-DEFER-08b-2 recorded. **Wave 2 complete.**)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 34-09-FP-PACKS-PLAN.md — Plan 34-09 (C6 v0.44 pack migration D-20 manual replay; `autonomous: false`)
