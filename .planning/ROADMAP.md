@@ -426,7 +426,7 @@ Plans:
 
 **Depends on:** Phase 33 (audit ledger + parity-strategy ADR).
 
-**Plans:** 6/12 plans executed
+**Plans:** 8/12 plans executed
 
 Plans:
 
@@ -445,8 +445,8 @@ Plans:
 - [⚠] 34-06-TRUST-SCAN-PLAN.md — Plan 34-06 (C9 v0.49 trust scan + YAML merge; 4/8 commits landed; security-critical trust-scan hardening preserved; yaml_merge trio deferred as P34-DEFER-06-1 + v0.49.0 release-bump deferred as P34-DEFER-06-2)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 34-02-PROXY-NET-PLAN.md — Plan 34-02 (C4 v0.43–v0.44 proxy net hardening; D-34-B2: no Phase 09 WFP retrofit)
-- [ ] 34-05-COMPLETION-PLAN.md — Plan 34-05 (C8 v0.48 `nono completion`; D-34-B2: no MSI integration)
+- [x] 34-02-PROXY-NET-PLAN.md — Plan 34-02 (C4 v0.43–v0.44 proxy net hardening; D-34-B2: no Phase 09 WFP retrofit)
+- [x] 34-05-COMPLETION-PLAN.md — Plan 34-05 (C8 v0.48 `nono completion`; D-34-B2: no MSI integration) — 8 cherry-picks + 3 fork-fixups landed; gates 1/2/5 PASS; 3/4 deferred-to-CI; P34-DEFER-01-1 carry-forward acceptable.
 - [ ] 34-07-PS-ENVURI-PLAN.md — Plan 34-07 (C10 v0.50 `nono ps` + `env://`)
 - [ ] 34-08-ENV-DENY-PLAN.md — Plan 34-08 (C12 v0.52 env deny_vars + `nono learn` deprecation; D-34-B2: no Windows-specific docstring)
 
