@@ -93,7 +93,7 @@ nono why --self --path <PATH> --op <OP> [OPTIONS]  # Inside sandbox
 
 ### `nono learn`
 
-Trace a command to discover required filesystem paths and network activity. Uses `strace` on Linux and `fs_usage` + `nettop` on macOS to monitor accesses and outputs paths and connections that would need to be allowed in a nono profile.
+Discover required filesystem paths and network activity. On Linux, `nono learn` uses `strace`. On macOS, use `nono run --profile <name> -- <command>` for sandboxed profile learning; legacy unsandboxed tracing is available with `nono learn --trace`.
 
 ```bash
 nono learn [OPTIONS] -- <COMMAND> [ARGS...]
@@ -147,7 +147,7 @@ Subcommands:
 ## `nono learn` Options
 
 <Note>
-  `nono learn` runs WITHOUT sandbox restrictions to discover what paths and network connections your application needs. On Linux it uses `strace` (install with `apt install strace`). On macOS it uses `fs_usage` and `nettop` for filesystem and network discovery (requires `sudo`).
+  On Linux, `nono learn` runs WITHOUT sandbox restrictions using `strace` (install with `apt install strace`). On macOS, profile learning happens through sandboxed `nono run`; use `nono learn --trace` only when you explicitly want the legacy unsandboxed `fs_usage` + `nettop` tracer.
 </Note>
 
 ### `--profile`, `-p`
@@ -180,6 +180,14 @@ Show all accessed paths, not just those that would be blocked by the sandbox.
 
 ```bash
 nono learn --all -- my-app
+```
+
+### `--trace`
+
+On macOS, use the legacy unsandboxed `fs_usage` + `nettop` tracer.
+
+```bash
+nono learn --trace -- my-app
 ```
 
 ### `--verbose`, `-v`

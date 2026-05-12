@@ -1544,29 +1544,187 @@ impl<'a> DiagnosticFormatter<'a> {
     }
 }
 
-/// Human-readable descriptions for commonly denied macOS mach services.
-fn describe_mach_service(service: &str) -> Option<&'static str> {
-    Some(match service {
-        s if s.starts_with("com.apple.security") || s == "com.apple.secd" => {
-            "Keychain / Security framework"
+/// Catalog of observed non-filesystem macOS sandbox denials.
+///
+/// Apple's public documentation covers APIs such as CFPreferences, but not a
+/// complete stable taxonomy of Seatbelt operation names. Keep this table
+/// evidence-based: add entries only when they are observed in sandbox logs or
+/// backed by a known framework/daemon mapping.
+#[derive(Debug, Clone, Copy)]
+struct SystemServiceDiagnostic {
+    operation: &'static str,
+    target: SystemServiceTarget,
+    description: &'static str,
+    guidance: Option<SystemServiceGuidance>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SystemServiceTarget {
+    Exact(&'static str),
+    Prefix(&'static str),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SystemServiceGuidance {
+    Keychain,
+    UserPreferences,
+}
+
+const SYSTEM_SERVICE_DIAGNOSTICS: &[SystemServiceDiagnostic] = &[
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.SecurityServer",
+        "Keychain / Security framework",
+        Some(SystemServiceGuidance::Keychain),
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.securityd",
+        "Keychain / Security framework",
+        Some(SystemServiceGuidance::Keychain),
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.security.keychaind",
+        "Keychain / Security framework",
+        Some(SystemServiceGuidance::Keychain),
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.secd",
+        "Keychain / Security framework",
+        Some(SystemServiceGuidance::Keychain),
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.security.agent",
+        "Keychain authorization agent",
+        Some(SystemServiceGuidance::Keychain),
+    ),
+    SystemServiceDiagnostic::exact("mach-lookup", "com.apple.logd", "System logging", None),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.system.notification_center",
+        "Distributed notifications",
+        None,
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.distributed_notifications",
+        "Distributed notifications",
+        None,
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.CoreServices.coreservicesd",
+        "Launch Services",
+        None,
+    ),
+    SystemServiceDiagnostic::exact(
+        "mach-lookup",
+        "com.apple.lsd.mapdb",
+        "Launch Services",
+        None,
+    ),
+    SystemServiceDiagnostic::prefix(
+        "mach-lookup",
+        "com.apple.windowserver",
+        "Window Server / GUI",
+        None,
+    ),
+    SystemServiceDiagnostic::prefix(
+        "mach-lookup",
+        "com.apple.cfprefsd",
+        "Preferences (CFPreferences / NSUserDefaults)",
+        None,
+    ),
+    SystemServiceDiagnostic::prefix(
+        "mach-lookup",
+        "com.apple.pasteboard",
+        "Pasteboard / clipboard",
+        None,
+    ),
+    SystemServiceDiagnostic::prefix(
+        "mach-lookup",
+        "com.apple.coreservices",
+        "Core Services",
+        None,
+    ),
+    SystemServiceDiagnostic::exact(
+        "user-preference-read",
+        "kcfpreferencesanyapplication",
+        "Global preferences (CFPreferences any-application domain)",
+        Some(SystemServiceGuidance::UserPreferences),
+    ),
+    SystemServiceDiagnostic::prefix(
+        "user-preference-read",
+        "kcfpreferences",
+        "Preferences (CFPreferences / NSUserDefaults)",
+        Some(SystemServiceGuidance::UserPreferences),
+    ),
+];
+
+impl SystemServiceDiagnostic {
+    const fn exact(
+        operation: &'static str,
+        target: &'static str,
+        description: &'static str,
+        guidance: Option<SystemServiceGuidance>,
+    ) -> Self {
+        Self {
+            operation,
+            target: SystemServiceTarget::Exact(target),
+            description,
+            guidance,
         }
-        "com.apple.logd" => "System logging",
-        "com.apple.system.notification_center" | "com.apple.distributed_notifications" => {
-            "Distributed notifications"
+    }
+
+    const fn prefix(
+        operation: &'static str,
+        target_prefix: &'static str,
+        description: &'static str,
+        guidance: Option<SystemServiceGuidance>,
+    ) -> Self {
+        Self {
+            operation,
+            target: SystemServiceTarget::Prefix(target_prefix),
+            description,
+            guidance,
         }
-        "com.apple.CoreServices.coreservicesd" | "com.apple.lsd.mapdb" => "Launch Services",
-        s if s.starts_with("com.apple.windowserver") => "Window Server / GUI",
-        s if s.starts_with("com.apple.cfprefsd") => "Preferences (NSUserDefaults)",
-        s if s.starts_with("com.apple.pasteboard") => "Pasteboard / clipboard",
-        s if s.starts_with("com.apple.coreservices") => "Core Services",
-        _ => return None,
-    })
+    }
+
+    fn matches(&self, violation: &SandboxViolation) -> bool {
+        violation.operation == self.operation
+            && violation
+                .target
+                .as_deref()
+                .is_some_and(|target| self.target.matches(target))
+    }
+}
+
+impl SystemServiceTarget {
+    fn matches(self, target: &str) -> bool {
+        match self {
+            Self::Exact(expected) => target.eq_ignore_ascii_case(expected),
+            Self::Prefix(prefix) => target
+                .get(..prefix.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix)),
+        }
+    }
+}
+
+fn system_service_diagnostic_for(
+    violation: &SandboxViolation,
+) -> Option<&'static SystemServiceDiagnostic> {
+    SYSTEM_SERVICE_DIAGNOSTICS
+        .iter()
+        .find(|diagnostic| diagnostic.matches(violation))
 }
 
 /// Format non-filesystem violations with human-readable service descriptions.
 fn format_non_fs_violations(lines: &mut Vec<String>, violations: &[&SandboxViolation]) {
     for v in violations {
-        let desc = v.target.as_deref().and_then(describe_mach_service);
+        let desc = system_service_diagnostic_for(v).map(|diagnostic| diagnostic.description);
         match (&v.target, desc) {
             (Some(target), Some(description)) => {
                 lines.push(format!(
@@ -1586,16 +1744,48 @@ fn format_non_fs_violations(lines: &mut Vec<String>, violations: &[&SandboxViola
 
 /// Generate actionable guidance for non-filesystem violations.
 fn format_non_fs_guidance(lines: &mut Vec<String>, violations: &[&SandboxViolation]) {
-    let has_keychain = violations.iter().any(|v| {
-        v.target
-            .as_deref()
-            .is_some_and(|t| t.contains("SecurityServer") || t.contains("securityd"))
-    });
+    let has_guidance = |guidance| {
+        violations.iter().any(|violation| {
+            system_service_diagnostic_for(violation).and_then(|diagnostic| diagnostic.guidance)
+                == Some(guidance)
+        })
+    };
 
-    if has_keychain {
+    if has_guidance(SystemServiceGuidance::Keychain) {
         lines.push("[nono] Keychain access requires granting the login keychain path:".to_string());
-        lines.push("[nono]   --read ~/Library/Keychains/login.keychain-db".to_string());
+        lines.push(keychain_login_grant_guidance());
     }
+
+    if has_guidance(SystemServiceGuidance::UserPreferences) {
+        lines.push("[nono] Preference reads use macOS CFPreferences / NSUserDefaults.".to_string());
+        lines.push(
+            "[nono] They are platform operations, not filesystem paths, so nono does not save them automatically.".to_string(),
+        );
+        lines.push(
+            "[nono] If the tool requires this, add a reviewed user profile rule:".to_string(),
+        );
+        lines.push(
+            "[nono]   \"unsafe_macos_seatbelt_rules\": [\"(allow user-preference-read)\"]"
+                .to_string(),
+        );
+    }
+}
+
+fn keychain_login_grant_guidance() -> String {
+    const DISPLAY_PATH: &str = "~/Library/Keychains/login.keychain-db";
+    let Some(home) = std::env::var_os("HOME") else {
+        return format!("[nono]   --read-file {DISPLAY_PATH}");
+    };
+    let path = PathBuf::from(home).join("Library/Keychains/login.keychain-db");
+    keychain_grant_guidance_for_path(&path, DISPLAY_PATH)
+}
+
+fn keychain_grant_guidance_for_path(path: &Path, display_path: &str) -> String {
+    let flag = match std::fs::metadata(path).map(|metadata| metadata.file_type()) {
+        Ok(file_type) if file_type.is_dir() => "--read",
+        _ => "--read-file",
+    };
+    format!("[nono]   {flag} {display_path}")
 }
 
 /// Deduplicate denials by path, merging access modes. When the same path
@@ -2572,6 +2762,69 @@ mod tests {
         assert!(output.contains("Also blocked (system services):"));
         assert!(output.contains("mach-lookup (com.apple.logd)"));
         assert!(output.contains("System logging"));
+    }
+
+    #[test]
+    fn test_keychain_guidance_uses_file_flag_for_file_targets() {
+        let dir = tempdir().expect("tempdir should be created");
+        let keychain = dir.path().join("login.keychain-db");
+        std::fs::write(&keychain, "db").expect("keychain fixture should be written");
+
+        let guidance =
+            keychain_grant_guidance_for_path(&keychain, "~/Library/Keychains/login.keychain-db");
+
+        assert_eq!(
+            guidance,
+            "[nono]   --read-file ~/Library/Keychains/login.keychain-db"
+        );
+    }
+
+    #[test]
+    fn test_keychain_guidance_uses_directory_flag_for_directory_targets() {
+        let dir = tempdir().expect("tempdir should be created");
+
+        let guidance =
+            keychain_grant_guidance_for_path(dir.path(), "~/Library/Keychains/login.keychain-db");
+
+        assert_eq!(
+            guidance,
+            "[nono]   --read ~/Library/Keychains/login.keychain-db"
+        );
+    }
+
+    #[test]
+    fn test_keychain_guidance_recognizes_keychain_mach_services() {
+        let caps = make_test_caps();
+        let violations = vec![SandboxViolation {
+            operation: "mach-lookup".to_string(),
+            target: Some("com.apple.secd".to_string()),
+        }];
+        let formatter = DiagnosticFormatter::new(&caps)
+            .with_mode(DiagnosticMode::Supervised)
+            .with_sandbox_violations(&violations);
+        let output = formatter.format_footer(1);
+
+        assert!(output.contains("Keychain access requires granting the login keychain path:"));
+        assert!(output.contains("--read-file ~/Library/Keychains/login.keychain-db"));
+    }
+
+    #[test]
+    fn test_preference_guidance_recognizes_any_application_domain() {
+        let caps = make_test_caps();
+        let violations = vec![SandboxViolation {
+            operation: "user-preference-read".to_string(),
+            target: Some("kcfpreferencesanyapplication".to_string()),
+        }];
+        let formatter = DiagnosticFormatter::new(&caps)
+            .with_mode(DiagnosticMode::Supervised)
+            .with_sandbox_violations(&violations);
+        let output = formatter.format_footer(1);
+
+        assert!(output.contains("user-preference-read (kcfpreferencesanyapplication)"));
+        assert!(output.contains("Global preferences"));
+        assert!(output.contains("CFPreferences / NSUserDefaults"));
+        assert!(output.contains("unsafe_macos_seatbelt_rules"));
+        assert!(output.contains("(allow user-preference-read)"));
     }
 
     #[test]

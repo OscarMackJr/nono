@@ -1,4 +1,6 @@
 use crate::cli::LearnArgs;
+#[cfg(target_os = "macos")]
+use crate::command_display::format_command_line;
 use crate::learn;
 #[cfg(not(target_os = "windows"))]
 use crate::profile;
@@ -11,9 +13,9 @@ use colored::Colorize;
 use nono::{NonoError, Result};
 
 pub(crate) fn run_learn(args: LearnArgs, silent: bool) -> Result<()> {
-    // D-02 / UAT Gap 1: on Windows, reject non-admin invocations immediately,
-    // BEFORE the interactive warning prompt. This matches the phase 10 admin gate
-    // contract — users should never see "Continue? [y/N]" if they cannot run learn
+    // D-02 / UAT Gap 1 (fork-only, Phase 10 admin gate contract): on Windows,
+    // reject non-admin invocations immediately, BEFORE the interactive warning
+    // prompt. Users should never see "Continue? [y/N]" if they cannot run learn
     // in the first place.
     #[cfg(target_os = "windows")]
     {
@@ -22,6 +24,14 @@ pub(crate) fn run_learn(args: LearnArgs, silent: bool) -> Result<()> {
                 crate::learn_windows::NON_ADMIN_ERROR.to_string(),
             ));
         }
+    }
+
+    // Upstream `b5f0a3ab` (v0.52.0): on macOS, redirect users from legacy
+    // unsandboxed tracing to sandboxed `nono run` workflow. Legacy path preserved
+    // behind `--trace`.
+    #[cfg(target_os = "macos")]
+    if !args.trace {
+        return print_macos_run_guidance(&args, silent);
     }
 
     if !silent {
@@ -88,6 +98,42 @@ pub(crate) fn run_learn(args: LearnArgs, silent: bool) -> Result<()> {
             eprintln!("Network activity detected. Use --block-net to restrict network access.");
         }
     }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn print_macos_run_guidance(args: &LearnArgs, silent: bool) -> Result<()> {
+    if args.json {
+        return Err(NonoError::LearnError(
+            "macOS run-based learning does not produce JSON. Use `nono learn --trace --json -- <command>` for the legacy unsandboxed tracer.".to_string(),
+        ));
+    }
+
+    if silent {
+        return Ok(());
+    }
+
+    let command = format_command_line(&args.command);
+    eprintln!(
+        "{}",
+        "macOS learn now uses sandbox denials from `nono run`.".yellow()
+    );
+    eprintln!("This keeps the command sandboxed and reuses the existing profile-save prompt.");
+    eprintln!();
+
+    if let Some(profile) = args.profile.as_deref() {
+        eprintln!("Run:");
+        eprintln!("  nono run --profile {} -- {}", profile, command);
+    } else {
+        eprintln!("Run with the profile you want to improve:");
+        eprintln!("  nono run --profile <profile> -- {}", command);
+    }
+
+    eprintln!();
+    eprintln!("When a path is denied, `nono run` will show diagnostics and offer to save a user profile patch.");
+    eprintln!("Legacy unsandboxed tracing remains available with:");
+    eprintln!("  nono learn --trace -- {}", command);
 
     Ok(())
 }
