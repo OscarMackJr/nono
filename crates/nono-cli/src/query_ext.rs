@@ -164,7 +164,17 @@ pub fn query_path(
                 access: cap.access.to_string(),
                 source: cap.source.to_string(),
             }),
-            suggested_flag: Some(suggested_flag_for_path(&canonical, requested)),
+            // Plan 35-03 (REQ-PORT-CLOSURE-07 / D-35-C1): strip Windows UNC
+            // verbatim prefix (`\\?\`, `\\?\UNC\`, `\??\`) from the
+            // canonicalized path before deriving the suggested CLI flag.
+            // Mirrors in-fork commit 400f8c90 (which fixed the same UX bug for
+            // the sensitive-path check). The helper is identity-no-op on
+            // non-Windows; platform dispatch is internal — no `#[cfg]` gate
+            // needed at this call site.
+            suggested_flag: Some(suggested_flag_for_path(
+                &strip_verbatim_prefix(&canonical),
+                requested,
+            )),
         });
     }
 
@@ -176,7 +186,12 @@ pub fn query_path(
         )),
         policy_source: None,
         matching_capability: None,
-        suggested_flag: Some(suggested_flag_for_path(&canonical, requested)),
+        // See comment above on Plan 35-03 D-35-C1: strip_verbatim_prefix
+        // removes Windows UNC verbatim prefix before deriving the flag.
+        suggested_flag: Some(suggested_flag_for_path(
+            &strip_verbatim_prefix(&canonical),
+            requested,
+        )),
     })
 }
 
@@ -366,6 +381,19 @@ mod tests {
         let caps = CapabilitySet::new();
         let path = PathBuf::from("/some/random/path");
 
+        // Compute the expected suggested_flag using the same helpers the
+        // production code uses, so the assertion is platform-agnostic.
+        // On Linux/macOS the canonical form is `/some/random/path` (POSIX).
+        // On Windows, `try_canonicalize` resolves `/some/random/path` to the
+        // current-drive-rooted form (e.g. `C:\some\random\path`); the
+        // `strip_verbatim_prefix` helper (Plan 35-03 D-35-C1) then removes
+        // any `\\?\` UNC verbatim prefix before the flag is derived.
+        // No `#[cfg]` gate needed — the helper handles platform dispatch.
+        let canonical = nono::try_canonicalize(&path);
+        let stripped = strip_verbatim_prefix(&canonical);
+        let (flag, target) = suggested_flag_parts(&stripped, AccessMode::Read);
+        let expected_flag = format!("{flag} {}", target.display());
+
         let result = query_path(&path, AccessMode::Read, &caps, &[]).expect("Query failed");
         match result {
             QueryResult::Denied {
@@ -375,7 +403,11 @@ mod tests {
                 ..
             } => {
                 assert_eq!(reason, "path_not_granted");
-                assert_eq!(suggested_flag.as_deref(), Some("--read /some/random"));
+                assert_eq!(
+                    suggested_flag.as_deref(),
+                    Some(expected_flag.as_str()),
+                    "suggested_flag should be typeable on current platform (no UNC prefix)"
+                );
                 assert!(matching_capability.is_none());
             }
             _ => panic!("expected denied result"),
@@ -446,7 +478,12 @@ mod tests {
                 details,
                 ..
             } => {
-                let expected_flag = format!("--write-file {}", test_file_canon.display());
+                // Use strip_verbatim_prefix on the canonical path to produce the
+                // expected flag, matching the Plan 35-03 D-35-C1 production-code fix.
+                let expected_flag = format!(
+                    "--write-file {}",
+                    strip_verbatim_prefix(&test_file_canon).display()
+                );
                 assert_eq!(reason, "insufficient_access");
                 assert_eq!(suggested_flag.as_deref(), Some(expected_flag.as_str()));
                 let capability = matching_capability.expect("expected matching capability");
