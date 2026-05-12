@@ -132,7 +132,11 @@ Full details: `.planning/milestones/v2.3-ROADMAP.md`.
 
 **Requirements:** REQ-PORT-CLOSURE-01, REQ-PORT-CLOSURE-06, REQ-PORT-CLOSURE-07. See `.planning/REQUIREMENTS.md`. **Scope note:** the v2.4 summary line mentions "half of REQ-PORT-CLOSURE-05 (escape-quote pipeline)" — that piece (P34-DEFER-08b-2) is **moved to Phase 36** because it depends on the 08b-1 ExecConfig refactor; Phase 35 ships 01 + 06 + 07 only.
 
-**Plans:** 0 plans — to be populated during `/gsd-plan-phase 35`.
+**Plans:** 3 plans (all Wave 1, parallelism-allowed per D-35-A3).
+
+- [ ] 35-01-WIN-ENV-FILTER-PLAN.md — REQ-PORT-CLOSURE-01 (Windows execution-path env-filter wiring; closes P34-DEFER-08a-1)
+- [ ] 35-02-LINUX-LANDLOCK-PROFILES-PLAN.md — REQ-PORT-CLOSURE-06 (Linux Landlock profiles-dir pre-creation; cherry-picks upstream bdf183e9; closes P34-DEFER-09-1)
+- [ ] 35-03-WIN-TEST-HYGIENE-PLAN.md — REQ-PORT-CLOSURE-07 (UNC strip in suggested_flag + full format!("{:?}") JSON-emission audit + Phase 35 closure ledger append; closes P34-DEFER-01-1, 09-3, 10-1)
 
 **Estimated effort:** ~2 weeks.
 
