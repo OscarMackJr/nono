@@ -1,5 +1,44 @@
 # Milestones
 
+## v2.3 — Linux POC Unblock + Deferreds Closure
+
+**Status:** ✅ SHIPPED 2026-05-12 with documented carry-forwards
+**Started:** 2026-04-29
+**Shipped:** 2026-05-12
+**Branch:** `main` (v2.2's `windows-squash` fast-forwarded into `main` at `1ef30c63` mid-milestone)
+
+**Goal:** A Linux user running fork-Linux-build sees real enforcement (not silent no-ops) for `--memory` / `--cpu-percent` / `--timeout` / `--max-processes`; v2.2's deferred items (PKG streaming, audit-attestation hardening, Authenticode chain-walker) ship as production-ready surfaces.
+
+**Phases:** 12 phases (Phases 25–34, including 27.1 + 27.2 inserted post-scope-lock).
+**Plans shipped:** 51 plans (25→6, 26→2, 27→1, 27.1→3, 27.2→4, 28→1, 29→1, 30→5, 31→6, 32→5, 33→4, 34→13).
+**Requirements:** 20 — RESL-NIX-01..03, AIPC-NIX-01, PKGS-01..04, AAH-01, NTH-01..03, AAHX-01..03, AUDC-01..03, WRU-01..02. Closed: 15 substantively (12 direct + 3 transitive via 27.1+27.2). Host-blocked carry-forward to v2.4: 5 (REQ-RESL-NIX-01..03 + REQ-PKGS-01 + REQ-PKGS-04).
+
+**Stats:**
+- 422 commits since `v2.2` tag (~13 days, 2026-04-29 → 2026-05-12).
+- 369 files changed; +91,624 / −5,506 LOC across code + docs + planning artifacts.
+- 2 new ADRs (`audit-bundle-target.md`, `upstream-parity-strategy.md`) + 1 new crate (`crates/nono-shell-broker/`).
+
+**Audit verdict at close:** `gaps_found` from `.planning/milestones/v2.3-MILESTONE-AUDIT.md` (audited 2026-05-09T21:15Z; Phase 34 post-audit close 2026-05-12). Gate triggered by institutional artifact gaps (4 phases missing VERIFICATION.md final: 26, 27, 28, 29) + 5 host-blocked requirements + Phase 31 verification = human_needed. Substantively healthy: 14/14 integration points WIRED, 5/5 E2E flows PASS, 12/12 cluster dispositions resolved in Phase 34, 0 D-34-E1 violations across 75 Phase 34 commits, `learn_windows.rs` byte-identity preserved start-to-end. **Acknowledged: proceed close with carry-forwards captured in `.planning/MILESTONE-CONTEXT.md` for v2.4 absorption.**
+
+**Key accomplishments:**
+
+- **Cross-platform RESL design (Phase 25)** — AIPC Unix Futures ADR shipped (`docs/architecture/aipc-unix-futures.md` locks Decision D-NN for 6 HandleKind discriminants — Socket/Pipe admit Unix backends via `SCM_RIGHTS`; JobObject/Event/Mutex Windows-only by design). Plan 25-01 (cgroup v2 + setrlimit RESL backends) plan + CONTEXT committed (`3ed80d38`); execution deferred to v2.4 pending Linux/macOS host coverage.
+- **PKG streaming follow-up (Phase 26)** — REQ-PKGS-02 + REQ-PKGS-03 closed via Plan 26-01 with D-20 manual replay of `58b5a24e` (cherry-pick would have deleted fork's `validate_path_within` — security regression); both validators preserved as belt-and-suspenders. `ArtifactType::Plugin` added as 7th variant. Plan 26-02 (PKGS-01 streaming + PKGS-04 auto-pull) deferred to v2.4.
+- **Audit-attestation hardening (Phases 27 + 27.1 + 27.2)** — `NONO_TEST_HOME` seam at `crates/nono-cli/src/config/mod.rs::nono_home_dir()` unblocks Windows-host integration tests. Audit-loader swap from `rollback_session::load_session` → `audit_session::load_session` for audit-only sessions. `audit-bundle-target.md` ADR (Option A: always at `<audit_root>/<id>/audit-attestation.bundle`) supersedes Plan 22-05a Decision 5. Both `#[ignore]` attributes removed from `audit_attestation.rs`. REQ-AAH-01 transitively closed.
+- **Authenticode chain-walker (Phase 28)** — `WTHelperProvDataFromStateData` → `WTHelperGetProvSignerFromChain` → `CertGetNameStringW(CERT_X500_NAME_STR)` + `CertGetCertificateContextProperty(CERT_HASH_PROP_ID)` replaces v2.2 Plan 22-05b Decision 4 `<unknown>` sentinel. Fail-closed `?` propagation on chain-walk failure when `WinVerifyTrust=Valid`. 11 SAFETY blocks; D-19/D-21 invariants hold.
+- **WR-01 reject-stage unification (Phase 29)** — Locked-as-design (Option c): mask-gate vs broker-failure-flip is O(1) profile lookup vs O(syscall) post-approval; asymmetry is structural. All 5 `wr01_*` regression tests preserved as guards on the locked matrix.
+- **Windows broker pattern productionized (Phases 30 + 31, SHELL-01)** — Phase 30 surfaced CSRSS console-subsystem ALPC denial at Low-IL via ProcMon. Phase 30 postscript broker-PoC (`260508-m99`) validated RESEARCH A1 same day. Phase 31 productionized into `crates/nono-shell-broker/`: Medium-IL broker self-degrades, spawns Low-IL shell child via `CreateProcessAsUserW(dwCreationFlags=EXTENDED_STARTUPINFO_PRESENT)`. Authenticode chain-walker records consistent signer for `nono.exe` + `broker.exe`. SHELL-01 → ✔ validated (was v3.0-deferred).
+- **Sigstore integration (Phase 32)** — TUF cached-root rewrite at `crates/nono/src/trust/bundle.rs::load_production_trusted_root` (verify-is-offline invariant: zero httpmock hits during keyless verify). `nono setup --refresh-trust-root` per-user no-admin cache. `nono trust verify --keyless` requires mandatory `--issuer` + `--identity` (regex via `regress` post-`extract_signer_identity`). Phase 31 broker trust loop closed via Phase 28 chain-walker self-introspection at BrokerLaunch dispatch. 16 D-32-* decisions; 2 ADRs (`broker-trust-anchor.md`, `sigstore-tuf-cache.md`).
+- **Upstream v0.40.1..v0.52.0 audit (Phase 33)** — DIVERGENCE-LEDGER.md inventory of 12 themed clusters / 97 commits (8 will-sync + 2 fork-preserve + 2 won't-sync). Strategic ADR `upstream-parity-strategy.md` (Option A `continue` accepted; 3 options × 5 criteria L/M/H scoring). G-25-DRIFT-01 RESL-rename hypothesis empirically disproved (ZERO matching commits in v0.40.1..v0.52.0).
+- **Upstream v0.41–v0.52 sync execution (Phase 34, UPST3)** — 13 plans / ~75 commits / 12 cluster dispositions resolved. 2 mid-flight plan splits (34-04 → 34-04b canonical-schema D-20 restructure; 34-08 → 34-08a/b env-surface partial-port discovery). 4 D-20 manual-replay plans absorbed upstream's heavily-diverged surface without deleting fork-only Windows wiring. `learn_windows.rs` byte-identity preserved across the full chain. 13 deferred items tracked (10 NEEDS-FOLLOW-UP-PLAN + 3 ACCEPTED-PERMANENT). `34-PHASE-OUTCOMES.md` documents C1 (PTY) + C3 (Unix-socket) won't-sync addendum.
+- **windows-squash → main merged** — fast-forwarded at commit `1ef30c63` mid-milestone (per quick-260428-rsu PR-583 maintainer response).
+
+**Known deferred items at close:** Captured in `.planning/MILESTONE-CONTEXT.md` for v2.4 absorption — Theme 1 (10 Phase 34 partial-port deferrals), Theme 2 (Plans 25-01 RESL Unix + 26-02 PKGS streaming/auto-pull, host-blocked), Theme 3 (UPST4 for upstream v0.52.1 / v0.52.2 / v0.53.0 ingestion).
+
+Full details: `.planning/milestones/v2.3-ROADMAP.md` + `.planning/milestones/v2.3-REQUIREMENTS.md` + `.planning/milestones/v2.3-MILESTONE-AUDIT.md`.
+
+---
+
 ## v2.2 — Windows/macOS Parity Sweep
 
 **Status:** ✅ SHIPPED 2026-04-29

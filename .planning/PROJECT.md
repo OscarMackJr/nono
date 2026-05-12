@@ -2,36 +2,32 @@
 
 ## Current State
 
-**Shipped:** v2.2 — Windows/macOS Parity Sweep (2026-04-29, tag `v2.2`).
+**Shipped:** v2.3 — Linux POC Unblock + Deferreds Closure (2026-05-12, tag `v2.3`).
 
-v2.2 closed the Windows-vs-macOS drift opened by upstream `always-further/nono` shipping v0.38.0–v0.40.1 without Windows ports: profile struct alignment with `unsafe_macos_seatbelt_rules` / `packs` / `command_args` / `custom_credentials.oauth2` fields and the `claude-no-keychain` builtin; policy tightening with orphan-`override_deny` fail-closed and `--rollback`/`--no-audit` mutex; `nono pull/remove/update/search/list` flat-shape package subcommand tree on Windows; OAuth2 client-credentials Bearer-token injection in `nono-proxy` with reverse-proxy HTTP upstream loopback-only gating; hash-chained Merkle-rooted audit ledger with cryptographic DSSE attestation, Windows Authenticode exec-identity discriminant, AIPC broker emissions with WR-01 reject-stage discriminator on the wire, and `prune` → `session cleanup` rename preserving v2.1 CLEAN-04 invariants byte-identically; and parity-drift prevention via `make check-upstream-drift` twin scripts + GSD upstream-sync template. 21 v2.2 requirements closed (19 fully + 2 complete-partial: PKG-01 streaming and AUD-03 Authenticode chain-walker subject extraction pulled into v2.3).
+v2.3 closed the Linux POC credibility gap with the Cross-Platform RESL design (Phase 25; AIPC Unix Futures ADR shipped; cgroup v2 + setrlimit RESL backends host-blocked carry-forward), shipped v2.2's deferred items (PKG streaming validators via Phase 26 Plan 26-01 with D-20 manual replay protecting `validate_path_within`; audit-attestation REQ-AAH-01 closed transitively via Phase 27.1 `NONO_TEST_HOME` seam + Phase 27.2 audit-loader + bundle-target ADR; Authenticode chain-walker subject extraction in Phase 28 with `WTHelperGetProvSignerFromChain` → `CertGetNameStringW` populating subject + thumbprint on Valid signatures), locked the WR-01 reject-stage asymmetry as permanent design property (Phase 29 Option c), productionized the Windows broker pattern (Phase 30 surfaced CSRSS console-subsystem ALPC denial via ProcMon → Phase 31 productionized `crates/nono-shell-broker/` Medium-IL broker with `CreateProcessAsUserW(EXTENDED_STARTUPINFO_PRESENT)` Low-IL child spawn — SHELL-01 → ✔ validated, was v3.0-deferred), hardened Sigstore integration (Phase 32; TUF cached-root + keyless `--issuer`/`--identity` regex + broker self-trust-anchor via Phase 28 chain-walker self-introspection), and absorbed upstream v0.37–v0.52 cross-platform parity work (Phase 33 audit produced DIVERGENCE-LEDGER + parity-strategy ADR with Option A `continue` accepted; Phase 34 UPST3 executed 13 plans / ~75 commits across 12 cluster dispositions). 15/20 v2.3 requirements closed substantively; 5 host-blocked carry-forwards to v2.4 (REQ-RESL-NIX-01..03 + REQ-PKGS-01 + REQ-PKGS-04). `windows-squash` → `main` merged mid-milestone at commit `1ef30c63`. 422 commits since `v2.2`.
 
-## Current Milestone: v2.3 Linux POC Unblock + Deferreds Closure
+## Current Milestone: v2.4 (TBD — pending `/gsd-new-milestone`)
 
-**Goal:** A Linux user running fork-Linux-build sees real enforcement (not silent no-ops) for `--memory` / `--cpu-percent` / `--timeout` / `--max-processes`, and v2.2's deferred items (PKG streaming, audit-attestation hardening, Authenticode chain-walker) ship as production-ready surfaces.
+**Scope preview (captured in `.planning/MILESTONE-CONTEXT.md`):**
 
-**Trigger:** Linux POC gap analysis at `.planning/quick/260429-gap-v039-linux-poc-vs-windows-fork-tip/PLAN.md` (2026-04-29) showed RESL flags emit "not enforced on linux" warnings — credibility issue for the demo. v2.3 closes those + lands the WR-01 product decision deferred since v2.1.
+Three themes selected at v2.3 close:
+1. **Complete the partial upstream ports** — 10 P34-DEFER-* items (deprecated_schema module port, profile drafts, yaml_merge wiring, Windows env-filter wiring, ExecConfig refactor, Linux Landlock profiles-dir, wiring.rs abstraction, Windows test-harness hygiene). ~8-12 weeks if all absorbed.
+2. **Execute v2.3 host-blocked carry-forwards** — Plan 25-01 RESL Unix backends (cgroup v2 + setrlimit) + Plan 26-02 PKGS-01 streaming + PKGS-04 auto-pull + Phase 27 REQ-AAH-01 closure on host. Requires Linux/macOS host coverage.
+3. **UPST4 — upstream v0.52.1 / v0.52.2 / v0.53.0 ingestion** — Phase 33 ADR's "per upstream release, lazily-evaluated" cadence rule fires.
 
-**Phases:** 5 (Phases 25–29). 14 requirements across RESL-NIX / AIPC-NIX / PKGS / AAH / AUDC / WRU.
+**Trigger:** Phase 34 VERIFICATION.md strategic recommendation (NEEDS-FOLLOW-UP-PLAN deferrals exceed in-phase absorption budget); v2.3 audit's host-blocked requirements; upstream cadence rule.
 
-**Target features:**
-- **Cross-platform RESL Unix backends (Phase 25 Plan 25-01)** — Linux cgroup v2 (`memory.max` / `cpu.max` / `pids.max` / `cgroup.kill`) + macOS `setrlimit` (`RLIMIT_AS` / `RLIMIT_NPROC`; CPU-percent fail-closed unsupported on macOS). Removes the four "not enforced" stderr warnings.
-- **AIPC Unix futures ADR (Phase 25 Plan 25-02)** — design-only document deciding which 5 AIPC HandleKinds admit Unix backends. Socket/Pipe via `SCM_RIGHTS`; JobObject/Event/Mutex Windows-only by design.
-- **PKG streaming follow-up (Phase 26)** — port upstream `58b5a24e` (`validate_relative_path`) + `9ebad89a` (streaming refactor) + `115b5cfa` (`load_registry_profile` auto-pull); add `ArtifactType::Plugin` enum variant + `bundle_json` field; resolve fork's `validate_path_within` belt-and-suspenders decision.
-- **Audit-attestation hardening (Phase 27)** — re-enable 2 `#[ignore]`'d fixture-driven tests via Rule-4 architectural decision (sigstore-rs upgrade vs fork-internal pkcs8 parser). Required before publishing v2.2 attestation as production-ready.
-- **Authenticode chain-walker subject extraction (Phase 28)** — add `Win32_Security_Cryptography_Catalog` + `Win32_Security_Cryptography_Sip` features to `windows-sys`; implement `parse_signer_subject` + `parse_thumbprint`; upgrade AUD-03 acceptance to require populated subject + non-empty thumbprint on Valid signature.
-- **WR-01 reject-stage unification (Phase 29)** — ✓ closed via Phase 29 Plan 29-01 (locked design property — Option c). Mask-gate kinds (Event/Mutex/JobObject) reject BeforePrompt; broker-failure-flip kinds (Pipe/Socket) reject AfterPrompt by structural necessity (O(1) profile lookup vs O(syscall) post-approval). Existing `wr01_*` regression tests preserved as guards on the locked matrix; Phase 23 `RejectStage` wire shape unchanged.
+**Out of scope (explicit deferrals to v2.5 or later):**
+- v2.5-FU-1 (audit-bundle shim removal) + v2.5-FU-2 (cmd_verify v2 JSON schema) — Phase 27.2 deferrals tracked in `deferred-items.md`.
+- WR-02 EDR HUMAN-UAT — v3.0-deferred pending EDR-instrumented runner.
+- AIPC G-04 wire-protocol compile-time tightening — v3.0 or later.
 
-**Out of scope (explicit deferrals to v2.4):**
-- **Upstream v0.41–v0.43 ingestion** — DRIFT-01/02 tooling stays warm; first real load deferred one cycle to keep v2.3 shippable in 2 weeks.
-- **AIPC G-04 wire-protocol compile-time tightening** — cascades into 23 pre-existing tests + child SDK demultiplexer; too large for v2.3.
-- **`windows-squash` → `main` merge** — gated on PR-583 maintainer response per quick-260428-rsu; cannot be pulled into v2.3 until that gate moves.
-- **Cross-platform drift QA** + **Docs pass** — bundle into v2.4 with the v0.41+ ingestion.
-- **WR-02 EDR HUMAN-UAT item** — v3.0-deferred pending EDR-instrumented runner.
+**Action required:** Run `/gsd-new-milestone` to formalize v2.4 with the scope preview as input.
 
 <details>
 <summary>Previously Shipped</summary>
 
+- **v2.3 Linux POC Unblock + Deferreds Closure** (2026-05-12, tag `v2.3`) — 12 phases (25–34 incl. 27.1, 27.2), 51 plans, 15/20 requirements closed (5 host-blocked carry-forward to v2.4). 422 commits since `v2.2`. SHELL-01 broker pattern → ✔ validated; Phase 34 UPST3 absorbed upstream v0.41–v0.52 cross-platform parity work.
 - **v2.2 Windows/macOS Parity Sweep** (2026-04-29, tag `v2.2`) — 3 phases (22–24), 9 plans, 21 requirements (PROF, POLY, PKG, OAUTH, AUD, DRIFT). 146 commits since `v2.1`.
 - **v2.1 Resource Limits, Extended IPC, Attach-Streaming & Cleanup** (2026-04-21, tag `v2.1`) — 7 phases (16–21 + 18.1), 25 plans, 13 requirements (RESL, AIPC, ATCH, CLEAN, UPST, WSFG).
 - **v2.0 Windows Gap Closure** (2026-04-18, tag `v2.0`; closed 2026-04-18 with Phase 15) — 7 Windows feature gaps closed (`nono wrap`, session commands, ConPTY shell, port-level WFP, proxy credential injection, ETW `learn`, runtime capability expansion stretch). Phase 15 closed the detached-console-grandchild `0xC0000142` carry-forward via direction-b fix (gated PTY-disable + null-token + AppID WFP on detached path only).
