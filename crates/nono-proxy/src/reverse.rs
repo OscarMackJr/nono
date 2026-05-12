@@ -102,6 +102,11 @@ pub async fn handle_reverse_proxy(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(&service),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
+                ..Default::default()
+            },
             &service,
             0,
             &reason,
@@ -131,6 +136,15 @@ pub async fn handle_reverse_proxy(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(&service),
+                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                    managed_credential_active: Some(true),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                    ),
+                    ..Default::default()
+                },
                 &service,
                 0,
                 &e.to_string(),
@@ -146,6 +160,16 @@ pub async fn handle_reverse_proxy(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(&service),
+                    auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                    managed_credential_active: Some(false),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                    ),
+                    ..Default::default()
+                },
                 &service,
                 0,
                 &e.to_string(),
@@ -190,6 +214,11 @@ pub async fn handle_reverse_proxy(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(&service),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+                ..Default::default()
+            },
             &service,
             0,
             &reason,
@@ -248,6 +277,13 @@ pub async fn handle_reverse_proxy(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(&service),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
+                    ),
+                    ..Default::default()
+                },
                 &service,
                 0,
                 &e.to_string(),

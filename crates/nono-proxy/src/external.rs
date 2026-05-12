@@ -113,7 +113,14 @@ pub async fn handle_external_proxy(
     let check = filter.check_host(&host, port).await?;
     if !check.result.is_allowed() {
         let reason = check.result.reason();
-        audit::log_denied(audit_log, audit::ProxyMode::External, &host, port, &reason);
+        audit::log_denied(
+            audit_log,
+            audit::ProxyMode::External,
+            &audit::EventContext::default(),
+            &host,
+            port,
+            &reason,
+        );
         send_response(stream, 403, &format!("Forbidden: {}", reason)).await?;
         return Err(ProxyError::HostDenied { host, reason });
     }
@@ -173,6 +180,7 @@ pub async fn handle_external_proxy(
         audit::log_denied(
             audit_log,
             audit::ProxyMode::External,
+            &audit::EventContext::default(),
             &host,
             port,
             &format!("external proxy rejected with status {}", status),
@@ -208,6 +216,7 @@ pub async fn handle_external_proxy(
     audit::log_allowed(
         audit_log,
         audit::ProxyMode::External,
+        &audit::EventContext::default(),
         &host,
         port,
         "CONNECT",

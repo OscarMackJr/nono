@@ -460,6 +460,12 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                     audit::log_denied(
                         Some(&state.audit_log),
                         audit::ProxyMode::Connect,
+                        &audit::EventContext {
+                            denial_category: Some(
+                                nono::undo::NetworkAuditDenialCategory::ConnectBypassesL7,
+                            ),
+                            ..Default::default()
+                        },
                         host,
                         port,
                         "route upstream: CONNECT bypasses L7 filtering",

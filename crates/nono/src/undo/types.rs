@@ -191,6 +191,61 @@ pub enum NetworkAuditDecision {
     Deny,
 }
 
+/// Authentication mechanism used at the proxy boundary.
+///
+/// Structured context added by upstream `9300de9` (v0.51.0). Fork-side D-20
+/// manual replay against the Phase 22-05a + Phase 23 REQ-AUD-05 audit envelope:
+/// extending `NetworkAuditEvent` with optional structured-context fields is
+/// additive — the integrity-protection / merkle / chain-head invariants on the
+/// envelope are unchanged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkAuditAuthMechanism {
+    /// `Proxy-Authorization` on CONNECT or reverse-proxy fallback auth
+    ProxyAuthorization,
+    /// Phantom token carried in an HTTP header
+    PhantomHeader,
+    /// Phantom token carried in the URL path
+    PhantomPath,
+    /// Phantom token carried in a query parameter
+    PhantomQuery,
+}
+
+/// Outcome of proxy-side authentication or phantom-token validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkAuditAuthOutcome {
+    /// Validation succeeded
+    Succeeded,
+    /// Validation failed
+    Failed,
+}
+
+/// Injection mode used when the proxy supplies an upstream credential.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkAuditInjectionMode {
+    Header,
+    UrlPath,
+    QueryParam,
+    BasicAuth,
+    OAuth2,
+}
+
+/// Structured category for denied proxy events.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkAuditDenialCategory {
+    AuthenticationFailed,
+    EndpointPolicy,
+    ManagedCredentialUnavailable,
+    HostDenied,
+    InterceptHandshakeFailed,
+    UpstreamConnectFailed,
+    ConnectBypassesL7,
+    ExternalProxyRejected,
+}
+
 /// A single network audit event captured by the proxy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkAuditEvent {
@@ -200,6 +255,26 @@ pub struct NetworkAuditEvent {
     pub mode: NetworkAuditMode,
     /// Allow or deny decision
     pub decision: NetworkAuditDecision,
+    /// Stable configured route identifier when the request was associated
+    /// with a proxy route (for example, `openai`); None for opaque traffic
+    /// with no route identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_id: Option<String>,
+    /// Authentication mechanism used at the proxy boundary, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_mechanism: Option<NetworkAuditAuthMechanism>,
+    /// Outcome of proxy-side authentication or phantom-token validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_outcome: Option<NetworkAuditAuthOutcome>,
+    /// Whether a proxy-managed upstream credential was active for the route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_credential_active: Option<bool>,
+    /// Proxy-side injection mode when a managed upstream credential was active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub injection_mode: Option<NetworkAuditInjectionMode>,
+    /// Structured denial category when the request was denied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub denial_category: Option<NetworkAuditDenialCategory>,
     /// Hostname or logical service target (for reverse proxy events)
     pub target: String,
     /// Port when available (CONNECT/external), otherwise None
