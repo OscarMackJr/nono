@@ -300,3 +300,103 @@ manual-replay follow-up plan.
 incremental cost.
 
 **Tracking:** Plan 34-08b SUMMARY commit 4/5 records this deferral.
+
+---
+
+## P34-DEFER-09-1: Linux Landlock profiles-dir pre-creation hunk (from upstream bdf183e9)
+
+**Source:** Upstream nono v0.44.0 commit `bdf183e9 fix(package): harden re-pulls against user edits`.
+
+**What:** Upstream's commit ends with a Landlock-specific 15-line hunk in
+`crates/nono-cli/src/profile_runtime.rs` that pre-creates
+`~/.config/nono/profiles` before the Landlock sandbox is built. The rationale
+is that Landlock requires the parent directory to exist for `mkdir`
+operations even when the child path is explicitly granted write permissions
+in `filesystem.allow`.
+
+**Plan 34-09 disposition:** Skip. Out of scope for Plan 34-09's documented C6
+cluster (pack migration). D-34-E1's inverse — no Linux-only sandbox-init
+wiring outside the plan's documented cluster scope.
+
+**Plan 34-09 rationale:** The vast bulk of bdf183e9 (188/239 lines) lives in
+upstream-only `crates/nono-cli/src/wiring.rs`, which the fork does not carry
+(see P34-DEFER-09-2 below). The Landlock hunk is a small standalone
+improvement that should be picked up by a focused Linux sandbox-init plan,
+not absorbed sideways through a pack-migration plan.
+
+**Why deferred:** No fork user is currently blocked. The fork already grants
+`~/.config/nono/profiles` write permission in its default profile; the
+upstream hardening prevents a latent edge case where the parent directory
+doesn't exist yet (clean install, first run).
+
+**Estimated scope:** 1-day Linux-only sandbox-init plan, deferable to
+post-Phase-34 cleanup.
+
+---
+
+## P34-DEFER-09-2: Upstream wiring.rs abstraction (idempotent JSON-merge install records)
+
+**Source:** Upstream nono v0.44.0 commits `24d8b924`, `d05672d5`, `bdf183e9`,
+`a05fdc57`. Together these introduce and harden a ~1102-line
+`crates/nono-cli/src/wiring.rs` module that implements:
+
+- `WriteFile` / `JsonMerge` / `JsonArrayAppend` install directives.
+- SHA-256-keyed install records (lockfile v3+v4).
+- Strict overwrite policy: refuse to overwrite existing files that were not
+  previously written by the same package; allow idempotent re-pulls verified
+  by SHA-256.
+- Idempotent reversal (`prior_value` capture, gracefully-handle removed
+  directives, hash-match-before-remove for JsonArrayAppend).
+- `--force` flag on `nono remove` for failure-tolerant uninstall.
+
+**Plan 34-09 disposition:** Not replayed. The fork's package system has
+fundamentally different shape — `crates/nono-cli/src/package.rs` (368 lines)
++ `package_cmd.rs` (with Phase 18.1-03 Windows widening + 9
+validate_path_within callsites) + `hooks.rs` (centralized installer). A
+structural port of wiring.rs would either delete fork-only retention items
+(violating D-34-B1 + multiple catalog entries) or require ~2-3 weeks of
+careful integration work to braid the two abstractions together.
+
+**Plan 34-09 rationale:** Per the catalog entries "Hooks subsystem ownership"
+and "validate_path_within defense-in-depth retention" in
+`.planning/templates/upstream-sync-quick.md`, the fork explicitly preserves
+the current package system. The wiring.rs benefits (SHA-256 install records,
+idempotent reversal, strict overwrite) are HIGH-VALUE but require a focused
+fork-preserve-with-integration plan, not a sideways cherry-pick.
+
+**Why deferred:** No fork user is currently blocked. Phase 22-03 PKG-04 +
+Phase 26-01 PKGS-02 give defense-in-depth at the path-validation layer; the
+hash-keyed install record is additive, not replacement.
+
+**Estimated scope:** 2-3 week D-20 manual-replay plan (post-Phase-34); would
+absorb 24d8b924 + d05672d5 + bdf183e9 + a05fdc57 intent at that point.
+
+**Tracking:** Plan 34-09 SUMMARY commit (sha d66dc02c) records this deferral.
+
+---
+
+## P34-DEFER-09-3 (carry-forward, not new): Windows query_ext UNC path test flake
+
+**Source:** `crates/nono-cli/src/query_ext.rs::tests::test_query_path_denied`.
+
+**Symptom:** Test asserts `Some("--read /some/random")` but receives
+`Some("--read \\?\C:\some\random")` when run on a Windows host. Pre-existing
+at Plan 34-09 baseline HEAD (`61703a4e`) — independently confirmed by checking
+out `query_ext.rs` from baseline and re-running the test (same failure).
+
+**Plan 34-09 disposition:** Pre-existing flake; not a NEW failure caused by
+Plan 34-09 (which only touched `package.rs` doc comment +
+`profile_save_runtime.rs` env var). Tracked here as a carry-forward, NOT a
+new deferral.
+
+**Why this isn't a Gate 1 STOP:** Per orchestrator prompt
+("P34-DEFER-01-1 + AIPC-SDK env-leak flake carry-forward acceptable; NEW
+failures trip STOP"), pre-existing Windows-host flakes do not block plan
+close. This failure has the same shape as `test_query_path_denied` would
+have at any v2.3-era HEAD on Windows.
+
+**Estimated scope:** 1-day Windows-host test fix (strip UNC prefix in the
+test's expected-value normalization, similar to fix
+`400f8c90 fix(19-CLEAN-02): strip UNC prefix in query_path sensitive-path
+check (Windows)` which fixed the production-code analog of the same issue).
+Deferable to post-Phase-34 cleanup.

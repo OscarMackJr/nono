@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.3
 milestone_name: Linux POC Unblock + Deferreds Closure
 status: executing
-last_updated: "2026-05-12T13:12:09.088Z"
+last_updated: "2026-05-12T14:43:08.136Z"
 last_activity: 2026-05-12
 progress:
   total_phases: 8

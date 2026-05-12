@@ -453,7 +453,7 @@ Plans:
 - [x] 34-08b-LEARN-DEPRECATION-PLAN.md — Plan 34-08b (C12-non-env: 5 non-env-touching cherry-picks from v0.52 — 5 commits landed with D-34-A2 escalation scope-trim; D-34-B2 surgical posture preserved (`learn_windows.rs` byte-identical, fork-version invariant `0.37.1`); gates 1/2/5 PASS; 3/4 deferred-to-CI; P34-DEFER-08b-1 + P34-DEFER-08b-2 recorded. **Wave 2 complete.**)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 34-09-FP-PACKS-PLAN.md — Plan 34-09 (C6 v0.44 pack migration D-20 manual replay; `autonomous: false`)
+- [x] 34-09-FP-PACKS-PLAN.md — Plan 34-09 (C6 v0.44 pack migration D-20 manual replay; complete 2026-05-12; 2 manual-replay commits + 1 summary commit; 4/6 upstream commits skipped per structural-divergence rationale; P34-DEFER-09-1/2/3 tracked)
 - [ ] 34-10-FP-PROXY-TLS-PLAN.md — Plan 34-10 (C11 v0.51 proxy TLS + audit-context D-20 manual replay; produces 34-PHASE-OUTCOMES.md addendum for C1+C3 won't-sync; `autonomous: false`)
 
 **Cross-cutting constraints:**
