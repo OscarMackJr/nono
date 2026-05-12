@@ -75,19 +75,18 @@ pub(super) fn should_skip_env_var(
         || is_dangerous_env_var(key)
 }
 
-/// Returns true if an environment variable matches the allow-list.
+/// Returns true if `key` matches any pattern in `patterns`.
 ///
 /// Supports exact names (`"PATH"`) and prefix patterns ending with `*`
 /// (`"AWS_*"` matches `AWS_REGION`, `AWS_SECRET_ACCESS_KEY`, etc.).
 /// A bare `"*"` matches everything. The `*` wildcard is only valid as a
-/// trailing suffix — patterns like `"A*B"` or `"*X"` are rejected.
+/// trailing suffix — patterns like `"A*B"` or `"*X"` are skipped.
 ///
-/// Ported from upstream v0.37.0 `1b412a7` per Plan 34-08a Task 3 (D-20
-/// manual replay). Phase 20-03 commit `b4762e63` ported only the CLI
-/// flag-parsing slice; this is part of the deferred surface.
-#[allow(dead_code)] // Windows execution path uses exec_strategy_windows; allow-list wiring there ships separately.
-pub(crate) fn is_env_var_allowed(key: &str, allowed_env_vars: &[String]) -> bool {
-    for pattern in allowed_env_vars {
+/// Extracted from `is_env_var_allowed` per upstream v0.52.0 `a022e5c7`
+/// (Plan 34-08a Task 6) so both `is_env_var_allowed` and `is_env_var_denied`
+/// independently delegate to it, avoiding direct coupling.
+fn matches_env_var_patterns(key: &str, patterns: &[String]) -> bool {
+    for pattern in patterns {
         if let Some(prefix) = pattern.strip_suffix('*') {
             if prefix.contains('*') {
                 continue;
@@ -100,6 +99,20 @@ pub(crate) fn is_env_var_allowed(key: &str, allowed_env_vars: &[String]) -> bool
         }
     }
     false
+}
+
+/// Returns true if an environment variable matches the allow-list.
+///
+/// Supports exact names (`"PATH"`) and prefix patterns ending with `*`
+/// (`"AWS_*"` matches `AWS_REGION`, `AWS_SECRET_ACCESS_KEY`, etc.).
+/// A bare `"*"` matches everything.
+///
+/// Ported from upstream v0.37.0 `1b412a7` per Plan 34-08a Task 3 (D-20
+/// manual replay). Refactored to delegate to `matches_env_var_patterns`
+/// per upstream v0.52.0 `a022e5c7` (Plan 34-08a Task 6).
+#[allow(dead_code)] // Windows execution path uses exec_strategy_windows; allow-list wiring there ships separately.
+pub(crate) fn is_env_var_allowed(key: &str, allowed_env_vars: &[String]) -> bool {
+    matches_env_var_patterns(key, allowed_env_vars)
 }
 
 /// Validates that all env var patterns use `*` only as a trailing suffix.
@@ -134,10 +147,12 @@ pub(crate) fn validate_env_var_patterns(patterns: &[String], field_name: &str) -
 /// trailing-`*` prefix patterns.
 ///
 /// Ported from upstream v0.52.0 `3657c935` per Plan 34-08a Task 4
-/// (D-20 manual-replay-by-escalation).
+/// (D-20 manual-replay-by-escalation). Refactored to delegate directly to
+/// `matches_env_var_patterns` (avoiding coupling to `is_env_var_allowed`)
+/// per upstream v0.52.0 `a022e5c7` (Plan 34-08a Task 6).
 #[allow(dead_code)] // Windows execution path uses exec_strategy_windows; deny-list wiring there ships separately.
 pub(crate) fn is_env_var_denied(key: &str, denied_env_vars: &[String]) -> bool {
-    is_env_var_allowed(key, denied_env_vars)
+    matches_env_var_patterns(key, denied_env_vars)
 }
 
 #[cfg(test)]
