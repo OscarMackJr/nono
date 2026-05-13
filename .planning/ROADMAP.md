@@ -108,7 +108,7 @@ Full details: `.planning/milestones/v2.3-ROADMAP.md`.
 
 - [x] **Phase 35: UPST3-closure quick wins** — REQ-PORT-CLOSURE-01 (Windows env-filter wiring; P34-DEFER-08a-1) + REQ-PORT-CLOSURE-06 (Linux Landlock profiles-dir; P34-DEFER-09-1) + REQ-PORT-CLOSURE-07 (Windows test-harness hygiene; P34-DEFER-01-1 + 10-1) + half of REQ-PORT-CLOSURE-05 (escape-quote pipeline; P34-DEFER-08b-2 depends on 08b-1 ordering). ~2 weeks. Quick wins to keep deferral count down while Phase 36 absorbs the heavy items.
  (completed 2026-05-12)
-- [ ] **Phase 36: UPST3 deep closure** — REQ-PORT-CLOSURE-02 (full deprecated_schema module port; P34-DEFER-04b-1) + REQ-PORT-CLOSURE-04 (yaml_merge wiring trio + wiring.rs base; P34-DEFER-06-1 + 09-2) + remainder of REQ-PORT-CLOSURE-05 (b5f0a3ab deep ExecConfig refactor; P34-DEFER-08b-1). ~4-6 weeks.
+- [x] **Phase 36: UPST3 deep closure** — REQ-PORT-CLOSURE-02 (full deprecated_schema module port; P34-DEFER-04b-1) + REQ-PORT-CLOSURE-04 (yaml_merge wiring trio + wiring.rs base; P34-DEFER-06-1 + 09-2) + remainder of REQ-PORT-CLOSURE-05 (b5f0a3ab deep ExecConfig refactor; P34-DEFER-08b-1). ~4-6 weeks. (completed 2026-05-13)
 - [ ] **Phase 36.5: Profile drafts feature absorption (optional)** — REQ-PORT-CLOSURE-03 (upstream 829c341a `nono profile promote` + `--draft` + package_status.rs + profile-drafts directory infrastructure). ~1 week. Planner-discretion split from Phase 36 to keep the deep-closure plan from getting unwieldy.
 - [ ] **Phase 37: v2.3 carry-forward Linux/macOS execution** — REQ-RESL-NIX-01..03 (Plan 25-01 cgroup v2 + setrlimit RESL backends) + REQ-PKGS-01 + REQ-PKGS-04 (Plan 26-02 streaming refactor + auto-pull). Plan + CONTEXT artifacts already committed in v2.3 (`3ed80d38` + `86efcdeb`); execution requires Linux/macOS host. ~2 weeks once host available.
 - [ ] **Phase 38: REQ-AAH-01 native host re-validation (optional)** — REQ-AAHX-HOST-01. Tactical confirmation pass on Linux/macOS host that the Phase 27 transitive closure (via 27.1 + 27.2) holds without a host-native gap. Skip if field-validation surfaces no gap. ~2-3 days.
@@ -151,12 +151,12 @@ Full details: `.planning/milestones/v2.3-ROADMAP.md`.
 
 **Requirements:** REQ-PORT-CLOSURE-02, REQ-PORT-CLOSURE-04, REQ-PORT-CLOSURE-05. See `.planning/REQUIREMENTS.md`.
 
-**Plans:** 5/6 plans executed
+**Plans:** 6/6 plans complete
 
 - [x] 36-01a-DEPRECATED-SCHEMA-MODULE-PLAN.md — REQ-PORT-CLOSURE-02 foundation (LegacyPolicyPatch + DeprecationCounter + --strict mode; Wave 1)
 - [x] 36-01b-CANONICAL-PROFILE-SECTIONS-PLAN.md — REQ-PORT-CLOSURE-02 (canonical Profile struct sections: commands, filesystem.deny/bypass_protection; Wave 2; depends_on 36-01a)
 - [x] 36-01c-OVERRIDE-DENY-RENAME-PLAN.md — REQ-PORT-CLOSURE-02 (atomic 17-file rename override_deny → bypass_protection, 183 callsites, single commit per D-36-B4; Wave 2; depends_on 36-01b)
-- [ ] 36-01d-PROFILE-DATA-DOCS-TOOLING-PLAN.md — REQ-PORT-CLOSURE-02 closure (built-in profile data + JSON schema + scripts/test-list-aliases.sh + scripts/lint-docs.sh + docs migration + Phase 34 deferred-items closure ledger; Wave 2; depends_on 36-01c)
+- [x] 36-01d-PROFILE-DATA-DOCS-TOOLING-PLAN.md — REQ-PORT-CLOSURE-02 closure (built-in profile data + JSON schema + scripts/test-list-aliases.sh + scripts/lint-docs.sh + docs migration + Phase 34 deferred-items closure ledger; Wave 2; depends_on 36-01c)
 - [x] 36-02-WIRING-YAML-MERGE-PLAN.md — REQ-PORT-CLOSURE-04 (stripped-down wiring.rs: yaml_merge directive + serde_yaml_ng 0.10.0 pin + reversal failure test; acceptance #1 scope-trimmed to v2.5-FU-3 per D-36-C1; Wave 1; depends_on [])
 - [x] 36-03-EXECCFG-SURGICAL-PORT-PLAN.md — REQ-PORT-CLOSURE-05 (b5f0a3ab surgical helpers + bbdf7b85 escape-quote tail; 3 sequenced commits; Commit 3 is the ONLY D-19 cherry-pick in Phase 36 per D-36-D2; fork ExecConfig 17-field shape preserved per D-36-D1; Wave 1; depends_on [])
 
