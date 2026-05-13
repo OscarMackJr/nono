@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.4
 milestone_name: Complete the Partial Ports + UPST4
 status: executing
-last_updated: "2026-05-13T02:00:00.000Z"
+last_updated: "2026-05-13T02:18:48.490Z"
 last_activity: 2026-05-13
 progress:
   total_phases: 7
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State: nono — v2.4 Complete the Partial Ports + UPST4
@@ -26,8 +26,8 @@ See: .planning/PROJECT.md (updated 2026-05-12 at v2.4 milestone start; v2.3 ship
 ## Current Position
 
 Phase: 36 (upst3-deep-closure) — EXECUTING
-Plan: 5 of 6
-Status: Executing (36-01b complete; 36-01c next)
+Plan: 6 of 6
+Status: Ready to execute
 Last activity: 2026-05-13
 
 ## Accumulated Context
@@ -63,6 +63,8 @@ Last activity: 2026-05-13
 - **Phase 12-03 STOP on pre-existing CI failure:** `make ci` fallback surfaced 48 `disallowed_methods` clippy errors in `profile/mod.rs`, `config/mod.rs`, `sandbox_state.rs`. Root-caused to revert `cf5a60a` (2026-04-10), predates Phase 12. Phase 12's own files (`crates/nono/src/sandbox/windows.rs`, `crates/nono-cli/tests/wfp_port_integration.rs`) produce zero clippy diagnostics. Did NOT auto-fix per plan STOP directive (2026-04-11).
 
 ### Key Decisions (v2.4)
+
+- **Phase 36 Plan 36-01c (REQ-PORT-CLOSURE-02) — atomic identifier rename override_deny → bypass_protection (D-36-B4):** Single atomic commit `e168dd6b` across 17 files (187 insertions / 181 deletions). `bypass_protection` is now canonical in all Rust identifiers; `override_deny` legacy accepted indefinitely via `#[serde(default, alias = "override_deny")]` on `PolicyPatchConfig` and `SandboxState` fields, and via `visible_alias = "override-deny"` on the `--bypass-protection` clap flag (D-36-B3). `deprecated_schema.rs` intentionally excluded — its `override_deny` identifiers are the legacy-key detection surface. 5 deviations auto-fixed (serde alias orientation, detection string literals, test fixture JSON strings, schema validation test, compound identifiers). Cross-target clippy skipped (no cross-compilers on Windows host, same skip as 36-01a/b). REQ-PORT-CLOSURE-02 acceptance criterion #5 met; #4/#6 deferred to 36-01d/e. Plan 36 position: 6/6 complete (2026-05-13).
 
 - **Phase 36 Plan 36-01b (REQ-PORT-CLOSURE-02) — canonical Profile sections landed (CommandsConfig + FilesystemConfig.deny/bypass_protection, D-20 manual-replay of f0abd413 v0.47.0):** Plan 36-01b extended `FilesystemConfig` with `deny: Vec<String>` and `bypass_protection: Vec<String>` fields (serde alias `override_deny` → `bypass_protection` per D-36-B3 indefinite acceptance), introduced new `CommandsConfig { allow, deny }` sub-struct (mirroring `CapabilitiesConfig` shape precedent, `#[serde(deny_unknown_fields)]`), added `pub commands: CommandsConfig` to `Profile` and `ProfileDeserialize`, and updated `From<ProfileDeserialize> for Profile` exhaustively. `GroupsConfig` wrapper intentionally skipped — `security.groups: Vec<String>` already correct; Plan 36-01c will handle any rename atomically. 9 new canonical-section serde tests (16 total in `canonical_schema_rename_tests`). Key decisions: (1) bypass_protection alias lives on FilesystemConfig, NOT on PolicyPatchConfig::override_deny (that rename is Plan 36-01c); (2) merge_profiles unions commands.allow + commands.deny lists; (3) policy.rs::ProfileDef::to_raw_profile uses CommandsConfig::default() (no commands policy in built-in profiles yet). Phase 35 Map-shape preserved (19 profile_cmd tests green). Cross-target clippy skipped (no cross-compilers on Windows host, same skip as 36-01a). Commits: `7f7d23a4` (test TDD RED) + `0dec5b5d` (feat GREEN) + `47ab31ae` (chore fmt fix). Plan 36 position: 5/6 complete, Plan 36-01c (183-callsite rename) next (2026-05-13).
 
