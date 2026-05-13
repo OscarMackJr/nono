@@ -67,11 +67,12 @@ pub struct YamlOverlay {
 
 /// Validate that `target` resolves within `profile_dir` after canonicalization.
 ///
-/// Uses `Path::components()` iteration — NOT `str::starts_with` (CLAUDE.md §
-/// Common Footguns #1: `path.starts_with("/home")` matches `/homeevil`).
+/// Uses `Path::starts_with()` — which performs component-based comparison
+/// (NOT `str::starts_with` byte comparison; see CLAUDE.md § Common Footguns
+/// #1: `path.starts_with("/home")` matches `/homeevil`).
 ///
-/// Handles UNC / `\\?\` / drive-letter prefixes by comparing components rather
-/// than byte strings, which is equivalent on all platforms including Windows.
+/// Handles UNC / `\\?\` / drive-letter prefixes by component comparison via
+/// the standard library primitive, equivalent across all platforms.
 ///
 /// # Errors
 ///
@@ -94,21 +95,17 @@ fn validate_target_path(target: &Path, profile_dir: &Path) -> Result<PathBuf> {
                 source: e,
             })?;
 
-    // Defense-in-depth via component iteration: compare each leading component
-    // of the canonical target against the canonical profile_dir.  This is
-    // path-safe: Path::starts_with() on PathBuf uses component comparison, not
-    // byte comparison, which is equivalent to the manual loop below.  We use
-    // the manual loop for explicit clarity and to satisfy the grep acceptance
-    // criterion (`components()` must appear in `validate_target_path`).
-    let dir_components: Vec<_> = canonical_profile_dir.components().collect();
-    let target_components: Vec<_> = canonical.components().collect();
-    if target_components.len() < dir_components.len()
-        || !target_components
-            .iter()
-            .take(dir_components.len())
-            .zip(dir_components.iter())
-            .all(|(a, b)| a == b)
-    {
+    // WR-07 fix (REVIEW.md): use Path::starts_with directly. The previous
+    // manual `components().zip()` loop was documented to "satisfy the grep
+    // acceptance criterion" — but `Path::starts_with()` already uses
+    // component-based comparison (not byte comparison), which is exactly
+    // what we need. The hand-rolled version risked drifting from the
+    // standard library's semantics as `Path` evolves (e.g. Windows
+    // `Prefix` components), and encoded a process check into structural
+    // code. Per CLAUDE.md § Path Handling, prefer the well-tested
+    // standard primitive. The rest of the codebase (policy.rs, query_ext.rs,
+    // protected_paths) uses `starts_with` for the same class of check.
+    if !canonical.starts_with(&canonical_profile_dir) {
         return Err(NonoError::ProfileParse(format!(
             "yaml_merge target '{}' is outside the allowed directory '{}'",
             target.display(),

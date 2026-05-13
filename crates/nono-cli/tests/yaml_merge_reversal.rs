@@ -259,7 +259,7 @@ fn test_yaml_merge_path_traversal_rejected_through_handler() {
 /// upstream-sync-quick.md catalog entry). `profile_cmd.rs` itself currently
 /// has 0 `validate_path_within` callsites (verified pre-Plan-36-02);
 /// Plan 36-02 adds `wiring::apply_yaml_merge` which provides its own
-/// `validate_target_path` (Path::components() + canonicalize).
+/// `validate_target_path` (Path::starts_with + canonicalize per WR-07).
 ///
 /// This test verifies that the yaml_merge path-validation layer is active
 /// by confirming a relative `../` escape within the overlay is rejected.
