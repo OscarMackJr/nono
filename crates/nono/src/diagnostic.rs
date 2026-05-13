@@ -476,8 +476,36 @@ fn extract_structured_string_property(line: &str, key: &str) -> Option<String> {
         return None;
     }
     let after_quote = after_colon.get(quote.len_utf8()..)?;
-    let end = after_quote.find(quote)?;
-    let value = after_quote[..end].trim();
+    let mut value = String::new();
+    let mut escaped = false;
+    let mut found_end = false;
+
+    for ch in after_quote.chars() {
+        if escaped {
+            if ch == quote || ch == '\\' {
+                value.push(ch);
+            } else {
+                value.push('\\');
+                value.push(ch);
+            }
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == quote {
+            found_end = true;
+            break;
+        }
+        value.push(ch);
+    }
+
+    if !found_end {
+        return None;
+    }
+    let value = value.trim();
     if value.is_empty() || value.chars().any(char::is_control) {
         return None;
     }
@@ -3442,5 +3470,37 @@ mod tests {
         let output = formatter.format_footer(42);
 
         assert!(output.contains("Command exited with code 42."));
+    }
+
+    #[test]
+    fn test_analyze_error_output_detects_structured_node_eperm_mkdir_path() {
+        let observation = analyze_error_output(
+            "Error: EPERM: operation not permitted\n  code: 'EPERM',\n  syscall: 'mkdir',\n  path: '/Users/luke/Library/Caches/copilot/pkg'\n",
+            &[],
+            None,
+        );
+        assert_eq!(
+            observation.path_hints,
+            vec![ObservedPathHint {
+                path: PathBuf::from("/Users/luke/Library/Caches/copilot/pkg"),
+                access: AccessMode::Write,
+            }]
+        );
+    }
+
+    #[test]
+    fn test_analyze_error_output_detects_structured_path_with_escaped_quote() {
+        let observation = analyze_error_output(
+            "Error: EPERM: operation not permitted\n  code: 'EPERM',\n  syscall: 'mkdir',\n  path: '/Users/luke/Library/Caches/it\\'s/pkg'\n",
+            &[],
+            None,
+        );
+        assert_eq!(
+            observation.path_hints,
+            vec![ObservedPathHint {
+                path: PathBuf::from("/Users/luke/Library/Caches/it's/pkg"),
+                access: AccessMode::Write,
+            }]
+        );
     }
 }
