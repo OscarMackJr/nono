@@ -71,16 +71,27 @@ Inherit from another profile by name:
 | `capability_elevation`| boolean         | `false`      | Enable runtime capability elevation via seccomp-notify. Linux only. |
 | `wsl2_proxy_policy`  | string          | `"error"`    | WSL2 only. Controls behavior when proxy-only network mode cannot be kernel-enforced. `"error"`: refuse to run (fail-secure). `"insecure_proxy"`: allow degraded execution where credential proxy runs but child is not prevented from bypassing it. See [WSL2 docs](https://nono.sh/docs/cli/internals/wsl2). |
 
+### commands
+
+Canonical section per upstream f0abd413 (v0.47.0). Controls command-level allow/deny overrides:
+
+| Field  | Type            | Description |
+|--------|-----------------|-------------|
+| `allow`| array of string | Commands to allow even when a deny-group would block them. |
+| `deny` | array of string | Commands to deny, extending the deny-group command list. |
+
 ### filesystem
 
-| Field        | Type            | Description |
-|--------------|-----------------|-------------|
-| `allow`      | array of string | Directories with read+write access. |
-| `read`       | array of string | Directories with read-only access. |
-| `write`      | array of string | Directories with write-only access. |
-| `allow_file` | array of string | Single files with read+write access. |
-| `read_file`  | array of string | Single files with read-only access. |
-| `write_file` | array of string | Single files with write-only access. |
+| Field              | Type            | Description |
+|--------------------|-----------------|-------------|
+| `allow`            | array of string | Directories with read+write access. |
+| `read`             | array of string | Directories with read-only access. |
+| `write`            | array of string | Directories with write-only access. |
+| `allow_file`       | array of string | Single files with read+write access. |
+| `read_file`        | array of string | Single files with read-only access. |
+| `write_file`       | array of string | Single files with write-only access. |
+| `deny`             | array of string | Paths to deny access to. Applied after `allow` grants so deny takes precedence. Canonical section per upstream f0abd413 (v0.47.0). |
+| `bypass_protection`| array of string | Paths to exempt from deny groups when paired with an explicit grant. Canonical key since v0.47.0 (upstream f0abd413). Legacy key `override_deny` accepted indefinitely via serde alias per D-36-B3. |
 
 All path fields support variable expansion (see Section 6).
 
@@ -102,7 +113,7 @@ Provides subtractive and additive composition on top of inherited groups and fil
 | `add_allow_readwrite`| array of string | Additional read+write path grants. |
 | `add_deny_access`    | array of string | Additional deny paths. |
 | `add_deny_commands`  | array of string | Command names (basename only) to block. Blocks execution of the named binaries regardless of where they are installed. Checked before the sandbox enforces filesystem rules. |
-| `override_deny`      | array of string | Paths to exempt from deny groups. Each path must also be granted via `filesystem` or `add_allow_*`. Does not implicitly grant access; only removes the deny rule. |
+| `bypass_protection`  | array of string | Paths to exempt from deny groups. Each path must also be granted via `filesystem` or `add_allow_*`. Does not implicitly grant access; only removes the deny rule. Canonical key since v0.47.0 (upstream f0abd413). Legacy key `override_deny` accepted indefinitely via serde alias per D-36-B3. |
 
 ### network
 
@@ -290,7 +301,7 @@ On Linux, the built-in `default` profile keeps host runtime, sysfs, and shared t
 
 ### Profile with deny overrides
 
-When a deny group blocks a path you need access to, use `override_deny` together with an explicit grant:
+When a deny group blocks a path you need access to, use `bypass_protection` together with an explicit grant:
 
 ```json
 {
@@ -306,7 +317,7 @@ When a deny group blocks a path you need access to, use `override_deny` together
     "read_file": ["$HOME/.bashrc", "$HOME/.zshrc"]
   },
   "policy": {
-    "override_deny": ["$HOME/.bashrc", "$HOME/.zshrc"]
+    "bypass_protection": ["$HOME/.bashrc", "$HOME/.zshrc"]
   }
 }
 ```
@@ -447,7 +458,7 @@ nono profile diff <a> <b>         # Compare two profiles
 
 ## 6. Variable Expansion
 
-The following variables are expanded in all path fields (`filesystem.*`, `policy.add_allow_*`, `policy.add_deny_access`, `policy.override_deny`).
+The following variables are expanded in all path fields (`filesystem.*`, `policy.add_allow_*`, `policy.add_deny_access`, `policy.bypass_protection`).
 
 | Variable           | Expands to |
 |--------------------|------------|
@@ -466,7 +477,7 @@ Always use these variables instead of hardcoded absolute paths to keep profiles 
 ## 7. Key Rules
 
 - A profile with no `security.groups` has no deny rules. Always include appropriate deny groups for untrusted workloads.
-- `override_deny` only removes the deny rule. It does not grant access. You must also add the path via `filesystem` or `policy.add_allow_*`.
+- `bypass_protection` only removes the deny rule. It does not grant access. You must also add the path via `filesystem` or `policy.add_allow_*`.
 - `exclude_groups` removes groups from the resolved set. This weakens the sandbox. Use it only when you understand which protections you are removing.
 - `extends` chains resolve recursively up to depth 10. Circular inheritance is an error.
 - Platform-specific groups (suffix `_macos` or `_linux`) are filtered at resolution time. Include both variants for cross-platform profiles.

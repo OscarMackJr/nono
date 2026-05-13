@@ -536,23 +536,23 @@ nono run --allow-cwd --block-command my-dangerous-tool -- my-script.sh
 
 ### Deny Group Overrides
 
-#### `--override-deny`
+#### `--bypass-protection`
 
 Override a deny group rule for a specific path. Required groups like `deny_credentials` block access to paths such as `~/.aws`, `~/.config/gcloud`, etc. This flag punches a targeted hole through the deny without removing the entire group.
 
-The override path must also be explicitly granted via `--allow`, `--read`, `--write`, or their file equivalents. `--override-deny` only removes the deny rule — it does not implicitly grant access.
+The override path must also be explicitly granted via `--allow`, `--read`, `--write`, or their file equivalents. `--bypass-protection` only removes the deny rule — it does not implicitly grant access.
 
 ```bash
 # Allow an AWS agent to access credentials
-nono run --override-deny ~/.aws --allow ~/.aws -- my-aws-agent
+nono run --bypass-protection ~/.aws --allow ~/.aws -- my-aws-agent
 
 # Allow read-only access to GCP config
-nono run --override-deny ~/.config/gcloud --read ~/.config/gcloud -- gcloud-agent
+nono run --bypass-protection ~/.config/gcloud --read ~/.config/gcloud -- gcloud-agent
 
 # Multiple overrides
 nono run \
-  --override-deny ~/.aws \
-  --override-deny ~/.config/gcloud \
+  --bypass-protection ~/.aws \
+  --bypass-protection ~/.config/gcloud \
   --allow ~/.aws \
   --read ~/.config/gcloud \
   -- multi-cloud-agent
@@ -568,11 +568,11 @@ Can be specified multiple times.
 </Warning>
 
 <Note>
-  `--override-deny` (and its canonical alias `--bypass-protection`) without a matching grant (`--allow`, `--read`, `--write`, etc.) is a hard error. This prevents silent no-ops on Linux and unintended implicit grants on macOS.
+  `--bypass-protection` without a matching grant (`--allow`, `--read`, `--write`, etc.) is a hard error. This prevents silent no-ops on Linux and unintended implicit grants on macOS.
 </Note>
 
 <Note>
-  **Renamed in upstream v0.47.0 (#594).** The canonical name for this flag is `--bypass-protection`; the fork accepts both `--override-deny` (the original v2.3 name) and `--bypass-protection` (the canonical name) as a clap `visible_alias`. Both names continue to work in v2.3 with no behavior difference; future major releases may remove the legacy name.
+  **Legacy alias (D-36-B3):** The original flag name `--override-deny` (pre-v0.47.0) is retained as a `visible_alias` indefinitely per D-36-B3 — both names work with no behavior difference. Canonical name since v0.47.0 (upstream f0abd413, Plan 36-01c): `--bypass-protection`. Deprecated: `--override-deny`.
 </Note>
 
 ### Credential Options

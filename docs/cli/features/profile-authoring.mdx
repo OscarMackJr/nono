@@ -88,7 +88,7 @@ With `--full`, additional sections are included as empty stubs for all additive 
     "add_allow_readwrite": [],
     "add_deny_access": [],
     "add_deny_commands": [],
-    "override_deny": []
+    "bypass_protection": []
   },
   "network": {
     "block": false,
@@ -281,13 +281,13 @@ Groups are referenced by name in the `security.groups` field. See [Profiles & Gr
     "allow": ["$HOME/.docker"]
   },
   "policy": {
-    "override_deny": ["$HOME/.docker"]
+    "bypass_protection": ["$HOME/.docker"]
   }
 }
 ```
 
 <Note>
-  `override_deny` only removes the deny rule. You must also grant access via `filesystem` or `policy.add_allow_*` for the path to be accessible.
+  `bypass_protection` only removes the deny rule. You must also grant access via `filesystem` or `policy.add_allow_*` for the path to be accessible. Canonical key since v0.47.0 (upstream f0abd413). The legacy `override_deny` — Deprecated, accepted indefinitely via serde alias per D-36-B3.
 </Note>
 
 ### Exclude Inherited Groups

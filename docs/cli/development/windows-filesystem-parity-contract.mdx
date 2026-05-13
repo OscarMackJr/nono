@@ -44,7 +44,7 @@ This is **not** yet a full Windows-native read-deny boundary for arbitrary proce
 
 Windows currently distinguishes between two different concepts:
 
-- **Policy preprocessing override**: `override_deny` is supported as a CLI/profile policy feature that removes matching deny-group entries before the Windows backend compiles the effective capability set
+- **Policy preprocessing override**: `bypass_protection` (canonical since v0.47.0; legacy alias `override_deny` accepted per D-36-B3) is supported as a CLI/profile policy feature that removes matching deny-group entries before the Windows backend compiles the effective capability set
 - **Backend-native deny-within-allow enforcement**: still unavailable on Windows
 
 That means Windows can honor targeted deny overrides at policy-construction time, but it cannot yet express a general native "deny this child path inside an allowed parent" filesystem boundary comparable to macOS Seatbelt deny rules.

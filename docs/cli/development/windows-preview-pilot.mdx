@@ -92,7 +92,7 @@ Those commands should fail loudly with documented Windows limitation or backend-
 Also validate that:
 
 - exact-file grants succeed when the file is explicitly allowed
-- `override_deny` behaves like policy preprocessing rather than causing a Windows-only live-run rejection by itself
+- `bypass_protection` (canonical; `override_deny` is Legacy alias per D-36-B3) behaves like policy preprocessing rather than causing a Windows-only live-run rejection by itself
 - WFP-backed network failures report actionable readiness or activation details instead of generic limitation wording
 
 ## Debugging Inputs

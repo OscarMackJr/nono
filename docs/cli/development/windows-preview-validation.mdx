@@ -64,7 +64,7 @@ Expected results:
 
 Also confirm:
 
-- `override_deny` use cases that already resolve during policy preprocessing do not fail purely because the run is on Windows
+- `bypass_protection` (canonical; `override_deny` is Legacy alias per D-36-B3) use cases that already resolve during policy preprocessing do not fail purely because the run is on Windows
 - command-aware path mediation still rejects absolute or escaped file paths outside the compiled allowlist
 - WFP-backed failures distinguish readiness, activation, stale-filter, and cleanup diagnostics instead of generic limitation wording
 

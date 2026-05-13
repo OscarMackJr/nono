@@ -56,13 +56,19 @@ Profiles use JSON format:
   "security": {
     "groups": ["node_runtime", "python_runtime", "git_config"]
   },
+  "commands": {
+    "allow": [],
+    "deny": []
+  },
   "filesystem": {
     "allow": ["$HOME/.config/my-agent"],
     "read": [],
     "write": [],
     "allow_file": [],
     "read_file": [],
-    "write_file": []
+    "write_file": [],
+    "deny": [],
+    "bypass_protection": []
   },
   "policy": {
     "exclude_groups": [],
@@ -71,7 +77,7 @@ Profiles use JSON format:
     "add_allow_readwrite": [],
     "add_deny_access": [],
     "add_deny_commands": [],
-    "override_deny": []
+    "bypass_protection": []
   },
   "network": {
     "block": false
@@ -104,7 +110,7 @@ The `policy` section provides fine-grained, additive and subtractive composition
 | `add_allow_readwrite` | Additional read+write directories to allow |
 | `add_deny_access` | Additional deny rules to apply (block read and write content). On macOS, Unix socket paths also emit a `network-outbound` deny so that `connect(2)` to the socket is blocked. |
 | `add_deny_commands` | Command names (basename only) to block execution of. Complements `add_deny_access` for defense-in-depth against tools like `docker`, `kubectl`, etc. |
-| `override_deny` | Paths to exempt from deny groups (must also have a matching grant). **As of v0.47.0 (#594)**, the canonical key is `bypass_protection`; the legacy `override_deny` continues to deserialize for backwards compatibility, emitting a one-time stderr deprecation warning per process. The full canonical-schema migration (canonical sections `groups`, `commands`, `filesystem`) is tracked as a follow-up plan. Legacy keys will be removed in a future major release. |
+| `bypass_protection` | Paths to exempt from deny groups (must also have a matching grant). Canonical key as of v0.47.0 (upstream f0abd413, Plan 36-01c). The path must also be explicitly granted via `filesystem` or `policy.add_allow_*`. |
 
 #### Adding a Deny Rule to an Inherited Profile
 
@@ -187,7 +193,7 @@ Remove the dangerous command blocking group to allow `rm`, `chmod`, etc.:
 
 #### Overriding a Deny Rule for a Specific Path
 
-Some deny groups (like `deny_credentials`) are marked as required and cannot be excluded. Use `override_deny` to punch a targeted hole through a deny group for a specific path. The path must also be explicitly granted via `filesystem` or `policy.add_allow_*`.
+Some deny groups (like `deny_credentials`) are marked as required and cannot be excluded. Use `bypass_protection` to punch a targeted hole through a deny group for a specific path. The path must also be explicitly granted via `filesystem` or `policy.add_allow_*`.
 
 ```json
 {
@@ -200,18 +206,30 @@ Some deny groups (like `deny_credentials`) are marked as required and cannot be 
     "allow": ["$HOME/.docker"]
   },
   "policy": {
-    "override_deny": ["$HOME/.docker"]
+    "bypass_protection": ["$HOME/.docker"]
   }
 }
 ```
 
 This allows access to `~/.docker` even though `deny_credentials` blocks it by default. The deny override does not implicitly grant access -- the matching `filesystem.allow` entry is required.
 
-This is equivalent to the CLI flag `--override-deny`:
+This is equivalent to the CLI flag `--bypass-protection`:
 
 ```bash
-nono run --profile opencode --allow ~/.docker --override-deny ~/.docker -- opencode
+nono run --profile opencode --allow ~/.docker --bypass-protection ~/.docker -- opencode
 ```
+
+#### Legacy Field Migration
+
+Prior to v0.47.0 (upstream f0abd413, Plan 36-01c), the field was named `override_deny` and the CLI flag was `--override-deny`. Per D-36-B3 (indefinite acceptance), legacy profiles using `override_deny` continue to deserialize correctly via serde alias — no migration is required for existing user profiles. New profiles and documentation use the canonical names:
+
+| Legacy key (pre-v0.47.0, D-36-B3) | Canonical key (v0.47.0+) |
+|------------------------------------|--------------------------|
+| `policy.override_deny` — Legacy accepted forever via serde alias (D-36-B3) | `policy.bypass_protection` |
+| `filesystem.override_deny` — Legacy accepted forever via serde alias (D-36-B3) | `filesystem.bypass_protection` |
+| `--override-deny` (CLI) — Legacy alias retained forever (D-36-B3) | `--bypass-protection` (CLI) |
+
+The `--bypass-protection` CLI flag is the canonical name since v0.47.0 (upstream f0abd413). The `--override-deny` flag is retained as a `visible_alias` indefinitely per D-36-B3.
 
 <Note>
   `policy` fields are additive across inheritance. A child profile's `add_deny_access` is merged with the base profile's `add_deny_access`, and `exclude_groups` from both levels are combined. The `filesystem` section works the same way - use `policy` when you need deny rules or write-only access that `filesystem` cannot express.
@@ -402,7 +420,7 @@ Groups are named, composable collections of security rules. Profiles reference g
 Every profile's effective capability set is built through composition:
 
 ```
-((default_profile_groups + profile.security.groups) - profile.policy.exclude_groups) + profile.policy.add_* + profile.filesystem - deny_groups + profile.policy.override_deny + CLI flags
+((default_profile_groups + profile.security.groups) - profile.policy.exclude_groups) + profile.policy.add_* + profile.filesystem - deny_groups + profile.policy.bypass_protection + CLI flags
 ```
 
 1. **default_profile_groups** come from the built-in `default` profile
@@ -410,8 +428,8 @@ Every profile's effective capability set is built through composition:
 3. **profile.policy.exclude_groups** removes groups from the composed set (exclusion wins)
 4. **profile.policy.add_allow_***, **profile.policy.add_deny_access**, and **profile.policy.add_deny_commands** apply additive overrides
 5. **profile.filesystem** entries are additive
-6. **profile.policy.override_deny** punches targeted holes through deny groups (requires matching grant)
-7. **CLI overrides** (`--allow`, `--read`, `--override-deny`, etc.) are applied last
+6. **profile.policy.bypass_protection** punches targeted holes through deny groups (requires matching grant)
+7. **CLI overrides** (`--allow`, `--read`, `--bypass-protection`, etc.) are applied last
 
 Exclusions are applied after group addition. If the same group appears in both
 `security.groups` and `policy.exclude_groups`, the exclusion wins.
