@@ -347,7 +347,13 @@ pub(crate) fn prepare_sandbox(args: &SandboxArgs, silent: bool) -> Result<Prepar
             };
             if let Err(e) = result {
                 if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    warn!("Failed to pre-create {}: {}", path.display(), e);
+                    // CR-04 fix (REVIEW.md): fully-qualified `tracing::warn!`
+                    // for consistency with line 377 below. The bare `warn!`
+                    // macro is not in scope (this file only imports
+                    // `tracing::info`), so the previous form would fail to
+                    // compile on Linux (block is `#[cfg(target_os = "linux")]`,
+                    // invisible from Windows-host clippy).
+                    tracing::warn!("Failed to pre-create {}: {}", path.display(), e);
                 }
             }
         };
