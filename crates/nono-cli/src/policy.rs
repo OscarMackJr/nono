@@ -868,12 +868,12 @@ pub fn apply_deny_overrides(
             }
         }
         if !grant_has_read && !grant_has_write {
-            // PROF-04 (Phase 22) cross-platform safety: if the override_deny
+            // PROF-04 (Phase 22) cross-platform safety: if the bypass_protection
             // target isn't actually denied on this platform (e.g. the deny
             // rule comes from a `platform: "macos"` group while we're running
             // on Windows), the override is a noop. Surfacing this as a hard
             // error breaks cross-platform profile loading for profiles that
-            // mix platform-gated denies with profile-level override_deny —
+            // mix platform-gated denies with profile-level bypass_protection —
             // see e.g. claude-code's $HOME/Library/Keychains on Windows.
             //
             // Detect the noop case: the canonical path is NOT present in
@@ -882,13 +882,13 @@ pub fn apply_deny_overrides(
             let path_is_actually_denied = deny_paths.iter().any(|d| d == &canonical);
             if !path_is_actually_denied {
                 crate::output::print_warning(&format!(
-                    "override_deny for '{}' has no matching grant AND no matching deny on this platform — skipping",
+                    "bypass_protection for '{}' has no matching grant AND no matching deny on this platform — skipping",
                     canonical.display()
                 ));
                 continue;
             }
             return Err(NonoError::SandboxInit(format!(
-                "override_deny '{}' has no matching grant. \
+                "bypass_protection '{}' has no matching grant. \
                  Add a filesystem allow (--allow, --read, --write, or profile filesystem/policy) \
                  for this path.",
                 override_path.display(),
@@ -897,7 +897,7 @@ pub fn apply_deny_overrides(
 
         // Warn about the security relaxation
         crate::output::print_warning(&format!(
-            "override_deny relaxing deny rule for '{}'",
+            "bypass_protection relaxing deny rule for '{}'",
             canonical.display()
         ));
 
@@ -2987,7 +2987,7 @@ mod tests {
         let err = result.expect_err("expected error");
         assert!(
             err.to_string().contains("no matching grant"),
-            "group grant should not satisfy override_deny, got: {}",
+            "group grant should not satisfy bypass_protection, got: {}",
             err
         );
     }

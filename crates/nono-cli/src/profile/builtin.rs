@@ -56,7 +56,7 @@ mod tests {
             .groups
             .contains(&"claude_code_macos".to_string()));
         assert!(profile.policy.add_allow_readwrite.is_empty());
-        assert!(profile.policy.override_deny.is_empty());
+        assert!(profile.policy.bypass_protection.is_empty());
         assert!(profile
             .filesystem
             .allow
@@ -112,7 +112,7 @@ mod tests {
             vec!["$HOME/Library/Keychains".to_string()]
         );
         assert_eq!(
-            profile.policy.override_deny,
+            profile.policy.bypass_protection,
             vec!["$HOME/Library/Keychains".to_string()]
         );
         assert!(profile
@@ -145,7 +145,7 @@ mod tests {
             .allow_file
             .contains(&"$HOME/Library/Keychains/metadata.keychain-db".to_string()));
         assert!(profile.policy.add_allow_readwrite.is_empty());
-        assert!(profile.policy.override_deny.is_empty());
+        assert!(profile.policy.bypass_protection.is_empty());
     }
 
     #[test]
@@ -255,8 +255,8 @@ mod tests {
         assert!(!profile.network.block);
         assert_eq!(profile.workdir.access, WorkdirAccess::ReadWrite);
 
-        // No keychain override_deny (the whole point of the variant).
-        assert!(profile.policy.override_deny.is_empty());
+        // No keychain bypass_protection (the whole point of the variant).
+        assert!(profile.policy.bypass_protection.is_empty());
     }
 
     #[test]
@@ -686,7 +686,7 @@ mod tests {
         // on Windows too. The claude-code profile's `add_allow_readwrite`
         // entry for `$HOME/Library/Keychains` is gated on
         // `try_new_dir` (path-exists), so without this mkdir the matching
-        // grant for the `override_deny` of the same path is silently
+        // grant for the `bypass_protection` of the same path is silently
         // skipped on Windows and resolution fails with "no matching grant".
         // The path is platform-irrelevant (it's a tempdir under HOME); only
         // the existence matters.

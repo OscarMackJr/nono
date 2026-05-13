@@ -228,7 +228,7 @@ fn build_skeleton(args: &ProfileInitArgs) -> serde_json::Value {
             serde_json::Value::Array(vec![]),
         );
         pol.insert(
-            "override_deny".to_string(),
+            "bypass_protection".to_string(),
             serde_json::Value::Array(vec![]),
         );
         root.insert("policy".to_string(), serde_json::Value::Object(pol));
@@ -919,7 +919,7 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
         || !pp.add_allow_readwrite.is_empty()
         || !pp.add_deny_access.is_empty()
         || !pp.add_deny_commands.is_empty()
-        || !pp.override_deny.is_empty();
+        || !pp.bypass_protection.is_empty();
 
     if has_policy {
         println!();
@@ -942,11 +942,11 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
                 pp.add_deny_commands.join(", ")
             );
         }
-        if !pp.override_deny.is_empty() {
+        if !pp.bypass_protection.is_empty() {
             println!(
                 "    {}: {}",
-                theme::fg("override_deny", t.yellow),
-                pp.override_deny.join(", ")
+                theme::fg("bypass_protection", t.yellow),
+                pp.bypass_protection.join(", ")
             );
         }
     }
@@ -1191,7 +1191,7 @@ fn profile_to_json(
         "add_allow_readwrite": profile.policy.add_allow_readwrite,
         "add_deny_access": profile.policy.add_deny_access,
         "add_deny_commands": profile.policy.add_deny_commands,
-        "override_deny": profile.policy.override_deny,
+        "bypass_protection": profile.policy.bypass_protection,
     });
 
     // Network
@@ -1387,9 +1387,9 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
             &p2.policy.add_deny_commands,
         ),
         (
-            "override_deny",
-            &p1.policy.override_deny,
-            &p2.policy.override_deny,
+            "bypass_protection",
+            &p1.policy.bypass_protection,
+            &p2.policy.bypass_protection,
         ),
     ]);
 
@@ -2220,7 +2220,7 @@ pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
     // route to errors (--strict) or warnings (default) based on args.strict.
     //
     // We attempt to deserialize the `policy` sub-object of the profile JSON as
-    // a `LegacyPolicyPatch`. If the sub-object contains `override_deny`, the
+    // a `LegacyPolicyPatch`. If the sub-object contains `bypass_protection`, the
     // `has_legacy_keys()` predicate returns `true`. In strict mode, we push
     // a clear error message naming both the legacy key and canonical key onto
     // `errors` (fail-closed, non-zero exit). In non-strict mode, we emit the
@@ -2240,11 +2240,11 @@ pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
                         if patch.has_legacy_keys() {
                             // Rewrite to canonical form to get the bypass_protection paths.
                             let canonical = patch.rewrite()?;
-                            counter.emit_once("override_deny", "bypass_protection");
+                            counter.emit_once("bypass_protection", "bypass_protection");
                             if args.strict {
                                 // Strict mode: fail closed with a clear error message.
                                 errors.push(format!(
-                                    "legacy key `override_deny` rejected by --strict; \
+                                    "legacy key `bypass_protection` rejected by --strict; \
                                      use canonical `bypass_protection` instead (found {} \
                                      path(s))",
                                     canonical.bypass_protection.len()
@@ -2253,7 +2253,7 @@ pub(crate) fn cmd_validate(args: ProfileValidateArgs) -> Result<()> {
                                 // Non-strict mode: the emit_once call above already
                                 // wrote the WARN to stderr; record as warning.
                                 warnings.push(
-                                    "legacy key `override_deny` found; migrate to canonical \
+                                    "legacy key `bypass_protection` found; migrate to canonical \
                                      `bypass_protection`"
                                         .to_string(),
                                 );
@@ -2487,12 +2487,12 @@ fn resolve_to_manifest(
         grants.push(make_fs_grant(&path_str, access, cap.is_file)?);
     }
 
-    // Expand override_deny paths so we can filter them out of the deny list.
+    // Expand bypass_protection paths so we can filter them out of the deny list.
     // The manifest is the fully-resolved output — overridden denies must not
     // appear, otherwise the manifest re-applies restrictions the profile relaxed.
-    let override_deny_expanded: Vec<std::path::PathBuf> = prof
+    let bypass_protection_expanded: Vec<std::path::PathBuf> = prof
         .policy
-        .override_deny
+        .bypass_protection
         .iter()
         .filter_map(|tmpl| profile::expand_vars(tmpl, workdir).ok())
         .map(|p| {
@@ -2505,11 +2505,11 @@ fn resolve_to_manifest(
         .collect();
 
     // Add deny paths from resolved groups, filtering out overridden paths.
-    for deny_path in resolved_groups
-        .deny_paths
-        .iter()
-        .filter(|dp| !override_deny_expanded.iter().any(|ovr| dp.starts_with(ovr)))
-    {
+    for deny_path in resolved_groups.deny_paths.iter().filter(|dp| {
+        !bypass_protection_expanded
+            .iter()
+            .any(|ovr| dp.starts_with(ovr))
+    }) {
         let path_str = deny_path.to_string_lossy().into_owned();
         deny.push(manifest::FsDeny {
             path: path_str

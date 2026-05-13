@@ -97,7 +97,7 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
         &prepared.caps,
         &resolve_requested_workdir(args.sandbox.workdir.as_ref()),
         nono::WindowsPreviewContext {
-            has_deny_override_policy: !prepared.override_deny_paths.is_empty(),
+            has_deny_override_policy: !prepared.bypass_protection_paths.is_empty(),
         },
     )?;
 
@@ -125,7 +125,7 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
             no_diagnostics: true,
             interactive_shell: true,
             capability_elevation: prepared.capability_elevation,
-            override_deny_paths: prepared.override_deny_paths,
+            bypass_protection_paths: prepared.bypass_protection_paths,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
             session: SessionLaunchOptions {
@@ -172,7 +172,7 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
         &prepared.caps,
         &resolve_requested_workdir(args.workdir.as_ref()),
         nono::WindowsPreviewContext {
-            has_deny_override_policy: !prepared.override_deny_paths.is_empty(),
+            has_deny_override_policy: !prepared.bypass_protection_paths.is_empty(),
         },
     )?;
 
@@ -206,7 +206,7 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
             strategy: exec_strategy::ExecStrategy::Direct,
             workdir: resolve_requested_workdir(args.workdir.as_ref()),
             no_diagnostics,
-            override_deny_paths: prepared.override_deny_paths,
+            bypass_protection_paths: prepared.bypass_protection_paths,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
             ..ExecutionFlags::defaults(silent)?

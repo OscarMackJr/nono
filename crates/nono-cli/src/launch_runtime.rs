@@ -170,7 +170,7 @@ pub(crate) struct ExecutionFlags {
     pub(crate) interactive_shell: bool,
     #[cfg(target_os = "linux")]
     pub(crate) wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy,
-    pub(crate) override_deny_paths: Vec<PathBuf>,
+    pub(crate) bypass_protection_paths: Vec<PathBuf>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names forwarded from
     /// `PreparedSandbox.allowed_env_vars`. Consumed by the Unix
@@ -203,7 +203,7 @@ impl ExecutionFlags {
             interactive_shell: false,
             #[cfg(target_os = "linux")]
             wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::Error,
-            override_deny_paths: Vec::new(),
+            bypass_protection_paths: Vec::new(),
             allowed_env_vars: None,
             denied_env_vars: None,
             session: SessionLaunchOptions::default(),
@@ -317,7 +317,7 @@ pub(crate) fn prepare_run_launch_plan(
             interactive_shell: false,
             #[cfg(target_os = "linux")]
             wsl2_proxy_policy: prepared.wsl2_proxy_policy,
-            override_deny_paths: prepared.override_deny_paths,
+            bypass_protection_paths: prepared.bypass_protection_paths,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
             session: SessionLaunchOptions {

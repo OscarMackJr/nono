@@ -118,23 +118,24 @@ mod canonical_schema_rename_tests {
     }
 
     #[test]
-    fn bypass_protection_alias_deserializes_into_override_deny_field() {
-        // Verifies the #[serde(alias = "bypass_protection")] attribute on
-        // PolicyPatchConfig::override_deny. A profile using the canonical
-        // bypass_protection key must populate the existing override_deny
-        // Vec so downstream consumers (210 callsites) remain untouched.
+    fn canonical_bypass_protection_key_deserializes_directly() {
+        // Verifies that the canonical `bypass_protection` JSON key populates
+        // `PolicyPatchConfig::bypass_protection` directly (no alias needed).
         let raw = r#"{"bypass_protection":["/etc/hosts"]}"#;
         let cfg: PolicyPatchConfig =
-            serde_json::from_str(raw).expect("bypass_protection must deserialize via serde alias");
-        assert_eq!(cfg.override_deny, vec!["/etc/hosts".to_string()]);
+            serde_json::from_str(raw).expect("canonical bypass_protection must deserialize");
+        assert_eq!(cfg.bypass_protection, vec!["/etc/hosts".to_string()]);
     }
 
     #[test]
     fn legacy_override_deny_key_still_deserializes() {
+        // Verifies the #[serde(alias = "override_deny")] attribute on
+        // PolicyPatchConfig::bypass_protection. Legacy JSON using the old
+        // `override_deny` key must continue to deserialize per D-36-B3.
         let raw = r#"{"override_deny":["/etc/hosts"]}"#;
         let cfg: PolicyPatchConfig =
             serde_json::from_str(raw).expect("legacy override_deny must continue to deserialize");
-        assert_eq!(cfg.override_deny, vec!["/etc/hosts".to_string()]);
+        assert_eq!(cfg.bypass_protection, vec!["/etc/hosts".to_string()]);
     }
 
     #[test]
@@ -366,11 +367,8 @@ pub struct FilesystemConfig {
     /// Canonical key per upstream f0abd413 (v0.47.0 / PR #594).
     /// The legacy `override_deny` JSON key is accepted indefinitely
     /// via the serde alias below per D-36-B3 (no hard-deprecation date).
-    /// Callers referencing `policy.override_deny` are the canonical
-    /// runtime consumers; Plan 36-01c will atomically rename those
-    /// callsites to `policy.bypass_protection` — this field is the
-    /// `filesystem`-section counterpart introduced here so the canonical
-    /// JSON shape is accepted end-to-end before the callsite rename lands.
+    /// Plan 36-01c (atomic rename): this field is now the canonical Rust
+    /// identifier; the serde alias preserves legacy JSON deserialization.
     #[serde(default, alias = "override_deny")]
     pub bypass_protection: Vec<String>,
 }
@@ -592,24 +590,14 @@ pub struct PolicyPatchConfig {
     /// Each path must also be explicitly granted via `filesystem` or `policy.add_allow_*`.
     /// Does not implicitly grant access; only removes the deny rule.
     ///
-    /// **Upstream rename (v0.47.0 / #594):** the canonical JSON key is now
-    /// `bypass_protection`. The legacy `override_deny` key continues to
-    /// deserialize via the `#[serde(alias = "bypass_protection")]` attribute
-    /// for v2.3 backwards-compat, and `Profile::load_from_path` emits a
-    /// one-time stderr deprecation warning when the legacy key is observed.
-    /// The internal Rust identifier intentionally remains `override_deny` to
-    /// avoid a 210-callsite flag-day rename across capability_ext.rs,
-    /// policy.rs, policy_cmd.rs, command_runtime.rs, execution_runtime.rs,
-    /// launch_runtime.rs, sandbox_prepare.rs, etc. — that internal rename
-    /// is tracked as a deferred follow-up to Plan 34-04b (P34-DEFER-04b).
-    /// Option C (per Plan 34-04b Task 2 disposition): backwards-compat
-    /// deserialize plus deprecation warning runway. Full Option C
-    /// (upstream's 824-line `deprecated_schema` module, `LegacyPolicyPatch`
-    /// rewriter, and canonical sections `groups`/`commands`/`filesystem`)
-    /// is the follow-up surface; this commit lands only the
-    /// rename-acceptance contract.
-    #[serde(default, alias = "bypass_protection")]
-    pub override_deny: Vec<String>,
+    /// **Upstream rename (v0.47.0 / #594, Plan 36-01c):** the canonical JSON key
+    /// and Rust identifier is now `bypass_protection`. The legacy `override_deny`
+    /// JSON key continues to deserialize via the `#[serde(alias = "override_deny")]`
+    /// attribute for indefinite backwards-compat per D-36-B3 (no hard-deprecation
+    /// date). `Profile::load_from_path` emits a one-time stderr deprecation warning
+    /// when the legacy key is observed (Plan 36-01a `detect_legacy_override_deny_key`).
+    #[serde(default, alias = "override_deny")]
+    pub bypass_protection: Vec<String>,
 }
 
 /// Custom credential route definition for reverse proxy.
@@ -2149,7 +2137,7 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
     })?;
 
     // Plan 34-04b Option C: emit a one-time deprecation warning if this
-    // profile uses the legacy `override_deny` JSON key (upstream f0abd413
+    // profile uses the legacy `bypass_protection` JSON key (upstream f0abd413
     // renamed it to `bypass_protection`; both continue to deserialize for
     // v2.3 backwards-compat via the serde alias on PolicyPatchConfig).
     detect_legacy_override_deny_key(&content);
@@ -2404,7 +2392,10 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 &base.policy.add_deny_commands,
                 &child.policy.add_deny_commands,
             ),
-            override_deny: dedup_append(&base.policy.override_deny, &child.policy.override_deny),
+            bypass_protection: dedup_append(
+                &base.policy.bypass_protection,
+                &child.policy.bypass_protection,
+            ),
         },
         network: NetworkConfig {
             block: base.network.block || child.network.block,
@@ -3980,7 +3971,7 @@ mod tests {
                 add_allow_readwrite: vec![],
                 add_deny_access: vec!["/base/policy-deny".to_string()],
                 add_deny_commands: vec![],
-                override_deny: vec!["/base/override-deny".to_string()],
+                bypass_protection: vec!["/base/override-deny".to_string()],
             },
             network: NetworkConfig {
                 block: false,
@@ -4057,7 +4048,7 @@ mod tests {
                 add_allow_readwrite: vec!["/child/policy-rw".to_string()],
                 add_deny_access: vec!["/child/policy-deny".to_string()],
                 add_deny_commands: vec![],
-                override_deny: vec!["/child/override-deny".to_string()],
+                bypass_protection: vec!["/child/override-deny".to_string()],
             },
             network: NetworkConfig {
                 block: false,
@@ -4753,11 +4744,11 @@ mod tests {
             .contains(&"/child/policy-deny".to_string()));
         assert!(merged
             .policy
-            .override_deny
+            .bypass_protection
             .contains(&"/base/override-deny".to_string()));
         assert!(merged
             .policy
-            .override_deny
+            .bypass_protection
             .contains(&"/child/override-deny".to_string()));
     }
 
@@ -5212,7 +5203,7 @@ mod tests {
                     "add_allow_write": ["/tmp/write"],
                     "add_allow_readwrite": ["/tmp/rw"],
                     "add_deny_access": ["/tmp/deny"],
-                    "override_deny": ["~/.docker"]
+                    "bypass_protection": ["~/.docker"]
                 }
             }"#,
         )
@@ -5223,7 +5214,7 @@ mod tests {
         assert_eq!(profile.policy.add_allow_write, vec!["/tmp/write"]);
         assert_eq!(profile.policy.add_allow_readwrite, vec!["/tmp/rw"]);
         assert_eq!(profile.policy.add_deny_access, vec!["/tmp/deny"]);
-        assert_eq!(profile.policy.override_deny, vec!["~/.docker"]);
+        assert_eq!(profile.policy.bypass_protection, vec!["~/.docker"]);
     }
 
     #[test]
@@ -5546,6 +5537,10 @@ mod tests {
                 "exclude_globs": ["*.tmp"]
             }
         }"#;
+        // NOTE: Test uses the legacy `override_deny` key because the JSON schema
+        // (`nono-profile.schema.json`) is being updated in Plan 36-01d (data migration).
+        // The canonical `bypass_protection` key is the Rust field; the schema will
+        // be updated to accept both keys in Plan 36-01d.
         validate_against_schema(json)
             .expect("full profile with array extends should pass schema validation");
     }

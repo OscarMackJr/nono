@@ -25,9 +25,11 @@ pub struct SandboxState {
     pub allowed_commands: Vec<String>,
     /// Commands explicitly blocked
     pub blocked_commands: Vec<String>,
-    /// Paths exempted from deny groups via override_deny (canonicalized)
-    #[serde(default)]
-    pub override_deny_paths: Vec<String>,
+    /// Paths exempted from deny groups via bypass_protection (canonicalized).
+    /// Plan 36-01c: renamed from `override_deny_paths`; serde alias ensures
+    /// backward compat with existing NONO_CAP_FILE JSON from running sessions.
+    #[serde(default, alias = "override_deny_paths")]
+    pub bypass_protection_paths: Vec<String>,
 }
 
 /// Serializable filesystem capability state
@@ -44,8 +46,8 @@ pub struct FsCapState {
 }
 
 impl SandboxState {
-    /// Create sandbox state from a CapabilitySet and override_deny paths
-    pub fn from_caps(caps: &CapabilitySet, override_deny_paths: &[PathBuf]) -> Self {
+    /// Create sandbox state from a CapabilitySet and bypass_protection paths
+    pub fn from_caps(caps: &CapabilitySet, bypass_protection_paths: &[PathBuf]) -> Self {
         Self {
             fs: caps
                 .fs_capabilities()
@@ -64,16 +66,19 @@ impl SandboxState {
             net_blocked: caps.is_network_blocked(),
             allowed_commands: caps.allowed_commands().to_vec(),
             blocked_commands: caps.blocked_commands().to_vec(),
-            override_deny_paths: override_deny_paths
+            bypass_protection_paths: bypass_protection_paths
                 .iter()
                 .map(|p| p.display().to_string())
                 .collect(),
         }
     }
 
-    /// Get override_deny paths as PathBufs for query use
-    pub fn override_deny_as_paths(&self) -> Vec<PathBuf> {
-        self.override_deny_paths.iter().map(PathBuf::from).collect()
+    /// Get bypass_protection paths as PathBufs for query use
+    pub fn bypass_protection_as_paths(&self) -> Vec<PathBuf> {
+        self.bypass_protection_paths
+            .iter()
+            .map(PathBuf::from)
+            .collect()
     }
 
     /// Convert back to a CapabilitySet

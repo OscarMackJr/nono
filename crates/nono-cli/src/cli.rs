@@ -1321,7 +1321,7 @@ pub struct ProfileValidateArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
-    /// Fail closed on legacy profile fields (e.g. `override_deny`). Default
+    /// Fail closed on legacy profile fields (e.g. `bypass_protection`). Default
     /// mode warns to stderr but continues; `--strict` exits non-zero.
     #[arg(long)]
     pub strict: bool,
@@ -1375,18 +1375,17 @@ pub struct SandboxArgs {
 
     /// Override a deny rule for a path. Pair with --allow/--read/--write grant
     ///
-    /// Plan 34-04b (upstream f0abd413, v0.47.0, #594): canonical flag name
+    /// Plan 36-01c (upstream f0abd413, v0.47.0, #594): canonical flag name
     /// is `--bypass-protection`. `--override-deny` continues to work via
-    /// the clap `visible_alias` for v2.3 backwards-compat. Internal Rust
-    /// identifier remains `override_deny` (210-callsite flag-day rename
-    /// deferred to P34-DEFER-04b).
+    /// the clap `visible_alias` for backwards-compat (indefinite per
+    /// D-36-B3 — no hard-deprecation date).
     #[arg(
-        long = "override-deny",
-        visible_alias = "bypass-protection",
+        long = "bypass-protection",
+        visible_alias = "override-deny",
         value_name = "PATH",
         help_heading = "FILESYSTEM"
     )]
-    pub override_deny: Vec<PathBuf>,
+    pub bypass_protection: Vec<PathBuf>,
 
     /// Allow CWD access without prompting (level set by profile, defaults to read-only)
     #[arg(long, help_heading = "FILESYSTEM")]
@@ -1620,7 +1619,7 @@ pub struct SandboxArgs {
         value_name = "FILE",
         conflicts_with_all = &[
             "allow", "read", "write", "allow_file", "read_file", "write_file",
-            "profile", "override_deny", "allow_cwd",
+            "profile", "bypass_protection", "allow_cwd",
             "block_net", "allow_net", "network_profile", "allow_proxy",
             "allow_bind", "allow_port", "allow_connect_port", "external_proxy", "proxy_port",
             "proxy_credential", "allow_endpoint", "env_credential", "env_credential_map",
@@ -1734,18 +1733,17 @@ pub struct WrapSandboxArgs {
 
     /// Override a deny rule for a path. Pair with --allow/--read/--write grant
     ///
-    /// Plan 34-04b (upstream f0abd413, v0.47.0, #594): canonical flag name
+    /// Plan 36-01c (upstream f0abd413, v0.47.0, #594): canonical flag name
     /// is `--bypass-protection`. `--override-deny` continues to work via
-    /// the clap `visible_alias` for v2.3 backwards-compat. Internal Rust
-    /// identifier remains `override_deny` (210-callsite flag-day rename
-    /// deferred to P34-DEFER-04b).
+    /// the clap `visible_alias` for backwards-compat (indefinite per
+    /// D-36-B3 — no hard-deprecation date).
     #[arg(
-        long = "override-deny",
-        visible_alias = "bypass-protection",
+        long = "bypass-protection",
+        visible_alias = "override-deny",
         value_name = "PATH",
         help_heading = "FILESYSTEM"
     )]
-    pub override_deny: Vec<PathBuf>,
+    pub bypass_protection: Vec<PathBuf>,
 
     /// Allow CWD access without prompting (level set by profile, defaults to read-only)
     #[arg(long, help_heading = "FILESYSTEM")]
@@ -1886,7 +1884,7 @@ pub struct WrapSandboxArgs {
         value_name = "FILE",
         conflicts_with_all = &[
             "allow", "read", "write", "allow_file", "read_file", "write_file",
-            "profile", "override_deny", "allow_cwd",
+            "profile", "bypass_protection", "allow_cwd",
             "block_net", "allow_bind", "allow_port", "allow_connect_port",
             "env_credential", "env_credential_map",
             "allow_command", "block_command", "allow_launch_services",
@@ -1913,7 +1911,7 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             allow_file: args.allow_file,
             read_file: args.read_file,
             write_file: args.write_file,
-            override_deny: args.override_deny,
+            bypass_protection: args.bypass_protection,
             allow_cwd: args.allow_cwd,
             workdir: args.workdir,
             block_net: args.block_net,
@@ -4193,8 +4191,11 @@ mod tests {
         ]);
         match cli.command {
             Commands::Run(args) => {
-                assert_eq!(args.sandbox.override_deny.len(), 1);
-                assert_eq!(args.sandbox.override_deny[0], PathBuf::from("/tmp/test"));
+                assert_eq!(args.sandbox.bypass_protection.len(), 1);
+                assert_eq!(
+                    args.sandbox.bypass_protection[0],
+                    PathBuf::from("/tmp/test")
+                );
             }
             _ => panic!("Expected Run command"),
         }
@@ -4215,9 +4216,9 @@ mod tests {
         ]);
         match cli.command {
             Commands::Run(args) => {
-                assert_eq!(args.sandbox.override_deny.len(), 2);
-                assert_eq!(args.sandbox.override_deny[0], PathBuf::from("/tmp/a"));
-                assert_eq!(args.sandbox.override_deny[1], PathBuf::from("/tmp/b"));
+                assert_eq!(args.sandbox.bypass_protection.len(), 2);
+                assert_eq!(args.sandbox.bypass_protection[0], PathBuf::from("/tmp/a"));
+                assert_eq!(args.sandbox.bypass_protection[1], PathBuf::from("/tmp/b"));
             }
             _ => panic!("Expected Run command"),
         }

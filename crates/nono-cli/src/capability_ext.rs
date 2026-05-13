@@ -621,13 +621,13 @@ impl CapabilitySetExt for CapabilitySet {
         // Apply CLI overrides (CLI args take precedence)
         add_cli_overrides(&mut caps, args)?;
 
-        // Expand profile-level override_deny paths for finalize_caps.
+        // Expand profile-level bypass_protection paths for finalize_caps.
         // Existing override targets must fail closed in apply_deny_overrides
         // when they lack a matching user-intent grant. Non-existent paths are
         // skipped here to preserve platform-specific built-in profiles whose
         // grants are intentionally absent on other OSes.
-        let mut profile_overrides = Vec::with_capacity(profile.policy.override_deny.len());
-        for path_template in &profile.policy.override_deny {
+        let mut profile_overrides = Vec::with_capacity(profile.policy.bypass_protection.len());
+        for path_template in &profile.policy.bypass_protection {
             let path = expand_vars(path_template, workdir)?;
             if path.exists() {
                 profile_overrides.push(path);
@@ -660,13 +660,13 @@ fn finalize_caps(
     resolved: &mut policy::ResolvedGroups,
     loaded_policy: &policy::Policy,
     args: &SandboxArgs,
-    profile_override_deny: &[PathBuf],
+    profile_bypass_protection: &[PathBuf],
 ) -> Result<()> {
     // Apply profile-level deny overrides first, then CLI overrides.
-    // Profile overrides come from `policy.override_deny` in the profile JSON.
-    // CLI `--override-deny` flags are applied on top.
-    policy::apply_deny_overrides(profile_override_deny, &mut resolved.deny_paths, caps)?;
-    policy::apply_deny_overrides(&args.override_deny, &mut resolved.deny_paths, caps)?;
+    // Profile overrides come from `policy.bypass_protection` in the profile JSON.
+    // CLI `--bypass-protection` flags are applied on top.
+    policy::apply_deny_overrides(profile_bypass_protection, &mut resolved.deny_paths, caps)?;
+    policy::apply_deny_overrides(&args.bypass_protection, &mut resolved.deny_paths, caps)?;
 
     // Remove exact file grants for the deny paths that remain after overrides.
     // This lets profile deny patches override inherited file capabilities while
@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn test_from_args_with_commands() {
         let args = SandboxArgs {
-            override_deny: vec![],
+            bypass_protection: vec![],
             allow_command: vec!["rm".to_string()],
             block_command: vec!["custom".to_string()],
             ..sandbox_args()
@@ -1649,7 +1649,7 @@ mod tests {
 
         let workdir = tempdir().expect("workdir");
         let mut args = sandbox_args();
-        args.override_deny = vec![target.clone()];
+        args.bypass_protection = vec![target.clone()];
 
         let (caps, _) = from_profile_locked(&profile, workdir.path(), &args).expect("build caps");
 
@@ -1683,7 +1683,7 @@ mod tests {
                     }},
                     "policy": {{
                         "add_deny_access": ["{link}"],
-                        "override_deny": ["{link}"]
+                        "bypass_protection": ["{link}"]
                     }}
                 }}"#,
                 target = target.display(),
@@ -1819,7 +1819,7 @@ mod tests {
                     "policy": {{
                         "add_allow_readwrite": [{path}],
                         "add_deny_access": [{path}],
-                        "override_deny": [{path}]
+                        "bypass_protection": [{path}]
                     }}
                 }}"#,
                 path = json_string(&denied),
@@ -1833,13 +1833,13 @@ mod tests {
 
         let (caps, _) = from_profile_locked(&profile, workdir.path(), &args).expect("build caps");
 
-        // The allow should survive because override_deny punches through the deny
+        // The allow should survive because bypass_protection punches through the deny
         let canonical = denied.canonicalize().expect("canonicalize");
         assert!(
             caps.fs_capabilities()
                 .iter()
                 .any(|cap| !cap.is_file && cap.resolved == canonical),
-            "override_deny should preserve the directory grant despite deny group"
+            "bypass_protection should preserve the directory grant despite deny group"
         );
     }
 
@@ -1860,7 +1860,7 @@ mod tests {
                     "meta": {{ "name": "override-deny-no-grant" }},
                     "policy": {{
                         "add_deny_access": [{path}],
-                        "override_deny": [{path}]
+                        "bypass_protection": [{path}]
                     }}
                 }}"#,
                 path = json_string(&denied),
@@ -1873,7 +1873,7 @@ mod tests {
         let args = sandbox_args();
 
         let err = from_profile_locked(&profile, workdir.path(), &args)
-            .expect_err("override_deny without user-intent grant should fail");
+            .expect_err("bypass_protection without user-intent grant should fail");
         assert!(
             err.to_string().contains("no matching grant"),
             "unexpected error: {err}"
@@ -1899,7 +1899,7 @@ mod tests {
                     "meta": {{ "name": "override-deny-no-grant" }},
                     "policy": {{
                         "add_deny_access": [{path}],
-                        "override_deny": [{path}]
+                        "bypass_protection": [{path}]
                     }}
                 }}"#,
                 path = json_string(&denied),
@@ -1912,7 +1912,7 @@ mod tests {
         let args = sandbox_args();
 
         let err = from_profile_locked(&profile, workdir.path(), &args)
-            .expect_err("profile override_deny without grant should fail");
+            .expect_err("profile bypass_protection without grant should fail");
         assert!(
             err.to_string().contains("no matching grant"),
             "unexpected error: {err}"

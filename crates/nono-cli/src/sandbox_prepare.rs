@@ -82,7 +82,7 @@ pub(crate) struct PreparedSandbox {
     pub(crate) allow_launch_services_active: bool,
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
-    pub(crate) override_deny_paths: Vec<PathBuf>,
+    pub(crate) bypass_protection_paths: Vec<PathBuf>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names from the loaded profile's
     /// `environment.allow_vars` block. See [`crate::profile_runtime::PreparedProfile::allowed_env_vars`]
@@ -279,7 +279,7 @@ pub(crate) fn prepare_sandbox(args: &SandboxArgs, silent: bool) -> Result<Prepar
                 allow_launch_services_active: false,
                 open_url_origins: Vec::new(),
                 open_url_allow_localhost: false,
-                override_deny_paths: Vec::new(),
+                bypass_protection_paths: Vec::new(),
                 // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): manifest path
                 // has no loaded Profile and no env-filter block.
                 allowed_env_vars: None,
@@ -314,7 +314,7 @@ pub(crate) fn prepare_sandbox(args: &SandboxArgs, silent: bool) -> Result<Prepar
         open_url_origins,
         open_url_allow_localhost,
         allow_launch_services: profile_allow_launch_services,
-        override_deny_paths,
+        bypass_protection_paths,
         allowed_env_vars: profile_allowed_env_vars,
         denied_env_vars: profile_denied_env_vars,
     } = prepared_profile;
@@ -484,7 +484,7 @@ pub(crate) fn prepare_sandbox(args: &SandboxArgs, silent: bool) -> Result<Prepar
             allow_launch_services_active,
             open_url_origins,
             open_url_allow_localhost,
-            override_deny_paths,
+            bypass_protection_paths,
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): forward the
             // env-filter allow-list from PreparedProfile to PreparedSandbox.
             allowed_env_vars: profile_allowed_env_vars,

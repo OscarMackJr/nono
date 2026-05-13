@@ -21,7 +21,7 @@ pub(crate) struct PreparedProfile {
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
     pub(crate) allow_launch_services: bool,
-    pub(crate) override_deny_paths: Vec<PathBuf>,
+    pub(crate) bypass_protection_paths: Vec<PathBuf>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names from `profile.environment.allow_vars`.
     /// `None` means inherit-all (default upstream behaviour); `Some([])`
@@ -74,7 +74,7 @@ fn install_profile_hooks(profile_name: Option<&str>, profile: &profile::Profile,
     }
 }
 
-fn expand_override_deny_path(path: &Path, workdir: &Path) -> PathBuf {
+fn expand_bypass_protection_path(path: &Path, workdir: &Path) -> PathBuf {
     let path_str = path.to_string_lossy();
     let expanded = profile::expand_vars(&path_str, workdir).unwrap_or_else(|_| path.to_path_buf());
     if expanded.exists() {
@@ -84,16 +84,16 @@ fn expand_override_deny_path(path: &Path, workdir: &Path) -> PathBuf {
     }
 }
 
-fn collect_override_deny_paths(
+fn collect_bypass_protection_paths(
     loaded_profile: Option<&profile::Profile>,
-    cli_override_deny: &[PathBuf],
+    cli_bypass_protection: &[PathBuf],
     workdir: &Path,
 ) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> = loaded_profile
         .map(|profile| {
             profile
                 .policy
-                .override_deny
+                .bypass_protection
                 .iter()
                 .filter_map(|template| {
                     profile::expand_vars(template, workdir)
@@ -110,8 +110,8 @@ fn collect_override_deny_paths(
         })
         .unwrap_or_default();
 
-    for path in cli_override_deny {
-        let canonical = expand_override_deny_path(path, workdir);
+    for path in cli_bypass_protection {
+        let canonical = expand_bypass_protection_path(path, workdir);
         if !paths.contains(&canonical) {
             paths.push(canonical);
         }
@@ -220,9 +220,9 @@ pub(crate) fn prepare_profile(
             .as_ref()
             .and_then(|profile| profile.allow_launch_services)
             .unwrap_or(false),
-        override_deny_paths: collect_override_deny_paths(
+        bypass_protection_paths: collect_bypass_protection_paths(
             loaded_profile.as_ref(),
-            &args.override_deny,
+            &args.bypass_protection,
             workdir,
         ),
         // Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
