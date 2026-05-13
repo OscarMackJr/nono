@@ -273,10 +273,9 @@ mod canonical_schema_rename_tests {
             "filesystem": {"deny": ["/proc"], "bypass_protection": ["/tmp/safe"]},
             "commands": {"deny": ["rm"]}
         }"#;
-        let profile: Profile =
-            serde_json::from_str(json).expect("Profile must deserialize");
-        let serialized = serde_json::to_value(&profile)
-            .expect("Profile must serialize to JSON value");
+        let profile: Profile = serde_json::from_str(json).expect("Profile must deserialize");
+        let serialized =
+            serde_json::to_value(&profile).expect("Profile must serialize to JSON value");
         // commands must be a top-level key with a deny sub-key
         assert!(
             serialized["commands"]["deny"].as_array().is_some(),
@@ -289,7 +288,9 @@ mod canonical_schema_rename_tests {
         );
         // filesystem.bypass_protection must still exist
         assert!(
-            serialized["filesystem"]["bypass_protection"].as_array().is_some(),
+            serialized["filesystem"]["bypass_protection"]
+                .as_array()
+                .is_some(),
             "filesystem.bypass_protection must appear in serialized JSON"
         );
     }
