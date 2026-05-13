@@ -172,7 +172,7 @@ Full details: `.planning/milestones/v2.3-ROADMAP.md`.
 
 **Requirements:** REQ-PORT-CLOSURE-03. See `.planning/REQUIREMENTS.md`.
 
-**Plans:** 0 plans — to be populated during `/gsd-plan-phase 36.5`. **Skip if** Phase 36 absorbs the drafts surface cleanly without scope strain.
+**Plans:** 1/1 plans complete
 
 **Estimated effort:** ~1 week.
 
