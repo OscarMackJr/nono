@@ -9,6 +9,16 @@ pub mod embedded;
 pub mod user;
 pub mod version;
 
+// Phase 40 follow-up: re-export `user_profiles_dir` at the module root so
+// `crate::config::user_profiles_dir()` resolves. profile_runtime.rs:138
+// (Plan 35-02 cherry-pick of upstream bdf183e9, the pre-create-landlock-
+// profiles-dir hook) calls `crate::config::user_profiles_dir()`, but the
+// function definition lives at `crate::config::user::user_profiles_dir`.
+// The re-export aligns the call-site with the function path without
+// changing the call-site (which was the upstream form).
+#[allow(unused_imports)]
+pub use user::user_profiles_dir;
+
 use crate::policy;
 use nono::{NonoError, Result};
 use std::path::{Path, PathBuf};
