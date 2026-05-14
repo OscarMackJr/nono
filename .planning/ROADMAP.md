@@ -230,12 +230,12 @@ Full details: `.planning/milestones/v2.3-ROADMAP.md`.
 
 **Requirements:** REQ-UPST4-02. See `.planning/REQUIREMENTS.md`.
 
-**Plans:** 2/6 plans executed
+**Plans:** 4/6 plans executed
 
-- [ ] 40-01-PROXY-HARDENING-PLAN.md — REQ-UPST4-02 (Cluster C1: proxy server.rs review fixes + libdbus isolation + Node 26 NODE_USE_ENV_PROXY, 5 D-19 cherry-picks; Wave 1)
+- [x] 40-01-PROXY-HARDENING-PLAN.md — REQ-UPST4-02 (Cluster C1: proxy server.rs review fixes + libdbus isolation + Node 26 NODE_USE_ENV_PROXY, 5 D-19 cherry-picks; Wave 1)
 - [x] 40-02-CLI-ALLOW-VALIDATE-PLAN.md — REQ-UPST4-02 (Cluster C2: --allow path validation + SandboxState domain-allowlist + nono why --host proxy-domain awareness, 2 D-19 cherry-picks; Wave 0 foundation)
 - [x] 40-03-SCRUB-MODULE-PLAN.md — REQ-UPST4-02 (Cluster C6: new nono::scrub module + lib.rs re-export + audit event integration, 2 D-19 cherry-picks; Wave 0 foundation)
-- [ ] 40-04-RELEASE-RIDE-PLAN.md — REQ-UPST4-02 (Cluster C7: Landlock ABI OnceLock cache + full failure diagnostic + v0.52.1/v0.52.2/v0.53.0 version bumps, 5 D-19 cherry-picks; Wave 1)
+- [x] 40-04-RELEASE-RIDE-PLAN.md — REQ-UPST4-02 (Cluster C7: Landlock ABI OnceLock cache + full failure diagnostic + v0.52.1/v0.52.2/v0.53.0 version bumps, 5 D-19 cherry-picks; Wave 1)
 - [ ] 40-05-FP-PROFILE-SAVE-PLAN.md — REQ-UPST4-02 (Cluster C4: profile-save denial suppression; D-40-B1 diff-inspection upgrade authority; D-20 manual replay or D-19 cherry-pick per inspection result; Wave 2)
 - [ ] 40-06-FP-PROXY-TLS-PLAN.md — REQ-UPST4-02 (Cluster C5: proxy TLS trust + multi-route dispatch + credential-match policy; D-20 manual replay per D-40-B2 LOCKED; Wave 2)
 
