@@ -1,12 +1,19 @@
-# Phase 41 — non-Windows CI cleanup (33 pre-existing latents)
+# Phase 41 — CI cleanup (cross-platform, pre-existing red)
 
 **Status:** TRACKER — not yet planned as a formal phase. See ROADMAP.md for phase formalization once scoped.
 
-**Filed:** 2026-05-14 during `/gsd-quick` session iterating PR #2 on `fix/40-rollback-status-cfg-gate`.
+**Filed:** 2026-05-14 during `/gsd-quick` session iterating PR #2 on `fix/40-rollback-status-cfg-gate`. Expanded with Windows-side findings during follow-up `/gsd-progress` triage.
 
 ## Context
 
-PR #2 unbreaks Phase 40's structural CI breakage on Linux/macOS, but CI run after PR #2's round-3 fix-chain still shows **33 errors** that were previously masked by the cascade of compile-stops PR #2 clears. These predate Plan 40-03 and represent fork-side tech debt accumulated across upstream-sync phases.
+PR #2 unbreaks Phase 40's structural CI breakage on Linux/macOS, but CI was already red BEFORE Phase 40 even started — confirmed by comparing CI runs on commit `a72736bb` (pre-PR-2-baseline) vs current. Same job failures both runs:
+
+- Linux/macOS Clippy: 33 errors (PR #2 round-3 surfaced these by clearing the earlier compile-stops)
+- Windows Build, Windows Integration, Windows Regression, Windows Security, Windows Packaging: all failing on `a72736bb` AND today's round-3 CI
+
+The "Windows CI green on main" claim in `.planning/phases/40-upst4-sync-execution/.continue-here.md` is incorrect — those "green" runs were docs-only commits with all real jobs SKIPPED by the change-classifier. The fork's `main` has had Windows CI red for at least a week, and the cherry-picks for Plan 40-02 and Plan 40-03 were merged on top of an already-red Windows baseline.
+
+So this tracker now covers BOTH the Linux/macOS clippy backlog AND the Windows test/build failures — all confirmed pre-existing.
 
 ## Error categorization
 
@@ -17,6 +24,17 @@ PR #2 unbreaks Phase 40's structural CI breakage on Linux/macOS, but CI run afte
 | **Disallowed methods — `std::env::set_var/remove_var`** | 2 | `crates/nono-cli/src/test_env.rs:343, 344` — must migrate to `EnvVarGuard` (lint's recommended replacement) |
 | **Unreachable expression** | 1 | `crates/nono-cli/src/exec_strategy.rs:1930` |
 | **Sundry / fields-never-read** | 2+ | misc — needs investigation |
+
+## Windows error categorization (added 2026-05-14 follow-up)
+
+Confirmed pre-existing on commit `a72736bb` — predates PR #2 and the version bump.
+
+| Class | Failing jobs | Sample sites |
+|---|---|---|
+| **MSI validator missing `BrokerPath` param** | Windows Build, Windows Packaging | `scripts/validate-windows-msi-contract.ps1:115` — `Get-WixDocumentForScope` was extended to require `-BrokerPath` when Phase 31 broker landed (`2026-05-09`), but the validator call site was never updated. PowerShell error: "Cannot process command because of one or more missing mandatory parameters: BrokerPath." |
+| **Block-net probe tests** | Windows Security | `crates/nono-cli/tests/env_vars.rs:811, 959` — `windows_run_block_net_blocks_probe_connection` + `_through_cmd_host` assert the output contains `"connect failed"` or `"exit code 42"` but the probe never runs; output is just the `nono v0.X.Y` banner. Root cause TBD — possibly a runtime probe-fixture issue, not a string-match issue. |
+| **env_vars parallel flake** | Windows Integration | `crates/nono-cli/tests/env_vars.rs::windows_run_redirects_profile_state_vars_into_writable_allowlist` — documented as out-of-scope in the original Phase 40 handoff; passes serially, fails on parallel runs. Pre-existing. |
+| **Windows Regression** | Windows Regression | Same env_vars suite; needs separate triage to confirm same root cause as Integration/Security. |
 
 ## Root cause hypotheses
 
@@ -39,8 +57,11 @@ Memory note `feedback-clippy-cross-target` (Phase 25 CR-A regression lesson) —
 
 ## Suggested phase structure
 
-- **Phase 41-01 (CR-A simple)**: dead-code, unreachable, disallowed-methods — ~17 fixes, ~10 commits, ~half-day
-- **Phase 41-02 (API migration)**: `CapabilityRequest::path` → `HandleTarget::FilePath` — needs research pass first to understand the new API and validate the migration pattern with a single call site before bulk-applying
+- **Phase 41-01 (CR-A simple Unix)**: dead-code, unreachable, disallowed-methods on Linux/macOS — ~17 fixes, ~10 commits, ~half-day
+- **Phase 41-02 (API migration Unix)**: `CapabilityRequest::path` → `HandleTarget::FilePath` — needs research pass first to understand the new API and validate the migration pattern with a single call site before bulk-applying
+- **Phase 41-03 (Windows MSI validator)**: thread `-BrokerPath` through `validate-windows-msi-contract.ps1`. One-file PowerShell fix once the new param semantics are confirmed.
+- **Phase 41-04 (Windows block-net probe tests)**: triage `windows_run_block_net_blocks_probe_connection` + `_through_cmd_host` — determine why the probe never runs. May be related to broker-spawn path, network filter wiring, or a fixture build issue.
+- **Phase 41-05 (env_vars parallel flake)**: fix or properly serialize `windows_run_redirects_profile_state_vars_into_writable_allowlist` — pre-existing flaky test confirmed under parallel runs.
 
 ## Blocking on / unblocked by
 
