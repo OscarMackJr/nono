@@ -479,6 +479,7 @@ mod tests {
     #[test]
     fn test_execution_start_dir_falls_back_to_root_when_not_covered() {
         let dir = tempfile::tempdir().expect("tempdir");
+        #[cfg(target_os = "windows")]
         let canonical = dir.path().canonicalize().expect("canonicalize");
         let caps = CapabilitySet::new();
 
