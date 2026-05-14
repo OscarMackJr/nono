@@ -328,23 +328,31 @@ Upstream-author: <Name> <<email>>
   </read_first>
   <action>
     ```bash
+    # Push commits to main. NOTE: per project-cross-fork-pr-pattern memory,
+    # the upstream contribution PR is a single umbrella (PR #922:
+    # oscarmackjr-twg:main → always-further:main). GitHub's one-PR-per-branch-pair
+    # rule means we update #922's body, not create a new PR.
     git push origin main
-    gh pr create \
-      --title "Plan 40-04 (C7): Landlock ABI OnceLock cache + full failure diagnostic + v0.52.1/v0.52.2/v0.53.0 release bumps (5 commits)" \
-      --body "$(cat <<'EOF'
-    Wave 1 plan (depends on Wave 0: 40-02 + 40-03). Absorbs upstream Cluster C7 (5 commits):
 
-    - 5b61971: Landlock ABI detection cached via OnceLock (linux.rs)
-    - 5a61808: full failure diagnostic returned at supervisor boundaries (diagnostic.rs)
-    - 21bbb82: chore: release v0.52.1 (Cargo.toml version bump)
-    - e8bf014: chore: release v0.52.2 (Cargo.toml version bump)
-    - c4b25b8: chore: release v0.53.0 (Cargo.toml version bump)
+    # Append this plan's contribution to PR #922's existing body.
+    # Read current body, append a section for 40-04, write back.
+    CURRENT_BODY=$(gh pr view 922 --repo always-further/nono --json body --jq '.body')
+    PLAN_SECTION='
 
-    D-19 trailers: 5/5. D-40-E1 violations: 0. D-40-C2 gates: all pass.
-    Fork now at upstream v0.53.0 for will-sync clusters.
-    Part of Phase 40 UPST4 sync execution (REQ-UPST4-02).
-    EOF
-    )"
+## Plan 40-04 (Cluster C7 — v0.52.1/v0.52.2/v0.53.0) — 5 commits
+
+Landlock ABI cache + diagnostic + release bumps:
+
+- `5b61971` — Landlock ABI detection cached via OnceLock (linux.rs)
+- `5a61808` — full failure diagnostic returned at supervisor boundaries (diagnostic.rs)
+- `21bbb82` — chore: release v0.52.1 (Cargo.toml version bump)
+- `e8bf014` — chore: release v0.52.2 (Cargo.toml version bump)
+- `c4b25b8` — chore: release v0.53.0 (Cargo.toml version bump)
+
+Fork now at upstream v0.53.0 for will-sync clusters. D-19 trailers: 5/5. D-40-E1 violations: 0. D-40-C2 gates: all pass.'
+
+    NEW_BODY="${CURRENT_BODY}${PLAN_SECTION}"
+    gh pr edit 922 --repo always-further/nono --body "$NEW_BODY"
     ```
   </action>
   <verify>

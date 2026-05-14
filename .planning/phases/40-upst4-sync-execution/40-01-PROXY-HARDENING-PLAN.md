@@ -316,22 +316,30 @@ Signed-off-by: oscarmackjr-twg <oscar.mack.jr@gmail.com>
   </read_first>
   <action>
     ```bash
+    # Push commits to main. NOTE: per project-cross-fork-pr-pattern memory,
+    # the upstream contribution PR is a single umbrella (PR #922:
+    # oscarmackjr-twg:main → always-further:main). GitHub's one-PR-per-branch-pair
+    # rule means we update #922's body, not create a new PR.
     git push origin main
-    gh pr create \
-      --title "Plan 40-01 (C1): Proxy server hardening — libdbus isolation + Node 26 NODE_USE_ENV_PROXY + review fixes (v0.52.1, 5 commits)" \
-      --body "$(cat <<'EOF'
-    Wave 1 plan (depends on Wave 0: 40-02 + 40-03). Absorbs upstream v0.52.1 Cluster C1 (5 commits):
 
-    - 5e6e7ca + eedfbcd: server.rs review fixes
-    - be8cd00: accurate warning message + doc comment
-    - abc86f6: libdbus isolated from no-keyring builds (critical for Windows MSI distribution)
-    - d57375e: NODE_USE_ENV_PROXY for Node 26 proxy env semantics
+    # Append this plan's contribution to PR #922's existing body.
+    # Read current body, append a section for 40-01, write back.
+    CURRENT_BODY=$(gh pr view 922 --repo always-further/nono --json body --jq '.body')
+    PLAN_SECTION='
 
-    D-19 trailers: 5/5. D-40-E1 violations: 0. D-40-C2 gates: all pass.
-    C5 boundary preserved (TLS/credential changes stay in Plan 40-06).
-    Part of Phase 40 UPST4 sync execution (REQ-UPST4-02).
-    EOF
-    )"
+## Plan 40-01 (Cluster C1 — v0.52.1) — 5 commits
+
+Proxy server hardening:
+
+- `5e6e7ca` + `eedfbcd` — server.rs review fixes
+- `be8cd00` — accurate warning message + doc comment
+- `abc86f6` — libdbus isolated from no-keyring builds (critical for Windows MSI distribution)
+- `d57375e` — NODE_USE_ENV_PROXY for Node 26 proxy env semantics
+
+C5 boundary preserved (TLS/credential changes stay in Plan 40-06). D-19 trailers: 5/5. D-40-E1 violations: 0. D-40-C2 gates: all pass.'
+
+    NEW_BODY="${CURRENT_BODY}${PLAN_SECTION}"
+    gh pr edit 922 --repo always-further/nono --body "$NEW_BODY"
     ```
   </action>
   <verify>
