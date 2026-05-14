@@ -358,6 +358,56 @@ Upstream-author: <Name> <<email>>
   </done>
 </task>
 
+<task type="auto">
+  <name>Task 5: Wait-for-CI gate (anti-pattern prevention)</name>
+  <files>(no edits; CI poll only)</files>
+  <read_first>
+    - .planning/phases/40-upst4-sync-execution/.continue-here.md § Critical Anti-Patterns row 1+2
+    - .planning/PHASE-41-TRACKER.md (baseline: pre-Wave-1 CI was pre-existing red on Linux/macOS clippy + 4 Windows job classes per commit `a72736bb` and onwards; Wave 1 must not REGRESS on top of that baseline, but is not responsible for FIXING the Phase 41 backlog)
+  </read_first>
+  <action>
+    ```bash
+    # 1. Capture the parent commit's CI conclusions as the regression baseline.
+    #    "Parent" = origin/main BEFORE this plan's push.
+    BASELINE_SHA=$(git rev-parse HEAD~5)  # 5 commits = this plan's 5 cherry-picks
+    BASELINE_RUN=$(gh run list --branch main --commit "$BASELINE_SHA" --workflow CI --limit 1 --json databaseId --jq '.[0].databaseId')
+    gh api "repos/oscarmackjr-twg/nono/actions/runs/${BASELINE_RUN}/jobs?per_page=30" \
+      --jq '.jobs[] | {name: .name, conclusion: .conclusion}' > /tmp/baseline-jobs.json
+
+    # 2. Wait for the Wave-1 push's CI run to finish.
+    WAVE1_RUN=$(gh run list --branch main --commit "$(git rev-parse HEAD)" --workflow CI --limit 1 --json databaseId --jq '.[0].databaseId')
+    gh run watch "$WAVE1_RUN" --exit-status || true  # do not auto-fail; we apply baseline diff next
+    gh api "repos/oscarmackjr-twg/nono/actions/runs/${WAVE1_RUN}/jobs?per_page=30" \
+      --jq '.jobs[] | {name: .name, conclusion: .conclusion}' > /tmp/wave1-jobs.json
+
+    # 3. Compute regression set: jobs that were `success` in baseline AND `failure` after Wave 1's push.
+    #    A regression means Wave 1's commits broke a job that previously passed — a P0 blocker.
+    #    A pre-existing failure (red in both baseline AND wave1) is NOT a regression — Phase 41 territory.
+    python3 -c "
+    import json
+    base = {j['name']: j['conclusion'] for j in [json.loads(l) for l in open('/tmp/baseline-jobs.json')]}
+    head = {j['name']: j['conclusion'] for j in [json.loads(l) for l in open('/tmp/wave1-jobs.json')]}
+    regressions = [n for n in head if base.get(n) == 'success' and head[n] == 'failure']
+    if regressions:
+        print('REGRESSIONS (P0):'); [print(' -', r) for r in regressions]
+        exit(1)
+    print('No regressions vs baseline. Pre-existing failures (if any) are Phase 41 scope.')
+    "
+    ```
+  </action>
+  <verify>
+    <automated>test $? = 0  # the python3 baseline-diff above must exit 0 (zero regressions)</automated>
+  </verify>
+  <acceptance_criteria>
+    - Wave 1's CI run completed (not still pending).
+    - Zero jobs regressed from `success` (baseline) → `failure` (Wave 1). Pre-existing failures are documented in Phase 41 tracker and do not block.
+    - If any regression detected: STOP. Do not declare PLAN COMPLETE. Open a debug session via `/gsd-debug` with the regression set.
+  </acceptance_criteria>
+  <done>
+    Wave 1 CI verified non-regressing against baseline. PLAN COMPLETE can be declared.
+  </done>
+</task>
+
 </tasks>
 
 <threat_model>
