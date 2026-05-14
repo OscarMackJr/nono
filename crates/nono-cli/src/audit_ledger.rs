@@ -373,6 +373,7 @@ mod tests {
     use crate::test_env::{EnvVarGuard, ENV_LOCK};
     use nono::undo::{
         AuditAttestationSummary, ExecutableIdentity, NetworkAuditDecision, NetworkAuditMode,
+        RollbackStatus,
     };
     #[cfg(unix)]
     use std::ffi::OsString;
@@ -394,6 +395,7 @@ mod tests {
             audit_event_count: 2,
             audit_integrity: None,
             audit_attestation: None,
+            rollback_status: RollbackStatus::Skipped,
         }
     }
 
@@ -470,6 +472,7 @@ mod tests {
                 merkle_root: ContentHash::from_bytes([3; 32]),
             }),
             audit_attestation: None,
+            rollback_status: RollbackStatus::Available,
         };
         let base_digest = compute_session_digest(&base).unwrap();
 
