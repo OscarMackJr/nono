@@ -61,9 +61,54 @@ impl std::fmt::Debug for LoadedCredential {
 }
 
 /// Credential store for all configured routes.
+///
+/// # Credential-match policy (D-20 replay of upstream f77e0e3)
+///
+/// Upstream `f77e0e3` ("absolute match / 2 matches = deny / no match =
+/// passthrough w no creds") defines selection semantics when **multiple
+/// credential routes share the same upstream host** (e.g. two GitHub
+/// orgs with different tokens injected at TLS-intercept time based on
+/// the inner-request path). Per D-40-B2, the fork does NOT host the
+/// `tls_intercept` module that owns that selection algorithm. Instead,
+/// the fork's reverse proxy is **path-prefix routed**: each request's
+/// service prefix is parsed from the path (see
+/// [`crate::reverse::parse_service_prefix`]) and looked up directly in
+/// [`CredentialStore::get`]. The three f77e0e3 cases collapse as
+/// follows in the fork's architecture:
+///
+/// 1. **Absolute match** — one and only one credential per service
+///    prefix is structurally enforced: `credentials` is a
+///    `HashMap<String, LoadedCredential>` keyed by prefix, so each
+///    prefix maps to at most one credential by construction. There is
+///    no path through which two `LoadedCredential` values can be
+///    selected for one request.
+///
+/// 2. **2-match-deny** — structurally impossible in this store. The
+///    upstream "ambiguous selection" case only arises when multiple
+///    routes share an upstream host AND the inner-request path can
+///    match more than one route's `endpoint_rules`. Both preconditions
+///    require the TLS-intercept multi-route dispatch surface that the
+///    fork does not have.
+///
+/// 3. **No match → passthrough with no credentials** — already the
+///    fork's behavior: `get(&prefix)` returns `None` when no
+///    credential is configured for the service prefix, and the
+///    downstream reverse-proxy code path forwards the request without
+///    injecting any credential header / URL transform. This is
+///    semantically Option A (uniform no-creds passthrough) from the
+///    Plan 40-06 D-40-B2 Windows-fallback decision: see the disposition
+///    commit body for the explicit Windows-side analysis (no
+///    Windows-specific credential fallback exists in the fork; Windows
+///    credential injection is a transitive consequence of
+///    `nono::keystore::load_secret_by_ref` using the `keyring v3`
+///    crate, which is cross-platform).
 #[derive(Debug)]
 pub struct CredentialStore {
-    /// Map from route prefix to loaded credential
+    /// Map from route prefix to loaded credential.
+    ///
+    /// Single-credential-per-prefix is a structural invariant of
+    /// `HashMap`; this guarantees the f77e0e3 "absolute match" case
+    /// without runtime checks.
     credentials: HashMap<String, LoadedCredential>,
 }
 
@@ -165,6 +210,18 @@ impl CredentialStore {
     }
 
     /// Get a credential for a route prefix, if configured.
+    ///
+    /// Returns `None` for a no-match lookup; callers MUST treat that as
+    /// **passthrough with no credentials injected** (per the D-20 replay
+    /// of upstream f77e0e3 "no match = passthrough w no creds"). This
+    /// fail-secure default applies uniformly across Linux / macOS /
+    /// Windows — the fork has no Windows-specific credential fallback
+    /// path that could silently inject a credential on a no-prefix-match
+    /// (Windows credential injection is a transitive property of
+    /// `nono::keystore::load_secret_by_ref` invoked from
+    /// [`CredentialStore::load`], not a separate "if Windows, try
+    /// Credential Manager again" branch). See the `CredentialStore`
+    /// struct-level doc for the full policy analysis.
     #[must_use]
     pub fn get(&self, prefix: &str) -> Option<&LoadedCredential> {
         self.credentials.get(prefix)
