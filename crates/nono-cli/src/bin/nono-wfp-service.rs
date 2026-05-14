@@ -4,9 +4,29 @@
 //! backend. It establishes the expected Windows service contract and now owns
 //! the first real user-mode WFP install/cleanup primitive for blocked-mode
 //! activation.
+//!
+//! The Windows-only implementation lives inside `windows_impl`. On
+//! non-Windows targets `main` is replaced with a stub that prints a
+//! diagnostic and exits non-zero, because the binary depends on the
+//! `windows-service` crate and named-pipe primitives that have no
+//! cross-platform analogue. The non-Windows stub keeps Cargo's
+//! auto-discovered bin target compileable on Linux/macOS so the workspace
+//! `cargo check` succeeds (Phase 40 follow-up — pre-existing latent bug
+//! exposed once a72736bb cleared the prior compile-stop in
+//! crates/nono/src/sandbox/mod.rs).
 
+#[cfg(not(target_os = "windows"))]
+fn main() {
+    eprintln!("nono-wfp-service is Windows-only");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "windows")]
 #[path = "../windows_wfp_contract.rs"]
 mod windows_wfp_contract;
+
+#[cfg(target_os = "windows")]
+mod windows_impl {
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -21,7 +41,7 @@ use windows_service::{
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
 };
-use windows_wfp_contract::{
+use super::windows_wfp_contract::{
     WfpRuntimeActivationRequest, WfpRuntimeActivationResponse, WFP_RUNTIME_PROTOCOL_VERSION,
 };
 
@@ -1554,7 +1574,7 @@ fn probe_runtime_activation() -> ExitCode {
     }
 }
 
-fn main() -> ExitCode {
+pub(super) fn run() -> ExitCode {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         None => {
@@ -1808,4 +1828,11 @@ mod tests {
         assert!(msg.contains("nono-wfp-service"));
         assert!(msg.contains("startup sweep complete"));
     }
+}
+
+} // end mod windows_impl
+
+#[cfg(target_os = "windows")]
+fn main() -> std::process::ExitCode {
+    windows_impl::run()
 }
