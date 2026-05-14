@@ -196,6 +196,9 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
     // audit_signer is computed locally from rollback.audit_sign_key (fork pattern).
     // _audit_signer_ctx from ctx is reserved for future API surface alignment.
     let _ = _audit_signer_ctx;
+    // capability_elevation only feeds the Windows supervisor support computation.
+    #[cfg(not(target_os = "windows"))]
+    let _ = capability_elevation;
 
     // Plan 18.1-03 G-06 wiring: UNION the hard-coded D-05 defaults with the
     // loaded profile's `capabilities.aipc` widening. No profile → pure
