@@ -9,7 +9,7 @@ use crate::cli::LearnArgs;
 use nono::try_canonicalize;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use nono::AccessMode;
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use nono::NonoError;
 use nono::Result;
 use std::collections::BTreeSet;

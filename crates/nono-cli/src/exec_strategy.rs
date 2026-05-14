@@ -2880,6 +2880,11 @@ fn handle_supervisor_message(
                 }
             }
         }
+        SupervisorMessage::Terminate { .. } | SupervisorMessage::Detach { .. } => {
+            warn!(
+                "Supervisor: received Windows-only supervisor message on non-Windows platform; ignoring"
+            );
+        }
     }
 
     Ok(())

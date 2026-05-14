@@ -627,7 +627,6 @@ mod tests {
     #[test]
     fn test_all_profiles_signal_mode_resolves() {
         use crate::capability_ext::CapabilitySetExt;
-        #[cfg(target_os = "windows")]
         use tempfile::tempdir;
         let _guard = match crate::test_env::ENV_LOCK.lock() {
             Ok(guard) => guard,

@@ -303,7 +303,7 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         detach_sequence: session.detach_sequence.as_deref(),
         open_url_origins: &proxy.open_url_origins,
         open_url_allow_localhost: proxy.open_url_allow_localhost,
-        audit_recorder: audit_recorder.as_ref(),
+        audit_recorder: audit_recorder.as_deref(),
         redaction_policy,
         allow_launch_services_active: proxy.allow_launch_services_active,
         #[cfg(target_os = "linux")]

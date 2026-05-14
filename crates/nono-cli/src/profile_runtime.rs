@@ -136,7 +136,7 @@ fn collect_bypass_protection_paths(
 #[cfg(target_os = "linux")]
 fn pre_create_landlock_profiles_dir() -> crate::Result<()> {
     let dir = crate::config::user_profiles_dir()?;
-    std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&dir).map_err(nono::NonoError::Io)?;
     Ok(())
 }
 
