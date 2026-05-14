@@ -561,8 +561,7 @@ pub fn execute_supervised(
     resource_limits: &crate::launch_runtime::ResourceLimits,
     // Session identifier used for naming the cgroup (Linux) or correlation.
     // Typically the audit session ID or a generated UUID.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    resource_session_id: &str,
+    #[cfg(any(target_os = "linux", target_os = "macos"))] resource_session_id: &str,
 ) -> Result<i32> {
     let program = &config.command[0];
     let cmd_args = &config.command[1..];

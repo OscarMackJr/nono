@@ -17,9 +17,9 @@ use colored::Colorize;
 use nono::undo::{MerkleTree, ObjectStore, SnapshotManager};
 use nono::{NonoError, Result};
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
 use std::path::Component;
+use std::path::{Path, PathBuf};
 
 /// A session paired with its change counts (created, modified, deleted).
 type SessionChanges<'a> = (&'a SessionInfo, (usize, usize, usize));
