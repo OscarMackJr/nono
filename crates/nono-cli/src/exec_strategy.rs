@@ -2840,16 +2840,17 @@ fn handle_supervisor_message(
             }
 
             // 4. Send decision response
+            let grant = if matches!(decision, ApprovalDecision::Granted) {
+                Some(nono::ResourceGrant::sideband_file_descriptor(
+                    request.access,
+                ))
+            } else {
+                None
+            };
             let response = SupervisorResponse::Decision {
                 request_id: request.request_id,
                 decision,
-                grant: if matches!(decision, ApprovalDecision::Granted) {
-                    Some(nono::ResourceGrant::sideband_file_descriptor(
-                        request.access,
-                    ))
-                } else {
-                    None
-                },
+                grant,
             };
             sock.send_response(&response)?;
         }
