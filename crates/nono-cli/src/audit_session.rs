@@ -354,6 +354,8 @@ fn calculate_dir_size(dir: &Path) -> u64 {
 mod tests {
     use super::*;
     use crate::test_env::{lock_env, EnvVarGuard};
+    #[cfg(not(target_os = "windows"))]
+    use nono::undo::RollbackStatus;
 
     // Plan 22-05a Task 10 deferral: this test suffers from the same Windows
     // state-directory flake category documented across Plan 22-01/22-03/22-04
