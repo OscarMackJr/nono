@@ -1,165 +1,141 @@
-# Roadmap: nono Windows Parity & Quality
+---
+milestone: v2.5
+milestone_name: Backlog Drain + UPST5
+status: active
+created: 2026-05-15
+granularity: standard
+---
 
-This roadmap tracks the path to full Windows/Unix parity and ongoing quality-of-life work for `nono`.
+# Roadmap — v2.5 Backlog Drain + UPST5
 
-## Milestones
+**Core Value:** Drain the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed Linux backends, clear the pre-existing CI red that has been masking real regressions, absorb upstream `v0.53.0..+` (first sync where Windows is touched), and resolve the v24 Windows broker code-review backlog — leaving the fork in a state where every cross-platform CI lane is green and Phase 38 + v2.6 work can proceed on a quiet baseline.
 
-- ✅ **v1.0 Windows Alpha** — Phases 1–4 (shipped 2026-03-31; tag `v1.0`)
-- ✅ **v2.0 Windows Gap Closure** — Phases 5–15 (shipped 2026-04-18; tag `v2.0`)
-- ✅ **v2.1 Resource Limits, Extended IPC, Attach-Streaming & Cleanup** — Phases 16–21 + 18.1 (shipped 2026-04-21; tag `v2.1`)
-- ✅ **v2.2 Windows/macOS Parity Sweep** — Phases 22–24 (shipped 2026-04-29; tag `v2.2`)
-- ✅ **v2.3 Linux POC Unblock + Deferreds Closure** — Phases 25–34, incl. 27.1, 27.2 (shipped 2026-05-12)
-- ✅ **v2.4 Complete the Partial Ports + UPST4** — Phases 35–40, incl. optional 36.5; Phases 37 + 38 re-anchored to v2.5 (shipped 2026-05-15; tag `v2.4`)
+**Phase numbering:** continues from Phase 40 (v2.4 close). Phase 37 number reserved from v2.4 ROADMAP for the host-blocked carry-forward. Phase 38 (REQ-AAHX-HOST-01) re-deferred to v2.6. Phases 39 + 40 already shipped in v2.4. v2.5 executes Phases 37, 41, 42, 43.
 
 ## Phases
 
-<details>
-<summary>✅ v1.0 Windows Alpha (Phases 1–4) — SHIPPED 2026-03-31</summary>
+- [ ] **Phase 37: Linux RESL backends + PKGS auto-pull** — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `load_registry_profile` auto-pull; coded on Windows host, verified via GitHub Actions Linux runners.
+- [ ] **Phase 41: CI cleanup + v24 broker code-review closure** — Linux/macOS Clippy + Windows CI jobs back to green; baseline reset; 4 v24 Windows broker code-review todos absorbed.
+- [ ] **Phase 42: UPST5 audit** — DIVERGENCE-LEDGER.md inventory of upstream `v0.53.0..+`; first audit where the `windows-touch` column actually fires.
+- [ ] **Phase 43: UPST5 sync execution** — Cherry-picks + D-20 manual replays per UPST5 audit dispositions; D-19 trailer convention + Windows-only-files invariant inherited; baseline-aware CI gate vs post-Phase-41 green baseline.
 
-- [x] Phase 1: Windows Control Foundation (3/3 plans) — completed 2026-04-04
-- [x] Phase 2: Persistent Sessions (4/4 plans) — completed 2026-04-04
-- [x] Phase 3: Network Sandboxing (4/4 plans) — completed 2026-04-04
-- [x] Phase 4: State Integrity & Deployment (3/3 plans) — completed 2026-04-05
+## Phase Details
 
-See `.planning/milestones/v1.0-*` if archived separately; the `v1.0` git tag points at the formal shipped state.
+### Phase 37: Linux RESL backends + PKGS auto-pull
+**Goal**: Close the 3-year Linux silent-no-op for `--memory` / `--cpu-percent` / `--max-processes` and ship cargo-install-style auto-pull for registry profiles. Linux backends coded on Windows host; verification runs on GitHub Actions Linux runners (Ubuntu 24.04, cgroup v2 default — same pattern that landed Phase 35-02 Landlock profiles-dir fix).
+**Depends on**: Nothing in v2.5 directly. Runs in parallel with Phase 41. macOS `setrlimit` portion of the v2.3 Plan 25-01 design is explicitly dropped from scope (macOS deprioritized this milestone).
+**Requirements**: REQ-RESL-NIX-01, REQ-RESL-NIX-02, REQ-RESL-NIX-03, REQ-PKGS-04
+**Success Criteria** (what must be TRUE):
+  1. On a Linux cgroup v2 host, `nono run --memory 100M -- python -c 'a = bytearray(200_000_000)'` exits non-zero (kernel kills via `cgroup.kill`), and `nono inspect <id>` shows `memory: 100M (cgroup v2 memory.max)`.
+  2. On a Linux cgroup v2 host, `nono run --cpu-percent 25 -- yes >/dev/null` averages ~25% CPU under sampling, and `nono inspect <id>` shows `cpu_percent: 25 (cgroup v2 cpu.max 25000 100000)`.
+  3. On a Linux cgroup v2 host, `nono run --max-processes 5 -- bash -c ':(){ :|:& };:'` is contained at ~5 processes (fork-bomb kernel-rejected with `EAGAIN`), and `nono inspect <id>` shows `max_processes: 5 (cgroup v2 pids.max)`.
+  4. On a cgroup v1 host, all three flags fail closed with `NonoError::UnsupportedKernelFeature` pointing to the `cgroup_no_v1` boot flag — no silent no-op path remains on Linux.
+  5. `nono run --profile claude-code-edge -- cmd` (registry profile not yet installed) auto-pulls the signed artifact, verifies the signature, installs, and runs; `--no-auto-pull` falls back to the legacy "profile not found" error; unknown names fail closed with no implicit network.
+  6. GitHub Actions Linux runner executes all four backends end-to-end as part of the Phase 37 close gate.
+**Plans**: TBD (v2.3 Plan 25-01 + Plan 26-02 designs carry forward as planning inputs; cgroup v2 vs macOS split materially simplifies the Plan 25-01 surface)
+**UI hint**: no
 
-</details>
+### Phase 41: CI cleanup + v24 broker code-review closure
+**Goal**: Reset every CI lane to green and clear the v24 Windows broker code-review backlog so Phases 42 + 43 inherit a clean baseline. This is the v2.5 prerequisite phase: subsequent baseline-aware CI gates (REQ-UPST5-02) become unambiguously real regression detectors rather than baseline-drift trackers.
+**Depends on**: Nothing. User explicitly chose Phase 41 as a v2.5 priority so subsequent phases get clean CI gates. Should land before Phase 43 sync execution.
+**Requirements**: REQ-CI-01, REQ-CI-02, REQ-CI-03, REQ-BROKER-CR-01, REQ-BROKER-CR-02, REQ-BROKER-CR-03, REQ-BROKER-CR-04
+**Success Criteria** (what must be TRUE):
+  1. `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` exits 0 from the Windows host (per memory `feedback_clippy_cross_target`), and the GitHub Actions Linux + macOS Clippy jobs are green on the Phase 41 close SHA. No `#[allow(dead_code)]` was added — every orphan was either deleted or wired per the CLAUDE.md "lazy use of dead code" rule.
+  2. All 5 Windows CI jobs (Build, Integration, Regression, Security, Packaging) are green on the Phase 41 close SHA; no `[ignored]` test markers added without an issue-linked justification; the MSI validator's `-BrokerPath` mandatory-parameter mismatch is resolved.
+  3. The baseline-aware CI gate baseline SHA in `.planning/templates/upstream-sync-quick.md` is updated to the Phase 41 close SHA, and the SUMMARY frontmatter convention (`skipped_gates_load_bearing` vs `_environmental`) is documented at the top of Phase 41's SUMMARY for Phase 43's inheritance.
+  4. `NonoError::BrokerNotFound` maps to a semantically correct C-FFI error code (per `.planning/todos/pending/v24-cr-01-broker-not-found-ffi-mapping.md`), broker-side FFI handle arguments are validated non-null before crossing the boundary (CR-02), and the empty-handle-list path is handled explicitly in the broker dispatch (CR-03).
+  5. The Job-object test skip policy for `broker_launch_assigns_child_to_job_object` is resolved with an explicit decision (a/b/c per `.planning/todos/pending/v24-cr-04-job-object-test-skip-policy.md`), and STATE.md `## Deferred Items` is cleared of the v24 CR-A class entries that were waiting on a clean baseline.
+**Plans**: TBD (PHASE-41-TRACKER.md § Suggested phase structure gives a 5-sub-plan starting shape; v24-cr-0[1-4]-*.md todos slot in as 1-2 additional sub-plans)
+**UI hint**: no
 
-<details>
-<summary>✅ v2.0 Windows Gap Closure (Phases 5–15) — SHIPPED 2026-04-18</summary>
+### Phase 42: UPST5 audit
+**Goal**: Produce DIVERGENCE-LEDGER.md for upstream `v0.53.0..+` with per-cluster dispositions and `windows-touch` column, gating Phase 43's cherry-pick selection. First audit cycle where the `windows-touch: yes` column actually fires per D-39-C3 conservative-default fork-preserve disposition: the two known Windows-touching commits (`5d821c12` + `0748cced`) land in `v0.54.0~5^2`. Mirror of Phase 33 / 39 audit shape; ADR review section confirms or amends the Phase 33 Option A `continue` strategy (Accepted, re-confirmed at v2.4 close per D-39-C4).
+**Depends on**: Phase 41 (close gate). Phase 42 is audit-only and could in principle start earlier, but landing it after the baseline reset means the audit's "next-phase will inherit a green baseline" assumption holds. Sequential after Phase 41.
+**Requirements**: REQ-UPST5-01
+**Success Criteria** (what must be TRUE):
+  1. `DIVERGENCE-LEDGER.md` enumerates every upstream commit in `v0.53.0..<anchor>` that touches a fork-shared file (`crates/nono/`, `crates/nono-cli/` excluding `_windows.rs`/`exec_strategy_windows/`, `crates/nono-proxy/`); anchor SHA is locked at audit-open time per D-39-D1.
+  2. Every cluster has a disposition (will-sync / fork-preserve / won't-sync), a `windows-touch` column entry, and a rationale; `5d821c12` + `0748cced` are explicitly handled with a decision recorded.
+  3. The `## ADR review` section is present (grep-confirmable) and either confirms or amends the Phase 33 Option A `continue` strategy with explicit per-cell L/M/H verdicts.
+  4. Empirical cross-check: spot-check at least 3 fork-shared files for any upstream path the drift tool missed (Phase 39 empirical-cross-check pattern).
+  5. The audit ships zero `crates/` / `bindings/` / `scripts/` source-tree edits (D-39-E5 Windows-only-files invariant trivially honored for audit-only output).
+**Plans**: TBD (Phase 33 / 39 plan shape carries forward)
+**UI hint**: no
 
-- [x] Phase 5: Windows Detach Readiness Fix (1/1 plan) — completed 2026-04-05
-- [x] Phase 6: WFP Enforcement Activation (2/2 plans) — completed 2026-04-06
-- [x] Phase 7: Quick Wins (2/2 plans) — completed 2026-04-08
-- [x] Phase 8: ConPTY Shell (1/1 plan, UAT-driven) — completed 2026-04-10
-- [x] Phase 9: WFP Port-Level + Proxy Filtering (4/4 plans) — completed 2026-04-10
-- [x] Phase 10: ETW-Based Learn Command (3/3 plans) — completed 2026-04-10
-- [x] Phase 11: Runtime Capability Expansion — stretch (2/2 plans) — completed 2026-04-11
-- [x] Phase 12: Milestone Bookkeeping Cleanup (3/3 plans) — completed 2026-04-11
-- [x] Phase 13: v2.0 Human Verification UAT (1/1 plan) — resolved 2026-04-18
-- [x] Phase 14: v2.0 Fix Pass (2/3 plans, 1 escalated to Phase 15) — complete-with-carry-forward 2026-04-18
-- [x] Phase 15: Detached Console + ConPTY Architecture Investigation (3/3 plans) — completed 2026-04-18
+### Phase 43: UPST5 sync execution
+**Goal**: Cherry-pick + D-20 manual-replay per UPST5 audit dispositions, with the baseline-aware CI gate verified against the post-Phase-41 green baseline. First upstream-sync phase where the `windows-touch: yes` cluster requires real fork-side review (vs Phase 34 / 40 where windows-touch was structurally absent). Mirror of Phase 34 / 40 execution shape; PR umbrella convention inherited (PR #922 pattern: one upstream PR holds all phase contribution sections).
+**Depends on**: Phase 41 (clean baseline) and Phase 42 (audit dispositions). Sequential after both.
+**Requirements**: REQ-UPST5-02
+**Success Criteria** (what must be TRUE):
+  1. Every Phase 42 audit `will-sync` cluster has a corresponding plan in Phase 43 with cherry-picks carrying verbatim 6-line D-19 `Upstream-commit:` trailers (lowercase per Phase 40 convention).
+  2. Every `fork-preserve` cluster has a documented "preserve fork because X" rationale at SUMMARY level; D-20 manual-replays preserve fork-side defense-in-depth (e.g. `validate_path_within` precedent from v2.3 Phase 26-01).
+  3. The Windows-touching cluster (`5d821c12` + `0748cced` per Phase 42 disposition) is handled correctly — if `will-sync`, Windows CI is green post-merge; D-34-E1 / D-40-E1 Windows-only-files invariant respected with any addendum exceptions codified inline per the Phase 40 4-condition rule.
+  4. Baseline-aware CI gate produces zero `success → failure` transitions vs the Phase 41 close SHA on every Wave 1+ head commit; load-bearing skips (cross-target clippy gates 3+4) categorized correctly in SUMMARY frontmatter per Phase 40 anti-pattern #3.
+  5. A single PR umbrella to upstream holds all Phase 43 plan contribution sections (PR #922 / fork pattern per memory `project_cross_fork_pr_pattern`).
+**Plans**: TBD (Phase 34 / 40 plan shape carries forward; wave structure derives from audit's `wave-hint:` annotations)
+**UI hint**: no
 
-Full details: `.planning/milestones/v2.0-ROADMAP.md`.
+## Sequencing Rationale
 
-</details>
+```
+Phase 37 (Linux RESL + auto-pull) ──┐
+                                    │   (parallel; both close before Phase 43)
+Phase 41 (CI cleanup + broker CR) ──┴──► Phase 42 (UPST5 audit) ──► Phase 43 (UPST5 sync)
+```
 
-<details>
-<summary>✅ v2.1 Resource Limits, Extended IPC, Attach-Streaming & Cleanup (Phases 16–21 + 18.1) — SHIPPED 2026-04-21</summary>
+- **Phase 41 first by user directive** — pre-existing red on Linux/macOS Clippy + 5 Windows job classes was masking real regressions for at least a week (per PHASE-41-TRACKER.md). Resetting the baseline is the v2.5 prerequisite for clean baseline-aware gates in Phase 43.
+- **Phase 37 in parallel with Phase 41** — Phase 37 is code-on-Windows + verify-on-Linux-CI. Its CI lanes are the same lanes Phase 41 is fixing (Linux Clippy + Linux integration tests); there is mild integration risk if both phases churn the same test surface simultaneously, but the surface areas are largely disjoint (Phase 37 touches `crates/nono/src/sandbox/linux.rs` + `crates/nono-cli/src/exec_strategy.rs` runtime path; Phase 41 touches `crates/nono-cli/src/exec_strategy.rs` API-migration call sites and `audit_ledger.rs` dead-code orphans). Coordinate on the API-migration commit (`CapabilityRequest::path` → `HandleTarget::FilePath`) — Phase 37 should rebase on Phase 41's API-migration sub-plan once it lands.
+- **Phase 42 sequential after Phase 41** — audit is cheap (1 plan, ~1 week) and benefits from the clean baseline so the ADR-review section can reference green CI as evidence for `continue` strategy.
+- **Phase 43 sequential after Phase 42** — D-19 cherry-pick discipline needs Phase 42's per-cluster dispositions to choose cherry-pick vs D-20 manual-replay.
+- **BROKER-CR folded into Phase 41** — all 4 todos are Windows-broker hygiene that share the code area Phase 41 already needs to touch for the Windows CI fixes (`crates/nono-shell-broker/` + `bindings/c/`). CR-04 (Job-object test skip policy) is literally a CI-signal-quality decision that must land before the baseline reset. Folding into Phase 43 was rejected because it would dilute the "every Phase 43 commit traces to an upstream commit" D-19 discipline; a standalone Phase 44 was rejected because each todo is too small to justify phase overhead.
 
-- [x] Phase 16: Resource Limits — RESL-01..04 (2/2 plans) — completed 2026-04-18
-- [x] Phase 17: Attach-Streaming — ATCH-01 (2/2 plans) — completed 2026-04-19
-- [x] Phase 18: Extended IPC — AIPC-01 (4/4 plans) — completed 2026-04-19
-- [x] Phase 18.1: Extended IPC Gap Closure (4/4 plans) — completed 2026-04-21
-- [x] Phase 19: Cleanup — CLEAN-01..04 (4/4 plans) — completed 2026-04-19
-- [x] Phase 20: Upstream Parity Sync — UPST-01..04 (4/4 plans) — completed 2026-04-19
-- [x] Phase 21: Windows Single-File Filesystem Grants — WSFG-01..03 (5/5 plans) — completed-with-issues 2026-04-20 (supervisor-pipe regression surfaced + resolved 2026-04-20; Phase 18.1 closed the 5 AIPC UAT gaps)
+## Requirement Coverage
 
-Full details: `.planning/milestones/v2.1-ROADMAP.md`.
+13 in-milestone requirements; every one mapped to exactly one phase; zero unmapped; zero double-mapped.
 
-</details>
+| REQ-ID | Phase | Category |
+|---|---|---|
+| REQ-RESL-NIX-01 | Phase 37 | RESL-NIX |
+| REQ-RESL-NIX-02 | Phase 37 | RESL-NIX |
+| REQ-RESL-NIX-03 | Phase 37 | RESL-NIX |
+| REQ-PKGS-04 | Phase 37 | PKGS |
+| REQ-CI-01 | Phase 41 | CI-CLEAN |
+| REQ-CI-02 | Phase 41 | CI-CLEAN |
+| REQ-CI-03 | Phase 41 | CI-CLEAN |
+| REQ-BROKER-CR-01 | Phase 41 | BROKER-CR |
+| REQ-BROKER-CR-02 | Phase 41 | BROKER-CR |
+| REQ-BROKER-CR-03 | Phase 41 | BROKER-CR |
+| REQ-BROKER-CR-04 | Phase 41 | BROKER-CR |
+| REQ-UPST5-01 | Phase 42 | UPST5 |
+| REQ-UPST5-02 | Phase 43 | UPST5 |
 
-<details>
-<summary>✅ v2.2 Windows/macOS Parity Sweep (Phases 22–24) — SHIPPED 2026-04-29</summary>
+**Coverage: 13/13 ✓**
 
-- [x] Phase 22: UPST2 — Upstream v0.38–v0.40 Parity Sync (6/6 plans, PROF + POLY + PKG + OAUTH + AUD-01..04) — completed 2026-04-28
-- [x] Phase 23: Windows Audit-Event Retrofit (1/1 plan, AUD-05) — completed 2026-04-29
-- [x] Phase 24: Parity-Drift Prevention (2/2 plans, DRIFT-01 + DRIFT-02) — completed 2026-04-27
+## Cross-Phase Invariants
 
-Full details: `.planning/milestones/v2.2-ROADMAP.md`.
+These invariants are inherited from prior milestones and remain in force across v2.5:
 
-</details>
-<details>
-<summary>✅ v2.3 Linux POC Unblock + Deferreds Closure (Phases 25–34, incl. 27.1, 27.2) — SHIPPED 2026-05-12</summary>
+- **D-19 (cross-platform byte-identity preserved when cherry-picking upstream commits)** — Phase 43 cherry-picks must carry the verbatim 6-line `Upstream-commit:` trailer (lowercase `Upstream-author:` per Phase 40 standardization).
+- **D-34-E1 / D-40-E1 (Windows-only-files invariant)** — upstream-sync commits in Phase 43 do not touch fork-Windows files (`*_windows.rs`, `exec_strategy_windows/`, `crates/nono-shell-broker/`). Codified addendum exceptions allowed only under the Phase 40 4-condition rule (required cross-platform struct field; cross-platform default factory only; ≤5 lines; documented in SUMMARY + STATE).
+- **Phase 33 ADR Option A `continue` upstream-parity strategy** — Accepted, re-confirmed at v2.4 close per D-39-C4. Phase 42 may amend but defaults to `continue`.
+- **Baseline-aware CI gate** — Phase 43 gates vs the Phase 41 close SHA, not a pre-Phase-41 baseline. Categorize gate skips per the Phase 40 anti-pattern #3 distinction (`skipped_gates_load_bearing` vs `_environmental`).
+- **CLAUDE.md "lazy use of dead code" rule** — Phase 41 dead-code orphans either deleted or wired; no `#[allow(dead_code)]` added without explicit justification.
+- **Cross-target clippy required for cfg-gated Unix code** — Phase 37 + Phase 41 + Phase 43 all run `cargo clippy --workspace --target x86_64-unknown-linux-gnu` from the Windows host per memory `feedback_clippy_cross_target`. Windows-host workspace clippy alone is insufficient for Linux-touching plans.
 
-- [x] Phase 25: Cross-Platform RESL + AIPC Unix Design (6/6 plans, REQ-AIPC-NIX-01 shipped; REQ-RESL-NIX-01..03 host-blocked carry-forward to v2.4) — completed 2026-05-10
-- [⚠️] Phase 26: PKG Streaming Follow-Up (1/2 plans, REQ-PKGS-02 + REQ-PKGS-03 shipped via Plan 26-01; REQ-PKGS-01 + REQ-PKGS-04 host-blocked carry-forward to v2.4) — partial 2026-05-01
-- [⚠️] Phase 27: Audit-Attestation Hardening (1 plan, REQ-AAH-01 closed transitively via Phase 27.1 + 27.2) — partial 2026-04-29
-- [x] Phase 27.1: NONO_TEST_HOME Seam (3/3 plans, REQ-NTH-01..03) — INSERTED + completed 2026-05-04
-- [x] Phase 27.2: Audit-Attestation Test Re-Enablement (4/4 plans, REQ-AAHX-01..03) — INSERTED + completed 2026-05-05
-- [x] Phase 28: Authenticode Chain-Walker Subject Extraction (1/1 plan, REQ-AUDC-01..03) — completed 2026-04-30
-- [x] Phase 29: WR-01 Reject-Stage Unification (1/1 plan, REQ-WRU-01..02, locked-as-design Option c) — completed 2026-04-30
-- [x] Phase 30: Windows nono shell Architecture Investigation (5/5 plans; failure-mode finding + broker-pattern PoC) — completed 2026-05-08
-- [x] Phase 31: Broker-Process Architecture / SHELL-01 (6/6 plans; SHELL-01 → ✔ validated; operator field-test SUCCESS recorded 2026-05-09) — completed 2026-05-09
-- [x] Phase 32: Sigstore Integration (5/5 plans, TUF cached-root + keyless hardening + broker self-trust-anchor; 16 D-32-* decisions) — completed 2026-05-10
-- [x] Phase 33: Upstream v0.40.1..v0.52.0 audit + parity-strategy ADR (4/4 plans; Option A `continue` accepted; DIVERGENCE-LEDGER.md; G-25-DRIFT-01 empirically disproved) — completed 2026-05-11
-- [x] Phase 34: UPST3 — Upstream v0.41–v0.52 Sync Execution (13/13 plans; 12 cluster dispositions resolved; ~75 commits; 2 mid-flight splits; 4 D-20 manual-replays; 13 deferrals tracked) — completed 2026-05-12
+## Progress
 
-**Carry-forwards to v2.4** (captured in `.planning/MILESTONE-CONTEXT.md`):
-- Theme 1 — Complete the partial upstream ports (10 P34-DEFER-* items: 04b-1/2, 06-1, 08a-1, 08b-1/2, 09-1/2, 01-1/10-1)
-- Theme 2 — v2.3 host-blocked carry-forwards (Plans 25-01 RESL Unix backends + 26-02 PKGS streaming/auto-pull)
-- Theme 3 — UPST4 (upstream v0.52.1 / v0.52.2 / v0.53.0 ingestion per "lazily-evaluated cadence" ADR rule)
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 37. Linux RESL + PKGS auto-pull | 0/TBD | Not started | - |
+| 41. CI cleanup + broker CR | 0/TBD | Not started | - |
+| 42. UPST5 audit | 0/TBD | Not started | - |
+| 43. UPST5 sync execution | 0/TBD | Not started | - |
 
-**Audit verdict at close:** `gaps_found` from `.planning/milestones/v2.3-MILESTONE-AUDIT.md` (2026-05-09 + Phase 34 post-audit close 2026-05-12). Gate triggered by institutional artifact gaps (4 phases missing VERIFICATION.md final: 26, 27, 28, 29) + 5 host-blocked requirements + Phase 31 verification = human_needed. Substantively healthy: 14/14 integration points WIRED, 5/5 E2E flows PASS, 12/12 cluster dispositions resolved, 0 D-34-E1 violations across 75 Phase 34 commits.
+## References
 
-Full details: `.planning/milestones/v2.3-ROADMAP.md`.
-
-</details>
-
-
-<details>
-<summary>✅ v2.4 Complete the Partial Ports + UPST4 (Phases 35–40, incl. optional 36.5; Phases 37 + 38 re-anchored to v2.5) — SHIPPED 2026-05-15</summary>
-
-- [x] Phase 35: UPST3-closure quick wins (3/3 plans, REQ-PORT-CLOSURE-01 + -06 + -07) — completed 2026-05-12
-- [x] Phase 36: UPST3 deep closure (6/6 plans, REQ-PORT-CLOSURE-02 + -04 + -05) — completed 2026-05-13
-- [x] Phase 36.5: Profile drafts absorption (optional) (1/1 plan, REQ-PORT-CLOSURE-03) — completed 2026-05-13
-- ⤴ Phase 37: v2.3 carry-forward Linux/macOS execution — re-anchored to v2.5 (host-blocked; REQ-RESL-NIX-01..03 + REQ-PKGS-04)
-- ⤴ Phase 38: REQ-AAH-01 native host re-validation (optional) — re-anchored to v2.5 (host-blocked; REQ-AAHX-HOST-01)
-- [x] Phase 39: UPST4 audit (1/1 plan, REQ-UPST4-01) — completed 2026-05-13
-- [x] Phase 40: UPST4 sync execution (6/6 plans, REQ-UPST4-02; 14 D-19 cherry-picks + 3 D-20 manual replays; PR #922 umbrella to upstream) — completed 2026-05-15
-
-**Audit verdict at close:** `gaps_found` (environmental + paperwork) — gaps are categorically host-blocked (5 reqs re-anchored to v2.5) or audit-open cataloging glitches on completed quick-tasks. Cross-phase integration **clean** (7/7 wiring claims PASS, 0 BLOCKERS per `.planning/milestones/v2.4-MILESTONE-AUDIT.md`). Acknowledged at close; carry-forwards captured in `.planning/MILESTONES.md` § v2.4 Known Gaps.
-
-Full details: `.planning/milestones/v2.4-ROADMAP.md`.
-
-</details>
-
-## v2.5 backlog
-
-These entries are queued under v2.5 — a mix of (a) Phase 33 ADR `### Future audit cadence` rule entries ("per upstream release, lazily-evaluated") and (b) v2.4 host-blocked carry-forwards re-anchored from v2.4 at milestone close 2026-05-15 (Phases 37 + 38). They activate when v2.5 scope locks; until then they live here as forward-cadence anchors.
-
-### Phase 37: v2.3 carry-forward Linux/macOS execution (re-anchored from v2.4)
-
-**Goal:** Execute the two v2.3 host-blocked carry-forwards on Linux/macOS host — Plan 25-01 cgroup v2 + `setrlimit` RESL backends (REQ-RESL-NIX-02, REQ-RESL-NIX-03) and Plan 26-02 streaming refactor + auto-pull e2e (REQ-PKGS-04). Plan + CONTEXT artifacts already committed in v2.3 (`3ed80d38` + `86efcdeb`); this phase is execution-only.
-
-**Depends on:** Linux/macOS host availability (not a phase dependency).
-
-**Requirements:** REQ-RESL-NIX-01, REQ-RESL-NIX-02, REQ-RESL-NIX-03, REQ-PKGS-04. See `.planning/REQUIREMENTS.md`. (REQ-PKGS-01 closed via v2.3 Phase 26-02 production code; only the e2e test gate remains, captured by REQ-PKGS-04.)
-
-**Plans:** 0 plans — to be populated during `/gsd-plan-phase 37`. Plan 25-01 and Plan 26-02 will be lifted from v2.3 phase directories and re-anchored here.
-
-**Estimated effort:** ~2 weeks once host available.
-
-**Re-anchor history:** Originally scoped to v2.4 alongside the UPST3-closure phases (Phases 35, 36, 36.5) and UPST4 phases (39, 40); remained `no_directory` at v2.4 close because Linux/macOS host did not become available during the milestone. See `.planning/v2.4-MILESTONE-AUDIT.md` § Recommended Routing (Path A — tighten scope) for the disposition.
-
-**Reference:** `.planning/REQUIREMENTS.md` § REQ-RESL-NIX-01..03 + REQ-PKGS-04, `.planning/phases/25-cross-platform-resl-aipc-unix-design/25-01-RESL-NIX-PLAN.md`, `.planning/phases/26-pkg-streaming-followup/26-02-PKGS-STREAM-AUTOPULL-PLAN.md` (if present in v2.3 phase dir).
-
-### Phase 38: REQ-AAH-01 native host re-validation (optional, re-anchored from v2.4)
-
-**Goal:** Tactical confirmation pass on Linux/macOS host that the Phase 27 transitive closure (via Phase 27.1 `NONO_TEST_HOME` seam + Phase 27.2 audit-loader/bundle-target ADR) holds without a host-native gap (REQ-AAHX-HOST-01). Skip if field-validation during Phase 37 surfaces no Phase-27-related gap.
-
-**Depends on:** Phase 37 (host availability).
-
-**Requirements:** REQ-AAHX-HOST-01. See `.planning/REQUIREMENTS.md`.
-
-**Plans:** 0 plans — to be populated during `/gsd-plan-phase 38` if not skipped.
-
-**Estimated effort:** ~2-3 days.
-
-**Re-anchor history:** Originally scoped to v2.4 as the optional Theme 2 closure confirmation; remained `no_directory` at v2.4 close because (a) Phase 37 did not run and (b) the requirement is optional. Carries forward to v2.5 alongside Phase 37.
-
-**Reference:** `.planning/REQUIREMENTS.md` § REQ-AAHX-HOST-01, `.planning/phases/27-audit-attestation-hardening/`, `.planning/phases/27.1-nono-test-home-seam/`, `.planning/phases/27.2-audit-attestation-test-re-enablement/`.
-
-### Phase TBD-NN: UPST5 — Upstream v0.53.0…+ sync audit
-
-**Goal:** Mirror Phase 33 / Phase 39 audit shape. Inventory of upstream divergence from v0.53.0 forward (commits accumulated post-Phase 39 audit cutoff `c4b25b82`, including v0.54.0 `6b00932f` and any subsequent v0.55.0+ tags). Per-cluster disposition + parity-strategy review against Phase 33 ADR. **First audit where the `windows-touch: yes` column will fire** (Phase 39 audit-walk surfaced `5d821c12 fix(platform): correctly parse windows registry dword values` + `0748cced feat(platform): implement robust windows platform detection` in `v0.54.0~5^2` — both authored 2026-05-12, post-v0.53.0; D-39-C3 conservative-default `fork-preserve` disposition will apply unless UPST5 auditor confirms via diff inspection that straight cherry-pick is safe).
-
-**Depends on:** Phase 40 (UPST4 execution baseline lands fork at v0.53.0).
-
-**Requirements:** TBD when v2.5 scope locks.
-
-**Plans:** 0 / TBD — to be populated during `/gsd-plan-phase TBD-NN`.
-
-**Estimated effort:** ~1 week (mirrors Phase 39 sizing).
-
-**Reference:** `.planning/phases/33-windows-parity-upstream-0-52-divergence/` (audit-shape template), `.planning/phases/39-upst4-audit/` (Phase 39 worked example with `windows-touch` column + § ADR review section), `docs/architecture/upstream-parity-strategy.md` § Future audit cadence (Phase 33 ADR cadence rule).
+- `.planning/PROJECT.md` — milestone context, key decisions, deferred items.
+- `.planning/REQUIREMENTS.md` — v2.5 requirements with acceptance criteria + traceability table.
+- `.planning/PHASE-41-TRACKER.md` — pre-existing CI red error categorization (33 Linux/macOS Clippy + 5 Windows CI job failures) and suggested sub-plan structure.
+- `.planning/todos/pending/v24-cr-01..04-*.md` — v24 Windows broker code-review todos (folded into Phase 41).
+- `.planning/MILESTONES.md` — v2.4 close context (5 phases shipped; 5 requirements re-anchored to v2.5).
+- `.planning/templates/upstream-sync-quick.md` — UPST5 sync template (baseline SHA updated at Phase 41 close per REQ-CI-03).
+- `docs/architecture/upstream-parity-strategy.md` — Phase 33 ADR (Option A `continue` Accepted, re-confirmed v2.4 close).

@@ -13,7 +13,7 @@ progress:
   percent: 0
 ---
 
-# Project State: nono — v2.4 Complete the Partial Ports + UPST4
+# Project State: nono — v2.5 Backlog Drain + UPST5
 
 ## Project Reference
 
@@ -21,14 +21,23 @@ See: .planning/PROJECT.md (updated 2026-05-12 at v2.4 milestone start; v2.3 ship
 
 **Core Value:** Every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 40 — upst4-sync-execution
+**Current Focus:** Phase 41 — ci-cleanup-and-broker-cr (first executable v2.5 phase; Phase 37 Linux RESL runs in parallel)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-05-15 — Milestone v2.5 started
+Phase: 41 — ci-cleanup-and-broker-cr (planning) | Phase 37 — linux-resl-pkgs-autopull (planning, parallel)
+Plan: — (roadmap landed; plans not yet decomposed)
+Status: Roadmap approved; ready for /gsd-plan-phase 41 (priority) or /gsd-plan-phase 37 (parallel)
+Last activity: 2026-05-15 — v2.5 ROADMAP.md landed (4 phases: 37 parallel + 41 first + 42 audit + 43 sync; 13/13 requirements mapped; BROKER-CR folded into Phase 41)
+
+### v2.5 phase queue
+
+| Phase | Goal | Depends on | Requirements |
+|---|---|---|---|
+| 37 | Linux cgroup v2 RESL backends + PKGS auto-pull (Windows-coded, CI-Linux-verified) | None (parallel with 41) | REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 |
+| 41 | CI cleanup (Linux/macOS Clippy + 5 Windows jobs) + baseline reset + 4 v24 broker code-review todos | None (priority) | REQ-CI-01/02/03 + REQ-BROKER-CR-01/02/03/04 |
+| 42 | UPST5 audit (DIVERGENCE-LEDGER for upstream v0.53.0..+; first windows-touch-yes column) | Phase 41 | REQ-UPST5-01 |
+| 43 | UPST5 sync execution (cherry-picks + D-20 manual-replays vs post-Phase-41 baseline) | Phases 41 + 42 | REQ-UPST5-02 |
 
 ## Accumulated Context
 

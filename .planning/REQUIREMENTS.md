@@ -203,9 +203,9 @@ Context: 4 code-review todos drafted in `.planning/todos/pending/` during v2.4 c
 | REQ-CI-03 | Phase 41 | not_started |
 | REQ-UPST5-01 | Phase 42 | not_started |
 | REQ-UPST5-02 | Phase 43 | not_started |
-| REQ-BROKER-CR-01 | TBD (Phase 41 or 43) | not_started |
-| REQ-BROKER-CR-02 | TBD (Phase 41 or 43) | not_started |
-| REQ-BROKER-CR-03 | TBD (Phase 41 or 43) | not_started |
-| REQ-BROKER-CR-04 | TBD (Phase 41 or 43) | not_started |
+| REQ-BROKER-CR-01 | Phase 41 | not_started |
+| REQ-BROKER-CR-02 | Phase 41 | not_started |
+| REQ-BROKER-CR-03 | Phase 41 | not_started |
+| REQ-BROKER-CR-04 | Phase 41 | not_started |
 
-Phase assignments finalized in `.planning/ROADMAP.md` (filled by `gsd-roadmapper`).
+Phase assignments finalized in `.planning/ROADMAP.md` (filled by `gsd-roadmapper` 2026-05-15). BROKER-CR todos folded into Phase 41 (shares broker code area with Windows CI fixes; CR-04 Job-object test skip policy must land before baseline reset).
