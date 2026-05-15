@@ -4,6 +4,7 @@ created: 2026-05-09
 source: .planning/phases/31-broker-process-architecture-shell-01/31-REVIEW.md (CR-04 secondary)
 target_milestone: v2.4
 priority: low
+resolves_phase: 41
 ---
 
 # CR-04 (secondary): Job Object containment test silent-SKIP shape

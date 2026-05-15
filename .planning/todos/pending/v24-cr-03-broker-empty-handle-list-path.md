@@ -4,6 +4,7 @@ created: 2026-05-09
 source: .planning/phases/31-broker-process-architecture-shell-01/31-REVIEW.md (CR-03)
 target_milestone: v2.4
 priority: low
+resolves_phase: 41
 ---
 
 # CR-03: Empty --inherit-handle list path likely returns ERROR_BAD_LENGTH

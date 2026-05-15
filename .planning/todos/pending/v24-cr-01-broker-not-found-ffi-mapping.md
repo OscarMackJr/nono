@@ -4,6 +4,7 @@ created: 2026-05-09
 source: .planning/phases/31-broker-process-architecture-shell-01/31-REVIEW.md (CR-01)
 target_milestone: v2.4
 priority: low
+resolves_phase: 41
 ---
 
 # CR-01: BrokerNotFound FFI mapping is semantically wrong

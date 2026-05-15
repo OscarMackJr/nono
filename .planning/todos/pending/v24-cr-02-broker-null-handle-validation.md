@@ -4,6 +4,7 @@ created: 2026-05-09
 source: .planning/phases/31-broker-process-architecture-shell-01/31-REVIEW.md (CR-02)
 target_milestone: v2.4
 priority: medium
+resolves_phase: 41
 ---
 
 # CR-02: Broker accepts --inherit-handle 0x0 (null HANDLE)
