@@ -3,6 +3,9 @@
 //! These run as separate processes, so env vars are isolated and cannot race
 //! with parallel unit tests.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::process::Command;
 
 fn nono_bin() -> Command {
@@ -1026,6 +1029,20 @@ fn windows_run_prefers_managed_low_integrity_runtime_root_inside_allowlist() {
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_run_redirects_profile_state_vars_into_writable_allowlist() {
+    // Phase 41 (REQ-CI-02): Pin canonical Windows runtime baseline before
+    // invoking nono_bin() so this test does not race with sibling parallel
+    // tests that mutate PATH/PATHEXT/COMSPEC/SystemRoot/windir/SystemDrive.
+    // The Drop on _env restores originals on test exit (see
+    // tests/common/test_env.rs for the EnvVarGuard contract).
+    let _env = common::test_env::EnvVarGuard::set_all(&[
+        ("PATH", r"C:\Windows\system32;C:\Windows"),
+        ("PATHEXT", ".COM;.EXE;.BAT;.CMD"),
+        ("COMSPEC", r"C:\Windows\system32\cmd.exe"),
+        ("SystemRoot", r"C:\Windows"),
+        ("windir", r"C:\Windows"),
+        ("SystemDrive", "C:"),
+    ]);
+
     let dir = tempfile::tempdir().expect("tmpdir");
     let workspace = dir.path().join("workspace");
     std::fs::create_dir_all(&workspace).expect("mkdir workspace");
