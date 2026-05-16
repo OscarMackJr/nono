@@ -2627,6 +2627,21 @@ fn run_supervisor_loop(
     Ok((status, denials))
 }
 
+/// Reads the request's path using the AIPC-01 shape (target = Some(FilePath{path}))
+/// with fallback to the Phase 11 deprecated `path` field. Localizes the
+/// deprecation surface to ONE place: once Phase 11 wire-shape is retired,
+/// only this helper changes.
+fn request_path(request: &nono::CapabilityRequest) -> &std::path::Path {
+    use nono::HandleTarget;
+    match &request.target {
+        Some(HandleTarget::FilePath { path }) => path.as_path(),
+        _ => {
+            #[allow(deprecated)]
+            { &request.path }
+        }
+    }
+}
+
 /// Handle a single supervisor IPC message.
 ///
 /// Flow:
@@ -2659,7 +2674,7 @@ fn handle_supervisor_message(
                 record_denial(
                     denials,
                     DenialRecord {
-                        path: request.path.clone(),
+                        path: request_path(&request).to_path_buf(),
                         access: request.access,
                         reason: DenialReason::PolicyBlocked,
                     },
