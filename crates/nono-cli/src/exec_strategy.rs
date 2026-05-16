@@ -2631,7 +2631,7 @@ fn run_supervisor_loop(
 /// deprecation surface to ONE place: once Phase 11 wire-shape is retired,
 /// only this helper changes.
 fn request_path(request: &nono::CapabilityRequest) -> &std::path::Path {
-    use nono::HandleTarget;
+    use nono::supervisor::HandleTarget;
     match &request.target {
         Some(HandleTarget::FilePath { path }) => path.as_path(),
         _ => {
