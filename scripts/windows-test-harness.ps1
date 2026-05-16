@@ -143,8 +143,31 @@ foreach ($activeSuite in $suites) {
                 "--workspace",
                 "--verbose"
             )
+            # Phase 41 Plan 08 (REQ-CI-02 gap closure): explicitly pre-build the broker so
+            # `target\debug\nono-shell-broker.exe` is guaranteed to exist before the MSI validator
+            # runs. Defense-in-depth against future workspace-build configuration changes that
+            # might exclude the broker crate. Mirrors the windows-packaging CI lane pattern
+            # established by Plan 41-03 (.github/workflows/ci.yml:334-338).
+            Invoke-LoggedCargo -LogFile "windows-build.log" -Label "build nono-shell-broker" -CargoArgs @(
+                "build",
+                "-p",
+                "nono-shell-broker"
+            )
             Invoke-LoggedCommand -LogFile "windows-build.log" -Label "validate windows msi contract" -Command {
-                & (Join-Path $PWD "scripts\validate-windows-msi-contract.ps1") -BinaryPath (Join-Path $PWD "target\debug\nono.exe")
+                # Phase 41 Plan 08 (REQ-CI-02 gap closure): validate-windows-msi-contract.ps1 made
+                # `-BrokerPath` mandatory in Plan 41-03 (validator line 8). Without `-BrokerPath`,
+                # PowerShell rejects with "Cannot process command because of one or more missing
+                # mandatory parameters: BrokerPath" and the GH Actions windows-build job fails
+                # every run. Pass the workspace's debug-built broker artifact and fail-secure if
+                # it is missing (CLAUDE.md Fail Secure principle).
+                $brokerPath = Join-Path $PWD "target\debug\nono-shell-broker.exe"
+                if (-not (Test-Path -LiteralPath $brokerPath)) {
+                    Write-Error "nono-shell-broker.exe missing at $brokerPath; MSI validator cannot proceed. The 'build nono-shell-broker' step above should produce this artifact - investigate cargo output."
+                    throw "MSI validator pre-check failed: broker artifact not found at $brokerPath"
+                }
+                & (Join-Path $PWD "scripts\validate-windows-msi-contract.ps1") `
+                    -BinaryPath (Join-Path $PWD "target\debug\nono.exe") `
+                    -BrokerPath $brokerPath
             }
         }
         "smoke" {
