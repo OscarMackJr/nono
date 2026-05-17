@@ -16,7 +16,7 @@ granularity: standard
 
 - [ ] **Phase 37: Linux RESL backends + PKGS auto-pull** — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `load_registry_profile` auto-pull; coded on Windows host, verified via GitHub Actions Linux runners.
 - [x] **Phase 41: CI cleanup + v24 broker code-review closure** — Linux/macOS Clippy + Windows CI jobs back to green; baseline reset; 4 v24 Windows broker code-review todos absorbed. (completed 2026-05-16)
-- [ ] **Phase 42: UPST5 audit** — DIVERGENCE-LEDGER.md inventory of upstream `v0.53.0..+`; first audit where the `windows-touch` column actually fires.
+- [x] **Phase 42: UPST5 audit** — DIVERGENCE-LEDGER.md inventory of upstream `v0.53.0..+`; first audit where the `windows-touch` column actually fires. (completed 2026-05-17)
 - [ ] **Phase 43: UPST5 sync execution** — Cherry-picks + D-20 manual replays per UPST5 audit dispositions; D-19 trailer convention + Windows-only-files invariant inherited; baseline-aware CI gate vs post-Phase-41 green baseline.
 
 ## Phase Details
@@ -80,7 +80,7 @@ Plans:
   5. The audit ships zero `crates/` / `bindings/` / `scripts/` source-tree edits (D-39-E5 Windows-only-files invariant trivially honored for audit-only output).
 **Plans**: 1 plans
 Plans:
-- [ ] 42-01-PLAN.md — DIVERGENCE-AUDIT: drift run + ledger curation (v0.53.0..v0.54.0, ~20 commits, 5-7 clusters) with `windows-touch` column firing for 5d821c12 + 0748cced, `## ADR review` per-cell L/M/H verdicts (5 dimensions), `## Empirical cross-check` (3 Phase-41-touched files), UPST6 stub queued per D-42-B4, STATE.md close
+- [x] 42-01-PLAN.md — DIVERGENCE-AUDIT: drift run + ledger curation (v0.53.0..v0.54.0, ~20 commits, 5-7 clusters) with `windows-touch` column firing for 5d821c12 + 0748cced, `## ADR review` per-cell L/M/H verdicts (5 dimensions), `## Empirical cross-check` (3 Phase-41-touched files), UPST6 stub queued per D-42-B4, STATE.md close
 **UI hint**: no
 
 ### Phase 43: UPST5 sync execution
@@ -149,7 +149,7 @@ These invariants are inherited from prior milestones and remain in force across 
 |-------|----------------|--------|-----------|
 | 37. Linux RESL + PKGS auto-pull | 0/TBD | Not started | - |
 | 41. CI cleanup + broker CR | 11/10 | Complete   | 2026-05-17 |
-| 42. UPST5 audit | 0/TBD | Not started | - |
+| 42. UPST5 audit | 1/1 | Complete   | 2026-05-17 |
 | 43. UPST5 sync execution | 0/TBD | Not started | - |
 
 ## References
