@@ -78,9 +78,9 @@ Plans:
   3. The `## ADR review` section is present (grep-confirmable) and either confirms or amends the Phase 33 Option A `continue` strategy with explicit per-cell L/M/H verdicts.
   4. Empirical cross-check: spot-check at least 3 fork-shared files for any upstream path the drift tool missed (Phase 39 empirical-cross-check pattern).
   5. The audit ships zero `crates/` / `bindings/` / `scripts/` source-tree edits (D-39-E5 Windows-only-files invariant trivially honored for audit-only output).
-**Plans**: 1 plans
+**Plans**: 1 / 1 plans complete
 Plans:
-- [x] 42-01-PLAN.md — DIVERGENCE-AUDIT: drift run + ledger curation (v0.53.0..v0.54.0, ~20 commits, 5-7 clusters) with `windows-touch` column firing for 5d821c12 + 0748cced, `## ADR review` per-cell L/M/H verdicts (5 dimensions), `## Empirical cross-check` (3 Phase-41-touched files), UPST6 stub queued per D-42-B4, STATE.md close
+- [x] 42-01-PLAN.md — REQ-UPST5-01 (DIVERGENCE-LEDGER curated for v0.53.0..v0.54.0; windows-touch column fired for 5d821c12 + 0748cced + ce06bd59; ## ADR review per-cell L/M/H outcome (a) confirm Option A continue; ## Empirical cross-check 4 fork-shared files; UPST6 stub queued at v2.5 § Future Cycles)
 **UI hint**: no
 
 ### Phase 43: UPST5 sync execution
@@ -149,7 +149,7 @@ These invariants are inherited from prior milestones and remain in force across 
 |-------|----------------|--------|-----------|
 | 37. Linux RESL + PKGS auto-pull | 0/TBD | Not started | - |
 | 41. CI cleanup + broker CR | 11/10 | Complete   | 2026-05-17 |
-| 42. UPST5 audit | 1/1 | Complete   | 2026-05-17 |
+| 42. UPST5 audit | 1/1 | Complete    | 2026-05-17 |
 | 43. UPST5 sync execution | 0/TBD | Not started | - |
 
 ## References
@@ -161,3 +161,21 @@ These invariants are inherited from prior milestones and remain in force across 
 - `.planning/MILESTONES.md` — v2.4 close context (5 phases shipped; 5 requirements re-anchored to v2.5).
 - `.planning/templates/upstream-sync-quick.md` — UPST5 sync template (baseline SHA updated at Phase 41 close per REQ-CI-03).
 - `docs/architecture/upstream-parity-strategy.md` — Phase 33 ADR (Option A `continue` Accepted, re-confirmed v2.4 close).
+
+## Future Cycles
+
+Entries queued under v2.5 § Future Cycles per the Phase 33 ADR `### Future audit cadence` rule — "per upstream release, lazily-evaluated". They activate when v2.6 scope locks; until then they live here as forward-cadence anchors. **UPST6 cadence trigger met:** `v0.55.0` tag fetched 2026-05-17 during Phase 42 audit-open's `git fetch upstream --tags`.
+
+### Phase TBD-NN: UPST6 — Upstream v0.54.0…+ sync audit
+
+**Goal:** Mirror Phase 33 / Phase 39 / Phase 42 audit shape. Inventory of upstream divergence from v0.54.0 forward (commits accumulated post-Phase 42 audit cutoff `6b00932f`, including the now-shipped v0.55.0 tag). Per-cluster disposition + parity-strategy review against Phase 33 ADR; absorbs the 2 known post-v0.54.0 commits (`fc965ccc chore(deps): bump tokio`, `089cf6a0 chore(deps): bump cosign-installer`) plus any subsequent additions from v0.55.0+.
+
+**Depends on:** Phase 43 (UPST5 execution baseline lands fork at v0.54.0).
+
+**Requirements:** TBD when v2.6 scope locks (or v2.5 § Future Cycles activates).
+
+**Plans:** 0 / TBD — to be populated during `/gsd-plan-phase TBD-NN`.
+
+**Estimated effort:** ~1 week (mirrors Phase 39 + Phase 42 sizing).
+
+**Reference:** `.planning/phases/33-windows-parity-upstream-0-52-divergence/` (audit-shape root template), `.planning/phases/39-upst4-audit/` (windows-touch column zero-fire example via git archive), `.planning/phases/42-upst5-audit/` (Phase 42 worked example with windows-touch:yes fires for 5d821c12 + 0748cced + ce06bd59 + per-cell L/M/H ADR verdict table + empirical cross-check subsection), `docs/architecture/upstream-parity-strategy.md` § Future audit cadence (Phase 33 ADR cadence rule).
