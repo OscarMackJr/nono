@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: Backlog Drain + UPST5
 status: executing
-last_updated: "2026-05-17T19:02:51.934Z"
+last_updated: "2026-05-17T19:48:44.039Z"
 last_activity: 2026-05-17
 progress:
   total_phases: 4
   completed_phases: 1
-  total_plans: 10
+  total_plans: 11
   completed_plans: 11
   percent: 100
 ---
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-05-12 at v2.4 milestone start; v2.3 ship
 
 Phase: 41 (ci-cleanup-v24-broker-code-review-closure) — COMPLETE
 Plan: 10 of 10 (Plan 41-10 complete — final gap closure for 5 CI failure classes from CI run 25973911653 + Class F verifier-protocol gap)
-Status: Phase 41 complete; awaiting orchestrator push to CI
+Status: Ready to execute
 Resume file: .planning/phases/42-upst5-audit/42-CONTEXT.md
-Last activity: 2026-05-17 -- Plan 41-10 execution complete (5 commits 97b51249..306d9fd5)
+Last activity: 2026-05-17 -- Phase 42 planning complete
 
 ### v2.5 phase queue
 
