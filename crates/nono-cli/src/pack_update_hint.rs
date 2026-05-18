@@ -168,7 +168,7 @@ fn refresh_synchronous(packs: &[(String, String)], state: &mut PackHintsState) {
         let latest = client
             .fetch_package_status(&pkg_ref, Some(installed))
             .ok()
-            .and_then(|s| s.latest);
+            .and_then(|s| s.latest_version);
         state.entries.insert(
             pack_ref.clone(),
             PackHintEntry {
