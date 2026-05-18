@@ -229,7 +229,7 @@ impl<'de> Deserialize<'de> for When {
 }
 
 pub fn when_matches_current(when: Option<&When>) -> Result<bool> {
-    Ok(when.map_or(true, |predicate| predicate.matches(current())))
+    Ok(when.is_none_or(|predicate| predicate.matches(current())))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
