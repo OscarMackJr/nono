@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: Backlog Drain + UPST5
-status: ready_to_plan
-last_updated: "2026-05-17T19:51:52.053Z"
+status: planning
+last_updated: "2026-05-18T02:01:58.045Z"
 last_activity: 2026-05-17
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 2
   total_plans: 11
-  completed_plans: 11
-  percent: 50
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State: nono — v2.5 Backlog Drain + UPST5
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-05-12 at v2.4 milestone start; v2.3 ship
 Phase: 43
 Plan: Not started
 Status: Phase 42 complete — ready to plan Phase 43
-Resume file: (Phase 42 closed; next: /gsd-discuss-phase 43 or /gsd-plan-phase 43)
+Resume file: .planning/phases/43-upst5-sync-execution/43-CONTEXT.md
 Last activity: 2026-05-17 -- Plan 42-01 execution complete (DIVERGENCE-LEDGER for v0.53.0..v0.54.0; windows-touch:yes column fired for 5d821c12 + 0748cced + ce06bd59; ADR review verdict: (a) confirm Option A continue; UPST6 stub queued at v2.5 § Future Cycles)
 
 ### v2.5 phase queue
