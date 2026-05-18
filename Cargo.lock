@@ -2281,6 +2281,7 @@ dependencies = [
  "nix",
  "nono",
  "nono-proxy",
+ "nono-shell-broker",
  "proptest",
  "rand 0.10.1",
  "rcgen",
