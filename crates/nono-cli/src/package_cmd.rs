@@ -388,7 +388,7 @@ pub fn run_update(args: UpdateArgs) -> Result<()> {
             }
             _ => {
                 // "outdated" or "unknown" — attempt update.
-                let latest = status.latest.as_deref().unwrap_or("latest");
+                let latest = status.latest_version.as_deref().unwrap_or("latest");
                 if args.dry_run {
                     eprintln!("  {key} {} → {latest} (dry run)", pkg.version);
                     updated = updated.saturating_add(1);
