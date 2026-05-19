@@ -393,27 +393,130 @@ pub struct ProfileMeta {
     pub author: Option<String>,
 }
 
+// ── Platform-conditional list deserializers (replayed from upstream ce06bd59) ──
+//
+// Replayed from upstream commit `ce06bd59 feat(profile): add platform-conditional
+// profile fields` (v0.54.0) per Plan 43-05 D-20 manual replay. These helper
+// functions parse list entries that may be either bare strings OR objects
+// carrying a `when:` predicate; entries whose predicate does not match the
+// current host platform are silently skipped at deserialization time.
+//
+// The `when:` predicate grammar + matcher live in `crate::platform`. Fork
+// reuses the upstream parser verbatim because the grammar is closed and
+// security-relevant (unknown values evaluate to false; unknown syntax is a
+// parse error).
+//
+// Fork-only scope deviations from upstream (W-4 fix per Plan 43-05 § Branch B):
+//   - Upstream `GroupsConfig::{include, exclude}` does NOT exist in fork
+//     (fork uses flat `groups: Vec<String>` + `exclude_groups: Vec<String>`
+//     fields directly inside policy/security configs). `deserialize_conditional_name_vec`
+//     is included here for parity with upstream's API surface so a future fork
+//     evolution toward a `GroupsConfig` struct can wire it in without re-replaying.
+//   - `wiring.rs` `when:` directive evaluation is SKIPPED in this plan because
+//     fork's `WiringDirective` enum surface does not yet compose conditional
+//     evaluation. The JSON schema's top-level `when:` on wiring directives
+//     is rejected at deserialization time by the existing
+//     `#[serde(deny_unknown_fields)]` on fork's wiring enum variants (no silent
+//     accept-and-no-op divergence). Field-level `when:` inside paths / names /
+//     origins IS fully consumed by these helpers — that is the load-bearing
+//     surface for the `feat(profile)` upstream intent.
+
+pub(crate) fn deserialize_conditional_path_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_conditional_string_vec(deserializer, "path")
+}
+
+#[allow(dead_code)] // wired alongside future GroupsConfig replay; surfaced for API parity now
+fn deserialize_conditional_name_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_conditional_string_vec(deserializer, "name")
+}
+
+fn deserialize_conditional_origin_vec<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_conditional_string_vec(deserializer, "origin")
+}
+
+fn deserialize_conditional_string_vec<'de, D>(
+    deserializer: D,
+    value_key: &'static str,
+) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<serde_json::Value>::deserialize(deserializer)?;
+    let mut result = Vec::with_capacity(values.len());
+    for value in values {
+        match value {
+            serde_json::Value::String(item) => result.push(item),
+            serde_json::Value::Object(mut object) => {
+                let item_value = object.remove(value_key).ok_or_else(|| {
+                    serde::de::Error::custom(format!("conditional entry is missing '{value_key}'"))
+                })?;
+                let item = item_value
+                    .as_str()
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(format!(
+                            "conditional entry '{value_key}' must be a string"
+                        ))
+                    })?
+                    .to_string();
+                let when = match object.remove("when") {
+                    Some(when_value) => Some(
+                        crate::platform::When::deserialize(when_value)
+                            .map_err(serde::de::Error::custom)?,
+                    ),
+                    None => None,
+                };
+                if crate::platform::when_matches_current(when.as_ref())
+                    .map_err(serde::de::Error::custom)?
+                {
+                    result.push(item);
+                }
+            }
+            _ => {
+                return Err(serde::de::Error::custom(format!(
+                    "conditional entry must be a string or object with '{value_key}'"
+                )));
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Filesystem configuration in a profile
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilesystemConfig {
     /// Directories with read+write access
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub allow: Vec<String>,
     /// Directories with read-only access
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub read: Vec<String>,
     /// Directories with write-only access
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub write: Vec<String>,
     /// Single files with read+write access
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub allow_file: Vec<String>,
     /// Single files with read-only access
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub read_file: Vec<String>,
     /// Single files with write-only access
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub write_file: Vec<String>,
     /// Directories explicitly denied for the sandboxed child.
     ///
@@ -422,7 +525,7 @@ pub struct FilesystemConfig {
     /// file-read*)`, Linux Landlock restricted ruleset) even if the
     /// path would otherwise be accessible by default. Applied AFTER
     /// `filesystem.allow` grants so that deny takes precedence.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_path_vec")]
     pub deny: Vec<String>,
     /// Paths that bypass deny rules when paired with an explicit
     /// user-intent grant (e.g. `filesystem.allow` or `--allow`).
@@ -432,7 +535,11 @@ pub struct FilesystemConfig {
     /// via the serde alias below per D-36-B3 (no hard-deprecation date).
     /// Plan 36-01c (atomic rename): this field is now the canonical Rust
     /// identifier; the serde alias preserves legacy JSON deserialization.
-    #[serde(default, alias = "override_deny")]
+    #[serde(
+        default,
+        alias = "override_deny",
+        deserialize_with = "deserialize_conditional_path_vec"
+    )]
     pub bypass_protection: Vec<String>,
     /// Paths whose runtime denials should not be offered as grants in the
     /// interactive save-profile prompt.
@@ -449,7 +556,11 @@ pub struct FilesystemConfig {
     /// (mirrors the `override_deny → bypass_protection` D-36-B3 alias
     /// discipline). Phase 40 Plan 40-05 (D-20 manual replay; D-19 trailer
     /// upgrade rule did not fire — see plan's `## Disposition resolution`).
-    #[serde(default, alias = "ignore")]
+    #[serde(
+        default,
+        alias = "ignore",
+        deserialize_with = "deserialize_conditional_path_vec"
+    )]
     pub suppress_save_prompt: Vec<String>,
 }
 
@@ -1445,12 +1556,55 @@ impl NetworkConfig {
 /// Maps keystore account names to environment variable names.
 /// Secrets are loaded from the system keystore (macOS Keychain / Linux Secret Service)
 /// under the service name "nono".
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// Plan 43-05 manual replay (D-20) of upstream `ce06bd59`: the derive-based
+/// `Deserialize` is replaced with a hand-rolled impl that accepts either a
+/// bare env-var string OR an object form carrying a `when:` predicate.
+/// Entries whose predicate does not match the current host platform are
+/// skipped at deserialization time. The Serialize derive is preserved
+/// (round-trip emits the bare-string form per the simpler shape).
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SecretsConfig {
     /// Map of keystore account name -> environment variable name
     /// Example: { "openai_api_key" = "OPENAI_API_KEY" }
     #[serde(flatten)]
     pub mappings: HashMap<String, String>,
+}
+
+impl<'de> Deserialize<'de> for SecretsConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum CredentialValue {
+            EnvVar(String),
+            Conditional {
+                env_var: String,
+                #[serde(default)]
+                when: Option<crate::platform::When>,
+            },
+        }
+
+        let raw = HashMap::<String, CredentialValue>::deserialize(deserializer)?;
+        let mut mappings = HashMap::with_capacity(raw.len());
+        for (key, value) in raw {
+            match value {
+                CredentialValue::EnvVar(env_var) => {
+                    mappings.insert(key, env_var);
+                }
+                CredentialValue::Conditional { env_var, when } => {
+                    if crate::platform::when_matches_current(when.as_ref())
+                        .map_err(serde::de::Error::custom)?
+                    {
+                        mappings.insert(key, env_var);
+                    }
+                }
+            }
+        }
+        Ok(Self { mappings })
+    }
 }
 
 /// Hook configuration for an agent
@@ -1707,7 +1861,7 @@ pub struct OpenUrlConfig {
     /// Allowed URL origins (scheme + host, e.g., "https://console.anthropic.com").
     /// The supervisor validates each URL open request against this list.
     /// An empty list means no URLs are allowed.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_conditional_origin_vec")]
     pub allow_origins: Vec<String>,
     /// Allow opening http://localhost and http://127.0.0.1 URLs (for OAuth2 callbacks).
     #[serde(default)]
@@ -6677,6 +6831,77 @@ mod tests {
             canonical.parent(),
             draft.parent(),
             "canonical and draft must live in different directories"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Plan 43-05: platform-conditional field-level deserialization (D-20 manual
+    // replay of upstream ce06bd59). Mirrors upstream's
+    // `profile_when_filters_filesystem_groups_credentials_and_open_urls` test
+    // (with the `groups` segment dropped because fork has no GroupsConfig
+    // struct — see W-4 fix in 43-05-DISPOSITION-RESOLUTION.md).
+    //
+    // Exercises every replayed surface:
+    //   - filesystem.read (path field with conditional entries)
+    //   - filesystem.deny (path field with conditional entries)
+    //   - env_credentials (manual SecretsConfig Deserialize with conditional
+    //     object form carrying when:)
+    //   - open_urls.allow_origins (origin field with conditional entries)
+    #[test]
+    fn plan_43_05_when_filters_filesystem_credentials_and_open_urls() {
+        let current = crate::platform::current_os_name();
+        let other = if current == "linux" { "macos" } else { "linux" };
+        let json = format!(
+            r#"{{
+                "meta": {{ "name": "conditional-test" }},
+                "filesystem": {{
+                    "read": [
+                        "/always",
+                        {{ "path": "/matching", "when": "{current}" }},
+                        {{ "path": "/skipped", "when": "{other}" }}
+                    ],
+                    "deny": [
+                        {{ "path": "/denied", "when": "{current}" }},
+                        {{ "path": "/not-denied", "when": "{other}" }}
+                    ]
+                }},
+                "env_credentials": {{
+                    "plain": "PLAIN_TOKEN",
+                    "matching": {{ "env_var": "MATCH_TOKEN", "when": "{current}" }},
+                    "skipped": {{ "env_var": "SKIP_TOKEN", "when": "{other}" }}
+                }},
+                "open_urls": {{
+                    "allow_origins": [
+                        "https://always.example",
+                        {{ "origin": "https://match.example", "when": "{current}" }},
+                        {{ "origin": "https://skip.example", "when": "{other}" }}
+                    ]
+                }}
+            }}"#
+        );
+
+        let profile = parse_profile_bytes(json.as_bytes()).expect("parse profile");
+        assert_eq!(
+            profile.filesystem.read,
+            vec!["/always".to_string(), "/matching".to_string()]
+        );
+        assert_eq!(profile.filesystem.deny, vec!["/denied".to_string()]);
+        assert_eq!(
+            profile.env_credentials.mappings.get("plain"),
+            Some(&"PLAIN_TOKEN".to_string())
+        );
+        assert_eq!(
+            profile.env_credentials.mappings.get("matching"),
+            Some(&"MATCH_TOKEN".to_string())
+        );
+        assert!(!profile.env_credentials.mappings.contains_key("skipped"));
+        let origins = profile.open_urls.expect("open urls").allow_origins;
+        assert_eq!(
+            origins,
+            vec![
+                "https://always.example".to_string(),
+                "https://match.example".to_string()
+            ]
         );
     }
 }
