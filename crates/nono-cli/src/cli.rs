@@ -1474,16 +1474,16 @@ pub struct ProfilePromoteArgs {
 /// command where opt-out is meaningless.
 #[derive(Parser, Debug, Clone, Default)]
 pub struct ProfileResolverArgs {
+    // Phase 37 D-10: `NONO_NO_AUTO_PULL=1` env var counterpart honored;
+    // CLI flag presence takes precedence over env var (clap default).
+    // The `num_args(0..=1) + default_missing_value("true") + BoolishValueParser`
+    // combination mirrors the `--block-net` precedent and makes the flag take
+    // an optional boolean value: bare `--no-auto-pull` parses as `true`,
+    // env-var values `1`/`true`/`yes` parse as `true`, `0`/`false`/`no` parse
+    // as `false`.
     /// Disable cargo-install-style auto-pull when --profile references a
     /// registry pack not yet installed locally. Falls back to the legacy
     /// "profile not found" error.
-    ///
-    /// Phase 37 D-10: `NONO_NO_AUTO_PULL=1` env var counterpart honored.
-    /// CLI flag presence takes precedence over env var (clap default).
-    /// `num_args(0..=1) + default_missing_value("true") + BoolishValueParser`
-    /// mirrors the `--block-net` precedent and makes the flag take an optional
-    /// boolean value: bare `--no-auto-pull` parses as `true`, env-var values
-    /// `1`/`true`/`yes` parse as `true`, `0`/`false`/`no` parse as `false`.
     #[arg(
         long,
         env = "NONO_NO_AUTO_PULL",
