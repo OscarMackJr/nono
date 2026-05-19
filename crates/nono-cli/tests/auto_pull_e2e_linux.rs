@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tempfile::TempDir;
 
-#[allow(dead_code)] // consumed by Tasks 2 + 3 tests
 const NONO_BIN: &str = env!("CARGO_BIN_EXE_nono");
 
 // ---------------------------------------------------------------------------
@@ -27,13 +26,11 @@ const NONO_BIN: &str = env!("CARGO_BIN_EXE_nono");
 // within the same process" rule + Pattern B.
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 pub(crate) struct EnvGuard {
     key: String,
     prev: Option<String>,
 }
 
-#[allow(dead_code)]
 impl EnvGuard {
     pub(crate) fn set(key: &str, val: &str) -> Self {
         let prev = std::env::var(key).ok();
@@ -79,7 +76,6 @@ impl Drop for EnvGuard {
 /// match any route receives a 404 with body `"not found"`. This shape lets
 /// `auto_pull_unknown_name_fails_closed` (Task 2) exercise the fail-closed
 /// path with an empty route table.
-#[allow(dead_code)]
 pub(crate) fn spawn_multi_endpoint_server(
     routes: HashMap<String, (u16, Vec<u8>)>,
 ) -> (String, thread::JoinHandle<()>, Arc<Mutex<u32>>) {
@@ -152,7 +148,6 @@ pub(crate) fn spawn_multi_endpoint_server(
 // Task 4's CI workflow step populates this dir before invoking the tests.
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 pub(crate) fn fixture_pack_dir() -> Option<std::path::PathBuf> {
     let path = std::env::var("NONO_FIXTURE_PACK_DIR").ok()?;
     let pb = std::path::PathBuf::from(path);
@@ -163,7 +158,6 @@ pub(crate) fn fixture_pack_dir() -> Option<std::path::PathBuf> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn read_fixture(name: &str) -> Vec<u8> {
     let dir = fixture_pack_dir().expect(
         "NONO_FIXTURE_PACK_DIR not set — run via Phase 37 CI workflow OR locally with sigstore-sign keyless",
@@ -204,5 +198,176 @@ fn spawn_multi_endpoint_server_smoke() {
         *counter.lock().unwrap(),
         1,
         "expected exactly 1 request"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// REQ-PKGS-04 acceptance #1: happy path. Auto-pull succeeds against a signed
+// fixture pack served by the mock registry. SKIPs when NONO_FIXTURE_PACK_DIR
+// is unset (i.e., running outside the Phase 37 CI workflow).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_pull_happy_path_mock() {
+    let Some(_dir) = fixture_pack_dir() else {
+        eprintln!("SKIP: NONO_FIXTURE_PACK_DIR not set — Phase 37 CI workflow required");
+        return;
+    };
+
+    let tmp_home = TempDir::new().expect("tempdir");
+    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
+    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+
+    let bundle_body = read_fixture("bundle.json");
+    let manifest_body = read_fixture("manifest.json");
+    let artifact_body = read_fixture("artifact.tar.gz");
+    let sigstore_body = read_fixture("artifact.tar.gz.sigstore.json");
+
+    let mut routes = HashMap::new();
+    routes.insert("/bundle.json".into(), (200, bundle_body));
+    routes.insert(
+        "/mock-ns/mock-pack/manifest.json".into(),
+        (200, manifest_body),
+    );
+    routes.insert(
+        "/mock-ns/mock-pack/artifact.tar.gz".into(),
+        (200, artifact_body),
+    );
+    routes.insert(
+        "/mock-ns/mock-pack/artifact.tar.gz.sigstore.json".into(),
+        (200, sigstore_body),
+    );
+
+    let (base_url, _handle, counter) = spawn_multi_endpoint_server(routes);
+    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+
+    let output = Command::new(NONO_BIN)
+        .args([
+            "run",
+            "--profile",
+            "mock-ns/mock-pack",
+            "--",
+            "/bin/true",
+        ])
+        .output()
+        .expect("spawn nono");
+
+    let req_count = *counter.lock().unwrap();
+    assert!(
+        output.status.success(),
+        "auto-pull happy path failed; stdout={} stderr={} req_count={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        req_count
+    );
+    assert!(
+        req_count > 0,
+        "expected at least 1 request to mock registry; got 0"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// REQ-PKGS-04 acceptance #2: fail-closed on unknown name. The mock registry
+// serves 404 for every path; the nono binary must exit non-zero with a
+// ProfileNotFound-flavored error, and must NOT continue retrying past a
+// reasonable bound (request_count <= 2 — production code may issue 1-2
+// lookups before giving up).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_pull_unknown_name_fails_closed() {
+    let tmp_home = TempDir::new().expect("tempdir");
+    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
+    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+
+    // Mock registry returns 404 for everything.
+    let routes: HashMap<String, (u16, Vec<u8>)> = HashMap::new();
+    let (base_url, _handle, counter) = spawn_multi_endpoint_server(routes);
+    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+
+    let output = Command::new(NONO_BIN)
+        .args([
+            "run",
+            "--profile",
+            "not-a-namespace/totally-fake-pack",
+            "--",
+            "/bin/true",
+        ])
+        .output()
+        .expect("spawn nono");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "unknown profile must fail; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("profile not found")
+            || stderr.contains("Profile not found")
+            || stderr.contains("ProfileNotFound")
+            || stderr.contains("not found"),
+        "expected ProfileNotFound-like error; got: {stderr}"
+    );
+
+    let req_count = *counter.lock().unwrap();
+    assert!(
+        req_count <= 2,
+        "fail-closed semantics: expected at most 2 requests for unknown name; got {req_count}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// REQ-PKGS-04 acceptance #4: --no-auto-pull suppression. The mock registry
+// is available BUT the flag must prevent any network request to it; the
+// binary falls back to ProfileNotFound. The D-11 diagnostic-formatter
+// footer must mention --no-auto-pull so the user can self-diagnose.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn auto_pull_no_auto_pull_flag_falls_back_to_profile_not_found() {
+    let tmp_home = TempDir::new().expect("tempdir");
+    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
+    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+
+    // Mock registry exists BUT the flag should prevent any request to it.
+    let routes: HashMap<String, (u16, Vec<u8>)> = HashMap::new();
+    let (base_url, _handle, counter) = spawn_multi_endpoint_server(routes);
+    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+
+    let output = Command::new(NONO_BIN)
+        .args([
+            "run",
+            "--no-auto-pull",
+            "--profile",
+            "mock-ns/mock-pack",
+            "--",
+            "/bin/true",
+        ])
+        .output()
+        .expect("spawn nono");
+
+    assert!(
+        !output.status.success(),
+        "--no-auto-pull must fall back to ProfileNotFound"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("profile not found")
+            || stderr.contains("Profile not found")
+            || stderr.contains("ProfileNotFound")
+            || stderr.contains("not found"),
+        "expected ProfileNotFound error; got: {stderr}"
+    );
+    // Phase 37 D-11 footer: diagnostic_formatter should mention --no-auto-pull.
+    assert!(
+        stderr.contains("--no-auto-pull") || stderr.contains("no-auto-pull"),
+        "expected D-11 footer mentioning --no-auto-pull; got: {stderr}"
+    );
+
+    // REQ-PKGS-04 acceptance #4: no network call when flag is set.
+    let req_count = *counter.lock().unwrap();
+    assert_eq!(
+        req_count, 0,
+        "expected 0 requests with --no-auto-pull; got {req_count}"
     );
 }
