@@ -2167,6 +2167,25 @@ pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
     None
 }
 
+/// Phase 37 D-12: optional resolver context for profile lookup.
+///
+/// Threaded through [`load_profile_with_context`] /
+/// [`load_registry_profile_with_context`] to honor `--no-auto-pull` (and any
+/// future profile-resolver options) WITHOUT a thread-local or global. Default
+/// = legacy behavior, so the existing `load_profile` thin wrapper preserves
+/// every prior call site unchanged.
+#[derive(Debug, Clone, Default)]
+pub struct ResolveContext {
+    /// When `true`, suppress the cargo-install-style auto-pull that
+    /// [`load_registry_profile_with_context`] would otherwise perform when
+    /// the registry pack is not installed locally. Maps to the CLI flag
+    /// `--no-auto-pull` and the env var `NONO_NO_AUTO_PULL=1`.
+    ///
+    /// Default `false` preserves the legacy code path (auto-pull from
+    /// registry on first reference).
+    pub no_auto_pull: bool,
+}
+
 /// Load a profile by name or file path
 ///
 /// If `name_or_path` contains a path separator or ends with `.json`, it is
@@ -2175,11 +2194,28 @@ pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
 /// Name loading precedence:
 /// 1. User profiles from ~/.config/nono/profiles/<name>.json (allows customization)
 /// 2. Built-in profiles (compiled into binary, fallback)
+///
+/// Phase 37 D-12: this is a thin wrapper over [`load_profile_with_context`]
+/// using the default [`ResolveContext`]. Callers that need to honor
+/// `--no-auto-pull` MUST use the `_with_context` variant.
 pub fn load_profile(name_or_path: &str) -> Result<Profile> {
+    load_profile_with_context(name_or_path, &ResolveContext::default())
+}
+
+/// Load a profile honoring the supplied resolver context (Phase 37 D-12).
+///
+/// Behaviorally identical to [`load_profile`] except for the registry-ref
+/// branch: when `ctx.no_auto_pull` is `true` AND the pack is not installed
+/// locally, returns [`NonoError::ProfileNotFound`] verbatim (D-11) instead
+/// of triggering auto-pull.
+pub fn load_profile_with_context(
+    name_or_path: &str,
+    ctx: &ResolveContext,
+) -> Result<Profile> {
     // Registry reference (namespace/name) — detect before the file path check
     // since the `/` would otherwise be treated as a path separator.
     if is_registry_ref(name_or_path) {
-        return load_registry_profile(name_or_path);
+        return load_registry_profile_with_context(name_or_path, ctx);
     }
 
     // Direct file path: contains separator or ends with .json
@@ -2225,15 +2261,34 @@ fn is_registry_ref(s: &str) -> bool {
         && parts.iter().all(|p| !p.is_empty())
 }
 
-/// Load a profile from a registry pack. If the pack isn't installed locally,
-/// pull it first (Docker-style auto-pull with Sigstore verification).
-fn load_registry_profile(name_or_path: &str) -> Result<Profile> {
+/// Load a profile from a registry pack honoring the supplied resolver
+/// context (Phase 37 D-12). When `ctx.no_auto_pull` is `true` and the pack
+/// is not installed locally, returns [`NonoError::ProfileNotFound`] with
+/// the package-ref string preserved verbatim per D-11; otherwise the
+/// existing auto-pull behavior fires.
+fn load_registry_profile_with_context(
+    name_or_path: &str,
+    ctx: &ResolveContext,
+) -> Result<Profile> {
     let package_ref = crate::package::parse_package_ref(name_or_path)?;
     let install_dir =
         crate::package::package_install_dir(&package_ref.namespace, &package_ref.name)?;
 
     // Check if pack is already installed
     if !install_dir.join("package.json").exists() {
+        if ctx.no_auto_pull {
+            // Phase 37 D-11: fall back to ProfileNotFound (verbatim per
+            // REQ-PKGS-04 acceptance #4) and emit the diagnostic-footer
+            // hint to stderr so users can self-diagnose. NO network attempt
+            // is made — auto-pull is structurally skipped.
+            let err = NonoError::ProfileNotFound(name_or_path.to_string());
+            if let Some(footer) =
+                crate::diagnostic_formatter::format_error_footer(&err, ctx)
+            {
+                eprintln!("{footer}");
+            }
+            return Err(err);
+        }
         eprintln!("Profile '{}' not found locally.", package_ref.key());
 
         // Auto-pull from registry
