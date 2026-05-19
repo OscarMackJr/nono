@@ -253,6 +253,59 @@
       "enum": ["shared_memory_only", "full"],
       "description": "IPC mode for the sandboxed process. 'shared_memory_only' allows POSIX shared memory but denies semaphores. 'full' enables both shared memory and semaphores (required for Python multiprocessing and similar runtimes)."
     },
+    "WhenPredicate": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      ],
+      "description": "Platform predicate string or any-of array, e.g. linux, macos:>=15, linux:fedora-like:>=43, or !linux:nixos. Replayed from upstream ce06bd59 (v0.54.0) per Plan 43-05."
+    },
+    "ConditionalPath": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path"],
+          "properties": {
+            "path": { "type": "string" },
+            "when": { "$ref": "#/$defs/WhenPredicate" }
+          }
+        }
+      ]
+    },
+    "ConditionalName": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string" },
+            "when": { "$ref": "#/$defs/WhenPredicate" }
+          }
+        }
+      ]
+    },
+    "ConditionalOrigin": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origin"],
+          "properties": {
+            "origin": { "type": "string" },
+            "when": { "$ref": "#/$defs/WhenPredicate" }
+          }
+        }
+      ]
+    },
     "FilesystemConfig": {
       "type": "object",
       "description": "Filesystem access rules for the sandboxed process.",
@@ -260,47 +313,47 @@
       "properties": {
         "allow": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Directories with read+write access."
         },
         "read": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Directories with read-only access."
         },
         "write": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Directories with write-only access."
         },
         "allow_file": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Single files with read+write access."
         },
         "read_file": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Single files with read-only access."
         },
         "write_file": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Single files with write-only access."
         },
         "deny": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Paths to deny access to within this filesystem section. Complements policy.add_deny_access for inline deny composition."
         },
         "bypass_protection": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Paths to exempt from deny groups within this filesystem section. Each path must also be explicitly granted via allow/read/write. Does not implicitly grant access; only removes the deny rule. Canonical key (since v0.47.0 / upstream f0abd413). Legacy key 'override_deny' is accepted indefinitely per D-36-B3."
         },
         "suppress_save_prompt": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalPath" },
           "description": "Paths whose runtime denials should not be offered in the save-profile prompt. Replayed from upstream 9b07bf7 (v0.52.2). Does NOT grant access, does NOT remove deny rules, does NOT hide diagnostic output — only affects whether the path is offered as a grant in the interactive save-profile prompt. Serde-accepts the legacy upstream alias 'ignore' indefinitely."
         }
       }
@@ -597,8 +650,24 @@
       "type": "object",
       "description": "Maps keystore account names (or op://, apple-password://, env:// URIs) to environment variable names. Secrets are loaded from the system keystore under the service name \"nono\".",
       "additionalProperties": {
-        "type": "string",
-        "description": "Environment variable name to inject the secret value into."
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Environment variable name to inject the secret value into."
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["env_var"],
+            "properties": {
+              "env_var": {
+                "type": "string",
+                "description": "Environment variable name to inject the secret value into."
+              },
+              "when": { "$ref": "#/$defs/WhenPredicate" }
+            }
+          }
+        ]
       }
     },
     "WorkdirConfig": {
@@ -669,7 +738,7 @@
       "properties": {
         "allow_origins": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": { "$ref": "#/$defs/ConditionalOrigin" },
           "description": "Allowed URL origins (scheme + host, e.g., \"https://console.anthropic.com\"). The supervisor validates each URL open request against this list. An empty list means no URLs are allowed."
         },
         "allow_localhost": {
