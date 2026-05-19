@@ -46,14 +46,17 @@ Take 4 host-blocked v2.3 requirements (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04) from
 ### Auto-pull e2e fixture strategy (D-13..D-16)
 - **D-13:** Signed fixture pack is **generated + signed at CI time** using `sigstore-sign` keyless with the GitHub Actions OIDC token (the same flow Phase 32 sigstore-integration shipped). Hermetic; tests verify the same crypto path real users hit. Avoids check-in TTL / Rekor staleness problems.
 - **D-14:** HTTP surface uses the **std-only single-shot TCP server pattern** Phase 26-02 already established in `registry_client::tests` (50 LOC, no new dev-deps). Extended to serve a multi-endpoint mock registry (bundle.json + manifest.json + artifact). NO `mockito` dev-dep (Phase 26-02 deliberately avoided it under portable-subset; Phase 37 holds the line).
-- **D-15:** Trust root: **production Sigstore trust root** + GitHub Actions OIDC issuer pin (`https://token.actions.githubusercontent.com`). Most realistic; exercises the same verification path production users hit. **Prerequisite:** the 2 pre-existing `load_production_trusted_root_succeeds` / `verify_bundle_with_invalid_digest` TUF flakes documented in Plan 26-02 SUMMARY must be addressed (or confirmed environmental + not blocking) before this test can be green; researcher should investigate and plan accordingly.
+- **D-15:** Trust root: **production Sigstore trust root** + GitHub Actions OIDC issuer pin (`https://token.actions.githubusercontent.com`). Most realistic; exercises the same verification path production users hit. **TWO LOCKED CLAUSES — both must hold:** (1) production Sigstore trust root used by the verifier, and (2) OIDC issuer pin enforced at `https://token.actions.githubusercontent.com`. Neither clause is optional; partial-D-15 (e.g. test-only trust root substitute) is permissible ONLY when the pre-existing `load_production_trusted_root_succeeds` / `verify_bundle_with_invalid_digest` TUF flakes from Plan 26-02 SUMMARY cannot be resolved by Phase 37 close — in which case the substitute MUST be documented in Plan 37-06's SUMMARY with a tracking issue link.
 - **D-16:** Test placement: new `crates/nono-cli/tests/auto_pull_e2e_linux.rs` integration test (Linux-gated via `#[cfg(target_os = "linux")]`). Mirrors the existing `resl_nix_linux.rs` pattern. Invokes the `nono` binary via the integration-test harness; covers REQ-PKGS-04 acceptance #1 (happy path), #2 (unknown-name fail-closed), #3 (signature-failure abort), #4 (`--no-auto-pull` fallback).
 
+### `nono inspect` Limits-block platform-aware emission (D-17 — retroactive, 2026-05-19)
+- **D-17:** `nono inspect <id>` Limits-block emission is **platform-aware via compile-time `#[cfg(target_os = ...)]` gates** in the shared `session_commands.rs` formatter (NOT runtime `cfg!()`). Linux emits the LOCKED REQ-RESL-NIX-01/02/03 acceptance #2 strings (`memory: 100M (cgroup v2 memory.max)`, `cpu_percent: 25 (cgroup v2 cpu.max 25000 100000)`, `max_processes: 5 (cgroup v2 pids.max)`). Windows retains the legacy v2.1-Phase-16 Job-Object emission shape (`cpu:     25% (hard cap)` etc.). macOS emits an explicit deprioritized stub per the v2.5 macOS-deprioritization posture. Discharges the second Claude's-Discretion item (planner's cfg-gate-vs-follow-up choice) — explicit decision: cfg-gate in this phase. Implemented by Plan 37-03.
+
 ### Claude's Discretion
-- Researcher decides whether the 2 pre-existing TUF-trust-root test flakes need their own sub-plan or can be absorbed as a Phase 37 fix-pass commit (see D-15 prerequisite).
-- Planner decides whether `nono inspect` Limits-block string drift (success criteria #1–3 exact strings) gets a Phase 37 plan or a follow-up — depends on what the existing code emits today.
-- Researcher confirms whether Ubuntu 24.04's default systemd-user-session provides cgroup-v2 delegation out-of-the-box such that `loginctl enable-linger` is sufficient, or whether additional cgroup-delegation config is required (D-02 implementation detail).
-- Planner decides whether the `phase-37-linux-resl.yml` workflow gets a path-filter so it only fires on Linux-touching PRs, or always runs. Memory `feedback_clippy_cross_target` argues for always-on; CI minute budget may argue for path-filter.
+- Researcher decides whether the 2 pre-existing TUF-trust-root test flakes need their own sub-plan or can be absorbed as a Phase 37 fix-pass commit (see D-15 prerequisite). *(Discharged by Plan 37-06's Wave-3 decision checkpoint.)*
+- ~~Planner decides whether `nono inspect` Limits-block string drift (success criteria #1–3 exact strings) gets a Phase 37 plan or a follow-up — depends on what the existing code emits today.~~ *(Discharged by D-17 above: cfg-gated platform-aware emission landed in Plan 37-03.)*
+- Researcher confirms whether Ubuntu 24.04's default systemd-user-session provides cgroup-v2 delegation out-of-the-box such that `loginctl enable-linger` is sufficient, or whether additional cgroup-delegation config is required (D-02 implementation detail). *(Discharged by Plan 37-04: `Delegate=cpu cpuset io memory pids` drop-in required because default Ubuntu user-delegation is `memory pids` only.)*
+- Planner decides whether the `phase-37-linux-resl.yml` workflow gets a path-filter so it only fires on Linux-touching PRs, or always runs. Memory `feedback_clippy_cross_target` argues for always-on; CI minute budget may argue for path-filter. *(Discharged by Plan 37-04: always-on, no path-filter.)*
 
 </decisions>
 
@@ -80,6 +83,7 @@ Take 4 host-blocked v2.3 requirements (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04) from
 - `crates/nono-cli/src/profile/mod.rs:2179–2233` — `is_registry_ref` + `load_registry_profile` auto-pull dispatch; D-12 threads `ResolveContext` here.
 - `crates/nono-cli/src/cli.rs` — D-12 adds `ProfileResolverArgs` struct flattened into `RunArgs` + `WrapArgs`.
 - `crates/nono-cli/src/registry_client.rs:13` — `DEFAULT_REGISTRY_URL = https://registry.nono.sh` + `NONO_REGISTRY` env override; D-14 mock-server test points `NONO_REGISTRY` at `127.0.0.1:<ephemeral>`.
+- `crates/nono-cli/src/session_commands.rs:546-595` — D-17 platform-aware `format_limits_block` formatter + `format_bytes_short` helper.
 - `crates/nono-cli/tests/resl_nix_linux.rs` + `resl_nix_async_signal_safety.rs` — existing Linux RESL integration tests Phase 37 will execute on CI for the first time.
 - `crates/nono-cli/tests/auto_pull_e2e_linux.rs` *(new)* — D-16 creates this file.
 
@@ -149,3 +153,4 @@ Take 4 host-blocked v2.3 requirements (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04) from
 
 *Phase: 37-linux-resl-backends-pkgs-auto-pull*
 *Context gathered: 2026-05-19*
+*Revision 1 (2026-05-19): added D-17 (cfg-gated `nono inspect` Limits-block emission) + clarified D-15 two-clause structure per checker revision 1 issues B2 + W4.*

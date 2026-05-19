@@ -16,8 +16,10 @@ granularity: standard
 
 - [ ] **Phase 37: Linux RESL backends + PKGS auto-pull** — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `load_registry_profile` auto-pull; coded on Windows host, verified via GitHub Actions Linux runners.
 - [x] **Phase 41: CI cleanup + v24 broker code-review closure** — Linux/macOS Clippy + Windows CI jobs back to green; baseline reset; 4 v24 Windows broker code-review todos absorbed. (completed 2026-05-16)
-- [x] **Phase 42: UPST5 audit** — DIVERGENCE-LEDGER.md inventory of upstream `v0.53.0..+`; first audit where the `windows-touch` column actually fires. (completed 2026-05-17)
-- [x] **Phase 43: UPST5 sync execution** — Cherry-picks + D-20 manual replays per UPST5 audit dispositions; D-19 trailer convention + Windows-only-files invariant inherited; baseline-aware CI gate vs post-Phase-41 green baseline. (completed 2026-05-19)
+- [x] **Phase 42: UPST5 audit** — DIVERGENCE-LEDGER.md inventory of upstream `v0.53.0..+`; first audit where the `windows-touch` column actually fires.
+ (completed 2026-05-17)
+- [x] **Phase 43: UPST5 sync execution** — Cherry-picks + D-20 manual replays per UPST5 audit dispositions; D-19 trailer convention + Windows-only-files invariant inherited; baseline-aware CI gate vs post-Phase-41 green baseline.
+ (completed 2026-05-19)
 
 ## Phase Details
 
@@ -32,7 +34,19 @@ granularity: standard
   4. On a cgroup v1 host, all three flags fail closed with `NonoError::UnsupportedKernelFeature` pointing to the `cgroup_no_v1` boot flag — no silent no-op path remains on Linux.
   5. `nono run --profile claude-code-edge -- cmd` (registry profile not yet installed) auto-pulls the signed artifact, verifies the signature, installs, and runs; `--no-auto-pull` falls back to the legacy "profile not found" error; unknown names fail closed with no implicit network.
   6. GitHub Actions Linux runner executes all four backends end-to-end as part of the Phase 37 close gate.
-**Plans**: TBD (v2.3 Plan 25-01 + Plan 26-02 designs carry forward as planning inputs; cgroup v2 vs macOS split materially simplifies the Plan 25-01 surface)
+**Plans**: 6 plans (3 waves)
+Plans:
+**Wave 1** *(parallel — independent files)*
+- [ ] 37-01-PLAN.md — REQ-RESL-NIX-01/02/03 acc#3: UnsupportedKernelFeature variant + FFI + 4-of-5 cgroup-v2 detection-site swap
+- [ ] 37-02-PLAN.md — REQ-PKGS-04 acc#4: --no-auto-pull flag + ResolveContext threading + DiagnosticFormatter footer
+- [ ] 37-03-PLAN.md — REQ-RESL-NIX-01/02/03 acc#2: nono inspect Limits-block LOCKED strings + cfg-gated platform-aware emission
+
+**Wave 2** *(both depend on Wave 1 landing)*
+- [ ] 37-04-PLAN.md — REQ-RESL-NIX-01/02/03 acc#4: phase-37-linux-resl.yml workflow with cpu-controller Delegate= drop-in + NEW CPU-percent integration test
+- [ ] 37-05-PLAN.md — REQ-PKGS-04 acc#1/#2/#3/#5: auto_pull_e2e_linux.rs + multi-endpoint mock TCP server + CI-time keyless sigstore-sign
+
+**Wave 3** *(gate — D-15 prerequisite)*
+- [ ] 37-06-PLAN.md — TUF trust-root flake triage: path (a) sigstore-rs version bump OR path (b) NONO_TEST_HOME test-only trust root fallback
 **UI hint**: no
 
 ### Phase 41: CI cleanup + v24 broker code-review closure
@@ -147,7 +161,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 37. Linux RESL + PKGS auto-pull | 0/TBD | Not started | - |
+| 37. Linux RESL + PKGS auto-pull | 0/6 | Not started | - |
 | 41. CI cleanup + broker CR | 11/10 | Complete   | 2026-05-17 |
 | 42. UPST5 audit | 1/1 | Complete    | 2026-05-17 |
 | 43. UPST5 sync execution | 7/7 | Complete    | 2026-05-19 |
