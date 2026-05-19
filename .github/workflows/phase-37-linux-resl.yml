@@ -1,0 +1,185 @@
+# Phase 37 — Linux RESL backends + PKGS auto-pull verification
+#
+# Verifies REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 acceptance #4 on a real
+# Ubuntu 24.04 runner with cgroup v2 default + systemd-user-session +
+# cpu-controller delegation. See:
+#   .planning/phases/37-linux-resl-backends-pkgs-auto-pull/37-CONTEXT.md (D-01..D-04)
+#   .planning/phases/37-linux-resl-backends-pkgs-auto-pull/37-RESEARCH.md (Pattern 5, Pitfall 1)
+#
+# Required check on PRs to main per D-03. Always-on trigger (no path-filter
+# per CONTEXT.md Claude's Discretion + research recommendation; CI minute
+# budget acceptable for the two-job-per-PR cost).
+
+name: Phase 37 Linux RESL
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+permissions:
+  contents: read
+
+jobs:
+  resl-nix:
+    name: Phase 37 RESL-NIX (cgroup v2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config dbus-user-session systemd-container
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-phase37-resl-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-phase37-resl-
+
+      # T-37-03 mitigation: scope is `cpu cpuset io memory pids` ONLY — minimum
+      # needed for REQ-RESL-NIX-02 throttling. Do NOT widen this list without a
+      # security review (no `net_cls`, no `devices`).
+      #
+      # CRITICAL: default Ubuntu user-delegation is `memory pids` ONLY.
+      # Without this drop-in, REQ-RESL-NIX-02 silently fails because the
+      # `cpu` controller is not available to the unprivileged user session.
+      # Reference: opencontainers/runc cgroup-v2 docs; systemd CGROUP_DELEGATION.md.
+      - name: Configure cgroup v2 controller delegation (cpu added)
+        run: |
+          sudo mkdir -p /etc/systemd/system/user@.service.d
+          sudo tee /etc/systemd/system/user@.service.d/delegate.conf <<'EOF'
+          [Service]
+          Delegate=cpu cpuset io memory pids
+          EOF
+          sudo systemctl daemon-reload
+
+      - name: Enable lingering for runner user
+        run: sudo loginctl enable-linger $USER
+
+      # T-37-14 mitigation: hard-fail the job if the `cpu` controller did NOT
+      # land. Without this gate the integration tests would skip (via
+      # `require_cpu_controller!`) and the workflow would be vacuously green,
+      # exactly re-creating the silent-no-op REQ-RESL-NIX-02 regression Phase
+      # 37 is built to close.
+      - name: Wait for user session and verify cpu controller delegated
+        run: |
+          # Give the user manager time to come up under the new drop-in.
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if systemctl --user is-active default.target >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          UID_NUM=$(id -u)
+          CONTROLLERS_PATH="/sys/fs/cgroup/user.slice/user-${UID_NUM}.slice/user@${UID_NUM}.service/cgroup.controllers"
+          echo "Reading controllers from: $CONTROLLERS_PATH"
+          if [ ! -f "$CONTROLLERS_PATH" ]; then
+            echo "FAIL: controllers file missing — user@.service did not start"
+            ls -la /sys/fs/cgroup/user.slice/ || true
+            exit 1
+          fi
+          CONTROLLERS=$(cat "$CONTROLLERS_PATH")
+          echo "Delegated controllers: $CONTROLLERS"
+          if ! echo "$CONTROLLERS" | grep -qw 'cpu'; then
+            echo "FAIL: cpu controller NOT delegated; REQ-RESL-NIX-02 will silently no-op"
+            exit 1
+          fi
+          echo "OK: cpu controller delegated"
+
+      - name: Build workspace
+        run: cargo build --workspace --release --verbose
+
+      # Plan 37-01 unit tests — UnsupportedKernelFeature variant, FFI mapping,
+      # and 4-of-5 cgroup-v2 detection-site swaps. These do NOT need systemd
+      # delegation; run at workspace level for speed.
+      # NOTE: nono-cli is bin-only (no [lib] target), so the supervisor_linux
+      # tests are reached via `--bin nono`, not `--lib`.
+      - name: Run Plan 37-01 unit tests (UnsupportedKernelFeature)
+        run: |
+          cargo test -p nono --lib unsupported_kernel_feature --release
+          cargo test -p nono-ffi map_error_unsupported_kernel_feature --release
+          cargo test -p nono-cli --bin nono exec_strategy::supervisor_linux::cgroup::unsupported_kernel_feature_swap_tests --release
+
+      # Plan 37-03 unit tests — LOCKED Limits-block strings emitted by
+      # `format_limits_block`. Pure-formatter tests; no systemd needed.
+      - name: Run Plan 37-03 unit tests (Limits-block LOCKED strings)
+        run: cargo test -p nono-cli --bin nono limits_block_format_tests --release
+
+      # Integration tests MUST run under a real systemd-user-session because
+      # the production code path writes to `cpu.max` / `memory.max` / `pids.max`
+      # in the user's delegated cgroup. `machinectl shell ${USER}@.host`
+      # activates the user@.service and runs the command inside it.
+      - name: Run RESL-NIX integration tests under systemd user session
+        run: |
+          sudo machinectl shell ${USER}@.host /usr/bin/env bash -c \
+            "cd ${{ github.workspace }} && cargo test -p nono-cli --test resl_nix_linux --test resl_nix_async_signal_safety --release -- --nocapture"
+
+      # Cross-target clippy gate (Linux-from-Linux sanity). The companion
+      # Windows/macOS clippy gates run in the umbrella ci.yml.
+      - name: Cross-target clippy gate (Linux from Linux)
+        run: cargo clippy --workspace --release --tests -- -D warnings -D clippy::unwrap_used
+
+  pkgs-auto-pull:
+    name: Phase 37 PKGS-04 (auto-pull e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write  # required for GitHub Actions OIDC keyless signing (D-13)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-phase37-pkgs-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-phase37-pkgs-
+
+      # Plan 37-05 will populate this job with the sigstore-sign keyless step
+      # + the auto_pull_e2e_linux test invocation. The job structure (runs-on,
+      # permissions, checkout, toolchain, cache) is established here so Plan
+      # 37-05 can incrementally add steps without re-touching the workflow
+      # skeleton.
+      - name: Plan 37-05 placeholder
+        run: |
+          echo "Plan 37-05 will populate this job with sigstore-sign keyless + auto_pull_e2e_linux test"
+          # Ensure the job is not vacuously green: build the workspace so a
+          # broken workspace still red-fails this job between now and Plan
+          # 37-05 landing.
+          cargo build --workspace --release --verbose
