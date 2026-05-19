@@ -1465,6 +1465,37 @@ pub struct ProfilePromoteArgs {
     pub yes: bool,
 }
 
+/// Shared args for subcommands that resolve a `--profile <name>` reference.
+///
+/// Phase 37 D-12: extracted as a flattened struct so future profile-resolver
+/// options (e.g. `--profile-cache-policy`) slot in without re-plumbing the
+/// same surface. Currently flattened into `RunArgs` and `WrapArgs` per D-09;
+/// NOT flattened into `PullArgs` because `nono pull` is an explicit-install
+/// command where opt-out is meaningless.
+#[derive(Parser, Debug, Clone, Default)]
+pub struct ProfileResolverArgs {
+    /// Disable cargo-install-style auto-pull when --profile references a
+    /// registry pack not yet installed locally. Falls back to the legacy
+    /// "profile not found" error.
+    ///
+    /// Phase 37 D-10: `NONO_NO_AUTO_PULL=1` env var counterpart honored.
+    /// CLI flag presence takes precedence over env var (clap default).
+    /// `num_args(0..=1) + default_missing_value("true") + BoolishValueParser`
+    /// mirrors the `--block-net` precedent and makes the flag take an optional
+    /// boolean value: bare `--no-auto-pull` parses as `true`, env-var values
+    /// `1`/`true`/`yes` parse as `true`, `0`/`false`/`no` parse as `false`.
+    #[arg(
+        long,
+        env = "NONO_NO_AUTO_PULL",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        num_args = 0..=1,
+        default_missing_value = "true",
+        default_value_t = false,
+        help_heading = "PROFILE"
+    )]
+    pub no_auto_pull: bool,
+}
+
 #[derive(Parser, Debug, Clone, Default)]
 pub struct SandboxArgs {
     // ── Filesystem ───────────────────────────────────────────────────────
@@ -2080,6 +2111,11 @@ pub struct RunArgs {
     #[command(flatten)]
     pub sandbox: SandboxArgs,
 
+    // Phase 37 D-12: profile-resolver options (currently `--no-auto-pull`).
+    // Flattened so future resolver options slot in without re-plumbing.
+    #[command(flatten)]
+    pub profile_resolver: ProfileResolverArgs,
+
     /// Start the session without attaching the current terminal.
     /// The supervisor keeps the sandboxed process running in the background;
     /// use `nono attach <session>` later to inspect or interact with it.
@@ -2276,6 +2312,11 @@ pub struct ShellArgs {
 pub struct WrapArgs {
     #[command(flatten)]
     pub sandbox: WrapSandboxArgs,
+
+    // Phase 37 D-12: profile-resolver options (currently `--no-auto-pull`).
+    // Flattened so future resolver options slot in without re-plumbing.
+    #[command(flatten)]
+    pub profile_resolver: ProfileResolverArgs,
 
     /// Suppress diagnostic footer on command failure
     #[arg(long, help_heading = "OPTIONS")]
