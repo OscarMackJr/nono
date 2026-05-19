@@ -4824,3 +4824,134 @@ mod tests {
         }
     }
 }
+
+// ============================================================================
+// Phase 37 Plan 37-02: ProfileResolverArgs (--no-auto-pull) tests
+//
+// D-09: scope is `nono run` + `nono wrap` only; `nono pull` (direct install)
+// intentionally does NOT get the flag.
+// D-10: env var `NONO_NO_AUTO_PULL=1` honored; CLI flag takes precedence over
+// env var per clap default.
+// D-12: ProfileResolverArgs struct flattened into RunArgs and WrapArgs via
+// `#[command(flatten)]`.
+//
+// Env-var tests use the save/restore pattern (CLAUDE.md mandate: tests run in
+// parallel within the same process; an unrestored env var causes flaky failures
+// in unrelated tests).
+// ============================================================================
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod profile_resolver_args_tests {
+    use super::*;
+
+    fn set_env(key: &str, val: Option<&str>) -> Option<String> {
+        let prev = std::env::var(key).ok();
+        match val {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+        prev
+    }
+
+    fn restore_env(key: &str, prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+
+    #[test]
+    fn profile_resolver_args_default_no_auto_pull_is_false() {
+        let args = ProfileResolverArgs::default();
+        assert!(!args.no_auto_pull);
+    }
+
+    #[test]
+    fn profile_resolver_args_cli_flag_sets_true() {
+        let prev = set_env("NONO_NO_AUTO_PULL", None);
+        let cli = Cli::try_parse_from([
+            "nono",
+            "run",
+            "--no-auto-pull",
+            "--allow",
+            ".",
+            "--",
+            "/bin/true",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Run(args) => assert!(args.profile_resolver.no_auto_pull),
+            _ => panic!("expected Run subcommand"),
+        }
+        restore_env("NONO_NO_AUTO_PULL", prev);
+    }
+
+    #[test]
+    fn profile_resolver_args_env_var_sets_true() {
+        let prev = set_env("NONO_NO_AUTO_PULL", Some("1"));
+        let cli = Cli::try_parse_from(["nono", "run", "--allow", ".", "--", "/bin/true"]).unwrap();
+        match cli.command {
+            Commands::Run(args) => assert!(args.profile_resolver.no_auto_pull),
+            _ => panic!("expected Run subcommand"),
+        }
+        restore_env("NONO_NO_AUTO_PULL", prev);
+    }
+
+    #[test]
+    fn profile_resolver_args_cli_flag_overrides_env_var() {
+        // clap default: when both CLI flag and env-var are present, the CLI
+        // flag takes precedence. With a bool flag and `env = "..."`, clap
+        // treats env-var "0" as falsy and "1" as truthy; with the CLI flag
+        // present the value is always `true` regardless of env.
+        let prev = set_env("NONO_NO_AUTO_PULL", Some("0"));
+        let cli = Cli::try_parse_from([
+            "nono",
+            "run",
+            "--no-auto-pull",
+            "--allow",
+            ".",
+            "--",
+            "/bin/true",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Run(args) => assert!(args.profile_resolver.no_auto_pull),
+            _ => panic!("expected Run subcommand"),
+        }
+        restore_env("NONO_NO_AUTO_PULL", prev);
+    }
+
+    #[test]
+    fn profile_resolver_args_wrap_subcommand_accepts_flag() {
+        // D-09: `nono wrap` MUST accept --no-auto-pull (in scope per D-09).
+        let prev = set_env("NONO_NO_AUTO_PULL", None);
+        let cli = Cli::try_parse_from([
+            "nono",
+            "wrap",
+            "--no-auto-pull",
+            "--allow",
+            ".",
+            "--",
+            "/bin/true",
+        ])
+        .unwrap();
+        match cli.command {
+            Commands::Wrap(args) => assert!(args.profile_resolver.no_auto_pull),
+            _ => panic!("expected Wrap subcommand"),
+        }
+        restore_env("NONO_NO_AUTO_PULL", prev);
+    }
+
+    #[test]
+    fn pull_args_does_not_have_no_auto_pull_field() {
+        // D-09: `nono pull` is explicit-install; the flag is meaningless there
+        // and clap MUST reject it with a parse error.
+        let prev = set_env("NONO_NO_AUTO_PULL", None);
+        let result = Cli::try_parse_from(["nono", "pull", "--no-auto-pull", "namespace/foo"]);
+        assert!(
+            result.is_err(),
+            "nono pull MUST reject --no-auto-pull per D-09"
+        );
+        restore_env("NONO_NO_AUTO_PULL", prev);
+    }
+}
