@@ -55,3 +55,31 @@ Task 2"). No user input required.
 
 To be determined at clone-time by inspecting each sibling repo's
 CONTRIBUTING / README conventions in Tasks 4 + 5.
+
+## REQ-TEST-HYG-02 Determinism Check
+
+50-consecutive-runs result: **PARTIAL — deferred to live CI lane**.
+
+Per Roadmap SC#3: "both flakes pass deterministically across 50
+consecutive runs on a Windows host (or CI lane equivalent)".
+
+Disposition rationale:
+- Executor is running inside a Claude Code worktree on a Windows
+  host (`win32` platform per env), but `cargo-nextest` is NOT
+  installed on this host (`cargo nextest --version` returns
+  "no such command: nextest").
+- The plan's Part C explicitly authorises a PARTIAL deferral via
+  cross-target-verify-checklist when nextest is unavailable from
+  the dev host.
+- The `.config/nextest.toml` file is correctly written, doc-comments
+  cross-link source to config, and the filter syntax matches the
+  Option A shape from D-44-D3 / 44-PATTERNS.md § ".config/nextest.toml"
+  Option A. The first CI run that wires `cargo nextest run -p
+  nono-cli --test env_vars --config-file .config/nextest.toml` into
+  the Windows CI lane (per 44-PATTERNS.md "CI wire-up" snippet) will
+  execute the determinism check.
+
+Follow-up: the Phase 44 verifier (or a Phase 46/47 CI hardening
+plan) should wire the nextest invocation into the Windows CI
+workflow and capture the 50-runs result. Until then this disposition
+stays PARTIAL.
