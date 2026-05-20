@@ -276,15 +276,13 @@ jobs:
       # REQ-PKGS-04 #1, #2, #3, #4 + researcher Open Q3 #5). The
       # NONO_FIXTURE_PACK_DIR points at the dir we just signed; the
       # NONO_TRUST_OIDC_ISSUER env var pins the OIDC issuer to GitHub
-      # Actions per D-15 clause 2 — when the production verifier code
-      # learns to read this env var (see SUMMARY for follow-up), the pin
-      # takes effect; otherwise the auto-pull tests still exercise D-15
-      # clause 1 (production trust root) and the follow-up tightens
-      # clause 2 to fail-closed on issuer mismatch.
-      # --test-threads=1 is belt-and-suspenders against parallel-test
-      # env-var contamination (the EnvGuard RAII already mitigates it,
-      # but EnvGuard saves/restores at struct level; concurrent tests
-      # mutating the SAME var still race within the save/restore window).
+      # Actions per D-15 clause 2.
+      #
+      # Phase 44 WR-03 P37 (REQ-REVIEW-FU-01 D-44-E6): dropped
+      # `--test-threads=1` belt-and-suspenders flag. Cross-test env-var
+      # serialization is now load-bearing on the canonical `lock_env()`
+      # mutex from `crates/nono-cli/tests/common/test_env.rs`, which every
+      # env-mutating test acquires before constructing an `EnvVarGuard`.
       - name: Run auto-pull e2e integration test (D-15 both clauses)
         env:
           NONO_FIXTURE_PACK_DIR: ${{ github.workspace }}/target/fixture-pack
@@ -293,7 +291,7 @@ jobs:
           # `nono::trust::signing::GITHUB_ACTIONS_OIDC_ISSUER`).
           NONO_TRUST_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
-          cargo test -p nono-cli --test auto_pull_e2e_linux --release -- --nocapture --test-threads=1
+          cargo test -p nono-cli --test auto_pull_e2e_linux --release -- --nocapture
 
       # Cross-target clippy gate (Linux-from-Linux sanity). The companion
       # Windows/macOS clippy gates run in the umbrella ci.yml.

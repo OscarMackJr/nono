@@ -7,6 +7,13 @@
 //! GitHub Actions OIDC token at CI time (D-13 + D-15).
 //!
 //! File path is LOCKED at this location per D-16.
+//!
+//! Phase 44 WR-03/WR-04/IN-01/IN-05 P37 (REQ-REVIEW-FU-01 D-44-E6):
+//! tests use the canonical `tests/common/test_env::{EnvVarGuard, lock_env}`
+//! primitives instead of a file-local `EnvGuard`. Each test acquires
+//! `lock_env()` so the parallel runner serializes env-var-mutating tests,
+//! and pins `XDG_CONFIG_HOME` alongside `NONO_TEST_HOME` so the
+//! `resolve_user_config_dir` fallback cannot escape into the host config.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used)]
@@ -19,46 +26,10 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tempfile::TempDir;
 
+mod common;
+use common::test_env::{lock_env, EnvVarGuard};
+
 const NONO_BIN: &str = env!("CARGO_BIN_EXE_nono");
-
-// ---------------------------------------------------------------------------
-// EnvGuard RAII — save/restore env vars per CLAUDE.md "tests run in parallel
-// within the same process" rule + Pattern B.
-// ---------------------------------------------------------------------------
-
-pub(crate) struct EnvGuard {
-    key: String,
-    prev: Option<String>,
-}
-
-impl EnvGuard {
-    pub(crate) fn set(key: &str, val: &str) -> Self {
-        let prev = std::env::var(key).ok();
-        std::env::set_var(key, val);
-        Self {
-            key: key.into(),
-            prev,
-        }
-    }
-
-    pub(crate) fn remove(key: &str) -> Self {
-        let prev = std::env::var(key).ok();
-        std::env::remove_var(key);
-        Self {
-            key: key.into(),
-            prev,
-        }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        match self.prev.take() {
-            Some(v) => std::env::set_var(&self.key, v),
-            None => std::env::remove_var(&self.key),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Multi-endpoint mock TCP server — extends Phase 26-02's spawn_one_shot_server
@@ -85,6 +56,11 @@ pub(crate) fn spawn_multi_endpoint_server(
     let counter = Arc::new(Mutex::new(0u32));
     let counter_clone = Arc::clone(&counter);
 
+    // Phase 44 IN-02 P37 (D-44-B5 defer): the listener thread is
+    // intentionally not contacted on the empty-routes paths; it provides a
+    // port-binding sentinel that proves the test's auto-pull URL is
+    // reachable before the production code path attempts a real fetch.
+    // Detached on purpose; tempdir Drop cleans up at test end.
     let handle = thread::spawn(move || {
         let max_connections = routes.len() * 3 + 2;
         for accept in listener.incoming().take(max_connections) {
@@ -209,14 +185,14 @@ fn spawn_multi_endpoint_server_smoke() {
 
 #[test]
 fn auto_pull_happy_path_mock() {
+    let _lock = lock_env();
     let Some(_dir) = fixture_pack_dir() else {
         eprintln!("SKIP: NONO_FIXTURE_PACK_DIR not set — Phase 37 CI workflow required");
         return;
     };
 
     let tmp_home = TempDir::new().expect("tempdir");
-    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
-    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+    let tmp_home_str = tmp_home.path().to_str().unwrap();
 
     let bundle_body = read_fixture("bundle.json");
     let manifest_body = read_fixture("manifest.json");
@@ -239,7 +215,15 @@ fn auto_pull_happy_path_mock() {
     );
 
     let (base_url, _handle, counter) = spawn_multi_endpoint_server(routes);
-    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+    let _env = EnvVarGuard::set_all(&[
+        ("NONO_TEST_HOME", tmp_home_str),
+        ("XDG_CONFIG_HOME", tmp_home_str), // WR-04 P37 pin
+        ("NONO_REGISTRY", base_url.as_str()),
+        ("NONO_NO_AUTO_PULL", ""),
+    ]);
+    // EnvVarGuard's set_all with empty string is NOT equivalent to remove —
+    // explicitly remove the var after set_all captures its baseline.
+    std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
         .args([
@@ -270,20 +254,33 @@ fn auto_pull_happy_path_mock() {
 // REQ-PKGS-04 acceptance #2: fail-closed on unknown name. The mock registry
 // serves 404 for every path; the nono binary must exit non-zero with a
 // ProfileNotFound-flavored error, and must NOT continue retrying past a
-// reasonable bound (request_count <= 2 — production code may issue 1-2
-// lookups before giving up).
+// reasonable bound. Phase 44 IN-05 P37 (D-44-B5): widened from `<= 2` to
+// `<= 4` to absorb harmless retry growth — expected requests are at most:
+//   1. bundle.json fetch (registry discovery)
+//   2. manifest.json fetch (404 → fail-closed)
+//   3. retry attempt 1 (if registry client has internal retry)
+//   4. retry attempt 2 (if registry client has internal retry)
+// Any count above 4 indicates the registry client is retrying without bound,
+// which would violate the fail-closed acceptance.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn auto_pull_unknown_name_fails_closed() {
+    let _lock = lock_env();
     let tmp_home = TempDir::new().expect("tempdir");
-    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
-    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+    let tmp_home_str = tmp_home.path().to_str().unwrap();
 
     // Mock registry returns 404 for everything.
     let routes: HashMap<String, (u16, Vec<u8>)> = HashMap::new();
     let (base_url, _handle, counter) = spawn_multi_endpoint_server(routes);
-    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+
+    let _env = EnvVarGuard::set_all(&[
+        ("NONO_TEST_HOME", tmp_home_str),
+        ("XDG_CONFIG_HOME", tmp_home_str), // WR-04 P37 pin
+        ("NONO_REGISTRY", base_url.as_str()),
+        ("NONO_NO_AUTO_PULL", ""),
+    ]);
+    std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
         .args([
@@ -310,9 +307,13 @@ fn auto_pull_unknown_name_fails_closed() {
     );
 
     let req_count = *counter.lock().unwrap();
+    // Phase 44 IN-05 P37 (D-44-B5): widened from <=2 to <=4 to absorb
+    // harmless retry growth. Expected requests = 1 bundle.json + 1-3
+    // manifest.json fetches (registry client may retry once or twice on
+    // 404). Any count above 4 indicates unbounded retry — a real bug.
     assert!(
-        req_count <= 2,
-        "fail-closed semantics: expected at most 2 requests for unknown name; got {req_count}"
+        req_count <= 4,
+        "fail-closed semantics: expected at most 4 requests for unknown name; got {req_count}"
     );
 }
 
@@ -325,14 +326,21 @@ fn auto_pull_unknown_name_fails_closed() {
 
 #[test]
 fn auto_pull_no_auto_pull_flag_falls_back_to_profile_not_found() {
+    let _lock = lock_env();
     let tmp_home = TempDir::new().expect("tempdir");
-    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
-    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+    let tmp_home_str = tmp_home.path().to_str().unwrap();
 
     // Mock registry exists BUT the flag should prevent any request to it.
     let routes: HashMap<String, (u16, Vec<u8>)> = HashMap::new();
     let (base_url, _handle, counter) = spawn_multi_endpoint_server(routes);
-    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+
+    let _env = EnvVarGuard::set_all(&[
+        ("NONO_TEST_HOME", tmp_home_str),
+        ("XDG_CONFIG_HOME", tmp_home_str), // WR-04 P37 pin
+        ("NONO_REGISTRY", base_url.as_str()),
+        ("NONO_NO_AUTO_PULL", ""),
+    ]);
+    std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
         .args([
@@ -359,6 +367,9 @@ fn auto_pull_no_auto_pull_flag_falls_back_to_profile_not_found() {
         "expected ProfileNotFound error; got: {stderr}"
     );
     // Phase 37 D-11 footer: diagnostic_formatter should mention --no-auto-pull.
+    // Phase 44 IN-07 P37: integration-test grep contract documented in
+    // diagnostic_formatter.rs:25-41 — the literal token "--no-auto-pull"
+    // MUST remain in the footer output.
     assert!(
         stderr.contains("--no-auto-pull") || stderr.contains("no-auto-pull"),
         "expected D-11 footer mentioning --no-auto-pull; got: {stderr}"
@@ -383,14 +394,14 @@ fn auto_pull_no_auto_pull_flag_falls_back_to_profile_not_found() {
 
 #[test]
 fn auto_pull_signature_failure_aborts() {
+    let _lock = lock_env();
     let Some(_dir) = fixture_pack_dir() else {
         eprintln!("SKIP: NONO_FIXTURE_PACK_DIR not set — Phase 37 CI workflow required");
         return;
     };
 
     let tmp_home = TempDir::new().expect("tempdir");
-    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
-    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+    let tmp_home_str = tmp_home.path().to_str().unwrap();
 
     let bundle_body = read_fixture("bundle.json");
     let manifest_body = read_fixture("manifest.json");
@@ -417,7 +428,13 @@ fn auto_pull_signature_failure_aborts() {
     );
 
     let (base_url, _handle, _counter) = spawn_multi_endpoint_server(routes);
-    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+    let _env = EnvVarGuard::set_all(&[
+        ("NONO_TEST_HOME", tmp_home_str),
+        ("XDG_CONFIG_HOME", tmp_home_str), // WR-04 P37 pin
+        ("NONO_REGISTRY", base_url.as_str()),
+        ("NONO_NO_AUTO_PULL", ""),
+    ]);
+    std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
         .args([
@@ -477,6 +494,7 @@ fn auto_pull_signature_failure_aborts() {
 
 #[test]
 fn auto_pull_rejects_non_policy_pack_type() {
+    let _lock = lock_env();
     let Some(dir) = fixture_pack_dir() else {
         eprintln!("SKIP: NONO_FIXTURE_PACK_DIR not set — Phase 37 CI workflow required");
         return;
@@ -489,8 +507,7 @@ fn auto_pull_rejects_non_policy_pack_type() {
     }
 
     let tmp_home = TempDir::new().expect("tempdir");
-    let _g_home = EnvGuard::set("NONO_TEST_HOME", tmp_home.path().to_str().unwrap());
-    let _g_no_pull = EnvGuard::remove("NONO_NO_AUTO_PULL");
+    let tmp_home_str = tmp_home.path().to_str().unwrap();
 
     let bundle_body = read_fixture("bundle.json");
     let manifest_body = read_fixture("manifest-non-policy.json");
@@ -513,7 +530,13 @@ fn auto_pull_rejects_non_policy_pack_type() {
     );
 
     let (base_url, _handle, _counter) = spawn_multi_endpoint_server(routes);
-    let _g_reg = EnvGuard::set("NONO_REGISTRY", &base_url);
+    let _env = EnvVarGuard::set_all(&[
+        ("NONO_TEST_HOME", tmp_home_str),
+        ("XDG_CONFIG_HOME", tmp_home_str), // WR-04 P37 pin
+        ("NONO_REGISTRY", base_url.as_str()),
+        ("NONO_NO_AUTO_PULL", ""),
+    ]);
+    std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
         .args([

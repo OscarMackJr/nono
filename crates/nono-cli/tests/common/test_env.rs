@@ -9,14 +9,13 @@
 //! The source of truth for the guard contract is `crates/nono-cli/src/test_env.rs`.
 //! If that file changes, update this mirror in lockstep.
 //!
-//! Phase 41 Plan 09 (REQ-CI-01 SC#4 gap closure, Gap 5): the sole caller
-//! is `crates/nono-cli/tests/env_vars.rs:1047` inside a
-//! `#[cfg(target_os = "windows")]` test (line 1039). On Linux/macOS the
-//! test compiles out, leaving the entire mirror orphaned and triggering
-//! `clippy::dead_code` under `-Dwarnings`. Gate the whole module to
-//! Windows so the mirror exists only where it is used.
+//! Phase 44 WR-03/WR-04/IN-01 P37 (REQ-REVIEW-FU-01 D-44-E6): the gate
+//! is widened to include Linux so tests/auto_pull_e2e_linux.rs can use
+//! the canonical Drop-restore guard instead of a file-local EnvGuard.
+//! macOS does not yet host an integration-test consumer of this mirror;
+//! if one is added, widen the gate further.
 
-#![cfg(target_os = "windows")]
+#![cfg(any(target_os = "windows", target_os = "linux"))]
 
 /// Restores a set of environment variables when dropped.
 ///
@@ -55,5 +54,27 @@ impl Drop for EnvVarGuard {
                 None => std::env::remove_var(key),
             }
         }
+    }
+}
+
+/// Process-global lock for tests that mutate environment variables.
+///
+/// Tests in this integration-test compilation unit MUST call
+/// `let _lock = lock_env();` at the top of every test function that
+/// constructs an `EnvVarGuard`. `EnvVarGuard`'s Drop-restore is necessary
+/// but not sufficient: it restores state at test end, but does not
+/// prevent a sibling test on a parallel thread from observing the
+/// mutated state DURING this test's execution. `lock_env` serializes
+/// the parallel runner across env-var-mutating tests.
+///
+/// Mirrors `crates/nono-cli/src/test_env.rs::lock_env` which is not
+/// visible from integration tests (binary-crate `cfg(test)` modules
+/// do not export across the crate boundary).
+pub static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+    match ENV_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
