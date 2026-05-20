@@ -16,6 +16,7 @@ files_modified:
   - crates/nono-cli/src/session_commands.rs
   - crates/nono-cli/src/session_commands_windows.rs
   - crates/nono-cli/src/format_util.rs
+  - crates/nono-cli/src/main.rs
   - crates/nono/src/trust/signing.rs
   - crates/nono/src/trust/mod.rs
   - crates/nono/src/undo/snapshot.rs
@@ -909,11 +910,43 @@ Per D-44-A3, this table is the canonical source. **Every WR + IN gets a row** �
 
     If `validate_oidc_issuer` is re-exported from trust/mod.rs, add `configured_oidc_issuer` to the same re-export line. If not, leave the function accessible via `nono::trust::signing::configured_oidc_issuer`.
 
-    Part D — Wire-up call site:
+    Part D — Wire-up call site (with pre-edit grep gate per W5/key_links_planned):
 
-    Identify the signature-verification call site (grep for `validate_oidc_issuer` callers in crates/nono-cli/src/trust_cmd.rs and crates/nono/src/). At the call site where the issuer pin is currently hardcoded to `GITHUB_ACTIONS_OIDC_ISSUER`, replace with `configured_oidc_issuer()?`. This makes the workflow's NONO_TRUST_OIDC_ISSUER setting actually take effect.
+    (1) **Pre-edit grep gate — halt if zero production-code matches:** Before editing, run:
 
-    If no current callsite exists yet (the env-var was inert prior to this commit), add the call where signature verification of GitHub-Actions-issued tokens is performed — the most likely site is wherever Phase 37 introduced the GitHub-Actions trust path. Acceptance gate per D-44-B3: "the env var is read; if set, asserts as the trusted OIDC issuer at signature verification time; if unset, falls back to current behavior".
+        grep -rn 'validate_oidc_issuer' crates/nono-cli/src/trust_cmd.rs crates/nono/src/ \
+            --include='*.rs' \
+            | grep -v -E '(/tests/|test_|_test\.rs|#\[cfg\(test\)\]|/spec/)' \
+            || echo "ZERO PRODUCTION-CODE CALLERS"
+
+    If the output is `ZERO PRODUCTION-CODE CALLERS` (no non-test caller of `validate_oidc_issuer` exists), HALT and surface as a `checkpoint:decision`:
+
+        > Phase 44 Task 6 Part D — wire-up call-site discovery gate
+        >
+        > `validate_oidc_issuer` has zero production-code callers in
+        > crates/nono-cli/src/trust_cmd.rs or crates/nono/src/. The
+        > wire-up site is unknown.
+        >
+        > Options:
+        >   (a) Tell me the call site to wire `configured_oidc_issuer()?` into.
+        >   (b) Confirm that adding `configured_oidc_issuer()` without an
+        >       in-phase consumer is acceptable (REQ-PKGS-04 acceptance #4
+        >       remains gapped; the env var stays inert).
+        >   (c) Defer Part D to a follow-up phase (downgrade D-44-B3 partial).
+
+    Wait for user input before proceeding. Do NOT silently fall back to "the reader + test file is enough" — the must_haves `key_links` invariant for WR-09 requires at least one production-code consumer.
+
+    (2) If the pre-edit grep returned at least one non-test caller, identify the signature-verification call site. At the call site where the issuer pin is currently hardcoded to `GITHUB_ACTIONS_OIDC_ISSUER`, replace with `configured_oidc_issuer()?`. This makes the workflow's NONO_TRUST_OIDC_ISSUER setting actually take effect.
+
+    (3) If a non-test caller exists but it is NOT a callsite that should consume `configured_oidc_issuer()` (e.g. validate_oidc_issuer is called from somewhere that already receives the issuer as an argument), add a NEW production-code consumer at the most natural site (most likely wherever Phase 37 introduced the GitHub-Actions trust path). Acceptance gate per D-44-B3: "the env var is read; if set, asserts as the trusted OIDC issuer at signature verification time; if unset, falls back to current behavior".
+
+    (4) Re-run the grep gate after the edit — it MUST now return at least one non-test match where the matched code calls or otherwise consumes `configured_oidc_issuer` (not merely `validate_oidc_issuer`):
+
+        grep -rn 'configured_oidc_issuer' crates/nono-cli/src/ crates/nono/src/ \
+            --include='*.rs' \
+            | grep -v -E '(/tests/|test_|_test\.rs|#\[cfg\(test\)\]|/spec/)'
+
+    The post-edit grep MUST show at least one production-code consumer line (in addition to the function definition in signing.rs).
 
     Part E — Update the workflow comment:
 
@@ -952,7 +985,8 @@ Per D-44-A3, this table is the canonical source. **Every WR + IN gets a row** �
   </verify>
   <acceptance_criteria>
     - grep -c 'fn configured_oidc_issuer' crates/nono/src/trust/signing.rs returns 1
-    - grep -rn 'NONO_TRUST_OIDC_ISSUER' crates/ shows at-least 2 matches (the reader + at least one consumer)
+    - grep -rn 'NONO_TRUST_OIDC_ISSUER' crates/nono-cli/src/ crates/nono/src/ --include='*.rs' | grep -v -E '(/tests/|test_|_test\.rs|#\[cfg\(test\)\]|/spec/)' returns at-least 1 match — i.e. at least one production-code consumer of the env-var reader exists (not merely the function definition or test code; W5 / key_links_planned tightening)
+    - grep -rn 'configured_oidc_issuer' crates/nono-cli/src/ crates/nono/src/ --include='*.rs' | grep -v -E '(/tests/|test_|_test\.rs|#\[cfg\(test\)\]|/spec/)' returns at-least 2 matches (function definition in signing.rs + at least one production consumer call site)
     - cargo test -p nono --lib trust::signing exits 0 (3 new tests pass)
     - The pre-fix grep `grep -r NONO_TRUST_OIDC_ISSUER crates/` returning "zero matches" (37-REVIEW.md line 102) is no longer true
     - Cross-target clippy (Linux + macOS) exits 0 per cross-target-verify-checklist (or PARTIAL)
@@ -1379,6 +1413,8 @@ Per D-44-A3, this table is the canonical source. **Every WR + IN gets a row** �
     (3) If either fails to LINK (missing toolchain `error: linker x86_64-linux-gnu-gcc not found` or equivalent), this is a PARTIAL disposition per the checklist § PARTIAL Disposition. Record the exact error.
     (4) If either reports clippy errors (warnings/lints), FIX before merging.
 
+    **Halt-on-FAIL rule (W6 / autonomous-mode safeguard):** If any commit-row's clippy run produces a FAIL (exit non-zero with actual lint errors, NOT a missing-toolchain skip), Task 9 MUST halt and the executor surfaces this as a deviation `checkpoint:human-action`. Only PARTIAL (missing toolchain per `.planning/templates/cross-target-verify-checklist.md` § PARTIAL Disposition) and PASS may pass through autonomously. A FAIL row MUST NOT be silently downgraded to PARTIAL in the log; the verdict in the Linux/macOS column for that commit must remain FAIL until the underlying clippy lint is fixed and the commit is amended or a follow-up commit lands. Re-run the gate after the fix lands; the table row is then updated to PASS (or PARTIAL if the toolchain is genuinely missing). The acceptance gate below enforces that NO row may carry FAIL at task close.
+
     Create .planning/phases/44-review-polish-test-hygiene-drain/44-01-CLIPPY-CROSS-TARGET.md documenting the run with this exact shape:
 
         # Phase 44 Plan 44-01 — Cross-target Clippy Verification Log
@@ -1424,7 +1460,7 @@ Per D-44-A3, this table is the canonical source. **Every WR + IN gets a row** �
   </verify>
   <acceptance_criteria>
     - .planning/phases/44-review-polish-test-hygiene-drain/44-01-CLIPPY-CROSS-TARGET.md exists with one row per in-scope commit
-    - Each row is one of {PASS, PARTIAL, FAIL}; FAIL must be empty (any FAIL must have been resolved before reaching this acceptance gate)
+    - Task 9 halts on any FAIL row (W6 halt-on-FAIL rule); only PARTIAL + PASS may close the task. Each row is one of {PASS, PARTIAL}; FAIL rows MUST NOT exist at acceptance-gate time (every FAIL must have been resolved with a clippy fix commit + amended log row before this gate is reached). The autonomous executor is NOT authorized to mark a FAIL as PARTIAL.
     - If any row is PARTIAL, the file contains the verbatim PARTIAL disposition prose from cross-target-verify-checklist.md § PARTIAL Disposition
     - If ALL rows are PASS, the file ends with a "Conclusion: REQ-REVIEW-FU-01 may be flipped to VERIFIED at codebase level by /gsd-verify-phase" line
     - Plan disposition for the entire REQ-REVIEW-FU-01 inherits the strongest non-PASS status from this log

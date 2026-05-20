@@ -8,6 +8,19 @@ files_modified:
   - crates/nono-cli/tests/deny_overlap_run.rs
   - crates/nono-cli/tests/env_vars.rs
   - .config/nextest.toml
+  - .planning/STATE.md
+  - .planning/todos/pending/41-10-linux-deny-overlap-regression.md
+  - .planning/todos/pending/41-10-windows-integration-env-vars-flake.md
+  - .planning/todos/pending/41-10-windows-regression-temp-vars-flake.md
+  - .planning/todos/pending/v24-cr-01-broker-not-found-ffi-mapping.md
+  - .planning/todos/pending/v24-cr-02-broker-null-handle-validation.md
+  - .planning/todos/pending/v24-cr-03-broker-empty-handle-list-path.md
+  - .planning/todos/pending/v24-cr-04-job-object-test-skip-policy.md
+  - .planning/todos/done/41-10-linux-deny-overlap-regression.md
+  - .planning/todos/done/41-10-windows-integration-env-vars-flake.md
+  - .planning/todos/done/41-10-windows-regression-temp-vars-flake.md
+  - .planning/todos/done/v24-cr-01-broker-not-found-ffi-mapping.md
+  - .planning/todos/done/v24-cr-02-broker-null-handle-validation.md
   - .planning/todos/done/v24-cr-03-broker-empty-handle-list-path.md
   - .planning/todos/done/v24-cr-04-job-object-test-skip-policy.md
   - .planning/todos/pending/44-class-d-validator-preflight-investigation.md
@@ -137,18 +150,32 @@ The Python + TypeScript regression tests in the sibling repos assert equivalent 
   <name>Task 1 — Derive sibling-repo URLs from `git remote -v` (D-44-D1 + D-44-D2)</name>
   <files>.planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md</files>
   <decision>
-    Plan 44-02 must clone or fetch `../nono-py/` and `../nono-ts/` sibling repos and land regression-test commits in each (D-44-D1). The URLs MUST be derived from this repo's `git remote -v` upstream entry (not hardcoded) per D-44-D2. If the derived URLs do NOT resolve to existing GitHub repos, the executor halts and asks the user.
+    Plan 44-02 must clone or fetch `../nono-py/` and `../nono-ts/` sibling repos and land regression-test commits in each (D-44-D1). The URLs MUST be derived from this repo's `git remote -v` upstream entry **at execute-time** (not hardcoded at plan-time) per D-44-D2. If the derived URLs do NOT resolve to existing GitHub repos, the executor halts and asks the user.
 
-    **Pre-decision automation (executor runs first):**
+    **Step 0 — derive `${DERIVED_ORG}` from this repo's remotes (MUST run before any sibling-repo command):**
 
-    1. Read this repo's `git remote -v` upstream URL. From PHASE-44 planning lookup: upstream is `https://github.com/always-further/nono.git`.
+    ```bash
+    # Prefer the `upstream` remote; fall back to `origin` if upstream is absent.
+    UPSTREAM_URL="$(git remote get-url upstream 2>/dev/null || git remote get-url origin)"
+    # Parse the org segment from either an https or ssh URL form.
+    #   https://github.com/<ORG>/nono.git  -> <ORG>
+    #   git@github.com:<ORG>/nono.git      -> <ORG>
+    DERIVED_ORG="$(printf '%s' "$UPSTREAM_URL"         | sed -E 's#(https?://[^/]+/|git@[^:]+:)##'         | sed -E 's#/nono(\.git)?$##')"
+    echo "DERIVED_ORG=$DERIVED_ORG (from $UPSTREAM_URL)"
+    ```
+
+    D-44-D2 explicitly forbids hardcoded URLs in PLAN.md (avoids stale-URL rot). `${DERIVED_ORG}` MUST be used in every subsequent sibling-repo command in this task. The literal `always-further` MUST NOT appear in any executed command — the planning context references it only to describe the historically observed upstream org; the executor must substitute whatever `git remote -v` reports today.
+
+    **Pre-decision automation (executor runs after Step 0):**
+
+    1. Step 0 above has populated `${DERIVED_ORG}`. Use this value verbatim in all subsequent commands.
     2. Derive sibling URLs by substituting the repo name:
-       - `https://github.com/always-further/nono-py.git`
-       - `https://github.com/always-further/nono-ts.git`
+       - `https://github.com/${DERIVED_ORG}/nono-py.git`
+       - `https://github.com/${DERIVED_ORG}/nono-ts.git`
     3. For each derived URL, check existence:
        ```bash
-       gh repo view always-further/nono-py --json url 2>&1
-       gh repo view always-further/nono-ts --json url 2>&1
+       gh repo view "${DERIVED_ORG}/nono-py" --json url 2>&1
+       gh repo view "${DERIVED_ORG}/nono-ts" --json url 2>&1
        ```
     4. For each that exists, check whether the sibling already lives at `../nono-py/` or `../nono-ts/`:
        ```bash
@@ -157,16 +184,17 @@ The Python + TypeScript regression tests in the sibling repos assert equivalent 
        ```
     5. For each existing remote that is NOT yet cloned locally, clone:
        ```bash
-       git clone https://github.com/always-further/nono-py.git ../nono-py
-       git clone https://github.com/always-further/nono-ts.git ../nono-ts
+       git clone "https://github.com/${DERIVED_ORG}/nono-py.git" ../nono-py
+       git clone "https://github.com/${DERIVED_ORG}/nono-ts.git" ../nono-ts
        ```
 
-    **Decision points (user-blocking if any apply):**
+    **Decision points (user-blocking if any apply — combined deviation gate):**
 
-    - If `gh repo view always-further/nono-py` returns 404 → org may differ; the user must confirm the correct sibling-repo URLs OR confirm the sibling repos do not exist (deviation: plan must change scope).
-    - If `gh repo view always-further/nono-ts` returns 404 → same as above.
+    - **Derived-org deviation gate (PRIMARY — D-44-D2 enforcement):** If `${DERIVED_ORG}` is NOT equal to `always-further` (the historically observed upstream org captured in planning context), the executor MUST surface this as a `checkpoint:decision` and log the derived org to `44-02-SIBLING-COORDINATION.md` BEFORE proceeding with any `gh repo view` or `git clone` call. The user must confirm whether the derived org is correct.
+    - **Existence deviation gate (SECONDARY — 404 detection):** If `gh repo view "${DERIVED_ORG}/nono-py"` returns 404 → the user must confirm the correct sibling-repo URLs OR confirm the sibling repos do not exist (deviation: plan must change scope).
+    - If `gh repo view "${DERIVED_ORG}/nono-ts"` returns 404 → same as above.
     - If both siblings exist but `gh` is not authenticated → user must run `gh auth login` before proceeding.
-    - If both siblings exist and clone succeeds → proceed to Task 2 with no decision needed; treat as Option A below auto-selected.
+    - If `${DERIVED_ORG}` equals `always-further` AND both siblings exist AND clone succeeds → proceed to Task 2 with no decision needed; treat as Option A below auto-selected.
   </decision>
   <context>
     D-44-D2 explicitly forbids hardcoded URLs in PLAN.md (avoids stale-URL rot). The derivation flow is fork-local — `git remote -v` is the source of truth at plan-open time.
@@ -194,56 +222,81 @@ The Python + TypeScript regression tests in the sibling repos assert equivalent 
   </options>
   <resume-signal>Select: option-a (auto-proceed), option-b (user-provided URL), or option-c (abort sibling work + file follow-up todos)</resume-signal>
   <action>
-    1. Run the pre-decision automation above (`gh repo view` checks + conditional clone).
-    2. Create `.planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md` with this shape:
+    1. **Step 0 — Derive `${DERIVED_ORG}` first (D-44-D2 enforcement):**
+
+        ```bash
+        UPSTREAM_URL="$(git remote get-url upstream 2>/dev/null || git remote get-url origin)"
+        DERIVED_ORG="$(printf '%s' "$UPSTREAM_URL" \
+            | sed -E 's#(https?://[^/]+/|git@[^:]+:)##' \
+            | sed -E 's#/nono(\.git)?$##')"
+        echo "UPSTREAM_URL=$UPSTREAM_URL"
+        echo "DERIVED_ORG=$DERIVED_ORG"
+        ```
+
+        Record `$UPSTREAM_URL` and `$DERIVED_ORG` in the SIBLING-COORDINATION log (Step 5 below) BEFORE running any `gh repo view` or `git clone` call.
+
+    2. **Derived-org deviation gate (PRIMARY):** If `$DERIVED_ORG` does NOT equal `always-further`, halt and surface as `checkpoint:decision`. Append a line to the SIBLING-COORDINATION log: `"DERIVED_ORG=$DERIVED_ORG differs from historically observed 'always-further'; user must confirm before proceeding."` Wait for user resume signal before continuing to step 3.
+
+    3. Run the pre-decision automation from the `<decision>` block, substituting `${DERIVED_ORG}` for every `<org>` placeholder (the `gh repo view` existence checks + conditional clones). The literal `always-further` MUST NOT appear in any executed command.
+
+    4. **Existence deviation gate (SECONDARY):** If either `gh repo view` returns 404, halt at the existing checkpoint:decision for option-b/option-c selection.
+
+    5. Create `.planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md` with this shape (substitute the actual derived org — do NOT pre-fill `always-further`):
 
         # Phase 44 Plan 44-02 — Sibling Repo Coordination Log
-        
+
         Per D-44-D1 + D-44-D2: sibling-repo URLs derived from this repo's
-        `git remote -v` upstream entry.
-        
-        ## Derivation
-        
-        - This repo upstream: `https://github.com/always-further/nono.git`
+        `git remote -v` upstream entry **at execute-time**.
+
+        ## Derivation (D-44-D2)
+
+        - Upstream URL (from `git remote get-url upstream || origin`): `<$UPSTREAM_URL>`
+        - Derived org (`$DERIVED_ORG`): `<value from Step 0>`
+        - Derivation matches historically observed `always-further`: <yes/no>
+        - Derived-org deviation checkpoint fired: <yes/no — if yes, link to user resume signal>
         - Derived sibling URLs:
-          - nono-py: `https://github.com/always-further/nono-py.git`
-          - nono-ts: `https://github.com/always-further/nono-ts.git`
-        
+          - nono-py: `https://github.com/<$DERIVED_ORG>/nono-py.git`
+          - nono-ts: `https://github.com/<$DERIVED_ORG>/nono-ts.git`
+
         ## Existence check (gh repo view)
-        
+
         | Repo | Status | Local clone |
         |------|--------|-------------|
-        | always-further/nono-py | <exists/404> | <path or "not cloned"> |
-        | always-further/nono-ts | <exists/404> | <path or "not cloned"> |
-        
+        | `<$DERIVED_ORG>/nono-py` | <exists/404> | <path or "not cloned"> |
+        | `<$DERIVED_ORG>/nono-ts` | <exists/404> | <path or "not cloned"> |
+
         ## Decision
-        
+
         <option-a / option-b / option-c selected; user input if any>
-        
+
         ## Sibling commit SHAs (populated after Tasks 4 + 5)
-        
+
         | Sibling | Branch | Commit SHA | Subject |
         |---------|--------|------------|---------|
         | nono-py | <branch> | <SHA> | test(44): broker FFI mapping + null-handle lockstep |
         | nono-ts | <branch> | <SHA> | test(44): broker FFI mapping + null-handle lockstep |
-        
+
         ## PR coordination (plan-discretion per D-44-D1)
-        
+
         <Record whether sibling-side commits land via PR or direct push;
         depends on the sibling repos' CONTRIBUTING conventions discovered at
         clone-time.>
 
-    3. Pause execution at the AskUserQuestion checkpoint ONLY if the existence check shows a 404 for either sibling. If both exist and clone, auto-proceed to Task 2 with `option-a` recorded.
+    6. Pause execution at the AskUserQuestion checkpoint if the derived-org deviation gate fired (Step 2) OR if the existence check shows a 404 for either sibling. If `$DERIVED_ORG == always-further` and both siblings exist and clone succeeds, auto-proceed to Task 2 with `option-a` recorded.
   </action>
   <verify>
-    <automated>cat .planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md | head -30 ; ls ../nono-py/.git 2>/dev/null ; ls ../nono-ts/.git 2>/dev/null</automated>
+    <automated>cat .planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md | head -30 ; ls ../nono-py/.git 2>/dev/null ; ls ../nono-ts/.git 2>/dev/null ; grep -c 'DERIVED_ORG=' .planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md</automated>
   </verify>
   <acceptance_criteria>
     - `.planning/phases/44-review-polish-test-hygiene-drain/44-02-SIBLING-COORDINATION.md` exists with the derivation + existence-check section populated
-    - If option-a selected: both `../nono-py/.git` and `../nono-ts/.git` exist
-    - If option-b selected: the user-provided URL is recorded in the SIBLING-COORDINATION doc
+    - The SIBLING-COORDINATION log records BOTH `$UPSTREAM_URL` (from `git remote get-url upstream || origin`) and the parsed `$DERIVED_ORG` value — proving derivation happened at execute-time (D-44-D2)
+    - The SIBLING-COORDINATION log does NOT contain a hardcoded `always-further` literal in the "Derivation" section's `$DERIVED_ORG` row UNLESS that was actually what the live `git remote` returned (the value must trace to a real `git remote get-url` call, not a plan-time hardcode)
+    - The "Derived-org deviation checkpoint fired" row in the log is populated (yes/no)
+    - Every `gh repo view` and `git clone` call recorded in the log uses the `$DERIVED_ORG` value, not a hardcoded org literal
+    - If option-a selected: both `../nono-py/.git` and `../nono-ts/.git` exist AND `$DERIVED_ORG == always-further`
+    - If option-b selected: the user-provided URL is recorded in the SIBLING-COORDINATION doc (covers both derived-org deviation and 404 deviation paths)
     - If option-c selected: REQ-TEST-HYG-03 + REQ-TEST-HYG-04 dispositions are explicitly downgraded to "follow-up todos filed in this repo" with new todo files referenced
-    - No URLs are hardcoded in PLAN.md (D-44-D2 honored)
+    - No URLs are hardcoded in PLAN.md (D-44-D2 honored); the only `always-further` references in the plan are in planning context / decision rationale, NOT in executable command strings
   </acceptance_criteria>
   <done>Sibling-repo derivation complete; either both siblings cloned + happy-path, OR user confirmed a deviation; the SIBLING-COORDINATION doc captures the outcome.</done>
 </task>
