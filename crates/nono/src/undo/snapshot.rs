@@ -592,6 +592,21 @@ impl SnapshotManager {
     /// runs outside the sandbox, so every existing parent component at or below
     /// the tracked root must be a real directory before `create_dir_all`,
     /// temp-file creation, rename, or chmod touches the path.
+    ///
+    /// **Residual race window:** this check runs lexically against
+    /// `symlink_metadata` and is followed by `create_dir_all` / atomic
+    /// rename / `set_permissions` non-atomically. A local attacker with
+    /// write access inside the tracked tree CAN race the validation by
+    /// swapping a directory for a symlink between this function returning
+    /// `Ok(())` and the write. Full closure requires `O_NOFOLLOW` and
+    /// fd-relative ops (`openat`, `mkdirat`, `renameat`, `fchmodat`);
+    /// tracked as follow-up
+    /// `.planning/todos/pending/44-validate-restore-target-fd-relative-hardening.md`.
+    /// Phase 44 WR-01 P43 (REQ-REVIEW-FU-01 D-44-B4) ships this doc note
+    /// only — the body is unchanged. The threat model accepts the
+    /// residual risk for v2.6 because closure is a substantial
+    /// cross-platform refactor (Linux nix `*at` syscalls + macOS `*at`
+    /// syscalls + Windows NtCreateFile-or-equivalent).
     fn validate_restore_target(&self, path: &Path) -> Result<()> {
         let tracked = self
             .tracked_paths
