@@ -678,6 +678,13 @@ fn windows_run_read_only_allowlist_blocks_runtime_write_attempt() {
     let _ = std::fs::remove_file(&probe_path);
 }
 
+// Phase 44 REQ-TEST-HYG-02 (D-44-D3): this test is run via
+// cargo-nextest under subprocess-per-test isolation (.config/
+// nextest.toml) because the PATH/PATHEXT/COMSPEC/SystemRoot/windir/
+// SystemDrive env-var redirections it exercises race with sibling
+// tests under cargo-test's in-process parallel runner. The
+// EnvVarGuard Drop here saves the canonical baseline against the
+// SUBPROCESS init env, not the cargo-test parent process.
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_run_redirects_temp_vars_into_writable_allowlist() {
@@ -1036,6 +1043,13 @@ fn windows_run_prefers_managed_low_integrity_runtime_root_inside_allowlist() {
     );
 }
 
+// Phase 44 REQ-TEST-HYG-02 (D-44-D3): this test is run via
+// cargo-nextest under subprocess-per-test isolation (.config/
+// nextest.toml) because the PATH/PATHEXT/COMSPEC/SystemRoot/windir/
+// SystemDrive env-var redirections it exercises race with sibling
+// tests under cargo-test's in-process parallel runner. The
+// EnvVarGuard Drop here saves the canonical baseline against the
+// SUBPROCESS init env, not the cargo-test parent process.
 #[cfg(target_os = "windows")]
 #[test]
 fn windows_run_redirects_profile_state_vars_into_writable_allowlist() {

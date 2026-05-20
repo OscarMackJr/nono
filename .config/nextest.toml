@@ -1,0 +1,16 @@
+# Phase 44 REQ-TEST-HYG-02 (D-44-D3): subprocess-per-test isolation
+# for the env_vars tests that race under cargo-test's in-process
+# parallel runner. Scoped to these tests only; all other tests
+# remain parallel under regular `cargo test`.
+#
+# Reviewers: extend this file only when a new test is empirically
+# observed to race; do NOT preemptively expand the scope.
+# Cross-ref: .planning/phases/44-review-polish-test-hygiene-drain/44-CONTEXT.md
+
+[[profile.default.overrides]]
+filter = 'test(=windows_run_redirects_profile_state_vars_into_writable_allowlist)'
+threads-required = 'num-cpus'   # take all threads → effectively serialized
+
+[[profile.default.overrides]]
+filter = 'test(=windows_run_redirects_temp_vars_into_writable_allowlist)'
+threads-required = 'num-cpus'   # take all threads → effectively serialized
