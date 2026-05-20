@@ -6,19 +6,41 @@
 
 v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed Linux backends (Phase 37 — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `NonoError::UnsupportedKernelFeature` fail-closed on cgroup v1 + cargo-install-style registry-profile auto-pull with sigstore-sign keyless OIDC signing; 5 e2e integration tests + multi-endpoint mock TCP server; sigstore-rust v0.7.0 bump closing 2 pre-existing TUF flakes), reset pre-existing CI red across all 7 lanes (Phase 41 — Linux/macOS Clippy + 5 Windows CI jobs back to green; MSI validator `-BrokerPath` mismatch resolved; cross-target clippy verification protocol codified in CLAUDE.md as enforcement-shaped MUST/NEVER rule; v24 broker code-review closure: `BrokerNotFound` FFI remap + null/INVALID handle rejection + empty-list rejection + Job-object test SKIP→FAIL policy), audited upstream `v0.53.0..v0.54.0` divergence (Phase 42 UPST5 audit — first cycle where `windows-touch` column fires: 7 clusters / 18 commits / 4 will-sync + 2 fork-preserve + 1 won't-sync; 3 windows-touch:yes commits dispositioned; per-cell L/M/H ADR review confirmed Phase 33 Option A `continue`), and executed the UPST5 sync (Phase 43 — 11 D-19 cherry-picks + 3 D-20 manual replays; new cross-platform `crates/nono-cli/src/platform.rs` module from upstream `ce06bd59` + Windows registry detection extensions; D-43-E1 Windows-only-files invariant respected; 2208 tests passing on Windows host; Cluster 2 reclassified `will-sync → split` mid-flight with source migration deferred to v2.6/UPST6). 13/13 v2.5 requirements satisfied at codebase level (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 + REQ-CI-01/02/03 + REQ-BROKER-CR-01..04 + REQ-UPST5-01/02). Cross-phase integration **clean** at close (7/7 wiring + 5/5 E2E flows WIRED per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`); milestone status `tech_debt` with 32 deferred items acknowledged at close (post-merge CI verifications on push + 16 REVIEW.md warnings + REQUIREMENTS.md checkbox drift). 172 commits since v2.4 (`25e88e61..a9b64440`, 5 days).
 
-## Current Milestone: v2.6 (Planning)
+## Current Milestone: v2.6 UPST6 + v2.5 Drain
 
-**Status:** scope to be defined via `/gsd-new-milestone v2.6`. Carry-forward and forward-cadence items inherited from v2.5 close:
+**Goal:** Drain the 7 v2.5 carry-forward items + 3 long-tail v2.4+ deferrals, then absorb upstream `v0.54.0..v0.55.0+` via UPST6 — mirroring the v2.5 drain-then-sync pattern.
+
+**Target features (10 items):**
+
+**Drain (v2.5 carry-forwards):**
 
 - **Post-merge CI verifications (orchestrator)** — Phase 37 `.github/workflows/phase-37-linux-resl.yml` live run on `ubuntu-24.04` + Phase 43 umbrella PR open + baseline-aware CI lane diff vs Phase 41 close SHA `13cc0628`. Worktree-mode discipline routed these to orchestrator post-merge action.
-- **UPST6 audit** — upstream `v0.54.0..+` (`v0.55.0` tag fetched 2026-05-17 during Phase 42 audit-open; cadence trigger met). Stub queued at ROADMAP `## Future Cycles`.
 - **Cluster 2 Edition 2024 source migration** — 39 `#[unsafe(no_mangle)]` rewrites in `bindings/c/src/`; deferred from Phase 43 Plan 43-01b DEC-3 per DIVERGENCE-LEDGER split-disposition (commit `79715aa5`).
 - **Phase 38 REQ-AAHX-HOST-01 native re-validation** — re-deferred from v2.5; depends on native Linux host availability for UAT.
 - **Phase 35 + 36 human-verify backlog** — 11 UAT items + 7 verification items host-blocked at v2.4 close; carry forward.
 - **REVIEW.md polish (16 warnings total)** — Phase 37 (10 warnings, incl. WR-09 OIDC issuer-pin production-verifier wiring) + Phase 43 (6 warnings, incl. WR-05 pack-update sync startup-latency CLAUDE.md hit + WR-04 platform.rs Ord antisymmetry + WR-06 case-sensitive registry name match). Candidate single `chore(v2.6-followup):` plan.
 - **Phase 41 follow-up todos (5)** — Class D Linux deny-overlap regression, Class E Windows env_vars parallel flakes (2; deferred to v2.5 cargo-nextest follow-on), v24 broker CR-01/02 cross-binding lockstep with `../nono-py/` + `../nono-ts/`.
 
-**Phase numbering:** continues from Phase 43 (no `--reset-phase-numbers`).
+**Long-tail v2.4+ deferrals (pulled in):**
+
+- **`windows-squash` → `main` merge** — re-deferred at v2.3 (2026-04-29 per quick-260428-rsu, commit `7911ef0e`) + v2.4 + v2.5 scope-locks; gated on PR-583 maintainer response. v2.6 lands the merge with either gate-moved evidence or a feature-flag-equivalent rollout.
+- **Upstream v0.41–v0.43 ingestion** — first real DRIFT-01/02 tooling exercise; deferred at v2.3 scope-lock 2026-04-29 to keep that milestone shippable in 2 weeks. Backwards-looking absorb (older than current upstream HEAD `v0.55.0+`); treat as backfill cleanup, not parity-sync.
+- **AIPC G-04 wire-protocol compile-time tightening** — `Approved(ResourceGrant)` inline at the wire type so `(Approved, grant=None)` becomes a compile-time error. Deferred from v2.1 Plan 18.1-02; reaffirmed at v2.3 and v2.4 scope-locks. Cascades into `aipc_sdk.rs` child SDK demultiplexer + 23 pre-existing tests.
+
+**UPST6 cycle (cadence trigger met):**
+
+- **UPST6 audit** — upstream `v0.54.0..v0.55.0+` (`v0.55.0` tag fetched 2026-05-17 during Phase 42 audit-open). DIVERGENCE-LEDGER inventory + per-cluster dispositions + ADR review (per Phase 33 ADR Option A `continue` strategy).
+- **UPST6 sync execution** — D-19 cherry-picks + D-20 manual replays per UPST6 audit dispositions. Cluster 2 Edition 2024 source migration coordinates with the standalone drain item above.
+
+**Trigger:** v2.5 close on 2026-05-20 surfaced 32 acknowledged deferrals across 4 categories; 7 of those are carry-forward to v2.6 per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`. 3 long-tail v2.4+ deferrals folded in to keep them from rotting further. UPST6 cadence trigger met (`v0.55.0` tag fetched during Phase 42 audit-open).
+
+**Phases:** 4-5 phases mirroring v2.5 shape (drain cluster + Edition 2024 source migration + AIPC G-04 + Phase 38 native re-validation + UPST6 audit + UPST6 sync, with the `windows-squash` → `main` merge + post-merge CI verifications absorbed into orchestrator-coordinated phases). Phase numbering continues from Phase 43 (no `--reset-phase-numbers`).
+
+**Out of scope (explicit deferrals to v2.7 or later):**
+
+- **WR-02 EDR HUMAN-UAT** — v3.0-deferred pending EDR-instrumented runner (re-affirmed at every milestone since v2.1).
+- **Gap 6b (runtime trust interception via kernel minifilter)** — requires signed kernel driver; deferred to v3.0.
+- **P32-DEFER-005 (sigstore-verify 0.6.5 → 0.6.6 upgrade)** — stretch candidate if any phase has space; otherwise re-defer.
 
 <details>
 <summary>Previously v2.4 Milestone scope (archived; shipped 2026-05-15)</summary>
@@ -262,7 +284,7 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-05-20 — v2.5 Backlog Drain + UPST5 milestone closed (tag `v2.5`).*
+*Last updated: 2026-05-20 — v2.6 UPST6 + v2.5 Drain milestone opened (scope-locked via `/gsd-new-milestone v2.6`).*
 
 *v2.5 shipped 4 phases on Windows host (37, 41, 42, 43), 24 plans, 34 tasks, 172 commits (`25e88e61..a9b64440`, 5 days). 13/13 v2.5 requirements satisfied at codebase level; cross-phase integration WIRED end-to-end (7/7 inter-phase + 5/5 E2E flows per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`). Milestone status `tech_debt` with 32 acknowledged deferred items (3 phase-level human-verification gaps for live CI on push, 13 partial UAT scenarios across Phases 37/41/43, 5 follow-up todos, 21 historical quick-task slugs pre-v2.5). 16 REVIEW.md warnings (0 CRITICAL) deferred as post-merge polish to v2.6. Phase 37 closed the 3-year Linux silent-no-op for RESL via cgroup v2 + `NonoError::UnsupportedKernelFeature` typed error + registry-profile auto-pull with sigstore-sign keyless OIDC. Phase 41 reset all 7 CI lanes to green + codified cross-target clippy verification protocol in CLAUDE.md as MUST/NEVER enforcement rule + closed v24 broker code-review backlog. Phase 42 produced DIVERGENCE-LEDGER for `v0.53.0..v0.54.0` (first audit cycle where `windows-touch` column fires; 3 windows-touch:yes commits dispositioned; ADR per-cell L/M/H verdict confirmed Phase 33 Option A `continue`). Phase 43 executed 11 D-19 cherry-picks + 3 D-20 manual replays; new cross-platform `platform.rs` module + Windows registry detection; D-43-E1 invariant respected; 2208 tests passing on Windows host; Cluster 2 mid-flight reclassified `will-sync → split` with source migration deferred to v2.6/UPST6 (DIVERGENCE-LEDGER amendment at `79715aa5`). v2.6 milestone planning queued — see `## Current Milestone: v2.6 (Planning)` for carry-forward items. UPST6 cadence trigger met (`v0.55.0` tag fetched during Phase 42 audit-open).*
 
