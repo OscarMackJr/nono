@@ -42,8 +42,8 @@ Plans:
 - [x] 37-03-PLAN.md — REQ-RESL-NIX-01/02/03 acc#2: nono inspect Limits-block LOCKED strings + cfg-gated platform-aware emission
 
 **Wave 2** *(both depend on Wave 1 landing)*
-- [ ] 37-04-PLAN.md — REQ-RESL-NIX-01/02/03 acc#4: phase-37-linux-resl.yml workflow with cpu-controller Delegate= drop-in + NEW CPU-percent integration test
-- [ ] 37-05-PLAN.md — REQ-PKGS-04 acc#1/#2/#3/#5: auto_pull_e2e_linux.rs + multi-endpoint mock TCP server + CI-time keyless sigstore-sign
+- [x] 37-04-PLAN.md — REQ-RESL-NIX-01/02/03 acc#4: phase-37-linux-resl.yml workflow with cpu-controller Delegate= drop-in + NEW CPU-percent integration test
+- [x] 37-05-PLAN.md — REQ-PKGS-04 acc#1/#2/#3/#5: auto_pull_e2e_linux.rs + multi-endpoint mock TCP server + CI-time keyless sigstore-sign
 
 **Wave 3** *(gate — D-15 prerequisite)*
 - [ ] 37-06-PLAN.md — TUF trust-root flake triage: path (a) sigstore-rs version bump OR path (b) NONO_TEST_HOME test-only trust root fallback
@@ -161,7 +161,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 37. Linux RESL + PKGS auto-pull | 3/6 | In Progress|  |
+| 37. Linux RESL + PKGS auto-pull | 5/6 | In Progress|  |
 | 41. CI cleanup + broker CR | 11/10 | Complete   | 2026-05-17 |
 | 42. UPST5 audit | 1/1 | Complete    | 2026-05-17 |
 | 43. UPST5 sync execution | 7/7 | Complete    | 2026-05-19 |
