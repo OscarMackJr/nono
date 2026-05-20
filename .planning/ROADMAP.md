@@ -14,7 +14,7 @@ granularity: standard
 
 ## Phases
 
-- [ ] **Phase 37: Linux RESL backends + PKGS auto-pull** — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `load_registry_profile` auto-pull; coded on Windows host, verified via GitHub Actions Linux runners.
+- [x] **Phase 37: Linux RESL backends + PKGS auto-pull** — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `load_registry_profile` auto-pull; coded on Windows host, verified via GitHub Actions Linux runners. (completed 2026-05-20)
 - [x] **Phase 41: CI cleanup + v24 broker code-review closure** — Linux/macOS Clippy + Windows CI jobs back to green; baseline reset; 4 v24 Windows broker code-review todos absorbed. (completed 2026-05-16)
 - [x] **Phase 42: UPST5 audit** — DIVERGENCE-LEDGER.md inventory of upstream `v0.53.0..+`; first audit where the `windows-touch` column actually fires.
  (completed 2026-05-17)
@@ -46,7 +46,7 @@ Plans:
 - [x] 37-05-PLAN.md — REQ-PKGS-04 acc#1/#2/#3/#5: auto_pull_e2e_linux.rs + multi-endpoint mock TCP server + CI-time keyless sigstore-sign
 
 **Wave 3** *(gate — D-15 prerequisite)*
-- [ ] 37-06-PLAN.md — TUF trust-root flake triage: path (a) sigstore-rs version bump OR path (b) NONO_TEST_HOME test-only trust root fallback
+- [x] 37-06-PLAN.md — TUF trust-root flake triage: path (a) sigstore-rs version bump OR path (b) NONO_TEST_HOME test-only trust root fallback
 **UI hint**: no
 
 ### Phase 41: CI cleanup + v24 broker code-review closure
@@ -161,7 +161,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 37. Linux RESL + PKGS auto-pull | 5/6 | In Progress|  |
+| 37. Linux RESL + PKGS auto-pull | 6/6 | Complete   | 2026-05-20 |
 | 41. CI cleanup + broker CR | 11/10 | Complete   | 2026-05-17 |
 | 42. UPST5 audit | 1/1 | Complete    | 2026-05-17 |
 | 43. UPST5 sync execution | 7/7 | Complete    | 2026-05-19 |
