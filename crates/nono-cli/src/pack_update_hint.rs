@@ -43,8 +43,18 @@ struct PackHintsState {
 /// Print update hints for every pack-provided profile in the active extends
 /// chain, reading from a 24-hour local cache.
 ///
-/// Silently no-ops on any error (network, I/O, parse). A background thread
-/// refreshes stale cache entries without blocking the current run.
+/// Silently no-ops on any error (network, I/O, parse). Stale cache entries
+/// are refreshed in a background thread — startup latency is never blocked
+/// on a registry lookup.
+///
+/// Phase 44 WR-05 P43 (REQ-REVIEW-FU-01 D-44-B2 option b): the pre-44
+/// implementation took a synchronous-then-background branch on the
+/// first-run cache-missing path. That branch could stall `nono run`
+/// startup up to 5 minutes when the registry was unreachable, violating
+/// CLAUDE.md § Performance "Zero startup latency". The synchronous path
+/// has been removed entirely; first-run users see hints on the SECOND
+/// `nono run` invocation (after the background refresh populates the
+/// cache), which is preferable to a multi-minute first-run stall.
 pub fn show_pack_update_hints(profile_name: &str, silent: bool) {
     if silent || is_opted_out() {
         return;
@@ -55,8 +65,7 @@ pub fn show_pack_update_hints(profile_name: &str, silent: bool) {
         return;
     }
 
-    let cache_existed = state_file_path().is_some_and(|p| p.exists());
-    let mut state = load_state();
+    let state = load_state();
     let now = Utc::now();
 
     let mut hints: Vec<(String, String, String)> = Vec::new(); // (pack_ref, installed, latest)
@@ -82,27 +91,12 @@ pub fn show_pack_update_hints(profile_name: &str, silent: bool) {
     }
 
     if !stale.is_empty() {
-        if !cache_existed {
-            // No cache file at all — first run after install or CLI upgrade.
-            // Do a synchronous check so the hint is visible immediately rather
-            // than silently deferring to the next run.
-            refresh_synchronous(&stale, &mut state);
-            save_state(&state);
-            for (pack_ref, installed) in &stale {
-                if let Some(entry) = state.entries.get(pack_ref) {
-                    if let Some(ref latest) = entry.latest {
-                        if is_newer(installed, latest) {
-                            hints.push((pack_ref.clone(), installed.clone(), latest.clone()));
-                        }
-                    }
-                }
-            }
-        } else {
-            // Cache exists but some entries are stale — refresh in background
-            // so startup latency is unaffected.
-            let shared = Arc::new(Mutex::new(state));
-            refresh_in_background(stale, shared);
-        }
+        // Always background-refresh — first-run users see hints on the
+        // 2nd `nono run` invocation rather than blocking startup on a
+        // dead registry. Phase 44 WR-05 P43 (D-44-B2 option b);
+        // CLAUDE.md § Performance "Zero startup latency".
+        let shared = Arc::new(Mutex::new(state));
+        refresh_in_background(stale, shared);
     }
 
     print_hints(&hints);
@@ -157,31 +151,16 @@ fn collect_profile_packs(profile_name: &str) -> Vec<(String, String)> {
 // Background refresh
 // ---------------------------------------------------------------------------
 
-fn refresh_synchronous(packs: &[(String, String)], state: &mut PackHintsState) {
-    let registry_url = crate::registry_client::resolve_registry_url(None);
-    let client = crate::registry_client::RegistryClient::new(registry_url);
-    for (pack_ref, installed) in packs {
-        let pkg_ref = match crate::package::parse_package_ref(pack_ref) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let latest = client
-            .fetch_package_status(&pkg_ref, Some(installed))
-            .ok()
-            .and_then(|s| s.latest_version);
-        state.entries.insert(
-            pack_ref.clone(),
-            PackHintEntry {
-                last_check: Utc::now(),
-                installed_at_check: installed.clone(),
-                latest,
-            },
-        );
-    }
-}
-
 fn refresh_in_background(stale: Vec<(String, String)>, state: Arc<Mutex<PackHintsState>>) {
     let registry_url = crate::registry_client::resolve_registry_url(None);
+    // Phase 44 IN-02 P43 (D-44-B5 accept-as-documented): the JoinHandle
+    // returned by `thread::spawn` is intentionally detached. If `nono`
+    // exits before the HTTP request and `save_state` complete, the
+    // network request is killed mid-flight and the cache may not be
+    // updated on this run. Worst case: more-aggressive registry checking
+    // on the next run — acceptable per CONTEXT.md D-44-B5. A graceful
+    // shutdown signal path would require routing through the supervisor
+    // lifecycle, which is out of scope for the WR-05 fix.
     let _ = thread::spawn(move || {
         let client = crate::registry_client::RegistryClient::new(registry_url);
         let mut changed = false;
@@ -269,7 +248,15 @@ fn save_state(state: &PackHintsState) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(state) {
-        let _ = std::fs::write(&path, json);
+        // Phase 44 IN-01 P43 (REQ-REVIEW-FU-01 D-44-B5): atomic
+        // tmp+rename write, mirroring the canonical pattern in
+        // `crates/nono-cli/src/package.rs::write_lockfile`. Prevents
+        // partial-write corruption if the process is killed between
+        // the file truncate and the JSON serialization completion.
+        let tmp_path = path.with_extension("json.tmp");
+        if std::fs::write(&tmp_path, json).is_ok() {
+            let _ = std::fs::rename(&tmp_path, &path);
+        }
     }
 }
 
@@ -287,10 +274,26 @@ fn is_opted_out() -> bool {
     }
 }
 
+/// Determine whether `latest` is strictly newer than `installed`.
+///
+/// Phase 44 WR-03 P43 (REQ-REVIEW-FU-01 D-44-A4): the pre-44 parser
+/// `s.splitn(4, '.')` left the third capture as the raw `"<patch>[-pre]"`
+/// substring, so `is_newer("1.2.3-beta", "1.2.3")` returned `false` on
+/// `(Some, Some)` but `is_newer("1.2.3", "1.2.3-beta")` returned `true`
+/// — depending on which side parsed successfully, the function emitted
+/// false-positive "update available" hints when the installed version
+/// was a pre-release of the same major.minor.patch as `latest`. The
+/// retrofit strips `-pre` / `+build-metadata` before splitting on `.`,
+/// so the parser matches `Cargo.toml`'s semver semantics. When EITHER
+/// side fails to parse, suppress the hint (pre-release suppression
+/// trumps a possibly-misleading legacy-installed signal).
 fn is_newer(installed: &str, latest: &str) -> bool {
     let parse = |s: &str| -> Option<(u64, u64, u64)> {
         let s = s.strip_prefix('v').unwrap_or(s);
-        let mut parts = s.splitn(4, '.');
+        // Strip semver pre-release / build-metadata before splitting on '.'
+        // so "1.2.3-beta" → "1.2.3" → (1, 2, 3) and "1.2.3+build5" → (1, 2, 3).
+        let core = s.split(['-', '+']).next().unwrap_or(s);
+        let mut parts = core.splitn(3, '.');
         let major: u64 = parts.next()?.parse().ok()?;
         let minor: u64 = parts.next()?.parse().ok()?;
         let patch: u64 = parts.next()?.parse().ok()?;
@@ -298,7 +301,54 @@ fn is_newer(installed: &str, latest: &str) -> bool {
     };
     match (parse(installed), parse(latest)) {
         (Some(i), Some(l)) => l > i,
-        (None, Some(_)) => true, // legacy non-semver installed, new semver release available
+        // If EITHER side is unparseable, suppress the hint rather than
+        // false-positiving on pre-release installs.
         _ => false,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// Phase 44 WR-03 P43 regression: pre-release installs must NOT
+    /// trigger an update hint to the same release version. Pre-44
+    /// `is_newer("1.2.3-beta", "1.2.3")` returned `true` because the
+    /// `splitn(4, '.')` parser left `"3-beta"` as the third capture
+    /// and `"3-beta".parse::<u64>()` failed; the `None`-fallback
+    /// branch then misclassified the comparison.
+    #[test]
+    fn is_newer_suppresses_hint_on_prerelease_installed() {
+        assert!(
+            !is_newer("1.2.3-beta", "1.2.3"),
+            "pre-release installed must not trigger an update hint to the same release version"
+        );
+        assert!(
+            !is_newer("2.0.0-rc1", "1.9.0"),
+            "pre-release of a higher major must not trigger an update hint to a lower major"
+        );
+        assert!(
+            !is_newer("1.2.3+build5", "1.2.3"),
+            "build-metadata-installed must not trigger an update hint to the same release version"
+        );
+    }
+
+    /// Phase 44 WR-03 P43: happy-path upgrade detection must still
+    /// fire when the parser succeeds on both sides.
+    #[test]
+    fn is_newer_returns_true_on_genuine_upgrade() {
+        assert!(is_newer("1.2.3", "1.2.4"));
+        assert!(is_newer("v1.2.3", "v1.3.0"));
+        assert!(is_newer("1.2.3", "2.0.0"));
+    }
+
+    /// Phase 44 WR-03 P43: monotone — downgrades and equal versions
+    /// never trigger an update hint.
+    #[test]
+    fn is_newer_returns_false_on_downgrade_or_equal() {
+        assert!(!is_newer("1.2.4", "1.2.3"));
+        assert!(!is_newer("1.2.3", "1.2.3"));
+        assert!(!is_newer("v2.0.0", "v1.9.9"));
     }
 }
