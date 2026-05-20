@@ -2,43 +2,98 @@
 gsd_state_version: 1.0
 milestone: v2.5
 milestone_name: Backlog Drain + UPST5
-status: ready_to_plan
-last_updated: "2026-05-19T15:49:09.834Z"
-last_activity: 2026-05-19
+status: completed
+last_updated: "2026-05-20T12:57:47.131Z"
+last_activity: 2026-05-20
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 24
-  completed_plans: 19
-  percent: 80
+  completed_plans: 25
+  percent: 100
 ---
 
 # Project State: nono — v2.5 Backlog Drain + UPST5
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-12 at v2.4 milestone start; v2.3 shipped same day)
+See: .planning/PROJECT.md (updated 2026-05-20 at v2.5 milestone close; v2.5 shipped same day).
 
-**Core Value:** Every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 37 — linux-resl-backends-pkgs-auto-pull
+**Current Focus:** Planning next milestone (v2.6 — run `/gsd-new-milestone v2.6`).
 
 ## Current Position
 
-Phase: 41
-Plan: Not started
-Status: Executing Phase 37
-Resume file: .planning/phases/37-linux-resl-backends-pkgs-auto-pull/37-CONTEXT.md
-Last activity: 2026-05-19 -- Phase 37 execution started
+Phase: Milestone v2.5 complete (tag `v2.5`)
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-05-20 — Milestone v2.5 completed and archived
 
-### v2.5 phase queue
+## Deferred Items
 
-| Phase | Goal | Depends on | Requirements |
-|---|---|---|---|
-| 37 | Linux cgroup v2 RESL backends + PKGS auto-pull (Windows-coded, CI-Linux-verified) | None (parallel with 41) | REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 |
-| 41 | CI cleanup (Linux/macOS Clippy + 5 Windows jobs) + baseline reset + 4 v24 broker code-review todos | None (priority) | REQ-CI-01/02/03 + REQ-BROKER-CR-01/02/03/04 |
-| 42 | UPST5 audit (DIVERGENCE-LEDGER for upstream v0.53.0..+; first windows-touch-yes column) | Phase 41 | REQ-UPST5-01 |
-| 43 | UPST5 sync execution (cherry-picks + D-20 manual-replays vs post-Phase-41 baseline) | Phases 41 + 42 | REQ-UPST5-02 |
+Items acknowledged and deferred at v2.5 milestone close on 2026-05-20 (per `.planning/v2.5-MILESTONE-AUDIT.md` and pre-close artifact audit). 32 items across 4 categories; carry-forward to v2.6 unless otherwise noted.
+
+### Phase-level verification gaps (3 — orchestrator post-merge)
+
+| Phase | Item | Disposition |
+|-------|------|-------------|
+| 37 | VERIFICATION.md `status: human_needed` — Success Criterion 6 (`.github/workflows/phase-37-linux-resl.yml` live run on `ubuntu-24.04`) | Orchestrator post-merge push triggers workflow; structurally complete + YAML-valid + commits unpushed per worktree-mode discipline. |
+| 41 | VERIFICATION.md `status: human_needed` — cross-target Linux/macOS clippy + 8 GH Actions lanes on HEAD `b78dba87` | Decisive close signal lives in GH Actions; Windows host cannot run cross-target clippy. Class E env_vars flake explicitly deferred per Plan 41-10 disposition. |
+| 43 | VERIFICATION.md `status: human_needed` — umbrella PR open + baseline-aware CI lane diff vs `13cc0628` | 6 PR-SECTION.md contribution artifacts staged; orchestrator concatenates + `gh pr create` post-merge. |
+
+### Partial UAT scenarios (13 across 3 phases)
+
+| Phase | File | Open scenarios |
+|-------|------|----------------|
+| 37 | `.planning/phases/37-linux-resl-backends-pkgs-auto-pull/37-HUMAN-UAT.md` | 5 |
+| 41 | `.planning/phases/41-ci-cleanup-v24-broker-code-review-closure/41-HUMAN-UAT.md` | 6 |
+| 43 | `.planning/phases/43-upst5-sync-execution/43-HUMAN-UAT.md` | 2 |
+
+### Pending follow-up todos (5 — `.planning/todos/pending/`)
+
+| File | Priority | Disposition |
+|------|----------|-------------|
+| `41-10-linux-deny-overlap-regression.md` | medium | Class D Linux deny-overlap test `#[ignore]`-gated with reason; sandbox guarantee intact (Landlock denies at runtime, exit 1, no secret leak); only diagnostic string missing from stderr. |
+| `41-10-windows-integration-env-vars-flake.md` | medium | Class E.1 — deferred to v2.5 cargo-nextest subprocess-per-test isolation follow-on. |
+| `41-10-windows-regression-temp-vars-flake.md` | medium | Class E.2 — same disposition as E.1 (sibling flake). |
+| `v24-cr-01-broker-not-found-ffi-mapping.md` | low | Closed in fork via Plan 41-06; deferred lockstep update to `../nono-py/` + `../nono-ts/` siblings (D-10 carry-forward). |
+| `v24-cr-02-broker-null-handle-validation.md` | medium | Same lockstep deferral as CR-01. |
+
+### Historical quick-task slugs (21 — pre-v2.5 stragglers)
+
+Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pre-date the v2.5 milestone by months and appear to be cleanup debris from prior milestones. Recommend bulk-archive via `/gsd-cleanup` retroactive in v2.6:
+
+```
+260405-v0e-investigate-and-fix-exec-strategy-rs-unc
+260405-vjj-fix-pr-555-signoffs-and-merge-conflicts-
+260406-ajy-assess-windows-functional-equivalence-to
+260406-bem-research-and-roadmap-windows-gap-closure
+260410-nlt-fix-three-uat-gaps-in-phase-10-etw-learn
+260412-ajy-safe-layer-roadmap-input
+260417-kem-fix-envvarguard-migration-migrate-48-fla
+260417-wla-fix-windows-createprocess-handle-uaf
+260419-cmp-upstream-036-windows-parity
+260424-upr-review-upstream-037-to-040
+260428-rsu-refresh-stack-onto-upstream-tip
+260508-m99-broker-process-poc-minimal-rust-binary-t
+260509-rib-clean-up-windows-poc-handoff-mdx-apply-9
+260509-s9m-verify-that-the-sigstore-functionality-i
+260509-stb-fix-windows-poc-handoff-mdx-block-net-se
+260510-im9-investigate-windows-test-failures-in-cra
+260511-jxg-cmd-unc-cwd-supervised
+260511-jxk-label-guard-drop-on-sigint
+260513-f5n-update-the-poc-runbook-windows-poc-hando
+260514-0gu-bump-fork-version-0-37-1-to-0-53-0
+260516-mxw-fix-handletarget-import-linux
+```
+
+### REVIEW.md polish (16 warnings, 0 CRITICAL — candidate v2.6 chore plan)
+
+| Phase | Count | Highest-leverage items |
+|-------|-------|------------------------|
+| 37 | 10 warnings + 7 info | WR-09 D-15 clause 2 OIDC issuer pin production-verifier wiring; WR-05 sigstore-verify 0.7.0 `verify_sct` default pin-test; WR-01 `check-cli-doc-flags.sh` multi-line `#[arg(...)]` parser blind spot; WR-03 EnvGuard cross-test mutex. |
+| 43 | 6 warnings + 5 info | WR-05 first-run synchronous pack-update startup latency (~5min hit on CLAUDE.md "Zero startup latency" constraint); WR-04 `platform.rs::compare_versions` Ord antisymmetry violation; WR-02 REG_DWORD malformed-hex fallback; WR-06 case-sensitive registry value-name match; WR-01 `validate_restore_target` best-effort TOCTOU. |
 
 ## Accumulated Context
 
@@ -92,7 +147,7 @@ Last activity: 2026-05-19 -- Phase 37 execution started
 
 - **Phase 33 Plan 33-03 (REQ-3 + REQ-4 + REQ-5) — Downstream artifacts landed; Phase 33 ready for verification:** Wave 3 closed 2026-05-11 with single commit `8f783c39` (`docs(33): land downstream artifacts — PROJECT.md row + G-25-DRIFT-01 Update + ROADMAP Phase 34 stub`). Three append-only edits ride atomically in this commit: (1) `.planning/PROJECT.md` Key Decisions table at L184 gains one new row for the parity-strategy decision — Decision cell `Phase 33 Upstream parity strategy (continue / split / freeze)`, Rationale cell cites Option A `continue` + per-cell L/M/H verdicts (Med/High/High/Med/High) + Wave 1 ledger evidence (12 clusters / 97 commits / 8 will-sync + 2 fork-preserve + 2 won't-sync) + 6+ fork-only surface seams + aggregate-shape dominance (3H/2M/0L vs B 1H/0M/4L vs C 1H/2M/2L) without invoking D-33-C3 tiebreaker; Outcome cell `✔ Decided — [docs/architecture/upstream-parity-strategy.md](../docs/architecture/upstream-parity-strategy.md); UPST3-sync follow-up queued in ROADMAP § Phase 34`. (2) `.planning/phases/25-cross-platform-resl-aipc-unix-design/25-HUMAN-UAT.md` G-25-DRIFT-01 entry gains a `**Update (Phase 33, 2026-05-11):**` section appended AFTER the Cross-references list (frontmatter `status: open` at L64 UNCHANGED — Phase 33 does NOT close the gap per SPEC.md § Out of scope). All 4 D-33-D2 subsections present; subsections 1/2/4 adapted for Wave 1 empirical-disproof finding (zero RESL-flag-rename commits in v0.40.1..v0.52.0 against `upstream/main` HEAD `54f7c32a`); literal phrase `Phase 33 does NOT close G-25-DRIFT-01` preserved verbatim in subsection 3 (validator gate). (3) `.planning/ROADMAP.md` updated in BOTH directions per PATTERNS Pitfall 8: Phase 33's own entry has Goal line replaced (audit-shaped wording, no more `[To be planned]`), Plans counter `3/4` → `4/4 plans executed`, 33-03 checkbox `[ ]` → `[x]`, 33-01 bullet disposition count corrected from stale `8/3/1` → `8/2/2` (matches actual DIVERGENCE-LEDGER.md ground truth verified via `grep -c "Disposition: ..."`), progress table row at L308 flipped from `1/4 In Progress` → `4/4 Complete 2026-05-11`; Phase 34 stub appended AFTER Phase 33's `**Reference:**` line with title `Phase 34: UPST3 — Upstream v0.41–v0.52 Sync Execution` (Option A base case per D-33-D1, NO flip), Depends on Phase 33, Plans: 0 plans TBD-stub shape, Reference list cites DIVERGENCE-LEDGER + ADR + `.planning/templates/upstream-sync-quick.md` (Option A only). **All 12 REQ-3/4/5 validators + 2 cross-cutting validators pass:** REQ-3 V1-V4 (upstream-parity-strategy grep, 3-option summary, ✔ Decided + ADR link, 3-col table context); REQ-4 V1-V4 (Update section header, both artifacts cross-referenced count=3, status: open unchanged at L64, verbatim phrase present); REQ-5 V1-V4 (Phase 34 stub title, Depends on Phase 33, Plans: 0 plans, Phase 33 Plans: 4/4); D-19 invariant (`git diff --name-only -- crates/nono/ | wc -l` = 0); source-tree drift substitute (`git status --porcelain -- crates/ bindings/ scripts/ | wc -l` = 0, Rule 3 deviation inherited from 33-02 since `make` not on PATH on Windows host). **2 deviations auto-fixed:** Rule 3 (make-ci substitute on Windows host, inherited from 33-02 with the same rationale — docs-only plan has structurally zero clippy/fmt/test risk); Rule 1 (ROADMAP 33-01 bullet disposition count corrected from stale `8/3/1` → canonical `8/2/2` to match DIVERGENCE-LEDGER.md ground truth; the stale count was inherited from 33-01-SUMMARY frontmatter's `provides` field — fixing the SUMMARY frontmatter is out of scope for this plan since it's a completed-plan artifact, but the ROADMAP correction is the canonical live-tracking fix). Commits: `8f783c39` (downstream-artifacts atomic commit — 3 files, +30/-5) + `af9ea2c5` (33-03 SUMMARY) + this entry's commit (sequential-mode tracking — STATE.md + ROADMAP.md if needed). **Phase 33 closed: 4/4 plans executed, all 5 REQs landed (REQ-1 5fa0dca4 / REQ-2 7107b88d / REQ-3+4+5 8f783c39), ready for `/gsd-verify-work` verifier pass.** Phase 34 inputs ready: 8 will-sync clusters from DIVERGENCE-LEDGER.md = cherry-pick / manual-replay queue; 2 fork-preserve clusters = manual-replay with D-20 rationale; 2 won't-sync = no-action documentation; audit cadence rule from ADR's `### Future audit cadence` subsection (every upstream minor release triggers a new drift audit).
 
-- **Phase 33 Plan 33-02 (REQ-2) — Strategic parity-decision ADR shipped Accepted; operator chose Option A `continue`:** Wave 2 closed 2026-05-11 with single commit `7107b88d` (`docs(33): write upstream-parity-strategy ADR (Accepted)`). Plain-text `**Status:** Ready to plan
+- **Phase 33 Plan 33-02 (REQ-2) — Strategic parity-decision ADR shipped Accepted; operator chose Option A `continue`:** Wave 2 closed 2026-05-11 with single commit `7107b88d` (`docs(33): write upstream-parity-strategy ADR (Accepted)`). Plain-text `**Status:** v2.5 milestone complete
 
 - **Phase 33 Plan 33-01 (REQ-1) — DIVERGENCE-LEDGER.md curated for v0.40.1..v0.52.0:** Wave 1 ledger curation completed 2026-05-11. Drift-tool re-run (D-33-A1 locked invocation `make check-upstream-drift ARGS="--from v0.40.1 --to v0.52.0 --format json"`, dispatched on Windows host via `bash scripts/check-upstream-drift.sh`) produces 97 unique commits across 12 minor releases (v0.41.0..v0.52.0) with `by_category` distribution `profile=15, policy=5, package=5, proxy=6, audit=4, other=91`. Curated 12 themed clusters (vs the v0.37-v0.40 precedent's 5; justified by the 97-commit / 12-tag spread): largest is v0.46-v0.47.1 path-canonicalization + JSON-schema-restructure (23 commits); smallest are v0.42 unix-socket-capability and v0.42 proxy-hardening (4 each). Per-cluster dispositions: **8 will-sync** (CLI consolidation v0.41, proxy/network hardening v0.42-v0.45, headless-keyring + display fixes v0.43-v0.43.1, schema-restructure v0.46-v0.47.1, shell completion v0.48, trust hardening v0.49, ps display + env:// credentials v0.50-v0.50.1, env-deny_vars + nono learn deprecation v0.52); **3 fork-preserve** (PTY attach v0.41 — fork's ConPTY path is structurally different per D-11; pack migration v0.44 — would delete v2.1 Phase 18.1-03 widening per D-20; proxy TLS interception v0.51 — would delete fork's Windows credential-injection rewrite per D-20); **1 won't-sync** (Unix-socket capability v0.42 — Unix-only enum variant would expose a no-op on Windows backend, violating D-19 if pulled in this audit cycle). Manual fork-only surface enumeration (D-33-A3) covers `crates/nono-shell-broker/` (Phase 31), `NONO_TEST_HOME` (Phase 27.1), Authenticode chain-walker (Phase 28), `WindowsTokenArm::BrokerLaunch` (Phase 31), Sigstore TUF cached-root (Phase 32), broker self-trust-anchor (Phase 32), plus 8 `*_windows.rs` files matching `git ls-files | grep -E '_windows\.rs$'` byte-for-byte; explicit "NOT in workspace" correction for `crates/nono-wfp-service/` (verified against `Cargo.toml` `[workspace] members`). **CRITICAL audit finding (contradicts G-25-DRIFT-01 hypothesis):** ZERO commits matching the 4 RESL flag rename keywords (`--memory`, `--cpu-percent`, `--max-processes`, `--timeout`) anywhere in v0.40.1..v0.52.0. The G-25-DRIFT-01 entry recorded 2026-05-10 cited "deprecated/renamed in upstream nono v0.52" as the originating concern; this audit shows that claim is empirically false against `upstream/main` HEAD `54f7c32a` at audit date `2026-05-11`. Upstream at v0.52.0 still ships the 4 flags under their original Phase 25 names. Wave 2 ADR Context section + Wave 3 REQ-4 G-25-DRIFT-01 update will re-classify the gap (the divergence does not exist). **Validation (all 6 self-audit checks pass):** coverage diff (97 == 97 unique shas — zero gap); disposition enum (12 clusters / 12 valid disposition lines); header reproducibility (`upstream_head_at_audit` + `drift_tool_sh_sha` + locked invocation each grep-discoverable on a single line); fork-only surface section (6 grep markers each return ≥1 line); drift-tool re-run idempotence (exit 0); D-19 invariant (`git diff --name-only -- crates/nono/` = 0 files). **2 deviations auto-fixed:** Rule 3 — drift JSON output redirected from `/tmp/` to `ci-logs-local/drift/` (Windows-host Python interpreters can't access MSYS `/tmp/` paths); `ci-logs-local/` added to `.gitignore` per D-33-A2 ("raw JSON not committed"). Rule 2 — `*_windows.rs` enumeration corrected: plan listed `crates/nono/src/sandbox/windows.rs` which does NOT exist at audit time (likely renamed in Phase 04-era sandbox modularization); actual ls-files surface adds `crates/nono/src/supervisor/socket_windows.rs` + `crates/nono-cli/tests/exec_identity_windows.rs`. Documented in SUMMARY. Commits: `5fa0dca4` (DIVERGENCE-LEDGER.md, .gitkeep, .gitignore — single atomic commit per plan's Task 3 commit-message template; ledger 30,972 bytes, 12 cluster sections, 97 commit rows) + `63a37d17` (33-01-SUMMARY.md). DCO sign-offs in both. Wave 2 (Plan 33-02 ADR) reads the cluster summary table for Decision Table scoring and the fork-only surface area for security-posture column rationale; Wave 3 (Plan 33-03) reads the audit finding for REQ-4 G-25-DRIFT-01 update item 4 (audit-walk note).
 
