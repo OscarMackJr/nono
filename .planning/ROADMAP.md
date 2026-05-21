@@ -64,6 +64,22 @@ Audit: [`milestones/v2.5-MILESTONE-AUDIT.md`](milestones/v2.5-MILESTONE-AUDIT.md
 - [x] 44-02-test-hygiene-drain-PLAN.md — test hygiene drain (REQ-TEST-HYG-01..04, Class D Linux deny-overlap + Class E Windows env_vars flakes + v24 broker CR-01/CR-02 cross-binding lockstep in nono-py + nono-ts siblings)
 **UI hint**: no
 
+### Phase 44.1: OIDC fail-closed remediation (REQ-REVIEW-FU-01 / T-44-01 / CR-01) (INSERTED)
+
+**Goal**: Remediate the T-44-01 / CR-01 BLOCKER carried out of Phase 44. The WR-09 production-wiring of `NONO_TRUST_OIDC_ISSUER` in `trust_cmd.rs` keyless verify paths regressed the D-32-08 fail-closed contract by silently substituting the canonical GitHub Actions OIDC issuer (`https://token.actions.githubusercontent.com`) when both `--issuer` and the env-var are unset. Restore the pre-44 explicit fail-closed shape — verify MUST error when neither `--issuer` nor a non-empty `NONO_TRUST_OIDC_ISSUER` is provided — while preserving the env-var fallback as an opt-in trust anchor per D-44-B3. Update the regression-codifying unit test and the CLI doc that still labels `--issuer` as REQUIRED, then re-audit so T-44-01 flips to CLOSED.
+**Depends on**: Phase 44 (inherits its head commit as baseline; both fix sites and the test that codifies the regression were introduced in Plan 44-01).
+**Requirements**: REQ-REVIEW-FU-01
+**Success Criteria** (what must be TRUE):
+  1. Keyless `nono trust verify` (both multi-subject and single-file paths at `crates/nono-cli/src/trust_cmd.rs:976-984` + `1172-1180`) errors fail-closed with a clear "keyless bundle requires --issuer <OIDC_URL> or NONO_TRUST_OIDC_ISSUER" message when both `user_issuer == None` AND the env-var is unset (or whitespace-only). The hard-coded `GITHUB_ACTIONS_OIDC_ISSUER` constant is no longer used as a silent default at the verify boundary.
+  2. The env-var fallback remains opt-in: when `NONO_TRUST_OIDC_ISSUER` is explicitly set to a non-empty value, verify uses it (after `url::Url::parse` URL-shape validation) without requiring `--issuer`. D-44-B3's "if set, asserts as the trusted OIDC issuer" half of the contract is preserved.
+  3. The unit test `configured_oidc_issuer_falls_back_to_github_default_when_unset` in `crates/nono/src/trust/signing.rs:1217-1224` is replaced (or repurposed) so it no longer codifies the regression; a new regression test pins the fail-closed shape at the verify-callsite boundary (env-var unset + `--issuer` unset → error). The malformed-env branch (`configured_oidc_issuer_rejects_malformed_env_value`) and the explicit-set branch both retain coverage.
+  4. The CLI doc at `crates/nono-cli/src/cli.rs:3046-3049` accurately reflects the restored contract (`--issuer` is REQUIRED unless `NONO_TRUST_OIDC_ISSUER` is explicitly set; the env-var alternative is documented).
+  5. `/gsd-secure-phase` re-run on Phase 44 flips T-44-01 from OPEN to CLOSED; Phase 44 SECURITY.md verdict moves from `OPEN_THREATS` to `SECURED`. Re-running the Phase 44 code review on the changed sites no longer surfaces CR-01.
+  6. Cross-target clippy passes per CLAUDE.md MUST/NEVER bullet: workspace clippy on Windows host AND `--target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin` (PARTIAL allowed only if cross-toolchain unavailable, per `.planning/templates/cross-target-verify-checklist.md`). No `#[allow(dead_code)]` introduced.
+**Plans**: 1 plan
+- [ ] 44.1-01-oidc-fail-closed-remediation-PLAN.md — restore D-32-08 fail-closed contract on keyless trust verify; delete dead configured_oidc_issuer; update CLI doc
+**UI hint**: no
+
 ### Phase 45: Source migration + AIPC G-04 + RESL native re-validation
 **Goal**: Close three Rule-4 architectural items that have been deferred for multiple milestones: (a) the Cluster 2 split-disposition Edition 2024 source-file migration deferred from Phase 43 Plan 43-01b DEC-3, (b) the AIPC G-04 wire-protocol compile-time tightening deferred from v2.1 Plan 18.1-02 and reaffirmed at v2.3/v2.4/v2.5 scope-locks, and (c) the Phase 38 REQ-AAHX-HOST-01 native re-validation on Linux/macOS host that has been host-blocked since v2.4 close. All three are independent surface-touch operations; bundling avoids three single-purpose phases.
 **Depends on**: Nothing in v2.6 directly. Can run in parallel with Phase 44 (surface areas disjoint: Phase 44 = REVIEW.md polish + tests; Phase 45 = `bindings/c/src/` Edition 2024 + `aipc_sdk.rs` wire-protocol + Linux/macOS host re-validation).
