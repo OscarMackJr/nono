@@ -6,13 +6,22 @@ created: 2026-05-20
 granularity: standard
 ### Phase 50: Corp-network TUF refresh via OS root store — replace or wrap the sigstore-rs TUF refresh path with an HTTP client that consults the Windows root store, fixing the recurring `nono setup --refresh-trust-root` failure at step [3/5] on TLS-inspecting enterprise networks (reqwest 0.12.28 + webpki-roots cannot see corp CA in Windows root store). Two viable implementation surfaces: (a) nono-local TUF chain-walk using existing `ureq` + `rustls-platform-verifier` deps in nono-cli/Cargo.toml (no upstream PR cycle), or (b) upstream `sigstore-rs` PR adding `TrustedRoot::with_http_client(...)` seam plus nono-side `reqwest::Client::builder().use_native_tls()` wire-through. Phase 49's `--from-file` flag covers the operational gap until this lands. Evidence: .planning/debug/resolved/sigstore-tuf-fetch-transport.md.
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** `nono setup --refresh-trust-root` succeeds on a Windows host behind a TLS-inspecting corporate proxy (whose interceptor CA is in the Windows root store but not in the Mozilla webpki-roots bundle), by replacing the single `sigstore-rs TrustedRoot::production()` call with a nono-local TUF chain-walk that uses an HTTP client (ureq + platform-verifier) consulting the OS certificate store.
+**Requirements**: SPEC-50-REQ-1..6 (locked in 50-SPEC.md)
 **Depends on:** Phase 49
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 50 to break down)
+**Wave 1**
+- [ ] 50-01-PLAN.md — Wave 0 skeleton: promote tough to direct dep, declare trust_refresh module, create skeleton (SPEC-50-REQ-1 partial)
+- [ ] 50-02-PLAN.md — Wave 1 production code: UreqTransport + tough RepositoryLoader chain-walk (SPEC-50-REQ-1, 2, 3, 4)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 50-03-PLAN.md — Wave 2 call-site swap in setup.rs preserving tokio runtime + cache contract (SPEC-50-REQ-1, 4)
+- [ ] 50-04-PLAN.md — Wave 2 hermetic test suite: StaticMapTransport + 4 tests (SPEC-50-REQ-3, 4, 5)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 50-05-PLAN.md — Wave 3 HUMAN-UAT + windows-poc-handoff doc update + cross-target clippy (SPEC-50-REQ-5, 6)
 
 ---
 
@@ -56,7 +65,8 @@ Audit: [`milestones/v2.5-MILESTONE-AUDIT.md`](milestones/v2.5-MILESTONE-AUDIT.md
 - [ ] **Phase 46: windows-squash merge + post-merge CI verifications + UAT backlog** — Orchestrator-coordinated: `windows-squash` → `main` merge (PR-583 gate moved OR feature-flag-equivalent rollout); Phase 37 workflow live run + Phase 43 umbrella PR + baseline-aware CI lane diff vs `13cc0628`; Phase 35 + 36 human-UAT backlog (11 scenarios + 7 verification items) on native Linux/macOS host.
 - [ ] **Phase 47: UPST6 audit + v0.41–v0.43 drift ingestion** — Mirror Phase 33 / 39 / 42 audit shape for upstream `v0.54.0..v0.55.0+`; first real load of the v2.2 DRIFT-01/02 tooling on the long-deferred `v0.41–v0.43` backfill (treat as cleanup, not parity-sync).
 - [ ] **Phase 48: UPST6 sync execution** — Cherry-picks + D-20 manual replays per UPST6 audit dispositions; D-19 trailer convention + Windows-only-files invariant + baseline-aware CI gate inherited from Phase 22/34/40/43.
-- [x] **Phase 49: Sigstore trust-root POC resilience** — Structural fix for the recurring stale-embedded-TUF-anchor failure on `nono setup --refresh-trust-root` (hit at 0.6.5 → 0.6.6, again at 0.7.0). Three sub-items: (1) `nono setup --from-file <PATH>` CLI flag that bypasses upstream `TrustedRoot::production()` when the user supplies a known-good `trusted_root.json`; (2) ship `trusted_root.json` as a release asset alongside `nono.exe`/`nono` so POC users don't need a GitHub fetch; (3) maintainer cadence task to refresh `crates/nono/tests/fixtures/trust-root-frozen.json` from upstream on every Sigstore root rotation announcement. Surfaces are disjoint from 44–48 (touches `crates/nono-cli/src/setup.rs` + `crates/nono-cli/src/cli.rs` + CI release-asset packaging + `.planning/templates/`) so parallel-safe. (completed 2026-05-21)
+- [x] **Phase 49: Sigstore trust-root POC resilience** — Structural fix for the recurring stale-embedded-TUF-anchor failure on `nono setup --refresh-trust-root` (hit at 0.6.5 → 0.6.6, again at 0.7.0). Three sub-items: (1) `nono setup --from-file <PATH>` CLI flag that bypasses upstream `TrustedRoot::production()` when the user supplies a known-good `trusted_root.json`; (2) ship `trusted_root.json` as a release asset alongside `nono.exe`/`nono` so POC users don't need a GitHub fetch; (3) maintainer cadence task to refresh `crates/nono/tests/fixtures/trust-root-frozen.json` from upstream on every Sigstore root rotation announcement. Surfaces are disjoint from 44–48 (touches `crates/nono-cli/src/setup.rs` + `crates/nono-cli/src/cli.rs` + CI release-asset packaging + `.planning/templates/`) so parallel-safe.
+ (completed 2026-05-21)
 
 ## Phase Details
 
