@@ -1319,6 +1319,7 @@ mod tests {
             #[cfg(target_os = "windows")]
             start_wfp_driver: false,
             refresh_trust_root: false,
+            from_file: None,
             generate_profiles: true,
             show_shell_integration: false,
         };
