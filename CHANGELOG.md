@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.53.1] - 2026-05-22
+
+### Added (fork)
+
+- **Corp-network TUF refresh via OS root store (Phase 50):** `nono setup --refresh-trust-root` now succeeds on Windows hosts behind TLS-inspecting corporate proxies whose interceptor CA is in the Windows root store but not in the Mozilla `webpki-roots` bundle. New nono-local TUF chain-walk in `crates/nono-cli/src/trust_refresh.rs` (verbatim port of sigstore-rs `TufClient::load_repository`) substitutes `tough::HttpTransport` with `UreqTransport(ureq::Agent)` so `RootCerts::PlatformVerifier` consults the OS root store (Windows Crypt32, macOS Security, Linux ca-certificates). Single call-site swap in `setup.rs::refresh_trust_root_step`; tokio runtime and cache-write contract preserved. 6 hermetic tests in `trust_refresh::tests` (happy / bad-sig / malformed / byte-identical baseline / env-seam / from_file round-trip). Resolves the recurring `error sending request for url` failure at step [3/5] on TLS-inspecting enterprise networks.
+- **WFP service + driver bundled in machine-scope MSI (quick 260522-c9c):** Machine-scope MSI now ships `nono-wfp-service.exe`, `nono-wfp-driver.sys`, and the `nono` EventLog source. `scripts/build-windows-msi.ps1` gains `-DriverBinaryPath` parameter and scope-coherence guards (refuse user-scope + driver/service; refuse machine-scope with only one of {service, driver}). Release pipeline (`.github/workflows/release.yml`) auto-wires both `-ServiceBinaryPath` and `-DriverBinaryPath` with `Test-Path` pre-flight guards. User-scope MSI deliberately excludes the WFP backend (kernel drivers cannot load from `%LocalAppData%`; LocalSystem services cannot run from per-user paths).
+
+### Changed (fork)
+
+- **POC handoff documentation reframed for WFP install path (quick 260522-cui):** `docs/cli/development/windows-poc-handoff.mdx` Option C split into C.1 (per-user, no WFP) and C.2 (machine MSI with WFP). Stale `<Warning>` reframed as `<Note>` explaining the user-vs-machine architectural tradeoff. Step 3 pre-flight expectations branched on install path. New post-install sub-section documents the four-command `nono setup --install-wfp-{service,driver} --start-wfp-{driver,service}` sequence (WiX cannot represent kernel drivers; the CLI does the registration).
+
+### Fixed (fork — Phase 50 code review polish)
+
+- **Path A freshness gate (WR-01):** `setup.rs::refresh_trust_root_step` now runs `check_trusted_root_freshness` on the network-fetched root, matching the Path B (`--from-file`) supply-chain contract.
+- **TUF cache preservation on transient failures (WR-02, WR-03):** Cache is preserved on transient network/parse failures (only wiped on signature/parse errors that invalidate trust). Cleanup uses async `tokio::fs::remove_dir_all` instead of blocking the executor.
+- **JoinError surface (WR-05):** Panic in `spawn_blocking` now resumes the panic (standard tokio idiom) instead of conflating internal bugs with network failures.
+- **Cross-target Linux clippy drift (Phase 50 Task 3):** 14 pre-existing cross-toolchain lint findings in cfg-gated Unix code (`exec_strategy.rs`, `exec_strategy/supervisor_linux.rs`, `learn.rs`, `session_commands.rs`) surfaced and fixed during the cross-target HARD-pass enforcement.
+
+### Internal
+
+- **Cross-target clippy enforcement via `cross` + Docker:** New `Cross.toml` pre-build hook for `x86_64-unknown-linux-gnu` installs `libdbus-1-dev` + `pkg-config` so the keyring / sync-secret-service transitive `libdbus-sys` build succeeds in the cross Docker image. Linux lane satisfies CLAUDE.md's MUST/NEVER cross-target clippy rule without modifying the Windows dev host. macOS lane (`x86_64-apple-darwin`) remains PARTIAL per `.planning/templates/cross-target-verify-checklist.md` with explicit user-acknowledged sign-off.
+
 ## [0.53.0] - 2026-05-14
 
 ### Bug Fixes (absorbed from upstream v0.54.0 - 2026-05-13)

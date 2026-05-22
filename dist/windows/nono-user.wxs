@@ -3,7 +3,7 @@
   <Package
       Name="nono"
       Manufacturer="Luke Hinds"
-      Version="0.53.0"
+      Version="0.53.1"
       UpgradeCode="5451E72C-E0C4-4BF8-B9EA-0D6A22AA80E4"
       Scope="perUser">
     <SummaryInformation
