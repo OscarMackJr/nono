@@ -82,7 +82,7 @@ cargo build --release --target x86_64-pc-windows-msvc -p nono-cli -p nono-shell-
 # The build-windows-msi.ps1 scope-coherence guard throws if you pass one without
 # the other (a half-installed WFP backend is worse than none).
 .\scripts\build-windows-msi.ps1 `
-  -VersionTag v0.37.1-poc.1 `
+  -VersionTag v0.53.1-poc.1 `
   -BinaryPath .\target\x86_64-pc-windows-msvc\release\nono.exe `
   -BrokerPath .\target\x86_64-pc-windows-msvc\release\nono-shell-broker.exe `
   -ServiceBinaryPath .\target\x86_64-pc-windows-msvc\release\nono-wfp-service.exe `
