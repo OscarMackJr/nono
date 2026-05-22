@@ -212,10 +212,6 @@ async fn do_refresh_after_datastore_create(
 /// cleanup of the TUF datastore at `<nono_home>/.nono/trust-root/tuf-cache/`
 /// is performed on ANY failure path after `create_dir_all` succeeds
 /// (D-49-B2 / D-50-07 — broadened per Codex R-50-05).
-// Phase 50 Wave 1: this function is still not invoked from any production
-// code path; Plan 50-03 swaps `setup.rs::refresh_trust_root_step` to call
-// it. The `#[allow(dead_code)]` is removed at that point.
-#[allow(dead_code)]
 pub async fn refresh_production_trusted_root() -> Result<TrustedRoot> {
     // 1. URL setup (mirror sigstore-trust-root tuf.rs:350-354).
     let base_url = Url::parse(DEFAULT_TUF_URL)
