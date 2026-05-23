@@ -198,9 +198,13 @@ pub struct CapabilityRequest {
 /// The supervisor's response to a [`CapabilityRequest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ApprovalDecision {
-    /// Access was granted. Resource-transfer details, if any, are carried by
-    /// [`SupervisorResponse::Decision`].
-    Granted,
+    /// Access was approved. The resource-transfer metadata is carried inline.
+    ///
+    /// Making the payload part of the variant eliminates the `(Approved, grant=None)`
+    /// class of dispatcher-bypass spoofing at the type level (Phase 45 Plan 45-02,
+    /// REQ-AIPC-G04-01). Elevates the Phase 18.1-02 G-04 flow-control invariant
+    /// (`Approved ⟹ grant Some`) from runtime defense to compile-time guarantee.
+    Approved(ResourceGrant),
     /// Access was denied with a reason.
     Denied {
         /// Why the request was denied
@@ -403,10 +407,13 @@ impl ResourceGrant {
 }
 
 impl ApprovalDecision {
-    /// Returns true if access was granted.
+    /// Returns true if access was approved (carries an inlined [`ResourceGrant`]).
+    ///
+    /// Renamed from `is_granted()` at Phase 45 Plan 45-02 to align with the
+    /// `Approved(ResourceGrant)` variant rename (D-45-C3).
     #[must_use]
-    pub fn is_granted(&self) -> bool {
-        matches!(self, ApprovalDecision::Granted)
+    pub fn is_approved(&self) -> bool {
+        matches!(self, ApprovalDecision::Approved(_))
     }
 
     /// Returns true if access was denied.
@@ -478,10 +485,15 @@ pub enum SupervisorResponse {
     Decision {
         /// The request_id this responds to
         request_id: String,
-        /// The approval decision
+        /// The approval decision.
+        ///
+        /// When access is approved, the resource-transfer metadata is carried
+        /// inline as `ApprovalDecision::Approved(ResourceGrant)`. The former
+        /// `grant: Option<ResourceGrant>` field has been removed; its payload
+        /// is now exclusively carried by the inlined variant (Phase 45 Plan
+        /// 45-02, REQ-AIPC-G04-01).
         decision: ApprovalDecision,
-        /// Resource-transfer metadata when the supervisor granted access.
-        grant: Option<ResourceGrant>,
+        // grant field removed; payload now carried by Approved(ResourceGrant)
     },
     /// Response to a URL open request
     UrlOpened {

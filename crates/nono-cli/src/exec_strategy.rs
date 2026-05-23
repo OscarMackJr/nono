@@ -2687,7 +2687,6 @@ fn handle_supervisor_message(
                     decision: ApprovalDecision::Denied {
                         reason: reason.to_string(),
                     },
-                    grant: None,
                 };
                 return sock.send_response(&response);
             }
@@ -2821,8 +2820,8 @@ fn handle_supervisor_message(
                 }
             };
 
-            // 3. If granted, open the path and send fd before the response
-            if decision.is_granted() {
+            // 3. If approved, open the path and send fd before the response
+            if decision.is_approved() {
                 match open_path_for_access(
                     request_path(&request),
                     &request.access,
@@ -2838,7 +2837,6 @@ fn handle_supervisor_message(
                                 decision: ApprovalDecision::Denied {
                                     reason: format!("Failed to send file descriptor: {e}"),
                                 },
-                                grant: None,
                             };
                             return sock.send_response(&response);
                         }
@@ -2850,25 +2848,32 @@ fn handle_supervisor_message(
                             decision: ApprovalDecision::Denied {
                                 reason: format!("Supervisor failed to open path: {e}"),
                             },
-                            grant: None,
                         };
                         return sock.send_response(&response);
                     }
                 }
             }
 
-            // 4. Send decision response
-            let grant = if matches!(decision, ApprovalDecision::Granted) {
-                Some(nono::ResourceGrant::sideband_file_descriptor(
+            // 4. Send decision response.
+            //
+            // Phase 45 Plan 45-02: the grant payload is now inlined into the
+            // ApprovalDecision::Approved variant. For the Unix path the fd is
+            // transferred out-of-band via SCM_RIGHTS (above); the inlined
+            // ResourceGrant carries the transfer-kind metadata so the child SDK
+            // can reconstruct the correct ResourceGrant shape. If the backend
+            // returned Approved (any grant kind), we explicitly set the outgoing
+            // decision to Approved(sideband_file_descriptor) because the actual
+            // transfer mechanism on Unix is always SCM_RIGHTS.
+            let decision = if decision.is_approved() {
+                ApprovalDecision::Approved(nono::ResourceGrant::sideband_file_descriptor(
                     request.access,
                 ))
             } else {
-                None
+                decision
             };
             let response = SupervisorResponse::Decision {
                 request_id: request.request_id,
                 decision,
-                grant,
             };
             sock.send_response(&response)?;
         }

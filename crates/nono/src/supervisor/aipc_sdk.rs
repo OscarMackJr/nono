@@ -405,7 +405,6 @@ fn send_capability_request(
         SupervisorResponse::Decision {
             request_id: resp_id,
             decision,
-            grant,
         } => {
             if resp_id != request_id {
                 // T-18-04-08 mitigation: response/request id drift.
@@ -414,11 +413,13 @@ fn send_capability_request(
                 )));
             }
             match decision {
-                ApprovalDecision::Granted => grant.ok_or_else(|| {
-                    NonoError::SandboxInit(
-                        "supervisor granted but returned no ResourceGrant".to_string(),
-                    )
-                }),
+                // Phase 45 Plan 45-02: Approved(grant) is now the sole success
+                // variant; the former `ok_or_else("supervisor granted but
+                // returned no ResourceGrant")` defense-in-depth branch is gone
+                // because (Approved, grant=None) is now structurally
+                // unrepresentable — this elimination IS the SC#2 compile-time
+                // guarantee (REQ-AIPC-G04-01).
+                ApprovalDecision::Approved(grant) => Ok(grant),
                 ApprovalDecision::Denied { reason } => Err(NonoError::SandboxInit(format!(
                     "supervisor denied capability: {reason}"
                 ))),
@@ -727,8 +728,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(ResourceGrant {
+                        decision: ApprovalDecision::Approved(ResourceGrant {
                             transfer: ResourceTransferKind::DuplicatedWindowsHandle,
                             resource_kind: GrantedResourceKind::Event,
                             access: AccessMode::ReadWrite,
@@ -766,7 +766,6 @@ mod tests {
                         decision: ApprovalDecision::Denied {
                             reason: "test deny".to_string(),
                         },
-                        grant: None,
                     })
                     .expect("send");
             });
@@ -798,8 +797,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(ResourceGrant {
+                        decision: ApprovalDecision::Approved(ResourceGrant {
                             transfer: ResourceTransferKind::DuplicatedWindowsHandle,
                             resource_kind: GrantedResourceKind::Pipe,
                             access: AccessMode::Read,
@@ -838,7 +836,6 @@ mod tests {
                             decision: ApprovalDecision::Denied {
                                 reason: "test".to_string(),
                             },
-                            grant: None,
                         })
                         .expect("send");
                 } else {
@@ -964,8 +961,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(grant),
+                        decision: ApprovalDecision::Approved(grant),
                     })
                     .expect("send");
                 // SAFETY: `source` is a live HANDLE; the broker does NOT
@@ -1030,8 +1026,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(grant),
+                        decision: ApprovalDecision::Approved(grant),
                     })
                     .expect("send");
                 // SAFETY: `source` is a live HANDLE; broker does NOT close it.
@@ -1075,8 +1070,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(grant),
+                        decision: ApprovalDecision::Approved(grant),
                     })
                     .expect("send");
                 // SAFETY: `source` is a live HANDLE; broker does NOT close it.
@@ -1138,8 +1132,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(grant),
+                        decision: ApprovalDecision::Approved(grant),
                     })
                     .expect("send");
                 // SAFETY: `source` is a live HANDLE; broker does NOT close it.
@@ -1209,8 +1202,7 @@ mod tests {
                 server
                     .send_response(&SupervisorResponse::Decision {
                         request_id: req.request_id,
-                        decision: ApprovalDecision::Granted,
-                        grant: Some(grant),
+                        decision: ApprovalDecision::Approved(grant),
                     })
                     .expect("send");
                 // SAFETY: closesocket is a leaf-safe Winsock call on a live

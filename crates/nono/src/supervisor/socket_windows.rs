@@ -1481,8 +1481,7 @@ mod tests {
         supervisor
             .send_response(&SupervisorResponse::Decision {
                 request_id: "req-001".to_string(),
-                decision: ApprovalDecision::Granted,
-                grant: Some(ResourceGrant::duplicated_windows_file_handle(
+                decision: ApprovalDecision::Approved(ResourceGrant::duplicated_windows_file_handle(
                     0x1234,
                     AccessMode::Read,
                 )),
@@ -1494,16 +1493,18 @@ mod tests {
             SupervisorResponse::Decision {
                 request_id,
                 decision,
-                grant,
             } => {
                 assert_eq!(request_id, "req-001");
-                assert!(decision.is_granted());
-                let grant = grant.expect("grant metadata should be present");
-                assert_eq!(
-                    grant.transfer,
-                    ResourceTransferKind::DuplicatedWindowsHandle
-                );
-                assert_eq!(grant.raw_handle, Some(0x1234));
+                match decision {
+                    ApprovalDecision::Approved(grant) => {
+                        assert_eq!(
+                            grant.transfer,
+                            ResourceTransferKind::DuplicatedWindowsHandle
+                        );
+                        assert_eq!(grant.raw_handle, Some(0x1234));
+                    }
+                    other => panic!("Expected Approved decision, got {other:?}"),
+                }
             }
             other => panic!("Expected Decision, got {other:?}"),
         }
@@ -1618,8 +1619,9 @@ mod tests {
             server
                 .send_response(&SupervisorResponse::Decision {
                     request_id: "lowint-req".to_string(),
-                    decision: ApprovalDecision::Granted,
-                    grant: None,
+                    decision: ApprovalDecision::Approved(
+                        ResourceGrant::duplicated_windows_file_handle(0x0, AccessMode::Read),
+                    ),
                 })
                 .expect("send response");
             // Wait for the client to confirm it has read the response before
@@ -1650,7 +1652,7 @@ mod tests {
             .expect("send request");
         match client.recv_response().expect("recv response") {
             SupervisorResponse::Decision { decision, .. } => {
-                assert!(decision.is_granted());
+                assert!(decision.is_approved());
             }
             other => panic!("unexpected response: {other:?}"),
         }

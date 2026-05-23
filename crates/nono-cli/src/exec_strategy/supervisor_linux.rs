@@ -445,7 +445,7 @@ pub(super) fn handle_seccomp_notification(
 
     // 10. Act on the decision
     // Pass verified_digest to enable TOCTOU re-verification for instruction files
-    if decision.is_granted() {
+    if decision.is_approved() {
         match open_path_for_access(
             &path,
             &access,

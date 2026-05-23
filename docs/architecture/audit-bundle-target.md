@@ -91,3 +91,48 @@ The audit attestation bundle is written to `<audit_root>/<id>/audit-attestation.
 ### Related ADRs
 
 - `docs/architecture/aipc-unix-futures.md` (Phase 25-02 ADR convention reference; this ADR mirrors its structure)
+
+---
+
+## Amendment 45-A — AIPC Wire-Format BREAKING Change (Phase 45 Plan 45-02, 2026-05-23)
+
+**Status:** Accepted
+**Phase:** 45 (v2.6 Source Migration — AIPC G-04 Resolution Native Re-Validation)
+
+### Context
+
+SC#2 (identified in Phase 45 CONTEXT.md) was a structural vulnerability in the AIPC wire format: the `(decision: Granted, grant: None)` shape was representable in `SupervisorResponse::Decision` but semantically illegal. No compile-time enforcement prevented a supervisor from sending a granted decision without an accompanying resource grant.
+
+### Change
+
+`ApprovalDecision::Granted` is replaced by `ApprovalDecision::Approved(ResourceGrant)`. The `grant: Option<ResourceGrant>` field is removed from `SupervisorResponse::Decision`. The `is_granted()` method is renamed `is_approved()`.
+
+**Wire shape before:**
+```json
+{ "Decision": { "request_id": "...", "decision": "Granted", "grant": { ... } } }
+```
+
+**Wire shape after:**
+```json
+{ "Decision": { "request_id": "...", "decision": { "Approved": { ... } } } }
+```
+
+The `(Approved, grant=None)` shape is now structurally unrepresentable — the Rust type system enforces the invariant at compile time.
+
+### Migration notes
+
+- **Fresh v2.6 sessions:** No migration required.
+- **Cross-version pairs (v2.5 ↔ v2.6):** The binary wire format is incompatible. Pin both supervisor and child binaries to the same version at session start. Mixed-version deployments will see a deserialize error at the IPC boundary; the child receives a `NonoError::SandboxInit` and the session terminates.
+- **Re-verifying pre-v2.6 audit ledgers:** Unaffected. The audit verifier reads raw JSON (`serde_json::Value`), not typed `ApprovalDecision`. Pre-v2.6 ledger entries containing `"Granted"` remain verifiable verbatim.
+- **`v2.5` binary pin:** Operators with long-running v2.5 agents should pin agent binaries to `v2.5.x` until they are ready to upgrade both sides simultaneously.
+
+### Disposition
+
+The wire-format break is accepted per D-45-C2 (Phase 45 CONTEXT.md). Pre-v2.6 ledgers are non-re-verifiable via the typed path (but are still verifiable via the raw-JSON audit verifier path). The security benefit — eliminating the illegal `(Approved, grant=None)` shape from the trusted computing base — outweighs the deployment complexity.
+
+### References
+
+- `crates/nono/src/supervisor/types.rs` — `ApprovalDecision` and `SupervisorResponse` definitions
+- `crates/nono/src/supervisor/aipc_sdk.rs` — child SDK demultiplexer (SC#2 `ok_or_else` branch removed)
+- `CHANGELOG.md` § `[Unreleased] - v2.6 Phase 45` — operator-facing BREAKING note with migration steps
+- Phase 45 CONTEXT.md § SC#2, D-45-C1, D-45-C2, D-45-C3

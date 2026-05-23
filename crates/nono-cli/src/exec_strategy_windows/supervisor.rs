@@ -1867,7 +1867,6 @@ pub(super) fn handle_windows_supervisor_message(
                 return sock.send_response(&nono::supervisor::SupervisorResponse::Decision {
                     request_id: request.request_id,
                     decision,
-                    grant: None,
                 });
             }
             seen_request_ids.insert(request.request_id.clone());
@@ -1892,7 +1891,6 @@ pub(super) fn handle_windows_supervisor_message(
                 return sock.send_response(&nono::supervisor::SupervisorResponse::Decision {
                     request_id: request.request_id,
                     decision,
-                    grant: None,
                 });
             }
 
@@ -1925,7 +1923,6 @@ pub(super) fn handle_windows_supervisor_message(
                 return sock.send_response(&nono::supervisor::SupervisorResponse::Decision {
                     request_id: request.request_id,
                     decision,
-                    grant: None,
                 });
             }
 
@@ -1978,7 +1975,6 @@ pub(super) fn handle_windows_supervisor_message(
                         &nono::supervisor::SupervisorResponse::Decision {
                             request_id: request.request_id,
                             decision,
-                            grant: None,
                         },
                     );
                 }
@@ -2010,8 +2006,10 @@ pub(super) fn handle_windows_supervisor_message(
             // outcomes (Approved, File/Event/Mutex/JobObject Denied — the
             // Event/Mutex/JobObject Denied case is unreachable here, gated
             // at site 4) carry `None`.
+            // Phase 45 Plan 45-02 elevated the (Approved, grant Some) invariant to type level;
+            // this dispatcher fold is now defense in depth, not load-bearing.
             let mut reject_stage: Option<crate::audit_integrity::RejectStage> = None;
-            let (decision, grant) = if decision.is_granted() {
+            let (decision, _grant) = if decision.is_approved() {
                 let result: Result<Option<nono::supervisor::ResourceGrant>> = match request.kind {
                     HandleKind::File => {
                         // Phase 11 path — preserved unchanged. Uses
@@ -2060,8 +2058,19 @@ pub(super) fn handle_windows_supervisor_message(
                         resolved_allowlist,
                     ),
                 };
-                match result {
-                    Ok(g) => (decision, g),
+                // Phase 45-02: broker helpers return Result<Option<ResourceGrant>>.
+                // Ok(Some(g)) = success; Ok(None) = unexpected empty (fail-secure
+                // as broker failure — the wire type no longer allows a grant-less
+                // Approved variant); Err(e) = hard broker error.
+                let result_grant: Result<nono::supervisor::ResourceGrant> = match result {
+                    Ok(Some(g)) => Ok(g),
+                    Ok(None) => Err(NonoError::SandboxInit(
+                        "broker returned Ok(None) — no ResourceGrant (internal error)".to_string(),
+                    )),
+                    Err(e) => Err(e),
+                };
+                match result_grant {
+                    Ok(g) => (nono::ApprovalDecision::Approved(g), true),
                     Err(e) => {
                         tracing::warn!(
                             "AIPC broker failure for kind {:?}: {}",
@@ -2089,11 +2098,12 @@ pub(super) fn handle_windows_supervisor_message(
                             reject_stage =
                                 Some(crate::audit_integrity::RejectStage::AfterPrompt);
                         }
-                        (denied, None)
+                        (denied, false)
                     }
                 }
             } else {
-                (decision, None)
+                // Denied / Timeout path: no broker invocation.
+                (decision, false)
             };
 
             let entry = audit_entry_with_redacted_token(
@@ -2108,7 +2118,6 @@ pub(super) fn handle_windows_supervisor_message(
             sock.send_response(&nono::supervisor::SupervisorResponse::Decision {
                 request_id: request.request_id,
                 decision,
-                grant,
             })
         }
         nono::supervisor::SupervisorMessage::OpenUrl(url_request) => sock
@@ -2158,11 +2167,11 @@ mod capability_handler_tests {
     //!
     //! The `Pipe | Socket` per-kind helpers run INSIDE the post-approval
     //! dispatch arm (see `handle_windows_supervisor_message` ~line 1900+
-    //! — the `if decision.is_granted()` block). The direction-allowlist
+    //! — the `if decision.is_approved()` block). The direction-allowlist
     //! check at `handle_pipe_request:1411` and the unconditional
     //! privileged-port deny + role-allowlist check at
     //! `handle_socket_request:1479` fire AFTER the approval backend has
-    //! returned `Granted`. The G-04 flip (Wave 2, Plan 18.1-02) wraps
+    //! returned `Approved`. The G-04 flip (Wave 2, Plan 18.1-02) wraps
     //! the resulting `Err` into `Denied { reason: "broker failed:
     //! <inner>" }` before the audit push + send_response, so the wire
     //! shape is consistent; but the UX observable differs: Pipe/Socket
@@ -2250,7 +2259,9 @@ mod capability_handler_tests {
             _request: &nono::CapabilityRequest,
         ) -> Result<nono::ApprovalDecision> {
             self.calls.fetch_add(1, AtomicOrdering::SeqCst);
-            Ok(nono::ApprovalDecision::Granted)
+            Ok(nono::ApprovalDecision::Approved(
+                nono::supervisor::ResourceGrant::sideband_file_descriptor(_request.access),
+            ))
         }
 
         fn backend_name(&self) -> &str {
@@ -2591,16 +2602,14 @@ mod capability_handler_tests {
 
     /// Close any HANDLE the supervisor brokered into the test process so the
     /// integration tests don't leak kernel objects.
-    fn close_grant_handle_if_any(grant: &Option<nono::supervisor::ResourceGrant>) {
-        if let Some(g) = grant {
-            if let Some(raw) = g.raw_handle {
-                if raw != 0 {
-                    // SAFETY: `raw` was returned by DuplicateHandle into the
-                    // current process via BrokerTargetProcess::current(). It
-                    // is a valid HANDLE we own at test-process scope.
-                    unsafe {
-                        windows_sys::Win32::Foundation::CloseHandle(raw as usize as HANDLE);
-                    }
+    fn close_grant_handle_if_any(grant: &nono::supervisor::ResourceGrant) {
+        if let Some(raw) = grant.raw_handle {
+            if raw != 0 {
+                // SAFETY: `raw` was returned by DuplicateHandle into the
+                // current process via BrokerTargetProcess::current(). It
+                // is a valid HANDLE we own at test-process scope.
+                unsafe {
+                    windows_sys::Win32::Foundation::CloseHandle(raw as usize as HANDLE);
                 }
             }
         }
@@ -2640,20 +2649,17 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision {
-                decision, grant, ..
-            } => {
-                assert!(
-                    decision.is_granted(),
-                    "expected Granted decision, got {decision:?}"
-                );
-                assert!(grant.is_some(), "Granted decision must carry a grant");
-                let g = grant.as_ref().unwrap();
-                assert_eq!(
-                    g.resource_kind,
-                    nono::supervisor::GrantedResourceKind::Event
-                );
-                close_grant_handle_if_any(&grant);
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
+                match decision {
+                    nono::ApprovalDecision::Approved(grant) => {
+                        assert_eq!(
+                            grant.resource_kind,
+                            nono::supervisor::GrantedResourceKind::Event
+                        );
+                        close_grant_handle_if_any(&grant);
+                    }
+                    other => panic!("expected Approved decision, got {other:?}"),
+                }
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -2667,7 +2673,7 @@ mod capability_handler_tests {
         assert_eq!(audit_log[0].request.kind, HandleKind::Event);
         assert!(matches!(
             audit_log[0].decision,
-            nono::ApprovalDecision::Granted
+            nono::ApprovalDecision::Approved(_)
         ));
     }
 
@@ -2757,17 +2763,17 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision {
-                decision, grant, ..
-            } => {
-                assert!(decision.is_granted(), "got {decision:?}");
-                assert!(grant.is_some());
-                let g = grant.as_ref().unwrap();
-                assert_eq!(
-                    g.resource_kind,
-                    nono::supervisor::GrantedResourceKind::Mutex
-                );
-                close_grant_handle_if_any(&grant);
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
+                match decision {
+                    nono::ApprovalDecision::Approved(grant) => {
+                        assert_eq!(
+                            grant.resource_kind,
+                            nono::supervisor::GrantedResourceKind::Mutex
+                        );
+                        close_grant_handle_if_any(&grant);
+                    }
+                    other => panic!("expected Approved decision, got {other:?}"),
+                }
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -2918,19 +2924,19 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision {
-                decision, grant, ..
-            } => {
-                assert!(decision.is_granted(), "got {decision:?}");
-                assert!(grant.is_some(), "Granted decision must carry a grant");
-                let g = grant.as_ref().unwrap();
-                assert_eq!(
-                    g.transfer,
-                    nono::supervisor::ResourceTransferKind::DuplicatedWindowsHandle
-                );
-                assert_eq!(g.resource_kind, nono::supervisor::GrantedResourceKind::Pipe);
-                assert_eq!(g.access, nono::AccessMode::Read);
-                close_grant_handle_if_any(&grant);
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
+                match decision {
+                    nono::ApprovalDecision::Approved(grant) => {
+                        assert_eq!(
+                            grant.transfer,
+                            nono::supervisor::ResourceTransferKind::DuplicatedWindowsHandle
+                        );
+                        assert_eq!(grant.resource_kind, nono::supervisor::GrantedResourceKind::Pipe);
+                        assert_eq!(grant.access, nono::AccessMode::Read);
+                        close_grant_handle_if_any(&grant);
+                    }
+                    other => panic!("expected Approved decision, got {other:?}"),
+                }
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -2973,21 +2979,19 @@ mod capability_handler_tests {
         .expect("dispatch");
 
         // Backend WAS consulted (mask is 0 valid; shape check happens inside
-        // handle_pipe_request which runs only after Granted). The grant call
-        // returns Err which is logged via tracing; the audit decision still
-        // shows Granted with grant=None. This matches the Plan 18-01 broker
-        // failure handling pattern.
+        // handle_pipe_request which runs only after Approved). The broker call
+        // returns Err which the G-04 dispatcher flips to Denied { reason:
+        // "broker failed: ..." }. Phase 45-02: grant is now inlined into
+        // Approved; Denied carries no grant by construction.
         assert_eq!(backend.calls(), 1);
         assert_eq!(audit_log.len(), 1);
-        // The audit decision is still Granted (the backend granted) but the
-        // grant Option is None because the broker call returned Err. The
-        // child receives a Granted response with grant=None.
+        // G-04 + Phase 45-02: broker failure → wire decision is Denied.
         let response = child.recv_response().expect("drain");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { grant, .. } => {
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
                 assert!(
-                    grant.is_none(),
-                    "shape-mismatch broker failure must produce grant=None"
+                    matches!(decision, nono::ApprovalDecision::Denied { .. }),
+                    "shape-mismatch broker failure must produce Denied on wire"
                 );
             }
             other => panic!("unexpected response: {other:?}"),
@@ -3031,30 +3035,31 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision {
-                decision, grant, ..
-            } => {
-                assert!(decision.is_granted(), "got {decision:?}");
-                let g = grant.as_ref().expect("Granted decision must carry a grant");
-                assert_eq!(
-                    g.transfer,
-                    nono::supervisor::ResourceTransferKind::SocketProtocolInfoBlob
-                );
-                assert_eq!(
-                    g.resource_kind,
-                    nono::supervisor::GrantedResourceKind::Socket
-                );
-                let blob = g.protocol_info_blob.as_ref().expect("blob present");
-                assert_eq!(
-                    blob.len(),
-                    std::mem::size_of::<windows_sys::Win32::Networking::WinSock::WSAPROTOCOL_INFOW>(
-                    ),
-                    "blob length must match WSAPROTOCOL_INFOW size"
-                );
-                assert!(
-                    g.raw_handle.is_none(),
-                    "socket grants don't carry raw_handle"
-                );
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
+                match decision {
+                    nono::ApprovalDecision::Approved(grant) => {
+                        assert_eq!(
+                            grant.transfer,
+                            nono::supervisor::ResourceTransferKind::SocketProtocolInfoBlob
+                        );
+                        assert_eq!(
+                            grant.resource_kind,
+                            nono::supervisor::GrantedResourceKind::Socket
+                        );
+                        let blob = grant.protocol_info_blob.as_ref().expect("blob present");
+                        assert_eq!(
+                            blob.len(),
+                            std::mem::size_of::<windows_sys::Win32::Networking::WinSock::WSAPROTOCOL_INFOW>(
+                            ),
+                            "blob length must match WSAPROTOCOL_INFOW size"
+                        );
+                        assert!(
+                            grant.raw_handle.is_none(),
+                            "socket grants don't carry raw_handle"
+                        );
+                    }
+                    other => panic!("expected Approved decision, got {other:?}"),
+                }
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -3099,16 +3104,17 @@ mod capability_handler_tests {
         .expect("dispatch");
 
         // Backend WAS consulted (port check happens inside the broker helper,
-        // not before backend dispatch). The audit log shows Granted by the
-        // backend but grant=None because the broker rejected.
+        // not before backend dispatch). G-04 + Phase 45-02: broker Err flips
+        // the wire decision to Denied; grant is inlined into Approved so a
+        // Denied response structurally carries no grant.
         assert_eq!(backend.calls(), 1);
         assert_eq!(audit_log.len(), 1);
         let response = child.recv_response().expect("drain");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { grant, .. } => {
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
                 assert!(
-                    grant.is_none(),
-                    "privileged-port rejection must produce grant=None"
+                    matches!(decision, nono::ApprovalDecision::Denied { .. }),
+                    "privileged-port rejection must produce Denied on wire"
                 );
             }
             other => panic!("unexpected response: {other:?}"),
@@ -3154,10 +3160,10 @@ mod capability_handler_tests {
         assert_eq!(audit_log.len(), 1);
         let response = child.recv_response().expect("drain");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { grant, .. } => {
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
                 assert!(
-                    grant.is_none(),
-                    "Bind role rejection must produce grant=None (profile widening required)"
+                    matches!(decision, nono::ApprovalDecision::Denied { .. }),
+                    "Bind role rejection must produce Denied on wire (profile widening required)"
                 );
             }
             other => panic!("unexpected response: {other:?}"),
@@ -3237,17 +3243,17 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision {
-                decision, grant, ..
-            } => {
-                assert!(decision.is_granted(), "got {decision:?}");
-                assert!(grant.is_some(), "Granted decision must carry a grant");
-                let g = grant.as_ref().unwrap();
-                assert_eq!(
-                    g.resource_kind,
-                    nono::supervisor::GrantedResourceKind::JobObject
-                );
-                close_grant_handle_if_any(&grant);
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
+                match decision {
+                    nono::ApprovalDecision::Approved(grant) => {
+                        assert_eq!(
+                            grant.resource_kind,
+                            nono::supervisor::GrantedResourceKind::JobObject
+                        );
+                        close_grant_handle_if_any(&grant);
+                    }
+                    other => panic!("expected Approved decision, got {other:?}"),
+                }
             }
             other => panic!("unexpected response: {other:?}"),
         }
@@ -3385,20 +3391,18 @@ mod capability_handler_tests {
 
         // Backend WAS consulted (mask check passes for QUERY); the runtime
         // guard fires INSIDE handle_job_object_request, after the backend
-        // grants. Post Phase 18.1 G-04: the broker-helper Err(..) flips
+        // grants. G-04 + Phase 45-02: the broker-helper Err(..) flips
         // decision to Denied { reason: "broker failed: ..." } at the
-        // dispatcher, so grant is None AND the wire decision is Denied.
-        // This test only asserts grant.is_none(); the full G-04 shape is
-        // covered by the `dispatcher_flips_approved_to_denied_on_*_broker_failure`
-        // suite below.
+        // dispatcher; grant is inlined into Approved so Denied carries
+        // no grant by construction.
         assert_eq!(backend.calls(), 1);
         assert_eq!(audit_log.len(), 1);
         let response = child.recv_response().expect("drain");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { grant, .. } => {
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
                 assert!(
-                    grant.is_none(),
-                    "containment-Job runtime guard must produce grant=None"
+                    matches!(decision, nono::ApprovalDecision::Denied { .. }),
+                    "containment-Job runtime guard must produce Denied on wire"
                 );
             }
             other => panic!("unexpected response: {other:?}"),
@@ -3462,10 +3466,10 @@ mod capability_handler_tests {
         assert_eq!(audit_log.len(), 1);
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { grant, .. } => {
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
                 assert!(
-                    grant.is_some(),
-                    "Bind role with profile widening must produce grant=Some"
+                    decision.is_approved(),
+                    "Bind role with profile widening must produce Approved decision, got {decision:?}"
                 );
             }
             other => panic!("unexpected response: {other:?}"),
@@ -3532,20 +3536,20 @@ mod capability_handler_tests {
         .expect("dispatch");
 
         // Backend WAS consulted (mask is now allowed by widening); the
-        // runtime guard still fires INSIDE handle_job_object_request,
-        // producing grant=None even though the mask check passed. Post
-        // Phase 18.1 G-04 the dispatcher additionally flips decision to
-        // Denied { reason: "broker failed: ..." }. This proves the
-        // runtime guard is structurally above the profile widening —
-        // the worst case (terminating the supervisor's own containment
-        // Job) is impossible.
+        // runtime guard still fires INSIDE handle_job_object_request
+        // even though the mask check passed. G-04 + Phase 45-02: the
+        // dispatcher flips to Denied { reason: "broker failed: ..." };
+        // grant is inlined into Approved so Denied carries no grant by
+        // construction. This proves the runtime guard is structurally
+        // above the profile widening — the worst case (terminating the
+        // supervisor's own containment Job) is impossible.
         assert_eq!(backend.calls(), 1);
         assert_eq!(audit_log.len(), 1);
         let response = child.recv_response().expect("drain");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { grant, .. } => {
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
                 assert!(
-                    grant.is_none(),
+                    matches!(decision, nono::ApprovalDecision::Denied { .. }),
                     "containment-Job runtime guard must fire EVEN when profile widens TERMINATE"
                 );
             }
@@ -3633,11 +3637,11 @@ mod capability_handler_tests {
         match child.recv_response().expect("drain") {
             nono::supervisor::SupervisorResponse::Decision {
                 decision: nono::ApprovalDecision::Denied { reason },
-                grant,
                 ..
             } => {
+                // Phase 45-02: grant is inlined into Approved; Denied
+                // carries no grant by construction (compile-time guarantee).
                 assert!(reason.contains("broker failed:"), "wire reason: {reason}");
-                assert!(grant.is_none(), "grant must be None on Denied");
             }
             other => panic!("unexpected wire response: {other:?}"),
         }
@@ -3696,11 +3700,11 @@ mod capability_handler_tests {
         match child.recv_response().expect("drain") {
             nono::supervisor::SupervisorResponse::Decision {
                 decision: nono::ApprovalDecision::Denied { reason },
-                grant,
                 ..
             } => {
+                // Phase 45-02: grant is inlined into Approved; Denied
+                // carries no grant by construction (compile-time guarantee).
                 assert!(reason.contains("broker failed:"), "wire reason: {reason}");
-                assert!(grant.is_none(), "grant must be None on Denied");
             }
             other => panic!("unexpected wire response: {other:?}"),
         }
@@ -3763,11 +3767,11 @@ mod capability_handler_tests {
         match child.recv_response().expect("drain") {
             nono::supervisor::SupervisorResponse::Decision {
                 decision: nono::ApprovalDecision::Denied { reason },
-                grant,
                 ..
             } => {
+                // Phase 45-02: grant is inlined into Approved; Denied
+                // carries no grant by construction (compile-time guarantee).
                 assert!(reason.contains("broker failed:"), "wire reason: {reason}");
-                assert!(grant.is_none(), "grant must be None on Denied");
             }
             other => panic!("unexpected wire response: {other:?}"),
         }
@@ -3833,11 +3837,11 @@ mod capability_handler_tests {
         match child.recv_response().expect("drain") {
             nono::supervisor::SupervisorResponse::Decision {
                 decision: nono::ApprovalDecision::Denied { reason },
-                grant,
                 ..
             } => {
+                // Phase 45-02: grant is inlined into Approved; Denied
+                // carries no grant by construction (compile-time guarantee).
                 assert!(reason.contains("broker failed:"), "wire reason: {reason}");
-                assert!(grant.is_none(), "grant must be None on Denied");
             }
             other => panic!("unexpected wire response: {other:?}"),
         }
@@ -3898,11 +3902,11 @@ mod capability_handler_tests {
         match child.recv_response().expect("drain") {
             nono::supervisor::SupervisorResponse::Decision {
                 decision: nono::ApprovalDecision::Denied { reason },
-                grant,
                 ..
             } => {
+                // Phase 45-02: grant is inlined into Approved; Denied
+                // carries no grant by construction (compile-time guarantee).
                 assert!(reason.contains("broker failed:"), "wire reason: {reason}");
-                assert!(grant.is_none(), "grant must be None on Denied");
             }
             other => panic!("unexpected wire response: {other:?}"),
         }

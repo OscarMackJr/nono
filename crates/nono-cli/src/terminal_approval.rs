@@ -6,6 +6,7 @@
 
 use nono::supervisor::policy;
 use nono::supervisor::{HandleKind, HandleTarget, SocketProtocol, SocketRole};
+use nono::supervisor::ResourceGrant;
 use nono::{AccessMode, ApprovalBackend, ApprovalDecision, CapabilityRequest, NonoError, Result};
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -81,7 +82,14 @@ impl ApprovalBackend for TerminalApproval {
         let input = input.trim().to_lowercase();
         if input == "y" || input == "yes" {
             eprintln!("[nono] Access granted.");
-            Ok(ApprovalDecision::Granted)
+            // The exact ResourceGrant contents are overwritten by the
+            // dispatcher (exec_strategy.rs) which chooses the correct
+            // transfer mechanism (SCM_RIGHTS on Unix, handle-dup on Windows).
+            // We supply sideband_file_descriptor as a typed placeholder so
+            // the variant is well-formed at the ApprovalBackend boundary.
+            Ok(ApprovalDecision::Approved(ResourceGrant::sideband_file_descriptor(
+                request.access,
+            )))
         } else {
             eprintln!("[nono] Access denied.");
             Ok(ApprovalDecision::Denied {

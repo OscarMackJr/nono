@@ -145,7 +145,9 @@ mod tests {
 
     impl ApprovalBackend for TestGrantBackend {
         fn request_capability(&self, _request: &CapabilityRequest) -> Result<ApprovalDecision> {
-            Ok(ApprovalDecision::Granted)
+            Ok(ApprovalDecision::Approved(ResourceGrant::sideband_file_descriptor(
+                _request.access,
+            )))
         }
 
         fn backend_name(&self) -> &str {
@@ -193,24 +195,25 @@ mod tests {
         let backend = TestGrantBackend;
         let request = make_request();
         let decision = backend.request_capability(&request).expect("decision");
-        assert!(decision.is_granted());
+        assert!(decision.is_approved());
         assert_eq!(backend.backend_name(), "test-grant");
     }
 
     #[test]
     fn test_approval_decision_methods() {
-        let granted = ApprovalDecision::Granted;
-        assert!(granted.is_granted());
-        assert!(!granted.is_denied());
+        let approved =
+            ApprovalDecision::Approved(ResourceGrant::sideband_file_descriptor(AccessMode::Read));
+        assert!(approved.is_approved());
+        assert!(!approved.is_denied());
 
         let denied = ApprovalDecision::Denied {
             reason: "no".to_string(),
         };
-        assert!(!denied.is_granted());
+        assert!(!denied.is_approved());
         assert!(denied.is_denied());
 
         let timeout = ApprovalDecision::Timeout;
-        assert!(!timeout.is_granted());
+        assert!(!timeout.is_approved());
         assert!(!timeout.is_denied());
     }
 

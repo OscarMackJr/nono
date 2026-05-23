@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] - v2.6 Phase 45
+
+### BREAKING (fork — Phase 45 Plan 45-02)
+
+- **AIPC wire-format change: `ApprovalDecision::Granted` replaced by `ApprovalDecision::Approved(ResourceGrant)` (SC#2 compile-time guarantee).**
+
+  The `SupervisorResponse::Decision` IPC envelope has changed:
+
+  **Before (v2.5 and earlier):**
+  ```json
+  { "Decision": { "request_id": "...", "decision": "Granted", "grant": { ... } } }
+  ```
+  The `(Approved, grant=None)` shape was representable in the serialized form but semantically illegal — a supervisor approval without a resource grant. SC#2 (Phase 45 CONTEXT.md) identified this as a structural vulnerability: no compile-time enforcement prevented the illegal pairing.
+
+  **After (v2.6 Phase 45-02+):**
+  ```json
+  { "Decision": { "request_id": "...", "decision": { "Approved": { ... } } } }
+  ```
+  The grant payload is now carried **inline** inside the `Approved` variant. The `grant` field is removed from `Decision`. The `(Approved, grant=None)` shape is structurally unrepresentable.
+
+  **Impact on running sessions:**
+  - **Fresh sessions (v2.6 supervisor + v2.6 child):** Wire format matches — no impact.
+  - **Cross-version pairs (v2.5 supervisor + v2.6 child, or vice versa):** Request rejected at deserialize time; the child receives a connection error. Pin both supervisor and child to the same binary version at session boundary. The audit ledger records the rejection.
+  - **Re-verifying pre-v2.6 audit ledgers:** Ledger entries written before this change contain `"Granted"` as the decision string. Ledger re-verification of those entries is not affected (the audit verifier reads raw JSON, not typed `ApprovalDecision`). Only new-session enforcement changes.
+
+  **Migration:** No migration required for v2.6-only deployments. For mixed-version deployments, pin both supervisor and agent to the same major version. See ADR amendment 45-A in `docs/architecture/audit-bundle-target.md`.
+
+  **Renamed API:** `ApprovalDecision::is_granted()` renamed to `ApprovalDecision::is_approved()`. The old name is removed; update any external `ApprovalBackend` implementations.
+
 ## [0.53.1] - 2026-05-22
 
 ### Added (fork)
