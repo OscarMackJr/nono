@@ -20,17 +20,19 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, LocalFree, HANDLE};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW,
-    SetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetEffectiveRightsFromAclW,
+    GetNamedSecurityInfoW, SetNamedSecurityInfoW, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1,
+    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     CreateWellKnownSid, DuplicateTokenEx, GetAce, GetSecurityDescriptorSacl, GetSidSubAuthority,
     GetSidSubAuthorityCount, SecurityAnonymous, SetTokenInformation, TokenIntegrityLevel,
-    TokenPrimary, WinLowLabelSid, ACE_HEADER, ACL, LABEL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SECURITY_IMPERSONATION_LEVEL, SECURITY_MAX_SID_SIZE,
-    SYSTEM_MANDATORY_LABEL_ACE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    TokenPrimary, WinLowLabelSid, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION,
+    LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SECURITY_IMPERSONATION_LEVEL,
+    SECURITY_MAX_SID_SIZE, SYSTEM_MANDATORY_LABEL_ACE, TOKEN_ADJUST_DEFAULT,
+    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
 };
+use windows_sys::Win32::Storage::FileSystem::WRITE_OWNER;
 use windows_sys::Win32::System::SystemServices::{
     SECURITY_MANDATORY_LOW_RID, SE_GROUP_INTEGRITY, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
     SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP, SYSTEM_MANDATORY_LABEL_NO_READ_UP,
@@ -679,6 +681,36 @@ pub fn try_set_mandatory_label(path: &Path, mask: u32) -> Result<()> {
         ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED,
     };
 
+    // WRITE_OWNER pre-flight (260522-v14 fix):
+    // `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` requires the caller to
+    // hold `WRITE_OWNER` (0x00080000) on the target. Owner status grants implicit
+    // `WRITE_DAC` + `READ_CONTROL` per the NT security model but NOT implicit
+    // `WRITE_OWNER`. User-created subdirectories of a drive root (e.g.
+    // `C:\poc\temp`) inherit the default `C:\` ACL, which grants `Authenticated
+    // Users: Modify` (mask `0x1301BF`) — `WRITE_OWNER` is missing. Probing the
+    // effective rights here lets us surface a precise directive error instead of
+    // the misleading "writable...NTFS..." catch-all below. Cheapest bail-out
+    // (no SDDL parse, no SACL extract, no `SetNamedSecurityInfoW` round-trip)
+    // when the user cannot possibly succeed.
+    if !path_has_write_owner(path)? {
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult: ERROR_ACCESS_DENIED,
+            hint: format!(
+                "The current user lacks WRITE_OWNER (0x00080000) on this path. \
+                 Mandatory integrity labels require WRITE_OWNER, which is NOT implicit for path owners. \
+                 User-created subdirectories of a drive root (e.g. C:\\poc\\) inherit the default C:\\ ACL, \
+                 which grants only `Authenticated Users: Modify` — WRITE_OWNER is missing. \
+                 Recommended: run nono from a working directory under your user profile \
+                 (e.g. %USERPROFILE%\\nono-poc or %TEMP%\\nono-poc). \
+                 Local override: grant FullControl on the current path via \
+                 `icacls {} /grant <user>:(OI)(CI)F` (this widens the DACL beyond \
+                 default inheritance — explicit user choice, not a default).",
+                path.display(),
+            ),
+        });
+    }
+
     let wide_path: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -990,6 +1022,234 @@ pub fn path_is_owned_by_current_user(path: &Path) -> Result<bool> {
         EqualSid(user_sid, owner_sid)
     };
     Ok(equal != 0)
+}
+
+/// Returns `Ok(true)` if the current-user SID has `WRITE_OWNER` (0x00080000)
+/// in its effective rights against `path`'s DACL; `Ok(false)` otherwise.
+///
+/// # Why
+///
+/// `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` requires the caller to
+/// hold `WRITE_OWNER` (0x00080000) on the target object. Owner status grants
+/// implicit `WRITE_DAC` + `READ_CONTROL` per the NT security model but does
+/// NOT imply `WRITE_OWNER` — that bit must come from a DACL ACE. The default
+/// `C:\` root ACL inherited by user-created drive-root subdirectories (e.g.
+/// `C:\poc\temp`) caps users at `Modify` via `Authenticated Users`, which is
+/// missing the `WRITE_OWNER` bit. Probing the effective rights via
+/// `GetEffectiveRightsFromAclW` before the label-apply call lets us surface a
+/// precise directive error instead of the misleading "writable...NTFS..."
+/// catch-all (260522-v14 fix).
+///
+/// # Errors
+///
+/// Fail-closed (CLAUDE.md § Security Considerations "Fail Secure"): any FFI
+/// failure (DACL read, token open, token-user query, effective-rights query)
+/// returns `NonoError::LabelApplyFailed` carrying the underlying Win32 error
+/// code. Callers MUST NOT treat this `Err` as "WRITE_OWNER present" — that
+/// would be a silent permission widening (T-v14-01).
+pub fn path_has_write_owner(path: &Path) -> Result<bool> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, PSID, TOKEN_USER};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // 1. Read the path's DACL via GetNamedSecurityInfoW(DACL_SECURITY_INFORMATION).
+    //    The DACL pointer lives inside the returned security descriptor, which
+    //    must be freed with LocalFree (handled by `_sd_guard` below).
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let status = unsafe {
+        // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer; both
+        // out-pointers refer to live local storage for the duration of the call.
+        // On success, the SD is heap-allocated by the kernel.
+        GetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut security_descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "GetNamedSecurityInfoW(DACL_SECURITY_INFORMATION) returned 0x{status:08X} while \
+                 probing WRITE_OWNER for {}",
+                path.display()
+            ),
+        });
+    }
+    let _sd_guard = OwnedSecurityDescriptor(security_descriptor);
+    if dacl.is_null() {
+        // A null DACL allows everyone every access — effectively WRITE_OWNER
+        // present. Fail-closed conservatively: if the OS reports NULL DACL we
+        // still report Ok(true) (matches AccessCheck semantics). This is a
+        // rare configuration; the more common edge case is a missing DACL
+        // pointer + non-zero status, handled above.
+        return Ok(true);
+    }
+
+    // 2. Open the current process token (read-only) to query TokenUser.
+    let mut token: HANDLE = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `GetCurrentProcess()` returns a pseudo-handle valid for the
+        // lifetime of this process; `&mut token` is a valid out-pointer.
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)
+    };
+    if ok == 0 {
+        let hresult = unsafe {
+            // SAFETY: GetLastError has no preconditions.
+            GetLastError()
+        };
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult,
+            hint: format!(
+                "OpenProcessToken(TOKEN_QUERY) failed (GetLastError=0x{hresult:08X}) while \
+                 probing WRITE_OWNER for {}",
+                path.display()
+            ),
+        });
+    }
+    // SAFETY guard: close the token handle on every exit path.
+    struct OwnedTokenHandle(HANDLE);
+    impl Drop for OwnedTokenHandle {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    // SAFETY: `self.0` was returned by `OpenProcessToken`
+                    // above and has not been closed yet.
+                    let _ = CloseHandle(self.0);
+                }
+            }
+        }
+    }
+    let _token_guard = OwnedTokenHandle(token);
+
+    // 3. Probe TokenUser buffer size (first call returns
+    //    ERROR_INSUFFICIENT_BUFFER and fills `required`).
+    let mut required: u32 = 0;
+    let _ = unsafe {
+        // SAFETY: `token` is a valid token handle; passing null + 0 is the
+        // documented pattern to ask Windows for the required buffer size.
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut required)
+    };
+    if required == 0 {
+        let hresult = unsafe {
+            // SAFETY: GetLastError has no preconditions.
+            GetLastError()
+        };
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult,
+            hint: format!(
+                "GetTokenInformation(TokenUser) size probe returned 0 \
+                 (GetLastError=0x{hresult:08X}) while probing WRITE_OWNER for {}",
+                path.display()
+            ),
+        });
+    }
+
+    // 4. Allocate buffer and fetch TOKEN_USER.
+    let mut buffer: Vec<u8> = vec![0u8; required as usize];
+    let mut actual: u32 = required;
+    let ok = unsafe {
+        // SAFETY: `token` is a valid token handle; `buffer` has `required`
+        // bytes of live storage; `&mut actual` is a valid out-pointer.
+        GetTokenInformation(
+            token,
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            required,
+            &mut actual,
+        )
+    };
+    if ok == 0 {
+        let hresult = unsafe {
+            // SAFETY: GetLastError has no preconditions.
+            GetLastError()
+        };
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult,
+            hint: format!(
+                "GetTokenInformation(TokenUser) failed (GetLastError=0x{hresult:08X}) while \
+                 probing WRITE_OWNER for {}",
+                path.display()
+            ),
+        });
+    }
+
+    // 5. Extract the current-user SID from the filled TOKEN_USER. The PSID
+    //    points INTO the same buffer allocation (it is not a separate heap
+    //    allocation), so it stays valid as long as `buffer` lives.
+    let token_user = unsafe {
+        // SAFETY: GetTokenInformation succeeded above, so the first
+        // `required` bytes of `buffer` hold a valid TOKEN_USER.
+        &*(buffer.as_ptr() as *const TOKEN_USER)
+    };
+    let user_sid: PSID = token_user.User.Sid;
+    if user_sid.is_null() {
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult: 0,
+            hint: format!(
+                "GetTokenInformation(TokenUser) returned a null Sid pointer while probing \
+                 WRITE_OWNER for {}",
+                path.display()
+            ),
+        });
+    }
+
+    // 6. Build a TRUSTEE_W identifying the current-user SID. windows-sys 0.59
+    //    exposes the struct fields directly (no newtype wrappers); we
+    //    initialize via a struct literal to avoid the BuildTrusteeWithSidW
+    //    FFI hop which does the same thing. `ptstrName` is typed as PWSTR
+    //    but per the Win32 docs is reinterpreted as a PSID when TrusteeForm
+    //    == TRUSTEE_IS_SID — cast through *mut c_void preserves the bits.
+    let trustee = TRUSTEE_W {
+        pMultipleTrustee: std::ptr::null_mut(),
+        MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+        TrusteeForm: TRUSTEE_IS_SID,
+        TrusteeType: TRUSTEE_IS_USER,
+        ptstrName: user_sid.cast(),
+    };
+
+    // 7. Query the effective rights of the trustee against the DACL.
+    let mut access_mask: u32 = 0;
+    let status = unsafe {
+        // SAFETY: `dacl` lives in `security_descriptor` (owned by `_sd_guard`);
+        // `trustee` holds a SID pointer into `buffer` (owned by this stack
+        // frame); `&mut access_mask` is a valid out-pointer.
+        // GetEffectiveRightsFromAclW returns a Win32 error code (0 == success).
+        GetEffectiveRightsFromAclW(dacl, &trustee, &mut access_mask)
+    };
+    if status != 0 {
+        return Err(NonoError::LabelApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "GetEffectiveRightsFromAclW returned 0x{status:08X} while probing WRITE_OWNER \
+                 for {}",
+                path.display()
+            ),
+        });
+    }
+
+    // WRITE_OWNER is a FILE_ACCESS_RIGHTS constant (= 0x00080000). The mask
+    // returned by GetEffectiveRightsFromAclW is a generic access mask, so a
+    // bitwise AND against the literal access-right bit is the correct test.
+    Ok((access_mask & WRITE_OWNER) != 0)
 }
 
 fn low_integrity_label_rid(path: &Path) -> Option<u32> {
