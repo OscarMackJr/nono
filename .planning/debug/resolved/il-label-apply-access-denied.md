@@ -57,7 +57,7 @@ DATA_END
 
 1. **Which `nono` binary did PowerShell resolve?** `where.exe nono` from the user's PowerShell would show whether they're running the freshly-built `target\x86_64-pc-windows-msvc\release\nono.exe` or an installed MSI binary at `C:\Program Files\nono\nono.exe` or `%LocalAppData%\Programs\nono\nono.exe`. (Orchestrator did not capture this — debugger should request it if material.)
 2. **Was the machine-scope MSI v0.53.1 installed before this run?** If yes, the WFP backend probe path is in scope; if no, the runtime should fail-closed at the network probe well before reaching the IL label apply. (The fact that we got *past* the WFP probe and into IL-label-apply suggests the WFP backend either isn't being probed for `nono run`, or it succeeded — surface this in evidence.)
-3. **Path ownership of `C:\poc\temp`:** CONFIRMED 2026-05-23 — owner is `TWGGLOBAL\OMack` (domain user, NOT BUILTIN\Administrators). See evidence below.
+3. **Path ownership of `C:\poc\temp`:** CONFIRMED 2026-05-23 — owner is `<CORP_DOMAIN>\<user>` (domain user, NOT BUILTIN\Administrators). See evidence below.
 4. **NTFS vs ReFS:** CONFIRMED 2026-05-23 — `C:` is NTFS. See evidence below.
 
 ## Current Focus
@@ -118,17 +118,17 @@ DATA_END
 
 - **2026-05-23 (user terminal — three-command evidence pack on `C:\poc\temp`):** User ran the three diagnostic PowerShell commands targeting h3 (owner), h4 (filesystem), and h5 (reparse-point). All three primary hypotheses ELIMINATED in a single round.
 
-  - **Owner of `C:\poc\temp` = `TWGGLOBAL\OMack`** — a domain user SID, NOT `BUILTIN\Administrators` (S-1-5-32-544). The runtime ownership pre-check `path_is_owned_by_current_user` correctly returned Ok(true) because the path's owner SID matches the user's TokenUser SID. **h3 ELIMINATED.**
+  - **Owner of `C:\poc\temp` = `<CORP_DOMAIN>\<user>`** — a domain user SID, NOT `BUILTIN\Administrators` (S-1-5-32-544). The runtime ownership pre-check `path_is_owned_by_current_user` correctly returned Ok(true) because the path's owner SID matches the user's TokenUser SID. **h3 ELIMINATED.**
   - **Volume `C:` filesystem = `NTFS`.** Mandatory-label support is present. The filesystem is not the issue. **h4 ELIMINATED.**
   - **Both `C:\poc` and `C:\poc\temp` show `Attributes=Directory` with empty `LinkType` and empty `Target`** — plain NTFS directories, no junction, no symlink, no reparse-point. **h5 ELIMINATED.** Side-check: also no `ReadOnly` attribute present on either path, so **h7 ELIMINATED** in passing.
 
-  **NEW high-priority observation:** `TWGGLOBAL\OMack` is a corporate Active Directory domain account. Corp-managed Windows endpoints almost universally run EDR (CrowdStrike Falcon, SentinelOne, Defender for Endpoint, Carbon Black, etc.), ASR (Microsoft Defender Attack Surface Reduction), AppLocker / WDAC, and Group Policy with custom DACL/SACL restrictions on user-created paths. Any of these can intercept `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` and return ACCESS_DENIED — typically as a Controlled Folder Access rule, an ASR rule blocking integrity-label tampering, or a tenant-level Defender for Endpoint policy. Promotes h6 from deprioritized to dominant prior. Also surfaces new h8 (explicit Deny ACE / missing WRITE_OWNER via GPO despite Owner status) and h9 (parent `C:\poc` created with broken label-write inheritance).
+  **NEW high-priority observation:** `<CORP_DOMAIN>\<user>` is a corporate Active Directory domain account. Corp-managed Windows endpoints almost universally run EDR, ASR rules, AppLocker / WDAC, and Group Policy with custom DACL/SACL restrictions on user-created paths. Any of these can intercept `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` and return ACCESS_DENIED — typically as a Controlled Folder Access rule, an ASR rule blocking integrity-label tampering, or a tenant-level endpoint-management policy. Promotes h6 from deprioritized to dominant prior. Also surfaces new h8 (explicit Deny ACE / missing WRITE_OWNER via GPO despite Owner status) and h9 (parent `C:\poc` created with broken label-write inheritance).
 
 DATA_START — user terminal output (three-command evidence pack on `C:\poc\temp`)
 
 ```
 PS C:\poc\temp> (Get-Acl C:\poc\temp).Owner
-TWGGLOBAL\OMack
+<CORP_DOMAIN>\<user>
 PS C:\poc\temp>   (Get-Volume -DriveLetter C).FileSystem
 NTFS
 PS C:\poc\temp>   Get-Item C:\poc, C:\poc\temp | Select-Object FullName, Attributes, LinkType, Target
@@ -141,7 +141,7 @@ C:\poc\temp  Directory
 
 DATA_END
 
-- **2026-05-23 (user terminal — three-block evidence pack: EDR/ASR + DACL + sibling-dir isolation):** User ran Blocks 1 + 2 + 3. **Block 3 (sibling-dir isolation) FAILED — `C:\poc-isolation-test` reproduces the exact same `apply failed` + HRESULT 0x5 pattern as `C:\poc\temp`.** This empirically pins the failure scope to "drive-root NTFS user-created dirs" — broader than `C:\poc\*` but narrower than "all NTFS". h6 ELIMINATED (CSAgent running but not the cause; Defender ASR rules empty; Controlled Folder Access disabled). h9 ELIMINATED (sibling dir under `C:\` exhibits identical failure — not a per-dir creation artifact). Block 2 reveals the smoking gun: the path's DACL contains `Authenticated Users: Modify` (not FullControl) as the user's only transitive grant. `Modify` rights mask `0x1301BF` does NOT include `WRITE_OWNER` (0x80000). Per the Windows security contract, `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` requires `WRITE_OWNER` on the target. Owner status grants implicit `WRITE_DAC` + `READ_CONTROL` but NOT implicit `WRITE_OWNER` — that bit must come from a DACL ACE. The default `C:\` root ACL does not grant WRITE_OWNER to user-mapped identities, so every user-created subdir of `C:\` inherits a DACL that caps the user at Modify and blocks mandatory-label SACL writes. `%TEMP%` (under `%LocalAppData%`) works because `userprofile.dll` applies an explicit `<user>: FullControl` ACE at profile-creation time, which includes WRITE_OWNER. **h11 (NEW) CONFIRMED: missing WRITE_OWNER on user-created drive-root paths despite Owner status.**
+- **2026-05-23 (user terminal — three-block evidence pack: EDR/ASR + DACL + sibling-dir isolation):** User ran Blocks 1 + 2 + 3. **Block 3 (sibling-dir isolation) FAILED — `C:\poc-isolation-test` reproduces the exact same `apply failed` + HRESULT 0x5 pattern as `C:\poc\temp`.** This empirically pins the failure scope to "drive-root NTFS user-created dirs" — broader than `C:\poc\*` but narrower than "all NTFS". h6 ELIMINATED (<edr-agent> running but not the cause; Defender ASR rules empty; Controlled Folder Access disabled). h9 ELIMINATED (sibling dir under `C:\` exhibits identical failure — not a per-dir creation artifact). Block 2 reveals the smoking gun: the path's DACL contains `Authenticated Users: Modify` (not FullControl) as the user's only transitive grant. `Modify` rights mask `0x1301BF` does NOT include `WRITE_OWNER` (0x80000). Per the Windows security contract, `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` requires `WRITE_OWNER` on the target. Owner status grants implicit `WRITE_DAC` + `READ_CONTROL` but NOT implicit `WRITE_OWNER` — that bit must come from a DACL ACE. The default `C:\` root ACL does not grant WRITE_OWNER to user-mapped identities, so every user-created subdir of `C:\` inherits a DACL that caps the user at Modify and blocks mandatory-label SACL writes. `%TEMP%` (under `%LocalAppData%`) works because `userprofile.dll` applies an explicit `<user>: FullControl` ACE at profile-creation time, which includes WRITE_OWNER. **h11 (NEW) CONFIRMED: missing WRITE_OWNER on user-created drive-root paths despite Owner status.**
 
 DATA_START — user terminal output (Blocks 1 + 2 + 3 evidence pack)
 
@@ -156,10 +156,10 @@ AttackSurfaceReductionRules_Ids ControlledFolderAccessProtectedFolders EnableCon
 ------------------------------- -------------------------------------- ----------------------------
                                                                                                   0
 
-PS C:\poc\temp> Get-Service -Name CSAgent,SentinelAgent,CarbonBlack,XDR* -ErrorAction SilentlyContinue | Select Name, Status
+PS C:\poc\temp> Get-Service -Name <edr-agent>,SentinelAgent,CarbonBlack,XDR* -ErrorAction SilentlyContinue | Select Name, Status
 Name     Status
 ----     ------
-CSAgent Running
+<edr-agent> Running
 
 PS C:\poc\temp> (Get-Acl C:\poc\temp).Access | Select IdentityReference, FileSystemRights, AccessControlType | Format-Table -AutoSize
 IdentityReference                           FileSystemRights AccessControlType
@@ -203,7 +203,7 @@ DATA_END
 
 - **EL-4 (post-isolation): IL backend code defect.** False. The `%TEMP%` isolation test (2026-05-23) proved the exact same binary, shell, and token can successfully apply the same Low-IL label to a freshly-created directory. The code path works; the environment is the variable.
 
-- **EL-5 (h3): `C:\poc\temp` owned by `BUILTIN\Administrators` (Admins-owner with anomalous TokenUser SID match).** False. 2026-05-23 evidence pack confirms `(Get-Acl C:\poc\temp).Owner == TWGGLOBAL\OMack` — a domain user SID, not the Administrators group SID. The runtime ownership pre-check correctly returned Ok(true). Owner status is not the issue.
+- **EL-5 (h3): `C:\poc\temp` owned by `BUILTIN\Administrators` (Admins-owner with anomalous TokenUser SID match).** False. 2026-05-23 evidence pack confirms `(Get-Acl C:\poc\temp).Owner == <CORP_DOMAIN>\<user>` — a domain user SID, not the Administrators group SID. The runtime ownership pre-check correctly returned Ok(true). Owner status is not the issue.
 
 - **EL-6 (h4): `C:\poc\temp` on non-NTFS volume (ReFS / FAT32).** False. 2026-05-23 evidence pack confirms `(Get-Volume -DriveLetter C).FileSystem == NTFS`. Mandatory-label support is present at the filesystem level.
 
@@ -211,7 +211,7 @@ DATA_END
 
 - **EL-8 (h7): READONLY directory attribute on `C:\poc\temp`.** False. 2026-05-23 evidence pack shows `Attributes=Directory` only — no `ReadOnly` flag. Attribute-state is not the issue.
 
-- **EL-9 (h6): EDR/ASR/CFA interception of `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)`.** False. 2026-05-23 Block 1 evidence pack shows Defender ASR rules empty (`AttackSurfaceReductionRules_Ids` is blank), Controlled Folder Access DISABLED (`EnableControlledFolderAccess = 0`), no protected folders configured. CrowdStrike CSAgent is running but is not blocking the label write — the failure is a deterministic Windows ACL gap, not a runtime interception. The presence of EDR was a plausible prior given the corp-domain context but is empirically not the cause here.
+- **EL-9 (h6): EDR/ASR/CFA interception of `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)`.** False. 2026-05-23 Block 1 evidence pack shows Defender ASR rules empty (`AttackSurfaceReductionRules_Ids` is blank), Controlled Folder Access DISABLED (`EnableControlledFolderAccess = 0`), no protected folders configured. EDR agent is running but is not blocking the label write — the failure is a deterministic Windows ACL gap, not a runtime interception. The presence of EDR was a plausible prior given the corp-domain context but is empirically not the cause here.
 
 - **EL-10 (h9): Parent `C:\poc` created with broken label-write inheritance.** False. 2026-05-23 Block 3 evidence pack shows a brand-new `C:\poc-isolation-test` directory (sibling of `C:\poc`, no shared parent below `C:\`) exhibits the IDENTICAL apply failure with mask=0x4 and HRESULT 0x5. The failure scope is "user-created drive-root subdirs of `C:\`", not "anything under `C:\poc\`". Per-dir creation history is irrelevant.
 
