@@ -1,0 +1,161 @@
+# Phase 46 — UAT backlog drain (REQ-UAT-BL-01..02)
+#
+# Tactical re-execution of Phase 35 + 36 HUMAN-UAT + VERIFICATION items
+# deferred at v2.4 close. Per D-46-C2 workflow_dispatch-only, deletable
+# in v3.0 once verdicts are recorded in 46-03-SUMMARY.md. Mirrors
+# .github/workflows/phase-45-resl-native-host.yml layout.
+#
+# Per D-46-C1, GH Actions runners replace the unavailable native
+# Linux/macOS host. Non-automatable items (Windows-gated env_filter_tests,
+# interactive consent prompts, native UX flows) waive as `no-test-fixture`
+# per D-46-C3 with per-item rationale in 46-03-SUMMARY.md.
+#
+# Invocation (Phase 46 orchestrator action):
+#   gh workflow run phase-46-uat-backlog.yml -f gh_runner_os=both
+#   gh run watch
+#
+# continue-on-error: true on both per-OS jobs — D-46-C3 maps cleanly:
+# items that fail because the test fixture is intrinsically unavailable
+# get a `no-test-fixture` waiver in 46-03-SUMMARY rather than blocking.
+
+name: Phase 46 — UAT backlog drain
+
+on:
+  workflow_dispatch:
+    inputs:
+      gh_runner_os:
+        description: Which OS matrix to run
+        type: choice
+        options:
+          - ubuntu-24.04
+          - macos-latest
+          - both
+        default: both
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+permissions:
+  contents: read
+
+jobs:
+  uat-backlog-linux:
+    if: ${{ inputs.gh_runner_os == 'ubuntu-24.04' || inputs.gh_runner_os == 'both' }}
+    name: Phase 46 UAT backlog (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-phase46-uat-backlog-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-phase46-uat-backlog-
+
+      - name: Build workspace
+        run: cargo build --workspace --release --verbose
+
+      # Phase 35 UAT items — Linux automatable subset
+      #
+      # Item 2: REQ-PORT-CLOSURE-06 — Linux Landlock profiles-dir pre-creation
+      # (35-02-LINUX-LANDLOCK-PROFILES-SUMMARY.md; requires Linux kernel 5.13+;
+      #  ubuntu-24.04 satisfies this requirement)
+      - name: Run Phase 35 UAT — Linux Landlock profiles-dir idempotency (REQ-PORT-CLOSURE-06)
+        run: cargo test -p nono-cli -- test_pre_create_landlock_profiles_dir_idempotent --include-ignored
+
+      # Item 3: REQ-PORT-CLOSURE-07 — profile_cli debug-syntax tests (host-agnostic)
+      # (35-03-WIN-TEST-HYGIENE-SUMMARY.md; v2.4-MILESTONE-AUDIT rows 116-121 confirm
+      #  this CAN run on non-Windows hosts; cargo test target is host-agnostic)
+      - name: Run Phase 35 UAT — profile_cli debug-syntax JSON shape (REQ-PORT-CLOSURE-07)
+        run: cargo test -p nono-cli -- test_policy_show_json_no_rust_debug_syntax test_policy_diff_json_no_rust_debug_syntax
+
+      # Item 4: REQ-PORT-CLOSURE-07 — query_path UNC prefix strip (host-agnostic)
+      # (35-03-WIN-TEST-HYGIENE-SUMMARY.md; test uses production helper, cross-platform)
+      - name: Run Phase 35 UAT — query_path UNC prefix strip (REQ-PORT-CLOSURE-07)
+        run: cargo test -p nono-cli -- test_query_path_denied test_query_path_reports_near_miss_with_source_and_fix
+
+      # Phase 36 UAT / verification items — Linux automatable subset
+      #
+      # Item 12: REQ-PORT-CLOSURE-02 — deprecated_schema --strict mode integration tests
+      # (36-01a-DEPRECATED-SCHEMA-MODULE-SUMMARY.md)
+      - name: Run Phase 36 UAT — deprecated_schema --strict mode (REQ-PORT-CLOSURE-02)
+        run: cargo test -p nono-cli --test profile_validate_strict --release
+
+      # Item 14: REQ-PORT-CLOSURE-04 — yaml_merge wiring integration tests
+      # (36-02-WIRING-YAML-MERGE-SUMMARY.md)
+      - name: Run Phase 36 UAT — yaml_merge wiring reversal tests (REQ-PORT-CLOSURE-04)
+        run: cargo test -p nono-cli --test yaml_merge_reversal --release
+
+      # Item 17: REQ-PORT-CLOSURE-05 — ExecConfig surgical port + diagnostic parser
+      # (36-03-EXECCFG-SURGICAL-PORT-SUMMARY.md; unit tests are host-agnostic)
+      - name: Run Phase 36 UAT — ExecConfig surgical port unit tests (REQ-PORT-CLOSURE-05)
+        run: cargo test -p nono -- --release
+
+  uat-backlog-macos:
+    if: ${{ inputs.gh_runner_os == 'macos-latest' || inputs.gh_runner_os == 'both' }}
+    name: Phase 46 UAT backlog (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-phase46-uat-backlog-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-phase46-uat-backlog-
+
+      - name: Build workspace
+        run: cargo build --workspace --release --verbose
+
+      # Phase 35 UAT items — macOS automatable subset
+      #
+      # Item 3: REQ-PORT-CLOSURE-07 — profile_cli debug-syntax tests (host-agnostic)
+      - name: Run Phase 35 UAT — profile_cli debug-syntax JSON shape (REQ-PORT-CLOSURE-07)
+        run: cargo test -p nono-cli -- test_policy_show_json_no_rust_debug_syntax test_policy_diff_json_no_rust_debug_syntax
+
+      # Item 4: REQ-PORT-CLOSURE-07 — query_path UNC prefix strip (host-agnostic)
+      - name: Run Phase 35 UAT — query_path UNC prefix strip (REQ-PORT-CLOSURE-07)
+        run: cargo test -p nono-cli -- test_query_path_denied test_query_path_reports_near_miss_with_source_and_fix
+
+      # Phase 36 UAT / verification items — macOS automatable subset
+      #
+      # Item 12: REQ-PORT-CLOSURE-02 — deprecated_schema --strict mode integration tests
+      - name: Run Phase 36 UAT — deprecated_schema --strict mode (REQ-PORT-CLOSURE-02)
+        run: cargo test -p nono-cli --test profile_validate_strict --release
+
+      # Item 14: REQ-PORT-CLOSURE-04 — yaml_merge wiring integration tests
+      - name: Run Phase 36 UAT — yaml_merge wiring reversal tests (REQ-PORT-CLOSURE-04)
+        run: cargo test -p nono-cli --test yaml_merge_reversal --release
+
+      # Item 17: REQ-PORT-CLOSURE-05 — ExecConfig surgical port + diagnostic parser
+      - name: Run Phase 36 UAT — ExecConfig surgical port unit tests (REQ-PORT-CLOSURE-05)
+        run: cargo test -p nono -- --release
