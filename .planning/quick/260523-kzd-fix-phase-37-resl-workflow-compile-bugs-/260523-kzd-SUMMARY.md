@@ -112,7 +112,7 @@ command.
 |------|--------|---------|
 | 1 (BUG-1 crate) | c8b3eacf | feat(quick-260523-kzd): add tools/sign-fixture workspace member (BUG-1) |
 | 2 (BUG-1 wiring) | 166100cc | fix(quick-260523-kzd): update PKGS-04 job to use sign-fixture binary (BUG-1) |
-| 3 (BUG-2 fix) | (see below) | fix(quick-260523-kzd): std-qualify Result in 3 test fn signatures (BUG-2) |
+| 3 (BUG-2 fix) | 4d45ef94 | fix(quick-260523-kzd): std-qualify Result in 3 test fn signatures (BUG-2) |
 
 ## Deviations from Plan
 
@@ -153,3 +153,4 @@ ports existing upstream signing logic verbatim. The OIDC token flow is identical
 - `supervisor_linux.rs` line 859 unchanged: VERIFIED
 - Task 1 commit c8b3eacf: FOUND
 - Task 2 commit 166100cc: FOUND
+- Task 3 commit 4d45ef94: FOUND
