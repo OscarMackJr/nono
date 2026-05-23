@@ -3360,6 +3360,7 @@ fn make_fs_grant(
 // Tests
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
