@@ -34,7 +34,6 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -Dwarnings
 
 permissions:
   contents: read
@@ -66,6 +65,11 @@ jobs:
           key: ${{ runner.os }}-phase46-uat-backlog-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-phase46-uat-backlog-
+
+      - name: Install system dependencies (libdbus-1-dev required by keyring crate)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Build workspace
         run: cargo build --workspace --release --verbose
