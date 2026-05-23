@@ -1,0 +1,105 @@
+# Phase 45 — Native RESL re-validation (REQ-RESL-NIX-04)
+#
+# Tactical confirmation pass: verifies the Phase 27.2 audit-attestation
+# transitive-closure (REQ-AAHX-01..03) holds on a native Linux + macOS host.
+# Closes the Phase 38 REQ-AAHX-HOST-01 deferral folded into v2.6 as
+# REQ-RESL-NIX-04 per ROADMAP § Phase 45 (success criterion 3).
+#
+# workflow_dispatch-only (NOT a permanent CI lane) per D-45-D2.
+# Deletable in v2.7 once the verdict is recorded in
+# 45-03-NATIVE-RESL-PROTOCOL.md § Closure Disposition.
+#
+# Invocation (Phase 46 orchestrator action):
+#   gh workflow run phase-45-resl-native-host.yml -f gh_runner_os=both
+#   gh run watch
+#
+# SC#3 explicitly says this REQ does not block phase close if no gap is
+# found. Both jobs carry continue-on-error so one OS green is sufficient.
+
+name: Phase 45 RESL Native Host Re-validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      gh_runner_os:
+        description: Which OS matrix to run
+        type: choice
+        options:
+          - ubuntu-24.04
+          - macos-latest
+          - both
+        default: both
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+permissions:
+  contents: read
+
+jobs:
+  resl-nix:
+    if: ${{ inputs.gh_runner_os == 'ubuntu-24.04' || inputs.gh_runner_os == 'both' }}
+    name: Phase 45 RESL native (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-phase45-resl-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-phase45-resl-
+
+      - name: Build workspace
+        run: cargo build --workspace --release --verbose
+
+      - name: Run audit-attestation regression
+        run: cargo test -p nono-cli --test audit_attestation -- --include-ignored
+
+  resl-darwin:
+    if: ${{ inputs.gh_runner_os == 'macos-latest' || inputs.gh_runner_os == 'both' }}
+    name: Phase 45 RESL native (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-phase45-resl-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-phase45-resl-
+
+      - name: Build workspace
+        run: cargo build --workspace --release --verbose
+
+      - name: Run audit-attestation regression
+        run: cargo test -p nono-cli --test audit_attestation -- --include-ignored
