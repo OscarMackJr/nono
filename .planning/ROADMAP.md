@@ -143,7 +143,9 @@ Audit: [`milestones/v2.5-MILESTONE-AUDIT.md`](milestones/v2.5-MILESTONE-AUDIT.md
   3. `## Empirical cross-check` section spot-checks at least 4 fork-shared files for any upstream path the drift tool missed, closing the `feedback_cluster_isolation_invalid` empirical lesson (DIVERGENCE-LEDGER cluster isolation can be empirically false; diff-inspect re-export surfaces, not just `--name-only`).
   4. Upstream `v0.41–v0.43` drift inventory produced via the same DRIFT-01/02 tooling; per-cluster dispositions recorded with a "backfill-cleanup, not parity-sync" framing in SUMMARY; the inventory either resolves the deferral by confirming no fork-side action needed (most likely outcome for a 1-year-stale backfill range) or flags any cherry-picks worth absorbing in Phase 48 alongside UPST6.
   5. Phase 47 ships zero `crates/` / `bindings/` / `scripts/` source-tree edits (audit-only output; D-39-E5 Windows-only-files invariant trivially honored).
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 47-01-UPST6-AUDIT-PLAN.md — UPST6 cycle audit ledger v0.54.0..v0.57.0 (REQ-UPST6-01) with ## ADR review + ## Empirical cross-check ≥4 files + ## Cross-cluster re-export deps detected; D-47-D1..D4 close feedback_cluster_isolation_invalid; UPST7 stub appended
+- [ ] 47-02-V041-V043-BACKFILL-PLAN.md — v0.41.0..v0.43.0 backfill drift ingestion ledger (REQ-DRIFT-INGEST-01) with absorbed-via: column reconstructing Phase 22/34 historical absorption + ## Phase 48 hand-off subsection for unmatched candidates; SKIPS ## ADR review per D-47-C4; closes v2.3 scope-lock 2026-04-29 deferral
 **UI hint**: no
 
 ### Phase 48: UPST6 sync execution
@@ -238,7 +240,7 @@ These invariants are inherited from prior milestones and remain in force across 
 | 44. REVIEW polish + test hygiene | 2/2 | Complete    | 2026-05-20 |
 | 45. Source migration + AIPC G-04 + RESL native re-validation | 3/3 | Complete    | 2026-05-23 |
 | 46. windows-squash merge + post-merge CI + UAT backlog | 3/3 | Complete    | 2026-05-24 |
-| 47. UPST6 audit + v0.41–v0.43 drift ingestion | 0/TBD | Not started | — |
+| 47. UPST6 audit + v0.41–v0.43 drift ingestion | 0/2 | Not started | — |
 | 48. UPST6 sync execution | 0/TBD | Not started | — |
 | 49. Sigstore trust-root POC resilience | 3/3 | Complete    | 2026-05-21 |
 
