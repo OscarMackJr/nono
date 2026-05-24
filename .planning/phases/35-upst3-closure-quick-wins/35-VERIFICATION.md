@@ -1,26 +1,26 @@
 ---
 phase: 35-upst3-closure-quick-wins
-verified: 2026-05-23T23:30:00Z
+verified: 2026-05-24T00:20:00Z
 status: passed
-score: 2/11 UAT items confirmed via original Windows-host execution (9 items waived per `no-test-fixture` per D-46-C3)
+score: 6/11 UAT items verified via GH Actions CI run 26347039444 + 2 pre-passed v2.4 (5 items waived per `no-test-fixture` per D-46-C3)
 overrides_applied: 0
 re_verification:
   previous_status: human_needed
   previous_score: n/a (v2.4 close did not produce 35-VERIFICATION.md)
   previous_verified: n/a
-  trigger: "Phase 46 Plan 46-03 backfill per D-46-C4; phase-46-uat-backlog.yml CI run-id 26345947787 attempted Linux/macOS automation; pre-passed items (env_filter_tests + profile_cli debug-syntax) from v2.4-MILESTONE-AUDIT.md rows 116-121 + no-test-fixture waivers in 46-03-SUMMARY close REQ-UAT-BL-01."
+  trigger: "Phase 46 Plan 46-03 backfill per D-46-C4; phase-46-uat-backlog.yml CI run-id 26347039444 (workflow fix iteration — both jobs success) + pre-passed items from v2.4-MILESTONE-AUDIT.md rows 116-121 + no-test-fixture waivers in 46-03-SUMMARY close REQ-UAT-BL-01."
   gaps_closed:
     - "env_filter_tests group (REQ-PORT-CLOSURE-01) → pass (pre-passed v2.4 on Windows host per v2.4-MILESTONE-AUDIT rows 116-121)"
-    - "Windows build_child_env deny-filter wiring (REQ-PORT-CLOSURE-01) → no-test-fixture (waiver in 46-03-SUMMARY § Item 2 — Windows interactive env-filter smoke test)"
+    - "Windows build_child_env deny-filter wiring (REQ-PORT-CLOSURE-01) → no-test-fixture (waiver in 46-03-SUMMARY § Item 2 — Windows host required)"
     - "Windows empty-allow fail-closed invariant (REQ-PORT-CLOSURE-01) → no-test-fixture (waiver in 46-03-SUMMARY § Item 3)"
     - "Windows credential bypass (REQ-PORT-CLOSURE-01) → no-test-fixture (waiver in 46-03-SUMMARY § Item 4)"
-    - "Linux Landlock profiles-dir pre-creation (REQ-PORT-CLOSURE-06) → no-test-fixture (waiver in 46-03-SUMMARY § Item 5 — build failed in CI run 26345947787)"
+    - "Linux Landlock profiles-dir pre-creation (REQ-PORT-CLOSURE-06) → pass (run-id 26347039444 Linux step 7 — success)"
     - "Linux Landlock first-run UX (REQ-PORT-CLOSURE-06) → no-test-fixture (waiver in 46-03-SUMMARY § Item 6 — interactive Linux host required)"
-    - "Landlock pre-create XDG path + fail-secure propagation (REQ-PORT-CLOSURE-06) → no-test-fixture (waiver in 46-03-SUMMARY § Item 7)"
-    - "profile_cli debug-syntax tests (REQ-PORT-CLOSURE-07) → pass (pre-passed v2.4 on Windows host per v2.4-MILESTONE-AUDIT rows 116-121)"
-    - "query_path UNC strip test_query_path_denied (REQ-PORT-CLOSURE-07) → no-test-fixture (waiver in 46-03-SUMMARY § Item 9 — build failed in CI run 26345947787)"
-    - "query_path near-miss UNC strip (REQ-PORT-CLOSURE-07) → no-test-fixture (waiver in 46-03-SUMMARY § Item 10)"
-    - "JSON serde_json::Map shape Option omit-when-None (REQ-PORT-CLOSURE-07) → no-test-fixture (waiver in 46-03-SUMMARY § Item 11)"
+    - "Landlock pre-create XDG path + fail-secure propagation (REQ-PORT-CLOSURE-06) → no-test-fixture (waiver in 46-03-SUMMARY § Item 7 — design verification only)"
+    - "profile_cli debug-syntax tests (REQ-PORT-CLOSURE-07) → pass (pre-passed v2.4 + confirmed run-id 26347039444 Linux step 8 + macOS step 6)"
+    - "query_path UNC strip test_query_path_denied (REQ-PORT-CLOSURE-07) → pass (run-id 26347039444 Linux step 9 + macOS step 7 — success)"
+    - "query_path near-miss UNC strip (REQ-PORT-CLOSURE-07) → pass (run-id 26347039444 Linux step 9 + macOS step 7 — same invocation)"
+    - "JSON serde_json::Map shape Option omit-when-None (REQ-PORT-CLOSURE-07) → pass (run-id 26347039444 Linux step 8 + macOS step 6 — same invocation)"
   gaps_remaining: []
   regressions: []
 backfilled_in: phase-46-plan-46-03
@@ -30,9 +30,9 @@ backfilled_in: phase-46-plan-46-03
 
 **Phase Goal:** Close 3 Phase 34 deferrals (P34-DEFER-08a-1, P34-DEFER-09-1, P34-DEFER-01-1/-09-3/-10-1) — Windows env-filter wiring (REQ-PORT-CLOSURE-01), Linux Landlock profiles-dir pre-creation (REQ-PORT-CLOSURE-06), and Windows test hygiene / JSON shape fixes (REQ-PORT-CLOSURE-07). Code runs on Linux/macOS/Windows; platform-specific test surfaces require respective hosts.
 
-**Verified:** 2026-05-23T23:30:00Z
+**Verified:** 2026-05-24T00:20:00Z
 **Status:** passed
-**Re-verification:** Yes (backfilled per Phase 46 Plan 46-03 D-46-C4)
+**Re-verification:** Yes (backfilled per Phase 46 Plan 46-03 D-46-C4; verdicts updated after workflow fix iteration — run-id 26347039444)
 
 ## Goal Achievement
 
@@ -44,7 +44,7 @@ backfilled_in: phase-46-plan-46-03
 | 2   | Linux `pre_create_landlock_profiles_dir()` pre-creates `~/.config/nono/profiles/` before Landlock apply; idempotency test passes; first-run UX fixed (REQ-PORT-CLOSURE-06) | VERIFIED | 35-02-LINUX-LANDLOCK-PROFILES-SUMMARY.md: 15-line helper at `profile_runtime.rs`; `test_pre_create_landlock_profiles_dir_idempotent` test added (Linux-gated); XDG-aware + fail-secure `?` propagation |
 | 3   | `profile show/diff --json` emits clean `serde_json::Map` without `format!("{:?}")` Debug leakage; `query_path` suggested_flag strips Windows UNC verbatim prefix (REQ-PORT-CLOSURE-07) | VERIFIED | 35-03-WIN-TEST-HYGIENE-SUMMARY.md: `test_policy_show_json_no_rust_debug_syntax` + `test_policy_diff_json_no_rust_debug_syntax` passed on Windows host at v2.4 close; `strip_verbatim_prefix` helper reused cross-platform |
 
-**Score:** 3/3 truths verified
+**Score:** 3/3 truths verified (6/11 UAT items pass via CI run 26347039444 + 5/11 waived per D-46-C3)
 
 ### Deferred Items
 
@@ -85,13 +85,13 @@ No CRITICAL findings. Phase 35 executed cleanly per all 3 plan SUMMARYs.
 
 ### Human Verification Required
 
-All HUMAN-UAT items closed via Phase 46 Plan 46-03 backfill per D-46-C4: 2/11 pass (pre-passed at v2.4 close on Windows dev host) + 9/11 no-test-fixture waivers per D-46-C3. See 35-HUMAN-UAT.md for per-item verdicts. Phase 46 workflow run-id 26345947787 (`.github/workflows/phase-46-uat-backlog.yml`) attempted Linux/macOS CI automation; workspace build failed on both platforms, resulting in all CI-targeted items receiving `no-test-fixture` waivers. Waiver rationale per item in 46-03-SUMMARY.md § No-Test-Fixture Waivers.
+All HUMAN-UAT items closed via Phase 46 Plan 46-03 backfill per D-46-C4: 6/11 pass (2 pre-passed at v2.4 close + 4 newly confirmed by CI run 26347039444) + 5/11 no-test-fixture waivers per D-46-C3. See 35-HUMAN-UAT.md for per-item verdicts. Phase 46 workflow run-id 26347039444 (`.github/workflows/phase-46-uat-backlog.yml`) — both Linux and macOS jobs success; Linux step 7 confirmed Landlock idempotency; steps 8-9 confirmed profile_cli debug-syntax + query_path UNC tests; macOS steps 6-7 cross-confirmed. Waiver rationale per item in 46-03-SUMMARY.md § No-Test-Fixture Waivers.
 
 ### Gaps Summary
 
-**No goal-blocking gaps.** All 11 Phase 35 UAT items reach `pass` (2 items, pre-passed at v2.4 close) or carry a documented `no-test-fixture` waiver (9 items) per SC#5 explicit allowance. The v2.4-close `human_needed` deferral closed via Phase 46 Plan 46-03 backfill per D-46-C4.
+**No goal-blocking gaps.** All 11 Phase 35 UAT items reach `pass` (6 items: 2 pre-passed v2.4 + 4 confirmed by CI run 26347039444) or carry a documented `no-test-fixture` waiver (5 items: Windows-only surfaces, interactive Linux UX, design-verification-only) per SC#5 explicit allowance. The v2.4-close `human_needed` deferral closed via Phase 46 Plan 46-03 backfill per D-46-C4.
 
 ---
 
-_Verified: 2026-05-23T23:30:00Z_
+_Verified: 2026-05-24T00:20:00Z_
 _Verifier: Claude (gsd-verifier) — Phase 46 backfill_
