@@ -3776,25 +3776,6 @@ mod tests {
             0,
             &explanations,
             &observation,
-            &[],
-        ));
-    }
-
-    #[test]
-    fn test_profile_save_prompt_triggers_on_user_preferences_violation_with_zero_exit() {
-        let explanations = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
-        let violations = vec![nono::SandboxViolation {
-            operation: "user-preference-read".to_string(),
-            target: Some("kcfpreferencesanyapplication".to_string()),
-        }];
-
-        assert!(should_offer_profile_save(
-            false,
-            0,
-            &explanations,
-            &observation,
-            &violations,
         ));
     }
 
@@ -3835,14 +3816,12 @@ mod tests {
             1,
             &explanations,
             &observation,
-            &[],
         ));
         assert!(!should_offer_profile_save(
             true,
             1,
             &explanations,
             &observation,
-            &[],
         ));
     }
 
@@ -4570,96 +4549,5 @@ mod tests {
         assert!(dir.exists(), "shim dir should exist before drop");
         drop(shim);
         assert!(!dir.exists(), "shim dir should be removed on drop");
-    }
-
-    #[test]
-    fn test_diagnostic_footer_triggers_on_successful_sandbox_violation() {
-        let violations = vec![nono::SandboxViolation {
-            operation: "file-read-data".to_string(),
-            target: Some("/tmp/secret.txt".to_string()),
-        }];
-        let denials = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
-
-        assert!(should_print_diagnostic_footer(
-            false,
-            0,
-            &denials,
-            &violations,
-            &observation,
-        ));
-        assert!(!should_print_diagnostic_footer(
-            true,
-            0,
-            &denials,
-            &violations,
-            &observation,
-        ));
-    }
-
-    #[test]
-    fn test_profile_save_prompt_triggers_on_policy_explanation_with_zero_exit() {
-        let explanations = vec![nono::diagnostic::PolicyExplanation {
-            path: PathBuf::from("/tmp/secret.txt"),
-            access: nono::AccessMode::Read,
-            reason: "path_not_granted".to_string(),
-            details: None,
-            policy_source: None,
-            suggested_flag: Some("--read-file /tmp/secret.txt".to_string()),
-        }];
-        let observation = nono::diagnostic::ErrorObservation::default();
-
-        assert!(should_offer_profile_save(
-            false,
-            0,
-            &explanations,
-            &observation,
-        ));
-    }
-
-    #[test]
-    fn test_keychain_mach_violation_adds_profile_save_explanation() {
-        let _env_lock = crate::test_env::ENV_LOCK.lock().expect("env lock");
-        let temp_home = tempfile::TempDir::new().expect("temp home");
-        let home = temp_home.path().canonicalize().expect("canonical home");
-        let _env =
-            crate::test_env::EnvVarGuard::set_all(&[("HOME", home.to_str().expect("home path"))]);
-        let keychain = home.join("Library/Keychains/login.keychain-db");
-        std::fs::create_dir_all(keychain.parent().expect("keychain parent")).expect("mkdir");
-        std::fs::write(&keychain, b"db").expect("write keychain fixture");
-
-        let violations = vec![nono::SandboxViolation {
-            operation: "mach-lookup".to_string(),
-            target: Some("com.apple.SecurityServer".to_string()),
-        }];
-
-        let explanations = build_policy_explanations(&[], &violations, &nono::CapabilitySet::new());
-
-        let explanation = explanations
-            .iter()
-            .find(|explanation| explanation.path == keychain)
-            .expect("keychain explanation");
-        assert_eq!(explanation.access, nono::AccessMode::Read);
-        #[cfg(target_os = "macos")]
-        assert_eq!(explanation.reason, "sensitive_path");
-    }
-
-    #[test]
-    fn test_profile_save_prompt_preserves_nonzero_exit_behavior() {
-        let explanations = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
-
-        assert!(should_offer_profile_save(
-            false,
-            1,
-            &explanations,
-            &observation,
-        ));
-        assert!(!should_offer_profile_save(
-            true,
-            1,
-            &explanations,
-            &observation,
-        ));
     }
 }
