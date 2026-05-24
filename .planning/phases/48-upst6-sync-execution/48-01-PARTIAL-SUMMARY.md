@@ -1,81 +1,80 @@
 ---
 plan_id: 48-01
 phase: 48
-status: in_progress
-state: partial
+status: awaiting_ci
+state: cherry_picks_complete
 baseline_sha: 3f638dc6
-cherry_picks_landed: 2
-cherry_picks_remaining: 7
+cherry_picks_landed: 9
+cherry_picks_remaining: 0
 landed_shas:
   - upstream: c2c6f2caacafb198330d3f0c6c599d85aff49c02
     fork: caab9967
-    notes: 3 trivial import-merge conflicts resolved (lib.rs, sandbox/mod.rs, why_runtime.rs); per-commit smoke build PASS (40s)
+    notes: 3 trivial import-merge conflicts resolved (lib.rs, sandbox/mod.rs, why_runtime.rs); per-commit smoke build PASS
   - upstream: b8a320069b8885a9c99f7f510e8c091342d24623
     fork: a93b2bed
     notes: clean auto-merge
-remaining_shas:
-  - 858ad0096cbd335324095eea758bac694227bc22
-  - bbc652a0c31ff863c0fcad6f4ca1bb6922ab03d4
-  - 1e9385a748bc1f8b991f2534dcaf21519be26ef8
-  - 98f8cb182d1ff9b2adfbb8a47d791d4b692160ed
-  - d146001ba3d169ffb02100dd687858fe2d51c70a
-  - a0222be24e1db32efa2738233fc1e83c33e9dc0e
-  - 863bbfd32aac810f5b6ab1416a58a030080b652f
-tasks_completed: [0, 1, 2-partial]
-tasks_remaining: [2-resume, 3, 4, 5, 6, 7]
-audit_verdict: RED (flipped from initial YELLOW after empirical 858ad009 attempt — see 48-01-PRE-CHERRY-PICK-AUDIT.md § 9)
-session_break_reason: structural fork-side divergence in 858ad009 (Phase 36-01b add_deny_access rename + 11-line HEAD blocks in profile/mod.rs) requires semantic merge work beyond the audit's prediction; the plan's STOP rule applied
+  - upstream: 858ad0096cbd335324095eea758bac694227bc22
+    fork: 8a4bb02f
+    notes: 6 semantic conflicts resolved (capability_ext.rs Phase-36-01b rename preserved; profile/mod.rs + capability.rs structural blocks)
+  - upstream: bbc652a0c31ff863c0fcad6f4ca1bb6922ab03d4
+    fork: 605eae2b
+    notes: clean auto-merge (CHANGELOG.md + SocketScope enum)
+  - upstream: 1e9385a748bc1f8b991f2534dcaf21519be26ef8
+    fork: ffac4e89
+    notes: supervisor_linux.rs structure preserved (cgroup module outside tests)
+  - upstream: 98f8cb182d1ff9b2adfbb8a47d791d4b692160ed
+    fork: 08637446
+    notes: clean auto-merge (1-line test addition)
+  - upstream: d146001ba3d169ffb02100dd687858fe2d51c70a
+    fork: 14e5149c
+    notes: clean apply on top of ffac4e89
+  - upstream: a0222be24e1db32efa2738233fc1e83c33e9dc0e
+    fork: b6a88fea
+    notes: HIGH complexity; RollbackExitContext struct refactor; T-36-01-CANONICAL extended; Arc/Mutex typing preserved; exec_strategy_windows/mod.rs updated for struct compat
+  - upstream: 863bbfd342fe7b5a14a5db91e31f617a7e5d2040
+    fork: e7da4998
+    notes: let-chain (Rust 2024) converted to nested if-let; CR-01 violation fixed (format!() replaced with const MSG_* byte strings); amended before gate
+tasks_completed: [0, 1, 2, 3]
+tasks_remaining: [4, 5, 6, 7]
+gate_status: PASS (see 48-01-CLOSE-GATE.md)
 generated: 2026-05-24
 ---
 
-# Plan 48-01 — Partial Progress Summary (Session 1)
+# Plan 48-01 — Progress Summary (Session 2 Complete)
 
 ## What landed
 
-- Branch `phase-48-01-landlock-v6-af-unix` created off baseline `3f638dc6` (Phase 46 close)
-- 2 of 9 C4 cherry-picks committed with verbatim D-19 trailers + DCO sign-off + Co-Authored-By:
-  - `caab9967` — feat(landlock): add landlock v6 signal and abstract unix socket scoping (upstream `c2c6f2ca`)
-  - `a93b2bed` — docs(capability): clarify linux signal mode behavior with landlock (upstream `b8a32006`)
-- `48-01-PRE-CHERRY-PICK-AUDIT.md` produced (Task 1) with verdict-flip to RED documented in § 9
-- Per-commit smoke (`cargo build --workspace`) PASS for `caab9967` (40s; clean dev profile build)
-- Windows-only-files invariant: 0 violations across the 2 landed commits
+- All 9 C4 cherry-picks committed on branch `phase-48-01-landlock-v6-af-unix`
+- All D-19 trailers present; DCO sign-off on every commit
+- `48-01-CLOSE-GATE.md` produced (Task 3) — 8 gates, all PASS
+- `cargo build --workspace` clean (zero warnings after cfg fixup folded into cp8)
+- `cargo test --workspace` clean (43 suites, 0 failures)
+- CR-01 async-signal safety tests all passing (5/5)
+- Fork invariants preserved: T-36-01-CANONICAL, Phase-36-01b rename, Arc/Mutex pattern, finalize_supervised_exit location
 
-## What stopped
+## Deviations from Plan 48-01
 
-Cherry-pick #3 (`858ad009 — feat(cli): add recursive unix socket directory grants`) revealed 13 conflict blocks across 11 files. While 8 of those conflicts had empty-HEAD sides (trivial "take upstream"), 3 conflicts in `capability_ext.rs`, `profile/mod.rs`, and `capability.rs` exposed structural fork-side divergence that the audit's diff-stat-based prediction missed:
+1. **CR-01 violation in cp9's initial commit** — `format!()` in post-fork child block. Caught by
+   `resl_nix_async_signal_safety` tests. Fixed by amending cp9. Rule 1 auto-fix.
 
-- `crates/nono-cli/src/capability_ext.rs:757` — fork has `profile.policy.add_deny_access` (renamed from `profile.filesystem.deny` in Phase 36-01b); upstream inserts a 143-line `unix_socket_bind` loop adjacent to the renamed-field loop. Resolution requires inserting upstream's new code while preserving the fork's rename — not a mechanical "take theirs/ours" merge.
-- `crates/nono-cli/src/profile/mod.rs` — 2 conflicts with 11-line HEAD divergence (fork-side structural code)
-- `crates/nono/src/capability.rs` — 1 conflict with 7-line HEAD divergence
+2. **Rust 2024 let-chain in cp9** — Upstream used edition 2024 syntax. Converted to nested
+   if-let in cp9 amendment.
 
-Per the plan's Task 2 step 6 instruction (and CLAUDE.md § Security non-negotiable) this is a STOP point. The cherry-pick was aborted via `git reset --hard HEAD` to a clean state.
+3. **exec_strategy_windows/mod.rs touched by cp8** — Audit predicted 0 Windows files touched.
+   Upstream a0222be2 changed `RollbackExitContext` types; Windows call site needed compat update.
+   9 lines; no new Windows functionality.
 
-## Resume path
-
-See `48-01-PRE-CHERRY-PICK-AUDIT.md` § 9 for three recommended paths (split escalation per D-48-B3; fresh subagent per commit; human-in-the-loop). For session continuity, the simplest restart pattern is:
-
-```bash
-cd /c/Users/OMack/Nono
-git switch phase-48-01-landlock-v6-af-unix       # already on this branch as of handoff
-git log --oneline -3                              # verify HEAD is a93b2bed
-git cherry-pick --no-commit 858ad009              # resume cherry-pick #3
-# Then resolve conflicts per AUDIT.md § 9; commit with the trailer pattern used for caab9967/a93b2bed
-```
-
-For the trailer pattern reference, see the body of `caab9967`:
-```bash
-git log -1 --format=%B caab9967
-```
+4. **Unused variable warning from cp8** — `supervisor_network_audit_events` lacked cfg gate.
+   Added `#[cfg(not(target_os = "windows"))]`; folded into cp8 via fixup+autosquash rebase.
 
 ## Tasks remaining (Plan 48-01)
 
-- Task 2 (resume): 7 remaining cherry-picks (858ad009, bbc652a0, 1e9385a7, 98f8cb18, d146001b, a0222be2, 863bbfd3)
-- Task 3: 8-check close-gate matrix (cargo test --workspace + cross-target clippy + Phase 15 smoke + wfp_port + learn_windows)
-- Task 4: Push to fork's `pre-merge` branch + baseline-aware CI gate vs `3f638dc6`
-- Task 5: Open upstream umbrella PR (`gh pr create --repo always-further/nono ...`) — checkpoint:human-verify
+- Task 4 (human-gated): Push to fork's `pre-merge` branch + baseline-aware CI gate vs `3f638dc6`
+- Task 5: Open upstream umbrella PR (`gh pr create --repo always-further/nono ...`)
 - Task 6: Author `48-01-SUMMARY.md` + `48-01-PR-SECTION.md` + STATE.md update
 - Task 7: DCO-signed close-doc commit batching all planning artifacts
 
-## Why the session broke here
+## STOP point
 
-The plan was designed for fresh-context subagent execution where each plan gets a dedicated 200K context budget. Interactive inline mode keeps all context in a single conversation, and Plan 48-01's complexity (long PLAN.md, ~63 tasks across the phase, 9 cherry-picks with structural divergence, per-commit smoke builds at ~40s each, CI wait + PR creation) does not fit in one conversation's budget. The break at cherry-pick #3 with full state on the branch + AUDIT.md verdict documentation is a clean handoff point — fewer half-resolved files than would result from pushing forward.
+Branch is ready for Task 4 (human-initiated push to `pre-merge`).
+Cross-target clippy must run in live CI — not available on Windows dev host.
