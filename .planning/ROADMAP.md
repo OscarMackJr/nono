@@ -158,7 +158,16 @@ Audit: [`milestones/v2.5-MILESTONE-AUDIT.md`](milestones/v2.5-MILESTONE-AUDIT.md
   3. D-20 manual-replays carry `Upstream-replayed-from:` trailers per Phase 43 convention; replays preserve fork-side defense-in-depth (e.g., `validate_path_within` precedent from v2.3 Phase 26-01, `snapshot.rs::validate_restore_target` per-file TOCTOU gate from Phase 43).
   4. Baseline-aware CI gate produces zero `success → failure` transitions vs the Phase 46 post-merge baseline SHA on every Wave 1+ head commit; load-bearing skips (cross-target clippy gates 3+4 absent `aws-lc-sys`/`ring` cross-compilers on Windows host) categorized correctly in SUMMARY frontmatter per Phase 40 anti-pattern #3.
   5. A single PR umbrella to upstream holds all Phase 48 plan contribution sections (PR #922 / Phase 43 fork pattern); 2200+ tests pass on Windows host post-merge with zero new failures.
-**Plans**: TBD
+**Plans**: 9 plans
+- [ ] 48-01-LANDLOCK-V6-AF-UNIX-PLAN.md — Wave 0 foundation: Cluster C4 Landlock v6 signal/socket scoping + af_unix pathname mediation (9 cherry-picks; pre-flight audit per D-48-B2; PR umbrella opens after close)
+- [ ] 48-02-PROFILE-SHADOWING-PLAN.md — Wave 1 parallel: Cluster C1 profile shadowing + pack signer verification (9 cherry-picks; Phase 36-01b exhaustive match preservation)
+- [ ] 48-03-STARTUP-TIMEOUT-PLAN.md — Wave 1 parallel: Cluster C2 startup-timeout config (7 cherry-picks + 1 D-48-D3 fork-side cleanup commit removing dead startup_prompt references before 4e0e127a)
+- [ ] 48-04-LINUX-POLICY-POLISH-PLAN.md — Wave 2 polish: Cluster C5 Linux policy + Landlock deny-overlap diagnostic quieting (3 cherry-picks; Phase 41 Class D regression preserved)
+- [ ] 48-05-MACOS-GRANT-RESTORE-PLAN.md — Wave 2 polish: Cluster C6 macOS exact-path/future-file grant restore + localhost outbound (3 cherry-picks; Windows-lane gates may be _environmental per Claude's Discretion)
+- [ ] 48-06-PTY-MUSL-PORTABILITY-PLAN.md — Wave 2 polish: Cluster C7 PTY proxy fixes + musl libc Ioctl portability (4 cherry-picks; D-48-D4 musl-target verification close-gate add)
+- [ ] 48-07-PROXY-CRED-FORMAT-PLAN.md — Wave 2 polish: Cluster C8 proxy credential_format on custom inject headers (2 cherry-picks + conditional D-48-D2 regression test if coverage gap)
+- [ ] 48-08-PACKAGE-MANIFEST-PLAN.md — Wave 2 fork-preserve: Cluster C9 package manifest + trust-bundle schema (2 cherry-picks OR D-20 manual-replays per D-48-C1 verdict; D-48-C2 disposition-resolution artifact; mandatory D-48-C3 regression test for D-32-15 offline-verify; D-48-C4 Phase 47 ledger immutability)
+- [ ] 48-09-RELEASE-RIDE-PLAN.md — Wave 3 release-ride: Cluster C3 consolidated CHANGELOG-only commit with 3 stacked D-19 trailers (D-48-D1 + D-48-E10 Cargo.toml/lock drops; structurally last; ships 48-SUMMARY.md phase-level close artifact)
 **UI hint**: no
 
 ### Phase 49: Sigstore trust-root POC resilience (--from-file flag + release-asset bundling + fixture refresh cadence)
