@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: UPST6 + v2.5 Drain
-status: executing
-last_updated: "2026-05-23T19:35:00.000Z"
-last_activity: 2026-05-23
+status: phase_48_shipped_milestone_bookkeeping_drift
+last_updated: "2026-05-24T20:30:00.000Z"
+last_activity: 2026-05-24
 progress:
   total_phases: 7
   completed_phases: 4
   total_plans: 13
   completed_plans: 10
   percent: 77
+  note: "STALE — these counts froze at the 2026-05-23 Phase 46 pause and do NOT reflect Phases 47/48/49/50 work. Memory project_v26_opened says 7/8 phases shipped before Phase 48; this close makes Phase 48 done. Reconcile all counts + the ROADMAP 46/47 checkboxes at /gsd-complete-milestone v2.6."
 ---
 
 # Project State: nono — v2.6 UPST6 + v2.5 Drain
@@ -21,14 +22,18 @@ See: .planning/PROJECT.md (updated 2026-05-20 at v2.5 milestone close; v2.5 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 46 — windows-squash-merge-post-merge-ci-verifications-uat-backlog
+**Current Focus:** Phase 48 SHIPPED (2026-05-24) — milestone v2.6 ready for `/gsd-complete-milestone` (pending bookkeeping reconciliation, see drift note below).
 
 ## Current Position
 
-Phase: 46 (windows-squash-merge-post-merge-ci-verifications-uat-backlog) — PAUSED (handed back to operator)
-Plan: 1 of 3 complete (46-01 SHIPPED 2026-05-23; commit `ddb6f4d2` — REQ-MERGE-01 closed via v2.6 upstream-merge deferral ADR)
-Status: Phase 46 paused at operator request; Plans 46-02 + 46-03 deferred to next session
-Last activity: 2026-05-23 -- Phase 37 RESL workflow GREEN end-to-end (run 26343828839 on SHA a92cde28; PKGS-04 + RESL-NIX both success in ~11.5min). Quick task 260523-moe closed the 4 cascading post-compile runtime bugs (BUG-A → -B → -C → -D): #[ignore]'d 3 mock/production protocol-mismatched auto-pull tests; added #[allow(clippy::unwrap_used)] to profile_cmd test module; added #[allow(dead_code)] to common::test_env::EnvVarGuard+set_all (per-compilation-unit dead-code on Linux); added file-level #[allow(clippy::disallowed_methods)] to auto_pull_e2e_linux.rs for 5 NONO_NO_AUTO_PULL remove_var sites. REQ-CI-FU-01 satisfied. Phase 46 Plan 46-02 Phase 37 RESL precondition CLEARED (Phase 43 feat-branch precondition still independently unmet).
+Phase: 48 (upst6-sync-execution) — **SHIPPED 2026-05-24**, regression-free vs baseline `3f638dc6`
+Plan: 48-01 complete — 9 C4 cherry-picks `caab9967..e7da4998` on branch `phase-48-01-landlock-v6-af-unix` (pushed to `origin:pre-merge`) + 3 CR-A cross-target fix rounds (`f072eef7` lib Linux, `715f979b` nono-cli fork-invariant restore, `4e3a7799` macOS seatbelt wiring). REQ-UPST6-02 satisfied.
+Status: Phase 48 close-doc commit pending (Task 7). Fork-internal PR `oscarmackjr-twg#3` (`pre-merge → main`) open as CI-signal draft. Upstream umbrella PR (Task 5) not yet opened. Remaining red CI lanes are pre-existing main-branch Class-B debt (deferred).
+Last activity: 2026-05-24 -- Resumed Phase 48 from HANDOFF.json at Task 4. The 8/8 close-gate matrix proved **Windows-only and unreliable** — it never compiled cfg(linux)/cfg(macos)/nix-test code, so the cherry-picks did NOT compile on Linux/macOS as landed. Fixed across 3 CR-A rounds (all reverts to fork baseline shape): duplicate AF_UNIX arm + let-chains + unused param (Linux lib); CapabilityRequest AIPC-01 fields + is_approved + duplicate-test dedup + 4-arg should_offer_profile_save (nono-cli); emit_unix_socket_rules call-site wiring (macOS seatbelt). Baseline-aware CI lane diff: regression-free — every PR-red lane was also red on main pre-Phase-48.
+
+### ⚠️ MILESTONE BOOKKEEPING DRIFT — reconcile at /gsd-complete-milestone v2.6
+
+STATE.md frontmatter counts (4/7 phases, 77%), the `## Current Position`/Phase Summary table below, and ROADMAP.md Phase 46+47 checkboxes (`[ ]`) are STALE — frozen at the 2026-05-23 Phase 46 pause. They contradict memory `project_v26_opened` (7/8 phases shipped: 44 + 44.1 + 45 + 46 + 47 + 49 + 50 before Phase 48) and ROADMAP's own `[x]` marks on 44/45/49. This was NOT reconciled during Phase 48 close (out of scope — Phase 48 only touched its own phase state). `/gsd-complete-milestone v2.6` (or `/gsd-health`) must reconcile: (a) frontmatter progress counts; (b) ROADMAP 46/47 `[ ]`→`[x]` if those truly shipped; (c) the Phase Summary table "Not started" rows; (d) REQ-UPST6-01 + REQ-DRIFT-INGEST-01 status if Phase 47 shipped.
 
 ### Phase 46 — Resume Preconditions
 
@@ -48,7 +53,7 @@ Plan 46-03 (UAT backlog drain) was deferred together with 46-02 at operator requ
 | 45 | Source migration + AIPC G-04 + RESL native re-validation | REQ-PORT-CLOSURE-08 + REQ-AIPC-G04-01 + REQ-RESL-NIX-04 | Not started |
 | 46 | windows-squash merge + post-merge CI verifs + UAT backlog | REQ-MERGE-01 + REQ-CI-FU-01..03 + REQ-UAT-BL-01..02 | Not started |
 | 47 | UPST6 audit + v0.41–v0.43 drift ingestion | REQ-UPST6-01 + REQ-DRIFT-INGEST-01 | Not started |
-| 48 | UPST6 sync execution | REQ-UPST6-02 | Not started |
+| 48 | UPST6 sync execution | REQ-UPST6-02 | **SHIPPED 2026-05-24** (regression-free; 3 CR-A rounds) |
 | 49 | Sigstore trust-root POC resilience (--from-file + release asset + fixture cadence) | TBD (anticipated REQ-POC-TRUST-01..03) | Not started |
 
 ## Deferred Items
@@ -318,6 +323,14 @@ Items acknowledged at v2.4 close (user chose [A] Acknowledge in `/gsd-complete-m
 Known deferred items at v2.4 close: 5 host-blocked requirements (re-anchored to v2.5) + ~18 human-verify items (Phase 35/36) + 1 context question + 20 audit-open cataloging glitches. None block release; cross-phase integration confirmed clean. v24 CR-A class (4 todos) resolved by Phase 41; cleared 2026-05-16.
 
 ## Session Continuity
+
+**Resumed + CLOSED:** 2026-05-24 — Phase 48 Plan 48-01 resumed from `HANDOFF.json` at Task 4/8 and SHIPPED regression-free. The 8/8 close-gate matrix was **Windows-only and unreliable** — it never compiled cfg(linux)/cfg(macos)/nix-test code, so the 9 cherry-picks did NOT compile on Linux/macOS as landed. Operator chose resume Option A (operator drives remote, agent drives docs/fixes). Sequence: pushed `phase-48-01-landlock-v6-af-unix:pre-merge`; discovered `ci.yml` only triggers on `main`, so opened fork-internal CI-signal draft PR `oscarmackjr-twg#3` (`pre-merge → main`); CI surfaced 3 layers of fork-invariant-drop regressions fixed in 3 CR-A commits (`f072eef7` Linux lib, `715f979b` nono-cli fork invariants, `4e3a7799` macOS seatbelt wiring). Baseline-aware lane diff: **regression-free** — every PR-red lane (macОS clippy/test, Integration, Rustfmt, Cargo Audit, Docs Checks, PR title) was also red on `main` pre-Phase-48 (Class-B inherited debt, deferred to a CI-cleanup effort). Authored `48-01-SUMMARY.md` (shipped) + `48-01-PR-SECTION.md` (upstream PR body) + updated ROADMAP/REQUIREMENTS (REQ-UPST6-02 satisfied) + this STATE. **FLAGGED DECISION:** kept fork's 4-arg `should_offer_profile_save` (not upstream's violations-aware 5-arg) — confirm before adopting upstream UX. **REMAINING (operator-gated):** Task 7 DCO close-doc commit (planning artifacts batched); Task 5 upstream umbrella PR vs `always-further/nono` (or merge `pre-merge`→fork-`main` first per Option A); then `/gsd-complete-milestone v2.6` which must also reconcile the milestone bookkeeping drift flagged above. Constraints still valid: Phase 48 has no `48-01-PLAN.md` (do NOT re-run `/gsd-execute-phase 48`); remote actions need operator authorization.
+
+**Current Milestone (per STATE frontmatter, authoritative):** v2.6 — UPST6 + v2.5 Drain (executing; 7/8 phases shipped per memory `project_v26_opened`; only Phase 48 remains). The stale "v2.3" line below was never cleaned at v2.4/v2.5/v2.6 transitions and is retained as forensic history only — do not trust.
+
+---
+
+**[Stale — pre-v2.4 forensic history below this line. Authoritative state is the YAML frontmatter at the top of this file plus the resume entry above.]**
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
 **Last Activity:** 2026-05-23
