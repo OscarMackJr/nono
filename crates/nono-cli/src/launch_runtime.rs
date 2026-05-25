@@ -200,6 +200,7 @@ pub(crate) struct ExecutionFlags {
     pub(crate) proxy: ProxyLaunchOptions,
     pub(crate) redaction_policy: nono::ScrubPolicy,
     pub(crate) resource_limits: ResourceLimits,
+    pub(crate) startup_timeout_secs: Option<u64>,
 }
 
 impl ExecutionFlags {
@@ -229,6 +230,7 @@ impl ExecutionFlags {
             proxy: ProxyLaunchOptions::default(),
             redaction_policy: nono::ScrubPolicy::secure_default(),
             resource_limits: ResourceLimits::default(),
+            startup_timeout_secs: None,
         })
     }
 }
@@ -260,6 +262,7 @@ pub(crate) fn prepare_run_launch_plan(
     let audit_integrity = run_args.audit_integrity && !run_args.no_audit_integrity;
     let audit_sign_key = run_args.audit_sign_key.clone();
     let trust_override = run_args.trust_override;
+    let startup_timeout_secs = run_args.startup_timeout_secs;
 
     let mut prepared =
         crate::sandbox_prepare::prepare_sandbox_with_context(&args, silent, &resolve_ctx)?;
@@ -369,6 +372,7 @@ pub(crate) fn prepare_run_launch_plan(
             proxy,
             redaction_policy,
             resource_limits,
+            startup_timeout_secs,
         },
     })
 }

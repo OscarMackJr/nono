@@ -19,7 +19,7 @@ mod supervisor_macos;
 use crate::rollback_runtime::{
     finalize_supervised_exit, AuditState, RollbackExitContext, RollbackRuntimeState,
 };
-use crate::startup_prompt::{print_terminal_safe_stderr, prompt_startup_termination_for_child};
+use crate::startup_prompt::{notify_startup_termination_for_child, print_terminal_safe_stderr};
 #[cfg(target_os = "windows")]
 use crate::{DETACHED_LAUNCH_ENV, DETACHED_SESSION_ID_ENV};
 use nix::libc;
@@ -348,7 +348,9 @@ pub struct ExecConfig<'a> {
 pub struct StartupTimeoutConfig<'a> {
     pub timeout: Duration,
     pub program: &'a str,
-    pub profile: &'a str,
+    /// Populated only when the binary matches a known built-in profile; used
+    /// solely to enrich the "try --profile X" hint message.
+    pub recommended_profile: Option<&'a str>,
 }
 
 /// Configuration for supervisor IPC in supervised execution mode.
@@ -1455,6 +1457,7 @@ pub fn execute_supervised(
                     .collect()
             };
 
+            let mut killed_by_timeout = false;
             let (status, denials, ipc_denials) =
                 if let (Some(sup_cfg), Some(mut sup_sock)) = (supervisor, supervisor_sock) {
                     #[cfg(target_os = "linux")]
@@ -1469,6 +1472,7 @@ pub fn execute_supervised(
                             &initial_caps,
                             trust_interceptor,
                             pty_proxy.as_mut(),
+                            &mut killed_by_timeout,
                         )?;
                         (status, denials, ipc_denials)
                     }
@@ -1481,12 +1485,17 @@ pub fn execute_supervised(
                             config.startup_timeout,
                             trust_interceptor,
                             pty_proxy.as_mut(),
+                            &mut killed_by_timeout,
                         )?;
                         (status, denials, Vec::new())
                     }
                 } else {
-                    let status =
-                        wait_for_child_with_pty(child, pty_proxy.as_mut(), config.startup_timeout)?;
+                    let status = wait_for_child_with_pty(
+                        child,
+                        pty_proxy.as_mut(),
+                        config.startup_timeout,
+                        &mut killed_by_timeout,
+                    )?;
                     (status, Vec::new(), Vec::new())
                 };
 
@@ -1494,14 +1503,14 @@ pub fn execute_supervised(
                 WaitStatus::Exited(_, code) => {
                     debug!("Supervised child exited with code {}", code);
                     let by_signal = (129..=143).contains(&code);
-                    if by_signal && !config.no_diagnostics {
+                    if by_signal && !config.no_diagnostics && !killed_by_timeout {
                         print_terminal_safe_stderr("[nono] Session stopped.");
                     }
                     code
                 }
                 WaitStatus::Signaled(_, sig, _) => {
                     debug!("Supervised child killed by signal {}", sig);
-                    if !config.no_diagnostics {
+                    if !config.no_diagnostics && !killed_by_timeout {
                         print_terminal_safe_stderr("[nono] Session stopped.");
                     }
                     128 + sig as i32
@@ -1584,14 +1593,15 @@ pub fn execute_supervised(
             let prompt_policy_explanations = policy_explanations.clone();
             let prompt_error_observation = error_observation.clone();
 
-            let should_print_diagnostics = should_print_diagnostic_footer(
-                config.no_diagnostics,
-                exit_code,
-                &denials,
-                &ipc_denials,
-                &sandbox_violations,
-                &error_observation,
-            );
+            let should_print_diagnostics = !killed_by_timeout
+                && should_print_diagnostic_footer(
+                    config.no_diagnostics,
+                    exit_code,
+                    &denials,
+                    &ipc_denials,
+                    &sandbox_violations,
+                    &error_observation,
+                );
 
             // Print diagnostic footer on non-zero exit or when the PTY
             // output or OS sandbox logs show a likely sandbox-related issue.
@@ -1842,13 +1852,15 @@ fn wait_for_child_with_pty(
     child: Pid,
     pty: Option<&mut crate::pty_proxy::PtyProxy>,
     startup_timeout: Option<StartupTimeoutConfig<'_>>,
+    killed_by_timeout: &mut bool,
 ) -> Result<WaitStatus> {
     let pty = match pty {
         Some(pty) => pty,
-        None => return wait_for_child_with_startup_timeout(child, startup_timeout),
+        None => {
+            return wait_for_child_with_startup_timeout(child, startup_timeout, killed_by_timeout);
+        }
     };
     let startup_deadline = startup_timeout.map(|cfg| (Instant::now() + cfg.timeout, cfg));
-    let mut startup_prompted = false;
 
     loop {
         let (master_fd, client_fd, attach_fd, resize_fd) = pty.poll_fds();
@@ -1906,20 +1918,16 @@ fn wait_for_child_with_pty(
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
                 if let Some((deadline, timeout_cfg)) = startup_deadline {
-                    let has_output = pty.has_visible_output();
-                    if Instant::now() >= deadline && !has_output && !startup_prompted {
-                        startup_prompted = true;
-                        let terminate = prompt_startup_termination_for_child(
-                            child,
+                    if Instant::now() >= deadline && !pty.is_interactive() {
+                        notify_startup_termination_for_child(
                             timeout_cfg,
-                            has_output,
+                            pty.has_visible_output(),
                             Some(pty),
                         );
-                        if terminate {
-                            let _ = signal::kill(child, Signal::SIGKILL);
-                            let status = wait_for_child(child)?;
-                            return Ok(status);
-                        }
+                        *killed_by_timeout = true;
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        let status = wait_for_child(child)?;
+                        return Ok(status);
                     }
                 }
                 continue;
@@ -1946,20 +1954,19 @@ fn wait_for_child_with_pty(
 fn wait_for_child_with_startup_timeout(
     child: Pid,
     startup_timeout: Option<StartupTimeoutConfig<'_>>,
+    killed_by_timeout: &mut bool,
 ) -> Result<WaitStatus> {
     let startup_deadline = startup_timeout.map(|cfg| (Instant::now() + cfg.timeout, cfg));
-    let mut startup_prompted = false;
 
     loop {
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
                 if let Some((deadline, timeout_cfg)) = startup_deadline {
-                    if Instant::now() >= deadline && !startup_prompted {
-                        startup_prompted = true;
-                        if prompt_startup_termination_for_child(child, timeout_cfg, true, None) {
-                            let _ = signal::kill(child, Signal::SIGKILL);
-                            return wait_for_child(child);
-                        }
+                    if Instant::now() >= deadline {
+                        notify_startup_termination_for_child(timeout_cfg, true, None);
+                        *killed_by_timeout = true;
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        return wait_for_child(child);
                     }
                 }
                 std::thread::sleep(Duration::from_millis(200));
@@ -2279,12 +2286,12 @@ fn run_supervisor_loop(
     startup_timeout: Option<StartupTimeoutConfig<'_>>,
     mut trust_interceptor: Option<crate::trust_intercept::TrustInterceptor>,
     mut pty: Option<&mut crate::pty_proxy::PtyProxy>,
+    killed_by_timeout: &mut bool,
 ) -> Result<(WaitStatus, Vec<DenialRecord>)> {
     let sock_fd = sock.as_raw_fd();
     let mut denials = Vec::new();
     let mut seen_request_ids = HashSet::new();
     let startup_deadline = startup_timeout.map(|cfg| (Instant::now() + cfg.timeout, cfg));
-    let mut startup_prompted = false;
 
     loop {
         let (pty_master, pty_client, pty_attach, pty_resize) =
@@ -2382,19 +2389,17 @@ fn run_supervisor_loop(
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
                 if let Some((deadline, timeout_cfg)) = startup_deadline {
-                    let has_output = pty.as_ref().is_some_and(|p| p.has_visible_output());
-                    if Instant::now() >= deadline && !has_output && !startup_prompted {
-                        startup_prompted = true;
-                        let terminate = prompt_startup_termination_for_child(
-                            child,
+                    if Instant::now() >= deadline
+                        && !pty.as_ref().is_some_and(|p| p.is_interactive())
+                    {
+                        notify_startup_termination_for_child(
                             timeout_cfg,
-                            has_output,
+                            pty.as_ref().is_some_and(|p| p.has_visible_output()),
                             pty.as_deref_mut(),
                         );
-                        if terminate {
-                            let _ = signal::kill(child, Signal::SIGKILL);
-                            return Ok((wait_for_child(child)?, denials));
-                        }
+                        *killed_by_timeout = true;
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        return Ok((wait_for_child(child)?, denials));
                     }
                 }
                 continue;
@@ -2455,6 +2460,7 @@ fn run_supervisor_loop(
     initial_caps: &[supervisor_linux::InitialCapability],
     mut trust_interceptor: Option<crate::trust_intercept::TrustInterceptor>,
     mut pty: Option<&mut crate::pty_proxy::PtyProxy>,
+    killed_by_timeout: &mut bool,
 ) -> Result<(
     WaitStatus,
     Vec<DenialRecord>,
@@ -2469,7 +2475,6 @@ fn run_supervisor_loop(
     let mut seen_request_ids = HashSet::new();
     let mut sock_fd_active = true;
     let startup_deadline = startup_timeout.map(|cfg| (Instant::now() + cfg.timeout, cfg));
-    let mut startup_prompted = false;
 
     loop {
         let mut pfds: Vec<libc::pollfd> = vec![libc::pollfd {
@@ -2633,19 +2638,17 @@ fn run_supervisor_loop(
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
                 if let Some((deadline, timeout_cfg)) = startup_deadline {
-                    let has_output = pty.as_ref().is_some_and(|p| p.has_visible_output());
-                    if Instant::now() >= deadline && !has_output && !startup_prompted {
-                        startup_prompted = true;
-                        let terminate = prompt_startup_termination_for_child(
-                            child,
+                    if Instant::now() >= deadline
+                        && !pty.as_ref().is_some_and(|p| p.is_interactive())
+                    {
+                        notify_startup_termination_for_child(
                             timeout_cfg,
-                            has_output,
+                            pty.as_ref().is_some_and(|p| p.has_visible_output()),
                             pty.as_deref_mut(),
                         );
-                        if terminate {
-                            let _ = signal::kill(child, Signal::SIGTERM);
-                            return Ok((wait_for_child(child)?, denials, ipc_denials));
-                        }
+                        *killed_by_timeout = true;
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        return Ok((wait_for_child(child)?, denials, ipc_denials));
                     }
                 }
                 continue;
@@ -4074,6 +4077,7 @@ mod tests {
                     &[],  // no initial caps
                     None, // no trust interceptor
                     None, // no PTY relay — this is what we're testing
+                    &mut false,
                 );
 
                 #[cfg(not(target_os = "linux"))]
@@ -4081,6 +4085,7 @@ mod tests {
                     child, &mut sock, &sup_cfg, None, // no startup timeout
                     None, // no trust interceptor
                     None, // no PTY relay
+                    &mut false,
                 );
 
                 #[cfg(target_os = "linux")]
@@ -4187,6 +4192,7 @@ mod tests {
                     &[],  // no initial caps
                     None, // no trust interceptor
                     None, // no PTY relay
+                    &mut false,
                 );
 
                 let (status, denials, ipc_denials) = result
