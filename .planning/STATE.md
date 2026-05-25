@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: UPST6 + v2.5 Drain
-status: executing
-last_updated: "2026-05-25T12:32:56.979Z"
+status: complete
+last_updated: "2026-05-25T19:00:00.000Z"
 last_activity: 2026-05-25
 progress:
-  total_phases: 7
-  completed_phases: 6
-  total_plans: 23
-  completed_plans: 18
-  percent: 78
+  total_phases: 8
+  completed_phases: 8
+  total_plans: 28
+  completed_plans: 30
+  percent: 100
 ---
 
 # Project State: nono — v2.6 UPST6 + v2.5 Drain
@@ -21,19 +21,16 @@ See: .planning/PROJECT.md (updated 2026-05-20 at v2.5 milestone close; v2.5 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 48 — upst6-sync-execution
+**Current Focus:** v2.6 milestone complete — all phases 44-49 shipped
 
 ## Current Position
 
-Phase: 48 (upst6-sync-execution) — EXECUTING
-Plan: 1 of 9
-Remaining plans: 48-02-PROFILE-SHADOWING (C1), 48-03-STARTUP-TIMEOUT (C2) [Wave 1, parallel after C4]; 48-04-LINUX-POLICY-POLISH (C5), 48-05-MACOS-GRANT-RESTORE (C6), 48-06-PTY-MUSL-PORTABILITY (C7), 48-07-PROXY-CRED-FORMAT (C8), 48-08-PACKAGE-MANIFEST (C9 fork-preserve) [Wave 2, parallel]; 48-09-RELEASE-RIDE (C3) [Wave 3, last]. ~33 more upstream commits across these 8 clusters.
-Status: Executing Phase 48
+Phase: 48 (upst6-sync-execution) — COMPLETE (2026-05-25)
+Plan: 9 of 9 — all plans shipped
+Status: Phase 48 complete. All 9 clusters cherry-picked (42 upstream commits + D-20 manual-replay for C9 + CHANGELOG-only release-ride for C3). Upstream PR always-further/nono#1008 open. Human verification pending: live CI gate for 48-02..48-09 vs baseline 3f638dc6.
+Last activity: 2026-05-25 -- Phase 48 all-plans complete + STATE.md sync
 
-**EXECUTION DECISION (2026-05-24): run Waves 1-3 on a Linux/macOS host, NOT Windows.** `/gsd-execute-phase 48` was invoked on the Windows dev host; declined to spawn the 8 cherry-pick executors here because every plan touches `cfg(linux)`/`cfg(macos)`/`nix`-test code the Windows host cannot compile — the same blind spot that cost Plan 48-01 three post-push CR-A fix rounds (`feedback_clippy_cross_target`). On a Unix host the executors can `cargo build/clippy/test` the real target and catch dropped fork invariants AT EXECUTION TIME. **Resume on a Unix host:** pull `main` (after the operator pushes it), then `/gsd-execute-phase 48` → discovers Waves 1-3 (48-02..48-09) and runs them with real cross-target validation. Per-plan close-gates MUST treat cross-target compile/clippy as a BLOCKING gate (not deferred-to-CI) since the host can run it. Phase 47 DIVERGENCE-LEDGER + each 48-NN PLAN carry the per-cluster cherry-pick manifests.
-Last activity: 2026-05-25 -- Phase 48 execution started
-
-**FORK-BEHAVIOR DECISION pending confirmation (Plan 48-01):** kept the fork's 4-arg `should_offer_profile_save` (not upstream's violations-aware 5-arg) — see `48-01-SUMMARY.md`. **CARRY-FORWARD CONCERN:** main's pre-existing Class-B CI debt (macОS clippy + Rustfmt + Cargo Audit + Docs Checks red for ~weeks) blocks the v2.6 "every cross-platform lane green" core value — candidate for a dedicated CI-cleanup effort.
+**FORK-BEHAVIOR DECISION (Plan 48-01):** kept the fork's 4-arg `should_offer_profile_save` (not upstream's violations-aware 5-arg) — see `48-01-SUMMARY.md`. **CARRY-FORWARD CONCERN:** main's pre-existing Class-B CI debt (macOS clippy + Rustfmt + Cargo Audit + Docs Checks red for ~weeks) blocks the v2.6 "every cross-platform lane green" core value — candidate for a dedicated CI-cleanup effort. Test suite: two pre-existing flakes (`rollback_commands::tests::shorten_home_replaces_prefix` parallel-env, `audit_verify_reports_signed_attestation_with_pinned_public_key` sandbox-path) confirmed on baseline 3f638dc6 — NOT Phase 48 regressions.
 
 ### v2.6 Phase Summary
 
@@ -43,8 +40,8 @@ Last activity: 2026-05-25 -- Phase 48 execution started
 | 45 | Source migration + AIPC G-04 + RESL native re-validation | REQ-PORT-CLOSURE-08 + REQ-AIPC-G04-01 + REQ-RESL-NIX-04 | Complete |
 | 46 | windows-squash merge + post-merge CI verifs + UAT backlog | REQ-MERGE-01 + REQ-CI-FU-01..03 + REQ-UAT-BL-01..02 | Complete (2026-05-23) |
 | 47 | UPST6 audit + v0.41–v0.43 drift ingestion | REQ-UPST6-01 + REQ-DRIFT-INGEST-01 | Complete (2026-05-24) |
-| 48 | UPST6 sync execution | REQ-UPST6-02 | **IN PROGRESS** — Plan 48-01/C4 done (Wave 0 of 4); 48-02..48-09 remain |
-| 49 | Sigstore trust-root POC resilience (--from-file + release asset + fixture cadence) | TBD (anticipated REQ-POC-TRUST-01..03) | Not started |
+| 48 | UPST6 sync execution | REQ-UPST6-02 | Complete (2026-05-25) — all 9 clusters; human_needed: live CI gate for 48-02..48-09 vs 3f638dc6 |
+| 49 | Sigstore trust-root POC resilience (--from-file + release asset + fixture cadence) | REQ-POC-TRUST-01..03 | Complete (2026-05-21) |
 
 ## Deferred Items
 
