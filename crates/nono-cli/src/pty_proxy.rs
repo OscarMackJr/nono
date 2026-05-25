@@ -213,7 +213,9 @@ pub unsafe fn setup_child_pty(slave_fd: RawFd) {
 
     // Set the slave as the controlling terminal (TIOCSCTTY).
     // The arg 0 means "don't steal if another process has it".
-    if libc::ioctl(slave_fd, libc::TIOCSCTTY as libc::c_ulong, 0) < 0 {
+    // Use `as _` to let Rust infer the correct cast type for each platform:
+    // c_ulong on macOS/glibc, c_int on musl.
+    if libc::ioctl(slave_fd, libc::TIOCSCTTY as _, 0) < 0 {
         child_setup_pty_fatal(b"nono: ioctl(TIOCSCTTY) failed while configuring child PTY\n");
     }
 
@@ -346,8 +348,19 @@ impl PtyProxy {
             return false;
         }
 
+        let in_alt_screen = self.screen.alternate_screen_active();
         leave_attach_screen();
         self.restore_terminal();
+        // If the child's last output had no trailing newline, `\r\x1b[K` inside
+        // `prepare_parent_output_area` would erase it.  Emit a newline first so
+        // the child's output is preserved.  Skip in alt-screen: the terminal
+        // restores the normal-screen cursor on exit, making the column moot.
+        if !in_alt_screen {
+            let (_row, col) = self.screen.cursor_position();
+            if col > 0 {
+                let _ = write_all_fd(libc::STDOUT_FILENO, b"\n");
+            }
+        }
         self.client = None;
         self.resize_notifier = None;
         self.pending_detach_match_len = 0;
@@ -694,7 +707,7 @@ impl PtyProxy {
         unsafe {
             let _ = libc::ioctl(
                 self.master.as_raw_fd(),
-                libc::TIOCSWINSZ as libc::c_ulong,
+                libc::TIOCSWINSZ,
                 winsize as *const Winsize,
             );
         }
@@ -835,7 +848,7 @@ impl PtyProxy {
     }
     fn filter_client_input(&mut self, bytes: &[u8]) -> Vec<u8> {
         let mut forwarded = Vec::with_capacity(bytes.len());
-        for &byte in bytes {
+        for (i, &byte) in bytes.iter().enumerate() {
             if self.maybe_consume_enhanced_detach_byte(byte, &mut forwarded) {
                 continue;
             }
@@ -858,7 +871,12 @@ impl PtyProxy {
                 continue;
             }
 
-            if self.should_start_enhanced_detach_match(byte) {
+            // Only buffer \x1b for enhanced CSI-u detach matching when '['
+            // immediately follows in the same read batch. A bare ESC with no
+            // '[' following is a standalone Escape key and must be forwarded immediately.
+            if self.should_start_enhanced_detach_match(byte)
+                && bytes.get(i + 1).copied() == Some(b'[')
+            {
                 self.pending_detach_escape.push(byte);
                 continue;
             }
@@ -2022,6 +2040,17 @@ mod tests {
     }
 
     #[test]
+    fn cursor_column_nonzero_after_output_without_trailing_newline() {
+        let mut proxy = build_test_proxy(&DEFAULT_DETACH_SEQUENCE);
+        proxy.record_output(b"hello");
+        let (_row, col) = proxy.screen.cursor_position();
+        assert!(
+            col > 0,
+            "cursor column should be > 0 after output without a trailing newline"
+        );
+    }
+
+    #[test]
     fn attach_replay_uses_rendered_snapshot_for_alternate_screen() {
         let replay = select_attach_replay_bytes(
             true,
@@ -2106,6 +2135,27 @@ mod tests {
         assert!(proxy.pending_detach_escape.is_empty());
         let forwarded = proxy.filter_client_input(b"x");
         assert_eq!(forwarded, b"x");
+        assert!(!proxy.take_detach_request());
+    }
+
+    #[test]
+    fn filter_client_input_forwards_bare_esc_immediately() {
+        // Regression test for issue #941: bare ESC must be forwarded right away,
+        // not buffered waiting for a possible CSI-u detach sequence.
+        let mut proxy = build_test_proxy(&DEFAULT_DETACH_SEQUENCE);
+        let forwarded = proxy.filter_client_input(b"\x1b");
+        assert_eq!(forwarded, b"\x1b");
+        assert!(proxy.pending_detach_escape.is_empty());
+        assert!(!proxy.take_detach_request());
+    }
+
+    #[test]
+    fn filter_client_input_forwards_esc_not_paired_with_next_key() {
+        // ESC followed by a non-'[' byte must both be forwarded as-is, not
+        // delayed and reordered into an Alt+key sequence.
+        let mut proxy = build_test_proxy(&DEFAULT_DETACH_SEQUENCE);
+        let forwarded = proxy.filter_client_input(b"\x1ba");
+        assert_eq!(forwarded, b"\x1ba");
         assert!(!proxy.take_detach_request());
     }
 
