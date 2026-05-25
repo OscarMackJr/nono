@@ -242,6 +242,21 @@ fn cmd_init(args: ProfileInitArgs) -> Result<()> {
         )));
     }
 
+    // When writing to the standard user profiles directory, block names that
+    // would shadow a built-in or installed pack profile. A user override of
+    // a pack profile intercepts all `"extends": "<name>"` chains and is
+    // almost never the intended outcome — use a derived name instead.
+    if args.output.is_none()
+        && !args.draft
+        && crate::profile_save_runtime::would_shadow_existing_profile(&args.name)
+    {
+        return Err(NonoError::ProfileParse(format!(
+            "Cannot create profile '{}': a built-in or pack profile with that name already \
+             exists. Choose a different name, or use --output to write to a custom path.",
+            args.name
+        )));
+    }
+
     // Validate --extends target exists
     if let Some(ref base) = args.extends {
         if !profile_exists(base) {
@@ -4032,6 +4047,119 @@ mod tests {
         assert!(
             !regular_file_exists(&symlink_path),
             "should return false for symlink"
+        );
+    }
+
+    #[test]
+    fn test_init_blocked_when_shadowing_builtin() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let xdg = dir.path().join("config");
+        std::fs::create_dir_all(&xdg).expect("create xdg");
+        let xdg_str = xdg.to_str().expect("utf8 xdg");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", xdg_str)]);
+
+        // `opencode` is a known built-in profile; init to the default path must be blocked.
+        let result = cmd_init(ProfileInitArgs {
+            name: "opencode".to_string(),
+            extends: None,
+            groups: vec![],
+            description: None,
+            full: false,
+            output: None,
+            force: false,
+            draft: false,
+            refresh: false,
+        });
+        assert!(result.is_err());
+        let err = result.expect_err("error");
+        assert!(
+            err.to_string().contains("already exists"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_init_allowed_with_custom_output_bypasses_shadow_check() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let xdg = dir.path().join("config");
+        std::fs::create_dir_all(&xdg).expect("create xdg");
+        let xdg_str = xdg.to_str().expect("utf8 xdg");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", xdg_str)]);
+
+        let out = dir.path().join("opencode-draft.json");
+        // Explicit --output to a custom path should bypass the shadow check.
+        let result = cmd_init(ProfileInitArgs {
+            name: "opencode".to_string(),
+            extends: None,
+            groups: vec![],
+            description: None,
+            full: false,
+            output: Some(out.clone()),
+            force: false,
+            draft: false,
+            refresh: false,
+        });
+        assert!(result.is_ok(), "expected ok, got: {:?}", result.err());
+        assert!(out.exists());
+    }
+
+    #[test]
+    fn test_init_blocked_when_shadowing_pack_profile() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let dir = tempfile::tempdir().expect("tempdir");
+        let xdg = dir.path().join("config");
+        std::fs::create_dir_all(&xdg).expect("create xdg");
+        let xdg_str = xdg.to_str().expect("utf8 xdg");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", xdg_str)]);
+
+        // Set up a fake pack that provides a profile named "my-agent".
+        let pack_dir = xdg
+            .join("nono")
+            .join("packages")
+            .join("test-ns")
+            .join("test-pack");
+        std::fs::create_dir_all(pack_dir.join("profiles")).expect("mkdir pack");
+        let manifest = r#"{
+            "schema_version": 1,
+            "name": "test-pack",
+            "artifacts": [
+                {"type": "profile", "path": "profiles/my-agent.json", "install_as": "my-agent"}
+            ]
+        }"#;
+        std::fs::write(pack_dir.join("package.json"), manifest).expect("write manifest");
+        std::fs::write(
+            pack_dir.join("profiles").join("my-agent.json"),
+            "{\"meta\":{\"name\":\"my-agent\",\"version\":\"1.0.0\"}}\n",
+        )
+        .expect("write pack profile");
+
+        let result = cmd_init(ProfileInitArgs {
+            name: "my-agent".to_string(),
+            extends: None,
+            groups: vec![],
+            description: None,
+            full: false,
+            output: None,
+            force: false,
+            draft: false,
+            refresh: false,
+        });
+        assert!(result.is_err());
+        let err = result.expect_err("error");
+        assert!(
+            err.to_string().contains("already exists"),
+            "unexpected error: {err}"
         );
     }
 }
