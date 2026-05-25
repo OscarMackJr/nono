@@ -18,7 +18,7 @@ fork_side_release_ride_commits: 1
 c9_final_disposition: stayed-d-20-manual-replay
 c9_verdict_artifact: 48-08-DISPOSITION-RESOLUTION-DEFERRED.md
 phase_47_ledger_immutable: true
-pr_umbrella_url: "oscarmackjr-twg/nono#TBD (opened after Wave 0 per D-48-A4)"
+pr_umbrella_url: "always-further/nono#1008"
 wave_structure: "Wave 0 (48-01) → Wave 1 (48-02 || 48-03 parallel) → Wave 2 (48-04 || 48-05 || 48-06 || 48-07 || 48-08 5-way parallel) → Wave 3 (48-09)"
 ---
 
