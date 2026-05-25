@@ -887,6 +887,7 @@ fn install_package(
         downloaded_by_name.insert(artifact.filename.as_str(), artifact);
     }
 
+    validate_manifest_install_paths(manifest)?;
     write_supporting_artifacts(&staging_root, manifest, downloads)?;
 
     let mut copied_to_project = 0usize;
@@ -1006,8 +1007,12 @@ fn write_supporting_artifacts(
 /// Preserves the fork's extended ArtifactType set (Hook, Script) alongside
 /// the upstream types. Per CLAUDE.md § Path Handling, all paths are derived
 /// from typed enum arms rather than filename inference.
+///
+/// Explicitly rejects artifacts that attempt to overwrite reserved files
+/// (`package.json`, `.nono-trust.bundle`) — defense-in-depth against
+/// attacker-crafted manifests that poison the trust record (T-48-08-01).
 fn installed_artifact_relative_path(artifact: &ArtifactEntry) -> Result<String> {
-    match artifact.artifact_type {
+    let path = match artifact.artifact_type {
         ArtifactType::Profile => {
             let install_name = artifact.install_as.as_deref().ok_or_else(|| {
                 NonoError::PackageInstall(format!(
@@ -1016,28 +1021,55 @@ fn installed_artifact_relative_path(artifact: &ArtifactEntry) -> Result<String> 
                 ))
             })?;
             validate_safe_name(install_name, "install_as")?;
-            Ok(format!("profiles/{install_name}.json"))
+            format!("profiles/{install_name}.json")
         }
         ArtifactType::Instruction => {
             validate_relative_path(&artifact.path)?;
-            Ok(format!("instructions/{}", file_name(&artifact.path)?))
+            format!("instructions/{}", file_name(&artifact.path)?)
         }
-        ArtifactType::TrustPolicy => Ok("trust-policy.json".to_string()),
-        ArtifactType::Groups => Ok("groups.json".to_string()),
+        ArtifactType::TrustPolicy => "trust-policy.json".to_string(),
+        ArtifactType::Groups => "groups.json".to_string(),
         // Fork-only ArtifactType variants (Phase 35/45; not in upstream).
         ArtifactType::Hook => {
             validate_relative_path(&artifact.path)?;
-            Ok(format!("hooks/{}", file_name(&artifact.path)?))
+            format!("hooks/{}", file_name(&artifact.path)?)
         }
         ArtifactType::Script => {
             validate_relative_path(&artifact.path)?;
-            Ok(format!("scripts/{}", file_name(&artifact.path)?))
+            format!("scripts/{}", file_name(&artifact.path)?)
         }
         ArtifactType::Plugin => {
             validate_relative_path(&artifact.path)?;
-            Ok(format!("plugins/{}", file_name(&artifact.path)?))
+            format!("plugins/{}", file_name(&artifact.path)?)
+        }
+    };
+    // Guard reserved filenames: package.json and .nono-trust.bundle are managed
+    // by the package pipeline itself; an artifact landing on these paths would
+    // corrupt the package record or the trust bundle.
+    if path == "package.json" || path == ".nono-trust.bundle" {
+        return Err(NonoError::PackageInstall(format!(
+            "artifact '{}' attempts to overwrite reserved file '{}'",
+            artifact.path, path
+        )));
+    }
+    Ok(path)
+}
+
+/// Pre-installation check that all artifacts in a manifest install to distinct
+/// paths within the package directory. Detects conflicts before any files are
+/// written, preventing silent overwrites.
+fn validate_manifest_install_paths(manifest: &PackageManifest) -> Result<()> {
+    let mut installed_paths = HashSet::with_capacity(manifest.artifacts.len());
+    for artifact in &manifest.artifacts {
+        let installed_path = installed_artifact_relative_path(artifact)?;
+        if !installed_paths.insert(installed_path.clone()) {
+            return Err(NonoError::PackageInstall(format!(
+                "multiple artifacts install to the same path '{}' (conflict at '{}')",
+                installed_path, artifact.path
+            )));
         }
     }
+    Ok(())
 }
 
 /// Install an artifact into the package staging directory and optionally to an
