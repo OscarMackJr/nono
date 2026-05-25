@@ -55,7 +55,7 @@ RUN_FLAGS_RAW="$(
       # Hidden flags (e.g. --dangerous-force-wfp-ready) are intentionally
       # excluded from the public CLI surface; the doc-parity script must
       # not flag them as "missing" — they are missing by design.
-      if (attr ~ /hide[[:space:]]*=[[:space:]]*true/) {
+      if (attr ~ /(^|[^a-zA-Z0-9_])hide([[:space:]]*=[[:space:]]*true|[[:space:]]*\([[:space:]]*true\)|[[:space:]]*[,)]|$)/) {
         attr = ""
         next
       }
@@ -65,7 +65,7 @@ RUN_FLAGS_RAW="$(
       # arguments). The pre-44 guard was implicit in the single-line
       # /long/ pattern; the accumulator now matches every #[arg(...)],
       # so re-introduce the guard explicitly here.
-      if (attr !~ /long/) {
+      if (attr !~ /(^|[^a-zA-Z0-9_])long([^a-zA-Z0-9_]|$)/) {
         attr = ""
         next
       }
