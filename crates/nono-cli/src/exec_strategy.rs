@@ -1856,7 +1856,9 @@ fn wait_for_child_with_pty(
 ) -> Result<WaitStatus> {
     let pty = match pty {
         Some(pty) => pty,
-        None => return wait_for_child_with_startup_timeout(child, startup_timeout, killed_by_timeout),
+        None => {
+            return wait_for_child_with_startup_timeout(child, startup_timeout, killed_by_timeout);
+        }
     };
     let startup_deadline = startup_timeout.map(|cfg| (Instant::now() + cfg.timeout, cfg));
 
