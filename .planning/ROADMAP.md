@@ -64,7 +64,7 @@ Audit: [`milestones/v2.5-MILESTONE-AUDIT.md`](milestones/v2.5-MILESTONE-AUDIT.md
 - [x] **Phase 45: Source migration + AIPC G-04 + RESL native re-validation** — Rule-4 architectural items: 39 `#[unsafe(no_mangle)]` Edition 2024 rewrites in `bindings/c/src/` (Cluster 2 split-disposition closure); AIPC G-04 wire-protocol compile-time tightening (`Approved(ResourceGrant)` inline); Phase 38 REQ-AAHX-HOST-01 native re-validation on Linux/macOS host (folded in as RESL-NIX-04). (completed 2026-05-23)
 - [x] **Phase 46: windows-squash merge + post-merge CI verifications + UAT backlog** — Orchestrator-coordinated: `windows-squash` → `main` merge (PR-583 gate moved OR feature-flag-equivalent rollout); Phase 37 workflow live run + Phase 43 umbrella PR + baseline-aware CI lane diff vs `13cc0628`; Phase 35 + 36 human-UAT backlog (11 scenarios + 7 verification items) on native Linux/macOS host. (completed 2026-05-23)
 - [x] **Phase 47: UPST6 audit + v0.41–v0.43 drift ingestion** — Mirror Phase 33 / 39 / 42 audit shape for upstream `v0.54.0..v0.55.0+`; first real load of the v2.2 DRIFT-01/02 tooling on the long-deferred `v0.41–v0.43` backfill (treat as cleanup, not parity-sync). (completed 2026-05-24)
-- [ ] **Phase 48: UPST6 sync execution** — Cherry-picks + D-20 manual replays per UPST6 audit dispositions (9 plans / 9 clusters / 4 waves, 42 commits v0.54.0..v0.57.0); D-19 trailer convention + Windows-only-files invariant + baseline-aware CI gate inherited from Phase 22/34/40/43. **IN PROGRESS — Wave 0 / Plan 48-01-LANDLOCK-V6-AF-UNIX (Cluster C4, 9 commits) complete 2026-05-24** (landed on `main`; regression-free vs `3f638dc6` after 3 CR-A cross-target fix rounds). **Remaining: Plans 48-02..48-09 (Waves 1-3, ~33 commits across clusters C1/C2/C5/C6/C7/C8/C9/C3) — run via `/gsd-execute-phase 48`.**
+- [x] **Phase 48: UPST6 sync execution** — Cherry-picks + D-20 manual replays per UPST6 audit dispositions (9 plans / 9 clusters / 4 waves, 42 commits v0.54.0..v0.57.0); D-19 trailer convention + Windows-only-files invariant + baseline-aware CI gate inherited from Phase 22/34/40/43. **IN PROGRESS — Wave 0 / Plan 48-01-LANDLOCK-V6-AF-UNIX (Cluster C4, 9 commits) complete 2026-05-24** (landed on `main`; regression-free vs `3f638dc6` after 3 CR-A cross-target fix rounds). **Remaining: Plans 48-02..48-09 (Waves 1-3, ~33 commits across clusters C1/C2/C5/C6/C7/C8/C9/C3) — run via `/gsd-execute-phase 48`.** (completed 2026-05-25)
 - [x] **Phase 49: Sigstore trust-root POC resilience** — Structural fix for the recurring stale-embedded-TUF-anchor failure on `nono setup --refresh-trust-root` (hit at 0.6.5 → 0.6.6, again at 0.7.0). Three sub-items: (1) `nono setup --from-file <PATH>` CLI flag that bypasses upstream `TrustedRoot::production()` when the user supplies a known-good `trusted_root.json`; (2) ship `trusted_root.json` as a release asset alongside `nono.exe`/`nono` so POC users don't need a GitHub fetch; (3) maintainer cadence task to refresh `crates/nono/tests/fixtures/trust-root-frozen.json` from upstream on every Sigstore root rotation announcement. Surfaces are disjoint from 44–48 (touches `crates/nono-cli/src/setup.rs` + `crates/nono-cli/src/cli.rs` + CI release-asset packaging + `.planning/templates/`) so parallel-safe.
  (completed 2026-05-21)
 
@@ -159,14 +159,14 @@ Audit: [`milestones/v2.5-MILESTONE-AUDIT.md`](milestones/v2.5-MILESTONE-AUDIT.md
   4. Baseline-aware CI gate produces zero `success → failure` transitions vs the Phase 46 post-merge baseline SHA on every Wave 1+ head commit; load-bearing skips (cross-target clippy gates 3+4 absent `aws-lc-sys`/`ring` cross-compilers on Windows host) categorized correctly in SUMMARY frontmatter per Phase 40 anti-pattern #3.
   5. A single PR umbrella to upstream holds all Phase 48 plan contribution sections (PR #922 / Phase 43 fork pattern); 2200+ tests pass on Windows host post-merge with zero new failures.
 **Plans**: 9 plans
-- [ ] 48-01-LANDLOCK-V6-AF-UNIX-PLAN.md — Wave 0 foundation: Cluster C4 Landlock v6 signal/socket scoping + af_unix pathname mediation (9 cherry-picks; pre-flight audit per D-48-B2; PR umbrella opens after close)
-- [ ] 48-02-PROFILE-SHADOWING-PLAN.md — Wave 1 parallel: Cluster C1 profile shadowing + pack signer verification (9 cherry-picks; Phase 36-01b exhaustive match preservation)
-- [ ] 48-03-STARTUP-TIMEOUT-PLAN.md — Wave 1 parallel: Cluster C2 startup-timeout config (7 cherry-picks + 1 D-48-D3 fork-side cleanup commit removing dead startup_prompt references before 4e0e127a)
-- [ ] 48-04-LINUX-POLICY-POLISH-PLAN.md — Wave 2 polish: Cluster C5 Linux policy + Landlock deny-overlap diagnostic quieting (3 cherry-picks; Phase 41 Class D regression preserved)
-- [ ] 48-05-MACOS-GRANT-RESTORE-PLAN.md — Wave 2 polish: Cluster C6 macOS exact-path/future-file grant restore + localhost outbound (3 cherry-picks; Windows-lane gates may be _environmental per Claude's Discretion)
-- [ ] 48-06-PTY-MUSL-PORTABILITY-PLAN.md — Wave 2 polish: Cluster C7 PTY proxy fixes + musl libc Ioctl portability (4 cherry-picks; D-48-D4 musl-target verification close-gate add)
-- [ ] 48-07-PROXY-CRED-FORMAT-PLAN.md — Wave 2 polish: Cluster C8 proxy credential_format on custom inject headers (2 cherry-picks + conditional D-48-D2 regression test if coverage gap)
-- [ ] 48-08-PACKAGE-MANIFEST-PLAN.md — Wave 2 fork-preserve: Cluster C9 package manifest + trust-bundle schema (2 cherry-picks OR D-20 manual-replays per D-48-C1 verdict; D-48-C2 disposition-resolution artifact; mandatory D-48-C3 regression test for D-32-15 offline-verify; D-48-C4 Phase 47 ledger immutability)
+- [x] 48-01-LANDLOCK-V6-AF-UNIX-PLAN.md — Wave 0 foundation: Cluster C4 Landlock v6 signal/socket scoping + af_unix pathname mediation (9 cherry-picks; pre-flight audit per D-48-B2; PR umbrella opens after close)
+- [x] 48-02-PROFILE-SHADOWING-PLAN.md — Wave 1 parallel: Cluster C1 profile shadowing + pack signer verification (9 cherry-picks; Phase 36-01b exhaustive match preservation)
+- [x] 48-03-STARTUP-TIMEOUT-PLAN.md — Wave 1 parallel: Cluster C2 startup-timeout config (7 cherry-picks + 1 D-48-D3 fork-side cleanup commit removing dead startup_prompt references before 4e0e127a)
+- [x] 48-04-LINUX-POLICY-POLISH-PLAN.md — Wave 2 polish: Cluster C5 Linux policy + Landlock deny-overlap diagnostic quieting (3 cherry-picks; Phase 41 Class D regression preserved)
+- [x] 48-05-MACOS-GRANT-RESTORE-PLAN.md — Wave 2 polish: Cluster C6 macOS exact-path/future-file grant restore + localhost outbound (3 cherry-picks; Windows-lane gates may be _environmental per Claude's Discretion)
+- [x] 48-06-PTY-MUSL-PORTABILITY-PLAN.md — Wave 2 polish: Cluster C7 PTY proxy fixes + musl libc Ioctl portability (4 cherry-picks; D-48-D4 musl-target verification close-gate add)
+- [x] 48-07-PROXY-CRED-FORMAT-PLAN.md — Wave 2 polish: Cluster C8 proxy credential_format on custom inject headers (2 cherry-picks + conditional D-48-D2 regression test if coverage gap)
+- [x] 48-08-PACKAGE-MANIFEST-PLAN.md — Wave 2 fork-preserve: Cluster C9 package manifest + trust-bundle schema (2 cherry-picks OR D-20 manual-replays per D-48-C1 verdict; D-48-C2 disposition-resolution artifact; mandatory D-48-C3 regression test for D-32-15 offline-verify; D-48-C4 Phase 47 ledger immutability)
 - [ ] 48-09-RELEASE-RIDE-PLAN.md — Wave 3 release-ride: Cluster C3 consolidated CHANGELOG-only commit with 3 stacked D-19 trailers (D-48-D1 + D-48-E10 Cargo.toml/lock drops; structurally last; ships 48-SUMMARY.md phase-level close artifact)
 **UI hint**: no
 
@@ -266,7 +266,7 @@ These invariants are inherited from prior milestones and remain in force across 
 | 45. Source migration + AIPC G-04 + RESL native re-validation | 3/3 | Complete    | 2026-05-23 |
 | 46. windows-squash merge + post-merge CI + UAT backlog | 3/3 | Complete    | 2026-05-24 |
 | 47. UPST6 audit + v0.41–v0.43 drift ingestion | 2/2 | Complete    | 2026-05-24 |
-| 48. UPST6 sync execution | 0/TBD | Not started | — |
+| 48. UPST6 sync execution | 9/9 | Complete   | 2026-05-25 |
 | 49. Sigstore trust-root POC resilience | 3/3 | Complete    | 2026-05-21 |
 
 (Prior milestones rolled up under `milestones/v*-ROADMAP.md`.)

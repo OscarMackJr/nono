@@ -3,15 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.6
 milestone_name: UPST6 + v2.5 Drain
 status: executing
-last_updated: "2026-05-24T21:00:00.000Z"
-last_activity: 2026-05-24
+last_updated: "2026-05-25T12:32:56.979Z"
+last_activity: 2026-05-25
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 23
-  completed_plans: 15
-  percent: 65
-  note: "Phase 48 IN PROGRESS — only Plan 48-01 (Wave 0, Cluster C4 af_unix/landlock-v6, 9 commits) of 9 plans complete. Plans 48-02..48-09 (Waves 1-3: clusters C1/C2/C5/C6/C7/C8/C9/C3, ~33 more commits) remain. completed_plans +1 for 48-01; completed_phases unchanged (48 not done). v2.6 NOT ready for close."
+  completed_plans: 18
+  percent: 78
 ---
 
 # Project State: nono — v2.6 UPST6 + v2.5 Drain
@@ -22,17 +21,17 @@ See: .planning/PROJECT.md (updated 2026-05-20 at v2.5 milestone close; v2.5 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 48 — upst6-sync-execution. **Wave 0 (Plan 48-01 / Cluster C4) COMPLETE; Plans 48-02..48-09 (Waves 1-3) REMAIN.** Phase 48 is ~1/9 done.
+**Current Focus:** Phase 48 — upst6-sync-execution
 
 ## Current Position
 
-Phase: 48 (upst6-sync-execution) — **IN PROGRESS (1 of 9 plans / Wave 0 of 4 complete).**
-Plan: 48-01-LANDLOCK-V6-AF-UNIX (Cluster C4) — **COMPLETE**, regression-free vs baseline `3f638dc6`, landed on local `main`. 9 cherry-picks `caab9967..e7da4998` + 3 CR-A cross-target fix rounds (`f072eef7` lib Linux, `715f979b` nono-cli fork-invariant restore, `4e3a7799` macOS seatbelt wiring) + close-doc `9eeea207`, merged via `--no-ff` of `phase-48-01-landlock-v6-af-unix` (merge `e0584f34`).
+Phase: 48 (upst6-sync-execution) — EXECUTING
+Plan: 1 of 9
 Remaining plans: 48-02-PROFILE-SHADOWING (C1), 48-03-STARTUP-TIMEOUT (C2) [Wave 1, parallel after C4]; 48-04-LINUX-POLICY-POLISH (C5), 48-05-MACOS-GRANT-RESTORE (C6), 48-06-PTY-MUSL-PORTABILITY (C7), 48-07-PROXY-CRED-FORMAT (C8), 48-08-PACKAGE-MANIFEST (C9 fork-preserve) [Wave 2, parallel]; 48-09-RELEASE-RIDE (C3) [Wave 3, last]. ~33 more upstream commits across these 8 clusters.
-Status: REQ-UPST6-02 NOT yet satisfied (covers all 9 clusters / 42 commits; only C4's 9 done). Local `main` carries the Wave-0 merge but is NOT pushed to `origin` (~35 commits ahead, incl. pre-existing unpushed Phase 46/47 doc commits). Remaining red CI lanes on `main` are pre-existing Class-B debt (macОS clippy/test, Integration, Rustfmt, Cargo Audit, Docs Checks) — deferred.
+Status: Executing Phase 48
 
 **EXECUTION DECISION (2026-05-24): run Waves 1-3 on a Linux/macOS host, NOT Windows.** `/gsd-execute-phase 48` was invoked on the Windows dev host; declined to spawn the 8 cherry-pick executors here because every plan touches `cfg(linux)`/`cfg(macos)`/`nix`-test code the Windows host cannot compile — the same blind spot that cost Plan 48-01 three post-push CR-A fix rounds (`feedback_clippy_cross_target`). On a Unix host the executors can `cargo build/clippy/test` the real target and catch dropped fork invariants AT EXECUTION TIME. **Resume on a Unix host:** pull `main` (after the operator pushes it), then `/gsd-execute-phase 48` → discovers Waves 1-3 (48-02..48-09) and runs them with real cross-target validation. Per-plan close-gates MUST treat cross-target compile/clippy as a BLOCKING gate (not deferred-to-CI) since the host can run it. Phase 47 DIVERGENCE-LEDGER + each 48-NN PLAN carry the per-cluster cherry-pick manifests.
-Last activity: 2026-05-24 -- Resumed from HANDOFF.json (which framed 48-01 as the SOLE plan — WRONG; the handoff was written on `pre-merge` which forked before the 9 plan files were created on `main`). Closed Plan 48-01 (C4): the 8/8 close-gate matrix proved **Windows-only and unreliable** (never compiled cfg-unix/macos/nix-test code), so the cherry-picks did NOT compile cross-platform as landed; fixed via 3 CR-A rounds (all reverts to fork baseline shape). Merged Wave 0 onto `main`. The merge then surfaced the true 9-plan Phase 48 scope.
+Last activity: 2026-05-25 -- Phase 48 execution started
 
 **FORK-BEHAVIOR DECISION pending confirmation (Plan 48-01):** kept the fork's 4-arg `should_offer_profile_save` (not upstream's violations-aware 5-arg) — see `48-01-SUMMARY.md`. **CARRY-FORWARD CONCERN:** main's pre-existing Class-B CI debt (macОS clippy + Rustfmt + Cargo Audit + Docs Checks red for ~weeks) blocks the v2.6 "every cross-platform lane green" core value — candidate for a dedicated CI-cleanup effort.
 
@@ -334,7 +333,7 @@ Known deferred items at v2.4 close: 5 host-blocked requirements (re-anchored to 
 **[Stale — pre-v2.4 forensic history below this line. Authoritative state is the YAML frontmatter at the top of this file plus the resume entry above.]**
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-05-24
+**Last Activity:** 2026-05-25
 **Resumed:** 2026-05-11 — Phase 33 (`windows-parity-upstream-0-52-divergence`) Wave 3 closed via `/gsd-execute-phase 33`. Plan 33-03 landed three downstream artifact edits in single commit `8f783c39` closing REQ-3 + REQ-4 + REQ-5 (PROJECT.md Key Decisions row for parity-strategy decision + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section with empirical-disproof framing + ROADMAP Phase 33 entry flipped to complete + Phase 34 UPST3-sync stub appended per D-33-D1 base case for Option A). All 12 REQ-3/4/5 validators + 2 cross-cutting (D-19 + make-ci sub) pass. Phase 33 now 4/4 plans executed; all 5 REQs landed (REQ-1 5fa0dca4 / REQ-2 7107b88d / REQ-3+4+5 8f783c39); ready for `/gsd-verify-work` verifier pass. Next: orchestrator's verify-phase step, then `/gsd-complete-phase 33` if verifier passes.
 
 **Stopped At (prior session, retained for context):** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.
