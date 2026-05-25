@@ -10,45 +10,6 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::{error, info};
 
-// Plan 36-03 Commit 2: per upstream b5f0a3ab, the startup-timeout hint for
-// known interactive CLIs launched without their recommended built-in profile
-// is reduced from 10 seconds to 5 seconds.
-#[cfg(not(target_os = "windows"))]
-const PROFILE_HINT_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Returns true if a startup timeout should be applied for the given invocation.
-///
-/// A timeout is only meaningful when a recommended profile exists (i.e., the
-/// user is running a known interactive CLI without their recommended profile)
-/// and no explicit arguments were provided (no-arg invocation is the common
-/// "stuck" pattern).
-#[cfg(not(target_os = "windows"))]
-fn should_apply_startup_timeout(
-    recommended_profile: Option<&str>,
-    cmd_args: &[impl AsRef<std::ffi::OsStr>],
-) -> bool {
-    recommended_profile.is_some() && cmd_args.is_empty()
-}
-
-/// Compute the effective startup-timeout profile to display.
-///
-/// Returns `None` when the user has already selected the recommended profile
-/// (or its local override), indicating they are intentionally running without
-/// the default profile and the timeout hint is not helpful.
-#[cfg(not(target_os = "windows"))]
-fn startup_timeout_profile<'a>(
-    recommended_profile: Option<&'a str>,
-    explicit_profile: Option<&str>,
-) -> Option<&'a str> {
-    let recommended = recommended_profile?;
-    if let Some(explicit) = explicit_profile {
-        if explicit == recommended || explicit == format!("{recommended}-local") {
-            return None;
-        }
-    }
-    Some(recommended)
-}
-
 fn apply_pre_fork_sandbox(
     strategy: exec_strategy::ExecStrategy,
     caps: &CapabilitySet,
@@ -188,9 +149,6 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     } else {
         None
     };
-    #[cfg(not(target_os = "windows"))]
-    let startup_timeout_profile =
-        startup_timeout_profile(known_builtin_profile, flags.session.profile_name.as_deref());
 
     let recommended_program_name = resolved_program
         .file_name()
@@ -394,15 +352,14 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             .profile_name
             .as_deref()
             .or(recommended_profile),
-        startup_timeout: if should_apply_startup_timeout(startup_timeout_profile, &cmd_args) {
-            startup_timeout_profile.map(|profile| exec_strategy::StartupTimeoutConfig {
-                timeout: PROFILE_HINT_STARTUP_TIMEOUT,
+        startup_timeout: flags
+            .startup_timeout_secs
+            .filter(|&secs| secs > 0)
+            .map(|secs| exec_strategy::StartupTimeoutConfig {
+                timeout: Duration::from_secs(secs),
                 program: recommended_program_name,
-                profile,
-            })
-        } else {
-            None
-        },
+                recommended_profile: known_builtin_profile,
+            }),
         capability_elevation: flags.capability_elevation,
         #[cfg(target_os = "linux")]
         seccomp_proxy_fallback,
@@ -545,10 +502,9 @@ fn write_capability_state_file(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_executable_identity;
-    use super::recommended_builtin_profile;
-    #[cfg(not(target_os = "windows"))]
-    use super::startup_timeout_profile;
+    use super::{compute_executable_identity, recommended_builtin_profile};
+    use sha2::{Digest, Sha256};
+    use std::fs;
     use std::path::Path;
 
     #[test]
@@ -569,37 +525,18 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
-    fn compute_executable_identity_resolves_path() {
+    fn compute_executable_identity_hashes_canonical_binary_bytes() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let binary = dir.path().join("fake_binary");
-        std::fs::write(&binary, b"fake binary content for identity test").expect("write");
-        let identity = compute_executable_identity(&binary).expect("compute identity");
-        let canonical = binary.canonicalize().expect("canonicalize");
-        assert_eq!(identity.resolved_path, canonical);
-        // SHA-256 hex digest is always 64 hex characters
-        assert_eq!(identity.sha256.to_string().len(), 64);
-    }
+        let binary = dir.path().join("tool");
+        fs::write(&binary, b"#!/bin/sh\necho hello\n").expect("write binary");
 
-    #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn startup_timeout_profile_ignores_matching_explicit_profile_only() {
+        let identity = compute_executable_identity(&binary).expect("compute identity");
+        let expected = Sha256::digest(b"#!/bin/sh\necho hello\n");
+
         assert_eq!(
-            startup_timeout_profile(Some("claude-code"), None),
-            Some("claude-code")
+            identity.resolved_path,
+            binary.canonicalize().expect("canonical")
         );
-        assert_eq!(
-            startup_timeout_profile(Some("claude-code"), Some("default")),
-            Some("claude-code")
-        );
-        assert_eq!(
-            startup_timeout_profile(Some("claude-code"), Some("claude-code")),
-            None
-        );
-        assert_eq!(
-            startup_timeout_profile(Some("claude-code"), Some("claude-code-local")),
-            None
-        );
-        assert_eq!(startup_timeout_profile(None, Some("default")), None);
+        assert_eq!(identity.sha256.as_bytes(), &<[u8; 32]>::from(expected));
     }
 }

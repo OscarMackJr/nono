@@ -796,6 +796,13 @@ impl PtyProxy {
             .any(|ch| !ch.is_whitespace())
     }
 
+    /// Returns true once the child has entered alt-screen mode, which is the
+    /// reliable signal that a TUI has become interactive. Plain log output
+    /// written to the PTY does not activate alt-screen and does not count.
+    pub fn is_interactive(&self) -> bool {
+        self.screen.alternate_screen_active()
+    }
+
     fn attach_replay_bytes(&self) -> Vec<u8> {
         select_attach_replay_bytes(
             self.screen.alternate_screen_active(),
