@@ -148,10 +148,34 @@ fn verify_profile_packs(packs: &[String]) -> crate::Result<()> {
 
         let bundle_path = install_dir.join(".nono-trust.bundle");
         if bundle_path.exists() {
-            let pinned_signer = locked
-                .and_then(|p| p.provenance.as_ref())
-                .map(|prov| prov.signer_identity.as_str());
-            verify_stored_bundles(&install_dir, &bundle_path, pack_ref, pinned_signer)?;
+            // A trust bundle without a lockfile provenance record means we
+            // cannot verify who signed it. Fail hard rather than silently
+            // accepting any valid Sigstore signer.
+            let pinned_signer = match locked {
+                None => {
+                    return Err(nono::NonoError::PackageVerification {
+                        package: pack_ref.clone(),
+                        reason: format!(
+                            "pack '{}' has a trust bundle but no lockfile entry — \
+                             reinstall with: nono pull {} --force",
+                            pack_ref, pack_ref
+                        ),
+                    });
+                }
+                Some(pkg) => pkg
+                    .provenance
+                    .as_ref()
+                    .map(|p| p.signer_identity.as_str())
+                    .ok_or_else(|| nono::NonoError::PackageVerification {
+                        package: pack_ref.clone(),
+                        reason: format!(
+                            "pack '{}' has a trust bundle but no signer identity in the \
+                             lockfile — reinstall with: nono pull {} --force",
+                            pack_ref, pack_ref
+                        ),
+                    })?,
+            };
+            verify_stored_bundles(&install_dir, &bundle_path, pack_ref, Some(pinned_signer))?;
         }
     }
 
@@ -248,8 +272,7 @@ fn verify_stored_bundles(
         // All artifacts in a pack share the same signer, so we check on each
         // entry and fail fast on any mismatch.
         if let Some(pinned) = pinned_signer {
-            let identity =
-                nono::trust::extract_signer_identity(&bundle, Path::new(artifact_name))?;
+            let identity = nono::trust::extract_signer_identity(&bundle, Path::new(artifact_name))?;
             let verified_uri = match &identity {
                 nono::trust::SignerIdentity::Keyless {
                     repository,
@@ -269,10 +292,7 @@ fn verify_stored_bundles(
                     reason: format!(
                         "signer identity mismatch for '{}': bundle was signed by '{}' \
                          but lockfile pins '{}'. Reinstall with: nono pull {} --force",
-                        artifact_name,
-                        verified_uri,
-                        pinned,
-                        pack_ref
+                        artifact_name, verified_uri, pinned, pack_ref
                     ),
                 });
             }
@@ -386,19 +406,35 @@ pub(crate) fn prepare_profile_with_context(
         // upstream's ActionRequired second-callsite for yanked packs.
         // Advisory-only by default; strict via NONO_REQUIRE_PACK_STATUS=1.
         crate::package_status::enforce_for_active_profile(Some(profile_name.as_str()), silent)?;
-        // If the profile was addressed by pack ref (e.g. --profile always-further/hermes),
-        // ensure that pack is verified even if the profile JSON doesn't list it in `packs`.
+        // Ensure the source pack is always verified, regardless of how the
+        // profile was addressed:
+        //   - Direct registry ref (--profile always-further/hermes): strip
+        //     any @version suffix and add the pack key.
+        //   - Profile name or alias (--profile claude): look up which pack
+        //     provides it via the pack store index and add that pack key.
+        // In both cases we skip adding if already listed in profile.packs.
         let mut packs_to_verify = profile.packs.clone();
-        let pack_key = profile_name
-            .as_str()
-            .split_once('@')
-            .map_or(profile_name.as_str(), |(p, _)| p);
-        if profile::is_registry_ref(profile_name) && !packs_to_verify.contains(&pack_key.to_string()) {
-            packs_to_verify.push(pack_key.to_string());
+        let source_pack_key: Option<String> = if profile::is_registry_ref(profile_name) {
+            let key = profile_name
+                .as_str()
+                .split_once('@')
+                .map_or(profile_name.as_str(), |(p, _)| p)
+                .to_string();
+            Some(key)
+        } else {
+            profile::list_pack_store_profiles()
+                .into_iter()
+                .find(|(pname, _)| pname == profile_name.as_str())
+                .map(|(_, pack_ref)| pack_ref)
+        };
+        if let Some(key) = source_pack_key {
+            if !packs_to_verify.contains(&key) {
+                packs_to_verify.push(key);
+            }
         }
         verify_profile_packs(&packs_to_verify)?;
-        if !profile.packs.is_empty() && !silent {
-            eprintln!("  Verified {} pack(s)", profile.packs.len());
+        if !packs_to_verify.is_empty() && !silent {
+            eprintln!("  Verified {} pack(s)", packs_to_verify.len());
         }
         install_profile_hooks(Some(profile_name.as_str()), &profile, silent);
         Some(profile)
