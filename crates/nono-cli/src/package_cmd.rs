@@ -887,7 +887,7 @@ fn install_package(
         downloaded_by_name.insert(artifact.filename.as_str(), artifact);
     }
 
-    write_supporting_artifacts(&staging_root, downloads)?;
+    write_supporting_artifacts(&staging_root, manifest, downloads)?;
 
     let mut copied_to_project = 0usize;
     let mut external_paths: HashMap<String, PathBuf> = HashMap::new();
@@ -933,7 +933,17 @@ fn install_package(
     })
 }
 
-fn write_supporting_artifacts(staging_root: &Path, downloads: &VerifiedDownloads) -> Result<()> {
+fn write_supporting_artifacts(
+    staging_root: &Path,
+    manifest: &PackageManifest,
+    downloads: &VerifiedDownloads,
+) -> Result<()> {
+    let downloaded_by_name: HashMap<&str, &DownloadedArtifact> = downloads
+        .artifacts
+        .iter()
+        .map(|artifact| (artifact.filename.as_str(), artifact))
+        .collect();
+
     for artifact in &downloads.artifacts {
         if artifact.filename == "package.json" {
             let path = staging_root.join("package.json");
@@ -942,25 +952,41 @@ fn write_supporting_artifacts(staging_root: &Path, downloads: &VerifiedDownloads
     }
 
     // Write per-artifact bundles into a single JSON array at the pack root.
-    // Tags the multi-subject bundle JSON (verified once at the supervisor
-    // layer) with each artifact's filename + digest so downstream `audit`
-    // tooling can do per-artifact provenance lookup without re-running the
-    // verification pipeline.
+    // Each entry now records `installed_path` (the relative path within the
+    // install directory where the artifact is placed) and `sha256_digest`
+    // so that offline bundle verification can locate and re-verify each
+    // artifact without re-running the full TUF pipeline (D-32-15 invariant).
     let bundle =
         serde_json::from_str::<serde_json::Value>(&downloads.bundle_json).map_err(|e| {
             NonoError::PackageInstall(format!("failed to parse trust bundle from registry: {e}"))
         })?;
-    let bundles: Vec<serde_json::Value> = downloads
-        .artifacts
-        .iter()
-        .map(|artifact| {
-            serde_json::json!({
-                "artifact": artifact.filename,
-                "digest": artifact.sha256_digest,
-                "bundle": bundle.clone()
-            })
-        })
-        .collect();
+    let mut bundles: Vec<serde_json::Value> = Vec::new();
+    // package.json itself gets an entry with a fixed installed_path.
+    if let Some(package_json) = downloaded_by_name.get("package.json") {
+        bundles.push(serde_json::json!({
+            "artifact": package_json.filename,
+            "installed_path": "package.json",
+            "digest": package_json.sha256_digest,
+            "bundle": bundle.clone()
+        }));
+    }
+    for artifact in &manifest.artifacts {
+        let downloaded = downloaded_by_name
+            .get(artifact.path.as_str())
+            .ok_or_else(|| {
+                NonoError::PackageInstall(format!(
+                    "manifest references missing artifact '{}'",
+                    artifact.path
+                ))
+            })?;
+        let installed_path = installed_artifact_relative_path(artifact)?;
+        bundles.push(serde_json::json!({
+            "artifact": downloaded.filename,
+            "installed_path": installed_path,
+            "digest": downloaded.sha256_digest,
+            "bundle": bundle.clone()
+        }));
+    }
 
     if !bundles.is_empty() {
         let bundle_path = staging_root.join(".nono-trust.bundle");
@@ -971,6 +997,47 @@ fn write_supporting_artifacts(staging_root: &Path, downloads: &VerifiedDownloads
     }
 
     Ok(())
+}
+
+/// Compute the relative path within the package install directory where an
+/// artifact entry will be placed. Centralises the manifest-to-path mapping
+/// used by both the bundle writer and the lockfile updater.
+///
+/// Preserves the fork's extended ArtifactType set (Hook, Script) alongside
+/// the upstream types. Per CLAUDE.md § Path Handling, all paths are derived
+/// from typed enum arms rather than filename inference.
+fn installed_artifact_relative_path(artifact: &ArtifactEntry) -> Result<String> {
+    match artifact.artifact_type {
+        ArtifactType::Profile => {
+            let install_name = artifact.install_as.as_deref().ok_or_else(|| {
+                NonoError::PackageInstall(format!(
+                    "profile artifact '{}' is missing install_as",
+                    artifact.path
+                ))
+            })?;
+            validate_safe_name(install_name, "install_as")?;
+            Ok(format!("profiles/{install_name}.json"))
+        }
+        ArtifactType::Instruction => {
+            validate_relative_path(&artifact.path)?;
+            Ok(format!("instructions/{}", file_name(&artifact.path)?))
+        }
+        ArtifactType::TrustPolicy => Ok("trust-policy.json".to_string()),
+        ArtifactType::Groups => Ok("groups.json".to_string()),
+        // Fork-only ArtifactType variants (Phase 35/45; not in upstream).
+        ArtifactType::Hook => {
+            validate_relative_path(&artifact.path)?;
+            Ok(format!("hooks/{}", file_name(&artifact.path)?))
+        }
+        ArtifactType::Script => {
+            validate_relative_path(&artifact.path)?;
+            Ok(format!("scripts/{}", file_name(&artifact.path)?))
+        }
+        ArtifactType::Plugin => {
+            validate_relative_path(&artifact.path)?;
+            Ok(format!("plugins/{}", file_name(&artifact.path)?))
+        }
+    }
 }
 
 /// Install an artifact into the package staging directory and optionally to an
