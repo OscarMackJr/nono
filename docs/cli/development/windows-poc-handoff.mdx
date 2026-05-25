@@ -28,7 +28,7 @@ Fast, dev-box only. Do **not** ship a `target/`-built binary to POC users — gi
 
 ```powershell
 .\target\release\nono.exe --version
-# nono 0.37.1
+# nono 0.57.0
 ```
 
 ### Option B: Fresh release build on this machine
@@ -58,14 +58,14 @@ cargo build --release --target x86_64-pc-windows-msvc -p nono-cli -p nono-shell-
 
 # Per-user MSI
 .\scripts\build-windows-msi.ps1 `
-  -VersionTag v0.37.1-poc.1 `
+  -VersionTag v0.57.0-poc.1 `
   -BinaryPath .\target\x86_64-pc-windows-msvc\release\nono.exe `
   -BrokerPath .\target\x86_64-pc-windows-msvc\release\nono-shell-broker.exe `
   -Scope user `
   -OutputDir dist\windows
 ```
 
-Output: `dist\windows\nono-v0.37.1-poc.1-x86_64-pc-windows-msvc-user.msi`.
+Output: `dist\windows\nono-v0.57.0-poc.1-x86_64-pc-windows-msvc-user.msi`.
 
 #### Sub-path C.2 — Machine MSI (with WFP backend)
 
@@ -82,7 +82,7 @@ cargo build --release --target x86_64-pc-windows-msvc -p nono-cli -p nono-shell-
 # The build-windows-msi.ps1 scope-coherence guard throws if you pass one without
 # the other (a half-installed WFP backend is worse than none).
 .\scripts\build-windows-msi.ps1 `
-  -VersionTag v0.53.1-poc.1 `
+  -VersionTag v0.57.0-poc.1 `
   -BinaryPath .\target\x86_64-pc-windows-msvc\release\nono.exe `
   -BrokerPath .\target\x86_64-pc-windows-msvc\release\nono-shell-broker.exe `
   -ServiceBinaryPath .\target\x86_64-pc-windows-msvc\release\nono-wfp-service.exe `
@@ -91,7 +91,7 @@ cargo build --release --target x86_64-pc-windows-msvc -p nono-cli -p nono-shell-
   -OutputDir dist\windows
 ```
 
-Output: `dist\windows\nono-v0.37.1-poc.1-x86_64-pc-windows-msvc-machine.msi`.
+Output: `dist\windows\nono-v0.57.0-poc.1-x86_64-pc-windows-msvc-machine.msi`.
 
 **Driver source — important:** `-DriverBinaryPath` points to the checked-in pre-signed copy at `crates\nono-cli\data\windows\nono-wfp-driver.sys`, **NOT** the `target\x86_64-pc-windows-msvc\release\nono-wfp-driver.sys` dev build artifact. Windows refuses to load unsigned kernel drivers in production; the checked-in copy is the WHQL-signed distribution artifact, and the `target/` copy is a dev convenience that is not WHQL-signed. The CI/release pipeline uses this same convention.
 
@@ -111,7 +111,7 @@ If you want a portable archive instead of MSI:
 Compress-Archive `
   -Path .\target\x86_64-pc-windows-msvc\release\nono.exe, `
         .\target\x86_64-pc-windows-msvc\release\nono-shell-broker.exe `
-  -DestinationPath .\dist\nono-v0.37.1-poc.1-x86_64-pc-windows-msvc.zip
+  -DestinationPath .\dist\nono-v0.57.0-poc.1-x86_64-pc-windows-msvc.zip
 ```
 
 POC users extract to a stable directory (e.g. `C:\Tools\nono`) and add it to PATH.
@@ -129,7 +129,7 @@ For a **clean test machine** (recommended before POC handoff — your dev box ha
 
 ```powershell
 # Per-user MSI install. No elevation prompt.
-msiexec /i .\nono-v0.37.1-poc.1-x86_64-pc-windows-msvc-user.msi
+msiexec /i .\nono-v0.57.0-poc.1-x86_64-pc-windows-msvc-user.msi
 # Open a fresh PowerShell so PATH picks up the new entry, then:
 nono --version
 ```
@@ -142,7 +142,7 @@ nono setup --check-only
 
 What you should see (paraphrased from a real run on a Standard User session):
 
-- `nono binary found at <path>`, `Version: 0.37.x`, `Platform: Windows (restricted execution)`
+- `nono binary found at <path>`, `Version: 0.57.x`, `Platform: Windows (restricted execution)`
 - `Support status: supported`
 - `Job Object creation: OK`, `Token Integrity level support: OK`, `BFE service status: OK`
 - `WFP readiness:` — the expected value depends on which install path you chose in Step 1:
@@ -195,7 +195,7 @@ nono run --dry-run --profile claude-code -- claude --version
 Expected output shape:
 
 ```text
-nono v0.37.x
+nono v0.57.x
   Updating claude-code hook (new version available)
   Capabilities:
    r+w  \\?\C:\Users\<u>\.claude (dir)
@@ -624,7 +624,7 @@ Drop the table below into the README you ship alongside the MSI. These are the i
 A reasonable validation order on your build box:
 
 1. `make build-release-cli` (or use an existing `target\release\nono.exe` if it is current).
-2. Build the per-user MSI per Step 1 Option C with a real version tag (e.g. `v0.37.1-poc.1`).
+2. Build the per-user MSI per Step 1 Option C with a real version tag (e.g. `v0.57.0-poc.1`).
 3. Install the MSI on this machine **or a separate VM**. A clean VM is the only way to catch missing-PATH and missing-Developer-Mode footguns that your dev box hides.
 4. Run the full Step 5 checklist from a **fresh** PowerShell window.
 5. If any negative test in Step 5 silently passes → stop, fix, rebuild. Do not ship.
