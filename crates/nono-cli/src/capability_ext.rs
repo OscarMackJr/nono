@@ -337,7 +337,7 @@ fn handle_missing_file_capability(
 }
 
 #[cfg(target_os = "macos")]
-fn new_future_file_capability(path: &Path, access: AccessMode) -> Result<FsCapability> {
+pub(crate) fn new_future_file_capability(path: &Path, access: AccessMode) -> Result<FsCapability> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
