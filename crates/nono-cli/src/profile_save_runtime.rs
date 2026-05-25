@@ -239,9 +239,13 @@ pub(crate) fn confirm_typed_word(prompt: &str, expected: &str) -> Result<bool> {
 }
 
 pub(crate) fn suggested_profile_name(compared_profile: Option<&str>) -> Option<String> {
-    compared_profile
+    let candidate = compared_profile
         .filter(|name| profile::is_valid_profile_name(name) && !profile::is_user_override(name))
-        .map(|name| format!("{}-local", name))
+        .map(|name| format!("{}-local", name))?;
+    if would_shadow_existing_profile(&candidate) {
+        return None;
+    }
+    Some(candidate)
 }
 
 /// Return true when writing `~/.config/nono/profiles/<name>.json` would shadow
@@ -260,16 +264,12 @@ pub(crate) fn would_shadow_existing_profile(profile_name: &str) -> bool {
     if profile::is_user_override(profile_name) {
         return false;
     }
-    // Check embedded built-in profiles first.
-    match crate::policy::load_embedded_policy() {
-        Ok(policy) => {
-            if policy.profiles.contains_key(profile_name) {
-                return true;
-            }
-        }
-        // Treat load failure as fail-safe: refuse to save rather than risk
-        // silently shadowing a built-in we couldn't enumerate.
-        Err(_) => return true,
+    // Check embedded built-in profiles. Treat load failure as fail-safe.
+    let is_builtin = crate::policy::load_embedded_policy()
+        .map(|policy| policy.profiles.contains_key(profile_name))
+        .unwrap_or(true);
+    if is_builtin {
+        return true;
     }
     // Check pack-store profiles. A user profile with the same name would
     // shadow the pack profile and break any "extends": "<name>" chains.
