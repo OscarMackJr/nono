@@ -634,6 +634,14 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
     info!("Using Landlock ABI {:?}", target_abi);
     let scopes = requested_scopes(caps, abi)?;
 
+    if !matches!(caps.network_mode(), NetworkMode::AllowAll) && caps.localhost_ports().contains(&0)
+    {
+        return Err(NonoError::SandboxInit(
+            "open_port 0 (localhost TCP wildcard) is macOS-only; on Linux use explicit ports or a network profile."
+                .to_string(),
+        ));
+    }
+
     // Determine which access rights to handle based on ABI
     let handled_fs = AccessFs::from_all(target_abi);
 
@@ -3413,6 +3421,20 @@ mod tests {
             SeccompNetFallback::None
         );
     }
+
+    /// Rejects `open_port: [0]` on Linux for any restricted network mode (not Landlock-only).
+    #[test]
+    fn test_reject_localhost_port_wildcard_zero_on_linux() {
+        let Ok(detected) = detect_abi() else {
+            return;
+        };
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_localhost_port(0);
+        let err = apply_with_abi(&caps, &detected).expect_err("port 0 wildcard must be rejected");
+        let msg = format!("{err}");
+        assert!(msg.contains("macOS-only"), "unexpected error: {msg}");
+    }
+
 
     #[test]
     fn test_seccomp_network_fallback_mode_proxy_only() {
