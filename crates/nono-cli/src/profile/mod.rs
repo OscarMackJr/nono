@@ -2324,7 +2324,7 @@ pub fn load_profile_with_context(
 
 /// Returns true if the string looks like a registry package reference
 /// (`namespace/name` or `namespace/name@version`) rather than a filesystem path.
-fn is_registry_ref(s: &str) -> bool {
+pub(crate) fn is_registry_ref(s: &str) -> bool {
     // Strip optional @version suffix for the path check
     let path_part = s.split_once('@').map_or(s, |(p, _)| p);
     let parts: Vec<&str> = path_part.split('/').collect();
