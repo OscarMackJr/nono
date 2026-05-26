@@ -18,7 +18,8 @@ findings:
   warning: 4
   info: 3
   total: 8
-status: issues_found
+status: resolved
+resolution: "CR-01 + WR-01 + WR-04 fixed inline (commit fix(51): resolve code-review CR-01/WR-01/WR-04); WR-02/WR-03/IN-01..03 acknowledged/deferred — see Resolution section"
 ---
 
 # Phase 51: Code Review Report
@@ -286,6 +287,27 @@ WR-03) broker binary.
 Tighten the comment to state the dependency explicitly ("write-deny holds *iff* the
 verified broker constructs a Low-IL token") so future readers do not assume this
 arm enforces IL locally.
+
+---
+
+## Resolution (orchestrator, 2026-05-26)
+
+Fixes applied inline during execute-phase, commit `fix(51): resolve code-review CR-01 (stderr deadlock), WR-01, WR-04`:
+
+| Finding | Disposition | Detail |
+|---------|-------------|--------|
+| **CR-01** (BLOCKER) | **FIXED** | `BrokerLaunchNoPty` arm now merges child stderr into stdout: the three positional broker stdio values bind `hStdOutput == hStdError == pipes.stdout_write` (`child_stdio`), mirroring the Phase 17 detached path (`launch.rs:1866`) and the ConPTY merge. HANDLE_LIST + flip/unflip now gate the 2 unique inheritable handles `{stdin_read, stdout_write}` (`gated_handles`); the stderr pipe pair is created but unused (closed by `close_child_ends`/`Drop`). The single `stdout_read` supervisor reader now drains both child fds — no undrained-stderr deadlock. |
+| **WR-01** | **FIXED** | `nono-shell-broker` `run()` now returns `Err(SandboxInit)` when `--no-pty` is passed with `< 3` handles (fail-closed) instead of silently leaving the child bound to the broker console. |
+| **WR-04** | **FIXED** | Write-deny test asserts `exit_code != 0 && exit_code != 2` (child ran AND denied; broker did not error) rather than `== 1`; the `after == b"sentinel"` content check remains the authoritative verdict. |
+| **WR-02** | **ACKNOWLEDGED / DEFERRED** | The producer↔broker stdio contract remains positional. The CR-01 merge keeps the 3-handle positional shape; a distinct `--stdio-handles` interface is a larger broker-CLI change tracked for a future hardening pass. The `< 3` fail-closed guard (WR-01) now also bounds the no-PTY path. |
+| **WR-03** | **ACKNOWLEDGED / PRE-EXISTING** | `is_dev_build_layout` substring gate predates Phase 51 (Phase 32 `BrokerLaunch`); not a Phase 51 regression. Component-based dev-build detection is a separate cross-arm hardening item (would also touch the PTY arm). |
+| **IN-01** | DEFERRED | `resolve_and_verify_broker()` helper extraction — refactor backlog (both arms currently verified-equivalent). |
+| **IN-02** | ACKNOWLEDGED | `attr_size` zero-guard — matches existing `BrokerLaunch` pattern; not exploitable (caught by the subsequent `ok == 0` check). |
+| **IN-03** | ACKNOWLEDGED | Comments attribute write-deny to the broker's Low-IL token construction; the cross-process dependency is documented in the SUMMARY threat table. |
+
+Follow-up recommended for Phase 52: a high-stderr child regression test (child emits >8 KiB stderr) to lock the merge invariant end-to-end (the merge fix routes stderr through the drained stdout pipe, so it will pass).
+
+Post-fix verification: write-deny + broker suite (17) + pty_token_gate (8) + broker_dispatch (5) pass; workspace clippy clean.
 
 ---
 
