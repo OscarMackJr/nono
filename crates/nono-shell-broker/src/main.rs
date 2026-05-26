@@ -289,6 +289,20 @@ mod broker {
         // STARTF_USESTDHANDLES only changes which fd the child writes stdout to;
         // mandatory-label NO_WRITE_UP enforcement is at token/kernel level, entirely
         // independent of stdio handle binding (T-51B-02 accepted).
+        //
+        // WR-01 (Phase 51 code review): fail CLOSED if --no-pty is requested
+        // without the full set of three stdio handles. Silently skipping the
+        // bind would leave the child's stdio pointing at the broker's inherited
+        // console — a silent degrade that violates CLAUDE.md "never silently
+        // degrade / fail secure". The production nono-cli path always passes
+        // exactly three; this guard rejects any malformed invocation.
+        if args.no_pty && args.inherit_handles.len() < 3 {
+            return Err(NonoError::SandboxInit(format!(
+                "--no-pty requires three inherited stdio handles (stdin, stdout, stderr); got {}. \
+                 Refusing to bind child stdio to the broker console (fail-closed).",
+                args.inherit_handles.len()
+            )));
+        }
         if args.no_pty && args.inherit_handles.len() >= 3 {
             // SAFETY: hStd* fields accept raw HANDLE values passed from the trusted
             // nono-cli caller via --inherit-handle. BROKER-CR-02 has already validated

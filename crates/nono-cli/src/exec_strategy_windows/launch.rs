@@ -1672,17 +1672,29 @@ pub(super) fn spawn_windows_child(
         }
 
         // D-04: anonymous-pipe stdio. The supervisor reads child stdout/stderr
-        // from the parent-end handles (detached_stdio relay); the three
-        // child-end handles are the ones the broker — and thence the grandchild
-        // — inherit.
+        // from the parent-end handles (detached_stdio relay); the child-end
+        // handles are the ones the broker — and thence the grandchild — inherit.
         let pipes = DetachedStdioPipes::create()?;
-        let inherit_handles: [HANDLE; 3] =
-            [pipes.stdin_read, pipes.stdout_write, pipes.stderr_write];
+        // CR-01: merge the child's stderr into stdout. The supervisor relay
+        // (supervisor.rs `start_logging`) drains ONLY `stdout_read`; `stderr_read`
+        // is never read. Binding the child's stderr to a separate `stderr_write`
+        // pipe would block the child once it fills the pipe buffer (and silently
+        // drop stderr below that), deadlocking the broker's
+        // `WaitForSingleObject(INFINITE)`. So the three positional stdio values
+        // passed to the broker bind hStdOutput == hStdError == stdout_write,
+        // mirroring the Phase 17 detached path (`hStdError = stdout_write`) and
+        // the ConPTY merge. The stderr pipe pair is created but intentionally
+        // unused (closed by `close_child_ends` / `Drop`).
+        let child_stdio: [HANDLE; 3] =
+            [pipes.stdin_read, pipes.stdout_write, pipes.stdout_write];
+        // The UNIQUE inheritable child-end handles to flip + gate via the
+        // HANDLE_LIST (stderr_write is NOT inherited under the merge).
+        let gated_handles: [HANDLE; 2] = [pipes.stdin_read, pipes.stdout_write];
 
         // Flip child-end handles to inheritable BEFORE CreateProcessW; the
         // matching unflip below runs on success AND error paths so they do not
         // leak into unrelated supervisor spawns (T-31-17 / T-51C-03).
-        for h in &inherit_handles {
+        for h in &gated_handles {
             let ok = unsafe {
                 // SAFETY: each handle is owned by `pipes` and lives for the
                 // duration of this scope. Setting the inheritance flag is
@@ -1692,7 +1704,7 @@ pub(super) fn spawn_windows_child(
             };
             if ok == 0 {
                 let last = unsafe { GetLastError() };
-                for cleanup_h in &inherit_handles {
+                for cleanup_h in &gated_handles {
                     unsafe {
                         // SAFETY: same handle ownership rationale as above.
                         let _ = SetHandleInformation(*cleanup_h, HANDLE_FLAG_INHERIT, 0);
@@ -1704,7 +1716,7 @@ pub(super) fn spawn_windows_child(
             }
         }
 
-        // PROC_THREAD_ATTRIBUTE_HANDLE_LIST gating exactly the three pipe
+        // PROC_THREAD_ATTRIBUTE_HANDLE_LIST gating exactly the two unique pipe
         // handles (T-51C-03: capability-pipe / supervisor handles must NOT
         // inherit past nono.exe).
         let mut attr_size: usize = 0;
@@ -1723,7 +1735,7 @@ pub(super) fn spawn_windows_child(
         };
         if ok == 0 {
             let last = unsafe { GetLastError() };
-            for h in &inherit_handles {
+            for h in &gated_handles {
                 unsafe {
                     // SAFETY: handle ownership rationale as above.
                     let _ = SetHandleInformation(*h, HANDLE_FLAG_INHERIT, 0);
@@ -1734,14 +1746,14 @@ pub(super) fn spawn_windows_child(
             )));
         }
         let ok = unsafe {
-            // SAFETY: `attr_list` initialized above; `inherit_handles` outlives
+            // SAFETY: `attr_list` initialized above; `gated_handles` outlives
             // the call (in scope through the CreateProcessW call below).
             UpdateProcThreadAttribute(
                 attr_list,
                 0,
                 PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                inherit_handles.as_ptr() as *mut _,
-                std::mem::size_of_val(&inherit_handles[..]),
+                gated_handles.as_ptr() as *mut _,
+                std::mem::size_of_val(&gated_handles[..]),
                 std::ptr::null_mut(),
                 std::ptr::null_mut(),
             )
@@ -1752,7 +1764,7 @@ pub(super) fn spawn_windows_child(
                 // SAFETY: `attr_list` initialized above; safe to release.
                 DeleteProcThreadAttributeList(attr_list);
             }
-            for h in &inherit_handles {
+            for h in &gated_handles {
                 unsafe {
                     // SAFETY: handle ownership rationale as above.
                     let _ = SetHandleInformation(*h, HANDLE_FLAG_INHERIT, 0);
@@ -1775,7 +1787,7 @@ pub(super) fn spawn_windows_child(
             broker_args.push(std::ffi::OsString::from(a));
         }
         broker_args.push(std::ffi::OsString::from("--no-pty"));
-        for h in &inherit_handles {
+        for h in &child_stdio {
             broker_args.push(std::ffi::OsString::from("--inherit-handle"));
             broker_args.push(std::ffi::OsString::from(format!("0x{:016x}", *h as usize)));
         }
@@ -1823,11 +1835,12 @@ pub(super) fn spawn_windows_child(
             DeleteProcThreadAttributeList(attr_list);
         }
 
-        // T-51C-03: unflip the three child-end handles non-inheritable on BOTH
-        // success and failure paths. The supervisor's copy of these child ends
-        // is closed by the shared `close_child_ends()` call after CreateProcess
-        // (below), once the broker holds its own inherited duplicates.
-        for h in &inherit_handles {
+        // T-51C-03: unflip the two unique child-end handles non-inheritable on
+        // BOTH success and failure paths. The supervisor's copy of these child
+        // ends is closed by the shared `close_child_ends()` call after
+        // CreateProcess (below), once the broker holds its own inherited
+        // duplicates.
+        for h in &gated_handles {
             unsafe {
                 // SAFETY: handle ownership rationale as above.
                 let _ = SetHandleInformation(*h, HANDLE_FLAG_INHERIT, 0);
@@ -3392,21 +3405,23 @@ mod write_deny_low_il_broker_no_pty_tests {
         }
         let _ = std::fs::remove_file(&fixture);
 
-        // Non-vacuousness gate: the broker propagates its child's exit code
-        // (broker-internal errors exit 2). cmd.exe sets ERRORLEVEL 1 when the
-        // `>` redirect target cannot be opened ("Access is denied."). So:
+        // Non-vacuousness gate (WR-04: assert the meaningful range, not an exact
+        // cmd.exe ERRORLEVEL). The broker propagates its child's exit code, and
+        // reserves exit 2 for broker-internal errors. So:
         //   exit 0 → the Low-IL child WROTE the Medium-IL file (NO_WRITE_UP
         //            breached) — a security failure;
-        //   exit 1 → the child ran and the write was DENIED (correct);
         //   exit 2 → the broker never spawned the child — the content check
-        //            below would be a VACUOUS pass.
-        // Asserting == 1 proves the child actually ran AND was denied.
-        assert_eq!(
-            exit_code, 1,
-            "write-deny non-vacuous gate FAILED: expected the no-PTY broker to \
-             propagate cmd.exe ERRORLEVEL 1 (Low-IL child ran and the Medium-IL \
-             write was denied). exit 0 = write succeeded (NO_WRITE_UP breached); \
-             exit 2 = broker never spawned the child (vacuous). got exit_code={exit_code}"
+        //            below would be a VACUOUS pass;
+        //   any other non-zero (cmd.exe ERRORLEVEL 1 on "Access is denied.") →
+        //            the child ran and the write was DENIED (correct).
+        // Requiring != 0 && != 2 proves the child actually ran AND was denied,
+        // without coupling to cmd.exe's exact denial errorlevel.
+        assert!(
+            exit_code != 0 && exit_code != 2,
+            "write-deny non-vacuous gate FAILED: exit 0 = write succeeded \
+             (NO_WRITE_UP breached); exit 2 = broker never spawned the child \
+             (vacuous). Either way the Low-IL child did not run-and-get-denied. \
+             got exit_code={exit_code}"
         );
         assert_eq!(
             after, b"sentinel",
