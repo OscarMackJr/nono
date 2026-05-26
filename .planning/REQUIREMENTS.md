@@ -35,11 +35,9 @@ Items acknowledged but not in v2.7 roadmap.
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| REQ-WSRH-01 | TBD (roadmap) | Pending |
-| REQ-WSRH-02 | TBD (roadmap) | Pending |
-| REQ-WSRH-03 | TBD (roadmap) | Pending |
-| REQ-WSRH-04 | TBD (roadmap) | Pending |
-| REQ-WSRH-05 | TBD (roadmap) | Pending |
-| REQ-WSRH-06 | TBD (roadmap) | Pending |
-
-*(Phase column filled by the roadmapper.)*
+| REQ-WSRH-01 | Phase 51 | Pending |
+| REQ-WSRH-02 | Phase 51 | Pending |
+| REQ-WSRH-03 | Phase 51 | Pending |
+| REQ-WSRH-04 | Phase 52 | Pending |
+| REQ-WSRH-05 | Phase 51 | Pending |
+| REQ-WSRH-06 | Phase 52 | Pending |

@@ -6,31 +6,38 @@ status: planning
 last_updated: "2026-05-26T15:04:10.042Z"
 last_activity: 2026-05-26
 progress:
-  total_phases: 0
+  total_phases: 2
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
 ---
 
-# Project State: nono — v2.6 UPST6 + v2.5 Drain
+# Project State: nono — v2.7 Windows supervised-run hardening
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-20 at v2.5 milestone close; v2.5 shipped same day). v2.6 ROADMAP.md created 2026-05-20 — 5 phases (44, 45, 46, 47, 48), 17 requirements, 100% coverage.
+See: .planning/PROJECT.md (updated 2026-05-26 at v2.7 milestone start; v2.6 shipped 2026-05-25). v2.7 ROADMAP.md created 2026-05-26 — 2 phases (51, 52), 6 requirements, 100% coverage.
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** v2.6 milestone complete — all phases 44-49 shipped
+**Current Focus:** v2.7 — roadmap defined; Phase 51 is next (no-PTY Low-IL broker + token routing + write-deny)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Phase 51 (not yet started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-05-26 — Milestone v2.7 started
+Status: Roadmap defined; awaiting plan-phase
+Last activity: 2026-05-26 — v2.7 ROADMAP.md written
 
-### v2.6 Phase Summary
+### v2.7 Phase Summary
+
+| Phase | Goal | Requirements | Status |
+|-------|------|--------------|--------|
+| 51 | No-PTY Low-IL broker + token routing + write-deny preservation | REQ-WSRH-01, REQ-WSRH-02, REQ-WSRH-03, REQ-WSRH-05 | Not started |
+| 52 | Field validation closure — heavy-runtime HUMAN-UAT + doc update | REQ-WSRH-04, REQ-WSRH-06 | Not started |
+
+### v2.6 Phase Summary (archived — shipped 2026-05-25)
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
