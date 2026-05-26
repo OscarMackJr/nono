@@ -41,8 +41,8 @@ granularity: standard
 **Plans**: 4 plans
 Plans:
 **Wave 1**
-- [ ] 51-01-PLAN.md — Profile field + cascade enum variant + unit tests (Wave 1, parallel with 51-02)
-- [ ] 51-02-PLAN.md — Broker --no-pty mode + STARTF_USESTDHANDLES + broker unit tests (Wave 1, parallel with 51-01)
+- [x] 51-01-PLAN.md — Profile field + cascade enum variant + unit tests (Wave 1, parallel with 51-02)
+- [x] 51-02-PLAN.md — Broker --no-pty mode + STARTF_USESTDHANDLES + broker unit tests (Wave 1, parallel with 51-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 51-03-PLAN.md — BrokerLaunchNoPty spawn wiring + write-deny integration test (Wave 2)
@@ -103,7 +103,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 51. No-PTY Low-IL broker + token routing + write-deny | 0/4 | Not started | - |
+| 51. No-PTY Low-IL broker + token routing + write-deny | 2/4 | In Progress|  |
 | 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/TBD | Not started | - |
 
 ## References
