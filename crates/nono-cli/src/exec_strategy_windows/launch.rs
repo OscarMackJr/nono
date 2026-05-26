@@ -3180,3 +3180,238 @@ mod env_filter_tests {
         );
     }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[allow(clippy::unwrap_used)]
+mod write_deny_low_il_broker_no_pty_tests {
+    use std::path::PathBuf;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::System::Pipes::CreatePipe;
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
+        CREATE_SUSPENDED, INFINITE, PROCESS_INFORMATION, STARTUPINFOW,
+    };
+
+    /// REQ-WSRH-03 / D-07: real-spawn integration proof that a Low-IL child
+    /// launched through the no-PTY broker (`--no-pty`) cannot write to a
+    /// Medium-IL file. The broker self-degrades to a Low-IL primary token and
+    /// binds the three inherited pipe handles as the child's stdio
+    /// (STARTF_USESTDHANDLES, Plan 51-02); the OS Mandatory Integrity Control
+    /// (MIC) pre-DACL check then denies NO_WRITE_UP from the Low-IL subject to
+    /// the Medium-IL object — kernel-enforced, no DACL needed (REQ-WSRH-05).
+    ///
+    /// The fixture lives in `%TEMP%` (`std::env::temp_dir()`), NOT a drive-root
+    /// path, to avoid the WRITE_OWNER label-apply limitation documented in
+    /// `feedback_windows_mandatory_label_write_owner` (T-51C-05).
+    ///
+    /// Hard-fail (D-08 / T-51C-06): if the broker artifact is missing, the
+    /// fixture cannot be created, or the broker cannot be spawned, the test
+    /// panics — it is NEVER `#[ignore]`d or silently skipped.
+    #[test]
+    fn write_deny_low_il_broker_no_pty_prevents_child_write_to_medium_il_file() {
+        // --- Resolve broker artifact (two-candidate lookup; mirrors broker_dispatch_tests) ---
+        let manifest =
+            std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by cargo");
+        let workspace_root = PathBuf::from(&manifest).join("..").join("..");
+        let candidate_triple = workspace_root
+            .join("target")
+            .join("x86_64-pc-windows-msvc")
+            .join("release")
+            .join("nono-shell-broker.exe");
+        let candidate_default = workspace_root
+            .join("target")
+            .join("release")
+            .join("nono-shell-broker.exe");
+        let broker_path = if candidate_triple.exists() {
+            candidate_triple
+        } else if candidate_default.exists() {
+            candidate_default
+        } else {
+            panic!(
+                "nono-shell-broker.exe missing at {} and {} — cannot be silently \
+                 skipped (D-08 / Phase 41 CR-04). Pre-build with: \
+                 cargo build -p nono-shell-broker --release --target x86_64-pc-windows-msvc",
+                candidate_triple.display(),
+                candidate_default.display()
+            );
+        };
+
+        // --- Create the Medium-IL fixture file with sentinel content ---
+        // std::fs::write creates the file at the caller's (Medium) IL by default;
+        // PID-suffix keeps parallel test runs from colliding.
+        let fixture = std::env::temp_dir()
+            .join(format!("nono-test-write-deny-{}.tmp", std::process::id()));
+        std::fs::write(&fixture, b"sentinel").unwrap_or_else(|e| {
+            panic!(
+                "failed to create write-deny fixture {}: {e}",
+                fixture.display()
+            )
+        });
+
+        // --- Three anonymous pipe pairs for the broker's --no-pty stdio binding ---
+        // SECURITY_ATTRIBUTES.bInheritHandle=1 makes the handles inheritable so
+        // the broker (spawned with bInheritHandles=1 below) receives them and can
+        // bind them to the Low-IL child via STARTF_USESTDHANDLES.
+        let sa = SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: std::ptr::null_mut(),
+            bInheritHandle: 1,
+        };
+        let make_pipe = |label: &str| -> (HANDLE, HANDLE) {
+            let mut r: HANDLE = INVALID_HANDLE_VALUE;
+            let mut w: HANDLE = INVALID_HANDLE_VALUE;
+            let ok = unsafe {
+                // SAFETY: CreatePipe writes into the two HANDLE out-params; `sa`
+                // is a valid SECURITY_ATTRIBUTES with non-null nLength.
+                CreatePipe(&mut r, &mut w, &sa as *const _, 0)
+            };
+            assert!(ok != 0, "CreatePipe({label}) failed: {}", unsafe {
+                GetLastError()
+            });
+            (r, w)
+        };
+        let (stdin_read, stdin_write) = make_pipe("stdin");
+        let (stdout_read, stdout_write) = make_pipe("stdout");
+        let (stderr_read, stderr_write) = make_pipe("stderr");
+        let all_handles = [
+            stdin_read,
+            stdin_write,
+            stdout_read,
+            stdout_write,
+            stderr_read,
+            stderr_write,
+        ];
+        // Child ends, in the same order the production arm passes them:
+        // stdin_read, stdout_write, stderr_write.
+        let child_ends: [HANDLE; 3] = [stdin_read, stdout_write, stderr_write];
+
+        // --- Broker command line: --no-pty + a child that writes the fixture ---
+        // `cmd.exe /c "echo x > <fixture>"` exits non-zero with "Access is
+        // denied." when the Low-IL child cannot write the Medium-IL file.
+        let fixture_str = fixture.to_string_lossy().into_owned();
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let mut broker_args: Vec<std::ffi::OsString> = Vec::new();
+        broker_args.push(std::ffi::OsString::from("--shell"));
+        broker_args.push(std::ffi::OsString::from(r"C:\Windows\System32\cmd.exe"));
+        broker_args.push(std::ffi::OsString::from("--shell-arg"));
+        broker_args.push(std::ffi::OsString::from("/c"));
+        broker_args.push(std::ffi::OsString::from("--shell-arg"));
+        broker_args.push(std::ffi::OsString::from(format!("echo x > {fixture_str}")));
+        broker_args.push(std::ffi::OsString::from("--no-pty"));
+        for h in &child_ends {
+            broker_args.push(std::ffi::OsString::from("--inherit-handle"));
+            broker_args.push(std::ffi::OsString::from(format!("0x{:016x}", *h as usize)));
+        }
+        broker_args.push(std::ffi::OsString::from("--cwd"));
+        broker_args.push(std::ffi::OsString::from(&cwd));
+
+        let mut cmd_buf = super::build_broker_command_line(&broker_path, &broker_args);
+
+        let mut si: STARTUPINFOW = unsafe {
+            // SAFETY: STARTUPINFOW is a plain Win32 struct safe to zero-init; cb
+            // is set immediately below.
+            std::mem::zeroed()
+        };
+        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut pi: PROCESS_INFORMATION = unsafe {
+            // SAFETY: PROCESS_INFORMATION is a plain Win32 struct safe to
+            // zero-init; populated by CreateProcessW on success.
+            std::mem::zeroed()
+        };
+
+        let created = unsafe {
+            // SAFETY: cmd_buf is null-terminated UTF-16 (build_broker_command_line);
+            // si/pi are valid mutable references. bInheritHandles=1 so the broker
+            // inherits the three pipe handles (flagged inheritable above) and can
+            // bind them to its Low-IL child. CREATE_SUSPENDED + ResumeThread keeps
+            // the spawn shape symmetric with broker_dispatch_tests.
+            CreateProcessW(
+                std::ptr::null(),
+                cmd_buf.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1,
+                CREATE_SUSPENDED,
+                std::ptr::null(),
+                std::ptr::null(),
+                &si,
+                &mut pi,
+            )
+        };
+        if created == 0 {
+            let err = unsafe {
+                // SAFETY: GetLastError is a thread-local lookup.
+                GetLastError()
+            };
+            for h in all_handles {
+                unsafe {
+                    // SAFETY: each handle was returned by CreatePipe above and is
+                    // closed exactly once on this error path.
+                    let _ = CloseHandle(h);
+                }
+            }
+            let _ = std::fs::remove_file(&fixture);
+            panic!("CreateProcessW(broker --no-pty) failed; GetLastError={err}");
+        }
+
+        unsafe {
+            // SAFETY: pi.hThread is a valid suspended thread handle; pi.hProcess
+            // is valid. Resume the broker, then wait for it (and its child) to
+            // finish. The child's only output is a short "Access is denied."
+            // diagnostic, far below the pipe buffer — no relay deadlock.
+            let _ = ResumeThread(pi.hThread);
+            WaitForSingleObject(pi.hProcess, INFINITE);
+        }
+
+        let mut exit_code: u32 = 0;
+        let got = unsafe {
+            // SAFETY: pi.hProcess valid; &mut exit_code is a valid out-pointer.
+            GetExitCodeProcess(pi.hProcess, &mut exit_code)
+        };
+        assert!(got != 0, "GetExitCodeProcess failed: {}", unsafe {
+            GetLastError()
+        });
+
+        // Belt-and-suspenders verdict (D-07): the Low-IL child must NOT have
+        // modified the Medium-IL fixture. This is the robust write-deny proof
+        // and is independent of how the broker propagates the child exit code.
+        let after = std::fs::read(&fixture)
+            .unwrap_or_else(|e| panic!("re-read of write-deny fixture failed: {e}"));
+
+        // --- Cleanup (best-effort) ---
+        unsafe {
+            // SAFETY: all HANDLEs are valid for the duration of these calls;
+            // TerminateProcess on an already-exited process is a benign no-op.
+            let _ = TerminateProcess(pi.hProcess, 0);
+            let _ = CloseHandle(pi.hThread);
+            let _ = CloseHandle(pi.hProcess);
+            for h in all_handles {
+                let _ = CloseHandle(h);
+            }
+        }
+        let _ = std::fs::remove_file(&fixture);
+
+        // Non-vacuousness gate: the broker propagates its child's exit code
+        // (broker-internal errors exit 2). cmd.exe sets ERRORLEVEL 1 when the
+        // `>` redirect target cannot be opened ("Access is denied."). So:
+        //   exit 0 → the Low-IL child WROTE the Medium-IL file (NO_WRITE_UP
+        //            breached) — a security failure;
+        //   exit 1 → the child ran and the write was DENIED (correct);
+        //   exit 2 → the broker never spawned the child — the content check
+        //            below would be a VACUOUS pass.
+        // Asserting == 1 proves the child actually ran AND was denied.
+        assert_eq!(
+            exit_code, 1,
+            "write-deny non-vacuous gate FAILED: expected the no-PTY broker to \
+             propagate cmd.exe ERRORLEVEL 1 (Low-IL child ran and the Medium-IL \
+             write was denied). exit 0 = write succeeded (NO_WRITE_UP breached); \
+             exit 2 = broker never spawned the child (vacuous). got exit_code={exit_code}"
+        );
+        assert_eq!(
+            after, b"sentinel",
+            "write-deny FAILED: the Low-IL no-PTY broker child modified the \
+             Medium-IL fixture (NO_WRITE_UP not enforced); broker exit_code={exit_code}"
+        );
+    }
+}
