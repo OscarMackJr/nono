@@ -45,7 +45,7 @@ mod broker {
         CreateProcessAsUserW, DeleteProcThreadAttributeList, GetExitCodeProcess,
         InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
         EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTUPINFOEXW, STARTUPINFOW,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
     };
 
     /// D-08: argv-only IPC. CapabilitySet/Profile NOT passed (RESEARCH §3a —
@@ -56,6 +56,15 @@ mod broker {
         pub shell_args: Vec<String>,
         pub inherit_handles: Vec<HANDLE>,
         pub cwd: PathBuf,
+        /// Phase 51 Plan 02: when `true`, the child is spawned with
+        /// `STARTF_USESTDHANDLES` binding the three `inherit_handles` as
+        /// `hStdInput`/`hStdOutput`/`hStdError` instead of inheriting the
+        /// broker's console. Set by the `--no-pty` flag passed from
+        /// `nono-cli`'s `BrokerLaunchNoPty` arm. When `false` (default), the
+        /// existing PTY/console path is byte-behaviorally unchanged (D-05:
+        /// `AllocConsole` console-presence probe is independent of std-handle
+        /// wiring and untouched).
+        pub no_pty: bool,
     }
 
     /// Manual argv loop. No `clap` — RESEARCH §4a: broker attack surface MUST
@@ -66,6 +75,7 @@ mod broker {
         let mut shell_args: Vec<String> = Vec::new();
         let mut inherit_handles: Vec<HANDLE> = Vec::new();
         let mut cwd: Option<PathBuf> = None;
+        let mut no_pty: bool = false;
 
         // Skip argv[0] (the broker binary path).
         let mut iter = raw.iter().skip(1);
@@ -113,6 +123,12 @@ mod broker {
                         .ok_or_else(|| NonoError::SandboxInit("--cwd requires a value".into()))?;
                     cwd = Some(PathBuf::from(v));
                 }
+                "--no-pty" => {
+                    // Phase 51 Plan 02: boolean flag; takes no value. When present,
+                    // run() will engage STARTF_USESTDHANDLES to bind inherit_handles
+                    // as the child's stdio instead of inheriting the broker's console.
+                    no_pty = true;
+                }
                 other => {
                     return Err(NonoError::SandboxInit(format!(
                         "unknown broker arg: '{other}'"
@@ -140,6 +156,7 @@ mod broker {
             shell_args,
             inherit_handles,
             cwd,
+            no_pty,
         })
     }
 
@@ -258,6 +275,30 @@ mod broker {
         };
         startup_info_ex.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
         startup_info_ex.lpAttributeList = attr_list;
+
+        // Phase 51 Plan 02 (T-51B-01 mitigation): bind the three passed pipe handles
+        // as the child's stdio when the no-PTY path is active. Without this,
+        // `CreateProcessAsUserW` would wire the child's stdio to the broker's console
+        // and the supervisor relay would never receive the child's output (Pitfall 7
+        // in RESEARCH.md). The guard `args.inherit_handles.len() >= 3` ensures we do
+        // not partially bind (which would leave one stdio slot pointing at the console).
+        //
+        // Security note: BROKER-CR-02 (null/INVALID_HANDLE_VALUE rejection) and
+        // BROKER-CR-03 (empty-list rejection) both execute in parse_args() before this
+        // branch is reached — they are not bypassed by `--no-pty` (T-51B-03 accepted).
+        // STARTF_USESTDHANDLES only changes which fd the child writes stdout to;
+        // mandatory-label NO_WRITE_UP enforcement is at token/kernel level, entirely
+        // independent of stdio handle binding (T-51B-02 accepted).
+        if args.no_pty && args.inherit_handles.len() >= 3 {
+            // SAFETY: hStd* fields accept raw HANDLE values passed from the trusted
+            // nono-cli caller via --inherit-handle. BROKER-CR-02 has already validated
+            // that each handle is non-null and non-INVALID_HANDLE_VALUE; the HANDLE
+            // values themselves are opaque integers — no dereference occurs here.
+            startup_info_ex.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startup_info_ex.StartupInfo.hStdInput = args.inherit_handles[0];
+            startup_info_ex.StartupInfo.hStdOutput = args.inherit_handles[1];
+            startup_info_ex.StartupInfo.hStdError = args.inherit_handles[2];
+        }
 
         let mut process_info: PROCESS_INFORMATION = unsafe {
             // SAFETY: PROCESS_INFORMATION zero-init is documented Win32 idiom.
@@ -653,6 +694,7 @@ mod broker {
                 shell_args,
                 inherit_handles: vec![],
                 cwd: PathBuf::from(r"C:\"),
+                no_pty: false,
             }
         }
 
