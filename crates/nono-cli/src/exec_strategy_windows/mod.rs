@@ -163,6 +163,13 @@ pub struct ExecConfig<'a> {
     /// `780965d7` is locked by the `test_windows_empty_allow_denies_all_env_vars`
     /// Windows-gated unit test.
     pub denied_env_vars: Option<Vec<String>>,
+    /// Phase 51 D-02: when true, routes non-PTY supervised launches through
+    /// `WindowsTokenArm::BrokerLaunchNoPty` instead of `WriteRestricted`.
+    /// Sourced from `profile.windows_low_il_broker`. Windows-only-meaningful;
+    /// the field exists on all platforms but is only consumed under
+    /// `cfg(target_os = "windows")` paths (same structural pattern as
+    /// `session_sid` — present on all platforms, Windows-meaningful only).
+    pub prefers_low_il_broker: bool,
 }
 
 pub struct SupervisorConfig<'a> {

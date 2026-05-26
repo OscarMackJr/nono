@@ -1098,16 +1098,42 @@ pub(super) enum WindowsTokenArm {
     /// (RESEARCH §1b — broker pattern is the validated path; PoC PASS
     /// 2026-05-08).
     BrokerLaunch,
+    /// Phase 51 D-06: non-PTY supervised launch via `nono-shell-broker.exe`
+    /// (Medium IL, same broker as BrokerLaunch) using anonymous-pipe stdio
+    /// instead of ConPTY pipes. Distinct variant so:
+    ///   1. PTY-path tests keep asserting BrokerLaunch (structural proof that
+    ///      Phase 31 PTY path is untouched — T-51A-04 mitigation).
+    ///   2. Downstream spawn wiring (Plan 51-03) dispatches on the variant to
+    ///      select anonymous-pipe stdio instead of ConPTY pipes.
+    /// Token construction is identical to BrokerLaunch: null h_token, broker
+    /// self-degrades to Low IL via `nono::create_low_integrity_primary_token`
+    /// internally. Mandatory-label NO_WRITE_UP write-deny is preserved via
+    /// MIC pre-DACL kernel check on the Low-IL grandchild (REQ-WSRH-05).
+    BrokerLaunchNoPty,
 }
 
 /// Pure decision function for the `spawn_windows_child` cascade. Returns the
 /// token-construction arm that applies to the given inputs. No FFI calls; no
 /// env reads other than the explicit `is_detached` parameter.
+///
+/// Cascade ordering (Phase 51 D-02 updated):
+///   1. is_detached → Null (Phase 15 waiver)
+///   2. has_pty → BrokerLaunch (Phase 31 D-15; PTY path unchanged)
+///   3. prefers_low_il_broker && has_session_sid → BrokerLaunchNoPty (Phase 51 D-06)
+///   4. has_session_sid → WriteRestricted (existing non-PTY supervised; REQ-WSRH-02)
+///   5. caps_demand_low_il → LowIlPrimary (legacy Direct-path fallback)
+///   6. else → Null
+///
+/// (3) is inserted AFTER (2) and BEFORE (4). WriteRestricted remains reachable
+/// when prefers_low_il_broker=false, satisfying REQ-WSRH-02's non-removal
+/// requirement. PTY tests assert BrokerLaunch (not BrokerLaunchNoPty), satisfying
+/// T-51A-04's Phase 31 regression-proof requirement.
 pub(super) fn select_windows_token_arm(
     is_detached: bool,
     has_pty: bool,
     has_session_sid: bool,
     caps_demand_low_il: bool,
+    prefers_low_il_broker: bool,
 ) -> WindowsTokenArm {
     if is_detached {
         WindowsTokenArm::Null
@@ -1122,7 +1148,18 @@ pub(super) fn select_windows_token_arm(
         // freshly-attached consoles. The broker pattern was empirically
         // validated by the PoC at .planning/quick/260508-m99-... on 2026-05-08.
         WindowsTokenArm::BrokerLaunch
+    } else if prefers_low_il_broker && has_session_sid {
+        // Phase 51 D-06: non-PTY supervised launch with profile opt-in.
+        // Broker self-degrades to Low IL (same as BrokerLaunch) but uses
+        // anonymous-pipe stdio instead of ConPTY pipes. Inserted BEFORE
+        // the WriteRestricted arm so the profile opt-in takes effect when
+        // session_sid is present (which is always true on Windows supervised).
+        // T-51A-01 mitigation: WriteRestricted arm below is NOT removed.
+        WindowsTokenArm::BrokerLaunchNoPty
     } else if has_session_sid {
+        // REQ-WSRH-02: WriteRestricted branch NOT removed — still reachable
+        // when prefers_low_il_broker=false (non-claude-code profiles stay on
+        // the existing non-PTY supervised path). D-02: profile-only opt-in.
         WindowsTokenArm::WriteRestricted
     } else if caps_demand_low_il {
         // Phase 31 D-15: kept as Direct-path fallback (structurally unreachable
@@ -1182,6 +1219,7 @@ pub(super) fn spawn_windows_child(
         pty.is_some(),
         config.session_sid.is_some(),
         should_use_low_integrity_windows_launch(config.caps),
+        config.prefers_low_il_broker,
     );
     let h_token: HANDLE = match arm {
         WindowsTokenArm::Null => {
@@ -1220,6 +1258,19 @@ pub(super) fn spawn_windows_child(
             // CreateProcessW(broker, ...) + PROC_THREAD_ATTRIBUTE_HANDLE_LIST
             // dispatch lives in the `if let Some(pty_pair) = pty` PTY branch
             // below — this match arm only owns the token (none) selection.
+            _restricted_holder = None;
+            _low_integrity_holder = None;
+            std::ptr::null_mut()
+        }
+        WindowsTokenArm::BrokerLaunchNoPty => {
+            // Phase 51 D-06: identical token selection to BrokerLaunch —
+            // null h_token because the broker spawns at caller's identity
+            // (Medium IL) and self-degrades to Low IL via
+            // `nono::create_low_integrity_primary_token` internally.
+            // The distinction from BrokerLaunch is at the spawn-wiring level
+            // (Plan 51-03): anonymous-pipe stdio instead of ConPTY pipes.
+            // Mandatory-label NO_WRITE_UP write-deny is preserved on the
+            // Low-IL grandchild via MIC pre-DACL kernel check (REQ-WSRH-05).
             _restricted_holder = None;
             _low_integrity_holder = None;
             std::ptr::null_mut()
@@ -1897,7 +1948,7 @@ mod pty_token_gate_tests {
         let arm = select_windows_token_arm(
             /* is_detached */ false, /* has_pty */ true,
             /* has_session_sid */ true, // always true on Windows supervised
-            /* caps_demand_low_il */ false,
+            /* caps_demand_low_il */ false, /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::BrokerLaunch);
     }
@@ -1913,6 +1964,7 @@ mod pty_token_gate_tests {
             /* is_detached */ false, /* has_pty */ true, /* has_session_sid */ true,
             /* caps_demand_low_il */
             true, // even if caps_demand_low_il, BrokerLaunch wins
+            /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::BrokerLaunch);
     }
@@ -1923,18 +1975,20 @@ mod pty_token_gate_tests {
     fn pty_some_with_detach_selects_null() {
         let arm = select_windows_token_arm(
             /* is_detached */ true, /* has_pty */ true, /* has_session_sid */ true,
-            /* caps_demand_low_il */ false,
+            /* caps_demand_low_il */ false, /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::Null);
     }
 
     /// Existing non-PTY supervised path (`nono run` without --interactive).
-    /// Wave 1 must NOT regress this — the new arm only fires when has_pty=true.
+    /// REQ-WSRH-02 regression-guard: WriteRestricted must remain reachable
+    /// when prefers_low_il_broker=false (D-02: WriteRestricted branch NOT removed).
     #[test]
     fn pty_none_with_session_sid_selects_write_restricted() {
         let arm = select_windows_token_arm(
             /* is_detached */ false, /* has_pty */ false,
             /* has_session_sid */ true, /* caps_demand_low_il */ false,
+            /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::WriteRestricted);
     }
@@ -1947,6 +2001,7 @@ mod pty_token_gate_tests {
         let arm = select_windows_token_arm(
             /* is_detached */ false, /* has_pty */ false,
             /* has_session_sid */ false, /* caps_demand_low_il */ false,
+            /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::Null);
     }
@@ -1960,6 +2015,7 @@ mod pty_token_gate_tests {
         let arm = select_windows_token_arm(
             /* is_detached */ false, /* has_pty */ false,
             /* has_session_sid */ false, /* caps_demand_low_il */ true,
+            /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::LowIlPrimary);
     }
@@ -1970,9 +2026,24 @@ mod pty_token_gate_tests {
     fn detach_dominates_other_signals() {
         let arm = select_windows_token_arm(
             /* is_detached */ true, /* has_pty */ false, /* has_session_sid */ true,
-            /* caps_demand_low_il */ true,
+            /* caps_demand_low_il */ true, /* prefers_low_il_broker */ false,
         );
         assert_eq!(arm, WindowsTokenArm::Null);
+    }
+
+    /// Phase 51 D-06 / REQ-WSRH-02: non-PTY supervised launch with broker opt-in
+    /// selects BrokerLaunchNoPty. The new arm is inserted AFTER has_pty and BEFORE
+    /// has_session_sid → WriteRestricted; this test pins the new path while the
+    /// existing pty_none_with_session_sid_selects_write_restricted test (with
+    /// prefers_low_il_broker=false) pins the WriteRestricted regression-guard.
+    #[test]
+    fn pty_none_session_sid_with_broker_opt_in_selects_broker_launch_no_pty() {
+        let arm = select_windows_token_arm(
+            /* is_detached */ false, /* has_pty */ false,
+            /* has_session_sid */ true, /* caps_demand_low_il */ false,
+            /* prefers_low_il_broker */ true,
+        );
+        assert_eq!(arm, WindowsTokenArm::BrokerLaunchNoPty);
     }
 }
 
@@ -2746,6 +2817,7 @@ mod env_filter_tests {
             cap_pipe_rendezvous_path: None,
             allowed_env_vars,
             denied_env_vars,
+            prefers_low_il_broker: false,
         }
     }
 
