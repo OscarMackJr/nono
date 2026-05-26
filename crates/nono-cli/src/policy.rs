@@ -143,6 +143,11 @@ pub struct ProfileDef {
     /// MAY declare these via policy.json; expansion lands in Plan 22-03.
     #[serde(default)]
     pub command_args: Vec<String>,
+    /// Phase 51 D-03: Windows-only. When true, routes non-PTY supervised
+    /// launches through WindowsTokenArm::BrokerLaunchNoPty. Only the
+    /// claude-code built-in profile sets this to true in v2.7.
+    #[serde(default)]
+    pub windows_low_il_broker: bool,
 }
 
 impl ProfileDef {
@@ -199,6 +204,9 @@ impl ProfileDef {
             // Built-in policy.json profiles use strict parent-of-protected
             // checking; individual user profiles can opt in via the field.
             allow_parent_of_protected: None,
+            // Phase 51 D-03: forward windows_low_il_broker from policy.json.
+            // Only the claude-code built-in profile sets this to true.
+            windows_low_il_broker: self.windows_low_il_broker,
         }
     }
 }
