@@ -1,21 +1,23 @@
 ---
 phase: 51-no-pty-low-il-broker-token-routing-write-deny-preservation
 verified: 2026-05-26T18:35:00Z
-status: human_needed
-score: 9/10 must-haves verified
+status: passed
+reconciled: 2026-05-26T19:30:00Z
+score: 10/10 must-haves verified
 overrides_applied: 0
 human_verification:
   - test: "Run nono run --profile claude-code -- cmd /c \"echo hi\" on a Windows 11 host and observe whether it exits 0"
     expected: "Child prints 'hi' and exits 0, confirming no regression to plain console-app paths"
-    why_human: "ROADMAP SC-4 requires literal exit-0. The cmd/echo path fails at the pre-existing Phase 27 launch-path policy gate (documented in crates/nono-cli/tests/audit_attestation.rs:118-122) in the current dev-host environment, making programmatic verification impossible. The Phase 27 gate is pre-existing and confirmed broken before Phase 51 at base commit 808e4b33, but the ROADMAP SC-4 as worded requires positive confirmation that the child 'launches, prints hi, and exits 0'. Phase 52 HUMAN-UAT covers the heavy-runtime positive test; a clean Windows host without the Phase 27 cmd/C:\\ launch-path limitation would be needed to verify SC-4 as literally stated."
+    result: passed
+    closed_by: "Phase 52 HUMAN-UAT repro A — live PASS on Windows 11 build 26200, operator-attested 2026-05-26 (see 52-HUMAN-UAT.md § Phase 51 SC-4 Closure Note). The dev-host blocker was a misattribution: the cmd/echo form fails only the cwd-coverage gate from an uncovered cwd, NOT the Phase 27 launch-path gate (which fires only for cmd shapes resolving C:\\, e.g. cmd /c cd). Run from the profile-covered cwd C:\\Users\\OMack\\.claude, cmd /c echo hi printed 'hi' and exited 0. Repro B (claude --version) also exited 0."
 ---
 
 # Phase 51: No-PTY Low-IL broker + token routing + write-deny preservation — Verification Report
 
 **Phase Goal:** The non-PTY `nono run` supervised path launches heavy-runtime children (e.g. `claude.exe`) through a Low-IL primary token with no synthetic restricting SID, eliminating the `STATUS_DLL_INIT_FAILED (0xC0000142)` failure class while preserving mandatory-label `NO_WRITE_UP` write-deny at the OS level.
 **Verified:** 2026-05-26T18:35:00Z
-**Status:** human_needed
-**Re-verification:** No — initial verification
+**Status:** passed (SC-4 reconciled 2026-05-26T19:30:00Z via Phase 52 HUMAN-UAT repro A)
+**Re-verification:** No — initial verification + SC-4 reconciliation
 
 ## Goal Achievement
 
@@ -26,10 +28,10 @@ human_verification:
 | 1 | `nono-shell-broker` accepts `--no-pty` invocation mode and binds anonymous-pipe stdio via `STARTF_USESTDHANDLES` | VERIFIED | `BrokerArgs.no_pty: bool` field exists in `main.rs:67`; `--no-pty` arm in `parse_args` at `main.rs:126-131`; `STARTF_USESTDHANDLES` branch in `run()` at `main.rs:299-315`. `parse_args_no_pty_flag_accepted` + `parse_args_no_pty_absent_defaults_false` unit tests pass (17/17 broker tests green). |
 | 2 | `select_windows_token_arm` dispatches non-detached, non-PTY, session-SID launches to `BrokerLaunchNoPty` when `prefers_low_il_broker=true`; `WriteRestricted` arm remains reachable when `prefers_low_il_broker=false` | VERIFIED | Cascade in `launch.rs:1139-1175`: arm 3 `prefers_low_il_broker && has_session_sid → BrokerLaunchNoPty`; arm 4 `has_session_sid → WriteRestricted` unchanged. Tests: `pty_none_session_sid_with_broker_opt_in_selects_broker_launch_no_pty` + `pty_none_with_session_sid_selects_write_restricted` both pass (8/8 `pty_token_gate_tests`). |
 | 3 | A regression test asserts that a Low-IL child write to a Medium-IL path is denied by OS kernel MIC pre-DACL; test passes with `exit_code != 0 && exit_code != 2` AND fixture unchanged | VERIFIED | `write_deny_low_il_broker_no_pty_prevents_child_write_to_medium_il_file` in `launch.rs:3225-3431`. Test observed `BROKER_EXIT_CODE=1`, fixture content `b"sentinel"` unchanged. Runs live (1/1 pass). `#[ignore]` attribute absent — confirmed in code. |
-| 4 | `nono run --profile claude-code -- cmd /c "echo hi"` still exits 0, confirming no regression to plain console-app paths | UNCERTAIN | The `0xC0000142` DLL-init regression is confirmed absent (run fails at the pre-existing Phase 27 launch-path policy gate: "Windows filesystem policy does not cover the absolute path argument required for launch: C:\\", documented at `crates/nono-cli/tests/audit_attestation.rs:118-122`). This pre-existing gate was present at base commit `808e4b33` before Phase 51. Phase 51 touched only token-arm routing and broker no-PTY path — not launch-path or filesystem policy. Literal exit-0 cannot be verified without a host where the Phase 27 cmd/C:\\ gate is satisfied. Routes to human verification. |
+| 4 | `nono run --profile claude-code -- cmd /c "echo hi"` still exits 0, confirming no regression to plain console-app paths | VERIFIED | Closed by Phase 52 HUMAN-UAT repro A (operator-attested live PASS, Windows 11 build 26200, 2026-05-26): run from the profile-covered cwd `C:\Users\OMack\.claude`, the command printed `hi` and exited 0. The earlier "UNCERTAIN" disposition misattributed the failure to the Phase 27 launch-path gate; the actual obstacle was the cwd-coverage gate (fires only from an uncovered cwd). `cmd /c echo hi` does not resolve `C:\` and so does not trip the Phase 27 gate. Repro B (`claude --version`) also exited 0. See `52-HUMAN-UAT.md` § "Phase 51 SC-4 Closure Note". |
 | 5 | Cross-target clippy is clean or PARTIAL per checklist; Windows CI lanes remain green; existing broker/detached paths produce no new failures | VERIFIED (host) / PARTIAL (cross-target) | Host `cargo clippy --workspace -- -D warnings -D clippy::unwrap_used` exits 0. Cross-target (`x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`) aborts at C cross-compiler absence (`cc-rs` failure, not a lint), consistent with known dev-host constraint documented in `.planning/templates/cross-target-verify-checklist.md`. User-approved disposition `approved-partial-both`. Existing `broker_dispatch_tests` (5/5), `pty_token_gate_tests` (8/8), `nono-shell-broker` (17/17) all pass — no regression to Phase 31 paths. |
 
-**Score:** 9/10 must-haves verified (SC-4 routes to human_needed due to pre-existing Phase 27 dev-host environment constraint)
+**Score:** 10/10 must-haves verified (SC-4 reconciled 2026-05-26 via Phase 52 HUMAN-UAT repro A — live PASS)
 
 ### Required Artifacts
 
@@ -102,24 +104,25 @@ The code review found a BLOCKER (CR-01: undrained stderr pipe deadlock). The fix
 
 CR-01 is FIXED and confirmed in code. WR-01 (fail-closed < 3 handles) is FIXED at `main.rs:299-305`. WR-04 (exit code assertion) is FIXED at `launch.rs:3419-3425` (`exit_code != 0 && exit_code != 2`).
 
-### Human Verification Required
+### Human Verification — CLOSED
 
-#### 1. Repro A: cmd /c "echo hi" exits 0 (ROADMAP SC-4)
+#### 1. Repro A: cmd /c "echo hi" exits 0 (ROADMAP SC-4) — PASSED
 
-**Test:** On a Windows 11 host where `cmd.exe` invocation is not blocked by the Phase 27 launch-path policy gate, run: `nono run --profile claude-code -- cmd /c "echo hi"`
+**Test:** `nono run --profile claude-code -- cmd /c "echo hi"`
 
 **Expected:** Child prints `hi` and exits 0
 
-**Why human:** The dev-host where Phase 51 was implemented has a pre-existing Phase 27 limitation: launching `cmd.exe` via the Windows supervisor requires `C:\` in the launch-path policy, which the default policy intentionally withholds (fail-secure). This gate fires BEFORE any process is spawned, so the `0xC0000142` regression cannot be reproduced OR disproved on this host for cmd.exe specifically. The Phase 27 gate is documented in `crates/nono-cli/tests/audit_attestation.rs:118-122` and was present at base commit `808e4b33` before Phase 51. Phase 51 changes do not touch launch-path or filesystem policy. A Windows 11 host where repro A passes in the `cmd /c "echo hi"` form (i.e. with appropriate launch-path policy configured) is needed to verify SC-4 literally. Alternatively, Phase 52 HUMAN-UAT covers the `claude.exe` positive test which is a stronger test of the same invariant.
+**Result:** PASS — operator-attested live on Windows 11 build 26200 (2026-05-26), Phase 51 `nono 0.57.0` BrokerLaunchNoPty binary. Run from the profile-covered cwd `C:\Users\OMack\.claude`, the command printed `hi` and exited 0; no `0xC0000142` / STATUS_DLL_INIT_FAILED. Recorded in `52-HUMAN-UAT.md` repro A + § "Phase 51 SC-4 Closure Note".
+
+**Correction to the original "why human" rationale:** the earlier disposition wrongly attributed the dev-host failure to the Phase 27 launch-path gate. The actual obstacle was the **cwd-coverage gate** (`crates/nono/src/sandbox/windows.rs:1304-1309`), which fires only when the working directory is outside the profile allowlist. `cmd /c echo hi` does NOT resolve `C:\` and therefore never trips the Phase 27 launch-path gate; from a profile-covered cwd it passes cleanly. Repro B (`claude --version`, 234 MB self-contained `claude.exe`) also exited 0 — stronger confirmation of the same invariant.
 
 ### Gaps Summary
 
-No BLOCKER gaps. All three critical path items are verified:
+No open gaps. All must-haves verified:
 1. The `BrokerLaunchNoPty` variant, cascade, spawn arm, and profile field threading are fully implemented and wired.
 2. The write-deny integration test proves kernel MIC `NO_WRITE_UP` enforcement with a real subprocess spawn.
 3. The CR-01 stderr-deadlock blocker found in code review was fixed before phase completion; the fix is present in the production code.
-
-The single `human_needed` item (SC-4: repro A literal exit-0) is a dev-host environment constraint — the Phase 27 cmd/`C:\` policy gate was present before Phase 51 and is unrelated to Phase 51 changes. This does not block Phase 52 (which has its own reproduction matrix), but does block `status: passed` until a human confirms the literal SC-4 assertion.
+4. SC-4 (repro A literal exit-0) was reconciled 2026-05-26 via Phase 52 HUMAN-UAT — live PASS. Status advanced to `passed`.
 
 ---
 
