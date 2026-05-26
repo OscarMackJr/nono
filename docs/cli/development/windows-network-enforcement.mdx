@@ -3,11 +3,13 @@ title: Windows Network Enforcement
 description: Design spike for the Windows network enforcement backend
 ---
 
-This note now covers both the initial `WIN-704` design spike and the current implementation slice. Windows still does **not** have full network parity, but it now has:
+This note now covers both the initial `WIN-704` design spike and the current implementation slice. Windows still does **not** have full network parity. The current state is a *partially wired* WFP backend:
 
-- a real WFP-backed app-scoped network-policy backend for live Windows runs
-- service-managed install and cleanup for blocked, proxy-only, and practical port allowlist shapes
-- shared direct and supervised runtime activation/cleanup behavior
+- `nono-wfp-service` contains a **real** WFP filter-installation path: on a valid activation request it opens the WFP engine (`FwpmEngineOpen0`) and installs app-scoped permit/block filters (`FwpmFilterAdd0`) on the connect and accept ALE layers, then removes them by key on cleanup
+- service-managed install/cleanup logic exists for blocked, proxy-only, and practical port allowlist shapes
+- shared direct and supervised runtime activation/cleanup behavior is wired through the same path
+
+But **end-to-end network enforcement is not yet live.** The CLI gates runtime activation behind a readiness probe that requires the WFP **driver** (`nono-wfp-driver`) to be registered *and* running, and the shipped driver is still a placeholder artifact that cannot reach `RUNNING`. Because the probe never reaches `Ready`, the real filter-install path in the service is never reached: `--block-net`, `--network-profile`, and `--allow-domain` currently **fail closed** with a directive diagnostic (`This request remains fail-closed until WFP activation is implemented`) rather than installing live filters. See [WFP Scaffold Boundary](#wfp-scaffold-boundary) for the exact gate.
 
 ## Selected Direction
 
@@ -22,7 +24,7 @@ This is the only option in scope that plausibly gives:
 - auditable deny paths
 - an upgrade path to proxy-only and richer policy shapes
 
-The current implementation does **not** have full WFP parity yet. It adds the compiled Windows network policy model, records `WFP` as both the preferred and active backend for the supported shapes, and uses `nono-wfp-service` to install/remove app-scoped WFP filters for live runs.
+The current implementation does **not** have full WFP parity yet. It adds the compiled Windows network policy model, records `WFP` as both the preferred and active backend for the supported shapes, and implements app-scoped WFP filter install/remove inside `nono-wfp-service`. That filter path is only reached once the readiness probe passes; with the current placeholder driver it never does, so live runs fail closed (see [WFP Scaffold Boundary](#wfp-scaffold-boundary)).
 
 ## Why Not the Other Options
 
@@ -148,8 +150,9 @@ Those filters are keyed deterministically from the runtime request fields so the
 This does **not** mean the broader Windows network backend is finished:
 
 - backend selection now routes supported direct and supervised Windows policies to `windows-filtering-platform`
-- runtime still fails closed when activation cannot install or clean up the required filters
-- broader packaging, service hardening, and future policy shapes are still deferred
+- runtime fails closed whenever the readiness probe is not `Ready` — most importantly because the placeholder driver cannot reach `RUNNING`, so the real filter-install path in the service is never reached end-to-end
+- runtime also fails closed if activation does reach the service host but cannot install or clean up the required filters
+- broader packaging, a real signed kernel driver, service hardening, and future policy shapes are still deferred
 
 The first real probing layer is now in place for that scaffold:
 
@@ -169,7 +172,7 @@ The first real probing layer is now in place for that scaffold:
   - verifies the Windows Base Filtering Engine (`BFE`) prerequisite is running
   - registers the service with `sc create`
   - writes the placeholder service description
-  - does **not** auto-start the service, because the placeholder host still fails closed
+  - does **not** auto-start the service; startup stays an explicit operator step (`--start-wfp-service`) because lifecycle control is gated on the driver before live activation
 - `nono setup --install-wfp-driver` now performs the first repo-owned driver registration flow:
   - verifies the placeholder driver artifact is present in the build output
   - verifies `BFE` is running
@@ -187,17 +190,17 @@ The first real probing layer is now in place for that scaffold:
   - verifies `BFE` is running
   - attempts `sc start nono-wfp-service`
   - reports `already running`, `running`, or a fail-closed startup error
-  - keeps the current placeholder-host behavior explicit when startup does not stay in `RUNNING`
+  - keeps the startup outcome explicit when the host does not stay in `RUNNING`
 - missing backend binary is treated as an early installability failure before service probing
-- this repo now ships the first backend artifacts:
-  - `nono-wfp-service` as a placeholder service-host binary
-  - `nono-wfp-driver.sys` as a placeholder driver artifact copied into the Windows build output
+- this repo now ships the backend artifacts:
+  - `nono-wfp-service`, which implements a **real** app-scoped WFP filter install/remove path (opens the engine via `FwpmEngineOpen0`, adds filters via `FwpmFilterAdd0`, removes them via `FwpmFilterDeleteByKey0`), served both over the `\\.\pipe\nono-wfp-control` control pipe under SCM and via the `--probe-runtime-activation` stdio one-shot
+  - `nono-wfp-driver.sys`, which is **still a placeholder** driver artifact copied into the Windows build output and cannot reach `RUNNING`
 - after building all CLI bins, readiness can advance from `missing binary` to `missing service` / `missing driver`, and after registration it can advance again to `missing driver`
 - the probe now distinguishes driver lifecycle states explicitly:
   - `missing driver binary`
   - `driver not registered`
   - `driver stopped`
-- because this branch still does not install the backend service or driver automatically on every install path, current post-build probe results land on those service/driver readiness failures rather than a working backend — unless the operator has run the four-command post-install registration sequence (`nono setup --install-wfp-service --install-wfp-driver --start-wfp-service --start-wfp-driver`) on a machine MSI install
+- because this branch still does not install the backend service or driver automatically on every install path, current post-build probe results land on those service/driver readiness failures rather than a working backend. The operator can run the four-command post-install registration sequence (`nono setup --install-wfp-service --install-wfp-driver --start-wfp-service --start-wfp-driver`) on a machine MSI install — that is the correct workflow — but the placeholder driver still cannot reach `RUNNING`, so the readiness probe stays on a driver-readiness failure and live runs continue to fail closed. The sequence will only yield a working backend once a real signed driver ships
 
 ## Real Blockers
 
