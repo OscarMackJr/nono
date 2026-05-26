@@ -38,7 +38,12 @@ granularity: standard
   3. A regression test asserts that a write attempt by the Low-IL child process to a Medium-IL-labeled path is denied by the OS kernel MIC pre-DACL check; the test passes on Windows and is cfg-gated for non-Windows targets; `NO_WRITE_UP` mandatory-label semantics are not weakened.
   4. `nono run --profile claude-code -- cmd /c "echo hi"` (repro A from the debug session) still passes — the child launches, prints `hi`, and exits 0 — confirming no regression to plain console-app paths.
   5. Cross-target clippy is clean per CLAUDE.md § Coding Standards MUST/NEVER enforcement bullet: `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` AND `--target x86_64-apple-darwin` from the dev host (or verification REQ marked PARTIAL per `.planning/templates/cross-target-verify-checklist.md` if cross-toolchain unavailable); Windows CI lanes (Build, Integration, Regression, Security, Packaging) remain green; existing `nono shell` broker path and detached path produce no new failures.
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 51-01-PLAN.md — Profile field + cascade enum variant + unit tests (Wave 1, parallel with 51-02)
+- [ ] 51-02-PLAN.md — Broker --no-pty mode + STARTF_USESTDHANDLES + broker unit tests (Wave 1, parallel with 51-01)
+- [ ] 51-03-PLAN.md — BrokerLaunchNoPty spawn wiring + write-deny integration test (Wave 2)
+- [ ] 51-04-PLAN.md — Verification sweep: Windows CI + cross-target clippy + repro A live gate (Wave 3)
 **UI hint**: no
 
 ### Phase 52: Field validation closure — heavy-runtime HUMAN-UAT + doc update
@@ -93,7 +98,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 51. No-PTY Low-IL broker + token routing + write-deny | 0/TBD | Not started | - |
+| 51. No-PTY Low-IL broker + token routing + write-deny | 0/4 | Not started | - |
 | 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/TBD | Not started | - |
 
 ## References
