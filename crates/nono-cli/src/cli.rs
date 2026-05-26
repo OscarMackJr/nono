@@ -727,12 +727,14 @@ pub enum Commands {
 {about}
 
 \x1b[1mUSAGE\x1b[0m
-  nono why [flags]
+  nono why [PATH] [flags]
+  nono why --path <PATH> [flags]
 
 {all-args}
 {after-help}")]
     #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
-  nono why --path ~/.ssh --op read             # Check if ~/.ssh is readable
+  nono why ~/.ssh/id_rsa                       # Check if a path is readable (positional)
+  nono why --path ~/.ssh --op read             # Check if ~/.ssh is readable (named flag)
   nono why --path ./src --op write --allow .   # Check with capability context
   nono why --json --path ~/.aws --op read      # JSON output for agents
   nono why --host api.openai.com --port 443    # Query network access
@@ -2573,6 +2575,10 @@ pub struct WhyArgs {
     /// Working directory for $WORKDIR expansion in profiles
     #[arg(long, value_name = "DIR", help_heading = "CONTEXT")]
     pub workdir: Option<PathBuf>,
+
+    /// Path to check (positional form; alternative to --path)
+    #[arg(value_name = "PATH", conflicts_with = "path", help_heading = "QUERY")]
+    pub path_arg: Option<PathBuf>,
 
     /// Print help
     #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
@@ -4479,6 +4485,33 @@ mod tests {
             }
             _ => panic!("Expected Why command"),
         }
+    }
+
+    #[test]
+    fn test_why_positional_path_resolves() {
+        // A bare positional path must land in path_arg.
+        let cli = Cli::parse_from(["nono", "why", "/tmp/test-file"]);
+        match cli.command {
+            Commands::Why(args) => {
+                assert_eq!(
+                    args.path_arg.as_deref(),
+                    Some(std::path::Path::new("/tmp/test-file"))
+                );
+                // --path (named flag) must remain unset when only the positional is given.
+                assert!(args.path.is_none());
+            }
+            _ => panic!("Expected Why command"),
+        }
+    }
+
+    #[test]
+    fn test_why_positional_and_named_path_conflict() {
+        // Passing both the positional PATH and --path must be rejected by clap.
+        let result = Cli::try_parse_from(["nono", "why", "--path", "/tmp/a", "/tmp/b"]);
+        assert!(
+            result.is_err(),
+            "expected clap error when both --path and positional PATH are supplied"
+        );
     }
 
     #[test]

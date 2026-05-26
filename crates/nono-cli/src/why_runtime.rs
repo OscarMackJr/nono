@@ -143,7 +143,11 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         }
     };
 
-    let result = if let Some(ref path) = args.path {
+    // Resolve the effective path: positional PATH takes precedence when --path is absent.
+    // clap's `conflicts_with = "path"` already ensures both cannot be set simultaneously.
+    let effective_path = args.path.clone().or_else(|| args.path_arg.clone());
+
+    let result = if let Some(ref path) = effective_path {
         let op = match args.op {
             Some(WhyOp::Read) => AccessMode::Read,
             Some(WhyOp::Write) => AccessMode::Write,
@@ -157,7 +161,7 @@ pub(crate) fn run_why(args: WhyArgs) -> Result<()> {
         query_scope(scope_query(scope), &ctx.caps)
     } else {
         return Err(NonoError::ConfigParse(
-            "--path, --host, or --scope is required".to_string(),
+            "PATH, --path, --host, or --scope is required".to_string(),
         ));
     };
 
