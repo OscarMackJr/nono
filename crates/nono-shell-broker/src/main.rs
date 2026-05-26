@@ -579,6 +579,62 @@ mod broker {
                 "dangling --shell must report 'requires a value'; got: {msg}"
             );
         }
+
+        /// Phase 51 Plan 02: `--no-pty` flag is recognized and sets `no_pty=true`.
+        /// When passed alongside three `--inherit-handle` values, the flag must
+        /// parse without error and the resulting `BrokerArgs.no_pty` must be `true`.
+        /// Guards against regressions where `--no-pty` falls through to the
+        /// `unknown broker arg` arm, causing the broker to hard-fail when
+        /// nono-cli passes the flag via `BrokerLaunchNoPty`.
+        #[test]
+        fn parse_args_no_pty_flag_accepted() {
+            let raw = argv(&[
+                "--shell",
+                r"C:\foo.exe",
+                "--inherit-handle",
+                "0x0000000000000100",
+                "--inherit-handle",
+                "0x0000000000000200",
+                "--inherit-handle",
+                "0x0000000000000300",
+                "--no-pty",
+                "--cwd",
+                r"C:\",
+            ]);
+            let parsed = parse_args(&raw).expect("--no-pty must parse without error");
+            assert!(
+                parsed.no_pty,
+                "BrokerArgs.no_pty must be true when --no-pty is present"
+            );
+            assert_eq!(
+                parsed.inherit_handles.len(),
+                3,
+                "all three --inherit-handle values must accumulate (needed for STARTF_USESTDHANDLES)"
+            );
+        }
+
+        /// Phase 51 Plan 02: when `--no-pty` is absent, `BrokerArgs.no_pty`
+        /// defaults to `false`. Guards against a regression where the field is
+        /// accidentally initialized to `true`, which would silently engage
+        /// STARTF_USESTDHANDLES on every spawn regardless of whether nono-cli
+        /// requested the no-PTY path.
+        #[test]
+        fn parse_args_no_pty_absent_defaults_false() {
+            let raw = argv(&[
+                "--shell",
+                r"C:\foo.exe",
+                "--inherit-handle",
+                "0x0000000000000100",
+                "--cwd",
+                r"C:\",
+            ]);
+            let parsed =
+                parse_args(&raw).expect("parse without --no-pty must succeed");
+            assert!(
+                !parsed.no_pty,
+                "BrokerArgs.no_pty must be false when --no-pty is absent"
+            );
+        }
     }
 
     /// Phase 31 Plan 31-02 Task 2 — Nyquist gap-fill: pin the broker
