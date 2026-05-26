@@ -389,3 +389,4 @@ The host-coverage gap is now the dominant v2.3 schedule constraint, not implemen
 | 2026-05-26 | fast | Bump release to 0.57.1 and rebuild all deliverables | ✅ |
 | 2026-05-26 | fast | Rebuild MSI installers at v0.57.1 (machine + user) | ✅ |
 | 2026-05-26 | fast | Bump all 5 workspace crates to 0.57.2 | ✅ |
+| 2026-05-26 | fast | Build v0.57.2 MSI installers (machine + user) | ✅ |
