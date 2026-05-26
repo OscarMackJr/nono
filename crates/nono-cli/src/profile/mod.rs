@@ -2070,6 +2070,15 @@ pub struct Profile {
     /// first-class capability.
     #[serde(default)]
     pub unsafe_macos_seatbelt_rules: Vec<String>,
+    /// Windows-only. When true, routes non-PTY supervised launches through
+    /// `WindowsTokenArm::BrokerLaunchNoPty` instead of `WriteRestricted`.
+    /// Preserves mandatory-label NO_WRITE_UP write-deny while removing the
+    /// restricting-SID double-gate that causes STATUS_DLL_INIT_FAILED in
+    /// heavy-runtime children (Electron, CLR, Node SEA). Ignored on Linux
+    /// and macOS (no-op; deserialize-only). Only set in the claude-code
+    /// built-in profile for v2.7.
+    #[serde(default)]
+    pub windows_low_il_broker: bool,
     /// Commands configuration — canonical section per upstream f0abd413 (v0.47.0).
     ///
     /// Provides structured allow/deny command lists at the profile level. These
@@ -2131,6 +2140,8 @@ struct ProfileDeserialize {
     #[serde(default)]
     unsafe_macos_seatbelt_rules: Vec<String>,
     #[serde(default)]
+    windows_low_il_broker: bool,
+    #[serde(default)]
     packs: Vec<String>,
     #[serde(default)]
     #[serde(alias = "brokered_commands")]
@@ -2162,6 +2173,7 @@ impl From<ProfileDeserialize> for Profile {
             skipdirs: raw.skipdirs,
             capabilities: raw.capabilities,
             unsafe_macos_seatbelt_rules: raw.unsafe_macos_seatbelt_rules,
+            windows_low_il_broker: raw.windows_low_il_broker,
             packs: raw.packs,
             command_args: raw.command_args,
             // Plan 36-01b: canonical section per upstream f0abd413 (v0.47.0).
@@ -3029,6 +3041,11 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
             &base.unsafe_macos_seatbelt_rules,
             &child.unsafe_macos_seatbelt_rules,
         ),
+        // Phase 51 D-02: OR semantics — either base or child enables the opt-in.
+        // Same pattern as `interactive` field (see line ~3006). A user-supplied
+        // profile without the field defaults to false and does not override
+        // a base profile that has it set (T-51A-02 mitigation).
+        windows_low_il_broker: base.windows_low_il_broker || child.windows_low_il_broker,
         packs: dedup_append(&base.packs, &child.packs),
         command_args: dedup_append(&base.command_args, &child.command_args),
         // Plan 36-01b: merge canonical commands sections — union allow + deny lists.
@@ -4773,6 +4790,7 @@ mod tests {
             skipdirs: vec!["vendor".to_string()],
             capabilities: CapabilitiesConfig::default(),
             unsafe_macos_seatbelt_rules: Vec::new(),
+            windows_low_il_broker: false,
             packs: Vec::new(),
             command_args: Vec::new(),
             commands: CommandsConfig::default(),
@@ -4859,6 +4877,7 @@ mod tests {
             skipdirs: vec!["dist".to_string()],
             capabilities: CapabilitiesConfig::default(),
             unsafe_macos_seatbelt_rules: Vec::new(),
+            windows_low_il_broker: false,
             packs: Vec::new(),
             command_args: Vec::new(),
             commands: CommandsConfig::default(),
@@ -7413,5 +7432,130 @@ mod resolve_context_tests {
         // Both must return ProfileNotFound for the same input.
         assert!(matches!(result_legacy, Err(NonoError::ProfileNotFound(_))));
         assert!(matches!(result_ctx, Err(NonoError::ProfileNotFound(_))));
+    }
+}
+
+/// Phase 51 Plan 01: tests for Profile.windows_low_il_broker field.
+///
+/// These tests cover:
+/// - D-01: cross-platform deserialization without unknown-field error
+/// - D-02: default is false (non-claude-code profiles do not enable opt-in)
+/// - D-03: claude-code built-in profile deserializes with windows_low_il_broker=true
+/// - merge_profiles OR semantics: either base or child enables the opt-in
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod windows_low_il_broker_tests {
+    use super::*;
+
+    /// D-01/D-03: Profile struct has windows_low_il_broker field and it defaults to false.
+    #[test]
+    fn windows_low_il_broker_default_is_false() {
+        let profile: Profile = serde_json::from_str("{}").unwrap();
+        assert!(
+            !profile.windows_low_il_broker,
+            "windows_low_il_broker must default to false for non-opted-in profiles"
+        );
+    }
+
+    /// D-01: ProfileDeserialize accepts windows_low_il_broker without unknown-field error.
+    /// This is the critical cross-platform deserialization test — deny_unknown_fields on
+    /// ProfileDeserialize would crash at startup if the field is present in policy.json
+    /// but missing from the struct.
+    #[test]
+    fn windows_low_il_broker_deserializes_without_unknown_field_error() {
+        let json = r#"{"windows_low_il_broker": true}"#;
+        let profile: Profile = serde_json::from_str(json).unwrap();
+        assert!(
+            profile.windows_low_il_broker,
+            "windows_low_il_broker: true must deserialize correctly"
+        );
+    }
+
+    /// D-01: false value deserializes correctly.
+    #[test]
+    fn windows_low_il_broker_false_deserializes_correctly() {
+        let json = r#"{"windows_low_il_broker": false}"#;
+        let profile: Profile = serde_json::from_str(json).unwrap();
+        assert!(
+            !profile.windows_low_il_broker,
+            "windows_low_il_broker: false must deserialize as false"
+        );
+    }
+
+    /// D-02: merge_profiles uses OR semantics — base=false, child=true → true.
+    #[test]
+    fn merge_profiles_or_semantics_base_false_child_true() {
+        let base = Profile {
+            windows_low_il_broker: false,
+            ..Profile::default()
+        };
+        let child = Profile {
+            windows_low_il_broker: true,
+            ..Profile::default()
+        };
+        let merged = merge_profiles(base, child);
+        assert!(
+            merged.windows_low_il_broker,
+            "merge_profiles must use OR semantics: base=false, child=true → true"
+        );
+    }
+
+    /// D-02: merge_profiles uses OR semantics — base=true, child=false → true.
+    #[test]
+    fn merge_profiles_or_semantics_base_true_child_false() {
+        let base = Profile {
+            windows_low_il_broker: true,
+            ..Profile::default()
+        };
+        let child = Profile {
+            windows_low_il_broker: false,
+            ..Profile::default()
+        };
+        let merged = merge_profiles(base, child);
+        assert!(
+            merged.windows_low_il_broker,
+            "merge_profiles must use OR semantics: base=true, child=false → true"
+        );
+    }
+
+    /// D-02: merge_profiles OR semantics — both false → false.
+    #[test]
+    fn merge_profiles_or_semantics_both_false() {
+        let base = Profile {
+            windows_low_il_broker: false,
+            ..Profile::default()
+        };
+        let child = Profile {
+            windows_low_il_broker: false,
+            ..Profile::default()
+        };
+        let merged = merge_profiles(base, child);
+        assert!(
+            !merged.windows_low_il_broker,
+            "merge_profiles must use OR semantics: both false → false"
+        );
+    }
+
+    /// D-03: claude-code built-in profile deserializes with windows_low_il_broker=true.
+    /// This exercises the actual embedded policy.json (via load_profile) to confirm
+    /// the field is present AND set to true in the claude-code profile block.
+    #[test]
+    fn claude_code_builtin_profile_has_windows_low_il_broker_true() {
+        let profile = load_profile("claude-code").expect("claude-code profile must load");
+        assert!(
+            profile.windows_low_il_broker,
+            "claude-code built-in profile must have windows_low_il_broker=true (D-03)"
+        );
+    }
+
+    /// D-03: codex built-in profile does NOT have windows_low_il_broker=true.
+    /// Only claude-code gets the opt-in in v2.7.
+    #[test]
+    fn codex_builtin_profile_does_not_have_windows_low_il_broker() {
+        let profile = load_profile("codex").expect("codex profile must load");
+        assert!(
+            !profile.windows_low_il_broker,
+            "codex built-in profile must NOT have windows_low_il_broker=true (D-03: only claude-code)"
+        );
     }
 }

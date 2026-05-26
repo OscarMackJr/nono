@@ -382,6 +382,13 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         cap_pipe_rendezvous_path: Some(windows_cap_pipe_path.clone()),
         allowed_env_vars: flags.allowed_env_vars.clone(),
         denied_env_vars: flags.denied_env_vars.clone(),
+        // Phase 51 D-02: source from profile.windows_low_il_broker.
+        // loaded_profile is in scope (LaunchPlan destructure at line ~114).
+        // map_or(false, ...) is fail-safe: no profile → false → WriteRestricted
+        // (existing non-PTY supervised behavior preserved, no security downgrade).
+        prefers_low_il_broker: loaded_profile
+            .as_ref()
+            .map_or(false, |p| p.windows_low_il_broker),
     };
 
     // Resource limits are now kernel-enforced on Linux (cgroup v2) and macOS

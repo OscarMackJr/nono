@@ -101,6 +101,10 @@
       "items": { "type": "string" },
       "description": "macOS-only. Expert escape hatch: raw Seatbelt S-expression rules applied verbatim to the sandbox policy. Each entry must be a valid S-expression, e.g. \"(allow iokit-open)\". Rules are validated at load time and rejected if malformed. Ignored on Linux and Windows. Surfaced prominently in 'nono profile show' output. If a rule pattern becomes common, prefer promoting it to a typed first-class capability instead."
     },
+    "windows_low_il_broker": {
+      "type": "boolean",
+      "description": "Windows-only. Routes non-PTY supervised launches through the Low-IL broker arm instead of WRITE_RESTRICTED, eliminating STATUS_DLL_INIT_FAILED for heavy-runtime children (Electron, CLR, Node SEA). Ignored on Linux and macOS."
+    },
     "packs": {
       "type": "array",
       "items": { "type": "string" },

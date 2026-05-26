@@ -1629,6 +1629,7 @@ mod tests {
             cap_pipe_rendezvous_path: None,
             allowed_env_vars: None,
             denied_env_vars: None,
+            prefers_low_il_broker: false,
         };
         let probe_config = make_test_probe_config();
 
@@ -1685,6 +1686,7 @@ mod tests {
             cap_pipe_rendezvous_path: None,
             allowed_env_vars: None,
             denied_env_vars: None,
+            prefers_low_il_broker: false,
         };
         let probe_config = make_test_probe_config();
 
