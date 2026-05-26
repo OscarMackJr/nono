@@ -1105,6 +1105,7 @@ pub(super) enum WindowsTokenArm {
     ///      Phase 31 PTY path is untouched — T-51A-04 mitigation).
     ///   2. Downstream spawn wiring (Plan 51-03) dispatches on the variant to
     ///      select anonymous-pipe stdio instead of ConPTY pipes.
+    ///
     /// Token construction is identical to BrokerLaunch: null h_token, broker
     /// self-degrades to Low IL via `nono::create_low_integrity_primary_token`
     /// internally. Mandatory-label NO_WRITE_UP write-deny is preserved via
@@ -1627,6 +1628,214 @@ pub(super) fn spawn_windows_child(
             }
             created
         }
+    } else if matches!(arm, WindowsTokenArm::BrokerLaunchNoPty) {
+        // === Phase 51 D-04: BrokerLaunchNoPty — non-PTY supervised broker spawn ===
+        // Structural counterpart of the BrokerLaunch (PTY) arm above, for the
+        // no-PTY supervised path. The broker spawns at caller's identity
+        // (Medium IL = nono.exe's token, so h_token is null), inherits ONLY the
+        // three anonymous-pipe child-end handles via
+        // PROC_THREAD_ATTRIBUTE_HANDLE_LIST, self-degrades to Low IL via
+        // `nono::create_low_integrity_primary_token`, and binds those three
+        // handles as the grandchild's stdio (STARTF_USESTDHANDLES, Plan 51-02
+        // `--no-pty`). Mandatory-label NO_WRITE_UP write-deny is preserved on
+        // the Low-IL grandchild by the OS MIC pre-DACL kernel check
+        // (REQ-WSRH-05). This replaces the WRITE_RESTRICTED + DETACHED_PROCESS
+        // shape that triggered STATUS_DLL_INIT_FAILED (0xC0000142) — see
+        // .planning/debug/resolved/claude-exe-dll-init-failed.md.
+        let nono_exe = std::env::current_exe().map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "Failed to resolve current_exe for broker location: {e}"
+            ))
+        })?;
+        let exe_dir = nono_exe.parent().ok_or_else(|| {
+            NonoError::SandboxInit(format!(
+                "Failed to resolve parent dir for broker location: {}",
+                nono_exe.display()
+            ))
+        })?;
+        let broker_path = exe_dir.join("nono-shell-broker.exe");
+        if !broker_path.exists() {
+            return Err(NonoError::BrokerNotFound { path: broker_path });
+        }
+
+        // Phase 32 D-32-11/13/14: Authenticode self-trust-anchor — same
+        // invariant as the BrokerLaunch arm (T-51C-04). Fail-closed; dev-build
+        // skip via install-layout detector (Pitfall 6).
+        if !is_dev_build_layout(&nono_exe) {
+            verify_broker_authenticode(&nono_exe, &broker_path)?;
+        } else {
+            tracing::info!(
+                target: "broker_authenticode",
+                "skipping broker Authenticode verify: dev-build layout detected at {}",
+                nono_exe.display()
+            );
+        }
+
+        // D-04: anonymous-pipe stdio. The supervisor reads child stdout/stderr
+        // from the parent-end handles (detached_stdio relay); the three
+        // child-end handles are the ones the broker — and thence the grandchild
+        // — inherit.
+        let pipes = DetachedStdioPipes::create()?;
+        let inherit_handles: [HANDLE; 3] =
+            [pipes.stdin_read, pipes.stdout_write, pipes.stderr_write];
+
+        // Flip child-end handles to inheritable BEFORE CreateProcessW; the
+        // matching unflip below runs on success AND error paths so they do not
+        // leak into unrelated supervisor spawns (T-31-17 / T-51C-03).
+        for h in &inherit_handles {
+            let ok = unsafe {
+                // SAFETY: each handle is owned by `pipes` and lives for the
+                // duration of this scope. Setting the inheritance flag is
+                // documented to succeed on a valid open handle; the matching
+                // unset call below restores the prior state on all paths.
+                SetHandleInformation(*h, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)
+            };
+            if ok == 0 {
+                let last = unsafe { GetLastError() };
+                for cleanup_h in &inherit_handles {
+                    unsafe {
+                        // SAFETY: same handle ownership rationale as above.
+                        let _ = SetHandleInformation(*cleanup_h, HANDLE_FLAG_INHERIT, 0);
+                    }
+                }
+                return Err(NonoError::SandboxInit(format!(
+                    "SetHandleInformation(HANDLE_FLAG_INHERIT) failed (error={last})"
+                )));
+            }
+        }
+
+        // PROC_THREAD_ATTRIBUTE_HANDLE_LIST gating exactly the three pipe
+        // handles (T-51C-03: capability-pipe / supervisor handles must NOT
+        // inherit past nono.exe).
+        let mut attr_size: usize = 0;
+        unsafe {
+            // SAFETY: First call with a null list queries the required size
+            // (Win32 idiom); the probe returns 0 with ERROR_INSUFFICIENT_BUFFER.
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+        }
+        let mut attr_buf = vec![0u8; attr_size];
+        let attr_list: LPPROC_THREAD_ATTRIBUTE_LIST =
+            attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        let ok = unsafe {
+            // SAFETY: `attr_list` points into `attr_buf`, sized by the probe
+            // call above for exactly one attribute slot.
+            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+        };
+        if ok == 0 {
+            let last = unsafe { GetLastError() };
+            for h in &inherit_handles {
+                unsafe {
+                    // SAFETY: handle ownership rationale as above.
+                    let _ = SetHandleInformation(*h, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+            return Err(NonoError::SandboxInit(format!(
+                "InitializeProcThreadAttributeList failed (error={last})"
+            )));
+        }
+        let ok = unsafe {
+            // SAFETY: `attr_list` initialized above; `inherit_handles` outlives
+            // the call (in scope through the CreateProcessW call below).
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                inherit_handles.as_ptr() as *mut _,
+                std::mem::size_of_val(&inherit_handles[..]),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            let last = unsafe { GetLastError() };
+            unsafe {
+                // SAFETY: `attr_list` initialized above; safe to release.
+                DeleteProcThreadAttributeList(attr_list);
+            }
+            for h in &inherit_handles {
+                unsafe {
+                    // SAFETY: handle ownership rationale as above.
+                    let _ = SetHandleInformation(*h, HANDLE_FLAG_INHERIT, 0);
+                }
+            }
+            return Err(NonoError::SandboxInit(format!(
+                "UpdateProcThreadAttribute(HANDLE_LIST) failed (error={last})"
+            )));
+        }
+
+        // Broker command line — same D-08 contract as the BrokerLaunch arm,
+        // plus the Plan 51-02 `--no-pty` flag so the broker binds the three
+        // handles as the grandchild's stdio via STARTF_USESTDHANDLES instead of
+        // a ConPTY.
+        let mut broker_args: Vec<std::ffi::OsString> = Vec::new();
+        broker_args.push(std::ffi::OsString::from("--shell"));
+        broker_args.push(launch_program.as_os_str().to_owned());
+        for a in cmd_args {
+            broker_args.push(std::ffi::OsString::from("--shell-arg"));
+            broker_args.push(std::ffi::OsString::from(a));
+        }
+        broker_args.push(std::ffi::OsString::from("--no-pty"));
+        for h in &inherit_handles {
+            broker_args.push(std::ffi::OsString::from("--inherit-handle"));
+            broker_args.push(std::ffi::OsString::from(format!("0x{:016x}", *h as usize)));
+        }
+        broker_args.push(std::ffi::OsString::from("--cwd"));
+        broker_args.push(current_dir.as_os_str().to_owned());
+
+        let mut broker_command_line = build_broker_command_line(&broker_path, &broker_args);
+        let broker_application_name = to_u16_null_terminated(&broker_path.to_string_lossy());
+
+        let mut startup_info_ex: STARTUPINFOEXW = unsafe {
+            // SAFETY: STARTUPINFOEXW is a plain Win32 FFI struct; zero-init is
+            // documented in the Win32 SDK.
+            std::mem::zeroed()
+        };
+        startup_info_ex.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        startup_info_ex.lpAttributeList = attr_list;
+        let lp_startup_info = &startup_info_ex.StartupInfo as *const STARTUPINFOW;
+
+        // CreateProcessW (NOT AsUserW) — broker runs at caller's identity
+        // (Medium IL = nono.exe's token). bInheritHandles=1 because the
+        // HANDLE_LIST gates the actual inherited set (only the three pipe
+        // child-end handles flipped inheritable above).
+        let created_local = unsafe {
+            // SAFETY: all pointers are valid for the duration of the call;
+            // EXTENDED_STARTUPINFO_PRESENT matches the STARTUPINFOEXW layout
+            // initialized above.
+            CreateProcessW(
+                broker_application_name.as_ptr(),
+                broker_command_line.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // bInheritHandles=TRUE; HANDLE_LIST gates which handles inherit.
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                environment_block.as_mut_ptr() as *mut _,
+                current_dir_u16.as_ptr(),
+                lp_startup_info,
+                &mut process_info,
+            )
+        };
+
+        unsafe {
+            // SAFETY: `attr_list` initialized above; safe to release after
+            // CreateProcessW (the kernel has copied the attribute data into the
+            // new process's PEB).
+            DeleteProcThreadAttributeList(attr_list);
+        }
+
+        // T-51C-03: unflip the three child-end handles non-inheritable on BOTH
+        // success and failure paths. The supervisor's copy of these child ends
+        // is closed by the shared `close_child_ends()` call after CreateProcess
+        // (below), once the broker holds its own inherited duplicates.
+        for h in &inherit_handles {
+            unsafe {
+                // SAFETY: handle ownership rationale as above.
+                let _ = SetHandleInformation(*h, HANDLE_FLAG_INHERIT, 0);
+            }
+        }
+
+        detached_stdio = Some(pipes);
+        created_local
     } else {
         // Phase 17 (ATCH-01): on the Windows detached path (no PTY,
         // NONO_DETACHED_LAUNCH=1), allocate three anonymous pipe pairs and
