@@ -45,7 +45,7 @@ Plans:
 - [x] 51-02-PLAN.md — Broker --no-pty mode + STARTF_USESTDHANDLES + broker unit tests (Wave 1, parallel with 51-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 51-03-PLAN.md — BrokerLaunchNoPty spawn wiring + write-deny integration test (Wave 2)
+- [x] 51-03-PLAN.md — BrokerLaunchNoPty spawn wiring + write-deny integration test (Wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 51-04-PLAN.md — Verification sweep: Windows CI + cross-target clippy + repro A live gate (Wave 3)
@@ -103,7 +103,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 51. No-PTY Low-IL broker + token routing + write-deny | 2/4 | In Progress|  |
+| 51. No-PTY Low-IL broker + token routing + write-deny | 3/4 | In Progress|  |
 | 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/TBD | Not started | - |
 
 ## References

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.7
 milestone_name: Windows supervised-run hardening
 status: executing
-last_updated: "2026-05-26T16:15:16.020Z"
+last_updated: "2026-05-26T17:56:41.217Z"
 last_activity: 2026-05-26
 progress:
   total_phases: 2
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State: nono — v2.7 Windows supervised-run hardening
