@@ -40,9 +40,14 @@ granularity: standard
   5. Cross-target clippy is clean per CLAUDE.md § Coding Standards MUST/NEVER enforcement bullet: `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` AND `--target x86_64-apple-darwin` from the dev host (or verification REQ marked PARTIAL per `.planning/templates/cross-target-verify-checklist.md` if cross-toolchain unavailable); Windows CI lanes (Build, Integration, Regression, Security, Packaging) remain green; existing `nono shell` broker path and detached path produce no new failures.
 **Plans**: 4 plans
 Plans:
+**Wave 1**
 - [ ] 51-01-PLAN.md — Profile field + cascade enum variant + unit tests (Wave 1, parallel with 51-02)
 - [ ] 51-02-PLAN.md — Broker --no-pty mode + STARTF_USESTDHANDLES + broker unit tests (Wave 1, parallel with 51-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 51-03-PLAN.md — BrokerLaunchNoPty spawn wiring + write-deny integration test (Wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 51-04-PLAN.md — Verification sweep: Windows CI + cross-target clippy + repro A live gate (Wave 3)
 **UI hint**: no
 
