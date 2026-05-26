@@ -12,9 +12,9 @@
 - [x] **REQ-WSRH-01**: The `nono-shell-broker` can launch a child process **without** a ConPTY/PTY, inheriting stdio via the parent console or anonymous pipes. Today the broker requires `--inherit-handle` ConPTY pipes + a PTY (Phase 31 `BrokerLaunch` arm); a no-PTY broker mode must be wired so non-PTY callers can route through it.
 - [x] **REQ-WSRH-02**: The non-PTY `nono run` supervised path routes through the broker's **Low-IL primary token (no synthetic restricting SID)** for the affected case, instead of `WindowsTokenArm::WriteRestricted`. The `select_windows_token_arm` cascade (`exec_strategy_windows/launch.rs`) is extended so a non-detached, non-PTY, session-SID launch of a heavy-runtime child dispatches to the broker/Low-IL arm rather than the restricting-SID arm.
 - [x] **REQ-WSRH-03**: The Low-IL child retains mandatory-label `NO_WRITE_UP` write-deny enforced at the OS level (kernel MIC pre-DACL check), parity with the Phase 31 broker's production-validated PowerShell/CLR guarantee. A regression test asserts a write attempt by the Low-IL child to a Medium-IL-labeled path is denied. No regression to the documented `nono run` security model.
-- [ ] **REQ-WSRH-04**: `nono run --profile claude-code -- claude --version` launches the self-contained `claude.exe` with **no `0xC0000142`** (DllMain/bootstrap succeeds), prints the Claude version, and exits 0 on a Windows 11 host.
+- [x] **REQ-WSRH-04**: `nono run --profile claude-code -- claude --version` launches the self-contained `claude.exe` with **no `0xC0000142`** (DllMain/bootstrap succeeds), prints the Claude version, and exits 0 on a Windows 11 host.
 - [x] **REQ-WSRH-05**: No regression to existing paths — plain console apps (`nono run --profile claude-code -- cmd /c "echo hi"`) still pass; the existing `nono shell` broker path and the detached path are unchanged; Windows CI lanes remain green; cross-target Linux/macOS clippy is clean per the CLAUDE.md § Coding Standards MUST/NEVER enforcement bullet + `.planning/templates/cross-target-verify-checklist.md`.
-- [ ] **REQ-WSRH-06**: Windows runtime field validation (HUMAN-UAT) — the reproduction matrix is executed on a real Windows host with recorded verdicts: **A** (`cmd /c "echo hi"`) passes; **B** (`claude --version`) prints the version and exits 0 post-fix; the `windows-poc-handoff.mdx` doc is updated to reflect the supported `nono run` behavior for heavy-runtime children.
+- [x] **REQ-WSRH-06**: Windows runtime field validation (HUMAN-UAT) — the reproduction matrix is executed on a real Windows host with recorded verdicts: **A** (`cmd /c "echo hi"`) passes; **B** (`claude --version`) prints the version and exits 0 post-fix; the `windows-poc-handoff.mdx` doc is updated to reflect the supported `nono run` behavior for heavy-runtime children.
 
 ## v2 Requirements (Deferred)
 
@@ -38,6 +38,6 @@ Items acknowledged but not in v2.7 roadmap.
 | REQ-WSRH-01 | Phase 51 | Complete |
 | REQ-WSRH-02 | Phase 51 | Complete |
 | REQ-WSRH-03 | Phase 51 | Complete |
-| REQ-WSRH-04 | Phase 52 | Pending |
+| REQ-WSRH-04 | Phase 52 | Complete |
 | REQ-WSRH-05 | Phase 51 | Complete |
-| REQ-WSRH-06 | Phase 52 | Pending |
+| REQ-WSRH-06 | Phase 52 | Complete |
