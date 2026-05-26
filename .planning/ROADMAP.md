@@ -103,7 +103,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 51. No-PTY Low-IL broker + token routing + write-deny | 4/4 | Complete   | 2026-05-26 |
+| 51. No-PTY Low-IL broker + token routing + write-deny | 4/4 | Complete    | 2026-05-26 |
 | 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/TBD | Not started | - |
 
 ## References
