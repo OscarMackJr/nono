@@ -23,7 +23,7 @@ granularity: standard
 
 ### v2.7 Windows supervised-run hardening (Phases 51-52) — ACTIVE
 
-- [ ] **Phase 51: No-PTY Low-IL broker + token routing + write-deny preservation** — Extend the Phase 31 broker with a no-PTY console-inherit/pipe-stdio mode; wire the `select_windows_token_arm` cascade to dispatch heavy-runtime non-PTY `nono run` through the broker/Low-IL arm; assert NO_WRITE_UP mandatory-label write-deny is preserved with a regression test; run the full no-regression sweep (CI + cross-target clippy).
+- [x] **Phase 51: No-PTY Low-IL broker + token routing + write-deny preservation** — Extend the Phase 31 broker with a no-PTY console-inherit/pipe-stdio mode; wire the `select_windows_token_arm` cascade to dispatch heavy-runtime non-PTY `nono run` through the broker/Low-IL arm; assert NO_WRITE_UP mandatory-label write-deny is preserved with a regression test; run the full no-regression sweep (CI + cross-target clippy). (completed 2026-05-26)
 - [ ] **Phase 52: Field validation closure — heavy-runtime HUMAN-UAT + doc update** — Execute the reproduction matrix (A: cmd/echo passes; B: `claude --version` prints version and exits 0) on a real Windows host with recorded verdicts; update `docs/cli/development/windows-poc-handoff.mdx` to reflect supported `nono run` behavior for heavy-runtime children.
 
 ## Phase Details
@@ -48,7 +48,7 @@ Plans:
 - [x] 51-03-PLAN.md — BrokerLaunchNoPty spawn wiring + write-deny integration test (Wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 51-04-PLAN.md — Verification sweep: Windows CI + cross-target clippy + repro A live gate (Wave 3)
+- [x] 51-04-PLAN.md — Verification sweep: Windows CI + cross-target clippy + repro A live gate (Wave 3)
 **UI hint**: no
 
 ### Phase 52: Field validation closure — heavy-runtime HUMAN-UAT + doc update
@@ -103,7 +103,7 @@ These invariants are inherited from prior milestones and remain in force across 
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 51. No-PTY Low-IL broker + token routing + write-deny | 3/4 | In Progress|  |
+| 51. No-PTY Low-IL broker + token routing + write-deny | 4/4 | Complete   | 2026-05-26 |
 | 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/TBD | Not started | - |
 
 ## References
