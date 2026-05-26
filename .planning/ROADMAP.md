@@ -60,7 +60,13 @@ Plans:
   2. `nono run --profile claude-code -- cmd /c "echo hi"` (repro A) continues to pass on the same host in the same run of the validation matrix — confirming the plain console-app path was not regressed by the Phase 51 changes.
   3. Both reproduction matrix verdicts (A: pass; B: pass) are recorded with timestamps in the Phase 52 HUMAN-UAT artifact; the VERIFICATION.md closes with `status: pass` (not `human_needed`).
   4. `docs/cli/development/windows-poc-handoff.mdx` is updated: the `nono run` section describes that heavy-runtime children (self-contained executables with embedded runtimes) are now supported via the Low-IL broker path; the doc does not claim `nono run` is limited to plain console apps for the claude-code profile.
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+**Wave 1**
+- [ ] 52-01-PLAN.md — HUMAN-UAT reproduction matrix on Windows 11 host (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 repro B PASS)*
+- [ ] 52-02-PLAN.md — Doc update + VERIFICATION close (Wave 2, gated on repro B)
 **UI hint**: no
 
 ## Sequencing Rationale
@@ -104,7 +110,7 @@ These invariants are inherited from prior milestones and remain in force across 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 51. No-PTY Low-IL broker + token routing + write-deny | 4/4 | Complete    | 2026-05-26 |
-| 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/TBD | Not started | - |
+| 52. Field validation closure — heavy-runtime HUMAN-UAT + doc | 0/2   | Not started | - |
 
 ## References
 
