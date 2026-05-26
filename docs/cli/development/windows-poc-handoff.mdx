@@ -541,7 +541,7 @@ If either of those silently runs, **stop the POC**. That is a fail-closed regres
 
 ## Known limitation: `nono run` cannot host TUI agents on Windows
 
-`nono run` on Windows always opens anonymous pipes for the child process — never a ConPTY. Non-interactive children (`cmd /c echo`, `cargo build`, `python -c '...'`, `claude --version`) work fine through pipes. Full-screen TUI agents (`claude`, `codex`, anything that needs cursor positioning, alternate screen buffer, or interactive stdin) cannot render through `nono run` and will appear to hang.
+`nono run` on Windows always opens anonymous pipes for the child process — never a ConPTY. Non-interactive children (`cmd /c echo`, `cargo build`, `python -c '...'`, `claude --version`) work fine through pipes. As of Phase 52 this is confirmed to include the **heavy self-contained `claude.exe`** (~234 MB single-exe build) under `nono run --profile claude-code` specifically: its Low-IL broker path clears the DllMain/bootstrap WRITE-type activity that previously failed with `STATUS_DLL_INIT_FAILED (0xC0000142)` — see [Windows `nono run` — heavy-runtime children](#windows-nono-run--heavy-runtime-children-phase-52-validated-2026-05-26). (This is the non-TUI `--version` invocation; full-screen interactive `claude` is the separate TUI limitation described next.) Full-screen TUI agents (`claude`, `codex`, anything that needs cursor positioning, alternate screen buffer, or interactive stdin) cannot render through `nono run` and will appear to hang.
 
 The constraint is documented in `crates/nono-cli/src/supervised_runtime.rs:101-111`: combining `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` with `DETACHED_PROCESS` historically crashed grandchildren with `STATUS_DLL_INIT_FAILED (0xC0000142)` (see `.planning/debug/resolved/windows-supervised-exec-cascade.md`). The conservative Phase-15 fix disabled PTY allocation on the **detached** Windows supervised path. Interactive `nono shell` does allocate ConPTY post-Phase 31 via the broker process — see security envelope below.
 
@@ -570,7 +570,7 @@ The constraint is documented in `crates/nono-cli/src/supervised_runtime.rs:101-1
 ### What's defense-in-depth (NOT the primary boundary)
 
 - **Claude Code `PreToolUse` hook.** The hook intercepts attempted writes to disallowed paths from inside the agent and surfaces a prompt. If the hook fails (or is misconfigured, or is bypassed by an attacker controlling the agent's actions), the OS-level mandatory-label check still denies the write. The OS check is the security boundary; the hook is UX + audit. Treat the hook as belt; the mandatory label is suspenders.
-- **Network differentiation per-session via WFP `FWPM_CONDITION_ALE_USER_ID` is waived on this path** (broker→Low-IL child); falls back to AppID-based filtering (same as Phase 15 detached-path waiver). For full per-session network filtering (granular `--allow-domain` differentiation across concurrent sessions of the same binary), use `nono run` (non-PTY supervised path retains `WRITE_RESTRICTED` + per-session SID).
+- **Network differentiation per-session via WFP `FWPM_CONDITION_ALE_USER_ID` is waived on this path** (broker→Low-IL child); falls back to AppID-based filtering (same as Phase 15 detached-path waiver). For full per-session network filtering (granular `--allow-domain` differentiation across concurrent sessions of the same binary), use `nono run` with a profile **other than** `claude-code` (`codex` / `opencode` / `openclaw` / `swival`) — those retain `WRITE_RESTRICTED` + per-session SID on the non-PTY supervised path. As of Phase 51, `nono run --profile claude-code` itself routes through the Low-IL broker (`BrokerLaunchNoPty`) and therefore shares this same per-session-WFP waiver (AppID-based filtering); see [Windows `nono run` — heavy-runtime children](#windows-nono-run--heavy-runtime-children-phase-52-validated-2026-05-26).
 
 ### What's NOT enforced
 
@@ -591,7 +591,10 @@ Operators can verify post-run with `nono audit list --recent 5` (or `nono audit 
 claude  # full TUI rendering — alternate screen buffer, cursor positioning, raw-mode input
 ```
 
-For non-TUI commands, `nono run --profile claude-code -- <command>` remains the supported invocation (anonymous-pipe stdio; `WRITE_RESTRICTED` + per-session SID; full WFP per-session differentiation).
+For non-TUI commands, `nono run -- <command>` remains the supported invocation, but its security envelope is now **profile-dependent** (Phase 51/52 — it is no longer universally `WRITE_RESTRICTED` + per-session WFP):
+
+- **`--profile claude-code`**: anonymous-pipe stdio routed through the **Low-IL broker** (no-PTY `BrokerLaunchNoPty` arm). Write-deny is enforced by the `NO_WRITE_UP` mandatory label (MIC pre-DACL kernel check), **not** `WRITE_RESTRICTED`; per-session WFP differentiation via `FWPM_CONDITION_ALE_USER_ID` is **waived** (falls back to AppID-based filtering — the same waiver the broker path uses, [described above](#whats-defense-in-depth-not-the-primary-boundary)). This is what enables self-contained heavy-runtime children — see [Windows `nono run` — heavy-runtime children](#windows-nono-run--heavy-runtime-children-phase-52-validated-2026-05-26) below.
+- **Other profiles** (`codex` / `opencode` / `openclaw` / `swival`): anonymous-pipe stdio; `WRITE_RESTRICTED` + per-session SID; full WFP per-session differentiation (unchanged behavior).
 
 ### Operator references (internal)
 
@@ -603,6 +606,30 @@ For non-TUI commands, `nono run --profile claude-code -- <command>` remains the 
 - Phase 30 final-state finding (the Low-IL direct-spawn dead-end the broker bypasses): [`30-WAVE-2-PROCMON.md`](https://github.com/anthropics/nono/blob/main/.planning/phases/30-windows-nono-shell-architecture/30-WAVE-2-PROCMON.md)
 - Debug session resolution: `.planning/debug/resolved/nono-shell-status-dll-init-failed.md` § Postscript 2 (Phase 31 closure)
 
+## Windows `nono run` — heavy-runtime children (Phase 52, validated 2026-05-26)
+
+`nono run --profile claude-code` on Windows 10/11 supports **heavy-runtime children**: self-contained executables with embedded runtimes — the canonical case is the ~234 MB single-exe `claude.exe` build — whose `DllMain`/bootstrap performs WRITE-type operations during loader initialization (e.g. `NtCreateSection` with `SECTION_MAP_WRITE` on named objects under `\BaseNamedObjects`, temp DLL extraction). Validated on the user's Windows test box on 2026-05-26, build 26200 (`nono 0.57.0`, `claude.exe` 234 MB self-contained build dated 2026-05-24).
+
+**The problem.** The non-PTY supervised path historically used a `WRITE_RESTRICTED` token (synthetic restricting SID) plus a per-session SID. Against a heavy self-contained runtime, that restricting-SID double-gate blocked the WRITE-type `DllMain` activity, so the loader returned `FALSE` and the child died at `STATUS_DLL_INIT_FAILED (0xC0000142)` before reaching `main()` — the same class of failure the `nono shell` ConPTY path and the Phase 15 detached path hit. (Root cause: `.planning/debug/claude-exe-dll-init-failed.md`.)
+
+**The Phase 51 fix.** The `claude-code` profile now sets `windows_low_il_broker: true`, which routes `nono run` through the **`BrokerLaunchNoPty` arm** (`crates/nono-cli/src/exec_strategy_windows/launch.rs` — cascade rule 3): `nono.exe` spawns the Medium-IL `nono-shell-broker.exe` with anonymous-pipe stdio (no ConPTY), and the broker self-degrades to a **Low-IL primary token with no synthetic restricting SID**. With the `WRITE_RESTRICTED` restricting SID gone, the heavy `DllMain` WRITE activity succeeds and the child initializes cleanly.
+
+**The security tradeoff (read before trusting the network boundary).** This path is **not** weaker on the filesystem boundary but **is** different on the network boundary:
+
+- **Filesystem write-deny is preserved** via the `NO_WRITE_UP` mandatory label (MIC pre-DACL kernel check) — a Low-IL subject cannot write to a Medium-IL object regardless of DACL. This is kernel-level, exactly as on the `nono shell` broker path. It is **not** `WRITE_RESTRICTED`, but it delivers equivalent write-deny.
+- **Per-session WFP differentiation is waived.** `FWPM_CONDITION_ALE_USER_ID` per-session network filtering is **not** available on this path; it falls back to AppID-based filtering — the same waiver documented for the `nono shell` broker path above (`launch.rs:1204-1206,1214-1216` is the ground truth). Do **not** assume per-session network isolation for concurrent `claude-code` sessions of the same binary.
+- **Other profiles are unchanged.** `codex` / `opencode` / `openclaw` / `swival` retain `WRITE_RESTRICTED` + per-session SID + full per-session WFP differentiation on the non-PTY supervised path.
+
+**Canonical invocation:**
+
+```powershell
+# From a supported working directory (see "Working directory choice (Windows)" above) — not a bare drive root.
+nono run --profile claude-code -- claude --version
+# Expected: prints the claude version string and exits 0 — no 0xC0000142 dialog.
+```
+
+For full-screen interactive `claude` (TUI), this `nono run` path does not apply — use `nono shell --profile claude-code --allow-cwd` per the [TUI-limitation note](#known-limitation-nono-run-cannot-host-tui-agents-on-windows) above. The heavy-runtime support here is specifically for **non-interactive** heavy children such as `claude --version`.
+
 ## Step 6 — POC user handoff content
 
 Drop the table below into the README you ship alongside the MSI. These are the items POC users will hit and need to know about.
@@ -612,8 +639,8 @@ Drop the table below into the README you ship alongside the MSI. These are the i
 | Install (per-user) | `msiexec /i nono-vX-x86_64-pc-windows-msvc-user.msi` (no admin prompt), then open a fresh PowerShell. Use this if your users do not need WFP-backed network filtering. |
 | Install (machine, with WFP) | `msiexec /i nono-vX-x86_64-pc-windows-msvc-machine.msi` (admin prompt — UAC will ask for elevation), then from an elevated PowerShell run the one-time post-install registration sequence: `nono setup --install-wfp-service --install-wfp-driver --start-wfp-driver --start-wfp-service`. After that, open a fresh PowerShell. Use this if your users need `--block-net`, `--network-profile`, or `--allow-domain`. |
 | First-time symlink warning | Enable Developer Mode (`Settings → System → For developers`) **or** run `nono setup` once as admin to create the symlink. Benign if skipped, but token refresh writes leak outside `~/.claude\`. |
-| Non-TUI commands (cargo, npm, scripts) | `nono run --profile claude-code -- <command>` is the supported invocation for non-interactive children |
-| Quick verification | `nono run --profile claude-code -- claude --version` exercises the full sandbox + profile path without needing a TUI |
+| Non-TUI commands (cargo, npm, scripts) | `nono run --profile claude-code -- <command>` is the supported invocation for non-interactive children. Under `claude-code` this routes through the **Low-IL broker** (`NO_WRITE_UP`; per-session WFP waived → AppID-based filtering); other profiles use `WRITE_RESTRICTED` + per-session WFP. |
+| Quick verification | `nono run --profile claude-code -- claude --version` exercises the **Low-IL broker path end-to-end** and confirms heavy-runtime (self-contained `claude.exe`) support — not just the generic sandbox + profile path. See [Windows `nono run` — heavy-runtime children](#windows-nono-run--heavy-runtime-children-phase-52-validated-2026-05-26). |
 | TUI agents (claude, codex, etc.) | `nono shell --profile claude-code --allow-cwd`, then run `claude` (or other TUI) inside. The broker-process architecture (Phase 31, validated 2026-05-09) delivers full TUI rendering with OS-level mandatory-label `NO_WRITE_UP` write-deny intact. See [Windows `nono shell` — security envelope](#windows-nono-shell--security-envelope-phase-31-validated-2026-05-09) for the security model and what's enforced vs. defense-in-depth. |
 | Triage payload on a bug | Exact command line, full stdout, full stderr, `nono --version`, `claude --version`, `nono setup --check-only` output (including the `WFP readiness:` line and which install path they used), Windows build (`(Get-CimInstance Win32_OperatingSystem).BuildNumber` or `[Environment]::OSVersion.Version.Build`). |
 | Not yet supported on this build | Per-user MSI deliberately excludes WFP (kernel driver cannot load from per-user `LocalAppData`; LocalSystem service requires admin install). For `--block-net`, `--network-profile`, or `--allow-domain`, install the machine MSI and run the post-install registration commands (see Step 3). `nono shell` per-session WFP differentiation remains waived on the broker path; falls back to AppID-based filtering — see security envelope above. |
