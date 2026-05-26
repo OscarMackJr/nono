@@ -386,3 +386,4 @@ The host-coverage gap is now the dominant v2.3 schedule constraint, not implemen
 ## Operator Next Steps
 
 - Start the next milestone with /gsd-new-milestone
+| 2026-05-26 | fast | Bump release to 0.57.1 and rebuild all deliverables | ✅ |
