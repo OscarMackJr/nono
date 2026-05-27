@@ -657,6 +657,24 @@ impl WindowsSupervisorRuntime {
             stdout_read
         };
 
+        // Debug session nopty-broker-stdout-swallowed: the pipe-source relay
+        // historically wrote drained child stdout ONLY to the session log file
+        // (+ the optional `nono attach` pipe) and NEVER echoed it to the
+        // foreground console — so a FOREGROUND no-PTY supervised run
+        // (`WindowsTokenArm::BrokerLaunchNoPty`, e.g. `nono run -- claude
+        // --version`) silently swallowed the child's output despite exit 0.
+        // The PTY relay (`start_interactive_terminal_io`) already echoes to
+        // `std::io::stdout()`; this brings the no-PTY foreground relay to
+        // parity. The echo MUST be suppressed on the genuinely-detached
+        // re-exec (`NONO_DETACHED_LAUNCH=1`): there the outer `nono run
+        // --detached` invocation has already returned to the user's prompt and
+        // there is no foreground console to write to — output reaches the user
+        // via the log file + `nono attach`/`nono logs` by design. The read
+        // pattern below is UNCHANGED (a single merged `source_handle` drain),
+        // so the CR-01 deadlock cannot reappear and the broker HANDLE_LIST
+        // dedup (commit d8b7ce00) is untouched.
+        let echo_to_console = !super::launch::is_windows_detached_launch();
+
         std::thread::spawn(move || {
             let log_path = match crate::session::session_log_path(&session_id) {
                 Ok(path) => path,
@@ -691,6 +709,15 @@ impl WindowsSupervisorRuntime {
             let mut source_file =
                 ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(source_handle as _) });
 
+            // Foreground console echo target (debug session
+            // nopty-broker-stdout-swallowed). `None` on the genuinely-detached
+            // path so the relay keeps its prior log-only behavior there.
+            let mut console_stdout = if echo_to_console {
+                Some(std::io::stdout())
+            } else {
+                None
+            };
+
             let mut buf = [0u8; 4096];
             while let Ok(n) = source_file.read(&mut buf) {
                 if n == 0 {
@@ -702,6 +729,15 @@ impl WindowsSupervisorRuntime {
                 // path; failures here would otherwise kill the bridge.
                 let _ = log_file.write_all(&buf[..n]);
                 let _ = log_file.flush();
+
+                // Foreground console echo (FOREGROUND no-PTY supervised path
+                // only). Best-effort like the log write — a closed/redirected
+                // stdout must never kill the bridge thread. Mirrors the PTY
+                // relay's `stdout.write_all + flush` (start_interactive_terminal_io).
+                if let Some(stdout) = console_stdout.as_mut() {
+                    let _ = stdout.write_all(&buf[..n]);
+                    let _ = stdout.flush();
+                }
 
                 // On Windows, writing to a named pipe that has no listener
                 // will block if we try to write to it directly. We mirror
