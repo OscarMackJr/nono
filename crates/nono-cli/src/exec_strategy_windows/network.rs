@@ -310,6 +310,22 @@ pub(super) fn build_wfp_driver_start_args(config: &WfpProbeConfig) -> Vec<String
     vec!["start".to_string(), config.backend_driver.to_string()]
 }
 
+pub(super) fn build_wfp_service_stop_args(config: &WfpProbeConfig) -> Vec<String> {
+    vec!["stop".to_string(), config.backend_service.to_string()]
+}
+
+pub(super) fn build_wfp_service_delete_args(config: &WfpProbeConfig) -> Vec<String> {
+    vec!["delete".to_string(), config.backend_service.to_string()]
+}
+
+pub(super) fn build_wfp_driver_stop_args(config: &WfpProbeConfig) -> Vec<String> {
+    vec!["stop".to_string(), config.backend_driver.to_string()]
+}
+
+pub(super) fn build_wfp_driver_delete_args(config: &WfpProbeConfig) -> Vec<String> {
+    vec!["delete".to_string(), config.backend_driver.to_string()]
+}
+
 pub(super) fn parse_windows_service_state(output: &str) -> WindowsServiceState {
     let normalized = output.to_ascii_uppercase();
     if normalized.contains("FAILED 1060") || normalized.contains("DOES NOT EXIST") {
@@ -1205,6 +1221,97 @@ pub(crate) fn start_windows_wfp_driver() -> Result<WindowsWfpDriverStartReport> 
     start_windows_wfp_driver_with_runner(&config, run_sc_query, run_sc_command)
 }
 
+/// Stop (best-effort) then delete a single Windows service by name.
+///
+/// Idempotent: a `Missing` service is reported as "not installed" and skipped.
+/// A running service is stopped first so the delete completes immediately and
+/// the service-host binary is unlocked; a stop failure does NOT abort the delete
+/// because `sc delete` can still mark a running service for deletion.
+fn remove_single_windows_service<Q, R>(
+    service_name: &str,
+    stop_args: &[String],
+    delete_args: &[String],
+    query_service: &Q,
+    run_service_command: &R,
+) -> Result<&'static str>
+where
+    Q: Fn(&str) -> Result<String>,
+    R: Fn(&[String]) -> Result<String>,
+{
+    let state = parse_windows_service_state(&query_service(service_name)?);
+    if state == WindowsServiceState::Missing {
+        return Ok("not installed");
+    }
+    if state == WindowsServiceState::Running {
+        // Best-effort: ignore the stop result and proceed to delete regardless.
+        let _ = run_service_command(stop_args);
+    }
+    run_service_command(delete_args)?;
+    let after = parse_windows_service_state(&query_service(service_name)?);
+    match after {
+        WindowsServiceState::Missing => Ok("removed"),
+        // `sc delete` on a service that still has open handles marks it for
+        // deletion; it disappears once those handles close (often immediately,
+        // otherwise on reboot).
+        _ => Ok("removed (pending handle close)"),
+    }
+}
+
+/// Stop and delete the nono user-mode WFP service AND the kernel driver service.
+///
+/// This is the removal counterpart to `install_windows_wfp_service` /
+/// `install_windows_wfp_driver`. The machine MSI already removes the user-mode
+/// service on uninstall via WiX `ServiceControl`, but the kernel driver service
+/// (`nono-wfp-driver`, registered post-install via `sc create type=kernel`) has
+/// no WiX representation, so a clean MSI uninstall leaves it behind. This command
+/// removes both.
+///
+/// Safety: only the two well-known nono-owned service names from `WfpProbeConfig`
+/// are ever touched, so this can never delete an unrelated service. Idempotent —
+/// services that are not installed are reported and skipped.
+pub(super) fn uninstall_windows_wfp_with_runner<Q, R>(
+    config: &WfpProbeConfig,
+    query_service: Q,
+    run_service_command: R,
+) -> Result<WindowsWfpUninstallReport>
+where
+    Q: Fn(&str) -> Result<String>,
+    R: Fn(&[String]) -> Result<String>,
+{
+    let service_outcome = remove_single_windows_service(
+        config.backend_service,
+        &build_wfp_service_stop_args(config),
+        &build_wfp_service_delete_args(config),
+        &query_service,
+        &run_service_command,
+    )?;
+    let driver_outcome = remove_single_windows_service(
+        config.backend_driver,
+        &build_wfp_driver_stop_args(config),
+        &build_wfp_driver_delete_args(config),
+        &query_service,
+        &run_service_command,
+    )?;
+
+    let status_label = if service_outcome == "not installed" && driver_outcome == "not installed" {
+        "nothing to remove"
+    } else {
+        "removed"
+    };
+    Ok(WindowsWfpUninstallReport {
+        status_label,
+        details: format!(
+            "user-mode service {}: {}; kernel driver {}: {}",
+            config.backend_service, service_outcome, config.backend_driver, driver_outcome
+        ),
+    })
+}
+
+pub(crate) fn uninstall_windows_wfp() -> Result<WindowsWfpUninstallReport> {
+    let config = current_wfp_probe_config()?;
+    uninstall_windows_wfp_with_runner(&config, run_sc_query, run_sc_command)
+}
+
 pub(super) fn start_windows_wfp_service_with_runner<Q, R>(
     config: &WfpProbeConfig,
     query_service: Q,
@@ -1607,6 +1714,123 @@ mod tests {
             backend_driver_binary_path: std::path::PathBuf::from(r"C:\tools\nono-wfp-driver.sys"),
             backend_service_args: WINDOWS_WFP_BACKEND_SERVICE_ARGS,
         }
+    }
+
+    // `sc query` output fragments that `parse_windows_service_state` recognizes.
+    fn sc_missing_output() -> String {
+        "[SC] EnumQueryServicesStatus:OpenService FAILED 1060: The specified service does not exist as an installed service.".to_string()
+    }
+    fn sc_running_output() -> String {
+        "SERVICE_NAME: x\n        STATE              : 4  RUNNING".to_string()
+    }
+    fn sc_stopped_output() -> String {
+        "SERVICE_NAME: x\n        STATE              : 1  STOPPED".to_string()
+    }
+
+    #[test]
+    fn uninstall_stops_and_deletes_both_running_services() {
+        let config = make_test_probe_config();
+        let deleted: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let calls: std::cell::RefCell<Vec<Vec<String>>> = std::cell::RefCell::new(Vec::new());
+
+        let query = |service: &str| -> Result<String> {
+            if deleted.borrow().iter().any(|s| s == service) {
+                Ok(sc_missing_output())
+            } else {
+                Ok(sc_running_output())
+            }
+        };
+        let run = |args: &[String]| -> Result<String> {
+            calls.borrow_mut().push(args.to_vec());
+            if args.first().map(String::as_str) == Some("delete") {
+                if let Some(name) = args.get(1) {
+                    deleted.borrow_mut().push(name.clone());
+                }
+            }
+            Ok(String::new())
+        };
+
+        let report = uninstall_windows_wfp_with_runner(&config, query, run).unwrap();
+        assert_eq!(report.status_label, "removed");
+
+        let calls = calls.into_inner();
+        // Each running service is stopped THEN deleted.
+        assert!(calls.contains(&build_wfp_service_stop_args(&config)));
+        assert!(calls.contains(&build_wfp_service_delete_args(&config)));
+        assert!(calls.contains(&build_wfp_driver_stop_args(&config)));
+        assert!(calls.contains(&build_wfp_driver_delete_args(&config)));
+    }
+
+    #[test]
+    fn uninstall_is_noop_when_nothing_installed() {
+        let config = make_test_probe_config();
+        let calls: std::cell::RefCell<Vec<Vec<String>>> = std::cell::RefCell::new(Vec::new());
+        let query = |_service: &str| -> Result<String> { Ok(sc_missing_output()) };
+        let run = |args: &[String]| -> Result<String> {
+            calls.borrow_mut().push(args.to_vec());
+            Ok(String::new())
+        };
+
+        let report = uninstall_windows_wfp_with_runner(&config, query, run).unwrap();
+        assert_eq!(report.status_label, "nothing to remove");
+        assert!(
+            calls.into_inner().is_empty(),
+            "no sc stop/delete should run when both services are missing"
+        );
+    }
+
+    #[test]
+    fn uninstall_deletes_stopped_service_without_stopping_it() {
+        let config = make_test_probe_config();
+        let deleted: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+        let calls: std::cell::RefCell<Vec<Vec<String>>> = std::cell::RefCell::new(Vec::new());
+
+        let query = |service: &str| -> Result<String> {
+            if deleted.borrow().iter().any(|s| s == service) {
+                Ok(sc_missing_output())
+            } else {
+                Ok(sc_stopped_output())
+            }
+        };
+        let run = |args: &[String]| -> Result<String> {
+            calls.borrow_mut().push(args.to_vec());
+            if args.first().map(String::as_str) == Some("delete") {
+                if let Some(name) = args.get(1) {
+                    deleted.borrow_mut().push(name.clone());
+                }
+            }
+            Ok(String::new())
+        };
+
+        let report = uninstall_windows_wfp_with_runner(&config, query, run).unwrap();
+        assert_eq!(report.status_label, "removed");
+        let calls = calls.into_inner();
+        assert!(
+            !calls
+                .iter()
+                .any(|c| c.first().map(String::as_str) == Some("stop")),
+            "an already-stopped service must not be stopped again"
+        );
+        assert!(calls.contains(&build_wfp_service_delete_args(&config)));
+        assert!(calls.contains(&build_wfp_driver_delete_args(&config)));
+    }
+
+    #[test]
+    fn uninstall_propagates_delete_failure() {
+        let config = make_test_probe_config();
+        let query = |_service: &str| -> Result<String> { Ok(sc_running_output()) };
+        let run = |args: &[String]| -> Result<String> {
+            if args.first().map(String::as_str) == Some("delete") {
+                return Err(nono::NonoError::Setup("access is denied".to_string()));
+            }
+            Ok(String::new())
+        };
+
+        let result = uninstall_windows_wfp_with_runner(&config, query, run);
+        assert!(
+            result.is_err(),
+            "a failing sc delete must surface as an error, not a silent success"
+        );
     }
 
     #[test]

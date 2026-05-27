@@ -2471,6 +2471,14 @@ pub struct SetupArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub start_wfp_driver: bool,
 
+    /// Stop and remove the Windows WFP service and kernel driver (Windows only; requires admin).
+    ///
+    /// Cleans up the `nono-wfp-driver` kernel service, which the MSI uninstall
+    /// cannot remove because it is registered post-install via `sc create`.
+    /// Also removes the `nono-wfp-service` user-mode service if present.
+    #[arg(long, help_heading = "OPTIONS")]
+    pub uninstall_wfp: bool,
+
     /// Refresh the cached Sigstore trusted root from https://tuf-repo-cdn.sigstore.dev (per-user, no admin required)
     #[arg(long, help_heading = "OPTIONS")]
     pub refresh_trust_root: bool,

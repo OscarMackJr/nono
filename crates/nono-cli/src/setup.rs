@@ -21,6 +21,8 @@ pub struct SetupRunner {
     start_wfp_service: bool,
     #[cfg(target_os = "windows")]
     start_wfp_driver: bool,
+    #[cfg(target_os = "windows")]
+    uninstall_wfp: bool,
     refresh_trust_root: bool,
     from_file: Option<std::path::PathBuf>,
     generate_profiles: bool,
@@ -41,6 +43,8 @@ impl SetupRunner {
             start_wfp_service: args.start_wfp_service,
             #[cfg(target_os = "windows")]
             start_wfp_driver: args.start_wfp_driver,
+            #[cfg(target_os = "windows")]
+            uninstall_wfp: args.uninstall_wfp,
             refresh_trust_root: args.refresh_trust_root,
             from_file: args.from_file.clone(),
             generate_profiles: args.profiles,
@@ -49,6 +53,13 @@ impl SetupRunner {
     }
 
     pub fn run(&self) -> Result<()> {
+        #[cfg(target_os = "windows")]
+        if !self.check_only && self.uninstall_wfp {
+            // Removal is the inverse of setup; short-circuit the normal
+            // step-numbered setup flow and just stop + delete the WFP services.
+            return self.uninstall_windows_wfp();
+        }
+
         // Installation verification
         self.check_installation()?;
 
@@ -212,6 +223,21 @@ impl SetupRunner {
         );
         let report = crate::exec_strategy::install_windows_wfp_driver()?;
         println!("  * WFP driver install: {}", report.status_label);
+        println!("  * {}", report.details);
+        println!();
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    fn uninstall_windows_wfp(&self) -> Result<()> {
+        if !crate::exec_strategy::is_admin_process() {
+            return Err(NonoError::Setup(
+                "Removing the Windows WFP service and driver requires an elevated administrator session. Please run this command from an 'Administrator' terminal.".to_string(),
+            ));
+        }
+        println!("Removing Windows WFP service and driver...");
+        let report = crate::exec_strategy::uninstall_windows_wfp()?;
+        println!("  * WFP removal: {}", report.status_label);
         println!("  * {}", report.details);
         println!();
         Ok(())
@@ -1386,6 +1412,8 @@ mod tests {
             start_wfp_service: false,
             #[cfg(target_os = "windows")]
             start_wfp_driver: false,
+            #[cfg(target_os = "windows")]
+            uninstall_wfp: false,
             refresh_trust_root: false,
             from_file: None,
             generate_profiles: true,

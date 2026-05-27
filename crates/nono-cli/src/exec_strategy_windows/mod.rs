@@ -462,6 +462,12 @@ pub(crate) struct WindowsWfpDriverStartReport {
     pub details: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WindowsWfpUninstallReport {
+    pub status_label: &'static str,
+    pub details: String,
+}
+
 #[derive(Debug)]
 struct ProcessContainment {
     job: HANDLE,
@@ -485,7 +491,7 @@ pub(crate) const JOB_OBJECT_QUERY: u32 = 0x0004;
 pub(crate) const JOB_OBJECT_TERMINATE: u32 = 0x0008;
 pub(crate) use network::{
     install_windows_wfp_driver, install_windows_wfp_service, probe_windows_wfp_readiness,
-    start_windows_wfp_driver, start_windows_wfp_service,
+    start_windows_wfp_driver, start_windows_wfp_service, uninstall_windows_wfp,
 };
 pub(crate) use restricted_token::generate_session_sid;
 use supervisor::*;
