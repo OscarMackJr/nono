@@ -34,7 +34,9 @@ mod windows_impl {
     use std::ffi::OsString;
     use std::io::Read;
     use std::process::ExitCode;
+    use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::Notify;
     use windows_service::{
         define_windows_service,
         service::{
@@ -487,9 +489,22 @@ mod windows_impl {
     }
 
     fn run_service(_arguments: Vec<OsString>) -> windows_service::Result<()> {
+        // Shutdown signal. The SCM control-dispatch thread invokes `event_handler`
+        // on a STOP control and wakes the named-pipe accept loop so the service can
+        // transition to STOPPED. Previously the STOP arm only returned NoError and
+        // never signalled the infinite accept loop, so the `Stopped` status below
+        // was unreachable: SCM reported a stop failure (~ERROR_SERVICE_REQUEST_TIMEOUT)
+        // and the MSI uninstall could not stop the service to delete its locked binary.
+        let shutdown = Arc::new(Notify::new());
+        let shutdown_handler = Arc::clone(&shutdown);
         let event_handler = move |control_event| -> ServiceControlHandlerResult {
             match control_event {
-                ServiceControl::Stop => ServiceControlHandlerResult::NoError,
+                ServiceControl::Stop => {
+                    // `notify_one` stores a permit if the loop is not currently parked
+                    // on `notified()`, so a STOP is never missed (no lost-wakeup race).
+                    shutdown_handler.notify_one();
+                    ServiceControlHandlerResult::NoError
+                }
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
                 _ => ServiceControlHandlerResult::NotImplemented,
             }
@@ -518,7 +533,7 @@ mod windows_impl {
             })?;
 
         rt.block_on(async {
-            if let Err(e) = run_named_pipe_server().await {
+            if let Err(e) = run_named_pipe_server(shutdown).await {
                 eprintln!("Named pipe server failed: {}", e);
             }
         });
@@ -536,7 +551,7 @@ mod windows_impl {
         Ok(())
     }
 
-    async fn run_named_pipe_server() -> Result<(), String> {
+    async fn run_named_pipe_server(shutdown: Arc<Notify>) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         {
             // Perform the startup orphan sweep before accepting any new activation
@@ -546,6 +561,12 @@ mod windows_impl {
 
             let engine = open_wfp_engine()?;
             create_nono_sublayer(&engine)?;
+
+            // The accept loop parks on `connect()` almost all the time; this future
+            // lets a STOP control break it. Created once and re-polled each iteration
+            // (a `notify_one` permit issued mid-request is consumed on the next poll).
+            let shutdown_signal = shutdown.notified();
+            tokio::pin!(shutdown_signal);
 
             let mut first = true;
             loop {
@@ -616,12 +637,25 @@ mod windows_impl {
                 }
                 .map_err(|e| format!("failed to convert raw handle to NamedPipeServer: {}", e))?;
 
-                server.connect().await.map_err(|e| {
-                    format!(
-                        "failed to connect to named pipe {}: {}",
-                        CONTROL_PIPE_NAME, e
-                    )
-                })?;
+                tokio::select! {
+                    // `biased` checks shutdown first so a STOP is honored promptly
+                    // even while a client is connecting.
+                    biased;
+                    _ = &mut shutdown_signal => {
+                        // STOP requested. Returning drops the dynamic-session WFP
+                        // engine (and the `nono` sublayer it created), tearing down
+                        // enforcement on stop — fail-secure, no filters left applied.
+                        break Ok(());
+                    }
+                    connect_result = server.connect() => {
+                        connect_result.map_err(|e| {
+                            format!(
+                                "failed to connect to named pipe {}: {}",
+                                CONTROL_PIPE_NAME, e
+                            )
+                        })?;
+                    }
+                }
 
                 let mut buffer = vec![0u8; MAX_RUNTIME_REQUEST_SIZE];
                 let n = server

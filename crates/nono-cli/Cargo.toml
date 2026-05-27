@@ -71,7 +71,7 @@ serde_yaml_ng = "=0.10.0"
 # Phase 50 Plan 04 (Task 3): added `macros` feature so `#[tokio::test]`
 # is available to the colocated tests in src/trust_refresh.rs. Other
 # features unchanged.
-tokio = { version = "1", features = ["rt", "net", "io-util", "macros"] }
+tokio = { version = "1", features = ["rt", "net", "io-util", "macros", "sync"] }
 
 # Phase 50 D-50-05: promoted from transitive (via sigstore-trust-root 0.7.0 ->
 # tough 0.22.0 in Cargo.lock) to direct dep so we can call
