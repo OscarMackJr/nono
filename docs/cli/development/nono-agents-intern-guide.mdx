@@ -1,0 +1,198 @@
+---
+title: "Running AI Agents with nono — Intern Guide"
+description: A friendly intro for Zt-Infra interns to running sandboxed AI agents with nono on Windows
+---
+
+# Running AI Agents with nono — an Intern's Guide 🧪
+
+Welcome! If you're reading this, Desktop Support has already dropped **nono** onto your machine
+and you're about to do something genuinely fun: turn an AI coding agent loose on real work
+**without** lying awake wondering what it touched. That's the whole pitch. Let's go.
+
+> **TL;DR** — nono is a sandbox. You run an agent *inside* it. The agent can only read and write
+> the folders you explicitly hand it; everything else is blocked by the operating system itself,
+> not by a polite request. So you can experiment boldly — the worst thing that usually happens is
+> a tidy little `Access is denied`, not a ruined afternoon.
+
+---
+
+## What does nono actually do?
+
+AI agents (like Claude Code) are great, but by default they run with **your** full permissions —
+your whole home directory, your credentials, your network, everything. nono puts a fence around
+the agent so it only gets what you grant it.
+
+- 🧱 **OS-enforced, not vibes-enforced.** On Windows, nono uses Job Objects, Windows Integrity
+  Levels, and the Windows Filtering Platform. The agent literally *cannot* write outside its
+  sandbox — the kernel says no. There's no "are you sure?" prompt the agent can click through.
+- 🎯 **Least privilege by default.** A *profile* decides what's allowed. You pick one with
+  `--profile`. The `claude-code` profile is tuned for Claude Code.
+- 🔍 **Totally transparent.** Every run prints a **capability banner** showing exactly what the
+  agent can touch. No mystery.
+
+Think of it as a playground with a fence: go wild on the equipment, but you're not wandering
+into traffic.
+
+---
+
+## The 30-second quickstart
+
+Open **PowerShell** (a normal window is fine) and prove it works:
+
+```powershell
+nono run --profile claude-code -- claude --version
+# -> 2.1.x (Claude Code)
+```
+
+Now actually run the agent against a folder you're working in:
+
+```powershell
+cd C:\Users\<you>\my-project
+nono run --profile claude-code --allow-cwd -- claude
+```
+
+- `--profile claude-code` → use the Claude Code rule set.
+- `--allow-cwd` → "yes, the agent may read+write *this* folder." (Leave it off and nono will
+  ask you `[y/N]` instead.)
+- everything after `--` is the command nono runs **inside** the sandbox.
+
+> 🪟 **One Windows quirk:** start from a real folder like your project dir or
+> `%USERPROFILE%\my-project`, **not** a bare drive root like `C:\`. See
+> [Working directory choice](./windows-poc-handoff#working-directory-choice-windows) for why.
+>
+> Also: full-screen interactive `claude` (the fancy TUI) goes through `nono shell`, not
+> `nono run` — see the [TUI note](./windows-poc-handoff#known-limitation-nono-run-cannot-host-tui-agents-on-windows).
+> For most "run a command / one-shot" experiments, `nono run` is your friend.
+
+---
+
+## How the default setup works
+
+When you run with `--profile claude-code`, nono prints a **capability banner** like this before it
+starts. **Read it — it's the contract.** Whatever's listed is *all* the agent can reach:
+
+```
+Capabilities:
+────────────────────────────────────────────────────
+ r+w  C:\Users\you\.claude (dir)
+ r+w  C:\Users\you\.cache\claude (dir)
+ r+w  C:\Users\you\.claude\claude.json (file)
+ r+w  C:\Users\you\my-project (dir)        <- this is your --allow-cwd
+     + 6 system/group paths (-v to show)
+ net  outbound allowed
+────────────────────────────────────────────────────
+```
+
+Out of the box the `claude-code` profile gives the agent:
+
+- **read+write** to Claude Code's own config/cache (`~/.claude`, `~/.cache/claude`, etc.) so the
+  agent can do its job and remember things,
+- **read+write** to whatever working directory you allowed,
+- a handful of **read-only system paths** it needs to function (`-v` shows them), and
+- **network access on** (so the agent can reach APIs). You can flip that off with `--block-net`.
+
+You'll also see a few `WARN label guard:` and `Library/Keychains` lines scroll by. **Those are
+normal** — they're nono noting that some paths already carry a Windows label (or that a
+mac-only path doesn't exist here). Not errors. Carry on.
+
+**Want to double-check a specific path before you run anything?** Ask nono:
+
+```powershell
+nono why --path C:\some\folder --op write --profile claude-code
+```
+
+---
+
+## Extending the sandbox — letting the agent see more folders
+
+Sooner or later you'll want the agent to touch a folder that isn't in the default set. Two ways
+(both **add** to the allow-list — they never punch holes in the security rules):
+
+1. **Just for this run** — add a flag:
+   ```powershell
+   nono run --profile claude-code --allow C:\work\project --read C:\reference -- claude
+   ```
+   `--allow` = read+write, `--read` = read-only, `--write` = write-only.
+
+2. **Every time** — make your own profile that *extends* `claude-code` (set it up once, reuse
+   forever). Drop a file at `%APPDATA%\nono\profiles\my-profile.json` and run with
+   `--profile my-profile`.
+
+The full how-to (the flag table and the profile JSON) lives right here:
+👉 **[Adding allowed directories](./windows-poc-handoff#adding-allowed-directories)**. No need to
+rebuild or reinstall anything — it's just config.
+
+---
+
+## Now go break things (safely) 🚀
+
+This is the part where being in a sandbox pays off. **Experiment.** Try the stuff you'd normally
+be nervous about, because the fence has your back:
+
+- Point Claude at a scratch project and ask it to refactor something gnarly.
+- Tell it to "delete everything in this folder" *on a throwaway folder you allowed* — watch it
+  work, and watch it get a hard `Access is denied` the moment it reaches outside the fence.
+- Run with `--block-net` and see how the agent behaves with no internet.
+- Run **without** `--allow-cwd` and watch nono ask permission instead.
+- Try `nono why` on random paths to build intuition for what's allowed and what isn't.
+
+When something gets denied, that's not a bug — **that's the feature working.** The goal is to get
+a feel for the boundary. Poke it. Learn where it is. You really can't hurt anything important
+from inside here.
+
+---
+
+## Something weird? Tell us! 🐞
+
+Feedback is the whole reason you're piloting this — please send it. Two flavors:
+
+**1. "nono did something I didn't expect" (the sandbox itself).** Grab these four things first:
+
+- the **exact command** you ran,
+- the **capability banner** it printed,
+- the recent **audit trail**:
+  ```powershell
+  nono audit list --recent 5
+  ```
+- the error / what you expected vs. what happened.
+
+Then send it to **`<#zt-infra-nono — your team's Slack/Teams channel or Desktop Support ticket queue>`**.
+<!-- Zt-Infra: replace the line above with the real internal intake (channel / email / ticket form). -->
+Your Zt-Infra contact triages it and, if it's a real nono bug, routes it upstream for you.
+
+**2. Going straight to the project (optional).** nono is open source and in **early alpha**, so
+breakage is expected and welcome to report:
+
+- 💬 **Discord** (best first stop): <https://discord.gg/pPcjYzGvbS> — ask there before filing.
+- 🐙 **GitHub**: <https://github.com/always-further/nono> (Discussions for ideas/questions,
+  Issues for confirmed bugs).
+
+> 🙏 One ask from the maintainers: **don't** point an AI at the repo and auto-file a pile of
+> "security findings" — they've almost certainly seen them. A clear, human, reproducible report
+> beats a hundred generated ones. Ask in Discord first if you're unsure.
+
+---
+
+## Cheat sheet
+
+| I want to… | Command |
+|------------|---------|
+| Check nono works | `nono run --profile claude-code -- claude --version` |
+| Run Claude on this folder | `nono run --profile claude-code --allow-cwd -- claude` |
+| Add another folder (one run) | `… --allow C:\work\project` (or `--read` / `--write`) |
+| Run with no internet | `nono run --profile claude-code --allow-cwd --block-net -- claude` |
+| See why a path is/ isn't allowed | `nono why --path C:\x --op write --profile claude-code` |
+| See what just happened | `nono audit list --recent 5` |
+| See the full granted list | add `-v` to any run |
+
+---
+
+## Where to go next
+
+- **[Windows POC handoff](./windows-poc-handoff)** — the deeper operator companion (install, smoke
+  tests, working-directory rules, the `nono shell` path for interactive TUIs).
+- **[Adding allowed directories](./windows-poc-handoff#adding-allowed-directories)** — full flag
+  table + custom-profile recipe.
+- `nono run --help` — every flag, grouped (FILESYSTEM, NETWORK, …).
+
+Have fun, and break things on purpose. That's what the sandbox is *for.* 🧪
