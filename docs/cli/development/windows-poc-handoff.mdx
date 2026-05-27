@@ -637,6 +637,62 @@ nono run --profile claude-code -- claude --version
 
 For full-screen interactive `claude` (TUI), this `nono run` path does not apply — use `nono shell --profile claude-code --allow-cwd` per the [TUI-limitation note](#known-limitation-nono-run-cannot-host-tui-agents-on-windows) above. The heavy-runtime support here is specifically for **non-interactive** heavy children such as `claude --version`.
 
+## Adding allowed directories
+
+POC users often need more than the `claude-code` profile's default grants (e.g. their project
+or reference dirs). Both methods below **add** to the allow-list on top of the profile — they
+never loosen deny rules.
+
+### Method 1 — per-run flags (quickest)
+
+From the `FILESYSTEM` group of `nono run --help`:
+
+| Flag | Access | Scope |
+|------|--------|-------|
+| `-a, --allow <DIR>` | read **+ write** | recursive dir (also reads `NONO_ALLOW`; comma-separated list ok) |
+| `-r, --read <DIR>` | read-only | recursive dir |
+| `-w, --write <DIR>` | write-only | recursive dir |
+| `--allow-file` / `--read-file` / `--write-file <FILE>` | rw / ro / wo | single file |
+| `--allow-cwd` | profile's cwd level | current dir |
+
+```powershell
+nono run --profile claude-code --allow C:\work\project --read C:\reference\docs -- claude
+```
+
+Paths must already exist (they are canonicalized at grant time).
+
+### Method 2 — a persistent custom profile (best for the POC team)
+
+nono loads user profiles from `%APPDATA%\nono\profiles\<name>.json` (that directory is already
+in the granted set). Create `%APPDATA%\nono\profiles\claude-code-poc.json` that **extends**
+`claude-code` and adds your directories:
+
+```json
+{
+  "extends": "claude-code",
+  "meta": { "name": "claude-code-poc" },
+  "filesystem": {
+    "allow": [ "C:/work", "$HOME/projects" ],
+    "read":  [ "C:/reference" ]
+  }
+}
+```
+
+```powershell
+nono run --profile claude-code-poc -- claude
+```
+
+`extends` inherits all of `claude-code`'s grants; your `filesystem` entries are added on top
+(same schema as the built-in profile). Env vars expand (`$HOME` → `%USERPROFILE%`,
+`$XDG_CONFIG_HOME` → `%APPDATA%`); forward or back slashes both work. It is just a config
+file — ship it to each POC machine, no rebuild and no re-sign.
+
+> **Deny rules still win.** A directory under a protected/deny path needs
+> `--allow-deny-override <path>` paired with `--allow`/`--read`/`--write`.
+>
+> **Verify a grant without launching anything:**
+> `nono why --path C:\work\project --op write --profile claude-code-poc`.
+
 ## Step 6 — POC user handoff content
 
 Drop the table below into the README you ship alongside the MSI. These are the items POC users will hit and need to know about.
