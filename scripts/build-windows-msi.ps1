@@ -221,6 +221,7 @@ $msiPath = Join-Path $outputFullPath $packageName
 $serviceComponentXml = ""
 $driverComponentXml = ""
 $eventLogComponentXml = ""
+$wfpUninstallCustomActionXml = ""
 if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
     $serviceComponentXml = @"
       <Component Id="cmpWfpServiceExe" Guid="*">
@@ -289,6 +290,42 @@ if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
         <File Id="filWfpDriverSys" Source="$driverBinaryFullPath" Name="nono-wfp-driver.sys" KeyPath="yes" />
       </Component>
 "@
+
+    # Fix #2b: remove the post-install-registered kernel driver service on uninstall.
+    #
+    # The MSI's <ServiceControl Remove="uninstall"> above removes the user-mode
+    # nono-wfp-service, but the kernel driver service (nono-wfp-driver) is
+    # registered post-install via `sc create type=kernel` and has no WiX
+    # representation, so a plain uninstall leaves it behind. This custom action
+    # runs the installed `nono.exe setup --uninstall-wfp` (the removal counterpart
+    # added alongside this) to stop + delete it.
+    #
+    # Design notes (see .planning/debug/resolved/wfp-service-stop-uninstall.md and
+    # the .planning todo of the same name — REQUIRES an elevated live-uninstall test):
+    #   * Type 34 (Directory + ExeCommand): the working directory resolves to
+    #     INSTALLFOLDER and the exe is referenced RELATIVELY ("nono.exe ...") to
+    #     avoid relying on [INSTALLFOLDER] expansion inside a deferred ExeCommand.
+    #   * Execute="deferred" Impersonate="no": runs as LocalSystem during the
+    #     machine uninstall, which `sc delete` requires.
+    #   * Sequenced Before="RemoveFiles" so nono.exe still exists when it runs.
+    #   * Condition (REMOVE="ALL") AND NOT UPGRADINGPRODUCTCODE: fire on a true
+    #     uninstall only, NOT during a major-upgrade remove pass (so upgrades do
+    #     not tear down the WFP services).
+    #   * Return="ignore": STRICTLY FAIL-OPEN — a failure here can never roll back
+    #     or block the uninstall (the whole point of deferring 2b was to never
+    #     regress uninstall). Worst case the driver service is left as today.
+    $wfpUninstallCustomActionXml = @"
+    <CustomAction
+        Id="CaUninstallWfpServices"
+        Directory="INSTALLFOLDER"
+        ExeCommand="nono.exe setup --uninstall-wfp"
+        Execute="deferred"
+        Impersonate="no"
+        Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="CaUninstallWfpServices" Before="RemoveFiles" Condition="(REMOVE=&quot;ALL&quot;) AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+"@
 }
 
 $wxsContent = @"
@@ -316,7 +353,7 @@ $wxsContent = @"
     <Feature Id="MainFeature" Title="nono" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
-  </Package>
+$($wfpUninstallCustomActionXml)  </Package>
 
   <Fragment>
 $($scopeInfo.DirectoryXml)
