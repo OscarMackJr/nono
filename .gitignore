@@ -81,3 +81,11 @@ ci-logs-local/
 *.swo
 Thumbs.db
 
+# Code-signing material (scripts/sign-poc-local.ps1 + manual signing).
+# *.pfx / *.p12 contain the PRIVATE KEY and must NEVER be committed.
+# The public cert + per-OutputDir cert are build artifacts, not source.
+*.pfx
+*.p12
+nono-poc-signing.cer
+dist/windows/*.cer
+
