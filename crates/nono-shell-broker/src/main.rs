@@ -187,6 +187,35 @@ mod broker {
         s.encode_wide().chain(Some(0)).collect()
     }
 
+    /// Order-preserving dedup of the inheritable-handle list for the
+    /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`.
+    ///
+    /// **Why this exists (bug `broker-nopty-createproc-gle87`, 2026-05-27):**
+    /// the no-PTY path's CR-01 (commit `f79a5a1a`) stderr→stdout merge makes
+    /// `nono-cli` pass three `--inherit-handle` values in which `hStdOutput`
+    /// and `hStdError` are the SAME handle value (`stdout_write`). A
+    /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` that contains a DUPLICATE handle is
+    /// rejected by the kernel at process-creation time, so
+    /// `CreateProcessAsUserW` returns `ERROR_INVALID_PARAMETER` (87) — exactly
+    /// the observed failure (token constructed, then 87). The HANDLE_LIST must
+    /// gate each unique inheritable handle EXACTLY ONCE; the std-handle BIND
+    /// (`hStdInput`/`hStdOutput`/`hStdError`) is free to alias the same handle
+    /// in two slots, and is NOT changed by this dedup. `nono-cli`'s own
+    /// HANDLE_LIST already dedupes (`gated_handles`); this restores the same
+    /// invariant on the broker side.
+    ///
+    /// Insertion order is preserved so the (already CR-02-validated) handle
+    /// values keep their argv order for any future ordering-sensitive logic.
+    fn dedup_handles_preserve_order(handles: &[HANDLE]) -> Vec<HANDLE> {
+        let mut seen: Vec<HANDLE> = Vec::with_capacity(handles.len());
+        for &h in handles {
+            if !seen.contains(&h) {
+                seen.push(h);
+            }
+        }
+        seen
+    }
+
     /// 8-step sequence. Mechanism MUST stay byte-equivalent to the validated
     /// PoC at `.planning/quick/260508-m99-.../poc-broker/src/main.rs:36-186`,
     /// with token construction unified through `nono::create_low_integrity_primary_token`
@@ -231,10 +260,18 @@ mod broker {
             )));
         }
 
-        // D-02: HANDLE_LIST = exactly the inheritable handles passed via --inherit-handle.
-        // Phase 41 D-12 (CR-03): the empty-list case is now rejected by parse_args()
-        // before reaching here, so inherit_handles is guaranteed non-empty at this point.
-        let handles_array: Vec<HANDLE> = args.inherit_handles.clone();
+        // D-02: HANDLE_LIST = the UNIQUE inheritable handles passed via --inherit-handle.
+        // Phase 41 D-12 (CR-03): the empty-list case is rejected by parse_args()
+        // before reaching here, so inherit_handles is guaranteed non-empty.
+        //
+        // Bug broker-nopty-createproc-gle87 (2026-05-27): the no-PTY stderr→stdout
+        // merge means hStdOutput and hStdError arrive as the SAME handle value, so
+        // args.inherit_handles can contain a duplicate. A PROC_THREAD_ATTRIBUTE_HANDLE_LIST
+        // with a duplicate handle is rejected by the kernel at CreateProcessAsUserW time
+        // with ERROR_INVALID_PARAMETER (87). Dedup (order-preserving) so the HANDLE_LIST
+        // gates each unique handle exactly once; the std-handle BIND below is unaffected
+        // and may still alias the same handle across hStdOutput/hStdError.
+        let handles_array: Vec<HANDLE> = dedup_handles_preserve_order(&args.inherit_handles);
         let handles_byte_size = std::mem::size_of_val(handles_array.as_slice());
         let ok = unsafe {
             // SAFETY: attr_list initialized above; handles_array lives for the duration of the call.
@@ -296,6 +333,11 @@ mod broker {
         // console — a silent degrade that violates CLAUDE.md "never silently
         // degrade / fail secure". The production nono-cli path always passes
         // exactly three; this guard rejects any malformed invocation.
+        //
+        // Bug broker-nopty-createproc-gle87: hStdOutput and hStdError MAY be the
+        // same handle value (the supervisor merges child stderr into stdout). That
+        // aliasing is intentional and correct HERE — only the HANDLE_LIST above is
+        // deduped; the bind keeps all three slots.
         if args.no_pty && args.inherit_handles.len() < 3 {
             return Err(NonoError::SandboxInit(format!(
                 "--no-pty requires three inherited stdio handles (stdin, stdout, stderr); got {}. \
@@ -689,6 +731,63 @@ mod broker {
                 !parsed.no_pty,
                 "BrokerArgs.no_pty must be false when --no-pty is absent"
             );
+        }
+    }
+
+    /// Bug `broker-nopty-createproc-gle87` (2026-05-27) regression guard: the
+    /// no-PTY stderr→stdout merge makes `nono-cli` pass a `--inherit-handle`
+    /// list with a DUPLICATE handle (hStdOutput == hStdError). The broker's
+    /// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` must gate each UNIQUE handle exactly
+    /// once or `CreateProcessAsUserW` returns ERROR_INVALID_PARAMETER (87).
+    /// These tests pin `dedup_handles_preserve_order` so the fix cannot silently
+    /// regress back to the raw `args.inherit_handles.clone()` that caused 87.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod dedup_handles_tests {
+        use super::*;
+
+        fn h(v: usize) -> HANDLE {
+            v as HANDLE
+        }
+
+        /// The production no-PTY shape: [stdin_read, stdout_write, stdout_write]
+        /// (positions 1 and 2 aliased by the stderr→stdout merge). Dedup MUST
+        /// collapse to the two UNIQUE handles in first-seen order, so the
+        /// HANDLE_LIST passed to UpdateProcThreadAttribute has no duplicate.
+        #[test]
+        fn dedup_collapses_merged_stdout_stderr_duplicate() {
+            let stdin_read = h(0x100);
+            let stdout_write = h(0x200);
+            let raw = vec![stdin_read, stdout_write, stdout_write];
+            let deduped = dedup_handles_preserve_order(&raw);
+            assert_eq!(
+                deduped,
+                vec![stdin_read, stdout_write],
+                "merged-stdio HANDLE_LIST must dedup to the unique set in first-seen order \
+                 (else CreateProcessAsUserW returns ERROR_INVALID_PARAMETER 87)"
+            );
+        }
+
+        /// A list with no duplicates is returned unchanged (order preserved).
+        /// Guards against the dedup accidentally reordering or dropping unique
+        /// handles on the PTY path (which passes distinct handles).
+        #[test]
+        fn dedup_preserves_unique_list_unchanged() {
+            let raw = vec![h(0xa), h(0xb), h(0xc)];
+            let deduped = dedup_handles_preserve_order(&raw);
+            assert_eq!(
+                deduped,
+                vec![h(0xa), h(0xb), h(0xc)],
+                "a list with no duplicates must pass through unchanged in order"
+            );
+        }
+
+        /// A single handle round-trips. Smallest valid HANDLE_LIST.
+        #[test]
+        fn dedup_single_handle_unchanged() {
+            let raw = vec![h(0x42)];
+            let deduped = dedup_handles_preserve_order(&raw);
+            assert_eq!(deduped, vec![h(0x42)]);
         }
     }
 
