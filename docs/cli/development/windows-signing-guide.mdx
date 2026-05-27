@@ -125,3 +125,50 @@ Note that `signtool verify /pa /tw` will warn or fail for self-signed certificat
 they are not trusted by the default authentication policy (`/pa`). Use
 `signtool verify /pa /tw /r <thumbprint>` or accept the expected failure output when running
 local tests with self-signed certs.
+
+## Runtime symptom: unsigned install cannot spawn the broker
+
+If you run an **unsigned** install (for example a locally built MSI deployed to
+`C:\Program Files\nono\`), `nono run` fails when it tries to spawn the Windows
+Low-IL broker with:
+
+```text
+Trust verification failed for C:\Program Files\nono\nono.exe:
+nono.exe Authenticode status is Unsigned (expected Valid).
+Self-trust-anchor unavailable; refusing to spawn broker.
+```
+
+This is **fail-secure behavior working as designed**, not a bug (Phase 32, D-32-12). The
+broker-spawn gate (`verify_broker_authenticode` in
+`crates/nono-cli/src/exec_strategy_windows/launch.rs`) implements a *self-trust-anchor*:
+`nono.exe` reads its own Authenticode signer subject + thumbprint and requires the sibling
+`nono-shell-broker.exe` to match exactly. That anchor only exists when `nono.exe`'s own
+signature is `Valid`, so an unsigned production-layout install has no anchor to extract and
+the gate fail-closes. There is **no env-var or CLI escape hatch** in production layout
+(D-32-12).
+
+There are exactly two supported ways to make `nono run` succeed:
+
+1. **Install a signed release (production fix).** Sign `nono.exe` *and*
+   `nono-shell-broker.exe` with the same certificate so their signer subject + thumbprint
+   match. In CI this happens automatically once the `WINDOWS_SIGNING_CERT` /
+   `WINDOWS_SIGNING_CERT_PASSWORD` repository secrets are set (see
+   [Required GitHub Actions secrets](#required-github-actions-secrets)) — the release
+   workflow signs both binaries and both MSIs before upload. Shipped MSIs are unsigned only
+   when those secrets are absent.
+
+2. **Run from a dev-build layout (development).** The gate is intentionally skipped when
+   `nono.exe` runs from a `\target\release\` or `\target\debug\` path (`is_dev_build_layout`).
+   Build and run the dev-layout binaries directly — no signing, no admin, no trust-store
+   changes:
+
+   ```powershell
+   cargo build --release -p nono-cli -p nono-shell-broker
+   # then invoke the dev-layout binary (broker is found as its sibling):
+   .\target\release\nono.exe run --profile claude-code -- claude --version
+   ```
+
+Signing an unsigned install in place with a self-signed cert is **not** a supported shortcut:
+because the gate uses `WinVerifyTrust` with full chain trust, the self-signed cert would also
+have to be imported into the machine's Trusted Root and Trusted Publisher stores, which
+broadens the machine-wide trust surface. Prefer option 2 for local development.

@@ -2021,7 +2021,11 @@ pub(crate) fn verify_broker_authenticode(
                 path: nono_exe.display().to_string(),
                 reason: format!(
                     "nono.exe Authenticode status is {other:?} (expected Valid). \
-                     Self-trust-anchor unavailable; refusing to spawn broker."
+                     Self-trust-anchor unavailable; refusing to spawn broker. \
+                     This install is not Authenticode-signed: install a signed release \
+                     MSI (signing setup: docs/cli/development/windows-signing-guide.mdx), \
+                     or run nono from a dev-build layout (target\\release or \
+                     target\\debug) where this gate is intentionally skipped."
                 ),
             })
         }
