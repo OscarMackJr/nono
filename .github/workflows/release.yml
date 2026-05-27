@@ -381,16 +381,14 @@ jobs:
             artifacts/trusted_root.json
             artifacts/SHA256SUMS.txt
 
-  docker:
-    name: Publish Docker Image
-    needs: release
-    if: ${{ !contains(github.event.inputs.tag || github.ref_name, 'alpha') && !contains(github.event.inputs.tag || github.ref_name, 'beta') && !contains(github.event.inputs.tag || github.ref_name, 'rc') }}
-    uses: ./.github/workflows/image-build.yml
-    with:
-      ref: ${{ github.event.inputs.tag || github.ref_name }}
-      version: ${{ github.event.inputs.tag || github.ref_name }}
-      push: true
-    secrets: inherit
+  # NOTE: Docker image publishing is handled by image-build.yml's own
+  # `workflow_run: workflows: ["Release"]` trigger, which auto-runs AFTER this
+  # Release workflow completes. Do NOT re-add a `docker:` job here that does
+  # `uses: ./.github/workflows/image-build.yml`: image-build.yml has no
+  # `on: workflow_call:` trigger, so a reusable-workflow call fails the ENTIRE
+  # Release workflow at startup validation (0s, no jobs run). This was the
+  # chronic release.yml startup_failure. See
+  # .planning/debug/resolved/release-yml-startup-failure.md.
 
   publish-crates:
     name: Publish to crates.io
