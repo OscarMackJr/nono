@@ -423,6 +423,13 @@ and always enforce verification. The detector is a runtime check on `current_exe
 path, NOT `#[cfg(debug_assertions)]` — `cargo test --release` therefore exercises
 the production-mode strict path correctly (Phase 32 Pitfall 6).
 
+**Making an installed (Program Files) POC build pass the gate.** If you need the *installed*
+MSI to spawn the broker — rather than running from `target\release\` — sign both binaries with
+a self-signed cert and trust it on each POC machine. `scripts/sign-poc-local.ps1` automates the
+whole flow (sign EXEs → rebuild MSIs → sign MSIs → export the public `.cer`); see
+[Local POC signing](./windows-signing-guide#local-poc-signing-self-signed-internal-use). This
+is a controlled-internal-POC path only — **not** for external distribution.
+
 ## Step 5 — Smoke checklist
 
 Run these from a fresh PowerShell. Capture stdout, stderr, and `nono --version` for each — that is the minimum triage payload from [Windows Preview Pilot § Debugging Inputs](/cli/development/windows-preview-pilot#debugging-inputs).

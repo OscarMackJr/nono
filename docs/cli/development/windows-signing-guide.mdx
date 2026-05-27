@@ -168,7 +168,71 @@ There are exactly two supported ways to make `nono run` succeed:
    .\target\release\nono.exe run --profile claude-code -- claude --version
    ```
 
-Signing an unsigned install in place with a self-signed cert is **not** a supported shortcut:
-because the gate uses `WinVerifyTrust` with full chain trust, the self-signed cert would also
-have to be imported into the machine's Trusted Root and Trusted Publisher stores, which
-broadens the machine-wide trust surface. Prefer option 2 for local development.
+For a **single developer machine**, prefer option 2 — it needs no cert and no trust-store
+changes. Signing an unsigned install in place with a self-signed cert is not a *production*
+path: because the gate uses `WinVerifyTrust` with full chain trust, the self-signed cert must
+also be imported into the machine's Trusted Root and Trusted Publisher stores, which broadens
+that machine's code-trust surface.
+
+For a **controlled internal POC across a few machines you own** (where running each from a
+`target\release` layout is impractical), that trust-store import is an acceptable, reversible
+tradeoff. See [Local POC signing](#local-poc-signing-self-signed-internal-use) below, which
+wraps the whole flow in `scripts/sign-poc-local.ps1`.
+
+## Local POC signing (self-signed, internal use)
+
+> **POC-only. Not for external distribution.** This path uses a self-signed certificate that
+> is trusted only on machines where you explicitly import it. It broadens those machines'
+> code-trust surface to anything signed by that cert, so use it **only on machines you
+> control** (e.g. an internal admin team's boxes). It is fully reversible. For releases to
+> anyone else, use a commercial CA code-signing cert or Azure Trusted Signing and the CI
+> `release.yml` path above. **You do not need DigiCert as a CA** — the only DigiCert
+> dependency anywhere here is the free public timestamp server.
+
+`scripts/sign-poc-local.ps1` performs the entire local POC signing flow in one command:
+
+```powershell
+pwsh -File scripts/sign-poc-local.ps1
+# or scope/cert options:
+pwsh -File scripts/sign-poc-local.ps1 -Scope machine -VersionTag v0.57.3
+pwsh -File scripts/sign-poc-local.ps1 -Thumbprint <existing-cert-thumbprint>
+```
+
+It runs, in this order:
+
+1. Discovers `signtool.exe` (newest `Windows Kits\10\bin\<ver>\x64`).
+2. Creates a self-signed `CodeSigningCert` in `Cert:\CurrentUser\My` (SHA-256, +2y), or
+   reuses one via `-Thumbprint`.
+3. **Signs the EXEs first** — `nono.exe`, `nono-shell-broker.exe`, and (machine scope only,
+   if present) `nono-wfp-service.exe`.
+4. **Rebuilds the MSIs** via `build-windows-msi.ps1` so the cab embeds the *signed* EXEs.
+5. **Signs the MSIs.**
+6. Exports the **public** certificate (no private key) to
+   `dist/windows/nono-poc-signing.cer` for distribution.
+
+**Why the EXE-then-MSI order is mandatory:** the MSI embeds *copies* of the EXEs, and the
+broker gate checks the **installed** `nono.exe`'s signature — not the MSI's. Signing the MSI
+alone leaves unsigned EXEs inside it and the broker still fail-closes. The script enforces the
+order; `-SkipMsiRebuild` re-signs existing artifacts only and warns about this.
+
+**The private key never leaves the build machine.** Distribute only the public `.cer` and the
+signed MSI. On **each** target machine, an admin runs once:
+
+```powershell
+Import-Certificate -FilePath nono-poc-signing.cer -CertStoreLocation Cert:\LocalMachine\Root
+Import-Certificate -FilePath nono-poc-signing.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+msiexec /i nono-v0.57.3-x86_64-pc-windows-msvc-machine.msi
+(Get-AuthenticodeSignature 'C:\Program Files\nono\nono.exe').Status   # -> Valid
+nono run --profile claude-code --allow-cwd -- claude --version
+```
+
+Once the cert is in **Root + TrustedPublisher**, `nono.exe` verifies as `Valid`, the broker
+self-trust-anchor exists, and the gate passes.
+
+**Reversibility:** to undo on a machine, delete the cert from `Cert:\LocalMachine\Root` and
+`Cert:\LocalMachine\TrustedPublisher` and uninstall the MSI.
+
+> Running the helper against the default `-OutputDir dist/windows` regenerates the tracked
+> `dist/windows/*.wxs` reference snapshots (a side effect of `build-windows-msi.ps1`). Revert
+> with `git checkout -- dist/windows/nono-machine.wxs dist/windows/nono-user.wxs` if you do
+> not want that churn.
