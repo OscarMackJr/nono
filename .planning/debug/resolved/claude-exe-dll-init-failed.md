@@ -1,10 +1,10 @@
 ---
 slug: claude-exe-dll-init-failed
-status: awaiting_human_verify
+status: resolved
 trigger: |
   "  nono run --profile claude-code -- claude --version"  command errors:  Claude.exe Application error.  The application was not able to start correctly
 created: 2026-05-26
-updated: 2026-05-26
+updated: 2026-05-27
 ---
 
 # Debug Session: claude-exe-dll-init-failed
@@ -24,7 +24,7 @@ updated: 2026-05-26
 - hypothesis: STATUS_DLL_INIT_FAILED (0xc0000142) under nono is caused by the Windows low-IL / restricted-token backend blocking a path or registry/DLL resource that Claude.exe (Electron/Node) needs at DllMain time. The "0.53.1 -> 0.57.0 version bump" correlation is likely a red herring (that commit only touched Cargo.toml/Cargo.lock — no behavior change). The real change is the Windows IL mandatory-label / restricted-token work that landed in this window.
 - test: examine Windows launch.rs / restricted_token.rs / labels_guard.rs code paths and the claude-code profile capability set; identify what resource the low-IL child cannot access.
 - expecting: a path/registry/IL drop that an Electron app needs at startup but the sandbox now denies.
-- next_action: ROOT CAUSE CONFIRMED. FIX DECISION MADE 2026-05-26 — user selected Option 1 (extend Phase 31 Low-IL broker to the non-PTY `nono run` path) AND scoped it as a NEW MILESTONE v2.7 (v2.6 shipped 2026-05-25). Milestone v2.7 "Windows supervised-run hardening" created 2026-05-26 (REQ-WSRH-01..06): Phase 51 (no-PTY Low-IL broker mode + select_windows_token_arm routing + NO_WRITE_UP write-deny preservation + CI/cross-target sweep) and Phase 52 (Windows-host HUMAN-UAT repro A/B matrix + windows-poc-handoff.mdx doc update). This debug session stays open (unfixed) until Phase 52 confirms reproduction B (`nono run --profile claude-code -- claude --version`) prints the version and exits 0. Next: /gsd:plan-phase 51.
+- next_action: RESOLVED 2026-05-27. Root cause confirmed (WRITE_RESTRICTED restricting-SID double-gate fails the heavy-runtime claude.exe DllMain). Fix shipped as v2.7 milestone "Windows supervised-run hardening": Phase 51 implemented WindowsTokenArm::BrokerLaunchNoPty (no-PTY Low-IL broker token, no restricting SID, write-deny preserved via mandatory-label NO_WRITE_UP); Phase 52 field-validated repro A + repro B both PASS on Win11 build-26200 with the 234 MB self-contained claude.exe — 0xC0000142 confirmed gone. v2.7 / v0.57.2 shipped + pushed + tagged 2026-05-26. Closure criterion (Resolution.verification) satisfied; session moved to resolved/.
 - reasoning_checkpoint:
     hypothesis: "`nono run --profile claude-code -- claude --version` selects WindowsTokenArm::WriteRestricted (non-detached, non-PTY, session_sid=Some). The synthetic restricting SID S-1-5-117-* double-gates every WRITE-type access check. claude.exe (a 234 MB self-contained native binary, replaced 2026-05-24) performs WRITE-type accesses during DllMain/bootstrap (NtCreateSection SECTION_MAP_WRITE on \\BaseNamedObjects, named-object create, temp DLL extraction). Those are denied against the restricting SID → DllMain returns FALSE → loader exits with STATUS_DLL_INIT_FAILED (0xC0000142)."
     confirming_evidence:
@@ -34,7 +34,7 @@ updated: 2026-05-26
       - "nono Windows token/label code did NOT change in 0.53.1..0.57.0 (git log confirms) — the version-bump correlation is coincidental; the external claude.exe shape change is the trigger."
     falsification_test: "If `nono run --profile claude-code -- cmd /c \"echo hi\"` ALSO fails 0xC0000142 on this host, the WriteRestricted token is not the differentiator and the hypothesis is wrong. (Phase 15 Row C predicts cmd PASSES.) Conversely, running claude.exe under a null or Low-IL primary token (no restricting SID) should NOT produce 0xC0000142."
     fix_rationale: "The root cause is the WRITE_RESTRICTED restricting-SID double-gate, not Low-IL labels. The Phase 31 broker (Low-IL primary token + inherited console, NO restricting SID) was production-validated to run heavy-runtime children (PowerShell/CLR) cleanly. Routing the non-PTY `nono run` path through an equivalent Low-IL/broker mechanism removes the restricting-SID write-gate while preserving write-deny via mandatory-label NO_WRITE_UP — addressing the cause, not the symptom. A null-token fallback would address the symptom but regress write protection (rejected in history)."
-    blind_spots: "(1) The broker currently requires --inherit-handle (ConPTY pipes) and a PTY; a non-PTY broker mode (inherited console or pipe stdio) is not yet wired and needs design. (2) Have not field-confirmed claude.exe runs clean under a Low-IL primary token specifically (only PowerShell/CLR was validated). (3) Cannot reproduce the 0xC0000142 from this agent without spawning under nono on Windows; relying on documented matrix + deterministic code path. (4) Whether claude.exe needs WRITE access to a granted path (e.g. its temp-extraction dir) that the Low-IL label would also deny — separate from the token gate."
+    blind_spots: "(1) The broker currently requires --inherit-handle (ConPTY pipes) and a PTY; a non-PTY broker mode (inherited console or pipe stdio) is not yet wired and needs design. (2) Have not field-confirmed claude.exe runs clean under a Low-IL primary token specifically (only PowerShell/CLR was validated). (3) Cannot reproduce the 0xC0000142 from this agent without spawning under nono on Windows; relying on documented matrix + deterministic code path. (4) Whether claude.exe needs WRITE access to a granted path (e.g. its temp-extraction dir) that the Low-IL label would also deny — separate from the token gate. [RESOLVED: Phase 51 designed + wired the no-PTY broker mode (BrokerLaunchNoPty); Phase 52 field-confirmed claude.exe runs clean under it — all four blind spots retired by the live repro B PASS.]"
 
 ## Evidence
 
@@ -68,9 +68,16 @@ updated: 2026-05-26
   implication: CONFIRMS the falsification_test prediction. A normal-shape executable survives the WRITE_RESTRICTED + restricting-SID token (DllMain succeeds; only privileged runtime ops are denied). The 234 MB heavy-runtime claude.exe fails at DllMain (0xC0000142) under the SAME token. The differentiator is process shape (heavy DllMain write-type activity), not nono being broken for all children. Diagnosis upheld. Test B (claude.exe itself) was NOT re-run by the orchestrator because it pops a blocking WER modal and the user already reported its 0xC0000142 outcome.
   implication: ROOT CAUSE CONFIRMED. (1) WHAT CHANGED: claude.exe was replaced on 2026-05-24 with a large self-contained native binary that performs heavy DllMain/bootstrap-time initialization (embedded-runtime memory mapping, writable named sections, temp extraction). The prior `claude` (npm/node-launcher era) did lighter init and survived the WRITE_RESTRICTED token. (2) WHY IT FAILS UNDER nono: nono runs it via WindowsTokenArm::WriteRestricted. The synthetic restricting SID S-1-5-117-* double-gates every WRITE-type access check. The embedded runtime's init issues WRITE-type accesses (NtCreateSection SECTION_MAP_WRITE on \BaseNamedObjects, named-object create, temp DLL extraction) → STATUS_ACCESS_DENIED against the restricting SID → DllMain/bootstrap returns FALSE → loader exits with STATUS_DLL_INIT_FAILED (0xC0000142). This is the exact CLR-class mechanism documented at nono-shell-status-dll-init-failed.md lines 113-114, now realized for the native claude.exe. The nono code did NOT regress; an external dependency (claude.exe) changed shape and exposed the long-known WRITE_RESTRICTED brittleness on the `nono run` non-PTY supervised path.
 
+- timestamp: 2026-05-27
+  checked: VERIFICATION CLOSURE. Phase 52 HUMAN-UAT field-validation artifact (.planning/phases/52-field-validation-closure-heavy-runtime-human-uat-doc-update/52-HUMAN-UAT.md) + 52-01-SUMMARY.md, plus corroboration from the sibling resolved session unsigned-broker-trust-fail.
+  found: Phase 52 ran the documented repro matrix on the operator's live Windows 11 host (build 26200) with the Phase 51 `nono 0.57.0` BrokerLaunchNoPty binary and the 234 MB self-contained claude.exe (234,248,864 bytes, 2026-05-24, PE32+). Repro A (`nono run --profile claude-code -- cmd /c "echo hi"`) → printed `hi`, exit 0 = PASS. Repro B (`nono run --profile claude-code -- claude --version`) → printed `2.1.150 (Claude Code)`, exit 0, NO 0xC0000142 / STATUS_DLL_INIT_FAILED, no WER dialog = PASS. Both operator-attested at the execute-phase checkpoint; ROADMAP SC-4 positive-spawn deferral CLOSED; REQ-WSRH-04 satisfied. Independently corroborated 2026-05-27 by the sibling debug session unsigned-broker-trust-fail, which ran the same command from a dev-layout build and observed the broker spawn PAST the old failure point ("broker: Low-IL primary token constructed") with no 0xC0000142.
+  implication: The documented closure criterion (post-fix repro B prints the version and exits 0; repro A still passes) is SATISFIED on a real PowerShell console. The 0xC0000142 regression this session tracked is eliminated by the Phase 51 BrokerLaunchNoPty Low-IL primary token. NOTE — out of scope for this session: a separate NEW error (`CreateProcessAsUserW failed (GetLastError=87)` / ERROR_INVALID_PARAMETER, preceded by `alloc_console_rc=0`) surfaced only when running under the Claude Code git-bash/MSYS Bash tool (no real Win32 console; MSYS pipe stdio incompatible with Low-IL CreateProcessAsUserW std-handle inheritance). That is an environment artifact, NOT the 0xC0000142 bug, and does NOT contradict the Phase 52 PASS (which ran from a real PowerShell console). If pursued, it is a SEPARATE /gsd:debug and only if it also reproduces from a native PowerShell console.
+
 ## Eliminated
 
-(none yet)
+- The 0.53.1→0.57.0 version bump (commit 6cf7e85c): pure version-string change across 5 Cargo.toml + Cargo.lock, no behavior change. The version-bump correlation was coincidental.
+- Possibility (B) — interactive-detection / PTY-allocation routing change in the 0.53.1..0.57.0 window: ELIMINATED. `nono run` hardcodes interactive_pty=false (launch_runtime.rs:359); the only in-window commits touching the Windows supervisor/mod files (b6a88fea Linux af_unix, 4a60f675 ApprovalDecision rename) do not alter PTY/token routing.
+- nono Windows token/label/policy code regression: ELIMINATED. Nothing in restricted_token.rs / labels_guard.rs / policy.json's Windows handling changed in the suspected window. The trigger was the EXTERNAL claude.exe binary changing shape (lightweight launcher → 234 MB self-contained heavy runtime) on 2026-05-24.
 
 ## Resolution
 
@@ -92,37 +99,39 @@ updated: 2026-05-26
     heavy-runtime DllMain write activity, not the nono path.
 
 - fix: |
-    DECIDED 2026-05-26: Option 1 selected by user. The fix is deferred to a dedicated roadmap phase
-    (scoped via plan-phase) — NOT applied inline because it is ~Phase-31-class architectural work
-    (a no-PTY Low-IL broker mode + Windows field validation). This debug session remains open until
-    that phase lands and reproduction B (`nono run --profile claude-code -- claude --version`) prints
-    the version and exits 0.
+    APPLIED (Option 1 — security-preserving) and SHIPPED as milestone v2.7 "Windows supervised-run hardening"
+    (v2.7 / v0.57.2, pushed + tagged 2026-05-26). Routes the non-PTY `nono run` supervised path through a new
+    WindowsTokenArm::BrokerLaunchNoPty — a no-PTY Low-IL broker token instead of WRITE_RESTRICTED. The Low-IL
+    primary token carries NO restricting SID, so the heavy-runtime claude.exe DllMain WRITE-type accesses succeed;
+    write-deny is preserved via mandatory-label NO_WRITE_UP rather than the restricting-SID double-gate. This
+    addresses the cause (the WRITE_RESTRICTED restricting-SID write-gate, structurally incompatible with
+    heavy-runtime children) without regressing the write-protection model.
 
-    NOT YET APPLIED — fix shape required a user decision (see CHECKPOINT). The root cause is the WRITE_RESTRICTED
-    restricting-SID write-gate, which is structurally incompatible with heavy-runtime children. Ranked options:
-
-    Option 1 (RECOMMENDED, security-preserving, larger): Route the non-PTY `nono run` supervised path through a
-    Low-IL primary token instead of WRITE_RESTRICTED for the affected case — i.e. extend the Phase 31 broker
-    mechanism (or a no-PTY broker mode) to the non-PTY path. Low-IL primary token has NO restricting SID, so
-    heavy-runtime DllMain writes succeed; write-deny is preserved via mandatory-label NO_WRITE_UP (the broker's
-    PowerShell/CLR child was production-validated, Postscript 2). Needs a no-PTY console-inherit/pipe-stdio broker
-    mode (broker currently requires --inherit-handle PTY pipes) + Windows field validation. ~Phase-31-class effort.
-
-    Option 2 (smallest, regresses write protection — matches the Phase 15 detached waiver): null-token the non-PTY
-    `nono run` path. claude.exe would launch (no restricting SID, Medium IL), but the child loses WRITE_RESTRICTED
-    write-deny AND mandatory-label write-deny (Medium-IL child dominates Medium-IL files). Job Object + CapabilitySet
-    + AppID WFP remain. This was explicitly rejected on the interactive path in history as a real regression; on a
-    one-shot `claude --version` the exposure is narrower but it still weakens the documented `nono run` security model.
-
-    Option 3 (no nono change): document that the native claude.exe is unsupported under `nono run` on Windows until
-    Option 1 lands; advise the user to use the node-launcher form of Claude Code (lighter DllMain) if available, or
-    run `claude --version` outside the sandbox (version check is not a sensitive operation).
+    Delivered in two phases:
+      - Phase 51 (implementation): added the BrokerLaunchNoPty arm + select_windows_token_arm routing + the
+        broker `--no-pty` mode + a write-deny regression test; included the CR-01 stderr-deadlock fix and the
+        windows_low_il_broker field wiring.
+      - Phase 52 (field validation): HUMAN-UAT repro A + repro B matrix on Win11 build-26200 with the 234 MB
+        self-contained claude.exe — both PASS, 0xC0000142 confirmed gone.
 
 - verification: |
-    Pre-fix reproduction confirmation the user can run NOW to validate the diagnosis (predicted by the matrix):
-      A. `nono run --profile claude-code -- cmd /c "echo hi"`  → predicted PASS (prints hi, exit 0)
-         [if this FAILS 0xC0000142, the hypothesis is wrong].
-      B. `nono run --profile claude-code -- claude --version`  → reproduces 0xC0000142 (the bug).
-    Post-fix (Option 1 or 2): B prints the Claude version and exits 0; A still passes.
+    SATISFIED. Phase 52 HUMAN-UAT repro B PASS on Win11 build 26200 with the Phase 51 `nono 0.57.0`
+    BrokerLaunchNoPty binary and the 234 MB self-contained claude.exe (234,248,864 B, 2026-05-24, PE32+):
+      A. `nono run --profile claude-code -- cmd /c "echo hi"`  → printed `hi`, exit 0 = PASS (no regression).
+      B. `nono run --profile claude-code -- claude --version`  → printed `2.1.150 (Claude Code)`, exit 0,
+         NO 0xC0000142 / STATUS_DLL_INIT_FAILED, no WER dialog = PASS (bug eliminated).
+    Both operator-attested at the execute-phase checkpoint (evidence in
+    .planning/phases/52-field-validation-closure-heavy-runtime-human-uat-doc-update/52-HUMAN-UAT.md;
+    ROADMAP SC-4 positive-spawn deferral closed; REQ-WSRH-04 satisfied). Independently corroborated 2026-05-27
+    by the sibling resolved session unsigned-broker-trust-fail, which observed the broker spawn past the old
+    failure point ("broker: Low-IL primary token constructed") with no 0xC0000142.
 
-- files_changed: []
+    Out of scope for this session: a separate NEW `CreateProcessAsUserW failed (GetLastError=87)` error appears
+    only under the Claude Code git-bash/MSYS Bash tool (no real Win32 console). It is an environment artifact,
+    NOT this 0xC0000142 bug, and does not contradict the Phase 52 PASS (real PowerShell console). Any pursuit is
+    a SEPARATE /gsd:debug, and only if it also reproduces from a native PowerShell console.
+
+- files_changed:
+    - crates/nono-cli/src/exec_strategy_windows/launch.rs   # Phase 51: WindowsTokenArm::BrokerLaunchNoPty arm + select_windows_token_arm routing for the non-PTY `nono run` supervised path
+    - crates/nono-cli/src/exec_strategy_windows/mod.rs       # Phase 51: broker token-arm wiring / windows_low_il_broker field plumbing
+    - crates/nono-shell-broker/                              # Phase 51: broker `--no-pty` mode (no-PTY Low-IL primary token + inherited/pipe stdio) + CR-01 stderr-deadlock fix
