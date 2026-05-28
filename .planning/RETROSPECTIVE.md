@@ -171,6 +171,29 @@
 
 ---
 
+## Milestone: v2.7 — Windows supervised-run hardening
+
+**Shipped:** 2026-05-26 (archived 2026-05-28) | **Phases:** 2 (51, 52) | **Plans:** 6
+
+### What Was Built
+The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-runtime children (the 234 MB self-contained `claude.exe`) survive DllMain under `nono run` while keeping `NO_WRITE_UP` write-deny — closing the `0xC0000142` regression. Phase 52 field-validated it live on Win11.
+
+### What Worked
+- Root-cause-first debugging: the `claude-exe-dll-init-failed` session nailed the WRITE_RESTRICTED restricting-SID mechanism before any code changed; the fix addressed the cause (broker token), not the symptom (a null-token would have regressed write-deny — explicitly rejected).
+- A live HUMAN-UAT phase (52) as a first-class deliverable for a security fix that can't be unit-tested.
+
+### What Was Inefficient
+- **The "shipped" milestone was not actually working.** Phase 52's repro-B "PASS" ran a *pre-CR-01* Program Files binary; the tagged v2.7 build (`637a426c`) was doubly-broken on the real-console no-PTY path (GLE=87 spawn failure, then swallowed stdout). Both were only found in post-ship operator testing (debug `broker-nopty-createproc-gle87` + `nopty-broker-stdout-swallowed`, fixed `d8b7ce00` + `005b4c9e`). Net: the headline feature took **two more post-tag debug cycles** to actually function.
+
+### Key Lessons
+- **Version-string sameness is a trap (twice this milestone).** "It's 0.57.0 / it passed UAT" did not mean the code under test matched HEAD. Always confirm the *commit/binary identity* under test, not just the version string — both post-ship bugs hid behind an unchanged version number. (Reinforces `feedback_verify_debug_hypothesis`.)
+- A field-UAT "PASS" is only as good as the binary it ran; record the exact commit + binary mtime in the UAT artifact, and re-run after any post-UAT relink.
+
+### Cost Observations
+- Not instrumented. Notable: the milestone "completed" in 2 phases but required ~2 post-ship debug cycles + a tooling/docs burst (MSI signing helper, POC docs, intern guide, gap analysis) before the feature was genuinely usable on a real console.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution

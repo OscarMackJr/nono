@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.7
 milestone_name: Windows supervised-run hardening
-status: milestone_complete
-last_updated: "2026-05-26T19:12:24.185Z"
-last_activity: 2026-05-26
+status: Awaiting next milestone
+last_updated: "2026-05-28T00:56:45.921Z"
+last_activity: 2026-05-28
 progress:
   total_phases: 2
   completed_phases: 2
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 6
   percent: 100
 ---
 
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-26 at v2.7 milestone start; v2.6 ship
 
 ## Current Position
 
-Phase: 52 (complete)
-Plan: 2/2 complete
-Status: Milestone v2.7 complete
-Last activity: 2026-05-26 -- Phase 52 executed on live Win11 host (build 26200): repro A + repro B both PASS, 0xC0000142 fix confirmed, windows-poc-handoff.mdx updated; v2.7 milestone complete (2/2 phases)
+Phase: Milestone v2.7 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-05-28 — Milestone v2.7 completed and archived
 
 ### v2.7 Phase Summary
 
@@ -49,6 +49,18 @@ Last activity: 2026-05-26 -- Phase 52 executed on live Win11 host (build 26200):
 | 49 | Sigstore trust-root POC resilience (--from-file + release asset + fixture cadence) | REQ-POC-TRUST-01..03 | Complete (2026-05-21) |
 
 ## Deferred Items
+
+### v2.7 close (acknowledged 2026-05-28)
+
+Pre-close `audit-open` reported 45 open items; user chose "Acknowledge all & proceed". Breakdown:
+- **~42 historical (already deferred at prior closes):** 29 `missing` quick-task slugs (pre-v2.5 stragglers) + 10 UAT gaps + 3 verification gaps (pre-v2.0 phases 01/07/13/17/18 bookkeeping, carried since the v2.2/v2.4 closes — see the older deferred tables below).
+- **Genuine new carry-forwards (→ v2.8):**
+  - WFP **elevated live-uninstall UAT** still pending (resolved debug `wfp-service-stop-uninstall` shipped Fix #1 `0cbeb3be` + #2a `b852826b` + #2b auto-uninstall custom action; elevated `sc stop` / `msiexec /x` leaves-nothing verification is operator-run).
+  - **v0.57.3 MSI rebuild** off the post-`005b4c9e` `nono.exe` before distribution (a signed rebuild ran ~18:32 reusing cert `2245…`; if it predates the `005b4c9e` stdout-echo fix the signed MSIs are stale — confirm at v2.8).
+  - **Untagged post-`637a426c` fixes** (`d8b7ce00` broker GLE=87, `005b4c9e` stdout-echo) — release with v2.8 (v2.7 tag deliberately not moved).
+  - 3 pending todos (carried).
+
+---
 
 Items acknowledged and deferred at v2.5 milestone close on 2026-05-20 (per `.planning/v2.5-MILESTONE-AUDIT.md` and pre-close artifact audit). Originally 32 items across 4 categories; Phase 44 drained 5 pending follow-up todos (2026-05-20), leaving 27 items across 3 categories carrying forward in v2.6.
 
@@ -342,7 +354,7 @@ Known deferred items at v2.4 close: 5 host-blocked requirements (re-anchored to 
 **[Stale — pre-v2.4 forensic history below this line. Authoritative state is the YAML frontmatter at the top of this file plus the resume entry above.]**
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-05-26
+**Last Activity:** 2026-05-28
 **Resumed:** 2026-05-11 — Phase 33 (`windows-parity-upstream-0-52-divergence`) Wave 3 closed via `/gsd-execute-phase 33`. Plan 33-03 landed three downstream artifact edits in single commit `8f783c39` closing REQ-3 + REQ-4 + REQ-5 (PROJECT.md Key Decisions row for parity-strategy decision + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section with empirical-disproof framing + ROADMAP Phase 33 entry flipped to complete + Phase 34 UPST3-sync stub appended per D-33-D1 base case for Option A). All 12 REQ-3/4/5 validators + 2 cross-cutting (D-19 + make-ci sub) pass. Phase 33 now 4/4 plans executed; all 5 REQs landed (REQ-1 5fa0dca4 / REQ-2 7107b88d / REQ-3+4+5 8f783c39); ready for `/gsd-verify-work` verifier pass. Next: orchestrator's verify-phase step, then `/gsd-complete-phase 33` if verifier passes.
 
 **Stopped At (prior session, retained for context):** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.
@@ -392,8 +404,3 @@ The host-coverage gap is now the dominant v2.3 schedule constraint, not implemen
 ## Operator Next Steps
 
 - Start the next milestone with /gsd-new-milestone
-| 2026-05-26 | fast | Bump release to 0.57.1 and rebuild all deliverables | ✅ |
-| 2026-05-26 | fast | Rebuild MSI installers at v0.57.1 (machine + user) | ✅ |
-| 2026-05-26 | fast | Bump all 5 workspace crates to 0.57.2 | ✅ |
-| 2026-05-26 | fast | Build v0.57.2 MSI installers (machine + user) | ✅ |
-| 2026-05-26 | ship | Push main (57 commits) + tag v2.7 + v0.57.2 to origin | ✅ |

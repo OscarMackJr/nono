@@ -1,5 +1,24 @@
 # Milestones
 
+## v2.7 Windows supervised-run hardening (Shipped: 2026-05-26; archived: 2026-05-28)
+
+**Phases completed:** 2 phases (51, 52), 6 plans, 6 tasks
+
+**Tag:** `v2.7` + `v0.57.2` at commit `637a426c` (pushed to origin 2026-05-26).
+
+**Delivered:** Heavy-runtime children (the 234 MB self-contained `claude.exe`) survive DllMain under `nono run` on Windows while OS-enforced write-deny is preserved — closing the `STATUS_DLL_INIT_FAILED (0xC0000142)` regression on the non-PTY supervised path.
+
+**Key accomplishments:**
+
+- **Phase 51** — Added `WindowsTokenArm::BrokerLaunchNoPty`: a no-PTY Low-IL broker token (no synthetic restricting SID) for the non-PTY `nono run` path, replacing `WriteRestricted` for heavy-runtime children. Write-deny preserved via mandatory-label `NO_WRITE_UP`. Wired the `select_windows_token_arm` cascade + `Profile.windows_low_il_broker` (default-on for claude-code) + broker `--no-pty` mode + a real-spawn write-deny regression test. Code review caught + fixed CR-01 (stderr-relay deadlock → merge stderr into stdout).
+- **Phase 52** — Live Win11 (build 26200) HUMAN-UAT field validation: repro A (`cmd /c echo`) and repro B (`claude --version`) both PASS, `0xC0000142` confirmed gone on the 234 MB self-contained `claude.exe`. Profile-conditional `windows-poc-handoff.mdx` doc sweep (claude-code → Low-IL/NO_WRITE_UP). Closed the deferred ROADMAP SC-4 positive-spawn test. REQ-WSRH-01..06 all closed.
+
+**⚠ Post-tag correction (2026-05-27, on `main`, NOT in the v2.7 tag — folded into v2.8):** Two further defects on the same no-PTY path were found + fixed after the `637a426c` tag — broker `CreateProcessAsUserW` GLE=87 from a duplicate `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` handle (`d8b7ce00`), and the relay swallowing child stdout (`005b4c9e`). Phase 52's "PASS" ran a pre-CR-01 binary, so the tagged v2.7 build is doubly-broken on the real-console no-PTY path; the working build requires both post-tag fixes, which ship with v2.8. Also: WFP service-stop + MSI-uninstall fixes (`0cbeb3be` / `b852826b` / Fix #2b).
+
+**Known deferred items at close:** 45 audit-open items acknowledged 2026-05-28 (see STATE.md `## Deferred Items` → v2.7 close). ~42 are historical (pre-v2.5 `missing` quick-task slugs + pre-v2.0 UAT/verification gaps already deferred at prior closes); genuine new carry-forwards: WFP elevated live-uninstall UAT, v0.57.3 MSI rebuild off post-`005b4c9e` `nono.exe`, and the untagged post-`637a426c` fixes (release with v2.8).
+
+---
+
 ## v2.6 UPST6 + v2.5 Drain (Shipped: 2026-05-25)
 
 **Phases completed:** 7 phases, 23 plans, 28 tasks
