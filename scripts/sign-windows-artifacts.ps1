@@ -86,6 +86,52 @@ function Remove-SigningCertificate {
     }
 }
 
+function Add-TrustForVerify {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Thumbprint
+    )
+
+    # A self-signed POC cert (D-53-02) does NOT chain to a trusted root, so
+    # `signtool verify /pa` fails with "A certificate chain processed, but
+    # terminated in a root certificate which is not trusted". Import the cert's
+    # PUBLIC portion into the CurrentUser Root store so the chain validates
+    # (verified locally: this is the store `signtool verify /pa` consults for the
+    # calling user; no admin required; the CI runner is ephemeral). For a real
+    # CA-issued cert this is a harmless no-op — it already chains to a trusted root.
+    $cerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("nono-verify-trust-" + $Thumbprint + ".cer")
+    try {
+        Export-Certificate -Cert "Cert:\CurrentUser\My\$Thumbprint" -FilePath $cerPath | Out-Null
+        Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+        Write-Host "Trusted signing cert in CurrentUser\Root for verification."
+    }
+    finally {
+        Remove-Item -LiteralPath $cerPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Remove-TrustForVerify {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Thumbprint
+    )
+
+    # `Remove-Item Cert:\CurrentUser\Root\...` raises a UI confirmation that fails
+    # non-interactively ("The operation is on user root store and UI is not
+    # allowed"). Use the X509Store API, which removes without a prompt.
+    try {
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+        $store.Open('ReadWrite')
+        foreach ($c in @($store.Certificates | Where-Object { $_.Thumbprint -eq $Thumbprint })) {
+            $store.Remove($c)
+        }
+        $store.Close()
+    }
+    catch {
+        Write-Host "Warning: could not remove trust cert from CurrentUser\Root: $($_.Exception.Message)"
+    }
+}
+
 function Invoke-SigntoolSign {
     param(
         [Parameter(Mandatory = $true)]
@@ -149,6 +195,7 @@ try {
     $signtoolPath = Find-Signtool
     Write-Host "Using signtool: $signtoolPath"
     $thumbprint = Import-SigningCertificate -PfxPath $pfxPath -Password $CertPassword
+    Add-TrustForVerify -Thumbprint $thumbprint
 
     try {
         # Sign all artifacts
@@ -168,6 +215,7 @@ try {
     }
     finally {
         Remove-SigningCertificate -Thumbprint $thumbprint
+        Remove-TrustForVerify -Thumbprint $thumbprint
     }
 }
 finally {
