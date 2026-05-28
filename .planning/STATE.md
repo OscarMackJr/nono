@@ -1,34 +1,34 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.7
-milestone_name: Windows supervised-run hardening
-status: Awaiting next milestone
-last_updated: "2026-05-28T00:56:45.921Z"
+milestone: v2.8
+milestone_name: UPST7 + v2.7 Drain & Release
+status: planning
+last_updated: "2026-05-28T01:27:25.240Z"
 last_activity: 2026-05-28
 progress:
-  total_phases: 2
-  completed_phases: 2
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# Project State: nono — v2.7 Windows supervised-run hardening
+# Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-26 at v2.7 milestone start; v2.6 shipped 2026-05-25). v2.7 ROADMAP.md created 2026-05-26 — 2 phases (51, 52), 6 requirements, 100% coverage.
+See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 shipped 2026-05-26, archived 2026-05-28). REQUIREMENTS.md + ROADMAP.md pending (defining requirements next). Phase numbering continues from Phase 52 (Phase 53+).
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 52 — field-validation-closure-heavy-runtime-human-uat-doc-update
+**Current Focus:** Defining v2.8 requirements (drain-then-sync: tag+signed release of untagged v2.7 fixes + release.yml repair + WFP-uninstall UAT + 3 todos, then full UPST7 sync of upstream v0.58.0 + v0.59.0).
 
 ## Current Position
 
-Phase: Milestone v2.7 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-05-28 — Milestone v2.7 completed and archived
+Status: Defining requirements
+Last activity: 2026-05-28 — Milestone v2.8 started
 
 ### v2.7 Phase Summary
 
@@ -53,6 +53,7 @@ Last activity: 2026-05-28 — Milestone v2.7 completed and archived
 ### v2.7 close (acknowledged 2026-05-28)
 
 Pre-close `audit-open` reported 45 open items; user chose "Acknowledge all & proceed". Breakdown:
+
 - **~42 historical (already deferred at prior closes):** 29 `missing` quick-task slugs (pre-v2.5 stragglers) + 10 UAT gaps + 3 verification gaps (pre-v2.0 phases 01/07/13/17/18 bookkeeping, carried since the v2.2/v2.4 closes — see the older deferred tables below).
 - **Genuine new carry-forwards (→ v2.8):**
   - WFP **elevated live-uninstall UAT** still pending (resolved debug `wfp-service-stop-uninstall` shipped Fix #1 `0cbeb3be` + #2a `b852826b` + #2b auto-uninstall custom action; elevated `sc stop` / `msiexec /x` leaves-nothing verification is operator-run).
