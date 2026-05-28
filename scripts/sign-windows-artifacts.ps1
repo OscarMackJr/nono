@@ -20,11 +20,41 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 function Find-Signtool {
-    $signtool = Get-Command signtool.exe -ErrorAction SilentlyContinue
-    if ($null -eq $signtool) {
-        throw "signtool.exe not found on PATH. The Windows SDK must be installed on the runner."
+    # Prefer signtool.exe if it is already on PATH.
+    $onPath = Get-Command signtool.exe -ErrorAction SilentlyContinue
+    if ($null -ne $onPath) {
+        return $onPath.Source
     }
-    return $signtool.Source
+
+    # GitHub-hosted Windows runners ship the Windows SDK but do NOT put signtool.exe
+    # on PATH — it lives under Windows Kits\10\bin\<sdk-version>\<arch>\signtool.exe.
+    # Search the SDK install roots, prefer the x64 build and the highest SDK version.
+    $roots = @(
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin",
+        "${env:ProgramFiles}\Windows Kits\10\bin"
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+
+    $candidates = foreach ($root in $roots) {
+        Get-ChildItem -Path $root -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' }
+    }
+    # Fall back to any arch if no x64 build was found.
+    if ($null -eq $candidates -or @($candidates).Count -eq 0) {
+        $candidates = foreach ($root in $roots) {
+            Get-ChildItem -Path $root -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue
+        }
+    }
+
+    $chosen = @($candidates) | Sort-Object {
+        # Directory layout: ...\bin\<version>\<arch>\signtool.exe → version is the grandparent.
+        $verName = $_.Directory.Parent.Name
+        try { [version]$verName } catch { [version]"0.0.0.0" }
+    } -Descending | Select-Object -First 1
+
+    if ($null -eq $chosen) {
+        throw "signtool.exe not found on PATH or under the Windows SDK (Windows Kits\10\bin). The Windows SDK must be installed on the runner."
+    }
+    return $chosen.FullName
 }
 
 function Import-SigningCertificate {
@@ -59,6 +89,9 @@ function Remove-SigningCertificate {
 function Invoke-SigntoolSign {
     param(
         [Parameter(Mandatory = $true)]
+        [string]$SigntoolPath,
+
+        [Parameter(Mandatory = $true)]
         [string]$ArtifactPath,
 
         [Parameter(Mandatory = $true)]
@@ -79,7 +112,7 @@ function Invoke-SigntoolSign {
     #
     # D-12: DigiCert timestamping, SHA-256 only.
     # D-14: signtool.exe is the only signing primitive.
-    & signtool.exe sign /fd sha256 /sha1 $Thumbprint /tr $TimestampUrl /td sha256 $ArtifactPath
+    & $SigntoolPath sign /fd sha256 /sha1 $Thumbprint /tr $TimestampUrl /td sha256 $ArtifactPath
     if ($LASTEXITCODE -ne 0) {
         throw "signtool sign failed for '$ArtifactPath' (exit $LASTEXITCODE)."
     }
@@ -88,13 +121,16 @@ function Invoke-SigntoolSign {
 function Invoke-SigntoolVerify {
     param(
         [Parameter(Mandatory = $true)]
+        [string]$SigntoolPath,
+
+        [Parameter(Mandatory = $true)]
         [string]$ArtifactPath
     )
 
     # /pa  - use the default authentication policy
     # /tw  - warn if no timestamp is present (makes timestamp absence a failure mode
     #        rather than a silent success; D-12 requires timestamp-aware verification)
-    & signtool.exe verify /pa /tw $ArtifactPath
+    & $SigntoolPath verify /pa /tw $ArtifactPath
     if ($LASTEXITCODE -ne 0) {
         throw "signtool verify failed for '$ArtifactPath' — signature is not valid Authenticode or is missing a timestamp (exit $LASTEXITCODE)."
     }
@@ -110,13 +146,15 @@ $pfxPath = [System.IO.Path]::ChangeExtension($tempFile, ".pfx")
 try {
     [System.IO.File]::WriteAllBytes($pfxPath, $certBytes)
 
-    Find-Signtool | Out-Null
+    $signtoolPath = Find-Signtool
+    Write-Host "Using signtool: $signtoolPath"
     $thumbprint = Import-SigningCertificate -PfxPath $pfxPath -Password $CertPassword
 
     try {
         # Sign all artifacts
         foreach ($path in $ArtifactPaths) {
             Invoke-SigntoolSign `
+                -SigntoolPath $signtoolPath `
                 -ArtifactPath $path `
                 -Thumbprint $thumbprint `
                 -TimestampUrl $TimestampUrl
@@ -125,7 +163,7 @@ try {
         # Verify all artifacts. Failure here aborts; D-13 requires that CI never
         # proceeds to artifact upload if signing or verification fails.
         foreach ($path in $ArtifactPaths) {
-            Invoke-SigntoolVerify -ArtifactPath $path
+            Invoke-SigntoolVerify -SigntoolPath $signtoolPath -ArtifactPath $path
         }
     }
     finally {
