@@ -76,7 +76,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$VersionTag = "v0.57.3",
+    [string]$VersionTag = "v0.57.4",
 
     [ValidateSet("machine", "user", "both")]
     [string]$Scope = "both",
