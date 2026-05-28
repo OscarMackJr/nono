@@ -236,3 +236,113 @@ self-trust-anchor exists, and the gate passes.
 > `dist/windows/*.wxs` reference snapshots (a side effect of `build-windows-msi.ps1`). Revert
 > with `git checkout -- dist/windows/nono-machine.wxs dist/windows/nono-user.wxs` if you do
 > not want that churn.
+
+## Production signing path (CA-ready)
+
+The fork is wired for a production commercial CA swap that requires only a secrets change,
+no code change. To upgrade from the POC self-signed cert to a commercial code-signing
+cert (e.g. DigiCert, Sectigo, or Azure Trusted Signing):
+
+1. Obtain a code-signing certificate from a CA enrolled in the Microsoft Trusted Root
+   Program (or configure Azure Trusted Signing with a verified publisher account).
+2. Export the certificate as a PFX file (certificate + private key, password-protected).
+3. Base64-encode the PFX: run
+   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))`
+4. Update the `WINDOWS_SIGNING_CERT` repository secret with the new base64 value.
+5. Update `WINDOWS_SIGNING_CERT_PASSWORD` with the new PFX password.
+6. No code changes are required. The release workflow (`release.yml`) reads these two
+   secrets and passes them directly to `scripts/sign-windows-artifacts.ps1` — the signing
+   path is identical whether the cert is self-signed or CA-issued.
+7. For Azure Trusted Signing: consult the Azure Trusted Signing documentation for the
+   `signtool.exe`-compatible dlib invocation; the `sign-windows-artifacts.ps1` script may
+   need a small extension to pass the `-dlib` and `-dmdf` flags instead of `/sha1`.
+   Document that extension here when it is implemented.
+
+## Fresh CI cert: generation, encoding, and trust redistribution
+
+D-53-02: each v2.x release uses a fresh self-signed cert (provenance born in/for CI),
+NOT a re-export of a previous POC cert. Consequence: the new cert's public `.cer` MUST
+be redistributed to every trusted machine before they accept the new signed binaries.
+Old installs' trust does not carry over automatically.
+
+**Step 1: Generate the fresh cert (elevated PowerShell on the operator's machine):**
+
+Use the cert-gen block from `sign-poc-local.ps1` (lines 137-144): run
+`New-SelfSignedCertificate` with subject `CN=nono POC Signing v0.57.4` (or similar
+version-tagged subject to distinguish certs across releases), type CodeSigningCert,
+HashAlgorithm SHA256, NotAfter two years from now. The cert lands in
+`Cert:\CurrentUser\My`.
+
+```powershell
+$cert = New-SelfSignedCertificate `
+    -Subject "CN=nono POC Signing v0.57.4" `
+    -CertStoreLocation "Cert:\CurrentUser\My" `
+    -Type CodeSigningCert `
+    -KeyUsage DigitalSignature `
+    -HashAlgorithm SHA256 `
+    -NotAfter (Get-Date).AddYears(2)
+Write-Host "Thumbprint: $($cert.Thumbprint)"
+```
+
+**Step 2: Export the PFX (private + public key, password-protected):**
+
+```powershell
+$password = ConvertTo-SecureString "YourStrongPassword" -AsPlainText -Force
+Export-PfxCertificate -Cert $cert -FilePath "nono-v0.57.4-ci.pfx" -Password $password
+```
+
+**Step 3: Base64-encode the PFX for the secret:**
+
+```powershell
+$b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("nono-v0.57.4-ci.pfx"))
+$b64 | Out-File "nono-v0.57.4-ci.pfx.b64.txt"
+# Content of that txt is the WINDOWS_SIGNING_CERT value
+```
+
+**Step 4: Set GitHub repository secrets:**
+
+Navigate to `Settings -> Secrets and variables -> Actions`. Create or update:
+
+- `WINDOWS_SIGNING_CERT` — the base64 PFX value from Step 3.
+- `WINDOWS_SIGNING_CERT_PASSWORD` — the plaintext password from Step 2.
+
+The PFX file must be securely deleted after encoding:
+
+```powershell
+Remove-Item "nono-v0.57.4-ci.pfx" -Force
+```
+
+**Step 5: Export the public `.cer` for trust redistribution (NO private key):**
+
+```powershell
+Export-Certificate -Cert $cert -FilePath "nono-v0.57.4-poc.cer" -Type CERT
+```
+
+Distribute this `.cer` to every machine that needs to accept v0.57.4-signed binaries.
+On each target machine (admin, one-time):
+
+```powershell
+Import-Certificate -FilePath "nono-v0.57.4-poc.cer" -CertStoreLocation Cert:\LocalMachine\Root
+Import-Certificate -FilePath "nono-v0.57.4-poc.cer" -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
+```
+
+After import, `(Get-AuthenticodeSignature 'C:\Program Files\nono\nono.exe').Status` must
+report `Valid`. Without this step, the broker self-trust-anchor gate (D-32-12) will
+fail-close on the new binaries even on machines that accepted previous signed releases.
+**Old cert trust does not carry over automatically** — each new cert requires its own
+redistribution round.
+
+**Step 6: Push main, then cut the dual tags:**
+
+Local `main` must be pushed before cutting the semver tag (the release workflow checks
+out the tag ref — a tag on an unpushed commit is unreachable to CI):
+
+```powershell
+git push origin main
+git tag v0.57.4
+git tag v2.8
+git push origin v0.57.4 v2.8
+```
+
+Only `v0.57.4` fires the release workflow (the `v*.*.*` trigger); `v2.8` is a non-firing
+milestone marker (two-segment tag does not match the glob).
