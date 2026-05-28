@@ -85,3 +85,13 @@ backlog needs a Linux host anyway, so this folds in).
 - .planning/phases/44-review-polish-test-hygiene-drain/44-CONTEXT.md
   § Decisions D-44-C3 (this follow-up's chartering decision)
 - crates/nono-cli/src/policy.rs:1032-1088 (validator source)
+
+---
+## Disposition (Phase 53)
+**Status:** Promoted to backlog — NOT done in-phase per D-53-08.
+**Rationale:** Security equivalence is already proven (the either-or assertion in the
+Class D test proves both branches deny the read). This is a latent-diagnostic
+investigation, not a security gap. Low-priority; requires a Linux host with
+instrumented trace capability (RUST_LOG=trace + strace) which the agent shell lacks.
+**Backlog entry:** REQUIREMENTS.md REQ-DENY-PREFLIGHT-01 (v2 Deferred section).
+**Date:** 2026-05-28

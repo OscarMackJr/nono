@@ -86,3 +86,14 @@ revisit at v2.7 milestone planning).
 - CLAUDE.md § Path Handling (TOCTOU with symlinks + canonicalization).
 - The doc note shipped in Phase 44 Plan 44-01 Task 7 commit (see
   `git log --oneline --all | grep 'validate_restore_target'`).
+
+---
+## Disposition (Phase 53)
+**Status:** Promoted to backlog — NOT done in-phase per D-53-08.
+**Rationale:** Full closure requires ~2-3 weeks of focused cross-platform work
+(O_NOFOLLOW + fd-relative openat/mkdirat/renameat/fchmodat on Linux/macOS;
+NtCreateFile-based or documented defense-in-depth on Windows). The residual TOCTOU
+race is a local-attacker-with-write-access scenario; a doc note was shipped in
+Phase 44. Full closure warrants a dedicated security-scoped phase.
+**Backlog entry:** REQUIREMENTS.md REQ-UNDO-TOCTOU-01 (v2 Deferred section).
+**Date:** 2026-05-28
