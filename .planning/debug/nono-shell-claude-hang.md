@@ -116,8 +116,33 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   sandbox hold `target\debug\nono.exe`. Operator must close that sandbox window, rebuild
   (`cargo build -p nono-cli --bin nono`), then re-run `cmd /c "echo HI > out.txt"` inside a fresh sandbox —
   expect out.txt created in the (now-plain) cwd + prompt returns, no "UNC paths are not supported".
-  **Issue B (`claude` not found) STILL OPEN** — awaiting `Get-Command claude` diagnostic (outside nono) to
-  root-cause PATH/profile/install-location before fixing. Specialist dispatch: rust-windows.
+  **Issue A FIELD-VERIFIED RESOLVED** (2026-05-28T19:10): plain cwd, `echo > out.txt` + `type` work.
+  **Issue B ROOT-CAUSED (curated PATH):** nono's `append_windows_runtime_env` hardcodes a minimal sandbox
+  PATH (System32 + Windows + Wbem + WindowsPowerShell\v1.0); `build_child_env` drops the inherited user PATH.
+  `claude.exe` is at `C:\Users\OMack\.local\bin\` (granted RX) but `.local\bin` isn't on the curated PATH →
+  bare-name `claude` unresolvable. DESIGN decision, not a typo. Fix DIRECTION pending operator choice:
+    - Option P1 (principled): add capability-granted executable dirs (the profile's read/exec-granted paths,
+      e.g. `.local\bin`, `.cargo\bin`) to the curated sandbox PATH so explicitly-granted tools are invokable.
+      Security note: prefer read/execute-only granted dirs; be cautious adding writable (r+w) grants to PATH.
+    - Option P2 (profile-scoped): have the claude-code profile contribute a PATH augmentation (only when that
+      profile is active) rather than a global env-builder change.
+    - Option P3 (workaround/interim): invoke claude by full path; document `.local\bin`-on-PATH as a known gap.
+  OPERATOR CHOSE P1. **Issue B FIXED (code-complete):** `append_windows_runtime_env` (launch.rs:688+) now
+  appends capability-granted READ-ONLY directories (`access == AccessMode::Read && !is_file`) to the curated
+  PATH, after the System32 baseline, with the `\\?\` verbatim prefix stripped via `normalize_windows_launch_path`
+  and case-insensitive dedup. Read-only-only is the security boundary: a non-writable PATH dir cannot be used
+  by the sandboxed agent to plant-and-execute an attacker-controlled binary; writable (r+w) and single-file
+  grants are excluded; appending after System32 prevents shadowing of system commands. `.local\bin` is granted
+  `read` via the cross-platform `user_tools` policy group → now on PATH → bare-name `claude` resolves.
+  Added Windows-gated regression test `test_windows_read_only_granted_dir_appended_to_path` (asserts RO dir
+  appended + after System32 + no `\\?\` + RW dir excluded). Windows-host: 5/5 env_filter_tests PASS, clippy
+  (-D warnings -D unwrap_used) CLEAN, `target\debug\nono.exe` rebuilt. Cross-target linux/macos clippy
+  PARTIAL/deferred (exec_strategy_windows is Windows-only; host lacks C cross-linker; per checklist).
+  **FIELD VERIFY of B PENDING:** in a fresh `nono shell --profile claude-code --allow-cwd`, run `$env:PATH`
+  (expect `.local\bin` now present) then `claude` (expect it resolves + launches; degraded/line-mode TUI per
+  Option D′ is acceptable). Also still want the `& "C:\...\.local\bin\claude.exe"` full-path probe result to
+  confirm claude RUNS under Low-IL (isolates PATH-resolution from any deeper claude-under-sandbox issue).
+  Specialist dispatch: rust-windows.
 **reasoning_checkpoint:**
   hypothesis: "Every grandchild PowerShell spawns inside the Low-IL `nono shell` sandbox is a NEW Low-IL
     console client that hangs registering with the Medium-IL conhost serving nono.exe's real console; the
@@ -132,6 +157,36 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   blind_spots: "Cannot reproduce on this MSYS/no-console host. Cannot from static analysis alone distinguish a pending-ALPC-connect hang (G1) from a write-to-unserviced-handle hang (G2); the single discriminator probe resolves it. Have not confirmed which conhost instance the grandchildren target (assume nono.exe's real-console conhost) or whether AppContainer-vs-Low-IL changes the conhost open-back result."
 
 ## Evidence
+
+- timestamp: 2026-05-28T19:10:00Z
+  checked: FIELD RE-VERIFY of Issue A (cwd `\\?\` strip fix, commit `2fb0fad2`) + Issue B root-cause
+    (`claude` not found). Live Win11 build-26200, rebuilt dev-layout `target\debug\nono.exe`, fresh
+    `nono shell --profile claude-code --allow-cwd` from `%USERPROFILE%\.claude`.
+  found:
+    Issue A → FIXED + VERIFIED. Prompt now renders PLAIN `PS C:\Users\OMack\.claude>` (no `\\?\` provider
+      prefix). `cmd /c "echo HI > out.txt"` returns cleanly (NO "UNC paths are not supported" message);
+      `type out.txt` prints `HI`. The verbatim-prefix strip works end-to-end on the live box.
+    Issue B → ROOT-CAUSED. `Get-Command claude` (outside nono) → `claude.exe`, CommandType `Application`,
+      Source `C:\Users\OMack\.local\bin\claude.exe` (a real on-PATH exe, NOT a `$PROFILE` function/alias —
+      profile-function theory refuted). Inside the sandbox `claude` → `CommandNotFoundException`. CODE
+      ROOT CAUSE: nono builds a CURATED child environment — `build_child_env` (launch.rs:551-663) puts
+      `PATH` in the skip-list (the inherited user PATH is dropped), and `append_windows_runtime_env`
+      (launch.rs:688-694) rebuilds `PATH` to a hardcoded minimal baseline:
+      `{SystemRoot}\System32;{SystemRoot};{SystemRoot}\System32\Wbem;{SystemRoot}\System32\WindowsPowerShell\v1.0`.
+      `.local\bin` (where claude lives, and which IS granted RX per the label-guard mask 0x5) is NOT on that
+      PATH → `claude` (and `node`, `ripgrep`, any user-dir tool) is unresolvable by bare name; `cmd` /
+      `powershell` resolve only because they live in System32. This is a DELIBERATE security/determinism
+      design (don't inherit arbitrary, possibly-writable user PATH dirs), NOT a typo like Issue A.
+  implication: Issue A is DONE (verified). Issue B is a DESIGN decision, not a one-line fix: to make
+    granted tools invokable, nono must add capability-granted executable directories to the curated sandbox
+    PATH (e.g. append the profile's read/execute-granted dirs like `.local\bin`). Options + the full-path
+    discriminator probe (`& "C:\Users\OMack\.local\bin\claude.exe"` — confirms claude RUNS under the sandbox,
+    isolating PATH-resolution from a deeper claude-under-Low-IL problem) are in Current Focus → next_action.
+    Touches the security-critical env-construction path → operator picks the direction before any edit.
+  source: operator field run 2026-05-28T19:10 (verbatim, treated as data); code:
+    crates/nono-cli/src/exec_strategy_windows/launch.rs:551-663 (build_child_env skip-list) + 681-694
+    (append_windows_runtime_env curated PATH); crates/nono-cli/src/exec_strategy/env_sanitization.rs:64-76
+    (should_skip_env_var)
 
 - timestamp: 2026-05-28T18:30:00Z
   checked: FIELD VERIFICATION of the Option D′ hang fix — live Win11 build-26200, dev-layout v0.57.4

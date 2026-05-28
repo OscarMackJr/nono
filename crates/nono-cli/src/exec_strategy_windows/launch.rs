@@ -685,13 +685,37 @@ fn append_windows_runtime_env(env_pairs: &mut Vec<(String, String)>, config: &Ex
         .unwrap_or_else(|_| PathBuf::from(r"C:\Windows"));
     let windows_system32 = system_root.join("System32");
 
-    env_pairs.push((
-        "PATH".to_string(),
-        format!(
-            r"{win}\System32;{win};{win}\System32\Wbem;{win}\System32\WindowsPowerShell\v1.0",
-            win = system_root.display()
-        ),
-    ));
+    // Base curated PATH: deterministic system locations only. The inherited
+    // user PATH is deliberately dropped by `build_child_env` (PATH is in its
+    // skip-list) so the sandbox never picks up arbitrary, possibly-writable
+    // PATH directories.
+    let mut path_value = format!(
+        r"{win}\System32;{win};{win}\System32\Wbem;{win}\System32\WindowsPowerShell\v1.0",
+        win = system_root.display()
+    );
+    // P1 (debug nono-shell-claude-hang, Issue B): append capability-granted
+    // READ-ONLY directories so explicitly-granted user tools (e.g.
+    // `<home>\.local\bin\claude.exe`) resolve by bare name inside the sandbox.
+    // Security: only read-only dirs are added — a non-writable PATH directory
+    // cannot be used by the sandboxed agent to plant and then execute an
+    // attacker-controlled binary; writable (r+w) grants and single-file grants
+    // are intentionally excluded. Entries are APPENDED after System32 so they
+    // never shadow system commands. The `\\?\` verbatim prefix that capability
+    // canonicalization produces is stripped so the entry is usable by
+    // PowerShell/cmd (mirrors `normalize_windows_launch_path`).
+    let mut seen_path_dirs = HashSet::new();
+    for cap in config.caps.fs_capabilities() {
+        if cap.is_file || cap.access != nono::AccessMode::Read {
+            continue;
+        }
+        let dir = normalize_windows_launch_path(&cap.resolved);
+        let dir = dir.to_string_lossy().into_owned();
+        if !dir.is_empty() && seen_path_dirs.insert(dir.to_ascii_lowercase()) {
+            path_value.push(';');
+            path_value.push_str(&dir);
+        }
+    }
+    env_pairs.push(("PATH".to_string(), path_value));
     env_pairs.push((
         "PATHEXT".to_string(),
         ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC".to_string(),
@@ -3130,6 +3154,78 @@ mod env_filter_tests {
                 .any(|(k, _)| k == "NONO_TEST_EMPTY_ALLOW_FIXTURE"),
             "Empty allow-list MUST strip non-runtime inherited env vars \
              (fail-closed invariant from upstream 780965d7)"
+        );
+    }
+
+    /// P1 (debug nono-shell-claude-hang, Issue B): a capability-granted READ-ONLY
+    /// directory MUST be appended to the curated child PATH (after the System32
+    /// baseline) so explicitly-granted user tools (e.g. `<home>\.local\bin\claude.exe`)
+    /// resolve by bare name inside the sandbox. A WRITABLE (r+w) directory grant MUST
+    /// NOT be added — a non-writable PATH dir cannot be used by the sandboxed agent to
+    /// plant-and-execute an attacker-controlled binary, and appending after System32
+    /// prevents shadowing of system commands.
+    #[test]
+    fn test_windows_read_only_granted_dir_appended_to_path() {
+        let _lock = lock_env();
+
+        let ro_dir = tempfile::tempdir().unwrap();
+        let rw_dir = tempfile::tempdir().unwrap();
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(nono::FsCapability::new_dir(ro_dir.path(), nono::AccessMode::Read).unwrap());
+        caps.add_fs(
+            nono::FsCapability::new_dir(rw_dir.path(), nono::AccessMode::ReadWrite).unwrap(),
+        );
+
+        let command: Vec<String> = vec![];
+        let resolved_program = Path::new(r"C:\tools\agent.exe");
+        let current_dir = Path::new(r"C:\workspace");
+        let config = make_minimal_exec_config(
+            &command,
+            resolved_program,
+            &caps,
+            current_dir,
+            /* allowed */ None,
+            /* denied */ None,
+            /* env_vars */ vec![],
+        );
+
+        let env_pairs = build_child_env(&config);
+        let path = env_pairs
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case("PATH"))
+            .map(|(_, v)| v.clone())
+            .expect("curated PATH must be present");
+        let path_lc = path.to_ascii_lowercase();
+
+        // Capability paths are canonicalized (\\?\-prefixed); the PATH entry must
+        // be the stripped plain form, never the verbatim prefix.
+        let ro_plain =
+            super::normalize_windows_launch_path(&ro_dir.path().canonicalize().unwrap());
+        let ro_lc = ro_plain.to_string_lossy().to_ascii_lowercase();
+        assert!(
+            path_lc.contains(&ro_lc),
+            "read-only granted dir must be appended to PATH; dir={ro_lc} path={path}"
+        );
+        assert!(
+            !path.contains(r"\\?\"),
+            "PATH entries must not carry the \\\\?\\ verbatim prefix; got: {path}"
+        );
+
+        // System32 baseline must precede the appended grant.
+        let sys32_idx = path_lc.find("system32").expect("System32 in curated PATH");
+        let ro_idx = path_lc.find(&ro_lc).unwrap();
+        assert!(
+            sys32_idx < ro_idx,
+            "System32 must precede appended capability grants (no shadowing); path={path}"
+        );
+
+        // The writable (r+w) grant MUST NOT be added.
+        let rw_plain =
+            super::normalize_windows_launch_path(&rw_dir.path().canonicalize().unwrap());
+        let rw_lc = rw_plain.to_string_lossy().to_ascii_lowercase();
+        assert!(
+            !path_lc.contains(&rw_lc),
+            "writable (r+w) granted dir MUST NOT be added to PATH; dir={rw_lc} path={path}"
         );
     }
 
