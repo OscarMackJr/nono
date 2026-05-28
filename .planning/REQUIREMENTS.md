@@ -10,7 +10,7 @@
 ### Release & Distribution (RLS)
 
 - [x] **REQ-RLS-01**: A v2.8 git tag is cut and **signed MSIs (machine + user)** are produced off the post-`005b4c9e` `nono.exe`, containing the untagged v2.7 fixes (`d8b7ce00` broker `CreateProcessAsUserW` GLE=87 HANDLE_LIST dedup, `005b4c9e` no-PTY relay stdout-echo, `0cbeb3be` + `b852826b` WFP service-stop + MSI-uninstall). An operator can install the signed v2.8 MSI; the bundled `nono.exe` reports the v2.8 fork version and runs correctly on the real-console no-PTY supervised path (the tagged v2.7 build's doubly-broken path is gone).
-- [ ] **REQ-RLS-02**: `.github/workflows/release.yml` runs to completion on a `v*` tag push and produces the signed release artifacts — the chronic 0s `startup_failure` (broken `docker` reusable-call job removed in `5c90c4cf`, never live-verified) is resolved and confirmed live on a tag push.
+- [x] **REQ-RLS-02**: `.github/workflows/release.yml` runs to completion on a `v*` tag push and produces the signed release artifacts — the chronic 0s `startup_failure` (broken `docker` reusable-call job removed in `5c90c4cf`, never live-verified) is resolved and confirmed live on a tag push.
 
 ### Drain (DRN)
 
@@ -80,7 +80,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
 | REQ-RLS-01 | Phase 53 | Complete |
-| REQ-RLS-02 | Phase 53 | Pending |
+| REQ-RLS-02 | Phase 53 | Complete |
 | REQ-DRN-01 | Phase 53 | Pending |
 | REQ-DRN-02 | Phase 53 | Complete |
 | REQ-UPST7-01 | Phase 54 | Pending |

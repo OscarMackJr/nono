@@ -50,7 +50,7 @@ Plans:
 - [x] 53-02-PLAN.md — Drain: promote Todos 2+3 to REQUIREMENTS.md backlog with D-53-08 rationale; move pending files to done/
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 53-03-PLAN.md — Fix release.yml trigger (v*.*.*), update sign-poc-local.ps1, expand signing guide (CA-ready + fresh-cert procedure), push main
+- [x] 53-03-PLAN.md — Fix release.yml trigger (v*.*.*), update sign-poc-local.ps1, expand signing guide (CA-ready + fresh-cert procedure), push main
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 53-04-PLAN.md — HUMAN-UAT: cut v0.57.4 + v2.8 tags, CI run verify (REQ-RLS-02), install signed MSI verify (REQ-RLS-01), elevated WFP stop/uninstall verify (REQ-DRN-01)
@@ -126,7 +126,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 53. Release & Drain | 2/4 | In Progress|  |
+| 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 0/TBD | Not started | - |
 | 55. UPST7 Cherry-pick Wave | 0/TBD | Not started | - |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
