@@ -45,9 +45,14 @@ granularity: standard
   5. The 3 pending todos in `.planning/todos/pending/` are resolved or explicitly re-dispositioned with a written rationale committed to the planning artifacts
 **Plans**: 4 plans
 Plans:
+**Wave 1**
 - [ ] 53-01-PLAN.md — Version bump 0.57.3 to 0.57.4 across all 5 crate Cargo.toml files and path-dep pins
 - [ ] 53-02-PLAN.md — Drain: promote Todos 2+3 to REQUIREMENTS.md backlog with D-53-08 rationale; move pending files to done/
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 53-03-PLAN.md — Fix release.yml trigger (v*.*.*), update sign-poc-local.ps1, expand signing guide (CA-ready + fresh-cert procedure), push main
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 53-04-PLAN.md — HUMAN-UAT: cut v0.57.4 + v2.8 tags, CI run verify (REQ-RLS-02), install signed MSI verify (REQ-RLS-01), elevated WFP stop/uninstall verify (REQ-DRN-01)
 
 ### Phase 54: UPST7 Audit
