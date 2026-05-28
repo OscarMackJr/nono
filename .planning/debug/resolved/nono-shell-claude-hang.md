@@ -1,6 +1,42 @@
 ---
 slug: nono-shell-claude-hang
-status: fix_applied_field_verification_pending
+status: resolved
+resolved: 2026-05-28T21:00:00Z
+root_cause: |
+  Every grandchild spawned inside the Low-IL `nono shell` sandbox (claude, cmd /c echo, node)
+  is a NEW Low-IL console-subsystem client that must register cross-IL with the Medium-IL conhost
+  serving nono.exe's real console; that registration neither completes nor fails → silent indefinite
+  HANG with zero output (grandchild ALIVE). The Phase-31 A1 inherited-console skip only covers the
+  DIRECT broker child (PowerShell), not grandchildren. (G1 confirmed by the `cmd /c "echo HI > out.txt"`
+  discriminator: still hung, no file — block is upstream of the first write.)
+fix: |
+  Option D′ — route the Low-IL shell tree through anonymous-PIPE stdio (the proven `nono run`
+  no-PTY wiring) instead of a console/ConPTY, so grandchildren inherit pipe std handles and never
+  register with the console subsystem (commit 40c11831). Plus two pre-existing bugs unmasked by the
+  fix: cwd `\\?\` verbatim prefix not stripped (off-by-one-backslash in normalize_windows_launch_path,
+  commit 2fb0fad2) and the curated sandbox PATH dropping granted dirs like `.local\bin` (commit
+  738690a5 appends granted read-only dirs to PATH). KNOWN LIMITATION (accepted): the interactive
+  `claude` TUI does NOT launch under D′ (pipe stdio is not a TTY); a real TUI is OS-blocked for a
+  Low-IL child — proven dead via two PoCs (B′ ConPTY-attach → 0xC0000142, commit 8416ff60;
+  B′′ Low-IL-conhost → 0xC0000142, commit efe638d4). Use non-interactive invocations
+  (`claude -p ...`, `claude --version`) or `nono run` for now.
+verification: |
+  Live Win11 build-26200 field runs (dev-layout target/debug/nono.exe v0.57.4): grandchild hang GONE
+  (`cmd /c echo` returns output + prompt); cwd plain + `echo > out.txt`/`type` work; `$env:PATH`
+  includes `.local\bin` and `claude --version` → 2.1.153 (resolves + runs, no hang). Windows-host:
+  new regression tests PASS (normalize_windows_launch_path_strips_verbatim_prefix,
+  test_windows_read_only_granted_dir_appended_to_path) + 6/6 broker_dispatch_tests + 5/5
+  env_filter_tests; clippy (-D warnings -D unwrap_used) clean. Cross-target linux/macos clippy
+  PARTIAL/deferred (exec_strategy_windows is Windows-only; host lacks C cross-linker; per checklist).
+files_changed: |
+  crates/nono-cli/src/supervised_runtime.rs (should_allocate_pty gate + interactive pipe threading + tests);
+  crates/nono-cli/src/exec_strategy_windows/supervisor.rs (start_streaming split + start_interactive_pipe_io);
+  crates/nono-cli/src/exec_strategy_windows/launch.rs (verbatim-prefix strip fix + curated-PATH granted-RO-dirs + tests);
+  .planning/quick/260508-m99-.../poc-broker (throwaway --conpty / --conpty-lowil PoCs proving B′/B′′ dead).
+follow_up: |
+  Research seed for a future planned phase: explore whether an alternative Windows sandbox primitive
+  (AppContainer) can host an interactive TUI while preserving the structural-isolation guarantee that
+  the Low-IL mandatory-label model provides. See .planning/research/windows-low-il-tui-blocked.md.
 trigger: |
   DATA_START
   "this command hung - it should have launched claude:
@@ -19,7 +55,7 @@ trigger: |
   PS Microsoft.PowerShell.Core\FileSystem::\\?\C:\Users\OMack\nono-poc> claude"
   DATA_END
 created: 2026-05-28T15:40:00Z
-updated: 2026-05-28T18:30:00Z
+updated: 2026-05-28T21:00:00Z
 host: windows-11-build-26200 (OMack dev box)
 binary: nono.exe v0.57.3 (run from C:\Users\OMack\nono-poc; installed MSI or copy, NOT dev-layout target/release with untagged post-v2.7 fixes)
 specialist_hint: rust-windows
@@ -156,12 +192,20 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   zero production risk) with a `--conpty` mode: a Medium-IL parent creates a ConPTY and spawns Low-IL
   powershell.exe attached via PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE (mirrors launch.rs:1584-1596
   addr_of!/size_of::<HPCON> idiom), then relays stdio with VT pass-through. Built clean (release).
-  **AWAITING field run** (operator, real PowerShell console):
-    `.\...\poc-broker\target\release\poc-broker.exe --conpty`
-    then at the sandboxed prompt: `cmd /c echo HI` (U2 grandchild test), `claude` (TUI test), then `exit`.
-  Interpretation: exit `0xC0000142` ⇒ U1 fails ⇒ B′ dead as-shaped; grandchild output present ⇒ U2 ok ⇒ B′
-  viable (proceed to production wiring behind a flag); grandchild hang ⇒ U2 fails ⇒ conhost-IL work needed.
-  Specialist dispatch: rust-windows.
+  **B′ PoC RESULT (2026-05-28T20:30): U1 FAILS — B′ DEAD AS-SHAPED.** `poc-broker.exe --conpty` spawned the
+  Low-IL PowerShell on the ConPTY (PID 40964) but it died in DllMain with `0xc0000142` STATUS_DLL_INIT_FAILED
+  — the exact Phase-30 CSRSS loader crash. Attaching a pseudoconsole to a Low-IL spawn re-trips the client-side
+  ALPC denial regardless of who spawns it. We never reached U2 (no prompt). (The claude TUI in the operator's
+  transcript ran in the OUTER unsandboxed shell after the PoC exited — not the sandbox.)
+  **CONCLUSION: an interactive TUI in the Low-IL `nono shell` is NOT achievable with either available approach
+  — D′ (pipe stdio, no TTY) or B′ (ConPTY on Low-IL, 0xC0000142).** The original HANG (this session's actual
+  bug) is FIXED + verified (commit `40c11831`), plus two unmasked bugs fixed (cwd `2fb0fad2`, PATH `738690a5`);
+  non-interactive claude (`claude --version`, print mode) and all grandchildren work in `nono shell`. The
+  interactive-TUI goal is blocked by an OS-level Low-IL/console-subsystem constraint. Only remaining theoretical
+  avenue: B′′ (Low-IL conhost so the child's console-client ALPC is same-IL) — speculative, untested, requires
+  the CreatePseudoConsole caller to itself be Low-IL; belongs in a planned phase, not this debug session.
+  RECOMMENDATION: resolve this debug session (core bug fixed); route the interactive-TUI aspiration to a
+  planned phase with the B′-dead finding + B′′ hypothesis as input. Specialist dispatch: rust-windows.
 **reasoning_checkpoint:**
   hypothesis: "Every grandchild PowerShell spawns inside the Low-IL `nono shell` sandbox is a NEW Low-IL
     console client that hangs registering with the Medium-IL conhost serving nono.exe's real console; the
@@ -176,6 +220,53 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   blind_spots: "Cannot reproduce on this MSYS/no-console host. Cannot from static analysis alone distinguish a pending-ALPC-connect hang (G1) from a write-to-unserviced-handle hang (G2); the single discriminator probe resolves it. Have not confirmed which conhost instance the grandchildren target (assume nono.exe's real-console conhost) or whether AppContainer-vs-Low-IL changes the conhost open-back result."
 
 ## Evidence
+
+- timestamp: 2026-05-28T20:55:00Z
+  checked: B′′ PoC field run (operator, real console): `poc-broker.exe --conpty-lowil` — a Medium-IL parent
+    spawns a LOW-IL helper that creates the ConPTY (intent: Low-IL conhost) and spawns Low-IL powershell.exe
+    attached, to test whether a SAME-IL conhost lets the child's console-client ALPC connect succeed.
+  found: `[POC-B''] Spawned Low-IL ConPTY-host helper, PID 35500` then
+    `helper/PowerShell exit code: 0xc0000142 (3221225794)` → `FAIL — still 0xC0000142 even with a LOW-IL
+    conhost`. PowerShell again died in DllMain with STATUS_DLL_INIT_FAILED.
+  implication: **B′′ ALSO DEAD.** Having a Low-IL process create the ConPTY does NOT save the Low-IL child —
+    the console-client registration still fails 0xC0000142. (Caveat: modern conhost spawning is brokered by
+    condrv/csrss, so this PoC could not independently confirm the resulting conhost was actually Low-IL; but
+    the EMPIRICAL result — Low-IL ConPTY caller still yields 0xC0000142 — closes this avenue regardless.)
+    **DEFINITIVE CONCLUSION: a Low-IL child cannot register with the Windows console subsystem.** Three
+    independent shapes confirm it: original real-console grandchild HANG, B′ Medium-IL ConPTY → 0xC0000142,
+    B′′ Low-IL ConPTY → 0xC0000142. The only thing that ever worked is the Phase-31 A1 inherited-console skip
+    (direct child only, no relay-able TTY, doesn't extend to grandchildren). An interactive TUI in the Low-IL
+    `nono shell` is therefore NOT reachable via the console subsystem without abandoning the Low-IL mandatory-
+    label model (e.g. AppContainer, or running the agent at Medium IL — both out of scope / weaken the model).
+    D′ (pipe stdio, non-interactive) is the practical ceiling. RESOLUTION: close the debug session — the
+    original HANG bug is fixed + verified; document the interactive-TUI as a known Windows limitation
+    (use `nono run`, `claude -p`, or other non-interactive invocations). Any future attempt to host a TUI
+    belongs in a researched planned phase exploring a different sandbox primitive, not this session.
+  source: operator field run 2026-05-28T20:55 (verbatim, treated as data); poc-broker `--conpty-lowil` mode
+    (commit `efe638d4`)
+
+- timestamp: 2026-05-28T20:30:00Z
+  checked: B′ PoC field run (operator, real console): `poc-broker.exe --conpty` — Medium-IL parent creates a
+    ConPTY and spawns Low-IL powershell.exe attached via PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE.
+  found: `[POC-CONPTY] Spawned Low-IL PowerShell on the ConPTY, PID 40964` then
+    `PowerShell exit code: 0xc0000142 (3221225794)` → `FAIL — 0xC0000142 STATUS_DLL_INIT_FAILED`. The Low-IL
+    child was CREATED (CreateProcessAsUserW succeeded) but DIED in DllMain with the exact Phase-30 loader
+    crash. NOTE on the transcript: the `cmd /c echo HI` → `HI` and the full Claude Code v2.1.154 TUI that
+    appeared AFTER the FAIL line ran in the operator's OUTER, UNSANDBOXED PowerShell (the PoC had already
+    exited and returned control there) — they are NOT evidence of B′ working; they are the normal Medium-IL
+    baseline.
+  implication: **U1 FAILS DECISIVELY — Option B′ (attach a ConPTY/pseudoconsole to the Low-IL child) is NOT
+    viable.** Attaching a pseudoconsole to a Low-IL spawn re-trips the Phase-30 client-side CSRSS ALPC denial
+    (ConClntInitialize → NtAlpcConnectPort → STATUS_ACCESS_DENIED → 0xC0000142) regardless of whether nono.exe
+    or a broker performs the spawn — the broker pattern only ever worked by AVOIDING the pseudoconsole
+    (inherited-console A1). We never reach U2 (the child dies before a prompt). This confirms the Phase-30
+    finding holds for the broker-mediated ConPTY shape too. **The interactive TUI is unreachable with both
+    available approaches**: D′ (pipe stdio) has no TTY → claude's TUI won't engage; B′ (ConPTY on Low-IL) →
+    0xC0000142. The only remaining theoretical avenue is B′′ (make the ConPTY's backing conhost LOW-IL so the
+    child's ALPC connect is same-IL, not cross-IL) — UNTESTED, speculative, and a non-trivial design (the
+    process calling CreatePseudoConsole must itself be Low-IL, since conhost inherits the caller's IL).
+  source: operator field run 2026-05-28T20:30 (verbatim, treated as data); poc-broker `--conpty` mode
+    (commit `8416ff60`); matches resolved/nono-shell-status-dll-init-failed.md (Phase-30 0xC0000142)
 
 - timestamp: 2026-05-28T19:55:00Z
   checked: FIELD VERIFY of Issue B fix (P1 granted-RO-dirs-on-PATH, commit `738690a5`). Fresh

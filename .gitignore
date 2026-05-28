@@ -48,6 +48,10 @@ ci-logs-local/
 .planning/quick/*/poc-broker/Cargo.lock
 .planning/quick/*/poc-broker/target/
 
+# Spike build artifacts (operator builds locally on Windows)
+.planning/spikes/*/Cargo.lock
+.planning/spikes/*/target/
+
 # Log files (build, test, clippy, debug output)
 *.log
 
