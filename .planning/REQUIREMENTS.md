@@ -15,7 +15,7 @@
 ### Drain (DRN)
 
 - [ ] **REQ-DRN-01**: WFP elevated live-uninstall is verified (HUMAN-UAT) — an operator running elevated `sc stop` of the WFP service then `msiexec /x` confirms the service stops cleanly and uninstall removes the service/driver, leaving nothing behind (closes the `wfp-service-stop-uninstall` debug's remaining live-verify leg).
-- [ ] **REQ-DRN-02**: The 3 pending follow-up todos in `.planning/todos/pending/` are resolved or explicitly re-dispositioned (carried since v2.7 close).
+- [x] **REQ-DRN-02**: The 3 pending follow-up todos in `.planning/todos/pending/` are resolved or explicitly re-dispositioned (carried since v2.7 close).
 
 ### Upstream Sync — Audit (UPST7)
 
@@ -82,7 +82,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-RLS-01 | Phase 53 | Complete |
 | REQ-RLS-02 | Phase 53 | Pending |
 | REQ-DRN-01 | Phase 53 | Pending |
-| REQ-DRN-02 | Phase 53 | Pending |
+| REQ-DRN-02 | Phase 53 | Complete |
 | REQ-UPST7-01 | Phase 54 | Pending |
 | REQ-UPST7-02 | Phase 55 | Pending |
 | REQ-NET-01 | Phase 56 | Pending |
