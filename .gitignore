@@ -90,6 +90,13 @@ Thumbs.db
 # The public cert + per-OutputDir cert are build artifacts, not source.
 *.pfx
 *.p12
+# Base64-encoded PFX (e.g. the WINDOWS_SIGNING_CERT secret value) — this IS the
+# private key in text form and must NEVER be committed.
+*.cert.b64
+*.pfx.b64
 nono-poc-signing.cer
+# Versioned POC public certs generated per release (nono-v0.57.4-poc.cer, etc.)
+nono-v*-poc.cer
+nono-v*.cer
 dist/windows/*.cer
 
