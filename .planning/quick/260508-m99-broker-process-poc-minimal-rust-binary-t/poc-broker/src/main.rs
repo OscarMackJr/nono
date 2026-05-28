@@ -29,7 +29,10 @@ use std::{
 };
 
 #[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+    INVALID_HANDLE_VALUE,
+};
 #[cfg(windows)]
 use windows_sys::Win32::Security::{
     CreateWellKnownSid, DuplicateTokenEx, SecurityAnonymous, SetTokenInformation,
@@ -50,10 +53,11 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::{
-    CreateProcessAsUserW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
-    InitializeProcThreadAttributeList, OpenProcessToken, UpdateProcThreadAttribute,
-    WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
-    PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW, STARTUPINFOW,
+    CreateProcessAsUserW, CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+    GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken,
+    UpdateProcThreadAttribute, WaitForSingleObject, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 #[cfg(not(windows))]
@@ -64,7 +68,12 @@ fn main() {
 
 #[cfg(windows)]
 fn main() {
-    if std::env::args().any(|a| a == "--conpty") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--conpty-lowil-host") {
+        run_conpty_lowil_host(&args);
+    } else if args.iter().any(|a| a == "--conpty-lowil") {
+        run_conpty_lowil_poc();
+    } else if args.iter().any(|a| a == "--conpty") {
         run_conpty_poc();
     } else {
         run_inherited_console_poc();
@@ -439,6 +448,288 @@ unsafe fn wait_and_exit_code(process: HANDLE) -> u32 {
         "GetExitCodeProcess",
     );
     exit_code
+}
+
+/// B'' PoC — PARENT/relay (Medium IL). Creates the ConPTY pipes, spawns a LOW-IL helper
+/// (`--conpty-lowil-host`) that owns the pseudoconsole (so the conhost is Low-IL), and relays
+/// stdio. The helper's exit code (= PowerShell's) reveals whether a SAME-IL conhost avoids the
+/// Phase-30 0xC0000142 that killed Option B'.
+#[cfg(windows)]
+fn run_conpty_lowil_poc() {
+    println!("[POC-B''] B'' shape: a LOW-IL helper creates the ConPTY (=> Low-IL conhost) and");
+    println!("[POC-B'']            spawns Low-IL powershell.exe attached to it. Hypothesis: a");
+    println!("[POC-B'']            SAME-IL (Low) conhost lets the child's console-client ALPC");
+    println!("[POC-B'']            connect succeed, avoiding the 0xC0000142 that killed B'.");
+    println!("[POC-B''] At the prompt: `cmd /c echo HI`, then `claude`, then `exit`.\n");
+
+    unsafe {
+        // SAFETY: AllocConsole takes no args; non-fatal if already attached.
+        AllocConsole();
+    }
+
+    // 1. Create the two ConPTY pipes. The CHILD ends (in_read, out_write) must be inheritable
+    //    by the Low-IL helper; the PARENT ends (in_write, out_read) stay private to the relay.
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: std::ptr::null_mut(),
+        bInheritHandle: 0,
+    };
+    let mut in_read: HANDLE = INVALID_HANDLE_VALUE;
+    let mut in_write: HANDLE = INVALID_HANDLE_VALUE;
+    let mut out_read: HANDLE = INVALID_HANDLE_VALUE;
+    let mut out_write: HANDLE = INVALID_HANDLE_VALUE;
+    unsafe {
+        // SAFETY: out-pointers are valid locals; `sa` lives for both calls.
+        fatal_if_zero(CreatePipe(&mut in_read, &mut in_write, &sa, 0), "CreatePipe(input)");
+        fatal_if_zero(
+            CreatePipe(&mut out_read, &mut out_write, &sa, 0),
+            "CreatePipe(output)",
+        );
+        // SAFETY: each handle is valid; toggling the inherit flag is documented to succeed.
+        SetHandleInformation(in_read, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        SetHandleInformation(out_write, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
+        SetHandleInformation(in_write, HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(out_read, HANDLE_FLAG_INHERIT, 0);
+    }
+
+    // 2. Low-IL primary token for the helper.
+    let h_token = unsafe { build_low_il_token() };
+
+    // 3. HANDLE_LIST attribute gating exactly the two child ends.
+    let inherit: [HANDLE; 2] = [in_read, out_write];
+    let mut attr_size: usize = 0;
+    unsafe {
+        // SAFETY: probe call with null list returns required size (Win32 idiom).
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    let mut attr_buf = vec![0u8; attr_size];
+    let attr_list: LPPROC_THREAD_ATTRIBUTE_LIST =
+        attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    unsafe {
+        // SAFETY: attr_list points into attr_buf sized by the probe above.
+        fatal_if_zero(
+            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size),
+            "InitializeProcThreadAttributeList",
+        );
+        // SAFETY: `inherit` outlives the CreateProcess call below.
+        fatal_if_zero(
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                inherit.as_ptr() as *mut _,
+                std::mem::size_of_val(&inherit[..]),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ),
+            "UpdateProcThreadAttribute(HANDLE_LIST)",
+        );
+    }
+
+    // 4. Spawn the helper at Low IL, passing the child-end handle values via argv. The helper
+    //    inherits the same numeric handle values (HANDLE_LIST gates the set).
+    let exe = std::env::current_exe().expect("current_exe");
+    let cmd = format!(
+        "\"{}\" --conpty-lowil-host --in-read 0x{:x} --out-write 0x{:x}",
+        exe.display(),
+        in_read as usize,
+        out_write as usize
+    );
+    let mut cmd_wide: Vec<u16> = OsStr::new(&cmd).encode_wide().chain(Some(0)).collect();
+    let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    si.lpAttributeList = attr_list;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let created = unsafe {
+        // SAFETY: h_token is a valid Low-IL primary token; cmd_wide is null-terminated;
+        // bInheritHandles=1 with HANDLE_LIST gating the two child ends.
+        CreateProcessAsUserW(
+            h_token,
+            std::ptr::null(),
+            cmd_wide.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+            EXTENDED_STARTUPINFO_PRESENT,
+            std::ptr::null(),
+            std::ptr::null(),
+            &si.StartupInfo as *const STARTUPINFOW,
+            &mut pi,
+        )
+    };
+    unsafe {
+        // SAFETY: attr_list initialized above; safe to release after CreateProcess.
+        DeleteProcThreadAttributeList(attr_list);
+    }
+    fatal_if_zero(created, "CreateProcessAsUserW(low-il helper)");
+    println!("[POC-B''] Spawned Low-IL ConPTY-host helper, PID {}.\n", pi.dwProcessId);
+
+    // 5. Close OUR copies of the child ends so EOF propagates when the helper/PTY close them.
+    unsafe {
+        // SAFETY: these handles are owned by this process and no longer needed here.
+        CloseHandle(in_read);
+        CloseHandle(out_write);
+    }
+
+    // 6. VT pass-through + relay (parent stays Medium IL → console output is reliable).
+    enable_vt_passthrough();
+    let mut out_file = unsafe { std::fs::File::from_raw_handle(out_read as *mut _) };
+    let mut in_file = unsafe { std::fs::File::from_raw_handle(in_write as *mut _) };
+    std::thread::spawn(move || {
+        let mut stdout = std::io::stdout();
+        let _ = std::io::copy(&mut out_file, &mut stdout);
+    });
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut lock = stdin.lock();
+        let _ = std::io::copy(&mut lock, &mut in_file);
+    });
+
+    // 7. Wait for the helper (it exits with PowerShell's exit code).
+    let exit_code = unsafe { wait_and_exit_code(pi.hProcess) };
+    println!("\n[POC-B''] helper/PowerShell exit code: {exit_code:#010x} ({exit_code})");
+    match exit_code {
+        3_221_225_794 => println!(
+            "[POC-B''] FAIL — still 0xC0000142 even with a LOW-IL conhost. The Low-IL console-client \
+             ALPC is denied regardless of conhost IL → B'' is also NOT viable; a real TUI in the \
+             Low-IL nono shell is not reachable via the console subsystem."
+        ),
+        _ => println!(
+            "[POC-B''] No 0xC0000142 → the Low-IL conhost accepted the child! Verdict depends on what \
+             you saw ABOVE: if `cmd /c echo HI` printed and `claude` rendered its TUI, B'' is VIABLE \
+             → production wiring = broker degrades to Low-IL, creates the ConPTY, then spawns the shell."
+        ),
+    }
+
+    unsafe {
+        // SAFETY: process/token handles valid and owned; out_read/in_write owned by the relay
+        // File wrappers (closed on process exit) — not closed here.
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+        CloseHandle(h_token);
+    }
+    std::process::exit(exit_code as i32);
+}
+
+/// B'' PoC — LOW-IL HELPER (`--conpty-lowil-host`). Runs at Low IL (spawned by the parent),
+/// creates the pseudoconsole from the inherited child pipe ends (so conhost is Low-IL), and
+/// spawns Low-IL powershell.exe attached to it. Exits with PowerShell's exit code.
+#[cfg(windows)]
+fn run_conpty_lowil_host(args: &[String]) {
+    let in_read = parse_handle_arg(args, "--in-read");
+    let out_write = parse_handle_arg(args, "--out-write");
+
+    // Create the pseudoconsole from the inherited child ends. Because THIS process is Low-IL,
+    // the conhost it spawns is Low-IL too — the crux of the B'' hypothesis.
+    let mut hpcon: HPCON = 0;
+    let size = COORD { X: 120, Y: 30 };
+    let hr = unsafe {
+        // SAFETY: in_read/out_write are valid inherited pipe handles; hpcon is a valid out-ptr.
+        CreatePseudoConsole(size, in_read, out_write, 0, &mut hpcon)
+    };
+    unsafe {
+        // SAFETY: pseudoconsole keeps its own references; release our inherited copies.
+        CloseHandle(in_read);
+        CloseHandle(out_write);
+    }
+    if hr != 0 {
+        eprintln!("[POC-B''-host] FATAL: CreatePseudoConsole failed HRESULT 0x{hr:X}");
+        std::process::exit(1);
+    }
+
+    // PSEUDOCONSOLE attribute (1 slot).
+    let mut attr_size: usize = 0;
+    unsafe {
+        // SAFETY: probe call returns required size.
+        InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+    }
+    let mut attr_buf = vec![0u8; attr_size];
+    let attr_list: LPPROC_THREAD_ATTRIBUTE_LIST =
+        attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    let hpcon_value = hpcon;
+    unsafe {
+        // SAFETY: attr_list sized by probe; hpcon_value outlives the CreateProcess call.
+        fatal_if_zero(
+            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size),
+            "InitializeProcThreadAttributeList(host)",
+        );
+        fatal_if_zero(
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                std::ptr::addr_of!(hpcon_value) as *mut _,
+                size_of::<HPCON>(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            ),
+            "UpdateProcThreadAttribute(PSEUDOCONSOLE, host)",
+        );
+    }
+
+    // Spawn powershell.exe; it inherits THIS process's Low-IL token (CreateProcessW, no AsUser),
+    // attached to the Low-IL pseudoconsole. The Low-IL child's ConClntInitialize now connects to
+    // a SAME-IL (Low) conhost — the test of whether that avoids 0xC0000142.
+    let mut cmd_wide: Vec<u16> = OsStr::new("powershell.exe -NoLogo")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut si: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+    si.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+    si.lpAttributeList = attr_list;
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+    let created = unsafe {
+        // SAFETY: cmd_wide null-terminated; EXTENDED_STARTUPINFO_PRESENT matches STARTUPINFOEXW;
+        // bInheritHandles=FALSE (the pseudoconsole carries stdio).
+        CreateProcessW(
+            std::ptr::null(),
+            cmd_wide.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            EXTENDED_STARTUPINFO_PRESENT,
+            std::ptr::null(),
+            std::ptr::null(),
+            &si.StartupInfo as *const STARTUPINFOW,
+            &mut pi,
+        )
+    };
+    unsafe {
+        // SAFETY: attr_list initialized above; release after CreateProcess.
+        DeleteProcThreadAttributeList(attr_list);
+    }
+    if created == 0 {
+        let err = unsafe { GetLastError() };
+        eprintln!("[POC-B''-host] FATAL: CreateProcessW(powershell) failed (GetLastError={err})");
+        std::process::exit(1);
+    }
+
+    let exit_code = unsafe { wait_and_exit_code(pi.hProcess) };
+    unsafe {
+        // SAFETY: hpcon + process handles valid and owned.
+        ClosePseudoConsole(hpcon);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    std::process::exit(exit_code as i32);
+}
+
+/// Parse a `--flag 0xHEX` HANDLE value from argv. Fatal on missing/invalid.
+#[cfg(windows)]
+fn parse_handle_arg(args: &[String], flag: &str) -> HANDLE {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == flag {
+            if let Some(v) = it.next() {
+                let hex = v.trim_start_matches("0x");
+                if let Ok(n) = usize::from_str_radix(hex, 16) {
+                    return n as HANDLE;
+                }
+            }
+        }
+    }
+    eprintln!("[POC-B''-host] FATAL: missing or invalid {flag} argument");
+    std::process::exit(1);
 }
 
 /// Exit the process with a descriptive FATAL message if `result` is zero.
