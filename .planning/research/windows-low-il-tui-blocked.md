@@ -39,15 +39,32 @@ must NOT weaken it (no running the agent at Medium IL, no dropping the label).
 
 ## Research directions for a future phase
 
-1. **AppContainer** instead of (or alongside) the Low-IL mandatory label. AppContainer has a different
-   console/capability model; investigate whether an AppContainer-confined process can host a console/ConPTY
-   while still structurally denying the filesystem/network the profile forbids. Biggest unknown: does
-   AppContainer give equivalent or stronger isolation than the Low-IL label for nono's threat model?
+1. ~~**AppContainer** instead of the Low-IL mandatory label.~~ **TESTED + DEAD (spike 001, 2026-05-28).**
+   An AppContainer-confined `cmd.exe` attached to a ConPTY dies with the same `0xC0000142`. Root reason: an
+   AppContainer token is itself **Low integrity** (Low IL + AppContainer SID + capability SIDs), so its
+   console-subsystem client registration is denied exactly as for a mandatory-label Low-IL child. AppContainer
+   changes the capability/ACL model, not the integrity level → it does NOT escape the console wall. PoC:
+   `.planning/spikes/001-appcontainer-conpty-tui`. **Do not re-attempt.**
 2. **Medium-IL console-broker proxy**: a cooperating Medium-IL helper hosts the real console/ConPTY and
-   proxies console API calls on behalf of the Low-IL tree (beyond what ConPTY already does — ConPTY's
-   conhost is the failing component). Likely large; uncertain it sidesteps the ALPC denial.
-3. **Accept non-interactive as the supported mode** (status quo D′): document `nono run` / `claude -p`
-   as the Windows path; deprioritize the TUI. Cheapest; already shipped.
+   proxies console API calls on behalf of the Low-IL tree. Beyond what ConPTY already does (ConPTY's conhost
+   is the failing component); would amount to re-implementing the console subsystem. Large, uncertain,
+   low priority.
+3. **★ RECOMMENDED — sandbox-the-tools, not sandbox-the-TUI (architecture pivot, no console work).** The
+   structural answer is to stop trying to confine the interactive process. Run `claude` itself at Medium IL
+   in a real terminal (full TUI, no console wall), and confine the *operations it spawns* — Bash/file/network
+   tool calls — by wrapping them with `nono run` via Claude Code hooks. Dangerous operations stay
+   kernel-isolated; the TUI works. This sidesteps the console subsystem entirely and matches how agent
+   sandboxing is practically deployed. A future phase would design the hook wiring + per-tool capability
+   mapping rather than chase a Low-IL TUI.
+4. **Accept non-interactive as a supported mode** (status quo D′): `nono run` / `claude -p` for fully-confined
+   non-interactive use. Already shipped; complements (3).
+
+## Conclusion (post-spike)
+
+The interactive TUI is **OS-blocked for every Windows confinement primitive that lowers integrity** — raw
+Low-IL (hang / 0xC0000142) and AppContainer (0xC0000142). There is no console-subsystem path for a
+Low-integrity client; a TUI requires Medium+ integrity, which abandons in-process structural isolation. The
+productive direction is the architecture pivot (#3): sandbox the tool invocations, not the agent's terminal.
 
 ## What's already done (do not redo)
 

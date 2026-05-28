@@ -3,7 +3,7 @@ spike: 001
 name: appcontainer-conpty-tui
 type: standard
 validates: "Given a process confined in a Windows AppContainer attached to a ConPTY, when it runs as a console client (echo / interactive shell), then it renders output without re-tripping the Phase-30 0xC0000142 STATUS_DLL_INIT_FAILED"
-verdict: PENDING
+verdict: INVALIDATED
 related: []
 tags: [windows, appcontainer, conpty, console, low-il, tui, security]
 ---
@@ -78,8 +78,29 @@ The binary prints a `[SPIKE-001]` verdict line + the child exit code at the end.
 
 - 2026-05-28: Built the spike (standalone `windows-sys` crate, mirrors poc-broker `--conpty` but swaps the raw
   Low-IL token for an AppContainer via `CreateAppContainerProfile` + `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`,
-  0 capabilities). Compiles clean (release). Awaiting operator field run on Win11.
+  0 capabilities). Compiles clean (release).
+- 2026-05-28: Operator field run on Win11 build-26200. AppContainer profile created OK; `cmd.exe` spawned in
+  the AppContainer on the ConPTY (PID 43608); child exited **`0xc0000142`** → `[SPIKE-001] FAIL`. Same
+  STATUS_DLL_INIT_FAILED as B′/B′′. INVALIDATED.
 
 ## Results
 
-PENDING — awaiting operator field run.
+**INVALIDATED.** An AppContainer-confined `cmd.exe` attached to a ConPTY dies in DllMain with `0xC0000142`,
+identical to the raw Low-IL approaches (B′/B′′) and the original Phase-30 crash. **Root reason:** an
+AppContainer token is itself **Low integrity** (Low IL + AppContainer SID + capability SIDs), so its
+console-subsystem client registration (`ConClntInitialize` → ALPC connect to the conhost) is denied exactly
+as for a mandatory-label Low-IL child. AppContainer changes the *capability/ACL* model but NOT the integrity
+level, so it does not escape the console wall.
+
+**Conclusion for the idea:** the interactive TUI is **OS-blocked across every confinement primitive tested** —
+raw Low-IL (hang / 0xC0000142) AND AppContainer (0xC0000142). There is no console-subsystem path for a
+Low-integrity client. A real TUI requires the agent process to run at Medium+ integrity, which abandons the
+structural isolation. Spikes 002–004 (AppContainer fs/net/grant isolation parity) are moot — cancelled.
+
+**Signal for the build (architecture pivot, not a console fix):** the achievable model on Windows is
+**sandbox-the-tools, not sandbox-the-TUI** — run `claude` itself at Medium IL in a real terminal (full TUI),
+and confine the *operations it spawns* (Bash/file/network tool calls) by wrapping them with `nono run`
+(Claude Code hooks already support this). That preserves the TUI while keeping the dangerous operations
+kernel-isolated. This sidesteps the console wall entirely and is the recommended direction over any further
+console/ConPTY work.
+
