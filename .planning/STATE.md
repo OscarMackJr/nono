@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-05-28T13:31:57.018Z"
+last_updated: "2026-05-28T13:44:27.481Z"
 last_activity: 2026-05-28
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 25
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -21,14 +21,14 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 53 — Release & Drain (first phase; ships the tagged release with the post-v2.7 fixes, repairs release.yml, verifies WFP uninstall UAT, drains 3 pending todos).
+**Current Focus:** Phase 53 — release-drain
 
 ## Current Position
 
-Phase: 53 — Release & Drain (Not started)
-Plan: —
+Phase: 53 (release-drain) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-05-28 -- Phase 53 planning complete
+Last activity: 2026-05-28
 
 ### v2.8 Phase Summary (active)
 

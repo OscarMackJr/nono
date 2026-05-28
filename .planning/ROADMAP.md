@@ -46,7 +46,7 @@ granularity: standard
 **Plans**: 4 plans
 Plans:
 **Wave 1**
-- [ ] 53-01-PLAN.md — Version bump 0.57.3 to 0.57.4 across all 5 crate Cargo.toml files and path-dep pins
+- [x] 53-01-PLAN.md — Version bump 0.57.3 to 0.57.4 across all 5 crate Cargo.toml files and path-dep pins
 - [ ] 53-02-PLAN.md — Drain: promote Todos 2+3 to REQUIREMENTS.md backlog with D-53-08 rationale; move pending files to done/
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -126,7 +126,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 53. Release & Drain | 0/4 | In planning | - |
+| 53. Release & Drain | 1/4 | In Progress|  |
 | 54. UPST7 Audit | 0/TBD | Not started | - |
 | 55. UPST7 Cherry-pick Wave | 0/TBD | Not started | - |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
