@@ -57,6 +57,14 @@ Acknowledged but not in the v2.8 roadmap.
 
 - **REQ-UPST-RESID-01** *(deferred)*: `b5f0a3ab` deep ExecConfig refactor + `bbdf7b85` escape-quote structured-property wiring + the full `wiring.rs` idempotent JSON-merge abstraction — macOS-learn-diagnostics-oriented residue from the v0.44–v0.57 window; out of forward UPST7 scope.
 
+### Deny-overlap validator preflight (carried from v2.7)
+
+- **REQ-DENY-PREFLIGHT-01** *(deferred from v2.7 carry-forward, Phase 44 Plan 44-02 D-44-C3 follow-up)*: Linux-host-gated investigation of why `validate_deny_overlaps` pre-flight does not fire on CI Linux (the either-or assertion already proves security equivalence — both code paths deny the read, neither leaks the secret). This is a latent-diagnostic investigation, not a security gap. Deferred until a dedicated Linux CI runner is available for the instrumented-trace investigation (RUST_LOG=trace + strace). Source: `.planning/todos/pending/44-class-d-validator-preflight-investigation.md`. Rationale per D-53-08: security equivalence is proven; investigation is low-priority and Linux-host-gated. Priority: low. Affects: `crates/nono-cli/src/policy.rs:1032-1088`, `crates/nono-cli/tests/deny_overlap_run.rs`.
+
+### Snapshot restore TOCTOU hardening (carried from v2.7)
+
+- **REQ-UNDO-TOCTOU-01** *(deferred from v2.7 carry-forward, Phase 44 Plan 44-01 WR-01 P43 follow-up)*: Full fd-relative TOCTOU hardening of `validate_restore_target` + downstream write sequence in `crates/nono/src/undo/snapshot.rs`. Requires O_NOFOLLOW + openat/mkdirat/renameat/fchmodat on Linux/macOS and NtCreateFile-with-OBJ_DONT_REPARSE or documented defense-in-depth on Windows. Estimated ~2-3 weeks of focused cross-platform work. Warrants a dedicated security-scoped phase. Source: `.planning/todos/pending/44-validate-restore-target-fd-relative-hardening.md`. Rationale per D-53-08: residual TOCTOU race is a known local-attacker-with-write-access scenario; doc note already shipped (Phase 44); full closure is a standalone security phase, not a drain item. Priority: medium. Affects: `crates/nono/src/undo/snapshot.rs`.
+
 ## Out of Scope (Explicit Exclusions)
 
 | Feature | Reason |
@@ -81,6 +89,8 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-CRED-01 | Phase 57 | Pending |
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
+| REQ-DENY-PREFLIGHT-01 | v2 Deferred | Deferred |
+| REQ-UNDO-TOCTOU-01 | v2 Deferred | Deferred |
 
 **Coverage:**
 - v1 requirements: 10 total
