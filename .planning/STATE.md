@@ -3,14 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: planning
-last_updated: "2026-05-28T01:27:25.240Z"
+last_updated: "2026-05-28T13:08:15.323Z"
 last_activity: 2026-05-28
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 0
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
