@@ -69,26 +69,24 @@ Acknowledged but not in the v2.8 roadmap.
 
 ## Traceability
 
-Populated during roadmap creation. Each requirement maps to exactly one phase.
-
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| REQ-RLS-01 | TBD | Pending |
-| REQ-RLS-02 | TBD | Pending |
-| REQ-DRN-01 | TBD | Pending |
-| REQ-DRN-02 | TBD | Pending |
-| REQ-UPST7-01 | TBD | Pending |
-| REQ-UPST7-02 | TBD | Pending |
-| REQ-NET-01 | TBD | Pending |
-| REQ-CRED-01 | TBD | Pending |
-| REQ-HOOK-01 | TBD | Pending |
-| REQ-IPC-01 | TBD | Pending |
+| REQ-RLS-01 | Phase 53 | Pending |
+| REQ-RLS-02 | Phase 53 | Pending |
+| REQ-DRN-01 | Phase 53 | Pending |
+| REQ-DRN-02 | Phase 53 | Pending |
+| REQ-UPST7-01 | Phase 54 | Pending |
+| REQ-UPST7-02 | Phase 55 | Pending |
+| REQ-NET-01 | Phase 56 | Pending |
+| REQ-CRED-01 | Phase 57 | Pending |
+| REQ-HOOK-01 | Phase 58 | Pending |
+| REQ-IPC-01 | Phase 59 | Pending |
 
 **Coverage:**
 - v1 requirements: 10 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 10 ⚠️ (resolved at roadmap creation)
+- Mapped to phases: 10/10 ✓
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-28*
-*Last updated: 2026-05-28 after initial definition (v2.8 milestone start)*
+*Last updated: 2026-05-28 — traceability populated at roadmap creation*

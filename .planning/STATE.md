@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-05-28T01:27:25.240Z"
 last_activity: 2026-05-28
 progress:
-  total_phases: 0
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,20 +17,32 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 shipped 2026-05-26, archived 2026-05-28). REQUIREMENTS.md + ROADMAP.md pending (defining requirements next). Phase numbering continues from Phase 52 (Phase 53+).
+See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 shipped 2026-05-26, archived 2026-05-28). Phase numbering continues from Phase 52 (Phases 53-59). Roadmap: 7 phases defined.
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Defining v2.8 requirements (drain-then-sync: tag+signed release of untagged v2.7 fixes + release.yml repair + WFP-uninstall UAT + 3 todos, then full UPST7 sync of upstream v0.58.0 + v0.59.0).
+**Current Focus:** Phase 53 — Release & Drain (first phase; ships the tagged release with the post-v2.7 fixes, repairs release.yml, verifies WFP uninstall UAT, drains 3 pending todos).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 53 — Release & Drain (Not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-05-28 — Milestone v2.8 started
+Status: Ready to plan
+Last activity: 2026-05-28 — Roadmap created (7 phases, 10/10 requirements mapped)
 
-### v2.7 Phase Summary
+### v2.8 Phase Summary (active)
+
+| Phase | Goal | Requirements | Status |
+|-------|------|--------------|--------|
+| 53 | Tag v2.8 + signed MSIs + release.yml verify + WFP UAT + 3 todos | REQ-RLS-01, REQ-RLS-02, REQ-DRN-01, REQ-DRN-02 | Not started |
+| 54 | UPST7 audit (DIVERGENCE-LEDGER v0.57.0..v0.59.0) | REQ-UPST7-01 | Not started |
+| 55 | UPST7 cherry-pick wave (cross-platform straight ports) | REQ-UPST7-02 | Not started |
+| 56 | Fine-grained network filtering (allow_domain path+method) | REQ-NET-01 | Not started |
+| 57 | Bitwarden bw:// credential source | REQ-CRED-01 | Not started |
+| 58 | Session lifecycle hooks (Unix upstream + Windows ADR) | REQ-HOOK-01 | Not started |
+| 59 | Supervisor IPC robustness (keep-alive + timeouts) | REQ-IPC-01 | Not started |
+
+### v2.7 Phase Summary (archived — shipped 2026-05-26)
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
