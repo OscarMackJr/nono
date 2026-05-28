@@ -43,7 +43,12 @@ granularity: standard
   3. `.github/workflows/release.yml` completes without `startup_failure` on a live `v*` tag push and produces signed release artifacts (HUMAN-UAT: push a `v2.8` tag, confirm GitHub Actions run to completion)
   4. An operator running elevated `sc stop` on the WFP service then `msiexec /x` confirms the service stops cleanly and uninstall removes the service/driver leaving nothing behind (HUMAN-UAT: requires elevated Windows host; closes `wfp-service-stop-uninstall` debug's remaining leg)
   5. The 3 pending todos in `.planning/todos/pending/` are resolved or explicitly re-dispositioned with a written rationale committed to the planning artifacts
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 53-01-PLAN.md — Version bump 0.57.3 to 0.57.4 across all 5 crate Cargo.toml files and path-dep pins
+- [ ] 53-02-PLAN.md — Drain: promote Todos 2+3 to REQUIREMENTS.md backlog with D-53-08 rationale; move pending files to done/
+- [ ] 53-03-PLAN.md — Fix release.yml trigger (v*.*.*), update sign-poc-local.ps1, expand signing guide (CA-ready + fresh-cert procedure), push main
+- [ ] 53-04-PLAN.md — HUMAN-UAT: cut v0.57.4 + v2.8 tags, CI run verify (REQ-RLS-02), install signed MSI verify (REQ-RLS-01), elevated WFP stop/uninstall verify (REQ-DRN-01)
 
 ### Phase 54: UPST7 Audit
 **Goal**: The fork has a complete DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0` with actionable dispositions for every cluster and a confirmed strategy for the cherry-pick wave
@@ -116,7 +121,7 @@ granularity: standard
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 53. Release & Drain | 0/TBD | Not started | - |
+| 53. Release & Drain | 0/4 | In planning | - |
 | 54. UPST7 Audit | 0/TBD | Not started | - |
 | 55. UPST7 Cherry-pick Wave | 0/TBD | Not started | - |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
