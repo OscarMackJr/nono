@@ -54,8 +54,17 @@ must NOT weaken it (no running the agent at Medium IL, no dropping the label).
    in a real terminal (full TUI, no console wall), and confine the *operations it spawns* — Bash/file/network
    tool calls — by wrapping them with `nono run` via Claude Code hooks. Dangerous operations stay
    kernel-isolated; the TUI works. This sidesteps the console subsystem entirely and matches how agent
-   sandboxing is practically deployed. A future phase would design the hook wiring + per-tool capability
-   mapping rather than chase a Low-IL TUI.
+   sandboxing is practically deployed.
+
+   **Existing foundation (NOT greenfield):** nono already ships Claude Code hook integration —
+   `crates/nono-cli/src/hooks.rs` (hook installation) + `crates/nono-cli/data/hooks/nono-hook.sh`. BUT the
+   current script is **bash/Unix-oriented** and its example wraps *claude itself* (`nono run --allow … -- claude`),
+   not the individual tool calls. **Gap for a pivot phase:** (a) a `PreToolUse`-style hook that wraps each
+   Bash/tool invocation with `nono run` (intercept + rewrite the tool command), rather than wrapping the whole
+   session; (b) a **Windows** hook script (the current one is `.sh`); (c) per-tool → capability mapping (which
+   grants each tool class needs). Open design questions → this phase wants a `discuss-phase`/research pass
+   before planning. It is a new capability (a second Windows sandboxing mode) — milestone-worthy, NOT a fit
+   for the v2.8 drain+release scope.
 4. **Accept non-interactive as a supported mode** (status quo D′): `nono run` / `claude -p` for fully-confined
    non-interactive use. Already shipped; complements (3).
 
