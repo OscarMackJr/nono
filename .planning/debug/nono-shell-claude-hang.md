@@ -138,10 +138,29 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   appended + after System32 + no `\\?\` + RW dir excluded). Windows-host: 5/5 env_filter_tests PASS, clippy
   (-D warnings -D unwrap_used) CLEAN, `target\debug\nono.exe` rebuilt. Cross-target linux/macos clippy
   PARTIAL/deferred (exec_strategy_windows is Windows-only; host lacks C cross-linker; per checklist).
-  **FIELD VERIFY of B PENDING:** in a fresh `nono shell --profile claude-code --allow-cwd`, run `$env:PATH`
-  (expect `.local\bin` now present) then `claude` (expect it resolves + launches; degraded/line-mode TUI per
-  Option D′ is acceptable). Also still want the `& "C:\...\.local\bin\claude.exe"` full-path probe result to
-  confirm claude RUNS under Low-IL (isolates PATH-resolution from any deeper claude-under-sandbox issue).
+  **Issue B FIELD-VERIFIED RESOLVED** (2026-05-28T19:55): `$env:PATH` now contains `C:\Users\OMack\.local\bin`
+  (+ `.cargo`, `.rustup`); `claude --version` → `2.1.153 (Claude Code)` (resolves + runs + returns, no hang).
+  Bare interactive `claude` returns instantly with NO UI — the KNOWN, operator-accepted Option D′ no-TTY
+  limitation (pipe stdio is not a TTY; Claude Code's TUI requires isatty). NOT a regression. Path to the
+  interactive TUI = Option B′ (real ConPTY through the broker).
+
+  **B′ PURSUIT — operator chose "gated in-tree PoC now", narrowed to a zero-production-risk standalone PoC
+  after design review.** B′ requires re-architecting ConPTY creation: `open_pty()` (pty_proxy_windows.rs:63)
+  makes the hpcon in nono.exe, but PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE must be set by the BROKER (different
+  process; an HPCON can't cross processes). TWO unresolved unknowns gate B′:
+    - U1: does attaching a pseudoconsole to a Low-IL spawn re-trip the Phase-30 0xC0000142?
+    - U2: the ConPTY's backing conhost is spawned by the broker at MEDIUM IL → does it re-create the SAME
+      cross-IL barrier D′ just worked around for Low-IL grandchildren?
+  Rather than rewrite the production launch path speculatively, extended the existing standalone A1 PoC
+  (`.planning/quick/260508-m99-broker-process-poc-minimal-rust-binary-t/poc-broker`, NOT a workspace member →
+  zero production risk) with a `--conpty` mode: a Medium-IL parent creates a ConPTY and spawns Low-IL
+  powershell.exe attached via PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE (mirrors launch.rs:1584-1596
+  addr_of!/size_of::<HPCON> idiom), then relays stdio with VT pass-through. Built clean (release).
+  **AWAITING field run** (operator, real PowerShell console):
+    `.\...\poc-broker\target\release\poc-broker.exe --conpty`
+    then at the sandboxed prompt: `cmd /c echo HI` (U2 grandchild test), `claude` (TUI test), then `exit`.
+  Interpretation: exit `0xC0000142` ⇒ U1 fails ⇒ B′ dead as-shaped; grandchild output present ⇒ U2 ok ⇒ B′
+  viable (proceed to production wiring behind a flag); grandchild hang ⇒ U2 fails ⇒ conhost-IL work needed.
   Specialist dispatch: rust-windows.
 **reasoning_checkpoint:**
   hypothesis: "Every grandchild PowerShell spawns inside the Low-IL `nono shell` sandbox is a NEW Low-IL
@@ -157,6 +176,34 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   blind_spots: "Cannot reproduce on this MSYS/no-console host. Cannot from static analysis alone distinguish a pending-ALPC-connect hang (G1) from a write-to-unserviced-handle hang (G2); the single discriminator probe resolves it. Have not confirmed which conhost instance the grandchildren target (assume nono.exe's real-console conhost) or whether AppContainer-vs-Low-IL changes the conhost open-back result."
 
 ## Evidence
+
+- timestamp: 2026-05-28T19:55:00Z
+  checked: FIELD VERIFY of Issue B fix (P1 granted-RO-dirs-on-PATH, commit `738690a5`). Fresh
+    `nono shell --profile claude-code --allow-cwd` from `%USERPROFILE%\.claude`, rebuilt
+    `target\debug\nono.exe`.
+  found:
+    `$env:PATH` →
+      `C:\Windows\System32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0;C:\Windows;C:\Users\OMack\.local\bin;C:\Users\OMack\.cargo;C:\Users\OMack\.rustup`
+      → P1 WORKS: the granted read-only dirs (`.local\bin`, `.cargo`, `.rustup`) are appended after the
+      System32 baseline; `.local\bin` (where claude lives) is now on PATH. (Cosmetic: `C:\Windows` appears
+      twice — once in the base, once from the `system_read_windows` read grant; my dedup only dedups among
+      appended grants, not against the base. Harmless; candidate one-line polish.)
+    `claude --version` → `2.1.153 (Claude Code)` → claude RESOLVES by bare name, RUNS under Low-IL, and
+      returns output (NO hang). Issue B (not-found) is RESOLVED and claude executes fine non-interactively.
+    bare `claude` (interactive TUI) → returns to the prompt IMMEDIATELY with ZERO UI (does not enter the
+      Claude Code TUI).
+  implication: Issue B (claude unresolvable) is FIXED + verified. The original HANG is fully resolved
+    (claude --version returns; no zero-output freeze). The remaining gap — bare interactive `claude` not
+    launching the TUI — is the KNOWN, DOCUMENTED, OPERATOR-ACCEPTED cost of Option D′: D′ gives the Low-IL
+    tree anonymous-PIPE stdio (no ConPTY), so claude's stdin/stdout are not a TTY. Claude Code's interactive
+    TUI requires a TTY (isatty) and exits immediately under pipe stdio (consistent with `--version` working —
+    non-interactive paths don't need a TTY). This is NOT a regression or a new bug in the three committed
+    fixes; it is the exact tradeoff flagged when D′ was chosen over B′. The path to a working interactive TUI
+    is Option B′ (real ConPTY through the broker), which remains deferred as a planned phase requiring a
+    Phase-30-0xC0000142 re-trip PoC. Suggested confirmation probe: `claude -p "say hi"` (non-interactive
+    print mode) should work, isolating the gap to interactive-TTY mode only.
+  source: operator field run 2026-05-28T19:55 (verbatim, treated as data); Option D′ tradeoff per
+    "Ranked fix options" Option D′ cons + RESEARCH §7b
 
 - timestamp: 2026-05-28T19:10:00Z
   checked: FIELD RE-VERIFY of Issue A (cwd `\\?\` strip fix, commit `2fb0fad2`) + Issue B root-cause
