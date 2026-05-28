@@ -84,14 +84,40 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   exactly as the Win32 finding (a) predicted. There is NO residual G1/G2 ambiguity; the root cause is now
   singular: a fresh Low-IL grandchild cannot complete console-client registration with the Medium-IL conhost
   serving nono.exe's real console.
-**next_action:** ROOT CAUSE FOUND → fix-decision checkpoint. With G1 confirmed, the fix locus is how the
-  broker establishes console/stdio for the WHOLE Low-IL tree so a fresh grandchild never registers cross-IL
-  with a Medium-IL conhost. Two viable fixes remain (Option D′ = pipe stdio for the whole tree, PROVEN on the
-  `nono run` no-PTY path, low risk, loses raw-mode TUI; Option B′ = real ConPTY through the broker, preserves
-  the TUI but must first PoC that it does not re-trip the Phase-30 0xC0000142 for the direct child). This is a
-  security-critical launch path AND an architectural change → present both options at a checkpoint; do NOT
-  edit until the operator picks the fix direction (Phase 30 discipline: no token/relay iteration without
-  confirmation). Specialist dispatch: rust-windows.
+**next_action:** HANG FIX VERIFIED (Option D′, commit `40c11831`). Live Win11 build-26200 field run with the
+  dev-layout v0.57.4 binary confirms the G1 hang is GONE: `cmd /c echo` returns output AND control returns to
+  the prompt (previously every grandchild hung with zero output). The ORIGINAL bug (hang) is RESOLVED.
+  TWO PRE-EXISTING issues were UNMASKED by the fix (the hang previously hid them); both are DISTINCT from the
+  hang and are NOT regressions from the D′ change (the old hanging path passed the same cwd/env):
+    - **Issue A (cwd `\\?\` verbatim prefix):** the sandboxed cwd is `\\?\C:\Users\OMack\.claude`; `cmd.exe`
+      rejects `\\?\` cwd ("UNC paths are not supported. Defaulting to Windows directory") and falls back to
+      C:\Windows, where relative writes (`echo HI > out.txt`) are denied. The "Access is denied" CONFIRMS
+      Low-IL NO_WRITE_UP still enforces (not a security regression — a usability bug). ROOT CAUSE: cwd comes
+      from `workdir.canonicalize()` (execution_runtime.rs:72) → Windows verbatim `\\?\` path; the strip in
+      `normalize_windows_launch_path` (launch.rs:998-1009) is OFF BY ONE BACKSLASH — it strips `r"\?\UNC"` /
+      `r"\?"` (single leading backslash) but a canonicalized verbatim path is `\\?\UNC\` / `\\?\` (double), so
+      the prefix is NEVER stripped. Fix: correct the strip patterns to `\\?\UNC\` / `\\?\` (small, contained,
+      same security-critical launch path → checkpoint discipline still applies).
+    - **Issue B (`claude` not found):** `CommandNotFoundException` inside the sandbox though `claude` works
+      outside in plain PowerShell. PATH / command-resolution issue — env not propagated into the Low-IL shell,
+      OR claude lives in a dir not on the sandbox PATH (note `.local\bin` IS granted RX per label-guard mask
+      0x5), OR `claude` is a `$PROFILE` function and the sandboxed PowerShell launched without loading the
+      profile. NEEDS a diagnostic (`Get-Command claude` / `where.exe claude` OUTSIDE the sandbox + PATH dump
+      inside) before root-causing.
+  OPERATOR CHOSE "Fix A now, here." **Issue A FIXED (code-complete):** corrected the off-by-one-backslash
+  strip patterns in `normalize_windows_launch_path` (launch.rs:998-1019) to `\\?\UNC\` / `\\?\`, mirroring the
+  three existing correct siblings (`rollback_commands::normalize_path_for_compare`,
+  `query_ext::strip_verbatim_prefix`, `protected_paths`). Added a Windows-gated regression unit test
+  (`normalize_windows_launch_path_strips_verbatim_prefix`). Windows-host: test PASS (+ 6/6 broker_dispatch_tests),
+  `cargo clippy -p nono-cli --bins -D warnings -D clippy::unwrap_used` CLEAN. Cross-target Linux/macOS clippy
+  PARTIAL/deferred (this code is `exec_strategy_windows`-only — not compiled on Unix — and the host lacks the C
+  cross-linker; per cross-target checklist). **Field re-verify of A PENDING:** debug `nono.exe` rebuild was
+  BLOCKED by a file lock — nono.exe PID 41900 + broker PID 4324 from the operator's still-open field-test
+  sandbox hold `target\debug\nono.exe`. Operator must close that sandbox window, rebuild
+  (`cargo build -p nono-cli --bin nono`), then re-run `cmd /c "echo HI > out.txt"` inside a fresh sandbox —
+  expect out.txt created in the (now-plain) cwd + prompt returns, no "UNC paths are not supported".
+  **Issue B (`claude` not found) STILL OPEN** — awaiting `Get-Command claude` diagnostic (outside nono) to
+  root-cause PATH/profile/install-location before fixing. Specialist dispatch: rust-windows.
 **reasoning_checkpoint:**
   hypothesis: "Every grandchild PowerShell spawns inside the Low-IL `nono shell` sandbox is a NEW Low-IL
     console client that hangs registering with the Medium-IL conhost serving nono.exe's real console; the
@@ -106,6 +132,30 @@ The post-v2.7 fixes (d8b7ce00 broker HANDLE_LIST dedup; 005b4c9e no-PTY stdout e
   blind_spots: "Cannot reproduce on this MSYS/no-console host. Cannot from static analysis alone distinguish a pending-ALPC-connect hang (G1) from a write-to-unserviced-handle hang (G2); the single discriminator probe resolves it. Have not confirmed which conhost instance the grandchildren target (assume nono.exe's real-console conhost) or whether AppContainer-vs-Low-IL changes the conhost open-back result."
 
 ## Evidence
+
+- timestamp: 2026-05-28T18:30:00Z
+  checked: FIELD VERIFICATION of the Option D′ hang fix — live Win11 build-26200, dev-layout v0.57.4
+    `C:\Users\OMack\Nono\target\debug\nono.exe shell --profile claude-code --allow-cwd`, profile-covered
+    cwd (`%USERPROFILE%\.claude`). Ran grandchildren that previously hung.
+  found:
+    HANG FIXED → `cmd /c echo HELLO and node -e "console.log(123)"` PRINTED `HELLO and node -e console.log(123)`
+      and control RETURNED to the prompt. (Parsed by PowerShell as ONE `cmd /c echo <literal>`; node did not
+      run as a separate process, so node is not independently re-verified — but a cmd grandchild executing +
+      returning is the decisive proof the universal grandchild hang is GONE.)
+    Issue A (cwd) → `cmd /c "echo HI > out.txt"` did NOT hang; cmd printed: `'\\?\C:\Users\OMack\.claude'
+      CMD.EXE was started with the above path as the current directory. UNC paths are not supported.
+      Defaulting to Windows directory. Access is denied.` — cmd RAN (no hang), rejected the `\\?\` cwd, fell
+      back to C:\Windows, and the relative write was denied there. Repeated identically from `..\nono-poc`.
+    Issue B (PATH) → `claude` → `CommandNotFoundException: The term 'claude' is not recognized as the name of a
+      cmdlet, function, script file, or operable program.` claude works fine outside nono on the same host.
+  implication: (1) The G1 hang is RESOLVED — grandchildren now execute and return. Option D′ verified on the
+    live box. (2) "Access is denied" on the C:\Windows fallback write CONFIRMS Low-IL NO_WRITE_UP is still
+    enforcing → no security regression from D′. (3) Two pre-existing, distinct issues are now visible: A (cwd
+    `\\?\` verbatim prefix not stripped → cmd.exe unusable cwd) and B (`claude` not on the sandbox PATH /
+    not resolved). Neither is a regression from D′ (the old hanging path carried the same cwd + env; the hang
+    masked them). See Current Focus → next_action for root causes and the decision checkpoint.
+  source: operator field run 2026-05-28 (verbatim transcript, treated as data); code: execution_runtime.rs:70-72,
+    crates/nono-cli/src/exec_strategy_windows/launch.rs:998-1009 + 1284
 
 - timestamp: 2026-05-28T15:33:38Z
   observation: Broker successfully spawned Low-IL child PID 38460; PowerShell prompt rendered. nono shell LAUNCH works on v0.57.3 (Phase 31 broker pattern intact). Distinct from resolved Phase 30 launch failure.

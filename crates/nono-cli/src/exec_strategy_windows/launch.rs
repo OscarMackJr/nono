@@ -995,13 +995,23 @@ pub(super) fn quote_windows_arg(arg: &str) -> String {
     quoted
 }
 
+/// Strip the Windows NT verbatim prefix (`\\?\` / `\\?\UNC\`) that
+/// `Path::canonicalize` produces, yielding a plain path that legacy consumers
+/// (notably `cmd.exe`, which rejects a `\\?\` current directory with "UNC paths
+/// are not supported" and silently falls back to the Windows directory) can use.
+///
+/// Mirrors the verbatim-strip in `rollback_commands::normalize_path_for_compare`
+/// and `query_ext::strip_verbatim_prefix`. The verbatim form uses a DOUBLE leading
+/// backslash (`\\?\C:\...`), so the patterns must too — an earlier single-backslash
+/// form (`\?`) never matched a real canonicalized path, leaving the `\\?\` cwd to
+/// reach the Low-IL shell's `cmd.exe` grandchildren.
 fn normalize_windows_launch_path(path: &Path) -> std::path::PathBuf {
     let raw = path.as_os_str().to_string_lossy();
 
-    if let Some(stripped) = raw.strip_prefix(r"\?\UNC") {
-        return std::path::PathBuf::from(format!(r"\{stripped}"));
+    if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{stripped}"));
     }
-    if let Some(stripped) = raw.strip_prefix(r"\?") {
+    if let Some(stripped) = raw.strip_prefix(r"\\?\") {
         return std::path::PathBuf::from(stripped);
     }
 
@@ -2982,6 +2992,40 @@ mod broker_dispatch_tests {
         assert!(
             s.contains("\"C:\\Users\\u name\""),
             "whitespace-bearing cwd value must be quoted; got: {s}"
+        );
+    }
+
+    /// Regression: `Path::canonicalize` on Windows returns the NT verbatim
+    /// form (`\\?\C:\...`), and `cmd.exe` rejects a `\\?\` current directory
+    /// ("UNC paths are not supported. Defaulting to Windows directory."),
+    /// silently relocating relative file operations into `C:\Windows` where a
+    /// Low-IL grandchild's writes are denied. `normalize_windows_launch_path`
+    /// MUST strip the verbatim prefix so the broker hands the Low-IL shell a
+    /// plain cwd. An earlier single-backslash pattern (`\?`) never matched the
+    /// real double-backslash prefix and let `\\?\` reach the shell.
+    #[test]
+    fn normalize_windows_launch_path_strips_verbatim_prefix() {
+        // VerbatimDisk → plain drive path.
+        assert_eq!(
+            super::normalize_windows_launch_path(std::path::Path::new(
+                r"\\?\C:\Users\OMack\.claude"
+            )),
+            std::path::PathBuf::from(r"C:\Users\OMack\.claude"),
+            "\\\\?\\ verbatim prefix must be stripped from the cwd"
+        );
+        // VerbatimUNC → plain UNC path (`\\server\share`).
+        assert_eq!(
+            super::normalize_windows_launch_path(std::path::Path::new(
+                r"\\?\UNC\server\share\dir"
+            )),
+            std::path::PathBuf::from(r"\\server\share\dir"),
+            "\\\\?\\UNC\\ verbatim prefix must collapse to a plain UNC path"
+        );
+        // A path already free of the verbatim prefix is returned unchanged.
+        assert_eq!(
+            super::normalize_windows_launch_path(std::path::Path::new(r"C:\Users\foo")),
+            std::path::PathBuf::from(r"C:\Users\foo"),
+            "non-verbatim path must pass through unchanged"
         );
     }
 
