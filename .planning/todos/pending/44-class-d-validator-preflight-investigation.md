@@ -8,7 +8,7 @@ tags: [linux, landlock, deny-overlap, validator, policy.rs]
 affects:
   - crates/nono-cli/src/policy.rs
   - crates/nono-cli/tests/deny_overlap_run.rs
-resolves_phase: null
+resolves_phase: 53
 ---
 
 # validate_deny_overlaps pre-flight investigation (Linux host required)

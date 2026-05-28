@@ -8,6 +8,7 @@ files:
   - crates/nono-cli/src/setup.rs
   - crates/nono-cli/src/bin/nono-wfp-service.rs
   - .planning/debug/resolved/wfp-service-stop-uninstall.md
+resolves_phase: 53
 ---
 
 ## Problem

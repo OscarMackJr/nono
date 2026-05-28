@@ -7,7 +7,7 @@ category: security-hardening
 tags: [snapshot, restore, toctou, fd-relative, cross-platform]
 affects:
   - crates/nono/src/undo/snapshot.rs
-resolves_phase: null
+resolves_phase: 53
 ---
 
 # validate_restore_target fd-relative TOCTOU hardening
