@@ -104,9 +104,28 @@ fn create_trust_interceptor(
 /// on Windows must not allocate a `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` because combining
 /// it with `DETACHED_PROCESS` causes console-application grandchildren to exit with
 /// `STATUS_DLL_INIT_FAILED (0xC0000142)`. See `.planning/debug/resolved/windows-supervised-exec-cascade.md`.
-fn should_allocate_pty(session: &SessionLaunchOptions) -> bool {
+///
+/// Windows + Low-IL broker opt-in (`prefers_low_il_broker`, from
+/// `profile.windows_low_il_broker`): do NOT allocate a ConPTY even for an
+/// interactive shell. Debug session `nono-shell-claude-hang` (G1, confirmed
+/// 2026-05-28) proved that under the Low-IL broker the ConPTY is never attached
+/// to any process (the `BrokerLaunch` PTY arm sets neither
+/// `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` nor `STARTF_USESTDHANDLES`), so the
+/// Low-IL PowerShell and its grandchildren attach to nono.exe's REAL console
+/// served by a Medium-IL conhost. Every fresh Low-IL grandchild (`claude`,
+/// `cmd /c echo`, `node`) then HANGS in cross-IL console-client registration.
+/// Skipping PTY allocation routes the whole Low-IL tree through pipe stdio
+/// (`WindowsTokenArm::BrokerLaunchNoPty` + broker `--no-pty`
+/// `STARTF_USESTDHANDLES`), the PROVEN-WORKING `nono run` no-PTY wiring:
+/// grandchildren inherit PIPE std handles → no console-subsystem registration
+/// → no cross-IL conhost barrier. Operator-accepted cost: loss of raw-mode TUI
+/// (claude renders degraded / non-TUI under `nono shell` on Windows). The
+/// Low-IL NO_WRITE_UP token shape is UNCHANGED — only the stdio binding differs
+/// (same security analysis as Phase 51 T-51B-02).
+fn should_allocate_pty(session: &SessionLaunchOptions, prefers_low_il_broker: bool) -> bool {
     if cfg!(target_os = "windows") {
-        session.interactive_pty
+        // Low-IL broker opt-in: pipe stdio for the whole tree, no ConPTY.
+        session.interactive_pty && !prefers_low_il_broker
     } else {
         session.detached_start || session.interactive_pty
     }
@@ -119,6 +138,7 @@ fn create_session_runtime_state(
     audit_state: Option<&AuditState>,
     resource_limits: &crate::launch_runtime::ResourceLimits,
     redaction_policy: &nono::ScrubPolicy,
+    prefers_low_il_broker: bool,
 ) -> Result<SessionRuntimeState> {
     let started = chrono::Local::now().to_rfc3339();
     let short_session_id = std::env::var(DETACHED_SESSION_ID_ENV)
@@ -161,7 +181,7 @@ fn create_session_runtime_state(
         limits: session::ResourceLimitsRecord::from_resource_limits(resource_limits),
     };
     let session_guard = Some(session::SessionGuard::new(session_record)?);
-    let pty_pair = if should_allocate_pty(session) {
+    let pty_pair = if should_allocate_pty(session, prefers_low_il_broker) {
         Some(pty_proxy::open_pty()?)
     } else {
         None
@@ -199,6 +219,24 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
     // capability_elevation only feeds the Windows supervisor support computation.
     #[cfg(not(target_os = "windows"))]
     let _ = capability_elevation;
+
+    // Debug session `nono-shell-claude-hang` (Option D′): the Low-IL broker
+    // opt-in (`profile.windows_low_il_broker`, threaded through
+    // `config.prefers_low_il_broker`) suppresses ConPTY allocation on Windows so
+    // an interactive `nono shell` routes the whole Low-IL tree through pipe stdio.
+    // Consumed below by `create_session_runtime_state` (the PTY-allocation gate)
+    // and the Windows `SupervisorConfig.interactive_shell` selection (the
+    // supervisor then splits PTY vs pipe on `self.pty.is_some()`). The `prefers_low_il_broker` field exists only on the Windows
+    // `ExecConfig`, so the read is `cfg`-gated; on non-Windows it is always
+    // `false` (the field — and the whole Low-IL broker concept — does not exist
+    // there). The non-Windows `create_session_runtime_state` still receives the
+    // value but its `cfg!(target_os = "windows")` branch never reads it.
+    #[cfg(target_os = "windows")]
+    let prefers_low_il_broker = config.prefers_low_il_broker;
+    #[cfg(not(target_os = "windows"))]
+    let prefers_low_il_broker = false;
+    #[cfg(not(target_os = "windows"))]
+    let _ = &prefers_low_il_broker;
 
     // Plan 18.1-03 G-06 wiring: UNION the hard-coded D-05 defaults with the
     // loaded profile's `capabilities.aipc` widening. No profile → pure
@@ -358,6 +396,19 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         // fail-secure denies when no console is attached.
         approval_backend: approval_backend.clone()
             as std::sync::Arc<dyn nono::ApprovalBackend + Send + Sync>,
+        // `interactive_shell` stays true for any foreground `nono shell`
+        // (PTY or pipe). The supervisor's `start_streaming` then splits on
+        // whether a ConPTY was actually allocated:
+        //   * PTY present  → `start_interactive_terminal_io` (classic ConPTY relay).
+        //   * PTY absent   → `start_interactive_pipe_io` (Option D′ pipe relay:
+        //                     stdout echo + foreground stdin pump + data pipe).
+        // Debug session `nono-shell-claude-hang` (Option D′): under the Low-IL
+        // broker opt-in `should_allocate_pty` returns false even for an
+        // interactive shell, so the no-PTY branch services the
+        // `BrokerLaunchNoPty` anonymous-pipe stdio. Keeping `interactive_shell`
+        // true (rather than clearing it) means the foreground stdin pump still
+        // runs so the sandboxed REPL is interactive. `prefers_low_il_broker` is
+        // read above only to gate PTY allocation; it does not feed this flag.
         interactive_shell: session.interactive_pty && !session.detached_start,
         session_token: config.session_token.as_deref(),
         cap_pipe_rendezvous_path: config.cap_pipe_rendezvous_path.as_deref(),
@@ -385,6 +436,7 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         audit_state.as_ref(),
         resource_limits,
         redaction_policy,
+        prefers_low_il_broker,
     )?;
     let SessionRuntimeState {
         started,
@@ -489,13 +541,15 @@ mod tests {
 
     #[test]
     fn interactive_sessions_always_allocate_pty() {
-        assert!(should_allocate_pty(&make_session(false, true)));
-        assert!(should_allocate_pty(&make_session(true, true)));
+        // prefers_low_il_broker = false: classic ConPTY path (Unix + non-claude
+        // Windows profiles).
+        assert!(should_allocate_pty(&make_session(false, true), false));
+        assert!(should_allocate_pty(&make_session(true, true), false));
     }
 
     #[test]
     fn non_detached_non_interactive_never_allocates_pty() {
-        assert!(!should_allocate_pty(&make_session(false, false)));
+        assert!(!should_allocate_pty(&make_session(false, false), false));
     }
 
     #[cfg(target_os = "windows")]
@@ -503,7 +557,26 @@ mod tests {
     fn windows_detached_supervisor_does_not_allocate_pty() {
         // Detached + non-interactive on Windows must skip PTY allocation to avoid
         // PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE + DETACHED_PROCESS → 0xC0000142.
-        assert!(!should_allocate_pty(&make_session(true, false)));
+        assert!(!should_allocate_pty(&make_session(true, false), false));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_low_il_broker_interactive_skips_pty() {
+        // Debug session `nono-shell-claude-hang` (Option D′): the Low-IL broker
+        // opt-in suppresses ConPTY allocation even for an interactive `nono
+        // shell`, so the whole Low-IL tree runs on pipe stdio
+        // (`BrokerLaunchNoPty`) and grandchildren never hang in cross-IL
+        // console-client registration with the Medium-IL conhost.
+        assert!(!should_allocate_pty(&make_session(false, true), true));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_non_low_il_interactive_still_allocates_pty() {
+        // Regression guard: non-opted-in Windows profiles keep the classic
+        // ConPTY interactive path (no behavior change for them).
+        assert!(should_allocate_pty(&make_session(false, true), false));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -511,6 +584,15 @@ mod tests {
     fn unix_detached_supervisor_allocates_pty() {
         // Unix supervisors still open a PTY in detached mode so attach-side clients
         // can read child output through the supervisor's PTY pair.
-        assert!(should_allocate_pty(&make_session(true, false)));
+        assert!(should_allocate_pty(&make_session(true, false), false));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn unix_ignores_prefers_low_il_broker() {
+        // `prefers_low_il_broker` is Windows-only-meaningful; on Unix the PTY
+        // decision is unchanged regardless of its value.
+        assert!(should_allocate_pty(&make_session(false, true), true));
+        assert!(should_allocate_pty(&make_session(true, false), true));
     }
 }

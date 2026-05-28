@@ -432,7 +432,21 @@ impl WindowsSupervisorRuntime {
     /// once after `attach_detached_stdio` returns.
     pub(super) fn start_streaming(&mut self) -> Result<()> {
         if self.interactive_shell {
-            self.start_interactive_terminal_io()?;
+            // Debug session `nono-shell-claude-hang` (Option D′): split the
+            // interactive relay on whether a ConPTY was actually allocated.
+            //   * PTY present → classic ConPTY relay (Unix-parity TUI path).
+            //   * PTY absent  → pipe relay over the `BrokerLaunchNoPty`
+            //     anonymous-pipe stdio (`detached_stdio`). The Low-IL broker
+            //     opt-in (`profile.windows_low_il_broker`) makes
+            //     `should_allocate_pty` return false even for an interactive
+            //     shell, so the whole Low-IL tree runs on pipe stdio and fresh
+            //     grandchildren never hang in cross-IL console-client
+            //     registration with the Medium-IL conhost (G1 root cause).
+            if self.pty.is_some() {
+                self.start_interactive_terminal_io()?;
+            } else {
+                self.start_interactive_pipe_io()?;
+            }
         } else {
             self.start_logging()?;
             self.start_data_pipe_server()?;
@@ -985,6 +999,89 @@ impl WindowsSupervisorRuntime {
                             // SAFETY: `hpcon` belongs to the live PTY pair and
                             // remains valid for the lifetime of this thread.
                             let _ = ResizePseudoConsole(hpcon, new_size);
+                        }
+                    }
+                }
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Option D′ pipe relay for an interactive `nono shell` that runs on
+    /// anonymous-pipe stdio instead of a ConPTY (`WindowsTokenArm::BrokerLaunchNoPty`,
+    /// selected when `profile.windows_low_il_broker` suppresses ConPTY
+    /// allocation in `should_allocate_pty`). Debug session
+    /// `nono-shell-claude-hang` (G1, confirmed 2026-05-28): the ConPTY was
+    /// never attached to any process under the Low-IL broker, so the Low-IL
+    /// PowerShell and its grandchildren attached to nono.exe's REAL console
+    /// served by a Medium-IL conhost; every fresh Low-IL grandchild then HUNG
+    /// in cross-IL console-client registration. Routing the whole tree through
+    /// pipe stdio removes the console-subsystem registration entirely.
+    ///
+    /// Wiring (reuses the PROVEN-WORKING `nono run` no-PTY relay, plus a
+    /// foreground stdin pump the one-shot `nono run` path never needs):
+    ///   1. `start_logging()` — drains `detached_stdio.stdout_read` (child
+    ///      stdout, with stderr merged in at spawn time) to the session log,
+    ///      the foreground console (post-v2.7 `nopty-broker-stdout-swallowed`
+    ///      echo fix), and the optional `nono attach` pipe.
+    ///   2. `start_data_pipe_server()` — services the `nono attach` data pipe
+    ///      into `detached_stdio.stdin_write` (attach-client → child stdin).
+    ///   3. Foreground stdin pump (added here) — relays the supervisor's own
+    ///      `std::io::stdin()` to `detached_stdio.stdin_write` so the user can
+    ///      type into the sandboxed REPL. Mirrors the ConPTY relay's stdin
+    ///      thread (`start_interactive_terminal_io`) but writes to the pipe.
+    ///
+    /// Operator-accepted cost (Option D′): no ConPTY means no raw mode /
+    /// alternate screen / resize, so a full-screen TUI (e.g. claude's Ink UI)
+    /// renders degraded or falls back to line mode. The Low-IL NO_WRITE_UP
+    /// token shape is UNCHANGED — only the stdio binding differs.
+    fn start_interactive_pipe_io(&mut self) -> Result<()> {
+        if self.detached_stdio.is_none() {
+            return Err(NonoError::SandboxInit(
+                "interactive pipe relay requires anonymous-pipe stdio \
+                 (BrokerLaunchNoPty) but none was wired"
+                    .to_string(),
+            ));
+        }
+
+        // (1) + (2): reuse the proven no-PTY stdout relay and the attach data
+        // pipe. `start_logging` already echoes to the foreground console for a
+        // non-detached run and forwards to the `nono attach` pipe.
+        self.start_logging()?;
+        self.start_data_pipe_server()?;
+
+        // (3): foreground stdin pump. Relay the supervisor's own console stdin
+        // into the child's stdin pipe so the sandboxed REPL is interactive.
+        // The one-shot `nono run` path deliberately does NOT do this (it has no
+        // interactive prompt to forward).
+        let stdin_write = self
+            .detached_stdio
+            .as_ref()
+            .map(|s| s.stdin_write as usize)
+            .unwrap_or(0);
+        if stdin_write != 0 {
+            std::thread::spawn(move || {
+                // SAFETY: `stdin_write` is the parent-end stdin write HANDLE
+                // owned by `runtime.detached_stdio` (lifetime tied to the
+                // runtime, which outlives this thread — the runtime is dropped
+                // only after the child exits). ManuallyDrop prevents a
+                // double-close; the runtime owns the handle.
+                let mut child_stdin = ManuallyDrop::new(unsafe {
+                    std::fs::File::from_raw_handle(stdin_write as _)
+                });
+                let mut stdin = std::io::stdin();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match stdin.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            // Best-effort: a broken pipe (child exited) ends the
+                            // pump without panicking (Pitfall 1).
+                            if child_stdin.write_all(&buf[..n]).is_err() {
+                                break;
+                            }
+                            let _ = child_stdin.flush();
                         }
                     }
                 }
