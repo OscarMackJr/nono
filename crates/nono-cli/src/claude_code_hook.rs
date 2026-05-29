@@ -931,4 +931,49 @@ mod tests {
 
         Ok(())
     }
+
+    /// Regression test for CR-01: guard must fire when CWD is an ancestor of ~/.claude.json
+    /// but the file does NOT exist on disk.
+    ///
+    /// The pre-fix path_covers() returned false in this case because the raw C:\... child
+    /// path did not match the \\?\-canonical parent CWD.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cwd_guard_denies_home_claude_ancestor_absent_file(
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        // Create ONLY the home directory itself — no .claude.json, .claude.json.lock, or .claude/
+        std::fs::create_dir_all(&home)?;
+        let cwd = home.canonicalize()?;
+
+        assert!(
+            cwd_covers_home_claude_state(&cwd, &home.canonicalize()?),
+            "guard must fire when CWD is home dir and .claude.json does not yet exist on disk"
+        );
+        Ok(())
+    }
+
+    /// Regression test for WR-01: guard must fire when CWD is nested INSIDE ~/.claude,
+    /// not only when it is an ancestor or equal.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cwd_guard_denies_inside_home_claude(
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".claude").join("projects").join("myrepo"))?;
+        let cwd = home
+            .join(".claude")
+            .join("projects")
+            .join("myrepo")
+            .canonicalize()?;
+        let canonical_home = home.canonicalize()?;
+
+        assert!(
+            cwd_covers_home_claude_state(&cwd, &canonical_home),
+            "guard must fire when CWD is nested inside ~/.claude subtree"
+        );
+        Ok(())
+    }
 }
