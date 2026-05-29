@@ -167,15 +167,30 @@ Operator installed `nono-v0.57.5-…-machine.msi`:
 | `nono-wfp-service.exe` Authenticode | (n/a) | **`Valid`** |
 | `nono --version` | `0.57.4` | `0.57.5` |
 
-**REQ-RLS-01 satisfied.** No-PTY supervised-path leg remains a documented test-design
-gap on Program-Files installs (the `claude-code` profile does not cover
-`C:\Program Files\nono`); the relay fix stays validated at dev-layout (v2.7 close).
+### No-PTY supervised path (SC-2) — PASS on v0.57.5
+
+Operator ran, from a real console with the v0.57.5 MSI installed:
+```
+cd %USERPROFILE%\.claude
+nono run --profile claude-code -- claude --version
+```
+The signed broker constructed a Low-IL primary token, spawned the Low-IL child
+(pid 19112), the child printed `2.1.156 (Claude Code)`, and exited code 0 — no
+`Self-trust-anchor` error. The doubly-broken v2.7 path (`d8b7ce00` + `005b4c9e`) is
+confirmed working **on the released signed binary**. The first attempt used
+`nono.exe` (in `C:\Program Files\nono`, which the `claude-code` profile does not
+cover) and was correctly refused at the executable-coverage gate — a test-design
+issue, not a code defect. Using a profile-covered child (`claude.exe` under
+`%USERPROFILE%\.claude`) exercises the broker path and passes.
+
+**REQ-RLS-01 fully satisfied** (signed MSI install + version + payload Authenticode
+`Valid` + no-PTY supervised path on the released binary).
 
 ## Requirement status
 
 | Requirement | Status | Note |
 |-------------|--------|------|
-| REQ-RLS-01 | ✅ Complete | UAT-B PASS on v0.57.5 (payloads signed); no-PTY leg = dev-layout-validated |
+| REQ-RLS-01 | ✅ Complete | UAT-B PASS on v0.57.5 (payloads signed); no-PTY path PASS on released binary (claude 2.1.156, exit 0) |
 | REQ-RLS-02 | ✅ Complete | UAT-A PASS |
 | REQ-DRN-01 | ✅ Complete | UAT-C PASS; Todo 1 closed |
 | REQ-DRN-02 | ✅ Complete | (Plan 53-02) |
@@ -184,9 +199,10 @@ gap on Program-Files installs (the `claude-code` profile does not cover
 
 1. **`v0.57.4` GitHub Release still has unsigned-payload MSIs** — a distribution
    hazard; delete or annotate it now that v0.57.5 supersedes it.
-2. **No-PTY-on-installed-MSI** is unvalidated due to the executable-coverage gate;
-   exercise it with a profile/child whose path is policy-covered, or accept the
-   dev-layout validation from v2.7.
+2. **No-PTY proxy-test ergonomics:** `nono run --profile claude-code -- nono --version`
+   fails on a Program-Files install because the `claude-code` profile does not cover
+   `C:\Program Files\nono`. The path works with a profile-covered child; consider a
+   built-in self-test profile or doc note so future UAT does not hit the same trap.
 
 ## Self-Check: PASS
 

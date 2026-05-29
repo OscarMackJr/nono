@@ -23,7 +23,7 @@ granularity: standard
 
 ## Phases
 
-- [ ] **Phase 53: Release & Drain** — Tag v2.8, produce signed MSIs off the post-`005b4c9e` binary, verify release.yml, UAT WFP uninstall, drain 3 todos
+- [x] **Phase 53: Release & Drain** — Tag v2.8 + v0.57.5, produce signed MSIs off the post-`005b4c9e` binary, verify release.yml, UAT WFP uninstall, drain 3 todos (shipped as v0.57.5 after a release.yml signing-order fix; all 5 SC verified)
 - [ ] **Phase 54: UPST7 Audit** — Produce DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0`; per-cluster dispositions + ADR re-confirm + re-export empirical cross-check
 - [ ] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, java-dev, proxy 502, denial/diagnostic polish) per Phase 54 dispositions
 - [ ] **Phase 56: Fine-grained Network Filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix
@@ -53,7 +53,7 @@ Plans:
 - [x] 53-03-PLAN.md — Fix release.yml trigger (v*.*.*), update sign-poc-local.ps1, expand signing guide (CA-ready + fresh-cert procedure), push main
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 53-04-PLAN.md — HUMAN-UAT: cut v0.57.4 + v2.8 tags, CI run verify (REQ-RLS-02), install signed MSI verify (REQ-RLS-01), elevated WFP stop/uninstall verify (REQ-DRN-01)
+- [x] 53-04-PLAN.md — HUMAN-UAT: CI run verify (REQ-RLS-02 PASS), signed MSI install verify (REQ-RLS-01 — failed on v0.57.4 unsigned payload, fixed release.yml + re-released v0.57.5, re-UAT PASS), elevated WFP stop/uninstall verify (REQ-DRN-01 PASS), no-PTY path verify on v0.57.5
 
 ### Phase 54: UPST7 Audit
 **Goal**: The fork has a complete DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0` with actionable dispositions for every cluster and a confirmed strategy for the cherry-pick wave

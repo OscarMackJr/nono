@@ -7,10 +7,10 @@ last_updated: "2026-05-29T12:13:59.388Z"
 last_activity: 2026-05-29
 progress:
   total_phases: 7
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -25,10 +25,11 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 ## Current Position
 
-Phase: 53 (release-drain) — BLOCKED (REQ-RLS-01 reopened by UAT-B)
-Plan: 4 of 4 (all SUMMARYs present; 53-04 status=partial)
-Status: UAT-A PASS (REQ-RLS-02) + UAT-C PASS (REQ-DRN-01, Todo 1 closed); UAT-B FAIL (REQ-RLS-01) — installed MSI payload binaries Authenticode NotSigned (release.yml signed AFTER MSI harvest). Fix applied + committed (cf6a28fa, UNPUSHED): sign binaries pre-package + verify MSI payload. Needs re-tag → CI → UAT-B re-run to close REQ-RLS-01 and the phase.
-Last activity: 2026-05-29 -- Phase 53 UAT executed; release.yml signing-order fixed
+Phase: 53 (release-drain) — COMPLETE (verified passed, 5/5 SC)
+Plan: 4 of 4 complete
+Status: Shipped as v0.57.5 (tags v0.57.5 + v2.8 at a3927be0). UAT-A PASS (REQ-RLS-02), UAT-C PASS (REQ-DRN-01, Todo 1 closed), UAT-B PASS on v0.57.5 (REQ-RLS-01) after a release.yml signing-order fix (v0.57.4 shipped unsigned MSI payloads; fixed via sign-before-harvest + MSI-payload verify gate), no-PTY supervised path PASS on released binary (claude 2.1.156, exit 0). 3 todos drained (REQ-DRN-02). VERIFICATION.md = passed.
+Next: Phase 54 (UPST7 Audit). Non-blocking follow-up: delete/annotate the superseded v0.57.4 GitHub release (unsigned-payload MSIs).
+Last activity: 2026-05-29 -- Phase 53 complete; v0.57.5 signed release shipped
 
 ### v2.8 Phase Summary (active)
 
