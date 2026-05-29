@@ -1,8 +1,9 @@
 # SPEC — Windows "sandbox-the-tools" mode (tool-wrapping via Claude Code hooks)
 
-**Status:** DRAFT FOR EXTERNAL REVIEW · **Author:** Oscar Mack Jr (+ Claude) · **Date:** 2026-05-29
+**Status:** REVIEWED — §7 answered 2026-05-29 (informed by PR #4 implementation + review; see https://github.com/oscarmackjr-twg/nono/pull/4) · **Author:** Oscar Mack Jr (+ Claude) · **Date:** 2026-05-29
 **Purpose:** Hand this to a reviewer along with the testing/failures below; have them answer the
 **§7 Feedback Requested** questions so the answers can be consumed back into a planned phase.
+**§7 status:** Answered inline below (`> R:`). PR #4 ("Add experimental Windows Claude tool wrapping profile") implemented the thin slice and empirically settled most questions; the runner-profile `~/.claude`/`--allow-cwd` edge is tracked in todo `2026-05-29-claude-tools-runner-deny-dotclaude-regardless-of-cwd.md`.
 
 > **How to use this doc (reviewer):** Read §1–§6. Then answer the numbered questions in **§7** —
 > answer *inline directly under each question* (prefix your answer with `> R:`), or in a separate
@@ -114,22 +115,39 @@ interception point for ALL side-effecting operations claude can perform (Bash, f
 MCP tools, anything else)? Can any side effect bypass them? If bypass is possible, this approach does not
 provide an isolation guarantee — say so plainly.
 
+> R: **NO — hooks are an enforceable *mediation* point for the tools the matcher covers, but NOT a complete isolation boundary.** PreToolUse can return `deny`/rewrite, so for every tool routed to the handler the interception is real and binding. Three things break "complete":
+> 1. **Matcher coverage.** Any tool the matcher doesn't list runs unhooked → unconfined. The fix is matcher `"*"` + a per-tool **deny-by-default** handler (allow read-only, rewrite Bash, deny all else incl. `NotebookEdit`/`WebFetch`/`WebSearch`/`Task`/`mcp__*`). PR #4's first cut shipped `matcher: "Bash|Write|Edit|MultiEdit"`, which silently left `NotebookEdit` (an in-process write!), `WebFetch`, MCP, etc. unconfined; fixed in `04bc6743`.
+> 2. **Self-disable.** If the tool jail can write the hook config, it removes its own enforcement. The `claude-code` profile grants r+w to `~/.claude` (where `settings.json` lives), so a confined Bash call could rewrite it. Fixed by wrapping Bash under a runner profile that `extends: default` (no `~/.claude` grant). Residual: `--allow-cwd` re-grants `~/.claude` if `claude` is launched from there — tracked in todo `2026-05-29-claude-tools-runner-deny-dotclaude-regardless-of-cwd.md`.
+> 3. **Out-of-band side effects.** The Medium-IL `claude` process itself, and any MCP **server** process, live entirely outside the `nono run` boundary. Hooks can deny an MCP *tool event*, but cannot confine an already-running Medium-IL MCP server.
+>
+> Verdict: usable as **defense-in-depth tool mediation**, not as agent isolation. State it that way (PR #4's docs now do).
+
 **Q2 (tool coverage).** Enumerate the tool types that need wrapping and which can/can't be expressed as
 `nono run -- <cmd>`. Bash is obvious; what about in-process file Write/Edit (no subprocess to wrap)? MCP?
+
+> R: **Wrappable** (has a subprocess): **`Bash`** only. **Not wrappable** (no subprocess boundary): in-process file tools **`Write` / `Edit` / `MultiEdit` / `NotebookEdit`**, and **MCP** tools (the server is a separate Medium-IL process). **No wrap needed** (no side effect): read-only **`Read` / `Glob` / `Grep`** — but these are *unconfined reads* (see Q5). Correct handling for the unwrappable set is **deny** (PR #4 denies them), or, as a later option, route file ops through a dedicated low-IL file broker and launch MCP servers themselves under `nono run`. `Task` (subagent spawn) is also denied — it would otherwise spawn an unconfined reasoning loop.
 
 **Q3 (capability mapping).** For each wrappable tool, how should the per-call `nono run` capability set be
 derived? Static per-profile, or computed from the tool's arguments (e.g. the file path being written)?
 What's the failure mode when the grant is too narrow (tool fails) vs too broad (isolation leak)?
 
+> R: PR #4 uses a **static per-profile** grant: `--allow-cwd` + the `claude-code-tools-windows-runner` profile (CWD r+w, **network blocked**, no `~/.claude`). **Argument-derived** grants (Write→target path, WebFetch→`allow_domain` for the host, Bash→the specific dirs touched) are the later hardening step and are NOT built yet. Failure modes: **too narrow** → the tool fails at the OS boundary, which is the *correct fail-closed* outcome (observed in UAT: outside-CWD write → `UnauthorizedAccessException`, no file created); **too broad** → isolation leak (e.g. granting `~/.claude` reopens hook-config tampering — Q1.2). Until per-arg grants exist, keep the static set minimal and **deny** the unwrappable tools rather than guessing a broad grant.
+
 **Q4 (Windows hook mechanics).** What's the right Windows hook implementation — a `.ps1`/`.cmd` script, or
 a `nono`-native hook handler? How does the hook receive the tool command + rewrite it on Windows?
+
+> R: A thin **`.ps1` trampoline → native `nono claude-code-hook` handler** (PR #4 ships exactly this, and it's the right shape). The `PreToolUse` hook pipes the tool-event JSON on stdin to `nono claude-code-hook`, which returns a `permissionDecision` — `allow` + `updatedInput` (Bash command rewritten to `nono run --profile <runner> --allow-cwd -- powershell …`), or `deny`. The `.ps1` is fail-closed: if the handler errors/non-zero, it emits `deny`. Windows "Bash" must be **native PowerShell-backed, not Git Bash/MSYS2** — MSYS2 can't initialize as a Low-IL child (`NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0…) 0xC0000022`), an integrity-boundary failure, not a quoting/PATH issue. Use two base64 `-EncodedCommand` layers (outer trampoline + inner tool command) to avoid nested-quoting fragility.
 
 **Q5 (security verdict).** Given §6, is "Medium-IL agent + per-tool Low-IL wrapping" an acceptable security
 posture for nono's threat model (untrusted agent), or a regression vs the current confined-but-non-TUI
 `nono run` path? What would make it acceptable (e.g. also confining the agent process's FS)?
 
+> R: **Not acceptable as agent isolation; acceptable as explicitly-labeled defense-in-depth.** As-is the `claude` process runs Medium-IL with full user FS + network — strictly *weaker* for the agent itself than today's Low-IL `nono run` path. What makes the *tool-mediation* layer sound (PR #4 after review): matcher `"*"` + deny-by-default, Bash jailed under a minimal runner profile (no `~/.claude`, network blocked), all unwrappable tools denied. To approach real isolation you'd additionally confine the agent process's FS — or consciously **accept** that the agent can *read* anything the user can (writes/exec/network are mediated, reads are not). The make-or-break product decision: **is unconfined agent reading (of secrets/creds) acceptable for the untrusted-agent threat model?** If no, this mode is defense-in-depth only and the confined non-TUI `nono run` path remains the isolation story.
+
 **Q6 (scope/sizing).** Is this one phase or several? What's the thinnest end-to-end slice that proves the
 model (e.g. PreToolUse hook wrapping only `Bash` on Windows)?
+
+> R: **Several phases.** The thinnest honest end-to-end slice — now realized by PR #4 — is: Windows `PreToolUse` matcher `"*"` + allow `Read`/`Glob`/`Grep` + rewrite `Bash` through a minimal runner profile + **deny everything else** + label defense-in-depth. Follow-on phases: (a) close the `--allow-cwd`/`~/.claude` edge (todo `2026-05-29-claude-tools-runner-deny-dotclaude-regardless-of-cwd.md`); (b) argument-derived capability grants (Q3); (c) MCP-under-`nono` or MCP-deny policy + audit MCP launch paths; (d) optional Low-IL file-operation broker so `Write`/`Edit` aren't merely denied; (e) decide the agent-process FS-confinement / unconfined-reads question (Q5). Promote this SPEC + these answers into a planned phase to sequence (a)–(e).
 
 ## 8. References (in this repo)
 
