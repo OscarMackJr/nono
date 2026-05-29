@@ -9,12 +9,13 @@
 
 ### Release & Distribution (RLS)
 
-- [x] **REQ-RLS-01**: A v2.8 git tag is cut and **signed MSIs (machine + user)** are produced off the post-`005b4c9e` `nono.exe`, containing the untagged v2.7 fixes (`d8b7ce00` broker `CreateProcessAsUserW` GLE=87 HANDLE_LIST dedup, `005b4c9e` no-PTY relay stdout-echo, `0cbeb3be` + `b852826b` WFP service-stop + MSI-uninstall). An operator can install the signed v2.8 MSI; the bundled `nono.exe` reports the v2.8 fork version and runs correctly on the real-console no-PTY supervised path (the tagged v2.7 build's doubly-broken path is gone).
+- [ ] **REQ-RLS-01**: A v2.8 git tag is cut and **signed MSIs (machine + user)** are produced off the post-`005b4c9e` `nono.exe`, containing the untagged v2.7 fixes (`d8b7ce00` broker `CreateProcessAsUserW` GLE=87 HANDLE_LIST dedup, `005b4c9e` no-PTY relay stdout-echo, `0cbeb3be` + `b852826b` WFP service-stop + MSI-uninstall). An operator can install the signed v2.8 MSI; the bundled `nono.exe` reports the v2.8 fork version and runs correctly on the real-console no-PTY supervised path (the tagged v2.7 build's doubly-broken path is gone).
+  - **NOT SATISFIED (Phase 53 UAT-B, 2026-05-29):** the v0.57.4 tag was cut, CI ran clean, and the version bump is correct (`nono --version` → `0.57.4`), BUT the installed MSI payload binaries are Authenticode `NotSigned` — `(Get-AuthenticodeSignature 'C:\Program Files\nono\nono.exe').Status` = `NotSigned` and the broker likewise, while the MSI *wrapper* is `Valid`. Root cause: `release.yml` signing-order defect — `build-windows-msi.ps1` harvested **unsigned** binaries into the MSIs because the "Sign Windows artifacts" step ran *after* "Package (Windows)". The no-PTY supervised path also could not be validated on the Program-Files install (the `claude-code` profile does not cover `C:\Program Files\nono`, so the launch is refused at the executable-coverage gate before reaching the broker). Fix applied to `release.yml` in Phase 53 (sign binaries before MSI harvest + MSI-payload verification gate); requires a fresh tagged build + UAT-B re-run to close. See `.planning/phases/53-release-drain/53-04-SUMMARY.md`.
 - [x] **REQ-RLS-02**: `.github/workflows/release.yml` runs to completion on a `v*` tag push and produces the signed release artifacts — the chronic 0s `startup_failure` (broken `docker` reusable-call job removed in `5c90c4cf`, never live-verified) is resolved and confirmed live on a tag push.
 
 ### Drain (DRN)
 
-- [ ] **REQ-DRN-01**: WFP elevated live-uninstall is verified (HUMAN-UAT) — an operator running elevated `sc stop` of the WFP service then `msiexec /x` confirms the service stops cleanly and uninstall removes the service/driver, leaving nothing behind (closes the `wfp-service-stop-uninstall` debug's remaining live-verify leg).
+- [x] **REQ-DRN-01**: WFP elevated live-uninstall is verified (HUMAN-UAT) — an operator running elevated `sc stop` of the WFP service then `msiexec /x` confirms the service stops cleanly and uninstall removes the service/driver, leaving nothing behind (closes the `wfp-service-stop-uninstall` debug's remaining live-verify leg). **SATISFIED (Phase 53 UAT-C, 2026-05-29):** all 5 steps passed on Windows 11 build 26200 — `sc stop` accepted (Fix #1), `nono setup --uninstall-wfp` removed both services (Fix #2a), `msiexec /x` left no service/driver/install-dir/filters (Fix #2b WiX CA), and the major-upgrade guard preserved services. Todo 1 closed to `todos/done/`.
 - [x] **REQ-DRN-02**: The 3 pending follow-up todos in `.planning/todos/pending/` are resolved or explicitly re-dispositioned (carried since v2.7 close).
 
 ### Upstream Sync — Audit (UPST7)
@@ -79,9 +80,9 @@ Acknowledged but not in the v2.8 roadmap.
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| REQ-RLS-01 | Phase 53 | Complete |
+| REQ-RLS-01 | Phase 53 | Blocked (UAT-B fail — MSI payload unsigned; release.yml fix applied, needs re-tag + re-UAT) |
 | REQ-RLS-02 | Phase 53 | Complete |
-| REQ-DRN-01 | Phase 53 | Pending |
+| REQ-DRN-01 | Phase 53 | Complete |
 | REQ-DRN-02 | Phase 53 | Complete |
 | REQ-UPST7-01 | Phase 54 | Pending |
 | REQ-UPST7-02 | Phase 55 | Pending |
