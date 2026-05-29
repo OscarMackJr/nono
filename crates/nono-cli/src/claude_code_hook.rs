@@ -295,10 +295,14 @@ fn cwd_self_disable_risk_reason() -> Result<Option<String>> {
 fn cwd_self_disable_risk_reason_for(cwd: &Path) -> Result<Option<String>> {
     let cwd = canonical_existing_path(cwd)?;
 
-    if let Some(home) = home_dir().and_then(|path| canonical_existing_path(&path).ok()) {
-        if cwd_covers_home_claude_state(&cwd, &home) {
-            return Ok(Some(self_disable_reason(&cwd)));
+    let home = match home_dir() {
+        None => {
+            return Ok(Some(self_disable_reason_no_home()));
         }
+        Some(path) => canonical_existing_path(&path)?,
+    };
+    if cwd_covers_home_claude_state(&cwd, &home) {
+        return Ok(Some(self_disable_reason(&cwd)));
     }
 
     let project_claude = cwd.join(".claude");
@@ -313,6 +317,9 @@ fn cwd_self_disable_risk_reason_for(cwd: &Path) -> Result<Option<String>> {
 fn cwd_covers_home_claude_state(cwd: &Path, home: &Path) -> bool {
     let home_claude = home.join(".claude");
     if path_covers(cwd, &home_claude) {
+        return true;
+    }
+    if cwd.starts_with(&home_claude) {
         return true;
     }
 
@@ -331,9 +338,43 @@ fn self_disable_reason(cwd: &Path) -> String {
 }
 
 #[cfg(target_os = "windows")]
+fn self_disable_reason_no_home() -> String {
+    "refusing to wrap Bash: home directory cannot be resolved; cannot verify CWD does not cover Claude Code hook state".to_string()
+}
+
+#[cfg(target_os = "windows")]
 fn path_covers(parent: &Path, child: &Path) -> bool {
-    let child = canonical_existing_path(child).unwrap_or_else(|_| child.to_path_buf());
+    let child = canonicalize_with_existing_prefix(child);
     child.starts_with(parent)
+}
+
+#[cfg(target_os = "windows")]
+fn canonicalize_with_existing_prefix(path: &Path) -> PathBuf {
+    let components_count = path.components().count();
+    for (i, ancestor) in path.ancestors().enumerate() {
+        if ancestor.exists() {
+            if let Some(canonical_base) = ancestor.canonicalize().ok() {
+                // Re-append the tail components that were stripped off.
+                // path.ancestors() yields path, then parent, then grandparent...
+                // so `i` is the number of components we stripped from the end.
+                let tail_count = i;
+                if tail_count == 0 {
+                    return canonical_base;
+                }
+                // Collect the tail components (the last `tail_count` components of path).
+                let all_components: Vec<_> = path.components().collect();
+                let tail_start = components_count - tail_count;
+                let result = all_components[tail_start..]
+                    .iter()
+                    .fold(canonical_base, |acc, c| acc.join(c));
+                return result;
+            }
+            // If canonicalize failed despite exists() being true, continue to the next ancestor.
+        }
+    }
+    // Degenerate case: no ancestor could be canonicalized (e.g. in-memory path with no real root).
+    // Return the path as-is to remain conservative.
+    path.to_path_buf()
 }
 
 #[cfg(target_os = "windows")]
