@@ -8,6 +8,7 @@ mod audit_commands;
 mod audit_integrity;
 mod audit_session;
 mod capability_ext;
+mod claude_code_hook;
 mod cli;
 mod cli_bootstrap;
 mod command_blocking_deprecation;

@@ -1095,6 +1095,10 @@ pub enum Commands {
     /// Internal: open a URL via supervisor IPC
     #[command(hide = true)]
     OpenUrlHelper(OpenUrlHelperArgs),
+
+    /// Internal: handle Claude Code hook JSON on stdin
+    #[command(name = "claude-code-hook", hide = true)]
+    ClaudeCodeHook,
 }
 
 #[derive(Parser, Debug)]

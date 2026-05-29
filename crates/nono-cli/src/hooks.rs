@@ -15,12 +15,16 @@ use std::path::{Path, PathBuf};
 mod embedded {
     /// nono-hook.sh for Claude Code integration
     pub const NONO_HOOK_SH: &str = include_str!(concat!(env!("OUT_DIR"), "/nono-hook.sh"));
+    /// nono-tool-hook.ps1 for Windows Claude Code tool-wrapping experiments
+    pub const NONO_TOOL_HOOK_PS1: &str =
+        include_str!(concat!(env!("OUT_DIR"), "/nono-tool-hook.ps1"));
 }
 
 /// Get embedded hook script by name
 fn get_embedded_script(name: &str) -> Option<&'static str> {
     match name {
         "nono-hook.sh" => Some(embedded::NONO_HOOK_SH),
+        "nono-tool-hook.ps1" => Some(embedded::NONO_TOOL_HOOK_PS1),
         _ => None,
     }
 }
@@ -397,49 +401,33 @@ fn update_claude_settings(settings_path: &PathBuf, config: &HookConfig) -> Resul
         .and_then(|v| v.as_object_mut())
         .ok_or_else(|| NonoError::HookInstall("hooks is not a JSON object".to_string()))?;
 
-    // Get or create event array
-    if !hooks.contains_key(&config.event) {
-        hooks.insert(config.event.clone(), json!([]));
-    }
-    let event_hooks = hooks
-        .get_mut(&config.event)
-        .and_then(|v| v.as_array_mut())
-        .ok_or_else(|| NonoError::HookInstall(format!("{} is not a JSON array", config.event)))?;
-
     // Build the hook command path (use $HOME for portability)
-    let hook_command = format!("$HOME/.claude/hooks/{}", config.script);
+    let hook_command = if config.script.ends_with(".ps1") {
+        format!("& \"$HOME/.claude/hooks/{}\"", config.script)
+    } else {
+        format!("$HOME/.claude/hooks/{}", config.script)
+    };
 
-    // Check if hook already registered
-    let hook_exists = event_hooks.iter().any(|h| {
-        if let Some(hooks_array) = h.get("hooks").and_then(|v| v.as_array()) {
-            hooks_array.iter().any(|hook| {
-                hook.get("command")
-                    .and_then(|c| c.as_str())
-                    .map(|c| c == hook_command)
-                    .unwrap_or(false)
-            })
-        } else {
-            false
-        }
+    let hook_handler = if config.script.ends_with(".ps1") {
+        json!({
+            "type": "command",
+            "shell": "powershell",
+            "command": hook_command
+        })
+    } else {
+        json!({
+            "type": "command",
+            "command": hook_command
+        })
+    };
+    let hook_entry = json!({
+        "matcher": config.matcher,
+        "hooks": [hook_handler]
     });
 
-    if !hook_exists {
-        tracing::info!(
-            "Registering hook for {} event with matcher '{}'",
-            config.event,
-            config.matcher
-        );
+    let modified = reconcile_claude_hook_entry(hooks, &config.event, &hook_command, hook_entry)?;
 
-        let hook_entry = json!({
-            "matcher": config.matcher,
-            "hooks": [{
-                "type": "command",
-                "command": hook_command
-            }]
-        });
-        event_hooks.push(hook_entry);
-
-        // Write updated settings
+    if modified {
         let content = serde_json::to_string_pretty(&settings)
             .map_err(|e| NonoError::HookInstall(format!("Failed to serialize settings: {}", e)))?;
         fs::write(settings_path, content).map_err(|e| {
@@ -456,6 +444,92 @@ fn update_claude_settings(settings_path: &PathBuf, config: &HookConfig) -> Resul
         tracing::debug!("Hook already registered in settings.json");
         Ok(false)
     }
+}
+
+fn reconcile_claude_hook_entry(
+    hooks: &mut serde_json::Map<String, Value>,
+    target_event: &str,
+    hook_command: &str,
+    hook_entry: Value,
+) -> Result<bool> {
+    let mut found_event: Option<String> = None;
+    let mut found_index: Option<usize> = None;
+
+    for (event_name, event_value) in hooks.iter_mut() {
+        let event_hooks = event_value
+            .as_array_mut()
+            .ok_or_else(|| NonoError::HookInstall(format!("{event_name} is not a JSON array")))?;
+
+        if let Some(index) = find_hook_entry_index(event_hooks, hook_command) {
+            found_event = Some(event_name.clone());
+            found_index = Some(index);
+            break;
+        }
+    }
+
+    match (found_event, found_index) {
+        (Some(event_name), Some(index)) if event_name == target_event => {
+            let event_hooks = hooks
+                .get_mut(target_event)
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(format!("{target_event} is not a JSON array"))
+                })?;
+            if event_hooks.get(index) == Some(&hook_entry) {
+                Ok(false)
+            } else {
+                event_hooks[index] = hook_entry;
+                Ok(true)
+            }
+        }
+        (Some(event_name), Some(index)) => {
+            let source_hooks = hooks
+                .get_mut(&event_name)
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(format!("{event_name} is not a JSON array"))
+                })?;
+            source_hooks.remove(index);
+
+            let target_hooks = hooks
+                .entry(target_event.to_string())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| {
+                    NonoError::HookInstall(format!("{target_event} is not a JSON array"))
+                })?;
+            target_hooks.push(hook_entry);
+            Ok(true)
+        }
+        _ => {
+            let target_hooks = hooks
+                .entry(target_event.to_string())
+                .or_insert_with(|| json!([]))
+                .as_array_mut()
+                .ok_or_else(|| {
+                    NonoError::HookInstall(format!("{target_event} is not a JSON array"))
+                })?;
+            target_hooks.push(hook_entry);
+            Ok(true)
+        }
+    }
+}
+
+fn find_hook_entry_index(event_hooks: &[Value], hook_command: &str) -> Option<usize> {
+    event_hooks.iter().position(|entry| {
+        entry
+            .get("hooks")
+            .and_then(Value::as_array)
+            .map(|hooks_array| {
+                hooks_array.iter().any(|hook| {
+                    hook.get("command")
+                        .and_then(Value::as_str)
+                        .map(|command| command == hook_command)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// Install all hooks from a profile's hooks configuration
@@ -517,11 +591,13 @@ fn resolve_hook_script(profile_name: Option<&str>, config: &HookConfig) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
     use tempfile::tempdir;
 
     #[test]
     fn test_embedded_script_exists() {
         assert!(get_embedded_script("nono-hook.sh").is_some());
+        assert!(get_embedded_script("nono-tool-hook.ps1").is_some());
         assert!(get_embedded_script("nonexistent.sh").is_none());
     }
 
@@ -530,6 +606,140 @@ mod tests {
         let script = get_embedded_script("nono-hook.sh").expect("Script not found");
         assert!(script.contains("NONO_CAP_FILE"));
         assert!(script.contains("jq"));
+    }
+
+    #[test]
+    fn test_embedded_tool_hook_fails_closed() -> std::result::Result<(), Box<dyn Error>> {
+        let script = get_embedded_script("nono-tool-hook.ps1").ok_or("Script not found")?;
+        assert!(script.contains("claude-code-hook"));
+        assert!(script.contains("permissionDecision"));
+        assert!(script.contains("\"deny\""));
+        assert!(script.contains("failed closed"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_claude_settings_registers_powershell_hook(
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempdir()?;
+        let settings_path = root.path().join("settings.json");
+        let config = HookConfig {
+            event: "PreToolUse".to_string(),
+            matcher: "*".to_string(),
+            script: "nono-tool-hook.ps1".to_string(),
+        };
+
+        let modified = update_claude_settings(&settings_path, &config)?;
+        assert!(modified, "first install must modify settings");
+
+        let content = fs::read_to_string(&settings_path)?;
+        let settings: Value = serde_json::from_str(&content)?;
+        let hook = &settings["hooks"]["PreToolUse"][0]["hooks"][0];
+
+        assert_eq!(hook["type"], json!("command"));
+        assert_eq!(hook["shell"], json!("powershell"));
+        assert_eq!(
+            hook["command"],
+            json!("& \"$HOME/.claude/hooks/nono-tool-hook.ps1\"")
+        );
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], json!("*"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_claude_settings_updates_existing_hook_matcher(
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempdir()?;
+        let settings_path = root.path().join("settings.json");
+        fs::write(
+            &settings_path,
+            r#"{
+              "hooks": {
+                "PreToolUse": [
+                  {
+                    "matcher": "Bash|Write|Edit|MultiEdit",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "shell": "powershell",
+                        "command": "& \"$HOME/.claude/hooks/nono-tool-hook.ps1\""
+                      }
+                    ]
+                  }
+                ]
+              }
+            }"#,
+        )?;
+        let config = HookConfig {
+            event: "PreToolUse".to_string(),
+            matcher: "*".to_string(),
+            script: "nono-tool-hook.ps1".to_string(),
+        };
+
+        let modified = update_claude_settings(&settings_path, &config)?;
+        assert!(modified, "matcher change must update settings");
+
+        let content = fs::read_to_string(&settings_path)?;
+        let settings: Value = serde_json::from_str(&content)?;
+
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], json!("*"));
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            json!("& \"$HOME/.claude/hooks/nono-tool-hook.ps1\"")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_claude_settings_moves_existing_hook_between_events(
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempdir()?;
+        let settings_path = root.path().join("settings.json");
+        fs::write(
+            &settings_path,
+            r#"{
+              "hooks": {
+                "PostToolUseFailure": [
+                  {
+                    "matcher": "Bash",
+                    "hooks": [
+                      {
+                        "type": "command",
+                        "shell": "powershell",
+                        "command": "& \"$HOME/.claude/hooks/nono-tool-hook.ps1\""
+                      }
+                    ]
+                  }
+                ],
+                "PreToolUse": []
+              }
+            }"#,
+        )?;
+        let config = HookConfig {
+            event: "PreToolUse".to_string(),
+            matcher: "*".to_string(),
+            script: "nono-tool-hook.ps1".to_string(),
+        };
+
+        let modified = update_claude_settings(&settings_path, &config)?;
+        assert!(modified, "event change must update settings");
+
+        let content = fs::read_to_string(&settings_path)?;
+        let settings: Value = serde_json::from_str(&content)?;
+
+        assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], json!("*"));
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            json!("& \"$HOME/.claude/hooks/nono-tool-hook.ps1\"")
+        );
+        assert!(
+            settings["hooks"]["PostToolUseFailure"]
+                .as_array()
+                .ok_or("old event remains an array")?
+                .is_empty(),
+            "old event entry should be removed after moving hook"
+        );
+        Ok(())
     }
 
     /// Ported from upstream v0.37.1 `97f7294`. Hostile `claude.json` symlink

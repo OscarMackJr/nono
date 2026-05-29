@@ -43,6 +43,93 @@ The built-in profile provides:
 - **Automatic hook installation** for sandbox-aware error handling
 - **OAuth2 login support** via supervised URL opening (allows `claude /login` to work)
 
+## Experimental Windows Tool Wrapping
+
+<Warning>
+`claude-code-tools-windows` is an experimental Windows defense-in-depth profile
+for the "sandbox the tools, not the TUI" proof of concept. It does not sandbox
+the Claude Code TUI process itself, and it should not be treated as a complete
+agent isolation boundary.
+</Warning>
+
+On Windows, a Low-integrity process cannot host Claude Code's interactive TUI.
+The experimental `claude-code-tools-windows` profile instead runs Claude Code
+normally in your terminal and installs a `PreToolUse` hook that wraps tool calls
+through `nono run`. The hook uses `matcher: "*"`, so every Claude Code tool
+call reaches the policy handler before execution.
+
+The profile currently applies this tool policy:
+
+- `Bash`: rewritten through `nono run --profile claude-code-tools-windows-runner --allow-cwd`
+- `Read`, `Glob`, `Grep`: allowed as read-only Claude Code tools
+- all other tools, including `Write`, `Edit`, `MultiEdit`, `NotebookEdit`,
+  `WebFetch`, `WebSearch`, `Task`, and `mcp__*`: denied, because they are either
+  in-process side effects, network side effects, subagent launches, or MCP
+  surfaces that cannot be converted into Low-integrity subprocesses by this hook
+
+The `claude-code-tools-windows-runner` profile is separate from the normal
+`claude-code` profile. It grants the current working directory to the rewritten
+tool process, blocks network, and does not grant write access to `~/.claude`, so
+a wrapped `Bash` call cannot rewrite Claude Code's hook settings and disable
+this enforcement path.
+
+**Important Windows command semantics:** Claude still calls this tool `Bash`,
+but on Windows nono backs it with native PowerShell. Use PowerShell syntax:
+
+```powershell
+Get-Location; Get-ChildItem -Force
+```
+
+Do not expect POSIX Bash syntax such as:
+
+```bash
+pwd && ls -la
+```
+
+Git Bash/MSYS2 is not used for this profile. It can be launched far enough to
+enter the Low-integrity sandbox, but then fails during MSYS2 runtime startup
+when creating objects in `\BaseNamedObjects`:
+
+```text
+NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0...): 0xC0000022
+```
+
+That is an integrity-boundary failure, not a quoting issue or a missing path
+grant.
+
+To install the hook for a local checkout while testing:
+
+```powershell
+.\target\debug\nono.exe run --dry-run --profile packages\claude-code\claude-code-tools-windows.profile.json --allow-cwd -- powershell.exe -NoProfile -NonInteractive -Command Write-Output dry-run
+```
+
+Then run Claude Code normally with `NONO_EXE` pointing at the build under test:
+
+```powershell
+$env:NONO_EXE = "$PWD\target\debug\nono.exe"
+claude
+```
+
+Useful smoke prompts:
+
+```text
+Run a Bash tool command using PowerShell syntax: Get-Location; Get-ChildItem -Force
+```
+
+```text
+Run a Bash tool command using PowerShell syntax that tries to write "blocked" to C:\Users\OMack\NonoDebug\outside-hook-denied-live.txt.
+```
+
+The first should succeed under `nono`. The second should fail with
+`UnauthorizedAccessException` because the target is outside the granted working
+directory.
+
+This prompt should also be denied by the hook before the tool runs:
+
+```text
+Use the Write tool to create a file named should-not-be-created-by-write-tool.txt in this repo with the text "blocked".
+```
+
 ### Token refresh via `.claude.json` symlink
 
 When nono installs the Claude Code hook (via `nono setup` or on first `nono run --profile claude-code`), it also creates a `~/.claude.json` → `~/.claude/claude.json` symlink so Claude Code's token-refresh writes land inside the sandboxed `~/.claude` tree. If a regular `~/.claude.json` file already exists, it is moved into the target path first, then the symlink is created over it.
