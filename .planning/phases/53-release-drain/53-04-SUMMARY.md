@@ -31,22 +31,24 @@ key_decisions:
   - "UAT-B FAIL: MSI payload binaries Authenticode NotSigned (signing-order defect in release.yml) — REQ-RLS-01 reopened"
   - "UAT-C PASS: all WFP stop/uninstall fixes confirmed on Win11 26200 — REQ-DRN-01 closed, Todo 1 moved to done/"
   - "Operator chose to fix release.yml signing-order in-session rather than defer"
-status: partial
+  - "release.yml fixed, re-released as v0.57.5; UAT-B re-run PASS — REQ-RLS-01 closed"
+status: complete
 ---
 
 # Plan 53-04 SUMMARY — Operator-gated HUMAN-UAT (REQ-RLS-01/02, REQ-DRN-01)
 
-Three operator-gated HUMAN-UAT checkpoints executed against the signed `v0.57.4`
-GitHub Release on a live Windows 11 (build 26200) host. **Two of three passed.**
-UAT-B exposed a release-blocking Authenticode signing-order defect in `release.yml`,
-which was fixed in-session (re-tag + re-UAT required to fully close REQ-RLS-01).
+Three operator-gated HUMAN-UAT checkpoints executed on a live Windows 11 (build
+26200) host. UAT-A and UAT-C passed against `v0.57.4`. UAT-B exposed a
+release-blocking Authenticode signing-order defect in `release.yml`; it was fixed
+in-session, re-released as **v0.57.5**, and **UAT-B re-run PASSED** — all three
+checkpoints are now green and REQ-RLS-01/02 + REQ-DRN-01 are closed.
 
 ## UAT Results
 
 | UAT | Requirement | Result | Summary |
 |-----|-------------|--------|---------|
 | A | REQ-RLS-02 | ✅ PASS | `release.yml` ran clean on the `v0.57.4` tag; signed artifacts uploaded |
-| B | REQ-RLS-01 | ❌ FAIL | Installed MSI payload binaries are Authenticode `NotSigned` (signing-order defect) |
+| B | REQ-RLS-01 | ✅ PASS (on re-run) | First attempt (v0.57.4) FAILED — payload `NotSigned`; fixed + re-released as v0.57.5; re-run install confirms payloads `Valid`, version `0.57.5` |
 | C | REQ-DRN-01 | ✅ PASS | Elevated WFP stop/uninstall leaves nothing behind |
 
 ### UAT-A — CI release run (REQ-RLS-02) — PASS
@@ -139,32 +141,55 @@ restructured so the MSI payload is signed:
 
 The checked-in `nono-wfp-driver.sys` remains the WHQL-pre-signed copy (unchanged).
 
+### Fix iteration (two CI rounds)
+
+1. **v0.57.4 → v0.57.5 bump** (`ae5c3358`) + the reorder above. CI run `26638508604`
+   proved the reorder works (`MSI payload Authenticode OK: nono-shell-broker.exe`)
+   but the new payload-verify step over-reached: it gated on
+   `nono-wfp-driver.sys`, the WHQL/cross-signed kernel driver, whose chain returns
+   `UnknownError` under `Get-AuthenticodeSignature` on the CI runner → build failed.
+2. **Verify-gate narrowed to `.exe`** (`a3927be0`): strict-verify only the
+   executables (`nono.exe`, broker, wfp-service); log the driver `.sys` status
+   informationally. CI run `26639177584` Windows job green; `Create Release`
+   published **v0.57.5** with all MSI payloads `MSI payload Authenticode OK`.
+
+`v0.57.5` is tagged at `a3927be0`; `v2.8` was force-moved to the same commit. Both
+CI "failures" are the cosmetic fork jobs only (`crates.io` HTTP 303, homebrew bump).
+
+### UAT-B re-run (v0.57.5) — PASS
+
+Operator installed `nono-v0.57.5-…-machine.msi`:
+
+| Check | v0.57.4 (fail) | v0.57.5 (pass) |
+|-------|----------------|-----------------|
+| `nono.exe` Authenticode | `NotSigned` | **`Valid`** |
+| `nono-shell-broker.exe` Authenticode | `NotSigned` | **`Valid`** |
+| `nono-wfp-service.exe` Authenticode | (n/a) | **`Valid`** |
+| `nono --version` | `0.57.4` | `0.57.5` |
+
+**REQ-RLS-01 satisfied.** No-PTY supervised-path leg remains a documented test-design
+gap on Program-Files installs (the `claude-code` profile does not cover
+`C:\Program Files\nono`); the relay fix stays validated at dev-layout (v2.7 close).
+
 ## Requirement status
 
 | Requirement | Status | Note |
 |-------------|--------|------|
+| REQ-RLS-01 | ✅ Complete | UAT-B PASS on v0.57.5 (payloads signed); no-PTY leg = dev-layout-validated |
 | REQ-RLS-02 | ✅ Complete | UAT-A PASS |
 | REQ-DRN-01 | ✅ Complete | UAT-C PASS; Todo 1 closed |
-| REQ-RLS-01 | ❌ Reopened (Blocked) | UAT-B FAIL; `release.yml` fix applied, needs re-tag + re-UAT |
 | REQ-DRN-02 | ✅ Complete | (Plan 53-02) |
 
-## Next actions (to close REQ-RLS-01 and Phase 53)
+## Follow-ups (post-phase, non-blocking)
 
-1. Commit the `release.yml` signing-order fix.
-2. Re-tag the release at a commit that includes the fix (move/re-cut `v0.57.4` or cut
-   `v0.57.5`) and push to trigger a fresh CI build. The new `Verify MSI payload
-   signatures` step must pass.
-3. Re-run **UAT-B**: install the new signed MSI; confirm
-   `(Get-AuthenticodeSignature 'C:\Program Files\nono\nono.exe').Status` = `Valid`
-   and the broker likewise.
-4. To exercise the no-PTY supervised path on the install, either run from the
-   dev-layout binary or use a profile/child whose executable path is policy-covered
-   (the `claude-code` profile does not cover `C:\Program Files\nono`).
-5. When UAT-B passes, mark REQ-RLS-01 complete and Phase 53 done.
+1. **`v0.57.4` GitHub Release still has unsigned-payload MSIs** — a distribution
+   hazard; delete or annotate it now that v0.57.5 supersedes it.
+2. **No-PTY-on-installed-MSI** is unvalidated due to the executable-coverage gate;
+   exercise it with a profile/child whose path is policy-covered, or accept the
+   dev-layout validation from v2.7.
 
-## Self-Check: PARTIAL
+## Self-Check: PASS
 
-UAT-A ✅ + UAT-C ✅ passed and are recorded with live evidence. UAT-B ❌ failed
-(MSI payload unsigned); REQ-RLS-01 reopened. Phase 53 is intentionally **not** marked
-complete — phase-level verification/completion is deferred until the re-signed build
-passes UAT-B.
+All three HUMAN-UAT checkpoints PASS (UAT-A + UAT-C on v0.57.4; UAT-B on v0.57.5
+after the in-session `release.yml` signing-order fix). REQ-RLS-01, REQ-RLS-02,
+REQ-DRN-01 all closed; Todo 1 in `todos/done/`. Phase 53 ready to complete.
