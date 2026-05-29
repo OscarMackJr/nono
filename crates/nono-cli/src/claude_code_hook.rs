@@ -2,10 +2,12 @@
 //!
 //! This is intentionally narrow: the first enforceable slice rewrites Claude
 //! Code's `Bash` tool into a `nono run` invocation, allows read-only tools, and
-//! denies everything else. On Windows the rewritten `Bash` tool is backed by
-//! native PowerShell because Git Bash/MSYS2 cannot initialize as a Low-IL child.
-//! In-process tools such as `Write` and `Edit` cannot be made Low-IL by command
-//! rewriting.
+//! confines or denies everything else. On Windows the rewritten `Bash` tool is
+//! backed by native PowerShell because Git Bash/MSYS2 cannot initialize as a
+//! Low-IL child. Write, Edit, and MultiEdit are confined via deny+additionalContext
+//! — the hook denies the in-process call and provides a bare inner PowerShell
+//! command for Claude to retry as a Bash tool call (the Bash arm calls
+//! `wrapped_bash_command` on it exactly once).
 
 use nono::{NonoError, Result};
 use serde_json::{json, Value};
@@ -53,10 +55,165 @@ fn pre_tool_use_response(input: &str) -> Result<Option<Value>> {
             "read-only Claude Code tool allowed by nono tool sandbox prototype",
         )));
     }
-    if tool_name != "Bash" {
-        return Ok(Some(deny_response(format!(
-            "nono tool sandbox prototype denies {tool_name}; only Bash rewriting and read-only tools are allowed"
-        ))));
+
+    match tool_name {
+        "Write" => {
+            #[cfg(target_os = "windows")]
+            if let Some(reason) = cwd_self_disable_risk_reason()? {
+                return Ok(Some(deny_response(reason)));
+            }
+            let tool_input = event
+                .get("tool_input")
+                .cloned()
+                .ok_or_else(|| NonoError::HookInstall("Write tool_input missing".to_string()))?;
+            let file_path = tool_input
+                .get("file_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(
+                        "Write tool_input missing string file_path".to_string(),
+                    )
+                })?;
+            let content = tool_input
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+
+            #[cfg(target_os = "windows")]
+            {
+                let ps_inner = build_confined_write_cmd(file_path, content)?;
+                return Ok(Some(json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Write is an in-process tool that cannot be confined directly; use the Bash tool with the PowerShell command in additionalContext to perform the confined file operation",
+                        "additionalContext": format!("Use the Bash tool with this PowerShell command: {ps_inner}")
+                    }
+                })));
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = (file_path, content);
+                return Ok(Some(deny_response(
+                    "Write confinement via Bash retry is Windows-only",
+                )));
+            }
+        }
+        "Edit" => {
+            #[cfg(target_os = "windows")]
+            if let Some(reason) = cwd_self_disable_risk_reason()? {
+                return Ok(Some(deny_response(reason)));
+            }
+            let tool_input = event
+                .get("tool_input")
+                .cloned()
+                .ok_or_else(|| NonoError::HookInstall("Edit tool_input missing".to_string()))?;
+            let file_path = tool_input
+                .get("file_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(
+                        "Edit tool_input missing string file_path".to_string(),
+                    )
+                })?;
+            let old_string = tool_input
+                .get("old_string")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(
+                        "Edit tool_input missing string old_string".to_string(),
+                    )
+                })?;
+            let new_string = tool_input
+                .get("new_string")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(
+                        "Edit tool_input missing string new_string".to_string(),
+                    )
+                })?;
+
+            #[cfg(target_os = "windows")]
+            {
+                let ps_inner = build_confined_edit_cmd(file_path, old_string, new_string)?;
+                return Ok(Some(json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "Edit is an in-process tool that cannot be confined directly; use the Bash tool with the PowerShell command in additionalContext to perform the confined file operation",
+                        "additionalContext": format!("Use the Bash tool with this PowerShell command: {ps_inner}")
+                    }
+                })));
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = (file_path, old_string, new_string);
+                return Ok(Some(deny_response(
+                    "Edit confinement via Bash retry is Windows-only",
+                )));
+            }
+        }
+        "MultiEdit" => {
+            #[cfg(target_os = "windows")]
+            if let Some(reason) = cwd_self_disable_risk_reason()? {
+                return Ok(Some(deny_response(reason)));
+            }
+            let tool_input = event
+                .get("tool_input")
+                .cloned()
+                .ok_or_else(|| {
+                    NonoError::HookInstall("MultiEdit tool_input missing".to_string())
+                })?;
+            let file_path = tool_input
+                .get("file_path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NonoError::HookInstall(
+                        "MultiEdit tool_input missing string file_path".to_string(),
+                    )
+                })?;
+            let edits = tool_input
+                .get("edits")
+                .cloned()
+                .ok_or_else(|| {
+                    NonoError::HookInstall(
+                        "MultiEdit tool_input missing edits array".to_string(),
+                    )
+                })?;
+
+            #[cfg(target_os = "windows")]
+            {
+                let ps_inner = build_confined_multiedit_cmd(file_path, &edits)?;
+                return Ok(Some(json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": "MultiEdit is an in-process tool that cannot be confined directly; use the Bash tool with the PowerShell command in additionalContext to perform the confined file operation",
+                        "additionalContext": format!("Use the Bash tool with this PowerShell command: {ps_inner}")
+                    }
+                })));
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = (file_path, edits);
+                return Ok(Some(deny_response(
+                    "MultiEdit confinement via Bash retry is Windows-only",
+                )));
+            }
+        }
+        "NotebookEdit" => {
+            return Ok(Some(deny_response(
+                "NotebookEdit is not yet supported in the Windows POC sandbox; use the Bash tool with PowerShell to read and write the notebook JSON directly",
+            )));
+        }
+        "Bash" => {
+            // fall through to the Bash arm below
+        }
+        _ => {
+            return Ok(Some(deny_response(format!(
+                "nono tool sandbox prototype denies {tool_name}; only Bash rewriting and read-only tools are allowed"
+            ))));
+        }
     }
 
     #[cfg(target_os = "windows")]
@@ -247,6 +404,93 @@ fn powershell_encoded_command(command: &str) -> String {
     nono::trust::base64::base64_encode(&utf16le)
 }
 
+/// Builds a bare inner PowerShell expression that writes `content` to `file_path`.
+///
+/// The content is base64-encoded (raw bytes, not UTF-16LE) to safely handle embedded
+/// single quotes, newlines, and PowerShell metacharacters. The returned string is the
+/// INNER PS expression — callers must NOT call `wrapped_bash_command` on the result;
+/// the Bash arm does exactly one wrap when Claude retries via the Bash tool.
+#[cfg(target_os = "windows")]
+#[must_use]
+fn build_confined_write_cmd(file_path: &str, content: &str) -> Result<String> {
+    let b64_content = nono::trust::base64::base64_encode(content.as_bytes());
+    let path_quoted = powershell_single_quoted(file_path);
+    let ps_inner = format!(
+        "$b = [Convert]::FromBase64String('{b64_content}'); \
+         [System.IO.File]::WriteAllText({path_quoted}, \
+         [System.Text.Encoding]::UTF8.GetString($b))"
+    );
+    Ok(ps_inner)
+}
+
+/// Builds a bare inner PowerShell expression that edits `file_path` by replacing
+/// the literal `old_string` with `new_string` using `String.Replace()` (not `-replace`
+/// regex) to avoid regex metacharacter injection.
+///
+/// The returned string is the INNER PS expression — callers must NOT call
+/// `wrapped_bash_command` on the result.
+#[cfg(target_os = "windows")]
+#[must_use]
+fn build_confined_edit_cmd(file_path: &str, old_string: &str, new_string: &str) -> Result<String> {
+    let path_quoted = powershell_single_quoted(file_path);
+    let old_quoted = powershell_single_quoted(old_string);
+    let new_quoted = powershell_single_quoted(new_string);
+    let ps_inner = format!(
+        "$content = [System.IO.File]::ReadAllText({path_quoted}); \
+         $content = $content.Replace({old_quoted}, {new_quoted}); \
+         [System.IO.File]::WriteAllText({path_quoted}, $content)"
+    );
+    Ok(ps_inner)
+}
+
+/// Builds a bare inner PowerShell expression that applies all edits in `edits` to
+/// `file_path` in-memory (reading once, applying all replacements, writing once) to
+/// avoid partially-edited state on failure.
+///
+/// `edits` must be a JSON array of `{"old_string": "...", "new_string": "..."}` objects.
+/// The returned string is the INNER PS expression — callers must NOT call
+/// `wrapped_bash_command` on the result.
+#[cfg(target_os = "windows")]
+#[must_use]
+fn build_confined_multiedit_cmd(file_path: &str, edits: &Value) -> Result<String> {
+    let edits_array = edits.as_array().ok_or_else(|| {
+        NonoError::HookInstall("MultiEdit tool_input.edits must be an array".to_string())
+    })?;
+
+    let path_quoted = powershell_single_quoted(file_path);
+    let mut ps_inner = format!("$content = [System.IO.File]::ReadAllText({path_quoted}); ");
+
+    for (i, edit) in edits_array.iter().enumerate() {
+        let old_string = edit
+            .get("old_string")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                NonoError::HookInstall(format!(
+                    "MultiEdit edits[{i}] missing string old_string"
+                ))
+            })?;
+        let new_string = edit
+            .get("new_string")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                NonoError::HookInstall(format!(
+                    "MultiEdit edits[{i}] missing string new_string"
+                ))
+            })?;
+        let old_quoted = powershell_single_quoted(old_string);
+        let new_quoted = powershell_single_quoted(new_string);
+        ps_inner.push_str(&format!(
+            "$content = $content.Replace({old_quoted}, {new_quoted}); "
+        ));
+    }
+
+    ps_inner.push_str(&format!(
+        "[System.IO.File]::WriteAllText({path_quoted}, $content)"
+    ));
+
+    Ok(ps_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,20 +533,35 @@ mod tests {
 
     #[test]
     fn pre_tool_use_file_tools_deny() -> std::result::Result<(), Box<dyn Error>> {
-        for tool_name in [
-            "Write",
-            "Edit",
-            "MultiEdit",
-            "NotebookEdit",
-            "WebFetch",
-            "WebSearch",
-            "Task",
-            "mcp__filesystem__write_file",
-        ] {
+        // Each tool needs tool_input that satisfies the arm's field extraction so
+        // we get a deny response rather than a propagated Err from a missing field.
+        let tool_inputs: &[(&str, serde_json::Value)] = &[
+            ("Write", json!({"file_path": "x.txt", "content": "hello"})),
+            (
+                "Edit",
+                json!({"file_path": "x.txt", "old_string": "foo", "new_string": "bar"}),
+            ),
+            (
+                "MultiEdit",
+                json!({"file_path": "x.txt", "edits": [{"old_string": "a", "new_string": "b"}]}),
+            ),
+            (
+                "NotebookEdit",
+                json!({"notebook_path": "nb.ipynb", "cell_index": 0, "new_source": "print(1)"}),
+            ),
+            ("WebFetch", json!({"url": "https://example.com"})),
+            ("WebSearch", json!({"query": "test"})),
+            ("Task", json!({"description": "do something"})),
+            (
+                "mcp__filesystem__write_file",
+                json!({"path": "x.txt", "content": "x"}),
+            ),
+        ];
+        for (tool_name, tool_input_val) in tool_inputs {
             let input = json!({
                 "hook_event_name": "PreToolUse",
                 "tool_name": tool_name,
-                "tool_input": {"file_path": "x.txt", "content": "x"},
+                "tool_input": tool_input_val,
                 "tool_use_id": "toolu_2"
             })
             .to_string();
