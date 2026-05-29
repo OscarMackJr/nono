@@ -70,9 +70,7 @@ fn pre_tool_use_response(input: &str) -> Result<Option<Value>> {
                 .get("file_path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    NonoError::HookInstall(
-                        "Write tool_input missing string file_path".to_string(),
-                    )
+                    NonoError::HookInstall("Write tool_input missing string file_path".to_string())
                 })?;
             let content = tool_input
                 .get("content")
@@ -112,25 +110,19 @@ fn pre_tool_use_response(input: &str) -> Result<Option<Value>> {
                 .get("file_path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    NonoError::HookInstall(
-                        "Edit tool_input missing string file_path".to_string(),
-                    )
+                    NonoError::HookInstall("Edit tool_input missing string file_path".to_string())
                 })?;
             let old_string = tool_input
                 .get("old_string")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    NonoError::HookInstall(
-                        "Edit tool_input missing string old_string".to_string(),
-                    )
+                    NonoError::HookInstall("Edit tool_input missing string old_string".to_string())
                 })?;
             let new_string = tool_input
                 .get("new_string")
                 .and_then(Value::as_str)
                 .ok_or_else(|| {
-                    NonoError::HookInstall(
-                        "Edit tool_input missing string new_string".to_string(),
-                    )
+                    NonoError::HookInstall("Edit tool_input missing string new_string".to_string())
                 })?;
 
             #[cfg(target_os = "windows")]
@@ -158,12 +150,9 @@ fn pre_tool_use_response(input: &str) -> Result<Option<Value>> {
             if let Some(reason) = cwd_self_disable_risk_reason()? {
                 return Ok(Some(deny_response(reason)));
             }
-            let tool_input = event
-                .get("tool_input")
-                .cloned()
-                .ok_or_else(|| {
-                    NonoError::HookInstall("MultiEdit tool_input missing".to_string())
-                })?;
+            let tool_input = event.get("tool_input").cloned().ok_or_else(|| {
+                NonoError::HookInstall("MultiEdit tool_input missing".to_string())
+            })?;
             let file_path = tool_input
                 .get("file_path")
                 .and_then(Value::as_str)
@@ -172,14 +161,9 @@ fn pre_tool_use_response(input: &str) -> Result<Option<Value>> {
                         "MultiEdit tool_input missing string file_path".to_string(),
                     )
                 })?;
-            let edits = tool_input
-                .get("edits")
-                .cloned()
-                .ok_or_else(|| {
-                    NonoError::HookInstall(
-                        "MultiEdit tool_input missing edits array".to_string(),
-                    )
-                })?;
+            let edits = tool_input.get("edits").cloned().ok_or_else(|| {
+                NonoError::HookInstall("MultiEdit tool_input missing edits array".to_string())
+            })?;
 
             #[cfg(target_os = "windows")]
             {
@@ -353,7 +337,7 @@ fn canonicalize_with_existing_prefix(path: &Path) -> PathBuf {
     let components_count = path.components().count();
     for (i, ancestor) in path.ancestors().enumerate() {
         if ancestor.exists() {
-            if let Some(canonical_base) = ancestor.canonicalize().ok() {
+            if let Ok(canonical_base) = ancestor.canonicalize() {
                 // Re-append the tail components that were stripped off.
                 // path.ancestors() yields path, then parent, then grandparent...
                 // so `i` is the number of components we stripped from the end.
@@ -503,17 +487,13 @@ fn build_confined_multiedit_cmd(file_path: &str, edits: &Value) -> Result<String
             .get("old_string")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                NonoError::HookInstall(format!(
-                    "MultiEdit edits[{i}] missing string old_string"
-                ))
+                NonoError::HookInstall(format!("MultiEdit edits[{i}] missing string old_string"))
             })?;
         let new_string = edit
             .get("new_string")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                NonoError::HookInstall(format!(
-                    "MultiEdit edits[{i}] missing string new_string"
-                ))
+                NonoError::HookInstall(format!("MultiEdit edits[{i}] missing string new_string"))
             })?;
         let old_quoted = powershell_single_quoted(old_string);
         let new_quoted = powershell_single_quoted(new_string);
@@ -812,8 +792,8 @@ mod tests {
     }
 
     #[test]
-    fn pre_tool_use_multiedit_returns_deny_with_ps_cmd(
-    ) -> std::result::Result<(), Box<dyn Error>> {
+    fn pre_tool_use_multiedit_returns_deny_with_ps_cmd() -> std::result::Result<(), Box<dyn Error>>
+    {
         let input = json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "MultiEdit",
@@ -912,8 +892,8 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_write_arm_cwd_guard_fires_before_ps_cmd(
-    ) -> std::result::Result<(), Box<dyn Error>> {
+    fn windows_write_arm_cwd_guard_fires_before_ps_cmd() -> std::result::Result<(), Box<dyn Error>>
+    {
         // Mirror of windows_cwd_guard_denies_project_claude_child (lines 672-686):
         // directly call cwd_self_disable_risk_reason_for with a CWD that contains
         // a .claude/ child, assert the guard fires. This confirms the guard logic
@@ -958,8 +938,7 @@ mod tests {
     /// not only when it is an ancestor or equal.
     #[cfg(target_os = "windows")]
     #[test]
-    fn windows_cwd_guard_denies_inside_home_claude(
-    ) -> std::result::Result<(), Box<dyn Error>> {
+    fn windows_cwd_guard_denies_inside_home_claude() -> std::result::Result<(), Box<dyn Error>> {
         let root = tempfile::tempdir()?;
         let home = root.path().join("home");
         std::fs::create_dir_all(home.join(".claude").join("projects").join("myrepo"))?;
