@@ -220,7 +220,18 @@ try {
     }
     finally {
         Remove-SigningCertificate -Thumbprint $thumbprint
-        Remove-TrustForVerify -Thumbprint $thumbprint
+        # release.yml runs a SEPARATE downstream "Verify Authenticode signatures"
+        # step (Get-AuthenticodeSignature, which needs a trusted chain) AFTER this
+        # script returns. If we remove the LocalMachine\Root trust here, that step
+        # fails with status UnknownError (untrusted chain). On the ephemeral CI
+        # runner, KEEP the trust so the downstream verify passes; remove it only
+        # for local-run hygiene.
+        if ($env:GITHUB_ACTIONS) {
+            Write-Host "CI detected — leaving signing cert in LocalMachine\Root for the downstream Authenticode verify step (ephemeral runner)."
+        }
+        else {
+            Remove-TrustForVerify -Thumbprint $thumbprint
+        }
     }
 }
 finally {
