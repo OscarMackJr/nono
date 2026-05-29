@@ -34,7 +34,7 @@ granularity: standard
 
 ### v2.9 — Windows Sandbox-the-Tools (separate track)
 
-- [ ] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
+- [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered) (completed 2026-05-29)
 
 ## Phase Details
 
@@ -141,8 +141,8 @@ Plans:
 **Plans**: 2 plans
 Plans:
 **Wave 1** (parallel — no file overlap)
-- [ ] 60-01-PLAN.md — Confined file-op arms: Write/Edit/MultiEdit deny+additionalContext + NotebookEdit informative deny + unit tests (REQ-STW-01)
-- [ ] 60-02-PLAN.md — PowerShell-steering CLAUDE.md update + runner profile verification + cross-target clippy PARTIAL note (REQ-STW-02)
+- [x] 60-01-PLAN.md — Confined file-op arms: Write/Edit/MultiEdit deny+additionalContext + NotebookEdit informative deny + unit tests (REQ-STW-01)
+- [x] 60-02-PLAN.md — PowerShell-steering CLAUDE.md update + runner profile verification + cross-target clippy PARTIAL note (REQ-STW-02)
 
 ## Progress
 
@@ -155,7 +155,7 @@ Plans:
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
-| 60. Confined Coding Loop (v2.9) | 0/2 | Not started | - |
+| 60. Confined Coding Loop (v2.9) | 2/2 | Complete   | 2026-05-29 |
 
 ## Coverage
 
