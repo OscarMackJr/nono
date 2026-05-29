@@ -155,7 +155,7 @@ Plans:
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
-| 60. Confined Coding Loop (v2.9) | 2/2 | Complete   | 2026-05-29 |
+| 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 
 ## Coverage
 
