@@ -180,6 +180,7 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Unpin(_)
         | Commands::Outdated(_)
         | Commands::OpenUrlHelper(_)
+        | Commands::ClaudeCodeHook
         | Commands::Completions(_) => 0,
     }
 }

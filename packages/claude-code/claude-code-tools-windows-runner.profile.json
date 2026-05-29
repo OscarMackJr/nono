@@ -1,0 +1,30 @@
+{
+  "extends": "default",
+  "meta": {
+    "name": "claude-code-tools-windows-runner",
+    "version": "0.1.0",
+    "description": "Experimental Windows tool runner profile for Claude Code Bash rewriting; grants CWD access, blocks network, and declares deny entries for ~/.claude hook state",
+    "author": "nono-project"
+  },
+  "security": {
+    "groups": [
+      "node_runtime",
+      "rust_runtime",
+      "python_runtime",
+      "git_config",
+      "unlink_protection"
+    ],
+    "signal_mode": "isolated",
+    "capability_elevation": false
+  },
+  "policy": {
+    "add_deny_access": [
+      "$HOME/.claude",
+      "$WORKDIR/.claude"
+    ]
+  },
+  "network": { "block": true },
+  "workdir": { "access": "readwrite" },
+  "allow_launch_services": false,
+  "interactive": true
+}

@@ -1035,10 +1035,12 @@ pub fn resolve_deny_paths_for_groups(
 ///
 /// On macOS this is a no-op (Seatbelt handles deny-within-allow natively).
 ///
-/// On Windows this is also a no-op: the mandatory-label backend (Phase 21 WSFG-01)
-/// applies `SECURITY_MANDATORY_LOW_RID` ACEs per deny path via `SetNamedSecurityInfoW`
-/// independently of allow grants on the parent, so deny-within-allow is structurally
-/// enforceable.
+/// On Windows this is also a no-op today. Windows MIC can express deny-within-allow
+/// if the backend applies a stronger mandatory label to the denied child after
+/// applying the parent allow label, but `CapabilitySet` does not yet carry deny
+/// paths into `Sandbox::apply`. Until that backend wiring exists, do not rely on
+/// `add_deny_access` to carve a sensitive child path out of a broader Windows
+/// allow grant.
 ///
 /// **Must be called after all paths are finalized** (groups + profile + CLI overrides + CWD).
 pub fn validate_deny_overlaps(deny_paths: &[PathBuf], caps: &CapabilitySet) -> Result<()> {

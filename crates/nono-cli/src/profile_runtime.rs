@@ -52,10 +52,7 @@ fn install_profile_hooks(profile_name: Option<&str>, profile: &profile::Profile,
                 match result {
                     hooks::HookInstallResult::Installed => {
                         if !silent {
-                            eprintln!(
-                                "  Installing {} hook to ~/.claude/hooks/nono-hook.sh",
-                                target
-                            );
+                            eprintln!("  Installing {} hook to ~/.claude/hooks/", target);
                         }
                     }
                     hooks::HookInstallResult::Updated => {

@@ -1,0 +1,31 @@
+{
+  "extends": "default",
+  "meta": {
+    "name": "claude-code-tools-windows",
+    "version": "0.1.0",
+    "description": "Experimental Windows Claude Code defense-in-depth profile that matches all tools, wraps Bash through nono using a PowerShell-backed runner, allows read-only tools, and denies other tool classes",
+    "author": "nono-project"
+  },
+  "hooks": {
+    "claude-code": {
+      "event": "PreToolUse",
+      "matcher": "*",
+      "script": "nono-tool-hook.ps1"
+    }
+  },
+  "security": {
+    "groups": [
+      "node_runtime",
+      "rust_runtime",
+      "python_runtime",
+      "git_config",
+      "unlink_protection"
+    ],
+    "signal_mode": "isolated",
+    "capability_elevation": false
+  },
+  "network": { "block": true },
+  "workdir": { "access": "readwrite" },
+  "allow_launch_services": false,
+  "interactive": true
+}

@@ -1,4 +1,5 @@
 use crate::audit_commands;
+use crate::claude_code_hook;
 use crate::cli::{Cli, Commands, RunArgs, SessionCommands, SetupArgs};
 use crate::command_runtime::{run_sandbox, run_shell, run_wrap};
 use crate::completions::run_completions;
@@ -141,6 +142,7 @@ fn dispatch_command(
             run_command_with_update(update_handle, silent, || package_cmd::run_outdated(args))
         }
         Commands::OpenUrlHelper(args) => run_open_url_helper(args),
+        Commands::ClaudeCodeHook => claude_code_hook::run(),
         Commands::Completions(args) => run_completions(args),
     }
 }
