@@ -63,3 +63,27 @@ confirm a MAJOR-UPGRADE install (not uninstall) does NOT tear down the services 
 CustomActionData pattern to pass the resolved `[INSTALLFOLDER]` path. Fail-open
 (`Return="ignore"`) means a mistake degrades to "driver left behind" (today's behavior), never
 a broken uninstall — verify that too.
+
+## Disposition (Phase 53) — CLOSED
+**Result:** PASS
+**Date:** 2026-05-29
+**Closed by:** Phase 53 UAT-C (Plan 53-04 Task 3)
+**Requirement:** REQ-DRN-01 — elevated WFP stop/uninstall leaves nothing behind
+**Decision:** D-53-07 — Todo 1 IS the REQ-DRN-01 HUMAN-UAT work
+**Outcome:** Fix #1 (SERVICE_CONTROL_STOP), Fix #2a (nono setup --uninstall-wfp),
+and Fix #2b (CaUninstallWfpServices WiX CA) all confirmed at runtime on Windows 11
+build 26200 against the signed v0.57.4 machine MSI. Live evidence:
+- `sc.exe stop nono-wfp-service` → accepted (STOPPABLE), no fast-fail (Fix #1 ✓).
+- `nono setup --uninstall-wfp` → both `nono-wfp-service` + `nono-wfp-driver` removed;
+  `sc query` on each → `1060 does not exist` (Fix #2a ✓).
+- `netsh wfp show filters | sls nono` → empty, no residual filters.
+- `msiexec /x …machine.msi` → no service, no driver, `Test-Path "C:\Program Files\nono"`
+  = `False`, no filters (Fix #2b WiX CA ✓).
+- Upgrade guard: double `msiexec /i` → service still `RUNNING`, not torn down
+  (`NOT UPGRADINGPRODUCTCODE` ✓).
+No CA-fallback (immediate-CA + CustomActionData) was needed.
+
+**Note:** This UAT ran against a build whose MSI payload binaries were Authenticode
+**unsigned** (signing-order defect found in the same checkpoint — see 53-04-SUMMARY.md
+and REQ-RLS-01). REQ-DRN-01 is independent of that defect: WFP stop/uninstall behavior
+does not depend on the binary's Authenticode signature, and all WFP fixes passed.
