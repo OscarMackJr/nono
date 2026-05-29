@@ -59,8 +59,15 @@ avoid fragile nested quoting.
 The runner profile is intentionally separate from the normal `claude-code`
 agent profile. It grants CWD access for the rewritten tool process, blocks
 network, has no hook installation stanza, and does not grant write access to
-`~/.claude`. That removes the self-disable path where a wrapped `Bash` command
-could rewrite `~/.claude/settings.json` and remove the hook.
+`~/.claude`. It also adds explicit deny entries for `$HOME/.claude` and
+`$WORKDIR/.claude` so a broad CWD grant does not re-open the self-disable path
+when Claude Code is launched from a sensitive directory.
+
+The read-only allow-list is a usability compromise, not read confinement:
+`Read`, `Glob`, and `Grep` still execute inside the Medium-IL Claude Code
+process and can read whatever that process can read. Likewise, network is
+blocked for rewritten `Bash`, so network-using commands fail until a future
+per-call capability mapping can grant specific domains.
 
 Git Bash/MSYS2 is not a viable Low-IL child for this slice. It starts under
 the broker, then fails during runtime initialization when it tries to create
@@ -210,12 +217,42 @@ nono tool sandbox prototype denies Write; only Bash rewriting and read-only tool
 Conclusion: the match-all hook reaches in-process file tools before execution
 and denies them. The file was not created.
 
+Denied CWD self-disable edge case:
+
+```powershell
+Push-Location $HOME\.claude
+nono run --profile claude-code-tools-windows-runner --allow-net --allow-cwd -- cmd.exe /c "echo probe> $HOME\.claude\nono-cwd-deny-probe.txt"
+Pop-Location
+```
+
+Observed result:
+
+```text
+Access is denied.
+exit=1
+exists=False
+```
+
+Conclusion: even when the process is launched from `$HOME\.claude` and
+`--allow-cwd` would otherwise grant that directory, the runner profile's
+explicit `$HOME/.claude` deny prevents writing hook state. The probe used
+`--allow-net` only to avoid WFP activation masking filesystem enforcement on
+this test machine; the runner's normal network policy remains blocked.
+
+Network-blocked runner tradeoff:
+
+- `network.block=true` means network-using Bash commands fail by design.
+- On Windows hosts without the nono WFP driver installed, a live run with
+  blocked network fails closed before the child command starts. Dry-run profile
+  validation still works, but executable smoke tests need WFP installed or an
+  explicit test override.
+
 ## Next Slices
 
 1. Add live UAT for `NotebookEdit`, `WebFetch`, `Task`, and an MCP tool name to
    verify that the match-all policy denies each surface in Claude Code.
-2. Add a capability policy for the hook handler. Static `--allow-cwd` is enough
-   for the POC; argument-derived grants are the later hardening step.
+2. Add argument-derived grants for the hook handler. Static `--allow-cwd` is
+   enough for the POC; per-tool path/domain grants are the later hardening step.
 3. Decide whether the product wants to expose this as "Bash" on Windows or as a
    separate "PowerShell tool runner" mode, since the command syntax is
    PowerShell-backed.

@@ -3,7 +3,7 @@
   "meta": {
     "name": "claude-code-tools-windows-runner",
     "version": "0.1.0",
-    "description": "Experimental Windows tool runner profile for Claude Code Bash rewriting; grants CWD access but does not grant write access to ~/.claude",
+    "description": "Experimental Windows tool runner profile for Claude Code Bash rewriting; grants CWD access, blocks network, and explicitly denies ~/.claude hook state",
     "author": "nono-project"
   },
   "security": {
@@ -16,6 +16,12 @@
     ],
     "signal_mode": "isolated",
     "capability_elevation": false
+  },
+  "policy": {
+    "add_deny_access": [
+      "$HOME/.claude",
+      "$WORKDIR/.claude"
+    ]
   },
   "network": { "block": true },
   "workdir": { "access": "readwrite" },

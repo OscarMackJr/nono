@@ -69,9 +69,17 @@ The profile currently applies this tool policy:
 
 The `claude-code-tools-windows-runner` profile is separate from the normal
 `claude-code` profile. It grants the current working directory to the rewritten
-tool process, blocks network, and does not grant write access to `~/.claude`, so
-a wrapped `Bash` call cannot rewrite Claude Code's hook settings and disable
-this enforcement path.
+tool process, blocks network, and does not grant write access to `~/.claude`.
+It also explicitly denies `$HOME/.claude` and `$WORKDIR/.claude`, so a wrapped
+`Bash` call cannot rewrite Claude Code's hook settings and disable this
+enforcement path even when Claude Code is launched from a sensitive directory.
+
+This profile mediates side-effecting tools; it does not confine reads performed
+by the Medium-integrity Claude Code process. `Read`, `Glob`, and `Grep` remain
+Claude Code in-process read tools and can read anything the host Claude process
+can read. Wrapped `Bash` runs in the runner profile with network blocked, so
+commands that require outbound network access fail until a future per-call
+domain grant mode is designed.
 
 **Important Windows command semantics:** Claude still calls this tool `Bash`,
 but on Windows nono backs it with native PowerShell. Use PowerShell syntax:
