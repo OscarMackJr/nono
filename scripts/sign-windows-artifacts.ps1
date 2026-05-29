@@ -95,15 +95,20 @@ function Add-TrustForVerify {
     # A self-signed POC cert (D-53-02) does NOT chain to a trusted root, so
     # `signtool verify /pa` fails with "A certificate chain processed, but
     # terminated in a root certificate which is not trusted". Import the cert's
-    # PUBLIC portion into the CurrentUser Root store so the chain validates
-    # (verified locally: this is the store `signtool verify /pa` consults for the
-    # calling user; no admin required; the CI runner is ephemeral). For a real
-    # CA-issued cert this is a harmless no-op — it already chains to a trusted root.
+    # PUBLIC portion into the LocalMachine Root store so the chain validates.
+    #
+    # MUST be LocalMachine, not CurrentUser: adding to the CurrentUser Root store
+    # raises the interactive protected-root consent dialog ("You are about to
+    # install a certificate from a certification authority ... install?"), which
+    # HANGS on a headless CI runner (observed: a 3h stall on the Sign step).
+    # Adding to LocalMachine Root as an administrator (GitHub-hosted Windows
+    # runners are admin) is non-interactive — no consent dialog. For a real
+    # CA-issued cert this is a harmless no-op (already chains to a trusted root).
     $cerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("nono-verify-trust-" + $Thumbprint + ".cer")
     try {
         Export-Certificate -Cert "Cert:\CurrentUser\My\$Thumbprint" -FilePath $cerPath | Out-Null
-        Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
-        Write-Host "Trusted signing cert in CurrentUser\Root for verification."
+        Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+        Write-Host "Trusted signing cert in LocalMachine\Root for verification."
     }
     finally {
         Remove-Item -LiteralPath $cerPath -Force -ErrorAction SilentlyContinue
@@ -116,11 +121,11 @@ function Remove-TrustForVerify {
         [string]$Thumbprint
     )
 
-    # `Remove-Item Cert:\CurrentUser\Root\...` raises a UI confirmation that fails
-    # non-interactively ("The operation is on user root store and UI is not
-    # allowed"). Use the X509Store API, which removes without a prompt.
+    # Remove from the LocalMachine Root store via the X509Store API (admin,
+    # non-interactive). `Remove-Item Cert:\...\Root\...` raises a UI prompt that
+    # fails/hangs non-interactively; the X509Store API removes without a prompt.
     try {
-        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+        $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', 'LocalMachine')
         $store.Open('ReadWrite')
         foreach ($c in @($store.Certificates | Where-Object { $_.Thumbprint -eq $Thumbprint })) {
             $store.Remove($c)
@@ -128,7 +133,7 @@ function Remove-TrustForVerify {
         $store.Close()
     }
     catch {
-        Write-Host "Warning: could not remove trust cert from CurrentUser\Root: $($_.Exception.Message)"
+        Write-Host "Warning: could not remove trust cert from LocalMachine\Root: $($_.Exception.Message)"
     }
 }
 
