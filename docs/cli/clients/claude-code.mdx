@@ -70,9 +70,20 @@ The profile currently applies this tool policy:
 The `claude-code-tools-windows-runner` profile is separate from the normal
 `claude-code` profile. It grants the current working directory to the rewritten
 tool process, blocks network, and does not grant write access to `~/.claude`.
-It also explicitly denies `$HOME/.claude` and `$WORKDIR/.claude`, so a wrapped
-`Bash` call cannot rewrite Claude Code's hook settings and disable this
-enforcement path even when Claude Code is launched from a sensitive directory.
+It also declares deny entries for `$HOME/.claude` and `$WORKDIR/.claude`, but
+Windows deny-within-allow is not yet a backend-enforced carve-out. The native
+hook therefore fails closed before rewriting `Bash` when the current working
+directory is equal to, contains, or is an ancestor of Claude Code hook settings
+or agent state, including `~/.claude`, `~/.claude.json`, and project-local
+`.claude` settings. That hook-level guard is what prevents a wrapped `Bash`
+call from rewriting Claude Code's hook settings and disabling its own
+enforcement path.
+
+Do not rely on Windows `add_deny_access` entries to carve sensitive child paths
+such as `.claude`, `.env`, `.git`, or credential directories out of a broader
+allowed parent. Until Windows backend-native deny-within-allow is implemented,
+that pattern needs a narrower allow grant or an explicit feature-level guard
+like the one above.
 
 This profile mediates side-effecting tools; it does not confine reads performed
 by the Medium-integrity Claude Code process. `Read`, `Glob`, and `Grep` remain

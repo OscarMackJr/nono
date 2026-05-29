@@ -10,6 +10,8 @@
 use nono::{NonoError, Result};
 use serde_json::{json, Value};
 use std::io::Read;
+#[cfg(target_os = "windows")]
+use std::path::{Path, PathBuf};
 
 const DEFAULT_TOOL_RUNNER_PROFILE: &str = "claude-code-tools-windows-runner";
 
@@ -55,6 +57,11 @@ fn pre_tool_use_response(input: &str) -> Result<Option<Value>> {
         return Ok(Some(deny_response(format!(
             "nono tool sandbox prototype denies {tool_name}; only Bash rewriting and read-only tools are allowed"
         ))));
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(reason) = cwd_self_disable_risk_reason()? {
+        return Ok(Some(deny_response(reason)));
     }
 
     let mut updated_input = event
@@ -118,6 +125,75 @@ fn deny_response(reason: impl Into<String>) -> Value {
 
 fn command_contains_nono_wrapper(command: &str) -> bool {
     command.contains(" nono run ") || command.starts_with("nono run ")
+}
+
+#[cfg(target_os = "windows")]
+fn cwd_self_disable_risk_reason() -> Result<Option<String>> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| NonoError::HookInstall(format!("failed to resolve hook CWD: {e}")))?;
+    cwd_self_disable_risk_reason_for(&cwd)
+}
+
+#[cfg(target_os = "windows")]
+fn cwd_self_disable_risk_reason_for(cwd: &Path) -> Result<Option<String>> {
+    let cwd = canonical_existing_path(cwd)?;
+
+    if let Some(home) = home_dir().and_then(|path| canonical_existing_path(&path).ok()) {
+        if cwd_covers_home_claude_state(&cwd, &home) {
+            return Ok(Some(self_disable_reason(&cwd)));
+        }
+    }
+
+    let project_claude = cwd.join(".claude");
+    if project_claude.exists() {
+        return Ok(Some(self_disable_reason(&cwd)));
+    }
+
+    Ok(None)
+}
+
+#[cfg(target_os = "windows")]
+fn cwd_covers_home_claude_state(cwd: &Path, home: &Path) -> bool {
+    let home_claude = home.join(".claude");
+    if path_covers(cwd, &home_claude) {
+        return true;
+    }
+
+    [".claude.json", ".claude.json.lock"]
+        .iter()
+        .map(|state_path| home.join(state_path))
+        .any(|target| path_covers(cwd, &target))
+}
+
+#[cfg(target_os = "windows")]
+fn self_disable_reason(cwd: &Path) -> String {
+    format!(
+        "refusing to wrap Bash: CWD '{}' covers Claude Code hook settings or agent state; would allow the tool jail to disable its own hooks",
+        cwd.display()
+    )
+}
+
+#[cfg(target_os = "windows")]
+fn path_covers(parent: &Path, child: &Path) -> bool {
+    let child = canonical_existing_path(child).unwrap_or_else(|_| child.to_path_buf());
+    child.starts_with(parent)
+}
+
+#[cfg(target_os = "windows")]
+fn canonical_existing_path(path: &Path) -> Result<PathBuf> {
+    path.canonicalize().map_err(|e| {
+        NonoError::HookInstall(format!(
+            "failed to canonicalize path '{}': {e}",
+            path.display()
+        ))
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
 }
 
 #[cfg(target_os = "windows")]
@@ -300,5 +376,54 @@ mod tests {
             !script.contains("bash.exe") && !script.contains("Git\\usr\\bin"),
             "Git Bash/MSYS2 must not be used for the Windows Low-IL tool runner"
         );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cwd_guard_denies_home_claude_ancestor() -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".claude"))?;
+        std::fs::write(home.join(".claude.json"), "{}")?;
+        let cwd = home.canonicalize()?;
+
+        assert!(
+            cwd_covers_home_claude_state(&cwd, &home.canonicalize()?),
+            "home CWD covers ~/.claude and ~/.claude.json state"
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cwd_guard_uses_path_components() -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".claude"))?;
+        std::fs::create_dir_all(home.join(".claudefoo"))?;
+        let cwd = home.join(".claudefoo").canonicalize()?;
+
+        assert!(
+            !cwd_covers_home_claude_state(&cwd, &home.canonicalize()?),
+            "component comparison must not treat .claudefoo as .claude"
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_cwd_guard_denies_project_claude_child() -> std::result::Result<(), Box<dyn Error>> {
+        let root = tempfile::tempdir()?;
+        let home = root.path().join("home");
+        let repo = root.path().join("repo");
+        std::fs::create_dir_all(&home)?;
+        std::fs::create_dir_all(repo.join(".claude"))?;
+
+        let reason = cwd_self_disable_risk_reason_for(&repo)?;
+        assert!(
+            reason.is_some(),
+            "repo CWD with project-local .claude child must be denied"
+        );
+        Ok(())
     }
 }

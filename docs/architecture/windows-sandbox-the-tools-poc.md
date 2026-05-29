@@ -59,9 +59,13 @@ avoid fragile nested quoting.
 The runner profile is intentionally separate from the normal `claude-code`
 agent profile. It grants CWD access for the rewritten tool process, blocks
 network, has no hook installation stanza, and does not grant write access to
-`~/.claude`. It also adds explicit deny entries for `$HOME/.claude` and
-`$WORKDIR/.claude` so a broad CWD grant does not re-open the self-disable path
-when Claude Code is launched from a sensitive directory.
+`~/.claude`. It also declares deny entries for `$HOME/.claude` and
+`$WORKDIR/.claude`, but those are not sufficient on Windows when a broader CWD
+grant covers the same path. The enforceable self-disable fix is in the native
+hook handler: before rewriting `Bash`, it canonicalizes the hook CWD and denies
+the tool call if that CWD is equal to, contains, or is an ancestor of Claude Code
+hook settings or agent state (`~/.claude`, `~/.claude.json`, or project-local
+`.claude` settings).
 
 The read-only allow-list is a usability compromise, not read confinement:
 `Read`, `Glob`, and `Grep` still execute inside the Medium-IL Claude Code
@@ -221,23 +225,25 @@ Denied CWD self-disable edge case:
 
 ```powershell
 Push-Location $HOME\.claude
-nono run --profile claude-code-tools-windows-runner --allow-net --allow-cwd -- cmd.exe /c "echo probe> $HOME\.claude\nono-cwd-deny-probe.txt"
-Pop-Location
+# Then ask Claude Code to run any Bash tool command.
 ```
 
 Observed result:
 
 ```text
-Access is denied.
-exit=1
-exists=False
+refusing to wrap Bash: CWD 'C:\Users\OMack\.claude' covers Claude Code hook
+settings or agent state; would allow the tool jail to disable its own hooks
 ```
 
-Conclusion: even when the process is launched from `$HOME\.claude` and
-`--allow-cwd` would otherwise grant that directory, the runner profile's
-explicit `$HOME/.claude` deny prevents writing hook state. The probe used
-`--allow-net` only to avoid WFP activation masking filesystem enforcement on
-this test machine; the runner's normal network policy remains blocked.
+Conclusion: the hook denies before producing a `nono run --allow-cwd` wrapper.
+This is deliberately implemented at the hook level because Windows
+`add_deny_access` is not yet a backend-enforced deny-within-allow primitive.
+The profile-level deny entries remain as policy documentation and for platforms
+that can enforce them, but the Windows security edge depends on the hook guard.
+The same caveat applies to any Windows attempt to carve `.env`, `.git`, or a
+credential directory out of a broader allowed parent: use narrower grants or a
+feature-specific guard until Windows deny labels are wired through the sandbox
+backend.
 
 Network-blocked runner tradeoff:
 
