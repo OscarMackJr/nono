@@ -138,7 +138,28 @@ jobs:
           WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
           WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
 
-      # D-11: build both machine and user MSIs before signing
+      # Phase 53 (UAT-B fix): sign the payload binaries BEFORE the MSI is built so
+      # build-windows-msi.ps1 harvests SIGNED binaries. Previously signing ran AFTER
+      # Package, which left the MSI-embedded nono.exe / broker / wfp-service
+      # Authenticode-unsigned even though the loose .exe assets and the MSI wrapper
+      # verified Valid — an operator installing the MSI got NotSigned binaries.
+      - name: Sign Windows binaries (pre-package)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = Join-Path $PWD "target\\${{ matrix.target }}\\release\\${{ matrix.artifact }}"
+          $broker = Join-Path $PWD "target\\${{ matrix.target }}\\release\\nono-shell-broker.exe"
+          $service = Join-Path $PWD "target\\${{ matrix.target }}\\release\\nono-wfp-service.exe"
+          .\scripts\sign-windows-artifacts.ps1 `
+            -CertBase64 $env:WINDOWS_SIGNING_CERT `
+            -CertPassword $env:WINDOWS_SIGNING_CERT_PASSWORD `
+            -ArtifactPaths @($binary, $broker, $service)
+        env:
+          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
+          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+
+      # D-11: build both machine and user MSIs from the now-signed binaries above
+      # (the MSI package wrappers are signed in the step after packaging)
       # Phase 31 Plan 04: include nono-shell-broker.exe as a sibling component in
       # both MSIs so install-time deployment lands the broker next to nono.exe at
       # the install dir current_exe().parent() resolves to at runtime (D-07).
@@ -189,22 +210,21 @@ jobs:
             -OutputDir artifact_staging
 
       # D-13: fail closed if signing or verification fails; never upload unsigned artifacts.
-      # Signs the raw .exe, the broker .exe (Phase 31 Plan 04), and both MSIs before
-      # any upload step. The broker is signed with the SAME Authenticode key as nono.exe
-      # so the Phase 28 chain-walker (parse_signer_subject) records a consistent signer
-      # for any audit-ledger trace involving the broker process.
-      - name: Sign Windows artifacts
+      # The payload binaries (nono.exe, broker, wfp-service) were already signed in the
+      # pre-package step, so the MSIs embed signed binaries; here we sign the MSI package
+      # wrappers themselves. The broker is signed with the SAME Authenticode key as
+      # nono.exe so the Phase 28 chain-walker (parse_signer_subject) records a consistent
+      # signer for any audit-ledger trace involving the broker process.
+      - name: Sign Windows MSIs
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $binary = Join-Path $PWD "target\\${{ matrix.target }}\\release\\${{ matrix.artifact }}"
-          $broker = Join-Path $PWD "target\\${{ matrix.target }}\\release\\nono-shell-broker.exe"
           $machineMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-machine.msi"
           $userMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-user.msi"
           .\scripts\sign-windows-artifacts.ps1 `
             -CertBase64 $env:WINDOWS_SIGNING_CERT `
             -CertPassword $env:WINDOWS_SIGNING_CERT_PASSWORD `
-            -ArtifactPaths @($binary, $broker, $machineMsi, $userMsi)
+            -ArtifactPaths @($machineMsi, $userMsi)
         env:
           WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
           WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
@@ -228,6 +248,43 @@ jobs:
               exit 1
             }
             Write-Host "Authenticode OK: $artifact"
+          }
+
+      # Phase 53 regression guard (UAT-B): verify the binaries EMBEDDED IN THE MSI are
+      # signed — not just the loose .exe assets and the MSI wrapper. Administrative-extract
+      # each MSI (msiexec /a) and Authenticode-verify every payload .exe/.sys. This is the
+      # check that was missing when an unsigned-payload MSI shipped despite a signed wrapper.
+      # Fail-closed (D-13): a non-Valid payload signature aborts before upload.
+      - name: Verify MSI payload signatures (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $machineMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-machine.msi"
+          $userMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-user.msi"
+          foreach ($msi in @($machineMsi, $userMsi)) {
+            $name = [System.IO.Path]::GetFileNameWithoutExtension($msi)
+            $extractDir = Join-Path $PWD ("msi-payload-" + $name)
+            if (Test-Path -LiteralPath $extractDir) { Remove-Item -LiteralPath $extractDir -Recurse -Force }
+            New-Item -ItemType Directory -Path $extractDir | Out-Null
+            $log = Join-Path $PWD ("admin-extract-" + $name + ".log")
+            $proc = Start-Process msiexec -ArgumentList @("/a", "`"$msi`"", "/qn", "TARGETDIR=`"$extractDir`"", "/l*v", "`"$log`"") -Wait -PassThru
+            if ($proc.ExitCode -ne 0) {
+              Write-Error "Administrative extract failed for $msi (exit $($proc.ExitCode)). See $log."
+              exit 1
+            }
+            $payload = Get-ChildItem -LiteralPath $extractDir -Recurse -File | Where-Object { $_.Extension -in '.exe', '.sys' }
+            if (-not $payload) {
+              Write-Error "No payload binaries (.exe/.sys) found in administrative extract of $msi — extract layout unexpected."
+              exit 1
+            }
+            foreach ($f in $payload) {
+              $sig = Get-AuthenticodeSignature -FilePath $f.FullName
+              if ($sig.Status -ne "Valid") {
+                Write-Error "MSI payload signature invalid: $($f.FullName) status $($sig.Status) — the MSI shipped an unsigned binary (signing-order regression)."
+                exit 1
+              }
+              Write-Host "MSI payload Authenticode OK: $($f.Name) [$name]"
+            }
           }
 
       # Phase 31 Plan 04: zip bundle now contains BOTH nono.exe and nono-shell-broker.exe
