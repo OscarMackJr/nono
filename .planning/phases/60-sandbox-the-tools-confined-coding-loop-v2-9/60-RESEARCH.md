@@ -434,7 +434,8 @@ if let Some(reason) = cwd_self_disable_risk_reason()? {
     if let Some(reason) = cwd_self_disable_risk_reason()? {
         return Ok(Some(deny_response(reason)));
     }
-    let tool_input = event.get("tool_input").cloned().unwrap_or(Value::Null);
+    let tool_input = event.get("tool_input").cloned()
+        .ok_or_else(|| NonoError::HookInstall(format!("{tool_name} tool_input missing")))?;
     let file_path = tool_input.get("file_path").and_then(Value::as_str)
         .ok_or_else(|| NonoError::HookInstall(
             "Write tool_input missing string file_path".to_string()
@@ -471,10 +472,9 @@ fn build_confined_write_cmd(file_path: &str, content: &str) -> Result<String> {
         path_quoted = powershell_single_quoted(file_path),
         b64 = b64_content,
     );
-    // Wrap with nono run --allow-cwd via the existing double-base64 trampoline
-    wrapped_bash_command(&ps_inner)
-    // NOTE: wrapped_bash_command already adds the outer nono run invocation;
-    // the returned string is the full Bash tool command to suggest via additionalContext.
+    // Return the bare inner PS expression — the Bash arm calls wrapped_bash_command on it
+    // exactly once (avoids double-wrap).
+    Ok(ps_inner)
 }
 ```
 
