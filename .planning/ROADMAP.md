@@ -20,6 +20,7 @@ granularity: standard
 - ✅ **v2.6 UPST6 + v2.5 Drain** — Phases 44, 44.1, 45, 46, 47, 48, 49, 50 (shipped 2026-05-25) — see [`milestones/v2.6-ROADMAP.md`](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Windows supervised-run hardening** — Phases 51, 52 (shipped 2026-05-26) — see [`milestones/v2.7-ROADMAP.md`](milestones/v2.7-ROADMAP.md)
 - **v2.8 UPST7 + v2.7 Drain & Release** — Phases 53–59 (active)
+- **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phase 60 (planned; separate initiative from UPST7, builds on merged PR #4)
 
 ## Phases
 
@@ -30,6 +31,10 @@ granularity: standard
 - [ ] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
 - [ ] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
 - [ ] **Phase 59: Supervisor IPC Robustness** — Keep-alive on transient child IPC close, bounded read-timeouts, robust accept; Unix named-socket hardening absorbed cross-platform-core; Windows Named-Pipe AIPC path translated (not cherry-picked)
+
+### v2.9 — Windows Sandbox-the-Tools (separate track)
+
+- [ ] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
 
 ## Phase Details
 
@@ -122,6 +127,19 @@ Plans:
   4. On Windows, the Named-Pipe AIPC path (Phase 18) receives the equivalent robustness treatment (keep-alive, bounded timeouts, robust accept); implementation is documented as a translate-not-cherry-pick with the translation rationale in the plan SUMMARY
 **Plans**: TBD
 
+### Phase 60: Sandbox-the-Tools — Confined Coding Loop (v2.9)
+**Goal**: A Windows POC user runs the Claude Code TUI at Medium IL and the agent completes a full coding loop — read, run commands, **and edit files** — with every side-effecting operation confined to a Low-IL `nono` jail. File edits work (confined) instead of being denied.
+**Depends on**: PR #4 (merged `7488dbba` — the matcher/deny-by-default/runner-profile/self-disable foundation). NOT dependent on the v2.8 UPST7 phases.
+**Input**: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered, informed by the PR #4 review). Promote per SPEC Q6.
+**Requirements**: REQ-STW-01 (confined file ops), REQ-STW-02 (usable shell story)
+**Success Criteria** (what must be TRUE):
+  1. **Confined file edits.** `Write`/`Edit`/`MultiEdit`/`NotebookEdit` tool calls execute as Low-IL `nono`-confined file operations scoped to the target path (per-call capability mapping derived from `tool_input`, SPEC Q3) — instead of being denied. HUMAN-UAT: a POC user has Claude edit a file in the project and the edit lands; a write outside the granted scope is denied at the OS boundary.
+  2. **Usable shell story.** Bash tool calls either are presented honestly as a PowerShell tool runner with Claude steered to emit PowerShell (profile tool-description / system-prompt note), or a confined real-shell path is provided — typical run-command requests succeed without manually prompting "use PowerShell syntax" (SPEC Next-Slice #3).
+  3. **Confinement invariants preserved.** The PR #4 self-disable CWD guard and deny-by-default for unwrappable surfaces remain intact; the per-call Write grant must not re-introduce a write path to `~/.claude` hook state (consistent with the merged guard + todo `2026-05-29-claude-tools-runner-deny-dotclaude-regardless-of-cwd.md`). Defense-in-depth labeling stays accurate.
+  4. **End-to-end POC UAT.** A POC user completes a small read → edit → run task on a Win11 host with the experimental profile; edits are confined, an out-of-scope write is denied.
+**Out of scope (this phase)**: network/`allow_domain` per-call grants, `WebFetch`/`WebSearch`, MCP-under-`nono`, `Task`/subagents (all remain denied); agent-process FS confinement (the agent stays Medium-IL with unconfined reads — documented, SPEC Q5).
+**Plans**: TBD
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -150,6 +168,8 @@ All 10 v1 requirements mapped:
 | REQ-CRED-01 | Phase 57 |
 | REQ-HOOK-01 | Phase 58 |
 | REQ-IPC-01 | Phase 59 |
+| REQ-STW-01 (v2.9 track) | Phase 60 |
+| REQ-STW-02 (v2.9 track) | Phase 60 |
 
 ## References
 
