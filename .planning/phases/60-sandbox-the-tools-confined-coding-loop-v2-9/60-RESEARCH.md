@@ -504,37 +504,27 @@ fn build_confined_write_cmd(file_path: &str, content: &str) -> Result<String> {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Behavioral: does deny+additionalContext reliably trigger a Bash+PS retry?**
-   - What we know: `deny` stops the in-process tool; `additionalContext` injects text into
-     Claude's context at the tool result point (confirmed by official hook docs).
-   - What's unclear: whether Claude reliably re-issues as Bash with the provided PS command,
-     or just tells the user "write failed."
-   - Recommendation: add a manual UAT scenario in VERIFICATION.md: ask Claude to "write the
-     string 'hello' to test.txt", observe whether it re-issues as Bash and whether the file
-     lands. If retry is unreliable, fall back to a direct nono subprocess launched from within
-     the hook handler (bypassing Claude's action loop entirely) — but this requires a different
-     hook response shape.
+   - **RESOLVED: UAT-gated.** The mechanism is shipped as designed (deny + additionalContext
+     with the inner PS expression). Whether Claude reliably re-issues the Bash retry is
+     verified in the manual UAT gate (VALIDATION.md step c). Fallback disposition is Q2 below.
 
 2. **Alternative mechanism: direct subprocess from hook handler**
-   - What we know: the hook handler is a Rust binary; it can spawn a subprocess directly and
-     wait for it. If the write succeeds, return `allow` + `updatedInput: {}` (no-op to Claude).
-   - What's unclear: whether returning `allow` + empty `updatedInput` after a side-effecting
-     subprocess write confuses Claude (it will attempt the in-process write too).
-   - Recommendation: If deny+retry is unreliable in UAT, this is the fallback. The hook would:
-     spawn `nono run --allow-cwd -- powershell.exe <write>`, wait, then return `deny` (so
-     Claude's in-process write is skipped, but Claude knows the write was "denied"). The risk
-     is Claude retrying endlessly; the deny reason must clearly state "write was completed by
-     the sandbox."
+   - **RESOLVED: Fallback if Q1 UAT fails.** If deny+additionalContext does not cause Claude
+     to retry as Bash, the fallback is a direct nono subprocess launched from within the hook
+     handler: spawn `nono run --allow-cwd -- powershell.exe <write>`, wait for completion,
+     then return `deny` with a reason stating "write was completed by the sandbox." This avoids
+     Claude's action loop entirely. Document the fallback approach and file a follow-on todo
+     before closing the phase if Q1 UAT fails (see VALIDATION.md note).
 
 3. **NotebookEdit complexity**
-   - What we know: NotebookEdit writes Jupyter notebook cells; its `tool_input` includes
-     `notebook_path`, `cell_index`, `new_source`, and potentially `cell_type`.
-   - What's unclear: Whether a simple PS JSON-manipulation command is robust enough, or if
-     a helper script is needed.
-   - Recommendation: Treat NotebookEdit as `deny` with "not supported in Windows POC" for
-     the initial phase; add it as a follow-on if users request it.
+   - **RESOLVED: Informative deny, no PS command, by design decision.** NotebookEdit is kept
+     as a simple `deny` with reason "NotebookEdit is not yet supported in the Windows POC sandbox"
+     for this phase. No PS command is constructed. This is a deliberate design choice (see
+     CONTEXT.md D-04 and THREAT-60-06): the complexity of JSON cell manipulation is deferred.
+     Add to follow-on backlog if users request it.
 
 ---
 

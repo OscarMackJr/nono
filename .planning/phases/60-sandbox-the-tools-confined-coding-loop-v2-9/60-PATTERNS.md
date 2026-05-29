@@ -83,7 +83,7 @@ Ok(Some(json!({
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
         "permissionDecisionReason": "<reason>",
-        "additionalContext": format!("Use the Bash tool with this PowerShell command: {ps_cmd}")
+        "additionalContext": format!("Use the Bash tool with this PowerShell command: {ps_inner}")
     }
 })))
 ```
@@ -134,7 +134,17 @@ fn powershell_single_quoted(value: &str) -> String {
 }
 ```
 
-The new `build_confined_write_cmd` / `build_confined_edit_cmd` helpers must call `powershell_encoded_command` on the inner PS command and `wrapped_bash_command` to produce the outer `nono run` invocation — not construct either string directly.
+The new `build_confined_write_cmd` / `build_confined_edit_cmd` / `build_confined_multiedit_cmd`
+helpers return the BARE INNER PS EXPRESSION — they MUST NOT call `wrapped_bash_command`.
+The `additionalContext` instructs Claude: "Use the Bash tool with this PowerShell command: {ps_inner}".
+When Claude retries via the Bash arm, the Bash arm calls `wrapped_bash_command(ps_inner)` exactly once.
+
+Rationale: `command_contains_nono_wrapper` (lines 126-128) checks for the literal string
+` nono run ` in the command text. If build_* called `wrapped_bash_command`, the outer
+`powershell.exe -EncodedCommand <base64>` result has ` nono run ` hidden inside the
+base64 blob — the check misses it and the Bash arm wraps a second time. The inner PS
+expression (e.g. `[System.IO.File]::WriteAllText(...)`) contains no ` nono run ` literal,
+so the single Bash-arm wrap is the only wrap.
 
 #### Pattern 5: The `is_read_only_tool` dispatch point (analog: lines 51–60)
 
@@ -157,8 +167,8 @@ match tool_name {
     "Write" | "Edit" | "MultiEdit" => {
         // Pattern 1: D-05 guard
         // Pattern 2: extract file_path / content / old_string / new_string
-        // Pattern 3: build PS cmd via Pattern 4 helpers
-        // Pattern 3: return deny + additionalContext
+        // call build_*_cmd(...) -> ps_inner  (bare inner PS expression, NO wrapped_bash_command)
+        // Pattern 3: return deny + additionalContext("Use the Bash tool with this PowerShell command: {ps_inner}")
     }
     "NotebookEdit" => {
         // Research Q3 says keep as simple deny for initial phase
