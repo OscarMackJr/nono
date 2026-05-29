@@ -138,7 +138,11 @@ Plans:
   3. **Confinement invariants preserved.** The PR #4 self-disable CWD guard and deny-by-default for unwrappable surfaces remain intact; the per-call Write grant must not re-introduce a write path to `~/.claude` hook state (consistent with the merged guard + todo `2026-05-29-claude-tools-runner-deny-dotclaude-regardless-of-cwd.md`). Defense-in-depth labeling stays accurate.
   4. **End-to-end POC UAT.** A POC user completes a small read → edit → run task on a Win11 host with the experimental profile; edits are confined, an out-of-scope write is denied.
 **Out of scope (this phase)**: network/`allow_domain` per-call grants, `WebFetch`/`WebSearch`, MCP-under-`nono`, `Task`/subagents (all remain denied); agent-process FS confinement (the agent stays Medium-IL with unconfined reads — documented, SPEC Q5).
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+**Wave 1** (parallel — no file overlap)
+- [ ] 60-01-PLAN.md — Confined file-op arms: Write/Edit/MultiEdit deny+additionalContext + NotebookEdit informative deny + unit tests (REQ-STW-01)
+- [ ] 60-02-PLAN.md — PowerShell-steering CLAUDE.md update + runner profile verification + cross-target clippy PARTIAL note (REQ-STW-02)
 
 ## Progress
 
@@ -151,6 +155,7 @@ Plans:
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
+| 60. Confined Coding Loop (v2.9) | 0/2 | Not started | - |
 
 ## Coverage
 
