@@ -1,6 +1,6 @@
 ---
 slug: lowil-cwd-write-denied
-status: root_cause_confirmed
+status: fix_applied_pending_live_verify
 trigger: "Phase 60 UAT F-60-UAT-04 — the Low-IL confined child cannot write to its granted CWD on Windows 11; the sandbox-the-tools confined-write mechanism (Phase 60 SC 1) fails at the OS level."
 created: 2026-06-01
 updated: 2026-06-01
@@ -143,6 +143,50 @@ to remove the instrument; the real fix is implemented separately (below).
 
 If the operator prefers, skip straight to the fix (below) — the mechanism is textbook
 WRITE_RESTRICTED double-access-check semantics and the code gap is unambiguous.
+
+## Fix Applied (2026-06-01) — pending operator live-verify
+
+Implemented the DACL-grant fix. Commits (DCO-signed, on `main`):
+- `b5324b3c` feat(windows): add session-SID DACL grant/revoke primitives
+  (`crates/nono/src/sandbox/windows.rs` + `lib.rs` export + `NonoError::DaclApplyFailed` in
+  `error.rs` + FFI arm in `bindings/c/src/lib.rs`):
+  - `pub fn grant_sid_write_on_path(path, sid, inheritable)` — merges an allow-ACE granting `sid`
+    `FILE_GENERIC_WRITE | DELETE` (NOT FullControl) onto the existing DACL via GetNamedSecurityInfoW
+    → SetEntriesInAclW → SetNamedSecurityInfoW (unprotected → inherited ACEs preserved); `(OI)(CI)`
+    when inheritable.
+  - `pub fn revoke_sid_on_path(path, sid)` — REVOKE_ACCESS for the trustee (safe: the synthetic SID
+    is unique to nono, pre-exists in no ACE).
+- `aff506eb` feat(windows): wire session-SID DACL guard into supervised launch
+  (`crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` new + `mod.rs` wiring):
+  - `AppliedDaclGrantsGuard::snapshot_and_apply(policy, session_sid)` — writable rules only
+    (read-only → Skip), ownership-gated, fail-closed, LIFO best-effort revoke on Drop. Held in
+    `PreparedWindowsLaunch._applied_dacls` (built only when `session_sid` is Some). Operative on the
+    WriteRestricted arm; inert (but reverted) on other arms.
+
+Verification done on this host (Windows dev box):
+- `cargo build --release --target x86_64-pc-windows-msvc -p nono-cli` → clean.
+- Unit tests 5/5 PASS (verified directly): nono lib `dacl_grant_tests::{grant_then_revoke_sid_round_trips_on_tempdir,
+  grant_single_file_and_invalid_sid_fails_closed}`; nono-cli bin `exec_strategy::dacl_guard::tests::
+  {writable_rule_applies_sid_ace_and_reverts_on_drop, read_only_rule_is_skipped_no_dacl_change,
+  mid_loop_grant_failure_reverts_already_applied}`.
+- `cargo clippy -p nono --lib` and `-p nono-cli --bin nono` with `-D warnings -D clippy::unwrap_used`
+  → clean (EXIT 0).
+- DEFERRED (cross-target rule): Linux/macOS clippy can't run on this Windows host; all new code is
+  `#[cfg(target_os = "windows")]` → defer to CI.
+- NOTE: the implementing agent ran `cargo fmt --all`, reformatting 24 unrelated pre-existing-fmt-drift
+  files; that noise was reverted (`git checkout -- crates/ bindings/`) and the binary rebuilt from the
+  clean committed source. Only the 6 fix files are committed.
+
+PENDING (operator, real PowerShell console — cannot run on the orchestrator MSYS host): live-verify
+the confined write now LANDS with the DEFAULT synthetic SID (no env override, no icacls):
+```powershell
+Set-Location "$env:USERPROFILE\nono-poc"
+$N = "C:\Users\OMack\Nono\target\x86_64-pc-windows-msvc\release\nono.exe"
+& $N run --profile claude-code-tools-windows-runner --allow-cwd -- cmd.exe /c "echo dacl-fix> test_fix.txt"
+Get-Content .\test_fix.txt    # expect: dacl-fix   (previously 'Access is denied')
+```
+Then re-run the Phase 60 UAT 1 end-to-end through the Claude Code hook. On confirmation → status
+`resolved`; then revisit secondary gaps B (pwsh under WindowsApps) and C (.NET CLR %TEMP%).
 
 ## Proposed Fix (security-critical Windows ACL code — respect cross-target clippy + fail-secure)
 
