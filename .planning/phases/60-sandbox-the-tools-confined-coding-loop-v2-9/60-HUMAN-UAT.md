@@ -65,19 +65,29 @@ granted scope provably includes `.claude`. That is a security-sensitive decision
 self-disable invariant) and needs a proper plan/debug pass — captured here as a follow-on, not
 fixed inline.
 
-**Operator workarounds (unblock the UAT without a code change):**
+**Operator workarounds — tried (2026-06-01):**
 
-- **(A) Reliable — user-scope hook.** Register the PreToolUse hook in `~\.claude\settings.json`
-  (merge into existing settings; do **not** clobber) instead of the project. Then run the UAT
-  from `nono-poc` (which has no `.claude` subdir). The hook config now lives outside the writable
-  CWD grant, so the guard passes and confinement still can't be self-disabled.
-  Caveat: user-scope applies the hook to **all** Claude Code sessions for that user on the box —
-  acceptable on a dedicated test box; remove after the UAT.
-- **(B) Lower-footprint — launch from a subdirectory.** Keep `nono-poc\.claude\settings.json`
-  (project root), create `nono-poc\work`, and launch `claude` from `nono-poc\work`. CWD has no
-  own `.claude` (guard passes), the hook config is in the ancestor (outside the CWD grant, so
-  safe), and the writable jail is scoped to `work`. Verify Claude Code actually discovers the
-  ancestor project settings from the subdir before trusting this path.
+- **(B) Launch from a subdirectory — FAILED.** Kept `nono-poc\.claude\settings.json`, launched
+  `claude` from `nono-poc\work`. `/hooks` showed **no** nono PreToolUse `*` entry. Confirmed via
+  claude-code-guide: **Claude Code does NOT walk up the directory tree for project settings** — it
+  reads `.claude/settings.json` relative to the launch CWD / git root only. So the only place the
+  hook reliably loads (`CWD\.claude`) is exactly the place the guard refuses. Project scope is a
+  hard dead end with the current guard.
+- **(A) User-scope in real `~\.claude\settings.json` — REJECTED (unsafe here).** That file is the
+  operator's live GSD harness (applies to every Claude Code session for the user, incl. the
+  assistant session helping run this UAT). A `matcher:"*"` deny-by-default nono hook there would
+  break normal Claude Code usage. Not viable on this box.
+- **(C) `CLAUDE_CONFIG_DIR` relocation — WORKING PATH.** Point `CLAUDE_CONFIG_DIR` at an isolated
+  dir (e.g. `C:\temp\nono-uat-cfg`) holding a minimal `settings.json` with ONLY the nono PreToolUse
+  hook; copy `~\.claude\.credentials.json` into it to skip re-login; remove `nono-poc\.claude`; and
+  launch `claude` from `nono-poc`. The self-disable guard checks the *real* `~\.claude` (resolved
+  via `home_dir()`, NOT `CLAUDE_CONFIG_DIR`), which is a sibling of `nono-poc`, so it passes; the
+  hook loads from the relocated config; and the operator's real `~\.claude` is never modified, so
+  the assistant session is unaffected. NOTE: `.claude/settings.local.json` does NOT work — it still
+  creates `CWD\.claude`, re-tripping the guard.
+
+The CLAUDE_CONFIG_DIR requirement reinforces F-60-UAT-01: with the guard as written, the only way
+to exercise confinement is a relocated/isolated user config, never project-scoped hooks.
 
 ## Next
 - Operator re-runs UAT 1–5 using workaround (A) or (B).
