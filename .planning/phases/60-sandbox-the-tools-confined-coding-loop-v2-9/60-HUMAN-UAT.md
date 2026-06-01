@@ -188,6 +188,34 @@ switch hook runner shell to `pwsh.exe`; all-fail → Low-IL jail blocks basic wr
 **Recommendation: escalate to `/gsd:debug`.** This is a code/design fix (runner shell choice or
 Low-IL temp provisioning), not a setup tweak — exceeds /gsd-fast scope.
 
+### Diagnostic A/B/C results (2026-06-01) — root cause is DEEPER than .NET
+
+Ran the three isolation commands from `C:\Users\OMack\nono-poc` with the 0.57.5 msvc binary:
+
+- **A) `cmd.exe /c "echo hi> test_cmd.txt"` (no CLR):** process launched, jail showed `r+w nono-poc`,
+  then the write → **`Access is denied.`** A *basic, no-.NET* Low-IL write to the granted CWD is
+  denied. This **disproves the "it's only a .NET CLR quirk" hypothesis.**
+- **B) `pwsh.exe ...` (PowerShell 7 / .NET Core):** never launched —
+  `Windows filesystem policy does not cover the executable path required for launch:
+  C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.1.0_x64__8wekyb3d8bbwe\pwsh.exe`.
+  PS7 is a Store/MSIX app under `WindowsApps`, a path the runner profile's launch policy doesn't
+  cover. Secondary issue (switching the hook to pwsh would also need this path allowed).
+- **C) `powershell.exe ...`:** `Starting the CLR failed with HRESULT 80070005` — the same
+  access-denied class as A, manifesting at the CLR's own (Medium-IL `%TEMP%`/fusion) writes.
+
+**Corrected root cause (for debug to confirm).** The Low-IL child cannot write to the granted CWD.
+A (CWD write) and C (CLR temp write) are the same failure. The `nono run` output carries the likely
+mechanism — repeated `WARN label guard: path has pre-existing mandatory-label ACE; skipping apply +
+revert (grant may have no observable enforcement effect ...)` for group paths, plus the general
+pattern that the CWD grant may not be producing an *effective* Low mandatory label (so the Low-IL
+subject is still blocked from a Medium-IL CWD by NO_WRITE_UP). If the CWD relabel is a no-op /
+ineffective, confined writes fail everywhere.
+
+**Net:** SC 1 ("edits work, confined") does not hold on real Win11 with shipped code — and the cause
+is the Low-IL write path itself, not the shell. UAT 2/5 cannot be validated until A passes. Hand the
+full `nono run` stderr (including the label-guard WARNs and the `Access is denied` line) to
+`/gsd:debug` as the primary evidence.
+
 ## Other findings (lower priority, also need a decision — not fast edits)
 - F-60-UAT-01: CWD-coarse self-disable guard makes project-scoped hooks unusable; CLAUDE_CONFIG_DIR
   isolation is the only working deployment. Decide: narrow the guard vs. document the constraint.
