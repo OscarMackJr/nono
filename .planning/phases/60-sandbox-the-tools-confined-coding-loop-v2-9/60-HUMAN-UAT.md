@@ -124,6 +124,29 @@ Even before the runner profile was installed, two behaviors validated cleanly on
   variants or attempt alternative paths — it stopped and surfaced the error, per the CLAUDE.md
   steering note.
 
+## F-60-UAT-03 — Runner profile network.block requires the WFP service (blocks file-confinement UAT)
+
+**Observed (2026-06-01, after installing the runner profile).** The confined Bash got further —
+nono initialized the jail with the correct capabilities (`r+w \\?\C:\Users\OMack\nono-poc`, net
+outbound blocked, +6 system/group paths) — then failed closed with:
+
+```
+nono: Platform not supported: Windows WFP runtime activation is required for blocked Windows
+network access but the WFP service `nono-wfp-service` is registered but not running.
+```
+
+**Root cause.** The runner profile sets `network.block: true`; on Windows that requires the
+`nono-wfp-service` WFP kernel service to be running, and it is registered-but-stopped. Starting it
+needs an elevated admin shell (`nono setup --start-wfp-service`) — the same WFP service stop/start
+surface tracked as the separate WFP elevated live-UAT carry-forward. This is the **network** layer;
+it is orthogonal to the **file** confinement Phase 60's SCs validate.
+
+**UAT deviation (applied 2026-06-01).** Installed a UAT-only variant of
+`claude-code-tools-windows-runner` with `network.block: false` (original saved alongside as
+`...\claude-code-tools-windows-runner.json.netblock.bak`). The file-confinement boundary (Low-IL
+workdir grant + mandatory label) is independent of WFP, so this does not weaken UAT 1/2/3/5. Network
+blocking + WFP is validated separately. Restore the `.netblock.bak` profile to test network blocking.
+
 ## Next
 - Operator re-runs UAT 1 (in-CWD edit should now land via the Low-IL runner) and UAT 2 (out-of-scope
   write should be denied at the OS boundary), then UAT 3–5.
