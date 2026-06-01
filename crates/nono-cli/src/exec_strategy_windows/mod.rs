@@ -260,6 +260,16 @@ struct PreparedWindowsLaunch {
     // This matches the Phase 16-02 drop-order discipline (containment_job
     // outliving the supervisor runtime).
     _applied_labels: labels_guard::AppliedLabelsGuard,
+    // WriteRestricted token-arm fix: adds the synthetic per-session SID
+    // (config.session_sid) to the DACL of every WRITABLE filesystem grant so
+    // confined writes under WRITE_RESTRICTED pass the restricting-SID double
+    // check. Declared AFTER _applied_labels but BEFORE _network_enforcement so
+    // reverse-of-declaration drop order revokes the DACL grants together with
+    // the label revert and before network teardown — same lifetime as the
+    // labels guard. `None` when no session SID is set (the grant is only
+    // OPERATIVE on the WriteRestricted arm; inert but harmless elsewhere, and
+    // always reverted on Drop). See dacl_guard.rs for the full rationale.
+    _applied_dacls: Option<dacl_guard::AppliedDaclGrantsGuard>,
     _network_enforcement: Option<NetworkEnforcementGuard>,
     launch_program: PathBuf,
 }
@@ -311,6 +321,19 @@ fn prepare_live_windows_launch(
     // The guard here is the SOLE apply site on the CLI path.
     let applied_labels = labels_guard::AppliedLabelsGuard::snapshot_and_apply(&fs_policy)?;
 
+    // WriteRestricted token-arm fix: when a per-session restricting SID is set
+    // (config.session_sid), add it to the DACL of every WRITABLE grant so the
+    // WRITE_RESTRICTED restricting-SID double-check passes and confined writes
+    // LAND. Fail-closed via `?` (any DACL apply error aborts the launch and the
+    // partially-applied guard reverts what it added). The grant is operative
+    // only on the WriteRestricted arm; on other token arms the SID is on no
+    // child token so the ACE is inert. Always reverted on Drop.
+    let applied_dacls = config
+        .session_sid
+        .as_deref()
+        .map(|sid| dacl_guard::AppliedDaclGrantsGuard::snapshot_and_apply(&fs_policy, sid))
+        .transpose()?;
+
     let network_enforcement = prepare_network_enforcement(config, session_id)?;
     let launch_program = network_enforcement
         .as_ref()
@@ -320,6 +343,7 @@ fn prepare_live_windows_launch(
 
     Ok(PreparedWindowsLaunch {
         _applied_labels: applied_labels,
+        _applied_dacls: applied_dacls,
         _network_enforcement: network_enforcement,
         launch_program,
     })
@@ -479,6 +503,7 @@ struct ProcessContainment {
 // `_token_guard.0` field access. The lifted struct is `pub struct OwnedHandle(pub HANDLE)`.
 pub(crate) use nono::OwnedHandle;
 
+mod dacl_guard;
 mod labels_guard;
 mod launch;
 mod network;
