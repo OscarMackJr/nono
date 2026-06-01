@@ -3,7 +3,7 @@ phase: 60-sandbox-the-tools-confined-coding-loop-v2-9
 doc: live-human-uat-results
 host: Win11 (operator), Claude Code v2.1.159, nono 0.57.5 (unreleased Phase 60 build)
 started: 2026-06-01
-status: blocked-setup-conflict
+status: fail-sc1-mechanism — confined write blocked by .NET CLR-at-Low-IL (F-60-UAT-04); escalate to /gsd:debug
 ---
 
 # Phase 60 — Live Human UAT Results
@@ -16,7 +16,7 @@ Write/Edit/MultiEdit arms + CR-01 `path_covers` fix). Runbook: `C:\temp\nono-pha
 
 | # | UAT item | SC | Result | Notes |
 |---|----------|----|--------|-------|
-| 1 | Confined edit lands | SC 1 | ⛔ BLOCKED (setup conflict) | self-disable guard fired — see finding F-60-UAT-01 |
+| 1 | Confined edit lands | SC 1 | ❌ FAIL (mechanism) | confined write reaches Low-IL shell but .NET CLR won't start at Low IL — F-60-UAT-04 |
 | 2 | Out-of-scope write denied at OS boundary | SC 1 | ⏸ not reached | blocked by item 1 |
 | 3 | deny+additionalContext → Bash retry (A1) | — | ⏸ not reached | blocked by item 1 |
 | 4 | PowerShell steering unprompted | SC 2 | ⏸ not reached | blocked by item 1 |
@@ -147,9 +147,49 @@ it is orthogonal to the **file** confinement Phase 60's SCs validate.
 workdir grant + mandatory label) is independent of WFP, so this does not weaken UAT 1/2/3/5. Network
 blocking + WFP is validated separately. Restore the `.netblock.bak` profile to test network blocking.
 
-## Next
-- Operator re-runs UAT 1 (in-CWD edit should now land via the Low-IL runner) and UAT 2 (out-of-scope
-  write should be denied at the OS boundary), then UAT 3–5.
-- Decide disposition of the CWD-coarse self-disable guard (narrow vs. document project-scope as
-  unsupported, and document the CLAUDE_CONFIG_DIR-isolation deployment) — needs `/gsd:debug` or a
-  scoped plan, not a fast edit.
+## F-60-UAT-04 — HEADLINE: confined write fails — .NET CLR will not start at Low IL (SC 1 mechanism broken)
+
+**Observed (2026-06-01, all config layers cleared).** With guard bypassed (CLAUDE_CONFIG_DIR),
+runner profile installed, and network.block disabled, the confined Bash retry finally reached the
+Low-IL shell launch and the jail initialized with the correct grant (`r+w \\?\C:\Users\OMack\nono-poc`,
+net outbound allowed). It then failed closed with:
+
+```
+Starting the CLR failed with HRESULT 80070005 (access denied).
+```
+
+**Root cause (hypothesis, needs debug confirmation).** The hook rewrites Write/Edit to
+`nono run --profile claude-code-tools-windows-runner --allow-cwd -- powershell.exe -NoProfile
+-NonInteractive -EncodedCommand <b64>` (claude_code_hook.rs ~line 397). **Windows PowerShell
+(.NET Framework) cannot start its CLR at Low integrity** — HRESULT 80070005 = E_ACCESSDENIED on
+CLR init. The Low-IL mandatory label (NO_WRITE_UP) blocks writes to Medium-IL locations the CLR
+needs (e.g. `%TEMP%`/fusion); the jail only relabels the CWD as Low-IL-writable, not a temp dir.
+The .NET `WriteAllText` payload never executes, so **no confined edit ever lands**.
+
+**Impact.** This is the core mechanism of Phase 60 SC 1 ("file edits work, confined"). On a real
+Win11 host with the shipped code + profiles, confined edits do **not** land. UAT 1 = FAIL. UAT 2
+(out-of-scope deny) and 5 (E2E) cannot be meaningfully validated until the write path works — UAT 2
+"passed" only incidentally because the CLR failed before any path check.
+
+**Positive signals that DO hold (independent of this failure):**
+- A1 / UAT 3 (deny+additionalContext → Bash retry): WORKING — Claude auto-retries every time, no nudge.
+- Self-disable guard + CLAUDE_CONFIG_DIR isolation: correct.
+- Jail capability scoping: correct (`r+w` exactly the CWD, nothing broader).
+- Sandbox-citizen refusal behavior: correct (no workaround-hunting on failure).
+
+**Diagnostic handed to operator (run from `nono-poc`, real PowerShell):**
+- A) `... -- cmd.exe /c "echo hi> test_cmd.txt"` — does the Low-IL FILE write work without a CLR?
+- B) `... -- pwsh.exe -NoProfile -NonInteractive -Command "Set-Content test_pwsh.txt hi"` — does PS7/.NET Core start at Low IL?
+- C) `... -- powershell.exe ...` — reproduce the failure in isolation.
+
+Decision tree: A-pass/C-fail → fix = no-CLR write (cmd) or grant Low-IL `%TEMP%`; B-pass → fix =
+switch hook runner shell to `pwsh.exe`; all-fail → Low-IL jail blocks basic writes (deeper).
+
+**Recommendation: escalate to `/gsd:debug`.** This is a code/design fix (runner shell choice or
+Low-IL temp provisioning), not a setup tweak — exceeds /gsd-fast scope.
+
+## Other findings (lower priority, also need a decision — not fast edits)
+- F-60-UAT-01: CWD-coarse self-disable guard makes project-scoped hooks unusable; CLAUDE_CONFIG_DIR
+  isolation is the only working deployment. Decide: narrow the guard vs. document the constraint.
+- F-60-UAT-03: runner `network.block:true` requires the WFP service (elevated, separately tracked);
+  UAT runs a no-network variant for file-confinement items.
