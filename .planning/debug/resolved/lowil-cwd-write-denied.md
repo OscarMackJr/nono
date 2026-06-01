@@ -1,6 +1,6 @@
 ---
 slug: lowil-cwd-write-denied
-status: fix_applied_pending_live_verify
+status: resolved
 trigger: "Phase 60 UAT F-60-UAT-04 — the Low-IL confined child cannot write to its granted CWD on Windows 11; the sandbox-the-tools confined-write mechanism (Phase 60 SC 1) fails at the OS level."
 created: 2026-06-01
 updated: 2026-06-01
@@ -144,7 +144,34 @@ to remove the instrument; the real fix is implemented separately (below).
 If the operator prefers, skip straight to the fix (below) — the mechanism is textbook
 WRITE_RESTRICTED double-access-check semantics and the code gap is unambiguous.
 
-## Fix Applied (2026-06-01) — pending operator live-verify
+## RESOLVED (2026-06-01) — fix live-verified
+
+Operator ran the exact failing repro on a real Win11 PowerShell console with the rebuilt 0.57.5
+binary, DEFAULT synthetic session SID (no env override, no icacls):
+`& nono.exe run --profile claude-code-tools-windows-runner --allow-cwd -- cmd.exe /c "echo dacl-fix> test_fix.txt"`
+→ `Get-Content test_fix.txt` = **`dacl-fix`**. The confined write LANDED where it previously returned
+`Access is denied`. Root cause (WriteRestricted restricting-SID absent from the writable-path DACL)
+is fixed. The label-guard WARNs on group paths persist and are unrelated/harmless.
+
+root_cause: WRITE_RESTRICTED restricting-SID (synthetic per-session `S-1-5-117-*`) was never added to
+the DACL of granted writable filesystem paths, so the double access-check's restricting-SID pass
+denied all confined writes.
+fix: new `nono::grant_sid_write_on_path`/`revoke_sid_on_path` primitives + `AppliedDaclGrantsGuard`
+wired into `PreparedWindowsLaunch` (writable rules only, ownership-gated, fail-closed, RAII-revert).
+files_changed: crates/nono/src/sandbox/windows.rs, crates/nono/src/lib.rs, crates/nono/src/error.rs,
+bindings/c/src/lib.rs, crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs (new),
+crates/nono-cli/src/exec_strategy_windows/mod.rs.
+commits: b5324b3c, aff506eb (+ debug docs).
+verification: 5/5 unit tests, clippy -D warnings clean (nono lib + nono-cli bin), build clean, and
+the live operator repro above. Cross-target Linux/macOS clippy deferred to CI (all new code is
+`#[cfg(target_os = "windows")]`).
+
+REMAINING (Phase 60 UAT, NOT this debug bug): re-run UAT 1 end-to-end through the Claude Code
+PreToolUse hook (the `Write` prompt), then UAT 2/4/5. Secondary gaps still open: B (pwsh.exe under
+WindowsApps not in launch policy) and C (.NET CLR needs a Low-IL `%TEMP%` — only relevant if confined
+writes ever route through a .NET shell; the cmd.exe path does not).
+
+## Fix Applied (2026-06-01) — verified (see RESOLVED above)
 
 Implemented the DACL-grant fix. Commits (DCO-signed, on `main`):
 - `b5324b3c` feat(windows): add session-SID DACL grant/revoke primitives

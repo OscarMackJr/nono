@@ -3,7 +3,7 @@ phase: 60-sandbox-the-tools-confined-coding-loop-v2-9
 doc: live-human-uat-results
 host: Win11 (operator), Claude Code v2.1.159, nono 0.57.5 (unreleased Phase 60 build)
 started: 2026-06-01
-status: fail-sc1-mechanism — confined write blocked by .NET CLR-at-Low-IL (F-60-UAT-04); escalate to /gsd:debug
+status: sc1-mechanism-FIXED (F-60-UAT-04 resolved — DACL grant for restricting SID, commits b5324b3c+aff506eb, live-verified at nono-run layer); UAT 1 hook E2E + UAT 2/4/5 pending
 ---
 
 # Phase 60 — Live Human UAT Results
@@ -16,7 +16,7 @@ Write/Edit/MultiEdit arms + CR-01 `path_covers` fix). Runbook: `C:\temp\nono-pha
 
 | # | UAT item | SC | Result | Notes |
 |---|----------|----|--------|-------|
-| 1 | Confined edit lands | SC 1 | ❌ FAIL (mechanism) | confined write reaches Low-IL shell but .NET CLR won't start at Low IL — F-60-UAT-04 |
+| 1 | Confined edit lands | SC 1 | 🟡 FIXED — nono-run layer PASS; hook E2E pending | F-60-UAT-04 root cause (restricting-SID DACL gap) fixed (b5324b3c+aff506eb); `nono run ... cmd.exe echo>file` now lands. Re-run via the Claude Code hook to close. |
 | 2 | Out-of-scope write denied at OS boundary | SC 1 | ⏸ not reached | blocked by item 1 |
 | 3 | deny+additionalContext → Bash retry (A1) | — | ⏸ not reached | blocked by item 1 |
 | 4 | PowerShell steering unprompted | SC 2 | ⏸ not reached | blocked by item 1 |
@@ -187,6 +187,14 @@ switch hook runner shell to `pwsh.exe`; all-fail → Low-IL jail blocks basic wr
 
 **Recommendation: escalate to `/gsd:debug`.** This is a code/design fix (runner shell choice or
 Low-IL temp provisioning), not a setup tweak — exceeds /gsd-fast scope.
+
+> **UPDATE 2026-06-01 — RESOLVED.** The A/B/C diagnostic below disproved the .NET-CLR hypothesis;
+> debug `/gsd:debug` (slug `lowil-cwd-write-denied`, now at `.planning/debug/resolved/`) found the
+> real cause: the WriteRestricted token's synthetic restricting SID was never added to granted
+> writable-path DACLs. Fixed in commits `b5324b3c`+`aff506eb` (new `grant_sid_write_on_path`/
+> `revoke_sid_on_path` lib primitives + `AppliedDaclGrantsGuard`). Live-verified: the confined
+> `nono run ... cmd.exe echo>file` write now lands. Re-run UAT 1 through the Claude Code hook to
+> close SC 1 end-to-end.
 
 ### Diagnostic A/B/C results (2026-06-01) — root cause is DEEPER than .NET
 
