@@ -89,7 +89,44 @@ fixed inline.
 The CLAUDE_CONFIG_DIR requirement reinforces F-60-UAT-01: with the guard as written, the only way
 to exercise confinement is a relocated/isolated user config, never project-scoped hooks.
 
+## F-60-UAT-02 — Runner profile not installed by the bundle (setup gap)
+
+**Observed (2026-06-01, after the CLAUDE_CONFIG_DIR fix unblocked the guard).** The hook engaged
+correctly and denied `Write test.txt` with the confinement message ("Write is an in-process tool
+that cannot be confined directly; use the Bash tool with the PowerShell command in
+additionalContext"). Claude **auto-retried as a Bash call** using the base64/PowerShell command
+from `additionalContext`. But the confined Bash exited 1 with:
+
+```
+nono: Profile not found: claude-code-tools-windows-runner
+```
+
+**Root cause.** The hook rewrites confined Bash to `nono run --profile claude-code-tools-windows-runner
+--allow-cwd -- ...` (`claude_code_hook.rs:18` `DEFAULT_TOOL_RUNNER_PROFILE`, used at lines 399/414;
+name is hardcoded, no env override). The bundle README step 1 only installed the *mediation* profile
+(`claude-code-tools-windows`), which the hook path does NOT use — `nono claude-code-hook` makes the
+allow/deny/rewrite decision in-process. The *runner* profile is what the confined Bash consumes, and
+it was never copied into `%APPDATA%\nono\profiles\`.
+
+**Fix (applied 2026-06-01).** Installed the runner profile from the repo:
+`packages\claude-code\claude-code-tools-windows-runner.profile.json` →
+`%APPDATA%\nono\profiles\claude-code-tools-windows-runner.json`; also added it to the
+`C:\temp\nono-uat\` bundle and corrected the bundle README step 1 to install both profiles
+(runner REQUIRED, mediation optional).
+
+## Positive signals already observed (pre-runner-profile)
+Even before the runner profile was installed, two behaviors validated cleanly on the live host:
+- **A1 / UAT 3 (deny+additionalContext → Bash retry): WORKING.** On both the in-CWD and the
+  out-of-scope attempts, Claude auto-converted the blocked Write into a Bash call using the exact
+  PowerShell command from `additionalContext`, with no manual nudge. (Confirm once more across 3–5
+  varied edits after the runner profile is in place.)
+- **Sandbox-citizen refusal behavior: correct.** On the (config) failure Claude did not retry
+  variants or attempt alternative paths — it stopped and surfaced the error, per the CLAUDE.md
+  steering note.
+
 ## Next
-- Operator re-runs UAT 1–5 using workaround (A) or (B).
+- Operator re-runs UAT 1 (in-CWD edit should now land via the Low-IL runner) and UAT 2 (out-of-scope
+  write should be denied at the OS boundary), then UAT 3–5.
 - Decide disposition of the CWD-coarse self-disable guard (narrow vs. document project-scope as
-  unsupported) — needs `/gsd:debug` or a scoped plan, not a fast edit.
+  unsupported, and document the CLAUDE_CONFIG_DIR-isolation deployment) — needs `/gsd:debug` or a
+  scoped plan, not a fast edit.
