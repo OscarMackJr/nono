@@ -1021,6 +1021,294 @@ pub fn path_is_owned_by_current_user(path: &Path) -> Result<bool> {
     Ok(equal != 0)
 }
 
+/// Write-class access-rights mask granted to the synthetic per-session SID by
+/// [`grant_sid_write_on_path`]. Deliberately minimal — `FILE_GENERIC_WRITE`
+/// (create/append/write/write-attrs) plus `DELETE` (rename/replace) — and
+/// explicitly NOT `FILE_ALL_ACCESS`/FullControl. Principle of least privilege:
+/// the restricting SID needs exactly enough to let confined writes LAND, not to
+/// take ownership or rewrite the DACL.
+///
+/// `FILE_GENERIC_WRITE` = 0x00120116, `DELETE` = 0x00010000 → 0x00130116.
+const SESSION_SID_WRITE_MASK: u32 = {
+    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_GENERIC_WRITE};
+    FILE_GENERIC_WRITE | DELETE
+};
+
+/// RAII wrapper around an ACL allocated by `SetEntriesInAclW`. The new ACL is
+/// heap-allocated by the OS and must be released with `LocalFree`.
+struct OwnedAcl(*mut ACL);
+
+impl Drop for OwnedAcl {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                // SAFETY: The ACL was allocated by SetEntriesInAclW and must be
+                // released with LocalFree per the Win32 contract.
+                let _ = LocalFree(self.0 as _);
+            }
+        }
+    }
+}
+
+/// RAII wrapper around a `PSID` allocated by `ConvertStringSidToSidW`, freed via
+/// `LocalFree`.
+struct OwnedSid(windows_sys::Win32::Security::PSID);
+
+impl Drop for OwnedSid {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                // SAFETY: The SID was allocated by ConvertStringSidToSidW and
+                // must be released with LocalFree per the Win32 contract.
+                let _ = LocalFree(self.0 as _);
+            }
+        }
+    }
+}
+
+/// Parses an SDDL SID string (e.g. `"S-1-5-117-..."`) into an owned `PSID`.
+///
+/// Fail-closed: returns `NonoError::DaclApplyFailed` if `ConvertStringSidToSidW`
+/// rejects the string. The returned `OwnedSid` frees the allocation on Drop.
+#[cfg(target_os = "windows")]
+fn parse_sid(path: &Path, sid: &str) -> Result<OwnedSid> {
+    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows_sys::Win32::Security::PSID;
+
+    let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut psid: PSID = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `wide_sid` is a valid nul-terminated UTF-16 buffer; `psid`
+        // is a valid out-pointer. On success the callee allocates a SID that
+        // must be freed with LocalFree (handled by OwnedSid's Drop).
+        ConvertStringSidToSidW(wide_sid.as_ptr(), &mut psid)
+    };
+    if ok == 0 || psid.is_null() {
+        let hresult = unsafe {
+            // SAFETY: GetLastError has no preconditions.
+            GetLastError()
+        };
+        return Err(NonoError::DaclApplyFailed {
+            path: path.to_path_buf(),
+            hresult,
+            hint: format!(
+                "ConvertStringSidToSidW could not parse session SID string {sid:?} \
+                 (GetLastError=0x{hresult:08X})"
+            ),
+        });
+    }
+    Ok(OwnedSid(psid))
+}
+
+/// Builds a single `EXPLICIT_ACCESS_W` entry targeting `psid` for the given
+/// access mode + inheritance.
+///
+/// The returned struct borrows `psid` (TrusteeForm = `TRUSTEE_IS_SID` stores the
+/// SID pointer in `ptstrName`); callers MUST keep the backing `OwnedSid` alive
+/// for the duration of any `SetEntriesInAclW` call that consumes this entry.
+#[cfg(target_os = "windows")]
+fn build_explicit_access(
+    psid: windows_sys::Win32::Security::PSID,
+    access_mode: windows_sys::Win32::Security::Authorization::ACCESS_MODE,
+    inheritance: u32,
+) -> windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W {
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    };
+
+    EXPLICIT_ACCESS_W {
+        grfAccessPermissions: SESSION_SID_WRITE_MASK,
+        grfAccessMode: access_mode,
+        grfInheritance: inheritance,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_UNKNOWN,
+            // For TRUSTEE_IS_SID, ptstrName holds the PSID cast to PWSTR.
+            ptstrName: psid as *mut u16,
+        },
+    }
+}
+
+/// Reads the current DACL on `path`, merges `entry` onto it via
+/// `SetEntriesInAclW`, and writes the result back with
+/// `SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION, ..)` WITHOUT the
+/// `PROTECTED_DACL_SECURITY_INFORMATION` flag (so inherited ACEs are preserved).
+///
+/// Shared core for [`grant_sid_write_on_path`] (SET_ACCESS) and
+/// [`revoke_sid_on_path`] (REVOKE_ACCESS). Fail-closed at every step.
+#[cfg(target_os = "windows")]
+fn edit_dacl_for_sid(
+    path: &Path,
+    sid: &str,
+    access_mode: windows_sys::Win32::Security::Authorization::ACCESS_MODE,
+    inheritance: u32,
+) -> Result<()> {
+    use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION};
+
+    let owned_sid = parse_sid(path, sid)?;
+
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // 1. Read the current DACL (preserve it — we MERGE onto it, never replace).
+    let mut old_dacl: *mut ACL = std::ptr::null_mut();
+    let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let status = unsafe {
+        // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer; the two
+        // out-pointers refer to live local storage. On success the SD is
+        // heap-allocated and freed via OwnedSecurityDescriptor's Drop. `old_dacl`
+        // points INTO that SD, so it stays valid until `_sd_guard` drops.
+        GetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut old_dacl,
+            std::ptr::null_mut(),
+            &mut security_descriptor,
+        )
+    };
+    if status != 0 {
+        return Err(NonoError::DaclApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "GetNamedSecurityInfoW(DACL_SECURITY_INFORMATION) returned 0x{status:08X} while \
+                 reading the current DACL for {}",
+                path.display()
+            ),
+        });
+    }
+    let _sd_guard = OwnedSecurityDescriptor(security_descriptor);
+
+    // 2. Merge one explicit-access entry onto the existing DACL.
+    let entry = build_explicit_access(owned_sid.0, access_mode, inheritance);
+    let mut new_dacl: *mut ACL = std::ptr::null_mut();
+    let status = unsafe {
+        // SAFETY: `&entry` is a valid single-element EXPLICIT_ACCESS_W array;
+        // `owned_sid` (referenced by `entry.Trustee.ptstrName`) is alive for the
+        // duration of this call. `old_dacl` is the SD-owned existing DACL (may be
+        // null for a path with no DACL — SetEntriesInAclW accepts null). On
+        // success `new_dacl` is heap-allocated and freed via OwnedAcl's Drop.
+        windows_sys::Win32::Security::Authorization::SetEntriesInAclW(
+            1,
+            &entry,
+            old_dacl,
+            &mut new_dacl,
+        )
+    };
+    if status != 0 {
+        return Err(NonoError::DaclApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "SetEntriesInAclW returned 0x{status:08X} while merging the session-SID ACE for {}",
+                path.display()
+            ),
+        });
+    }
+    let _new_dacl_guard = OwnedAcl(new_dacl);
+
+    // 3. Write the merged DACL back. No PROTECTED flag → inherited ACEs survive.
+    let status = unsafe {
+        // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer; `new_dacl`
+        // is the merged DACL owned by `_new_dacl_guard` and lives past this call.
+        SetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            new_dacl,
+            std::ptr::null(),
+        )
+    };
+    if status != 0 {
+        return Err(NonoError::DaclApplyFailed {
+            path: path.to_path_buf(),
+            hresult: status,
+            hint: format!(
+                "SetNamedSecurityInfoW(DACL_SECURITY_INFORMATION) returned 0x{status:08X} while \
+                 writing the merged DACL for {} (the current user needs WRITE_DAC, which path \
+                 owners hold implicitly)",
+                path.display()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Adds an allow-ACE to the DACL of `path` granting the SDDL SID string `sid`
+/// write-class rights ([`SESSION_SID_WRITE_MASK`] — `FILE_GENERIC_WRITE |
+/// DELETE`, deliberately NOT FullControl), PRESERVING the existing DACL
+/// (including inherited ACEs).
+///
+/// # Why
+///
+/// On the Windows `WriteRestricted` token arm the Low-IL child token carries a
+/// synthetic per-session restricting SID (`S-1-5-117-...` from
+/// `generate_session_sid`). Under `WRITE_RESTRICTED`, every WRITE access check
+/// runs twice — once against the token's normal SIDs and once against the
+/// restricting-SID list — and BOTH must grant. The synthetic SID is on no
+/// path's DACL, so the second check denies and all confined writes fail with
+/// `Access is denied`. Adding the SID to the DACL of each granted *writable*
+/// path closes that gap. Read-only grants need no DACL edit because
+/// `WRITE_RESTRICTED` only double-checks WRITE-class access.
+///
+/// For directory grants pass `inheritable = true` so files the child CREATES
+/// inherit the grant ((OI)(CI)). For single-file grants pass `false`.
+///
+/// This widens nothing in practice: the SID is synthetic and unique to the
+/// current nono session, the path is already user-owned and already in the
+/// granted capability set, and the ACE is always reverted via
+/// [`revoke_sid_on_path`] when the session ends.
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed, the
+/// current DACL cannot be read, the ACE cannot be merged, or the merged DACL
+/// cannot be written back (fail-closed at every step).
+#[cfg(target_os = "windows")]
+pub fn grant_sid_write_on_path(path: &Path, sid: &str, inheritable: bool) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::SET_ACCESS;
+    use windows_sys::Win32::Security::{CONTAINER_INHERIT_ACE, NO_INHERITANCE, OBJECT_INHERIT_ACE};
+
+    let inheritance = if inheritable {
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+    } else {
+        NO_INHERITANCE
+    };
+    edit_dacl_for_sid(path, sid, SET_ACCESS, inheritance)
+}
+
+/// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting
+/// the grant made by [`grant_sid_write_on_path`].
+///
+/// Uses `SetEntriesInAclW` with `REVOKE_ACCESS`, which removes ALL allow/deny
+/// ACEs for the trustee. This is safe here because the synthetic per-session SID
+/// is unique to nono and pre-existed in NO ACE — so the only ACE it can match is
+/// the one this session added.
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed, the
+/// current DACL cannot be read, the revoke cannot be applied, or the resulting
+/// DACL cannot be written back.
+#[cfg(target_os = "windows")]
+pub fn revoke_sid_on_path(path: &Path, sid: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::REVOKE_ACCESS;
+    use windows_sys::Win32::Security::NO_INHERITANCE;
+
+    // Inheritance is ignored for REVOKE_ACCESS (the trustee match drives removal).
+    edit_dacl_for_sid(path, sid, REVOKE_ACCESS, NO_INHERITANCE)
+}
+
 fn low_integrity_label_rid(path: &Path) -> Option<u32> {
     let wide_path: Vec<u16> = path
         .as_os_str()
@@ -3500,7 +3788,7 @@ mod tests {
     #[test]
     fn try_set_mandatory_label_surfaces_directive_when_user_owned_apply_fails() {
         use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LocalFree};
+        use windows_sys::Win32::Foundation::{CloseHandle, LocalFree, HANDLE};
         use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
         use windows_sys::Win32::Security::{
             GetSecurityDescriptorDacl, GetTokenInformation, TokenUser, DACL_SECURITY_INFORMATION,
@@ -3538,13 +3826,19 @@ mod tests {
                 &mut required,
             )
         };
-        assert_ne!(ok, 0, "test setup: GetTokenInformation(TokenUser) must succeed");
+        assert_ne!(
+            ok, 0,
+            "test setup: GetTokenInformation(TokenUser) must succeed"
+        );
         let token_user = unsafe {
             // SAFETY: GetTokenInformation populated `buffer` with TOKEN_USER.
             &*(buffer.as_ptr() as *const TOKEN_USER)
         };
         let user_sid: PSID = token_user.User.Sid;
-        assert!(!user_sid.is_null(), "test setup: TokenUser.Sid must not be null");
+        assert!(
+            !user_sid.is_null(),
+            "test setup: TokenUser.Sid must not be null"
+        );
 
         let mut sid_string_ptr: *mut u16 = std::ptr::null_mut();
         let ok = unsafe {
@@ -3587,9 +3881,7 @@ mod tests {
         //      0x00020000 READ_CONTROL
         //      0x00100000 SYNCHRONIZE
         //    Total: 0x001301BF (NO WRITE_OWNER, NO WRITE_DAC).
-        let sddl = format!(
-            "D:PAI(A;OICI;0x1301BF;;;{user_sid_string})"
-        );
+        let sddl = format!("D:PAI(A;OICI;0x1301BF;;;{user_sid_string})");
         let wide_sddl: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
 
         let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -3652,8 +3944,10 @@ mod tests {
         //    (before the asserts) so a failed assertion still leaves the
         //    dir in a deletable state.
         let restore_sddl = "D:AI";
-        let wide_restore_sddl: Vec<u16> =
-            restore_sddl.encode_utf16().chain(std::iter::once(0)).collect();
+        let wide_restore_sddl: Vec<u16> = restore_sddl
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let mut restore_sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         let restore_parse = unsafe {
             // SAFETY: nul-terminated UTF-16 buffer; valid out-pointer.
@@ -3816,5 +4110,148 @@ mod create_low_integrity_primary_token_tests {
         let owned = OwnedHandle(null_handle);
         // Must not panic, abort, or call CloseHandle(null).
         drop(owned);
+    }
+
+}
+
+/// Library-level tests for the DACL session-SID grant/revoke primitives
+/// (`grant_sid_write_on_path` / `revoke_sid_on_path`). Self-contained imports
+/// (this module does NOT `use super::*`) so the FFI symbols resolve regardless
+/// of which parent `use` items are in scope.
+#[cfg(all(test, target_os = "windows"))]
+#[allow(clippy::unwrap_used)]
+mod dacl_grant_tests {
+    use super::{grant_sid_write_on_path, revoke_sid_on_path};
+    use crate::error::NonoError;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::Path;
+    use tempfile::tempdir;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, PSID,
+    };
+
+    /// A unique synthetic SID, shaped like `generate_session_sid`'s
+    /// `S-1-5-117-...` output but with fixed sub-authorities for a deterministic
+    /// round-trip. Pre-exists in NO real ACE, so REVOKE removes only what we add.
+    const TEST_SESSION_SID: &str = "S-1-5-117-1-2-3-4";
+
+    /// Returns true iff `path`'s DACL contains at least one ACE whose trustee
+    /// SID equals `sid`. Walks the DACL (vs the SACL the label tests walk).
+    fn dacl_contains_sid(path: &Path, sid: &str) -> bool {
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut want_sid: PSID = std::ptr::null_mut();
+        // SAFETY: valid nul-terminated UTF-16 SID string + valid out-pointer.
+        let ok = unsafe { ConvertStringSidToSidW(wide_sid.as_ptr(), &mut want_sid) };
+        assert!(ok != 0 && !want_sid.is_null(), "parse test SID");
+
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW(DACL) must succeed");
+
+        let mut found = false;
+        if !dacl.is_null() {
+            // SAFETY: `dacl` points into the SD we own until LocalFree below.
+            let ace_count = unsafe { (*dacl).AceCount };
+            for index in 0..ace_count {
+                let mut ace = std::ptr::null_mut();
+                // SAFETY: `dacl` is valid; `ace` is a valid out-pointer.
+                let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+                if got == 0 || ace.is_null() {
+                    continue;
+                }
+                // SAFETY: allow/deny ACEs share the SidStart layout; we only
+                // ever add allow-ACEs, so reading the SID at that offset is
+                // correct.
+                let ace_sid = unsafe {
+                    (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID
+                };
+                // SAFETY: both SIDs are valid for the duration of the call.
+                if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // SAFETY: both allocations came from Win32 and must be LocalFree'd.
+        unsafe {
+            if !want_sid.is_null() {
+                let _ = LocalFree(want_sid as _);
+            }
+            if !sd.is_null() {
+                let _ = LocalFree(sd as _);
+            }
+        }
+        found
+    }
+
+    /// Round-trip on a directory (inheritable): grant adds the SID ACE, revoke
+    /// removes it.
+    #[test]
+    fn grant_then_revoke_sid_round_trips_on_tempdir() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        assert!(
+            !dacl_contains_sid(path, TEST_SESSION_SID),
+            "test precondition: synthetic SID must not pre-exist in the DACL"
+        );
+
+        grant_sid_write_on_path(path, TEST_SESSION_SID, /*inheritable=*/ true).expect("grant");
+        assert!(
+            dacl_contains_sid(path, TEST_SESSION_SID),
+            "after grant, the DACL must contain the synthetic SID's allow-ACE"
+        );
+
+        revoke_sid_on_path(path, TEST_SESSION_SID).expect("revoke");
+        assert!(
+            !dacl_contains_sid(path, TEST_SESSION_SID),
+            "after revoke, the synthetic SID's ACE must be gone"
+        );
+    }
+
+    /// A single-file grant (inheritable = false) round-trips, and a malformed
+    /// SID string fails closed with `DaclApplyFailed`.
+    #[test]
+    fn grant_single_file_and_invalid_sid_fails_closed() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "x").expect("write file");
+
+        grant_sid_write_on_path(&file, TEST_SESSION_SID, /*inheritable=*/ false).expect("grant");
+        assert!(dacl_contains_sid(&file, TEST_SESSION_SID));
+        revoke_sid_on_path(&file, TEST_SESSION_SID).expect("revoke");
+        assert!(!dacl_contains_sid(&file, TEST_SESSION_SID));
+
+        let err = grant_sid_write_on_path(&file, "not-a-sid", false)
+            .expect_err("malformed SID must fail closed");
+        assert!(
+            matches!(err, NonoError::DaclApplyFailed { .. }),
+            "malformed SID must yield DaclApplyFailed; got {err:?}"
+        );
     }
 }

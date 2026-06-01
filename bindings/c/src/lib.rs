@@ -129,6 +129,10 @@ pub(crate) fn map_error(e: &nono::NonoError) -> types::NonoErrorCode {
         nono::NonoError::NetworkFilterUnsupported { .. } => NonoErrorCode::ErrUnsupportedPlatform,
         nono::NonoError::PartialRestore { .. } => NonoErrorCode::ErrIo,
         nono::NonoError::LabelApplyFailed { .. } => NonoErrorCode::ErrSandboxInit,
+        // DaclApplyFailed is the DACL-grant analog of LabelApplyFailed (the
+        // WriteRestricted token-arm session-SID grant): a fail-closed sandbox
+        // setup failure, mapped to the same code.
+        nono::NonoError::DaclApplyFailed { .. } => NonoErrorCode::ErrSandboxInit,
         // Phase 41 D-09 (CR-01): BrokerNotFound is an installation/runtime
         // defect — the broker.exe sibling is missing from disk where
         // current_exe().parent() expected it. This is structurally a sandbox-

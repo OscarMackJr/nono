@@ -213,6 +213,27 @@ pub enum NonoError {
         hint: String,
     },
 
+    /// Failed to apply (or revoke) a Windows DACL allow-ACE granting a SID
+    /// write-class rights on a path.
+    ///
+    /// Distinct from [`LabelApplyFailed`] (which mutates the *mandatory
+    /// integrity label* / SACL): this variant covers the *discretionary*
+    /// access-control list (DACL) edit performed on the `WriteRestricted`
+    /// token arm so the synthetic per-session restricting SID can write to
+    /// already-user-owned, already-grant-scoped paths. Fail-closed: any
+    /// non-zero return from `GetNamedSecurityInfoW` / `SetEntriesInAclW` /
+    /// `SetNamedSecurityInfoW` (or a SID-string parse failure) surfaces here.
+    /// The `hint` field carries a human-actionable diagnostic string.
+    #[error("Failed to apply DACL grant to {path}: {hint} (HRESULT: 0x{hresult:08X})")]
+    DaclApplyFailed {
+        /// The exact path that failed.
+        path: PathBuf,
+        /// The Win32 HRESULT (or raw error code) returned by the OS.
+        hresult: u32,
+        /// Human-actionable hint for remediation.
+        hint: String,
+    },
+
     /// One or more files could not be restored (e.g. locked on Windows).
     ///
     /// Carries the list of successfully applied changes along with per-file
@@ -476,10 +497,7 @@ mod unsupported_kernel_feature_tests {
             feature: "cgroup_v2".into(),
             hint: LOCKED_HINT.into(),
         };
-        assert!(matches!(
-            err,
-            NonoError::UnsupportedKernelFeature { .. }
-        ));
+        assert!(matches!(err, NonoError::UnsupportedKernelFeature { .. }));
     }
 
     #[test]
