@@ -1,6 +1,6 @@
 ---
 slug: lowil-cwd-write-denied
-status: root_cause_found
+status: root_cause_confirmed
 trigger: "Phase 60 UAT F-60-UAT-04 — the Low-IL confined child cannot write to its granted CWD on Windows 11; the sandbox-the-tools confined-write mechanism (Phase 60 SC 1) fails at the OS level."
 created: 2026-06-01
 updated: 2026-06-01
@@ -89,8 +89,8 @@ child tries to write.
 
 ## Current Focus
 
-- status: ROOT CAUSE FOUND (static analysis, high confidence). One operator confirmation experiment
-  pending before applying/verifying the fix (Low-IL repros cannot run on the orchestrator host).
+- status: ROOT CAUSE CONFIRMED (static analysis + live env-instrument A/B on 2026-06-01). Ready to
+  implement the DACL-grant fix; operator verifies the full hook→confined-write path after.
 - root cause: the Low-IL child token is built with `WRITE_RESTRICTED` + a synthetic restricting SID
   (`S-1-5-117-*`), but nono NEVER adds that restricting SID to the DACL of granted writable paths.
   Under `WRITE_RESTRICTED`, every WRITE access check runs TWICE — once vs the user's normal SIDs
@@ -198,6 +198,16 @@ Secondary, separate fixes (track but do not conflate with this root cause):
   `label_mask_for_access_mode` (windows.rs:647) maps ReadWrite→NO_EXECUTE_UP only (no NO_WRITE_UP),
   so the mandatory label is NOT the gate — consistent with the absence of a `label guard` WARN for
   nono-poc.
+
+- timestamp: 2026-06-01 — ROOT CAUSE CONFIRMED via env-instrument A/B. Both runs took the
+  `WriteRestricted` token arm (logged: `has_pty=false, prefers_low_il_broker=false`). PLAIN run:
+  restricting SID = random synthetic `S-1-5-117-4056659201-...` (NOT on CWD DACL) → `Access is
+  denied`. TEST 1: restricting SID overridden to the user's own SID `S-1-5-21-...-2727` (already on
+  `nono-poc`'s DACL with full control) → `cmd.exe` write LANDED (`Get-Content test_t1.txt` = `hi`).
+  Only the restricting SID changed between the two runs. This is decisive: under WRITE_RESTRICTED
+  the write requires the restricting SID to grant write on the target DACL; nono's synthetic
+  per-session SID is never added to granted filesystem paths' DACLs. The mandatory label is not the
+  gate (WriteRestricted child stays Medium-IL; writing to a Low-labeled CWD is writing-down, allowed).
 
 ## Eliminated
 
