@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: verifying
-last_updated: "2026-06-02T17:19:09.161Z"
+last_updated: "2026-06-02T17:43:05.498Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 16
-  completed_plans: 14
+  total_plans: 17
+  completed_plans: 15
   percent: 88
 ---
 
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 ## Current Position
 
 Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — EXECUTING
-Plan: 8 of 8 (gap-closure 62-08 complete)
-Status: Phase complete — pending live UAT re-run (62-04 SC1) after MSI rebuild
-Next: Phase 54 (UPST7 Audit). Phase 62 close gate: rebuild machine MSI off updated nono-wfp-service.exe + re-run 62-04 SC1 to confirm FwpmFilterAdd0 returns 0. Phase 60 follow-ups (non-blocking): (a) production network.block needs the WFP service (F-60-UAT-03); (b) broker arm needs dev-layout or SIGNED binary at runtime — distribution needs signed MSIs + an MSI rebuild off the fixed binaries (note: dist/windows/*.wxs still point at the stale target\release path); (c) cross-target Linux/macOS clippy for the new windows-cfg code deferred to CI; (d) delete/annotate superseded v0.57.4 GitHub release.
-Last activity: 2026-06-02 -- Phase 62 Plan 08 (gap-closure) complete (F-62-UAT-03 fix: ALE_USER_ID SD wrapped in FWP_BYTE_BLOB; commit 19dcf3e5)
+Plan: 9 of 9 (gap-closure 62-09 complete — F-62-UAT-04 persistent WFP session fix, commit df823d10)
+Status: Phase complete — pending live UAT re-run (62-04 SC1) after MSI rebuild + plan 62-10 (uninstall purge, REQ-DRN-01)
+Next: Plan 62-10 (uninstall purge, FwpmSubLayerDeleteByKey0, before SC4), then Phase 54 (UPST7 Audit). Phase 62 close gate: rebuild machine MSI off updated nono-wfp-service.exe + re-run 62-04 SC1 to confirm FwpmFilterAdd0 returns 0 (no FWP_E_WRONG_SESSION). Phase 60 follow-ups (non-blocking): (a) production network.block needs the WFP service (F-60-UAT-03); (b) broker arm needs dev-layout or SIGNED binary at runtime — distribution needs signed MSIs + an MSI rebuild off the fixed binaries (note: dist/windows/*.wxs still point at the stale target\release path); (c) cross-target Linux/macOS clippy for the new windows-cfg code deferred to CI; (d) delete/annotate superseded v0.57.4 GitHub release.
+Last activity: 2026-06-02 -- Phase 62 Plan 09 (gap-closure) complete (F-62-UAT-04 fix: WFP session.flags=0 persistent; commit df823d10)
 
 ### v2.8 Phase Summary (active)
 
