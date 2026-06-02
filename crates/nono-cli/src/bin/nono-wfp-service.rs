@@ -1369,10 +1369,14 @@ mod windows_impl {
             }
         };
 
+        // FWPM_DISPLAY_DATA0.name is a REQUIRED PWSTR; a null name makes FwpmFilterAdd0 fail with
+        // RPC_X_BAD_STUB_DATA (win32 1783). name_wide is bound here so its pointer outlives the
+        // FwpmFilterAdd0 call below. (debug: wfp-filter-add-1783; mirrors create_nono_sublayer.)
+        let name_wide = to_utf16_null(std::ffi::OsStr::new("nono Network Policy Filter"));
         let mut filter: FWPM_FILTER0 = zeroed();
         filter.filterKey = spec.key;
         filter.displayData = FWPM_DISPLAY_DATA0 {
-            name: null_mut(),
+            name: name_wide.as_ptr() as *mut _,
             description: null_mut(),
         };
         filter.layerKey = spec.layer_key;
