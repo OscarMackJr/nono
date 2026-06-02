@@ -791,7 +791,7 @@ pub(super) fn describe_wfp_next_action_for_setup(
 ) -> Option<String> {
     match status {
         WfpProbeStatus::Ready => Some(
-            "Next action: Windows WFP components are present, but runtime activation is still not implemented in this build."
+            "Next action: Windows WFP components are present and the service can activate kernel WFP filters; runtime activation will proceed."
                 .to_string(),
         ),
         WfpProbeStatus::BackendBinaryMissing => Some(format!(
@@ -1362,14 +1362,14 @@ where
         return Ok(WindowsWfpStartReport {
             status_label: "running",
             details: format!(
-                "Windows WFP service {} is running with startup command {}. The placeholder service host still does not provide network enforcement yet.",
+                "Windows WFP service {} is running with startup command {}. The service is ready to activate WFP filters on request.",
                 config.backend_service, service_command
             ),
         });
     }
 
     Err(NonoError::Setup(format!(
-        "Windows WFP service {} did not reach RUNNING after an explicit start attempt. Startup command: {}. Current host output: {}. This is expected while the placeholder service host still fails closed.",
+        "Windows WFP service {} did not reach RUNNING after an explicit start attempt. Startup command: {}. Current host output: {}.",
         config.backend_service,
         service_command,
         start_output.trim()
