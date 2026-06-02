@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
-status: planning
-last_updated: "2026-06-02T12:22:04.135Z"
-last_activity: 2026-05-29
+status: executing
+last_updated: "2026-06-02T13:51:01.621Z"
+last_activity: 2026-06-02
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 8
+  total_plans: 12
   completed_plans: 7
-  percent: 88
+  percent: 58
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -27,9 +27,9 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 Phase: 60 (sandbox-the-tools-confined-coding-loop-v2-9) — COMPLETE + LIVE-UAT PASS
 Plan: 3 of 3 (gap-closure plan 03 complete)
-Status: Phase 60 complete — all 3 plans + LIVE Win11 UAT (all 5 human-verification items PASS, 2026-06-01). Two fixes landed during UAT: F-60-UAT-04 DACL grant for the WriteRestricted restricting SID (commits b5324b3c+aff506eb) + F-60-UAT-05 runner profile windows_low_il_broker:true / broker arm so .NET-PowerShell starts (79ce8b05). Debug session lowil-cwd-write-denied resolved+archived. See .planning/phases/60-.../60-HUMAN-UAT.md.
+Status: Ready to execute
 Next: Phase 54 (UPST7 Audit). Phase 60 follow-ups (non-blocking): (a) production network.block needs the WFP service (F-60-UAT-03); (b) broker arm needs dev-layout or SIGNED binary at runtime — distribution needs signed MSIs + an MSI rebuild off the fixed binaries (note: dist/windows/*.wxs still point at the stale target\release path); (c) cross-target Linux/macOS clippy for the new windows-cfg code deferred to CI; (d) delete/annotate superseded v0.57.4 GitHub release.
-Last activity: 2026-06-02 — Completed quick task 260601-wha: synced binaries + Windows MSI source to v0.57.5 (rebuilt triple binaries, re-derived dist wxs cleanly, rebuilt both MSIs).
+Last activity: 2026-06-02 -- Phase 62 planning complete
 
 ### v2.8 Phase Summary (active)
 
@@ -376,7 +376,7 @@ Known deferred items at v2.4 close: 5 host-blocked requirements (re-anchored to 
 **[Stale — pre-v2.4 forensic history below this line. Authoritative state is the YAML frontmatter at the top of this file plus the resume entry above.]**
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-05-29
+**Last Activity:** 2026-06-02
 **Resumed:** 2026-05-11 — Phase 33 (`windows-parity-upstream-0-52-divergence`) Wave 3 closed via `/gsd-execute-phase 33`. Plan 33-03 landed three downstream artifact edits in single commit `8f783c39` closing REQ-3 + REQ-4 + REQ-5 (PROJECT.md Key Decisions row for parity-strategy decision + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section with empirical-disproof framing + ROADMAP Phase 33 entry flipped to complete + Phase 34 UPST3-sync stub appended per D-33-D1 base case for Option A). All 12 REQ-3/4/5 validators + 2 cross-cutting (D-19 + make-ci sub) pass. Phase 33 now 4/4 plans executed; all 5 REQs landed (REQ-1 5fa0dca4 / REQ-2 7107b88d / REQ-3+4+5 8f783c39); ready for `/gsd-verify-work` verifier pass. Next: orchestrator's verify-phase step, then `/gsd-complete-phase 33` if verifier passes.
 
 **Stopped At (prior session, retained for context):** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.
