@@ -192,7 +192,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
-| 62. WFP kernel network enforcement (Windows supervised) | 4/5 | In Progress|  |
+| 62. WFP kernel network enforcement (Windows supervised) | 5/6 | In Progress|  |
 
 ## Coverage
 
