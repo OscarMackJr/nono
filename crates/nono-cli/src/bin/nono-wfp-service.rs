@@ -50,6 +50,7 @@ mod windows_impl {
     const SERVICE_NAME: &str = "nono-wfp-service";
     const SERVICE_MODE_ARG: &str = "--service-mode";
     const PROBE_RUNTIME_ACTIVATION_ARG: &str = "--probe-runtime-activation";
+    const PURGE_WFP_OBJECTS_ARG: &str = "--purge-wfp-objects";
     const MAX_RUNTIME_REQUEST_SIZE: usize = 64 * 1024;
     const CONTROL_PIPE_NAME: &str = r"\\.\pipe\nono-wfp-control";
     const PIPE_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;OW)";
@@ -214,56 +215,25 @@ mod windows_impl {
         write_event_log(level, event_id, body);
     }
 
-    /// Perform the startup orphan sweep over nono-owned WFP filters.
+    /// Enumerate and delete all nono-owned WFP filters under `NONO_SUBLAYER_GUID`.
     ///
-    /// Opens a fresh WFP engine handle and enumerates all filters in the
-    /// nono sublayer (`NONO_SUBLAYER_GUID`). Any filter found in that sublayer
-    /// is considered nono-owned. Filters with a zero GUID key are skipped
-    /// (fail-secure: zero-key filters are system-assigned and must not be deleted).
-    /// All other filters are deleted; if deletion succeeds they are logged as
-    /// `Removed`; if the API returns `FWP_E_FILTER_NOT_FOUND` (already gone) they
-    /// are also counted as `Removed`; any other error is logged as `Failed`.
+    /// This is the shared filter-purge helper used by both the startup orphan
+    /// sweep (`run_startup_sweep`) and the uninstall purge (`run_purge_wfp_objects`).
+    /// Both callers open their own engine and pass it in — this function only does
+    /// the enumeration+delete loop, keeping all path logic in one place.
     ///
-    /// This runs before the named-pipe server begins accepting new activation
-    /// requests so that stale filters from a previous crash are cleaned up
-    /// before any new session can be established.
+    /// Filters with a zero GUID key are skipped (fail-secure: they are
+    /// system-assigned and must not be deleted). `FWP_E_FILTER_NOT_FOUND` on a
+    /// delete is treated as success (idempotent). Any other delete error is
+    /// recorded as `SweepOutcome::Failed` but does not abort the loop.
     ///
-    /// Returns the list of outcomes for summary logging.
+    /// Returns the per-filter outcome list for the caller to log.
     #[cfg(target_os = "windows")]
-    fn run_startup_sweep() -> Vec<(SweepOutcome, String, String)> {
+    fn purge_nono_filters(engine: &WfpEngine) -> Vec<(SweepOutcome, String, String)> {
         use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
             FwpmFilterCreateEnumHandle0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0,
-            FwpmSubLayerGetByKey0, FWPM_FILTER_ENUM_TEMPLATE0,
+            FWPM_FILTER_ENUM_TEMPLATE0,
         };
-
-        let engine = match open_wfp_engine() {
-            Ok(e) => e,
-            Err(err) => {
-                log_sweep_event(
-                    EventLogLevel::Warning,
-                    EVENT_ID_SWEEP_FAILED,
-                    &format!("startup sweep aborted: could not open WFP engine: {}", err),
-                );
-                return Vec::new();
-            }
-        };
-
-        // Check whether our sublayer is registered. If absent, there are no nono
-        // filters to sweep — emit a clean summary and return early.
-        //
-        // SAFETY: engine handle is valid; NONO_SUBLAYER_GUID is a static const;
-        // we pass null for the output pointer because we only care about existence.
-        let sublayer_status =
-            unsafe { FwpmSubLayerGetByKey0(engine.0, &NONO_SUBLAYER_GUID, std::ptr::null_mut()) };
-        if sublayer_status != 0 {
-            let summary = build_sweep_summary(&[]);
-            log_sweep_event(
-                EventLogLevel::Information,
-                EVENT_ID_SWEEP_COMPLETE,
-                &summary,
-            );
-            return Vec::new();
-        }
 
         // Build a filter enumeration template. We enumerate all filters (no layer
         // restriction) and filter by sublayer key during the loop to avoid touching
@@ -271,7 +241,6 @@ mod windows_impl {
         let mut template: FWPM_FILTER_ENUM_TEMPLATE0 = zeroed();
         template.actionMask = 0xFFFF_FFFF;
         // enumType 0 = FWP_FILTER_ENUM_FULLY_CONTAINED (only non-boot-time filters)
-        // 0 = FWP_FILTER_ENUM_FULLY_CONTAINED (only fully-contained filters, no boot-time)
         template.enumType = 0;
 
         let mut enum_handle: HANDLE = std::ptr::null_mut();
@@ -283,7 +252,7 @@ mod windows_impl {
                 EventLogLevel::Warning,
                 EVENT_ID_SWEEP_FAILED,
                 &format!(
-                    "startup sweep: could not create filter enum handle (win32 0x{:08x})",
+                    "purge_nono_filters: could not create filter enum handle (win32 0x{:08x})",
                     enum_status
                 ),
             );
@@ -386,6 +355,56 @@ mod windows_impl {
             let _ = FwpmFilterDestroyEnumHandle0(engine.0, enum_handle);
         }
 
+        outcomes
+    }
+
+    /// Perform the startup orphan sweep over nono-owned WFP filters.
+    ///
+    /// Opens a fresh WFP engine handle and checks whether the nono sublayer
+    /// exists. If absent, there are no filters to sweep. If present, delegates
+    /// to `purge_nono_filters` for the enumeration+delete loop, then logs the
+    /// summary. Behavior and outcomes are unchanged from before the refactor.
+    ///
+    /// This runs before the named-pipe server begins accepting new activation
+    /// requests so that stale filters from a previous crash are cleaned up
+    /// before any new session can be established.
+    ///
+    /// Returns the list of outcomes for summary logging.
+    #[cfg(target_os = "windows")]
+    fn run_startup_sweep() -> Vec<(SweepOutcome, String, String)> {
+        use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FwpmSubLayerGetByKey0;
+
+        let engine = match open_wfp_engine() {
+            Ok(e) => e,
+            Err(err) => {
+                log_sweep_event(
+                    EventLogLevel::Warning,
+                    EVENT_ID_SWEEP_FAILED,
+                    &format!("startup sweep aborted: could not open WFP engine: {}", err),
+                );
+                return Vec::new();
+            }
+        };
+
+        // Check whether our sublayer is registered. If absent, there are no nono
+        // filters to sweep — emit a clean summary and return early.
+        //
+        // SAFETY: engine handle is valid; NONO_SUBLAYER_GUID is a static const;
+        // we pass null for the output pointer because we only care about existence.
+        let sublayer_status =
+            unsafe { FwpmSubLayerGetByKey0(engine.0, &NONO_SUBLAYER_GUID, std::ptr::null_mut()) };
+        if sublayer_status != 0 {
+            let summary = build_sweep_summary(&[]);
+            log_sweep_event(
+                EventLogLevel::Information,
+                EVENT_ID_SWEEP_COMPLETE,
+                &summary,
+            );
+            return Vec::new();
+        }
+
+        let outcomes = purge_nono_filters(&engine);
+
         let tuple_refs: Vec<(SweepOutcome, &str, &str)> = outcomes
             .iter()
             .map(|(o, n, l)| (*o, n.as_str(), l.as_str()))
@@ -405,6 +424,83 @@ mod windows_impl {
         Vec::new()
     }
 
+    /// One-shot uninstall purge: delete all nono WFP filters under
+    /// `NONO_SUBLAYER_GUID` and then delete the sublayer itself.
+    ///
+    /// Invoked by `setup --uninstall-wfp` (via `nono-wfp-service --purge-wfp-objects`)
+    /// BEFORE the service is stopped+deleted. The MSI custom action runs
+    /// Before=RemoveFiles and Return=ignore, so the binary is still present and
+    /// the caller treats any non-zero exit as best-effort (fail-open at the
+    /// uninstall level — see `uninstall_windows_wfp_with_runner` in network.rs).
+    ///
+    /// Idempotent: `FWP_E_FILTER_NOT_FOUND` on a filter delete and
+    /// `FWP_E_SUBLAYER_NOT_FOUND` on the sublayer delete are treated as success
+    /// (already gone). Running this when nothing is installed is a clean no-op.
+    ///
+    /// FAIL-OPEN contract: a purge failure returns a non-zero `ExitCode` so
+    /// the caller can record it, but the caller (uninstall path) MUST NOT abort
+    /// uninstall on a non-zero exit — see the fail-open note in 62-11 and
+    /// `T-62-24` in the threat register.
+    #[cfg(target_os = "windows")]
+    fn run_purge_wfp_objects() -> ExitCode {
+        let engine = match open_wfp_engine() {
+            Ok(e) => e,
+            Err(err) => {
+                log_sweep_event(
+                    EventLogLevel::Warning,
+                    EVENT_ID_SWEEP_FAILED,
+                    &format!(
+                        "purge-wfp-objects: could not open WFP engine: {} \
+                         (uninstall continues; best-effort purge)",
+                        err
+                    ),
+                );
+                return ExitCode::from(1);
+            }
+        };
+
+        // Delete all filters first. A sublayer that still has filters cannot be
+        // deleted, so filters must go before the sublayer key.
+        // Any individual filter-delete failure is recorded but does not abort —
+        // we still attempt the sublayer delete below.
+        let _ = purge_nono_filters(&engine);
+
+        // Delete the nono sublayer itself (the persistent object that 62-09
+        // introduced and that msiexec /x would otherwise leave behind).
+        //
+        // SAFETY: engine handle is valid (WfpEngine RAII wrapper);
+        // NONO_SUBLAYER_GUID is a static const with a stable address for the
+        // duration of the call. FwpmSubLayerDeleteByKey0 takes a pointer to a
+        // GUID by value.
+        let sub_status = unsafe { FwpmSubLayerDeleteByKey0(engine.0, &NONO_SUBLAYER_GUID) };
+        if sub_status == 0 || sub_status == FWP_E_SUBLAYER_NOT_FOUND as u32 {
+            log_sweep_event(
+                EventLogLevel::Information,
+                EVENT_ID_SWEEP_COMPLETE,
+                "purge-wfp-objects: filters and sublayer removed (or already absent); \
+                 uninstall object store is clean",
+            );
+            ExitCode::SUCCESS
+        } else {
+            log_sweep_event(
+                EventLogLevel::Warning,
+                EVENT_ID_SWEEP_FAILED,
+                &format!(
+                    "purge-wfp-objects: FwpmSubLayerDeleteByKey0 returned 0x{:08x}; \
+                     sublayer may remain (uninstall continues; best-effort purge)",
+                    sub_status
+                ),
+            );
+            ExitCode::from(1)
+        }
+    }
+
+    /// Non-Windows stub: purge is a no-op on non-Windows platforms.
+    #[cfg(not(target_os = "windows"))]
+    fn run_purge_wfp_objects() -> ExitCode {
+        ExitCode::SUCCESS
+    }
+
     #[cfg(target_os = "windows")]
     use sha2::{Digest, Sha256};
 
@@ -420,11 +516,12 @@ mod windows_impl {
         Win32::{
             Foundation::HANDLE,
             Foundation::{GetLastError, LocalFree},
-            Foundation::{FWP_E_ALREADY_EXISTS, FWP_E_FILTER_NOT_FOUND},
+            Foundation::{FWP_E_ALREADY_EXISTS, FWP_E_FILTER_NOT_FOUND, FWP_E_SUBLAYER_NOT_FOUND},
             NetworkManagement::WindowsFilteringPlatform::{
                 FwpmEngineClose0, FwpmEngineOpen0, FwpmFilterAdd0, FwpmFilterDeleteByKey0,
                 FwpmFreeMemory0, FwpmGetAppIdFromFileName0, FwpmSubLayerAdd0,
-                FwpmTransactionAbort0, FwpmTransactionBegin0, FwpmTransactionCommit0, FWPM_ACTION0,
+                FwpmSubLayerDeleteByKey0, FwpmTransactionAbort0, FwpmTransactionBegin0,
+                FwpmTransactionCommit0, FWPM_ACTION0,
                 FWPM_ACTION0_0, FWPM_CONDITION_ALE_APP_ID, FWPM_CONDITION_ALE_USER_ID,
                 FWPM_CONDITION_FLAGS, FWPM_CONDITION_IP_LOCAL_PORT, FWPM_CONDITION_IP_REMOTE_PORT,
                 FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_FILTER0_0, FWPM_FILTER_CONDITION0,
@@ -473,6 +570,9 @@ mod windows_impl {
             "  {PROBE_RUNTIME_ACTIVATION_ARG:<22}Probe the placeholder runtime activation contract"
         );
         println!("  {SERVICE_MODE_ARG:<22}Run the placeholder service entrypoint");
+        println!(
+            "  {PURGE_WFP_OBJECTS_ARG:<22}Delete all nono WFP filters + the nono sublayer (used by setup --uninstall-wfp)"
+        );
     }
 
     fn print_service_contract() {
@@ -1174,7 +1274,7 @@ mod windows_impl {
         // added by per-request engines would live in different sessions →
         // FwpmFilterAdd0 returns FWP_E_WRONG_SESSION (0x8032000C). Persistent objects are shared
         // across engine handles and cleaned up by the startup sweep + remove-by-key +
-        // (62-10) uninstall purge. zeroed() already sets flags = 0 (persistent); this is explicit.
+        // (62-11) uninstall purge. zeroed() already sets flags = 0 (persistent); this is explicit.
         // (debug: wfp-wrong-session-dynamic.)
         session.flags = 0;
         let mut handle: HANDLE = null_mut();
@@ -1664,7 +1764,7 @@ mod windows_impl {
             None => {
                 eprintln!(
                     "nono-wfp-service: missing required mode; use \
-                 --print-service-contract, {PROBE_RUNTIME_ACTIVATION_ARG}, or {SERVICE_MODE_ARG}"
+                 --print-service-contract, {PROBE_RUNTIME_ACTIVATION_ARG}, {SERVICE_MODE_ARG}, or {PURGE_WFP_OBJECTS_ARG}"
                 );
                 ExitCode::from(2)
             }
@@ -1682,6 +1782,7 @@ mod windows_impl {
             }
             Some(PROBE_RUNTIME_ACTIVATION_ARG) => probe_runtime_activation(),
             Some(SERVICE_MODE_ARG) => run_service_mode(),
+            Some(PURGE_WFP_OBJECTS_ARG) => run_purge_wfp_objects(),
             Some(other) => {
                 eprintln!("nono-wfp-service: unsupported argument '{other}'");
                 eprintln!(
@@ -1925,6 +2026,21 @@ mod windows_impl {
                 "PIPE_SDDL must grant access to Interactive Users or Built-in Users \
                  so non-elevated supervised nono runs can reach the WFP service pipe"
             );
+        }
+
+        // Task 1 (62-11): verify the PURGE_WFP_OBJECTS_ARG constant and
+        // run() dispatch plumbing. The actual FwpmSubLayerDeleteByKey0 path
+        // requires an elevated BFE host and is validated by the live 62-04
+        // SC4/SC5 uninstall UAT, not by this unit test.
+        #[test]
+        fn purge_wfp_objects_arg_constant_is_correct() {
+            assert_eq!(PURGE_WFP_OBJECTS_ARG, "--purge-wfp-objects");
+        }
+
+        #[test]
+        fn purge_wfp_objects_arg_is_distinct_from_other_mode_args() {
+            assert_ne!(PURGE_WFP_OBJECTS_ARG, SERVICE_MODE_ARG);
+            assert_ne!(PURGE_WFP_OBJECTS_ARG, PROBE_RUNTIME_ACTIVATION_ARG);
         }
     }
 } // end mod windows_impl
