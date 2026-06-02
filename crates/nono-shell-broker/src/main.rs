@@ -39,7 +39,8 @@ mod broker {
     use std::path::PathBuf;
 
     use nono::{NonoError, OwnedHandle, Result as NonoResult};
-    use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
+    use windows_sys::Win32::Foundation::{GetLastError, LocalFree, HANDLE};
+    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
     use windows_sys::Win32::System::Console::AllocConsole;
     use windows_sys::Win32::System::Threading::{
         CreateProcessAsUserW, DeleteProcThreadAttributeList, GetExitCodeProcess,
@@ -65,6 +66,16 @@ mod broker {
         /// `AllocConsole` console-presence probe is independent of std-handle
         /// wiring and untouched).
         pub no_pty: bool,
+        /// Plan 62-10 (F-62-UAT-05): the synthetic per-session SID string
+        /// (`S-1-5-117-*`) injected into the Low-IL primary token as a
+        /// WRITE_RESTRICTED restricting SID so the WFP ALE_USER_ID filter
+        /// (SD `D:(A;;CC;;;<session_sid>)`) matches the confined child's
+        /// outbound connections. Present on the `--no-pty` (BrokerLaunchNoPty)
+        /// path only; absent on the PTY/legacy path (PTY waives per-session WFP).
+        /// FAIL-CLOSED: when `no_pty` is true, `session_sid` MUST be Some;
+        /// parse_args rejects the combination of `--no-pty` without
+        /// `--session-sid` as a hard error.
+        pub session_sid: Option<String>,
     }
 
     /// Manual argv loop. No `clap` — RESEARCH §4a: broker attack surface MUST
@@ -76,6 +87,7 @@ mod broker {
         let mut inherit_handles: Vec<HANDLE> = Vec::new();
         let mut cwd: Option<PathBuf> = None;
         let mut no_pty: bool = false;
+        let mut session_sid: Option<String> = None;
 
         // Skip argv[0] (the broker binary path).
         let mut iter = raw.iter().skip(1);
@@ -129,6 +141,15 @@ mod broker {
                     // as the child's stdio instead of inheriting the broker's console.
                     no_pty = true;
                 }
+                "--session-sid" => {
+                    // Plan 62-10: the synthetic per-session SID injected into the
+                    // broker's Low-IL primary token as a WRITE_RESTRICTED restricting
+                    // SID so the WFP ALE_USER_ID filter matches the confined child.
+                    let v = iter.next().ok_or_else(|| {
+                        NonoError::SandboxInit("--session-sid requires a value".into())
+                    })?;
+                    session_sid = Some(v.to_string_lossy().into_owned());
+                }
                 other => {
                     return Err(NonoError::SandboxInit(format!(
                         "unknown broker arg: '{other}'"
@@ -151,12 +172,58 @@ mod broker {
                     .into(),
             ));
         }
+
+        // Plan 62-10: validate the session SID string with ConvertStringSidToSidW
+        // so a malformed value is caught at parse time (fail-closed, D5(c)).
+        // LocalFree the PSID immediately after the validity check — the string
+        // form is what the broker stores and passes to the token builder.
+        if let Some(ref sid_str) = session_sid {
+            let wide_sid: Vec<u16> = sid_str
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let mut psid: *mut std::ffi::c_void = std::ptr::null_mut();
+            let ok = unsafe {
+                // SAFETY: `wide_sid` is a valid nul-terminated UTF-16 buffer;
+                // `psid` is a valid out-pointer. On success the callee allocates
+                // a SID heap object that MUST be freed with LocalFree immediately
+                // (we only need the parse-validity verdict, not the SID bytes).
+                ConvertStringSidToSidW(wide_sid.as_ptr(), &mut psid)
+            };
+            if ok == 0 || psid.is_null() {
+                let gle = unsafe { GetLastError() };
+                return Err(NonoError::SandboxInit(format!(
+                    "--session-sid is not a valid SID: {sid_str:?} \
+                     (ConvertStringSidToSidW failed, GetLastError={gle})"
+                )));
+            }
+            // Free immediately — we only needed the parse-validity verdict.
+            unsafe {
+                // SAFETY: `psid` was allocated by ConvertStringSidToSidW and
+                // has not been freed yet; LocalFree is the documented release fn.
+                let _ = LocalFree(psid as _);
+            }
+        }
+
+        // FAIL-CLOSED: the --no-pty path enables per-session WFP enforcement;
+        // the broker child token MUST carry the session SID.  Spawning without
+        // a SID means the WFP filter installs but matches nothing — silent
+        // non-enforcement, the worst outcome (plan 62-10 D5(c)).
+        if no_pty && session_sid.is_none() {
+            return Err(NonoError::SandboxInit(
+                "--no-pty requires --session-sid (WFP per-session enforcement); \
+                 refusing to spawn an unmatched WFP child"
+                    .into(),
+            ));
+        }
+
         Ok(BrokerArgs {
             shell_path,
             shell_args,
             inherit_handles,
             cwd,
             no_pty,
+            session_sid,
         })
     }
 
@@ -231,8 +298,16 @@ mod broker {
         tracing::info!(alloc_console_rc = alloc_rc, "broker: console attach probe");
 
         // Steps 2-5: Construct Low-IL primary token via the lifted library function (D-06).
+        // Plan 62-10: when session_sid is present (--no-pty path), inject it as a
+        // WRITE_RESTRICTED restricting SID so the WFP ALE_USER_ID filter matches
+        // the confined child's outbound connections (F-62-UAT-05 fix).
+        // FAIL-CLOSED: `?` propagates any FFI failure; the parameterless fn is NEVER
+        // used as a fallback on error — spawning a SID-less child = silent non-enforcement.
         // The OwnedHandle returned manages CloseHandle on drop — RAII per Pattern S-07.
-        let low_il_token: OwnedHandle = nono::create_low_integrity_primary_token()?;
+        let low_il_token: OwnedHandle = match args.session_sid.as_deref() {
+            Some(sid) => nono::create_low_integrity_primary_token_with_sid(sid)?,
+            None => nono::create_low_integrity_primary_token()?,
+        };
         tracing::info!("broker: Low-IL primary token constructed");
 
         // Step 6: Build PROC_THREAD_ATTRIBUTE_HANDLE_LIST per D-02 (production hardening over PoC).
@@ -677,10 +752,11 @@ mod broker {
             );
         }
 
-        /// Phase 51 Plan 02: `--no-pty` flag is recognized and sets `no_pty=true`.
-        /// When passed alongside three `--inherit-handle` values, the flag must
-        /// parse without error and the resulting `BrokerArgs.no_pty` must be `true`.
-        /// Guards against regressions where `--no-pty` falls through to the
+        /// Phase 51 Plan 02 / Plan 62-10: `--no-pty` flag is recognized and sets
+        /// `no_pty=true`. When passed alongside three `--inherit-handle` values and
+        /// a valid `--session-sid` (required by the Plan 62-10 fail-closed gate), the
+        /// flags must parse without error and the resulting `BrokerArgs.no_pty` must
+        /// be `true`. Guards against regressions where `--no-pty` falls through to the
         /// `unknown broker arg` arm, causing the broker to hard-fail when
         /// nono-cli passes the flag via `BrokerLaunchNoPty`.
         #[test]
@@ -695,10 +771,12 @@ mod broker {
                 "--inherit-handle",
                 "0x0000000000000300",
                 "--no-pty",
+                "--session-sid",
+                "S-1-5-117-123456789-987654321-11223344-55667788",
                 "--cwd",
                 r"C:\",
             ]);
-            let parsed = parse_args(&raw).expect("--no-pty must parse without error");
+            let parsed = parse_args(&raw).expect("--no-pty with valid --session-sid must parse without error");
             assert!(
                 parsed.no_pty,
                 "BrokerArgs.no_pty must be true when --no-pty is present"
@@ -730,6 +808,100 @@ mod broker {
             assert!(
                 !parsed.no_pty,
                 "BrokerArgs.no_pty must be false when --no-pty is absent"
+            );
+        }
+
+        // -------------------------------------------------------------------
+        // Plan 62-10: --session-sid tests
+        // -------------------------------------------------------------------
+
+        /// Plan 62-10: `--session-sid` is parsed into `BrokerArgs.session_sid`.
+        /// Pins the flag is recognised (not falling through to `unknown broker arg`)
+        /// and that the value survives into the struct.
+        #[test]
+        fn parse_args_session_sid_parsed() {
+            let sid = "S-1-5-117-123456789-987654321-11223344-55667788";
+            let raw = argv(&[
+                "--shell",
+                r"C:\foo.exe",
+                "--inherit-handle",
+                "0x0000000000000100",
+                "--inherit-handle",
+                "0x0000000000000200",
+                "--inherit-handle",
+                "0x0000000000000300",
+                "--no-pty",
+                "--session-sid",
+                sid,
+                "--cwd",
+                r"C:\",
+            ]);
+            let parsed = parse_args(&raw).expect("valid --session-sid must parse without error");
+            assert_eq!(
+                parsed.session_sid.as_deref(),
+                Some(sid),
+                "BrokerArgs.session_sid must equal the provided SID string"
+            );
+        }
+
+        /// Plan 62-10 FAIL-CLOSED: `--no-pty` without `--session-sid` MUST return
+        /// Err. Spawning without a session SID means the WFP filter matches nothing
+        /// (silent non-enforcement — the worst outcome, plan D5(c)).
+        #[test]
+        fn parse_args_no_pty_without_session_sid_returns_error() {
+            let raw = argv(&[
+                "--shell",
+                r"C:\foo.exe",
+                "--inherit-handle",
+                "0x0000000000000100",
+                "--inherit-handle",
+                "0x0000000000000200",
+                "--inherit-handle",
+                "0x0000000000000300",
+                "--no-pty",
+                "--cwd",
+                r"C:\",
+            ]);
+            let Err(NonoError::SandboxInit(msg)) = parse_args(&raw) else {
+                panic!(
+                    "parse_args must return Err(SandboxInit) when --no-pty is set \
+                     without --session-sid (fail-closed WFP enforcement)"
+                );
+            };
+            assert!(
+                msg.contains("--no-pty") && msg.contains("--session-sid"),
+                "error message must name both --no-pty and --session-sid; got: {msg}"
+            );
+        }
+
+        /// Plan 62-10 FAIL-CLOSED: a malformed `--session-sid` value (non-SID string)
+        /// MUST return Err at parse time.  Guards the ConvertStringSidToSidW validation
+        /// gate so malformed SIDs are caught before the token-build step.
+        #[test]
+        fn parse_args_malformed_session_sid_returns_error() {
+            let raw = argv(&[
+                "--shell",
+                r"C:\foo.exe",
+                "--inherit-handle",
+                "0x0000000000000100",
+                "--inherit-handle",
+                "0x0000000000000200",
+                "--inherit-handle",
+                "0x0000000000000300",
+                "--no-pty",
+                "--session-sid",
+                "not-a-valid-sid",
+                "--cwd",
+                r"C:\",
+            ]);
+            let Err(NonoError::SandboxInit(msg)) = parse_args(&raw) else {
+                panic!(
+                    "parse_args must return Err(SandboxInit) for a malformed --session-sid value"
+                );
+            };
+            assert!(
+                msg.contains("--session-sid") || msg.contains("not a valid SID"),
+                "error message must identify the malformed SID; got: {msg}"
             );
         }
     }
@@ -808,6 +980,7 @@ mod broker {
                 inherit_handles: vec![],
                 cwd: PathBuf::from(r"C:\"),
                 no_pty: false,
+                session_sid: None,
             }
         }
 
