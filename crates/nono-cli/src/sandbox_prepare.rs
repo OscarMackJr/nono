@@ -84,6 +84,11 @@ pub(crate) struct PreparedSandbox {
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
     pub(crate) bypass_protection_paths: Vec<PathBuf>,
+    pub(crate) ignored_denial_paths: Vec<PathBuf>,
+    /// cc21229f (C3): non-filesystem sandbox operations suppressed from
+    /// the diagnostic footer. Sandbox enforcement is unchanged; this only
+    /// controls reporting. Required by Plan 70-03 (C2 prerequisite).
+    pub(crate) suppressed_system_service_operations: Vec<String>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names from the loaded profile's
     /// `environment.allow_vars` block. See [`crate::profile_runtime::PreparedProfile::allowed_env_vars`]
@@ -328,6 +333,8 @@ pub(crate) fn prepare_sandbox_with_context(
                 open_url_origins: Vec::new(),
                 open_url_allow_localhost: false,
                 bypass_protection_paths: Vec::new(),
+                ignored_denial_paths: Vec::new(),
+                suppressed_system_service_operations: Vec::new(),
                 // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): manifest path
                 // has no loaded Profile and no env-filter block.
                 allowed_env_vars: None,
@@ -369,6 +376,8 @@ pub(crate) fn prepare_sandbox_with_context(
         open_url_allow_localhost,
         allow_launch_services: profile_allow_launch_services,
         bypass_protection_paths,
+        ignored_denial_paths,
+        suppressed_system_service_operations,
         allowed_env_vars: profile_allowed_env_vars,
         denied_env_vars: profile_denied_env_vars,
     } = prepared_profile;
@@ -582,6 +591,8 @@ pub(crate) fn prepare_sandbox_with_context(
             open_url_origins,
             open_url_allow_localhost,
             bypass_protection_paths,
+            ignored_denial_paths,
+            suppressed_system_service_operations,
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): forward the
             // env-filter allow-list from PreparedProfile to PreparedSandbox.
             allowed_env_vars: profile_allowed_env_vars,

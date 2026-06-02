@@ -181,6 +181,8 @@ pub(crate) struct ExecutionFlags {
     #[cfg(target_os = "linux")]
     pub(crate) af_unix_mediation: crate::profile::LinuxAfUnixMediation,
     pub(crate) bypass_protection_paths: Vec<PathBuf>,
+    pub(crate) ignored_denial_paths: Vec<PathBuf>,
+    pub(crate) suppressed_system_service_operations: Vec<String>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names forwarded from
     /// `PreparedSandbox.allowed_env_vars`. Consumed by the Unix
@@ -223,6 +225,8 @@ impl ExecutionFlags {
             #[cfg(target_os = "linux")]
             af_unix_mediation: crate::profile::LinuxAfUnixMediation::Off,
             bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
             allowed_env_vars: None,
             denied_env_vars: None,
             session: SessionLaunchOptions::default(),
@@ -352,6 +356,8 @@ pub(crate) fn prepare_run_launch_plan(
             #[cfg(target_os = "linux")]
             af_unix_mediation: prepared.af_unix_mediation,
             bypass_protection_paths: prepared.bypass_protection_paths,
+            ignored_denial_paths: prepared.ignored_denial_paths,
+            suppressed_system_service_operations: prepared.suppressed_system_service_operations,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
             session: SessionLaunchOptions {

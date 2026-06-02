@@ -422,21 +422,10 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         ));
     }
 
-    // Pre-compute ignored denial paths from the loaded profile's
-    // `filesystem.suppress_save_prompt`. Used to annotate denied paths with
-    // `[save skipped]` in the diagnostic footer (UX gate, not security gate).
-    // Failure is non-fatal: empty list = no annotations (conservative default).
-    #[cfg(not(target_os = "windows"))]
-    let ignored_denial_paths: Vec<std::path::PathBuf> = loaded_profile
-        .as_ref()
-        .map(|p| {
-            p.filesystem
-                .suppress_save_prompt
-                .iter()
-                .map(|raw| crate::profile_save_runtime::canonicalize_suppress_path(raw))
-                .collect()
-        })
-        .unwrap_or_default();
+    // ignored_denial_paths and suppressed_system_service_operations are now
+    // carried through flags.ignored_denial_paths and
+    // flags.suppressed_system_service_operations (populated from PreparedSandbox
+    // via cc21229f / Plan 70-01 C3). No local computation needed.
 
     #[cfg(not(target_os = "windows"))]
     let config = exec_strategy::ExecConfig {
@@ -454,6 +443,8 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             .profile_name
             .as_deref()
             .or(recommended_profile),
+        ignored_denial_paths: &flags.ignored_denial_paths,
+        suppressed_system_service_operations: &flags.suppressed_system_service_operations,
         startup_timeout: flags
             .startup_timeout_secs
             .filter(|&secs| secs > 0)
@@ -469,7 +460,6 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         af_unix_mediation: flags.af_unix_mediation,
         allowed_env_vars: flags.allowed_env_vars,
         denied_env_vars: flags.denied_env_vars,
-        ignored_denial_paths: &ignored_denial_paths,
     };
     // Plan 62-12 (F-62-UAT-05 redesign): the SINGLE per-run identifier for the
     // WFP-enforced broker-no-PTY arm is the AppContainer moniker

@@ -288,6 +288,8 @@ mod tests {
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,
             bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): test fixture
             // has no env-filter allow-list.
             allowed_env_vars: None,
@@ -343,6 +345,8 @@ mod tests {
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,
             bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): test fixture
             // has no env-filter allow-list.
             allowed_env_vars: None,

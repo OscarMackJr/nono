@@ -25,6 +25,8 @@ pub(crate) struct PreparedProfile {
     pub(crate) open_url_allow_localhost: bool,
     pub(crate) allow_launch_services: bool,
     pub(crate) bypass_protection_paths: Vec<PathBuf>,
+    pub(crate) ignored_denial_paths: Vec<PathBuf>,
+    pub(crate) suppressed_system_service_operations: Vec<String>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names from `profile.environment.allow_vars`.
     /// `None` means inherit-all (default upstream behaviour); `Some([])`
@@ -582,6 +584,32 @@ pub(crate) fn prepare_profile_with_context(
             &args.bypass_protection,
             workdir,
         ),
+        // cc21229f (C3) adaptation: upstream `collect_ignored_denial_paths` accepts
+        // a CLI `suppress_save_prompt` slice (not in fork's SandboxArgs yet).
+        // Replicate the profile-only path inline. `profile_save_runtime` is
+        // cfg-gated to non-Windows, so use `PathBuf::from` on Windows
+        // (no sandbox enforcement difference — this field only affects UX).
+        ignored_denial_paths: {
+            #[cfg(not(target_os = "windows"))]
+            let paths = loaded_profile
+                .as_ref()
+                .map(|profile| {
+                    profile
+                        .filesystem
+                        .suppress_save_prompt
+                        .iter()
+                        .map(|raw| crate::profile_save_runtime::canonicalize_suppress_path(raw))
+                        .collect()
+                })
+                .unwrap_or_default();
+            #[cfg(target_os = "windows")]
+            let paths: Vec<PathBuf> = Vec::new();
+            paths
+        },
+        suppressed_system_service_operations: loaded_profile
+            .as_ref()
+            .map(|profile| profile.diagnostics.suppress_system_services.clone())
+            .unwrap_or_default(),
         // Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
         // surface `profile.environment.allow_vars` as a runtime allow-list.
         // Plan 34-08a Task 5 (D-20 replay of v0.52.0 `780965d7`): preserve
