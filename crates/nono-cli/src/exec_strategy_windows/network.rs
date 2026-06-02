@@ -257,7 +257,7 @@ pub(super) fn build_wfp_service_create_args(config: &WfpProbeConfig) -> Vec<Stri
         "binPath=".to_string(),
         format_wfp_service_command(config),
         "start=".to_string(),
-        "demand".to_string(),
+        "auto".to_string(),
         "type=".to_string(),
         "own".to_string(),
         "DisplayName=".to_string(),
@@ -269,7 +269,7 @@ pub(super) fn build_wfp_service_description_args(config: &WfpProbeConfig) -> Vec
     vec![
         "description".to_string(),
         config.backend_service.to_string(),
-        "Placeholder service host for the future nono Windows WFP backend. Registration is supported; runtime still fails closed until enforcement is implemented.".to_string(),
+        "nono Windows Filtering Platform service. Enforces kernel-level network blocking for supervised nono runs via WFP ALE_AUTH filters. Start this service before issuing `nono run` with network.block:true.".to_string(),
     ]
 }
 
