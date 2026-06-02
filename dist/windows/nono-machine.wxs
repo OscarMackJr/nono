@@ -42,7 +42,7 @@
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Component Id="cmpNonoExe" Guid="*">
-        <File Id="filNonoExe" Source="C:\Users\OMack\Nono\target\x86_64-pc-windows-msvc\release\nono.exe" KeyPath="yes" />
+        <File Id="filNonoExe" Source="C:\Users\OMack\Nono\target\release\nono.exe" KeyPath="yes" />
       </Component>
       <Component Id="cmpNonoShellBrokerExe" Guid="*">
         <!-- Phase 31 Plan 04: nono-shell-broker.exe lives under INSTALLFOLDER
@@ -50,8 +50,8 @@
              to the same dir at runtime. Satisfies D-07 sibling resolution
              (current_exe().parent() finds the broker) for both machine scope
              (Program Files\nono\) and user scope (LocalAppData\Programs\nono\).
-             No scope guard needed — broker is required for both MSIs. -->
-        <File Id="filNonoShellBrokerExe" Source="C:\Users\OMack\Nono\target\x86_64-pc-windows-msvc\release\nono-shell-broker.exe" KeyPath="yes" />
+             No scope guard needed â€” broker is required for both MSIs. -->
+        <File Id="filNonoShellBrokerExe" Source="C:\Users\OMack\Nono\target\release\nono-shell-broker.exe" KeyPath="yes" />
       </Component>
       <Component Id="cmpReadme" Guid="*">
         <File Id="filReadme" Source="C:\Users\OMack\Nono\README.md" Name="README.md" KeyPath="yes" />
@@ -77,7 +77,7 @@
             Value="[INSTALLFOLDER]" />
       </Component>
       <Component Id="cmpWfpServiceExe" Guid="*">
-        <File Id="filWfpServiceExe" Source="C:\Users\OMack\Nono\target\x86_64-pc-windows-msvc\release\nono-wfp-service.exe" KeyPath="yes" />
+        <File Id="filWfpServiceExe" Source="C:\Users\OMack\Nono\target\release\nono-wfp-service.exe" KeyPath="yes" />
         <ServiceInstall
             Id="svcWfpService"
             Name="nono-wfp-service"
