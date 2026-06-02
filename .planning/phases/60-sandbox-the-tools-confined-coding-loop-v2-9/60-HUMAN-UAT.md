@@ -239,13 +239,24 @@ Medium-IL location (almost certainly `%TEMP%`/fusion). That path is NOT in the r
 session restricting SID is absent from its DACL → under WRITE_RESTRICTED the CLR's startup write is
 denied → `80070005`. (Confirm via the %TEMP%-grant experiment below.)
 
-**Fix options (decision needed — a follow-on, not done here):**
-- (1) Change the hook's confined-write vehicle to NOT use .NET: emit a `cmd.exe`-based write, or
-  better, a native `nono write-file`-style primitive run inside the jail (nono.exe is native, no
-  CLR). Most robust; avoids granting %TEMP%. Touches `claude_code_hook.rs` confined-write rewrite.
-- (2) Grant a Low-IL-writable temp to the runner profile so the CLR can start (the F-60-UAT-04 DACL
-  fix would then cover it). Simpler but broadens the jail (shared %TEMP%); prefer a per-session temp
-  subdir if taken.
+**%TEMP%-grant experiment (2026-06-01) — option (2) ELIMINATED.** Ran
+`nono run --profile ... --allow-cwd --allow "%LOCALAPPDATA%\Temp" -- powershell.exe ... Set-Content`.
+Banner confirmed `r+w ...\AppData\Local\Temp` (the F-60-UAT-04 DACL fix covered it). The CLR STILL
+failed `80070005`; `clrtest.txt` was not created. So gap C is NOT a temp-DACL issue — it is a deeper
+.NET-Framework-at-Low-IL / WRITE_RESTRICTED incompatibility: the desktop CLR creates kernel sync
+objects in the `BaseNamedObjects` namespace at startup; under WRITE_RESTRICTED those creations are
+write-class and the synthetic restricting SID cannot satisfy them — and that is a kernel object
+namespace, not a filesystem path any `--allow` can grant. No filesystem grant can fix this.
+
+**Fix (decision narrowed to ONE viable path):**
+- (1) Change the hook's confined-write vehicle to NOT use .NET — emit a native `nono write-file`-style
+  primitive run inside the jail (nono.exe is native Rust, no CLR; proven to run + write under
+  WRITE_RESTRICTED) or `cmd.exe` for simple content. Touches `claude_code_hook.rs` confined-write
+  rewrite (+ a tiny native write subcommand if chosen) + the additionalContext message. This is the
+  only mechanism that works; ALSO implies UAT 5's `run` step (`pwsh greet.ps1`) will hit the same
+  CLR wall — any .NET/PowerShell EXECUTION inside the jail is blocked, so the "run a command"
+  capability needs the same non-.NET consideration.
+- (2) ~~Grant a Low-IL-writable temp~~ — ELIMINATED by the experiment above.
 
 ## Other findings (lower priority, also need a decision — not fast edits)
 - F-60-UAT-01: CWD-coarse self-disable guard makes project-scoped hooks unusable; CLAUDE_CONFIG_DIR
