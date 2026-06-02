@@ -341,12 +341,19 @@ pub(super) fn parse_windows_service_state(output: &str) -> WindowsServiceState {
     }
 }
 
+/// Determine the WFP readiness status from the current system state.
+///
+/// Returns [`WfpProbeStatus::Ready`] when the Base Filtering Engine platform service
+/// (`BFE`) AND the nono-wfp-service backend service are both Running.  Per D-05
+/// (service-only model) the kernel driver `nono-wfp-driver` is **out of scope** and
+/// is NOT required for `Ready`; its absence does not gate enforcement.
+///
+/// All other fail-secure prerequisites remain unchanged: a missing/stopped BFE or a
+/// missing/stopped backend service short-circuit before `Ready`.
 pub(super) fn build_wfp_probe_status(
     backend_binary_exists: bool,
-    backend_driver_binary_exists: bool,
     platform_service: WindowsServiceState,
     backend_service: WindowsServiceState,
-    backend_driver: WindowsServiceState,
 ) -> WfpProbeStatus {
     if !backend_binary_exists {
         return WfpProbeStatus::BackendBinaryMissing;
@@ -368,18 +375,6 @@ pub(super) fn build_wfp_probe_status(
         WindowsServiceState::Running => {}
     }
 
-    if !backend_driver_binary_exists {
-        return WfpProbeStatus::BackendDriverBinaryMissing;
-    }
-
-    match backend_driver {
-        WindowsServiceState::Missing | WindowsServiceState::Unknown => {
-            return WfpProbeStatus::BackendDriverMissing;
-        }
-        WindowsServiceState::Stopped => return WfpProbeStatus::BackendDriverStopped,
-        WindowsServiceState::Running => {}
-    }
-
     WfpProbeStatus::Ready
 }
 
@@ -389,8 +384,6 @@ pub(super) fn probe_wfp_backend_status_with_config(
     if windows_wfp_test_force_ready() {
         return Ok(build_wfp_probe_status(
             config.backend_binary_path.exists(),
-            config.backend_driver_binary_path.exists(),
-            WindowsServiceState::Running,
             WindowsServiceState::Running,
             WindowsServiceState::Running,
         ));
@@ -403,14 +396,11 @@ pub(super) fn probe_wfp_backend_status_with_config(
     let platform_output = run_sc_query(config.platform_service)?;
     let platform_state = parse_windows_service_state(&platform_output);
     let backend_service_state = parse_windows_service_state(&run_sc_query(config.backend_service)?);
-    let backend_driver_state = parse_windows_service_state(&run_sc_query(config.backend_driver)?);
 
     Ok(build_wfp_probe_status(
         true,
-        config.backend_driver_binary_path.exists(),
         platform_state,
         backend_service_state,
-        backend_driver_state,
     ))
 }
 
@@ -2244,5 +2234,65 @@ mod tests {
             }
             other => panic!("Expected UnsupportedPlatform, got: {:?}", other),
         }
+    }
+
+    /// 62-06: build_wfp_probe_status returns Ready when BFE and backend service are
+    /// both Running — no kernel driver required (F-62-UAT-01 fix, D-05 service-only).
+    #[test]
+    fn test_wfp_ready_without_kernel_driver() {
+        let status = build_wfp_probe_status(
+            true,                         // backend_binary_exists
+            WindowsServiceState::Running, // platform_service (BFE)
+            WindowsServiceState::Running, // backend_service (nono-wfp-service)
+        );
+        assert_eq!(
+            status,
+            WfpProbeStatus::Ready,
+            "BFE Running + service Running must yield Ready with no driver requirement"
+        );
+    }
+
+    /// 62-06: fail-secure regression — BFE stopped still short-circuits before Ready.
+    #[test]
+    fn test_wfp_platform_service_stopped_is_fail_closed() {
+        let status = build_wfp_probe_status(
+            true,
+            WindowsServiceState::Stopped, // BFE stopped
+            WindowsServiceState::Running,
+        );
+        assert_eq!(status, WfpProbeStatus::PlatformServiceStopped);
+    }
+
+    /// 62-06: fail-secure regression — backend service missing still short-circuits.
+    #[test]
+    fn test_wfp_backend_service_missing_is_fail_closed() {
+        let status = build_wfp_probe_status(
+            true,
+            WindowsServiceState::Running,
+            WindowsServiceState::Missing, // backend service missing
+        );
+        assert_eq!(status, WfpProbeStatus::BackendServiceMissing);
+    }
+
+    /// 62-06: fail-secure regression — backend service stopped still short-circuits.
+    #[test]
+    fn test_wfp_backend_service_stopped_is_fail_closed() {
+        let status = build_wfp_probe_status(
+            true,
+            WindowsServiceState::Running,
+            WindowsServiceState::Stopped, // backend service stopped
+        );
+        assert_eq!(status, WfpProbeStatus::BackendServiceStopped);
+    }
+
+    /// 62-06: fail-secure regression — binary missing still short-circuits.
+    #[test]
+    fn test_wfp_backend_binary_missing_is_fail_closed() {
+        let status = build_wfp_probe_status(
+            false,                        // binary missing
+            WindowsServiceState::Running,
+            WindowsServiceState::Running,
+        );
+        assert_eq!(status, WfpProbeStatus::BackendBinaryMissing);
     }
 }
