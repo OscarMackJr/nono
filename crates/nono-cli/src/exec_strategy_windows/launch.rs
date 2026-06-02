@@ -1825,6 +1825,27 @@ pub(super) fn spawn_windows_child(
             broker_args.push(std::ffi::OsString::from("--inherit-handle"));
             broker_args.push(std::ffi::OsString::from(format!("0x{:016x}", *h as usize)));
         }
+        // Plan 62-10 (F-62-UAT-05): pass the session SID to the broker so it can
+        // inject it as a WRITE_RESTRICTED restricting SID into the Low-IL primary
+        // token, causing the WFP ALE_USER_ID filter to match the confined child's
+        // outbound connections.
+        //
+        // FAIL-CLOSED: this arm is only reached when `prefers_low_il_broker &&
+        // has_session_sid` (select_windows_token_arm, L1186-1193), so
+        // config.session_sid is unconditionally Some(...) here.  ok_or_else makes
+        // the invariant explicit and structurally prevents spawning a SID-less
+        // broker child if the field ever becomes None (e.g. future refactor).
+        // A missing SID must error rather than silently spawn an unmatched WFP
+        // child (silent non-enforcement = worst outcome, plan D5(c)).
+        let session_sid = config.session_sid.as_deref().ok_or_else(|| {
+            NonoError::SandboxInit(
+                "BrokerLaunchNoPty reached without session_sid; \
+                 refusing to spawn an unmatched WFP child"
+                    .into(),
+            )
+        })?;
+        broker_args.push(std::ffi::OsString::from("--session-sid"));
+        broker_args.push(std::ffi::OsString::from(session_sid));
         broker_args.push(std::ffi::OsString::from("--cwd"));
         broker_args.push(current_dir.as_os_str().to_owned());
 
