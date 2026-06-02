@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-02T13:51:01.621Z"
+last_updated: "2026-06-02T14:23:24.595Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 12
-  completed_plans: 7
-  percent: 58
+  completed_plans: 8
+  percent: 67
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -21,15 +21,15 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 60 — sandbox-the-tools-confined-coding-loop-v2-9
+**Current Focus:** Phase 62 — add-wfp-kernel-network-enforcement-for-windows-supervised-ru
 
 ## Current Position
 
-Phase: 60 (sandbox-the-tools-confined-coding-loop-v2-9) — COMPLETE + LIVE-UAT PASS
-Plan: 3 of 3 (gap-closure plan 03 complete)
+Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
 Next: Phase 54 (UPST7 Audit). Phase 60 follow-ups (non-blocking): (a) production network.block needs the WFP service (F-60-UAT-03); (b) broker arm needs dev-layout or SIGNED binary at runtime — distribution needs signed MSIs + an MSI rebuild off the fixed binaries (note: dist/windows/*.wxs still point at the stale target\release path); (c) cross-target Linux/macOS clippy for the new windows-cfg code deferred to CI; (d) delete/annotate superseded v0.57.4 GitHub release.
-Last activity: 2026-06-02 -- Phase 62 planning complete
+Last activity: 2026-06-02 -- Phase 62 Plan 01 complete (D-03 auto-start hook + start=auto; commits 096bd1bd + 7da6d5d8)
 
 ### v2.8 Phase Summary (active)
 
