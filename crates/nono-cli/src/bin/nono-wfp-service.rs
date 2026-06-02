@@ -430,7 +430,7 @@ mod windows_impl {
                 FWPM_DISPLAY_DATA0, FWPM_FILTER0, FWPM_FILTER0_0, FWPM_FILTER_CONDITION0,
                 FWPM_LAYER_ALE_AUTH_CONNECT_V4, FWPM_LAYER_ALE_AUTH_CONNECT_V6,
                 FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4, FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6,
-                FWPM_SESSION0, FWPM_SESSION_FLAG_DYNAMIC, FWPM_SUBLAYER0, FWP_ACTION_BLOCK,
+                FWPM_SESSION0, FWPM_SUBLAYER0, FWP_ACTION_BLOCK,
                 FWP_ACTION_PERMIT, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE,
                 FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0,
                 FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET, FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT16,
@@ -1169,7 +1169,14 @@ mod windows_impl {
     #[cfg(target_os = "windows")]
     fn open_wfp_engine() -> Result<WfpEngine, String> {
         let mut session: FWPM_SESSION0 = zeroed();
-        session.flags = FWPM_SESSION_FLAG_DYNAMIC;
+        // Persistent (NON-dynamic) WFP session. Dynamic sessions make objects private to the
+        // opening engine, so the sublayer created at service startup (engine #1) and the filters
+        // added by per-request engines would live in different sessions →
+        // FwpmFilterAdd0 returns FWP_E_WRONG_SESSION (0x8032000C). Persistent objects are shared
+        // across engine handles and cleaned up by the startup sweep + remove-by-key +
+        // (62-10) uninstall purge. zeroed() already sets flags = 0 (persistent); this is explicit.
+        // (debug: wfp-wrong-session-dynamic.)
+        session.flags = 0;
         let mut handle: HANDLE = null_mut();
         // SAFETY: All pointers are either null or point to initialized POD
         // structures valid for the duration of the call. The returned handle is
