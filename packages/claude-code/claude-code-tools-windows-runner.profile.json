@@ -2,8 +2,8 @@
   "extends": "default",
   "meta": {
     "name": "claude-code-tools-windows-runner",
-    "version": "0.1.0",
-    "description": "Experimental Windows tool runner profile for Claude Code Bash rewriting; grants CWD access, blocks network, and declares deny entries for ~/.claude hook state",
+    "version": "0.1.1",
+    "description": "Experimental Windows tool runner profile for Claude Code Bash rewriting; grants CWD access, blocks network, declares deny entries for ~/.claude hook state, and routes confined runs through the Low-IL primary-token broker (windows_low_il_broker) so .NET/PowerShell can start (WRITE_RESTRICTED blocks the CLR; see Phase 60 F-60-UAT-05)",
     "author": "nono-project"
   },
   "security": {
@@ -26,5 +26,6 @@
   "network": { "block": true },
   "workdir": { "access": "readwrite" },
   "allow_launch_services": false,
-  "interactive": true
+  "interactive": true,
+  "windows_low_il_broker": true
 }

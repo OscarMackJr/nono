@@ -16,7 +16,7 @@ Write/Edit/MultiEdit arms + CR-01 `path_covers` fix). Runbook: `C:\temp\nono-pha
 
 | # | UAT item | SC | Result | Notes |
 |---|----------|----|--------|-------|
-| 1 | Confined edit lands | SC 1 | 🟡 write-capability FIXED; hook E2E blocked by gap C | F-60-UAT-04 (restricting-SID DACL gap) fixed (b5324b3c+aff506eb): `nono run ... cmd.exe echo>file` lands. But the HOOK routes the write through `powershell.exe` (.NET) whose CLR fails at Low IL (`80070005`) — F-60-UAT-05 / gap C. Edit doesn't land via the hook yet. |
+| 1 | Confined edit lands | SC 1 | 🟢 vehicle fixed (broker arm); hook E2E pending | F-60-UAT-04 (DACL) fixed + F-60-UAT-05 (CLR) resolved via `windows_low_il_broker:true`. Direct test: confined `powershell.exe Set-Content` AND `cmd.exe echo` both land. Re-run through the hook (PATH→target\release) to close. |
 | 2 | Out-of-scope write denied at OS boundary | SC 1 | ⏸ not reached | blocked by item 1 |
 | 3 | deny+additionalContext → Bash retry (A1) | — | ⏸ not reached | blocked by item 1 |
 | 4 | PowerShell steering unprompted | SC 2 | ⏸ not reached | blocked by item 1 |
@@ -248,15 +248,29 @@ objects in the `BaseNamedObjects` namespace at startup; under WRITE_RESTRICTED t
 write-class and the synthetic restricting SID cannot satisfy them — and that is a kernel object
 namespace, not a filesystem path any `--allow` can grant. No filesystem grant can fix this.
 
-**Fix (decision narrowed to ONE viable path):**
-- (1) Change the hook's confined-write vehicle to NOT use .NET — emit a native `nono write-file`-style
-  primitive run inside the jail (nono.exe is native Rust, no CLR; proven to run + write under
-  WRITE_RESTRICTED) or `cmd.exe` for simple content. Touches `claude_code_hook.rs` confined-write
-  rewrite (+ a tiny native write subcommand if chosen) + the additionalContext message. This is the
-  only mechanism that works; ALSO implies UAT 5's `run` step (`pwsh greet.ps1`) will hit the same
-  CLR wall — any .NET/PowerShell EXECUTION inside the jail is blocked, so the "run a command"
-  capability needs the same non-.NET consideration.
-- (2) ~~Grant a Low-IL-writable temp~~ — ELIMINATED by the experiment above.
+**RESOLVED (2026-06-01) — broker arm (`windows_low_il_broker: true`).** The decisive test: flipped
+the runner profile to `windows_low_il_broker: true`, routing confined runs through
+`WindowsTokenArm::BrokerLaunchNoPty` (a Low-IL **primary** token via `nono-shell-broker.exe`) instead
+of WRITE_RESTRICTED. Result (dev-layout `target\release\nono.exe`, broker gate exempt):
+- `powershell.exe ... Set-Content broker_ps.txt hi` → **`broker_ps.txt` = `hi`** (CLR started! broker
+  log: `Low-IL primary token constructed` → `spawned Low-IL child` → `child exited child_exit_code=0`).
+- `cmd.exe ... echo broker-cmd` → **`broker_cmd.txt` = `broker-cmd`**.
+
+Why it works: the Low-IL primary token has NO synthetic restricting SID, so the desktop CLR's
+`BaseNamedObjects` kernel-object creation at startup is no longer write-denied — .NET/PowerShell runs.
+Write-confinement rides on the mandatory **label** (NO_WRITE_UP on the Medium-IL out-of-grant world;
+CWD relabeled Low) instead of the restricting-SID DACL. So the SAME flag unblocks BOTH confined writes
+AND confined PowerShell execution (UAT 4/5).
+
+FIX APPLIED: `packages/claude-code/claude-code-tools-windows-runner.profile.json` →
+`"windows_low_il_broker": true` (v0.1.1). REQUIRES a dev-layout (`target\release|debug`) or a SIGNED
+binary at runtime (the broker trust gate; the cross-target `target\x86_64-pc-windows-msvc\release`
+path is NOT recognized as dev-layout — use `target\release`). The F-60-UAT-04 DACL fix is orthogonal
+(repairs the WriteRestricted arm for non-broker profiles) and remains valid; it is not the mechanism
+here.
+
+- ~~(1) non-.NET vehicle~~ — unnecessary; the broker arm runs .NET fine.
+- ~~(2) grant a Low-IL temp~~ — ELIMINATED earlier (CLR failed even with %TEMP% granted).
 
 ## Other findings (lower priority, also need a decision — not fast edits)
 - F-60-UAT-01: CWD-coarse self-disable guard makes project-scoped hooks unusable; CLAUDE_CONFIG_DIR
