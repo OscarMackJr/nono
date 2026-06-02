@@ -20,7 +20,7 @@ granularity: standard
 - ✅ **v2.6 UPST6 + v2.5 Drain** — Phases 44, 44.1, 45, 46, 47, 48, 49, 50 (shipped 2026-05-25) — see [`milestones/v2.6-ROADMAP.md`](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Windows supervised-run hardening** — Phases 51, 52 (shipped 2026-05-26) — see [`milestones/v2.7-ROADMAP.md`](milestones/v2.7-ROADMAP.md)
 - **v2.8 UPST7 + v2.7 Drain & Release** — Phases 53–59 (active)
-- **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61 (Phase 60 complete; Phase 61 = ship/release; separate initiative from UPST7, builds on merged PR #4)
+- **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61, 62 (Phase 60 complete; Phase 61 = ship/release; Phase 62 = out-of-box WFP network enforcement closing Phase 60's F-60-UAT-03; separate initiative from UPST7, builds on merged PR #4)
 
 ## Phases
 
@@ -37,6 +37,7 @@ granularity: standard
 - [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
  (completed 2026-05-29)
 - [ ] **Phase 61: Ship/Release v2.9** — Package and release the Phase 60 confined-coding-loop POC: produce CI-signed machine+user MSIs via `release.yml` off the current 0.57.5 binaries, tag the v2.9 milestone, push, and write release notes for the Windows confined tool-mediation story
+- [ ] **Phase 62: Add WFP kernel network enforcement for Windows supervised runs** — Make `network.block:true` on a supervised `nono run` enforce WFP kernel filtering out of the box (machine MSI `start=auto`, in-run auto-start-or-fail-closed, non-elevated pipe SDDL); closes Phase 60's F-60-UAT-03. Service-only — no new kernel driver. (REQ-WFP-01, v2.9 track)
 
 ## Phase Details
 
@@ -156,6 +157,21 @@ Plans:
 Plans:
 - [ ] TBD (run /gsd-plan-phase 61 to break down)
 
+### Phase 62: Add WFP kernel network enforcement for Windows supervised runs
+**Goal**: Make `network.block:true` on a supervised/broker (Low-IL) `nono run` reliably enforce WFP kernel network filtering out of the box on a machine-MSI-installed host — with no manual `nono setup --start-wfp-service` step — and never silently pass through unenforced. Closes Phase 60's F-60-UAT-03 carry-forward. (WFP-via-service is already kernel-enforced; the deliverable is operational reliability, not a new kernel layer — `nono-wfp-driver.sys` minifilter stays v3.0-deferred.)
+**Depends on**: Phase 61
+**Requirements**: REQ-WFP-01
+**Success Criteria** (what must be TRUE):
+  1. **Out-of-box enforced block (HUMAN-UAT, real elevated Win11 host).** After installing the machine MSI, a non-elevated supervised `nono run` on the runner profile with `network.block:true` denies the confined child's outbound network while any explicitly-allowed ports still pass — with NO prior `nono setup --start-wfp-service`. (REQ-WFP-01, D-01; inverse of the Phase 60 `network.block:false` workaround.)
+  2. **Boot-start posture survives reboot.** The machine MSI registers `nono-wfp-service` with `start=auto` so the SCM boot-starts it as SYSTEM; after a reboot the service is already running and the SC1 scenario succeeds without elevation. (D-01)
+  3. **Fail-closed, never silent.** When a `network.block:true` run finds the service not running (stopped, dev layout), nono attempts to start it; if the start succeeds it enforces, and if it cannot (e.g. no elevation) it aborts fail-closed with an actionable error naming the exact elevated remediation command — it NEVER passes through unenforced and performs no netsh FirewallRules fallback. The decision path is unit-tested via the injectable-runner seam without requiring elevation or a running service. (D-03, D-04)
+  4. **Clean uninstall preserved.** `sc stop` + `msiexec /x` of the machine MSI still leaves nothing behind (service fully removed); the `start=demand → start=auto` flip does not regress the Phase 53 / REQ-DRN-01 leave-nothing invariant. (regression guard)
+  5. **Non-elevated pipe access.** The `nono-wfp-service` control-pipe SDDL grants the non-elevated supervised-run persona (Interactive Users) connect access, so a standard-user `nono run` reaches the boot-started service without "Access is denied". (research critical finding — blocking for D-01 end-to-end.)
+**Out of scope (this phase)**: `nono-wfp-driver.sys` real kernel minifilter (Gap 6b, v3.0-deferred); per-process/AppID filter scoping; fine-grained `allow_domain` path/method filtering (that is Phase 56 / REQ-NET-01, proxy layer); the user-scope MSI (`nono-user.wxs`) cannot register SCM services, so boot-start is machine-MSI-only.
+**Plans**: 0 plans
+Plans:
+- [ ] TBD (run /gsd-plan-phase 62 to break down)
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -169,6 +185,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
+| 62. WFP kernel network enforcement (Windows supervised) | 0/TBD | Not started | - |
 
 ## Coverage
 
@@ -188,6 +205,7 @@ All 10 v1 requirements mapped:
 | REQ-IPC-01 | Phase 59 |
 | REQ-STW-01 (v2.9 track) | Phase 60 |
 | REQ-STW-02 (v2.9 track) | Phase 60 |
+| REQ-WFP-01 (v2.9 track) | Phase 62 |
 
 ## References
 
