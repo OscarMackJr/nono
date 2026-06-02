@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
-status: verifying
-last_updated: "2026-06-02T17:43:05.498Z"
+status: executing
+last_updated: "2026-06-02T23:50:01.432Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 17
-  completed_plans: 15
-  percent: 88
+  total_plans: 19
+  completed_plans: 16
+  percent: 84
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 ## Current Position
 
 Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — EXECUTING
-Plan: 62-01..62-09 complete (incl. gap-closures 62-05..62-09). Live 62-04 HUMAN-UAT IN PROGRESS — BANKED 2026-06-02 at the F-62-UAT-05 blocker (design ready, not implemented).
-Status: WFP fully ACTIVATES on real Win11 (FwpmFilterAdd0 returns 0; broker spawns the confined Low-IL child) — but enforcement does NOT yet bite. SC1 BLOCKED at F-62-UAT-05: the BrokerLaunchNoPty Low-IL token lacks the synthetic session_sid the WFP ALE_USER_ID filter matches on, so `--block-net` installs a filter that matches nothing (curl reached the internet). Root-caused + DESIGNED in debug `wfp-broker-token-no-sid` (status design_complete). Six live-UAT bugs total: 62-05 generator start=auto, 62-06 driver-gate, 62-07 null filter name, 62-08 SD→FWP_BYTE_BLOB, 62-09 persistent session (all FIXED); F-62-UAT-05 broker-token-SID (DESIGNED, pending impl).
-Next (resume fresh): (1) implement F-62-UAT-05 = `nono::create_low_integrity_primary_token_with_sid` (CreateRestrictedToken WRITE_RESTRICTED restricting SID + Low-IL label) + `--session-sid` broker plumbing + fail-closed; EMPIRICAL RISK to validate via UAT: does the child start under WRITE_RESTRICTED on the broker path. (2) Plan 62-10 = uninstall WFP purge (FwpmSubLayerDeleteByKey0 + filter sweep, REQ-DRN-01 leave-nothing under the now-persistent session). Then re-run 62-04 SC1→SC4. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; verify installed nono-wfp-service.exe SHA256; import POC cert to LocalMachine\Root+TrustedPublisher; SC1 probe = `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org`. Latest built MSI: nono-v0.57.8 (service hash 5A3355A1...). Phase 60 follow-ups (non-blocking) carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
-Last activity: 2026-06-02 -- Phase 62 live UAT banked at F-62-UAT-05 (broker-token session_sid gap; designed in debug wfp-broker-token-no-sid). 62-05..62-09 shipped; WFP activates but does not yet match the broker child.
+Plan: 2 of 11 (62-10 COMPLETE; 62-11 next)
+Status: 62-10 code-complete; pending live SC1 UAT re-run to confirm (a) curl starts under WRITE_RESTRICTED+Low-IL on broker path and (b) outbound is blocked
+Next (resume fresh): EXECUTE 62-11 = uninstall WFP purge: `--purge-wfp-objects` service mode (FwpmSubLayerDeleteByKey0 + filter sweep) invoked fail-open from `setup --uninstall-wfp`, REQ-DRN-01 leave-nothing under the now-persistent session. Then rebuild nono.exe+broker, sign MSI, re-run 62-04 SC1→SC4. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; SC1 probe = `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org`. Phase 60 follow-ups (non-blocking) carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
+Last session: 2026-06-02 — Completed 62-10-PLAN.md (3 tasks: create_low_integrity_primary_token_with_sid library fn + broker --session-sid plumbing + launch.rs fail-closed push; commits b5c2eae0, 9af1136e, 9e75d084)
 
 ### v2.8 Phase Summary (active)
 
