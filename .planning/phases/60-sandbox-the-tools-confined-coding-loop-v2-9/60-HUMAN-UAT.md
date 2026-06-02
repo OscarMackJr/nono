@@ -3,7 +3,7 @@ phase: 60-sandbox-the-tools-confined-coding-loop-v2-9
 doc: live-human-uat-results
 host: Win11 (operator), Claude Code v2.1.159, nono 0.57.5 (unreleased Phase 60 build)
 started: 2026-06-01
-status: sc1-mechanism-FIXED (F-60-UAT-04 resolved — DACL grant for restricting SID, commits b5324b3c+aff506eb, live-verified at nono-run layer); UAT 1 hook E2E + UAT 2/4/5 pending
+status: PASS — all 5 human-verification items satisfied on a real Win11 host (broker arm). Fixes: F-60-UAT-04 DACL grant (b5324b3c+aff506eb) + F-60-UAT-05 windows_low_il_broker:true (79ce8b05). File-confinement validated with network off; production network.block still needs the WFP service (F-60-UAT-03).
 ---
 
 # Phase 60 — Live Human UAT Results
@@ -16,11 +16,20 @@ Write/Edit/MultiEdit arms + CR-01 `path_covers` fix). Runbook: `C:\temp\nono-pha
 
 | # | UAT item | SC | Result | Notes |
 |---|----------|----|--------|-------|
-| 1 | Confined edit lands | SC 1 | 🟢 vehicle fixed (broker arm); hook E2E pending | F-60-UAT-04 (DACL) fixed + F-60-UAT-05 (CLR) resolved via `windows_low_il_broker:true`. Direct test: confined `powershell.exe Set-Content` AND `cmd.exe echo` both land. Re-run through the hook (PATH→target\release) to close. |
-| 2 | Out-of-scope write denied at OS boundary | SC 1 | ⏸ not reached | blocked by item 1 |
-| 3 | deny+additionalContext → Bash retry (A1) | — | ⏸ not reached | blocked by item 1 |
-| 4 | PowerShell steering unprompted | SC 2 | ⏸ not reached | blocked by item 1 |
-| 5 | E2E read→edit→run | SC 4 | ⏸ not reached | blocked by item 1 |
+| 1 | Confined edit lands | SC 1 | ✅ PASS | Hook E2E (broker arm): `Write "hello world"` denied → confined Bash/PS retry → `test.txt` (12 B) landed, child exit 0. |
+| 2 | Out-of-scope write denied at OS boundary | SC 1 | ✅ PASS (security-critical) | `Write ..\outside.txt` ran in the Low-IL shell; OS denied at kernel: `Access to the path 'C:\Users\OMack\outside.txt' is denied. UnauthorizedAccessException`. No file created. Mandatory-label boundary holds. |
+| 3 | deny+additionalContext → Bash retry (A1) | — | ✅ PASS | Confirmed reliable across all runs — Claude auto-converts blocked Write/Edit to a confined Bash+PS call, no nudge. |
+| 4 | PowerShell steering unprompted | SC 2 | ✅ PASS | `List the files` → Claude used `Get-ChildItem -Force \| Select-Object … \| Format-Table` (PS, not `ls`), executed confined under the broker arm. |
+| 5 | E2E read→edit→run | SC 4 | ✅ PASS | Read `notes.md` (allowed) → create `greet.ps1` (confined write) → **run** `& greet.ps1` (confined exec) → printed `Hello from nono POC`, exit 0. |
+
+**VERDICT: all 5 items PASS** on Win11 build, Claude Code v2.1.159, `nono 0.57.5` dev-layout
+(`target\release`), runner profile `windows_low_il_broker:true` + `network.block:false` (UAT variant).
+The two fixes this session — F-60-UAT-04 (DACL grant for the WriteRestricted arm) and F-60-UAT-05
+(broker arm so .NET/PowerShell starts) — close SC 1/2/4. Caveats: (a) production network blocking
+(`network.block:true`) still requires the WFP service running (F-60-UAT-03, separate); (b) the broker
+arm requires a dev-layout or SIGNED binary at runtime (broker trust gate) — distribution needs signed
+MSIs. Gap B (pwsh-under-WindowsApps) is moot: the hook uses `powershell.exe` (Windows PowerShell 5.1),
+not the MSIX `pwsh.exe`.
 
 ## F-60-UAT-01 — Self-disable guard fires on the documented working dir (setup conflict)
 
