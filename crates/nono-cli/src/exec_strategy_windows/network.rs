@@ -1256,18 +1256,44 @@ where
 /// no WiX representation, so a clean MSI uninstall leaves it behind. This command
 /// removes both.
 ///
+/// Before stopping/deleting the services, the persistent WFP objects introduced
+/// by 62-09 are purged FAIL-OPEN: `run_purge` receives the path to the backend
+/// binary and must invoke it with `--purge-wfp-objects`. A purge failure is
+/// recorded in `report.details` but NEVER aborts or returns an error — uninstall
+/// must always complete regardless of purge outcome. The MSI custom action
+/// (`CaUninstallWfpServices`) has `Return=ignore`, so even a non-zero exit from
+/// the whole setup chain is non-blocking. This is the deliberate inverse of the
+/// run-time fail-CLOSED stance: at uninstall the service is going away and
+/// best-effort cleanup is correct (T-62-24).
+///
 /// Safety: only the two well-known nono-owned service names from `WfpProbeConfig`
 /// are ever touched, so this can never delete an unrelated service. Idempotent —
 /// services that are not installed are reported and skipped.
-pub(super) fn uninstall_windows_wfp_with_runner<Q, R>(
+pub(super) fn uninstall_windows_wfp_with_runner<Q, R, P>(
     config: &WfpProbeConfig,
     query_service: Q,
     run_service_command: R,
+    run_purge: P,
 ) -> Result<WindowsWfpUninstallReport>
 where
     Q: Fn(&str) -> Result<String>,
     R: Fn(&[String]) -> Result<String>,
+    P: Fn(&std::path::Path) -> Result<String>,
 {
+    // Run the WFP object purge FIRST (before stopping/deleting the service),
+    // while the binary is still present (MSI custom action runs Before=RemoveFiles).
+    // FAIL-OPEN: a purge error is recorded but must NOT abort uninstall.
+    let purge_note = match run_purge(&config.backend_binary_path) {
+        Ok(_) => "wfp objects purged",
+        Err(e) => {
+            tracing::warn!(
+                "uninstall: wfp object purge failed (best-effort, uninstall continues): {}",
+                e
+            );
+            "wfp object purge skipped (best-effort)"
+        }
+    };
+
     let service_outcome = remove_single_windows_service(
         config.backend_service,
         &build_wfp_service_stop_args(config),
@@ -1291,15 +1317,42 @@ where
     Ok(WindowsWfpUninstallReport {
         status_label,
         details: format!(
-            "user-mode service {}: {}; kernel driver {}: {}",
-            config.backend_service, service_outcome, config.backend_driver, driver_outcome
+            "purge: {}; user-mode service {}: {}; kernel driver {}: {}",
+            purge_note,
+            config.backend_service,
+            service_outcome,
+            config.backend_driver,
+            driver_outcome
         ),
     })
 }
 
+/// Run the backend binary with `--purge-wfp-objects` to delete all nono WFP
+/// filters and the nono sublayer before the service is stopped+deleted.
+///
+/// Non-zero exit from the binary is NOT treated as an error — the uninstall
+/// path is fail-open (T-62-24). Spawn failure is propagated so the caller
+/// can record it, but the caller must not abort uninstall on Err either.
+fn run_backend_purge(binary: &std::path::Path) -> Result<String> {
+    if !binary.exists() {
+        return Ok("backend binary absent; nothing to purge".into());
+    }
+    let out = std::process::Command::new(binary)
+        .arg("--purge-wfp-objects")
+        .output()
+        .map_err(NonoError::CommandExecution)?;
+    // Non-zero exit is NOT an error here (fail-open): surface stdout/stderr
+    // for the uninstall report so the outcome is auditable.
+    Ok(format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    ))
+}
+
 pub(crate) fn uninstall_windows_wfp() -> Result<WindowsWfpUninstallReport> {
     let config = current_wfp_probe_config()?;
-    uninstall_windows_wfp_with_runner(&config, run_sc_query, run_sc_command)
+    uninstall_windows_wfp_with_runner(&config, run_sc_query, run_sc_command, run_backend_purge)
 }
 
 pub(super) fn start_windows_wfp_service_with_runner<Q, R>(
@@ -1777,9 +1830,15 @@ mod tests {
             }
             Ok(String::new())
         };
+        let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let report = uninstall_windows_wfp_with_runner(&config, query, run).unwrap();
+        let report =
+            uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
         assert_eq!(report.status_label, "removed");
+        assert!(
+            report.details.contains("wfp objects purged"),
+            "purge note must appear in report details"
+        );
 
         let calls = calls.into_inner();
         // Each running service is stopped THEN deleted.
@@ -1798,8 +1857,10 @@ mod tests {
             calls.borrow_mut().push(args.to_vec());
             Ok(String::new())
         };
+        let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let report = uninstall_windows_wfp_with_runner(&config, query, run).unwrap();
+        let report =
+            uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
         assert_eq!(report.status_label, "nothing to remove");
         assert!(
             calls.into_inner().is_empty(),
@@ -1829,8 +1890,10 @@ mod tests {
             }
             Ok(String::new())
         };
+        let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let report = uninstall_windows_wfp_with_runner(&config, query, run).unwrap();
+        let report =
+            uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
         assert_eq!(report.status_label, "removed");
         let calls = calls.into_inner();
         assert!(
@@ -1853,11 +1916,38 @@ mod tests {
             }
             Ok(String::new())
         };
+        let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let result = uninstall_windows_wfp_with_runner(&config, query, run);
+        let result = uninstall_windows_wfp_with_runner(&config, query, run, purge);
         assert!(
             result.is_err(),
             "a failing sc delete must surface as an error, not a silent success"
+        );
+    }
+
+    /// Task 2 (62-11): a purge Err must NOT fail the uninstall call (fail-open
+    /// contract, T-62-24). The purge outcome is recorded in report.details as
+    /// "wfp object purge skipped (best-effort)" so the outcome is auditable.
+    #[test]
+    fn uninstall_purge_failure_is_fail_open() {
+        let config = make_test_probe_config();
+        let query = |_service: &str| -> Result<String> { Ok(sc_missing_output()) };
+        let run = |_args: &[String]| -> Result<String> { Ok(String::new()) };
+        // Simulate a purge error (e.g. BFE stopped, binary not reachable).
+        let purge = |_p: &std::path::Path| -> Result<String> {
+            Err(nono::NonoError::Setup("boom".to_string()))
+        };
+
+        let result = uninstall_windows_wfp_with_runner(&config, query, run, purge);
+        assert!(
+            result.is_ok(),
+            "a failing purge must NOT abort uninstall (fail-open)"
+        );
+        let report = result.unwrap();
+        assert!(
+            report.details.contains("wfp object purge skipped (best-effort)"),
+            "report details must record the skipped-purge note; got: {}",
+            report.details
         );
     }
 
