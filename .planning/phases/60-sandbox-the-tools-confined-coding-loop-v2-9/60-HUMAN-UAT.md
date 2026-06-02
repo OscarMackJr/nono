@@ -16,7 +16,7 @@ Write/Edit/MultiEdit arms + CR-01 `path_covers` fix). Runbook: `C:\temp\nono-pha
 
 | # | UAT item | SC | Result | Notes |
 |---|----------|----|--------|-------|
-| 1 | Confined edit lands | SC 1 | 🟡 FIXED — nono-run layer PASS; hook E2E pending | F-60-UAT-04 root cause (restricting-SID DACL gap) fixed (b5324b3c+aff506eb); `nono run ... cmd.exe echo>file` now lands. Re-run via the Claude Code hook to close. |
+| 1 | Confined edit lands | SC 1 | 🟡 write-capability FIXED; hook E2E blocked by gap C | F-60-UAT-04 (restricting-SID DACL gap) fixed (b5324b3c+aff506eb): `nono run ... cmd.exe echo>file` lands. But the HOOK routes the write through `powershell.exe` (.NET) whose CLR fails at Low IL (`80070005`) — F-60-UAT-05 / gap C. Edit doesn't land via the hook yet. |
 | 2 | Out-of-scope write denied at OS boundary | SC 1 | ⏸ not reached | blocked by item 1 |
 | 3 | deny+additionalContext → Bash retry (A1) | — | ⏸ not reached | blocked by item 1 |
 | 4 | PowerShell steering unprompted | SC 2 | ⏸ not reached | blocked by item 1 |
@@ -223,6 +223,29 @@ ineffective, confined writes fail everywhere.
 is the Low-IL write path itself, not the shell. UAT 2/5 cannot be validated until A passes. Hand the
 full `nono run` stderr (including the label-guard WARNs and the `Access is denied` line) to
 `/gsd:debug` as the primary evidence.
+
+## F-60-UAT-05 — Hook confined-write vehicle is .NET PowerShell; CLR fails at Low IL (gap C, now on the hook E2E)
+
+**Observed (2026-06-01, after F-60-UAT-04 fix).** Re-ran UAT 1 through the Claude Code hook. Write
+denied → Claude retried as Bash with the hook's additionalContext command
+(`[System.IO.File]::WriteAllText(...)` — a .NET PowerShell command). The hook wraps it as
+`nono run ... -- powershell.exe -EncodedCommand <b64>`. The Low-IL `powershell.exe` failed:
+`Starting the CLR failed with HRESULT 80070005`. The file did not land. Meanwhile the SAME confined
+write via `cmd.exe` (no CLR) DOES land (F-60-UAT-04 fix). So the write CAPABILITY is fixed; the
+hook's .NET VEHICLE is the remaining blocker.
+
+**Likely mechanism (same as F-60-UAT-04, different path):** .NET Framework CLR startup writes to a
+Medium-IL location (almost certainly `%TEMP%`/fusion). That path is NOT in the runner grant, so the
+session restricting SID is absent from its DACL → under WRITE_RESTRICTED the CLR's startup write is
+denied → `80070005`. (Confirm via the %TEMP%-grant experiment below.)
+
+**Fix options (decision needed — a follow-on, not done here):**
+- (1) Change the hook's confined-write vehicle to NOT use .NET: emit a `cmd.exe`-based write, or
+  better, a native `nono write-file`-style primitive run inside the jail (nono.exe is native, no
+  CLR). Most robust; avoids granting %TEMP%. Touches `claude_code_hook.rs` confined-write rewrite.
+- (2) Grant a Low-IL-writable temp to the runner profile so the CLR can start (the F-60-UAT-04 DACL
+  fix would then cover it). Simpler but broadens the jail (shared %TEMP%); prefer a per-session temp
+  subdir if taken.
 
 ## Other findings (lower priority, also need a decision — not fast edits)
 - F-60-UAT-01: CWD-coarse self-disable guard makes project-scoped hooks unusable; CLAUDE_CONFIG_DIR
