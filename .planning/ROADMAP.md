@@ -178,6 +178,7 @@ Plans:
 - [x] 62-06-PLAN.md -- GAP-CLOSURE F-62-UAT-01: drop the out-of-scope kernel-driver gate from build_wfp_probe_status so Ready (the only trigger for the service FwpmFilterAdd0 activation IPC) is reachable BFE+service-only, per D-05; retire stale SERVICE placeholder strings (network.rs); root-caused in debug wfp-driver-gate-placeholder
 - [x] 62-07-PLAN.md -- GAP-CLOSURE F-62-UAT-02: set non-null filter displayData.name in add_policy_filter (nono-wfp-service.rs) so FwpmFilterAdd0 stops failing RPC_X_BAD_STUB_DATA (win32 1783); 7-point FWPM field audit confirmed name was the sole defect; root-caused in debug wfp-filter-add-1783
 - [x] 62-08-PLAN.md -- GAP-CLOSURE F-62-UAT-03: wrap the ALE_USER_ID security descriptor in an FWP_BYTE_BLOB (windows-sys types sd as *mut FWP_BYTE_BLOB) so FwpmFilterAdd0 stops failing RPC_X_BAD_STUB_DATA (1783); second stacked 1783 cause on the SID block path
+- [x] 62-09-PLAN.md -- GAP-CLOSURE F-62-UAT-04: make the WFP session PERSISTENT (drop FWPM_SESSION_FLAG_DYNAMIC) so the sublayer (startup engine) + filters (per-request engines) share one namespace; fixes FwpmFilterAdd0 FWP_E_WRONG_SESSION (0x8032000C); root-caused in debug wfp-wrong-session-dynamic. FOLLOW-UP 62-10 = uninstall WFP purge (REQ-DRN-01 leave-nothing) before SC4
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
