@@ -20,7 +20,7 @@ granularity: standard
 - ✅ **v2.6 UPST6 + v2.5 Drain** — Phases 44, 44.1, 45, 46, 47, 48, 49, 50 (shipped 2026-05-25) — see [`milestones/v2.6-ROADMAP.md`](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Windows supervised-run hardening** — Phases 51, 52 (shipped 2026-05-26) — see [`milestones/v2.7-ROADMAP.md`](milestones/v2.7-ROADMAP.md)
 - **v2.8 UPST7 + v2.7 Drain & Release** — Phases 53–59 (active)
-- **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phase 60 (planned; separate initiative from UPST7, builds on merged PR #4)
+- **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61 (Phase 60 complete; Phase 61 = ship/release; separate initiative from UPST7, builds on merged PR #4)
 
 ## Phases
 
@@ -36,6 +36,7 @@ granularity: standard
 
 - [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
  (completed 2026-05-29)
+- [ ] **Phase 61: Ship/Release v2.9** — Package and release the Phase 60 confined-coding-loop POC: produce CI-signed machine+user MSIs via `release.yml` off the current 0.57.5 binaries, tag the v2.9 milestone, push, and write release notes for the Windows confined tool-mediation story
 
 ## Phase Details
 
@@ -147,6 +148,14 @@ Plans:
 - [x] 60-01-PLAN.md — Confined file-op arms: Write/Edit/MultiEdit deny+additionalContext + NotebookEdit informative deny + unit tests (REQ-STW-01)
 - [x] 60-02-PLAN.md — PowerShell-steering CLAUDE.md update + runner profile verification + cross-target clippy PARTIAL note (REQ-STW-02)
 
+### Phase 61: Ship/Release v2.9
+**Goal**: Package and release the Phase 60 confined-coding-loop POC — produce CI-signed machine+user MSIs via `release.yml` off the current 0.57.5 binaries, tag the v2.9 milestone, push, and write release notes for the Windows confined tool-mediation story.
+**Depends on**: Phase 60 (confined coding loop is code-complete + live-UAT PASS).
+**Requirements**: TBD (run /gsd-plan-phase 61)
+**Plans**: 0 plans
+Plans:
+- [ ] TBD (run /gsd-plan-phase 61 to break down)
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -159,6 +168,7 @@ Plans:
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
+| 61. Ship/Release v2.9 | 0/TBD | Not started | - |
 
 ## Coverage
 
