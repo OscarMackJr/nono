@@ -168,9 +168,15 @@ Plans:
   4. **Clean uninstall preserved.** `sc stop` + `msiexec /x` of the machine MSI still leaves nothing behind (service fully removed); the `start=demand → start=auto` flip does not regress the Phase 53 / REQ-DRN-01 leave-nothing invariant. (regression guard)
   5. **Non-elevated pipe access.** The `nono-wfp-service` control-pipe SDDL grants the non-elevated supervised-run persona (Interactive Users) connect access, so a standard-user `nono run` reaches the boot-started service without "Access is denied". (research critical finding — blocking for D-01 end-to-end.)
 **Out of scope (this phase)**: `nono-wfp-driver.sys` real kernel minifilter (Gap 6b, v3.0-deferred); per-process/AppID filter scoping; fine-grained `allow_domain` path/method filtering (that is Phase 56 / REQ-NET-01, proxy layer); the user-scope MSI (`nono-user.wxs`) cannot register SCM services, so boot-start is machine-MSI-only.
-**Plans**: 0 plans
+**Plans**: 4 plans
 Plans:
-- [ ] TBD (run /gsd-plan-phase 62 to break down)
+**Wave 1** (parallel -- no file overlap)
+- [ ] 62-01-PLAN.md -- D-03 auto-start hook + start=auto in build_wfp_service_create_args + 3 unit tests (network.rs)
+- [ ] 62-02-PLAN.md -- ServiceInstall Start=auto (nono-machine.wxs) + PIPE_SDDL IU ACE + SDDL unit test (nono-wfp-service.rs)
+- [ ] 62-03-PLAN.md -- REQ-WFP-01 in REQUIREMENTS.md + ROADMAP Phase 62 plan list (planning artifacts)
+
+**Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
+- [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
 
 ## Progress
 
@@ -185,7 +191,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
-| 62. WFP kernel network enforcement (Windows supervised) | 0/TBD | Not started | - |
+| 62. WFP kernel network enforcement (Windows supervised) | 0/4 | Planning | - |
 
 ## Coverage
 
