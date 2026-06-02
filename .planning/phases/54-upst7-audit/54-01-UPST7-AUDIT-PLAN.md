@@ -157,8 +157,9 @@ Upstream uses (the fork does NOT carry): tls_intercept/, forward.rs, audit_ledge
     - `v0.59.0_sha: e61814f8` (assert)
     - `v0.60.0: 9a05a4ff — OUT OF RANGE; scope decision deferred to Task 3 / human`
     - `v0.59.x_patch: <none | v0.59.N sha>` (SC3 patch-release capture)
+    - `plan_base_sha: <output of \`git rev-parse HEAD\` captured BEFORE this lock-notes commit>` (the pre-plan HEAD; the Task 9 zero-source-edits close-gate diffs `${plan_base_sha}..HEAD` instead of a fragile `HEAD~N` offset, so it stays correct regardless of how many commits the audit-walk produces)
 
-    This file is the source-of-truth for Task 3's frontmatter `upstream_head_at_audit` + `refetch_date`. Commit this file standalone with DCO sign-off: `docs(54-01): re-fetch upstream + lock upstream_head_at_audit for UPST7 audit`.
+    Capture `plan_base_sha` via `git rev-parse HEAD` IMMEDIATELY before committing this lock-notes file (it must point at the commit just before plan 54-01's first commit). This file is the source-of-truth for Task 3's frontmatter `upstream_head_at_audit` + `refetch_date`, and for the Task 9 close-gate base ref. Commit this file standalone with DCO sign-off: `docs(54-01): re-fetch upstream + lock upstream_head_at_audit for UPST7 audit`.
   </action>
   <verify>
     <automated>cd /c/Users/OMack/Nono && git rev-parse v0.58.0 >/dev/null 2>&1 && git rev-parse v0.59.0 >/dev/null 2>&1 && test -f .planning/phases/54-upst7-audit/54-01-LOCK-NOTES.md && grep -qE "^upstream_head_at_audit: [a-f0-9]{40}$" .planning/phases/54-upst7-audit/54-01-LOCK-NOTES.md && grep -q "^refetch_date:" .planning/phases/54-upst7-audit/54-01-LOCK-NOTES.md && grep -q "^v0.59.0_sha: e61814f8" .planning/phases/54-upst7-audit/54-01-LOCK-NOTES.md</automated>
@@ -171,6 +172,7 @@ Upstream uses (the fork does NOT carry): tls_intercept/, forward.rs, audit_ledge
     - `git rev-parse v0.60.0` resolves (starts with `9a05a4ff`) and is noted OUT OF RANGE
     - `54-01-LOCK-NOTES.md` exists with `upstream_head_at_audit:` line carrying a 40-char hex sha AND a `refetch_date:` line carrying a UTC date
     - `v0.59.x_patch:` line present (records `none` or the patch sha)
+    - `plan_base_sha:` line present carrying a 40-char hex sha (the Task 9 close-gate base ref)
     - Lock-notes commit signed with `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>`
   </acceptance_criteria>
   <done>Upstream re-fetched; v0.58.0 + v0.59.0 resolve locally; upstream_head_at_audit + refetch_date locked to file; v0.60.0 surfaced as out-of-range; commit signed.</done>
@@ -597,7 +599,7 @@ Upstream uses (the fork does NOT carry): tls_intercept/, forward.rs, audit_ledge
     Commit with DCO sign-off: `docs(54-01): close-gate verification + STATE.md update + Plan 54-01 SUMMARY`.
   </action>
   <verify>
-    <automated>cd /c/Users/OMack/Nono && test -f .planning/phases/54-upst7-audit/54-01-SUMMARY.md && grep -q "^status: complete$" .planning/phases/54-upst7-audit/54-01-SUMMARY.md && grep -q "Plan 54-01" .planning/STATE.md && [ "$(git diff --name-only HEAD~8..HEAD -- crates/ bindings/ scripts/ Makefile | wc -l)" -eq 0 ]</automated>
+    <automated>cd /c/Users/OMack/Nono && BASE=$(grep -E "^plan_base_sha: [a-f0-9]{40}$" .planning/phases/54-upst7-audit/54-01-LOCK-NOTES.md | awk '{print $2}') && test -n "$BASE" && test -f .planning/phases/54-upst7-audit/54-01-SUMMARY.md && grep -q "^status: complete$" .planning/phases/54-upst7-audit/54-01-SUMMARY.md && grep -q "Plan 54-01" .planning/STATE.md && [ "$(git diff --name-only ${BASE}..HEAD -- crates/ bindings/ scripts/ Makefile | wc -l)" -eq 0 ]</automated>
   </verify>
   <acceptance_criteria>
     - All close-gate checks pass (drift-tool re-run idempotent; row-count gate; all mandatory sections incl. SC4 TLS + SC3 frontmatter; ROADMAP stub + Phase 54 flip; STATE updated; zero source edits)
@@ -662,7 +664,7 @@ No high-severity threats: this is a read-only markdown-producing phase. All disp
 8. `grep -q "^## Cross-cluster re-export deps detected$" .planning/phases/54-upst7-audit/54-DIVERGENCE-LEDGER.md` — exits 0 (SC2)
 9. `grep -q "^## TLS-intercept clean-apply assessment (Phase 34 C11)$" .planning/phases/54-upst7-audit/54-DIVERGENCE-LEDGER.md && grep -qE "^\*\*Verdict:\*\* (clean-apply|small-additive-port|manual-replay|fork-preserve)" .planning/phases/54-upst7-audit/54-DIVERGENCE-LEDGER.md` — exits 0 (SC4)
 10. `grep -q "^### UPST8 — Upstream v0.59.0" .planning/ROADMAP.md` — exits 0
-11. `[ "$(cd /c/Users/OMack/Nono && git diff --name-only HEAD~8..HEAD -- crates/ bindings/ scripts/ Makefile | wc -l)" -eq 0 ]` — true (zero-source-edits invariant)
+11. `BASE=$(grep -E "^plan_base_sha: [a-f0-9]{40}$" .planning/phases/54-upst7-audit/54-01-LOCK-NOTES.md | awk '{print $2}'); [ "$(cd /c/Users/OMack/Nono && git diff --name-only ${BASE}..HEAD -- crates/ bindings/ scripts/ Makefile | wc -l)" -eq 0 ]` — true (zero-source-edits invariant; base = `plan_base_sha` from Task 1 lock-notes, not a fragile `HEAD~N` offset)
 12. `make check-upstream-drift ARGS="--from v0.57.0 --to v0.59.0 --format json" > /dev/null` — exits 0 (idempotent re-run)
 13. `test -f .planning/phases/54-upst7-audit/54-01-SUMMARY.md && grep -q "^status: complete$" .planning/phases/54-upst7-audit/54-01-SUMMARY.md` — exits 0
 </verification>

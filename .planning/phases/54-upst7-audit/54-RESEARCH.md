@@ -6,7 +6,7 @@
 
 ## Summary
 
-Phase 54 is an **audit/analysis phase**, not a code-implementation phase. It produces exactly one durable artifact: `DIVERGENCE-LEDGER.md` covering upstream `v0.57.0..v0.59.0`, with per-cluster dispositions, a `windows-touch` column, an `## ADR review` section, an `## Empirical cross-check` section (diff-inspect, not `--name-only`), and frontmatter recording a fresh upstream HEAD SHA + re-fetch date. The phase is the binding input for Phase 55 (the cherry-pick wave). It ships **zero** `.rs`/`.toml`/`.sh`/`.ps1`/`Makefile` edits — only `.planning/` artifacts.
+Phase 54 is an **audit/analysis phase**, not a code-implementation phase. It produces exactly one durable artifact: `54-DIVERGENCE-LEDGER.md` covering upstream `v0.57.0..v0.59.0`, with per-cluster dispositions, a `windows-touch` column, an `## ADR review` section, an `## Empirical cross-check` section (diff-inspect, not `--name-only`), and frontmatter recording a fresh upstream HEAD SHA + re-fetch date. The phase is the binding input for Phase 55 (the cherry-pick wave). It ships **zero** `.rs`/`.toml`/`.sh`/`.ps1`/`Makefile` edits — only `.planning/` artifacts.
 
 The fork has an exceptionally well-established methodology for this exact task: Phase 33 (UPST3), Phase 39 (UPST4), Phase 42 (UPST5 audit), and **Phase 47 (UPST6 audit)** are direct precedents. Phase 47's `DIVERGENCE-LEDGER.md` and its `47-01-UPST6-AUDIT-PLAN.md` are the verbatim template Phase 54 should mirror — same frontmatter schema, same 8-task structure (mechanical preamble → scaffold → human audit-walk → re-export scan → ADR review → empirical cross-check → ROADMAP stub → SUMMARY), same disposition vocabulary, same close-gates. The single substantive change versus Phase 47 is the range (`v0.57.0..v0.59.0` instead of `v0.54.0..v0.57.0`) and two SC-mandated additions: (SC3) a mandatory re-fetch because the v0.58/v0.59 tags are **not yet local**, and (SC4) an explicit diff-inspect note on the fork-divergent TLS-interception surface (Phase 34 Cluster C11).
 
@@ -98,7 +98,7 @@ This phase installs **no external packages**. It uses only repo-local tooling an
              │                                        vs manual-replay)
              ▼                                              ▼
   ┌─────────────────────────────────────────────────────────────────┐
-  │ DIVERGENCE-LEDGER.md  (the ONLY durable code-adjacent output)     │
+  │ 54-DIVERGENCE-LEDGER.md  (the ONLY durable code-adjacent output)  │
   │  Headline · Reproduction · Cluster Summary · per-Cluster ·        │
   │  ## ADR review · ## Empirical cross-check ·                       │
   │  ## Cross-cluster re-export deps detected                         │
@@ -115,7 +115,7 @@ This phase installs **no external packages**. It uses only repo-local tooling an
 ├── 54-CONTEXT.md                   # (if discuss-phase runs)
 ├── 54-01-UPST7-AUDIT-PLAN.md       # single analysis plan (clone of 47-01)
 ├── 54-01-LOCK-NOTES.md             # re-fetch HEAD SHA + tag-assert holding file (Task 1)
-├── DIVERGENCE-LEDGER.md            # the deliverable
+├── 54-DIVERGENCE-LEDGER.md         # the deliverable (phase-prefixed per 54-VALIDATION.md + plan 54-01)
 └── 54-01-SUMMARY.md                # plan close summary
 ```
 Raw drift JSON goes to `ci-logs-local/drift/<timestamp>-v057-v059.json` and is **NOT committed** (`ci-logs-local/` is gitignored) — per D-47-E1 / D-33-A2 inherited.
@@ -290,22 +290,27 @@ git show <v0.59-ordering-sha> -- crates/nono-proxy/
 
 **Note:** The v0.58/v0.59 *feature content* (Bitwarden `bw://`, JSONC, `target_binary`, session hooks, allow_domain path/method, proxy 502, etc.) in the gap analysis is tagged MEDIUM/MEDIUM-HIGH confidence by its own Section 4 and was retrieved from upstream CHANGELOG + Releases page — the drift tool run in Task 2 is what authoritatively enumerates the actual commits. Do not treat the gap-analysis feature list as the commit inventory; use it as a cross-check.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All three are deferred-by-design to execution-time human checkpoints in plan 54-01 — none are dangling; each has a defined in-plan resolution path.
 
 1. **Does the audit scope expand to v0.60.0?**
    - What we know: SC locks `v0.57.0..v0.59.0`; v0.60.0 exists upstream (`9a05a4ff`), cut after the 2026-05-27 gap analysis.
    - What's unclear: whether the team wants UPST7 to absorb v0.60.0 too, or defer it to UPST8.
    - Recommendation: Keep range at `v0.57.0..v0.59.0` per SC; record v0.60.0 as "deferred to next cycle" in the ledger Headline (mirroring Phase 47's post-v0.57.0 deferral). Surface the choice to the human at discuss-phase or Task 1. Do NOT silently expand.
+   - **RESOLVED:** range stays `v0.57.0..v0.59.0` per the locked SC; v0.60.0 deferred to UPST8. Surfaced in plan 54-01 Task 1 and confirmed by the human at Task 4, recorded in the ledger Headline `**v0.60.0 scope:**` line.
 
 2. **Are there v0.59.x patch releases (post-2026-05-27)?**
    - What we know: SC3 specifically asks to capture any. Pre-fetch `ls-remote` showed only `v0.59.0` (no `v0.59.1+`), but v0.60.0 landed.
    - What's unclear: settled only by the Task 1 re-fetch.
    - Recommendation: The re-fetch resolves this; if a `v0.59.x` exists, include it (range `v0.57.0..v0.59.x`).
+   - **RESOLVED:** settled by plan 54-01 Task 1's mandatory `git fetch upstream --tags`; the `v0.59.x_patch:` capture line records the outcome (include if any patch tag resolves).
 
 3. **Which exact v0.59 commit is the "endpoint-rules-before-credential-selection" ordering fix?**
    - What we know: gap analysis flags it as `partial/verify`, cross-platform-core, touching the proxy CONNECT route.
    - What's unclear: the precise SHA (gap analysis had no PR numbers).
    - Recommendation: Identify it from the Task 2 drift JSON (proxy category), then run the SC4 diff-inspect.
+   - **RESOLVED:** identified in plan 54-01 Task 5b from the Task 2 drift JSON (proxy category), then diff-inspected for the SC4 clean-apply-vs-manual-replay verdict.
 
 ## Environment Availability
 
