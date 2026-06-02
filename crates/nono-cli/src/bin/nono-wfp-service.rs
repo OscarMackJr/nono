@@ -1888,6 +1888,16 @@ mod windows_impl {
             assert!(msg.contains("nono-wfp-service"));
             assert!(msg.contains("startup sweep complete"));
         }
+
+        #[cfg(target_os = "windows")]
+        #[test]
+        fn test_wfp_pipe_sddl_includes_interactive_users() {
+            assert!(
+                PIPE_SDDL.contains("IU") || PIPE_SDDL.contains("BU"),
+                "PIPE_SDDL must grant access to Interactive Users or Built-in Users \
+                 so non-elevated supervised nono runs can reach the WFP service pipe"
+            );
+        }
     }
 } // end mod windows_impl
 
