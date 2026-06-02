@@ -42,6 +42,19 @@
 
 - [ ] **REQ-IPC-01**: The supervisor survives a transient child IPC close (keep-alive instead of dropping the supervisor loop), enforces bounded read-timeouts, and accepts connections robustly. The Unix side absorbs upstream's named-socket hardening (cross-platform-core); the Windows side translates the robustness intent onto the fork's Named-Pipe AIPC path (Phase 18) — a translate-not-cherry-pick.
 
+### Windows Network Enforcement (WFP)
+
+- [ ] **REQ-WFP-01**: Out-of-box WFP operational enforcement for supervised runs on a
+  machine-MSI-installed Windows host. A `network.block:true` supervised `nono run` enforces
+  WFP kernel network filtering without any manual `nono setup --start-wfp-service` step.
+  Specifically: (1) the machine MSI registers `nono-wfp-service` with `start=auto` so the
+  SCM boot-starts it as SYSTEM; (2) the control-pipe SDDL grants non-elevated supervised-run
+  sessions (Interactive Users) read+write access; (3) when the service is not running at
+  enforcement time, nono attempts an auto-start and if that fails returns a fail-closed error
+  naming the exact remediation command — never passes through unenforced; (4) clean
+  uninstall via `msiexec /x` still leaves nothing behind. Closes Phase 60's F-60-UAT-03.
+  (v2.9 track, Phase 62)
+
 ## v2 Requirements (Deferred)
 
 Acknowledged but not in the v2.8 roadmap.
@@ -90,12 +103,13 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-CRED-01 | Phase 57 | Pending |
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
+| REQ-WFP-01 | Phase 62 | Pending |
 | REQ-DENY-PREFLIGHT-01 | v2 Deferred | Deferred |
 | REQ-UNDO-TOCTOU-01 | v2 Deferred | Deferred |
 
 **Coverage:**
-- v1 requirements: 10 total
-- Mapped to phases: 10/10 ✓
+- v1 requirements: 11 total
+- Mapped to phases: 11/11 ✓
 - Unmapped: 0
 
 ---
