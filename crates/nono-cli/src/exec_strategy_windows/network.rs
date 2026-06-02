@@ -442,7 +442,7 @@ pub(super) fn describe_wfp_runtime_activation_failure(
             config.backend_service
         ),
         WfpProbeStatus::BackendServiceStopped => format!(
-            "the WFP service `{}` is registered but not running. Run `nono setup --start-wfp-service` first",
+            "the WFP service `{}` is registered but not running and could not be started automatically. To start it, run in an elevated (Administrator) terminal: `nono setup --start-wfp-service`",
             config.backend_service
         ),
         WfpProbeStatus::BackendDriverBinaryMissing => format!(
@@ -1557,16 +1557,18 @@ impl WindowsNetworkBackend for WfpNetworkBackend {
     }
 }
 
-pub(super) fn install_wfp_network_backend_with_runner<P, R>(
+pub(super) fn install_wfp_network_backend_with_runner<P, R, S>(
     policy: &nono::WindowsNetworkPolicy,
     config: &ExecConfig<'_>,
     probe_config: &WfpProbeConfig,
     probe_fn: P,
     run_probe: R,
+    start_service_fn: S,
 ) -> Result<Option<NetworkEnforcementGuard>>
 where
     P: Fn(&WfpProbeConfig) -> Result<WfpProbeStatus>,
     R: Fn(&WfpProbeConfig, &WfpRuntimeActivationRequest) -> Result<WfpRuntimeProbeOutput>,
+    S: Fn(&WfpProbeConfig) -> Result<WindowsWfpStartReport>,
 {
     if matches!(&policy.mode, nono::WindowsNetworkPolicyMode::AllowAll) && !policy.has_port_rules()
     {
@@ -1578,13 +1580,48 @@ where
         | nono::WindowsNetworkPolicyMode::Blocked
         | nono::WindowsNetworkPolicyMode::ProxyOnly { .. } => {
             let _ = Sandbox::windows_network_launch_support(policy, config.resolved_program);
-            let status = probe_fn(probe_config).map_err(|err| {
+            let initial_status = probe_fn(probe_config).map_err(|err| {
                 NonoError::SandboxInit(format!(
                     "Failed to probe Windows WFP backend status ({}): {}",
                     policy.backend_summary(),
                     err
                 ))
             })?;
+
+            // D-03: if the service is stopped, attempt to start it before failing closed.
+            // This provides defense-in-depth for dev layouts, user-scope installs, and
+            // post-crash scenarios where the boot-start service was never started or was stopped.
+            let status = if initial_status == WfpProbeStatus::BackendServiceStopped {
+                match start_service_fn(probe_config) {
+                    Ok(_) => {
+                        // Service started; re-probe to get fresh status for the IPC path.
+                        probe_fn(probe_config).map_err(|err| {
+                            NonoError::SandboxInit(format!(
+                                "Failed to re-probe Windows WFP backend status after auto-start ({}): {}",
+                                policy.backend_summary(),
+                                err
+                            ))
+                        })?
+                    }
+                    Err(_) => {
+                        // Start attempt failed (e.g. not elevated). Fail closed with an
+                        // actionable remediation message. Never return Ok(None) here.
+                        return Err(NonoError::UnsupportedPlatform(format!(
+                            "Windows WFP runtime activation is required for {} but the WFP service \
+                             `{}` is not running and could not be started automatically \
+                             (elevation is required). To start it, run this command once in an \
+                             elevated (Administrator) terminal: `nono setup --start-wfp-service` \
+                             ({}). This request remains fail-closed.",
+                            describe_windows_network_runtime_target(policy),
+                            probe_config.backend_service,
+                            policy.backend_summary()
+                        )));
+                    }
+                }
+            } else {
+                initial_status
+            };
+
             if status == WfpProbeStatus::Ready {
                 let suffix = unique_windows_firewall_rule_suffix();
                 let outbound_rule = format!("nono-wfp-block-out-{suffix}");
@@ -1659,6 +1696,7 @@ pub(super) fn install_wfp_network_backend(
         probe_config,
         probe_wfp_backend_status_with_config,
         run_wfp_runtime_probe_with_request,
+        |cfg| start_windows_wfp_service_with_runner(cfg, run_sc_query, run_sc_command),
     )
 }
 
@@ -1874,12 +1912,17 @@ mod tests {
             })
         };
 
+        let mock_start = |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+            panic!("start_service_fn must not be called when probe returns Ready")
+        };
+
         let result = install_wfp_network_backend_with_runner(
             &policy,
             &config,
             &probe_config,
             mock_probe,
             mock_runner,
+            mock_start,
         );
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result);
         let guard = result.unwrap();
@@ -1931,12 +1974,17 @@ mod tests {
             })
         };
 
+        let mock_start = |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+            panic!("start_service_fn must not be called when probe returns Ready")
+        };
+
         let result = install_wfp_network_backend_with_runner(
             &policy,
             &config,
             &probe_config,
             mock_probe,
             mock_runner,
+            mock_start,
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -2000,5 +2048,201 @@ mod tests {
             request.inbound_rule_name.as_deref(),
             Some("nono-wfp-block-in-abc123")
         );
+    }
+
+    // D-03 unit tests: verify auto-start hook branches without elevation.
+
+    fn make_exec_config<'a>(
+        command: &'a Vec<String>,
+        resolved_program: &'a std::path::PathBuf,
+        current_dir: &'a std::path::PathBuf,
+        caps: &'a nono::CapabilitySet,
+    ) -> ExecConfig<'a> {
+        ExecConfig {
+            command,
+            resolved_program,
+            caps,
+            env_vars: vec![],
+            cap_file: None,
+            current_dir,
+            session_sid: Some("S-1-5-117-123456789-1234-5678-9012".to_string()),
+            interactive_shell: false,
+            session_token: None,
+            cap_pipe_rendezvous_path: None,
+            allowed_env_vars: None,
+            denied_env_vars: None,
+            prefers_low_il_broker: false,
+        }
+    }
+
+    /// D-03: probe returns Stopped → start_service_fn succeeds → re-probe returns Ready
+    /// → IPC mock returns EnforcedPendingCleanup → result is Ok(Some(WfpServiceManaged)).
+    #[test]
+    fn test_wfp_autostart_on_stopped() {
+        let policy = make_blocked_policy();
+        let caps = nono::CapabilitySet::new();
+        let command = vec!["agent.exe".to_string()];
+        let resolved_program = std::path::PathBuf::from(r"C:\tools\agent.exe");
+        let current_dir = std::path::PathBuf::from(r"C:\workspace");
+        let config = make_exec_config(&command, &resolved_program, &current_dir, &caps);
+        let probe_config = make_test_probe_config();
+
+        // First call: BackendServiceStopped; second call (after auto-start): Ready.
+        let call_count = std::cell::Cell::new(0u32);
+        let mock_probe = |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
+            let n = call_count.get();
+            call_count.set(n + 1);
+            if n == 0 {
+                Ok(WfpProbeStatus::BackendServiceStopped)
+            } else {
+                Ok(WfpProbeStatus::Ready)
+            }
+        };
+
+        let mock_start =
+            |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+                Ok(WindowsWfpStartReport {
+                    status_label: "running",
+                    details: "service started by mock".to_string(),
+                })
+            };
+
+        let mock_runner = |_cfg: &WfpProbeConfig,
+                           _req: &WfpRuntimeActivationRequest|
+         -> Result<WfpRuntimeProbeOutput> {
+            Ok(WfpRuntimeProbeOutput {
+                status_code: Some(0),
+                response: WfpRuntimeActivationResponse {
+                    protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
+                    status: "enforced-pending-cleanup".to_string(),
+                    details: "WFP filters installed".to_string(),
+                },
+                stderr: String::new(),
+            })
+        };
+
+        let result = install_wfp_network_backend_with_runner(
+            &policy,
+            &config,
+            &probe_config,
+            mock_probe,
+            mock_runner,
+            mock_start,
+        );
+        assert!(result.is_ok(), "Expected Ok after auto-start, got: {:?}", result);
+        let guard = result.unwrap();
+        assert!(guard.is_some(), "Expected Some(NetworkEnforcementGuard)");
+        match guard.unwrap() {
+            NetworkEnforcementGuard::WfpServiceManaged { .. } => {}
+            other => panic!("Expected WfpServiceManaged, got: {:?}", other),
+        }
+    }
+
+    /// D-03: probe returns Stopped → start_service_fn returns Err → result is
+    /// Err(UnsupportedPlatform) with message containing service name, "could not be started
+    /// automatically", "elevated", and "nono setup --start-wfp-service".
+    #[test]
+    fn test_wfp_autostart_fail_remediation_message() {
+        let policy = make_blocked_policy();
+        let caps = nono::CapabilitySet::new();
+        let command = vec!["agent.exe".to_string()];
+        let resolved_program = std::path::PathBuf::from(r"C:\tools\agent.exe");
+        let current_dir = std::path::PathBuf::from(r"C:\workspace");
+        let config = make_exec_config(&command, &resolved_program, &current_dir, &caps);
+        let probe_config = make_test_probe_config();
+
+        let mock_probe =
+            |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
+                Ok(WfpProbeStatus::BackendServiceStopped)
+            };
+
+        let mock_start =
+            |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+                Err(nono::NonoError::Setup("elevation required".to_string()))
+            };
+
+        let mock_runner = |_cfg: &WfpProbeConfig,
+                           _req: &WfpRuntimeActivationRequest|
+         -> Result<WfpRuntimeProbeOutput> {
+            panic!("run_probe should never be called when start_service_fn fails")
+        };
+
+        let result = install_wfp_network_backend_with_runner(
+            &policy,
+            &config,
+            &probe_config,
+            mock_probe,
+            mock_runner,
+            mock_start,
+        );
+        assert!(result.is_err(), "Expected Err, got: {:?}", result);
+        let err = result.unwrap_err();
+        match &err {
+            nono::NonoError::UnsupportedPlatform(msg) => {
+                assert!(
+                    msg.contains("nono-wfp-service"),
+                    "Expected service name in message, got: {msg}"
+                );
+                assert!(
+                    msg.contains("nono setup --start-wfp-service"),
+                    "Expected remediation command in message, got: {msg}"
+                );
+                assert!(
+                    msg.contains("elevated"),
+                    "Expected 'elevated' in message, got: {msg}"
+                );
+            }
+            other => panic!("Expected UnsupportedPlatform, got: {:?}", other),
+        }
+    }
+
+    /// D-03: probe returns BackendServiceMissing (not BackendServiceStopped) → start_service_fn
+    /// is never called → result is Err(UnsupportedPlatform) with the BackendServiceMissing message
+    /// (does NOT contain "could not be started automatically").
+    #[test]
+    fn test_wfp_non_stopped_status_unchanged() {
+        let policy = make_blocked_policy();
+        let caps = nono::CapabilitySet::new();
+        let command = vec!["agent.exe".to_string()];
+        let resolved_program = std::path::PathBuf::from(r"C:\tools\agent.exe");
+        let current_dir = std::path::PathBuf::from(r"C:\workspace");
+        let config = make_exec_config(&command, &resolved_program, &current_dir, &caps);
+        let probe_config = make_test_probe_config();
+
+        let mock_probe =
+            |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
+                Ok(WfpProbeStatus::BackendServiceMissing)
+            };
+
+        // This closure must never be called; panic if it is.
+        let mock_start = |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+            panic!("start_service_fn must NOT be called for BackendServiceMissing")
+        };
+
+        let mock_runner = |_cfg: &WfpProbeConfig,
+                           _req: &WfpRuntimeActivationRequest|
+         -> Result<WfpRuntimeProbeOutput> {
+            panic!("run_probe should never be called when service is missing")
+        };
+
+        let result = install_wfp_network_backend_with_runner(
+            &policy,
+            &config,
+            &probe_config,
+            mock_probe,
+            mock_runner,
+            mock_start,
+        );
+        assert!(result.is_err(), "Expected Err, got: {:?}", result);
+        let err = result.unwrap_err();
+        match &err {
+            nono::NonoError::UnsupportedPlatform(msg) => {
+                assert!(
+                    !msg.contains("could not be started automatically"),
+                    "BackendServiceMissing must NOT route through auto-start path, got: {msg}"
+                );
+            }
+            other => panic!("Expected UnsupportedPlatform, got: {:?}", other),
+        }
     }
 }
