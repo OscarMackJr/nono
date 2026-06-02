@@ -34,7 +34,8 @@ granularity: standard
 
 ### v2.9 — Windows Sandbox-the-Tools (separate track)
 
-- [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered) (completed 2026-05-29)
+- [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
+ (completed 2026-05-29)
 
 ## Phase Details
 
@@ -69,7 +70,9 @@ Plans:
   2. An `## Empirical cross-check` section verifies re-export surface isolation on fork-shared files via diff-inspect (not just `--name-only`), per the `feedback_cluster_isolation_invalid` lesson from Phase 43
   3. Upstream was re-fetched at audit-open, capturing any `v0.59.x` patch releases cut after 2026-05-27; the ledger frontmatter records the upstream HEAD SHA and date of the re-fetch
   4. The fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`) is explicitly addressed with a diff-inspect note flagging whether the v0.59 TLS-intercept ordering fix applies cleanly or requires manual replay
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 54-01-UPST7-AUDIT-PLAN.md — DIVERGENCE-LEDGER for v0.57.0..v0.59.0: re-fetch + drift run, per-cluster dispositions + windows-touch, ADR review, empirical cross-check, SC4 TLS-intercept assessment, UPST8 stub
 
 ### Phase 55: UPST7 Cherry-pick Wave
 **Goal**: The cross-platform straight-port clusters from the UPST7 audit are absorbed into the fork with correct D-19 trailers and the fork's invariants intact
@@ -149,7 +152,7 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 53. Release & Drain | 3/4 | In Progress|  |
-| 54. UPST7 Audit | 0/TBD | Not started | - |
+| 54. UPST7 Audit | 0/1 | Not started | - |
 | 55. UPST7 Cherry-pick Wave | 0/TBD | Not started | - |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
