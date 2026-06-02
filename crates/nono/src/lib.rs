@@ -81,7 +81,8 @@ pub use net_filter::{FilterResult, HostFilter};
 pub use path::try_canonicalize;
 #[cfg(target_os = "windows")]
 pub use sandbox::windows::{
-    create_low_integrity_primary_token, grant_sid_write_on_path, label_mask_for_access_mode,
+    create_low_integrity_primary_token, create_low_integrity_primary_token_with_sid,
+    grant_sid_write_on_path, label_mask_for_access_mode,
     low_integrity_label_and_mask, path_is_owned_by_current_user, revoke_sid_on_path,
     try_set_mandatory_label, OwnedHandle,
 };

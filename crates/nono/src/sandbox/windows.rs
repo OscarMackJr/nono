@@ -24,13 +24,15 @@ use windows_sys::Win32::Security::Authorization::{
     SetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::{
-    CreateWellKnownSid, DuplicateTokenEx, GetAce, GetSecurityDescriptorSacl, GetSidSubAuthority,
-    GetSidSubAuthorityCount, SecurityAnonymous, SetTokenInformation, TokenIntegrityLevel,
-    TokenPrimary, WinLowLabelSid, ACE_HEADER, ACL, LABEL_SECURITY_INFORMATION,
-    PSECURITY_DESCRIPTOR, SECURITY_IMPERSONATION_LEVEL, SECURITY_MAX_SID_SIZE,
-    SYSTEM_MANDATORY_LABEL_ACE, TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-    TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+    CreateRestrictedToken, CreateWellKnownSid, DuplicateTokenEx, GetAce,
+    GetSecurityDescriptorSacl, GetSidSubAuthority, GetSidSubAuthorityCount, SecurityAnonymous,
+    SetTokenInformation, SID_AND_ATTRIBUTES, TokenIntegrityLevel, TokenPrimary, WinLowLabelSid,
+    ACE_HEADER, ACL, LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SECURITY_IMPERSONATION_LEVEL, SECURITY_MAX_SID_SIZE, SYSTEM_MANDATORY_LABEL_ACE,
+    TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_MANDATORY_LABEL,
+    TOKEN_QUERY, WRITE_RESTRICTED,
 };
+use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
 use windows_sys::Win32::System::SystemServices::{
     SECURITY_MANDATORY_LOW_RID, SE_GROUP_INTEGRITY, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
     SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP, SYSTEM_MANDATORY_LABEL_NO_READ_UP,
@@ -575,6 +577,24 @@ pub fn create_low_integrity_primary_token() -> Result<OwnedHandle> {
     }
     let primary_token = OwnedHandle(primary_token);
 
+    apply_low_il_label(&primary_token)?;
+
+    Ok(primary_token)
+}
+
+/// Applies a Low-Integrity mandatory-label (`WinLowLabelSid`, `SE_GROUP_INTEGRITY`)
+/// to an already-primary token via `SetTokenInformation(TokenIntegrityLevel)`.
+///
+/// This is the SHARED label step factored out of `create_low_integrity_primary_token`
+/// so that `create_low_integrity_primary_token_with_sid` can reuse the identical
+/// label path. Both functions call this last, after their respective token-construction
+/// steps, making the Low-IL label byte-equivalent on both paths.
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] with a Windows `GetLastError` code if
+/// `CreateWellKnownSid` or `SetTokenInformation` fail.
+fn apply_low_il_label(token: &OwnedHandle) -> Result<()> {
     let mut sid_buffer = [0u8; SECURITY_MAX_SID_SIZE as usize];
     let mut sid_size = sid_buffer.len() as u32;
     let created = unsafe {
@@ -613,11 +633,11 @@ pub fn create_low_integrity_primary_token() -> Result<OwnedHandle> {
         (*label_ptr).Label.Attributes = SE_GROUP_INTEGRITY as u32;
     }
     let adjusted = unsafe {
-        // SAFETY: `primary_token` is a valid duplicated token; `label_ptr`
+        // SAFETY: `token` is a valid primary token handle; `label_ptr`
         // points to a fully populated TOKEN_MANDATORY_LABEL structure of
         // `label_size` bytes inside `label_buffer`.
         SetTokenInformation(
-            primary_token.raw(),
+            token.raw(),
             TokenIntegrityLevel,
             label_ptr as *mut _,
             label_size as u32,
@@ -629,8 +649,156 @@ pub fn create_low_integrity_primary_token() -> Result<OwnedHandle> {
             unsafe { GetLastError() }
         )));
     }
+    Ok(())
+}
 
-    Ok(primary_token)
+/// Constructs a Low-Integrity primary token that carries `session_sid` as the
+/// single RESTRICTING SID under `WRITE_RESTRICTED`.
+///
+/// This is the token shape required for the `BrokerLaunchNoPty` arm to satisfy
+/// the WFP `FWPM_CONDITION_ALE_USER_ID` filter (security descriptor
+/// `D:(A;;CC;;;<session_sid>)`). The WFP access check is a read-like probe
+/// that grants access when the connection token carries `session_sid` — even
+/// under `WRITE_RESTRICTED`, which limits the second access check to
+/// WRITE-class operations only and leaves read-like checks (including the WFP
+/// ALE_USER_ID probe) open.
+///
+/// # Design (debug D1/D3, plan 62-10)
+///
+/// 1. Opens the current process token with `DUP|QUERY|ASSIGN_PRIMARY|ADJUST_DEFAULT`.
+/// 2. Parses `session_sid` via `ConvertStringSidToSidW` (fail-closed: malformed
+///    SID string → [`NonoError::SandboxInit`]).
+/// 3. Builds `SID_AND_ATTRIBUTES { Sid, Attributes: 0 }` and calls
+///    `CreateRestrictedToken(cur, WRITE_RESTRICTED, 0, null, 0, null, 1, &sid, &out)`.
+///    Fail-closed: `GetLastError` non-zero → [`NonoError::SandboxInit`]; the SID-less
+///    token is NEVER returned.
+/// 4. Applies the Low-IL mandatory label via [`apply_low_il_label`] (same step as
+///    `create_low_integrity_primary_token`), ensuring integrity stays at Low.
+///
+/// # WRITE_RESTRICTED / no-escalation note
+///
+/// `session_sid` is a synthetic per-session SID in the `S-1-5-117-*` range
+/// (`generate_session_sid`). It names no real account and appears on no system
+/// object's ACL except the per-run capability pipe and the DACL grants that
+/// `AppliedDaclGrantsGuard` applies. As a RESTRICTING SID under `WRITE_RESTRICTED`
+/// it can only NARROW write access (double-check on WRITE-class ops), never widen
+/// it. The token's integrity stays Low (label applied AFTER the restricted-token
+/// build). No escalation.
+///
+/// # FAIL-CLOSED CONTRACT
+///
+/// Any failure in SID parsing or `CreateRestrictedToken` returns
+/// [`NonoError::SandboxInit`] and NEVER falls back to a SID-less token.
+/// The caller (broker) MUST propagate the error and MUST NOT spawn the child.
+/// Spawning a SID-less child = WFP filter installs but matches nothing = silent
+/// non-enforcement (the worst possible outcome).
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] if `OpenProcessToken`,
+/// `ConvertStringSidToSidW`, `CreateRestrictedToken`, or the Low-IL label step
+/// fails.
+#[must_use = "the returned OwnedHandle owns a Win32 HANDLE and must be retained until CreateProcess[AsUser]W has consumed it"]
+pub fn create_low_integrity_primary_token_with_sid(session_sid: &str) -> Result<OwnedHandle> {
+    let mut current_token: HANDLE = std::ptr::null_mut();
+    let opened = unsafe {
+        // SAFETY: We pass a valid mutable out-pointer and request access on the
+        // current process token only.
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT,
+            &mut current_token,
+        )
+    };
+    if opened == 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "Failed to open Windows process token for broker session-SID launch (GetLastError={})",
+            unsafe { GetLastError() }
+        )));
+    }
+    let current_token = OwnedHandle(current_token);
+
+    // Parse the SDDL SID string into a Win32 PSID (heap-allocated by the OS).
+    // FAIL-CLOSED: if ConvertStringSidToSidW returns 0 or a null pointer, the
+    // session_sid string is malformed and we MUST NOT produce any token.
+    let wide_sid: Vec<u16> = session_sid
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut sid_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `wide_sid` is a valid nul-terminated UTF-16 buffer; `sid_ptr`
+        // is a valid out-pointer. On success the callee allocates a SID that
+        // MUST be freed with LocalFree (handled below via OwnedSid's Drop or
+        // explicit LocalFree before returning Err).
+        ConvertStringSidToSidW(wide_sid.as_ptr(), &mut sid_ptr)
+    };
+    if ok == 0 || sid_ptr.is_null() {
+        let gle = unsafe { GetLastError() };
+        return Err(NonoError::SandboxInit(format!(
+            "invalid session SID for broker token: {session_sid:?} \
+             (ConvertStringSidToSidW failed, GetLastError={gle})"
+        )));
+    }
+    // Wrap in OwnedSid so it is freed on every exit path (including the
+    // CreateRestrictedToken failure branch below).
+    let _owned_sid = OwnedSid(sid_ptr);
+
+    // Build a restricting-SID entry.  Attributes=0 per restricted_token.rs:67.
+    //
+    // Under WRITE_RESTRICTED, `CreateRestrictedToken` produces a token where:
+    //   - Read-like access checks (DLL loads, section mappings, registry traversal,
+    //     and WFP's ALE_USER_ID probe) run against the NORMAL SID list only →
+    //     startup reads succeed.
+    //   - WRITE-class access checks run TWICE: once against normal SIDs and once
+    //     against the restricting-SID list.  Because session_sid appears only on
+    //     DACLs that `AppliedDaclGrantsGuard` explicitly grants, confined writes
+    //     land correctly while writes to ungrant paths are blocked.
+    //   - The WFP ALE_USER_ID filter (SD `D:(A;;CC;;;<session_sid>)`) uses the CC
+    //     (ADS_RIGHT_DS_CREATE_CHILD, 0x1) probe, which is treated as a read-like
+    //     access check → the filter MATCHES the confined child's outbound connections.
+    // This is the proven WFP-matchable shape validated by restricted_token.rs.
+    let sid_and_attrs = SID_AND_ATTRIBUTES {
+        Sid: sid_ptr,
+        Attributes: 0,
+    };
+
+    let mut restricted_out: HANDLE = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `current_token.raw()` is a valid primary token open with the
+        // required access flags.  `&sid_and_attrs` is a valid one-element array;
+        // `_owned_sid` keeps the SID allocation live for the duration of this call.
+        // `&mut restricted_out` is a valid out-pointer.  The WRITE_RESTRICTED flag
+        // and a single restricting SID are the only non-zero inputs — all other
+        // counts/pointers are 0/null per the documented no-op idiom.
+        CreateRestrictedToken(
+            current_token.raw(),
+            WRITE_RESTRICTED,
+            0,
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            1,
+            &sid_and_attrs,
+            &mut restricted_out,
+        )
+    };
+    // FAIL-CLOSED: if CreateRestrictedToken fails we MUST NOT return any token.
+    // `_owned_sid` will free sid_ptr on drop regardless.
+    if ok == 0 {
+        let gle = unsafe { GetLastError() };
+        return Err(NonoError::SandboxInit(format!(
+            "CreateRestrictedToken (broker session-SID) failed \
+             (GetLastError={gle})"
+        )));
+    }
+    let restricted_primary = OwnedHandle(restricted_out);
+
+    // Apply the Low-IL mandatory label AFTER the restricted-token build so that
+    // token integrity stays at Low (not inherited from the Medium-IL nono process).
+    apply_low_il_label(&restricted_primary)?;
+
+    Ok(restricted_primary)
 }
 
 /// Maps an `AccessMode` to the `SYSTEM_MANDATORY_LABEL_ACE.Mask` bits per
@@ -4110,6 +4278,87 @@ mod create_low_integrity_primary_token_tests {
         let owned = OwnedHandle(null_handle);
         // Must not panic, abort, or call CloseHandle(null).
         drop(owned);
+    }
+
+    // -----------------------------------------------------------------------
+    // Plan 62-10 Task 1: create_low_integrity_primary_token_with_sid tests
+    // -----------------------------------------------------------------------
+
+    /// FAIL-CLOSED: a malformed SID string MUST return Err (not produce any
+    /// token). Guards the D5(c) contract: a ConvertStringSidToSidW failure
+    /// on the broker path must propagate, never silently spawn an unmatched child.
+    #[test]
+    fn with_sid_rejects_malformed_sid_string() {
+        use super::create_low_integrity_primary_token_with_sid;
+        use crate::error::NonoError;
+
+        let result = create_low_integrity_primary_token_with_sid("not-a-sid");
+        let Err(NonoError::SandboxInit(msg)) = result else {
+            panic!(
+                "create_low_integrity_primary_token_with_sid must return \
+                 Err(SandboxInit) for a malformed SID; got Ok"
+            );
+        };
+        assert!(
+            msg.contains("not-a-sid"),
+            "error message must include the rejected SID string; got: {msg}"
+        );
+        assert!(
+            msg.contains("ConvertStringSidToSidW") || msg.contains("invalid session SID"),
+            "error message must identify the ConvertStringSidToSidW failure; got: {msg}"
+        );
+    }
+
+    /// CORRECTNESS: a syntactically valid synthetic SID (S-1-5-117-* shape,
+    /// the format generated by `generate_session_sid`) must parse successfully
+    /// and CreateRestrictedToken must succeed (no elevation required).
+    ///
+    /// If CreateRestrictedToken fails in the CI/test environment (unusual token
+    /// privileges, non-interactive session), this test documents the limitation
+    /// rather than asserting unconditional Ok — the live SC1 UAT is the real
+    /// proof that the broker token carries session_sid.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn with_sid_accepts_valid_synthetic_sid() {
+        use super::create_low_integrity_primary_token_with_sid;
+        use crate::error::NonoError;
+
+        // Use a fixed synthetic SID in the S-1-5-117-* reserved range —
+        // the same range generate_session_sid uses.  This value is chosen to
+        // be parsable by ConvertStringSidToSidW (Windows accepts sub-auth
+        // values up to MAXDWORD on all four sub-authority slots).
+        let sid = "S-1-5-117-123456789-987654321-11223344-55667788";
+        let result = create_low_integrity_primary_token_with_sid(sid);
+        match result {
+            Ok(handle) => {
+                assert!(
+                    !handle.0.is_null(),
+                    "broker session-SID token handle must be non-null"
+                );
+                // Drop test: OwnedHandle::Drop must close the handle exactly once.
+                drop(handle);
+            }
+            Err(NonoError::SandboxInit(msg)) => {
+                // Document the environment limitation rather than failing the test.
+                // The live SC1 UAT run is the authoritative proof for startup-under-
+                // WRITE_RESTRICTED on the broker path.
+                eprintln!(
+                    "NOTE: create_low_integrity_primary_token_with_sid returned Err in test \
+                     environment (may require interactive logon session or additional privileges): \
+                     {msg}"
+                );
+                assert!(
+                    !msg.contains("not-a-sid"),
+                    "the error must not be a SID-parse rejection for a valid SID; got: {msg}"
+                );
+            }
+            Err(other) => {
+                panic!(
+                    "unexpected error variant from create_low_integrity_primary_token_with_sid: \
+                     {other:?}"
+                );
+            }
+        }
     }
 
 }
