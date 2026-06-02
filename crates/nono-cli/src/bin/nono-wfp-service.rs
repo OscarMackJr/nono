@@ -440,7 +440,7 @@ mod windows_impl {
                 Authorization::{
                     ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
                 },
-                SECURITY_ATTRIBUTES,
+                GetSecurityDescriptorLength, SECURITY_ATTRIBUTES,
             },
             Storage::FileSystem::{
                 FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, PIPE_ACCESS_DUPLEX,
@@ -1295,16 +1295,33 @@ mod windows_impl {
         app_id_blob: *mut FWP_BYTE_BLOB,
         security_descriptor: *mut core::ffi::c_void,
     ) -> Result<(), String> {
+        // FWP_SECURITY_DESCRIPTOR_TYPE requires an FWP_BYTE_BLOB-wrapped self-relative SD; a raw SD
+        // pointer causes FwpmFilterAdd0 to fail with RPC_X_BAD_STUB_DATA (win32 1783) because the
+        // BFE RPC stub marshals the union member as *mut FWP_BYTE_BLOB, not as a raw PSECURITY_DESCRIPTOR.
+        // (windows-sys 0.59: FWP_CONDITION_VALUE0_0.sd is `*mut FWP_BYTE_BLOB`. debug: wfp-filter-add-1783.)
+        // Declared before `conditions` so the blob pointer outlives the FwpmFilterAdd0 call below.
+        let mut sd_blob = FWP_BYTE_BLOB {
+            size: 0,
+            data: null_mut(),
+        };
         let mut conditions = Vec::with_capacity(3);
 
         if !security_descriptor.is_null() {
+            // SAFETY: security_descriptor is a valid self-relative SD allocated by
+            // ConvertStringSecurityDescriptorToSecurityDescriptorW. GetSecurityDescriptorLength
+            // reads the SD header to return its total byte length. sd_blob and the SD it points
+            // at both outlive the FwpmFilterAdd0 call (sd_blob is a function-scope local; the SD
+            // is owned by a WfpSecurityDescriptor RAII guard in install_wfp_policy_filters whose
+            // lifetime encompasses this call).
+            sd_blob.size = unsafe { GetSecurityDescriptorLength(security_descriptor) };
+            sd_blob.data = security_descriptor as *mut u8;
             conditions.push(FWPM_FILTER_CONDITION0 {
                 fieldKey: FWPM_CONDITION_ALE_USER_ID,
                 matchType: FWP_MATCH_EQUAL,
                 conditionValue: FWP_CONDITION_VALUE0 {
                     r#type: FWP_SECURITY_DESCRIPTOR_TYPE,
                     Anonymous: FWP_CONDITION_VALUE0_0 {
-                        sd: security_descriptor as *mut _,
+                        sd: &mut sd_blob,
                     },
                 },
             });
