@@ -197,8 +197,8 @@ if ($serviceBinaryFullPath -ne "") {
     $machineServiceInstall = Get-FirstNodeByLocalName -Document $machineDoc -LocalName "ServiceInstall"
     Assert-Equal -Actual $machineServiceInstall.Name -Expected "nono-wfp-service" `
         -Message "Machine MSI ServiceInstall Name mismatch"
-    Assert-Equal -Actual $machineServiceInstall.Start -Expected "demand" `
-        -Message "Machine MSI ServiceInstall Start mismatch"
+    Assert-Equal -Actual $machineServiceInstall.Start -Expected "auto" `
+        -Message "Machine MSI ServiceInstall Start mismatch (expected auto/boot-start for out-of-box WFP enforcement)"
     Assert-Equal -Actual $machineServiceInstall.Type -Expected "ownProcess" `
         -Message "Machine MSI ServiceInstall Type mismatch"
     Assert-Equal -Actual $machineServiceInstall.Account -Expected "LocalSystem" `
