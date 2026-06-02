@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-02T14:36:02.943Z"
+last_updated: "2026-06-02T14:40:05.454Z"
 last_activity: 2026-06-02
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 ## Current Position
 
 Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Next: Phase 54 (UPST7 Audit). Phase 60 follow-ups (non-blocking): (a) production network.block needs the WFP service (F-60-UAT-03); (b) broker arm needs dev-layout or SIGNED binary at runtime — distribution needs signed MSIs + an MSI rebuild off the fixed binaries (note: dist/windows/*.wxs still point at the stale target\release path); (c) cross-target Linux/macOS clippy for the new windows-cfg code deferred to CI; (d) delete/annotate superseded v0.57.4 GitHub release.
-Last activity: 2026-06-02 -- Phase 62 Plan 02 complete (PIPE_SDDL IU ACE + WiX Start=auto; commits a3f0fcf7 + ab0b01d3 + ce3b7954)
+Last activity: 2026-06-02 -- Phase 62 Plan 03 complete (REQ-WFP-01 in REQUIREMENTS.md + ROADMAP plan list sync; commits 78aa2049 + 6393e473)
 
 ### v2.8 Phase Summary (active)
 

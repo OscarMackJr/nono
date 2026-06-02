@@ -103,7 +103,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-CRED-01 | Phase 57 | Pending |
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
-| REQ-WFP-01 | Phase 62 | Pending |
+| REQ-WFP-01 | Phase 62 | Complete |
 | REQ-DENY-PREFLIGHT-01 | v2 Deferred | Deferred |
 | REQ-UNDO-TOCTOU-01 | v2 Deferred | Deferred |
 
