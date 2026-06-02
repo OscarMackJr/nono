@@ -232,7 +232,7 @@ if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
             DisplayName="nono WFP Service"
             Description="nono Windows Filtering Platform backend service"
             Type="ownProcess"
-            Start="demand"
+            Start="auto"
             Account="LocalSystem"
             ErrorControl="normal"
             Arguments="--service-mode" />
