@@ -176,6 +176,7 @@ Plans:
 - [x] 62-03-PLAN.md -- REQ-WFP-01 in REQUIREMENTS.md + ROADMAP Phase 62 plan list (planning artifacts)
 - [x] 62-05-PLAN.md -- GAP-CLOSURE F-62-01: MSI generator (build-windows-msi.ps1) + contract guard set ServiceInstall Start=auto; .wxs was a regenerated snapshot, not the build source
 - [x] 62-06-PLAN.md -- GAP-CLOSURE F-62-UAT-01: drop the out-of-scope kernel-driver gate from build_wfp_probe_status so Ready (the only trigger for the service FwpmFilterAdd0 activation IPC) is reachable BFE+service-only, per D-05; retire stale SERVICE placeholder strings (network.rs); root-caused in debug wfp-driver-gate-placeholder
+- [x] 62-07-PLAN.md -- GAP-CLOSURE F-62-UAT-02: set non-null filter displayData.name in add_policy_filter (nono-wfp-service.rs) so FwpmFilterAdd0 stops failing RPC_X_BAD_STUB_DATA (win32 1783); 7-point FWPM field audit confirmed name was the sole defect; root-caused in debug wfp-filter-add-1783
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
