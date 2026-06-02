@@ -173,7 +173,7 @@ Plans:
 **Wave 1** (parallel -- no file overlap)
 - [x] 62-01-PLAN.md -- D-03 auto-start hook + start=auto in build_wfp_service_create_args + 3 unit tests (network.rs)
 - [x] 62-02-PLAN.md -- ServiceInstall Start=auto (nono-machine.wxs) + PIPE_SDDL IU ACE + SDDL unit test (nono-wfp-service.rs)
-- [ ] 62-03-PLAN.md -- REQ-WFP-01 in REQUIREMENTS.md + ROADMAP Phase 62 plan list (planning artifacts)
+- [x] 62-03-PLAN.md -- REQ-WFP-01 in REQUIREMENTS.md + ROADMAP Phase 62 plan list (planning artifacts)
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
@@ -191,7 +191,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
-| 62. WFP kernel network enforcement (Windows supervised) | 2/4 | In Progress|  |
+| 62. WFP kernel network enforcement (Windows supervised) | 3/4 | In Progress|  |
 
 ## Coverage
 
