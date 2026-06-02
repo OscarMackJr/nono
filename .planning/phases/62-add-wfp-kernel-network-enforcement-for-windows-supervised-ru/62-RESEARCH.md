@@ -684,9 +684,12 @@ runs at when making the IPC call (Medium IL = OK; Low IL = needs pipe SDDL integ
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three resolved during planning (Phase 62, 2026-06-02). Resolution notes appended per question.
 
 1. **Should `build_wfp_service_create_args` also switch to `start=auto`?**
+   - **RESOLVED:** Yes — implemented in plan 62-01 Task 2 (`build_wfp_service_create_args` → `start=auto`), aligning both registration paths so `nono setup --register-wfp-service` cannot silently revert the MSI posture.
    - What we know: Two independent registration paths exist. D-02 says `--start-wfp-service` is
      retained for manual/dev-layout. D-01 is about the MSI only.
    - What's unclear: If `nono setup --register-wfp-service` is used on a production machine
@@ -705,6 +708,7 @@ runs at when making the IPC call (Medium IL = OK; Low IL = needs pipe SDDL integ
      responds to valid IPC requests and only activates/deactivates enforcement; it does not expose
      a "disable all enforcement" API. The threat model is acceptable. An alternative is
      `(A;;GRGW;;;BU)` (Built-in Users = any local/domain user), which is equivalent in practice.
+   - **RESOLVED:** Use `IU` — implemented in plan 62-02 Task 1 (`PIPE_SDDL` gains `(A;;GRGW;;;IU)`), with a regression test asserting the ACE is present.
 
 3. **`ServiceConfig` restart policy: include or not?**
    - What we know: WiX v4 supports `ServiceConfig`. A crash-looping service is a DoS vector.
@@ -712,6 +716,7 @@ runs at when making the IPC call (Medium IL = OK; Low IL = needs pipe SDDL integ
    - Recommendation: Add a single-restart policy (`FirstFailureActionType="restart"`,
      `ResetPeriodInSeconds="60"`) as defense-in-depth. This is a one-time WiX configuration
      and has no runtime cost. Keep it simple — do not configure second/third failure actions.
+   - **RESOLVED:** Include — implemented in plan 62-02 Task 2 (single-restart ServiceConfig), conditional on the WiX v4 syntax verifying at implementation time; omit-and-note if WiX docs are unreachable.
 
 ---
 

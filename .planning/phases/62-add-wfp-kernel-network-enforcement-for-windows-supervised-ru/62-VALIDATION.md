@@ -1,8 +1,8 @@
 ---
 phase: 62
 slug: add-wfp-kernel-network-enforcement-for-windows-supervised-ru
-status: draft
-nyquist_compliant: false
+status: ready
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-02
 ---
@@ -44,9 +44,15 @@ created: 2026-06-02
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 62-XX-XX | TBD | TBD | REQ-WFP-01 | T-62-01 (fail-open pass-through) | A `network.block:true` run never proceeds unenforced; service-not-running → start attempt → enforce, else fail-closed | unit | `cargo test -p nono-cli --lib network` | ❌ W0 | ⬜ pending |
+| 62-01-T1 | 62-01 | 1 | REQ-WFP-01 | T-62-01 (fail-open pass-through) | A `network.block:true` run with the service stopped attempts an auto-start; succeeds → enforce; fails → fail-closed error naming the remediation command; never `Ok(None)` | unit (TDD) | `cargo test -p nono-cli --lib network -- test_wfp_autostart` | ❌ W0 | ⬜ pending |
+| 62-01-T2 | 62-01 | 1 | REQ-WFP-01 | — | `build_wfp_service_create_args` registers `start=auto` (manual path no longer reverts MSI posture); stale description fixed | unit | `cargo test -p nono-cli --lib network` | ✅ | ⬜ pending |
+| 62-02-T1 | 62-02 | 1 | REQ-WFP-01 | T-62-SDDL (non-elevated denied / over-grant) | Control-pipe `PIPE_SDDL` grants Interactive Users connect (read+write); SYSTEM/Admin ACEs unchanged | unit (TDD) | `cargo test -p nono-cli -- pipe_sddl` | ❌ W0 | ⬜ pending |
+| 62-02-T2 | 62-02 | 1 | REQ-WFP-01 | T-62-UNINST (uninstall residue) | Machine MSI `ServiceInstall Start="auto"`; `ServiceControl Start="install"`/Remove unchanged; user MSI untouched | source/file | `powershell` Start="auto" content assertion | ✅ | ⬜ pending |
+| 62-03-T1 | 62-03 | 1 | REQ-WFP-01 | T-62-PA | REQ-WFP-01 present in REQUIREMENTS.md (v2.9-track section, not deferred) | source/file | `powershell` REQ-WFP-01 grep REQUIREMENTS.md | ✅ | ⬜ pending |
+| 62-03-T2 | 62-03 | 1 | REQ-WFP-01 | T-62-PA | ROADMAP Phase 62 Requirements + 4-plan list + progress row | source/file | `powershell` REQ-WFP-01 grep ROADMAP.md | ✅ | ⬜ pending |
+| 62-04-T6 | 62-04 | 2 | REQ-WFP-01 | — | HUMAN-UAT record (SC1–SC5) captured with PASS/FAIL verdicts | doc | `powershell` PASS-count assertion on 62-HUMAN-UAT.md | ✅ | ⬜ pending |
 
-*Filled concretely by the planner per task. Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
+*62-04 Tasks 1–5 are `checkpoint:human-verify` operator steps (no automated command by design — see Manual-Only Verifications). Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
 ---
 
@@ -71,12 +77,14 @@ created: 2026-06-02
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] Human-UAT instructions captured for the 3 manual-only behaviors above
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (62-04 T1–T5 are human-verify checkpoints, exempt by type)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (62-01-T1 D-03 decision-path tests; 62-02-T1 SDDL test)
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s
+- [x] Human-UAT instructions captured for the 3 manual-only behaviors above (62-04 checkpoint tasks)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+*`wave_0_complete` stays false until the RED→GREEN Wave 0 tests (62-01-T1, 62-02-T1) are written and pass during execution.*
+
+**Approval:** approved 2026-06-02
