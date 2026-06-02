@@ -168,12 +168,13 @@ Plans:
   4. **Clean uninstall preserved.** `sc stop` + `msiexec /x` of the machine MSI still leaves nothing behind (service fully removed); the `start=demand → start=auto` flip does not regress the Phase 53 / REQ-DRN-01 leave-nothing invariant. (regression guard)
   5. **Non-elevated pipe access.** The `nono-wfp-service` control-pipe SDDL grants the non-elevated supervised-run persona (Interactive Users) connect access, so a standard-user `nono run` reaches the boot-started service without "Access is denied". (research critical finding — blocking for D-01 end-to-end.)
 **Out of scope (this phase)**: `nono-wfp-driver.sys` real kernel minifilter (Gap 6b, v3.0-deferred); per-process/AppID filter scoping; fine-grained `allow_domain` path/method filtering (that is Phase 56 / REQ-NET-01, proxy layer); the user-scope MSI (`nono-user.wxs`) cannot register SCM services, so boot-start is machine-MSI-only.
-**Plans**: 4 plans
+**Plans**: 5 plans (4 planned + 1 gap-closure)
 Plans:
 **Wave 1** (parallel -- no file overlap)
 - [x] 62-01-PLAN.md -- D-03 auto-start hook + start=auto in build_wfp_service_create_args + 3 unit tests (network.rs)
 - [x] 62-02-PLAN.md -- ServiceInstall Start=auto (nono-machine.wxs) + PIPE_SDDL IU ACE + SDDL unit test (nono-wfp-service.rs)
 - [x] 62-03-PLAN.md -- REQ-WFP-01 in REQUIREMENTS.md + ROADMAP Phase 62 plan list (planning artifacts)
+- [x] 62-05-PLAN.md -- GAP-CLOSURE F-62-01: MSI generator (build-windows-msi.ps1) + contract guard set ServiceInstall Start=auto; .wxs was a regenerated snapshot, not the build source
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
