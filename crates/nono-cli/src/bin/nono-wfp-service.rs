@@ -52,7 +52,7 @@ mod windows_impl {
     const PROBE_RUNTIME_ACTIVATION_ARG: &str = "--probe-runtime-activation";
     const MAX_RUNTIME_REQUEST_SIZE: usize = 64 * 1024;
     const CONTROL_PIPE_NAME: &str = r"\\.\pipe\nono-wfp-control";
-    const PIPE_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;OW)";
+    const PIPE_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;OW)";
     const SDDL_REVISION_1: u32 = 1;
 
     /// Classic Windows Application Event Log source name registered by the machine MSI.
