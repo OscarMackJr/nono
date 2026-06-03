@@ -37,7 +37,8 @@ granularity: standard
 - [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
  (completed 2026-05-29)
 - [ ] **Phase 61: Ship/Release v2.9** — Package and release the Phase 60 confined-coding-loop POC: produce CI-signed machine+user MSIs via `release.yml` off the current 0.57.5 binaries, tag the v2.9 milestone, push, and write release notes for the Windows confined tool-mediation story
-- [x] **Phase 62: Add WFP kernel network enforcement for Windows supervised runs** — Make `network.block:true` on a supervised `nono run` enforce WFP kernel filtering out of the box (machine MSI `start=auto`, in-run auto-start-or-fail-closed, non-elevated pipe SDDL); closes Phase 60's F-60-UAT-03. Service-only — no new kernel driver. (REQ-WFP-01, v2.9 track) (completed 2026-06-03)
+- [x] **Phase 62: Add WFP kernel network enforcement for Windows supervised runs** — Make `network.block:true` on a supervised `nono run` enforce WFP kernel filtering out of the box (machine MSI `start=auto`, in-run auto-start-or-fail-closed, non-elevated pipe SDDL); closes Phase 60's F-60-UAT-03. Service-only — no new kernel driver. (REQ-WFP-01, v2.9 track)
+ (completed 2026-06-03)
 
 ## Phase Details
 
@@ -150,12 +151,20 @@ Plans:
 - [x] 60-02-PLAN.md — PowerShell-steering CLAUDE.md update + runner profile verification + cross-target clippy PARTIAL note (REQ-STW-02)
 
 ### Phase 61: Ship/Release v2.9
-**Goal**: Package and release the Phase 60 confined-coding-loop POC — produce CI-signed machine+user MSIs via `release.yml` off the current 0.57.5 binaries, tag the v2.9 milestone, push, and write release notes for the Windows confined tool-mediation story.
-**Depends on**: Phase 60 (confined coding loop is code-complete + live-UAT PASS).
-**Requirements**: TBD (run /gsd-plan-phase 61)
-**Plans**: 0 plans
+**Goal**: Package and release the Phase 60 confined-coding-loop POC + Phase 62 WFP enforcement — lockstep-bump the workspace to 0.58.0, verify the D-09 deny-`~/.claude` hook guard, dual-tag `v2.9`+`v0.58.0` off current `main`, produce CI-signed machine+user MSIs via `release.yml`, and write release notes for the Windows confined tool-mediation + out-of-box WFP enforcement story (honest POC / defense-in-depth framing).
+**Depends on**: Phase 60 (confined coding loop is code-complete + live-UAT PASS) + Phase 62 (WFP enforcement complete).
+**Requirements**: REQ-RLS-03, REQ-RLS-04
+**Plans**: 4 plans
 Plans:
-- [ ] TBD (run /gsd-plan-phase 61 to break down)
+**Wave 1** (parallel — no file overlap)
+- [ ] 61-01-PLAN.md — Lockstep 0.58.0 version bump (5 crates + 6 path-dep pins + Cargo.lock) + CHANGELOG [0.58.0] + register REQ-RLS-03/04 (D-03, D-04)
+- [ ] 61-02-PLAN.md — D-09 verify-and-document: run the hook CWD-guard tests, write the honest hook-layer scope/limitation note, resolve the deny-`~/.claude` todo (D-09)
+
+**Wave 2** *(blocked on 61-01)*
+- [ ] 61-03-PLAN.md — Pre-tag readiness: drain-fix ancestry (D-08), v0.57.4 verify-absent/delete-if-found (D-07), signing-secret pre-flight (D-02), driver-sys presence
+
+**Wave 3** *(operator-gated; blocked on 61-01/02/03)*
+- [ ] 61-04-PLAN.md — Release notes + tag/push v0.58.0 + release.yml live-verify + v2.9 annotation tag + post-release MSI signature spot-check (D-01, D-02, D-03, D-05, D-06)
 
 ### Phase 62: Add WFP kernel network enforcement for Windows supervised runs
 **Goal**: Make `network.block:true` on a supervised/broker (Low-IL) `nono run` reliably enforce WFP kernel network filtering out of the box on a machine-MSI-installed host — with no manual `nono setup --start-wfp-service` step — and never silently pass through unenforced. Closes Phase 60's F-60-UAT-03 carry-forward. (WFP-via-service is already kernel-enforced; the deliverable is operational reliability, not a new kernel layer — `nono-wfp-driver.sys` minifilter stays v3.0-deferred.)
@@ -199,7 +208,7 @@ Plans:
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
-| 61. Ship/Release v2.9 | 0/TBD | Not started | - |
+| 61. Ship/Release v2.9 | 0/4 | Not started | - |
 | 62. WFP kernel network enforcement (Windows supervised) | 12/13 | Complete    | 2026-06-03 |
 
 ## Coverage

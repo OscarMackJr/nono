@@ -55,6 +55,31 @@
   uninstall via `msiexec /x` still leaves nothing behind. Closes Phase 60's F-60-UAT-03.
   (v2.9 track, Phase 62)
 
+### Release & Distribution — v2.9 (RLS)
+
+- [ ] **REQ-RLS-03**: The v2.9 milestone is published as a **CI-signed public GitHub release**.
+  Specifically: a lockstep `0.58.0` workspace version bump (all 5 crate `Cargo.toml` versions +
+  the 6 internal path-dep `version` pins + `Cargo.lock`; `CHANGELOG.md` `## [0.58.0]` section);
+  a dual tag `v2.9` + `v0.58.0` off current `main` (`v0.58.0` is the `release.yml` build trigger,
+  `v2.9` is a non-building milestone marker on the same commit); `release.yml` produces signed
+  machine + user MSIs whose **wrapper AND embedded payloads** are Authenticode-valid (the v0.57.4
+  unsigned-payload class is gated out by the Phase 53 sign-before-harvest + MSI-payload-verify
+  steps); release notes telling the Windows confined tool-mediation + out-of-box WFP enforcement
+  story (honest POC / defense-in-depth framing) are published; the superseded v0.57.4 release is
+  resolved (verified absent / deleted-if-found); and the untagged v2.7 drain fixes (`d8b7ce00`,
+  `005b4c9e`, `0cbeb3be`, `b852826b`) are confirmed ancestors of the tagged commit. CI signing
+  material must be present at release time — if unavailable, the release is **blocked**, never
+  falls back to the self-signed POC cert. (v2.9 track, Phase 61; D-01..D-08)
+- [ ] **REQ-RLS-04**: The shipped `claude-code` tool runner cannot expose `~/.claude`
+  (credentials/session state) or a project `.claude/` to a confined tool call regardless of
+  `--allow-cwd`. Enforced by the hook-level CWD guard in `crates/nono-cli/src/claude_code_hook.rs`
+  (`cwd_self_disable_risk_reason` → `cwd_covers_home_claude_state`, component comparison via
+  `path_covers`), implemented in Phase 60-03, verified by its unit tests on the 0.58.0 build.
+  Enforcement is **hook-layer** (the Windows OS label backend cannot deny-within-allow); the
+  hooked Claude Code loop is the documented v2.9 boundary, and a bare
+  `nono run --allow-cwd ~/.claude` outside that loop is a documented limitation, not a Phase 61
+  code task. (v2.9 track, Phase 61; D-09)
+
 ## v2 Requirements (Deferred)
 
 Acknowledged but not in the v2.8 roadmap.
@@ -104,14 +129,16 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
 | REQ-WFP-01 | Phase 62 | Complete |
+| REQ-RLS-03 | Phase 61 | Pending |
+| REQ-RLS-04 | Phase 61 | Pending |
 | REQ-DENY-PREFLIGHT-01 | v2 Deferred | Deferred |
 | REQ-UNDO-TOCTOU-01 | v2 Deferred | Deferred |
 
 **Coverage:**
-- v1 requirements: 11 total
-- Mapped to phases: 11/11 ✓
+- v1 requirements: 13 total
+- Mapped to phases: 13/13 ✓
 - Unmapped: 0
 
 ---
 *Requirements defined: 2026-05-28*
-*Last updated: 2026-05-28 — traceability populated at roadmap creation*
+*Last updated: 2026-06-03 — registered REQ-RLS-03/04 (v2.9 release track, Phase 61)*
