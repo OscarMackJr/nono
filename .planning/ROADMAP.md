@@ -161,7 +161,7 @@ Plans:
 - [x] 61-02-PLAN.md — D-09 verify-and-document: run the hook CWD-guard tests, write the honest hook-layer scope/limitation note, resolve the deny-`~/.claude` todo (D-09)
 
 **Wave 2** *(blocked on 61-01)*
-- [ ] 61-03-PLAN.md — Pre-tag readiness: drain-fix ancestry (D-08), v0.57.4 verify-absent/delete-if-found (D-07), signing-secret pre-flight (D-02), driver-sys presence
+- [x] 61-03-PLAN.md — Pre-tag readiness: drain-fix ancestry (D-08), v0.57.4 verify-absent/delete-if-found (D-07), signing-secret pre-flight (D-02), driver-sys presence
 
 **Wave 3** *(operator-gated; blocked on 61-01/02/03)*
 - [ ] 61-04-PLAN.md — Release notes + tag/push v0.58.0 + release.yml live-verify + v2.9 annotation tag + post-release MSI signature spot-check (D-01, D-02, D-03, D-05, D-06)
@@ -208,7 +208,7 @@ Plans:
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
-| 61. Ship/Release v2.9 | 2/4 | In Progress|  |
+| 61. Ship/Release v2.9 | 3/4 | In Progress|  |
 | 62. WFP kernel network enforcement (Windows supervised) | 12/13 | Complete    | 2026-06-03 |
 
 ## Coverage
