@@ -24,6 +24,12 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # Environment gives the GitHub OIDC token an `environment:Development` subject claim that
+    # matches the Azure Trusted Signing federated credential (subject
+    # repo:OscarMackJr/nono:environment:Development). Keep this environment WITHOUT protection
+    # rules (required reviewers / wait timers) — they would pause every matrix leg, not just the
+    # Windows signing leg. To gate only signing, split it into its own job instead.
+    environment: Development
     strategy:
       fail-fast: false
       matrix:
