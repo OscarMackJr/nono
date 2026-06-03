@@ -57,7 +57,7 @@
 
 ### Release & Distribution — v2.9 (RLS)
 
-- [ ] **REQ-RLS-03**: The v2.9 milestone is published as a **CI-signed public GitHub release**.
+- [x] **REQ-RLS-03**: The v2.9 milestone is published as a **CI-signed public GitHub release**.
   Specifically: a lockstep `0.58.0` workspace version bump (all 5 crate `Cargo.toml` versions +
   the 6 internal path-dep `version` pins + `Cargo.lock`; `CHANGELOG.md` `## [0.58.0]` section);
   a dual tag `v2.9` + `v0.58.0` off current `main` (`v0.58.0` is the `release.yml` build trigger,
@@ -129,7 +129,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
 | REQ-WFP-01 | Phase 62 | Complete |
-| REQ-RLS-03 | Phase 61 | Pending |
+| REQ-RLS-03 | Phase 61 | Complete |
 | REQ-RLS-04 | Phase 61 | Pending |
 | REQ-DENY-PREFLIGHT-01 | v2 Deferred | Deferred |
 | REQ-UNDO-TOCTOU-01 | v2 Deferred | Deferred |

@@ -157,7 +157,7 @@ Plans:
 **Plans**: 4 plans
 Plans:
 **Wave 1** (parallel — no file overlap)
-- [ ] 61-01-PLAN.md — Lockstep 0.58.0 version bump (5 crates + 6 path-dep pins + Cargo.lock) + CHANGELOG [0.58.0] + register REQ-RLS-03/04 (D-03, D-04)
+- [x] 61-01-PLAN.md — Lockstep 0.58.0 version bump (5 crates + 6 path-dep pins + Cargo.lock) + CHANGELOG [0.58.0] + register REQ-RLS-03/04 (D-03, D-04)
 - [ ] 61-02-PLAN.md — D-09 verify-and-document: run the hook CWD-guard tests, write the honest hook-layer scope/limitation note, resolve the deny-`~/.claude` todo (D-09)
 
 **Wave 2** *(blocked on 61-01)*
@@ -208,7 +208,7 @@ Plans:
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
-| 61. Ship/Release v2.9 | 0/4 | Not started | - |
+| 61. Ship/Release v2.9 | 1/4 | In Progress|  |
 | 62. WFP kernel network enforcement (Windows supervised) | 12/13 | Complete    | 2026-06-03 |
 
 ## Coverage
