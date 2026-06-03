@@ -216,11 +216,11 @@ Confirm these commits are ancestors of the tagged commit (`git merge-base --is-a
 | Confined tool jail self-disables by rewriting `~/.claude/settings.json` via `--allow-cwd` | Elevation of Privilege / Tampering | Hook refuses to wrap Bash when CWD covers `~/.claude` or project `.claude/` (`claude_code_hook.rs:203`) |
 | Silent fallback to self-signed POC cert for a public release | Spoofing | D-02 hard blocker; CI has no POC-cert path |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **`tools/sign-fixture` version.** Is it a 6th versioned crate / does it pin `nono` by `version`? Not grepped this session — planner should confirm and include in the bump if so. `[ASSUMED]`
-2. **D-09 scope — hook vs bare CLI.** The enforcement is hook-only; a bare `nono run --profile claude-code-tools-windows-runner --allow-cwd ~/.claude` would still grant write on Windows (no backend deny-within-allow). Is direct-CLI in the threat model, or is "hooked Claude loop only" the documented boundary? Maintainer call.
-3. **`v2.9` annotation tag** — confirm it's intended as a non-building milestone marker (it cannot trigger/build under the `v*.*.*` + 3-component constraints). Likely yes.
+1. **`tools/sign-fixture` version.** Is it a 6th versioned crate / does it pin `nono` by `version`? Not grepped this session — planner should confirm and include in the bump if so. `[ASSUMED]` **RESOLVED:** `tools/sign-fixture` is version `0.1.0` with `publish = false` and carries NO `nono` path-dep `version` pin -> it is EXCLUDED from the 0.58.0 lockstep bump (verified on disk; reflected in the 61-01 interfaces block).
+2. **D-09 scope — hook vs bare CLI.** The enforcement is hook-only; a bare `nono run --profile claude-code-tools-windows-runner --allow-cwd ~/.claude` would still grant write on Windows (no backend deny-within-allow). Is direct-CLI in the threat model, or is "hooked Claude loop only" the documented boundary? Maintainer call. **RESOLVED:** the enforcement boundary is the hooked Claude Code loop; the bare-CLI `--allow-cwd ~/.claude` write is a DOCUMENTED LIMITATION per D-09, captured in 61-02 (61-D09-VERIFICATION.md) + the v2.9 release notes -- not a Phase 61 code task.
+3. **`v2.9` annotation tag** — confirm it's intended as a non-building milestone marker (it cannot trigger/build under the `v*.*.*` + 3-component constraints). Likely yes. **RESOLVED:** `v2.9` is confirmed a NON-BUILDING 2-component milestone annotation tag; only `v0.58.0` (3-component) matches the `v*.*.*` glob and triggers release.yml (D-03).
 
 ## Assumptions Log
 
