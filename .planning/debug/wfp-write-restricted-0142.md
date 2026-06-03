@@ -239,3 +239,18 @@ broadening grant surface for an arbitrary user tool. AND the make-or-break quest
 actually MATCH an AppContainer connection (D5 #2) — is STILL UNVALIDATED because the child has never successfully
 started. Decision point: push the full grant model to finally test WFP-match, vs. validate WFP-match in isolation
 first (cheap experiment) before investing, vs. reconsider the approach. Recorded for the next session.
+
+## DECISIVE SPIKE RESULT (2026-06-03) — AppContainer approach VALIDATED ✅
+Spike (crates/nono-cli/examples/spike_wfp_appcontainer.rs, run elevated) with the AppContainer profile REGISTERED:
+```
+ALE_USER_ID    : BLOCKED   (curl exit=6, "Could not resolve host: api.ipify.org")
+ALE_PACKAGE_ID : BLOCKED   (curl exit=2, "getaddrinfo() thread failed to start")
+```
+TWO confirmed facts:
+1. WFP kernel-BLOCKS an AppContainer process's outbound connection scoped by its package SID — via BOTH FWPM_CONDITION_ALE_USER_ID (the SD D:(A;;CC;;;<pkgSid>) path nono ALREADY builds, 62-07/62-08) AND FWPM_CONDITION_ALE_PACKAGE_ID (FWP_SID). The AppContainer redesign (D5 #2) is VIABLE; keep the existing ALE_USER_ID scoping (no condition switch needed).
+2. The CreateProcessW ERROR_FILE_NOT_FOUND was NOT a cwd-access problem (the spike spawned from a fully-accessible C:\Windows\System32 and still failed until the profile was registered). The real cause: the AppContainer PROFILE must be REGISTERED via CreateAppContainerProfile (which creates the registry entry + AppContainerNamedObjects namespace) before CreateProcess(SECURITY_CAPABILITIES) can launch into it. A derived-only SID is insufficient. The 62-12 broker (Derive-only, D1 option 1a) is the bug; the fix is D1 option 1b (CreateAppContainerProfile + DeleteAppContainerProfile cleanup). My v0.57.10/v0.57.11 cwd-traverse work (c3d7644f) was a WRONG turn (harmless — the read+traverse grant is still needed for real tools to access files — but NOT the spawn fix).
+
+### Validated implementation path (next plan, e.g. 62-13)
+1. BROKER (the spawn fix): register the per-run AppContainer profile with CreateAppContainerProfile(name,...) BEFORE the SECURITY_CAPABILITIES spawn; RAII DeleteAppContainerProfile on session end (tolerate ALREADY_EXISTS). This is the validated fix that makes the confined child START.
+2. WFP: KEEP ALE_USER_ID(packageSid) — proven to block. No condition change.
+3. GRANT MODEL (for real user-profile cwd/tools): after registration the spawn works from an accessible cwd; for a profile-deep cwd (e.g. %USERPROFILE%\.claude) the package SID still needs traverse on the cwd (+ ancestors if the lowbox lacks bypass-traverse) and READ on the tool's read paths. The c3d7644f leaf read+traverse grant is the start; next UAT after registration reveals whether ancestor grants are also required. Full read-grant model for claude.exe remains a follow-up.
