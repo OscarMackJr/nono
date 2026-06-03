@@ -184,3 +184,31 @@ Files: (1) `crates/nono/src/sandbox/windows.rs` — replace/augment `create_low_
 - "WRITE_RESTRICTED leaves all reads / the loader open, so the broker path will start cleanly" (the 62-10/D1 single empirical unknown) — ELIMINATED: the loader's section-map-write and BaseNamedObjects creation are WRITE-class, denied against the synthetic SID → 0xC0000142. WRITE_RESTRICTED does NOT keep the loader open for a SID that is on no object DACL.
 - "Restricting SID is the only Win32 way to make session_sid WFP-matchable" (the D1 design premise) — ELIMINATED: AppContainer/lowbox tokens carry an arbitrary SID as a normal access-check participant, both startup-safe and WFP-matchable.
 - WFP ALE_APP_ID (exe-path) scoping — ELIMINATED (re-confirmed): the confined child shares its exe with unconfined system curl/powershell, so an app-id filter blocks all instances system-wide. AppContainer package-SID scoping is the per-run-unique replacement.
+
+## UAT FOLLOW-UP (2026-06-03): 0xC0000142 FIXED; new finding = AppContainer principal lacks read/traverse on cwd
+
+Installed v0.57.10 (62-12 AppContainer build). Live SC1 re-run RESULT:
+- `broker: token/AppContainer setup complete app_container=true` — the lowbox token + SECURITY_CAPABILITIES build OK.
+- **0xC0000142 STATUS_DLL_INIT_FAILED is GONE** (debug D5 #1 core premise CONFIRMED: AppContainer startup path is viable).
+- NEW failure: `CreateProcessW (AppContainer) failed (GetLastError=2)` = ERROR_FILE_NOT_FOUND.
+
+### Confirmed root cause (verified, not hypothesized)
+The confined child now runs as the PACKAGE SID (member of ALL APPLICATION PACKAGES), NOT the user. Verified evidence:
+1. cwd = `C:\Users\OMack\.claude` (launch.rs normalize_windows_launch_path strips `\?\`, so it is a plain path — the verbatim-prefix theory is FALSE).
+2. `Get-Acl C:\Users\OMack\.claude` grants ONLY SYSTEM, Administrators, OMack — NO ALL APPLICATION PACKAGES / S-1-15-2 ACE. An empty-capability AppContainer has NO access to it.
+3. nono's package-SID DACL grant is WRITE-ONLY: SESSION_SID_WRITE_MASK = FILE_GENERIC_WRITE | DELETE = 0x00130116 (windows.rs L1220-1223) — NO FILE_TRAVERSE (0x20) / FILE_LIST_DIRECTORY (0x1).
+4. curl.exe IS in System32 and grants ALL APPLICATION PACKAGES ReadAndExecute (so the EXE is reachable) — ruling out the exe-access theory; the failure is the CWD.
+A process cannot have a current directory its token cannot traverse → CreateProcessW returns ERROR_FILE_NOT_FOUND.
+
+Why it worked under the old Low-IL token: that token is the USER's identity (integrity-lowered); the user owns `.claude`, so traverse/read succeeded. Reads "just worked" under Low-IL (read-down allowed; NO_WRITE_UP only blocks writes), which is why the DACL guard only ever granted WRITE. AppContainer changes the PRINCIPAL, so reads AND traversal now also need explicit grants.
+
+### Design implication (the real cost of the AppContainer model)
+Every path the confined child must READ or TRAVERSE — the cwd, the tool's exe dir (if outside System32), its DLLs, config, node_modules (for claude.exe), etc. — must be granted to the package SID (or ALL APPLICATION PACKAGES). The current write-only grant is insufficient. The capability set already enumerates the r+w paths; the fix is to grant the package SID the FULL access matching each capability's AccessMode, with directory TRAVERSE, instead of write-only.
+
+### Proposed fix (62-12 follow-up)
+Map each capability to a package-SID grant mask:
+- Read    → FILE_GENERIC_READ | FILE_TRAVERSE  (read + list + traverse; execute for exe dirs)
+- Write   → FILE_GENERIC_WRITE | DELETE | FILE_TRAVERSE  (traverse needed to reach the file)
+- ReadWrite → READ|WRITE|DELETE|TRAVERSE
+Add a package-SID READ/TRAVERSE grant primitive alongside grant_sid_write_on_path (currently write-only), thread the AccessMode through AppliedDaclGrantsGuard, and ensure all grants revert on Drop. MINIMAL unblock for SC1 = grant the cwd read+traverse; FULL model = grant every capability path per its mode (needed for claude.exe). Same user-owned-path gate, inheritable, Drop-revoke. Fail-closed unchanged.
+This is debug D5 #3 expanded from "do writes work" to "the AppContainer needs explicit grants for ALL access (read+traverse+write), because it is a different principal than the user."
