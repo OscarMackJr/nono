@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-03T00:00:49.839Z"
+last_updated: "2026-06-03T01:57:38.762Z"
 last_activity: 2026-06-03
 progress:
   total_phases: 10
   completed_phases: 2
-  total_plans: 19
-  completed_plans: 17
-  percent: 89
+  total_plans: 20
+  completed_plans: 18
+  percent: 90
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 ## Current Position
 
-Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — SC1 BLOCKED (62-10 design falsified by live UAT); 62-11 OK; redesign ready
-Plan: 10 of 11 "complete" but 62-10's approach is FALSIFIED. Wave 1 executed 62-10 (broker session_sid fix) + 62-11 (uninstall WFP purge). 62-11 stands. 62-04 (Wave 2, HUMAN-UAT) remains; SC1 is BLOCKED pending a 62-10 re-implementation (see below).
+Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — 62-12 AppContainer REDESIGN CODE-COMPLETE (supersedes falsified 62-10); 62-11 OK; awaiting live 62-04 HUMAN-UAT
+Plan: 62-12 EXECUTED 2026-06-03 (build + Windows-host clippy clean, unit tests green). Wave 1 = 62-10 (FALSIFIED) + 62-11 (uninstall purge, stands) + 62-12 (the viable AppContainer redesign). 62-04 (Wave 2, HUMAN-UAT) remains. 62-12 replaces the WRITE_RESTRICTED broker token with a per-run AppContainer (lowbox) spawn: derive package SID S-1-15-2-* from name nono.session.<uuid> (DeriveAppContainerSidFromAppContainerName) → SECURITY_CAPABILITIES{0 caps} → CreateProcessW CREATE_SUSPENDED → label child Low-IL → Resume; WFP scoped by the package SID via the UNCHANGED ALE_USER_ID SD path (WFP service binary untouched); AppliedDaclGrantsGuard retargeted to the package SID (new ExecConfig.package_sid field; session_sid retained as the synthetic SID for the mutually-exclusive legacy WriteRestricted arm). Dead 62-10 create_low_integrity_primary_token_with_sid removed. DESIGN DECISIONS: (1) CreateProcessW+SECURITY_CAPABILITIES (debug D2) over AsUserW+token; (2) explicit Low-IL label on the suspended child token. windows-sys 0.59: added Win32_Security_Isolation; no new dep/shim. Commits c1fe2572, cb341165, 066d1c74, c573586d. 4 D5 UAT unknowns (does the lowbox child start; ALE_USER_ID vs ALE_PACKAGE_ID match; confined writes with package-SID DACL; Low-IL label survival) DEFERRED to the live elevated Win11 62-04 UAT — NOT validated here (no live host). NOTE: a NEW signed MSI (v0.57.10+) must be rebuilt off the 62-12 binaries before the UAT (the installed v0.57.9 is the falsified-62-10 build that crashes confined children).
 Status: LIVE UAT 2026-06-02 (installed v0.57.9, SHA-confirmed 62-10 build) FAILED SC1: the confined child exits 0xC0000142 (STATUS_DLL_INIT_FAILED) — curl never starts. ROOT-CAUSED + REDESIGNED in debug `wfp-write-restricted-0142` (status design_complete): CreateRestrictedToken(WRITE_RESTRICTED, restricting SID = synthetic S-1-5-117-* on no DACL) denies the loader's WRITE-class ops (image-section COW mapping + BaseNamedObjects/section creation) → DLL-init fails. Un-narrowable; integrity-independent; hits NATIVE binaries (curl), not just CLR. The prior debug wfp-broker-token-no-sid D1 premise ("restricting SID is the ONLY Win32 way to make session_sid WFP-matchable") is FALSE. VIABLE FIX (designed, code-ready, MEDIUM): per-run **AppContainer** child — derive package SID `S-1-15-2-*` from the per-run UUID (DeriveAppContainerSidFromAppContainerName), spawn via STARTUPINFOEX + SECURITY_CAPABILITIES{AppContainerSid, 0 caps} (starts cleanly: private AppContainerNamedObjects namespace), scope WFP by the package SID (REUSE the proven ALE_USER_ID SD path fed the package SID first; ALE_PACKAGE_ID fallback), retarget AppliedDaclGrantsGuard from session_sid → package SID. All invariants preserved (Low-IL NO_WRITE_UP, broker-spawn, fail-closed, single-source, net tightening). 4 live-UAT unknowns in debug D5. 62-11 (uninstall purge) is INDEPENDENT and still valid. NOTE: the currently-installed v0.57.9 is a REGRESSION for usability — confined --block-net children crash at startup (worse than pre-62-10, where they ran but were unblocked).
 Next (operator, live elevated Win11): rebuild nono.exe + broker + version-bumped MSI, then run 62-04 HUMAN-UAT SC1→SC5. SC1 probe (from a profile-covered cwd e.g. %USERPROFILE%\.claude): `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org` MUST block (no external IP). SC4/SC5: after a confined --block-net run, `msiexec /x` then confirm NO nono filters + NO NONO_SUBLAYER_GUID sublayer remain. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; import POC cert to LocalMachine\Root+TrustedPublisher; verify installed nono-wfp-service.exe SHA256. If startup regresses under WRITE_RESTRICTED on the broker path, escalate to a new debug session (the restricting-SID shape is the only WFP-matchable option per debug wfp-broker-token-no-sid D1). Phase 60 follow-ups (non-blocking) still carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
 BUILT+SIGNED FOR 62-04 UAT (2026-06-02): signed machine MSI `dist/windows/nono-v0.57.9-x86_64-pc-windows-msvc-machine.msi` (ProductVersion 0.57.9 > prior 0.57.8, so MajorUpgrade replaces the prior UAT install), built off the 62-10+62-11 release binaries and Authenticode-signed (all Valid) with the trusted POC cert 319E507E950472D490F56F7C4CD94437C013CC06. Build-identity for the UAT SHA256 gate: nono-wfp-service.exe = E393213104AE4F5A6C3D63B6D90AE3F63C3B31AD389318486CC0B198067963A6; nono.exe = 2F910D9DA2B90A2074556834236763157B2FBF94707F8ADB94E6108FCF0BE40A. Cert already imported on this host (same machine); on a fresh target import dist/windows/nono-poc-signing.cer to LocalMachine\Root+TrustedPublisher first. NOTE: Cargo crate version stays 0.57.5 (MSI version derives from the build tag, not Cargo) — matches the WFP-62 tag-only UAT pattern.
-Last session: 2026-06-03T00:00:49.822Z
+Last session: 2026-06-03T01:57:16.482Z
 
 ### v2.8 Phase Summary (active)
 
