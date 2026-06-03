@@ -285,6 +285,14 @@ struct PreparedWindowsLaunch {
     // OPERATIVE on the WriteRestricted arm; inert but harmless elsewhere, and
     // always reverted on Drop). See dacl_guard.rs for the full rationale.
     _applied_dacls: Option<dacl_guard::AppliedDaclGrantsGuard>,
+    // Plan 62-13: grants the per-run package SID FILE_TRAVERSE on the USER-OWNED
+    // ancestors of the cwd so the AppContainer child (a different principal) can
+    // traverse INTO a profile-deep cwd. The cwd LEAF is covered by _applied_dacls
+    // (0x1301BF). `None` when no package SID is set (non-AppContainer arm). Same
+    // lifetime as _applied_dacls; reverted on Drop. Declared AFTER _applied_dacls
+    // but BEFORE _network_enforcement so reverse-of-declaration drop order revokes
+    // the ancestor grants together with the leaf grants and before network teardown.
+    _applied_ancestor_traverse: Option<dacl_guard::AppliedAncestorTraverseGuard>,
     _network_enforcement: Option<NetworkEnforcementGuard>,
     launch_program: PathBuf,
 }
@@ -351,6 +359,21 @@ fn prepare_live_windows_launch(
         .map(|sid| dacl_guard::AppliedDaclGrantsGuard::snapshot_and_apply(&fs_policy, sid))
         .transpose()?;
 
+    // Plan 62-13 (debug `wfp-write-restricted-0142`): on the AppContainer arm
+    // (config.package_sid is Some), also grant the package SID FILE_TRAVERSE on
+    // the USER-OWNED ancestors of the cwd. The leaf cwd is already granted
+    // read+write+traverse above; this lets the AppContainer child (a different
+    // principal) traverse INTO a profile-deep cwd. Best-effort (stops at the first
+    // non-owned ancestor — C:\Users, C:\ — which it cannot edit), fail-closed on
+    // ownership-check / grant errors on OWNED ancestors. Reverted on Drop.
+    let applied_ancestor_traverse = config
+        .package_sid
+        .as_deref()
+        .map(|sid| {
+            dacl_guard::AppliedAncestorTraverseGuard::snapshot_and_apply(config.current_dir, sid)
+        })
+        .transpose()?;
+
     let network_enforcement = prepare_network_enforcement(config, session_id)?;
     let launch_program = network_enforcement
         .as_ref()
@@ -361,6 +384,7 @@ fn prepare_live_windows_launch(
     Ok(PreparedWindowsLaunch {
         _applied_labels: applied_labels,
         _applied_dacls: applied_dacls,
+        _applied_ancestor_traverse: applied_ancestor_traverse,
         _network_enforcement: network_enforcement,
         launch_program,
     })

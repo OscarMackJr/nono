@@ -42,8 +42,8 @@
 use std::path::{Path, PathBuf};
 
 use nono::{
-    grant_sid_write_on_path, path_is_owned_by_current_user, revoke_sid_on_path, AccessMode, Result,
-    WindowsFilesystemPolicy,
+    grant_sid_traverse_on_path, grant_sid_write_on_path, path_is_owned_by_current_user,
+    revoke_sid_on_path, AccessMode, Result, WindowsFilesystemPolicy,
 };
 
 /// Per-rule state recorded at snapshot time.
@@ -183,6 +183,124 @@ impl AppliedDaclGrantsGuard {
 }
 
 impl Drop for AppliedDaclGrantsGuard {
+    fn drop(&mut self) {
+        self.revert_all();
+    }
+}
+
+/// RAII guard that grants the per-run PACKAGE SID `FILE_TRAVERSE` on the
+/// USER-OWNED ancestor directories of the confined cwd, and revokes them on Drop.
+///
+/// # Why this exists (Plan 62-13, debug `wfp-write-restricted-0142`)
+///
+/// On the Phase-62 AppContainer arm the confined child runs as the per-run
+/// package SID (`S-1-15-2-*`) — a DIFFERENT principal than the user, with NO
+/// inherent access to the user-profile directory chain. The cwd LEAF is already
+/// granted read+write+traverse by [`AppliedDaclGrantsGuard`] (the 0x1301BF
+/// writable mask). But to SET its current directory to a profile-deep cwd (e.g.
+/// `%USERPROFILE%\.claude`) the child's token must also TRAVERSE every ANCESTOR
+/// (`C:\Users\<user>`, ...).
+///
+/// This guard walks the cwd ancestors from the immediate parent upward and grants
+/// the package SID traverse-only on each USER-OWNED ancestor. It STOPS at the
+/// first non-owned ancestor (`C:\Users`, `C:\` — owned by SYSTEM/TrustedInstaller,
+/// no `WRITE_DAC`, cannot be edited). Reaching the cwd through those non-owned
+/// ancestors depends on the lowbox retaining bypass-traverse
+/// (`SeChangeNotifyPrivilege`), which the follow-up live UAT confirms.
+///
+/// # Best-effort + fail-closed
+///
+/// - Non-owned ancestor (`Ok(false)`): STOP the walk (cannot edit; higher
+///   ancestors are also non-owned). Best-effort — not an error.
+/// - Ownership-check error (`Err`): fail-closed — revert what was applied and
+///   propagate (ownership-check errors are NEVER swallowed).
+/// - Grant error on an owned ancestor: fail-closed — revert + propagate.
+///
+/// Modeled on [`AppliedDaclGrantsGuard`]: same snapshot/apply/revert/Drop shape,
+/// same `path_is_owned_by_current_user` gate, same fail-closed discipline.
+#[derive(Debug)]
+pub(crate) struct AppliedAncestorTraverseGuard {
+    /// The owned ancestor directories we granted traverse on (revoke on Drop).
+    applied: Vec<PathBuf>,
+    /// The package SID stored so Drop can `revoke_sid_on_path` each entry.
+    package_sid: String,
+}
+
+impl AppliedAncestorTraverseGuard {
+    /// Grant the package SID `FILE_TRAVERSE` on every USER-OWNED ancestor of
+    /// `current_dir`, from the immediate parent upward, stopping at the first
+    /// non-owned ancestor.
+    ///
+    /// Fail-closed: returns `Err` (after reverting already-applied grants) on any
+    /// ownership-check error or grant failure on an owned ancestor.
+    pub(crate) fn snapshot_and_apply(current_dir: &Path, package_sid: &str) -> Result<Self> {
+        let mut guard = Self {
+            applied: Vec::new(),
+            package_sid: package_sid.to_string(),
+        };
+
+        // Walk ancestors from the immediate parent upward. `Path::ancestors`
+        // yields `current_dir` first, then each parent up to the root, so skip
+        // the leaf (index 0 — already granted read+write+traverse by the writable
+        // DACL guard).
+        for ancestor in current_dir.ancestors().skip(1) {
+            match path_is_owned_by_current_user(ancestor) {
+                Ok(true) => {
+                    if let Err(err) = grant_sid_traverse_on_path(ancestor, package_sid) {
+                        tracing::warn!(
+                            ancestor = %ancestor.display(),
+                            "ancestor-traverse guard: grant failed; reverting entries already applied"
+                        );
+                        guard.revert_all();
+                        return Err(err);
+                    }
+                    guard.applied.push(ancestor.to_path_buf());
+                }
+                Ok(false) => {
+                    // First non-owned ancestor (e.g. C:\Users, C:\). Cannot edit
+                    // its DACL (no WRITE_DAC); every ancestor ABOVE it is also
+                    // non-owned. STOP — reaching the cwd through these depends on
+                    // the lowbox's bypass-traverse (confirmed by the live UAT).
+                    tracing::debug!(
+                        ancestor = %ancestor.display(),
+                        "ancestor-traverse guard: ancestor not owned by current user; stopping the \
+                         walk (cannot grant traverse without WRITE_DAC — relies on lowbox \
+                         bypass-traverse from here up)"
+                    );
+                    break;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        ancestor = %ancestor.display(),
+                        error = %err,
+                        "ancestor-traverse guard: ownership check failed; reverting entries already applied"
+                    );
+                    guard.revert_all();
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(guard)
+    }
+
+    /// Best-effort revert of every applied grant, LIFO. Drop-safe: errors are
+    /// logged, never panic.
+    fn revert_all(&mut self) {
+        while let Some(path) = self.applied.pop() {
+            if let Err(err) = revoke_sid_on_path(&path, &self.package_sid) {
+                tracing::warn!(
+                    ancestor = %path.display(),
+                    error = %err,
+                    "ancestor-traverse guard: revoke failed; the package SID may remain on this \
+                     ancestor's DACL"
+                );
+            }
+        }
+    }
+}
+
+impl Drop for AppliedAncestorTraverseGuard {
     fn drop(&mut self) {
         self.revert_all();
     }
@@ -401,5 +519,71 @@ mod tests {
             !dacl_contains_sid(&ok_dir, TEST_SESSION_SID),
             "first rule's SID ACE must be reverted after the mid-loop failure"
         );
+    }
+
+    // A package-SID-shaped (S-1-15-2-*) test SID for the ancestor-traverse guard;
+    // on no real ACE, so revoke removes only what the guard added.
+    const TEST_PACKAGE_SID: &str = "S-1-15-2-10-20-30-40-50-60-70";
+
+    /// Plan 62-13 Task 3: the ancestor-traverse guard grants the package SID
+    /// traverse on the USER-OWNED ancestors of a profile-deep cwd, and reverts
+    /// every grant on Drop. A tempdir lives under `%TEMP%` (user-owned), so its
+    /// immediate parent chain up to the user profile is owned by the current user.
+    #[test]
+    fn ancestor_traverse_grants_owned_ancestors_and_reverts_on_drop() {
+        let dir = tempdir().expect("tempdir");
+        // A nested cwd so there is at least one owned ancestor below the tempdir
+        // root: <temp>/<rand>/leaf — the parent <temp>/<rand> is user-owned.
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+        let parent = dir.path().to_path_buf();
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist on the parent DACL"
+        );
+
+        {
+            let guard =
+                AppliedAncestorTraverseGuard::snapshot_and_apply(&leaf, TEST_PACKAGE_SID)
+                    .expect("apply ancestor traverse");
+            // The tempdir parent is user-owned, so it must have received a grant.
+            assert!(
+                guard.applied.iter().any(|p| p == &parent),
+                "the user-owned tempdir parent must be granted traverse; applied = {:?}",
+                guard.applied
+            );
+            assert!(
+                dacl_contains_sid(&parent, TEST_PACKAGE_SID),
+                "during the guard lifetime the package SID's traverse ACE must be on the parent DACL"
+            );
+        } // guard drops → revert all
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_PACKAGE_SID),
+            "after guard drop, the package SID's ancestor ACE must be revoked"
+        );
+    }
+
+    /// The walk STOPS at the first non-owned ancestor (e.g. `C:\Users`, `C:\`):
+    /// those are never granted, and reaching them relies on lowbox bypass-traverse.
+    #[test]
+    fn ancestor_traverse_stops_at_non_owned_ancestor() {
+        let dir = tempdir().expect("tempdir");
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+
+        let guard = AppliedAncestorTraverseGuard::snapshot_and_apply(&leaf, TEST_PACKAGE_SID)
+            .expect("apply ancestor traverse");
+
+        // C:\ (or whatever the drive root is) is owned by SYSTEM/TrustedInstaller,
+        // never the current user, so it must NOT appear in the applied set.
+        let root = leaf.ancestors().last().expect("a root ancestor exists");
+        assert!(
+            !guard.applied.iter().any(|p| p.as_path() == root),
+            "the drive root ({}) must never be granted (non-owned)",
+            root.display()
+        );
+        drop(guard);
     }
 }
