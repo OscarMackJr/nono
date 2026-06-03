@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-02T23:50:01.432Z"
-last_activity: 2026-06-02
+last_updated: "2026-06-03T00:00:49.839Z"
+last_activity: 2026-06-03
 progress:
   total_phases: 10
   completed_phases: 2
   total_plans: 19
-  completed_plans: 16
-  percent: 84
+  completed_plans: 17
+  percent: 89
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -26,10 +26,10 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 ## Current Position
 
 Phase: 62 (add-wfp-kernel-network-enforcement-for-windows-supervised-ru) — EXECUTING
-Plan: 2 of 11 (62-10 COMPLETE; 62-11 next)
-Status: 62-10 code-complete; pending live SC1 UAT re-run to confirm (a) curl starts under WRITE_RESTRICTED+Low-IL on broker path and (b) outbound is blocked
+Plan: 3 of 11 (62-10 COMPLETE; 62-11 next)
+Status: Ready to execute
 Next (resume fresh): EXECUTE 62-11 = uninstall WFP purge: `--purge-wfp-objects` service mode (FwpmSubLayerDeleteByKey0 + filter sweep) invoked fail-open from `setup --uninstall-wfp`, REQ-DRN-01 leave-nothing under the now-persistent session. Then rebuild nono.exe+broker, sign MSI, re-run 62-04 SC1→SC4. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; SC1 probe = `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org`. Phase 60 follow-ups (non-blocking) carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
-Last session: 2026-06-02 — Completed 62-10-PLAN.md (3 tasks: create_low_integrity_primary_token_with_sid library fn + broker --session-sid plumbing + launch.rs fail-closed push; commits b5c2eae0, 9af1136e, 9e75d084)
+Last session: 2026-06-03T00:00:49.822Z
 
 ### v2.8 Phase Summary (active)
 
@@ -376,7 +376,7 @@ Known deferred items at v2.4 close: 5 host-blocked requirements (re-anchored to 
 **[Stale — pre-v2.4 forensic history below this line. Authoritative state is the YAML frontmatter at the top of this file plus the resume entry above.]**
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-06-02
+**Last Activity:** 2026-06-03
 **Resumed:** 2026-05-11 — Phase 33 (`windows-parity-upstream-0-52-divergence`) Wave 3 closed via `/gsd-execute-phase 33`. Plan 33-03 landed three downstream artifact edits in single commit `8f783c39` closing REQ-3 + REQ-4 + REQ-5 (PROJECT.md Key Decisions row for parity-strategy decision + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section with empirical-disproof framing + ROADMAP Phase 33 entry flipped to complete + Phase 34 UPST3-sync stub appended per D-33-D1 base case for Option A). All 12 REQ-3/4/5 validators + 2 cross-cutting (D-19 + make-ci sub) pass. Phase 33 now 4/4 plans executed; all 5 REQs landed (REQ-1 5fa0dca4 / REQ-2 7107b88d / REQ-3+4+5 8f783c39); ready for `/gsd-verify-work` verifier pass. Next: orchestrator's verify-phase step, then `/gsd-complete-phase 33` if verifier passes.
 
 **Stopped At (prior session, retained for context):** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.

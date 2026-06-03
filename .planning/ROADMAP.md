@@ -180,7 +180,7 @@ Plans:
 - [x] 62-08-PLAN.md -- GAP-CLOSURE F-62-UAT-03: wrap the ALE_USER_ID security descriptor in an FWP_BYTE_BLOB (windows-sys types sd as *mut FWP_BYTE_BLOB) so FwpmFilterAdd0 stops failing RPC_X_BAD_STUB_DATA (1783); second stacked 1783 cause on the SID block path
 - [x] 62-09-PLAN.md -- GAP-CLOSURE F-62-UAT-04: make the WFP session PERSISTENT (drop FWPM_SESSION_FLAG_DYNAMIC) so the sublayer (startup engine) + filters (per-request engines) share one namespace; fixes FwpmFilterAdd0 FWP_E_WRONG_SESSION (0x8032000C); root-caused in debug wfp-wrong-session-dynamic. FOLLOW-UP 62-11 = uninstall WFP purge (REQ-DRN-01 leave-nothing) before SC4
 - [x] 62-10-PLAN.md -- GAP-CLOSURE F-62-UAT-05: inject session_sid into the broker (BrokerLaunchNoPty) Low-IL child token as a WRITE_RESTRICTED restricting SID via new `nono::create_low_integrity_primary_token_with_sid` + `--session-sid` plumbing (launch.rs -> broker argv -> token build), fail-closed; the WFP ALE_USER_ID filter installed cleanly post-62-09 but matched NOTHING because the broker token lacked session_sid (curl reached the net). Closes the SC1 enforcement-MATCH gap; root-caused + DESIGNED in debug wfp-broker-token-no-sid
-- [ ] 62-11-PLAN.md -- GAP-CLOSURE (REQ-DRN-01 leave-nothing): add `--purge-wfp-objects` one-shot mode to nono-wfp-service (delete all NONO_SUBLAYER_GUID filters + FwpmSubLayerDeleteByKey0), invoked fail-open from `setup --uninstall-wfp` before service delete, so the now-PERSISTENT (62-09) sublayer/filters are removed by `msiexec /x`. Closes the SC4/SC5 gap 62-09 deferred; no WiX change
+- [x] 62-11-PLAN.md -- GAP-CLOSURE (REQ-DRN-01 leave-nothing): add `--purge-wfp-objects` one-shot mode to nono-wfp-service (delete all NONO_SUBLAYER_GUID filters + FwpmSubLayerDeleteByKey0), invoked fail-open from `setup --uninstall-wfp` before service delete, so the now-PERSISTENT (62-09) sublayer/filters are removed by `msiexec /x`. Closes the SC4/SC5 gap 62-09 deferred; no WiX change
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
@@ -198,7 +198,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
-| 62. WFP kernel network enforcement (Windows supervised) | 9/11 | In Progress|  |
+| 62. WFP kernel network enforcement (Windows supervised) | 10/11 | In Progress|  |
 
 ## Coverage
 
