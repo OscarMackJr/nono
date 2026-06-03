@@ -73,7 +73,7 @@ mod windows_spike {
         ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
     };
     use windows_sys::Win32::Security::{
-        GetSecurityDescriptorLength, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID,
+        FreeSid, GetSecurityDescriptorLength, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID,
     };
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
@@ -87,6 +87,69 @@ mod windows_spike {
         PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES, STARTUPINFOEXW,
         STARTUPINFOW,
     };
+
+    // userenv.dll AppContainer profile APIs. A derived package SID is NOT enough
+    // for CreateProcess(SECURITY_CAPABILITIES) — the AppContainer PROFILE (registry
+    // + AppContainerNamedObjects namespace) must be REGISTERED first, else
+    // CreateProcessW fails ERROR_FILE_NOT_FOUND. Declared as a local extern shim so
+    // this throwaway spike needs no production Cargo.toml feature change.
+    #[link(name = "userenv")]
+    extern "system" {
+        fn CreateAppContainerProfile(
+            pszAppContainerName: *const u16,
+            pszDisplayName: *const u16,
+            pszDescription: *const u16,
+            pCapabilities: *const core::ffi::c_void,
+            dwCapabilityCount: u32,
+            ppSidAppContainerSid: *mut *mut core::ffi::c_void,
+        ) -> i32;
+        fn DeleteAppContainerProfile(pszAppContainerName: *const u16) -> i32;
+    }
+
+    fn to_wide_nul(s: &str) -> Vec<u16> {
+        OsStr::new(s).encode_wide().chain(Some(0)).collect()
+    }
+
+    /// HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS).
+    const HR_ALREADY_EXISTS: i32 = 0x8007_0050u32 as i32;
+
+    /// Register the spike AppContainer profile so the package SID names a real
+    /// lowbox the kernel can launch into. Tolerates ERROR_ALREADY_EXISTS (a prior
+    /// run left it registered; the SID is deterministic from the name).
+    fn register_app_container_profile() -> Result<(), String> {
+        let name = to_wide_nul(APP_CONTAINER_NAME);
+        let display = to_wide_nul("nono spike");
+        let desc = to_wide_nul("nono WFP AppContainer spike (throwaway)");
+        let mut sid: *mut core::ffi::c_void = null_mut();
+        // SAFETY: name/display/desc are nul-terminated UTF-16; no capabilities;
+        // sid is a valid out-pointer freed below.
+        let hr = unsafe {
+            CreateAppContainerProfile(name.as_ptr(), display.as_ptr(), desc.as_ptr(), null(), 0, &mut sid)
+        };
+        if hr == 0 {
+            if !sid.is_null() {
+                // SAFETY: sid was allocated by CreateAppContainerProfile; free per its contract.
+                unsafe { FreeSid(sid) };
+            }
+            Ok(())
+        } else if hr == HR_ALREADY_EXISTS {
+            Ok(())
+        } else {
+            Err(format!(
+                "CreateAppContainerProfile failed (HRESULT=0x{:08X})",
+                hr as u32
+            ))
+        }
+    }
+
+    /// Best-effort: delete the spike AppContainer profile registered above.
+    fn unregister_app_container_profile() {
+        let name = to_wide_nul(APP_CONTAINER_NAME);
+        // SAFETY: nul-terminated UTF-16 name; best-effort cleanup, result ignored.
+        unsafe {
+            let _ = DeleteAppContainerProfile(name.as_ptr());
+        }
+    }
 
     /// Fixed per-spike AppContainer moniker. Deterministic → stable package SID.
     const APP_CONTAINER_NAME: &str = "nono.spike.wfptest";
@@ -615,6 +678,18 @@ mod windows_spike {
         println!("=== nono WFP AppContainer SPIKE (Phase 62) ===");
         println!("AppContainer name : {APP_CONTAINER_NAME}");
 
+        // 0) REGISTER the AppContainer profile (the fix under test): without a
+        //    registered profile, CreateProcess(SECURITY_CAPABILITIES) fails
+        //    ERROR_FILE_NOT_FOUND even with a fully-accessible cwd + exe.
+        match register_app_container_profile() {
+            Ok(()) => println!("AppContainer profile registered (or already existed)."),
+            Err(e) => {
+                eprintln!("FATAL: {e}");
+                eprintln!("(CreateAppContainerProfile needs an ELEVATED process. Re-run from an admin shell.)");
+                return ExitCode::from(2);
+            }
+        }
+
         // 1) Derive the per-spike package SID (PSID + string form).
         let package_sid = match nono::derive_app_container_sid(APP_CONTAINER_NAME) {
             Ok(s) => s,
@@ -688,6 +763,9 @@ mod windows_spike {
         print_line("ALE_PACKAGE_ID", &probe_b);
         println!();
         interpret(&probe_a, &probe_b);
+
+        // 7) Best-effort: unregister the spike AppContainer profile.
+        unregister_app_container_profile();
 
         ExitCode::SUCCESS
     }
