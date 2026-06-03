@@ -306,6 +306,33 @@ mod broker {
         // STATUS_DLL_INIT_FAILED that the falsified 62-10 WRITE_RESTRICTED token
         // caused. The SAME package SID scopes the WFP ALE_USER_ID filter
         // (single source: nono-cli derives it from the same name).
+        // Plan 62-13 (the SPAWN fix — debug `wfp-write-restricted-0142` decisive
+        // spike): a DERIVE-ONLY package SID is insufficient. `CreateProcessW` with
+        // `SECURITY_CAPABILITIES` fails `ERROR_FILE_NOT_FOUND` unless the
+        // AppContainer PROFILE is REGISTERED first (it creates the registry entry
+        // + the `\Sessions\<n>\AppContainerNamedObjects\<pkgSid>` namespace the
+        // lowbox launches into). REGISTER the per-run profile BEFORE deriving the
+        // SID / building SECURITY_CAPABILITIES, and HOLD the guard until the child
+        // exits (the guard drops at the END of `run`, after WaitForSingleObject,
+        // so DeleteAppContainerProfile runs on child exit — RAII).
+        //
+        // FAIL-CLOSED: `?` propagates any CreateAppContainerProfile failure (other
+        // than ALREADY_EXISTS, which the lib tolerates) — we NEVER spawn an
+        // unregistered/unmatched child (silent non-enforcement). The SAME name
+        // (single source) yields the SAME package SID on BOTH the broker spawn and
+        // the WFP ALE_USER_ID filter.
+        let _app_container_profile: Option<nono::AppContainerProfile> =
+            match args.app_container_name.as_deref() {
+                Some(name) => {
+                    let profile = nono::create_app_container_profile(name)?;
+                    tracing::info!(
+                        app_container_name = %name,
+                        "broker: AppContainer profile registered"
+                    );
+                    Some(profile)
+                }
+                None => None,
+            };
         let app_container_sid: Option<nono::OwnedAppContainerSid> = match args
             .app_container_name
             .as_deref()
