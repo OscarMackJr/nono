@@ -222,3 +222,20 @@ the AppContainer child's outbound connection? Re-run SC1: (a) curl should now ST
 observe BLOCK (no IP / timeout) = SC1 PASS, or PRINTS IP = ALE_USER_ID does not match AppContainer connections →
 implement the ALE_PACKAGE_ID FWP_SID condition fallback (D1 step 4). Read-only grant paths (for claude.exe) remain the
 deferred full read-grant model.
+
+### ANCESTOR-TRAVERSE WALL (2026-06-03) — the deeper AppContainer problem
+After the leaf cwd read+traverse grant (v0.57.11), CreateProcessW (AppContainer) STILL failed ERROR_FILE_NOT_FOUND
+(operator's run; binary identity unconfirmed — operator then UNINSTALLED nono, so retroactive hashing is impossible).
+Verified ACL evidence: `C:\Users\OMack`, `C:\Users`, and `C:\Users\OMack\.claude` ALL lack any ALL APPLICATION
+PACKAGES / S-1-15-2 ACE. To set its current directory to the profile-deep cwd, the AppContainer must TRAVERSE every
+ancestor (C:\, C:\Users, C:\Users\OMack); granting only the leaf `.claude` is insufficient if the lowbox token lacks
+bypass-traverse (SeChangeNotifyPrivilege) OR the ancestors are not granted.
+
+ROOT PROBLEM (architectural, not a one-line bug): the AppContainer child is a DIFFERENT principal (package SID) with
+ZERO inherent access to the user profile, where BOTH the cwd AND (for the real target, claude.exe) all the tool's
+files live. Making it work requires, at minimum: package-SID TRAVERSE on the cwd ancestor chain, package-SID READ on
+every read path the tool touches (the deferred read-grant model), and likely bypass-traverse handling — a large,
+broadening grant surface for an arbitrary user tool. AND the make-or-break question — does WFP ALE_USER_ID/ALE_PACKAGE_ID
+actually MATCH an AppContainer connection (D5 #2) — is STILL UNVALIDATED because the child has never successfully
+started. Decision point: push the full grant model to finally test WFP-match, vs. validate WFP-match in isolation
+first (cheap experiment) before investing, vs. reconsider the approach. Recorded for the next session.
