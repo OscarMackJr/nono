@@ -16,7 +16,7 @@ key_files:
 decisions:
   - "Use session.flags = 0 (persistent WFP session): sublayer and filters must share the same WFP object namespace across engine handles; dynamic sessions make objects private and the cross-engine reference fails with FWP_E_WRONG_SESSION."
   - "Remove FWPM_SESSION_FLAG_DYNAMIC import: unused after the flag change; removing keeps -D warnings clean."
-  - "Defer uninstall purge (FwpmSubLayerDeleteByKey0) to plan 62-10: scoped to unblocking SC1 only."
+  - "Defer uninstall purge (FwpmSubLayerDeleteByKey0) to plan 62-11: scoped to unblocking SC1 only."
 metrics:
   duration: "~10 minutes"
   completed: "2026-06-02"
@@ -79,7 +79,7 @@ Pending operator re-run of 62-04 SC1 after MSI rebuild from this commit:
 
 None — plan executed exactly as written.
 
-## REQUIRED Follow-up: Plan 62-10 (uninstall purge, REQ-DRN-01)
+## REQUIRED Follow-up: Plan 62-11 (uninstall purge, REQ-DRN-01)
 
 **This is a known, accepted gap introduced by this plan and MUST be closed before SC4.**
 
@@ -89,7 +89,7 @@ Under the dynamic model, stopping the service auto-deleted all WFP objects (the 
 
 **Mitigation during gap:** crash-surviving filters are BLOCK (fail-closed), so the residue over-restricts rather than under-restricts — no security weakening. The startup sweep (`run_startup_sweep`) removes orphaned filters before the service accepts requests. The sublayer is an empty, benign container after removal of its filters.
 
-**Plan 62-10** will add `FwpmSubLayerDeleteByKey0` (and a final filter sweep) to the uninstall path before SC4.
+**Plan 62-11** will add `FwpmSubLayerDeleteByKey0` (and a final filter sweep) to the uninstall path before SC4.
 
 ## Known Stubs
 
