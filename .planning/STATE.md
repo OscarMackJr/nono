@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-03T01:57:38.762Z"
+last_updated: "2026-06-03T14:05:54.366Z"
 last_activity: 2026-06-03
 progress:
   total_phases: 10
@@ -329,6 +329,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 | 260601-wha | Sync binaries + Windows MSI source to **v0.57.5**. Rebuilt release binaries for the `x86_64-pc-windows-msvc` triple (nono, nono-shell-broker, nono-wfp-service); discarded the stale uncommitted `dist/windows/*.wxs` working copy (it had switched to bare `target\release` paths) and re-derived both wxs cleanly via `build-windows-msi.ps1`, which also built both MSIs. machine MSI ships the full WFP backend (service+driver+eventlog; driver = pre-signed checked-in copy); user MSI stays minimal. wxs now `Version="0.57.5"` + `x86_64-pc-windows-msvc\release` Source paths. MSIs are gitignored local artifacts (UNSIGNED); not pushed. Run inline (worktree isolation unsafe — empty `target/` + gitignored MSIs). | 2026-06-02 | 68abcacb | [260601-wha-sync-up-binaries-and-source-code-rebuild](./quick/260601-wha-sync-up-binaries-and-source-code-rebuild/) |
 | fast (2026-06-01) | Rebuild all 5 workspace binaries (`cargo build --release --target x86_64-pc-windows-msvc`, exit 0) + both MSIs (`build-windows-msi.ps1 -VersionTag v0.57.5-poc.1 -Scope {user,machine}`, no WFP) for Phase 60 UAT, refreshing the artifacts off the latest main (Phase 60 confined-edit + CR-01 fix; `nono.exe --version` → 0.57.5). Both `nono-v0.57.5-poc.1-x86_64-pc-windows-msvc-{user,machine}.msi` rebuilt (5.19 MB each) under `dist\windows\`. Inline /gsd-fast; build artifacts gitignored and regenerated `.wxs` byproducts (local abs paths) reverted, so no source committed. | 2026-06-01 | — | (inline) |
 | fast (2026-06-01) | Wrote an MSI install guide for a Phase 60 UAT user at `C:\temp\nono-uat\INSTALL-MSI.md`: which MSI to pick (per-user no-admin → `%LocalAppData%\Programs\nono` vs per-machine → `Program Files\nono`), `msiexec /i` silent + GUI install, `nono --version` verify, the **broker trust-gate caveat** (installed UNSIGNED build can't spawn the Low-IL broker per D-32-12 → Phase 60 Bash-jail/confined-edit fails closed; run dev-layout `target\...\release\nono.exe` or sign via `scripts\sign-poc-local.ps1` first), pointers to the bundle `README.md` + cookbook, and uninstall. Deliverable lives in `C:\temp` (outside repo); no source committed. | 2026-06-01 | — | (inline) |
+| 260603-e0x | Windows-native development status summary for upstream (macOS/Linux) nono maintainers — what's shipped on Windows (core sandbox, supervisor, broker, WFP/ports/proxy/ETW/AIPC, Job-Object limits, signed-MSI release, + Phase 62 out-of-box WFP enforcement 5/5 UAT), what's in the v2.9 sandbox-the-tools POC (Medium-IL agent + per-tool-call Low-IL nono jail; defense-in-depth not isolation; TUI OS-blocked), and next milestones (Phase 61 ship v2.9 → v2.8 UPST7 sync → v3.0 kernel-minifilter/EDR deferrals). Parity-maps Windows primitives to Landlock/Seatbelt; explicit limitations section. Synthesis only, no code. | 2026-06-03 | 3acc3db7 | [260603-e0x-windows-native-development-status-summar](./quick/260603-e0x-windows-native-development-status-summar/) |
 
 ## Deferred Items
 
