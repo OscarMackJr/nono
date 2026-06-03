@@ -368,6 +368,29 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         allowed_env_vars: flags.allowed_env_vars,
         denied_env_vars: flags.denied_env_vars,
     };
+    // Plan 62-12 (F-62-UAT-05 redesign): the SINGLE per-run identifier for the
+    // WFP-enforced broker-no-PTY arm is the AppContainer moniker
+    // `nono.session.<uuid>`. From it we deterministically derive the package SID
+    // (`S-1-15-2-*`) — the value the WFP filter keys on AND the value the DACL
+    // guard grants to the AppContainer child. The name flows to the broker via
+    // `--app-container-name`, where it derives the SAME package SID for the
+    // lowbox `SECURITY_CAPABILITIES`. Never two ids for the AppContainer arm.
+    //
+    // `session_sid` (the synthetic `S-1-5-117-*`) is RETAINED for the legacy,
+    // non-broker `WriteRestricted` arm only (the package SID is NOT a restricting
+    // SID). The two arms are mutually exclusive (BrokerLaunchNoPty XOR
+    // WriteRestricted), so the synthetic SID and package SID never coexist on a
+    // single child.
+    //
+    // FAIL-CLOSED: if the package SID cannot be derived, the run aborts here
+    // rather than launching a child whose WFP filter would match nothing.
+    #[cfg(target_os = "windows")]
+    let windows_app_container_name = exec_strategy::generate_app_container_name();
+    #[cfg(target_os = "windows")]
+    let windows_package_sid = {
+        let psid = nono::derive_app_container_sid(&windows_app_container_name)?;
+        nono::package_sid_to_string(&psid)?
+    };
     #[cfg(target_os = "windows")]
     let config = exec_strategy::ExecConfig {
         command: &command,
@@ -376,7 +399,12 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         env_vars,
         cap_file: cap_file.as_deref(),
         current_dir: &current_dir,
+        // Synthetic SID for the legacy WriteRestricted arm (mutually exclusive
+        // with the AppContainer arm). The WFP request + DACL guard read the
+        // package SID below, NOT this field.
         session_sid: Some(exec_strategy::generate_session_sid()),
+        app_container_name: Some(windows_app_container_name),
+        package_sid: Some(windows_package_sid),
         interactive_shell: flags.interactive_shell,
         session_token: Some(windows_session_token.clone()),
         cap_pipe_rendezvous_path: Some(windows_cap_pipe_path.clone()),

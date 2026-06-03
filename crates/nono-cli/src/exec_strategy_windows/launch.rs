@@ -1825,27 +1825,28 @@ pub(super) fn spawn_windows_child(
             broker_args.push(std::ffi::OsString::from("--inherit-handle"));
             broker_args.push(std::ffi::OsString::from(format!("0x{:016x}", *h as usize)));
         }
-        // Plan 62-10 (F-62-UAT-05): pass the session SID to the broker so it can
-        // inject it as a WRITE_RESTRICTED restricting SID into the Low-IL primary
-        // token, causing the WFP ALE_USER_ID filter to match the confined child's
-        // outbound connections.
+        // Plan 62-12 (F-62-UAT-05 redesign): pass the per-run AppContainer name
+        // to the broker so it derives the package SID and spawns the confined
+        // child as a per-run AppContainer (lowbox). The SAME name derives the
+        // SAME package SID that scopes the WFP ALE_USER_ID filter (single source
+        // — config.session_sid already carries that package SID string).
         //
         // FAIL-CLOSED: this arm is only reached when `prefers_low_il_broker &&
-        // has_session_sid` (select_windows_token_arm, L1186-1193), so
-        // config.session_sid is unconditionally Some(...) here.  ok_or_else makes
-        // the invariant explicit and structurally prevents spawning a SID-less
-        // broker child if the field ever becomes None (e.g. future refactor).
-        // A missing SID must error rather than silently spawn an unmatched WFP
-        // child (silent non-enforcement = worst outcome, plan D5(c)).
-        let session_sid = config.session_sid.as_deref().ok_or_else(|| {
+        // has_session_sid` (select_windows_token_arm), and execution_runtime
+        // sets app_container_name alongside session_sid. ok_or_else makes the
+        // invariant explicit and structurally prevents spawning a non-AppContainer
+        // child if the field is ever None (e.g. future refactor). A missing name
+        // must error rather than silently spawn an unmatched WFP child (silent
+        // non-enforcement = worst outcome, debug D4c).
+        let app_container_name = config.app_container_name.as_deref().ok_or_else(|| {
             NonoError::SandboxInit(
-                "BrokerLaunchNoPty reached without session_sid; \
-                 refusing to spawn an unmatched WFP child"
+                "BrokerLaunchNoPty reached without app_container_name; \
+                 refusing to spawn a non-AppContainer (unmatched WFP) child"
                     .into(),
             )
         })?;
-        broker_args.push(std::ffi::OsString::from("--session-sid"));
-        broker_args.push(std::ffi::OsString::from(session_sid));
+        broker_args.push(std::ffi::OsString::from("--app-container-name"));
+        broker_args.push(std::ffi::OsString::from(app_container_name));
         broker_args.push(std::ffi::OsString::from("--cwd"));
         broker_args.push(current_dir.as_os_str().to_owned());
 
@@ -3127,6 +3128,8 @@ mod env_filter_tests {
             cap_file: None,
             current_dir,
             session_sid: None,
+            app_container_name: None,
+            package_sid: None,
             interactive_shell: false,
             session_token: None,
             cap_pipe_rendezvous_path: None,

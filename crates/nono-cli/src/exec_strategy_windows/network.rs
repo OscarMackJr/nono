@@ -1669,12 +1669,19 @@ where
                 let suffix = unique_windows_firewall_rule_suffix();
                 let outbound_rule = format!("nono-wfp-block-out-{suffix}");
                 let inbound_rule = format!("nono-wfp-block-in-{suffix}");
+                // Plan 62-12: feed the WFP request the per-run PACKAGE SID
+                // (`S-1-15-2-*`, derived from the AppContainer name) so the
+                // UNCHANGED ALE_USER_ID security-descriptor path scopes the
+                // filter to the AppContainer child. The package SID is a normal
+                // access-check participant, so the CC-probe matches AND the child
+                // starts (debug D1 step 4 / D4). `package_sid` is single-sourced
+                // with the broker's `--app-container-name` (same derivation).
                 let request = build_wfp_target_activation_request(
                     policy,
                     config.resolved_program,
                     &outbound_rule,
                     &inbound_rule,
-                    config.session_sid.as_deref(),
+                    config.package_sid.as_deref(),
                 );
                 let probe_output = run_probe(probe_config, &request)?;
                 return match parse_wfp_runtime_probe_status(&probe_output)? {
@@ -1965,7 +1972,11 @@ mod tests {
             env_vars: vec![],
             cap_file: None,
             current_dir: &current_dir,
+            // Plan 62-12: session_sid is the legacy synthetic SID; package_sid is
+            // the per-run AppContainer package SID fed to WFP + DACL.
             session_sid: Some("S-1-5-117-123456789-1234-5678-9012".to_string()),
+            app_container_name: Some("nono.session.deadbeefcafebabe0123456789abcdef".to_string()),
+            package_sid: Some("S-1-15-2-1-2-3-4-5-6-7".to_string()),
             interactive_shell: false,
             session_token: None,
             cap_pipe_rendezvous_path: None,
@@ -2027,7 +2038,11 @@ mod tests {
             env_vars: vec![],
             cap_file: None,
             current_dir: &current_dir,
+            // Plan 62-12: session_sid is the legacy synthetic SID; package_sid is
+            // the per-run AppContainer package SID fed to WFP + DACL.
             session_sid: Some("S-1-5-117-123456789-1234-5678-9012".to_string()),
+            app_container_name: Some("nono.session.deadbeefcafebabe0123456789abcdef".to_string()),
+            package_sid: Some("S-1-15-2-1-2-3-4-5-6-7".to_string()),
             interactive_shell: false,
             session_token: None,
             cap_pipe_rendezvous_path: None,
@@ -2079,17 +2094,21 @@ mod tests {
     fn build_wfp_target_activation_request_populates_session_sid() {
         let policy = make_blocked_policy();
 
+        // Plan 62-12: the value carried by `session_sid` is now the per-run
+        // PACKAGE SID (`S-1-15-2-*`, derived from the AppContainer name), fed to
+        // the UNCHANGED ALE_USER_ID security-descriptor path. The field is reused
+        // verbatim — only the value's SID class changed (S-1-5-117 → S-1-15-2).
         let request = build_wfp_target_activation_request(
             &policy,
             std::path::Path::new(r"C:\tools\agent.exe"),
             "nono-wfp-block-out-abc123",
             "nono-wfp-block-in-abc123",
-            Some("S-1-5-117-123456789-1234-5678-9012"),
+            Some("S-1-15-2-1111111111-2222222222-3333333333-4444444444-5555555555-6666666666-7777777777"),
         );
 
         assert_eq!(
             request.session_sid.as_deref(),
-            Some("S-1-5-117-123456789-1234-5678-9012")
+            Some("S-1-15-2-1111111111-2222222222-3333333333-4444444444-5555555555-6666666666-7777777777")
         );
         assert_eq!(
             request.outbound_rule_name.as_deref(),
@@ -2145,7 +2164,11 @@ mod tests {
             env_vars: vec![],
             cap_file: None,
             current_dir,
+            // Plan 62-12: session_sid is the legacy synthetic SID; package_sid is
+            // the per-run AppContainer package SID fed to WFP + DACL.
             session_sid: Some("S-1-5-117-123456789-1234-5678-9012".to_string()),
+            app_container_name: Some("nono.session.deadbeefcafebabe0123456789abcdef".to_string()),
+            package_sid: Some("S-1-15-2-1-2-3-4-5-6-7".to_string()),
             interactive_shell: false,
             session_token: None,
             cap_pipe_rendezvous_path: None,

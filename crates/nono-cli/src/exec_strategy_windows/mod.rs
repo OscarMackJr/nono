@@ -134,6 +134,21 @@ pub struct ExecConfig<'a> {
     pub cap_file: Option<&'a Path>,
     pub current_dir: &'a Path,
     pub session_sid: Option<String>,
+    /// Plan 62-12 (F-62-UAT-05 redesign): the per-run AppContainer moniker
+    /// `nono.session.<uuid>`. This NAME is the single per-run identifier from
+    /// which BOTH the broker (`SECURITY_CAPABILITIES.AppContainerSid`) and the
+    /// WFP request (`session_sid` carries the package SID derived from this
+    /// name) obtain the same package SID deterministically. Present on the
+    /// `BrokerLaunchNoPty` (no-PTY supervised) arm; `None` on other arms.
+    pub app_container_name: Option<String>,
+    /// Plan 62-12: the per-run PACKAGE SID (`S-1-15-2-*`) derived from
+    /// `app_container_name`. This is the value the WFP `ALE_USER_ID` filter
+    /// keys on AND the value the DACL guard grants to the AppContainer child.
+    /// Single source: derived from the SAME name the broker receives, so both
+    /// sides obtain the identical package SID. `None` on non-Windows-supervised
+    /// arms. Distinct from `session_sid` (the synthetic restricting SID used
+    /// only by the legacy WriteRestricted arm).
+    pub package_sid: Option<String>,
     pub interactive_shell: bool,
     /// Per-session 32-byte hex token authenticating capability requests
     /// from the sandboxed child. `None` disables runtime capability
@@ -321,15 +336,17 @@ fn prepare_live_windows_launch(
     // The guard here is the SOLE apply site on the CLI path.
     let applied_labels = labels_guard::AppliedLabelsGuard::snapshot_and_apply(&fs_policy)?;
 
-    // WriteRestricted token-arm fix: when a per-session restricting SID is set
-    // (config.session_sid), add it to the DACL of every WRITABLE grant so the
-    // WRITE_RESTRICTED restricting-SID double-check passes and confined writes
-    // LAND. Fail-closed via `?` (any DACL apply error aborts the launch and the
-    // partially-applied guard reverts what it added). The grant is operative
-    // only on the WriteRestricted arm; on other token arms the SID is on no
-    // child token so the ACE is inert. Always reverted on Drop.
+    // Plan 62-12 (F-62-UAT-05 redesign): grant the per-run PACKAGE SID
+    // (config.package_sid, `S-1-15-2-*`) write on every WRITABLE grant so the
+    // AppContainer child's confined cwd writes LAND (the package SID is the
+    // child token's access-check participant — debug D4b). Same primitive as the
+    // Phase 60 F-60-UAT-04 mechanism, package SID as the grantee. Fail-closed via
+    // `?` (any DACL apply error aborts the launch and the partially-applied guard
+    // reverts what it added). The grant is scoped to already-user-owned grant-set
+    // paths, FILE_GENERIC_WRITE | DELETE, (OI)(CI), revoked on Drop. Single source
+    // with the broker's AppContainer name (same package SID).
     let applied_dacls = config
-        .session_sid
+        .package_sid
         .as_deref()
         .map(|sid| dacl_guard::AppliedDaclGrantsGuard::snapshot_and_apply(&fs_policy, sid))
         .transpose()?;
@@ -518,7 +535,7 @@ pub(crate) use network::{
     install_windows_wfp_driver, install_windows_wfp_service, probe_windows_wfp_readiness,
     start_windows_wfp_driver, start_windows_wfp_service, uninstall_windows_wfp,
 };
-pub(crate) use restricted_token::generate_session_sid;
+pub(crate) use restricted_token::{generate_app_container_name, generate_session_sid};
 use supervisor::*;
 
 pub(crate) fn is_admin_process() -> bool {
