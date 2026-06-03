@@ -1,6 +1,9 @@
 ---
 created: 2026-05-29
-updated: 2026-05-29
+updated: 2026-06-03
+status: resolved
+resolved_by: Phase 60-03
+resolution_date: 2026-06-03
 title: Runner profile must deny ~/.claude (and project .claude/) regardless of --allow-cwd
 area: tooling
 files:
@@ -81,3 +84,26 @@ The robust fix does NOT depend on label-backend deny semantics:
 Medium — closes the last residual enforceability edge in the PR #4 defense-in-depth
 slice. Not blocking the experimental merge if documented as a known limitation, but
 required before the runner profile is presented as a reliable boundary.
+
+---
+
+## Resolution (2026-06-03 — Phase 60-03 + Plan 61-02 verification)
+
+**Status: RESOLVED**
+
+The robust hook-level CWD guard was implemented in **Phase 60-03** via commits:
+
+- `ddb711dc` — hook: add `cwd_self_disable_risk_reason` CWD guard (initial implementation)
+- `fe832dfc` — hook: fix `path_covers` CR-01 fail-open via `canonicalize_with_existing_prefix`
+- `309c94a4` — hook: add unit tests for `cwd_covers_home_claude_state` and component-boundary edge cases
+
+The guard lives at `crates/nono-cli/src/claude_code_hook.rs:204` (`cwd_self_disable_risk_reason`)
+and uses `cwd_covers_home_claude_state` at :301 with path-component comparison (not string
+`starts_with`) to close the CR-01 fail-open. All 16 hook unit tests pass on the v0.58.0 build
+(verified 2026-06-03 as part of plan 61-02).
+
+**Scope / honest limitation:** The guard is a hook-layer boundary — it fires when Claude Code is
+the launcher. The bare-CLI path (`nono run --allow-cwd ~/.claude` outside the hooked loop) is a
+documented limitation accepted as T-61-04 in the v2.9 threat model. The Windows OS label backend
+has no deny-within-allow primitive for the overlap case. See full scope analysis in:
+`.planning/phases/61-ship-release-v2-9-package-and-release-the-phase-60-confined-/61-D09-VERIFICATION.md`
