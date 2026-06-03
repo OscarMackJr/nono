@@ -70,7 +70,7 @@
   `005b4c9e`, `0cbeb3be`, `b852826b`) are confirmed ancestors of the tagged commit. CI signing
   material must be present at release time — if unavailable, the release is **blocked**, never
   falls back to the self-signed POC cert. (v2.9 track, Phase 61; D-01..D-08)
-- [ ] **REQ-RLS-04**: The shipped `claude-code` tool runner cannot expose `~/.claude`
+- [x] **REQ-RLS-04**: The shipped `claude-code` tool runner cannot expose `~/.claude`
   (credentials/session state) or a project `.claude/` to a confined tool call regardless of
   `--allow-cwd`. Enforced by the hook-level CWD guard in `crates/nono-cli/src/claude_code_hook.rs`
   (`cwd_self_disable_risk_reason` → `cwd_covers_home_claude_state`, component comparison via
@@ -130,7 +130,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-IPC-01 | Phase 59 | Pending |
 | REQ-WFP-01 | Phase 62 | Complete |
 | REQ-RLS-03 | Phase 61 | Complete |
-| REQ-RLS-04 | Phase 61 | Pending |
+| REQ-RLS-04 | Phase 61 | Complete |
 | REQ-DENY-PREFLIGHT-01 | v2 Deferred | Deferred |
 | REQ-UNDO-TOCTOU-01 | v2 Deferred | Deferred |
 
