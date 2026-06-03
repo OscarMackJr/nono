@@ -1210,17 +1210,37 @@ pub fn path_is_owned_by_current_user(path: &Path) -> Result<bool> {
     Ok(equal != 0)
 }
 
-/// Write-class access-rights mask granted to the synthetic per-session SID by
-/// [`grant_sid_write_on_path`]. Deliberately minimal — `FILE_GENERIC_WRITE`
-/// (create/append/write/write-attrs) plus `DELETE` (rename/replace) — and
-/// explicitly NOT `FILE_ALL_ACCESS`/FullControl. Principle of least privilege:
-/// the restricting SID needs exactly enough to let confined writes LAND, not to
-/// take ownership or rewrite the DACL.
+/// Access-rights mask granted to the per-session SID by
+/// [`grant_sid_write_on_path`] on a *writable* grant path. `FILE_GENERIC_WRITE`
+/// (create/append/write/write-attrs) plus `DELETE` (rename/replace), plus
+/// `FILE_GENERIC_READ | FILE_EXECUTE` so the SID can also READ and, for
+/// directories, TRAVERSE (`FILE_EXECUTE` == `FILE_TRAVERSE`) the path.
+/// Deliberately NOT `FILE_ALL_ACCESS`/FullControl (no `WRITE_DAC`/`WRITE_OWNER`).
 ///
-/// `FILE_GENERIC_WRITE` = 0x00120116, `DELETE` = 0x00010000 → 0x00130116.
+/// # Why read + traverse, not write-only
+///
+/// On the `WriteRestricted` arm the child runs as the USER's token, which
+/// already holds read+traverse on these user-owned paths, so the synthetic
+/// restricting SID only needed WRITE (the restricting second-check gates
+/// WRITE-class access only; the extra read/execute ACEs are inert there).
+///
+/// On the Phase-62 AppContainer arm the child runs as a DIFFERENT principal
+/// (the per-run package SID), which has NO inherent access to user-profile
+/// dirs. A process cannot even set a current directory it cannot TRAVERSE, so
+/// an AppContainer child spawned with cwd inside a granted writable dir failed
+/// `CreateProcessW` with `ERROR_FILE_NOT_FOUND` until the package SID was also
+/// granted `FILE_EXECUTE`/`FILE_TRAVERSE` (+ read). See debug
+/// `wfp-write-restricted-0142` (UAT follow-up). Read-only grant paths the child
+/// must read are a separate, larger concern (the AppContainer read-grant model)
+/// tracked for follow-up; this mask only covers the already-writable paths.
+///
+/// `FILE_GENERIC_READ` = 0x00120089, `FILE_GENERIC_WRITE` = 0x00120116,
+/// `FILE_EXECUTE` = 0x001200A0, `DELETE` = 0x00010000 → 0x001301BF.
 const SESSION_SID_WRITE_MASK: u32 = {
-    use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_GENERIC_WRITE};
-    FILE_GENERIC_WRITE | DELETE
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    };
+    FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_EXECUTE | DELETE
 };
 
 /// RAII wrapper around an ACL allocated by `SetEntriesInAclW`. The new ACL is
@@ -1434,9 +1454,13 @@ fn edit_dacl_for_sid(
 }
 
 /// Adds an allow-ACE to the DACL of `path` granting the SDDL SID string `sid`
-/// write-class rights ([`SESSION_SID_WRITE_MASK`] — `FILE_GENERIC_WRITE |
-/// DELETE`, deliberately NOT FullControl), PRESERVING the existing DACL
-/// (including inherited ACEs).
+/// read + write + traverse rights ([`SESSION_SID_WRITE_MASK`] —
+/// `FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_EXECUTE | DELETE` = 0x1301BF,
+/// deliberately NOT FullControl), PRESERVING the existing DACL (including
+/// inherited ACEs). The read/traverse bits let a Phase-62 AppContainer child
+/// (a different principal than the user) traverse and read its granted writable
+/// paths — e.g. use a granted dir as its current directory; see
+/// [`SESSION_SID_WRITE_MASK`].
 ///
 /// # Why
 ///
