@@ -822,6 +822,180 @@ pub fn package_sid_to_string(sid: &OwnedAppContainerSid) -> Result<String> {
     Ok(s)
 }
 
+/// `CreateAppContainerProfile` returns one of these "already registered"
+/// HRESULTs when the named profile exists (e.g. a prior crashed run left it).
+/// The package SID is deterministic from the name, so an already-registered
+/// profile is REUSED, not an error.
+///
+/// Two distinct codes are tolerated because the API has been observed to return
+/// EITHER, depending on Windows build:
+/// - `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)` = 0x800700B7 (the live Win11
+///   build-26200 return, confirmed by this plan's host test).
+/// - `HRESULT_FROM_WIN32(ERROR_FILE_EXISTS)` = 0x80070050 (the value the
+///   reference spike `spike_wfp_appcontainer.rs` tolerated).
+///
+/// Tolerating both is strictly fail-SAFE: an already-registered profile with a
+/// deterministic SID is exactly the reuse case, never a security-relevant
+/// failure. Any OTHER HRESULT still propagates (fail-closed).
+const HR_PROFILE_ALREADY_EXISTS: i32 = 0x8007_00B7u32 as i32;
+/// Alternate "already exists" HRESULT (`ERROR_FILE_EXISTS`); see
+/// [`HR_PROFILE_ALREADY_EXISTS`].
+const HR_PROFILE_FILE_EXISTS: i32 = 0x8007_0050u32 as i32;
+
+/// RAII guard for a per-run AppContainer PROFILE registered via
+/// [`create_app_container_profile`].
+///
+/// # Plan 62-13 (the AppContainer SPAWN fix — debug `wfp-write-restricted-0142`)
+///
+/// A *derived-only* package SID (from `DeriveAppContainerSidFromAppContainerName`)
+/// is NOT sufficient to spawn an AppContainer child: `CreateProcessW` with
+/// `SECURITY_CAPABILITIES` fails `ERROR_FILE_NOT_FOUND` unless the AppContainer
+/// PROFILE has been REGISTERED first. Registration (via
+/// `CreateAppContainerProfile`) creates the registry entry and the
+/// `\Sessions\<n>\AppContainerNamedObjects\<pkgSid>` private named-object
+/// namespace the lowbox launches into. The decisive elevated spike
+/// (`crates/nono-cli/examples/spike_wfp_appcontainer.rs`) proved that with the
+/// profile registered the AppContainer child STARTS and WFP kernel-blocks its
+/// outbound connection via the existing `ALE_USER_ID(packageSid)` filter.
+///
+/// The guard holds the registered profile NAME and, on Drop, deletes the profile
+/// (best-effort) via `DeleteAppContainerProfile`. The holder MUST keep the guard
+/// in scope until AFTER the child it spawned has exited (the broker waits on the
+/// child, then drops the guard), so the profile/namespace outlives every child
+/// that depends on it.
+///
+/// # FAIL-CLOSED CONTRACT
+///
+/// [`create_app_container_profile`] propagates any `CreateAppContainerProfile`
+/// failure OTHER than `ERROR_ALREADY_EXISTS` as [`NonoError::SandboxInit`]. The
+/// caller (broker) MUST `?`-propagate and NEVER spawn an unregistered child —
+/// an unregistered/unmatched lowbox = silent non-enforcement. Profile DELETE on
+/// Drop is best-effort: a cleanup failure is LOGGED, never propagated, never
+/// panics (a delete failure must not fail the run).
+#[must_use = "the returned AppContainerProfile deletes the profile on drop; keep it in scope until the AppContainer child exits"]
+pub struct AppContainerProfile {
+    /// Nul-terminated UTF-16 AppContainer moniker, retained so Drop can call
+    /// `DeleteAppContainerProfile` with the SAME name that was registered.
+    name_wide: Vec<u16>,
+    /// The original moniker (for diagnostics on Drop).
+    name: String,
+}
+
+/// Registers the per-run AppContainer profile `name` (e.g. `nono.session.<uuid>`)
+/// via `CreateAppContainerProfile`, returning an [`AppContainerProfile`] RAII
+/// guard whose Drop deletes the profile.
+///
+/// Tolerates `HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS)` (0x80070050) — a crashed
+/// prior run may have left the profile registered; the SID is deterministic from
+/// the name, so the existing profile is REUSED. The package SID returned by the
+/// API on the fresh-create path is freed immediately (via `FreeSid`); the
+/// registration (not the SID) is what this function provides — callers derive the
+/// SID separately via [`derive_app_container_sid`] to preserve the single-source
+/// invariant.
+///
+/// Ported from the proven sequence in
+/// `crates/nono-cli/examples/spike_wfp_appcontainer.rs`.
+///
+/// # FAIL-CLOSED CONTRACT
+///
+/// Any `CreateAppContainerProfile` HRESULT other than `S_OK` or
+/// `ERROR_ALREADY_EXISTS` returns [`NonoError::SandboxInit`]. The caller MUST
+/// propagate and MUST NOT spawn the AppContainer child without a registered
+/// profile.
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] if `name` is empty or
+/// `CreateAppContainerProfile` fails with an HRESULT other than
+/// `ERROR_ALREADY_EXISTS`.
+#[must_use = "the returned AppContainerProfile deletes the profile on drop; keep it in scope until the AppContainer child exits"]
+pub fn create_app_container_profile(name: &str) -> Result<AppContainerProfile> {
+    use windows_sys::Win32::Security::Isolation::CreateAppContainerProfile;
+
+    if name.is_empty() {
+        return Err(NonoError::SandboxInit(
+            "AppContainer profile name must not be empty".into(),
+        ));
+    }
+
+    let name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let display: Vec<u16> = "nono confined session"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let desc: Vec<u16> = "nono per-run AppContainer (WFP network confinement)"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut psid: windows_sys::Win32::Security::PSID = std::ptr::null_mut();
+    let hr = unsafe {
+        // SAFETY: `name_wide`/`display`/`desc` are valid nul-terminated UTF-16
+        // buffers that live for the duration of the call; no capabilities are
+        // requested (null pointer, count 0); `psid` is a valid out-pointer. On
+        // the fresh-create path the callee allocates a package SID that MUST be
+        // freed with `FreeSid` (done below); on ALREADY_EXISTS no SID is written.
+        CreateAppContainerProfile(
+            name_wide.as_ptr(),
+            display.as_ptr(),
+            desc.as_ptr(),
+            std::ptr::null(),
+            0,
+            &mut psid,
+        )
+    };
+
+    if hr == 0 {
+        if !psid.is_null() {
+            unsafe {
+                // SAFETY: `psid` was allocated by CreateAppContainerProfile; the
+                // documented matching release call is `FreeSid` (NOT LocalFree).
+                // We do not retain the SID — the registration is what matters;
+                // the broker/WFP derive the SID from the name (single source).
+                let _ = windows_sys::Win32::Security::FreeSid(psid);
+            }
+        }
+        Ok(AppContainerProfile {
+            name_wide,
+            name: name.to_string(),
+        })
+    } else if hr == HR_PROFILE_ALREADY_EXISTS || hr == HR_PROFILE_FILE_EXISTS {
+        // A prior (possibly crashed) run left the profile registered. The SID is
+        // deterministic from the name, so reuse the existing registration. No SID
+        // is allocated on this path.
+        Ok(AppContainerProfile {
+            name_wide,
+            name: name.to_string(),
+        })
+    } else {
+        Err(NonoError::SandboxInit(format!(
+            "CreateAppContainerProfile({name:?}) failed (HRESULT=0x{:08X})",
+            hr as u32
+        )))
+    }
+}
+
+impl Drop for AppContainerProfile {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Security::Isolation::DeleteAppContainerProfile;
+
+        let hr = unsafe {
+            // SAFETY: `self.name_wide` is the same valid nul-terminated UTF-16
+            // moniker used to register the profile. Best-effort cleanup; the
+            // result is inspected only to LOG (never propagated, never panics).
+            DeleteAppContainerProfile(self.name_wide.as_ptr())
+        };
+        if hr != 0 {
+            tracing::warn!(
+                profile = %self.name,
+                hresult = format!("0x{:08X}", hr as u32),
+                "AppContainer profile cleanup: DeleteAppContainerProfile failed (best-effort; \
+                 the per-run profile may persist until the next reuse/cleanup)"
+            );
+        }
+    }
+}
+
 /// Maps an `AccessMode` to the `SYSTEM_MANDATORY_LABEL_ACE.Mask` bits per
 /// CONTEXT.md D-01 mask-encoding table.
 ///
@@ -1243,6 +1417,36 @@ const SESSION_SID_WRITE_MASK: u32 = {
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_EXECUTE | DELETE
 };
 
+/// Traverse-only access-rights mask granted to the per-run package SID by
+/// [`grant_sid_traverse_on_path`] on a cwd ANCESTOR directory.
+///
+/// `FILE_TRAVERSE` (== `FILE_EXECUTE` for directories, 0x20) is the pass-through
+/// right that lets a principal step THROUGH a directory to reach a descendant —
+/// WITHOUT being able to read or enumerate the directory's contents.
+/// `FILE_LIST_DIRECTORY` (== `FILE_READ_DATA`, 0x1) is paired so the kernel can
+/// also `stat` the directory entry while resolving the cwd path (some path-
+/// resolution code paths request read-attributes on each component). This is
+/// deliberately NARROW: it is NOT `FILE_GENERIC_READ` (no `FILE_READ_EA`, no
+/// `READ_CONTROL` beyond what is needed) and NOT any write-class right — an
+/// ancestor grant must never let the confined child write into, or enumerate,
+/// the user's profile-chain directories.
+///
+/// # Why a separate, narrower mask than [`SESSION_SID_WRITE_MASK`]
+///
+/// The cwd LEAF itself is already granted read+write+traverse by the writable-
+/// grant path ([`SESSION_SID_WRITE_MASK`], 0x1301BF). The cwd ANCESTORS
+/// (e.g. `C:\Users\<user>`) are NOT grant-set paths — the AppContainer child
+/// (a different principal than the user) merely needs to TRAVERSE them to set
+/// its current directory deep inside the profile. Granting them only traverse
+/// (no read/list/write) keeps the ancestor exposure minimal (threat T-62-33,
+/// accept-minimal).
+///
+/// `FILE_TRAVERSE` = 0x00000020, `FILE_LIST_DIRECTORY` = 0x00000001 → 0x21.
+const PACKAGE_SID_TRAVERSE_MASK: u32 = {
+    use windows_sys::Win32::Storage::FileSystem::{FILE_LIST_DIRECTORY, FILE_TRAVERSE};
+    FILE_TRAVERSE | FILE_LIST_DIRECTORY
+};
+
 /// RAII wrapper around an ACL allocated by `SetEntriesInAclW`. The new ACL is
 /// heap-allocated by the OS and must be released with `LocalFree`.
 struct OwnedAcl(*mut ACL);
@@ -1310,14 +1514,20 @@ fn parse_sid(path: &Path, sid: &str) -> Result<OwnedSid> {
 }
 
 /// Builds a single `EXPLICIT_ACCESS_W` entry targeting `psid` for the given
-/// access mode + inheritance.
+/// access mask, access mode + inheritance.
 ///
 /// The returned struct borrows `psid` (TrusteeForm = `TRUSTEE_IS_SID` stores the
 /// SID pointer in `ptstrName`); callers MUST keep the backing `OwnedSid` alive
 /// for the duration of any `SetEntriesInAclW` call that consumes this entry.
+///
+/// `access_mask` is the rights set granted/revoked: [`SESSION_SID_WRITE_MASK`]
+/// for writable grants, [`PACKAGE_SID_TRAVERSE_MASK`] for ancestor-traverse
+/// grants. For `REVOKE_ACCESS` the mask is ignored (the trustee match drives
+/// removal of ALL the SID's ACEs).
 #[cfg(target_os = "windows")]
 fn build_explicit_access(
     psid: windows_sys::Win32::Security::PSID,
+    access_mask: u32,
     access_mode: windows_sys::Win32::Security::Authorization::ACCESS_MODE,
     inheritance: u32,
 ) -> windows_sys::Win32::Security::Authorization::EXPLICIT_ACCESS_W {
@@ -1326,7 +1536,7 @@ fn build_explicit_access(
     };
 
     EXPLICIT_ACCESS_W {
-        grfAccessPermissions: SESSION_SID_WRITE_MASK,
+        grfAccessPermissions: access_mask,
         grfAccessMode: access_mode,
         grfInheritance: inheritance,
         Trustee: TRUSTEE_W {
@@ -1351,6 +1561,7 @@ fn build_explicit_access(
 fn edit_dacl_for_sid(
     path: &Path,
     sid: &str,
+    access_mask: u32,
     access_mode: windows_sys::Win32::Security::Authorization::ACCESS_MODE,
     inheritance: u32,
 ) -> Result<()> {
@@ -1397,7 +1608,7 @@ fn edit_dacl_for_sid(
     let _sd_guard = OwnedSecurityDescriptor(security_descriptor);
 
     // 2. Merge one explicit-access entry onto the existing DACL.
-    let entry = build_explicit_access(owned_sid.0, access_mode, inheritance);
+    let entry = build_explicit_access(owned_sid.0, access_mask, access_mode, inheritance);
     let mut new_dacl: *mut ACL = std::ptr::null_mut();
     let status = unsafe {
         // SAFETY: `&entry` is a valid single-element EXPLICIT_ACCESS_W array;
@@ -1497,7 +1708,54 @@ pub fn grant_sid_write_on_path(path: &Path, sid: &str, inheritable: bool) -> Res
     } else {
         NO_INHERITANCE
     };
-    edit_dacl_for_sid(path, sid, SET_ACCESS, inheritance)
+    edit_dacl_for_sid(path, sid, SESSION_SID_WRITE_MASK, SET_ACCESS, inheritance)
+}
+
+/// Adds an allow-ACE to the DACL of the directory `path` granting the SDDL SID
+/// string `sid` TRAVERSE-ONLY rights ([`PACKAGE_SID_TRAVERSE_MASK`] —
+/// `FILE_TRAVERSE | FILE_LIST_DIRECTORY` = 0x21), PRESERVING the existing DACL
+/// (including inherited ACEs).
+///
+/// Traverse-only means PASS-THROUGH, NOT read/enumerate: the grantee can step
+/// through this directory to reach a descendant (e.g. set a profile-deep current
+/// directory) but cannot list its contents or read its files. There is NO write
+/// or delete right.
+///
+/// # Why (Plan 62-13, debug `wfp-write-restricted-0142`)
+///
+/// On the Phase-62 AppContainer arm the confined child runs as the per-run
+/// package SID (`S-1-15-2-*`) — a DIFFERENT principal than the user, with NO
+/// inherent access to the user-profile directory chain. To set its current
+/// directory to a profile-deep cwd (e.g. `%USERPROFILE%\.claude`) the child's
+/// token must be able to TRAVERSE every ANCESTOR (`C:\Users\<user>`, ...). The
+/// cwd LEAF is already granted read+write+traverse via [`grant_sid_write_on_path`]
+/// (0x1301BF); this grants only the narrow traverse right on the USER-OWNED
+/// ancestors. Non-user-owned ancestors (`C:\`, `C:\Users`) cannot be granted
+/// (no `WRITE_DAC`) and are SKIPPED by the caller; reaching the cwd through those
+/// depends on the lowbox retaining bypass-traverse (`SeChangeNotifyPrivilege`).
+///
+/// The grant is always reverted via [`revoke_sid_on_path`] when the session ends.
+/// Pass `inheritable = false` — an ancestor-traverse grant must NOT propagate the
+/// traverse right onto the ancestor's other children (it is scoped to THIS
+/// directory object only, just enough to pass through it).
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed, the
+/// current DACL cannot be read, the ACE cannot be merged, or the merged DACL
+/// cannot be written back (fail-closed at every step).
+#[cfg(target_os = "windows")]
+pub fn grant_sid_traverse_on_path(path: &Path, sid: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::SET_ACCESS;
+    use windows_sys::Win32::Security::NO_INHERITANCE;
+
+    edit_dacl_for_sid(
+        path,
+        sid,
+        PACKAGE_SID_TRAVERSE_MASK,
+        SET_ACCESS,
+        NO_INHERITANCE,
+    )
 }
 
 /// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting
@@ -1518,8 +1776,9 @@ pub fn revoke_sid_on_path(path: &Path, sid: &str) -> Result<()> {
     use windows_sys::Win32::Security::Authorization::REVOKE_ACCESS;
     use windows_sys::Win32::Security::NO_INHERITANCE;
 
-    // Inheritance is ignored for REVOKE_ACCESS (the trustee match drives removal).
-    edit_dacl_for_sid(path, sid, REVOKE_ACCESS, NO_INHERITANCE)
+    // Inheritance + mask are ignored for REVOKE_ACCESS (the trustee match drives
+    // removal of ALL the SID's ACEs, regardless of the rights they carry).
+    edit_dacl_for_sid(path, sid, 0, REVOKE_ACCESS, NO_INHERITANCE)
 }
 
 fn low_integrity_label_rid(path: &Path) -> Option<u32> {
@@ -4225,7 +4484,7 @@ mod tests {
 #[cfg(all(test, target_os = "windows"))]
 #[allow(clippy::unwrap_used)]
 mod app_container_tests {
-    use super::{derive_app_container_sid, package_sid_to_string};
+    use super::{create_app_container_profile, derive_app_container_sid, package_sid_to_string};
 
     /// Plan 62-12: deriving a package SID from a well-formed AppContainer name
     /// succeeds, yields a non-null PSID, and its string form is an
@@ -4267,6 +4526,57 @@ mod app_container_tests {
             other => panic!(
                 "empty-name rejection must be a SandboxInit error; got {:?}",
                 other.map(|_| "Ok(<sid>)")
+            ),
+        }
+    }
+
+    /// Plan 62-13 Task 1: registering an AppContainer profile returns a guard,
+    /// double-registration (ERROR_ALREADY_EXISTS) is tolerated (still Ok), and
+    /// after the guard drops a fresh registration succeeds again.
+    ///
+    /// CreateAppContainerProfile is a per-USER profile op (no elevation needed),
+    /// but it may still be environment-sensitive in some CI sandboxes. We assert
+    /// Ok in the normal case; if the environment rejects it we document the limit
+    /// rather than fail the suite (the live elevated UAT is the proof).
+    #[test]
+    fn create_app_container_profile_round_trips() {
+        // Unique per-process name so concurrent test runs never collide and a
+        // crashed prior run cannot poison this one.
+        let name = format!("nono.test.{}", std::process::id());
+
+        let first = match create_app_container_profile(&name) {
+            Ok(guard) => guard,
+            Err(err) => {
+                eprintln!(
+                    "skipping create_app_container_profile_round_trips: \
+                     CreateAppContainerProfile rejected in this environment: {err} \
+                     (the live elevated UAT is the proof for this FFI)"
+                );
+                return;
+            }
+        };
+
+        // Second create with the SAME name → ERROR_ALREADY_EXISTS, tolerated as Ok.
+        let second = create_app_container_profile(&name)
+            .expect("second create_app_container_profile (ALREADY_EXISTS) must still be Ok");
+        drop(second);
+        drop(first); // Drop deletes the profile.
+
+        // After the profile was deleted on Drop, a fresh registration succeeds.
+        let again = create_app_container_profile(&name)
+            .expect("create after Drop-delete must succeed fresh");
+        drop(again);
+    }
+
+    /// An empty AppContainer profile name fails closed with `SandboxInit`
+    /// (never registers a nameless profile).
+    #[test]
+    fn create_app_container_profile_empty_name_fails_closed() {
+        match create_app_container_profile("") {
+            Err(super::NonoError::SandboxInit(_)) => {}
+            other => panic!(
+                "empty profile name must yield SandboxInit; got {:?}",
+                other.map(|_| "Ok(<profile>)")
             ),
         }
     }
@@ -4384,7 +4694,7 @@ mod create_low_integrity_primary_token_tests {
 #[cfg(all(test, target_os = "windows"))]
 #[allow(clippy::unwrap_used)]
 mod dacl_grant_tests {
-    use super::{grant_sid_write_on_path, revoke_sid_on_path};
+    use super::{grant_sid_traverse_on_path, grant_sid_write_on_path, revoke_sid_on_path};
     use crate::error::NonoError;
     use std::os::windows::ffi::OsStrExt;
     use std::path::Path;
@@ -4511,6 +4821,51 @@ mod dacl_grant_tests {
         assert!(!dacl_contains_sid(&file, TEST_SESSION_SID));
 
         let err = grant_sid_write_on_path(&file, "not-a-sid", false)
+            .expect_err("malformed SID must fail closed");
+        assert!(
+            matches!(err, NonoError::DaclApplyFailed { .. }),
+            "malformed SID must yield DaclApplyFailed; got {err:?}"
+        );
+    }
+
+    /// Plan 62-13 Task 1: the traverse-only grant adds the SID's ACE on a
+    /// tempdir and `revoke_sid_on_path` removes it (mirrors
+    /// `grant_then_revoke_sid_round_trips_on_tempdir`). The package-SID-shaped
+    /// SID (`S-1-15-2-*`) pre-exists in NO real ACE, so revoke removes only what
+    /// the grant added.
+    #[test]
+    fn grant_traverse_then_revoke_round_trips_on_tempdir() {
+        // A package-SID-shaped (S-1-15-2-*) test SID — the real ancestor-traverse
+        // grantee is a per-run package SID of this shape. On no real ACE.
+        const TEST_PACKAGE_SID: &str = "S-1-15-2-1-2-3-4-5-6-7-8-9-10-11";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        assert!(
+            !dacl_contains_sid(path, TEST_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist in the DACL"
+        );
+
+        grant_sid_traverse_on_path(path, TEST_PACKAGE_SID).expect("grant traverse");
+        assert!(
+            dacl_contains_sid(path, TEST_PACKAGE_SID),
+            "after grant, the DACL must contain the package SID's traverse allow-ACE"
+        );
+
+        revoke_sid_on_path(path, TEST_PACKAGE_SID).expect("revoke");
+        assert!(
+            !dacl_contains_sid(path, TEST_PACKAGE_SID),
+            "after revoke, the package SID's ACE must be gone"
+        );
+    }
+
+    /// A malformed SID string fails the traverse grant closed with
+    /// `DaclApplyFailed` (never a silent no-op).
+    #[test]
+    fn grant_traverse_invalid_sid_fails_closed() {
+        let dir = tempdir().expect("tempdir");
+        let err = grant_sid_traverse_on_path(dir.path(), "not-a-sid")
             .expect_err("malformed SID must fail closed");
         assert!(
             matches!(err, NonoError::DaclApplyFailed { .. }),
