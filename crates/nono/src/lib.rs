@@ -81,11 +81,10 @@ pub use net_filter::{FilterResult, HostFilter};
 pub use path::try_canonicalize;
 #[cfg(target_os = "windows")]
 pub use sandbox::windows::{
-    apply_low_il_label_to_token, create_low_integrity_primary_token,
-    create_low_integrity_primary_token_with_sid, derive_app_container_sid, grant_sid_write_on_path,
-    label_mask_for_access_mode, low_integrity_label_and_mask, package_sid_to_string,
-    path_is_owned_by_current_user, revoke_sid_on_path, try_set_mandatory_label,
-    OwnedAppContainerSid, OwnedHandle,
+    apply_low_il_label_to_token, create_low_integrity_primary_token, derive_app_container_sid,
+    grant_sid_write_on_path, label_mask_for_access_mode, low_integrity_label_and_mask,
+    package_sid_to_string, path_is_owned_by_current_user, revoke_sid_on_path,
+    try_set_mandatory_label, OwnedAppContainerSid, OwnedHandle,
 };
 #[cfg(target_os = "linux")]
 pub use sandbox::{detect_abi, is_wsl2, landlock_scope_policy, DetectedAbi, LandlockScopePolicy};
