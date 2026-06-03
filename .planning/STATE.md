@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
-status: executing
-last_updated: "2026-06-03T14:05:54.366Z"
+status: completed
+last_updated: "2026-06-03T14:28:37.013Z"
 last_activity: 2026-06-03
 progress:
   total_phases: 10
-  completed_phases: 3
-  total_plans: 20
-  completed_plans: 18
-  percent: 30
+  completed_phases: 2
+  total_plans: 21
+  completed_plans: 19
+  percent: 90
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -39,7 +39,7 @@ Plan: (historical — pre-validation block; superseded, see top of Current Posit
 Status: (historical — Phase 62 since COMPLETED 2026-06-03; this line was clobbered by phase.complete's status string-replace, restored as historical marker)
 Next (operator, live elevated Win11): rebuild nono.exe + broker + version-bumped MSI, then run 62-04 HUMAN-UAT SC1→SC5. SC1 probe (from a profile-covered cwd e.g. %USERPROFILE%\.claude): `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org` MUST block (no external IP). SC4/SC5: after a confined --block-net run, `msiexec /x` then confirm NO nono filters + NO NONO_SUBLAYER_GUID sublayer remain. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; import POC cert to LocalMachine\Root+TrustedPublisher; verify installed nono-wfp-service.exe SHA256. If startup regresses under WRITE_RESTRICTED on the broker path, escalate to a new debug session (the restricting-SID shape is the only WFP-matchable option per debug wfp-broker-token-no-sid D1). Phase 60 follow-ups (non-blocking) still carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
 BUILT+SIGNED FOR 62-04 UAT — CURRENT = v0.57.12 (62-13 AppContainer PROFILE-REGISTRATION fix; 2026-06-03): signed machine MSI `dist/windows/nono-v0.57.12-x86_64-pc-windows-msvc-machine.msi` (ProductVersion 0.57.12, MajorUpgrade; Authenticode Valid; POC cert 319E507E...). SHA256: nono.exe = C9F900CFCB6AAC5A288233BF84DB23D4CBAC3AC8D6BCD330070C227E8A59A318; nono-wfp-service.exe = 17A24FB19EB942F1EF55732DC0EBA2FA6CC05BBD590D0C1B502AC2AE37CAF25B. Cert already imported on this host. ⚠ INSTALL v0.57.12 (it carries the SPIKE-VALIDATED fix). UAT HISTORY: v0.57.9 → 0xC0000142 (WRITE_RESTRICTED crash; FIXED by 62-12 AppContainer). v0.57.10/v0.57.11 → CreateProcessW ERROR_FILE_NOT_FOUND (wrongly chased as cwd-traverse; c3d7644f leaf grant kept but was NOT the fix — the spike proved it failed even from a fully-accessible System32 cwd). v0.57.12 (62-13) = the REAL fix: broker REGISTERS the AppContainer profile (CreateAppContainerProfile) before spawn — spike PROVED this makes the child START + WFP-block via ALE_USER_ID. SC1 re-run from %USERPROFILE%\.claude: curl should START; BLOCK (no IP / "Could not resolve host"/timeout) = SC1 PASS. OPEN UAT QUESTION: does the lowbox have bypass-traverse? If curl STILL fails FILE_NOT_FOUND, a non-owned ancestor (C:\Users) blocks reaching the profile-deep cwd (can't grant its DACL) → pivot to a profile-accessible cwd strategy. DEFERRED: full read-grant model for claude.exe. NOTE: Cargo crate version stays 0.57.5 (MSI version from build tag).
-Last session: 2026-06-03 (Phase 62 CLOSED OUT: verify-work recorded 5/5 UAT PASS; secure-phase produced 62-SECURITY.md with 33/33 threats closed (T-62-06 accepted, AR-62-10); 4 debug sessions moved to resolved/; phase.complete marked 62 done in ROADMAP (12/13 plans). Next: plan Phase 61 — ship/release v2.9. Stopped at: ready to /gsd:plan-phase 61.)
+Last session: 2026-06-03T14:28:36.994Z
 
 ### v2.8 Phase Summary (active)
 
