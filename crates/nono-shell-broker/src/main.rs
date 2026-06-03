@@ -39,14 +39,19 @@ mod broker {
     use std::path::PathBuf;
 
     use nono::{NonoError, OwnedHandle, Result as NonoResult};
-    use windows_sys::Win32::Foundation::{GetLastError, LocalFree, HANDLE};
-    use windows_sys::Win32::Security::Authorization::ConvertStringSidToSidW;
+    use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
+    use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
     use windows_sys::Win32::System::Console::AllocConsole;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessAsUserW, DeleteProcThreadAttributeList, GetExitCodeProcess,
-        InitializeProcThreadAttributeList, UpdateProcThreadAttribute, WaitForSingleObject,
+        CreateProcessAsUserW, CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, OpenProcessToken, ResumeThread,
+        UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
         EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+        STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    };
+    use windows_sys::Win32::Security::{
+        TOKEN_ADJUST_DEFAULT, TOKEN_QUERY,
     };
 
     /// D-08: argv-only IPC. CapabilitySet/Profile NOT passed (RESEARCH §3a —
@@ -66,16 +71,23 @@ mod broker {
         /// `AllocConsole` console-presence probe is independent of std-handle
         /// wiring and untouched).
         pub no_pty: bool,
-        /// Plan 62-10 (F-62-UAT-05): the synthetic per-session SID string
-        /// (`S-1-5-117-*`) injected into the Low-IL primary token as a
-        /// WRITE_RESTRICTED restricting SID so the WFP ALE_USER_ID filter
-        /// (SD `D:(A;;CC;;;<session_sid>)`) matches the confined child's
-        /// outbound connections. Present on the `--no-pty` (BrokerLaunchNoPty)
+        /// Plan 62-12 (F-62-UAT-05 redesign, debug `wfp-write-restricted-0142`):
+        /// the per-run AppContainer moniker `nono.session.<uuid>`. The broker
+        /// derives the package SID (`S-1-15-2-*`) from this name via
+        /// `nono::derive_app_container_sid` and spawns the confined child as a
+        /// per-run AppContainer (lowbox) carrying
+        /// `SECURITY_CAPABILITIES { AppContainerSid, CapabilityCount: 0 }`.
+        /// This starts cleanly (private AppContainerNamedObjects namespace),
+        /// eliminating the 0xC0000142 STATUS_DLL_INIT_FAILED that the falsified
+        /// 62-10 WRITE_RESTRICTED token caused, AND the same package SID scopes
+        /// the WFP ALE_USER_ID filter (single source: nono-cli derives the same
+        /// SID from the same name). Present on the `--no-pty` (BrokerLaunchNoPty)
         /// path only; absent on the PTY/legacy path (PTY waives per-session WFP).
-        /// FAIL-CLOSED: when `no_pty` is true, `session_sid` MUST be Some;
-        /// parse_args rejects the combination of `--no-pty` without
-        /// `--session-sid` as a hard error.
-        pub session_sid: Option<String>,
+        /// FAIL-CLOSED: when `no_pty` is true, `app_container_name` MUST be Some;
+        /// parse_args rejects `--no-pty` without `--app-container-name` as a
+        /// hard error (spawning a non-AppContainer child = the WFP filter
+        /// matches nothing = silent non-enforcement, the worst outcome).
+        pub app_container_name: Option<String>,
     }
 
     /// Manual argv loop. No `clap` — RESEARCH §4a: broker attack surface MUST
@@ -87,7 +99,7 @@ mod broker {
         let mut inherit_handles: Vec<HANDLE> = Vec::new();
         let mut cwd: Option<PathBuf> = None;
         let mut no_pty: bool = false;
-        let mut session_sid: Option<String> = None;
+        let mut app_container_name: Option<String> = None;
 
         // Skip argv[0] (the broker binary path).
         let mut iter = raw.iter().skip(1);
@@ -141,14 +153,15 @@ mod broker {
                     // as the child's stdio instead of inheriting the broker's console.
                     no_pty = true;
                 }
-                "--session-sid" => {
-                    // Plan 62-10: the synthetic per-session SID injected into the
-                    // broker's Low-IL primary token as a WRITE_RESTRICTED restricting
-                    // SID so the WFP ALE_USER_ID filter matches the confined child.
+                "--app-container-name" => {
+                    // Plan 62-12: the per-run AppContainer moniker. The broker
+                    // derives the package SID from it and spawns the child as a
+                    // per-run AppContainer (lowbox), which starts cleanly and is
+                    // WFP-matchable via the same package SID.
                     let v = iter.next().ok_or_else(|| {
-                        NonoError::SandboxInit("--session-sid requires a value".into())
+                        NonoError::SandboxInit("--app-container-name requires a value".into())
                     })?;
-                    session_sid = Some(v.to_string_lossy().into_owned());
+                    app_container_name = Some(v.to_string_lossy().into_owned());
                 }
                 other => {
                     return Err(NonoError::SandboxInit(format!(
@@ -173,46 +186,25 @@ mod broker {
             ));
         }
 
-        // Plan 62-10: validate the session SID string with ConvertStringSidToSidW
-        // so a malformed value is caught at parse time (fail-closed, D5(c)).
-        // LocalFree the PSID immediately after the validity check — the string
-        // form is what the broker stores and passes to the token builder.
-        if let Some(ref sid_str) = session_sid {
-            let wide_sid: Vec<u16> = sid_str
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
-            let mut psid: *mut std::ffi::c_void = std::ptr::null_mut();
-            let ok = unsafe {
-                // SAFETY: `wide_sid` is a valid nul-terminated UTF-16 buffer;
-                // `psid` is a valid out-pointer. On success the callee allocates
-                // a SID heap object that MUST be freed with LocalFree immediately
-                // (we only need the parse-validity verdict, not the SID bytes).
-                ConvertStringSidToSidW(wide_sid.as_ptr(), &mut psid)
-            };
-            if ok == 0 || psid.is_null() {
-                let gle = unsafe { GetLastError() };
-                return Err(NonoError::SandboxInit(format!(
-                    "--session-sid is not a valid SID: {sid_str:?} \
-                     (ConvertStringSidToSidW failed, GetLastError={gle})"
-                )));
-            }
-            // Free immediately — we only needed the parse-validity verdict.
-            unsafe {
-                // SAFETY: `psid` was allocated by ConvertStringSidToSidW and
-                // has not been freed yet; LocalFree is the documented release fn.
-                let _ = LocalFree(psid as _);
-            }
+        // Plan 62-12: validate the AppContainer name by deriving the package SID
+        // at parse time (fail-closed). A malformed/unusable name is caught here
+        // before any spawn attempt. The derived SID is dropped immediately — we
+        // only need the validity verdict; run() re-derives it for the spawn.
+        if let Some(ref name) = app_container_name {
+            // nono::derive_app_container_sid fails closed on an empty/invalid
+            // moniker (non-S_OK HRESULT / null PSID) and frees the SID on drop.
+            let _validated = nono::derive_app_container_sid(name)?;
         }
 
         // FAIL-CLOSED: the --no-pty path enables per-session WFP enforcement;
-        // the broker child token MUST carry the session SID.  Spawning without
-        // a SID means the WFP filter installs but matches nothing — silent
-        // non-enforcement, the worst outcome (plan 62-10 D5(c)).
-        if no_pty && session_sid.is_none() {
+        // the broker child MUST be a per-run AppContainer whose package SID the
+        // WFP filter keys on. Spawning a non-AppContainer child means the WFP
+        // filter installs but matches nothing — silent non-enforcement, the
+        // worst outcome (plan 62-12 / debug D4c).
+        if no_pty && app_container_name.is_none() {
             return Err(NonoError::SandboxInit(
-                "--no-pty requires --session-sid (WFP per-session enforcement); \
-                 refusing to spawn an unmatched WFP child"
+                "--no-pty requires --app-container-name (WFP per-session enforcement); \
+                 refusing to spawn a non-AppContainer (unmatched WFP) child"
                     .into(),
             ));
         }
@@ -223,7 +215,7 @@ mod broker {
             inherit_handles,
             cwd,
             no_pty,
-            session_sid,
+            app_container_name,
         })
     }
 
@@ -297,33 +289,59 @@ mod broker {
         };
         tracing::info!(alloc_console_rc = alloc_rc, "broker: console attach probe");
 
-        // Steps 2-5: Construct Low-IL primary token via the lifted library function (D-06).
-        // Plan 62-10: when session_sid is present (--no-pty path), inject it as a
-        // WRITE_RESTRICTED restricting SID so the WFP ALE_USER_ID filter matches
-        // the confined child's outbound connections (F-62-UAT-05 fix).
-        // FAIL-CLOSED: `?` propagates any FFI failure; the parameterless fn is NEVER
-        // used as a fallback on error — spawning a SID-less child = silent non-enforcement.
-        // The OwnedHandle returned manages CloseHandle on drop — RAII per Pattern S-07.
-        let low_il_token: OwnedHandle = match args.session_sid.as_deref() {
-            Some(sid) => nono::create_low_integrity_primary_token_with_sid(sid)?,
-            None => nono::create_low_integrity_primary_token()?,
+        // Steps 2-5: token / AppContainer setup.
+        //
+        // Plan 62-12 (F-62-UAT-05 redesign, debug `wfp-write-restricted-0142`):
+        //   - When `app_container_name` is present (--no-pty path), the child is
+        //     spawned as a per-run AppContainer (lowbox) via `CreateProcessW` +
+        //     `SECURITY_CAPABILITIES`. The broker derives the package SID here
+        //     (FAIL-CLOSED: `?` propagates any FFI failure; we NEVER fall back to
+        //     a plain token or spawn without the AppContainer). The Low-IL label
+        //     is applied to the SUSPENDED child's primary token after spawn.
+        //   - Otherwise (PTY / legacy path) the broker self-degrades to a plain
+        //     Low-IL primary token and spawns via `CreateProcessAsUserW` (D-06).
+        //
+        // The lowbox is per-run-unique and starts cleanly (private
+        // AppContainerNamedObjects namespace), eliminating the 0xC0000142
+        // STATUS_DLL_INIT_FAILED that the falsified 62-10 WRITE_RESTRICTED token
+        // caused. The SAME package SID scopes the WFP ALE_USER_ID filter
+        // (single source: nono-cli derives it from the same name).
+        let app_container_sid: Option<nono::OwnedAppContainerSid> = match args
+            .app_container_name
+            .as_deref()
+        {
+            Some(name) => Some(nono::derive_app_container_sid(name)?),
+            None => None,
         };
-        tracing::info!("broker: Low-IL primary token constructed");
+        // For the legacy/PTY path only: build the plain Low-IL primary token.
+        // For the AppContainer path the child token is produced by the lowbox at
+        // spawn time, so no primary token is built here.
+        let low_il_token: Option<OwnedHandle> = if app_container_sid.is_some() {
+            None
+        } else {
+            Some(nono::create_low_integrity_primary_token()?)
+        };
+        tracing::info!(
+            app_container = app_container_sid.is_some(),
+            "broker: token/AppContainer setup complete"
+        );
 
-        // Step 6: Build PROC_THREAD_ATTRIBUTE_HANDLE_LIST per D-02 (production hardening over PoC).
-        // Probe required size for one attribute slot.
+        // Step 6: Build the proc-thread attribute list.
+        // Slot count: 1 (HANDLE_LIST) for the legacy path, 2 (HANDLE_LIST +
+        // SECURITY_CAPABILITIES) when spawning an AppContainer child.
+        let attr_count: u32 = if app_container_sid.is_some() { 2 } else { 1 };
         let mut attr_size: usize = 0;
         unsafe {
             // SAFETY: First call with null list queries required size; documented Win32 idiom.
             // Documented to return ERROR_INSUFFICIENT_BUFFER and write the required size.
-            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), attr_count, 0, &mut attr_size);
         }
         let mut attr_buf = vec![0u8; attr_size];
         let attr_list: LPPROC_THREAD_ATTRIBUTE_LIST =
             attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
         let ok = unsafe {
-            // SAFETY: attr_list points to attr_buf, sized by the probe call above for one attribute.
-            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+            // SAFETY: attr_list points to attr_buf, sized by the probe call above for `attr_count`.
+            InitializeProcThreadAttributeList(attr_list, attr_count, 0, &mut attr_size)
         };
         if ok == 0 {
             let err = unsafe {
@@ -372,6 +390,53 @@ mod broker {
             return Err(NonoError::SandboxInit(format!(
                 "UpdateProcThreadAttribute(HANDLE_LIST) failed (GetLastError={err})"
             )));
+        }
+
+        // Plan 62-12: when spawning a per-run AppContainer, add the second
+        // proc-thread attribute PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+        // carrying SECURITY_CAPABILITIES{ AppContainerSid, CapabilityCount: 0 }.
+        // The EMPTY capability set is the security-correct default (the child
+        // can reach nothing extra). `security_caps` and `app_container_sid`
+        // MUST outlive the CreateProcessW call below — both are owned by `run`'s
+        // stack and dropped only after the spawn returns.
+        let security_caps: Option<SECURITY_CAPABILITIES> = app_container_sid.as_ref().map(|sid| {
+            SECURITY_CAPABILITIES {
+                AppContainerSid: sid.as_psid(),
+                Capabilities: std::ptr::null_mut(),
+                CapabilityCount: 0,
+                Reserved: 0,
+            }
+        });
+        if let Some(ref caps) = security_caps {
+            let ok = unsafe {
+                // SAFETY: attr_list was initialized with slot count 2 above (the
+                // AppContainer branch sets attr_count=2). `caps` is a valid
+                // SECURITY_CAPABILITIES whose AppContainerSid is kept live by
+                // `app_container_sid` for the duration of the spawn. The pointer
+                // and size describe a single SECURITY_CAPABILITIES value.
+                UpdateProcThreadAttribute(
+                    attr_list,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                    caps as *const SECURITY_CAPABILITIES as *mut _,
+                    size_of::<SECURITY_CAPABILITIES>(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                let err = unsafe {
+                    // SAFETY: GetLastError takes no arguments; always safe to call.
+                    GetLastError()
+                };
+                unsafe {
+                    // SAFETY: attr_list was initialized successfully above.
+                    DeleteProcThreadAttributeList(attr_list);
+                }
+                return Err(NonoError::SandboxInit(format!(
+                    "UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed (GetLastError={err})"
+                )));
+            }
         }
 
         // Step 7: CreateProcessAsUserW with dwCreationFlags = EXTENDED_STARTUPINFO_PRESENT only.
@@ -438,30 +503,66 @@ mod broker {
 
         let lp_startup_info = &startup_info_ex.StartupInfo as *const STARTUPINFOW;
 
-        let created = unsafe {
-            // SAFETY: low_il_token.raw() is a valid primary token (RAII-owned by OwnedHandle).
-            // command_line is null-terminated UTF-16. cwd_wide is null-terminated. The startup
-            // struct is correctly initialized with EXTENDED_STARTUPINFO_PRESENT semantics.
-            // bInheritHandles=1 is required when PROC_THREAD_ATTRIBUTE_HANDLE_LIST is set;
-            // the HANDLE_LIST attribute restricts the actual inherited set to args.inherit_handles.
-            CreateProcessAsUserW(
-                low_il_token.raw(),
-                std::ptr::null(),
-                command_line.as_mut_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                1,                            // bInheritHandles=TRUE (HANDLE_LIST gates)
-                EXTENDED_STARTUPINFO_PRESENT, // dwCreationFlags (D-01: no new-console flag)
-                std::ptr::null(),             // lpEnvironment: inherit broker env
-                cwd_wide.as_ptr(),
-                lp_startup_info,
-                &mut process_info,
-            )
+        // Plan 62-12: two spawn shapes.
+        //   - AppContainer (no-PTY): CreateProcessW (the broker's Medium-IL token
+        //     is the base; SECURITY_CAPABILITIES derives the lowbox child token).
+        //     Spawned CREATE_SUSPENDED so we can label the child token Low-IL
+        //     before any user code runs, then resume (defence-in-depth /
+        //     NO_WRITE_UP parity, D1 step 3). bInheritHandles=1 — the HANDLE_LIST
+        //     gates the inherited set.
+        //   - Legacy/PTY: CreateProcessAsUserW with the plain Low-IL primary token.
+        let (created, is_app_container) = if let Some(_caps) = security_caps.as_ref() {
+            let creation_flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED;
+            let rc = unsafe {
+                // SAFETY: command_line/cwd_wide are null-terminated UTF-16. The
+                // startup struct carries EXTENDED_STARTUPINFO_PRESENT and the
+                // 2-slot attribute list (HANDLE_LIST + SECURITY_CAPABILITIES).
+                // bInheritHandles=1 is required for the HANDLE_LIST attribute.
+                CreateProcessW(
+                    std::ptr::null(),
+                    command_line.as_mut_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1, // bInheritHandles=TRUE (HANDLE_LIST gates)
+                    creation_flags,
+                    std::ptr::null(), // inherit broker env
+                    cwd_wide.as_ptr(),
+                    lp_startup_info,
+                    &mut process_info,
+                )
+            };
+            (rc, true)
+        } else {
+            // Legacy path requires the plain Low-IL primary token.
+            let token = low_il_token.as_ref().ok_or_else(|| {
+                NonoError::SandboxInit(
+                    "internal: non-AppContainer spawn reached without a Low-IL token".into(),
+                )
+            })?;
+            let rc = unsafe {
+                // SAFETY: token.raw() is a valid primary token (RAII-owned).
+                // command_line/cwd_wide are null-terminated UTF-16; the startup
+                // struct carries EXTENDED_STARTUPINFO_PRESENT + the HANDLE_LIST.
+                CreateProcessAsUserW(
+                    token.raw(),
+                    std::ptr::null(),
+                    command_line.as_mut_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    1,                            // bInheritHandles=TRUE (HANDLE_LIST gates)
+                    EXTENDED_STARTUPINFO_PRESENT, // dwCreationFlags (D-01: no new-console flag)
+                    std::ptr::null(),             // lpEnvironment: inherit broker env
+                    cwd_wide.as_ptr(),
+                    lp_startup_info,
+                    &mut process_info,
+                )
+            };
+            (rc, false)
         };
 
         unsafe {
             // SAFETY: attr_list was initialized above and is no longer needed
-            // after CreateProcessAsUserW.
+            // after the spawn call consumed it.
             DeleteProcThreadAttributeList(attr_list);
         }
 
@@ -471,16 +572,85 @@ mod broker {
                 GetLastError()
             };
             return Err(NonoError::SandboxInit(format!(
-                "CreateProcessAsUserW failed (GetLastError={err})"
+                "{} failed (GetLastError={err})",
+                if is_app_container {
+                    "CreateProcessW (AppContainer)"
+                } else {
+                    "CreateProcessAsUserW"
+                }
             )));
         }
 
         // Wrap child handles in OwnedHandle for RAII cleanup.
         let child_process = OwnedHandle(process_info.hProcess);
-        let _child_thread = OwnedHandle(process_info.hThread);
+        let child_thread = OwnedHandle(process_info.hThread);
+
+        // Plan 62-12 (D1 step 3 / D5 #4): for the AppContainer child, apply the
+        // Low-IL mandatory label to the (suspended) child's primary token for
+        // explicit NO_WRITE_UP parity, then resume the main thread. FAIL-CLOSED:
+        // any failure terminates the child and propagates Err — we never run an
+        // unlabeled child.
+        if is_app_container {
+            let mut child_token: HANDLE = std::ptr::null_mut();
+            let opened = unsafe {
+                // SAFETY: child_process.raw() is a valid, suspended process
+                // handle; &mut child_token is a valid out-pointer.
+                OpenProcessToken(
+                    child_process.raw(),
+                    TOKEN_ADJUST_DEFAULT | TOKEN_QUERY,
+                    &mut child_token,
+                )
+            };
+            if opened == 0 {
+                let err = unsafe { GetLastError() };
+                unsafe {
+                    // SAFETY: terminate the suspended child before bailing so we
+                    // never leave an unlabeled (un-resumed) process behind.
+                    windows_sys::Win32::System::Threading::TerminateProcess(
+                        child_process.raw(),
+                        1,
+                    );
+                }
+                return Err(NonoError::SandboxInit(format!(
+                    "OpenProcessToken on AppContainer child failed (GetLastError={err})"
+                )));
+            }
+            let child_token = OwnedHandle(child_token);
+            if let Err(e) = nono::apply_low_il_label_to_token(child_token.raw()) {
+                unsafe {
+                    // SAFETY: see above — fail closed by terminating the child.
+                    windows_sys::Win32::System::Threading::TerminateProcess(
+                        child_process.raw(),
+                        1,
+                    );
+                }
+                return Err(e);
+            }
+            let resumed = unsafe {
+                // SAFETY: child_thread.raw() is the valid main-thread handle of
+                // the suspended child. ResumeThread returns the previous suspend
+                // count, or u32::MAX (-1) on error.
+                ResumeThread(child_thread.raw())
+            };
+            if resumed == u32::MAX {
+                let err = unsafe { GetLastError() };
+                unsafe {
+                    // SAFETY: fail closed — terminate rather than leave suspended.
+                    windows_sys::Win32::System::Threading::TerminateProcess(
+                        child_process.raw(),
+                        1,
+                    );
+                }
+                return Err(NonoError::SandboxInit(format!(
+                    "ResumeThread on AppContainer child failed (GetLastError={err})"
+                )));
+            }
+        }
+        let _child_thread = child_thread;
         tracing::info!(
             child_pid = process_info.dwProcessId,
-            "broker: spawned Low-IL child"
+            app_container = is_app_container,
+            "broker: spawned child"
         );
 
         // Step 8: Wait + propagate exit code (D-03).
@@ -752,13 +922,13 @@ mod broker {
             );
         }
 
-        /// Phase 51 Plan 02 / Plan 62-10: `--no-pty` flag is recognized and sets
+        /// Phase 51 Plan 02 / Plan 62-12: `--no-pty` flag is recognized and sets
         /// `no_pty=true`. When passed alongside three `--inherit-handle` values and
-        /// a valid `--session-sid` (required by the Plan 62-10 fail-closed gate), the
-        /// flags must parse without error and the resulting `BrokerArgs.no_pty` must
-        /// be `true`. Guards against regressions where `--no-pty` falls through to the
-        /// `unknown broker arg` arm, causing the broker to hard-fail when
-        /// nono-cli passes the flag via `BrokerLaunchNoPty`.
+        /// a valid `--app-container-name` (required by the Plan 62-12 fail-closed
+        /// gate), the flags must parse without error and the resulting
+        /// `BrokerArgs.no_pty` must be `true`. Guards against regressions where
+        /// `--no-pty` falls through to the `unknown broker arg` arm, causing the
+        /// broker to hard-fail when nono-cli passes the flag via `BrokerLaunchNoPty`.
         #[test]
         fn parse_args_no_pty_flag_accepted() {
             let raw = argv(&[
@@ -771,12 +941,13 @@ mod broker {
                 "--inherit-handle",
                 "0x0000000000000300",
                 "--no-pty",
-                "--session-sid",
-                "S-1-5-117-123456789-987654321-11223344-55667788",
+                "--app-container-name",
+                "nono.session.deadbeefcafebabe0123456789abcdef",
                 "--cwd",
                 r"C:\",
             ]);
-            let parsed = parse_args(&raw).expect("--no-pty with valid --session-sid must parse without error");
+            let parsed = parse_args(&raw)
+                .expect("--no-pty with valid --app-container-name must parse without error");
             assert!(
                 parsed.no_pty,
                 "BrokerArgs.no_pty must be true when --no-pty is present"
@@ -812,15 +983,16 @@ mod broker {
         }
 
         // -------------------------------------------------------------------
-        // Plan 62-10: --session-sid tests
+        // Plan 62-12: --app-container-name tests
         // -------------------------------------------------------------------
 
-        /// Plan 62-10: `--session-sid` is parsed into `BrokerArgs.session_sid`.
-        /// Pins the flag is recognised (not falling through to `unknown broker arg`)
-        /// and that the value survives into the struct.
+        /// Plan 62-12: `--app-container-name` is parsed into
+        /// `BrokerArgs.app_container_name`. Pins the flag is recognised (not
+        /// falling through to `unknown broker arg`) and that the value survives
+        /// into the struct.
         #[test]
-        fn parse_args_session_sid_parsed() {
-            let sid = "S-1-5-117-123456789-987654321-11223344-55667788";
+        fn parse_args_app_container_name_parsed() {
+            let name = "nono.session.deadbeefcafebabe0123456789abcdef";
             let raw = argv(&[
                 "--shell",
                 r"C:\foo.exe",
@@ -831,24 +1003,25 @@ mod broker {
                 "--inherit-handle",
                 "0x0000000000000300",
                 "--no-pty",
-                "--session-sid",
-                sid,
+                "--app-container-name",
+                name,
                 "--cwd",
                 r"C:\",
             ]);
-            let parsed = parse_args(&raw).expect("valid --session-sid must parse without error");
+            let parsed =
+                parse_args(&raw).expect("valid --app-container-name must parse without error");
             assert_eq!(
-                parsed.session_sid.as_deref(),
-                Some(sid),
-                "BrokerArgs.session_sid must equal the provided SID string"
+                parsed.app_container_name.as_deref(),
+                Some(name),
+                "BrokerArgs.app_container_name must equal the provided moniker"
             );
         }
 
-        /// Plan 62-10 FAIL-CLOSED: `--no-pty` without `--session-sid` MUST return
-        /// Err. Spawning without a session SID means the WFP filter matches nothing
-        /// (silent non-enforcement — the worst outcome, plan D5(c)).
+        /// Plan 62-12 FAIL-CLOSED: `--no-pty` without `--app-container-name` MUST
+        /// return Err. Spawning a non-AppContainer child means the WFP filter
+        /// matches nothing (silent non-enforcement — the worst outcome, D4c).
         #[test]
-        fn parse_args_no_pty_without_session_sid_returns_error() {
+        fn parse_args_no_pty_without_app_container_name_returns_error() {
             let raw = argv(&[
                 "--shell",
                 r"C:\foo.exe",
@@ -865,20 +1038,20 @@ mod broker {
             let Err(NonoError::SandboxInit(msg)) = parse_args(&raw) else {
                 panic!(
                     "parse_args must return Err(SandboxInit) when --no-pty is set \
-                     without --session-sid (fail-closed WFP enforcement)"
+                     without --app-container-name (fail-closed WFP enforcement)"
                 );
             };
             assert!(
-                msg.contains("--no-pty") && msg.contains("--session-sid"),
-                "error message must name both --no-pty and --session-sid; got: {msg}"
+                msg.contains("--no-pty") && msg.contains("--app-container-name"),
+                "error message must name both --no-pty and --app-container-name; got: {msg}"
             );
         }
 
-        /// Plan 62-10 FAIL-CLOSED: a malformed `--session-sid` value (non-SID string)
-        /// MUST return Err at parse time.  Guards the ConvertStringSidToSidW validation
-        /// gate so malformed SIDs are caught before the token-build step.
+        /// Plan 62-12 FAIL-CLOSED: an empty `--app-container-name` value MUST
+        /// return Err at parse time (derive_app_container_sid rejects empty
+        /// monikers before any spawn).
         #[test]
-        fn parse_args_malformed_session_sid_returns_error() {
+        fn parse_args_empty_app_container_name_returns_error() {
             let raw = argv(&[
                 "--shell",
                 r"C:\foo.exe",
@@ -889,20 +1062,16 @@ mod broker {
                 "--inherit-handle",
                 "0x0000000000000300",
                 "--no-pty",
-                "--session-sid",
-                "not-a-valid-sid",
+                "--app-container-name",
+                "",
                 "--cwd",
                 r"C:\",
             ]);
-            let Err(NonoError::SandboxInit(msg)) = parse_args(&raw) else {
+            let Err(NonoError::SandboxInit(_)) = parse_args(&raw) else {
                 panic!(
-                    "parse_args must return Err(SandboxInit) for a malformed --session-sid value"
+                    "parse_args must return Err(SandboxInit) for an empty --app-container-name value"
                 );
             };
-            assert!(
-                msg.contains("--session-sid") || msg.contains("not a valid SID"),
-                "error message must identify the malformed SID; got: {msg}"
-            );
         }
     }
 
@@ -980,7 +1149,7 @@ mod broker {
                 inherit_handles: vec![],
                 cwd: PathBuf::from(r"C:\"),
                 no_pty: false,
-                session_sid: None,
+                app_container_name: None,
             }
         }
 

@@ -801,6 +801,39 @@ pub fn create_low_integrity_primary_token_with_sid(session_sid: &str) -> Result<
     Ok(restricted_primary)
 }
 
+/// Applies the Low-IL mandatory label (`WinLowLabelSid`, `NO_WRITE_UP`) to a
+/// child process's primary token referenced by `token` (a raw `HANDLE` opened
+/// with at least `TOKEN_ADJUST_DEFAULT | TOKEN_QUERY`).
+///
+/// # Plan 62-12 (debug `wfp-write-restricted-0142` D1 step 3 / D5 #4)
+///
+/// The AppContainer (lowbox) spawn produces a child whose token already enjoys
+/// AppContainer write-up isolation, but we set Low explicitly for parity with
+/// the documented Low-IL model and defence-in-depth. The broker calls this on
+/// the SUSPENDED child's primary token (opened via `OpenProcessToken`) before
+/// resuming the main thread, so the label is in place before any user code runs.
+///
+/// # Safety contract
+///
+/// `token` MUST be a valid, open primary-token handle for the lifetime of the
+/// call. The function does not take ownership of the handle (the caller closes
+/// it). FAIL-CLOSED: any failure returns [`NonoError::SandboxInit`].
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] if `CreateWellKnownSid` or
+/// `SetTokenInformation` fail.
+pub fn apply_low_il_label_to_token(token: HANDLE) -> Result<()> {
+    // Reuse the shared label step. `apply_low_il_label` borrows an `OwnedHandle`
+    // but only calls `.raw()`; we must NOT let it close the borrowed handle on
+    // drop, so wrap-borrow via a non-owning shim. Construct an OwnedHandle, call
+    // through, then forget it so its Drop does not CloseHandle the caller's handle.
+    let borrowed = OwnedHandle(token);
+    let result = apply_low_il_label(&borrowed);
+    std::mem::forget(borrowed);
+    result
+}
+
 /// RAII wrapper around a package `PSID` allocated by
 /// [`DeriveAppContainerSidFromAppContainerName`], released via `FreeSid`.
 ///
