@@ -212,3 +212,13 @@ Map each capability to a package-SID grant mask:
 - ReadWrite → READ|WRITE|DELETE|TRAVERSE
 Add a package-SID READ/TRAVERSE grant primitive alongside grant_sid_write_on_path (currently write-only), thread the AccessMode through AppliedDaclGrantsGuard, and ensure all grants revert on Drop. MINIMAL unblock for SC1 = grant the cwd read+traverse; FULL model = grant every capability path per its mode (needed for claude.exe). Same user-owned-path gate, inheritable, Drop-revoke. Fail-closed unchanged.
 This is debug D5 #3 expanded from "do writes work" to "the AppContainer needs explicit grants for ALL access (read+traverse+write), because it is a different principal than the user."
+
+### MINIMAL FIX APPLIED (2026-06-03, commit c3d7644f) — cwd read+traverse
+Broadened SESSION_SID_WRITE_MASK from FILE_GENERIC_WRITE|DELETE to
+FILE_GENERIC_READ|FILE_GENERIC_WRITE|FILE_EXECUTE|DELETE (0x1301BF) so the package SID can READ + TRAVERSE its
+WRITABLE grant paths (incl. the cwd). Inert on the WriteRestricted arm. Build + DACL tests + clippy green. Rebuilt as
+v0.57.11. NEXT UAT GOAL = the real unknown D5 #2: does the WFP ALE_USER_ID filter (SD D:(A;;CC;;;<packageSid>)) MATCH
+the AppContainer child's outbound connection? Re-run SC1: (a) curl should now START (no ERROR_FILE_NOT_FOUND); (b)
+observe BLOCK (no IP / timeout) = SC1 PASS, or PRINTS IP = ALE_USER_ID does not match AppContainer connections →
+implement the ALE_PACKAGE_ID FWP_SID condition fallback (D1 step 4). Read-only grant paths (for claude.exe) remain the
+deferred full read-grant model.
