@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.58.0] - v2.9 (2026-06-03)
+
+### Summary
+
+v2.9 ships the Phase 60 **Windows confined coding-loop POC** together with the Phase 62
+**out-of-box WFP kernel network enforcement** for supervised runs. Both features are framed
+honestly as **defense-in-depth / POC**, not full isolation: the OS-enforced boundary is
+real and structurally unavoidable, but the full isolation story requires further work beyond
+v2.9.
+
+Also bundles the untagged post-v2.7 drain fixes: `d8b7ce00` (broker GLE=87 HANDLE_LIST
+dedup), `005b4c9e` (no-PTY relay stdout-echo), `0cbeb3be` + `b852826b` (WFP service-stop
+and MSI uninstall).
+
+### Windows: Confined Coding Loop (Phase 60 POC)
+
+The merged PR #4 tool-mediation slice is now a usable coding-agent configuration for
+Windows POC users:
+
+- `Write`, `Edit`, `MultiEdit`, and `NotebookEdit` tool calls are individually confined
+  to Low-IL via a per-call AppContainer capability mapping (instead of deny-by-default).
+  Unauthorized writes are structurally blocked at the OS label / DAC layer.
+- A PowerShell-runner shell story is included, enabling the common PS-scripting loop
+  inside the hook-mediated session.
+- Network (`WebFetch`), `Task`, and `MCP` tool calls stay denied (out of POC scope for
+  this release; superseded by Phase 62 WFP for network).
+- The `cwd_covers_home_claude_state` CWD guard (Phase 60-03) prevents `--allow-cwd` from
+  covering `~/.claude` or any project `.claude/` — credentials and session state cannot be
+  exposed to a confined tool call regardless of invocation flags. Enforced at the hook
+  layer (component-path comparison, not string prefix), verified by unit tests in
+  `crates/nono-cli/src/claude_code_hook.rs`.
+
+**Security scope:** hook-layer mediation (defense-in-depth). A bare
+`nono run --allow-cwd ~/.claude` outside the hooked Claude Code loop is a documented
+limitation, not a bug. Full kernel-level isolation is a future milestone.
+
+### Windows: Out-of-Box WFP Kernel Network Enforcement (Phase 62)
+
+`network.block:true` on a supervised `nono run` now enforces WFP kernel filtering without
+any manual `nono setup --start-wfp-service` step:
+
+- Machine-MSI `nono-wfp-service` is registered with `start=auto` — the SCM boot-starts
+  the WFP service as SYSTEM, so enforcement is available immediately after install.
+- The control-pipe SDDL grants non-elevated Interactive Users read+write access, so
+  `nono run --block-net` works from a standard user session without elevation.
+- When the service is not running at enforcement time, nono attempts an auto-start; if
+  that fails the run is **fail-closed** with a diagnostic naming the exact remediation
+  command (`nono setup --start-wfp-service`). Network is never passed through unenforced.
+- AppContainer per-run profiles are registered before spawn and cleaned up on exit.
+- Clean uninstall via `msiexec /x` still leaves no service, driver, filters, or
+  install-dir behind (Phase 53 gate preserved).
+
+Closes Phase 60's F-60-UAT-03 (WFP kernel enforcement gap).
+
+### Version
+
+All workspace crates bumped to `0.58.0` in lockstep (5 `Cargo.toml` versions + 6
+internal path-dep pins). The `v0.58.0` git tag is the `release.yml` build trigger;
+`v2.9` is a non-building milestone marker on the same commit. CI-signed machine + user
+MSIs (wrapper AND embedded payloads Authenticode-valid, per Phase 53 sign-before-harvest
+gate).
+
 ## [Unreleased] - v2.6 Phase 45
 
 ### Bug Fixes
