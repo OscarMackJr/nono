@@ -1,6 +1,7 @@
 ---
 slug: wfp-filter-add-1783
-status: root-caused
+status: resolved
+resolution: "FIXED in plan 62-07 (2026-06-03): the per-SID block-filter SD is wrapped in FWP_BYTE_BLOB so FwpmFilterAdd0 marshals correctly (no more 1783 RPC_X_BAD_STUB_DATA). Verified by the working WFP block on live Win11 (62-HUMAN-UAT.md SC1, exit 6). Threat T-62-17 CLOSED in 62-SECURITY.md."
 trigger: "FwpmFilterAdd0 fails with win32 1783 (RPC_X_BAD_STUB_DATA) when nono-wfp-service installs the network-policy block filter. Surfaced during 62-04 HUMAN-UAT after the 62-06 driver-gate fix unblocked the service activation path."
 created: 2026-06-02
 updated: 2026-06-02
@@ -10,6 +11,8 @@ requirements:
 ---
 
 # Debug: FwpmFilterAdd0 fails 1783 (RPC_X_BAD_STUB_DATA) installing the block filter
+
+> **RESOLVED 2026-06-03.** Fixed in plan 62-07 — the filter-condition SD is now wrapped in `FWP_BYTE_BLOB` so `FwpmFilterAdd0` marshals correctly. Confirmed by the working live-Win11 WFP block (62-HUMAN-UAT.md SC1). Threat T-62-17 CLOSED.
 
 ## Symptoms
 

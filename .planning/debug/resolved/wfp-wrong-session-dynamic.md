@@ -1,6 +1,7 @@
 ---
 slug: wfp-wrong-session-dynamic
-status: root_cause_found
+status: resolved
+resolution: "FIXED in plan 62-09 (2026-06-03): the WFP engine session is opened persistent (flags=0, not FWPM_SESSION_FLAG_DYNAMIC) so the sublayer and filters share one session — no more FWP_E_WRONG_SESSION (0x8032000C). Runtime + uninstall cleanup audited (purge by NONO_SUBLAYER_GUID). Verified by the working block on live Win11 (62-HUMAN-UAT.md SC1) and clean uninstall (SC4). Threats T-62-19/T-62-20 CLOSED in 62-SECURITY.md."
 trigger: "FwpmFilterAdd0 fails FWP_E_WRONG_SESSION (0x8032000C) because the WFP sublayer and filters are created in SEPARATE FWPM_SESSION_FLAG_DYNAMIC sessions. Surfaced during 62-04 HUMAN-UAT after 62-07/62-08 fixed the marshaling (1783) errors. The hash of the running nono-wfp-service.exe is confirmed = E856DED4... (the fixed binary)."
 created: 2026-06-02
 updated: 2026-06-02
@@ -10,6 +11,8 @@ requirements:
 ---
 
 # Debug: FWP_E_WRONG_SESSION (dynamic-session sublayer/filter mismatch) + persistent-cleanup audit
+
+> **RESOLVED 2026-06-03.** Fixed in plan 62-09 — the WFP session is opened persistent (`flags=0`) so sublayer + filters share one session. Confirmed by the working live-Win11 block (62-HUMAN-UAT.md SC1) and clean uninstall (SC4). Threats T-62-19/T-62-20 CLOSED.
 
 ## Symptoms
 

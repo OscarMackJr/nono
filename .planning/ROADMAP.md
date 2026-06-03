@@ -37,7 +37,7 @@ granularity: standard
 - [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
  (completed 2026-05-29)
 - [ ] **Phase 61: Ship/Release v2.9** — Package and release the Phase 60 confined-coding-loop POC: produce CI-signed machine+user MSIs via `release.yml` off the current 0.57.5 binaries, tag the v2.9 milestone, push, and write release notes for the Windows confined tool-mediation story
-- [ ] **Phase 62: Add WFP kernel network enforcement for Windows supervised runs** — Make `network.block:true` on a supervised `nono run` enforce WFP kernel filtering out of the box (machine MSI `start=auto`, in-run auto-start-or-fail-closed, non-elevated pipe SDDL); closes Phase 60's F-60-UAT-03. Service-only — no new kernel driver. (REQ-WFP-01, v2.9 track)
+- [x] **Phase 62: Add WFP kernel network enforcement for Windows supervised runs** — Make `network.block:true` on a supervised `nono run` enforce WFP kernel filtering out of the box (machine MSI `start=auto`, in-run auto-start-or-fail-closed, non-elevated pipe SDDL); closes Phase 60's F-60-UAT-03. Service-only — no new kernel driver. (REQ-WFP-01, v2.9 track) (completed 2026-06-03)
 
 ## Phase Details
 
@@ -200,7 +200,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
-| 62. WFP kernel network enforcement (Windows supervised) | 12/13 | In Progress|  |
+| 62. WFP kernel network enforcement (Windows supervised) | 12/13 | Complete    | 2026-06-03 |
 
 ## Coverage
 

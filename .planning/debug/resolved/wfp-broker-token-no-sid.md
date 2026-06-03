@@ -1,6 +1,7 @@
 ---
 slug: wfp-broker-token-no-sid
-status: design_complete
+status: resolved
+resolution: "SUPERSEDED 2026-06-03. The restricting-SID design this session produced was FALSIFIED — CreateRestrictedToken(WRITE_RESTRICTED) crashed confined children (0xC0000142). The real fix is the per-run AppContainer (lowbox) whose package SID is WFP-matchable via ALE_USER_ID — see resolved/wfp-write-restricted-0142.md, shipped v0.57.12 (plans 62-12/62-13). REQ-WFP-01 verified 5/5 SC PASS on live Win11 (62-HUMAN-UAT.md)."
 trigger: "WFP --block-net does not block the confined child: the broker-arm (BrokerLaunchNoPty) Low-IL primary token does NOT carry the synthetic session_sid that the WFP ALE_USER_ID filter matches on, so the filter installs but matches nothing. Surfaced during 62-04 HUMAN-UAT (live Win11) after 62-05..62-09 made WFP fully activate."
 created: 2026-06-02
 updated: 2026-06-02
@@ -10,6 +11,8 @@ requirements:
 ---
 
 # Debug + DESIGN: broker Low-IL token lacks session_sid → WFP filter matches nothing
+
+> **RESOLVED (superseded) 2026-06-03.** This session's restricting-SID design was falsified (WRITE_RESTRICTED crashed native children with 0xC0000142). Superseded by the per-run AppContainer fix in `resolved/wfp-write-restricted-0142.md` (shipped v0.57.12, plans 62-12/62-13). REQ-WFP-01 now verified 5/5 SC PASS on live Win11. Retained for the historical record.
 
 ## Symptoms
 
