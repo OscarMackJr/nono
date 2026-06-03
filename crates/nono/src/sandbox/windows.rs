@@ -801,6 +801,145 @@ pub fn create_low_integrity_primary_token_with_sid(session_sid: &str) -> Result<
     Ok(restricted_primary)
 }
 
+/// RAII wrapper around a package `PSID` allocated by
+/// [`DeriveAppContainerSidFromAppContainerName`], released via `FreeSid`.
+///
+/// NOTE: this is a DIFFERENT allocator/free pair from [`OwnedSid`] (which wraps
+/// `ConvertStringSidToSidW` allocations freed via `LocalFree`).
+/// `DeriveAppContainerSidFromAppContainerName` documents `FreeSid` as the
+/// matching release call, so this type MUST NOT use `LocalFree`.
+pub struct OwnedAppContainerSid(windows_sys::Win32::Security::PSID);
+
+impl OwnedAppContainerSid {
+    /// Borrow the raw package `PSID`. The pointer is valid only while `self`
+    /// is alive; callers MUST keep the `OwnedAppContainerSid` in scope for the
+    /// duration of any FFI call that consumes the SID (e.g. building a
+    /// `SECURITY_CAPABILITIES`).
+    #[must_use]
+    pub fn as_psid(&self) -> windows_sys::Win32::Security::PSID {
+        self.0
+    }
+}
+
+impl Drop for OwnedAppContainerSid {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                // SAFETY: the SID was allocated by
+                // DeriveAppContainerSidFromAppContainerName and `FreeSid` is the
+                // documented matching release call. Freed exactly once on drop;
+                // null was checked above.
+                let _ = windows_sys::Win32::Security::FreeSid(self.0);
+            }
+        }
+    }
+}
+
+/// Derives the per-run AppContainer (package) SID from an AppContainer moniker
+/// such as `nono.session.<uuid>` via
+/// [`DeriveAppContainerSidFromAppContainerName`].
+///
+/// # Plan 62-12 (F-62-UAT-05 redesign — debug `wfp-write-restricted-0142` D1/D2)
+///
+/// The derivation is a pure, deterministic function of the name (no profile
+/// registration, no elevation): the same name always yields the same
+/// `S-1-15-2-*` package SID. This is the load-bearing property of the
+/// single-source invariant — the broker (which builds the lowbox token's
+/// `SECURITY_CAPABILITIES`) and the WFP request (which scopes the
+/// `ALE_USER_ID` filter) both call this with the SAME name and obtain the SAME
+/// SID without marshaling SID bytes across the argv boundary.
+///
+/// The returned [`OwnedAppContainerSid`] frees the SID via `FreeSid` on Drop.
+///
+/// # FAIL-CLOSED CONTRACT
+///
+/// A non-`S_OK` HRESULT or a null out-pointer returns [`NonoError::SandboxInit`].
+/// The caller (broker token build / WFP request) MUST propagate the error and
+/// MUST NOT fall back to a non-AppContainer token or an unscoped filter.
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] if `DeriveAppContainerSidFromAppContainerName`
+/// fails (non-zero HRESULT) or yields a null SID.
+#[must_use = "the returned OwnedAppContainerSid frees the package SID on drop and must outlive any FFI use of the SID"]
+pub fn derive_app_container_sid(name: &str) -> Result<OwnedAppContainerSid> {
+    use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
+
+    if name.is_empty() {
+        return Err(NonoError::SandboxInit(
+            "AppContainer name must not be empty".into(),
+        ));
+    }
+    let wide_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut psid: windows_sys::Win32::Security::PSID = std::ptr::null_mut();
+    let hr = unsafe {
+        // SAFETY: `wide_name` is a valid nul-terminated UTF-16 buffer that lives
+        // for the duration of the call; `psid` is a valid out-pointer. On
+        // success the callee allocates a package SID that MUST be freed with
+        // `FreeSid` (handled by OwnedAppContainerSid's Drop).
+        DeriveAppContainerSidFromAppContainerName(wide_name.as_ptr(), &mut psid)
+    };
+    if hr != 0 || psid.is_null() {
+        return Err(NonoError::SandboxInit(format!(
+            "DeriveAppContainerSidFromAppContainerName({name:?}) failed (HRESULT=0x{hr:08X})"
+        )));
+    }
+    Ok(OwnedAppContainerSid(psid))
+}
+
+/// Converts a package `PSID` to its SDDL string form (`S-1-15-2-*`) via
+/// `ConvertSidToStringSidW`.
+///
+/// Used on the WFP-request side to feed the existing `ALE_USER_ID` security
+/// descriptor path the package SID string (the value that previously carried
+/// the synthetic `S-1-5-117-*` session SID). The returned `String` is owned by
+/// Rust; the intermediate Win32 allocation is freed before return.
+///
+/// # FAIL-CLOSED CONTRACT
+///
+/// A `ConvertSidToStringSidW` failure returns [`NonoError::SandboxInit`]; no
+/// partial/empty string is ever returned.
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] if `ConvertSidToStringSidW` fails or
+/// yields a null pointer.
+pub fn package_sid_to_string(sid: &OwnedAppContainerSid) -> Result<String> {
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+
+    let mut str_ptr: windows_sys::core::PWSTR = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `sid.as_psid()` is a valid package SID owned by `sid` (kept
+        // alive across this call); `str_ptr` is a valid out-pointer. On success
+        // the callee allocates a UTF-16 string that MUST be freed with
+        // `LocalFree` (done below before return).
+        ConvertSidToStringSidW(sid.as_psid(), &mut str_ptr)
+    };
+    if ok == 0 || str_ptr.is_null() {
+        let gle = unsafe { GetLastError() };
+        return Err(NonoError::SandboxInit(format!(
+            "ConvertSidToStringSidW failed for package SID (GetLastError={gle})"
+        )));
+    }
+    // Compute the wide-string length, copy into a Rust String, then free.
+    let s = unsafe {
+        // SAFETY: `str_ptr` points to a nul-terminated UTF-16 string allocated
+        // by ConvertSidToStringSidW; we read up to the first nul to size it.
+        let mut len = 0usize;
+        while *str_ptr.add(len) != 0 {
+            len += 1;
+        }
+        let slice = std::slice::from_raw_parts(str_ptr, len);
+        String::from_utf16_lossy(slice)
+    };
+    unsafe {
+        // SAFETY: `str_ptr` was allocated by ConvertSidToStringSidW; LocalFree
+        // is the documented release call. Freed exactly once.
+        let _ = LocalFree(str_ptr as _);
+    }
+    Ok(s)
+}
+
 /// Maps an `AccessMode` to the `SYSTEM_MANDATORY_LABEL_ACE.Mask` bits per
 /// CONTEXT.md D-01 mask-encoding table.
 ///
@@ -4177,6 +4316,56 @@ mod tests {
 // a token at Low IL (RID 0x1000). Mirrors the pre-lift assertion that lived in
 // nono-cli's `low_integrity_primary_token_sets_low_il`; this version proves the
 // new home crate works without going through `nono-cli`.
+#[cfg(all(test, target_os = "windows"))]
+#[allow(clippy::unwrap_used)]
+mod app_container_tests {
+    use super::{derive_app_container_sid, package_sid_to_string};
+
+    /// Plan 62-12: deriving a package SID from a well-formed AppContainer name
+    /// succeeds, yields a non-null PSID, and its string form is an
+    /// `S-1-15-2-*` (APPLICATION_PACKAGE_AUTHORITY) SID — a REAL OS SID class,
+    /// unlike the synthetic `S-1-5-117-*` session SID. Derivation needs no
+    /// elevation and is deterministic from the name.
+    #[test]
+    fn derive_app_container_sid_yields_package_sid_string() {
+        let name = "nono.session.deadbeefcafebabe0123456789abcdef";
+        let sid = derive_app_container_sid(name).expect("derive must succeed for a valid name");
+        assert!(!sid.as_psid().is_null(), "derived package PSID must be non-null");
+
+        let s = package_sid_to_string(&sid).expect("package SID must stringify");
+        assert!(
+            s.starts_with("S-1-15-2-"),
+            "package SID must be S-1-15-2-* (APPLICATION_PACKAGE_AUTHORITY); got {s}"
+        );
+    }
+
+    /// Plan 62-12: the derivation is deterministic — the same name yields the
+    /// same package SID string. This is the load-bearing property of the
+    /// single-source invariant (broker and WFP both derive from the same name).
+    #[test]
+    fn derive_app_container_sid_is_deterministic_for_same_name() {
+        let name = "nono.session.0011223344556677889900aabbccddee";
+        let a = package_sid_to_string(&derive_app_container_sid(name).expect("derive a"))
+            .expect("stringify a");
+        let b = package_sid_to_string(&derive_app_container_sid(name).expect("derive b"))
+            .expect("stringify b");
+        assert_eq!(a, b, "same name must derive the same package SID (single-source)");
+    }
+
+    /// Plan 62-12 FAIL-CLOSED: an empty AppContainer name is rejected before
+    /// any FFI call (a null/empty moniker must never silently derive a SID).
+    #[test]
+    fn derive_app_container_sid_rejects_empty_name() {
+        match derive_app_container_sid("") {
+            Err(super::NonoError::SandboxInit(_)) => {}
+            other => panic!(
+                "empty-name rejection must be a SandboxInit error; got {:?}",
+                other.map(|_| "Ok(<sid>)")
+            ),
+        }
+    }
+}
+
 #[cfg(all(test, target_os = "windows"))]
 mod create_low_integrity_primary_token_tests {
     use super::{create_low_integrity_primary_token, OwnedHandle};

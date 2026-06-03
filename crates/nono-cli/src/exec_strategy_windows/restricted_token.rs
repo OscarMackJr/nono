@@ -31,6 +31,27 @@ pub(crate) fn generate_session_sid() -> String {
     )
 }
 
+/// Generates a per-run AppContainer moniker `nono.session.<uuid-simple>`.
+///
+/// # Plan 62-12 (F-62-UAT-05 redesign)
+///
+/// This NAME is the SINGLE per-run identifier from which BOTH sides of the
+/// enforcement derive the same package SID deterministically via
+/// `DeriveAppContainerSidFromAppContainerName`:
+///   - the broker's `SECURITY_CAPABILITIES.AppContainerSid` (the spawned
+///     lowbox child), and
+///   - the WFP `ALE_USER_ID` security-descriptor `D:(A;;CC;;;<packageSid>)`.
+///
+/// The simple (hyphen-free) UUID form keeps the moniker short, ASCII, and well
+/// inside the documented AppContainer-name length limit. The derivation is a
+/// pure function of the name (no profile registration, no elevation), so the
+/// two independent `Derive…` calls produce identical package SIDs — preserving
+/// the single-source invariant without threading SID bytes across the argv
+/// boundary.
+pub(crate) fn generate_app_container_name() -> String {
+    format!("nono.session.{}", Uuid::new_v4().simple())
+}
+
 pub(super) fn create_restricted_token_with_sid(session_sid_str: &str) -> Result<RestrictedToken> {
     let mut h_current_token: HANDLE = std::ptr::null_mut();
     let ok = unsafe {
@@ -233,6 +254,33 @@ mod tests {
     /// `create_restricted_token_with_sid_applies_write_restricted_flag`
     /// above; spelling it out as its own test makes the regression obvious
     /// if the SID format ever drifts outside the Microsoft-reserved range.
+    /// Plan 62-12: `generate_app_container_name` produces the
+    /// `nono.session.<hex>` moniker and two calls are distinct (per-run
+    /// uniqueness — distinct names derive distinct package SIDs, so each run
+    /// gets its own WFP-matchable identity).
+    #[test]
+    fn generate_app_container_name_is_unique_and_well_formed() {
+        let a = generate_app_container_name();
+        let b = generate_app_container_name();
+        assert_ne!(a, b, "two calls must produce distinct per-run names");
+        for name in [&a, &b] {
+            assert!(
+                name.starts_with("nono.session."),
+                "name must start with the nono.session. prefix: {name}"
+            );
+            let suffix = &name["nono.session.".len()..];
+            assert_eq!(
+                suffix.len(),
+                32,
+                "the simple UUID suffix must be 32 hex chars: {name}"
+            );
+            assert!(
+                suffix.chars().all(|c| c.is_ascii_hexdigit()),
+                "the suffix must be ASCII hex (valid AppContainer moniker): {name}"
+            );
+        }
+    }
+
     #[test]
     fn generate_session_sid_produces_parsable_sddl_string() {
         let sid = generate_session_sid();
