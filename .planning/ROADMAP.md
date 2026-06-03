@@ -168,7 +168,7 @@ Plans:
   4. **Clean uninstall preserved.** `sc stop` + `msiexec /x` of the machine MSI still leaves nothing behind (service fully removed); the `start=demand → start=auto` flip does not regress the Phase 53 / REQ-DRN-01 leave-nothing invariant. (regression guard)
   5. **Non-elevated pipe access.** The `nono-wfp-service` control-pipe SDDL grants the non-elevated supervised-run persona (Interactive Users) connect access, so a standard-user `nono run` reaches the boot-started service without "Access is denied". (research critical finding — blocking for D-01 end-to-end.)
 **Out of scope (this phase)**: `nono-wfp-driver.sys` real kernel minifilter (Gap 6b, v3.0-deferred); per-process/AppID filter scoping; fine-grained `allow_domain` path/method filtering (that is Phase 56 / REQ-NET-01, proxy layer); the user-scope MSI (`nono-user.wxs`) cannot register SCM services, so boot-start is machine-MSI-only.
-**Plans**: 11 plans (4 planned + 7 gap-closure)
+**Plans**: 12 plans (4 planned + 8 gap-closure)
 Plans:
 **Wave 1** (parallel -- no file overlap)
 - [x] 62-01-PLAN.md -- D-03 auto-start hook + start=auto in build_wfp_service_create_args + 3 unit tests (network.rs)
@@ -179,8 +179,9 @@ Plans:
 - [x] 62-07-PLAN.md -- GAP-CLOSURE F-62-UAT-02: set non-null filter displayData.name in add_policy_filter (nono-wfp-service.rs) so FwpmFilterAdd0 stops failing RPC_X_BAD_STUB_DATA (win32 1783); 7-point FWPM field audit confirmed name was the sole defect; root-caused in debug wfp-filter-add-1783
 - [x] 62-08-PLAN.md -- GAP-CLOSURE F-62-UAT-03: wrap the ALE_USER_ID security descriptor in an FWP_BYTE_BLOB (windows-sys types sd as *mut FWP_BYTE_BLOB) so FwpmFilterAdd0 stops failing RPC_X_BAD_STUB_DATA (1783); second stacked 1783 cause on the SID block path
 - [x] 62-09-PLAN.md -- GAP-CLOSURE F-62-UAT-04: make the WFP session PERSISTENT (drop FWPM_SESSION_FLAG_DYNAMIC) so the sublayer (startup engine) + filters (per-request engines) share one namespace; fixes FwpmFilterAdd0 FWP_E_WRONG_SESSION (0x8032000C); root-caused in debug wfp-wrong-session-dynamic. FOLLOW-UP 62-11 = uninstall WFP purge (REQ-DRN-01 leave-nothing) before SC4
-- [x] 62-10-PLAN.md -- GAP-CLOSURE F-62-UAT-05: inject session_sid into the broker (BrokerLaunchNoPty) Low-IL child token as a WRITE_RESTRICTED restricting SID via new `nono::create_low_integrity_primary_token_with_sid` + `--session-sid` plumbing (launch.rs -> broker argv -> token build), fail-closed; the WFP ALE_USER_ID filter installed cleanly post-62-09 but matched NOTHING because the broker token lacked session_sid (curl reached the net). Closes the SC1 enforcement-MATCH gap; root-caused + DESIGNED in debug wfp-broker-token-no-sid
+- [x] 62-10-PLAN.md -- GAP-CLOSURE F-62-UAT-05: inject session_sid into the broker (BrokerLaunchNoPty) Low-IL child token as a WRITE_RESTRICTED restricting SID via new `nono::create_low_integrity_primary_token_with_sid` + `--session-sid` plumbing (launch.rs -> broker argv -> token build), fail-closed; the WFP ALE_USER_ID filter installed cleanly post-62-09 but matched NOTHING because the broker token lacked session_sid (curl reached the net). Closes the SC1 enforcement-MATCH gap; root-caused + DESIGNED in debug wfp-broker-token-no-sid. ⚠ SUPERSEDED by 62-12: live UAT showed this WRITE_RESTRICTED token crashes the confined child at startup (0xC0000142 STATUS_DLL_INIT_FAILED); design falsified, re-root-caused in debug wfp-write-restricted-0142
 - [x] 62-11-PLAN.md -- GAP-CLOSURE (REQ-DRN-01 leave-nothing): add `--purge-wfp-objects` one-shot mode to nono-wfp-service (delete all NONO_SUBLAYER_GUID filters + FwpmSubLayerDeleteByKey0), invoked fail-open from `setup --uninstall-wfp` before service delete, so the now-PERSISTENT (62-09) sublayer/filters are removed by `msiexec /x`. Closes the SC4/SC5 gap 62-09 deferred; no WiX change
+- [ ] 62-12-PLAN.md -- GAP-CLOSURE F-62-UAT-05 (REDESIGN, supersedes 62-10): spawn the confined child as a per-run AppContainer (lowbox) — derive package SID S-1-15-2-* from name `nono.session.<uuid>` (DeriveAppContainerSidFromAppContainerName), spawn via STARTUPINFOEX + SECURITY_CAPABILITIES{AppContainerSid,0 caps} (starts cleanly), scope WFP by the package SID reusing the proven ALE_USER_ID SD path, retarget AppliedDaclGrantsGuard to the package SID, remove the dead WRITE_RESTRICTED broker code; fail-closed + single-source preserved. Fixes the 0xC0000142 startup crash; root-caused + DESIGNED in debug wfp-write-restricted-0142
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
@@ -198,7 +199,7 @@ Plans:
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 0/TBD | Not started | - |
-| 62. WFP kernel network enforcement (Windows supervised) | 10/11 | In Progress|  |
+| 62. WFP kernel network enforcement (Windows supervised) | 10/12 | In Progress|  |
 
 ## Coverage
 
