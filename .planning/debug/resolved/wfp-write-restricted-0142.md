@@ -254,3 +254,24 @@ TWO confirmed facts:
 1. BROKER (the spawn fix): register the per-run AppContainer profile with CreateAppContainerProfile(name,...) BEFORE the SECURITY_CAPABILITIES spawn; RAII DeleteAppContainerProfile on session end (tolerate ALREADY_EXISTS). This is the validated fix that makes the confined child START.
 2. WFP: KEEP ALE_USER_ID(packageSid) — proven to block. No condition change.
 3. GRANT MODEL (for real user-profile cwd/tools): after registration the spawn works from an accessible cwd; for a profile-deep cwd (e.g. %USERPROFILE%\.claude) the package SID still needs traverse on the cwd (+ ancestors if the lowbox lacks bypass-traverse) and READ on the tool's read paths. The c3d7644f leaf read+traverse grant is the start; next UAT after registration reveals whether ancestor grants are also required. Full read-grant model for claude.exe remains a follow-up.
+
+## RESOLVED ✅ (2026-06-03) — SC1 PASSES end-to-end in nono (v0.57.12 / 62-13)
+Non-elevated live Win11 run, cwd %USERPROFILE%\.claude:
+```
+broker: AppContainer profile registered app_container_name=nono.session.44b70f67a93342f9bd42079ccd46071d
+broker: spawned child child_pid=10612 app_container=true
+curl: (6) Could not resolve host: api.ipify.org
+broker: child exited child_exit_code=6
+```
+The confined child STARTED (no 0xC0000142, no FILE_NOT_FOUND) AND its outbound was WFP-kernel-BLOCKED (curl exit 6,
+"Could not resolve host"). REQ-WFP-01 SC1 = PASS. F-62-UAT-05 (and the whole WRITE_RESTRICTED→AppContainer chain) RESOLVED.
+
+Fix that landed it: 62-13 — broker registers the per-run AppContainer profile (CreateAppContainerProfile) before the
+SECURITY_CAPABILITIES spawn (v0.57.12). Bypass-traverse ANSWERED: the profile-deep cwd worked, so the lowbox retains
+SeChangeNotifyPrivilege — only the leaf .claude traverse (c3d7644f 0x1301BF mask) was needed; the Task-3 user-owned-
+ancestor traverse grant proved unnecessary (harmless belt-and-suspenders; candidate for removal in cleanup).
+
+Resolution chain: 62-10 (WRITE_RESTRICTED, FALSIFIED) → 62-12 (AppContainer redesign, but Derive-only) → spike
+(validated WFP-block + exposed the missing profile registration) → 62-13 (CreateAppContainerProfile = the fix).
+Remaining for the milestone (NOT this bug): SC2 (reboot boot-start), SC4/SC5 (uninstall leave-nothing via 62-11 purge),
+and the DEFERRED full read-grant model for claude.exe (the curl SC1 path needs no user-file READ; claude.exe will).
