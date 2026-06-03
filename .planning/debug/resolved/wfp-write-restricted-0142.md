@@ -275,3 +275,10 @@ Resolution chain: 62-10 (WRITE_RESTRICTED, FALSIFIED) → 62-12 (AppContainer re
 (validated WFP-block + exposed the missing profile registration) → 62-13 (CreateAppContainerProfile = the fix).
 Remaining for the milestone (NOT this bug): SC2 (reboot boot-start), SC4/SC5 (uninstall leave-nothing via 62-11 purge),
 and the DEFERRED full read-grant model for claude.exe (the curl SC1 path needs no user-file READ; claude.exe will).
+
+## SC4 PASS (2026-06-03, elevated uninstall of v0.57.12)
+`msiexec /x` leave-nothing verified: nono-wfp-service → 1060 (gone), C:\Program Files\nono → removed, nono WFP sublayer
+(NONO_SUBLAYER_GUID {33445566-7788-99aa-bbcc-ddeeff001122}) → absent. Observation: the sublayer matched NOTHING even
+BEFORE uninstall — the runtime self-cleans per run (filter + sublayer reference removed on run-exit), so after a clean
+run nothing nono-owned remains in WFP; the 62-11 uninstall purge is belt-and-suspenders for crash-orphans (active-delete
+path covered by 62-11 unit tests, not exercised live since nothing was orphaned). REQ-WFP-01 SC4 = PASS.
