@@ -30,6 +30,12 @@ a Low-IL broker. Unsupported shapes **fail closed**.
 
 1. **Use a real console** — Windows Terminal or a PowerShell window. **NOT** git-bash/MSYS; the
    Low-IL broker spawn fails (`CreateProcessAsUserW GLE=87`) without a real console.
+1b. **Run NON-elevated** (a normal user console, not "Run as administrator"). An elevated process
+   creates directories owned by `BUILTIN\Administrators`, not your user SID — and nono then
+   cannot edit the directory DACL (`WRITE_DAC` needs ownership) to grant the sandbox's session
+   SID, so **confined writes are denied**. Phase 60/62 UAT all ran non-elevated. (Verified
+   2026-06-04: elevated console → `dacl guard: writable path not owned by current user … confined
+   writes here will be denied`.)
 2. **Profile runs from a covered cwd** — `cd $env:USERPROFILE\.claude` first. A bare
    `%USERPROFILE%` fails the cwd-coverage gate (lesson D-52-01).
 3. **This is an on-host POC build** — signed with an internal POC cert trusted on *this machine
@@ -47,10 +53,11 @@ a Low-IL broker. Unsupported shapes **fail closed**.
 ## Pre-flight (run once, ~1 min)
 
 ```powershell
+# IMPORTANT: run this in a NON-elevated console (so the dir is owned by you, not Administrators)
 nono --version                       # expect: nono 0.57.12
 Get-Service nono-wfp-service         # expect: Running / Automatic
-New-Item -ItemType Directory -Force C:\demo\workspace | Out-Null
-cd $env:USERPROFILE\.claude          # profile-covered cwd for Act 2
+New-Item -ItemType Directory -Force "$env:USERPROFILE\nono-demo\ws" | Out-Null   # user-owned (non-elevated)
+cd $env:USERPROFILE\.claude          # profile-covered cwd for Act 2 (sibling of .nono, no overlap)
 ```
 
 ---
@@ -105,20 +112,32 @@ WFP filters auto-remove — show `Get-Service nono-wfp-service` is still healthy
 
 ---
 
-## Act 3 — Filesystem confinement (live, safe)
+## Act 3 — Filesystem confinement (explain-only — reliable, zero-risk)
+
+> ⚠ **Do NOT demo a live confined *write* as a one-liner.** Verified 2026-06-04: a bare
+> `nono run --allow <dir> -- cmd /c "echo … > file"` does **not** reliably complete the write on
+> this host — it needs (a) a **non-elevated** session and a **user-owned** target dir, and (b) the
+> **Low-IL broker arm** (`windows_low_il_broker` profile), which is the Phase 60 confined-coding-
+> loop path, not a standalone one-liner. The default WriteRestricted arm denies the write
+> (F-60-UAT-05). Demo the *policy* instead — it's reliable and just as convincing:
 
 ```powershell
-# Inside the jail: allowed
-nono run --allow C:\demo\workspace -- cmd /c "echo ok > C:\demo\workspace\proof.txt"   # succeeds
-
-# Outside the jail: structurally denied
-nono run --allow C:\demo\workspace -- cmd /c "echo pwn > C:\Windows\System32\pwn.txt"   # DENIED
+# The sandbox is a least-privilege allow-list. Show what a jail would/wouldn't permit:
+nono why --path "C:\Windows\System32\drivers\etc\hosts" --op write   # -> DENIED (insufficient_access: read-only grant)
+nono why --path "$env:USERPROFILE\Documents\anything.txt" --op write # -> DENIED (not in the allow-list)
+nono run --dry-run --allow "$env:USERPROFILE\nono-demo\ws" -- cmd /c "echo x"
+#   -> Capabilities: r+w <only that dir> | everything else outside the jail is denied
 ```
 
-Zero-risk variant (no process, same point):
-```powershell
-nono why --path "C:\Windows\System32\pwn.txt" --op write     # -> DENIED
-```
+**Talk track:** "Only the explicitly-granted directory is writable; every other path — even ones
+the user could normally write — is denied. That's the allow-list, enforced by the OS, not by
+asking the process nicely."
+
+> If you specifically need a **live** confined write for the CSO, that's the Phase 60
+> confined-coding-loop (Claude Code at Medium-IL, each tool call confined via a PreToolUse hook →
+> `nono run` with the broker-profile runner). It's a heavier setup, must be **non-elevated**, and
+> should be rehearsed end-to-end — not a single command. Keep it out of the quick demo unless
+> you've staged it.
 
 ---
 
@@ -135,7 +154,7 @@ nono audit          # the recorded trail of what sandboxed commands were run
 1. **Pre-flight** (version + service running) — "kernel enforcement is already on, started at boot."
 2. **Act 1** (`why` x3 + `--dry-run`) — explain the model, zero risk.
 3. **Act 2** (curl control → confined) — the visceral kernel network-kill.
-4. **Act 3** (write inside vs outside the jail) — filesystem least-privilege.
+4. **Act 3** (`why --op write` + `--dry-run`) — filesystem least-privilege, explain-only (reliable).
 5. Close on **honesty slide** below.
 
 ---
