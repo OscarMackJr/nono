@@ -2,9 +2,9 @@ name: Trusted Signing Smoke Test
 
 # Manual-only, non-destructive validation of the Azure Trusted Signing chain BEFORE the real
 # v0.58.0 release. Proves: GitHub OIDC -> azure/login (FIC subject + secrets + Development env),
-# then a real Trusted Signing sign of a throwaway copy of a system DLL (RBAC role + Public Trust
-# profile + endpoint/account/profile vars), then that the signature chains to the production cert.
-# Publishes nothing. Delete this workflow once the real release is green.
+# then a real Trusted Signing sign of a freshly-compiled UNSIGNED, non-Microsoft binary (RBAC
+# role + Public Trust profile + endpoint/account/profile vars), then that the embedded signature
+# is OUR validated Trusted Signing cert. Publishes nothing. Delete once the real release is green.
 
 on:
   workflow_dispatch:
@@ -27,13 +27,24 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Stage a throwaway signable binary
+      - name: Compile a fresh UNSIGNED non-Microsoft binary
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force smoke | Out-Null
-          Copy-Item C:\Windows\System32\winhttp.dll smoke\smoke-test.dll -Force
-          $before = (Get-AuthenticodeSignature smoke\smoke-test.dll)
-          Write-Host "Pre-sign signer: $($before.SignerCertificate.Subject)"
+          $target = "smoke\nono-smoke.exe"
+          # Compile a trivial exe with the .NET Framework C# compiler -> a brand-new PE with NO
+          # signature and NO Microsoft catalog association (so GAS later reads OUR embedded sig).
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          'class P { static void Main() { System.Console.WriteLine("nono trusted-signing smoke"); } }' | Set-Content smoke\prog.cs
+          if (Test-Path $csc) { & $csc /nologo /out:$target smoke\prog.cs }
+          if (-not (Test-Path $target)) {
+            # Fallback: a non-Microsoft third-party signed exe (GitHub CLI), still not catalog-backed
+            $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
+            if ($gh) { Copy-Item $gh $target -Force }
+          }
+          if (-not (Test-Path $target)) { Write-Error "Could not stage a signable non-Microsoft binary"; exit 1 }
+          $before = Get-AuthenticodeSignature $target
+          Write-Host "Pre-sign status: $($before.Status)  (expected NotSigned)"
 
       - name: Sign with Azure Trusted Signing
         uses: azure/trusted-signing-action@v0
@@ -42,16 +53,16 @@ jobs:
           trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
           files-folder: ${{ github.workspace }}\smoke
-          files-folder-filter: dll
+          files-folder-filter: exe
           files-folder-recurse: false
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Verify the signature chains to the production cert
+      - name: Verify the embedded signature is OUR Trusted Signing cert
         shell: pwsh
         run: |
-          $sig = Get-AuthenticodeSignature smoke\smoke-test.dll
+          $sig = Get-AuthenticodeSignature smoke\nono-smoke.exe
           Write-Host "Status: $($sig.Status)"
           Write-Host "Signer: $($sig.SignerCertificate.Subject)"
           Write-Host "Issuer: $($sig.SignerCertificate.Issuer)"
