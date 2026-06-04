@@ -2385,8 +2385,8 @@ pub struct RunArgs {
     )]
     pub max_processes: Option<u32>,
 
-    /// Command to run inside the sandbox
-    #[arg(required = true, hide = true)]
+    /// Command to run inside the sandbox (optional if profile specifies `binary`)
+    #[arg(hide = true)]
     pub command: Vec<String>,
 
     /// Print help

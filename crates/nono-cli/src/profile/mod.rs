@@ -2050,6 +2050,11 @@ pub struct Profile {
     /// the actual resolution surface). Field deserializes on every platform.
     #[serde(default)]
     pub packs: Vec<String>,
+    /// Binary path or command name to run when no trailing `-- <command>` is given.
+    /// Resolved via `PATH` lookup or canonicalized if absolute. Only honoured
+    /// for user-authored profiles (ignored for pack and built-in profiles).
+    #[serde(default)]
+    pub binary: Option<String>,
     /// PROF-02 (Phase 22): extra arguments appended to the child command
     /// at launch. Supports variable expansion (e.g. `$NONO_PACKAGES` —
     /// expansion lands with the rest of the package machinery in Plan
@@ -2144,6 +2149,8 @@ struct ProfileDeserialize {
     #[serde(default)]
     packs: Vec<String>,
     #[serde(default)]
+    binary: Option<String>,
+    #[serde(default)]
     #[serde(alias = "brokered_commands")]
     command_args: Vec<String>,
     #[serde(default)]
@@ -2175,6 +2182,7 @@ impl From<ProfileDeserialize> for Profile {
             unsafe_macos_seatbelt_rules: raw.unsafe_macos_seatbelt_rules,
             windows_low_il_broker: raw.windows_low_il_broker,
             packs: raw.packs,
+            binary: raw.binary,
             command_args: raw.command_args,
             // Plan 36-01b: canonical section per upstream f0abd413 (v0.47.0).
             // Exhaustively enumerated here so rustc's struct-literal completeness
@@ -3060,6 +3068,7 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
         // a base profile that has it set (T-51A-02 mitigation).
         windows_low_il_broker: base.windows_low_il_broker || child.windows_low_il_broker,
         packs: dedup_append(&base.packs, &child.packs),
+        binary: child.binary.or(base.binary),
         command_args: dedup_append(&base.command_args, &child.command_args),
         // Plan 36-01b: merge canonical commands sections — union allow + deny lists.
         commands: CommandsConfig {
@@ -4823,6 +4832,7 @@ mod tests {
             unsafe_macos_seatbelt_rules: Vec::new(),
             windows_low_il_broker: false,
             packs: Vec::new(),
+            binary: None,
             command_args: Vec::new(),
             commands: CommandsConfig::default(),
             allow_parent_of_protected: None,
@@ -4910,6 +4920,7 @@ mod tests {
             unsafe_macos_seatbelt_rules: Vec::new(),
             windows_low_il_broker: false,
             packs: Vec::new(),
+            binary: None,
             command_args: Vec::new(),
             commands: CommandsConfig::default(),
             allow_parent_of_protected: None,
@@ -7588,6 +7599,38 @@ mod windows_low_il_broker_tests {
             !profile.windows_low_il_broker,
             "codex built-in profile must NOT have windows_low_il_broker=true (D-03: only claude-code)"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // target_binary field tests (C7 upstream 9398a139)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn profile_binary_field_parses_and_inherits() {
+        let base = br#"{
+            "meta": { "name": "base" },
+            "binary": "/usr/bin/base-agent"
+        }"#;
+        let base_profile = parse_profile_bytes(base).expect("parse base");
+        assert_eq!(base_profile.binary.as_deref(), Some("/usr/bin/base-agent"));
+
+        let child = br#"{
+            "meta": { "name": "child" },
+            "binary": "/opt/child-agent"
+        }"#;
+        let child_profile = parse_profile_bytes(child).expect("parse child");
+        assert_eq!(child_profile.binary.as_deref(), Some("/opt/child-agent"));
+
+        let merged = merge_profiles(base_profile, child_profile);
+        assert_eq!(
+            merged.binary.as_deref(),
+            Some("/opt/child-agent"),
+            "child binary should override base"
+        );
+
+        let no_binary = br#"{ "meta": { "name": "no-bin" } }"#;
+        let no_bin_profile = parse_profile_bytes(no_binary).expect("parse no-binary");
+        assert!(no_bin_profile.binary.is_none(), "binary should default to None");
     }
 
     // -------------------------------------------------------------------------
