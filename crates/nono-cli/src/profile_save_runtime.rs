@@ -1,4 +1,5 @@
 use crate::command_display::format_command_line;
+use crate::theme;
 use crate::{profile, query_ext};
 use colored::Colorize;
 use nono::diagnostic::{ErrorObservation, PolicyExplanation};
@@ -398,14 +399,27 @@ pub(crate) fn print_patch_preview(patch: &profile::Profile) {
         return;
     }
 
-    prompt_println("[nono] Paths to be saved:");
+    let t = theme::current();
+    prompt_println(&format!(
+        "{}",
+        theme::fg("[nono] Paths to be saved as grants:", t.brand).bold()
+    ));
     for (label, paths) in sections {
         for path in *paths {
             let is_override = patch.policy.bypass_protection.contains(path);
             if is_override {
-                prompt_println(&format!("  {}  {} ({})", "⚠".red(), path, label));
+                prompt_println(&format!(
+                    "  {}  {} ({})",
+                    "⚠".red(),
+                    theme::fg(path, t.text).bold(),
+                    label
+                ));
             } else {
-                prompt_println(&format!("  {}  ({})", path, label));
+                prompt_println(&format!(
+                    "  {}  ({})",
+                    theme::fg(path, t.text).bold(),
+                    label
+                ));
             }
         }
     }
@@ -792,6 +806,16 @@ fn matches_ignored_denial(path: &Path, ignored_denial_paths: &[PathBuf]) -> bool
 /// non-existent path yields its (expanded) literal form — this is the
 /// correct fail-safe for a UX suppression list (no canonical resolution
 /// means no prefix collapse, which is the conservative shape).
+/// Canonicalize a single `suppress_save_prompt` entry from a profile.
+///
+/// Expands `~/` prefixes using the validated home directory, then applies
+/// best-effort `try_canonicalize` to resolve symlinks. Used both internally
+/// and by `execution_runtime` when pre-computing the denied-path suppression
+/// list for `DiagnosticFormatter::with_suppressed_paths`.
+pub fn canonicalize_suppress_path(raw: &str) -> PathBuf {
+    canonicalize_suppress_entry(raw)
+}
+
 fn canonicalize_suppress_entry(raw: &str) -> PathBuf {
     let expanded = if let Some(rest) = raw.strip_prefix("~/") {
         match crate::config::validated_home() {

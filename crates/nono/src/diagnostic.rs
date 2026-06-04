@@ -684,6 +684,11 @@ pub struct DiagnosticFormatter<'a> {
     session_id: Option<String>,
     /// Policy explanations for denied paths, resolved from `query_path`.
     policy_explanations: Vec<PolicyExplanation>,
+    /// Paths suppressed from the save-profile prompt (from `suppress_save_prompt`
+    /// profile field or `--suppress-save-prompt` CLI flag). Used to annotate
+    /// denied paths with `[save skipped]` so the diagnostic footer is
+    /// self-explanatory without requiring the user to cross-reference their profile.
+    suppressed_paths: &'a [PathBuf],
 }
 
 impl<'a> DiagnosticFormatter<'a> {
@@ -706,6 +711,7 @@ impl<'a> DiagnosticFormatter<'a> {
             current_dir: None,
             session_id: None,
             policy_explanations: Vec::new(),
+            suppressed_paths: &[],
         }
     }
 
@@ -797,6 +803,18 @@ impl<'a> DiagnosticFormatter<'a> {
     #[must_use]
     pub fn with_policy_explanations(mut self, explanations: Vec<PolicyExplanation>) -> Self {
         self.policy_explanations = explanations;
+        self
+    }
+
+    /// Set paths suppressed from the save-profile prompt.
+    ///
+    /// When set, denied paths that match an entry in `paths` are annotated with
+    /// `[save skipped]` in the diagnostic footer, making it clear why a blocked
+    /// path does not appear in the save prompt. The library applies no policy
+    /// from this list — it is used for display only.
+    #[must_use]
+    pub fn with_suppressed_paths(mut self, paths: &'a [PathBuf]) -> Self {
+        self.suppressed_paths = paths;
         self
     }
 
@@ -1442,10 +1460,17 @@ impl<'a> DiagnosticFormatter<'a> {
                 lines.push(format!("[nono]   … and {} more", total - idx));
                 break;
             }
-            let suffix = if self.is_denial_policy_blocked(denial) {
-                "  [permanently restricted]"
+            let mut labels: Vec<&str> = Vec::new();
+            if self.is_denial_policy_blocked(denial) {
+                labels.push("permanently restricted");
+            }
+            if self.is_denial_suppressed(denial) {
+                labels.push("save skipped");
+            }
+            let suffix = if labels.is_empty() {
+                String::new()
             } else {
-                ""
+                format!("  [{}]", labels.join(", "))
             };
             lines.push(format!(
                 "[nono]   {} ({}){}",
@@ -1511,6 +1536,20 @@ impl<'a> DiagnosticFormatter<'a> {
         if !flags.is_empty() {
             lines.push(format!("[nono] Fix: {}", flags.join(" ")));
         }
+    }
+
+    /// Return true when the denied path is in the caller-supplied suppression
+    /// list (i.e. `suppress_save_prompt` entries). Such paths are still denied
+    /// by the sandbox — this only controls whether they appear in the save
+    /// prompt and how they are labelled in the diagnostic footer.
+    fn is_denial_suppressed(&self, denial: &DenialRecord) -> bool {
+        if self.suppressed_paths.is_empty() {
+            return false;
+        }
+        let canonical = try_canonicalize(&denial.path);
+        self.suppressed_paths
+            .iter()
+            .any(|suppressed| canonical == *suppressed || canonical.starts_with(suppressed))
     }
 
     /// Return true when the denial cannot be fixed by a path flag alone —
@@ -3624,6 +3663,109 @@ mod tests {
                 path: PathBuf::from("/Users/luke/Library/Caches/it's/pkg"),
                 access: AccessMode::Write,
             }]
+        );
+    }
+
+    #[test]
+    fn suppressed_denial_annotated_with_save_skipped() {
+        let caps = make_test_caps();
+        let denied = PathBuf::from("/tmp/suppressed-file");
+        let other = PathBuf::from("/tmp/other-file");
+        let suppressed = try_canonicalize(&denied);
+
+        let denials = vec![
+            DenialRecord {
+                path: denied.clone(),
+                access: AccessMode::Read,
+                reason: DenialReason::RateLimited,
+            },
+            DenialRecord {
+                path: other.clone(),
+                access: AccessMode::Read,
+                reason: DenialReason::RateLimited,
+            },
+        ];
+        let formatter = DiagnosticFormatter::new(&caps)
+            .with_mode(DiagnosticMode::Supervised)
+            .with_denials(&denials)
+            .with_suppressed_paths(std::slice::from_ref(&suppressed));
+        let output = formatter.format_footer(1);
+
+        // The suppressed path gets the [save skipped] annotation.
+        assert!(
+            output.contains("[save skipped]"),
+            "expected [save skipped] in:\n{output}"
+        );
+        // The non-suppressed path does not.
+        let other_line = output
+            .lines()
+            .find(|l| l.contains("other-file"))
+            .unwrap_or("");
+        assert!(
+            !other_line.contains("[save skipped]"),
+            "non-suppressed path should not have [save skipped]: {other_line}"
+        );
+    }
+
+    #[test]
+    fn suppressed_denial_without_suppressed_paths_has_no_annotation() {
+        let caps = make_test_caps();
+        let denied = PathBuf::from("/tmp/some-file");
+        let denials = vec![DenialRecord {
+            path: denied,
+            access: AccessMode::Read,
+            reason: DenialReason::RateLimited,
+        }];
+        let formatter = DiagnosticFormatter::new(&caps)
+            .with_mode(DiagnosticMode::Supervised)
+            .with_denials(&denials);
+        let output = formatter.format_footer(1);
+
+        assert!(
+            !output.contains("[save skipped]"),
+            "no suppressed paths set — [save skipped] should not appear:\n{output}"
+        );
+    }
+
+    #[test]
+    fn permanently_restricted_and_suppressed_shows_both_labels() {
+        let caps = make_test_caps();
+        let denied = PathBuf::from("/tmp/restricted-and-suppressed");
+        let suppressed = try_canonicalize(&denied);
+
+        // PolicyBlocked reason + a policy explanation with reason "sensitive_path"
+        // causes is_denial_policy_blocked() to return true.
+        let explanation = PolicyExplanation {
+            path: denied.clone(),
+            access: AccessMode::Read,
+            reason: "sensitive_path".to_string(),
+            details: None,
+            policy_source: None,
+            suggested_flag: None,
+        };
+        let denials = vec![DenialRecord {
+            path: denied,
+            access: AccessMode::Read,
+            reason: DenialReason::PolicyBlocked,
+        }];
+        let formatter = DiagnosticFormatter::new(&caps)
+            .with_mode(DiagnosticMode::Supervised)
+            .with_denials(&denials)
+            .with_policy_explanations(vec![explanation])
+            .with_suppressed_paths(std::slice::from_ref(&suppressed));
+        let output = formatter.format_footer(1);
+
+        let line = output
+            .lines()
+            .find(|l| l.contains("restricted-and-suppressed"))
+            .unwrap_or("");
+        assert!(
+            line.contains("permanently restricted"),
+            "expected 'permanently restricted' in: {line}"
+        );
+        assert!(
+            line.contains("save skipped"),
+            "expected 'save skipped' in: {line}"
         );
     }
 }

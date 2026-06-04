@@ -342,6 +342,15 @@ pub struct ExecConfig<'a> {
     /// (e.g. `"GITHUB_*"`) are stripped even if they also appear in
     /// `allowed_env_vars`. Nono-injected credentials bypass this list.
     pub denied_env_vars: Option<Vec<String>>,
+    /// Paths suppressed from the save-profile prompt (from
+    /// `filesystem.suppress_save_prompt` or the `--suppress-save-prompt` CLI
+    /// flag). Forwarded to the `DiagnosticFormatter` via
+    /// `with_suppressed_paths` so denied paths that are suppressed get an
+    /// `[save skipped]` annotation in the diagnostic footer.
+    ///
+    /// This is a UX gate, not a security gate: paths in this list are STILL
+    /// denied by the sandbox; the field only controls footer annotation.
+    pub ignored_denial_paths: &'a [std::path::PathBuf],
 }
 
 #[derive(Clone, Copy)]
@@ -1631,7 +1640,8 @@ pub fn execute_supervised(
                     .with_error_observation(error_observation)
                     .with_current_dir(config.current_dir)
                     .with_session_id(diag_session_id)
-                    .with_policy_explanations(policy_explanations);
+                    .with_policy_explanations(policy_explanations)
+                    .with_suppressed_paths(config.ignored_denial_paths);
                 if let Some(program) = config.command.first() {
                     formatter = formatter.with_command(nono::diagnostic::CommandContext {
                         program: program.clone(),
