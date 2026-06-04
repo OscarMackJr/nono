@@ -89,7 +89,7 @@ Plans:
 **Plans**: 7 plans
 Plans:
 **Wave 1** (parallel)
-- [ ] 55-01-PLANNING-AMEND-PROXY502-PLAN.md -- D-55-01 REQ/SC amendment (planning docs) + C4 proxy 502 hardening (d11193f + 4ad708d)
+- [x] 55-01-PLANNING-AMEND-PROXY502-PLAN.md -- D-55-01 REQ/SC amendment (planning docs) + C4 proxy 502 hardening (d11193f + 4ad708d)
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 55-02-PROFILE-JSONC-TARGET-BINARY-PLAN.md -- C7 profile system: JSONC parsing + target_binary + opencode extraction + refactors (5 commits) + SC3 schema-collision check
@@ -230,7 +230,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 |-------|----------------|--------|-----------|
 | 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
-| 55. UPST7 Cherry-pick Wave | 0/TBD | Not started | - |
+| 55. UPST7 Cherry-pick Wave | 1/7 | In Progress|  |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
