@@ -1,0 +1,62 @@
+name: Trusted Signing Smoke Test
+
+# Manual-only, non-destructive validation of the Azure Trusted Signing chain BEFORE the real
+# v0.58.0 release. Proves: GitHub OIDC -> azure/login (FIC subject + secrets + Development env),
+# then a real Trusted Signing sign of a throwaway copy of a system DLL (RBAC role + Public Trust
+# profile + endpoint/account/profile vars), then that the signature chains to the production cert.
+# Publishes nothing. Delete this workflow once the real release is green.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  smoke:
+    name: Trusted Signing smoke
+    runs-on: windows-latest
+    # MUST match the federated-credential subject repo:OscarMackJr/nono:environment:Development
+    environment: Development
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Stage a throwaway signable binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force smoke | Out-Null
+          Copy-Item C:\Windows\System32\winhttp.dll smoke\smoke-test.dll -Force
+          $before = (Get-AuthenticodeSignature smoke\smoke-test.dll)
+          Write-Host "Pre-sign signer: $($before.SignerCertificate.Subject)"
+
+      - name: Sign with Azure Trusted Signing
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\smoke
+          files-folder-filter: dll
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Verify the signature chains to the production cert
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature smoke\smoke-test.dll
+          Write-Host "Status: $($sig.Status)"
+          Write-Host "Signer: $($sig.SignerCertificate.Subject)"
+          Write-Host "Issuer: $($sig.SignerCertificate.Issuer)"
+          if ($sig.Status -ne 'Valid') {
+            Write-Error "Smoke test FAILED: Authenticode status is $($sig.Status) (expected Valid)."
+            exit 1
+          }
+          Write-Host "OK: Trusted Signing smoke test PASSED — the D-02 signing path is live."
