@@ -25,7 +25,7 @@ granularity: standard
 ## Phases
 
 - [x] **Phase 53: Release & Drain** — Tag v2.8 + v0.57.5, produce signed MSIs off the post-`005b4c9e` binary, verify release.yml, UAT WFP uninstall, drain 3 todos (shipped as v0.57.5 after a release.yml signing-order fix; all 5 SC verified)
-- [ ] **Phase 54: UPST7 Audit** — Produce DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0`; per-cluster dispositions + ADR re-confirm + re-export empirical cross-check
+- [x] **Phase 54: UPST7 Audit** — Produce DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0`; per-cluster dispositions + ADR re-confirm + re-export empirical cross-check
 - [ ] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, java-dev, proxy 502, denial/diagnostic polish) per Phase 54 dispositions
 - [ ] **Phase 56: Fine-grained Network Filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix
 - [ ] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
@@ -75,7 +75,7 @@ Plans:
   4. The fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`) is explicitly addressed with a diff-inspect note flagging whether the v0.59 TLS-intercept ordering fix applies cleanly or requires manual replay
 **Plans**: 1 plan
 Plans:
-- [ ] 54-01-UPST7-AUDIT-PLAN.md — DIVERGENCE-LEDGER for v0.57.0..v0.59.0: re-fetch + drift run, per-cluster dispositions + windows-touch, ADR review, empirical cross-check, SC4 TLS-intercept assessment, UPST8 stub
+- [x] 54-01-UPST7-AUDIT-PLAN.md — DIVERGENCE-LEDGER for v0.57.0..v0.59.0: re-fetch + drift run, per-cluster dispositions + windows-touch, ADR review, empirical cross-check, SC4 TLS-intercept assessment, UPST8 stub (complete 2026-06-04; 40 commits / 14 clusters)
 
 ### Phase 55: UPST7 Cherry-pick Wave
 **Goal**: The cross-platform straight-port clusters from the UPST7 audit are absorbed into the fork with correct D-19 trailers and the fork's invariants intact
@@ -196,12 +196,23 @@ Plans:
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
 - [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
 
+## Future Cycles
+
+### UPST8 — Upstream v0.59.0… sync audit (placeholder)
+
+**Goal**: Audit upstream `v0.59.0..<next-tag>` divergence per the Phase 33 ADR `continue` cadence rule. Inherits the audit-shape template from Phase 33 + 39 + 42 + 47 + 54 verbatim. The first deferred-from-UPST7 targets are **v0.60.0 (`9a05a4ff`), v0.61.0, and v0.61.1** (the 2026-06-04 UPST7 re-fetch surfaced all three past the locked `v0.57.0..v0.59.0` range; the deferred set is `v0.60.0..v0.61.1`, NOT v0.60.0 alone — and NOT the unrelated Feb-2026 v0.6.x tag line). Title may flip from `sync audit` to `sync execution` if the next cycle's commit set is small enough to skip a dedicated audit (auditor's call at UPST8 plan-phase).
+**Depends on**: Phase 55 (UPST7 cherry-pick wave must close before UPST8 audit; cadence rule preserves linear ordering)
+**Plans**: 0 / TBD
+**Reference**: `docs/architecture/upstream-parity-strategy.md` § Future audit cadence
+
+UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60.0..v0.61.1 deferred at Phase 54; will grow before UPST8 fires) warrants absorbing.
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 53. Release & Drain | 3/4 | In Progress|  |
-| 54. UPST7 Audit | 0/1 | Not started | - |
+| 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
 | 55. UPST7 Cherry-pick Wave | 0/TBD | Not started | - |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
