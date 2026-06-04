@@ -26,7 +26,7 @@ granularity: standard
 
 - [x] **Phase 53: Release & Drain** — Tag v2.8 + v0.57.5, produce signed MSIs off the post-`005b4c9e` binary, verify release.yml, UAT WFP uninstall, drain 3 todos (shipped as v0.57.5 after a release.yml signing-order fix; all 5 SC verified)
 - [x] **Phase 54: UPST7 Audit** — Produce DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0`; per-cluster dispositions + ADR re-confirm + re-export empirical cross-check
-- [ ] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, java-dev, proxy 502, denial/diagnostic polish) per Phase 54 dispositions
+- [ ] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, proxy 502 hardening, pack-update-hint robustness, ENV_LOCK policy test, sigstore 0.8.0, denial/diagnostic polish) per Phase 54 dispositions (`java-dev`/`java_runtime`: 0 commits in v0.57.0..v0.59.0 per ledger empirical cross-check on platform.rs; UPST8 territory)
 - [ ] **Phase 56: Fine-grained Network Filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix
 - [ ] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
 - [ ] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
