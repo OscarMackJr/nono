@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-03T16:33:38.384Z"
-last_activity: 2026-06-03
+last_updated: "2026-06-04T21:19:18.599Z"
+last_activity: 2026-06-04
 progress:
   total_phases: 10
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 25
-  completed_plans: 22
-  percent: 88
+  completed_plans: 23
+  percent: 92
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -21,11 +21,11 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 61 — v2.9 ship/release — 🔴 BLOCKED at plan 61-04 on the D-02 signing-secret gate (operator confirmed WINDOWS_SIGNING_CERT/_PASSWORD are the POC cert / expired, NOT production). Release NOT triggered (no v0.58.0 tag, main NOT pushed). Resumable once production Authenticode material is configured. See 61-RELEASE-VERIFY.md.
+**Current Focus:** Phase 54 — upst7-audit
 
 ## Current Position
 
-Phase: 61 (ship-release-v2-9-package-and-release-the-phase-60-confined-) — EXECUTING (3/4 plans done; 61-04 BLOCKED at the human-verify checkpoint). Plans 61-01 (workspace lockstep-bumped 0.57.5→0.58.0 + CHANGELOG + ROADMAP D-05 fix; `cargo build --workspace` green), 61-02 (D-09 hook-guard tests pass on 0.58.0; verification + todo resolved), 61-03 (pre-tag readiness READY-TO-TAG:YES on automated checks) all COMPLETE + committed locally. 61-04 Task 1 (release notes, `7d5bef4f`) done; Task 2 tag/push BLOCKED on D-02. Two re-attempt fixes recorded in 61-RELEASE-VERIFY.md: use annotated `git tag -a` (NOT `-s` — no GPG key; DCO is a text trailer), and `git push origin main` first (local main is 101 commits ahead of origin/main). NOTHING shipped — GitHub Latest still v0.57.5.
+Phase: 54 (upst7-audit) — EXECUTING
 
 --- Phase 62 — COMPLETE 2026-06-03 (REQ-WFP-01; out-of-box WFP kernel network enforcement) ---
 GATES GREEN: UAT 5/5 SC PASS (62-HUMAN-UAT.md) + security 33/33 closed (62-SECURITY.md, threats_open:0, T-62-06 self-DoS accepted as AR-62-10). 4 Phase-62 debug sessions moved to debug/resolved/. UAT PROOF (recorded in 62-HUMAN-UAT.md): SC1 out-of-box block (non-elevated, cwd %USERPROFILE%\.claude): `broker: spawned child app_container=true` → `curl: (6) Could not resolve host` → child_exit 6 (WFP-kernel-BLOCKED, child STARTED clean). SC2 boot-start: `sc query` RUNNING + `sc qc` START_TYPE 2 AUTO_START (LocalSystem) + SC1-repeat blocked (reboot-evidence rests on AUTO_START config + running state + enforced block — gold-standard post-`shutdown /r` capture optional). SC3 fail-closed: service STOPPED → non-elevated `--block-net` run raised PlatformNotSupported naming both `nono-wfp-service` and `nono setup --start-wfp-service`, NEVER printed `hello`. SC4 clean-uninstall leaves-nothing (PASS, prior session). SC5 pipe-isolation: blocks were clean kernel filters (curl exit 6), NO `Access is denied` pipe error → confirmed from SC1/SC2. Bypass-traverse ANSWERED: profile-deep cwd worked, lowbox retains SeChangeNotifyPrivilege — only the leaf .claude traverse (c3d7644f) was needed; 62-13 Task-3 ancestor grant unnecessary (harmless; removable in cleanup). DEFERRED: full READ-grant model for claude.exe (curl SC1 needs no user-file reads; claude.exe will — the AppContainer is a different principal). Memory: [[windows_appcontainer_wfp_validated]].
@@ -35,8 +35,8 @@ GATES GREEN: UAT 5/5 SC PASS (62-HUMAN-UAT.md) + security 33/33 closed (62-SECUR
 VALIDATION (decisive, supersedes all the D5 #2 uncertainty below): the elevated spike `crates/nono-cli/examples/spike_wfp_appcontainer.rs` PROVED WFP kernel-BLOCKS an AppContainer's outbound connection scoped by its package SID — via BOTH ALE_USER_ID (curl exit 6, "Could not resolve host", the path nono already builds) AND ALE_PACKAGE_ID (curl exit 2). So the AppContainer redesign is VIABLE and the existing ALE_USER_ID scoping is KEPT. The spike also EXPOSED the real spawn bug: CreateProcessW(SECURITY_CAPABILITIES) fails ERROR_FILE_NOT_FOUND with a DERIVE-ONLY package SID even from a fully-accessible cwd (C:\Windows\System32) — the AppContainer PROFILE must be REGISTERED first via CreateAppContainerProfile (62-12 used Derive-only → THE bug; debug D1 "no registration needed" FALSIFIED). The v0.57.10/v0.57.11 cwd-traverse work (c3d7644f) was a WRONG turn for the SPAWN (but the read+traverse grant is still needed for real tools to access user files). Memory: [[windows_appcontainer_wfp_validated]]. NEXT FIX (plan 62-13): (1) broker registers the per-run profile (CreateAppContainerProfile + RAII DeleteAppContainerProfile, tolerate ALREADY_EXISTS) BEFORE the SECURITY_CAPABILITIES spawn; (2) KEEP ALE_USER_ID; (3) package-SID grant model for the real user-profile cwd (traverse on cwd + ancestors if no bypass-traverse) + read paths for claude.exe (deferred). Full trail: .planning/debug/wfp-write-restricted-0142.md.
 --- (historical context below, pre-validation) ---
 Phase: 62 — 62-12 AppContainer REDESIGN CODE-COMPLETE (supersedes falsified 62-10); 62-11 OK; awaiting live 62-04 HUMAN-UAT
-Plan: 4 of 4
-Status: Ready to execute
+Plan: 1 of 1
+Status: Executing Phase 54
 Next (operator, live elevated Win11): rebuild nono.exe + broker + version-bumped MSI, then run 62-04 HUMAN-UAT SC1→SC5. SC1 probe (from a profile-covered cwd e.g. %USERPROFILE%\.claude): `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org` MUST block (no external IP). SC4/SC5: after a confined --block-net run, `msiexec /x` then confirm NO nono filters + NO NONO_SUBLAYER_GUID sublayer remain. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; import POC cert to LocalMachine\Root+TrustedPublisher; verify installed nono-wfp-service.exe SHA256. If startup regresses under WRITE_RESTRICTED on the broker path, escalate to a new debug session (the restricting-SID shape is the only WFP-matchable option per debug wfp-broker-token-no-sid D1). Phase 60 follow-ups (non-blocking) still carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
 BUILT+SIGNED FOR 62-04 UAT — CURRENT = v0.57.12 (62-13 AppContainer PROFILE-REGISTRATION fix; 2026-06-03): signed machine MSI `dist/windows/nono-v0.57.12-x86_64-pc-windows-msvc-machine.msi` (ProductVersion 0.57.12, MajorUpgrade; Authenticode Valid; POC cert 319E507E...). SHA256: nono.exe = C9F900CFCB6AAC5A288233BF84DB23D4CBAC3AC8D6BCD330070C227E8A59A318; nono-wfp-service.exe = 17A24FB19EB942F1EF55732DC0EBA2FA6CC05BBD590D0C1B502AC2AE37CAF25B. Cert already imported on this host. ⚠ INSTALL v0.57.12 (it carries the SPIKE-VALIDATED fix). UAT HISTORY: v0.57.9 → 0xC0000142 (WRITE_RESTRICTED crash; FIXED by 62-12 AppContainer). v0.57.10/v0.57.11 → CreateProcessW ERROR_FILE_NOT_FOUND (wrongly chased as cwd-traverse; c3d7644f leaf grant kept but was NOT the fix — the spike proved it failed even from a fully-accessible System32 cwd). v0.57.12 (62-13) = the REAL fix: broker REGISTERS the AppContainer profile (CreateAppContainerProfile) before spawn — spike PROVED this makes the child START + WFP-block via ALE_USER_ID. SC1 re-run from %USERPROFILE%\.claude: curl should START; BLOCK (no IP / "Could not resolve host"/timeout) = SC1 PASS. OPEN UAT QUESTION: does the lowbox have bypass-traverse? If curl STILL fails FILE_NOT_FOUND, a non-owned ancestor (C:\Users) blocks reaching the profile-deep cwd (can't grant its DACL) → pivot to a profile-accessible cwd strategy. DEFERRED: full read-grant model for claude.exe. NOTE: Cargo crate version stays 0.57.5 (MSI version from build tag).
 Last session: 2026-06-03T16:33:38.367Z
@@ -46,7 +46,7 @@ Last session: 2026-06-03T16:33:38.367Z
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
 | 53 | Tag v2.8 + signed MSIs + release.yml verify + WFP UAT + 3 todos | REQ-RLS-01, REQ-RLS-02, REQ-DRN-01, REQ-DRN-02 | Not started |
-| 54 | UPST7 audit (DIVERGENCE-LEDGER v0.57.0..v0.59.0) | REQ-UPST7-01 | Not started |
+| 54 | UPST7 audit (DIVERGENCE-LEDGER v0.57.0..v0.59.0) | REQ-UPST7-01 | Complete (2026-06-04) — 40 commits / 14 clusters; ADR (a) confirm; SC4 fork-preserve |
 | 55 | UPST7 cherry-pick wave (cross-platform straight ports) | REQ-UPST7-02 | Not started |
 | 56 | Fine-grained network filtering (allow_domain path+method) | REQ-NET-01 | Not started |
 | 57 | Bitwarden bw:// credential source | REQ-CRED-01 | Not started |
@@ -144,6 +144,18 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 | 43 | 6 warnings + 5 info | WR-05 first-run synchronous pack-update startup latency (~5min hit on CLAUDE.md "Zero startup latency" constraint); WR-04 `platform.rs::compare_versions` Ord antisymmetry violation; WR-02 REG_DWORD malformed-hex fallback; WR-06 case-sensitive registry value-name match; WR-01 `validate_restore_target` best-effort TOCTOU. |
 
 ## Accumulated Context
+
+### Plan 54-01 Close — UPST7 Audit (2026-06-04)
+
+- **Range:** v0.57.0..v0.59.0 | **upstream_head_at_audit:** `48d39f36` | **refetch_date:** 2026-06-04 | **drift_tool_sh_sha:** `0834aa66` (pin held).
+- **40 unique commits** (drift source of truth; the 260527-sgo gap analysis under-counted at ~19), **14 clusters**. Disposition breakdown: **will-sync 8** (allow_domain, proxy-502, bw://, profile JSONC/target_binary/opencode, pack-hints, diagnostic polish, timeout constants, policy-test) · **split 3** (C2 supervisor named-socket IPC→Ph59, C5 TLS-intercept ordering→Ph56, C8 session hooks→Ph58) · **won't-sync 3** (release commits, C13 sigstore→reclassified split, C14 macOS-only). **windows-touch:yes = 2** (C2, C8).
+- **ADR review:** **(a) confirm** Phase 33 Option A `continue` (5-dim L/M/H: security M, windows L, maintenance M, divergence M, contributor L). Does NOT supersede Phase 33 ADR.
+- **Cross-cluster re-export:** pub-use scan **clean** (no Phase-43-class trap); one **function-call** prereq C5→C3 (`partition_allow_domain`).
+- **SC4 TLS-intercept verdict:** **fork-preserve** — fork `RouteStore`/`CredentialStore` already decouples endpoint-before-credential; upstream `tls_intercept/` absent in fork; `credential.rs` untouched by `22e6c40` (byte-identical preserved). Small `proxy_runtime.rs` filter-allowlist port rides WITH Phase 56 allow_domain. (Phase 56 prerequisite note delivered.)
+- **Empirical cross-check:** 5 fork-shared files walked (route.rs, credential.rs, keystore.rs, profile/mod.rs, platform.rs); **zero drift-tool gaps** (route.rs/credential.rs fork-original → 0 upstream commits; profile/mod.rs 6 merges correctly excluded; platform.rs 0 → no java-dev cluster in range).
+- **v0.60.0 scope:** range kept v0.57.0..v0.59.0; **v0.60.0..v0.61.1 deferred to UPST8** (re-fetch surfaced v0.60.0 `9a05a4ff` + v0.61.0 + v0.61.1 — larger than the v0.60.0-alone set the plan anticipated). UPST8 stub appended to ROADMAP § Future Cycles (commit `0b49c697`).
+- **Zero-source-edits invariant honored:** `git diff plan_base_sha(eb8c9b82)..HEAD -- crates/ bindings/ scripts/ Makefile` = 0. Drift re-run idempotent (exit 0, 40 commits). DCO sign-off on all commits.
+- **Next:** Phase 55 (UPST7 cherry-pick wave) consumes these dispositions as immutable input — but per the v2.9 release plan, hold Phase 55 *code* off `main` until v0.58.0 is tagged (it would otherwise ride into the signed release). [[feedback_cluster_isolation_invalid]] structurally closed for UPST7.
 
 ### Key Decisions (carried from v1.0)
 
@@ -390,7 +402,7 @@ Known deferred items at v2.4 close: 5 host-blocked requirements (re-anchored to 
 **[Stale — pre-v2.4 forensic history below this line. Authoritative state is the YAML frontmatter at the top of this file plus the resume entry above.]**
 
 **Current Milestone:** v2.3 — Linux POC Unblock + Deferreds Closure (scope-locked 2026-04-29; in progress; status=gaps_found per audit).
-**Last Activity:** 2026-06-03
+**Last Activity:** 2026-06-04
 **Resumed:** 2026-05-11 — Phase 33 (`windows-parity-upstream-0-52-divergence`) Wave 3 closed via `/gsd-execute-phase 33`. Plan 33-03 landed three downstream artifact edits in single commit `8f783c39` closing REQ-3 + REQ-4 + REQ-5 (PROJECT.md Key Decisions row for parity-strategy decision + 25-HUMAN-UAT.md G-25-DRIFT-01 Update section with empirical-disproof framing + ROADMAP Phase 33 entry flipped to complete + Phase 34 UPST3-sync stub appended per D-33-D1 base case for Option A). All 12 REQ-3/4/5 validators + 2 cross-cutting (D-19 + make-ci sub) pass. Phase 33 now 4/4 plans executed; all 5 REQs landed (REQ-1 5fa0dca4 / REQ-2 7107b88d / REQ-3+4+5 8f783c39); ready for `/gsd-verify-work` verifier pass. Next: orchestrator's verify-phase step, then `/gsd-complete-phase 33` if verifier passes.
 
 **Stopped At (prior session, retained for context):** 2026-05-08 — user chose Phase 31 broker-process commitment over v2.3 gap-fill. Next: `/gsd-phase add 31` to insert Phase 31 (broker-process implementation, SHELL-01) into ROADMAP.md, then `/gsd-discuss-phase 31` with validated PoC (`quick-260508-m99`) + 370-line RESEARCH.md (`quick-260508-lqh`) as locked scoping inputs. Effort: ~7 days execution. v2.3 audit gaps (5 missing VERIFICATION.md + Phase 27.2 disposition) deferred — to be addressed before milestone close, but not blocking Phase 31 start.
