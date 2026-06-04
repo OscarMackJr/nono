@@ -106,6 +106,7 @@ pub fn show_pack_update_hints(profile_name: &str, silent: bool) {
 /// Refresh stale hint cache entries for the hidden helper subcommand.
 pub fn run_refresh_helper(args: crate::cli::PackUpdateHintHelperArgs) -> crate::Result<()> {
     let Some(stale) = parse_refresh_helper_args(args.packs) else {
+        tracing::debug!("pack update hint helper received malformed pack/version arguments");
         return Ok(());
     };
     if stale.is_empty() || is_opted_out() {
@@ -276,14 +277,17 @@ fn save_state(state: &PackHintsState) {
         let _ = std::fs::create_dir_all(parent);
     }
     if let Ok(json) = serde_json::to_string_pretty(state) {
-        // Phase 44 IN-01 P43 (REQ-REVIEW-FU-01 D-44-B5): atomic
-        // tmp+rename write, mirroring the canonical pattern in
-        // `crates/nono-cli/src/package.rs::write_lockfile`. Prevents
-        // partial-write corruption if the process is killed between
-        // the file truncate and the JSON serialization completion.
-        let tmp_path = path.with_extension("json.tmp");
-        if std::fs::write(&tmp_path, json).is_ok() {
-            let _ = std::fs::rename(&tmp_path, &path);
+        // Phase 44 IN-01 P43 (REQ-REVIEW-FU-01 D-44-B5): atomic tmp+rename
+        // write prevents partial-write corruption if the process is killed.
+        // C9 (b1a650a3): use pid-scoped temp name to avoid conflicts when
+        // multiple helper processes run concurrently; append newline for
+        // standard file formatting.
+        let tmp_path =
+            path.with_file_name(format!(".{HINTS_STATE_FILE}.{}.tmp", std::process::id()));
+        let write_result = std::fs::write(&tmp_path, format!("{json}\n"))
+            .and_then(|()| std::fs::rename(&tmp_path, &path));
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&tmp_path);
         }
     }
 }
