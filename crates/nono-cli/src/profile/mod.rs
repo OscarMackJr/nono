@@ -7690,6 +7690,13 @@ mod windows_low_il_broker_tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let canonical = dir.path().canonicalize().expect("canonicalize tempdir");
         let canonical_str = canonical.to_str().expect("tempdir is valid UTF-8");
+        #[cfg(target_os = "windows")]
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", canonical_str),
+            ("USERPROFILE", canonical_str),
+            ("HOME", canonical_str),
+        ]);
+        #[cfg(not(target_os = "windows"))]
         let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", canonical_str)]);
 
         let profiles_dir = canonical.join("nono").join("profiles");
