@@ -3843,7 +3843,12 @@ mod tests {
         assert!(profiles.contains(&"claude-code".to_string()));
         assert!(profiles.contains(&"codex".to_string()));
         assert!(profiles.contains(&"openclaw".to_string()));
-        assert!(profiles.contains(&"opencode".to_string()));
+        assert!(profiles.contains(&"swival".to_string()));
+        // These profiles were removed from built-ins; they ship via registry packs:
+        //   claude-code / claude → always-further/claude   (removed v0.43.0)
+        //   codex               → always-further/codex    (removed v0.43.0)
+        //   opencode            → always-further/opencode (removed)
+        assert!(!profiles.contains(&"opencode".to_string()));
     }
 
     #[test]
@@ -5909,7 +5914,7 @@ mod tests {
         std::fs::write(
             &profile_path,
             r#"{
-                "extends": ["claude-code", "opencode"],
+                "extends": ["claude-code", "openclaw"],
                 "meta": { "name": "shared-base-test" }
             }"#,
         )
@@ -6875,12 +6880,12 @@ mod tests {
 
     #[test]
     fn built_in_profiles_load_with_aipc_block_present() {
-        // policy.json is embedded at build time; the 5 named profiles
-        // (claude-code, codex, opencode, openclaw, swival) all carry
-        // capabilities.aipc per Plan 18-03 Task 2 step 6. Round-trip
-        // through serde + the parse-time validator.
+        // policy.json is embedded at build time; the 4 named profiles
+        // (claude-code, codex, openclaw, swival) carry capabilities.aipc
+        // per Plan 18-03 Task 2 step 6. opencode moved to registry pack.
+        // Round-trip through serde + the parse-time validator.
         use crate::profile::builtin;
-        let names = &["claude-code", "codex", "opencode", "openclaw", "swival"];
+        let names = &["claude-code", "codex", "openclaw", "swival"];
         for name in names {
             let profile = builtin::get_builtin(name)
                 .unwrap_or_else(|| panic!("built-in profile '{name}' must exist"));

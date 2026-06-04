@@ -190,19 +190,10 @@ mod tests {
     }
 
     #[test]
-    fn test_get_builtin_opencode() {
-        let profile = get_builtin("opencode").expect("Profile not found");
-        assert_eq!(profile.meta.name, "opencode");
-        assert_eq!(profile.workdir.access, WorkdirAccess::ReadWrite);
-        assert!(profile.interactive);
-        assert!(profile
-            .filesystem
-            .allow
-            .contains(&"$HOME/.opencode".to_string()));
-        assert!(profile
-            .filesystem
-            .allow
-            .contains(&"$HOME/.local/share/opentui".to_string()));
+    fn test_opencode_no_longer_inbuilt() {
+        // Removed: opencode is now shipped via the registry pack
+        // `always-further/opencode`, not embedded in policy.json.
+        assert!(get_builtin("opencode").is_none());
     }
 
     #[test]
@@ -268,8 +259,12 @@ mod tests {
         assert!(profiles.contains(&"claude-no-kc".to_string()));
         assert!(profiles.contains(&"codex".to_string()));
         assert!(profiles.contains(&"openclaw".to_string()));
-        assert!(profiles.contains(&"opencode".to_string()));
         assert!(profiles.contains(&"swival".to_string()));
+        // Profiles that ship via registry packs instead of as built-ins:
+        //   claude-code → always-further/claude   (removed v0.43.0)
+        //   codex       → always-further/codex    (removed v0.43.0)
+        //   opencode    → always-further/opencode (removed)
+        assert!(!profiles.contains(&"opencode".to_string()));
     }
 
     #[test]
@@ -376,7 +371,7 @@ mod tests {
 
     #[test]
     fn test_linux_interactive_profiles_include_sysfs_but_not_runtime_state_or_temp() {
-        for name in ["claude-code", "codex", "opencode", "swival"] {
+        for name in ["claude-code", "codex", "swival"] {
             let profile = get_builtin(name).expect("Profile not found");
             assert!(
                 !profile
@@ -403,23 +398,6 @@ mod tests {
                 name
             );
         }
-    }
-
-    #[test]
-    fn test_opencode_profile_includes_tmpdir_and_state_dir() {
-        let policy = crate::policy::load_embedded_policy().expect("load embedded policy");
-        let opencode = policy.profiles.get("opencode").expect("opencode profile");
-        assert!(
-            opencode.filesystem.allow.contains(&"$TMPDIR".to_string()),
-            "opencode profile should allow $TMPDIR for Bun TUI runtime extraction"
-        );
-        assert!(
-            opencode
-                .filesystem
-                .allow
-                .contains(&"$HOME/.local/state/opencode".to_string()),
-            "opencode profile should allow $HOME/.local/state/opencode"
-        );
     }
 
     // ------------------------------------------------------------------

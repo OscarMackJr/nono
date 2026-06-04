@@ -874,45 +874,6 @@
       },
       "interactive": false
     },
-    "opencode": {
-      "extends": "default",
-      "meta": {
-        "name": "opencode",
-        "version": "1.0.0",
-        "description": "OpenCode AI coding assistant",
-        "author": "nono-project"
-      },
-      "security": {
-        "groups": ["user_caches_macos", "user_caches_linux", "node_runtime", "opencode_linux", "linux_sysfs_read", "git_config", "unlink_protection"],
-        "signal_mode": "isolated"
-      },
-      "filesystem": {
-        "allow": [
-          "$HOME/.opencode",
-          "$HOME/.config/opencode",
-          "$HOME/.cache/opencode",
-          "$HOME/.local/share/opencode",
-          "$HOME/.local/share/opentui",
-          "$HOME/.local/state/opencode",
-          "$TMPDIR"
-        ]
-      },
-      "network": { "block": false },
-      "workdir": { "access": "readwrite" },
-      "capabilities": {
-        "aipc": {
-          "socket": ["connect"],
-          "pipe": ["read", "write", "read+write"],
-          "job_object": ["query"],
-          "event": ["wait", "signal"],
-          "mutex": ["wait", "release"]
-        }
-      },
-      "undo": {
-        "exclude_patterns": ["node_modules", ".next"]
-      },
-      "interactive": true
-    },
     "python-dev": {
       "extends": "default",
       "meta": {
