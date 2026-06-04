@@ -689,6 +689,11 @@ pub struct DiagnosticFormatter<'a> {
     /// denied paths with `[save skipped]` so the diagnostic footer is
     /// self-explanatory without requiring the user to cross-reference their profile.
     suppressed_paths: &'a [PathBuf],
+    /// Canonicalized forms of the denied paths, parallel to `denials`. When
+    /// provided, used in place of on-demand `try_canonicalize` calls inside the
+    /// render loop so filesystem I/O is done once (by the caller, after the
+    /// child exits) rather than once per denial per render method.
+    canonical_denial_paths: Vec<PathBuf>,
 }
 
 impl<'a> DiagnosticFormatter<'a> {
@@ -712,6 +717,7 @@ impl<'a> DiagnosticFormatter<'a> {
             session_id: None,
             policy_explanations: Vec::new(),
             suppressed_paths: &[],
+            canonical_denial_paths: Vec::new(),
         }
     }
 
@@ -807,14 +813,17 @@ impl<'a> DiagnosticFormatter<'a> {
     }
 
     /// Set paths suppressed from the save-profile prompt.
-    ///
-    /// When set, denied paths that match an entry in `paths` are annotated with
-    /// `[save skipped]` in the diagnostic footer, making it clear why a blocked
-    /// path does not appear in the save prompt. The library applies no policy
-    /// from this list — it is used for display only.
     #[must_use]
     pub fn with_suppressed_paths(mut self, paths: &'a [PathBuf]) -> Self {
         self.suppressed_paths = paths;
+        self
+    }
+
+    /// Set pre-canonicalized forms of the denied paths to avoid repeated
+    /// calling of `try_canonicalize` at render time.
+    #[must_use]
+    pub fn with_canonical_denial_paths(mut self, paths: Vec<PathBuf>) -> Self {
+        self.canonical_denial_paths = paths;
         self
     }
 
@@ -1538,6 +1547,20 @@ impl<'a> DiagnosticFormatter<'a> {
         }
     }
 
+    /// Return the canonical form of `denial.path`, using the pre-computed
+    /// parallel vec when available to avoid repeated filesystem I/O.
+    fn canonical_for_denial<'b>(&'b self, denial: &DenialRecord) -> std::borrow::Cow<'b, Path> {
+        if let Some(canonical) = self
+            .denials
+            .iter()
+            .position(|d| d.path == denial.path)
+            .and_then(|i| self.canonical_denial_paths.get(i))
+        {
+            return std::borrow::Cow::Borrowed(canonical.as_path());
+        }
+        std::borrow::Cow::Owned(try_canonicalize(&denial.path))
+    }
+
     /// Return true when the denied path is in the caller-supplied suppression
     /// list (i.e. `suppress_save_prompt` entries). Such paths are still denied
     /// by the sandbox — this only controls whether they appear in the save
@@ -1546,15 +1569,15 @@ impl<'a> DiagnosticFormatter<'a> {
         if self.suppressed_paths.is_empty() {
             return false;
         }
-        let canonical = try_canonicalize(&denial.path);
+        let canonical = self.canonical_for_denial(denial);
         self.suppressed_paths
             .iter()
-            .any(|suppressed| canonical == *suppressed || canonical.starts_with(suppressed))
+            .any(|suppressed| canonical.starts_with(suppressed))
     }
 
     /// Return true when the denial cannot be fixed by a path flag alone —
     /// i.e. the path is blocked by the sensitive-path policy and requires a
-    /// profile with `policy.bypass_protection`.
+    /// profile with `filesystem.bypass_protection`.
     fn is_denial_policy_blocked(&self, denial: &DenialRecord) -> bool {
         if let Some(expl) = self
             .policy_explanations
@@ -3766,6 +3789,36 @@ mod tests {
         assert!(
             line.contains("save skipped"),
             "expected 'save skipped' in: {line}"
+        );
+    }
+
+    #[test]
+    fn suppressed_denial_uses_precomputed_canonical_path() {
+        // Verify that when `with_canonical_denial_paths` is supplied the
+        // pre-computed value is used for suppression matching instead of the
+        // raw denial path. We supply a canonical path that differs from the
+        // raw path (simulating symlink resolution) and assert that suppression
+        // is triggered against the canonical form.
+        let caps = make_test_caps();
+        let raw_path = PathBuf::from("/tmp/link-to-suppressed");
+        let canonical_path = PathBuf::from("/tmp/real-suppressed-target");
+
+        let denials = vec![DenialRecord {
+            path: raw_path.clone(),
+            access: AccessMode::Read,
+            reason: DenialReason::RateLimited,
+        }];
+        // Suppress the canonical path, not the raw symlink path.
+        let formatter = DiagnosticFormatter::new(&caps)
+            .with_mode(DiagnosticMode::Supervised)
+            .with_denials(&denials)
+            .with_suppressed_paths(std::slice::from_ref(&canonical_path))
+            .with_canonical_denial_paths(vec![canonical_path.clone()]);
+        let output = formatter.format_footer(1);
+
+        assert!(
+            output.contains("[save skipped]"),
+            "suppression via precomputed canonical path should annotate [save skipped]:\n{output}"
         );
     }
 }
