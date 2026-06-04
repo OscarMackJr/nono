@@ -2050,6 +2050,11 @@ pub struct Profile {
     /// the actual resolution surface). Field deserializes on every platform.
     #[serde(default)]
     pub packs: Vec<String>,
+    /// Binary path or command name to run when no trailing `-- <command>` is given.
+    /// Resolved via `PATH` lookup or canonicalized if absolute. Only honoured
+    /// for user-authored profiles (ignored for pack and built-in profiles).
+    #[serde(default)]
+    pub binary: Option<String>,
     /// PROF-02 (Phase 22): extra arguments appended to the child command
     /// at launch. Supports variable expansion (e.g. `$NONO_PACKAGES` —
     /// expansion lands with the rest of the package machinery in Plan
@@ -2144,6 +2149,8 @@ struct ProfileDeserialize {
     #[serde(default)]
     packs: Vec<String>,
     #[serde(default)]
+    binary: Option<String>,
+    #[serde(default)]
     #[serde(alias = "brokered_commands")]
     command_args: Vec<String>,
     #[serde(default)]
@@ -2175,6 +2182,7 @@ impl From<ProfileDeserialize> for Profile {
             unsafe_macos_seatbelt_rules: raw.unsafe_macos_seatbelt_rules,
             windows_low_il_broker: raw.windows_low_il_broker,
             packs: raw.packs,
+            binary: raw.binary,
             command_args: raw.command_args,
             // Plan 36-01b: canonical section per upstream f0abd413 (v0.47.0).
             // Exhaustively enumerated here so rustc's struct-literal completeness
@@ -2203,7 +2211,7 @@ pub fn is_user_override(name: &str) -> bool {
     if !is_valid_profile_name(name) {
         return false;
     }
-    get_user_profile_path(name)
+    resolve_user_profile_path(name)
         .map(|p| p.exists())
         .unwrap_or(false)
 }
@@ -2228,7 +2236,7 @@ pub fn get_package_for_profile(name: &str) -> Option<PathBuf> {
 /// This reads the raw profile definition before inheritance resolution clears the field.
 pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
     // Direct file path
-    if name_or_path.contains('/') || name_or_path.ends_with(".json") {
+    if is_file_path_ref(name_or_path) {
         return parse_profile_file(Path::new(name_or_path))
             .ok()
             .and_then(|p| p.extends);
@@ -2239,7 +2247,7 @@ pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
     }
 
     // User profile
-    if let Ok(profile_path) = get_user_profile_path(name_or_path) {
+    if let Ok(profile_path) = resolve_user_profile_path(name_or_path) {
         if profile_path.exists() {
             return parse_profile_file(&profile_path)
                 .ok()
@@ -2316,8 +2324,8 @@ pub fn load_profile_with_context(
         return load_registry_profile_with_context(name_or_path, ctx);
     }
 
-    // Direct file path: contains separator or ends with .json
-    if name_or_path.contains('/') || name_or_path.ends_with(".json") {
+    // Direct file path: contains separator or has a recognized profile extension
+    if is_file_path_ref(name_or_path) {
         return load_profile_from_path(Path::new(name_or_path));
     }
 
@@ -2330,7 +2338,7 @@ pub fn load_profile_with_context(
     }
 
     // 1. Check user profiles first (allows overriding built-ins)
-    let profile_path = get_user_profile_path(name_or_path)?;
+    let profile_path = resolve_user_profile_path(name_or_path)?;
     if profile_path.exists() {
         tracing::info!("Loading user profile from: {}", profile_path.display());
         return finalize_profile(load_from_file(&profile_path)?);
@@ -2372,6 +2380,13 @@ pub(crate) fn is_registry_ref(s: &str) -> bool {
         && !s.starts_with('/')
         && !s.ends_with(".json")
         && parts.iter().all(|p| !p.is_empty())
+}
+
+/// Returns true if the profile name looks like a direct filesystem path
+/// (contains path separators or has a recognized profile file extension)
+/// rather than a simple profile name or registry reference.
+pub(crate) fn is_file_path_ref(s: &str) -> bool {
+    !is_registry_ref(s) && (s.contains('/') || s.ends_with(".json") || s.ends_with(".jsonc"))
 }
 
 /// Load a profile from a registry pack honoring the supplied resolver
@@ -2565,7 +2580,7 @@ fn merge_implicit_default_groups(profile: &mut Profile) -> Result<()> {
 /// 3. Run `raw_profile_has_both_bypass_and_override_keys` fail-closed check
 ///    FIRST (before any deserialize). If both legacy `override_deny` AND
 ///    canonical `bypass_protection` keys are present, refuse.
-/// 4. Final `serde_json::from_str::<Profile>` typed deserialize.
+/// 4. Final `jsonc_parser::parse_to_serde_value` typed deserialize (supports JSONC).
 /// 5. Run `validate_profile_custom_credentials` + `validate_env_credential_keys`
 ///    + `validate_profile_aipc_tokens` (same as `parse_profile_file`).
 pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
@@ -2584,9 +2599,14 @@ pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
                 .to_string(),
         ));
     }
-    // Step 4 — final typed deserialize.
-    let profile: Profile =
-        serde_json::from_str(content).map_err(|e| NonoError::ProfileParse(e.to_string()))?;
+    // Step 4 — final typed deserialize (JSONC: allows comments + trailing commas).
+    let parse_options = jsonc_parser::ParseOptions {
+        allow_comments: true,
+        allow_trailing_commas: true,
+        ..Default::default()
+    };
+    let profile: Profile = jsonc_parser::parse_to_serde_value(content, &parse_options)
+        .map_err(|e| NonoError::ProfileParse(e.to_string()))?;
     // Step 5 — post-parse validation (mirrors parse_profile_file).
     validate_profile_custom_credentials(&profile)?;
     validate_env_credential_keys(&profile)?;
@@ -2626,8 +2646,13 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
         )));
     }
 
-    let profile: Profile =
-        serde_json::from_str(&content).map_err(|e| NonoError::ProfileParse(e.to_string()))?;
+    let parse_options = jsonc_parser::ParseOptions {
+        allow_comments: true,
+        allow_trailing_commas: true,
+        ..Default::default()
+    };
+    let profile: Profile = jsonc_parser::parse_to_serde_value(&content, &parse_options)
+        .map_err(|e| NonoError::ProfileParse(e.to_string()))?;
 
     // Validate custom credentials for security issues
     validate_profile_custom_credentials(&profile)?;
@@ -2798,7 +2823,7 @@ fn load_base_profile_raw(
     }
 
     // 1. User profiles take precedence.
-    let profile_path = get_user_profile_path(name)?;
+    let profile_path = resolve_user_profile_path(name)?;
     if profile_path.exists() {
         return Ok(ResolvedBase::Global(parse_profile_file(&profile_path)?));
     }
@@ -3047,6 +3072,7 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
         // a base profile that has it set (T-51A-02 mitigation).
         windows_low_il_broker: base.windows_low_il_broker || child.windows_low_il_broker,
         packs: dedup_append(&base.packs, &child.packs),
+        binary: child.binary.or(base.binary),
         command_args: dedup_append(&base.command_args, &child.command_args),
         // Plan 36-01b: merge canonical commands sections — union allow + deny lists.
         commands: CommandsConfig {
@@ -3072,14 +3098,27 @@ pub(crate) fn dedup_append<T: Eq + std::hash::Hash + Clone>(base: &[T], child: &
     result
 }
 
-/// Get the path to a user profile
+/// Get the path to a user profile (default `.json` extension, used for writes).
 pub(crate) fn get_user_profile_path(name: &str) -> Result<PathBuf> {
-    let config_dir = resolve_user_config_dir()?;
+    Ok(user_profile_dir()?.join(format!("{}.json", name)))
+}
 
-    Ok(config_dir
-        .join("nono")
-        .join("profiles")
-        .join(format!("{}.json", name)))
+/// Resolve an existing user profile, preferring `.jsonc` over `.json`.
+///
+/// Returns the path to the first file that exists, checking `.jsonc` first.
+/// Falls back to the default `.json` path if neither exists (for callers
+/// that check `.exists()` themselves).
+pub(crate) fn resolve_user_profile_path(name: &str) -> Result<PathBuf> {
+    let dir = user_profile_dir()?;
+    let jsonc_path = dir.join(format!("{name}.jsonc"));
+    if jsonc_path.exists() {
+        return Ok(jsonc_path);
+    }
+    Ok(dir.join(format!("{name}.json")))
+}
+
+pub(crate) fn user_profile_dir() -> Result<PathBuf> {
+    Ok(resolve_user_config_dir()?.join("nono").join("profiles"))
 }
 
 /// Returns the path to a user profile draft (under `profile-drafts/` sibling
@@ -3492,12 +3531,17 @@ pub fn list_profiles() -> Vec<String> {
     let mut profiles = builtin::list_builtin();
 
     // Add user profiles (if home directory is available)
-    if let Ok(profile_path) = get_user_profile_path("") {
-        if let Some(dir) = profile_path.parent() {
-            if dir.exists() {
-                if let Ok(entries) = fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        if let Some(name) = entry.path().file_stem() {
+    if let Ok(dir) = user_profile_dir() {
+        if dir.exists() {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_profile_ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|ext| ext == "json" || ext == "jsonc");
+                    if is_profile_ext {
+                        if let Some(name) = path.file_stem() {
                             let name_str = name.to_string_lossy().to_string();
                             if !profiles.contains(&name_str) {
                                 profiles.push(name_str);
@@ -3786,11 +3830,25 @@ mod tests {
 
     #[test]
     fn test_list_profiles() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempdir().expect("tmpdir");
+        let canonical = dir.path().canonicalize().expect("canonicalize tmpdir");
+        let canonical_str = canonical.to_str().expect("tmpdir is valid UTF-8");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", canonical_str)]);
+
         let profiles = list_profiles();
         assert!(profiles.contains(&"claude-code".to_string()));
         assert!(profiles.contains(&"codex".to_string()));
         assert!(profiles.contains(&"openclaw".to_string()));
-        assert!(profiles.contains(&"opencode".to_string()));
+        assert!(profiles.contains(&"swival".to_string()));
+        // These profiles were removed from built-ins; they ship via registry packs:
+        //   claude-code / claude → always-further/claude   (removed v0.43.0)
+        //   codex               → always-further/codex    (removed v0.43.0)
+        //   opencode            → always-further/opencode (removed)
+        assert!(!profiles.contains(&"opencode".to_string()));
     }
 
     #[test]
@@ -4792,6 +4850,7 @@ mod tests {
             unsafe_macos_seatbelt_rules: Vec::new(),
             windows_low_il_broker: false,
             packs: Vec::new(),
+            binary: None,
             command_args: Vec::new(),
             commands: CommandsConfig::default(),
             allow_parent_of_protected: None,
@@ -4879,6 +4938,7 @@ mod tests {
             unsafe_macos_seatbelt_rules: Vec::new(),
             windows_low_il_broker: false,
             packs: Vec::new(),
+            binary: None,
             command_args: Vec::new(),
             commands: CommandsConfig::default(),
             allow_parent_of_protected: None,
@@ -5854,7 +5914,7 @@ mod tests {
         std::fs::write(
             &profile_path,
             r#"{
-                "extends": ["claude-code", "opencode"],
+                "extends": ["claude-code", "openclaw"],
                 "meta": { "name": "shared-base-test" }
             }"#,
         )
@@ -6820,12 +6880,12 @@ mod tests {
 
     #[test]
     fn built_in_profiles_load_with_aipc_block_present() {
-        // policy.json is embedded at build time; the 5 named profiles
-        // (claude-code, codex, opencode, openclaw, swival) all carry
-        // capabilities.aipc per Plan 18-03 Task 2 step 6. Round-trip
-        // through serde + the parse-time validator.
+        // policy.json is embedded at build time; the 4 named profiles
+        // (claude-code, codex, openclaw, swival) carry capabilities.aipc
+        // per Plan 18-03 Task 2 step 6. opencode moved to registry pack.
+        // Round-trip through serde + the parse-time validator.
         use crate::profile::builtin;
-        let names = &["claude-code", "codex", "opencode", "openclaw", "swival"];
+        let names = &["claude-code", "codex", "openclaw", "swival"];
         for name in names {
             let profile = builtin::get_builtin(name)
                 .unwrap_or_else(|| panic!("built-in profile '{name}' must exist"));
@@ -7556,6 +7616,107 @@ mod windows_low_il_broker_tests {
         assert!(
             !profile.windows_low_il_broker,
             "codex built-in profile must NOT have windows_low_il_broker=true (D-03: only claude-code)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // target_binary field tests (C7 upstream 9398a139)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn profile_binary_field_parses_and_inherits() {
+        let base = br#"{
+            "meta": { "name": "base" },
+            "binary": "/usr/bin/base-agent"
+        }"#;
+        let base_profile = parse_profile_bytes(base).expect("parse base");
+        assert_eq!(base_profile.binary.as_deref(), Some("/usr/bin/base-agent"));
+
+        let child = br#"{
+            "meta": { "name": "child" },
+            "binary": "/opt/child-agent"
+        }"#;
+        let child_profile = parse_profile_bytes(child).expect("parse child");
+        assert_eq!(child_profile.binary.as_deref(), Some("/opt/child-agent"));
+
+        let merged = merge_profiles(base_profile, child_profile);
+        assert_eq!(
+            merged.binary.as_deref(),
+            Some("/opt/child-agent"),
+            "child binary should override base"
+        );
+
+        let no_binary = br#"{ "meta": { "name": "no-bin" } }"#;
+        let no_bin_profile = parse_profile_bytes(no_binary).expect("parse no-binary");
+        assert!(no_bin_profile.binary.is_none(), "binary should default to None");
+    }
+
+    // -------------------------------------------------------------------------
+    // JSONC parsing tests (C7 upstream 53a0c521)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn jsonc_comments_and_trailing_commas() {
+        let jsonc = br#"{
+            // Profile for my agent
+            "meta": {
+                "name": "jsonc-test",
+                "description": "Testing JSONC features", // inline comment
+            },
+            "filesystem": {
+                /* Grant read to source,
+                   write to output */
+                "read": ["/src"],
+                "write": ["/output"],
+            },
+            "network": {
+                "block": true, // no network access
+            },
+        }"#;
+
+        let profile = parse_profile_bytes(jsonc).expect("JSONC with comments and trailing commas");
+        assert_eq!(profile.meta.name, "jsonc-test");
+        assert_eq!(profile.filesystem.read, vec!["/src"]);
+        assert_eq!(profile.filesystem.write, vec!["/output"]);
+        assert!(profile.network.block);
+    }
+
+    #[test]
+    fn jsonc_resolve_prefers_jsonc_extension() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let canonical = dir.path().canonicalize().expect("canonicalize tempdir");
+        let canonical_str = canonical.to_str().expect("tempdir is valid UTF-8");
+        #[cfg(target_os = "windows")]
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", canonical_str),
+            ("USERPROFILE", canonical_str),
+            ("HOME", canonical_str),
+        ]);
+        #[cfg(not(target_os = "windows"))]
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", canonical_str)]);
+
+        let profiles_dir = canonical.join("nono").join("profiles");
+        std::fs::create_dir_all(&profiles_dir).expect("create profiles dir");
+
+        std::fs::write(
+            profiles_dir.join("myprofile.jsonc"),
+            b"{ \"meta\": { \"name\": \"from-jsonc\" } }",
+        )
+        .expect("write jsonc");
+        std::fs::write(
+            profiles_dir.join("myprofile.json"),
+            b"{ \"meta\": { \"name\": \"from-json\" } }",
+        )
+        .expect("write json");
+
+        let resolved = resolve_user_profile_path("myprofile").expect("resolve");
+        assert!(
+            resolved.extension().and_then(|e| e.to_str()) == Some("jsonc"),
+            "should prefer .jsonc: {resolved:?}"
         );
     }
 }

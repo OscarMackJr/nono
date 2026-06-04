@@ -878,9 +878,10 @@ fn profile_exists(name: &str) -> bool {
     if profile::builtin::get_builtin(name).is_some() {
         return true;
     }
-    // Check user profiles
-    if let Ok(path) = profile::get_user_profile_path(name) {
-        return path.exists();
+    if let Ok(path) = profile::resolve_user_profile_path(name) {
+        if path.exists() {
+            return true;
+        }
     }
     false
 }
@@ -4107,9 +4108,9 @@ mod tests {
         let xdg_str = xdg.to_str().expect("utf8 xdg");
         let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", xdg_str)]);
 
-        // `opencode` is a known built-in profile; init to the default path must be blocked.
+        // `openclaw` is a known built-in profile; init to the default path must be blocked.
         let result = cmd_init(ProfileInitArgs {
-            name: "opencode".to_string(),
+            name: "openclaw".to_string(),
             extends: None,
             groups: vec![],
             description: None,
@@ -4139,10 +4140,10 @@ mod tests {
         let xdg_str = xdg.to_str().expect("utf8 xdg");
         let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", xdg_str)]);
 
-        let out = dir.path().join("opencode-draft.json");
+        let out = dir.path().join("openclaw-draft.json");
         // Shadow check applies even when --output points to a custom path.
         let result = cmd_init(ProfileInitArgs {
-            name: "opencode".to_string(),
+            name: "openclaw".to_string(),
             extends: None,
             groups: vec![],
             description: None,

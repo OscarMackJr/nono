@@ -123,6 +123,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5.8"
 tempfile = "3"
 vt100 = "0.16.2"
+jsonc-parser = { version = "0.32", features = ["serde"] }
 shlex = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
