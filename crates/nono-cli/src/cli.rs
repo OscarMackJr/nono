@@ -1096,6 +1096,10 @@ pub enum Commands {
     #[command(hide = true)]
     OpenUrlHelper(OpenUrlHelperArgs),
 
+    /// Internal: refresh cached pack update hints out of process
+    #[command(hide = true)]
+    PackUpdateHintHelper(PackUpdateHintHelperArgs),
+
     /// Internal: handle Claude Code hook JSON on stdin
     #[command(name = "claude-code-hook", hide = true)]
     ClaudeCodeHook,
@@ -1261,6 +1265,17 @@ pub struct OutdatedArgs {
 pub struct OpenUrlHelperArgs {
     /// The URL to open
     pub url: String,
+}
+
+/// Arguments for the hidden pack-update-hint-helper subcommand.
+///
+/// Invoked by `nono run` to refresh stale pack update hint cache entries in a
+/// child process, so the supervised parent does not gain an extra thread before
+/// fork.
+#[derive(Parser, Debug, Clone)]
+pub struct PackUpdateHintHelperArgs {
+    /// Alternating package reference and installed version values.
+    pub packs: Vec<String>,
 }
 
 /// Shell variant for completion generation.
