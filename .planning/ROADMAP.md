@@ -82,11 +82,28 @@ Plans:
 **Depends on**: Phase 54 (dispositions are the input)
 **Requirements**: REQ-UPST7-02
 **Success Criteria** (what must be TRUE):
-  1. Every `will-sync` cluster disposition from Phase 54 is executed: JSONC profile parsing, `target_binary` profile field, `opencode` pack relocation, configurable timeout constants, `java-dev` profile / `java_runtime` group (with Windows JDK paths via `platform.rs`), proxy 502 hardening, suppressed-denial annotations, canonical denial-path precompute, access-mode `rfind` split, and overflow-check tightening are all present in the fork tree
+  1. Every `will-sync` cluster disposition from Phase 54 is executed: JSONC profile parsing, `target_binary` profile field, `opencode` pack relocation, configurable timeout constants, proxy 502 hardening, pack-update-hint robustness (atomic writes + detached refresh), ENV_LOCK policy test serialization, sigstore 0.8.0 dep bump (Cargo + scrub.rs verify-then-port), suppressed-denial annotations, canonical denial-path precompute, access-mode `rfind` split, and overflow-check tightening are all present in the fork tree. (`java-dev`/`java_runtime` has 0 commits in v0.57.0..v0.59.0 per Phase 54 empirical cross-check -- removed from SC1; UPST8 territory.)
   2. Each absorbed upstream commit carries a verbatim lowercase 6-line `Upstream-commit:` trailer (D-19 convention) or `Upstream-replayed-from:` for D-20 replays; the D-43-E1 Windows-only-files invariant is respected
   3. Schema-collision checks confirm no canonical-section conflicts between absorbed upstream profile schema changes and the fork's `nono-profile.schema.json` / `policy.json` canonical sections
   4. `make ci` (or the Windows equivalent `cargo test --workspace`) passes with zero new test failures relative to the Phase 54 baseline SHA
-**Plans**: TBD
+**Plans**: 7 plans
+Plans:
+**Wave 1** (parallel)
+- [ ] 55-01-PLANNING-AMEND-PROXY502-PLAN.md -- D-55-01 REQ/SC amendment (planning docs) + C4 proxy 502 hardening (d11193f + 4ad708d)
+
+**Wave 2** *(blocked on Wave 1)*
+- [ ] 55-02-PROFILE-JSONC-TARGET-BINARY-PLAN.md -- C7 profile system: JSONC parsing + target_binary + opencode extraction + refactors (5 commits) + SC3 schema-collision check
+
+**Wave 3** *(blocked on Wave 2 -- parallel pair)*
+- [ ] 55-03-PACK-HINT-ROBUSTNESS-PLAN.md -- C9 pack-update-hint: detached-process refresh + atomic state writes (74fbbf12 + b1a650a3)
+- [ ] 55-04-DIAGNOSTIC-DENIAL-POLISH-PLAN.md -- C10 diagnostic/denial polish: suppressed-denial annotations + canonical-path precompute + rfind split + bold-path footer (4 commits)
+
+**Wave 4** *(blocked on Wave 3 -- parallel pair)*
+- [ ] 55-05-TIMEOUT-CONSTANTS-PLAN.md -- C11 timeout constants: centralize timeouts.rs + overflow-check tightening (3 commits)
+- [ ] 55-06-POLICY-ENV-LOCK-TEST-PLAN.md -- C12 policy test: ENV_LOCK serialization in test_all_groups_no_deny_within_allow_overlap (1a764d05)
+
+**Wave 5** *(blocked on Waves 2+4)*
+- [ ] 55-07-SIGSTORE-BUMP-PLAN.md -- C13 sigstore 0.8.0 split: diff-inspection-first + Cargo bump + scrub.rs verify-then-port (e581569)
 
 ### Phase 56: Fine-grained Network Filtering
 **Goal**: Operators can scope `--allow-domain` entries to specific URL paths and HTTP methods, with TLS-intercept endpoint rules correctly evaluated before credential selection
