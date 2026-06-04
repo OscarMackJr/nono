@@ -878,9 +878,10 @@ fn profile_exists(name: &str) -> bool {
     if profile::builtin::get_builtin(name).is_some() {
         return true;
     }
-    // Check user profiles
-    if let Ok(path) = profile::get_user_profile_path(name) {
-        return path.exists();
+    if let Ok(path) = profile::resolve_user_profile_path(name) {
+        if path.exists() {
+            return true;
+        }
     }
     false
 }

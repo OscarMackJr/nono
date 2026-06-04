@@ -2203,7 +2203,7 @@ pub fn is_user_override(name: &str) -> bool {
     if !is_valid_profile_name(name) {
         return false;
     }
-    get_user_profile_path(name)
+    resolve_user_profile_path(name)
         .map(|p| p.exists())
         .unwrap_or(false)
 }
@@ -2228,7 +2228,7 @@ pub fn get_package_for_profile(name: &str) -> Option<PathBuf> {
 /// This reads the raw profile definition before inheritance resolution clears the field.
 pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
     // Direct file path
-    if name_or_path.contains('/') || name_or_path.ends_with(".json") {
+    if name_or_path.contains('/') || name_or_path.ends_with(".json") || name_or_path.ends_with(".jsonc") {
         return parse_profile_file(Path::new(name_or_path))
             .ok()
             .and_then(|p| p.extends);
@@ -2239,7 +2239,7 @@ pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
     }
 
     // User profile
-    if let Ok(profile_path) = get_user_profile_path(name_or_path) {
+    if let Ok(profile_path) = resolve_user_profile_path(name_or_path) {
         if profile_path.exists() {
             return parse_profile_file(&profile_path)
                 .ok()
@@ -2316,8 +2316,11 @@ pub fn load_profile_with_context(
         return load_registry_profile_with_context(name_or_path, ctx);
     }
 
-    // Direct file path: contains separator or ends with .json
-    if name_or_path.contains('/') || name_or_path.ends_with(".json") {
+    // Direct file path: contains separator or ends with .json/.jsonc
+    if name_or_path.contains('/')
+        || name_or_path.ends_with(".json")
+        || name_or_path.ends_with(".jsonc")
+    {
         return load_profile_from_path(Path::new(name_or_path));
     }
 
@@ -2330,7 +2333,7 @@ pub fn load_profile_with_context(
     }
 
     // 1. Check user profiles first (allows overriding built-ins)
-    let profile_path = get_user_profile_path(name_or_path)?;
+    let profile_path = resolve_user_profile_path(name_or_path)?;
     if profile_path.exists() {
         tracing::info!("Loading user profile from: {}", profile_path.display());
         return finalize_profile(load_from_file(&profile_path)?);
@@ -2565,7 +2568,7 @@ fn merge_implicit_default_groups(profile: &mut Profile) -> Result<()> {
 /// 3. Run `raw_profile_has_both_bypass_and_override_keys` fail-closed check
 ///    FIRST (before any deserialize). If both legacy `override_deny` AND
 ///    canonical `bypass_protection` keys are present, refuse.
-/// 4. Final `serde_json::from_str::<Profile>` typed deserialize.
+/// 4. Final `jsonc_parser::parse_to_serde_value` typed deserialize (supports JSONC).
 /// 5. Run `validate_profile_custom_credentials` + `validate_env_credential_keys`
 ///    + `validate_profile_aipc_tokens` (same as `parse_profile_file`).
 pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
@@ -2584,9 +2587,14 @@ pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
                 .to_string(),
         ));
     }
-    // Step 4 — final typed deserialize.
-    let profile: Profile =
-        serde_json::from_str(content).map_err(|e| NonoError::ProfileParse(e.to_string()))?;
+    // Step 4 — final typed deserialize (JSONC: allows comments + trailing commas).
+    let parse_options = jsonc_parser::ParseOptions {
+        allow_comments: true,
+        allow_trailing_commas: true,
+        ..Default::default()
+    };
+    let profile: Profile = jsonc_parser::parse_to_serde_value(content, &parse_options)
+        .map_err(|e| NonoError::ProfileParse(e.to_string()))?;
     // Step 5 — post-parse validation (mirrors parse_profile_file).
     validate_profile_custom_credentials(&profile)?;
     validate_env_credential_keys(&profile)?;
@@ -2626,8 +2634,13 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
         )));
     }
 
-    let profile: Profile =
-        serde_json::from_str(&content).map_err(|e| NonoError::ProfileParse(e.to_string()))?;
+    let parse_options = jsonc_parser::ParseOptions {
+        allow_comments: true,
+        allow_trailing_commas: true,
+        ..Default::default()
+    };
+    let profile: Profile = jsonc_parser::parse_to_serde_value(&content, &parse_options)
+        .map_err(|e| NonoError::ProfileParse(e.to_string()))?;
 
     // Validate custom credentials for security issues
     validate_profile_custom_credentials(&profile)?;
@@ -2798,7 +2811,7 @@ fn load_base_profile_raw(
     }
 
     // 1. User profiles take precedence.
-    let profile_path = get_user_profile_path(name)?;
+    let profile_path = resolve_user_profile_path(name)?;
     if profile_path.exists() {
         return Ok(ResolvedBase::Global(parse_profile_file(&profile_path)?));
     }
@@ -3072,14 +3085,27 @@ pub(crate) fn dedup_append<T: Eq + std::hash::Hash + Clone>(base: &[T], child: &
     result
 }
 
-/// Get the path to a user profile
+/// Get the path to a user profile (default `.json` extension, used for writes).
 pub(crate) fn get_user_profile_path(name: &str) -> Result<PathBuf> {
-    let config_dir = resolve_user_config_dir()?;
+    Ok(user_profile_dir()?.join(format!("{}.json", name)))
+}
 
-    Ok(config_dir
-        .join("nono")
-        .join("profiles")
-        .join(format!("{}.json", name)))
+/// Resolve an existing user profile, preferring `.jsonc` over `.json`.
+///
+/// Returns the path to the first file that exists, checking `.jsonc` first.
+/// Falls back to the default `.json` path if neither exists (for callers
+/// that check `.exists()` themselves).
+pub(crate) fn resolve_user_profile_path(name: &str) -> Result<PathBuf> {
+    let dir = user_profile_dir()?;
+    let jsonc_path = dir.join(format!("{name}.jsonc"));
+    if jsonc_path.exists() {
+        return Ok(jsonc_path);
+    }
+    Ok(dir.join(format!("{name}.json")))
+}
+
+pub(crate) fn user_profile_dir() -> Result<PathBuf> {
+    Ok(resolve_user_config_dir()?.join("nono").join("profiles"))
 }
 
 /// Returns the path to a user profile draft (under `profile-drafts/` sibling
@@ -3492,12 +3518,17 @@ pub fn list_profiles() -> Vec<String> {
     let mut profiles = builtin::list_builtin();
 
     // Add user profiles (if home directory is available)
-    if let Ok(profile_path) = get_user_profile_path("") {
-        if let Some(dir) = profile_path.parent() {
-            if dir.exists() {
-                if let Ok(entries) = fs::read_dir(dir) {
-                    for entry in entries.flatten() {
-                        if let Some(name) = entry.path().file_stem() {
+    if let Ok(dir) = user_profile_dir() {
+        if dir.exists() {
+            if let Ok(entries) = fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let is_profile_ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .is_some_and(|ext| ext == "json" || ext == "jsonc");
+                    if is_profile_ext {
+                        if let Some(name) = path.file_stem() {
                             let name_str = name.to_string_lossy().to_string();
                             if !profiles.contains(&name_str) {
                                 profiles.push(name_str);
@@ -7556,6 +7587,68 @@ mod windows_low_il_broker_tests {
         assert!(
             !profile.windows_low_il_broker,
             "codex built-in profile must NOT have windows_low_il_broker=true (D-03: only claude-code)"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // JSONC parsing tests (C7 upstream 53a0c521)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn jsonc_comments_and_trailing_commas() {
+        let jsonc = br#"{
+            // Profile for my agent
+            "meta": {
+                "name": "jsonc-test",
+                "description": "Testing JSONC features", // inline comment
+            },
+            "filesystem": {
+                /* Grant read to source,
+                   write to output */
+                "read": ["/src"],
+                "write": ["/output"],
+            },
+            "network": {
+                "block": true, // no network access
+            },
+        }"#;
+
+        let profile = parse_profile_bytes(jsonc).expect("JSONC with comments and trailing commas");
+        assert_eq!(profile.meta.name, "jsonc-test");
+        assert_eq!(profile.filesystem.read, vec!["/src"]);
+        assert_eq!(profile.filesystem.write, vec!["/output"]);
+        assert!(profile.network.block);
+    }
+
+    #[test]
+    fn jsonc_resolve_prefers_jsonc_extension() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let canonical = dir.path().canonicalize().expect("canonicalize tempdir");
+        let canonical_str = canonical.to_str().expect("tempdir is valid UTF-8");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("XDG_CONFIG_HOME", canonical_str)]);
+
+        let profiles_dir = canonical.join("nono").join("profiles");
+        std::fs::create_dir_all(&profiles_dir).expect("create profiles dir");
+
+        std::fs::write(
+            profiles_dir.join("myprofile.jsonc"),
+            b"{ \"meta\": { \"name\": \"from-jsonc\" } }",
+        )
+        .expect("write jsonc");
+        std::fs::write(
+            profiles_dir.join("myprofile.json"),
+            b"{ \"meta\": { \"name\": \"from-json\" } }",
+        )
+        .expect("write json");
+
+        let resolved = resolve_user_profile_path("myprofile").expect("resolve");
+        assert!(
+            resolved.extension().and_then(|e| e.to_str()) == Some("jsonc"),
+            "should prefer .jsonc: {resolved:?}"
         );
     }
 }
