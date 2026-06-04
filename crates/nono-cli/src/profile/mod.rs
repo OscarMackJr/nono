@@ -2236,7 +2236,7 @@ pub fn get_package_for_profile(name: &str) -> Option<PathBuf> {
 /// This reads the raw profile definition before inheritance resolution clears the field.
 pub fn load_profile_extends(name_or_path: &str) -> Option<Vec<String>> {
     // Direct file path
-    if name_or_path.contains('/') || name_or_path.ends_with(".json") || name_or_path.ends_with(".jsonc") {
+    if is_file_path_ref(name_or_path) {
         return parse_profile_file(Path::new(name_or_path))
             .ok()
             .and_then(|p| p.extends);
@@ -2324,11 +2324,8 @@ pub fn load_profile_with_context(
         return load_registry_profile_with_context(name_or_path, ctx);
     }
 
-    // Direct file path: contains separator or ends with .json/.jsonc
-    if name_or_path.contains('/')
-        || name_or_path.ends_with(".json")
-        || name_or_path.ends_with(".jsonc")
-    {
+    // Direct file path: contains separator or has a recognized profile extension
+    if is_file_path_ref(name_or_path) {
         return load_profile_from_path(Path::new(name_or_path));
     }
 
@@ -2383,6 +2380,13 @@ pub(crate) fn is_registry_ref(s: &str) -> bool {
         && !s.starts_with('/')
         && !s.ends_with(".json")
         && parts.iter().all(|p| !p.is_empty())
+}
+
+/// Returns true if the profile name looks like a direct filesystem path
+/// (contains path separators or has a recognized profile file extension)
+/// rather than a simple profile name or registry reference.
+pub(crate) fn is_file_path_ref(s: &str) -> bool {
+    !is_registry_ref(s) && (s.contains('/') || s.ends_with(".json") || s.ends_with(".jsonc"))
 }
 
 /// Load a profile from a registry pack honoring the supplied resolver

@@ -28,9 +28,8 @@ fn resolve_profile_binary(
 ) -> Option<String> {
     let binary = loaded.binary.as_ref()?;
 
-    let is_path_based = (profile_name.contains('/') || profile_name.ends_with(".json"))
-        && !crate::profile::is_registry_ref(profile_name);
-    let is_user_profile = crate::profile::is_user_override(profile_name) || is_path_based;
+    let is_user_profile =
+        crate::profile::is_user_override(profile_name) || crate::profile::is_file_path_ref(profile_name);
 
     if !is_user_profile {
         if !silent {
