@@ -69,7 +69,11 @@ pub async fn handle_connect(
     let resolved = &check.resolved_addrs;
     if resolved.is_empty() {
         let reason = "DNS resolution returned no addresses".to_string();
-        write_upstream_failure(stream, audit_log, &host, port, &reason).await?;
+        // Discard the write result so a client-side hangup during the 502
+        // doesn't shadow the more descriptive UpstreamConnect error below.
+        // The audit entry is recorded inside write_upstream_failure before
+        // the response is sent, so audit coverage is preserved regardless.
+        let _ = write_upstream_failure(stream, audit_log, &host, port, &reason).await;
         return Err(ProxyError::UpstreamConnect {
             host: host.clone(),
             reason,
@@ -86,7 +90,9 @@ pub async fn handle_connect(
                 ProxyError::UpstreamConnect { reason, .. } => reason.clone(),
                 other => other.to_string(),
             };
-            write_upstream_failure(stream, audit_log, &host, port, &reason).await?;
+            // Discard the write result for the same reason as the empty-DNS
+            // branch above: preserve the original UpstreamConnect error.
+            let _ = write_upstream_failure(stream, audit_log, &host, port, &reason).await;
             return Err(err);
         }
     };
@@ -167,12 +173,19 @@ fn validate_proxy_auth(header_bytes: &[u8], session_token: &Zeroizing<String>) -
 }
 
 /// Send an HTTP response line to the client.
+///
+/// The `reason` phrase is sanitised by replacing `\r` and `\n` with spaces
+/// before being inlined into the status line. This is defence in depth
+/// against HTTP response splitting: today's call sites all produce safe
+/// strings, but `send_response` is on a protocol-formatting boundary and
+/// guarding it makes future call sites safe by construction.
 async fn send_response<S: AsyncWrite + Unpin>(
     stream: &mut S,
     status: u16,
     reason: &str,
 ) -> Result<()> {
-    let response = format!("HTTP/1.1 {} {}\r\n\r\n", status, reason);
+    let sanitised_reason = reason.replace(['\r', '\n'], " ");
+    let response = format!("HTTP/1.1 {} {}\r\n\r\n", status, sanitised_reason);
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;
     Ok(())
@@ -334,6 +347,49 @@ mod tests {
 
         let response = read_to_string(client).await;
         assert!(response.starts_with("HTTP/1.1 502 "));
+    }
+
+    #[tokio::test]
+    async fn write_upstream_failure_sanitises_crlf_in_reason() {
+        let (mut server, client) = duplex(1024);
+
+        write_upstream_failure(
+            &mut server,
+            None,
+            "example.com",
+            443,
+            "connection refused\r\nX-Injected: yes",
+        )
+        .await
+        .unwrap();
+        drop(server);
+
+        let response = read_to_string(client).await;
+
+        // The status line must contain neither raw CR nor LF until the
+        // single CRLFCRLF terminator at the end. Response splitting via a
+        // crafted reason string must not be possible.
+        let terminator = "\r\n\r\n";
+        let body_end = response.find(terminator).expect("response must terminate");
+        let status_line = &response[..body_end];
+        assert!(
+            !status_line.contains('\r'),
+            "status line must not contain CR, got: {:?}",
+            status_line
+        );
+        assert!(
+            !status_line.contains('\n'),
+            "status line must not contain LF, got: {:?}",
+            status_line
+        );
+
+        // The injected header name should not appear as a real header
+        // (i.e., must not be split out of the reason phrase).
+        assert!(
+            !response.contains("\r\nX-Injected:"),
+            "injected header must not be split into a real header: {:?}",
+            response
+        );
     }
 
     #[tokio::test]
