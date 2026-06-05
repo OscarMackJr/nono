@@ -31,6 +31,14 @@ mod exec_strategy;
 mod execution_runtime;
 mod format_util;
 mod hooks;
+// Session lifecycle hook runtime (Phase 58).
+// Unix runtime (cfg(unix)) — gated unix-only per upstream daa55c8.
+#[cfg(unix)]
+mod hook_runtime;
+// Windows runtime (cfg(windows)) — net-new fork work; stub in Plan 02,
+// full implementation in Plan 03 Task 2.
+#[cfg(windows)]
+mod hook_runtime_windows;
 mod instruction_deny;
 mod launch_runtime;
 mod learn;
