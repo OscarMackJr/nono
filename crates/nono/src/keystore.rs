@@ -1,15 +1,17 @@
-//! Secure credential loading from system keystore, 1Password, Apple Passwords, and environment
+//! Secure credential loading from system keystore, 1Password, Bitwarden, Apple Passwords, and environment
 //!
 //! This module provides functionality to load secrets from the system keystore
 //! (macOS Keychain / Linux Secret Service), 1Password (via the `op` CLI),
-//! Apple Passwords (via macOS `security`), custom keyring entries (via the
-//! `keyring` crate), or environment variables (via the `env://` scheme) and
-//! return them as zeroized strings.
+//! Bitwarden (via the `bw` or `bws` CLI), Apple Passwords (via macOS `security`),
+//! custom keyring entries (via the `keyring` crate), or environment variables
+//! (via the `env://` scheme) and return them as zeroized strings.
 //!
 //! Credential references are dispatched by URI scheme:
 //! - `env://VAR_NAME` — reads from the current process environment
 //! - `file:///path/to/secret` — reads from a local file (before sandbox activation)
 //! - `op://vault/item/field` — loaded via the 1Password CLI
+//! - `bw://item/<id>/<selector>` — loaded via the Bitwarden `bw` CLI
+//! - `bw://secret/<uuid>` — loaded via the Bitwarden Secrets Manager `bws` CLI
 //! - `apple-password://server/account` — loaded via macOS `security`
 //! - `keyring://service/account` — loaded from the system keyring with a custom service name
 //! - Everything else — loaded from the system keyring (service name `nono`)
@@ -43,6 +45,19 @@ pub const DEFAULT_SERVICE: &str = "nono";
 
 /// The `op://` URI scheme prefix, indicating 1Password CLI backend.
 const OP_URI_PREFIX: &str = "op://";
+
+/// The `bw://` URI scheme prefix, indicating a Bitwarden backend (`bw` CLI or `bws` CLI).
+const BW_URI_PREFIX: &str = "bw://";
+
+/// First path segment selecting the `bw` password-manager CLI backend.
+///
+/// Used in `bw://item/<id>/<selector>` URIs.
+const BW_ITEM_SEGMENT: &str = "item";
+
+/// First path segment selecting the `bws` Secrets Manager CLI backend.
+///
+/// Used in `bw://secret/<uuid>` URIs.
+const BW_SECRET_SEGMENT: &str = "secret";
 
 /// The `apple-password://` URI scheme prefix, indicating Apple Passwords backend.
 const APPLE_PASSWORD_URI_PREFIX: &str = "apple-password://";
@@ -210,6 +225,8 @@ pub fn load_secret_by_ref(service: &str, credential_ref: &str) -> Result<Zeroizi
         load_from_op(credential_ref)
     } else if is_apple_password_uri(credential_ref) {
         load_from_apple_password(credential_ref)
+    } else if is_bw_uri(credential_ref) {
+        load_from_bw_dispatch(credential_ref)
     } else if is_keyring_uri(credential_ref) {
         load_from_keyring_uri(credential_ref)
     } else {
@@ -275,6 +292,193 @@ pub fn validate_op_uri(uri: &str) -> Result<()> {
 #[must_use]
 pub fn is_op_uri(credential_ref: &str) -> bool {
     credential_ref.starts_with(OP_URI_PREFIX)
+}
+
+/// Returns true if the credential reference is a Bitwarden `bw://` URI.
+#[must_use]
+pub fn is_bw_uri(credential_ref: &str) -> bool {
+    credential_ref.starts_with(BW_URI_PREFIX)
+}
+
+/// Validate a `bw://` URI has the correct structure.
+///
+/// Accepted formats:
+/// - `bw://item/<id>/password` — login password
+/// - `bw://item/<id>/username` — login username
+/// - `bw://item/<id>/totp` — current TOTP code (requires `bw get totp` subprocess)
+/// - `bw://item/<id>/notes` — secure note body
+/// - `bw://item/<id>/field/<name>` — named custom field
+/// - `bw://secret/<uuid>` — Bitwarden Secrets Manager secret value (no field selector)
+///
+/// Rejects:
+/// - Characters that could enable argument injection (`FORBIDDEN_URI_CHARS`)
+/// - Query strings or fragments
+/// - Empty path segments
+/// - Unknown first segment (not `item` or `secret`)
+/// - Field selectors on `bw://secret/` URIs (D-06)
+/// - Item IDs or secret UUIDs that fail the injection-safe charset check
+pub fn validate_bw_uri(uri: &str) -> Result<()> {
+    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "credential reference '{}' does not start with '{}'",
+            uri, BW_URI_PREFIX
+        ))
+    })?;
+
+    // Reject shell metacharacters to prevent injection
+    if let Some(bad) = path.chars().find(|c| FORBIDDEN_URI_CHARS.contains(c)) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI contains forbidden character {:?}: {}",
+            bad, uri
+        )));
+    }
+
+    // Reject query strings and fragments
+    if path.contains('?') || path.contains('#') {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI must not contain query strings or fragments: {}",
+            uri
+        )));
+    }
+
+    let segments: Vec<&str> = path.split('/').collect();
+
+    // No empty segments
+    if segments.iter().any(|s| s.is_empty()) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI has empty path segment: {}",
+            uri
+        )));
+    }
+
+    match segments.first().copied() {
+        Some(BW_ITEM_SEGMENT) => validate_bw_item_uri_segments(&segments, uri),
+        Some(BW_SECRET_SEGMENT) => validate_bws_uri_segments(&segments, uri),
+        _ => Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI must start with 'item/' or 'secret/': {}",
+            uri
+        ))),
+    }
+}
+
+/// Validate the segment structure of a `bw://item/<id>/<selector>` URI.
+fn validate_bw_item_uri_segments(segments: &[&str], uri: &str) -> Result<()> {
+    // segments[0] == "item" (already matched by caller)
+    // segments[1] must be a valid item ID
+    let item_id = segments.get(1).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "Bitwarden item URI missing item ID segment: {}",
+            uri
+        ))
+    })?;
+    if !is_valid_bw_id(item_id) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden item URI has invalid item ID '{}' (must be alphanumeric + hyphens, max 64 chars): {}",
+            item_id, uri
+        )));
+    }
+
+    // segments[2] must be a known selector
+    let selector = segments.get(2).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "Bitwarden item URI missing selector segment (expected password/username/totp/notes/field): {}",
+            uri
+        ))
+    })?;
+
+    match *selector {
+        "password" | "username" | "totp" | "notes" => {
+            // Reserved selectors: exactly 3 segments total
+            if segments.len() != 3 {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden item URI has extra segments after '{}' selector (not allowed): {}",
+                    selector, uri
+                )));
+            }
+        }
+        "field" => {
+            // Custom field: exactly 4 segments, segments[3] is the field name
+            if segments.len() != 4 {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden item URI with 'field' selector requires a field name \
+                     (e.g. bw://item/<id>/field/my-key): {}",
+                    uri
+                )));
+            }
+            let field_name = segments[3];
+            if field_name.is_empty() {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden item URI field selector requires a non-empty field name: {}",
+                    uri
+                )));
+            }
+        }
+        other => {
+            return Err(NonoError::ConfigParse(format!(
+                "Bitwarden item URI has unknown selector '{}' \
+                 (expected password/username/totp/notes/field): {}",
+                other, uri
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the segment structure of a `bw://secret/<uuid>` URI.
+fn validate_bws_uri_segments(segments: &[&str], uri: &str) -> Result<()> {
+    // D-06: field selectors are not supported for bw://secret/ URIs.
+    if segments.len() != 2 {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden secret URI must be 'bw://secret/<uuid>' with no field selector \
+             (field selectors are not supported for Secrets Manager secrets): {}",
+            uri
+        )));
+    }
+
+    let secret_id = segments.get(1).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "Bitwarden secret URI missing secret UUID segment: {}",
+            uri
+        ))
+    })?;
+    if !is_valid_bw_id(secret_id) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden secret URI has invalid secret UUID '{}' \
+             (must be alphanumeric + hyphens, max 64 chars): {}",
+            secret_id, uri
+        )));
+    }
+
+    Ok(())
+}
+
+/// Accept only characters safe for passing as CLI arguments:
+/// alphanumeric (upper/lower/digit) and hyphens.
+/// This covers all UUID forms and Bitwarden's compact item IDs.
+fn is_valid_bw_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Redact the selector/UUID segment of a `bw://` URI for safe logging.
+///
+/// - `bw://item/<id>/<selector>` → `bw://item/<id>/<redacted>`
+/// - `bw://secret/<uuid>` → `bw://secret/<redacted>`
+#[must_use]
+pub fn redact_bw_uri(uri: &str) -> String {
+    if let Some(path) = uri.strip_prefix(BW_URI_PREFIX) {
+        let parts: Vec<&str> = path.splitn(3, '/').collect();
+        match parts.as_slice() {
+            [seg, id, _] if *seg == BW_ITEM_SEGMENT => {
+                return format!("bw://item/{}/<redacted>", id);
+            }
+            [seg, _] if *seg == BW_SECRET_SEGMENT => {
+                return "bw://secret/<redacted>".to_string();
+            }
+            _ => {}
+        }
+    }
+    "bw://***".to_string()
 }
 
 fn strip_apple_password_prefix(uri: &str) -> Option<&str> {
@@ -1240,6 +1444,473 @@ fn classify_apple_password_error(stderr: &str, uri: &str) -> NonoError {
     }
 }
 
+// =============================================================================
+// bw:// Bitwarden backend (bw CLI item backend + bws CLI secret backend)
+// =============================================================================
+
+/// Selector parsed from a `bw://item/<id>/<selector>` URI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BwSelector {
+    Password,
+    Username,
+    Totp,
+    Notes,
+    CustomField(String),
+}
+
+/// Parse a `bw://item/<id>/<selector>` URI into its item ID and selector.
+///
+/// Assumes the URI has already been validated by `validate_bw_uri`.
+fn parse_bw_item_uri(uri: &str) -> Result<(String, BwSelector)> {
+    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
+        NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri))
+    })?;
+    let segments: Vec<&str> = path.split('/').collect();
+
+    let item_id = segments.get(1).ok_or_else(|| {
+        NonoError::ConfigParse(format!("bw:// item URI missing item ID: {}", uri))
+    })?;
+
+    let selector_str = segments.get(2).ok_or_else(|| {
+        NonoError::ConfigParse(format!("bw:// item URI missing selector: {}", uri))
+    })?;
+
+    let selector = match *selector_str {
+        "password" => BwSelector::Password,
+        "username" => BwSelector::Username,
+        "totp" => BwSelector::Totp,
+        "notes" => BwSelector::Notes,
+        "field" => {
+            let field_name = segments.get(3).ok_or_else(|| {
+                NonoError::ConfigParse(format!(
+                    "bw:// item URI with 'field' selector requires a field name: {}",
+                    uri
+                ))
+            })?;
+            BwSelector::CustomField((*field_name).to_string())
+        }
+        other => {
+            return Err(NonoError::ConfigParse(format!(
+                "bw:// item URI has unrecognized selector '{}': {}",
+                other, uri
+            )));
+        }
+    };
+
+    Ok(((*item_id).to_string(), selector))
+}
+
+/// Walk a `serde_json::Value` tree by path keys and return the leaf as a
+/// non-empty `Zeroizing<String>`.
+///
+/// Returns `SecretNotFound` if any intermediate key is absent, the leaf is
+/// not a string, or the string is empty (empty string is not a valid secret).
+fn json_str_field(
+    json: &serde_json::Value,
+    path: &[&str],
+    redacted_uri: &str,
+) -> Result<Zeroizing<String>> {
+    let mut node = json;
+    for key in path {
+        node = node.get(key).ok_or_else(|| {
+            NonoError::SecretNotFound(format!(
+                "Bitwarden item '{}' missing field '{}'",
+                redacted_uri, key
+            ))
+        })?;
+    }
+    node.as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| Zeroizing::new(s.to_string()))
+        .ok_or_else(|| {
+            NonoError::SecretNotFound(format!(
+                "Bitwarden field is empty or not a string for '{}'",
+                redacted_uri
+            ))
+        })
+}
+
+/// Extract a field value from the JSON returned by `bw get item`.
+///
+/// For the `Totp` selector, issues a separate `bw get totp` subprocess call.
+/// `login.totp` in `bw get item` JSON contains the TOTP seed (otpauth:// URI),
+/// not the computed code. The current TOTP code requires a separate
+/// `bw get totp` subprocess call. See RESEARCH.md Pitfall 1 and D-07.
+fn extract_bw_field(
+    json: &serde_json::Value,
+    selector: &BwSelector,
+    item_id: &str,
+    uri: &str,
+) -> Result<Zeroizing<String>> {
+    let redacted = redact_bw_uri(uri);
+    match selector {
+        BwSelector::Password => json_str_field(json, &["login", "password"], &redacted),
+        BwSelector::Username => json_str_field(json, &["login", "username"], &redacted),
+        BwSelector::Notes => json_str_field(json, &["notes"], &redacted),
+        BwSelector::Totp => {
+            // login.totp in bw get item JSON contains the otpauth:// seed, NOT the computed code.
+            // The computed code must come from `bw get totp` (a separate subprocess call).
+            // See: D-07; this branch spawns the dedicated subcommand.
+            load_totp_via_bw_get_totp(item_id, uri)
+        }
+        BwSelector::CustomField(name) => {
+            let fields = json["fields"].as_array().ok_or_else(|| {
+                NonoError::SecretNotFound(format!(
+                    "Bitwarden item '{}' has no custom fields",
+                    redacted
+                ))
+            })?;
+            fields
+                .iter()
+                .find(|f| f["name"].as_str() == Some(name.as_str()))
+                .and_then(|f| f["value"].as_str())
+                .filter(|v| !v.is_empty())
+                .map(|v| Zeroizing::new(v.to_string()))
+                .ok_or_else(|| {
+                    NonoError::SecretNotFound(format!(
+                        "Custom field '{}' not found in Bitwarden item '{}'",
+                        name, redacted
+                    ))
+                })
+        }
+    }
+}
+
+/// Classify `bw` CLI errors into actionable error messages.
+fn classify_bw_error(stderr: &str, uri: &str) -> NonoError {
+    let redacted = redact_bw_uri(uri);
+    let stderr_trimmed = stderr.trim();
+
+    if stderr.contains("Vault is locked")
+        || stderr.contains("not logged in")
+        || stderr.contains("Session key is invalid")
+        || stderr.contains("Invalid master password")
+    {
+        NonoError::KeystoreAccess(format!(
+            "Bitwarden vault is locked for '{}'. \
+             Run `bw unlock --raw` and export BW_SESSION. Detail: {}",
+            redacted, stderr_trimmed
+        ))
+    } else if stderr.contains("not found")
+        || stderr.contains("No items")
+        || stderr.contains("invalid UUID")
+    {
+        NonoError::SecretNotFound(format!(
+            "Bitwarden item not found: '{}'. Detail: {}",
+            redacted, stderr_trimmed
+        ))
+    } else {
+        NonoError::KeystoreAccess(format!(
+            "Bitwarden CLI failed for '{}': {}",
+            redacted, stderr_trimmed
+        ))
+    }
+}
+
+/// Classify `bws` CLI errors into actionable error messages.
+fn classify_bws_error(stderr: &str, uri: &str) -> NonoError {
+    let redacted = redact_bw_uri(uri);
+    let stderr_trimmed = stderr.trim();
+
+    if stderr.contains("Missing access token")
+        || stderr.contains("access token")
+        || stderr.contains("Unauthorized")
+        || stderr.contains("authentication")
+    {
+        NonoError::KeystoreAccess(format!(
+            "bws authentication failed for '{}'. \
+             Set BWS_ACCESS_TOKEN to your service-account access token. Detail: {}",
+            redacted, stderr_trimmed
+        ))
+    } else if stderr.contains("not found") || stderr.contains("404") {
+        NonoError::SecretNotFound(format!(
+            "Bitwarden secret not found: '{}'. Detail: {}",
+            redacted, stderr_trimmed
+        ))
+    } else {
+        NonoError::KeystoreAccess(format!(
+            "Bitwarden Secrets Manager CLI failed for '{}': {}",
+            redacted, stderr_trimmed
+        ))
+    }
+}
+
+/// Load a secret from Bitwarden using the `bw` CLI.
+///
+/// Runs `bw get item --nointeraction -- <id>` and parses the JSON output.
+/// `BW_SESSION` must be set and non-empty in the environment (D-02).
+///
+/// # Security Notes
+/// - `BW_SESSION` is NOT passed as a `--session` flag (which would place the token
+///   in argv, visible via `ps`/`/proc/<pid>/cmdline`). Instead, `bw` reads it from
+///   the inherited environment implicitly (RESEARCH.md Pitfall 2, D-02, T-57-02).
+/// - The URI is validated by `load_from_bw_dispatch` before this is called.
+/// - Known limitation: the intermediate `Vec<u8>` of subprocess stdout is not
+///   zeroized. This is the same class of limitation as the op:// backend
+///   (see keystore.rs line ~200 comment).
+fn load_from_bw(uri: &str) -> Result<Zeroizing<String>> {
+    let (item_id, selector) = parse_bw_item_uri(uri)?;
+
+    // Pre-flight: BW_SESSION must be set and non-empty.
+    // SECURITY (D-02 / T-57-02): Do NOT pass BW_SESSION as --session CLI arg.
+    // bw reads BW_SESSION from its inherited environment implicitly.
+    let session = std::env::var("BW_SESSION").map_err(|_| {
+        NonoError::KeystoreAccess(
+            "bw:// requires BW_SESSION; run `bw unlock --raw` and export it".to_string(),
+        )
+    })?;
+    if session.is_empty() {
+        return Err(NonoError::KeystoreAccess(
+            "BW_SESSION is set but empty; run `bw unlock --raw` and export it".to_string(),
+        ));
+    }
+
+    tracing::debug!("Loading secret from Bitwarden: {}", redact_bw_uri(uri));
+
+    // Spawn `bw get item --nointeraction -- <id>`.
+    // DO NOT pass --session or the BW_SESSION value as an arg (T-57-02, RESEARCH.md Pitfall 2).
+    let mut child = Command::new("bw")
+        .args(["get", "item", "--nointeraction", "--", item_id.as_str()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                NonoError::KeystoreAccess(
+                    "Bitwarden CLI ('bw') not found. \
+                     Install from https://bitwarden.com/help/cli/"
+                        .to_string(),
+                )
+            } else {
+                NonoError::KeystoreAccess(format!("Could not start Bitwarden CLI: {}", e))
+            }
+        })?;
+
+    let output = wait_with_timeout(
+        &mut child,
+        SECRET_MANAGER_TIMEOUT,
+        "Bitwarden CLI",
+        "Is the vault locked? Check BW_SESSION.",
+    )
+    .inspect_err(|_e| {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(classify_bw_error(&stderr, uri));
+    }
+
+    // Known limitation: the intermediate Vec<u8> of subprocess stdout is not
+    // zeroized. This is the same class of limitation as the op:// backend
+    // (see keystore.rs line ~200 comment).
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+        NonoError::KeystoreAccess(format!(
+            "Bitwarden CLI returned invalid JSON for '{}': {}",
+            redact_bw_uri(uri),
+            e
+        ))
+    })?;
+
+    extract_bw_field(&json, &selector, &item_id, uri)
+}
+
+/// Load the current TOTP code for a Bitwarden item using `bw get totp`.
+///
+/// `login.totp` in `bw get item` JSON contains the TOTP seed (otpauth:// URI),
+/// not the computed code. The computed code requires this separate subprocess call.
+/// See RESEARCH.md Pitfall 1.
+fn load_totp_via_bw_get_totp(item_id: &str, parent_uri: &str) -> Result<Zeroizing<String>> {
+    // Pre-flight: BW_SESSION must be set and non-empty.
+    let session = std::env::var("BW_SESSION").map_err(|_| {
+        NonoError::KeystoreAccess(
+            "bw:// requires BW_SESSION; run `bw unlock --raw` and export it".to_string(),
+        )
+    })?;
+    if session.is_empty() {
+        return Err(NonoError::KeystoreAccess(
+            "BW_SESSION is set but empty; run `bw unlock --raw` and export it".to_string(),
+        ));
+    }
+
+    // DO NOT pass --session in args (T-57-02, RESEARCH.md Pitfall 2).
+    let mut child = Command::new("bw")
+        .args(["get", "totp", "--nointeraction", "--", item_id])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                NonoError::KeystoreAccess(
+                    "Bitwarden CLI ('bw') not found. \
+                     Install from https://bitwarden.com/help/cli/"
+                        .to_string(),
+                )
+            } else {
+                NonoError::KeystoreAccess(format!("Could not start Bitwarden CLI: {}", e))
+            }
+        })?;
+
+    let output = wait_with_timeout(
+        &mut child,
+        SECRET_MANAGER_TIMEOUT,
+        "Bitwarden CLI (get totp)",
+        "Is the vault locked? Check BW_SESSION.",
+    )
+    .inspect_err(|_e| {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(classify_bw_error(&stderr, parent_uri));
+    }
+
+    let raw = String::from_utf8(output.stdout).map_err(|_| {
+        NonoError::KeystoreAccess(format!(
+            "Bitwarden CLI returned non-UTF-8 data for '{}'",
+            redact_bw_uri(parent_uri)
+        ))
+    })?;
+
+    let trimmed = raw.trim_end_matches(['\n', '\r']).to_string();
+    if trimmed.is_empty() {
+        return Err(NonoError::SecretNotFound(format!(
+            "Bitwarden TOTP for '{}' returned an empty code",
+            redact_bw_uri(parent_uri)
+        )));
+    }
+    Ok(Zeroizing::new(trimmed))
+}
+
+/// Load a secret from the Bitwarden Secrets Manager using the `bws` CLI.
+///
+/// Runs `bws secret get -- <uuid>` and extracts the `.value` field from JSON.
+/// `BWS_ACCESS_TOKEN` must be set and non-empty in the environment (D-02).
+///
+/// # Security Notes
+/// - `BWS_ACCESS_TOKEN` is read by `bws` from the inherited environment automatically.
+///   It is NOT passed as a CLI argument (T-57-02).
+/// - The URI is validated by `load_from_bw_dispatch` before this is called.
+/// - Known limitation: the intermediate `Vec<u8>` of subprocess stdout is not
+///   zeroized. This is the same class of limitation as the op:// backend
+///   (see keystore.rs line ~200 comment).
+fn load_from_bws(uri: &str) -> Result<Zeroizing<String>> {
+    // Parse the secret UUID from the URI (validated before this call).
+    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
+        NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri))
+    })?;
+    let secret_uuid = path.split('/').nth(1).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "bw://secret/ URI missing UUID segment: {}",
+            uri
+        ))
+    })?;
+
+    // Pre-flight: BWS_ACCESS_TOKEN must be set and non-empty.
+    let token = std::env::var("BWS_ACCESS_TOKEN").map_err(|_| {
+        NonoError::KeystoreAccess(
+            "bw://secret/ requires BWS_ACCESS_TOKEN; set it to your \
+             Bitwarden Secrets Manager service-account access token"
+                .to_string(),
+        )
+    })?;
+    if token.is_empty() {
+        return Err(NonoError::KeystoreAccess(
+            "BWS_ACCESS_TOKEN is set but empty; set it to your \
+             Bitwarden Secrets Manager service-account access token"
+                .to_string(),
+        ));
+    }
+
+    tracing::debug!(
+        "Loading secret from Bitwarden Secrets Manager: {}",
+        redact_bw_uri(uri)
+    );
+
+    // `bws` reads BWS_ACCESS_TOKEN from the environment automatically.
+    // DO NOT pass the token as a CLI arg (T-57-02, RESEARCH.md Pitfall 3).
+    let mut child = Command::new("bws")
+        .args(["secret", "get", "--", secret_uuid])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                NonoError::KeystoreAccess(
+                    "Bitwarden Secrets Manager CLI ('bws') not found. \
+                     Install from https://bitwarden.com/help/secrets-manager-cli/"
+                        .to_string(),
+                )
+            } else {
+                NonoError::KeystoreAccess(format!("Could not start bws CLI: {}", e))
+            }
+        })?;
+
+    let output = wait_with_timeout(
+        &mut child,
+        SECRET_MANAGER_TIMEOUT,
+        "Bitwarden Secrets Manager CLI",
+        "Is BWS_ACCESS_TOKEN set and valid?",
+    )
+    .inspect_err(|_e| {
+        let _ = child.kill();
+        let _ = child.wait();
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(classify_bws_error(&stderr, uri));
+    }
+
+    // Known limitation: the intermediate Vec<u8> of subprocess stdout is not
+    // zeroized. This is the same class of limitation as the op:// backend
+    // (see keystore.rs line ~200 comment).
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+        NonoError::KeystoreAccess(format!(
+            "Bitwarden Secrets Manager CLI returned invalid JSON for '{}': {}",
+            redact_bw_uri(uri),
+            e
+        ))
+    })?;
+
+    json["value"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| Zeroizing::new(s.to_string()))
+        .ok_or_else(|| {
+            NonoError::SecretNotFound(format!(
+                "Bitwarden secret '{}' has no .value field or it is empty",
+                redact_bw_uri(uri)
+            ))
+        })
+}
+
+/// Dispatch a `bw://` URI to the appropriate Bitwarden backend.
+///
+/// Validates the URI, then routes to `load_from_bw` (item/ backend) or
+/// `load_from_bws` (secret/ backend) based on the first path segment.
+#[must_use = "loaded secret should be used or explicitly dropped"]
+fn load_from_bw_dispatch(uri: &str) -> Result<Zeroizing<String>> {
+    validate_bw_uri(uri)?;
+    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
+        NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri))
+    })?;
+    match path.split('/').next() {
+        Some(BW_ITEM_SEGMENT) => load_from_bw(uri),
+        Some(BW_SECRET_SEGMENT) => load_from_bws(uri),
+        other => Err(NonoError::ConfigParse(format!(
+            "Unknown bw:// backend segment '{:?}': expected 'item' or 'secret'",
+            other
+        ))),
+    }
+}
+
 /// Redact the field segment of an `op://` URI for safe logging.
 ///
 /// `op://vault/item/field` → `op://vault/item/<redacted>`
@@ -1458,6 +2129,31 @@ pub fn build_mappings_from_list(accounts: &str) -> Result<HashMap<String, String
                     redact_op_uri(entry)
                 )));
             }
+        } else if entry.starts_with(BW_URI_PREFIX) {
+            // Bitwarden URI: must have =VAR_NAME suffix (cannot auto-derive from bw:// path)
+            if let Some(eq_pos) = entry.rfind('=') {
+                let uri = &entry[..eq_pos];
+                let var_name = &entry[eq_pos + 1..];
+
+                if var_name.is_empty() {
+                    return Err(NonoError::ConfigParse(format!(
+                        "Bitwarden credential '{}' has '=' but no variable name. \
+                         Use format: bw://item/<id>/password=MY_VAR",
+                        redact_bw_uri(uri)
+                    )));
+                }
+
+                validate_bw_uri(uri)?;
+                validate_destination_env_var(var_name)?;
+
+                mappings.insert(uri.to_string(), var_name.to_string());
+            } else {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden credential requires an explicit variable name. \
+                     Use format: bw://item/<id>/password=MY_VAR (got '{}')",
+                    redact_bw_uri(entry)
+                )));
+            }
         } else if is_apple_password_uri(entry) {
             return Err(NonoError::ConfigParse(format!(
                 "Apple Passwords credential '{}' is not supported in --env-credential. \
@@ -1504,6 +2200,8 @@ pub fn build_mappings_from_pairs(pairs: &[(String, String)]) -> Result<HashMap<S
 
         if credential_ref.starts_with(OP_URI_PREFIX) {
             validate_op_uri(credential_ref)?;
+        } else if is_bw_uri(credential_ref) {
+            validate_bw_uri(credential_ref)?;
         } else if is_apple_password_uri(credential_ref) {
             validate_apple_password_uri(credential_ref)?;
         } else if credential_ref.starts_with(ENV_URI_PREFIX) {
@@ -2906,5 +3604,469 @@ mod tests {
         assert!(!is_keyring_uri("env://VAR"));
         assert!(!is_keyring_uri("op://v/i/f"));
         assert!(!is_keyring_uri("plain-account-name"));
+    }
+
+    // =====================================================================
+    // bw:// URI tests (Task 1: constants, validation, redaction)
+    // =====================================================================
+
+    // --- is_bw_uri ---
+
+    #[test]
+    fn test_is_bw_uri_true() {
+        assert!(is_bw_uri("bw://item/abc123/password"));
+        assert!(is_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn test_is_bw_uri_false() {
+        assert!(!is_bw_uri("op://vault/item/field"));
+        assert!(!is_bw_uri("keyring://svc/acct"));
+        assert!(!is_bw_uri("env://MY_VAR"));
+        assert!(!is_bw_uri("bw-other://something"));
+    }
+
+    // --- validate_bw_uri: valid cases ---
+
+    #[test]
+    fn test_validate_bw_uri_item_password() {
+        assert!(validate_bw_uri("bw://item/abc123def456/password").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_username() {
+        assert!(validate_bw_uri("bw://item/abc-123-def/username").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_notes() {
+        assert!(validate_bw_uri("bw://item/abc123/notes").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_totp() {
+        assert!(validate_bw_uri("bw://item/abc123/totp").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_custom_field() {
+        assert!(validate_bw_uri("bw://item/abc123/field/my-api-key").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_secret() {
+        assert!(validate_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000").is_ok());
+    }
+
+    // --- validate_bw_uri: rejection cases ---
+
+    #[test]
+    fn test_validate_bw_uri_forbidden_char() {
+        let err = validate_bw_uri("bw://item/abc;drop/password")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("forbidden character"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_id_with_injection_char() {
+        // & is in FORBIDDEN_URI_CHARS
+        let err = validate_bw_uri("bw://item/abc&def/password")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("forbidden character"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_query_rejected() {
+        let err = validate_bw_uri("bw://item/abc123/password?debug=1")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("query"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_fragment_rejected() {
+        let err = validate_bw_uri("bw://item/abc123/password#h")
+            .expect_err("should be rejected");
+        // Fragment '#' is rejected by the query/fragment check
+        assert!(
+            err.to_string().contains("fragment") || err.to_string().contains("query"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_secret_no_field_selector() {
+        // D-06: field selectors are not supported on bw://secret/ URIs
+        let err = validate_bw_uri("bw://secret/abc123/password")
+            .expect_err("should be rejected per D-06");
+        assert!(
+            err.to_string().contains("field selector") || err.to_string().contains("secret"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_missing_selector() {
+        // bw://item/<id> with no selector segment should be rejected
+        let err = validate_bw_uri("bw://item/abc123")
+            .expect_err("should be rejected: missing selector");
+        assert!(!err.to_string().is_empty(), "got empty error");
+    }
+
+    #[test]
+    fn test_validate_bw_uri_unknown_first_segment() {
+        let err = validate_bw_uri("bw://vault/abc123/password")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("'item'") || err.to_string().contains("'secret'")
+                || err.to_string().contains("item/") || err.to_string().contains("secret/"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_unknown_selector() {
+        let err = validate_bw_uri("bw://item/abc123/login")
+            .expect_err("should be rejected: unknown selector");
+        assert!(
+            err.to_string().contains("unknown selector") || err.to_string().contains("selector"),
+            "got: {}",
+            err
+        );
+    }
+
+    // --- redact_bw_uri ---
+
+    #[test]
+    fn test_redact_bw_uri_item() {
+        assert_eq!(
+            redact_bw_uri("bw://item/abc123/password"),
+            "bw://item/abc123/<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_bw_uri_item_custom() {
+        // For item URIs, splitn(3) absorbs "field/my-key" as the third part
+        assert_eq!(
+            redact_bw_uri("bw://item/abc123/field/my-key"),
+            "bw://item/abc123/<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_bw_uri_secret() {
+        assert_eq!(
+            redact_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000"),
+            "bw://secret/<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_bw_uri_malformed() {
+        assert_eq!(redact_bw_uri("bw://"), "bw://***");
+    }
+
+    #[test]
+    fn test_redact_bw_uri_not_bw_prefix() {
+        // Non-bw:// string falls through to bw://*** fallback
+        assert_eq!(redact_bw_uri("op://vault/item/field"), "bw://***");
+    }
+
+    // =====================================================================
+    // bw:// backend tests (Task 2: loaders, dispatch, mappings)
+    // =====================================================================
+
+    // --- Environment pre-flight tests ---
+
+    #[test]
+    fn test_load_from_bw_no_session() {
+        // BW_SESSION absent → KeystoreAccess with actionable message
+        let old_val = std::env::var("BW_SESSION").ok();
+        // SAFETY: test-only env mutation; restored in the same test function.
+        unsafe { std::env::remove_var("BW_SESSION") };
+        let result = load_from_bw_dispatch("bw://item/abc123def456/password");
+        if let Some(v) = old_val {
+            // SAFETY: restoring original value
+            unsafe { std::env::set_var("BW_SESSION", v) };
+        }
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        assert!(
+            err.contains("BW_SESSION"),
+            "error should mention BW_SESSION, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_from_bw_empty_session() {
+        // BW_SESSION="" (empty string) → KeystoreAccess
+        let old_val = std::env::var("BW_SESSION").ok();
+        // SAFETY: test-only env mutation; restored in the same test function.
+        unsafe { std::env::set_var("BW_SESSION", "") };
+        let result = load_from_bw_dispatch("bw://item/abc123def456/password");
+        match old_val {
+            Some(v) => {
+                // SAFETY: restoring original value
+                unsafe { std::env::set_var("BW_SESSION", v) };
+            }
+            None => {
+                // SAFETY: restoring to unset
+                unsafe { std::env::remove_var("BW_SESSION") };
+            }
+        }
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        assert!(
+            err.contains("BW_SESSION"),
+            "error should mention BW_SESSION, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_from_bws_no_token() {
+        // BWS_ACCESS_TOKEN absent → KeystoreAccess with actionable message
+        let old_val = std::env::var("BWS_ACCESS_TOKEN").ok();
+        // SAFETY: test-only env mutation; restored in the same test function.
+        unsafe { std::env::remove_var("BWS_ACCESS_TOKEN") };
+        let result = load_from_bw_dispatch("bw://secret/550e8400-e29b-41d4-a716-446655440000");
+        if let Some(v) = old_val {
+            // SAFETY: restoring original value
+            unsafe { std::env::set_var("BWS_ACCESS_TOKEN", v) };
+        }
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        assert!(
+            err.contains("BWS_ACCESS_TOKEN"),
+            "error should mention BWS_ACCESS_TOKEN, got: {}",
+            err
+        );
+    }
+
+    // --- CLI-not-found tests (use an empty temp dir as PATH) ---
+
+    #[test]
+    fn test_load_from_bw_cli_not_found() {
+        // Set BW_SESSION to a non-empty value, then set PATH to an empty temp dir.
+        // `bw` should not be found → KeystoreAccess with 'bw' and 'not found'.
+        let old_session = std::env::var("BW_SESSION").ok();
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+
+        // SAFETY: test-only env mutation; restored in the same test function.
+        unsafe { std::env::set_var("BW_SESSION", "fake-session-token") };
+        // SAFETY: test-only PATH override; restored in the same test function.
+        unsafe { std::env::set_var("PATH", dir.path().as_os_str()) };
+
+        let result = load_from_bw_dispatch("bw://item/abc123def456/password");
+
+        // Restore env ASAP — keep window as short as possible.
+        match old_session {
+            Some(v) => {
+                // SAFETY: restoring
+                unsafe { std::env::set_var("BW_SESSION", v) };
+            }
+            None => {
+                // SAFETY: restoring
+                unsafe { std::env::remove_var("BW_SESSION") };
+            }
+        }
+        // SAFETY: restoring
+        unsafe { std::env::set_var("PATH", &old_path) };
+
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        assert!(
+            err.contains("'bw'") || err.contains("bw"),
+            "error should mention bw binary, got: {}",
+            err
+        );
+        assert!(
+            err.to_lowercase().contains("not found"),
+            "error should mention 'not found', got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_from_bws_cli_not_found() {
+        // Set BWS_ACCESS_TOKEN to a non-empty value, then set PATH to an empty temp dir.
+        let old_token = std::env::var("BWS_ACCESS_TOKEN").ok();
+        let old_path = std::env::var("PATH").unwrap_or_default();
+        let dir = tempfile::tempdir().unwrap();
+
+        // SAFETY: test-only env mutation; restored in the same test function.
+        unsafe { std::env::set_var("BWS_ACCESS_TOKEN", "fake-access-token") };
+        // SAFETY: test-only PATH override; restored in the same test function.
+        unsafe { std::env::set_var("PATH", dir.path().as_os_str()) };
+
+        let result =
+            load_from_bw_dispatch("bw://secret/550e8400-e29b-41d4-a716-446655440000");
+
+        // Restore env ASAP.
+        match old_token {
+            Some(v) => {
+                // SAFETY: restoring
+                unsafe { std::env::set_var("BWS_ACCESS_TOKEN", v) };
+            }
+            None => {
+                // SAFETY: restoring
+                unsafe { std::env::remove_var("BWS_ACCESS_TOKEN") };
+            }
+        }
+        // SAFETY: restoring
+        unsafe { std::env::set_var("PATH", &old_path) };
+
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        assert!(
+            err.contains("'bws'") || err.contains("bws"),
+            "error should mention bws binary, got: {}",
+            err
+        );
+        assert!(
+            err.to_lowercase().contains("not found"),
+            "error should mention 'not found', got: {}",
+            err
+        );
+    }
+
+    // --- JSON field extraction tests (static fixtures, no subprocess) ---
+
+    #[test]
+    fn test_extract_bw_field_password() {
+        let json = serde_json::json!({
+            "login": { "username": "alice", "password": "hunter2" },
+            "notes": null,
+            "fields": []
+        });
+        let result = json_str_field(&json, &["login", "password"], "bw://item/abc/<redacted>");
+        assert_eq!(result.unwrap().as_str(), "hunter2");
+    }
+
+    #[test]
+    fn test_extract_bw_field_username() {
+        let json = serde_json::json!({
+            "login": { "username": "alice", "password": "hunter2" }
+        });
+        let result = json_str_field(&json, &["login", "username"], "bw://item/abc/<redacted>");
+        assert_eq!(result.unwrap().as_str(), "alice");
+    }
+
+    #[test]
+    fn test_extract_bw_field_notes() {
+        let json = serde_json::json!({
+            "notes": "my secret note"
+        });
+        let result = json_str_field(&json, &["notes"], "bw://item/abc/<redacted>");
+        assert_eq!(result.unwrap().as_str(), "my secret note");
+    }
+
+    #[test]
+    fn test_extract_bw_field_missing() {
+        let json = serde_json::json!({
+            "login": {}
+        });
+        let result = json_str_field(&json, &["login", "password"], "bw://item/abc/<redacted>");
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        // Should be a SecretNotFound error
+        assert!(
+            err.contains("missing field") || err.contains("not found"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_extract_bw_field_empty_string() {
+        // Empty string is not a valid secret value
+        let json = serde_json::json!({
+            "login": { "password": "" }
+        });
+        let result = json_str_field(&json, &["login", "password"], "bw://item/abc/<redacted>");
+        assert!(result.is_err(), "empty string should not be returned as a secret");
+    }
+
+    #[test]
+    fn test_extract_bw_field_custom() {
+        let json = serde_json::json!({
+            "fields": [
+                {"name": "api-key", "value": "xyz789", "type": 1},
+                {"name": "other", "value": "other-val", "type": 0}
+            ]
+        });
+        let selector = BwSelector::CustomField("api-key".to_string());
+        let result = extract_bw_field(&json, &selector, "abc123", "bw://item/abc123/field/api-key");
+        assert_eq!(result.unwrap().as_str(), "xyz789");
+    }
+
+    #[test]
+    fn test_extract_bw_field_custom_not_found() {
+        let json = serde_json::json!({
+            "fields": [
+                {"name": "other-field", "value": "val", "type": 0}
+            ]
+        });
+        let selector = BwSelector::CustomField("missing".to_string());
+        let result =
+            extract_bw_field(&json, &selector, "abc123", "bw://item/abc123/field/missing");
+        assert!(result.is_err());
+    }
+
+    // --- build_mappings tests ---
+
+    #[test]
+    fn test_build_mappings_bw_uri_without_var() {
+        let err = build_mappings_from_list("bw://item/abc123/password")
+            .expect_err("should reject bare bw:// URI");
+        assert!(
+            err.to_string().contains("explicit variable name"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_build_mappings_bw_uri_with_var() {
+        let mappings = build_mappings_from_list("bw://item/abc123/password=MY_SECRET")
+            .expect("should parse");
+        assert_eq!(
+            mappings.get("bw://item/abc123/password"),
+            Some(&"MY_SECRET".to_string())
+        );
+    }
+
+    // --- Dispatch wiring test ---
+
+    #[test]
+    fn test_load_secret_by_ref_dispatches_bw() {
+        // A bw:// URI with invalid chars should fail at validation (not fall through to keyring).
+        // This confirms is_bw_uri fires before the keyring fallthrough.
+        let result = load_secret_by_ref("nono", "bw://item/abc;bad/password");
+        assert!(result.is_err());
+        let err = result.expect_err("should fail").to_string();
+        // Must fail due to validation (forbidden char), not a keyring lookup failure.
+        assert!(
+            err.contains("forbidden character") || err.contains("Bitwarden"),
+            "expected bw:// validation error, got: {}",
+            err
+        );
     }
 }
