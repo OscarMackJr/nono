@@ -28,7 +28,7 @@
 
 ### Network Filtering (NET)
 
-- [ ] **REQ-NET-01**: `--allow-domain` accepts a URL with **path scoping** and **fine-grained HTTP method + path restrictions**, enforced in `nono-proxy` (`route`/`filter`/`server`), and TLS-intercept endpoint rules are evaluated **before** credential selection. Cross-platform; the change is diff-inspected against the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`) rather than blind-cherry-picked. `nono why --host` awareness of the new scoping is preserved.
+- [x] **REQ-NET-01**: `--allow-domain` accepts a URL with **path scoping** and **fine-grained HTTP method + path restrictions**, enforced in `nono-proxy` (`route`/`filter`/`server`), and TLS-intercept endpoint rules are evaluated **before** credential selection. Cross-platform; the change is diff-inspected against the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`) rather than blind-cherry-picked. `nono why --host` awareness of the new scoping is preserved.
 
 ### Credentials (CRED)
 
@@ -124,7 +124,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-DRN-02 | Phase 53 | Complete |
 | REQ-UPST7-01 | Phase 54 | Pending |
 | REQ-UPST7-02 | Phase 55 | Complete |
-| REQ-NET-01 | Phase 56 | Pending |
+| REQ-NET-01 | Phase 56 | Complete |
 | REQ-CRED-01 | Phase 57 | Pending |
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
