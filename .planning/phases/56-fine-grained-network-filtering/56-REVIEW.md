@@ -23,7 +23,25 @@ findings:
   info: 3
   total: 8
 status: issues_found
+resolved:
+  - CR-01  # fixed in 05cd7580 — PreparedSandbox.allow_domain threaded as Vec<AllowDomainEntry> end-to-end
+  - CR-02  # fixed in 05cd7580 — parse_allow_domain_arg gated on explicit http(s):// scheme
+  - WR-01  # fixed in c4931750 — is_loopback_domain uses parsed IpAddr semantics
+open:
+  - WR-02  # nono why endpoint display vs proxy enforcement divergence (advisory)
+  - WR-03  # profile+CLI same-host entries not merged at runtime (advisory)
+  - IN-01  # merge_allow_domain does not dedup duplicate endpoint rules
+  - IN-02  # schema lacks additionalProperties:false
+  - IN-03  # redundant/behavior-changing domain lowercasing before check_host
 ---
+
+> **Resolution (2026-06-05):** Both blockers (CR-01 fail-open, CR-02 regression)
+> and WR-01 (TLS-downgrade footgun) were fixed during execute-phase before
+> verification — commits `05cd7580` (CR-01 + CR-02) and `c4931750` (WR-01), with
+> regression tests added. `cargo test -p nono-cli` → 1190 passed (only the 4
+> known pre-existing baseline failures remain). The remaining advisory warnings
+> (WR-02, WR-03) and info items (IN-01..03) are left open as non-blocking
+> follow-ups.
 
 # Phase 56: Code Review Report
 
