@@ -21,11 +21,13 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 55 — upst7-cherry-pick-wave
+**Current Focus:** Phase 56 — fine-grained-network-filtering (next; Phase 55 complete 2026-06-05)
 
 ## Current Position
 
-Phase: 60
+Phase: 56 (fine-grained-network-filtering) — NOT STARTED (next in v2.8). Phase 55 (upst7-cherry-pick-wave) COMPLETE 2026-06-05: 7/7 plans, 9/9 must-haves verified; code-review BLOCKER CR-01 (JSONC profile dual-key fail-open) found + fixed on main (commit 61504656, +2 regression tests); 4 WARNING/3 INFO advisory follow-ups in 55-REVIEW.md; cross-target Linux/macOS clippy carried in 55-HUMAN-UAT.md (status partial, enforced by D-55-03 v0.58.0 release gate). NOTE: `gsd-sdk query phase.complete 55` reported next_phase=60 — that is the documented SDK numeric-skip bug ([[feedback_sdk_next_phase_skip]]); Phase 60 is already-executed v2.9 work, the true v2.8 next phase is 56.
+
+--- (historical v2.9/Phase 62 narrative below is PRE-EXISTING drift from out-of-band work, retained as-is; not part of v2.8 Phase 55 close) ---
 
 --- Phase 62 — COMPLETE 2026-06-03 (REQ-WFP-01; out-of-box WFP kernel network enforcement) ---
 GATES GREEN: UAT 5/5 SC PASS (62-HUMAN-UAT.md) + security 33/33 closed (62-SECURITY.md, threats_open:0, T-62-06 self-DoS accepted as AR-62-10). 4 Phase-62 debug sessions moved to debug/resolved/. UAT PROOF (recorded in 62-HUMAN-UAT.md): SC1 out-of-box block (non-elevated, cwd %USERPROFILE%\.claude): `broker: spawned child app_container=true` → `curl: (6) Could not resolve host` → child_exit 6 (WFP-kernel-BLOCKED, child STARTED clean). SC2 boot-start: `sc query` RUNNING + `sc qc` START_TYPE 2 AUTO_START (LocalSystem) + SC1-repeat blocked (reboot-evidence rests on AUTO_START config + running state + enforced block — gold-standard post-`shutdown /r` capture optional). SC3 fail-closed: service STOPPED → non-elevated `--block-net` run raised PlatformNotSupported naming both `nono-wfp-service` and `nono setup --start-wfp-service`, NEVER printed `hello`. SC4 clean-uninstall leaves-nothing (PASS, prior session). SC5 pipe-isolation: blocks were clean kernel filters (curl exit 6), NO `Access is denied` pipe error → confirmed from SC1/SC2. Bypass-traverse ANSWERED: profile-deep cwd worked, lowbox retains SeChangeNotifyPrivilege — only the leaf .claude traverse (c3d7644f) was needed; 62-13 Task-3 ancestor grant unnecessary (harmless; removable in cleanup). DEFERRED: full READ-grant model for claude.exe (curl SC1 needs no user-file reads; claude.exe will — the AppContainer is a different principal). Memory: [[windows_appcontainer_wfp_validated]].
