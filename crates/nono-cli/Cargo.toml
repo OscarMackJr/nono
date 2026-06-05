@@ -121,6 +121,8 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2.5.8"
+globset.workspace = true
+urlencoding = "2"
 tempfile = "3"
 vt100 = "0.16.2"
 jsonc-parser = { version = "0.32", features = ["serde"] }

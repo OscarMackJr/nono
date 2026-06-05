@@ -1576,7 +1576,7 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
             println!(
                 "    {}: {}",
                 theme::fg("allow_domain", t.subtext),
-                net.allow_domain.join(", ")
+                net.allow_domain.iter().map(|e| e.domain()).collect::<Vec<_>>().join(", ")
             );
         }
         if !net.resolved_credentials().is_empty() {
@@ -2063,11 +2063,13 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
         }
     }
 
+    let ad1: Vec<String> = p1.network.allow_domain.iter().map(|e| e.domain().to_string()).collect();
+    let ad2: Vec<String> = p2.network.allow_domain.iter().map(|e| e.domain().to_string()).collect();
     let net_vec_diffs = diff_string_vecs(&[
         (
             "allow_domain",
-            &p1.network.allow_domain,
-            &p2.network.allow_domain,
+            &ad1,
+            &ad2,
         ),
         (
             "credentials",
@@ -2596,7 +2598,7 @@ fn diff_to_json(name1: &str, name2: &str, p1: &Profile, p2: &Profile) -> Result<
                 "profile2": p2.network.resolved_network_profile(),
                 "changed": p1.network.resolved_network_profile() != p2.network.resolved_network_profile(),
             },
-            "allow_domain": diff_vec(&p1.network.allow_domain, &p2.network.allow_domain),
+            "allow_domain": diff_vec(&p1.network.allow_domain.iter().map(|e| e.domain().to_string()).collect::<Vec<_>>(), &p2.network.allow_domain.iter().map(|e| e.domain().to_string()).collect::<Vec<_>>()),
             "credentials": diff_vec(p1.network.resolved_credentials(), p2.network.resolved_credentials()),
             "open_port": {
                 "profile1": p1.network.open_port,
@@ -3242,7 +3244,7 @@ fn resolve_to_manifest(
 
     let network = Some(manifest::Network {
         mode: network_mode,
-        allow_domains: prof.network.allow_domain.clone(),
+        allow_domains: prof.network.allow_domain.iter().map(|e| e.domain().to_string()).collect(),
         endpoints: Vec::new(),
         dns: true,
         ports: if prof.network.listen_port.is_empty() && prof.network.open_port.is_empty() {
