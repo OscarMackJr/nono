@@ -45,10 +45,34 @@ use std::path::{Path, PathBuf};
 /// `GLOBAL_DEPRECATION_COUNTER.emit_once(...)`. Tests call this directly
 /// to verify detection logic without side effects on global counter state
 /// (which is shared per-process and would race in parallel test runs).
+/// Parse a raw profile string into a `serde_json::Value` using the SAME JSONC
+/// options as the main deserialiser (`parse_profile_bytes` / `parse_profile_file`).
+///
+/// SECURITY (CR-01, 55-REVIEW.md): the raw-key fail-closed pre-checks below MUST
+/// observe the exact same keys the main JSONC parser will accept. Plan 55-02
+/// switched the main deserialiser to `jsonc_parser` (comments + trailing commas)
+/// but left these pre-checks on strict `serde_json::from_str`, which returns
+/// `Err` — and therefore `false` — for any profile containing a comment or
+/// trailing comma. A JSONC profile carrying BOTH `bypass_protection` and
+/// `override_deny` plus a single comment slipped past the dual-key guard and
+/// then parsed cleanly, re-opening the non-deterministic deny-list fail-open the
+/// guard exists to refuse. Parsing the pre-check with JSONC options closes that
+/// gap. On parse error we still return `None` so the main parser surfaces the
+/// real, user-facing error (unchanged fail-closed behaviour for that path).
+fn raw_profile_to_jsonc_value(raw: &str) -> Option<serde_json::Value> {
+    let parse_options = jsonc_parser::ParseOptions {
+        allow_comments: true,
+        allow_trailing_commas: true,
+        ..Default::default()
+    };
+    jsonc_parser::parse_to_serde_value(raw, &parse_options)
+        .ok()
+        .flatten()
+}
+
 fn raw_profile_has_legacy_override_deny_key(raw: &str) -> bool {
-    let value: serde_json::Value = match serde_json::from_str(raw) {
-        Ok(v) => v,
-        Err(_) => return false, // main parser will surface the real error
+    let Some(value) = raw_profile_to_jsonc_value(raw) else {
+        return false; // main parser will surface the real error
     };
     json_value_has_key(&value, "override_deny")
 }
@@ -85,9 +109,8 @@ fn detect_legacy_override_deny_key(raw: &str) {
 /// at the top level of the `policy` object. Does NOT recurse — the schema
 /// only declares the keys at that one location.
 fn raw_profile_has_both_bypass_and_override_keys(raw: &str) -> bool {
-    let value: serde_json::Value = match serde_json::from_str(raw) {
-        Ok(v) => v,
-        Err(_) => return false, // main parser will surface the real error
+    let Some(value) = raw_profile_to_jsonc_value(raw) else {
+        return false; // main parser will surface the real error
     };
     if let Some(policy) = value.get("policy").and_then(|v| v.as_object()) {
         return policy.contains_key("bypass_protection") && policy.contains_key("override_deny");
@@ -178,6 +201,42 @@ mod canonical_schema_rename_tests {
         assert!(
             raw_profile_has_both_bypass_and_override_keys(raw),
             "both keys present in policy must trip the pre-check"
+        );
+    }
+
+    /// CR-01 (55-REVIEW.md) security regression: a JSONC profile (comment +
+    /// trailing comma) carrying BOTH keys must STILL trip the fail-closed
+    /// dual-key guard. Under the strict `serde_json::from_str` pre-check this
+    /// input parsed to `Err` → `false`, bypassing the guard while the main
+    /// JSONC deserialiser accepted it — a fail-open. The pre-check now parses
+    /// with the same JSONC options, so both keys are observed.
+    #[test]
+    fn raw_profile_has_both_bypass_and_override_keys_detects_both_in_jsonc() {
+        let raw = r#"{
+            // a comment makes strict serde_json::from_str fail
+            "meta": {"name": "t"},
+            "policy": {
+                "bypass_protection": ["/a"],
+                "override_deny": ["/b"],
+            }
+        }"#;
+        assert!(
+            raw_profile_has_both_bypass_and_override_keys(raw),
+            "both keys in a JSONC profile (comment + trailing comma) must trip the pre-check"
+        );
+    }
+
+    /// CR-01 companion: the legacy-key detector must also see through JSONC
+    /// comments so the deprecation path stays consistent with the deserialiser.
+    #[test]
+    fn raw_profile_has_legacy_override_deny_key_detects_in_jsonc() {
+        let raw = r#"{
+            // comment
+            "policy": {"override_deny": ["/a"],}
+        }"#;
+        assert!(
+            raw_profile_has_legacy_override_deny_key(raw),
+            "legacy override_deny in a JSONC profile must be detected"
         );
     }
 
