@@ -1,14 +1,18 @@
 # Changelog
 
-## [0.58.0] - v2.9 (2026-06-03)
+## [0.62.0] - v2.9 (2026-06-05)
 
 ### Summary
 
 v2.9 ships the Phase 60 **Windows confined coding-loop POC** together with the Phase 62
-**out-of-box WFP kernel network enforcement** for supervised runs. Both features are framed
-honestly as **defense-in-depth / POC**, not full isolation: the OS-enforced boundary is
-real and structurally unavoidable, but the full isolation story requires further work beyond
-v2.9.
+**out-of-box WFP kernel network enforcement** for supervised runs, plus the Phase 56
+**fine-grained `allow_domain` network filtering** (HTTP method + URL-path endpoint rules in
+the proxy). The Phase 60/62 features are framed honestly as **defense-in-depth / POC**, not
+full isolation: the OS-enforced boundary is real and structurally unavoidable, but the full
+isolation story requires further work beyond v2.9.
+
+> Crate version leapfrogs `0.58.0 → 0.62.0` to clear upstream's `v0.58.0–v0.61.1` tags in
+> this repo's namespace, restoring a collision-free `v0.62.0` release tag for `release.yml`.
 
 Also bundles the untagged post-v2.7 drain fixes: `d8b7ce00` (broker GLE=87 HANDLE_LIST
 dedup), `005b4c9e` (no-PTY relay stdout-echo), `0cbeb3be` + `b852826b` (WFP service-stop
@@ -54,13 +58,39 @@ any manual `nono setup --start-wfp-service` step:
 
 Closes Phase 60's F-60-UAT-03 (WFP kernel enforcement gap).
 
+### Network: Fine-grained `allow_domain` Filtering (Phase 56)
+
+`allow_domain` now accepts per-endpoint HTTP method + URL-path scoping in addition to plain
+hostname strings, enforced in the TLS-intercept proxy path (REQ-NET-01):
+
+- Profile and `--allow-domain` entries may be structured objects, e.g.
+  `{ domain: "api.github.com", endpoints: [ { method: "GET", path: "/repos/**" } ] }`.
+  The form is `#[serde(untagged)]` and **backward-compatible** — plain strings and scoped
+  objects can be mixed in the same array.
+- Endpoint rules compile to `CompiledEndpointRules` and are evaluated by the proxy's reverse
+  handler **before** credential selection, so a request to a disallowed method/path is
+  rejected (HTTP 403) before any credential is injected.
+- `nono why --host <url>` surfaces an **"Endpoint rules:"** section listing the method+path
+  rules for a scoped host (SC3).
+- CR-01 (profile endpoint rules silently dropped before reaching `RouteConfig`) and CR-02
+  (`host:port` mangling) were fixed before verification; the proxy `is_allowed` suite (161
+  tests) covers enforcement on Linux/macOS.
+
+**Known follow-ups (accepted, non-blocking):** `nono why`'s allow/deny verdict is
+method-blind in the display approximation (WR-02; enforcement in the proxy is method-correct),
+and a same-host plain + scoped entry pair is not merged at runtime but stays fail-secure via
+the `server.rs` CONNECT block (WR-03 / IN-01). **Platform note:** live end-to-end proxy
+enforcement is exercised on Linux/macOS; Windows supervised execution does not yet drive
+proxy-filter supervision and fails closed.
+
 ### Version
 
-All workspace crates bumped to `0.58.0` in lockstep (5 `Cargo.toml` versions + 6
-internal path-dep pins). The `v0.58.0` git tag is the `release.yml` build trigger;
-`v2.9` is a non-building milestone marker on the same commit. CI-signed machine + user
-MSIs (wrapper AND embedded payloads Authenticode-valid, per Phase 53 sign-before-harvest
-gate).
+All workspace crates bumped to `0.62.0` in lockstep (5 `Cargo.toml` versions + 6
+internal path-dep pins). The version leapfrogs `0.58.0 → 0.62.0` to clear upstream's
+`v0.58.0–v0.61.1` tags already present in this repo. The `v0.62.0` git tag is the
+`release.yml` build trigger; `v2.9` is a non-building milestone marker on the same commit.
+CI-signed machine + user MSIs (wrapper AND embedded payloads Authenticode-valid, per
+Phase 53 sign-before-harvest gate).
 
 ## [Unreleased] - v2.6 Phase 45
 
