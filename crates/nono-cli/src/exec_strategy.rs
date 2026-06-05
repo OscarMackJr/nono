@@ -49,20 +49,7 @@ use env_sanitization::should_skip_env_var;
 // Re-exported for cross-module consumers; profile_runtime uses a local copy.
 pub(crate) use env_sanitization::validate_env_var_patterns;
 
-// Plan 36-03 Commit 2: per upstream b5f0a3ab, the post-exit PTY drain
-// quiet period is reduced from 250ms to 100ms.
-//
-// REGRESSION COVERAGE per D-36-D3: this MUST NOT regress Phase 17
-// attach-streaming (crates/nono-cli/tests/attach_streaming_integration.rs)
-// or Phase 31 broker ConPTY (crates/nono-shell-broker/). Phase 15 5-row
-// detached-console smoke gate (close-gate step 6) double-checks.
-//
-// The usage site (`drain_master_output`) is in f782ddcd (intermediate upstream
-// commit). This constant is declared here so the fork's value matches upstream
-// b5f0a3ab once `drain_master_output` is ported in a future plan.
-#[cfg(not(target_os = "windows"))]
-#[allow(dead_code)]
-const POST_EXIT_PTY_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
+use crate::timeouts;
 
 /// Platform-specific guard returned by [`apply_resource_limits_unix`].
 ///
@@ -1984,7 +1971,7 @@ fn wait_for_child_with_startup_timeout(
                         return wait_for_child(child);
                     }
                 }
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(timeouts::CHILD_POLL_INTERVAL);
             }
             Ok(status) => return Ok(status),
             Err(nix::errno::Errno::EINTR) => continue,
