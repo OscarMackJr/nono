@@ -21,9 +21,13 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 56 — fine-grained-network-filtering
+**Current Focus:** Phase 57 — Bitwarden Credential Source (next; Phase 56 fine-grained-network-filtering COMPLETE 2026-06-05)
 
 ## Current Position
+
+Phase: 57 (Bitwarden Credential Source) — NEXT in v2.8. Phase 56 (fine-grained-network-filtering) COMPLETE 2026-06-05: 4/4 plans, REQ-NET-01 satisfied (4/4 must-haves verified). Code review caught 2 blockers — CR-01 (fail-open: profile endpoint rules flattened to bare domains → unrestricted tunnel; fixed `05cd7580` by threading `Vec<AllowDomainEntry>` end-to-end through `PreparedSandbox`) and CR-02 (`host:port` URL-parse mangling; fixed `05cd7580` with an http(s):// scheme guard) — plus WR-01 (loopback string-prefix → parsed `IpAddr`, `c4931750`); all fixed pre-verification with regression tests. Verification status `human_needed`: 4 live/policy items in 56-HUMAN-UAT.md (operator approved phase completion 2026-06-05, UAT deferred). NOTE: `gsd-sdk query phase.complete 56` reported next_phase=60 — the documented SDK numeric-skip bug ([[feedback_sdk_next_phase_skip]]); Phases 60/61 are the separate v2.9 Sandbox-the-Tools track, the true v2.8 next phase is 57.
+
+--- (historical v2.9/Phase 62 narrative below is PRE-EXISTING drift from out-of-band work, retained as-is; not part of v2.8 Phase 56 close) ---
 
 Phase: 60
 
