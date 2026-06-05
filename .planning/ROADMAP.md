@@ -244,7 +244,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
 | 56. Fine-grained Network Filtering | 4/4 | Complete    | 2026-06-05 |
-| 57. Bitwarden Credential Source | 1/1 | Complete   | 2026-06-05 |
+| 57. Bitwarden Credential Source | 1/1 | Complete    | 2026-06-05 |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |

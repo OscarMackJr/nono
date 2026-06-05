@@ -32,7 +32,7 @@
 
 ### Credentials (CRED)
 
-- [ ] **REQ-CRED-01**: A `bw://` Bitwarden credential source resolves secrets through the keystore abstraction alongside the existing `keyring://` / `env://` / `file://` schemes, with secret fields held in `Zeroizing<String>` (aligned with the fork's `zeroize` standard) and in-place truncation. Cross-platform; isolated surface in `crates/nono/src/keystore.rs`.
+- [x] **REQ-CRED-01**: A `bw://` Bitwarden credential source resolves secrets through the keystore abstraction alongside the existing `keyring://` / `env://` / `file://` schemes, with secret fields held in `Zeroizing<String>` (aligned with the fork's `zeroize` standard) and in-place truncation. Cross-platform; isolated surface in `crates/nono/src/keystore.rs`.
 
 ### Session Hooks (HOOK)
 
@@ -125,7 +125,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-UPST7-01 | Phase 54 | Pending |
 | REQ-UPST7-02 | Phase 55 | Complete |
 | REQ-NET-01 | Phase 56 | Complete |
-| REQ-CRED-01 | Phase 57 | Pending |
+| REQ-CRED-01 | Phase 57 | Complete |
 | REQ-HOOK-01 | Phase 58 | Pending |
 | REQ-IPC-01 | Phase 59 | Pending |
 | REQ-WFP-01 | Phase 62 | Complete |
