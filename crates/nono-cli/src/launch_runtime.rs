@@ -201,6 +201,11 @@ pub(crate) struct ExecutionFlags {
     pub(crate) redaction_policy: nono::ScrubPolicy,
     pub(crate) resource_limits: ResourceLimits,
     pub(crate) startup_timeout_secs: Option<u64>,
+    /// Phase 58: session lifecycle hooks to execute before/after the sandboxed
+    /// child. Runtime dispatch is platform-specific (`hook_runtime.rs` on Unix,
+    /// `hook_runtime_windows.rs` on Windows) but the field is cross-platform so
+    /// profiles round-trip cleanly on all platforms.
+    pub(crate) session_hooks: crate::profile::SessionHooks,
 }
 
 impl ExecutionFlags {
@@ -231,6 +236,8 @@ impl ExecutionFlags {
             redaction_policy: nono::ScrubPolicy::secure_default(),
             resource_limits: ResourceLimits::default(),
             startup_timeout_secs: None,
+            // Phase 58: default to no session hooks.
+            session_hooks: crate::profile::SessionHooks::default(),
         })
     }
 }
@@ -373,6 +380,9 @@ pub(crate) fn prepare_run_launch_plan(
             redaction_policy,
             resource_limits,
             startup_timeout_secs,
+            // Phase 58: wire session_hooks from PreparedSandbox into
+            // ExecutionFlags. Source: upstream daa55c8 launch_runtime.rs.
+            session_hooks: prepared.session_hooks,
         },
     })
 }

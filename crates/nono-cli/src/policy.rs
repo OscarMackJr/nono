@@ -148,6 +148,11 @@ pub struct ProfileDef {
     /// claude-code built-in profile sets this to true in v2.7.
     #[serde(default)]
     pub windows_low_il_broker: bool,
+    /// Phase 58: session lifecycle hooks from policy.json built-in profiles.
+    /// Built-in profiles may declare session_hooks in policy.json; forwarded
+    /// verbatim via `to_raw_profile()`.
+    #[serde(default)]
+    pub session_hooks: profile::SessionHooks,
 }
 
 impl ProfileDef {
@@ -208,6 +213,8 @@ impl ProfileDef {
             // Phase 51 D-03: forward windows_low_il_broker from policy.json.
             // Only the claude-code built-in profile sets this to true.
             windows_low_il_broker: self.windows_low_il_broker,
+            // Phase 58: forward session_hooks from policy.json built-in profile verbatim.
+            session_hooks: self.session_hooks.clone(),
         }
     }
 }
@@ -3155,5 +3162,65 @@ mod tests {
         let conflicts = find_denied_user_grants(&[path], &caps, &policy);
         assert_eq!(conflicts.len(), 1);
         assert!(conflicts[0].1.is_none());
+    }
+
+    /// Phase 58: nono-profile.schema.json must contain "session_hooks" as a property key.
+    #[test]
+    fn test_schema_has_session_hooks_property() {
+        let schema = crate::config::embedded::embedded_profile_schema();
+        assert!(
+            schema.contains("\"session_hooks\""),
+            "nono-profile.schema.json must contain \"session_hooks\" property; got schema of length {}",
+            schema.len()
+        );
+    }
+
+    /// Phase 58: nono-profile.schema.json must contain SessionHooks and SessionHook $defs.
+    #[test]
+    fn test_schema_has_session_hooks_defs() {
+        let schema = crate::config::embedded::embedded_profile_schema();
+        assert!(
+            schema.contains("\"SessionHooks\""),
+            "nono-profile.schema.json must contain \"SessionHooks\" $def"
+        );
+        assert!(
+            schema.contains("\"SessionHook\""),
+            "nono-profile.schema.json must contain \"SessionHook\" $def"
+        );
+    }
+
+    /// Phase 58: to_raw_profile() must include session_hooks in the produced Profile.
+    #[test]
+    fn test_to_raw_profile_includes_session_hooks() {
+        let def = ProfileDef {
+            session_hooks: profile::SessionHooks {
+                before: Some(profile::SessionHook {
+                    script: std::path::PathBuf::from("/usr/local/bin/pre.sh"),
+                    timeout_secs: Some(30),
+                }),
+                after: None,
+            },
+            ..Default::default()
+        };
+        let raw = def.to_raw_profile();
+        assert!(
+            raw.session_hooks.before.is_some(),
+            "to_raw_profile() must forward session_hooks.before into the produced Profile"
+        );
+        let before = raw.session_hooks.before.unwrap();
+        assert_eq!(
+            before.script,
+            std::path::PathBuf::from("/usr/local/bin/pre.sh"),
+            "session_hooks.before.script must survive to_raw_profile() passthrough"
+        );
+        assert_eq!(
+            before.timeout_secs,
+            Some(30),
+            "session_hooks.before.timeout_secs must survive to_raw_profile() passthrough"
+        );
+        assert!(
+            raw.session_hooks.after.is_none(),
+            "session_hooks.after must be None when not set in ProfileDef"
+        );
     }
 }

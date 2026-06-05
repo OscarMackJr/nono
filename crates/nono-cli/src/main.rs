@@ -288,6 +288,8 @@ mod tests {
             denied_env_vars: None,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
+            // Phase 58: test fixture has no session hooks.
+            session_hooks: crate::profile::SessionHooks::default(),
         };
 
         let effective = resolve_effective_proxy_settings(&args, &prepared);
@@ -341,6 +343,8 @@ mod tests {
             denied_env_vars: None,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
+            // Phase 58: test fixture has no session hooks.
+            session_hooks: crate::profile::SessionHooks::default(),
         };
 
         let effective = resolve_effective_proxy_settings(&args, &prepared);

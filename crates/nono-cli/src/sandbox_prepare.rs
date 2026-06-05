@@ -99,6 +99,11 @@ pub(crate) struct PreparedSandbox {
     /// `Profile::resolve_aipc_allowlist`. `None` when the run has no
     /// `--profile` argument; widening falls back to hard-coded defaults.
     pub(crate) loaded_profile: Option<profile::Profile>,
+    /// Phase 58: session lifecycle hooks carried forward from the loaded profile
+    /// for dispatch in `execution_runtime::execute_sandboxed`. Cross-platform;
+    /// runtime execution is platform-gated in `hook_runtime.rs` (Unix) /
+    /// `hook_runtime_windows.rs` (Windows).
+    pub(crate) session_hooks: profile::SessionHooks,
 }
 
 fn finalize_prepared_sandbox(
@@ -316,6 +321,9 @@ pub(crate) fn prepare_sandbox_with_context(
                 // Plan 18.1-03 G-06: manifest path has no loaded Profile —
                 // AIPC widening defaults to hard-coded supervisor allowlist.
                 loaded_profile: None,
+                // Phase 58: manifest path has no loaded Profile — no session
+                // hooks configured.
+                session_hooks: profile::SessionHooks::default(),
             },
             args,
             silent,
@@ -501,6 +509,13 @@ pub(crate) fn prepare_sandbox_with_context(
         .map(|profile| profile.env_credentials.mappings.clone())
         .unwrap_or_default();
     let loaded_secrets = load_env_credentials(args, &profile_secrets, silent)?;
+    // Phase 58: extract session_hooks before `loaded_profile` is moved into
+    // the PreparedSandbox struct literal below. Follows the profile_secrets
+    // extraction pattern above (clone before move).
+    let profile_session_hooks = loaded_profile
+        .as_ref()
+        .map(|p| p.session_hooks.clone())
+        .unwrap_or_default();
 
     finalize_prepared_sandbox(
         PreparedSandbox {
@@ -534,6 +549,9 @@ pub(crate) fn prepare_sandbox_with_context(
             // `Profile::resolve_aipc_allowlist` can be consulted at the
             // Windows supervisor construction site.
             loaded_profile,
+            // Phase 58: carry session_hooks from the loaded profile into
+            // PreparedSandbox. Follows the allowed_env_vars pattern above.
+            session_hooks: profile_session_hooks,
         },
         args,
         silent,

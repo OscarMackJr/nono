@@ -404,6 +404,7 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             loaded_profile: None,
+            session_hooks: crate::profile::SessionHooks::default(),
         };
 
         let args = SandboxArgs::default();
