@@ -287,7 +287,7 @@ pub(super) const STATUS_TIMEOUT_EXIT_CODE: u32 = 0x0000_0102;
 /// misfires — when `ProcessContainment` drops, the kernel still tears the
 /// tree down. See `.planning/phases/16-resource-limits/16-CONTEXT.md`
 /// § Failure Modes.
-pub(super) fn terminate_job_object(job: HANDLE, exit_code: u32) -> Result<()> {
+pub(crate) fn terminate_job_object(job: HANDLE, exit_code: u32) -> Result<()> {
     let ok = unsafe {
         // SAFETY: `job` is a live Job Object handle borrowed from
         // `ProcessContainment`. `TerminateJobObject` requires
