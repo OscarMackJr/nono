@@ -65,7 +65,7 @@ keyring = { version = "3", optional = true }
 # (upstream sigstore-rust PR #85, released 2026-05-13). Adds "API for fetching /
 # using the trust root (#69)" + "Avoid hashing the payload twice"; consumers
 # (`crates/nono-cli/src/trust_cmd.rs`) call `sign_blob`-style APIs unchanged.
-sigstore-sign = "0.7.0"
+sigstore-sign = "0.8.0"
 # YAML-merge directive support (Plan 36-02; upstream-aligned at v0.10.0 per 242d4917)
 serde_yaml_ng = "=0.10.0"
 # Phase 50 Plan 04 (Task 3): added `macros` feature so `#[tokio::test]`
@@ -86,7 +86,7 @@ tough = "0.22"
 # transitive graph; this just promotes the edge. Exact-minor pin "0.7.0"
 # locks us to the same release Plan 02's source-level imports are written
 # against — looser ranges could break the import surface on a minor bump.
-sigstore-trust-root = "0.7.0"
+sigstore-trust-root = "0.8.0"
 
 # Phase 50 (Codex R-50-01): direct dep so the `#[async_trait]` attribute
 # macro is resolvable in `crates/nono-cli/src/trust_refresh.rs`'s
