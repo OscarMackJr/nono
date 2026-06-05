@@ -1,7 +1,9 @@
 #[cfg(not(target_os = "windows"))]
 use crate::launch_runtime::select_threading_context;
 use crate::launch_runtime::LaunchPlan;
+use crate::profile::AllowDomainEntry;
 use crate::proxy_runtime::start_proxy_runtime;
+use crate::sandbox_state::{DomainEndpointState, EndpointRuleState};
 use crate::supervised_runtime::{execute_supervised_runtime, SupervisedRuntimeContext};
 use crate::{config, exec_strategy, output, sandbox_state};
 use nono::{CapabilitySet, NonoError, Result, Sandbox};
@@ -158,10 +160,41 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     if let Some(profile) = recommended_profile {
         output::print_profile_hint(recommended_program_name, profile, flags.silent);
     }
+    // Derive plain domain strings and endpoint state from Vec<AllowDomainEntry>.
+    // domain_endpoints captures WithEndpoints entries for the capability state file;
+    // plain_allowed_domains is the flat domain list for the allowed_domains field.
+    let domain_endpoints: Vec<DomainEndpointState> = flags
+        .proxy
+        .allow_domain
+        .iter()
+        .filter_map(|entry| {
+            if let AllowDomainEntry::WithEndpoints { domain, endpoints } = entry {
+                Some(DomainEndpointState {
+                    domain: domain.clone(),
+                    endpoints: endpoints
+                        .iter()
+                        .map(|e| EndpointRuleState {
+                            method: e.method.clone(),
+                            path: e.path.clone(),
+                        })
+                        .collect(),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let plain_allowed_domains: Vec<String> = flags
+        .proxy
+        .allow_domain
+        .iter()
+        .map(|e| e.domain().to_string())
+        .collect();
     let cap_file = write_capability_state_file(
         &caps,
         &flags.bypass_protection_paths,
-        &flags.proxy.allow_domain,
+        &plain_allowed_domains,
+        &domain_endpoints,
         flags.silent,
     );
     let cap_file_path = cap_file.as_ref().cloned().unwrap_or_else(|| {
@@ -508,11 +541,15 @@ fn write_capability_state_file(
     caps: &CapabilitySet,
     bypass_protection_paths: &[std::path::PathBuf],
     allowed_domains: &[String],
+    domain_endpoints: &[DomainEndpointState],
     silent: bool,
 ) -> Option<std::path::PathBuf> {
-    // TODO(56-02): pass domain_endpoints as 4th arg once Plan 02 wires partition_allow_domain
-    let state =
-        sandbox_state::SandboxState::from_caps(caps, bypass_protection_paths, allowed_domains, &[]);
+    let state = sandbox_state::SandboxState::from_caps(
+        caps,
+        bypass_protection_paths,
+        allowed_domains,
+        domain_endpoints,
+    );
 
     for _ in 0..8 {
         let cap_file = next_capability_state_file_path();

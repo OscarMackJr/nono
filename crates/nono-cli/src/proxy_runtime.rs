@@ -1,6 +1,7 @@
 use crate::cli::SandboxArgs;
 use crate::launch_runtime::ProxyLaunchOptions;
 use crate::network_policy;
+use crate::profile::AllowDomainEntry;
 use crate::sandbox_prepare::{validate_external_proxy_bypass, PreparedSandbox};
 use nono::{CapabilitySet, NonoError, Result};
 use tracing::info;
@@ -14,8 +15,37 @@ pub(crate) struct ActiveProxyRuntime {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct EffectiveProxySettings {
     pub(crate) network_profile: Option<String>,
-    pub(crate) allow_domain: Vec<String>,
+    pub(crate) allow_domain: Vec<AllowDomainEntry>,
     pub(crate) credentials: Vec<String>,
+}
+
+/// Parse a `--allow-domain` CLI argument that may be a bare hostname or a URL with path.
+///
+/// - Plain hostname (e.g. `api.openai.com`) → `AllowDomainEntry::Plain`
+/// - URL with non-root path (e.g. `https://api.github.com/repos/my-org/**`) →
+///   `AllowDomainEntry::WithEndpoints` with a single wildcard-method rule
+/// - URL with root or empty path → `AllowDomainEntry::Plain` (no endpoint restriction)
+/// - Unparseable input → `AllowDomainEntry::Plain` (fallback)
+///
+/// Upstream-commit: 75b2265
+fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
+    if let Ok(parsed) = url::Url::parse(input) {
+        let domain = parsed.host_str().unwrap_or(input).to_string();
+        let path = parsed.path();
+        if path.is_empty() || path == "/" {
+            AllowDomainEntry::Plain(domain)
+        } else {
+            AllowDomainEntry::WithEndpoints {
+                domain,
+                endpoints: vec![nono_proxy::config::EndpointRule {
+                    method: "*".to_string(),
+                    path: path.to_string(),
+                }],
+            }
+        }
+    } else {
+        AllowDomainEntry::Plain(input.to_string())
+    }
 }
 
 pub(crate) fn prepare_proxy_launch_options(
@@ -109,8 +139,14 @@ pub(crate) fn resolve_effective_proxy_settings(
         .network_profile
         .clone()
         .or_else(|| prepared.network_profile.clone());
-    let mut allow_domain = prepared.allow_domain.clone();
-    allow_domain.extend(args.allow_proxy.clone());
+    // Convert PreparedSandbox allow_domain (Vec<String>) to Vec<AllowDomainEntry> via
+    // parse_allow_domain_arg, then extend with CLI --allow-domain args also parsed.
+    let mut allow_domain: Vec<AllowDomainEntry> = prepared
+        .allow_domain
+        .iter()
+        .map(|s| parse_allow_domain_arg(s))
+        .collect();
+    allow_domain.extend(args.allow_proxy.iter().map(|s| parse_allow_domain_arg(s)));
     let mut credentials = prepared.credentials.clone();
     credentials.extend(args.proxy_credential.clone());
 
@@ -160,9 +196,20 @@ pub(crate) fn build_proxy_config_from_flags(
     )?;
     resolved.routes = routes;
 
-    let expanded_allow_domain =
-        network_policy::expand_proxy_allow(&net_policy, &proxy.allow_domain);
-    let mut proxy_config = network_policy::build_proxy_config(&resolved, &expanded_allow_domain);
+    // Partition allow_domain entries into plain hosts and endpoint-scoped routes.
+    // C5 rider (22e6c40): also push endpoint route upstreams into plain_hosts so
+    // the proxy filter allowlist allows upstream TCP connections for TLS-intercept routes.
+    let (mut plain_hosts, endpoint_routes) =
+        network_policy::partition_allow_domain(&net_policy, &proxy.allow_domain)?;
+    for route in &endpoint_routes {
+        if let Some(hp) = route.upstream.strip_prefix("https://") {
+            plain_hosts.push(hp.to_string());
+        } else if let Some(hp) = route.upstream.strip_prefix("http://") {
+            plain_hosts.push(hp.to_string());
+        }
+    }
+    resolved.routes.extend(endpoint_routes);
+    let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts);
 
     if let Some(ref addr) = proxy.upstream_proxy {
         proxy_config.external_proxy = Some(nono_proxy::config::ExternalProxyConfig {
@@ -230,4 +277,56 @@ pub(crate) fn start_proxy_runtime(
         env_vars,
         handle: Some(handle),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::profile::AllowDomainEntry;
+
+    /// Upstream-commit: 75b2265 — parse_allow_domain_arg tests
+    #[test]
+    fn parse_allow_domain_plain_hostname() {
+        let entry = parse_allow_domain_arg("api.openai.com");
+        assert_eq!(entry, AllowDomainEntry::Plain("api.openai.com".to_string()));
+    }
+
+    #[test]
+    fn parse_allow_domain_url_with_path_produces_with_endpoints() {
+        let entry = parse_allow_domain_arg("https://api.github.com/repos/my-org/**");
+        assert_eq!(
+            entry,
+            AllowDomainEntry::WithEndpoints {
+                domain: "api.github.com".to_string(),
+                endpoints: vec![nono_proxy::config::EndpointRule {
+                    method: "*".to_string(),
+                    path: "/repos/my-org/**".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn parse_allow_domain_url_with_root_path_produces_plain() {
+        let entry = parse_allow_domain_arg("https://api.github.com/");
+        assert_eq!(
+            entry,
+            AllowDomainEntry::Plain("api.github.com".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_allow_domain_url_no_path_produces_plain() {
+        let entry = parse_allow_domain_arg("https://api.github.com");
+        assert_eq!(
+            entry,
+            AllowDomainEntry::Plain("api.github.com".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_allow_domain_unparseable_input_falls_back_to_plain() {
+        let entry = parse_allow_domain_arg("not-a-url");
+        assert_eq!(entry, AllowDomainEntry::Plain("not-a-url".to_string()));
+    }
 }
