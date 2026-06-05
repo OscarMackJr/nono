@@ -1,15 +1,17 @@
-//! Secure credential loading from system keystore, 1Password, Apple Passwords, and environment
+//! Secure credential loading from system keystore, 1Password, Bitwarden, Apple Passwords, and environment
 //!
 //! This module provides functionality to load secrets from the system keystore
 //! (macOS Keychain / Linux Secret Service), 1Password (via the `op` CLI),
-//! Apple Passwords (via macOS `security`), custom keyring entries (via the
-//! `keyring` crate), or environment variables (via the `env://` scheme) and
-//! return them as zeroized strings.
+//! Bitwarden (via the `bw` or `bws` CLI), Apple Passwords (via macOS `security`),
+//! custom keyring entries (via the `keyring` crate), or environment variables
+//! (via the `env://` scheme) and return them as zeroized strings.
 //!
 //! Credential references are dispatched by URI scheme:
 //! - `env://VAR_NAME` — reads from the current process environment
 //! - `file:///path/to/secret` — reads from a local file (before sandbox activation)
 //! - `op://vault/item/field` — loaded via the 1Password CLI
+//! - `bw://item/<id>/<selector>` — loaded via the Bitwarden `bw` CLI
+//! - `bw://secret/<uuid>` — loaded via the Bitwarden Secrets Manager `bws` CLI
 //! - `apple-password://server/account` — loaded via macOS `security`
 //! - `keyring://service/account` — loaded from the system keyring with a custom service name
 //! - Everything else — loaded from the system keyring (service name `nono`)
@@ -43,6 +45,19 @@ pub const DEFAULT_SERVICE: &str = "nono";
 
 /// The `op://` URI scheme prefix, indicating 1Password CLI backend.
 const OP_URI_PREFIX: &str = "op://";
+
+/// The `bw://` URI scheme prefix, indicating a Bitwarden backend (`bw` CLI or `bws` CLI).
+const BW_URI_PREFIX: &str = "bw://";
+
+/// First path segment selecting the `bw` password-manager CLI backend.
+///
+/// Used in `bw://item/<id>/<selector>` URIs.
+const BW_ITEM_SEGMENT: &str = "item";
+
+/// First path segment selecting the `bws` Secrets Manager CLI backend.
+///
+/// Used in `bw://secret/<uuid>` URIs.
+const BW_SECRET_SEGMENT: &str = "secret";
 
 /// The `apple-password://` URI scheme prefix, indicating Apple Passwords backend.
 const APPLE_PASSWORD_URI_PREFIX: &str = "apple-password://";
@@ -275,6 +290,193 @@ pub fn validate_op_uri(uri: &str) -> Result<()> {
 #[must_use]
 pub fn is_op_uri(credential_ref: &str) -> bool {
     credential_ref.starts_with(OP_URI_PREFIX)
+}
+
+/// Returns true if the credential reference is a Bitwarden `bw://` URI.
+#[must_use]
+pub fn is_bw_uri(credential_ref: &str) -> bool {
+    credential_ref.starts_with(BW_URI_PREFIX)
+}
+
+/// Validate a `bw://` URI has the correct structure.
+///
+/// Accepted formats:
+/// - `bw://item/<id>/password` — login password
+/// - `bw://item/<id>/username` — login username
+/// - `bw://item/<id>/totp` — current TOTP code (requires `bw get totp` subprocess)
+/// - `bw://item/<id>/notes` — secure note body
+/// - `bw://item/<id>/field/<name>` — named custom field
+/// - `bw://secret/<uuid>` — Bitwarden Secrets Manager secret value (no field selector)
+///
+/// Rejects:
+/// - Characters that could enable argument injection (`FORBIDDEN_URI_CHARS`)
+/// - Query strings or fragments
+/// - Empty path segments
+/// - Unknown first segment (not `item` or `secret`)
+/// - Field selectors on `bw://secret/` URIs (D-06)
+/// - Item IDs or secret UUIDs that fail the injection-safe charset check
+pub fn validate_bw_uri(uri: &str) -> Result<()> {
+    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "credential reference '{}' does not start with '{}'",
+            uri, BW_URI_PREFIX
+        ))
+    })?;
+
+    // Reject shell metacharacters to prevent injection
+    if let Some(bad) = path.chars().find(|c| FORBIDDEN_URI_CHARS.contains(c)) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI contains forbidden character {:?}: {}",
+            bad, uri
+        )));
+    }
+
+    // Reject query strings and fragments
+    if path.contains('?') || path.contains('#') {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI must not contain query strings or fragments: {}",
+            uri
+        )));
+    }
+
+    let segments: Vec<&str> = path.split('/').collect();
+
+    // No empty segments
+    if segments.iter().any(|s| s.is_empty()) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI has empty path segment: {}",
+            uri
+        )));
+    }
+
+    match segments.first().copied() {
+        Some(BW_ITEM_SEGMENT) => validate_bw_item_uri_segments(&segments, uri),
+        Some(BW_SECRET_SEGMENT) => validate_bws_uri_segments(&segments, uri),
+        _ => Err(NonoError::ConfigParse(format!(
+            "Bitwarden URI must start with 'item/' or 'secret/': {}",
+            uri
+        ))),
+    }
+}
+
+/// Validate the segment structure of a `bw://item/<id>/<selector>` URI.
+fn validate_bw_item_uri_segments(segments: &[&str], uri: &str) -> Result<()> {
+    // segments[0] == "item" (already matched by caller)
+    // segments[1] must be a valid item ID
+    let item_id = segments.get(1).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "Bitwarden item URI missing item ID segment: {}",
+            uri
+        ))
+    })?;
+    if !is_valid_bw_id(item_id) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden item URI has invalid item ID '{}' (must be alphanumeric + hyphens, max 64 chars): {}",
+            item_id, uri
+        )));
+    }
+
+    // segments[2] must be a known selector
+    let selector = segments.get(2).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "Bitwarden item URI missing selector segment (expected password/username/totp/notes/field): {}",
+            uri
+        ))
+    })?;
+
+    match *selector {
+        "password" | "username" | "totp" | "notes" => {
+            // Reserved selectors: exactly 3 segments total
+            if segments.len() != 3 {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden item URI has extra segments after '{}' selector (not allowed): {}",
+                    selector, uri
+                )));
+            }
+        }
+        "field" => {
+            // Custom field: exactly 4 segments, segments[3] is the field name
+            if segments.len() != 4 {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden item URI with 'field' selector requires a field name \
+                     (e.g. bw://item/<id>/field/my-key): {}",
+                    uri
+                )));
+            }
+            let field_name = segments[3];
+            if field_name.is_empty() {
+                return Err(NonoError::ConfigParse(format!(
+                    "Bitwarden item URI field selector requires a non-empty field name: {}",
+                    uri
+                )));
+            }
+        }
+        other => {
+            return Err(NonoError::ConfigParse(format!(
+                "Bitwarden item URI has unknown selector '{}' \
+                 (expected password/username/totp/notes/field): {}",
+                other, uri
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validate the segment structure of a `bw://secret/<uuid>` URI.
+fn validate_bws_uri_segments(segments: &[&str], uri: &str) -> Result<()> {
+    // D-06: field selectors are not supported for bw://secret/ URIs.
+    if segments.len() != 2 {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden secret URI must be 'bw://secret/<uuid>' with no field selector \
+             (field selectors are not supported for Secrets Manager secrets): {}",
+            uri
+        )));
+    }
+
+    let secret_id = segments.get(1).ok_or_else(|| {
+        NonoError::ConfigParse(format!(
+            "Bitwarden secret URI missing secret UUID segment: {}",
+            uri
+        ))
+    })?;
+    if !is_valid_bw_id(secret_id) {
+        return Err(NonoError::ConfigParse(format!(
+            "Bitwarden secret URI has invalid secret UUID '{}' \
+             (must be alphanumeric + hyphens, max 64 chars): {}",
+            secret_id, uri
+        )));
+    }
+
+    Ok(())
+}
+
+/// Accept only characters safe for passing as CLI arguments:
+/// alphanumeric (upper/lower/digit) and hyphens.
+/// This covers all UUID forms and Bitwarden's compact item IDs.
+fn is_valid_bw_id(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
+/// Redact the selector/UUID segment of a `bw://` URI for safe logging.
+///
+/// - `bw://item/<id>/<selector>` → `bw://item/<id>/<redacted>`
+/// - `bw://secret/<uuid>` → `bw://secret/<redacted>`
+#[must_use]
+pub fn redact_bw_uri(uri: &str) -> String {
+    if let Some(path) = uri.strip_prefix(BW_URI_PREFIX) {
+        let parts: Vec<&str> = path.splitn(3, '/').collect();
+        match parts.as_slice() {
+            [seg, id, _] if *seg == BW_ITEM_SEGMENT => {
+                return format!("bw://item/{}/<redacted>", id);
+            }
+            [seg, _] if *seg == BW_SECRET_SEGMENT => {
+                return "bw://secret/<redacted>".to_string();
+            }
+            _ => {}
+        }
+    }
+    "bw://***".to_string()
 }
 
 fn strip_apple_password_prefix(uri: &str) -> Option<&str> {
@@ -2906,5 +3108,186 @@ mod tests {
         assert!(!is_keyring_uri("env://VAR"));
         assert!(!is_keyring_uri("op://v/i/f"));
         assert!(!is_keyring_uri("plain-account-name"));
+    }
+
+    // =====================================================================
+    // bw:// URI tests (Task 1: constants, validation, redaction)
+    // =====================================================================
+
+    // --- is_bw_uri ---
+
+    #[test]
+    fn test_is_bw_uri_true() {
+        assert!(is_bw_uri("bw://item/abc123/password"));
+        assert!(is_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000"));
+    }
+
+    #[test]
+    fn test_is_bw_uri_false() {
+        assert!(!is_bw_uri("op://vault/item/field"));
+        assert!(!is_bw_uri("keyring://svc/acct"));
+        assert!(!is_bw_uri("env://MY_VAR"));
+        assert!(!is_bw_uri("bw-other://something"));
+    }
+
+    // --- validate_bw_uri: valid cases ---
+
+    #[test]
+    fn test_validate_bw_uri_item_password() {
+        assert!(validate_bw_uri("bw://item/abc123def456/password").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_username() {
+        assert!(validate_bw_uri("bw://item/abc-123-def/username").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_notes() {
+        assert!(validate_bw_uri("bw://item/abc123/notes").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_totp() {
+        assert!(validate_bw_uri("bw://item/abc123/totp").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_custom_field() {
+        assert!(validate_bw_uri("bw://item/abc123/field/my-api-key").is_ok());
+    }
+
+    #[test]
+    fn test_validate_bw_uri_secret() {
+        assert!(validate_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000").is_ok());
+    }
+
+    // --- validate_bw_uri: rejection cases ---
+
+    #[test]
+    fn test_validate_bw_uri_forbidden_char() {
+        let err = validate_bw_uri("bw://item/abc;drop/password")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("forbidden character"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_id_with_injection_char() {
+        // & is in FORBIDDEN_URI_CHARS
+        let err = validate_bw_uri("bw://item/abc&def/password")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("forbidden character"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_query_rejected() {
+        let err = validate_bw_uri("bw://item/abc123/password?debug=1")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("query"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_fragment_rejected() {
+        let err = validate_bw_uri("bw://item/abc123/password#h")
+            .expect_err("should be rejected");
+        // Fragment '#' is rejected by the query/fragment check
+        assert!(
+            err.to_string().contains("fragment") || err.to_string().contains("query"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_secret_no_field_selector() {
+        // D-06: field selectors are not supported on bw://secret/ URIs
+        let err = validate_bw_uri("bw://secret/abc123/password")
+            .expect_err("should be rejected per D-06");
+        assert!(
+            err.to_string().contains("field selector") || err.to_string().contains("secret"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_item_missing_selector() {
+        // bw://item/<id> with no selector segment should be rejected
+        let err = validate_bw_uri("bw://item/abc123")
+            .expect_err("should be rejected: missing selector");
+        assert!(!err.to_string().is_empty(), "got empty error");
+    }
+
+    #[test]
+    fn test_validate_bw_uri_unknown_first_segment() {
+        let err = validate_bw_uri("bw://vault/abc123/password")
+            .expect_err("should be rejected");
+        assert!(
+            err.to_string().contains("'item'") || err.to_string().contains("'secret'")
+                || err.to_string().contains("item/") || err.to_string().contains("secret/"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_validate_bw_uri_unknown_selector() {
+        let err = validate_bw_uri("bw://item/abc123/login")
+            .expect_err("should be rejected: unknown selector");
+        assert!(
+            err.to_string().contains("unknown selector") || err.to_string().contains("selector"),
+            "got: {}",
+            err
+        );
+    }
+
+    // --- redact_bw_uri ---
+
+    #[test]
+    fn test_redact_bw_uri_item() {
+        assert_eq!(
+            redact_bw_uri("bw://item/abc123/password"),
+            "bw://item/abc123/<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_bw_uri_item_custom() {
+        // For item URIs, splitn(3) absorbs "field/my-key" as the third part
+        assert_eq!(
+            redact_bw_uri("bw://item/abc123/field/my-key"),
+            "bw://item/abc123/<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_bw_uri_secret() {
+        assert_eq!(
+            redact_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000"),
+            "bw://secret/<redacted>"
+        );
+    }
+
+    #[test]
+    fn test_redact_bw_uri_malformed() {
+        assert_eq!(redact_bw_uri("bw://"), "bw://***");
+    }
+
+    #[test]
+    fn test_redact_bw_uri_not_bw_prefix() {
+        // Non-bw:// string falls through to bw://*** fallback
+        assert_eq!(redact_bw_uri("op://vault/item/field"), "bw://***");
     }
 }
