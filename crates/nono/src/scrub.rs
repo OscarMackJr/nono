@@ -185,7 +185,7 @@ pub fn scrub_value_with_policy<'a>(s: &'a str, policy: &ScrubPolicy) -> Cow<'a, 
     let url_scrubbed = scrub_url_userinfo(header_scrubbed.as_ref() as &str);
     let query_scrubbed = scrub_query_params(url_scrubbed.as_ref() as &str, policy);
 
-    if query_scrubbed.as_ref() as &str == s {
+    if &*query_scrubbed == s {
         Cow::Borrowed(s)
     } else {
         Cow::Owned(query_scrubbed.into_owned())
@@ -275,7 +275,7 @@ pub fn scrub_header_with_policy<'a>(
 fn scrub_header_arg<'a>(value: &'a str, policy: &ScrubPolicy) -> Cow<'a, str> {
     if let Some((name, header_value)) = value.split_once(':') {
         let scrubbed = scrub_header_with_policy(name.trim(), header_value.trim_start(), policy);
-        if scrubbed.as_ref() as &str != header_value.trim_start() {
+        if &*scrubbed != header_value.trim_start() {
             return Cow::Owned(format!("{}: {}", name, scrubbed));
         }
     }
