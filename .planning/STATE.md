@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.8
 milestone_name: UPST7 + v2.7 Drain & Release
 status: executing
-last_updated: "2026-06-05T19:05:49.182Z"
+last_updated: "2026-06-05T20:13:14.029Z"
 last_activity: 2026-06-05
 progress:
   total_phases: 10
@@ -21,11 +21,11 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 57 — Bitwarden Credential Source (next; Phase 56 fine-grained-network-filtering COMPLETE 2026-06-05)
+**Current Focus:** Phase 57 — bitwarden-credential-source
 
 ## Current Position
 
-Phase: 57 (Bitwarden Credential Source) — NEXT in v2.8. Phase 56 (fine-grained-network-filtering) COMPLETE 2026-06-05: 4/4 plans, REQ-NET-01 satisfied (4/4 must-haves verified). Code review caught 2 blockers — CR-01 (fail-open: profile endpoint rules flattened to bare domains → unrestricted tunnel; fixed `05cd7580` by threading `Vec<AllowDomainEntry>` end-to-end through `PreparedSandbox`) and CR-02 (`host:port` URL-parse mangling; fixed `05cd7580` with an http(s):// scheme guard) — plus WR-01 (loopback string-prefix → parsed `IpAddr`, `c4931750`); all fixed pre-verification with regression tests. Verification status `human_needed`: 4 live/policy items in 56-HUMAN-UAT.md (operator approved phase completion 2026-06-05, UAT deferred). NOTE: `gsd-sdk query phase.complete 56` reported next_phase=60 — the documented SDK numeric-skip bug ([[feedback_sdk_next_phase_skip]]); Phases 60/61 are the separate v2.9 Sandbox-the-Tools track, the true v2.8 next phase is 57.
+Phase: 57 (bitwarden-credential-source) — EXECUTING
 
 --- (historical v2.9/Phase 62 narrative below is PRE-EXISTING drift from out-of-band work, retained as-is; not part of v2.8 Phase 56 close) ---
 
@@ -41,8 +41,8 @@ GATES GREEN: UAT 5/5 SC PASS (62-HUMAN-UAT.md) + security 33/33 closed (62-SECUR
 VALIDATION (decisive, supersedes all the D5 #2 uncertainty below): the elevated spike `crates/nono-cli/examples/spike_wfp_appcontainer.rs` PROVED WFP kernel-BLOCKS an AppContainer's outbound connection scoped by its package SID — via BOTH ALE_USER_ID (curl exit 6, "Could not resolve host", the path nono already builds) AND ALE_PACKAGE_ID (curl exit 2). So the AppContainer redesign is VIABLE and the existing ALE_USER_ID scoping is KEPT. The spike also EXPOSED the real spawn bug: CreateProcessW(SECURITY_CAPABILITIES) fails ERROR_FILE_NOT_FOUND with a DERIVE-ONLY package SID even from a fully-accessible cwd (C:\Windows\System32) — the AppContainer PROFILE must be REGISTERED first via CreateAppContainerProfile (62-12 used Derive-only → THE bug; debug D1 "no registration needed" FALSIFIED). The v0.57.10/v0.57.11 cwd-traverse work (c3d7644f) was a WRONG turn for the SPAWN (but the read+traverse grant is still needed for real tools to access user files). Memory: [[windows_appcontainer_wfp_validated]]. NEXT FIX (plan 62-13): (1) broker registers the per-run profile (CreateAppContainerProfile + RAII DeleteAppContainerProfile, tolerate ALREADY_EXISTS) BEFORE the SECURITY_CAPABILITIES spawn; (2) KEEP ALE_USER_ID; (3) package-SID grant model for the real user-profile cwd (traverse on cwd + ancestors if no bypass-traverse) + read paths for claude.exe (deferred). Full trail: .planning/debug/wfp-write-restricted-0142.md.
 --- (historical context below, pre-validation) ---
 Phase: 62 — 62-12 AppContainer REDESIGN CODE-COMPLETE (supersedes falsified 62-10); 62-11 OK; awaiting live 62-04 HUMAN-UAT
-Plan: Not started
-Status: Ready to execute
+Plan: 1 of 1
+Status: Executing Phase 57
 Next (operator, live elevated Win11): rebuild nono.exe + broker + version-bumped MSI, then run 62-04 HUMAN-UAT SC1→SC5. SC1 probe (from a profile-covered cwd e.g. %USERPROFILE%\.claude): `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org` MUST block (no external IP). SC4/SC5: after a confined --block-net run, `msiexec /x` then confirm NO nono filters + NO NONO_SUBLAYER_GUID sublayer remain. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; import POC cert to LocalMachine\Root+TrustedPublisher; verify installed nono-wfp-service.exe SHA256. If startup regresses under WRITE_RESTRICTED on the broker path, escalate to a new debug session (the restricting-SID shape is the only WFP-matchable option per debug wfp-broker-token-no-sid D1). Phase 60 follow-ups (non-blocking) still carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
 BUILT+SIGNED FOR 62-04 UAT — CURRENT = v0.57.12 (62-13 AppContainer PROFILE-REGISTRATION fix; 2026-06-03): signed machine MSI `dist/windows/nono-v0.57.12-x86_64-pc-windows-msvc-machine.msi` (ProductVersion 0.57.12, MajorUpgrade; Authenticode Valid; POC cert 319E507E...). SHA256: nono.exe = C9F900CFCB6AAC5A288233BF84DB23D4CBAC3AC8D6BCD330070C227E8A59A318; nono-wfp-service.exe = 17A24FB19EB942F1EF55732DC0EBA2FA6CC05BBD590D0C1B502AC2AE37CAF25B. Cert already imported on this host. ⚠ INSTALL v0.57.12 (it carries the SPIKE-VALIDATED fix). UAT HISTORY: v0.57.9 → 0xC0000142 (WRITE_RESTRICTED crash; FIXED by 62-12 AppContainer). v0.57.10/v0.57.11 → CreateProcessW ERROR_FILE_NOT_FOUND (wrongly chased as cwd-traverse; c3d7644f leaf grant kept but was NOT the fix — the spike proved it failed even from a fully-accessible System32 cwd). v0.57.12 (62-13) = the REAL fix: broker REGISTERS the AppContainer profile (CreateAppContainerProfile) before spawn — spike PROVED this makes the child START + WFP-block via ALE_USER_ID. SC1 re-run from %USERPROFILE%\.claude: curl should START; BLOCK (no IP / "Could not resolve host"/timeout) = SC1 PASS. OPEN UAT QUESTION: does the lowbox have bypass-traverse? If curl STILL fails FILE_NOT_FOUND, a non-owned ancestor (C:\Users) blocks reaching the profile-deep cwd (can't grant its DACL) → pivot to a profile-accessible cwd strategy. DEFERRED: full read-grant model for claude.exe. NOTE: Cargo crate version stays 0.57.5 (MSI version from build tag).
 Last session: 2026-06-05T18:24:10.341Z
