@@ -647,17 +647,13 @@ Not applicable — this is a new feature addition (not a rename/refactor/migrati
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **`sandbox_state.rs::SandboxState::from_caps` signature** — upstream `0ced085` adds a fourth `domain_endpoints` parameter to `from_caps`. The fork's current signature and all call sites need to be updated. The planner should grep for `SandboxState::from_caps` call sites to get the full list before writing plan tasks.
-   - What we know: 5 test call sites visible in upstream diff, all gain `&[]` for the new parameter.
-   - What's unclear: How many call sites exist in the fork's current code.
-   - Recommendation: `grep -rn "SandboxState::from_caps" crates/` at plan time.
+1. **`sandbox_state.rs::SandboxState::from_caps` signature** — upstream `0ced085` adds a fourth `domain_endpoints` parameter to `from_caps`. The fork's current signature and all call sites need to be updated.
+   - **RESOLVED (planner grep 2026-06-04):** `grep -rn "SandboxState::from_caps" crates/` returns **5 call sites in `sandbox_state.rs` test module** (lines 490, 508, 552, 581, 610) that use the 3-arg `(caps, bypass_paths, allowed_domains)` CLI signature — all 5 must gain a 4th `&[]` arg. The production call site in `execution_runtime.rs` line 514 is the one wired by Plan 02. The 2 call sites in `nono/src/state.rs` and 2 in `capability_ext.rs` use a different 1-arg library `from_caps` — unaffected. Total CLI test sites: **5**.
 
-2. **`profile_cmd.rs` allow_domain rendering** — `0ced085` modifies `profile_cmd.rs` to render `AllowDomainEntry` items with their endpoint rules in the `nono profile show` output. The exact display format (plain string vs structured) should be checked from the diff.
-   - What we know: `profile_cmd.rs` gets ~78 lines of changes in `0ced085`.
-   - What's unclear: Whether the fork's `profile_cmd.rs` is sufficiently close to upstream to make this a clean port.
-   - Recommendation: `git show 0ced085 -- crates/nono-cli/src/profile_cmd.rs` at plan time.
+2. **`profile_cmd.rs` allow_domain rendering** — `0ced085` modifies `profile_cmd.rs` to render `AllowDomainEntry` items with their endpoint rules in the `nono profile show` output.
+   - **RESOLVED (planner diff-inspect 2026-06-04):** `git show 0ced085 -- crates/nono-cli/src/profile_cmd.rs` was diff-inspected and confirms the upstream diff is a clean port for the fork (the `cmd_show` function at line 1039 is the primary change site; ~78 lines of endpoint-rule display logic; fork's `profile_cmd.rs` structure is sufficiently close to upstream — Plan 03 handles this with standard diff-inspect-then-adapt pattern).
 
 ---
 

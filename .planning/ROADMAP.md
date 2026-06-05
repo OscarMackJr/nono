@@ -146,18 +146,7 @@ Plans:
   2. On Unix, the upstream `hook_runtime` behavior is preserved exactly (gated unix-only as upstream ships it); no behavioral regression from the upstream implementation
   3. On Windows, hooks execute via a broker-spawned Low-IL process (no `fork`/`sh` assumption); an ADR is committed to `.planning/` documenting the Windows execution design decisions and any invariants the hook executor must preserve (e.g., mandatory-label enforcement, no unrestricted shell access)
   4. Hook resolution or execution failure is fail-closed: if a required hook cannot be found or exits non-zero, the session does not start (or stops with an error) — never silently skipped
-**Plans**: 4 plans
-Plans:
-**Wave 1**
-- [ ] 56-01-PLAN.md — AllowDomainEntry enum + merge_allow_domain (profile/mod.rs) + partition_allow_domain (network_policy.rs) + DomainEndpointState + from_caps update (sandbox_state.rs) + Cargo.toml deps
-
-**Wave 2** *(parallel pair — no file overlap)*
-- [ ] 56-02-PLAN.md — Core proxy wiring: proxy_runtime.rs (parse_allow_domain_arg + C5 rider) + profile_runtime.rs + launch_runtime.rs + execution_runtime.rs + sandbox_prepare.rs + main.rs test fixtures
-- [ ] 56-03-PLAN.md — Display + schema: profile_cmd.rs allow_domain rendering + nono-profile.schema.json AllowDomainWithEndpoints
-
-**Wave 3** *(blocked on Waves 1+2)*
-- [ ] 56-04-PLAN.md — SC3 nono why extension: query_ext.rs (parse_host_input + query_network + QueryResult::Allowed endpoint_rules) + why_runtime.rs + full verification sweep (credential.rs SHA gate, Upstream-commit trailer audit, clippy)
-**UI hint**: yes
+**Plans**: TBD
 
 ### Phase 59: Supervisor IPC Robustness
 **Goal**: The supervisor loop survives transient child IPC disconnects and enforces bounded read timeouts on both Unix and Windows
