@@ -28,6 +28,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use crate::timeouts;
+
 #[cfg(unix)]
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 
@@ -384,7 +386,7 @@ impl PtyProxy {
                     return false;
                 }
 
-                let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                let _ = stream.set_read_timeout(Some(timeouts::ATTACH_SOCKET_READ_TIMEOUT));
                 let mut request_kind = [0u8; 1];
                 match stream.read_exact(&mut request_kind) {
                     Ok(()) => {}
@@ -1757,7 +1759,7 @@ where
         Ok(()) => run_attach_loop(
             sock_fd,
             resize_socket.as_ref(),
-            Some(Duration::from_millis(250)),
+            Some(timeouts::ATTACH_STDIN_DELAY),
         ),
         Err(e) => Err(e),
     };
@@ -1781,7 +1783,7 @@ where
 /// Connect to a running session's attach socket and proxy I/O.
 pub fn attach_to_session(session_id: &str) -> Result<()> {
     let stream = connect_to_session(session_id)?;
-    wait_for_attach_ready(stream.as_raw_fd(), 1000)?;
+    wait_for_attach_ready(stream.as_raw_fd(), timeouts::pty_attach_timeout_ms())?;
     attach_to_stream(stream)
 }
 
