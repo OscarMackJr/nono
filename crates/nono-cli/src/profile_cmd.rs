@@ -1573,10 +1573,15 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
             );
         }
         if !net.allow_domain.is_empty() {
+            let display: Vec<String> = net.allow_domain.iter().map(|e| match e {
+                profile::AllowDomainEntry::Plain(s) => s.clone(),
+                profile::AllowDomainEntry::WithEndpoints { domain, endpoints } =>
+                    format!("{} ({} endpoint rules)", domain, endpoints.len()),
+            }).collect();
             println!(
                 "    {}: {}",
                 theme::fg("allow_domain", t.subtext),
-                net.allow_domain.iter().map(|e| e.domain()).collect::<Vec<_>>().join(", ")
+                display.join(", ")
             );
         }
         if !net.resolved_credentials().is_empty() {
@@ -3242,10 +3247,36 @@ fn resolve_to_manifest(
         manifest::NetworkMode::Unrestricted
     };
 
+    let manifest_endpoints: Vec<manifest::NetworkEndpoint> = prof
+        .network
+        .allow_domain
+        .iter()
+        .filter_map(|e| match e {
+            profile::AllowDomainEntry::WithEndpoints { domain, endpoints }
+                if !endpoints.is_empty() =>
+            {
+                let host: manifest::NetworkEndpointHost =
+                    domain.as_str().try_into().ok()?;
+                let rules = endpoints
+                    .iter()
+                    .filter_map(|r| {
+                        let method: manifest::EndpointRuleMethod =
+                            r.method.as_str().try_into().ok()?;
+                        let path: manifest::EndpointRulePath =
+                            r.path.as_str().try_into().ok()?;
+                        Some(manifest::EndpointRule { method, path })
+                    })
+                    .collect();
+                Some(manifest::NetworkEndpoint { host, rules })
+            }
+            _ => None,
+        })
+        .collect();
+
     let network = Some(manifest::Network {
         mode: network_mode,
         allow_domains: prof.network.allow_domain.iter().map(|e| e.domain().to_string()).collect(),
-        endpoints: Vec::new(),
+        endpoints: manifest_endpoints,
         dns: true,
         ports: if prof.network.listen_port.is_empty() && prof.network.open_port.is_empty() {
             None
