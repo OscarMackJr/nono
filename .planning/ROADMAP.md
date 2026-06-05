@@ -26,7 +26,7 @@ granularity: standard
 
 - [x] **Phase 53: Release & Drain** — Tag v2.8 + v0.57.5, produce signed MSIs off the post-`005b4c9e` binary, verify release.yml, UAT WFP uninstall, drain 3 todos (shipped as v0.57.5 after a release.yml signing-order fix; all 5 SC verified)
 - [x] **Phase 54: UPST7 Audit** — Produce DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0`; per-cluster dispositions + ADR re-confirm + re-export empirical cross-check
-- [ ] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, proxy 502 hardening, pack-update-hint robustness, ENV_LOCK policy test, sigstore 0.8.0, denial/diagnostic polish) per Phase 54 dispositions (`java-dev`/`java_runtime`: 0 commits in v0.57.0..v0.59.0 per ledger empirical cross-check on platform.rs; UPST8 territory)
+- [x] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, proxy 502 hardening, pack-update-hint robustness, ENV_LOCK policy test, sigstore 0.8.0, denial/diagnostic polish) per Phase 54 dispositions (`java-dev`/`java_runtime`: 0 commits in v0.57.0..v0.59.0 per ledger empirical cross-check on platform.rs; UPST8 territory) (completed 2026-06-05)
 - [ ] **Phase 56: Fine-grained Network Filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix
 - [ ] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
 - [ ] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
@@ -103,7 +103,7 @@ Plans:
 - [x] 55-06-POLICY-ENV-LOCK-TEST-PLAN.md -- C12 policy test: ENV_LOCK serialization in test_all_groups_no_deny_within_allow_overlap (1a764d05)
 
 **Wave 5** *(blocked on Waves 2+4)*
-- [ ] 55-07-SIGSTORE-BUMP-PLAN.md -- C13 sigstore 0.8.0 split: diff-inspection-first + Cargo bump + scrub.rs verify-then-port (e581569)
+- [x] 55-07-SIGSTORE-BUMP-PLAN.md -- C13 sigstore 0.8.0 split: diff-inspection-first + Cargo bump + scrub.rs verify-then-port (e581569)
 
 ### Phase 56: Fine-grained Network Filtering
 **Goal**: Operators can scope `--allow-domain` entries to specific URL paths and HTTP methods, with TLS-intercept endpoint rules correctly evaluated before credential selection
@@ -230,7 +230,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 |-------|----------------|--------|-----------|
 | 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
-| 55. UPST7 Cherry-pick Wave | 6/7 | In Progress|  |
+| 55. UPST7 Cherry-pick Wave | 7/7 | Complete   | 2026-06-05 |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
