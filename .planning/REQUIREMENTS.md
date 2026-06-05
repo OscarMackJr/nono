@@ -24,7 +24,7 @@
 
 ### Upstream Sync — Cherry-pick wave (UPST7)
 
-- [ ] **REQ-UPST7-02**: The cross-platform straight ports are absorbed per audit dispositions with verbatim D-19 `Upstream-commit:` trailers (or `Upstream-replayed-from:` for D-20 replays): JSONC profile parsing, `target_binary` profile field, `opencode` pack relocation, configurable timeout constants, proxy 502 hardening, pack-update-hint robustness (atomic writes + detached-process refresh), ENV_LOCK policy test serialization, sigstore 0.8.0 dep bump (`crates/nono/Cargo.toml` + `scrub.rs` verify-then-port), and denial/diagnostic polish (suppressed-denial annotations, canonical denial-path precompute, access-mode `rfind` split, overflow-check tightening). Schema-collision checks run against the fork's canonical-sections; the D-43-E1 Windows-only-files invariant is respected. (`java-dev` / `java_runtime` has **0 commits** in `v0.57.0..v0.59.0` per Phase 54 empirical cross-check on `platform.rs` -- removed from REQ-UPST7-02 enumeration; UPST8 territory. Authority: `54-DIVERGENCE-LEDGER.md` § Empirical cross-check.)
+- [x] **REQ-UPST7-02**: The cross-platform straight ports are absorbed per audit dispositions with verbatim D-19 `Upstream-commit:` trailers (or `Upstream-replayed-from:` for D-20 replays): JSONC profile parsing, `target_binary` profile field, `opencode` pack relocation, configurable timeout constants, proxy 502 hardening, pack-update-hint robustness (atomic writes + detached-process refresh), ENV_LOCK policy test serialization, sigstore 0.8.0 dep bump (`crates/nono/Cargo.toml` + `scrub.rs` verify-then-port), and denial/diagnostic polish (suppressed-denial annotations, canonical denial-path precompute, access-mode `rfind` split, overflow-check tightening). Schema-collision checks run against the fork's canonical-sections; the D-43-E1 Windows-only-files invariant is respected. (`java-dev` / `java_runtime` has **0 commits** in `v0.57.0..v0.59.0` per Phase 54 empirical cross-check on `platform.rs` -- removed from REQ-UPST7-02 enumeration; UPST8 territory. Authority: `54-DIVERGENCE-LEDGER.md` § Empirical cross-check.)
 
 ### Network Filtering (NET)
 
@@ -123,7 +123,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-DRN-01 | Phase 53 | Complete |
 | REQ-DRN-02 | Phase 53 | Complete |
 | REQ-UPST7-01 | Phase 54 | Pending |
-| REQ-UPST7-02 | Phase 55 | Pending |
+| REQ-UPST7-02 | Phase 55 | Complete |
 | REQ-NET-01 | Phase 56 | Pending |
 | REQ-CRED-01 | Phase 57 | Pending |
 | REQ-HOOK-01 | Phase 58 | Pending |
