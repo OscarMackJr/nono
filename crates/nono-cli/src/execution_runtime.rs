@@ -510,8 +510,9 @@ fn write_capability_state_file(
     allowed_domains: &[String],
     silent: bool,
 ) -> Option<std::path::PathBuf> {
+    // TODO(56-02): pass domain_endpoints as 4th arg once Plan 02 wires partition_allow_domain
     let state =
-        sandbox_state::SandboxState::from_caps(caps, bypass_protection_paths, allowed_domains);
+        sandbox_state::SandboxState::from_caps(caps, bypass_protection_paths, allowed_domains, &[]);
 
     for _ in 0..8 {
         let cap_file = next_capability_state_file_path();

@@ -3,7 +3,7 @@
 //! Parses `network-policy.json` and resolves named groups into flat host
 //! lists and credential route configurations for the proxy.
 
-use crate::profile::CustomCredentialDef;
+use crate::profile::{AllowDomainEntry, CustomCredentialDef};
 use nono::{NonoError, Result};
 use nono_proxy::config::{EndpointRule, InjectMode, ProxyConfig, RouteConfig};
 use serde::Deserialize;
@@ -332,6 +332,79 @@ pub fn expand_proxy_allow(policy: &NetworkPolicy, entries: &[String]) -> Vec<Str
         }
     }
     result
+}
+
+/// Returns `true` if `domain` is a loopback address (localhost, 127.x.x.x, ::1, 0.0.0.0).
+/// Loopback domains use `http://` upstream scheme in `partition_allow_domain`.
+fn is_loopback_domain(domain: &str) -> bool {
+    domain == "localhost"
+        || domain.starts_with("127.")
+        || domain == "::1"
+        || domain == "0.0.0.0"
+}
+
+/// Partition `allow_domain` entries into plain host strings and endpoint-scoped `RouteConfig`s.
+///
+/// - `Plain` entries (and `WithEndpoints` with empty `endpoints`) expand via `expand_proxy_allow`
+///   and are added to the plain hosts list for normal CONNECT-tunnel filtering.
+/// - `WithEndpoints` entries with non-empty `endpoints` produce a `RouteConfig` with a synthetic
+///   `_ep_{domain}` prefix, enabling L7 path+method filtering in the proxy.
+/// - An empty domain on a `WithEndpoints` entry returns `Err(ConfigParse(...))` (fail-secure).
+///
+/// Ported from upstream commit 0ced085 (fork adaptation: no proxy/tls_client_cert/tls_client_key).
+pub fn partition_allow_domain(
+    policy: &NetworkPolicy,
+    entries: &[AllowDomainEntry],
+) -> Result<(Vec<String>, Vec<RouteConfig>)> {
+    let mut plain_hosts = Vec::new();
+    let mut endpoint_routes = Vec::new();
+
+    for entry in entries {
+        match entry {
+            AllowDomainEntry::Plain(host) => {
+                let expanded = expand_proxy_allow(policy, std::slice::from_ref(host));
+                plain_hosts.extend(expanded);
+            }
+            AllowDomainEntry::WithEndpoints { domain, endpoints } => {
+                if endpoints.is_empty() {
+                    let expanded = expand_proxy_allow(policy, std::slice::from_ref(domain));
+                    plain_hosts.extend(expanded);
+                } else {
+                    if domain.is_empty() {
+                        return Err(NonoError::ConfigParse(
+                            "allow_domain entry with endpoints must have a non-empty domain"
+                                .to_string(),
+                        ));
+                    }
+                    let prefix = format!("_ep_{}", domain);
+                    let scheme = if is_loopback_domain(domain) {
+                        "http"
+                    } else {
+                        "https"
+                    };
+                    endpoint_routes.push(RouteConfig {
+                        prefix,
+                        upstream: format!("{}://{}", scheme, domain),
+                        credential_key: None,
+                        inject_mode: InjectMode::default(),
+                        inject_header: "Authorization".to_string(),
+                        credential_format: None,
+                        path_pattern: None,
+                        path_replacement: None,
+                        query_param_name: None,
+                        env_var: None,
+                        endpoint_rules: endpoints.clone(),
+                        tls_ca: None,
+                        oauth2: None,
+                        // NOTE: upstream also sets proxy/tls_client_cert/tls_client_key
+                        // — these fields are ABSENT from the fork's RouteConfig (Phase 34
+                        // fork-preserve decision, confirmed c9f25164 invariant).
+                    });
+                }
+            }
+        }
+    }
+    Ok((plain_hosts, endpoint_routes))
 }
 
 pub fn collect_allow_domain_port_warnings(entries: &[String], source: &str) -> Vec<String> {
@@ -1055,5 +1128,92 @@ mod tests {
         );
 
         assert!(warnings.is_empty());
+    }
+
+    // =========================================================================
+    // Phase 56-01 Task 2: partition_allow_domain tests (ported from 0ced085)
+    // =========================================================================
+
+    #[test]
+    fn partition_allow_domain_plain_entry_goes_to_plain_hosts() {
+        use crate::profile::AllowDomainEntry;
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+        let entries = vec![AllowDomainEntry::Plain("api.openai.com".to_string())];
+        let (plain_hosts, endpoint_routes) = partition_allow_domain(&policy, &entries).unwrap();
+        assert!(plain_hosts.contains(&"api.openai.com".to_string()));
+        assert!(endpoint_routes.is_empty());
+    }
+
+    #[test]
+    fn partition_allow_domain_with_endpoints_creates_route() {
+        use crate::profile::AllowDomainEntry;
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+        let entries = vec![AllowDomainEntry::WithEndpoints {
+            domain: "api.github.com".to_string(),
+            endpoints: vec![EndpointRule {
+                method: "GET".to_string(),
+                path: "/repos/**".to_string(),
+            }],
+        }];
+        let (plain_hosts, endpoint_routes) = partition_allow_domain(&policy, &entries).unwrap();
+        assert!(plain_hosts.is_empty());
+        assert_eq!(endpoint_routes.len(), 1);
+        assert_eq!(endpoint_routes[0].prefix, "_ep_api.github.com");
+        assert_eq!(endpoint_routes[0].upstream, "https://api.github.com");
+        assert_eq!(endpoint_routes[0].endpoint_rules.len(), 1);
+    }
+
+    #[test]
+    fn partition_allow_domain_empty_endpoints_treated_as_plain() {
+        use crate::profile::AllowDomainEntry;
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+        let entries = vec![AllowDomainEntry::WithEndpoints {
+            domain: "api.github.com".to_string(),
+            endpoints: vec![],
+        }];
+        let (plain_hosts, endpoint_routes) = partition_allow_domain(&policy, &entries).unwrap();
+        assert!(plain_hosts.contains(&"api.github.com".to_string()));
+        assert!(endpoint_routes.is_empty());
+    }
+
+    #[test]
+    fn partition_allow_domain_empty_domain_returns_error() {
+        use crate::profile::AllowDomainEntry;
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+        let entries = vec![AllowDomainEntry::WithEndpoints {
+            domain: String::new(),
+            endpoints: vec![EndpointRule {
+                method: "GET".to_string(),
+                path: "/api/**".to_string(),
+            }],
+        }];
+        let result = partition_allow_domain(&policy, &entries);
+        assert!(result.is_err(), "empty domain should return error");
+    }
+
+    #[test]
+    fn partition_allow_domain_loopback_uses_http_scheme() {
+        use crate::profile::AllowDomainEntry;
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+        let entries = vec![AllowDomainEntry::WithEndpoints {
+            domain: "localhost".to_string(),
+            endpoints: vec![EndpointRule {
+                method: "GET".to_string(),
+                path: "/api/**".to_string(),
+            }],
+        }];
+        let (plain_hosts, endpoint_routes) = partition_allow_domain(&policy, &entries).unwrap();
+        assert!(plain_hosts.is_empty());
+        assert_eq!(endpoint_routes.len(), 1);
+        assert!(
+            endpoint_routes[0].upstream.starts_with("http://"),
+            "loopback should use http scheme, got: {}",
+            endpoint_routes[0].upstream
+        );
     }
 }

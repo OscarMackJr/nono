@@ -15,7 +15,7 @@ fn resolve_allowed_domains(profile: &profile::Profile) -> Vec<String> {
     let policy_json = crate::config::embedded::embedded_network_policy_json();
     let net_policy = match network_policy::load_network_policy(policy_json) {
         Ok(p) => p,
-        Err(_) => return profile.network.allow_domain.clone(),
+        Err(_) => return profile.network.allow_domain.iter().map(|e| e.domain().to_string()).collect(),
     };
 
     let mut domains = Vec::new();
@@ -35,9 +35,10 @@ fn resolve_allowed_domains(profile: &profile::Profile) -> Vec<String> {
         }
     }
 
+    let plain_allow: Vec<String> = profile.network.allow_domain.iter().map(|e| e.domain().to_string()).collect();
     domains.extend(network_policy::expand_proxy_allow(
         &net_policy,
-        &profile.network.allow_domain,
+        &plain_allow,
     ));
 
     domains
