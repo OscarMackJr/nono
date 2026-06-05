@@ -334,13 +334,21 @@ pub fn expand_proxy_allow(policy: &NetworkPolicy, entries: &[String]) -> Vec<Str
     result
 }
 
-/// Returns `true` if `domain` is a loopback address (localhost, 127.x.x.x, ::1, 0.0.0.0).
+/// Returns `true` if `domain` is a loopback or unspecified address.
+///
 /// Loopback domains use `http://` upstream scheme in `partition_allow_domain`.
+///
+/// Uses parsed IP semantics — `Ipv4Addr::is_loopback()` covers the full `127.0.0.0/8` block
+/// without the string-prefix hazard (`domain.starts_with("127.")` would misclassify
+/// `127.example.com` as loopback). `is_unspecified()` covers `0.0.0.0` / `::`.
 fn is_loopback_domain(domain: &str) -> bool {
-    domain == "localhost"
-        || domain.starts_with("127.")
-        || domain == "::1"
-        || domain == "0.0.0.0"
+    if domain == "localhost" {
+        return true;
+    }
+    if let Ok(ip) = domain.parse::<std::net::IpAddr>() {
+        return ip.is_loopback() || ip.is_unspecified();
+    }
+    false
 }
 
 /// Partition `allow_domain` entries into plain host strings and endpoint-scoped `RouteConfig`s.
@@ -1213,6 +1221,91 @@ mod tests {
         assert!(
             endpoint_routes[0].upstream.starts_with("http://"),
             "loopback should use http scheme, got: {}",
+            endpoint_routes[0].upstream
+        );
+    }
+
+    // WR-01 regression: is_loopback_domain must NOT match arbitrary 127.*-prefixed hostnames.
+    // Only actual loopback IPs (127.0.0.0/8 parsed as IpAddr) and "localhost" are loopback.
+    #[test]
+    fn is_loopback_domain_does_not_match_127_example_com() {
+        assert!(
+            !is_loopback_domain("127.example.com"),
+            "127.example.com is a public hostname, not loopback — string prefix was wrong"
+        );
+    }
+
+    #[test]
+    fn is_loopback_domain_matches_127_0_0_1() {
+        assert!(
+            is_loopback_domain("127.0.0.1"),
+            "127.0.0.1 is a loopback address"
+        );
+    }
+
+    #[test]
+    fn is_loopback_domain_matches_127_x_x_x_cidr() {
+        // IpAddr::is_loopback() covers the full 127.0.0.0/8 block.
+        assert!(
+            is_loopback_domain("127.1.2.3"),
+            "127.1.2.3 is in the loopback range"
+        );
+        assert!(
+            is_loopback_domain("127.255.255.255"),
+            "127.255.255.255 is in the loopback range"
+        );
+    }
+
+    #[test]
+    fn is_loopback_domain_matches_localhost() {
+        assert!(
+            is_loopback_domain("localhost"),
+            "localhost must be loopback"
+        );
+    }
+
+    #[test]
+    fn is_loopback_domain_matches_ipv6_loopback() {
+        assert!(
+            is_loopback_domain("::1"),
+            "::1 is the IPv6 loopback address"
+        );
+    }
+
+    #[test]
+    fn is_loopback_domain_matches_0_0_0_0() {
+        assert!(
+            is_loopback_domain("0.0.0.0"),
+            "0.0.0.0 (unspecified) treated as loopback for proxy http: scheme"
+        );
+    }
+
+    #[test]
+    fn is_loopback_domain_does_not_match_public_host() {
+        assert!(!is_loopback_domain("api.github.com"));
+        assert!(!is_loopback_domain("0.0.0.0.example.com"));
+        assert!(!is_loopback_domain("notlocalhost"));
+    }
+
+    #[test]
+    fn partition_allow_domain_127_example_com_uses_https_scheme() {
+        // Before WR-01 fix, 127.example.com was misclassified as loopback (string prefix)
+        // and would get http:// upstream. With the fix, it must use https://.
+        use crate::profile::AllowDomainEntry;
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+        let entries = vec![AllowDomainEntry::WithEndpoints {
+            domain: "127.example.com".to_string(),
+            endpoints: vec![EndpointRule {
+                method: "GET".to_string(),
+                path: "/api/**".to_string(),
+            }],
+        }];
+        let (_plain_hosts, endpoint_routes) = partition_allow_domain(&policy, &entries).unwrap();
+        assert_eq!(endpoint_routes.len(), 1);
+        assert!(
+            endpoint_routes[0].upstream.starts_with("https://"),
+            "127.example.com is a public hostname and must use https:// upstream, got: {}",
             endpoint_routes[0].upstream
         );
     }
