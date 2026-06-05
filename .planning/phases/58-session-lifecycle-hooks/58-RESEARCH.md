@@ -544,14 +544,16 @@ session_hooks: SessionHooks {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `LowIlPrimary` work for `powershell.exe -NoProfile -File` spawned as a hook?**
+   RESOLVED: Implement with LowIlPrimary direct spawn first; Plan 03 Task 4 human-verify checkpoint provides the 0xC0000142 escalation path (per Research Assumption A3).
    - What we know: Phase 30/31 showed `STATUS_DLL_INIT_FAILED` (0xC0000142) for `claude.exe` (heavy Electron) under Low-IL primary token when using `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`. Hooks do NOT use PTY.
    - What's unclear: Whether `powershell.exe` requires any CSRSS console-attach path that fails under direct Low-IL spawn even without PTY.
    - Recommendation: Implement with `LowIlPrimary` direct spawn first. If UAT shows `0xC0000142` for the hook, escalate to a new debug session — but this is unlikely since Phase 51/52 showed the `BrokerLaunchNoPty` path works for non-PTY, and the 0xC0000142 was PTY-specific.
 
 2. **Should `timeout_secs` expiry on a before-hook be fail-closed or silently pass?**
+   RESOLVED: Treat timeout as Err (fail-closed), consistent with D-01/D-03.
    - What we know: D-01 says fail-closed. D-03 says "before-hook failure → session does not start." Timeout is a failure mode.
    - What's unclear: Upstream treats timeout as a warning (fail-open). The fork's D-01 implies timeout → `Err`. But an infinite-wait hook could also be an external service that's slow.
    - Recommendation: Treat timeout on a before-hook as `Err` (fail-closed, consistent with D-01/D-03). Document this in the ADR. Users who want a "best-effort" hook can set a long `timeout_secs`.
