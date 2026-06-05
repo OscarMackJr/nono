@@ -153,11 +153,11 @@ Plans:
 **Plans**: 3 plans
 Plans:
 **Wave 1**
-- [ ] 58-01-PLAN.md — SessionHooks + SessionHook types + 4-lockstep profile pipeline + schema (profile/mod.rs, policy.rs, sandbox_prepare.rs, launch_runtime.rs, nono-profile.schema.json)
+- [x] 58-01-PLAN.md ï¿½ SessionHooks + SessionHook types + 4-lockstep profile pipeline + schema (profile/mod.rs, policy.rs, sandbox_prepare.rs, launch_runtime.rs, nono-profile.schema.json)
 
-**Wave 2** *(parallel pair — blocked on Wave 1; no file overlap)*
-- [ ] 58-02-PLAN.md — Unix hook_runtime.rs port (daa55c8, fail-closed per D-01/D-02) + execution_runtime.rs dispatch wiring
-- [ ] 58-03-PLAN.md — Windows hook_runtime_windows.rs (LowIlPrimary + env-file ACL + D-10 vet bar) + is_dangerous_env_var Windows extension (D-09) + ADR
+**Wave 2** *(parallel pair ï¿½ blocked on Wave 1; no file overlap)*
+- [ ] 58-02-PLAN.md ï¿½ Unix hook_runtime.rs port (daa55c8, fail-closed per D-01/D-02) + execution_runtime.rs dispatch wiring
+- [ ] 58-03-PLAN.md ï¿½ Windows hook_runtime_windows.rs (LowIlPrimary + env-file ACL + D-10 vet bar) + is_dangerous_env_var Windows extension (D-09) + ADR
 
 ### Phase 59: Supervisor IPC Robustness
 **Goal**: The supervisor loop survives transient child IPC disconnects and enforces bounded read timeouts on both Unix and Windows
@@ -253,7 +253,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
 | 56. Fine-grained Network Filtering | 4/4 | Complete    | 2026-06-05 |
 | 57. Bitwarden Credential Source | 1/1 | Complete    | 2026-06-05 |
-| 58. Session Lifecycle Hooks | 0/3 | Not started | - |
+| 58. Session Lifecycle Hooks | 1/3 | In Progress|  |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 3/4 | In Progress|  |

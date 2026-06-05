@@ -36,7 +36,7 @@
 
 ### Session Hooks (HOOK)
 
-- [ ] **REQ-HOOK-01**: A `session_hooks` profile field runs vetted hooks at session start/stop. On Unix the upstream `hook_runtime` behavior is preserved (gated unix-only as upstream ships it); on Windows the hooks execute via a Windows-safe design (broker-spawned, Low-IL, no `fork`/`sh` assumption) documented in an ADR. Hook resolution or execution failure is **fail-closed**, never silently skipped.
+- [x] **REQ-HOOK-01**: A `session_hooks` profile field runs vetted hooks at session start/stop. On Unix the upstream `hook_runtime` behavior is preserved (gated unix-only as upstream ships it); on Windows the hooks execute via a Windows-safe design (broker-spawned, Low-IL, no `fork`/`sh` assumption) documented in an ADR. Hook resolution or execution failure is **fail-closed**, never silently skipped.
 
 ### Supervisor IPC (IPC)
 
@@ -126,7 +126,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-UPST7-02 | Phase 55 | Complete |
 | REQ-NET-01 | Phase 56 | Complete |
 | REQ-CRED-01 | Phase 57 | Complete |
-| REQ-HOOK-01 | Phase 58 | Pending |
+| REQ-HOOK-01 | Phase 58 | Complete |
 | REQ-IPC-01 | Phase 59 | Pending |
 | REQ-WFP-01 | Phase 62 | Complete |
 | REQ-RLS-03 | Phase 61 | Complete |
