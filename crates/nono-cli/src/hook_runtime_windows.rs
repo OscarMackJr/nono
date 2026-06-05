@@ -6,13 +6,7 @@
 // compiles cleanly on the Windows dev host (where cfg(windows) is true). Plan 03
 // Task 2 replaces these placeholder bodies with the full Windows implementation.
 //
-// NOTE: `#[allow(dead_code)]` is required because execution_runtime.rs wires these
-// functions in Task 2. The functions appear dead between Task 1 and Task 2 commits;
-// this attribute is removed when Task 2 completes the wiring. This is the only
-// legitimate use of dead_code in this codebase (documented inter-task stub, not
-// production dead code).
 #![cfg(windows)]
-#![allow(dead_code)]
 
 use crate::profile;
 use nono::Result;

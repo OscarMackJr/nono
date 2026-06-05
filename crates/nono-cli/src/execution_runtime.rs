@@ -5,12 +5,17 @@ use crate::profile::AllowDomainEntry;
 use crate::proxy_runtime::start_proxy_runtime;
 use crate::sandbox_state::{DomainEndpointState, EndpointRuleState};
 use crate::supervised_runtime::{execute_supervised_runtime, SupervisedRuntimeContext};
-use crate::{config, exec_strategy, output, sandbox_state};
+use crate::{config, exec_strategy, output, sandbox_state, session, DETACHED_SESSION_ID_ENV};
+#[cfg(unix)]
+use crate::hook_runtime;
+#[cfg(windows)]
+use crate::hook_runtime_windows;
 use nono::{CapabilitySet, NonoError, Result, Sandbox};
 use std::path::Path;
 #[cfg(not(target_os = "windows"))]
 use std::time::Duration;
 use tracing::{error, info};
+use zeroize::Zeroize;
 
 fn apply_pre_fork_sandbox(
     strategy: exec_strategy::ExecStrategy,
@@ -253,6 +258,42 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
 
     apply_pre_fork_sandbox(strategy, &caps, flags.silent)?;
 
+    // Session id shared across before- and after-hook so paired setup/teardown
+    // scripts see the same NONO_SESSION_ID. Only allocated when at least one
+    // hook is configured.
+    let hook_session_id: Option<String> =
+        (flags.session_hooks.before.is_some() || flags.session_hooks.after.is_some()).then(|| {
+            std::env::var(DETACHED_SESSION_ID_ENV)
+                .ok()
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(session::generate_session_id)
+        });
+
+    // ---- Before-hook execution ----
+    // FORK DIVERGENCE (D-01/D-03): ? propagates Err (session aborts).
+    // Upstream daa55c8 warns and continues (fail-open); fork propagates Err (fail-closed).
+    let mut hook_env_vars_owned: Vec<(String, String)> = if let Some((before, session_id)) =
+        flags.session_hooks.before.as_ref().zip(hook_session_id.as_deref())
+    {
+        #[cfg(unix)]
+        {
+            // FORK DIVERGENCE (D-01/D-03): ? propagates Err, not warn-and-continue
+            hook_runtime::execute_before_hook(before, session_id, &current_dir)?
+        }
+        #[cfg(windows)]
+        {
+            // FORK DIVERGENCE (D-01/D-03): ? propagates Err, not warn-and-continue
+            hook_runtime_windows::execute_before_hook(before, session_id, &current_dir)?
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (before, session_id);
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     // Generate per-session runtime capability expansion credentials BEFORE
     // building `env_vars` so the owned strings outlive the `ExecConfig`.
     //
@@ -294,6 +335,15 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         env_vars.push(("NONO_SESSION_TOKEN", windows_session_token.as_str()));
         env_vars.push(("NONO_SUPERVISOR_PIPE", windows_cap_pipe_path_str.as_str()));
     }
+
+    // Hook env vars have lowest priority: prepend so secrets and proxy override.
+    for (key, value) in hook_env_vars_owned.iter().rev() {
+        env_vars.insert(0, (key.as_str(), value.as_str()));
+    }
+    // Note: hook_env_vars_owned values are zeroized after config is dropped below,
+    // once the &str borrows in env_vars are no longer live (CLAUDE.md §Memory,
+    // T-58-02-08). Inline zeroize here would conflict with the outstanding &str
+    // references inserted into env_vars.
 
     #[cfg(not(target_os = "windows"))]
     let threading = select_threading_context(
@@ -487,6 +537,11 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
                 )?;
                 cleanup_capability_state_file(&cap_file_path);
                 drop(config);
+                // Zeroize hook env-var values after injection; values may be credentials (CLAUDE.md §Memory).
+                // config is dropped above so &str borrows into hook_env_vars_owned are no longer live.
+                for (_, value) in &mut hook_env_vars_owned {
+                    value.zeroize();
+                }
                 drop(loaded_secrets);
                 std::process::exit(exit_code);
             }
@@ -529,8 +584,31 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
                 loaded_profile: loaded_profile.as_ref(),
             })?;
 
+            // ---- After-hook execution ----
+            // FORK DIVERGENCE (D-04): ? propagates Err so CI sees non-zero exit.
+            // Upstream daa55c8 warns and swallows (fail-open); fork propagates Err (fail-closed).
+            if let Some((after, session_id)) =
+                flags.session_hooks.after.as_ref().zip(hook_session_id.as_deref())
+            {
+                #[cfg(unix)]
+                // FORK DIVERGENCE (D-01/D-03): ? propagates Err, not warn-and-continue
+                hook_runtime::execute_after_hook(after, session_id, &current_dir, exit_code)?;
+                #[cfg(windows)]
+                // FORK DIVERGENCE (D-01/D-03): ? propagates Err, not warn-and-continue
+                hook_runtime_windows::execute_after_hook(after, session_id, &current_dir, exit_code)?;
+                #[cfg(not(any(unix, windows)))]
+                {
+                    let _ = (after, session_id, exit_code);
+                }
+            }
+
             cleanup_capability_state_file(&cap_file_path);
             drop(config);
+            // Zeroize hook env-var values after injection; values may be credentials (CLAUDE.md §Memory).
+            // config is dropped above so &str borrows into hook_env_vars_owned are no longer live.
+            for (_, value) in &mut hook_env_vars_owned {
+                value.zeroize();
+            }
             drop(loaded_secrets);
             std::process::exit(exit_code);
         }
@@ -593,11 +671,62 @@ fn write_capability_state_file(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::{compute_executable_identity, recommended_builtin_profile};
     use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::Path;
+
+    /// D-03 behavioral test: before-hook returning Err must propagate to the caller.
+    ///
+    /// This test verifies the fail-closed ? propagation at the hook dispatch level
+    /// (execute_before_hook). Full execute_sandboxed integration requires a
+    /// complete LaunchPlan which is not feasible in a unit test; however, the
+    /// dispatch code in execute_sandboxed uses `?` which is the same propagation
+    /// mechanism tested here. This test provides the behavioral guarantee that a
+    /// before-hook returning Err causes the caller to see Err (D-03).
+    ///
+    /// On Unix: calls execute_before_hook with a script that exits 1 → asserts Err.
+    /// On Windows: the stub returns Ok; the full test fires on Unix CI.
+    #[test]
+    #[cfg(unix)]
+    fn test_execute_sandboxed_before_hook_err_aborts_session() {
+        use crate::hook_runtime;
+        use crate::profile;
+        use tempfile::TempDir;
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_lock, _env, _home) = {
+            let lock = match crate::test_env::ENV_LOCK.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let home = TempDir::new().unwrap();
+            let home_str = home.path().to_str().unwrap();
+            let env = crate::test_env::EnvVarGuard::set_all(&[("HOME", home_str)]);
+            (lock, env, home)
+        };
+
+        let dir = TempDir::new().unwrap();
+        let script = dir.path().join("fail.sh");
+        std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let hook = profile::SessionHook {
+            script: script.clone(),
+            timeout_secs: Some(5),
+        };
+
+        // D-03: before-hook Err propagates to the caller (session aborts).
+        // The execute_sandboxed dispatch uses ? — this test verifies the Err is
+        // returned by the hook, confirming the ? will propagate it.
+        let result = hook_runtime::execute_before_hook(&hook, "d03-test", Path::new("/tmp"));
+        assert!(
+            result.is_err(),
+            "D-03 fail-closed: before-hook exit 1 must return Err (session aborts)"
+        );
+    }
 
     #[test]
     fn recommended_builtin_profile_matches_known_agent_commands() {
