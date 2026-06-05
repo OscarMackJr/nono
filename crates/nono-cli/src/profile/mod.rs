@@ -1780,6 +1780,44 @@ pub struct HooksConfig {
     pub hooks: HashMap<String, HookConfig>,
 }
 
+/// A single session lifecycle hook configuration.
+///
+/// Defines a script to execute before or after the sandboxed session.
+/// Scripts run outside the sandbox with host privileges. On Windows, hooks
+/// are confined to Low-IL via broker
+/// (see `.planning/architecture/adr-58-windows-hook-executor.md`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionHook {
+    /// Absolute path to the hook script. Must be an executable regular file
+    /// owned by the current user or root, not in a world-writable directory.
+    /// Validated at execution time.
+    pub script: std::path::PathBuf,
+    /// Optional timeout in seconds. If set, the hook is killed after this
+    /// duration. If absent, no timeout is enforced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+}
+
+/// Session lifecycle hooks for a profile.
+///
+/// `before` runs before the sandboxed child is forked; `after` runs after it
+/// exits. Both run outside the sandbox with host privileges. This type
+/// deserializes on all platforms; runtime execution is platform-gated in
+/// `hook_runtime.rs` (Unix) and `hook_runtime_windows.rs` (Windows).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionHooks {
+    /// Hook executed before the sandboxed process starts. May export
+    /// environment variables to the sandboxed child via `NONO_ENV_FILE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<SessionHook>,
+    /// Hook executed after the sandboxed process exits. Receives the child
+    /// exit code via `NONO_EXIT_CODE`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<SessionHook>,
+}
+
 /// Working directory access level for profiles
 ///
 /// Controls whether and how the current working directory is automatically
@@ -2182,6 +2220,12 @@ pub struct Profile {
     /// built-in profile for v2.7.
     #[serde(default)]
     pub windows_low_il_broker: bool,
+    /// Phase 58: session lifecycle hooks. Field is cross-platform;
+    /// deserialization occurs on all platforms. Runtime execution is
+    /// platform-gated in `hook_runtime.rs` (Unix) /
+    /// `hook_runtime_windows.rs` (Windows).
+    #[serde(default)]
+    pub session_hooks: SessionHooks,
     /// Commands configuration — canonical section per upstream f0abd413 (v0.47.0).
     ///
     /// Provides structured allow/deny command lists at the profile level. These
@@ -2244,6 +2288,13 @@ struct ProfileDeserialize {
     unsafe_macos_seatbelt_rules: Vec<String>,
     #[serde(default)]
     windows_low_il_broker: bool,
+    /// Phase 58: session lifecycle hooks. `deny_unknown_fields` on
+    /// `ProfileDeserialize` requires this entry for round-tripping — omitting
+    /// it would cause a deserialization error for any profile JSON containing
+    /// `session_hooks`. Cross-platform: must appear here even though execution
+    /// is platform-gated.
+    #[serde(default)]
+    session_hooks: SessionHooks,
     #[serde(default)]
     packs: Vec<String>,
     #[serde(default)]
@@ -2279,6 +2330,10 @@ impl From<ProfileDeserialize> for Profile {
             capabilities: raw.capabilities,
             unsafe_macos_seatbelt_rules: raw.unsafe_macos_seatbelt_rules,
             windows_low_il_broker: raw.windows_low_il_broker,
+            // Phase 58: forward session_hooks verbatim. Exhaustively enumerated
+            // here so rustc's struct-literal completeness check catches any
+            // future field additions.
+            session_hooks: raw.session_hooks,
             packs: raw.packs,
             binary: raw.binary,
             command_args: raw.command_args,
@@ -3169,6 +3224,13 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
         // profile without the field defaults to false and does not override
         // a base profile that has it set (T-51A-02 mitigation).
         windows_low_il_broker: base.windows_low_il_broker || child.windows_low_il_broker,
+        // Phase 58: child overrides base per hook slot. Option-semantics:
+        // child wins per slot (not OR). Source: upstream daa55c8 profile/mod.rs
+        // merge semantics.
+        session_hooks: SessionHooks {
+            before: child.session_hooks.before.or(base.session_hooks.before),
+            after: child.session_hooks.after.or(base.session_hooks.after),
+        },
         packs: dedup_append(&base.packs, &child.packs),
         binary: child.binary.or(base.binary),
         command_args: dedup_append(&base.command_args, &child.command_args),
@@ -4988,6 +5050,7 @@ mod tests {
             capabilities: CapabilitiesConfig::default(),
             unsafe_macos_seatbelt_rules: Vec::new(),
             windows_low_il_broker: false,
+            session_hooks: SessionHooks::default(),
             packs: Vec::new(),
             binary: None,
             command_args: Vec::new(),
@@ -5076,6 +5139,7 @@ mod tests {
             capabilities: CapabilitiesConfig::default(),
             unsafe_macos_seatbelt_rules: Vec::new(),
             windows_low_il_broker: false,
+            session_hooks: SessionHooks::default(),
             packs: Vec::new(),
             binary: None,
             command_args: Vec::new(),
@@ -8014,5 +8078,169 @@ mod allow_domain_tests {
             AllowDomainEntry::WithEndpoints { domain, .. } => assert_eq!(domain, "api.github.com"),
             AllowDomainEntry::Plain(_) => panic!("expected WithEndpoints"),
         }
+    }
+}
+
+/// Phase 58 Plan 01: tests for SessionHook + SessionHooks types and profile threading.
+///
+/// These tests cover:
+/// - Basic deserialization of session_hooks.before and session_hooks.after
+/// - Unknown-field rejection via `#[serde(deny_unknown_fields)]` on SessionHook
+/// - merge_profiles Option-semantics: child slot wins per before/after slot
+/// - Inheritance: child with no session_hooks inherits base hooks unchanged
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod session_hooks_tests {
+    use super::*;
+
+    /// Verify that a profile JSON with session_hooks.before.script + timeout_secs
+    /// and session_hooks.after.script deserializes into SessionHooks with correct fields.
+    #[test]
+    fn test_session_hooks_basic_deserialize() {
+        let json = r#"{
+            "session_hooks": {
+                "before": { "script": "/usr/local/bin/pre.sh", "timeout_secs": 30 },
+                "after": { "script": "/usr/local/bin/post.sh" }
+            }
+        }"#;
+        let profile: Profile = serde_json::from_str(json).unwrap();
+        let before = profile
+            .session_hooks
+            .before
+            .as_ref()
+            .expect("before hook must be present");
+        assert_eq!(
+            before.script,
+            std::path::PathBuf::from("/usr/local/bin/pre.sh"),
+            "before.script must round-trip correctly"
+        );
+        assert_eq!(
+            before.timeout_secs,
+            Some(30),
+            "before.timeout_secs must deserialize as Some(30)"
+        );
+        let after = profile
+            .session_hooks
+            .after
+            .as_ref()
+            .expect("after hook must be present");
+        assert_eq!(
+            after.script,
+            std::path::PathBuf::from("/usr/local/bin/post.sh"),
+            "after.script must round-trip correctly"
+        );
+        assert!(
+            after.timeout_secs.is_none(),
+            "after.timeout_secs must default to None when absent"
+        );
+    }
+
+    /// Verify that `#[serde(deny_unknown_fields)]` on SessionHook rejects
+    /// an unknown field (e.g. `unknown_field`) with a serde error.
+    #[test]
+    fn test_session_hooks_rejects_unknown_field() {
+        // An unknown field inside a SessionHook object must be rejected.
+        let json = r#"{
+            "session_hooks": {
+                "before": { "script": "/x/y.sh", "unknown_field": true }
+            }
+        }"#;
+        let result: std::result::Result<Profile, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "SessionHook must reject unknown fields via deny_unknown_fields, got: {:?}",
+            result
+        );
+    }
+
+    /// Verify that `#[serde(deny_unknown_fields)]` on SessionHooks rejects
+    /// an unknown top-level key inside the session_hooks object.
+    #[test]
+    fn test_session_hooks_rejects_unknown_top_level_field() {
+        // An unknown field at the SessionHooks level must also be rejected.
+        let json = r#"{
+            "session_hooks": { "befor": { "script": "/x/y.sh" } }
+        }"#;
+        let result: std::result::Result<Profile, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "SessionHooks must reject unknown fields via deny_unknown_fields, got: {:?}",
+            result
+        );
+    }
+
+    /// Verify merge_profiles Option-semantics: child.before wins; base.after is
+    /// inherited when child.after is None.
+    #[test]
+    fn test_merge_profiles_session_hooks_child_overrides_per_field() {
+        let mut base = Profile::default();
+        base.session_hooks = SessionHooks {
+            before: Some(SessionHook {
+                script: std::path::PathBuf::from("/base/pre.sh"),
+                timeout_secs: None,
+            }),
+            after: Some(SessionHook {
+                script: std::path::PathBuf::from("/base/post.sh"),
+                timeout_secs: Some(60),
+            }),
+        };
+        let mut child = Profile::default();
+        child.session_hooks = SessionHooks {
+            before: Some(SessionHook {
+                script: std::path::PathBuf::from("/child/pre.sh"),
+                timeout_secs: None,
+            }),
+            after: None, // child does not set after → inherits from base
+        };
+        let merged = merge_profiles(base, child);
+        let merged_before = merged.session_hooks.before.expect("before must be present");
+        assert_eq!(
+            merged_before.script,
+            std::path::PathBuf::from("/child/pre.sh"),
+            "child.before must win over base.before"
+        );
+        let merged_after = merged
+            .session_hooks
+            .after
+            .expect("after must be inherited from base");
+        assert_eq!(
+            merged_after.script,
+            std::path::PathBuf::from("/base/post.sh"),
+            "base.after must be inherited when child.after is None"
+        );
+    }
+
+    /// Verify that a child with no session_hooks at all inherits both
+    /// base.session_hooks.before and base.session_hooks.after unchanged.
+    #[test]
+    fn test_merge_profiles_session_hooks_child_inherits_when_absent() {
+        let mut base = Profile::default();
+        base.session_hooks = SessionHooks {
+            before: Some(SessionHook {
+                script: std::path::PathBuf::from("/base/pre.sh"),
+                timeout_secs: Some(10),
+            }),
+            after: None,
+        };
+        let child = Profile::default(); // no session_hooks set
+        let merged = merge_profiles(base, child);
+        let before = merged
+            .session_hooks
+            .before
+            .expect("before must be inherited from base");
+        assert_eq!(
+            before.script,
+            std::path::PathBuf::from("/base/pre.sh"),
+            "base.before must survive when child has no session_hooks"
+        );
+        assert_eq!(
+            before.timeout_secs,
+            Some(10),
+            "base.before.timeout_secs must be preserved"
+        );
+        assert!(
+            merged.session_hooks.after.is_none(),
+            "after must remain None when both base and child have no after hook"
+        );
     }
 }
