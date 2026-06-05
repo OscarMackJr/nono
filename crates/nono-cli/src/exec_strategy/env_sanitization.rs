@@ -9,8 +9,10 @@
 /// Returns true if an environment variable is unsafe to inherit into a sandboxed child.
 ///
 /// Covers linker injection (LD_PRELOAD, DYLD_INSERT_LIBRARIES), shell startup
-/// injection (BASH_ENV, PROMPT_COMMAND, IFS), and interpreter code/module injection
-/// (NODE_OPTIONS, PYTHONPATH, PERL5OPT, RUBYOPT, JAVA_TOOL_OPTIONS, etc.).
+/// injection (BASH_ENV, PROMPT_COMMAND, IFS), interpreter code/module injection
+/// (NODE_OPTIONS, PYTHONPATH, PERL5OPT, RUBYOPT, JAVA_TOOL_OPTIONS, etc.), and
+/// Windows hook env-file injection vectors (Low-IL-writer → Medium-IL-reader trust
+/// gap, D-09).
 pub(crate) fn is_dangerous_env_var(key: &str) -> bool {
     // Linker injection
     key.starts_with("LD_")
@@ -50,6 +52,21 @@ pub(crate) fn is_dangerous_env_var(key: &str) -> bool {
         || key == "OP_CONNECT_TOKEN"
         || key == "OP_CONNECT_HOST"
         || key.starts_with("OP_SESSION_")
+        // Windows hook env-file injection vectors (Low-IL-writer → Medium-IL-reader gap, D-09).
+        // On Windows, env-var comparison is case-insensitive; eq_ignore_ascii_case matches
+        // all capitalizations. These vars can redirect executable resolution, interpreter
+        // search paths, and system directories — a Low-IL hook writing them to the env file
+        // could hijack the Medium-IL parent's execution context.
+        || key.eq_ignore_ascii_case("PATH") // executable resolution hijacking
+        || key.eq_ignore_ascii_case("PATHEXT") // extension association hijacking
+        || key.eq_ignore_ascii_case("COMSPEC") // cmd interpreter redirect
+        || key.eq_ignore_ascii_case("PSModulePath") // PowerShell module injection
+        || key.eq_ignore_ascii_case("PSModuleAnalysisCachePath") // PS analysis cache poisoning
+        || key.eq_ignore_ascii_case("__PSLockdownPolicy") // PS constrained-language bypass
+        || key.eq_ignore_ascii_case("SystemRoot") // system DLL resolution redirect
+        || key.eq_ignore_ascii_case("windir") // system directory redirect
+        || key.eq_ignore_ascii_case("TEMP") // temp file redirect from parent perspective
+        || key.eq_ignore_ascii_case("TMP") // same as TEMP
 }
 
 fn env_key_matches(left: &str, right: &str) -> bool {
@@ -199,6 +216,9 @@ mod tests {
         assert!(!is_dangerous_env_var("OPERATOR_TOKEN"));
         assert!(!is_dangerous_env_var("OPTIONS"));
         assert!(!is_dangerous_env_var("HOME"));
+        // NOTE: PATH is NOT dangerous on non-Windows (case-sensitive, different threat model).
+        // On Windows, PATH is dangerous (executable resolution hijacking via D-09 eq_ignore_ascii_case).
+        #[cfg(not(target_os = "windows"))]
         assert!(!is_dangerous_env_var("PATH"));
     }
 
@@ -228,6 +248,25 @@ mod tests {
             &[]
         ));
         assert!(should_skip_env_var("Path", &[], &["PATH"]));
+    }
+
+    /// Windows hook env-file injection vectors (D-09) — all 10 danger vars must be
+    /// blocked case-insensitively. A Low-IL hook writing any of these to the env file
+    /// could hijack the Medium-IL parent's execution context.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_dangerous_vars_blocked() {
+        assert!(is_dangerous_env_var("PATH"));
+        assert!(is_dangerous_env_var("Path")); // case-insensitive
+        assert!(is_dangerous_env_var("PATHEXT"));
+        assert!(is_dangerous_env_var("COMSPEC"));
+        assert!(is_dangerous_env_var("PSModulePath"));
+        assert!(is_dangerous_env_var("PSModuleAnalysisCachePath"));
+        assert!(is_dangerous_env_var("__PSLockdownPolicy"));
+        assert!(is_dangerous_env_var("SystemRoot"));
+        assert!(is_dangerous_env_var("windir"));
+        assert!(is_dangerous_env_var("TEMP"));
+        assert!(is_dangerous_env_var("TMP"));
     }
 
     // ============================================================================
