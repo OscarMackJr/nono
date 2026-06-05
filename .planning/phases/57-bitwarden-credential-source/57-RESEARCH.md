@@ -129,9 +129,11 @@ load_secret_by_ref()          (dispatch ladder, keystore.rs ~line 204)
         │                    │                                   │                  │
         │              BW_SESSION env                     BWS_ACCESS_TOKEN env      │
         │              Command::new("bw")                 Command::new("bws")       │
-        │              args: ["get","item","--","<id>",   args: ["secret","get",    │
-        │                     "--session","<token>",             "--","<uuid>"]      │
-        │                     "--nointeraction"]                                     │
+        │              args: ["get","item",               args: ["secret","get",    │
+        │                     "--nointeraction",                 "--","<uuid>"]      │
+        │                     "--","<id>"]                                           │
+        │              (NO --session: BW_SESSION is        (NO token in argv:        │
+        │               env-only, per D-02 / Pitfall 2)     BWS_ACCESS_TOKEN env)    │
         │                    │                                   │                  │
         │              wait_with_timeout()                wait_with_timeout()       │
         │              parse JSON stdout                  parse JSON stdout          │

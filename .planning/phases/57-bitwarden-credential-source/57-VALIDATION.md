@@ -1,9 +1,9 @@
 ---
 phase: 57
 slug: bitwarden-credential-source
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: ready
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-05
 ---
 
@@ -41,6 +41,7 @@ created: 2026-06-05
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
 | 57-01-01 | 01 | 1 | REQ-CRED-01 | T-57-01 / — | `bw://` URI validation rejects injection chars / query / fragment; reserved vs custom-field selectors do not collide | unit | `cargo test -p nono keystore::tests::bw` | ✅ | ⬜ pending |
+| 57-01-02 | 01 | 1 | REQ-CRED-01 | T-57-02 / T-57-03 / T-57-04 | `BW_SESSION`/`BWS_ACCESS_TOKEN` and secret values never in argv (env-only); `bw://` ref redacted in logs; fail-closed (missing token / CLI / not-found aborts, never defaults) | unit | `cargo test -p nono keystore::tests::bw` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -62,11 +63,11 @@ created: 2026-06-05
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (none — existing in-module test infra covers both tasks)
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-05
