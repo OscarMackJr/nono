@@ -120,8 +120,8 @@ Plans:
 - [x] 56-01-PLAN.md — AllowDomainEntry enum + merge_allow_domain (profile/mod.rs) + partition_allow_domain (network_policy.rs) + DomainEndpointState + from_caps update (sandbox_state.rs) + Cargo.toml deps
 
 **Wave 2** *(parallel pair — no file overlap)*
-- [ ] 56-02-PLAN.md — Core proxy wiring: proxy_runtime.rs (parse_allow_domain_arg + C5 rider) + profile_runtime.rs + launch_runtime.rs + execution_runtime.rs + sandbox_prepare.rs + main.rs test fixtures
-- [ ] 56-03-PLAN.md — Display + schema: profile_cmd.rs allow_domain rendering + nono-profile.schema.json AllowDomainWithEndpoints
+- [x] 56-02-PLAN.md — Core proxy wiring: proxy_runtime.rs (parse_allow_domain_arg + C5 rider) + profile_runtime.rs + launch_runtime.rs + execution_runtime.rs + sandbox_prepare.rs + main.rs test fixtures
+- [x] 56-03-PLAN.md — Display + schema: profile_cmd.rs allow_domain rendering + nono-profile.schema.json AllowDomainWithEndpoints
 
 **Wave 3** *(blocked on Waves 1+2)*
 - [ ] 56-04-PLAN.md — SC3 nono why extension: query_ext.rs (parse_host_input + query_network + QueryResult::Allowed endpoint_rules) + why_runtime.rs + full verification sweep (credential.rs SHA gate, Upstream-commit trailer audit, clippy)
@@ -240,7 +240,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
-| 56. Fine-grained Network Filtering | 1/4 | In Progress|  |
+| 56. Fine-grained Network Filtering | 3/4 | In Progress|  |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
