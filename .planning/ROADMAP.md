@@ -95,8 +95,8 @@ Plans:
 - [x] 55-02-PROFILE-JSONC-TARGET-BINARY-PLAN.md -- C7 profile system: JSONC parsing + target_binary + opencode extraction + refactors (5 commits) + SC3 schema-collision check
 
 **Wave 3** *(blocked on Wave 2 -- parallel pair)*
-- [ ] 55-03-PACK-HINT-ROBUSTNESS-PLAN.md -- C9 pack-update-hint: detached-process refresh + atomic state writes (74fbbf12 + b1a650a3)
-- [ ] 55-04-DIAGNOSTIC-DENIAL-POLISH-PLAN.md -- C10 diagnostic/denial polish: suppressed-denial annotations + canonical-path precompute + rfind split + bold-path footer (4 commits)
+- [x] 55-03-PACK-HINT-ROBUSTNESS-PLAN.md -- C9 pack-update-hint: detached-process refresh + atomic state writes (74fbbf12 + b1a650a3)
+- [x] 55-04-DIAGNOSTIC-DENIAL-POLISH-PLAN.md -- C10 diagnostic/denial polish: suppressed-denial annotations + canonical-path precompute + rfind split + bold-path footer (4 commits)
 
 **Wave 4** *(blocked on Wave 3 -- parallel pair)*
 - [ ] 55-05-TIMEOUT-CONSTANTS-PLAN.md -- C11 timeout constants: centralize timeouts.rs + overflow-check tightening (3 commits)
@@ -230,7 +230,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 |-------|----------------|--------|-----------|
 | 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
-| 55. UPST7 Cherry-pick Wave | 2/7 | In Progress|  |
+| 55. UPST7 Cherry-pick Wave | 4/7 | In Progress|  |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
