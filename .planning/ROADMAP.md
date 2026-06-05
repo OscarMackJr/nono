@@ -31,7 +31,7 @@ granularity: standard
  (completed 2026-06-05)
 - [x] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
  (completed 2026-06-05)
-- [ ] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
+- [x] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure (completed 2026-06-05)
 - [ ] **Phase 59: Supervisor IPC Robustness** — Keep-alive on transient child IPC close, bounded read-timeouts, robust accept; Unix named-socket hardening absorbed cross-platform-core; Windows Named-Pipe AIPC path translated (not cherry-picked)
 
 ### v2.9 — Windows Sandbox-the-Tools (separate track)
@@ -157,7 +157,7 @@ Plans:
 
 **Wave 2** *(parallel pair � blocked on Wave 1; no file overlap)*
 - [x] 58-02-PLAN.md � Unix hook_runtime.rs port (daa55c8, fail-closed per D-01/D-02) + execution_runtime.rs dispatch wiring
-- [ ] 58-03-PLAN.md � Windows hook_runtime_windows.rs (LowIlPrimary + env-file ACL + D-10 vet bar) + is_dangerous_env_var Windows extension (D-09) + ADR
+- [x] 58-03-PLAN.md � Windows hook_runtime_windows.rs (LowIlPrimary + env-file ACL + D-10 vet bar) + is_dangerous_env_var Windows extension (D-09) + ADR
 
 ### Phase 59: Supervisor IPC Robustness
 **Goal**: The supervisor loop survives transient child IPC disconnects and enforces bounded read timeouts on both Unix and Windows
@@ -253,7 +253,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
 | 56. Fine-grained Network Filtering | 4/4 | Complete    | 2026-06-05 |
 | 57. Bitwarden Credential Source | 1/1 | Complete    | 2026-06-05 |
-| 58. Session Lifecycle Hooks | 2/3 | In Progress|  |
+| 58. Session Lifecycle Hooks | 3/3 | Complete   | 2026-06-05 |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 3/4 | In Progress|  |
