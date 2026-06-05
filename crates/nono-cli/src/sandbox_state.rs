@@ -35,6 +35,32 @@ pub struct SandboxState {
     /// Proxy domain allowlist at sandbox creation time
     #[serde(default)]
     pub allowed_domains: Vec<String>,
+    /// Endpoint-scoped rules per domain at sandbox creation time.
+    /// Backward compatible: absent in old NONO_CAP_FILE JSON deserializes as empty Vec.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain_endpoints: Vec<DomainEndpointState>,
+}
+
+/// Serializable endpoint rule state for a single domain's fine-grained restrictions.
+///
+/// Ported from upstream commit 0ced085.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DomainEndpointState {
+    /// Domain the rules apply to (e.g., "api.github.com")
+    pub domain: String,
+    /// Per-endpoint method+path rules
+    pub endpoints: Vec<EndpointRuleState>,
+}
+
+/// Serializable representation of a single endpoint rule (method + path glob).
+///
+/// Ported from upstream commit 0ced085.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EndpointRuleState {
+    /// HTTP method (e.g., "GET", "POST", "*")
+    pub method: String,
+    /// Path pattern (e.g., "/repos/**")
+    pub path: String,
 }
 
 /// Serializable filesystem capability state
@@ -54,11 +80,13 @@ pub struct FsCapState {
 }
 
 impl SandboxState {
-    /// Create sandbox state from a CapabilitySet, bypass_protection paths, and domain allowlist
+    /// Create sandbox state from a CapabilitySet, bypass_protection paths, domain allowlist,
+    /// and fine-grained endpoint rules per domain.
     pub fn from_caps(
         caps: &CapabilitySet,
         bypass_protection_paths: &[PathBuf],
         allowed_domains: &[String],
+        domain_endpoints: &[DomainEndpointState],
     ) -> Self {
         Self {
             fs: caps
@@ -84,6 +112,7 @@ impl SandboxState {
                 .map(|p| p.display().to_string())
                 .collect(),
             allowed_domains: allowed_domains.to_vec(),
+            domain_endpoints: domain_endpoints.to_vec(),
         }
     }
 
@@ -487,7 +516,7 @@ mod tests {
         let mut caps = CapabilitySet::new().block_network();
         caps.add_allowed_command("pip".to_string());
 
-        let state = SandboxState::from_caps(&caps, &[], &[]);
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
         assert!(state.net_blocked);
         assert_eq!(state.allowed_commands, vec!["pip"]);
 
@@ -505,7 +534,7 @@ mod tests {
 
         let caps = CapabilitySet::new().block_network();
 
-        let state = SandboxState::from_caps(&caps, &[], &[]);
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
         state
             .write_to_file(&file_path)
             .expect("Failed to write state");
@@ -549,7 +578,7 @@ mod tests {
         let mut caps = CapabilitySet::new();
         caps.add_fs(cap);
 
-        let state = SandboxState::from_caps(&caps, &[], &[]);
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
         let restored = state.to_caps().expect("restore caps");
 
         assert_eq!(restored.fs_capabilities().len(), 1);
@@ -578,7 +607,7 @@ mod tests {
             source: CapabilitySource::Profile,
         });
 
-        let state = SandboxState::from_caps(&caps, &[], &[]);
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
         let restored = state.to_caps().expect("restore future file cap");
 
         assert_eq!(restored.fs_capabilities().len(), 1);
@@ -607,7 +636,7 @@ mod tests {
             source: CapabilitySource::Profile,
         });
 
-        let state = SandboxState::from_caps(&caps, &[], &[]);
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
         let restored = state.to_caps().expect("restore exact directory literal");
 
         assert_eq!(restored.fs_capabilities().len(), 1);
@@ -657,5 +686,72 @@ mod tests {
             format!("{err}").contains("sandbox state path drifted"),
             "error should mention path drift"
         );
+    }
+}
+
+// ============================================================================
+// Phase 56-01 Task 2: DomainEndpointState + from_caps 4-arg signature tests
+// ============================================================================
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod domain_endpoint_state_tests {
+    use super::*;
+
+    #[test]
+    fn domain_endpoint_state_serializes_and_deserializes() {
+        let state = DomainEndpointState {
+            domain: "api.github.com".to_string(),
+            endpoints: vec![EndpointRuleState {
+                method: "GET".to_string(),
+                path: "/repos/**".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let back: DomainEndpointState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.domain, "api.github.com");
+        assert_eq!(back.endpoints.len(), 1);
+        assert_eq!(back.endpoints[0].method, "GET");
+        assert_eq!(back.endpoints[0].path, "/repos/**");
+    }
+
+    #[test]
+    fn from_caps_four_arg_signature_with_empty_domain_endpoints() {
+        let caps = CapabilitySet::new().block_network();
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
+        assert!(state.domain_endpoints.is_empty());
+        assert!(state.net_blocked);
+    }
+
+    #[test]
+    fn from_caps_four_arg_populates_domain_endpoints() {
+        let caps = CapabilitySet::new();
+        let endpoints = vec![DomainEndpointState {
+            domain: "api.github.com".to_string(),
+            endpoints: vec![EndpointRuleState {
+                method: "POST".to_string(),
+                path: "/graphql".to_string(),
+            }],
+        }];
+        let state = SandboxState::from_caps(&caps, &[], &[], &endpoints);
+        assert_eq!(state.domain_endpoints.len(), 1);
+        assert_eq!(state.domain_endpoints[0].domain, "api.github.com");
+        assert_eq!(state.domain_endpoints[0].endpoints[0].method, "POST");
+    }
+
+    #[test]
+    fn sandbox_state_domain_endpoints_field_skips_when_empty_in_json() {
+        let caps = CapabilitySet::new().block_network();
+        let state = SandboxState::from_caps(&caps, &[], &[], &[]);
+        let json = serde_json::to_string(&state).unwrap();
+        // domain_endpoints should not appear in JSON when empty
+        assert!(!json.contains("domain_endpoints"), "empty domain_endpoints should be skipped in serialization; got: {json}");
+    }
+
+    #[test]
+    fn sandbox_state_domain_endpoints_backwards_compat_deserialize() {
+        // Old JSON without domain_endpoints field should deserialize with empty vec
+        let old_json = r#"{"fs":[],"net_blocked":false,"allowed_commands":[],"blocked_commands":[],"allowed_domains":[]}"#;
+        let state: SandboxState = serde_json::from_str(old_json).unwrap();
+        assert!(state.domain_endpoints.is_empty());
     }
 }
