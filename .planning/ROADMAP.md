@@ -29,7 +29,8 @@ granularity: standard
 - [x] **Phase 55: UPST7 Cherry-pick Wave** â€” Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, proxy 502 hardening, pack-update-hint robustness, ENV_LOCK policy test, sigstore 0.8.0, denial/diagnostic polish) per Phase 54 dispositions (`java-dev`/`java_runtime`: 0 commits in v0.57.0..v0.59.0 per ledger empirical cross-check on platform.rs; UPST8 territory) (completed 2026-06-05)
 - [x] **Phase 56: Fine-grained Network Filtering** â€” `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix
  (completed 2026-06-05)
-- [x] **Phase 57: Bitwarden Credential Source** â€” `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture (completed 2026-06-05)
+- [x] **Phase 57: Bitwarden Credential Source** â€” `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
+ (completed 2026-06-05)
 - [ ] **Phase 58: Session Lifecycle Hooks** â€” `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
 - [ ] **Phase 59: Supervisor IPC Robustness** â€” Keep-alive on transient child IPC close, bounded read-timeouts, robust accept; Unix named-socket hardening absorbed cross-platform-core; Windows Named-Pipe AIPC path translated (not cherry-picked)
 
@@ -149,7 +150,14 @@ Plans:
   2. On Unix, the upstream `hook_runtime` behavior is preserved exactly (gated unix-only as upstream ships it); no behavioral regression from the upstream implementation
   3. On Windows, hooks execute via a broker-spawned Low-IL process (no `fork`/`sh` assumption); an ADR is committed to `.planning/` documenting the Windows execution design decisions and any invariants the hook executor must preserve (e.g., mandatory-label enforcement, no unrestricted shell access)
   4. Hook resolution or execution failure is fail-closed: if a required hook cannot be found or exits non-zero, the session does not start (or stops with an error) â€” never silently skipped
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+**Wave 1**
+- [ ] 58-01-PLAN.md — SessionHooks + SessionHook types + 4-lockstep profile pipeline + schema (profile/mod.rs, policy.rs, sandbox_prepare.rs, launch_runtime.rs, nono-profile.schema.json)
+
+**Wave 2** *(parallel pair — blocked on Wave 1; no file overlap)*
+- [ ] 58-02-PLAN.md — Unix hook_runtime.rs port (daa55c8, fail-closed per D-01/D-02) + execution_runtime.rs dispatch wiring
+- [ ] 58-03-PLAN.md — Windows hook_runtime_windows.rs (LowIlPrimary + env-file ACL + D-10 vet bar) + is_dangerous_env_var Windows extension (D-09) + ADR
 
 ### Phase 59: Supervisor IPC Robustness
 **Goal**: The supervisor loop survives transient child IPC disconnects and enforces bounded read timeouts on both Unix and Windows
@@ -245,7 +253,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
 | 56. Fine-grained Network Filtering | 4/4 | Complete    | 2026-06-05 |
 | 57. Bitwarden Credential Source | 1/1 | Complete    | 2026-06-05 |
-| 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
+| 58. Session Lifecycle Hooks | 0/3 | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 3/4 | In Progress|  |
