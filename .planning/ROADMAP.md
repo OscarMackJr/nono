@@ -27,7 +27,8 @@ granularity: standard
 - [x] **Phase 53: Release & Drain** — Tag v2.8 + v0.57.5, produce signed MSIs off the post-`005b4c9e` binary, verify release.yml, UAT WFP uninstall, drain 3 todos (shipped as v0.57.5 after a release.yml signing-order fix; all 5 SC verified)
 - [x] **Phase 54: UPST7 Audit** — Produce DIVERGENCE-LEDGER for upstream `v0.57.0..v0.59.0`; per-cluster dispositions + ADR re-confirm + re-export empirical cross-check
 - [x] **Phase 55: UPST7 Cherry-pick Wave** — Absorb cross-platform straight ports (JSONC, target_binary, opencode relocation, timeout constants, proxy 502 hardening, pack-update-hint robustness, ENV_LOCK policy test, sigstore 0.8.0, denial/diagnostic polish) per Phase 54 dispositions (`java-dev`/`java_runtime`: 0 commits in v0.57.0..v0.59.0 per ledger empirical cross-check on platform.rs; UPST8 territory) (completed 2026-06-05)
-- [x] **Phase 56: Fine-grained Network Filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix (completed 2026-06-05)
+- [x] **Phase 56: Fine-grained Network Filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy; TLS-intercept endpoint-rules-before-credential-selection ordering fix
+ (completed 2026-06-05)
 - [ ] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
 - [ ] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
 - [ ] **Phase 59: Supervisor IPC Robustness** — Keep-alive on transient child IPC close, bounded read-timeouts, robust accept; Unix named-socket hardening absorbed cross-platform-core; Windows Named-Pipe AIPC path translated (not cherry-picked)
@@ -135,7 +136,9 @@ Plans:
   1. A `bw://` URI in a profile or `--credential` argument resolves a secret from Bitwarden (via the `bw` CLI or Bitwarden API) and makes it available to the sandboxed child without exposing the raw secret in any log, audit entry, or process argument list
   2. Secret fields are held in `Zeroizing<String>` and cleared on drop; the implementation satisfies `cargo clippy -D clippy::unwrap_used` with no exceptions
   3. `bw://` behaves identically to `keyring://`/`env://`/`file://` at the keystore abstraction boundary: the same `--credential` flag accepts all four schemes cross-platform with no platform-specific code paths above the keystore layer
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 57-01-PLAN.md — bw:// URI validation, dispatch, bw + bws backend loaders, build_mappings branch, and unit tests
 
 ### Phase 58: Session Lifecycle Hooks
 **Goal**: Profiles can declare hooks that run at session start and stop, with Unix behavior preserved from upstream and Windows executing via a safe broker-spawned design
@@ -241,7 +244,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
 | 56. Fine-grained Network Filtering | 4/4 | Complete    | 2026-06-05 |
-| 57. Bitwarden Credential Source | 0/TBD | Not started | - |
+| 57. Bitwarden Credential Source | 0/1 | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
