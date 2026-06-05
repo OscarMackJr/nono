@@ -225,7 +225,7 @@ fn is_valid_bw_id(s: &str) -> bool {
 
 ### Pattern 2: `bw` CLI invocation (item backend)
 
-**What:** Spawn `bw get item <id> --session <token> --nointeraction`, capture stdout as JSON, parse with `serde_json`, select field.
+**What:** Spawn `bw get item <id> --nointeraction` (env-only: BW_SESSION is read from the inherited environment, NOT passed via --session flag -- avoids token in argv per D-02 and Pitfall 2), capture stdout as JSON, parse with `serde_json`, select field.
 **When to use:** `bw://item/<id>/<selector>` URIs.
 
 ```rust
@@ -246,7 +246,7 @@ fn load_from_bw(uri: &str) -> Result<Zeroizing<String>> {
     }
 
     let mut child = Command::new("bw")
-        .args(["get", "item", "--", item_id, "--session", &session, "--nointeraction"])
+        .args(["get", "item", "--nointeraction", "--", item_id])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -727,22 +727,25 @@ pub fn redact_bw_uri(uri: &str) -> String {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should `--session` be passed explicitly or omitted?**
    - What we know: `--session` flag exists; `BW_SESSION` env var also works natively.
    - What's unclear: Whether omitting `--session` and relying on the env var is sufficient across all `bw` versions.
    - Recommendation: Omit `--session`; pre-validate `BW_SESSION` is non-empty; rely on `bw`'s native env var support. This avoids session token in argv.
+   - **RESOLVED:** Env-only. OMIT `--session` entirely from Command args. Pre-validate BW_SESSION non-empty before spawning. bw reads BW_SESSION from its inherited environment natively. Placing the token in argv is forbidden per D-02 and T-57-02.
 
 2. **`bw get totp` vs `login.totp` for TOTP selector**
    - What we know: Community consensus is that `bw get totp` returns the computed code. The CONTEXT.md D-07 says "field specific subcommands" are avoided, but TOTP is the one exception because the item JSON field holds the seed, not the code.
    - What's unclear: Whether the `bw get item` output ever includes a pre-computed TOTP code (it doesn't per current understanding).
    - Recommendation: Use `bw get totp <id>` for the `totp` selector. Document this explicitly as the one selector that requires a second subprocess call.
+   - **RESOLVED:** Use `bw get totp -- <id>` for the totp selector. `login.totp` in bw get item JSON is the TOTP seed (otpauth:// URI), not the computed code. This is the one legitimate exception to the single-subprocess pattern (D-07).
 
 3. **Does `bw get item` require `--nointeraction` or is it implied when `BW_SESSION` is set?**
    - What we know: `--nointeraction` is a documented global flag meaning "Do not prompt for interactive user input."
    - What's unclear: Whether omitting it could cause interactive prompts on some vault states.
    - Recommendation: Always pass `--nointeraction`; it is defensive, costs nothing.
+   - **RESOLVED:** Always pass `--nointeraction`. Required for scripted/non-interactive use across all bw CLI versions and vault states.
 
 ---
 
