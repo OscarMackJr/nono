@@ -99,8 +99,8 @@ Plans:
 - [x] 55-04-DIAGNOSTIC-DENIAL-POLISH-PLAN.md -- C10 diagnostic/denial polish: suppressed-denial annotations + canonical-path precompute + rfind split + bold-path footer (4 commits)
 
 **Wave 4** *(blocked on Wave 3 -- parallel pair)*
-- [ ] 55-05-TIMEOUT-CONSTANTS-PLAN.md -- C11 timeout constants: centralize timeouts.rs + overflow-check tightening (3 commits)
-- [ ] 55-06-POLICY-ENV-LOCK-TEST-PLAN.md -- C12 policy test: ENV_LOCK serialization in test_all_groups_no_deny_within_allow_overlap (1a764d05)
+- [x] 55-05-TIMEOUT-CONSTANTS-PLAN.md -- C11 timeout constants: centralize timeouts.rs + overflow-check tightening (3 commits)
+- [x] 55-06-POLICY-ENV-LOCK-TEST-PLAN.md -- C12 policy test: ENV_LOCK serialization in test_all_groups_no_deny_within_allow_overlap (1a764d05)
 
 **Wave 5** *(blocked on Waves 2+4)*
 - [ ] 55-07-SIGSTORE-BUMP-PLAN.md -- C13 sigstore 0.8.0 split: diff-inspection-first + Cargo bump + scrub.rs verify-then-port (e581569)
@@ -230,7 +230,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 |-------|----------------|--------|-----------|
 | 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
-| 55. UPST7 Cherry-pick Wave | 4/7 | In Progress|  |
+| 55. UPST7 Cherry-pick Wave | 6/7 | In Progress|  |
 | 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
