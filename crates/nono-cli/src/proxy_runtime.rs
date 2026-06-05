@@ -22,30 +22,39 @@ pub(crate) struct EffectiveProxySettings {
 /// Parse a `--allow-domain` CLI argument that may be a bare hostname or a URL with path.
 ///
 /// - Plain hostname (e.g. `api.openai.com`) → `AllowDomainEntry::Plain`
+/// - `host:port` (e.g. `api.openai.com:8080`) → `AllowDomainEntry::Plain` (port is stripped
+///   by downstream filtering; no URL parsing attempted, prevents the scheme-confusion
+///   where `url::Url::parse("host:port")` treats the host as the URL scheme)
 /// - URL with non-root path (e.g. `https://api.github.com/repos/my-org/**`) →
 ///   `AllowDomainEntry::WithEndpoints` with a single wildcard-method rule
 /// - URL with root or empty path → `AllowDomainEntry::Plain` (no endpoint restriction)
-/// - Unparseable input → `AllowDomainEntry::Plain` (fallback)
+/// - Unparseable URL or no scheme → `AllowDomainEntry::Plain` (fallback)
 ///
-/// Upstream-commit: 75b2265
+/// Upstream-commit: 75b2265 (adapted: guard URL parse behind explicit http/https scheme check
+/// to avoid mangling `host:port` entries — CR-02 fix)
 fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
-    if let Ok(parsed) = url::Url::parse(input) {
-        let domain = parsed.host_str().unwrap_or(input).to_string();
-        let path = parsed.path();
-        if path.is_empty() || path == "/" {
-            AllowDomainEntry::Plain(domain)
-        } else {
-            AllowDomainEntry::WithEndpoints {
-                domain,
-                endpoints: vec![nono_proxy::config::EndpointRule {
-                    method: "*".to_string(),
-                    path: path.to_string(),
-                }],
+    let looks_like_url =
+        input.starts_with("http://") || input.starts_with("https://");
+    if looks_like_url {
+        if let Ok(parsed) = url::Url::parse(input) {
+            if let Some(host) = parsed.host_str() {
+                let domain = host.to_string();
+                let path = parsed.path();
+                return if path.is_empty() || path == "/" {
+                    AllowDomainEntry::Plain(domain)
+                } else {
+                    AllowDomainEntry::WithEndpoints {
+                        domain,
+                        endpoints: vec![nono_proxy::config::EndpointRule {
+                            method: "*".to_string(),
+                            path: path.to_string(),
+                        }],
+                    }
+                };
             }
         }
-    } else {
-        AllowDomainEntry::Plain(input.to_string())
     }
+    AllowDomainEntry::Plain(input.to_string())
 }
 
 pub(crate) fn prepare_proxy_launch_options(
@@ -139,13 +148,11 @@ pub(crate) fn resolve_effective_proxy_settings(
         .network_profile
         .clone()
         .or_else(|| prepared.network_profile.clone());
-    // Convert PreparedSandbox allow_domain (Vec<String>) to Vec<AllowDomainEntry> via
-    // parse_allow_domain_arg, then extend with CLI --allow-domain args also parsed.
-    let mut allow_domain: Vec<AllowDomainEntry> = prepared
-        .allow_domain
-        .iter()
-        .map(|s| parse_allow_domain_arg(s))
-        .collect();
+    // Clone the structured entries from PreparedSandbox (already Vec<AllowDomainEntry> —
+    // endpoint rules from profile WithEndpoints entries are preserved end-to-end).
+    // CLI --allow-domain args are parsed and appended; they use parse_allow_domain_arg
+    // because they arrive as raw strings from the command line.
+    let mut allow_domain: Vec<AllowDomainEntry> = prepared.allow_domain.clone();
     allow_domain.extend(args.allow_proxy.iter().map(|s| parse_allow_domain_arg(s)));
     let mut credentials = prepared.credentials.clone();
     credentials.extend(args.proxy_credential.clone());
@@ -328,5 +335,85 @@ mod tests {
     fn parse_allow_domain_unparseable_input_falls_back_to_plain() {
         let entry = parse_allow_domain_arg("not-a-url");
         assert_eq!(entry, AllowDomainEntry::Plain("not-a-url".to_string()));
+    }
+
+    // CR-02 regression: `host:port` must NOT be mangled into a WithEndpoints
+    // (url::Url::parse treats the host as the URL scheme for `host:port` inputs).
+    #[test]
+    fn parse_allow_domain_host_port_yields_plain() {
+        let entry = parse_allow_domain_arg("api.openai.com:8080");
+        assert_eq!(
+            entry,
+            AllowDomainEntry::Plain("api.openai.com:8080".to_string()),
+            "host:port must parse as Plain, not WithEndpoints"
+        );
+    }
+
+    #[test]
+    fn parse_allow_domain_host_port_443_yields_plain() {
+        let entry = parse_allow_domain_arg("api.github.com:443");
+        assert_eq!(
+            entry,
+            AllowDomainEntry::Plain("api.github.com:443".to_string()),
+            "host:port must parse as Plain, not WithEndpoints"
+        );
+    }
+
+    // CR-01 regression: resolve_effective_proxy_settings must preserve structured
+    // WithEndpoints entries from PreparedSandbox (no round-trip through string parsing).
+    #[test]
+    fn resolve_effective_proxy_settings_preserves_with_endpoints() {
+        use crate::cli::SandboxArgs;
+        use nono::CapabilitySet;
+
+        let endpoint_entry = AllowDomainEntry::WithEndpoints {
+            domain: "api.github.com".to_string(),
+            endpoints: vec![
+                nono_proxy::config::EndpointRule {
+                    method: "GET".to_string(),
+                    path: "/repos/**".to_string(),
+                },
+                nono_proxy::config::EndpointRule {
+                    method: "POST".to_string(),
+                    path: "/issues/**".to_string(),
+                },
+            ],
+        };
+
+        let prepared = PreparedSandbox {
+            caps: CapabilitySet::new(),
+            secrets: Vec::new(),
+            rollback_exclude_patterns: Vec::new(),
+            rollback_exclude_globs: Vec::new(),
+            network_profile: None,
+            allow_domain: vec![endpoint_entry.clone()],
+            credentials: Vec::new(),
+            custom_credentials: std::collections::HashMap::new(),
+            upstream_proxy: None,
+            upstream_bypass: Vec::new(),
+            listen_ports: Vec::new(),
+            capability_elevation: false,
+            #[cfg(target_os = "linux")]
+            wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::default(),
+            #[cfg(target_os = "linux")]
+            af_unix_mediation: crate::profile::LinuxAfUnixMediation::default(),
+            allow_launch_services_active: false,
+            open_url_origins: Vec::new(),
+            open_url_allow_localhost: false,
+            bypass_protection_paths: Vec::new(),
+            allowed_env_vars: None,
+            denied_env_vars: None,
+            loaded_profile: None,
+        };
+
+        let args = SandboxArgs::default();
+        let effective = resolve_effective_proxy_settings(&args, &prepared);
+
+        assert_eq!(effective.allow_domain.len(), 1);
+        assert_eq!(
+            effective.allow_domain[0],
+            endpoint_entry,
+            "WithEndpoints entry must survive end-to-end without being flattened to Plain"
+        );
     }
 }

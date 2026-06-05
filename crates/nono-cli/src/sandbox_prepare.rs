@@ -69,7 +69,7 @@ pub(crate) struct PreparedSandbox {
     pub(crate) rollback_exclude_patterns: Vec<String>,
     pub(crate) rollback_exclude_globs: Vec<String>,
     pub(crate) network_profile: Option<String>,
-    pub(crate) allow_domain: Vec<String>,
+    pub(crate) allow_domain: Vec<crate::profile::AllowDomainEntry>,
     pub(crate) credentials: Vec<String>,
     pub(crate) custom_credentials: HashMap<String, profile::CustomCredentialDef>,
     pub(crate) upstream_proxy: Option<String>,
@@ -269,12 +269,16 @@ pub(crate) fn prepare_sandbox_with_context(
                 (Vec::new(), Vec::new())
             };
 
-        let allow_domain = manifest
+        let allow_domain_strings: Vec<String> = manifest
             .network
             .as_ref()
             .map(|network| network.allow_domains.clone())
             .unwrap_or_default();
-        print_allow_domain_port_warnings(&allow_domain, "manifest allow_domain", silent);
+        print_allow_domain_port_warnings(&allow_domain_strings, "manifest allow_domain", silent);
+        let allow_domain: Vec<crate::profile::AllowDomainEntry> = allow_domain_strings
+            .into_iter()
+            .map(crate::profile::AllowDomainEntry::Plain)
+            .collect();
         let credentials = manifest
             .credentials
             .iter()
@@ -505,7 +509,7 @@ pub(crate) fn prepare_sandbox_with_context(
             rollback_exclude_patterns: profile_rollback_patterns,
             rollback_exclude_globs: profile_rollback_globs,
             network_profile: profile_network_profile,
-            allow_domain: profile_allow_domain.iter().map(|e| e.domain().to_string()).collect(),
+            allow_domain: profile_allow_domain,
             credentials: profile_credentials,
             custom_credentials: profile_custom_credentials,
             upstream_proxy: profile_upstream_proxy,
