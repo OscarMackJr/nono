@@ -10,21 +10,26 @@ use tracing::warn;
 
 /// Quiet period to drain final PTY output after child exit before parent
 /// diagnostics/prompts take over the terminal.
+#[cfg(unix)]
 pub const POST_EXIT_PTY_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
 
 /// Poll interval for the non-blocking `waitpid` loop.
+#[cfg(unix)]
 pub const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 // pty_proxy
 
 /// Read timeout on the attach socket when reading the request-kind byte.
+#[cfg(unix)]
 pub const ATTACH_SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Delay before forwarding stdin in the attach warm-up loop, giving the
 /// supervisor time to replay buffered screen content.
+#[cfg(unix)]
 pub const ATTACH_STDIN_DELAY: Duration = Duration::from_millis(250);
 
 /// Sleep before retrying a session connection that failed with `SessionGone`.
+#[cfg(unix)]
 pub const ATTACH_RETRY_DELAY: Duration = Duration::from_millis(150);
 
 // startup_runtime
@@ -38,14 +43,17 @@ pub const SESSION_READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Poll interval while waiting for a detached launch process to exit after
 /// SIGTERM.
+#[cfg(unix)]
 pub const TERMINATE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 // session_commands
 
 /// Poll interval while waiting for a session to exit after SIGTERM.
+#[cfg(unix)]
 pub const STOP_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Poll interval when tailing a log file and the reader reaches EOF.
+#[cfg(unix)]
 pub const LOG_TAIL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 // learn
@@ -69,12 +77,14 @@ pub fn detach_startup_timeout() -> Duration {
 
 /// Read `NONO_PTY_DRAIN_TIMEOUT` (milliseconds). Returns the default when
 /// the variable is absent or unparseable.
+#[cfg(unix)]
 pub fn pty_drain_timeout() -> Duration {
     env_duration_millis("NONO_PTY_DRAIN_TIMEOUT", POST_EXIT_PTY_DRAIN_TIMEOUT)
 }
 
 /// Read `NONO_PTY_ATTACH_TIMEOUT` (milliseconds). Returns the default when
 /// the variable is absent or unparseable.
+#[cfg(unix)]
 pub fn pty_attach_timeout_ms() -> i32 {
     env_duration_millis(
         "NONO_PTY_ATTACH_TIMEOUT",
@@ -85,6 +95,7 @@ pub fn pty_attach_timeout_ms() -> i32 {
 }
 
 /// Default for `wait_for_attach_ready` poll timeout.
+#[cfg(unix)]
 pub const PTY_ATTACH_TIMEOUT_MS: i32 = 1000;
 
 /// Upper bound for any user-supplied timeout. Prevents `Instant + Duration`
@@ -115,6 +126,7 @@ fn env_duration_secs(var: &str, default: Duration) -> Duration {
     }
 }
 
+#[cfg(unix)]
 fn env_duration_millis(var: &str, default: Duration) -> Duration {
     match std::env::var(var) {
         Ok(val) => match val.parse::<u64>() {
