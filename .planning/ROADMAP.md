@@ -114,7 +114,17 @@ Plans:
   2. TLS-intercept endpoint rules are evaluated before credential selection: a request matching an endpoint-rule deny is rejected before credentials are injected (verifiable via proxy trace log or audit entry)
   3. `nono why --host api.example.com` surfaces path/method scoping rules in its output when the domain has path-scoped entries
   4. The Phase 34 C11 `fork-preserve` TLS-interception surface is preserved; the diff-inspect note from Phase 54 documents exactly which upstream v0.59 changes were applied as cherry-picks vs manual replays vs intentionally skipped
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+**Wave 1**
+- [ ] 56-01-PLAN.md — AllowDomainEntry enum + merge_allow_domain (profile/mod.rs) + partition_allow_domain (network_policy.rs) + DomainEndpointState + from_caps update (sandbox_state.rs) + Cargo.toml deps
+
+**Wave 2** *(parallel pair — no file overlap)*
+- [ ] 56-02-PLAN.md — Core proxy wiring: proxy_runtime.rs (parse_allow_domain_arg + C5 rider) + profile_runtime.rs + launch_runtime.rs + execution_runtime.rs + sandbox_prepare.rs + main.rs test fixtures
+- [ ] 56-03-PLAN.md — Display + schema: profile_cmd.rs allow_domain rendering + nono-profile.schema.json AllowDomainWithEndpoints
+
+**Wave 3** *(blocked on Waves 1+2)*
+- [ ] 56-04-PLAN.md — SC3 nono why extension: query_ext.rs (parse_host_input + query_network + QueryResult::Allowed endpoint_rules) + why_runtime.rs + full verification sweep (credential.rs SHA gate, Upstream-commit trailer audit, clippy)
 **UI hint**: yes
 
 ### Phase 57: Bitwarden Credential Source
@@ -136,7 +146,17 @@ Plans:
   2. On Unix, the upstream `hook_runtime` behavior is preserved exactly (gated unix-only as upstream ships it); no behavioral regression from the upstream implementation
   3. On Windows, hooks execute via a broker-spawned Low-IL process (no `fork`/`sh` assumption); an ADR is committed to `.planning/` documenting the Windows execution design decisions and any invariants the hook executor must preserve (e.g., mandatory-label enforcement, no unrestricted shell access)
   4. Hook resolution or execution failure is fail-closed: if a required hook cannot be found or exits non-zero, the session does not start (or stops with an error) — never silently skipped
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+**Wave 1**
+- [ ] 56-01-PLAN.md — AllowDomainEntry enum + merge_allow_domain (profile/mod.rs) + partition_allow_domain (network_policy.rs) + DomainEndpointState + from_caps update (sandbox_state.rs) + Cargo.toml deps
+
+**Wave 2** *(parallel pair — no file overlap)*
+- [ ] 56-02-PLAN.md — Core proxy wiring: proxy_runtime.rs (parse_allow_domain_arg + C5 rider) + profile_runtime.rs + launch_runtime.rs + execution_runtime.rs + sandbox_prepare.rs + main.rs test fixtures
+- [ ] 56-03-PLAN.md — Display + schema: profile_cmd.rs allow_domain rendering + nono-profile.schema.json AllowDomainWithEndpoints
+
+**Wave 3** *(blocked on Waves 1+2)*
+- [ ] 56-04-PLAN.md — SC3 nono why extension: query_ext.rs (parse_host_input + query_network + QueryResult::Allowed endpoint_rules) + why_runtime.rs + full verification sweep (credential.rs SHA gate, Upstream-commit trailer audit, clippy)
 **UI hint**: yes
 
 ### Phase 59: Supervisor IPC Robustness
@@ -231,7 +251,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 53. Release & Drain | 3/4 | In Progress|  |
 | 54. UPST7 Audit | 1/1 | Complete | 2026-06-04 |
 | 55. UPST7 Cherry-pick Wave | 7/7 | Complete    | 2026-06-05 |
-| 56. Fine-grained Network Filtering | 0/TBD | Not started | - |
+| 56. Fine-grained Network Filtering | 0/4 | Not started | - |
 | 57. Bitwarden Credential Source | 0/TBD | Not started | - |
 | 58. Session Lifecycle Hooks | 0/TBD | Not started | - |
 | 59. Supervisor IPC Robustness | 0/TBD | Not started | - |
