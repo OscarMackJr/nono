@@ -406,7 +406,8 @@ fn wrapped_bash_command(command: &str) -> Result<String> {
     let nono_exe = std::env::current_exe().map_err(|e| {
         NonoError::HookInstall(format!("failed to resolve current nono executable: {e}"))
     })?;
-    let nono_exe = shlex::try_quote(&nono_exe.display().to_string())
+    let nono_exe_display = nono_exe.display().to_string();
+    let nono_exe = shlex::try_quote(&nono_exe_display)
         .map_err(|e| NonoError::HookInstall(format!("failed to quote nono executable: {e}")))?;
     let command = shlex::try_quote(command)
         .map_err(|e| NonoError::HookInstall(format!("failed to quote shell command: {e}")))?;
