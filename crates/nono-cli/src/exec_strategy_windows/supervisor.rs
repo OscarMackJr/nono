@@ -498,6 +498,14 @@ impl WindowsSupervisorRuntime {
         // admits the AppContainer child (FIX 2) and the rendezvous file gets
         // a READ grant for the package SID principal (FIX 1).
         let package_sid = self.package_sid.clone();
+        // TEMPORARY: cycle-3 diagnostics — remove once root cause confirmed.
+        tracing::warn!(
+            "DIAG[appcontainer-cap-pipe]: cap-pipe server starting; \
+             package_sid_present={}, package_sid={:?}, rendezvous_path={:?}",
+            package_sid.is_some(),
+            package_sid.as_deref(),
+            rendezvous_path,
+        );
         // Phase 18 Plan 18-03: pass the supervisor's own containment Job
         // HANDLE through to the capability pipe server thread for the
         // containment-Job runtime guard in `handle_job_object_request`. The
