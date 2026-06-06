@@ -418,6 +418,11 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         // through to the capability pipe server's DACL so the child's
         // second-pass access check succeeds.
         session_sid: config.session_sid.clone(),
+        // Debug session `appcontainer-cap-pipe-unreachable` FIX 2: thread the
+        // per-run AppContainer package SID through to the capability pipe
+        // server so the pipe DACL and rendezvous-file read grant admit the
+        // AppContainer child's principal.
+        package_sid: config.package_sid.clone(),
         // Phase 18.1 Plan 18.1-03 G-06: live profile-resolved allowlist.
         // UNION of hard-coded D-05 defaults with the loaded profile's
         // `capabilities.aipc` widening (via `Profile::resolve_aipc_allowlist`).

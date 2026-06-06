@@ -242,6 +242,13 @@ pub(super) struct WindowsSupervisorRuntime {
     /// `.planning/debug/supervisor-pipe-access-denied.md`. `None` preserves
     /// the byte-identical pre-fix SDDL (legacy / non-restricted callers).
     session_sid: Option<String>,
+    /// Per-run AppContainer package SID (`S-1-15-2-*`) for the broker/Low-IL
+    /// arm. When `Some(..)`, the capability pipe DACL gets an additional ACE
+    /// for the AppContainer child's principal (FIX 2, debug
+    /// `appcontainer-cap-pipe-unreachable`) and `AppliedRendezvousReadGuard`
+    /// grants the package SID READ on the rendezvous file (FIX 1). `None`
+    /// on all non-AppContainer arms.
+    package_sid: Option<String>,
     /// Receiver end drained by the main event loop to merge audit entries
     /// produced by the capability pipe server thread.
     audit_rx: Option<std::sync::mpsc::Receiver<Vec<AuditEntry>>>,
@@ -374,6 +381,7 @@ impl WindowsSupervisorRuntime {
             session_token: supervisor.session_token.map(str::to_string),
             cap_pipe_rendezvous_path: supervisor.cap_pipe_rendezvous_path.map(|p| p.to_path_buf()),
             session_sid: supervisor.session_sid.clone(),
+            package_sid: supervisor.package_sid.clone(),
             audit_rx: None,
             child_process_for_broker: Arc::new(Mutex::new(None)),
             approval_backend: supervisor.approval_backend.clone(),
@@ -484,6 +492,11 @@ impl WindowsSupervisorRuntime {
         // `CreateFileW(GENERIC_READ | GENERIC_WRITE)` second-pass access
         // check. `None` => byte-identical pre-fix SDDL.
         let session_sid = self.session_sid.clone();
+        // Debug session `appcontainer-cap-pipe-unreachable` FIX 1 + FIX 2:
+        // clone the per-run package SID into the thread so the pipe DACL
+        // admits the AppContainer child (FIX 2) and the rendezvous file gets
+        // a READ grant for the package SID principal (FIX 1).
+        let package_sid = self.package_sid.clone();
         // Phase 18 Plan 18-03: pass the supervisor's own containment Job
         // HANDLE through to the capability pipe server thread for the
         // containment-Job runtime guard in `handle_job_object_request`. The
@@ -508,9 +521,10 @@ impl WindowsSupervisorRuntime {
             // capture would detect the `runtime_containment_job.0` access
             // below and capture only the inner field, triggering an E0277.
             let runtime_containment_job_local: SendableHandle = runtime_containment_job;
-            let mut sock = match nono::SupervisorSocket::bind_low_integrity_with_session_sid(
+            let mut sock = match nono::SupervisorSocket::bind_low_integrity_with_session_and_package_sid(
                 &rendezvous_path,
                 session_sid.as_deref(),
+                package_sid.as_deref(),
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -522,6 +536,32 @@ impl WindowsSupervisorRuntime {
                     return;
                 }
             };
+
+            // Debug session `appcontainer-cap-pipe-unreachable` FIX 1:
+            // Grant the AppContainer package SID READ on the rendezvous file
+            // so the AppContainer child can execute `read_pipe_rendezvous`.
+            // The rendezvous file only exists AFTER `bind_low_integrity_*`
+            // writes it (via `write_pipe_rendezvous` inside `bind_impl`).
+            // The guard reverts the ACE when the cap-pipe server thread exits.
+            // `None` package_sid → guard is a no-op (pre-existing callers
+            // on the WriteRestricted / non-AppContainer arm are unaffected).
+            let _rendezvous_read_guard =
+                match super::dacl_guard::AppliedRendezvousReadGuard::new(
+                    &rendezvous_path,
+                    package_sid.as_deref(),
+                ) {
+                    Ok(guard) => guard,
+                    Err(e) => {
+                        tracing::error!(
+                            session_id = %session_id,
+                            error = %e,
+                            "Failed to grant AppContainer package SID READ on rendezvous file; \
+                             AppContainer child will not be able to read the rendezvous — \
+                             capability expansion disabled for this session",
+                        );
+                        return;
+                    }
+                };
 
             // Wait for the parent to publish the spawned child's process
             // handle before processing any messages. Without a live target

@@ -216,6 +216,19 @@ pub struct SupervisorConfig<'a> {
     /// child is expected (detached-launch path, legacy callers) and the pipe
     /// uses the byte-identical pre-fix SDDL.
     pub session_sid: Option<String>,
+    /// Per-run AppContainer package SID (`S-1-15-2-*`) derived from the
+    /// `app_container_name` for the AppContainer (broker/Low-IL) arm.
+    ///
+    /// When `Some(..)`, the capability pipe DACL gets an additional ACE
+    /// `(A;;0x0012019F;;;<package_sid>)` so the AppContainer child can open
+    /// the pipe with `GENERIC_READ | GENERIC_WRITE` (FIX 2, debug
+    /// `appcontainer-cap-pipe-unreachable`). Also used by
+    /// `AppliedRendezvousReadGuard` to grant the package SID READ on the
+    /// rendezvous file (FIX 1).
+    ///
+    /// `None` on the `WriteRestricted` arm and all non-AppContainer paths.
+    /// Mirrors `ExecConfig.package_sid`.
+    pub package_sid: Option<String>,
     /// Phase 18 AIPC-01 (Plan 18-03 + Plan 18.1-03): per-handle-type
     /// allowlist resolved by UNIONing the hard-coded supervisor defaults
     /// (D-05) with the loaded profile's `capabilities.aipc` widening

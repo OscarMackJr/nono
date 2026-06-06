@@ -98,6 +98,14 @@ const CAPABILITY_PIPE_RESTRICTING_SID_MASK: &str = "0x0012019F";
 /// defense-in-depth alongside the character-class filter).
 const SESSION_SID_MAX_LEN: usize = 128;
 
+/// Maximum accepted length for a package SID string when embedding in SDDL.
+///
+/// AppContainer package SIDs produced by `derive_app_container_sid` have the
+/// shape `S-1-15-2-<u32>-...-<u32>` with up to 11 numeric components (2 +
+/// 9 sub-authorities), making the maximum realistic length ≈ 80 characters.
+/// 192 is a generous ceiling that still rejects pathological input.
+const PACKAGE_SID_MAX_LEN: usize = 192;
+
 /// Length prefix size: 4 bytes (u32 big-endian)
 const LENGTH_PREFIX_SIZE: usize = 4;
 
@@ -175,7 +183,7 @@ impl SupervisorSocket {
 
     /// Bind a named pipe for the provided rendezvous path and wait for a client.
     pub fn bind(path: &Path) -> Result<Self> {
-        Self::bind_impl(path, false, None)
+        Self::bind_impl(path, false, None, None)
     }
 
     /// Bind a named pipe that accepts connections from Low Integrity processes.
@@ -227,19 +235,55 @@ impl SupervisorSocket {
         path: &Path,
         session_sid: Option<&str>,
     ) -> Result<Self> {
-        Self::bind_impl(path, true, session_sid)
+        // Back-compat wrapper: no package SID. Existing callers (tests, legacy
+        // paths) are unaffected.
+        Self::bind_impl(path, true, session_sid, None)
     }
 
-    fn bind_impl(path: &Path, low_integrity: bool, session_sid: Option<&str>) -> Result<Self> {
+    /// Bind a Low-IL capability pipe, admitting BOTH the per-session
+    /// restricting SID (`session_sid`, for the `WRITE_RESTRICTED` arm) AND the
+    /// AppContainer package SID (`package_sid`, for the broker/AppContainer arm)
+    /// in the pipe DACL.
+    ///
+    /// When `package_sid` is `Some(sid)`, the validated SID is appended as an
+    /// additional `(A;;0x0012019F;;;<sid>)` ACE so the AppContainer child can
+    /// open the pipe with `GENERIC_READ | GENERIC_WRITE` (FIX 2, debug
+    /// `appcontainer-cap-pipe-unreachable`).
+    ///
+    /// `package_sid` is validated via [`validate_package_sid_for_sddl`] before
+    /// embedding — malformed input is fatal (fail-closed).
+    ///
+    /// # Errors
+    ///
+    /// Same as [`bind_low_integrity_with_session_sid`]; additionally returns
+    /// `NonoError::SandboxInit` if `package_sid` fails `validate_package_sid_for_sddl`.
+    pub fn bind_low_integrity_with_session_and_package_sid(
+        path: &Path,
+        session_sid: Option<&str>,
+        package_sid: Option<&str>,
+    ) -> Result<Self> {
+        Self::bind_impl(path, true, session_sid, package_sid)
+    }
+
+    fn bind_impl(
+        path: &Path,
+        low_integrity: bool,
+        session_sid: Option<&str>,
+        package_sid: Option<&str>,
+    ) -> Result<Self> {
         let (pipe_name, cleanup_rendezvous_path) = prepare_bind_pipe_name(path)?;
         let server_handle = if low_integrity {
-            create_low_integrity_named_pipe(&pipe_name, session_sid)?
+            create_low_integrity_named_pipe(&pipe_name, session_sid, package_sid)?
         } else {
             // Non-low-integrity path has no restricting-SID DACL ACE — the
             // caller does not expect Low-IL or restricted-token children.
             debug_assert!(
                 session_sid.is_none(),
                 "session_sid is only meaningful on the low_integrity path"
+            );
+            debug_assert!(
+                package_sid.is_none(),
+                "package_sid is only meaningful on the low_integrity path"
             );
             create_named_pipe(&pipe_name, false)?
         };
@@ -1011,7 +1055,7 @@ pub fn bind_aipc_pipe(canonical_name: &str, _direction: PipeDirection) -> Result
     // AIPC pipes do not face WRITE_RESTRICTED + restricting-SID children; the
     // target process is the child's own spawned AIPC peer which inherits the
     // normal user token. The byte-identical pre-fix SDDL is correct here.
-    let (sa, _sd_guard) = build_low_integrity_security_attributes(None)?;
+    let (sa, _sd_guard) = build_low_integrity_security_attributes(None, None)?;
     let wide_name = to_wide(canonical_name);
 
     // SAFETY: `wide_name` is a valid null-terminated UTF-16 string with a
@@ -1292,6 +1336,56 @@ fn validate_session_sid_for_sddl(sid: &str) -> Result<()> {
     Ok(())
 }
 
+/// Validate a package SID string before embedding it in the capability-pipe
+/// SDDL (SDDL-injection defense-in-depth, fail-closed).
+///
+/// AppContainer package SIDs have the shape `S-1-15-2-<digits>-...`. This
+/// function enforces a conservative allow-list matching that shape:
+///
+/// - Non-empty, no longer than [`PACKAGE_SID_MAX_LEN`] characters.
+/// - Begins with ASCII `S-1-15-2-` (the mandatory integrity level 15 =
+///   AppContainer; sub-authority 2 = `SECURITY_APP_PACKAGE_BASE_RID`). Any
+///   other prefix indicates a non-package SID that must not be embedded.
+/// - Every byte after the `S-` prefix is an ASCII digit or `-`.
+///
+/// Returns an error on any violation — the caller MUST treat it as fatal and
+/// MUST NOT silently fall back to the no-SID SDDL path. Fail-closed is
+/// mandatory per CLAUDE.md § "Fail Secure".
+fn validate_package_sid_for_sddl(sid: &str) -> Result<()> {
+    if sid.is_empty() {
+        return Err(NonoError::SandboxInit(
+            "malformed package SID: empty string".to_string(),
+        ));
+    }
+    if sid.len() > PACKAGE_SID_MAX_LEN {
+        return Err(NonoError::SandboxInit(format!(
+            "malformed package SID: length {} exceeds maximum {}",
+            sid.len(),
+            PACKAGE_SID_MAX_LEN
+        )));
+    }
+    // AppContainer package SIDs are always `S-1-15-2-*` (IL=15, base=2).
+    // Reject anything that deviates from this prefix — a session SID
+    // (`S-1-5-117-*`) or a user SID (`S-1-5-21-*`) must NEVER be admitted
+    // through the package-SID code path.
+    if !sid.starts_with("S-1-15-2-") {
+        return Err(NonoError::SandboxInit(format!(
+            "malformed package SID: must start with \"S-1-15-2-\" (got {sid:?})"
+        )));
+    }
+    // Character-class check on the tail (post `S-`): digits and hyphens only.
+    // `.bytes()` avoids any Unicode surprises — every accepted byte is ASCII.
+    let tail = &sid[2..];
+    for b in tail.bytes() {
+        if !(b.is_ascii_digit() || b == b'-') {
+            return Err(NonoError::SandboxInit(format!(
+                "malformed package SID: contains non-digit non-hyphen character (got {sid:?})"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Retrieve the current process's logon SID as a string (shape
 /// `S-1-5-5-X-Y`). The logon SID is unique per interactive logon session
 /// and is present on every token spawned within that session with the
@@ -1455,27 +1549,80 @@ fn current_logon_sid() -> Result<String> {
 /// WRITE_RESTRICTED child.
 ///
 /// Failure to retrieve the logon SID is fatal (fail-closed per CLAUDE.md).
-fn build_capability_pipe_sddl(session_sid: Option<&str>) -> Result<String> {
+///
+/// `package_sid`: when `Some(sid)`, admits the AppContainer package SID in the
+/// DACL by appending `(A;;0x0012019F;;;<package_sid>)` after the session/logon
+/// ACEs (FIX 2 — debug `appcontainer-cap-pipe-unreachable`). The SID is
+/// validated via [`validate_package_sid_for_sddl`] before embedding (SDDL
+/// injection defense-in-depth). `None` preserves the pre-fix behavior exactly.
+///
+/// The package SID ACE uses the SAME `CAPABILITY_PIPE_RESTRICTING_SID_MASK`
+/// (`0x0012019F` = `FILE_GENERIC_READ | FILE_GENERIC_WRITE | SYNCHRONIZE`) as
+/// the session/logon SIDs. On the AppContainer arm there is NO restricting-SID
+/// second-pass: the package SID is the token IDENTITY, so a single allow-ACE
+/// in the DACL's first pass suffices for `CreateFileW(GENERIC_READ |
+/// GENERIC_WRITE)` to succeed.
+fn build_capability_pipe_sddl(
+    session_sid: Option<&str>,
+    package_sid: Option<&str>,
+) -> Result<String> {
+    // Validate the package SID before any SDDL embedding (fail-closed).
+    // Do this BEFORE the session_sid match so a malformed package SID is
+    // never silently dropped.
+    let validated_package_sid: Option<&str> = match package_sid {
+        None => None,
+        Some(psid) => {
+            validate_package_sid_for_sddl(psid)?;
+            Some(psid)
+        }
+    };
+
     match session_sid {
-        None => Ok(CAPABILITY_PIPE_SDDL.to_string()),
+        None => {
+            // No session SID: base SDDL, optionally with a package-SID ACE.
+            match validated_package_sid {
+                None => Ok(CAPABILITY_PIPE_SDDL.to_string()),
+                Some(psid) => {
+                    // Package-SID-only path: no logon SID needed (the logon-SID
+                    // ACE is only needed alongside the WRITE_RESTRICTED arm's
+                    // second-pass check; on the AppContainer arm a single ACE
+                    // for the package SID suffices).
+                    Ok(format!(
+                        "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)\
+                         (A;;{mask};;;{psid})S:(ML;;NW;;;LW)",
+                        mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK,
+                    ))
+                }
+            }
+        }
         Some(sid) => {
             validate_session_sid_for_sddl(sid)?;
             let logon_sid = current_logon_sid()?;
-            // Insert the two ACEs BEFORE the SACL. SDDL requires the DACL
-            // (`D:`) section to precede the SACL (`S:`) section.
-            Ok(format!(
-                "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)\
-                 (A;;{mask};;;{sid})(A;;{mask};;;{logon_sid})S:(ML;;NW;;;LW)",
-                mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK,
-            ))
+            // Insert the session + logon ACEs BEFORE the SACL. SDDL requires
+            // the DACL (`D:`) section to precede the SACL (`S:`) section.
+            // Append the package-SID ACE when the AppContainer arm is active.
+            match validated_package_sid {
+                None => Ok(format!(
+                    "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)\
+                     (A;;{mask};;;{sid})(A;;{mask};;;{logon_sid})S:(ML;;NW;;;LW)",
+                    mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK,
+                )),
+                Some(psid) => Ok(format!(
+                    "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)\
+                     (A;;{mask};;;{sid})(A;;{mask};;;{logon_sid})\
+                     (A;;{mask};;;{psid})S:(ML;;NW;;;LW)",
+                    mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK,
+                )),
+            }
         }
     }
 }
 
 fn build_low_integrity_security_attributes(
     session_sid: Option<&str>,
+    package_sid: Option<&str>,
 ) -> Result<(SECURITY_ATTRIBUTES, SecurityDescriptorGuard)> {
-    let sddl_str = build_capability_pipe_sddl(session_sid)?;
+    let sddl_str = build_capability_pipe_sddl(session_sid, package_sid)?;
     let sddl_u16: Vec<u16> = sddl_str.encode_utf16().chain(std::iter::once(0)).collect();
     let mut security_descriptor: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
     let ok = unsafe {
@@ -1504,8 +1651,12 @@ fn build_low_integrity_security_attributes(
     Ok((sa, guard))
 }
 
-fn create_low_integrity_named_pipe(pipe_name: &str, session_sid: Option<&str>) -> Result<HANDLE> {
-    let (sa, _sd_guard) = build_low_integrity_security_attributes(session_sid)?;
+fn create_low_integrity_named_pipe(
+    pipe_name: &str,
+    session_sid: Option<&str>,
+    package_sid: Option<&str>,
+) -> Result<HANDLE> {
+    let (sa, _sd_guard) = build_low_integrity_security_attributes(session_sid, package_sid)?;
     let wide_name = to_wide(pipe_name);
 
     // SAFETY: `wide_name` is a valid null-terminated UTF-16 string. `sa` carries
@@ -2159,7 +2310,7 @@ mod tests {
         // session-SID ACE AND an ACE for a logon-SID (`S-1-5-5-*`). If
         // either is missing, the downstream CreateFileW will fail and we'd
         // rather the assert surface the structural regression first.
-        let sddl = build_capability_pipe_sddl(Some(&session_sid))
+        let sddl = build_capability_pipe_sddl(Some(&session_sid), None)
             .expect("build_capability_pipe_sddl for valid session SID must succeed");
         assert!(
             sddl.contains(&session_sid),
@@ -2198,7 +2349,7 @@ mod tests {
         // blocks until a client connects — we need both ends alive
         // concurrently.
         let server_handle = std::thread::spawn(move || {
-            SupervisorSocket::bind_impl(&rendezvous_for_server, true, Some(&server_thread_sid))
+            SupervisorSocket::bind_impl(&rendezvous_for_server, true, Some(&server_thread_sid), None)
         });
 
         // Wait briefly for the rendezvous file to be written — the server
@@ -2264,7 +2415,7 @@ mod tests {
         // Pre-fix guard: when session_sid is None, the DACL MUST NOT contain
         // any `S-1-5-117-*` (session-SID) ACE. This preserves byte-identical
         // SDDL for in-process / AIPC callers.
-        let baseline_sddl = build_capability_pipe_sddl(None).expect("no-SID path must succeed");
+        let baseline_sddl = build_capability_pipe_sddl(None, None).expect("no-SID path must succeed");
         assert_eq!(baseline_sddl, CAPABILITY_PIPE_SDDL);
         let baseline_aces = extract_dacl_aces_from_sddl(&baseline_sddl);
         assert!(
@@ -2323,7 +2474,7 @@ mod tests {
     /// perturbed by the restricted-SID plumbing.
     #[test]
     fn build_capability_pipe_sddl_none_matches_constant() {
-        let sddl = build_capability_pipe_sddl(None).expect("none path must succeed");
+        let sddl = build_capability_pipe_sddl(None, None).expect("none path must succeed");
         assert_eq!(sddl, CAPABILITY_PIPE_SDDL);
     }
 
@@ -2336,7 +2487,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn build_capability_pipe_sddl_some_embeds_session_and_logon_aces_before_sacl() {
         let sid = "S-1-5-117-1-2-3-4";
-        let sddl = build_capability_pipe_sddl(Some(sid)).expect("valid sid must build");
+        let sddl = build_capability_pipe_sddl(Some(sid), None).expect("valid sid must build");
         // The logon SID is a Windows invariant for any interactive session —
         // we can't predict its exact value, so anchor on the prefix and
         // assert the structural shape of the SDDL around it.
@@ -2364,6 +2515,163 @@ mod tests {
             logon_pos < sacl_pos,
             "logon-SID ACE must appear before the SACL: {sddl}"
         );
+    }
+
+    /// `validate_package_sid_for_sddl` must accept valid `S-1-15-2-*` shapes
+    /// and reject anything that could smuggle extra SDDL tokens through
+    /// string concatenation (SDDL-injection defense-in-depth, FIX 2).
+    #[test]
+    fn validate_package_sid_for_sddl_accepts_valid_and_rejects_injection() {
+        // Valid AppContainer package SID shapes:
+        assert!(
+            validate_package_sid_for_sddl("S-1-15-2-1").is_ok(),
+            "minimal valid package SID"
+        );
+        assert!(
+            validate_package_sid_for_sddl("S-1-15-2-1-2-3-4-5-6-7").is_ok(),
+            "typical AppContainer package SID with multiple sub-authorities"
+        );
+        assert!(
+            validate_package_sid_for_sddl(
+                "S-1-15-2-4294967295-0-0-0-1234567890-9876543210-0"
+            )
+            .is_ok(),
+            "maximum-component u32 values"
+        );
+
+        // Rejected: wrong prefix (session SID shape — must NOT be admitted
+        // through the package-SID path).
+        assert!(
+            validate_package_sid_for_sddl("S-1-5-117-1-2-3-4").is_err(),
+            "session SID prefix must be rejected"
+        );
+        // Rejected: user SID prefix.
+        assert!(
+            validate_package_sid_for_sddl("S-1-5-21-1-2-3-4").is_err(),
+            "user SID prefix must be rejected"
+        );
+        // Rejected: non-AppContainer integrity level.
+        assert!(
+            validate_package_sid_for_sddl("S-1-16-4096-1").is_err(),
+            "IL SID prefix must be rejected (IL 16, not AppContainer 15)"
+        );
+        // Rejected: empty string.
+        assert!(
+            validate_package_sid_for_sddl("").is_err(),
+            "empty string must be rejected"
+        );
+        // Rejected: injection via ACE.
+        assert!(
+            validate_package_sid_for_sddl("S-1-15-2-1)(A;;GA;;;WD").is_err(),
+            "injection via ACE terminator must be rejected"
+        );
+        // Rejected: semicolon.
+        assert!(
+            validate_package_sid_for_sddl("S-1-15-2-1;A").is_err(),
+            "semicolon must be rejected"
+        );
+        // Rejected: trailing space.
+        assert!(
+            validate_package_sid_for_sddl("S-1-15-2-1 ").is_err(),
+            "trailing space must be rejected"
+        );
+        // Rejected: embedded NUL.
+        assert!(
+            validate_package_sid_for_sddl("S-1-15-2-\0").is_err(),
+            "embedded NUL must be rejected"
+        );
+        // Rejected: lowercase prefix.
+        assert!(
+            validate_package_sid_for_sddl("s-1-15-2-1").is_err(),
+            "lowercase prefix must be rejected"
+        );
+        // Rejected: over-length.
+        let too_long = format!("S-1-15-2-{}", "1".repeat(PACKAGE_SID_MAX_LEN));
+        assert!(
+            validate_package_sid_for_sddl(&too_long).is_err(),
+            "over-length string must be rejected"
+        );
+    }
+
+    /// `build_capability_pipe_sddl(None, Some(package_sid))` (no session SID,
+    /// but a package SID) must embed exactly one package-SID ACE before the SACL.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn build_capability_pipe_sddl_package_sid_only_embeds_ace() {
+        let psid = "S-1-15-2-10-20-30-40";
+        let sddl = build_capability_pipe_sddl(None, Some(psid))
+            .expect("valid package SID with no session SID must build");
+        let package_ace = format!("(A;;{mask};;;{psid})", mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK);
+        assert!(
+            sddl.starts_with("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)"),
+            "SDDL must retain the D:P protected prefix: {sddl}"
+        );
+        assert!(
+            sddl.contains(&package_ace),
+            "SDDL must embed the package-SID ACE: {sddl}"
+        );
+        assert!(
+            sddl.ends_with("S:(ML;;NW;;;LW)"),
+            "SDDL must end with the Low-IL SACL: {sddl}"
+        );
+        // No session-SID (S-1-5-117) ACE should be present.
+        assert!(
+            !sddl.contains("S-1-5-117-"),
+            "session-SID ACE must not appear in package-only path: {sddl}"
+        );
+    }
+
+    /// `build_capability_pipe_sddl(Some(session), Some(package))` must embed
+    /// both the session-SID ACE, the logon-SID ACE, AND the package-SID ACE.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn build_capability_pipe_sddl_session_and_package_sid_embeds_all_aces() {
+        let ssid = "S-1-5-117-1-2-3-4";
+        let psid = "S-1-15-2-10-20-30-40";
+        let sddl = build_capability_pipe_sddl(Some(ssid), Some(psid))
+            .expect("valid session + package SID must build");
+        let session_ace = format!("(A;;{mask};;;{ssid})", mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK);
+        let package_ace = format!("(A;;{mask};;;{psid})", mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK);
+        assert!(
+            sddl.contains(&session_ace),
+            "SDDL must embed the session-SID ACE: {sddl}"
+        );
+        assert!(
+            sddl.contains("S-1-5-5-"),
+            "SDDL must embed a logon-SID ACE (S-1-5-5-*): {sddl}"
+        );
+        assert!(
+            sddl.contains(&package_ace),
+            "SDDL must embed the package-SID ACE: {sddl}"
+        );
+        assert!(
+            sddl.ends_with("S:(ML;;NW;;;LW)"),
+            "SDDL must end with the Low-IL SACL: {sddl}"
+        );
+    }
+
+    /// `build_capability_pipe_sddl` must REJECT a malformed package SID even
+    /// when the session SID is valid (fail-closed, SDDL-injection defense).
+    #[test]
+    fn build_capability_pipe_sddl_rejects_malformed_package_sid() {
+        let session_sid = "S-1-5-117-1-2-3-4";
+        let bad_package_sids = [
+            "S-1-15-2-1)(A;;GA;;;WD", // injection via ACE
+            "S-1-5-21-1-2-3-4",        // wrong prefix (user SID)
+            "",                         // empty
+            "S-1-15-2-1 ",              // trailing space
+        ];
+        for bad in &bad_package_sids {
+            assert!(
+                build_capability_pipe_sddl(Some(session_sid), Some(bad)).is_err(),
+                "build_capability_pipe_sddl must fail-closed on malformed package SID {bad:?}"
+            );
+            // Also test with no session SID (same validation must apply).
+            assert!(
+                build_capability_pipe_sddl(None, Some(bad)).is_err(),
+                "build_capability_pipe_sddl(None, bad) must fail-closed on {bad:?}"
+            );
+        }
     }
 
     #[test]
