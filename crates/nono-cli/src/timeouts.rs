@@ -67,6 +67,35 @@ pub const FS_USAGE_SETTLE_TIME: Duration = Duration::from_secs(2);
 #[cfg(target_os = "macos")]
 pub const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(3);
 
+// supervisor IPC
+
+/// Bounded read timeout for the supervisor IPC listener.
+///
+/// Matches upstream d1851c9 (5 s). Defends against a slow or silent child
+/// holding a partial frame and thereby blocking the supervisor indefinitely.
+///
+/// The value is intentionally not `#[cfg(unix)]`: Windows reads the same
+/// constant via the `NONO_SUPERVISOR_IPC_READ_TIMEOUT` env override, and
+/// `env_duration_secs` itself is non-cfg'd.
+// Wired in 59-02 (Unix) and 59-03 (Windows); the const is defined here so
+// both plans can reference it without creating a dependency between the two
+// Wave-2 plans.
+#[allow(dead_code)]
+pub const SUPERVISOR_IPC_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Read `NONO_SUPERVISOR_IPC_READ_TIMEOUT` (seconds), clamped to `MAX_TIMEOUT`.
+///
+/// Returns [`SUPERVISOR_IPC_READ_TIMEOUT`] when the variable is absent or
+/// contains an unparseable value.
+// Wired in 59-02 (Unix) and 59-03 (Windows).
+#[allow(dead_code)]
+pub fn supervisor_ipc_read_timeout() -> Duration {
+    env_duration_secs(
+        "NONO_SUPERVISOR_IPC_READ_TIMEOUT",
+        SUPERVISOR_IPC_READ_TIMEOUT,
+    )
+}
+
 // Configurable user-facing timeouts
 
 /// Read `NONO_DETACH_STARTUP_TIMEOUT` (seconds). Returns the default when
@@ -148,5 +177,60 @@ fn env_duration_millis(var: &str, default: Duration) -> Duration {
             }
         },
         Err(_) => default,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::test_env::EnvVarGuard;
+
+    const TIMEOUT_VAR: &str = "NONO_SUPERVISOR_IPC_READ_TIMEOUT";
+
+    /// Default value is 5 s when `NONO_SUPERVISOR_IPC_READ_TIMEOUT` is absent.
+    #[test]
+    fn supervisor_ipc_read_timeout_default() {
+        // Acquire the process-global env-var lock, then use EnvVarGuard to
+        // capture the current value (if any) and temporarily set a sentinel
+        // value we immediately remove so the env var is absent during the test.
+        let _env_lock = crate::test_env::lock_env();
+        // set_all captures the original and sets the sentinel; remove() unsets
+        // it for the actual test; Drop restores the original.
+        let _guard = EnvVarGuard::set_all(&[(TIMEOUT_VAR, "__sentinel__")]);
+        _guard.remove(TIMEOUT_VAR);
+
+        let got = supervisor_ipc_read_timeout();
+        assert_eq!(got, Duration::from_secs(5));
+    }
+
+    /// `NONO_SUPERVISOR_IPC_READ_TIMEOUT=1` yields a 1-second duration.
+    #[test]
+    fn supervisor_ipc_read_timeout_env_override() {
+        let _env_lock = crate::test_env::lock_env();
+        let _guard = EnvVarGuard::set_all(&[(TIMEOUT_VAR, "1")]);
+
+        let got = supervisor_ipc_read_timeout();
+        assert_eq!(got, Duration::from_secs(1));
+    }
+
+    /// A value greater than `MAX_TIMEOUT` (3600 s) is clamped to `MAX_TIMEOUT`.
+    #[test]
+    fn supervisor_ipc_read_timeout_clamp() {
+        let _env_lock = crate::test_env::lock_env();
+        let _guard = EnvVarGuard::set_all(&[(TIMEOUT_VAR, "99999")]);
+
+        let got = supervisor_ipc_read_timeout();
+        assert_eq!(got, MAX_TIMEOUT);
+    }
+
+    /// An unparseable env value (e.g. "abc") falls back to the 5 s default.
+    #[test]
+    fn supervisor_ipc_read_timeout_invalid_fallback() {
+        let _env_lock = crate::test_env::lock_env();
+        let _guard = EnvVarGuard::set_all(&[(TIMEOUT_VAR, "abc")]);
+
+        let got = supervisor_ipc_read_timeout();
+        assert_eq!(got, SUPERVISOR_IPC_READ_TIMEOUT);
     }
 }
