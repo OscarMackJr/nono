@@ -16,9 +16,11 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    DuplicateHandle, LocalFree, DUPLICATE_SAME_ACCESS, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY,
-    ERROR_PIPE_CONNECTED, GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    DuplicateHandle, LocalFree, DUPLICATE_SAME_ACCESS, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND,
+    ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ,
+    GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Networking::WinSock::{
     WSADuplicateSocketW, INVALID_SOCKET, SOCKET, WSAPROTOCOL_INFOW,
@@ -35,8 +37,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, CreatePipe, DisconnectNamedPipe,
-    GetNamedPipeServerProcessId, WaitNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-    PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    GetNamedPipeServerProcessId, PeekNamedPipe, WaitNamedPipeW, PIPE_READMODE_BYTE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::SystemServices::SE_GROUP_LOGON_ID;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
@@ -104,6 +106,21 @@ const MAX_MESSAGE_SIZE: u32 = 64 * 1024;
 
 /// Default wait for pipe availability during startup.
 const PIPE_CONNECT_TIMEOUT_MS: u32 = 5_000;
+
+/// Default bounded read timeout for `read_frame` (5 s, matching upstream d1851c9).
+///
+/// This constant is library-internal. Callers that want a different timeout
+/// should call [`SupervisorSocket::recv_message_with_timeout`] and pass the
+/// desired [`Duration`] (e.g. the CLI's `supervisor_ipc_read_timeout()` value).
+/// The library never reads env vars directly (policy-free boundary).
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Polling interval between `PeekNamedPipe` calls when no bytes are available.
+///
+/// 10 ms is a reasonable Nyquist balance: low enough to not add noticeable
+/// latency to normal IPC (messages arrive in microseconds), high enough to
+/// avoid busy-spinning a CPU core (T-59-03b mitigation).
+const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PipeRendezvousInfo {
@@ -268,8 +285,38 @@ impl SupervisorSocket {
     }
 
     /// Receive a message from child (supervisor side).
+    ///
+    /// Bounded by `DEFAULT_READ_TIMEOUT` (5 s). Use
+    /// [`recv_message_with_timeout`] to pass a custom deadline (e.g. the
+    /// CLI's `supervisor_ipc_read_timeout()` value).
     pub fn recv_message(&mut self) -> Result<SupervisorMessage> {
         let payload = self.read_frame()?;
+        serde_json::from_slice(&payload).map_err(|e| {
+            NonoError::SandboxInit(format!("Failed to deserialize supervisor message: {e}"))
+        })
+    }
+
+    /// Receive a message from child (supervisor side), bounded by `timeout`.
+    ///
+    /// The timeout is measured from the instant this method is called.
+    /// On deadline expiry the error message contains the tag `[timeout]`,
+    /// which the caller's loop can use to distinguish keep-alive (no-op)
+    /// from a disconnect-class `[disconnect]` error that requires re-accept.
+    ///
+    /// This is the preferred entry point for the CLI's supervision loop:
+    /// ```no_run
+    /// # use nono::supervisor::socket::SupervisorSocket;
+    /// # let mut sock: SupervisorSocket = unimplemented!();
+    /// let timeout = std::time::Duration::from_secs(5);
+    /// match sock.recv_message_with_timeout(timeout) {
+    ///     Ok(msg) => { /* handle message */ }
+    ///     Err(e) if e.to_string().contains("[timeout]") => { /* keep-alive, retry */ }
+    ///     Err(e) if e.to_string().contains("[disconnect]") => { /* re-accept */ }
+    ///     Err(e) => { /* other error, fail-closed */ }
+    /// }
+    /// ```
+    pub fn recv_message_with_timeout(&mut self, timeout: Duration) -> Result<SupervisorMessage> {
+        let payload = self.read_frame_with_timeout(timeout)?;
         serde_json::from_slice(&payload).map_err(|e| {
             NonoError::SandboxInit(format!("Failed to deserialize supervisor message: {e}"))
         })
@@ -318,11 +365,144 @@ impl SupervisorSocket {
         Ok(())
     }
 
+    /// Read exactly `buf.len()` bytes from `reader`, bounded by `deadline`.
+    ///
+    /// Uses `PeekNamedPipe` as a non-destructive availability probe so that
+    /// blocking `Read::read` is only called after bytes are confirmed present
+    /// (the post-peek read completes promptly). This avoids the
+    /// `PIPE_WAIT`-mode unbounded block that would otherwise occur on a
+    /// partial-frame or silent child.
+    ///
+    /// # Error classification
+    ///
+    /// The two error kinds are **distinguishable** so the caller's loop can
+    /// handle them correctly:
+    ///
+    /// * **Disconnect-class** (`ERROR_BROKEN_PIPE` / `ERROR_PIPE_NOT_CONNECTED`
+    ///   / `ERROR_NO_DATA`): the pipe peer has closed. The error message
+    ///   contains the tag `[disconnect]`. The caller should re-accept or
+    ///   terminate.
+    /// * **Deadline-exceeded**: the configured read deadline elapsed with no
+    ///   data. The error message contains the tag `[timeout]`. The caller
+    ///   should treat this as keep-alive (discard the in-flight partial frame
+    ///   and continue the loop — fail-closed: no capability granted).
+    fn read_exact_bounded(reader: &mut File, buf: &mut [u8], deadline: Instant) -> Result<()> {
+        let handle = reader.as_raw_handle() as HANDLE;
+        let mut filled = 0usize;
+
+        while filled < buf.len() {
+            let mut avail: u32 = 0;
+            // SAFETY: `handle` is a live named-pipe handle owned by the
+            // `SupervisorSocket` for the lifetime of this call. The out-params
+            // `lpBytesRead`, `lpTotalBytesAvail`, and `lpBytesLeftThisMessage`
+            // are NULL (we only want the availability count), and `lpBuffer`
+            // is NULL with `nBufferSize == 0` (non-destructive probe that does
+            // NOT consume bytes from the pipe buffer). All pointer-typed
+            // arguments are null-checked valid by the Win32 docs for this
+            // non-reading variant of PeekNamedPipe.
+            let ok = unsafe {
+                PeekNamedPipe(
+                    handle,
+                    std::ptr::null_mut(), // lpBuffer — NULL: non-destructive
+                    0,                    // nBufferSize — 0 for NULL lpBuffer
+                    std::ptr::null_mut(), // lpBytesRead — not needed
+                    &mut avail,           // lpTotalBytesAvail — the only output we use
+                    std::ptr::null_mut(), // lpBytesLeftThisMessage — not needed
+                )
+            };
+
+            if ok == 0 {
+                let gle = std::io::Error::last_os_error();
+                let raw = gle.raw_os_error().unwrap_or(0) as u32;
+                // Classify disconnect-class GLEs (T-59-03a / Pattern 4)
+                if raw == ERROR_BROKEN_PIPE
+                    || raw == ERROR_PIPE_NOT_CONNECTED
+                    || raw == ERROR_NO_DATA
+                {
+                    return Err(NonoError::SandboxInit(format!(
+                        "[disconnect] PeekNamedPipe failed (GLE {raw}): {gle}"
+                    )));
+                }
+                // Any other GLE is also treated as a disconnect for fail-safety
+                return Err(NonoError::SandboxInit(format!(
+                    "[disconnect] PeekNamedPipe unexpected error (GLE {raw}): {gle}"
+                )));
+            }
+
+            if avail == 0 {
+                // No bytes yet — check deadline before sleeping (T-59-03b: MUST sleep)
+                if Instant::now() >= deadline {
+                    return Err(NonoError::SandboxInit(format!(
+                        "[timeout] Supervisor IPC read deadline exceeded after {filled} bytes \
+                         (needed {}); in-flight partial frame discarded (fail-closed)",
+                        buf.len()
+                    )));
+                }
+                std::thread::sleep(POLL_INTERVAL);
+                continue;
+            }
+
+            // Bytes are available — blocking read will complete promptly.
+            // Read at most `avail` bytes but no more than we still need.
+            let want = (avail as usize).min(buf.len().saturating_sub(filled));
+            // SAFETY: `buf[filled..filled + want]` is a valid mutable slice;
+            // `want` is bounded by both `avail` (kernel-confirmed present bytes)
+            // and the remaining space in `buf`. `Read::read` on a `File` wraps
+            // `ReadFile` which is safe here because the handle is a live pipe.
+            let n = reader
+                .read(&mut buf[filled..filled.saturating_add(want)])
+                .map_err(|e| {
+                    let raw = e.raw_os_error().unwrap_or(0) as u32;
+                    if raw == ERROR_BROKEN_PIPE
+                        || raw == ERROR_PIPE_NOT_CONNECTED
+                        || raw == ERROR_NO_DATA
+                    {
+                        NonoError::SandboxInit(format!(
+                            "[disconnect] Read after peek failed (GLE {raw}): {e}"
+                        ))
+                    } else {
+                        NonoError::SandboxInit(format!(
+                            "[disconnect] Read after peek unexpected error (GLE {raw}): {e}"
+                        ))
+                    }
+                })?;
+
+            if n == 0 {
+                // EOF on a named pipe — treat as disconnect
+                return Err(NonoError::SandboxInit(
+                    "[disconnect] Pipe EOF during read (peer closed)".to_string(),
+                ));
+            }
+            filled = filled.saturating_add(n);
+        }
+
+        Ok(())
+    }
+
+    /// Read a framed message from the pipe, bounded by `DEFAULT_READ_TIMEOUT`.
+    ///
+    /// Uses a `PeekNamedPipe` deadline poll so that a slow or silent child
+    /// cannot block the supervisor indefinitely (T-59-03a mitigated). The
+    /// 5-second default matches upstream d1851c9.
+    ///
+    /// If you need a custom timeout (e.g. CLI `supervisor_ipc_read_timeout()`),
+    /// use [`recv_message_with_timeout`] instead.
     fn read_frame(&mut self) -> Result<Vec<u8>> {
+        self.read_frame_with_timeout(DEFAULT_READ_TIMEOUT)
+    }
+
+    /// Read a framed message bounded by the supplied `timeout` deadline.
+    ///
+    /// This is the underlying implementation shared by `read_frame` and
+    /// `recv_message_with_timeout`. The `timeout` is measured from the
+    /// instant this method is called.
+    fn read_frame_with_timeout(&mut self, timeout: Duration) -> Result<Vec<u8>> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .unwrap_or_else(Instant::now);
+
         let mut len_bytes = [0u8; LENGTH_PREFIX_SIZE];
-        self.reader
-            .read_exact(&mut len_bytes)
-            .map_err(|e| NonoError::SandboxInit(format!("Failed to read message length: {e}")))?;
+        Self::read_exact_bounded(&mut self.reader, &mut len_bytes, deadline)?;
 
         let len = u32::from_be_bytes(len_bytes);
         if len > MAX_MESSAGE_SIZE {
@@ -332,9 +512,7 @@ impl SupervisorSocket {
         }
 
         let mut payload = vec![0u8; len as usize];
-        self.reader
-            .read_exact(&mut payload)
-            .map_err(|e| NonoError::SandboxInit(format!("Failed to read message payload: {e}")))?;
+        Self::read_exact_bounded(&mut self.reader, &mut payload, deadline)?;
         Ok(payload)
     }
 }
