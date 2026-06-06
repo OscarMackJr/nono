@@ -15,6 +15,28 @@
 
 v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed Linux backends (Phase 37 — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `NonoError::UnsupportedKernelFeature` fail-closed on cgroup v1 + cargo-install-style registry-profile auto-pull with sigstore-sign keyless OIDC signing; 5 e2e integration tests + multi-endpoint mock TCP server; sigstore-rust v0.7.0 bump closing 2 pre-existing TUF flakes), reset pre-existing CI red across all 7 lanes (Phase 41 — Linux/macOS Clippy + 5 Windows CI jobs back to green; MSI validator `-BrokerPath` mismatch resolved; cross-target clippy verification protocol codified in CLAUDE.md as enforcement-shaped MUST/NEVER rule; v24 broker code-review closure: `BrokerNotFound` FFI remap + null/INVALID handle rejection + empty-list rejection + Job-object test SKIP→FAIL policy), audited upstream `v0.53.0..v0.54.0` divergence (Phase 42 UPST5 audit — first cycle where `windows-touch` column fires: 7 clusters / 18 commits / 4 will-sync + 2 fork-preserve + 1 won't-sync; 3 windows-touch:yes commits dispositioned; per-cell L/M/H ADR review confirmed Phase 33 Option A `continue`), and executed the UPST5 sync (Phase 43 — 11 D-19 cherry-picks + 3 D-20 manual replays; new cross-platform `crates/nono-cli/src/platform.rs` module from upstream `ce06bd59` + Windows registry detection extensions; D-43-E1 Windows-only-files invariant respected; 2208 tests passing on Windows host; Cluster 2 reclassified `will-sync → split` mid-flight with source migration deferred to v2.6/UPST6). 13/13 v2.5 requirements satisfied at codebase level (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 + REQ-CI-01/02/03 + REQ-BROKER-CR-01..04 + REQ-UPST5-01/02). Cross-phase integration **clean** at close (7/7 wiring + 5/5 E2E flows WIRED per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`); milestone status `tech_debt` with 32 deferred items acknowledged at close (post-merge CI verifications on push + 16 REVIEW.md warnings + REQUIREMENTS.md checkbox drift). 172 commits since v2.4 (`25e88e61..a9b64440`, 5 days).
 
+## Current Milestone: v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
+
+**Goal:** De-risk the two long-deferred "v3.0" Windows items — Gap 6b kernel file-open/trust interception and WR-02 EDR validation — via a feasibility spike and a real EDR HUMAN-UAT, and bring the dormant macOS Seatbelt backend up to upstream parity through `v0.61.2`.
+
+**Target features:**
+
+- **Gap 6b kernel minifilter — feasibility spike (POC).** Prototype a minimal **test-signed** FltMgr minifilter proving the runtime file-open / pre-exec trust-interception design, and stand up the driver build + (test-)signing pipeline. Production EV/WHQL signing + kernel-version-maintenance hardening remain deferred to a future milestone. Deliverable includes an ADR + go/no-go recommendation for a production driver.
+- **WR-02 EDR HUMAN-UAT.** Execute the EDR-instrumented HUMAN-UAT deferred since v2.1: validate nono's behavior and visibility under a real EDR runner on a representative host; record success-criteria verdicts; close or explicitly re-scope WR-02.
+- **macOS Seatbelt upstream parity sync (through `v0.61.2`).** Audit + absorb the macOS-relevant upstream `always-further/nono` commits the fork hasn't synced — high-water mark `v0.57.0`, window ≈ `v0.60.0..v0.61.2` plus the macOS-only items UPST7 deferred (`$PWD` symlink-CWD capture, platform-rules-after-user-write-allows ordering) — and re-validate the Seatbelt layer on a macOS host. Overlaps the planned UPST8 cadence, scoped to the macOS surface + extended to `v0.61.2`.
+
+**Trigger:** v2.8/v2.9 shipped 2026-06-06 with the Windows confined-tools + out-of-box WFP-enforcement story complete; the two heaviest standing deferrals (Gap 6b kernel driver, WR-02 EDR) plus the dormant macOS backend are the next frontier. The user scoped the kernel driver as a **de-risking spike** (not a production driver) and the EDR theme as **finally running the deferred UAT**; macOS = upstream feature parity through `v0.61.2`.
+
+**Phases:** Phase numbering continues from Phase 62 (Phase 63+). No `--reset-phase-numbers`.
+
+**Out of scope (explicit deferrals):**
+- **Production EV/WHQL-signed Gap 6b driver** + kernel-version-maintenance hardening — gated on the spike's go/no-go; future milestone.
+- **EDR telemetry emission / EDR-evasion-resistance hardening** — v2.10 *validates under* EDR (WR-02 UAT); it does not build EDR integrations.
+- **Non-macOS UPST8 cherry-picks** — the broader Windows/Linux upstream sync stays on its own cadence; v2.10 absorbs only the macOS-relevant slice through `v0.61.2`.
+
+<details>
+<summary>Previously v2.8 + v2.9 Milestone scope (archived; shipped 2026-06-06)</summary>
+
 ## Milestone scope (archived): v2.8 UPST7 + v2.7 Drain & Release — SHIPPED 2026-06-06
 
 > **Archived.** This section is the original v2.8 milestone scope, retained for historical context. v2.8 shipped 2026-06-06 (10/10 reqs, audit `tech_debt`). The v2.9 track (Phases 60-62) shipped alongside it as `v0.62.2`. See `.planning/milestones/v2.8-ROADMAP.md` + `v2.9-ROADMAP.md`.
@@ -50,6 +72,8 @@ v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed
 - **Gap 6b (runtime trust interception via kernel minifilter)** — requires signed kernel driver; deferred to v3.0.
 - **Release-attestation alignment** (upstream `attest-build-provenance`) — optional/CI-only; fold into `release.yml` work or defer; the fork's sigstore/TUF + Authenticode + MSI signing likely supersedes a verbatim port.
 - **Residual v0.44–v0.57 macOS-learn deferrals** (`b5f0a3ab` deep ExecConfig refactor, `bbdf7b85` escape-quote wiring) — macOS-diagnostics-oriented, out of forward UPST7 scope.
+
+</details>
 
 <details>
 <summary>Previously v2.7 Milestone scope (archived; shipped 2026-05-26)</summary>

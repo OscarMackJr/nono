@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: none
-milestone_name: (between milestones — v2.8 + v2.9 shipped 2026-06-06)
-status: shipped
-last_updated: "2026-06-06T22:30:00.000Z"
+milestone: v2.10
+milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
+status: planning
+last_updated: "2026-06-06T23:47:34.826Z"
 last_activity: 2026-06-06
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 43
-  completed_plans: 43
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -25,27 +25,10 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 ## Current Position
 
-Phase: 60
-
---- (historical v2.9/Phase 62 narrative below is PRE-EXISTING drift from out-of-band work, retained as-is; not part of v2.8 Phase 56 close) ---
-
-Phase: 60
-
---- (historical v2.9/Phase 62 narrative below is PRE-EXISTING drift from out-of-band work, retained as-is; not part of v2.8 Phase 55 close) ---
-
---- Phase 62 — COMPLETE 2026-06-03 (REQ-WFP-01; out-of-box WFP kernel network enforcement) ---
-GATES GREEN: UAT 5/5 SC PASS (62-HUMAN-UAT.md) + security 33/33 closed (62-SECURITY.md, threats_open:0, T-62-06 self-DoS accepted as AR-62-10). 4 Phase-62 debug sessions moved to debug/resolved/. UAT PROOF (recorded in 62-HUMAN-UAT.md): SC1 out-of-box block (non-elevated, cwd %USERPROFILE%\.claude): `broker: spawned child app_container=true` → `curl: (6) Could not resolve host` → child_exit 6 (WFP-kernel-BLOCKED, child STARTED clean). SC2 boot-start: `sc query` RUNNING + `sc qc` START_TYPE 2 AUTO_START (LocalSystem) + SC1-repeat blocked (reboot-evidence rests on AUTO_START config + running state + enforced block — gold-standard post-`shutdown /r` capture optional). SC3 fail-closed: service STOPPED → non-elevated `--block-net` run raised PlatformNotSupported naming both `nono-wfp-service` and `nono setup --start-wfp-service`, NEVER printed `hello`. SC4 clean-uninstall leaves-nothing (PASS, prior session). SC5 pipe-isolation: blocks were clean kernel filters (curl exit 6), NO `Access is denied` pipe error → confirmed from SC1/SC2. Bypass-traverse ANSWERED: profile-deep cwd worked, lowbox retains SeChangeNotifyPrivilege — only the leaf .claude traverse (c3d7644f) was needed; 62-13 Task-3 ancestor grant unnecessary (harmless; removable in cleanup). DEFERRED: full READ-grant model for claude.exe (curl SC1 needs no user-file reads; claude.exe will — the AppContainer is a different principal). Memory: [[windows_appcontainer_wfp_validated]].
---- (62-13 execution detail) ---
-62-13 (the spike-validated spawn fix) EXECUTED 2026-06-03: 4 tasks, commits a250701f (lib AppContainerProfile RAII guard create_app_container_profile + grant_sid_traverse_on_path 0x21 via parameterized edit_dacl_for_sid mask), e3a22895 (broker registers the per-run profile fail-closed BEFORE the SECURITY_CAPABILITIES spawn, holds the guard until child exit), b5550717 (nono-cli AppliedAncestorTraverseGuard — package-SID traverse on user-owned cwd ancestors, stops at non-owned, reverted on Drop), 66bd0b6b (verify). windows-sys 0.59 Win32_Security_Isolation already exposes Create/DeleteAppContainerProfile → NO new dep/shim. KEPT ALE_USER_ID(packageSid) (WFP service untouched). REAL CORRECTION over the spike: tolerate BOTH already-exists HRESULTs — 0x800700B7 (ERROR_ALREADY_EXISTS, the LIVE Win11 build-26200 return) AND 0x80070050 (ERROR_FILE_EXISTS, the spike's value); the spike's single 0x80070050 was insufficient (caught by the round-trip test). Build + Windows-host clippy (nono/broker/cli) green; nono 730 + broker 23 + dacl_guard 5 (2 new) + app_container_tests 5 (2 new) tests pass; spike untouched + still builds. 4 pre-existing protected_paths/profile_cmd CLI failures re-confirmed failing at baseline e290d6bf (out of scope). PENDING (live elevated Win11, the operator): rebuild nono.exe+broker+signed v0.57.12 MSI; SC1 from %USERPROFILE%\.claude — (1) confined child STARTS (no FILE_NOT_FOUND/0xC0000142), (2) curl BLOCKED, (3) RECORD whether ancestor grants were needed = the bypass-traverse answer (compare with/without). Cross-target Unix clippy PARTIAL/deferred-to-CI (cfg(windows)-only). Full trail: .planning/phases/62-.../62-13-SUMMARY.md.
---- (historical context below, pre-62-13) ---
-VALIDATION (decisive, supersedes all the D5 #2 uncertainty below): the elevated spike `crates/nono-cli/examples/spike_wfp_appcontainer.rs` PROVED WFP kernel-BLOCKS an AppContainer's outbound connection scoped by its package SID — via BOTH ALE_USER_ID (curl exit 6, "Could not resolve host", the path nono already builds) AND ALE_PACKAGE_ID (curl exit 2). So the AppContainer redesign is VIABLE and the existing ALE_USER_ID scoping is KEPT. The spike also EXPOSED the real spawn bug: CreateProcessW(SECURITY_CAPABILITIES) fails ERROR_FILE_NOT_FOUND with a DERIVE-ONLY package SID even from a fully-accessible cwd (C:\Windows\System32) — the AppContainer PROFILE must be REGISTERED first via CreateAppContainerProfile (62-12 used Derive-only → THE bug; debug D1 "no registration needed" FALSIFIED). The v0.57.10/v0.57.11 cwd-traverse work (c3d7644f) was a WRONG turn for the SPAWN (but the read+traverse grant is still needed for real tools to access user files). Memory: [[windows_appcontainer_wfp_validated]]. NEXT FIX (plan 62-13): (1) broker registers the per-run profile (CreateAppContainerProfile + RAII DeleteAppContainerProfile, tolerate ALREADY_EXISTS) BEFORE the SECURITY_CAPABILITIES spawn; (2) KEEP ALE_USER_ID; (3) package-SID grant model for the real user-profile cwd (traverse on cwd + ancestors if no bypass-traverse) + read paths for claude.exe (deferred). Full trail: .planning/debug/wfp-write-restricted-0142.md.
---- (historical context below, pre-validation) ---
-Phase: 62 — 62-12 AppContainer REDESIGN CODE-COMPLETE (supersedes falsified 62-10); 62-11 OK; awaiting live 62-04 HUMAN-UAT
-Plan: Not started
-Status: Ready to plan
-Next (operator, live elevated Win11): rebuild nono.exe + broker + version-bumped MSI, then run 62-04 HUMAN-UAT SC1→SC5. SC1 probe (from a profile-covered cwd e.g. %USERPROFILE%\.claude): `nono run --profile claude-code --block-net --allow-cwd -- curl.exe -sS -m 5 https://api.ipify.org` MUST block (no external IP). SC4/SC5: after a confined --block-net run, `msiexec /x` then confirm NO nono filters + NO NONO_SUBLAYER_GUID sublayer remain. Local UAT loop: `sign-poc-local.ps1 -Scope machine -VersionTag <BUMP first-3 fields> -Thumbprint 319E507E...`; import POC cert to LocalMachine\Root+TrustedPublisher; verify installed nono-wfp-service.exe SHA256. If startup regresses under WRITE_RESTRICTED on the broker path, escalate to a new debug session (the restricting-SID shape is the only WFP-matchable option per debug wfp-broker-token-no-sid D1). Phase 60 follow-ups (non-blocking) still carried: cross-target clippy deferred to CI; delete/annotate superseded v0.57.4 GitHub release.
-BUILT+SIGNED FOR 62-04 UAT — CURRENT = v0.57.12 (62-13 AppContainer PROFILE-REGISTRATION fix; 2026-06-03): signed machine MSI `dist/windows/nono-v0.57.12-x86_64-pc-windows-msvc-machine.msi` (ProductVersion 0.57.12, MajorUpgrade; Authenticode Valid; POC cert 319E507E...). SHA256: nono.exe = C9F900CFCB6AAC5A288233BF84DB23D4CBAC3AC8D6BCD330070C227E8A59A318; nono-wfp-service.exe = 17A24FB19EB942F1EF55732DC0EBA2FA6CC05BBD590D0C1B502AC2AE37CAF25B. Cert already imported on this host. ⚠ INSTALL v0.57.12 (it carries the SPIKE-VALIDATED fix). UAT HISTORY: v0.57.9 → 0xC0000142 (WRITE_RESTRICTED crash; FIXED by 62-12 AppContainer). v0.57.10/v0.57.11 → CreateProcessW ERROR_FILE_NOT_FOUND (wrongly chased as cwd-traverse; c3d7644f leaf grant kept but was NOT the fix — the spike proved it failed even from a fully-accessible System32 cwd). v0.57.12 (62-13) = the REAL fix: broker REGISTERS the AppContainer profile (CreateAppContainerProfile) before spawn — spike PROVED this makes the child START + WFP-block via ALE_USER_ID. SC1 re-run from %USERPROFILE%\.claude: curl should START; BLOCK (no IP / "Could not resolve host"/timeout) = SC1 PASS. OPEN UAT QUESTION: does the lowbox have bypass-traverse? If curl STILL fails FILE_NOT_FOUND, a non-owned ancestor (C:\Users) blocks reaching the profile-deep cwd (can't grant its DACL) → pivot to a profile-accessible cwd strategy. DEFERRED: full read-grant model for claude.exe. NOTE: Cargo crate version stays 0.57.5 (MSI version from build tag).
-Last session: 2026-06-06 (later) — **v2.9 PUBLISHED as v0.62.2.** During the `/gsd-complete-milestone 2.8` pre-flight, discovered the v2.9 release had never actually published (v0.62.0/v0.62.1 tags existed but `release.yml` failed): two latent cfg-gated cross-target compile errors broke all 4 Linux/macOS build legs — E0716 in `claude_code_hook.rs` (Phase 60) + edition-2024 let-chain in `hook_runtime.rs` (Phase 58). Fixed via quick task `260606-mp9` (`4de294e8`) + `7bb7c7e3`, lockstep-bumped to 0.62.2, tagged v0.62.2 → release.yml run `27074741774` shipped (5/5 build legs + Create Release green, signed machine+user MSIs, notes published). Phase 61 (4/4) + 62 (13/13) now both Complete; 61-04-SUMMARY written, 61-RELEASE-VERIFY flipped BLOCKED→SHIPPED. **Next: complete the v2.9 bookkeeping commit, then `/gsd-complete-milestone 2.8` (Phases 53-59).** (Phase 59-03 was already operator-UAT PASS per prior session.)
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-06 — Milestone v2.10 started
 
 ### v2.8 Phase Summary (active)
 
@@ -366,6 +349,7 @@ Pre-close `audit-open` reported **55 open items**; user chose "Acknowledge all &
 | verification_gaps | 5 | Pre-v2.0 phase verification bookkeeping (`human_needed` close signals living in GH Actions), carried since prior closes. |
 
 **Genuine new tech-debt carry-forwards (→ next milestone), from the v2.8 audit + the v2.9 release:**
+
 - **Phase 58 D-05 (SECURITY, defense-in-depth):** Windows session hooks run Medium-IL; `create_low_integrity_primary_token()` is created but not plumbed into `CreateProcessAsUserW`. ADR-tracked; close in a dedicated follow-up phase.
 - **v0.57.4 GitHub release** still carries unsigned-payload MSIs (distribution hazard) — delete or annotate.
 - **CI `-Dwarnings` lint debt** keeps CI chronically red (cfg-gated `dead_code` `timeouts.rs` PTY constants, unused `format_bytes_short`/import/`resource_session_id`); harmless to `release.yml` (plain `cargo build`) but a hygiene cleanup. Same cross-target-drift class as the two compile errors that blocked the v2.9 release — see memory `feedback_clippy_cross_target`.
