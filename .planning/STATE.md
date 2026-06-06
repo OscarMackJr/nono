@@ -21,11 +21,11 @@ See: .planning/PROJECT.md (updated 2026-05-28 at v2.8 milestone start; v2.7 ship
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 58 — session-lifecycle-hooks
+**Current Focus:** Phase 59 — supervisor-ipc-robustness (Phase 58 complete 2026-06-06)
 
 ## Current Position
 
-Phase: 60
+Phase: 59 (Phase 58 complete; SDK phase.complete reported next=60 but Phase 60 is already shipped — corrected to 59 per ROADMAP status, see [[feedback_sdk_next_phase_skip]])
 
 --- (historical v2.9/Phase 62 narrative below is PRE-EXISTING drift from out-of-band work, retained as-is; not part of v2.8 Phase 56 close) ---
 
