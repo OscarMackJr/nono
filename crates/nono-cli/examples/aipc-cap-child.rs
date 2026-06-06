@@ -2,7 +2,8 @@
 //!
 //! When launched as the child process under `nono run --profile claude-code`,
 //! this binary drives the real capability pipe (rendezvous path injected by the
-//! supervisor as `NONO_CAP_FILE`) to exercise:
+//! supervisor as `NONO_SUPERVISOR_PIPE` — NOT `NONO_CAP_FILE`, which is the
+//! capability-state file, a different artifact) to exercise:
 //!
 //! - **SC2** (`sc2` mode): partial-frame / bounded-read. Connects to the cap
 //!   pipe, sends a 4-byte big-endian length prefix announcing 64 bytes (payload
@@ -124,12 +125,12 @@ mod windows_impl {
     // -----------------------------------------------------------------------
 
     fn run_sc2() -> ExitCode {
-        let cap_file = match env::var("NONO_CAP_FILE") {
+        let cap_file = match env::var("NONO_SUPERVISOR_PIPE") {
             Ok(v) => v,
             Err(_) => {
                 eprintln!(
                     "aipc-cap-child sc2 must be launched as a `nono run` child; \
-                     NONO_CAP_FILE not set"
+                     NONO_SUPERVISOR_PIPE not set"
                 );
                 return ExitCode::FAILURE;
             }
@@ -167,12 +168,12 @@ mod windows_impl {
     // -----------------------------------------------------------------------
 
     fn run_sc1() -> ExitCode {
-        let cap_file = match env::var("NONO_CAP_FILE") {
+        let cap_file = match env::var("NONO_SUPERVISOR_PIPE") {
             Ok(v) => v,
             Err(_) => {
                 eprintln!(
                     "aipc-cap-child sc1 must be launched as a `nono run` child; \
-                     NONO_CAP_FILE not set"
+                     NONO_SUPERVISOR_PIPE not set"
                 );
                 return ExitCode::FAILURE;
             }
@@ -291,11 +292,11 @@ mod windows_impl {
         let pipe_name = selftest_pipe_name();
 
         // #[allow(clippy::disallowed_methods)] — set_var is safe in a single-
-        // threaded selftest context; the only side effect is setting NONO_CAP_FILE
-        // for this process, which is exactly what we need here.
+        // threaded selftest context; the only side effect is setting
+        // NONO_SUPERVISOR_PIPE for this process, which is exactly what we need here.
         #[allow(clippy::disallowed_methods)]
         unsafe {
-            env::set_var("NONO_CAP_FILE", &pipe_name);
+            env::set_var("NONO_SUPERVISOR_PIPE", &pipe_name);
         }
 
         let (tx, rx) = mpsc::channel::<Result<(), String>>();
@@ -384,7 +385,7 @@ mod windows_impl {
         // threaded selftest context before the mimic thread is spawned.
         #[allow(clippy::disallowed_methods)]
         unsafe {
-            env::set_var("NONO_CAP_FILE", &pipe_name);
+            env::set_var("NONO_SUPERVISOR_PIPE", &pipe_name);
         }
 
         let (tx, rx) = mpsc::channel::<Result<(), String>>();
