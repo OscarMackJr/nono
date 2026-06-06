@@ -222,9 +222,9 @@ pub struct SupervisorConfig<'a> {
     /// When `Some(..)`, the capability pipe DACL gets an additional ACE
     /// `(A;;0x0012019F;;;<package_sid>)` so the AppContainer child can open
     /// the pipe with `GENERIC_READ | GENERIC_WRITE` (FIX 2, debug
-    /// `appcontainer-cap-pipe-unreachable`). Also used by
-    /// `AppliedRendezvousReadGuard` to grant the package SID READ on the
-    /// rendezvous file (FIX 1).
+    /// `appcontainer-cap-pipe-unreachable`). The rendezvous file READ grant
+    /// is applied inside `bind_impl` before the blocking `ConnectNamedPipe`
+    /// (FIX 1 cycle-2 ordering fix — see `socket_windows.rs` `bind_impl`).
     ///
     /// `None` on the `WriteRestricted` arm and all non-AppContainer paths.
     /// Mirrors `ExecConfig.package_sid`.

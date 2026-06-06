@@ -293,6 +293,53 @@ impl SupervisorSocket {
             drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
             return Err(err);
         }
+        // Cycle-2 ordering fix (debug session `appcontainer-cap-pipe-unreachable`):
+        //
+        // `finalize_server_connection` below calls `ConnectNamedPipe`, which BLOCKS
+        // until the AppContainer child connects to the pipe. The child cannot connect
+        // until it has read the rendezvous file (to learn the pipe name). Therefore
+        // the package-SID READ grant on the rendezvous file MUST be applied here —
+        // AFTER `write_pipe_rendezvous` (the file now exists on disk) and BEFORE
+        // `finalize_server_connection` (the blocking connect). Placing the grant
+        // after `bind_low_integrity_with_session_and_package_sid` returns (as
+        // cycle-1's `AppliedRendezvousReadGuard` did) is effectively dead code:
+        // by the time `bind_impl` returns, the child has already attempted the read,
+        // received `ERROR_ACCESS_DENIED` (os error 5), and exited.
+        //
+        // Revert: the rendezvous file is deleted in `SupervisorSocket::Drop` via
+        // `cleanup_rendezvous_path → std::fs::remove_file`. File deletion destroys
+        // the leaf ACE with the file — no separate revoke is needed.
+        //
+        // `None` package_sid (WriteRestricted arm / non-AppContainer / existing
+        // callers): no grant, unchanged behavior.
+        if low_integrity {
+            if let Some(pkg_sid) = package_sid {
+                // Validate the SID before calling into the DACL-edit primitive.
+                // `validate_package_sid_for_sddl` enforces `S-1-15-2-` prefix +
+                // digits/hyphens only + length ceiling — same allow-list already
+                // applied in `build_capability_pipe_sddl` for the pipe DACL ACE.
+                // Fail-closed: on validation or grant failure, reclaim the server
+                // handle and propagate. Never proceed to ConnectNamedPipe with an
+                // ungranted rendezvous on the AppContainer arm.
+                if let Err(err) = validate_package_sid_for_sddl(pkg_sid) {
+                    // SAFETY: `server_handle` is an owned handle created above.
+                    drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
+                    return Err(err);
+                }
+                if let Err(err) =
+                    crate::sandbox::windows::grant_sid_read_on_path(path, pkg_sid)
+                {
+                    // SAFETY: `server_handle` is an owned handle created above.
+                    drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
+                    return Err(NonoError::SandboxInit(format!(
+                        "Failed to grant AppContainer package SID READ on rendezvous file \
+                         {} before blocking ConnectNamedPipe — AppContainer child would be \
+                         denied access; failing secure: {err}",
+                        path.display()
+                    )));
+                }
+            }
+        }
         let server_file = finalize_server_connection(server_handle, &pipe_name)?;
         Ok(Self {
             reader: server_file

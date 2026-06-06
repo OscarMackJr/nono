@@ -245,9 +245,10 @@ pub(super) struct WindowsSupervisorRuntime {
     /// Per-run AppContainer package SID (`S-1-15-2-*`) for the broker/Low-IL
     /// arm. When `Some(..)`, the capability pipe DACL gets an additional ACE
     /// for the AppContainer child's principal (FIX 2, debug
-    /// `appcontainer-cap-pipe-unreachable`) and `AppliedRendezvousReadGuard`
-    /// grants the package SID READ on the rendezvous file (FIX 1). `None`
-    /// on all non-AppContainer arms.
+    /// `appcontainer-cap-pipe-unreachable`). The rendezvous file READ grant
+    /// for the package SID is applied inside `bind_impl` (FIX 1 — cycle-2
+    /// ordering fix: must happen before the blocking `ConnectNamedPipe`).
+    /// `None` on all non-AppContainer arms.
     package_sid: Option<String>,
     /// Receiver end drained by the main event loop to merge audit entries
     /// produced by the capability pipe server thread.
@@ -537,31 +538,16 @@ impl WindowsSupervisorRuntime {
                 }
             };
 
-            // Debug session `appcontainer-cap-pipe-unreachable` FIX 1:
-            // Grant the AppContainer package SID READ on the rendezvous file
-            // so the AppContainer child can execute `read_pipe_rendezvous`.
-            // The rendezvous file only exists AFTER `bind_low_integrity_*`
-            // writes it (via `write_pipe_rendezvous` inside `bind_impl`).
-            // The guard reverts the ACE when the cap-pipe server thread exits.
-            // `None` package_sid → guard is a no-op (pre-existing callers
-            // on the WriteRestricted / non-AppContainer arm are unaffected).
-            let _rendezvous_read_guard =
-                match super::dacl_guard::AppliedRendezvousReadGuard::new(
-                    &rendezvous_path,
-                    package_sid.as_deref(),
-                ) {
-                    Ok(guard) => guard,
-                    Err(e) => {
-                        tracing::error!(
-                            session_id = %session_id,
-                            error = %e,
-                            "Failed to grant AppContainer package SID READ on rendezvous file; \
-                             AppContainer child will not be able to read the rendezvous — \
-                             capability expansion disabled for this session",
-                        );
-                        return;
-                    }
-                };
+            // Cycle-2 ordering fix (debug session `appcontainer-cap-pipe-unreachable`):
+            // The rendezvous READ grant for the AppContainer package SID is now applied
+            // INSIDE `bind_low_integrity_with_session_and_package_sid` → `bind_impl`,
+            // AFTER `write_pipe_rendezvous` and BEFORE the blocking `ConnectNamedPipe`
+            // in `finalize_server_connection`. Applying it here (after the bind call
+            // returns) was dead code: the bind blocks on `ConnectNamedPipe` until the
+            // child connects; the child cannot connect until it reads the rendezvous;
+            // so the child already received `ERROR_ACCESS_DENIED` and exited before
+            // `bind_impl` ever returned. See socket_windows.rs `bind_impl` for the
+            // authoritative grant + ordering comment.
 
             // Wait for the parent to publish the spawned child's process
             // handle before processing any messages. Without a live target
