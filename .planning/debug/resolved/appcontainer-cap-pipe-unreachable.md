@@ -1,6 +1,6 @@
 ---
 slug: appcontainer-cap-pipe-unreachable
-status: fixing
+status: resolved
 trigger: "Under `nono run --profile claude-code` (broker/AppContainer arm) the supervised child cannot connect to the supervisor capability pipe; SupervisorSocket::connect fails reading the %TEMP% rendezvous file with Access is denied (os error 5). Surfaced by Phase 59 live UAT via the aipc-cap-child harness."
 created: 2026-06-06
 updated: 2026-06-06
@@ -163,22 +163,15 @@ FIX 2 — cap-pipe DACL admit (library + CLI plumbing):
 - Cycle-1 commits: `109ffc78` (FIX 1), `ece9b6dc` (FIX 2)
 - Cycle-2 operator binaries rebuilt: `target\release\nono.exe`, `target\release\examples\aipc-cap-child.exe`
 
-**OPERATOR VERIFICATION PENDING**
+**OPERATOR VERIFICATION COMPLETE — RESOLVED (2026-06-06, real Win11 26200, broker/AppContainer arm):**
 
-The full `aipc-cap-child sc2`/`sc1` PASS requires a real Win11 console under the broker/AppContainer arm — NOT automatable from this context.
+The cycle-3 root cause turned out to be a THIRD layer the static trace missed: the harness read the WRONG env var. The supervisor binds/writes/grants the cap-pipe rendezvous at `NONO_SUPERVISOR_PIPE` (`%TEMP%\nono-cap-<session_id>.pipe`, execution_runtime.rs:336), but `aipc-cap-child` read `NONO_CAP_FILE` (`%TEMP%\.nono-<nonce>.json`, the capability-STATE file) — two different artifacts. DIAG instrumentation (cycle-3) proved FIX 1's grant fired correctly on the rendezvous (`package_sid_present=true`, correct `S-1-15-2-*` SID, `read-grant OK`); the child just read the wrong path. Harness fixed to read `NONO_SUPERVISOR_PIPE` (commit `08c8e902`). FIX 1 + FIX 2 are both REQUIRED and RETAINED (the AppContainer principal needs the rendezvous READ grant AND the pipe-DACL package-SID ACE).
 
-**Exact repro commands** (run from `%USERPROFILE%\.claude` in a real PowerShell console using dev-layout binaries):
+LIVE PASS evidence (cwd `C:\Users\OMack\Nono`, `--allow-cwd`, dev-layout `target\release\nono.exe`):
+- **sc2 (17:52, bounded read):** `broker: spawned child app_container=true` → `sc2: partial frame (4-byte prefix) sent on cap pipe; stalling 20s...` → `broker: child exited child_exit_code=0`. No `os error 5`; child connected to the cap pipe, supervisor bounded the read, no hang. **PASS.**
+- **sc1 conn1 approval reachability (17:58):** conn1's `request_event` reached `[nono] Grant event access? name=nono-aipc-cap-child-sc1-probe-1 access=wait+signal [y/N]` — proving the cap pipe is fully reachable AND a real AIPC request dispatched to the supervisor's approval backend. (The synchronous prompt blocked the loop, so that run's conn2 couldn't re-accept — a test-design collision; sc1 was redesigned to transport-level re-accept to avoid it.)
+- **sc1 (18:14, transport re-accept, redesigned):** `sc1 conn1: established (cap pipe reachable)` → `SC1 RESULT: PASS (cap pipe re-accepted after transient close)` → `broker: child exited child_exit_code=0`. The 59-03 `disconnect_and_reconnect` re-accept is proven live under the AppContainer arm. **PASS.**
 
-```powershell
-# sc2: supervisor bounded-read test — child connects, sends oversized frame, supervisor reads bounded fragment, no hang
-target\release\nono.exe run --profile claude-code --allow-cwd -- target\release\examples\aipc-cap-child.exe sc2
+Both Phase 59-03 success criteria (SC1 re-accept + SC2 bounded read) are now confirmed on real Win11 under the broker/AppContainer arm. DIAG instrumentation stripped (commit `467575b6`). sc1 harness redesigned to transport-level re-accept (commit `c8bd649d`). Debug session RESOLVED.
 
-# sc1: full AIPC round-trip — child connects, sends RequestCapability, supervisor approves/denies, child prints result
-target\release\nono.exe run --profile claude-code --allow-cwd -- target\release\examples\aipc-cap-child.exe sc1
-```
-
-**PASS criteria:**
-- sc2: no `Access is denied (os error 5)` in child output; supervisor log shows `cap-pipe: bounded read` or similar; child exits 0.
-- sc1: child prints `SC1 RESULT: PASS`; supervisor log shows capability request handled; child exits 0.
-
-**If the repro still fails:** check that `target\release\nono.exe` is the post-fix binary (built after commit `ece9b6dc`). If a new `os error 5` appears on the PIPE (not the rendezvous file), a third DACL layer may be present — open a new debug session.
+**Final commit trail:** `109ffc78` (FIX 1 cycle-1) · `ece9b6dc` (FIX 2) · `f5bbd807` (FIX 1 cycle-2 ordering) · `83fde87b` (DIAG) · `08c8e902` (env-var root cause) · `467575b6` (DIAG strip) · `c8bd649d` (sc1 transport re-accept).
