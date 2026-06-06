@@ -88,11 +88,15 @@ FIX 2 — cap-pipe DACL admit (library + CLI plumbing):
 
 - timestamp: 2026-06-06 — Live Win11 run log: `broker: AppContainer profile registered app_container_name=nono.session.<guid>`; `broker: token/AppContainer setup complete app_container=true`; `broker: spawned child app_container=true`; then child prints `sc2: connect failed: ...Failed to read Windows supervisor pipe rendezvous C:\Users\OMack\AppData\Local\Temp\.nono-cb90a1393c9fcfd0.json: Access is denied. (os error 5)`; `broker: child exited child_exit_code=1`. Identical for sc1 conn1. Earlier in the same run: `dacl guard: writable path not owned by current user; skipping session-SID DACL grant ... path=C:\Users\OMack\.claude\claude.json` (shows the dacl-guard skip pattern is already active for non-owned paths).
 - timestamp: 2026-06-06 — CODE TRACE (CRUX resolution): package SID derived at execution_runtime.rs:490-495 (derive_app_container_sid + package_sid_to_string, fail-closed), stored ExecConfig.package_sid (mod.rs:151), already consumed pre-spawn for FS write/traverse grants (mod.rs:347-375). SupervisorConfig (mod.rs:190-232) carries session_sid (218) but NOT package_sid; supervised_runtime.rs:420 threads session_sid only, dropping package_sid. Cap-pipe server (supervisor.rs:511-513) binds with the synthetic session_sid; rendezvous written by write_pipe_rendezvous (socket_windows.rs:1168-1191) with user-default ACL; SDDL (socket_windows.rs:1458-1473) admits only session_sid + logon SID. Package SID is in neither the rendezvous ACL nor the pipe DACL. CONFIRMS both fix layers; package SID is known pre-bind.
+- timestamp: 2026-06-06 16:24/16:27 — CYCLE-1 LIVE RE-TEST STILL FAILED (os error 5): the same `Access is denied` error on the rendezvous file occurred AFTER deploying the cycle-1 fix. Root-caused to ordering inversion: cycle-1's `AppliedRendezvousReadGuard` was applied in `supervisor.rs` ~line 540 AFTER `bind_low_integrity_with_session_and_package_sid` returned. But `bind_impl` calls `write_pipe_rendezvous` then immediately calls `finalize_server_connection` which calls `ConnectNamedPipe` — which BLOCKS until the child connects. The child cannot connect until it has read the rendezvous file. So the child attempted the read (before the grant), received `ERROR_ACCESS_DENIED`, and exited — only then did `ConnectNamedPipe` return, `bind_impl` return, and the (now-useless) grant run. The grant was effectively dead code in the cycle-1 placement.
+- timestamp: 2026-06-06 — SID IDENTITY CONFIRMED: supervisor package SID == broker child package SID. Both are derived via `derive_app_container_sid(app_container_name)` from the same `ExecConfig.windows_app_container_name` string. Only the TIMING of the grant was wrong, not the SID itself.
 
 ## Eliminated
 
 - NOT a regression of Phase 59-03 (read_frame bounded-read / disconnect_and_reconnect) — those are integration-test + live-repro verified. The blocker is cap-pipe REACHABILITY for the AppContainer package-SID principal (a Phase 62 deferral), not the IPC robustness code.
 - NOT a "supervisor created the channel too late" ordering bug (the error string's hint is misleading here): the channel exists; the AppContainer principal simply lacks READ on the rendezvous file. The package SID IS known before bind, so no reorder/broker-round-trip is needed.
+- FIX 1 PLACED AFTER bind() IS INEFFECTIVE (CYCLE-1 INVERSION — CONFIRMED): `bind_impl` calls `ConnectNamedPipe` inside `finalize_server_connection`, which blocks until the child connects. The child reads the rendezvous to learn the pipe name; without the READ grant it fails immediately. Applying the grant AFTER `bind_impl` returns (as cycle-1's `AppliedRendezvousReadGuard` did) is therefore dead code — the child has already failed and exited before the grant runs.
+- SUPERVISOR PACKAGE SID == BROKER CHILD PACKAGE SID (CONFIRMED): both are derived from the same `app_container_name` via `derive_app_container_sid`. The SID identity was never the issue; only the timing of the grant was wrong.
 
 ## Resolution
 
@@ -100,11 +104,10 @@ FIX 2 — cap-pipe DACL admit (library + CLI plumbing):
 - **Layer 1:** `write_pipe_rendezvous` creates `%TEMP%\.nono-<nonce>.json` with the user's default ACL. The AppContainer child (package-SID principal, `S-1-15-2-*`) has no read right → `ERROR_ACCESS_DENIED` (os error 5) in `SupervisorSocket::connect` → `read_pipe_rendezvous` → `std::fs::read_to_string`.
 - **Layer 2:** Even after the rendezvous is readable, `build_capability_pipe_sddl` only included ACEs for the synthetic session restricting SID and the logon SID. The AppContainer child's access-check principal is the PACKAGE SID, absent from the pipe DACL → `ERROR_ACCESS_DENIED` on `CreateFileW(pipe, GENERIC_READ|GENERIC_WRITE)`.
 
-**FIX 1 applied — rendezvous-file READ grant:**
-- New symbol: `grant_sid_read_on_path(path, sid)` in `crates/nono/src/sandbox/windows.rs` (new `PACKAGE_SID_READ_MASK` const = `FILE_GENERIC_READ` 0x00120089, `NO_INHERITANCE`, `edit_dacl_for_sid` core).
-- Exported from `crates/nono/src/lib.rs` alongside `grant_sid_{write,traverse}_on_path`.
-- New RAII guard: `AppliedRendezvousReadGuard` in `crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs`. On construction (when `package_sid` is `Some`): gates on `path_is_owned_by_current_user` (fail-closed if not owned), calls `grant_sid_read_on_path`, reverts via `revoke_sid_on_path` on Drop. No-op guard when `package_sid` is `None` (preserves pre-fix behavior for all existing callers).
-- Applied in `start_capability_pipe_server` (supervisor.rs) AFTER the bind call (the rendezvous file only exists after `bind_impl` invokes `write_pipe_rendezvous`). Guard `_rendezvous_read_guard` is held for the lifetime of the cap-pipe server thread; Drop reverts on thread exit.
+**FIX 1 applied (cycle-2 ordering fix) — rendezvous-file READ grant:**
+- New symbol: `grant_sid_read_on_path(path, sid)` in `crates/nono/src/sandbox/windows.rs` (new `PACKAGE_SID_READ_MASK` const = `FILE_GENERIC_READ` 0x00120089, `NO_INHERITANCE`, `edit_dacl_for_sid` core). Exported from `crates/nono/src/lib.rs`. Primitive and its tests retained in `sandbox/windows.rs`.
+- **Cycle-2 relocation:** The grant is now applied inside `bind_impl` (socket_windows.rs), AFTER `write_pipe_rendezvous` (rendezvous file now exists on disk) and BEFORE `finalize_server_connection` (the blocking `ConnectNamedPipe`). The package SID is validated via `validate_package_sid_for_sddl` before the grant (fail-closed: on validation or grant error, the server handle is reclaimed and the error propagated — we never proceed to `ConnectNamedPipe` with an ungranted rendezvous on the AppContainer arm). Revert: the rendezvous file is deleted on `SupervisorSocket::Drop` via `cleanup_rendezvous_path → std::fs::remove_file`; file deletion destroys the leaf ACE with the file (no separate revoke needed). `None` package_sid → no grant, unchanged behavior for all existing callers.
+- **Cycle-1 dead code removed:** The `AppliedRendezvousReadGuard` application in `supervisor.rs` (after `bind_low_integrity_with_session_and_package_sid` returns) has been replaced with a comment explaining the ordering fix. `AppliedRendezvousReadGuard` struct and its two tests removed from `dacl_guard.rs` (unused per CLAUDE.md § dead_code); `grant_sid_read_on_path` and `NonoError` removed from dacl_guard.rs production imports.
 
 **FIX 2 applied — admit package SID in cap-pipe DACL:**
 - New symbol: `validate_package_sid_for_sddl(sid)` in `socket_windows.rs` — allow-lists the `S-1-15-2-` prefix (AppContainer IL=15, base=2); rejects injection/garbage/over-length (same fail-closed discipline as `validate_session_sid_for_sddl`). New constant `PACKAGE_SID_MAX_LEN = 192`.
@@ -115,27 +118,32 @@ FIX 2 — cap-pipe DACL admit (library + CLI plumbing):
 - New entry point `bind_low_integrity_with_session_and_package_sid(path, session_sid, package_sid)` — used exclusively by the cap-pipe server thread.
 - `package_sid: Option<String>` field added to `SupervisorConfig` (mod.rs) and `WindowsSupervisorRuntime` (supervisor.rs); threaded from `ExecConfig.package_sid` via `supervised_runtime.rs`; cloned into cap-pipe server thread closure; passed to `bind_low_integrity_with_session_and_package_sid`.
 
-**Files changed:**
-- `crates/nono/src/sandbox/windows.rs` — `PACKAGE_SID_READ_MASK`, `grant_sid_read_on_path`, tests `grant_read_then_revoke_sid_round_trips_on_tempfile`, `grant_read_invalid_sid_fails_closed`
-- `crates/nono/src/lib.rs` — export `grant_sid_read_on_path`
-- `crates/nono/src/supervisor/socket_windows.rs` — `PACKAGE_SID_MAX_LEN`, `validate_package_sid_for_sddl`, `build_capability_pipe_sddl` extended, `build_low_integrity_security_attributes` extended, `create_low_integrity_named_pipe` extended, `bind_impl` extended, `bind_low_integrity_with_session_and_package_sid` added, `bind_aipc_pipe` and `bind` call sites updated; new tests `validate_package_sid_for_sddl_accepts_valid_and_rejects_injection`, `build_capability_pipe_sddl_package_sid_only_embeds_ace`, `build_capability_pipe_sddl_session_and_package_sid_embeds_all_aces`, `build_capability_pipe_sddl_rejects_malformed_package_sid`
-- `crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` — import `grant_sid_read_on_path`, `NonoError`; `AppliedRendezvousReadGuard` struct + `new()` + `Drop`; tests `rendezvous_read_guard_grants_and_reverts_on_drop`, `rendezvous_read_guard_noop_when_no_package_sid`
-- `crates/nono-cli/src/exec_strategy_windows/mod.rs` — `SupervisorConfig.package_sid: Option<String>` field with doc
-- `crates/nono-cli/src/exec_strategy_windows/supervisor.rs` — `WindowsSupervisorRuntime.package_sid` field; `initialize` copies from `SupervisorConfig`; `start_capability_pipe_server` clones `package_sid` into thread, uses `bind_low_integrity_with_session_and_package_sid`, applies `AppliedRendezvousReadGuard`
-- `crates/nono-cli/src/supervised_runtime.rs` — `SupervisorConfig` construction adds `package_sid: config.package_sid.clone()`
+**Files changed (cycle-1, unchanged):**
+- `crates/nono/src/sandbox/windows.rs` — `PACKAGE_SID_READ_MASK`, `grant_sid_read_on_path`, tests `grant_read_then_revoke_sid_round_trips_on_tempfile`, `grant_read_invalid_sid_fails_closed` (RETAINED)
+- `crates/nono/src/lib.rs` — export `grant_sid_read_on_path` (RETAINED)
+- `crates/nono/src/supervisor/socket_windows.rs` — `PACKAGE_SID_MAX_LEN`, `validate_package_sid_for_sddl`, `build_capability_pipe_sddl` extended, `bind_low_integrity_with_session_and_package_sid` added; tests for package-SID SDDL (RETAINED)
+- `crates/nono-cli/src/exec_strategy_windows/mod.rs` — `SupervisorConfig.package_sid: Option<String>` field (RETAINED; doc updated)
+- `crates/nono-cli/src/exec_strategy_windows/supervisor.rs` — `WindowsSupervisorRuntime.package_sid` field; `start_capability_pipe_server` uses `bind_low_integrity_with_session_and_package_sid` (RETAINED; doc updated)
+- `crates/nono-cli/src/supervised_runtime.rs` — `package_sid: config.package_sid.clone()` (RETAINED)
 
-**Verification (this host — Windows 11 26200):**
+**Files changed (cycle-2 ordering fix):**
+- `crates/nono/src/supervisor/socket_windows.rs` — `bind_impl`: grant added AFTER `write_pipe_rendezvous` and BEFORE `finalize_server_connection` (blocking `ConnectNamedPipe`); uses `validate_package_sid_for_sddl` + `crate::sandbox::windows::grant_sid_read_on_path`; fail-closed (handle reclaim + error propagation on validation/grant failure).
+- `crates/nono-cli/src/exec_strategy_windows/supervisor.rs` — removed dead-code `AppliedRendezvousReadGuard` application (replaced with comment explaining the ordering fix and pointing to `bind_impl`); updated `WindowsSupervisorRuntime.package_sid` doc.
+- `crates/nono-cli/src/exec_strategy_windows/mod.rs` — updated `SupervisorConfig.package_sid` doc (FIX 1 now in `bind_impl`, not in CLI guard).
+- `crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` — removed `AppliedRendezvousReadGuard` struct + `impl` + `Drop` (unused in production code after relocation); removed associated imports (`grant_sid_read_on_path`, `NonoError`); removed 2 tests (`rendezvous_read_guard_*`). `grant_sid_read_on_path` primitive and its tests in `sandbox/windows.rs` RETAINED.
+
+**Verification (cycle-2, this host — Windows 11 26200):**
 - `cargo build -p nono -p nono-cli` — PASS
 - `cargo clippy -p nono --all-targets -- -D warnings -D clippy::unwrap_used` — PASS (0 warnings)
 - `cargo clippy -p nono-cli --bin nono -- -D warnings -D clippy::unwrap_used` — PASS (0 warnings)
-- `cargo test -p nono --lib supervisor::socket` — PASS (30/30, includes 4 new package-SID tests)
-- `cargo test -p nono --lib dacl_grant_tests` — PASS (6/6, includes 2 new `grant_sid_read_on_path` tests)
-- `cargo test -p nono-cli --bin nono dacl_guard` — PASS (7/7, includes 2 new `AppliedRendezvousReadGuard` tests)
+- `cargo test -p nono --lib supervisor::socket` — PASS (30/30)
+- `cargo test -p nono --lib dacl_grant_tests` — PASS (6/6, includes 2 `grant_sid_read_on_path` tests)
+- `cargo test -p nono-cli --bin nono dacl_guard` — PASS (5/5, 2 removed `AppliedRendezvousReadGuard` tests no longer present)
 - `cargo test -p nono-cli --test aipc_handle_brokering_integration` — PASS (5/5)
 - `cargo test -p nono-cli --test supervisor_ipc_robustness_windows` — PASS (4/4)
 - Cross-target Unix clippy: N/A — changed files are all `cfg(target_os = "windows")` gated; marked PARTIAL per `.planning/templates/cross-target-verify-checklist.md`, deferred to live CI.
-- Commits: `109ffc78` (FIX 1), `ece9b6dc` (FIX 2)
-- Operator binaries rebuilt: `target\release\nono.exe`, `target\release\examples\aipc-cap-child.exe`
+- Cycle-1 commits: `109ffc78` (FIX 1), `ece9b6dc` (FIX 2)
+- Cycle-2 operator binaries rebuilt: `target\release\nono.exe`, `target\release\examples\aipc-cap-child.exe`
 
 **OPERATOR VERIFICATION PENDING**
 
