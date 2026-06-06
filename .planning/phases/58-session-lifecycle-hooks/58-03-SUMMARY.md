@@ -295,3 +295,58 @@ In `build_windows_hook_command`, after `env_clear()`, re-inject `SystemRoot`, `w
 - `cargo clippy -p nono-cli -- -D warnings -D clippy::unwrap_used` → CLEAN
 - `cargo test --bin nono -- hook_runtime_windows` → 6/6 PASS (5 original + 1 new regression)
 - `cargo test -p nono-cli` → 1205 pass, 4 fail (same 4 pre-existing baseline failures — no regressions)
+
+---
+
+## UAT Gap Closure #2 (2026-06-05) — `\\?\` Verbatim Prefix Fix
+
+### Defect Found During Second Live Windows UAT Pass
+
+**Defect:** `execute_before_hook` returned `Err("Before-hook exited with code 1 (fail-closed): \\?\C:\Users\OMack\AppData\Local\Temp\hook-before.ps1")` — note the `\\?\` prefix in the path. The `-65536` defect (Gap Closure #1) was already fixed; this is a distinct, second defect.
+
+**Root cause:** `validate_hook_script_windows` returns `std::fs::canonicalize()` output. On Windows, `std::fs::canonicalize` always returns the **extended-length verbatim form** `\\?\C:\...` (or `\\?\UNC\server\share\...` for UNC paths). This verbatim prefix is correct and intentional for security validation — it bypasses `MAX_PATH` and defeats symlink/`..` traversal.
+
+However, `build_windows_hook_command` was passing the canonical path (verbatim prefix and all) directly to `powershell.exe -File`. PowerShell's `-File` flag **cannot resolve the security zone** of a `\\?\`-prefixed path. Under the `RemoteSigned` execution policy (the Windows default for user-scope installations), PowerShell treats the script as untrusted and refuses to execute it:
+
+```
+The file \\?\C:\Users\...\hook.ps1 cannot be loaded. The file ... is not digitally signed.
+You cannot run this script on the current system.
+```
+
+The interpreter exits with code `1` **before any script body runs**. The fail-closed policy then aborts the session with the `code 1` error.
+
+**Empirical proof:**
+- `powershell.exe -NoProfile -NonInteractive -File "C:\...\hook.ps1"` (normal path) → exit 0, body runs. GOOD.
+- `powershell.exe -NoProfile -NonInteractive -File "\\?\C:\...\hook.ps1"` (verbatim form) → exit 1, "not digitally signed". BAD.
+
+**Fix applied (commit `b4208934`):**
+Added `strip_verbatim_prefix(path: &Path) -> PathBuf` private helper that:
+- `\\?\UNC\server\share\...` → `\\server\share\...`
+- `\\?\C:\...` → `C:\...`
+- anything else → unchanged
+
+Called in `build_windows_hook_command` for ALL three dispatch branches (.ps1, .cmd/.bat, .exe):
+```rust
+let interpreter_path = strip_verbatim_prefix(script);
+```
+The canonical path (with `\\?\` prefix) is still used for all security validation in `validate_hook_script_windows` — the stripping happens ONLY when constructing the interpreter argument.
+
+**Security analysis — why this is safe:**
+The canonicalization in `validate_hook_script_windows` uses `std::fs::canonicalize()` which resolves the path, follows symlinks, and returns the absolute real path — all the security properties come from canonicalization itself, not from the `\\?\` prefix. Stripping the prefix from the interpreter argument does not weaken the security checks; it only changes the textual form passed to the spawned process.
+
+**Test hole closed:**
+The original `test_execute_before_hook_powershell_does_not_clr_fail` had a validity hole: it only asserted the error did NOT contain `-65536`, and treated any other `Err` (including the `code 1` from the `\\?\` bug) as an acceptable "skip". That is why the test passed green while real nono was broken.
+
+The test was strengthened:
+- `Ok` path: REQUIRES `HOOK_OK=yes` in the exported vars (unchanged, already correct).
+- `Err` path: only accepts a **genuine spawn failure** (`os error 2` / `os error 3` / "program not found" / "Failed to spawn hook"). Any functional failure — including `code 1`, `-65536`, "not digitally signed" — **fails the test**, not skips it.
+
+A new deterministic unit test `test_strip_verbatim_prefix_deterministic` was also added. It asserts the path transform directly with no filesystem access and no PowerShell spawn, so it is NOT subject to the PowerShell execution-policy `Bypass` workaround that can mask the `\\?\` bug in live-spawn tests.
+
+**Bypass policy caveat:** `cargo test` runs in a shell whose Process-scope PowerShell execution policy may be `Bypass` (bypasses zone/signature checks). Under `Bypass`, `powershell.exe -File "\\?\..."` would succeed even with the bug present, masking it in the live-spawn test. The deterministic `test_strip_verbatim_prefix_deterministic` is the authoritative regression guard.
+
+**Self-check post-fix:**
+- `cargo build -p nono-cli` → CLEAN
+- `cargo clippy -p nono-cli -- -D warnings -D clippy::unwrap_used` → CLEAN
+- `cargo test --bin nono -- hook_runtime_windows` → **7/7 PASS** (6 prior + 1 new deterministic strip test)
+- No new failures beyond the known 4 nono-cli + 1 nono baseline pre-existing failures
