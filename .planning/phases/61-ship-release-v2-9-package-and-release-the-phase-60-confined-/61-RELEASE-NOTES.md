@@ -1,7 +1,7 @@
 # v2.9 — Windows Confined Coding Loop + Out-of-Box WFP Enforcement
 
-**Release:** v0.58.0 / v2.9 milestone  
-**Date:** 2026-06-03  
+**Release:** v0.62.2 / v2.9 milestone  
+**Date:** 2026-06-06  
 **Artifacts:** CI-signed machine + user MSIs (wrapper AND embedded payloads Authenticode-valid, Phase 53 sign-before-harvest gate)
 
 ---
@@ -73,7 +73,7 @@ case (`add_deny_access_rules` is a Windows no-op; there is no `Deny` variant in
 Phase 60 "defense-in-depth, not full isolation" verdict — it is accepted (T-61-04)
 and deferred to v3.0 (which would require a kernel-level minifilter, Gap 6b).
 
-Verified: 16/16 hook unit tests pass on the v0.58.0 build (see
+Verified: 16/16 hook unit tests pass on the v0.62.2 build (see
 `.planning/phases/.../61-D09-VERIFICATION.md`).
 
 ---
@@ -118,14 +118,23 @@ Closes Phase 60's F-60-UAT-03 (WFP kernel enforcement gap).
 
 ## Version
 
-All five workspace crates bumped to `0.58.0` in lockstep (5 `Cargo.toml` versions +
-6 internal path-dep pins). The `v0.58.0` git tag is the `release.yml` build trigger;
-`v2.9` is a non-building milestone marker on the same commit. CI-signed machine + user
-MSIs (wrapper AND embedded payloads Authenticode-valid via Phase 53 sign-before-harvest
-gate and the `Verify MSI payload signatures` admin-extract CI step).
+All five workspace crates are bumped to `0.62.2` in lockstep (5 `Cargo.toml` versions +
+6 internal path-dep pins). The `v0.62.2` git tag is the `release.yml` build trigger;
+`v2.9` is a non-building milestone marker. CI-signed machine + user MSIs (wrapper AND
+embedded payloads Authenticode-valid via the Phase 53 sign-before-harvest gate and the
+`Verify MSI payload signatures` admin-extract CI step — all signing/verify steps passed
+on this build).
+
+> **Version history.** The crate version leapfrogged `0.58.0 → 0.62.0` to clear upstream's
+> `v0.58.0–v0.61.1` tags already present in this repo's namespace. The first two release
+> attempts (`v0.62.0`, `v0.62.1`) failed to publish because two latent cross-target compile
+> errors — in `cfg`-gated code the Windows dev host never compiles — broke the Linux/macOS
+> build legs: an `E0716` borrow error in `claude_code_hook.rs` (Phase 60) and an
+> edition-2024 `let`-chain in `hook_runtime.rs` (Phase 58). Both are fixed in **`v0.62.2`**,
+> the first successfully-published v2.9 release.
 
 ---
 
 ## Full Changelog
 
-See [CHANGELOG.md §0.58.0](../../../CHANGELOG.md) for the complete entry.
+See [CHANGELOG.md §0.62.2](../../../CHANGELOG.md) for the complete entry.

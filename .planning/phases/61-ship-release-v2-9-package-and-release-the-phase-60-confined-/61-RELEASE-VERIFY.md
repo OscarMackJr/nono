@@ -1,15 +1,45 @@
 ---
-status: blocked
+status: shipped
 phase: 61-ship-release-v2-9-package-and-release-the-phase-60-confined
 plan: 04
 created: 2026-06-03
-release_status: BLOCKED
-release_url: (none — v0.58.0 not tagged; release.yml never triggered)
+resolved: 2026-06-06
+release_status: SHIPPED
+release_tag: v0.62.2
+release_url: https://github.com/OscarMackJr/nono/releases/tag/v0.62.2
 ---
 
-# 61-RELEASE-VERIFY — v2.9 / v0.58.0 Release Outcome
+# 61-RELEASE-VERIFY — v2.9 / v0.62.2 Release Outcome
 
-**FINAL RELEASE STATUS: 🔴 BLOCKED — not shipped.**
+> ## ✅ RESOLUTION (2026-06-06) — SHIPPED as v0.62.2
+>
+> **The release is published: https://github.com/OscarMackJr/nono/releases/tag/v0.62.2**
+> (Latest; signed machine + user MSIs, all `Sign`/`Verify Authenticode`/`Verify MSI payload`
+> steps green; release notes published; `release.yml` run `27074741774` — all 5 build legs
+> success + `Create Release` success; only the cosmetic crates.io/Homebrew jobs "failed").
+>
+> **The original BLOCKED diagnosis below (D-02 signing cert) was superseded.** After it was
+> written, signing was wired up (Azure Trusted Signing, 2026-06-04) and the `v0.62.0` tag was
+> cut on 2026-06-05 — but `release.yml` still failed to **publish**, for a *different* reason
+> than the cert: **two latent cross-target compile errors** in `cfg`-gated code the Windows
+> dev host never compiles, which broke all four Linux/macOS build legs and gated `Create
+> Release`:
+> 1. `E0716` (temporary dropped while borrowed) in `claude_code_hook.rs` `wrapped_bash_command`
+>    (`cfg(not(windows))`, Phase 60) — fixed in `4de294e8`.
+> 2. `error: let chains are only allowed in Rust 2024 or later` in `hook_runtime.rs`
+>    `EnvFileGuard::drop` (`cfg(unix)`, Phase 58) — fixed in `7bb7c7e3` (masked behind #1, so it
+>    only surfaced on the `v0.62.1` attempt).
+>
+> Windows always built + signed cleanly, so the cert was **not** the publish blocker. Tag
+> history: `v0.62.0` (compile-fail, unpublished) → `v0.62.1` (E0716 fixed, let-chain surfaced,
+> unpublished) → **`v0.62.2` (both fixed, PUBLISHED)**. The historical BLOCKED analysis is
+> retained verbatim below for the record.
+
+---
+
+# (HISTORICAL — superseded by the resolution above) v2.9 / v0.58.0 Release Outcome
+
+**FINAL RELEASE STATUS (historical, 2026-06-03): 🔴 BLOCKED — not shipped.**
 
 The release was stopped at the Plan 61-04 Task 2 human-verify checkpoint by the **D-02
 signing-secret gate**. Nothing was published; no tag was pushed; `release.yml` never ran. The
