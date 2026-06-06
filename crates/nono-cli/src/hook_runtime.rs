@@ -36,7 +36,7 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Result of executing a session hook.
 struct HookOutput {
@@ -358,13 +358,17 @@ impl EnvFileGuard {
 
 impl Drop for EnvFileGuard {
     fn drop(&mut self) {
-        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&self.path)
-            && let Ok(metadata) = file.metadata()
-        {
-            use std::io::Write;
-            let zeros = vec![0u8; metadata.len() as usize];
-            let _ = file.write_all(&zeros);
-            let _ = file.sync_all();
+        // Nested `if let` (not an `if let ... && let ...` let-chain) — let-chains
+        // require Rust 2024 and this workspace is edition 2021. This code is
+        // `cfg(unix)`-only and is never compiled on the Windows dev host, so the
+        // edition violation escaped local checks (cross-target drift).
+        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(&self.path) {
+            if let Ok(metadata) = file.metadata() {
+                use std::io::Write;
+                let zeros = vec![0u8; metadata.len() as usize];
+                let _ = file.write_all(&zeros);
+                let _ = file.sync_all();
+            }
         }
         let _ = std::fs::remove_file(&self.path);
     }
