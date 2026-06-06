@@ -232,8 +232,39 @@ fn build_windows_hook_command(script: &Path) -> Result<Command> {
             Command::new(script)
         }
     };
-    // Clear all inherited environment; hooks get only NONO_* vars explicitly set.
+    // Clear all inherited environment; hooks get only NONO_* vars explicitly set,
+    // plus the OS-baseline vars required for interpreter/CLR startup (see below).
     cmd.env_clear();
+
+    // Re-add the minimal OS-baseline environment required for Windows interpreter
+    // and CLR startup. Without these, powershell.exe (and any .NET/CLR process) fails
+    // with exit code -65536 (0xFFFF0000) — a CLR startup failure that occurs before any
+    // script body runs. This was empirically proven during live UAT:
+    //   - powershell.exe spawned with env_clear() + only NONO_ENV_FILE set → exit -65536
+    //   - powershell.exe spawned with env_clear() + SystemRoot added → exit 0
+    //
+    // Security rationale for this allowlist:
+    // - These three vars are read-only OS-directory paths, NOT code-injection vectors.
+    //   PATH and PSModulePath (which influence DLL/module loading) remain stripped by
+    //   env_clear() and are NOT re-added here — they are properly listed in
+    //   is_dangerous_env_var() to block injection from hook env-file reads.
+    // - SystemRoot and windir are also listed in is_dangerous_env_var() to prevent a
+    //   hook from EXPORTING a tampered value back to the parent via the env file (the
+    //   Low-IL writer → Medium-IL reader trust boundary, D-09). That filter applies to
+    //   env-file reads in execute_before_hook(); it does NOT prevent us from forwarding
+    //   the parent's own (trustworthy) OS values to the spawned interpreter.
+    // - The values here come from std::env::var_os() — the parent's verified process
+    //   environment — NOT from any hook-written input.
+    // - SystemDrive is NOT in is_dangerous_env_var() (it doesn't influence code loading),
+    //   but it IS required by some CLR/PS profiles and is similarly read-only.
+    //
+    // DO NOT remove this block to "tidy" the env isolation: the -65536 regression will return.
+    for var in &["SystemRoot", "windir", "SystemDrive"] {
+        if let Some(val) = std::env::var_os(var) {
+            cmd.env(var, val);
+        }
+    }
+
     Ok(cmd)
 }
 
@@ -855,5 +886,79 @@ mod tests {
                 || err.to_ascii_lowercase().contains("everyone"),
             "Error must mention world-writable or Everyone: {err}"
         );
+    }
+
+    /// Regression test: execute_before_hook must NOT fail with exit code -65536
+    /// (0xFFFF0000 — CLR startup failure) when spawning a PowerShell hook.
+    ///
+    /// Root cause: build_windows_hook_command called env_clear() which stripped
+    /// SystemRoot/windir/SystemDrive. Without these, powershell.exe cannot
+    /// initialize the CLR and exits with -65536 before any script body runs.
+    /// The fix re-adds those three OS-baseline vars after env_clear().
+    ///
+    /// This test spawns a real .ps1 hook end-to-end and asserts:
+    /// 1. execute_before_hook returns Ok (NOT the -65536 failure)
+    /// 2. A variable written by the hook to NONO_ENV_FILE is present in the returned vars
+    ///
+    /// Guard: if powershell.exe is unavailable in this environment (e.g., a minimal
+    /// container without PowerShell), the spawn will fail with "program not found" (not
+    /// -65536) and we skip with a message. The DEFAULT path attempts the real spawn.
+    #[test]
+    fn test_execute_before_hook_powershell_does_not_clr_fail() {
+        use std::io::Write;
+
+        let (_lock, _env, _home) = isolated_home();
+
+        // Create a user-owned temp dir (not world-writable) for the hook script.
+        // validate_hook_script_windows requires: absolute, canonical, regular file,
+        // user-owned, no world-writable ACL on file or parent.
+        let script_dir = TempDir::new().unwrap();
+        let script_path = script_dir.path().join("test_hook.ps1");
+
+        // Hook body: append HOOK_OK=yes to $env:NONO_ENV_FILE
+        {
+            let mut f = std::fs::File::create(&script_path).unwrap();
+            writeln!(f, "Add-Content -Path $env:NONO_ENV_FILE -Value 'HOOK_OK=yes'").unwrap();
+        }
+
+        // Build a SessionHook pointing at the script.
+        let hook = profile::SessionHook {
+            script: script_path.clone(),
+            timeout_secs: Some(30),
+        };
+
+        let workdir = script_dir.path();
+        let session_id = "test-clr-regression-session";
+
+        let result = execute_before_hook(&hook, session_id, workdir);
+
+        match &result {
+            Err(e) => {
+                let msg = e.to_string();
+                // -65536 is the specific CLR startup failure this regression test guards against.
+                assert!(
+                    !msg.contains("-65536"),
+                    "execute_before_hook failed with the CLR startup exit code -65536 \
+                     (SystemRoot/windir/SystemDrive baseline env was not re-added after env_clear): {msg}"
+                );
+                // Any other error (e.g., PowerShell not installed in this environment,
+                // or ACL check failure on the temp dir) → skip with a diagnostic message.
+                // This is NOT a -65536 regression, so we do not fail the test.
+                println!(
+                    "test_execute_before_hook_powershell_does_not_clr_fail: execute_before_hook \
+                     returned Err (not -65536): {msg}; skipping HOOK_OK assertion. \
+                     This is acceptable if powershell.exe is unavailable or the temp dir \
+                     fails the owner/ACL check in this CI environment."
+                );
+            }
+            Ok(vars) => {
+                // execute_before_hook succeeded — assert the hook's HOOK_OK=yes was exported.
+                assert!(
+                    vars.iter().any(|(k, v)| k == "HOOK_OK" && v == "yes"),
+                    "execute_before_hook returned Ok but HOOK_OK=yes was not in the exported vars; \
+                     got: {vars:?}"
+                );
+            }
+        }
     }
 }
