@@ -350,3 +350,24 @@ A new deterministic unit test `test_strip_verbatim_prefix_deterministic` was als
 - `cargo clippy -p nono-cli -- -D warnings -D clippy::unwrap_used` → CLEAN
 - `cargo test --bin nono -- hook_runtime_windows` → **7/7 PASS** (6 prior + 1 new deterministic strip test)
 - No new failures beyond the known 4 nono-cli + 1 nono baseline pre-existing failures
+
+---
+
+## Live Windows UAT — PASS (2026-06-05, real Win11 build 26200, release nono.exe v0.62.0)
+
+Operator-driven UAT of the Phase 58 hook feature, after both gap-closure fixes:
+
+| Property | Result |
+|----------|--------|
+| Before-hook executes (no `-65536` CLR fail) | ✅ |
+| Before-hook script body runs (no `\?\` "not digitally signed" block) | ✅ |
+| Hook-exported env var injected into sandboxed child | ✅ `cmd.exe /c echo GOT=%HOOK_VAR%` → `GOT=hello_from_hook`, exit 0 |
+| Fail-closed on non-zero hook | ✅ hook `exit 1` → `Before-hook exited with code 1 (fail-closed)`, nono exit 1, child never ran |
+
+**Driving the UAT surfaced + fixed two real defects** that all 35 unit tests missed (none actually spawned an interpreter):
+- **F-58-UAT-01** `env_clear()` stripped `SystemRoot` → `powershell.exe`/CLR exits `-65536` (`0xFFFF0000`) before any script body. Fixed by re-adding a `SystemRoot`/`windir`/`SystemDrive` baseline allowlist after `env_clear()` (`4c467a28`).
+- **F-58-UAT-02** `validate_hook_script_windows` returns the `std::fs::canonicalize` `\?\`-verbatim path; `powershell.exe -File "\?\..."` can't resolve the security zone → treats the local script as unsigned → refuses under `RemoteSigned` → exit 1, body never runs. Fixed by stripping the verbatim prefix for the interpreter argument while keeping the canonical path for validation (`b4208934`).
+
+**Out of scope (pre-existing, not Phase 58):** a sandboxed **`powershell.exe` child** (CLR) fails to start under the Windows sandbox with `0xC0000142` (STATUS_DLL_INIT_FAILED) — the documented Phase 60 CLR-under-WriteRestricted limitation. The hook pipeline itself is unaffected; native children (`cmd.exe`) run cleanly. The cwd-coverage gate (`execution directory outside supported allowlist`) also fired correctly when the child cwd was outside the granted paths (fail-secure, working as designed).
+
+**Checkpoint resolution:** human-verify checkpoint APPROVED — feature works end-to-end on real Windows.
