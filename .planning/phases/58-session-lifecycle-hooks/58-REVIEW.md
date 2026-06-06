@@ -453,3 +453,23 @@ _ => {
 _Reviewed: 2026-06-06T02:28:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+---
+
+## Resolution (2026-06-05)
+
+**Critical findings addressed:**
+- **CR-02** — FIXED (`676a444a`): job-assignment failure now fails closed when a timeout is configured and the child is still alive (kills child + returns Err); benign already-exited case preserved via `child.try_wait()`; no-timeout case keeps the warning.
+- **CR-03** — FIXED (`a9fb02c4`): Windows `Direct` strategy now dispatches the after-hook (fail-closed) before exit; Unix `Direct` rejects an `after`-hook at launch (exec replaces the process — silent drop eliminated).
+- **CR-01** — DOC-CORRECTED (`83fed38b`): module doc + ADR now state hooks run at parent Medium-IL inside a Job Object; Low-IL `CreateProcessAsUserW` plumbing is an explicit deferred follow-up (Research Open Question 1). No runtime behavior change. **Real Low-IL confinement remains a tracked follow-up.**
+
+Post-fix self-check: `cargo build -p nono-cli` clean, `cargo clippy -p nono-cli -- -D warnings -D clippy::unwrap_used` clean.
+
+**Tracked follow-ups (not blocking Phase 58 — captured here, surface via /gsd:progress):**
+- CR-01 real Low-IL spawn via `CreateProcessAsUserW` (token currently held as no-op placeholder).
+- WR-01 validate→spawn TOCTOU (consider fd-based exec on Linux; document residual Windows risk).
+- WR-02 background wait-thread + `Child` stdio handles leak on timeout.
+- WR-03 `Drop` zero-fill uses `len as usize` (truncates on 32-bit) and skips on metadata error → use `usize::try_from`.
+- WR-04 Unix linker-injection filter (`LD_*`/`DYLD_*`) is case-sensitive while D-09 Windows vars are case-insensitive.
+- IN-01 `NONO_DETACHED_SESSION_ID` used as a directory component without path-traversal validation.
+- IN-02 extensionless hook scripts spawn directly with no actionable diagnostic.
