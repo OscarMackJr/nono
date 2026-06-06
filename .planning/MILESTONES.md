@@ -1,5 +1,53 @@
 # Milestones
 
+## v2.9 Windows Sandbox-the-Tools — Confined Coding Loop (Shipped: 2026-06-06)
+
+**Phases completed:** 3 phases (60, 61, 62), 18 plans.
+
+**Tags:** `v2.9` (milestone marker) + `v0.62.2` (the published release trigger), origin `OscarMackJr/nono`.
+
+**Delivered:** A Windows confined coding-loop POC (Claude Code Medium-IL with each side-effecting tool call jailed Low-IL) plus out-of-box WFP kernel network enforcement for supervised runs — shipped as the first PUBLISHED v2.9 release, `v0.62.2`, with CI-signed machine + user MSIs (wrapper AND embedded payloads Authenticode-valid).
+
+**Key accomplishments:**
+
+- **Phase 60 — Confined coding loop** — `Write`/`Edit`/`MultiEdit`/`NotebookEdit` tool calls execute as Low-IL `nono`-confined file ops scoped to the target path; PowerShell-runner shell story; deny-by-default for unwrappable surfaces. Live Win11 UAT 5/5 PASS. Honest verdict: defense-in-depth, not full isolation.
+- **Phase 62 — Out-of-box WFP kernel network enforcement** — machine MSI registers `nono-wfp-service` `start=auto` (SCM boot-starts as SYSTEM); non-elevated Interactive-Users pipe SDDL; fail-closed auto-start-or-abort; clean uninstall preserved. Live Win11 UAT 5/5 SC PASS; security 33/33 closed. Closed Phase 60's F-60-UAT-03.
+- **Phase 61 — CI-signed public release** — lockstep workspace bump, dual-tag, signed MSIs via `release.yml`, honest POC/defense-in-depth release notes, plus the REQ-RLS-04 hook-layer `~/.claude` self-disable guard (16/16 hook tests).
+
+**⚠ Release saga (cross-target drift):** the `v0.62.0` and `v0.62.1` tag attempts FAILED to publish — two latent `cfg`-gated compile errors the Windows dev host never compiles broke all four Linux/macOS `release.yml` build legs: `E0716` in `claude_code_hook.rs` (Phase 60) and an edition-2024 `let`-chain in `hook_runtime.rs` (Phase 58). Fixed in `4de294e8` + `7bb7c7e3`; **`v0.62.2` (run `27074741774`) published clean** (5/5 build legs + Create Release green). Durable lesson recorded in memory `feedback_clippy_cross_target`. (The crate version leapfrogged `0.58.0 → 0.62.x` to clear upstream's `v0.58.0–v0.61.1` tag collision in this repo's namespace.)
+
+**Note:** v2.9 was archived together with v2.8 (the two milestones were developed/shipped interleaved); no separate `/gsd:audit-milestone` was run for v2.9, but all 3 phases are verified (Phase 60 UAT 5/5, Phase 61 shipped+signed, Phase 62 UAT 5/5).
+
+**Known deferred items at close:** see the shared v2.8 close note below (55 audit-open items acknowledged 2026-06-06; mostly historical).
+
+---
+
+## v2.8 UPST7 + v2.7 Drain & Release (Shipped: 2026-06-06)
+
+**Phases completed:** 7 phases (53, 54, 55, 56, 57, 58, 59), 20 plans.
+
+**Tags:** `v2.8` + `v0.57.5` at `a3927be0` (Phase 53 release, pushed 2026-05-29).
+
+**Audit:** `v2.8-MILESTONE-AUDIT.md` (re-audit 2026-06-06) — **`tech_debt`**, **10/10 requirements satisfied**, 0 integration blockers, 5/5 cross-phase seams WIRED.
+
+**Delivered:** A drain-then-sync milestone — shipped the untagged post-v2.7 fixes as a real signed release (`v0.57.5`, after fixing a `release.yml` signing-order defect that had shipped unsigned MSI payloads), then audited and absorbed the UPST7 upstream window (`v0.57.0..v0.59.0`) and added four cross-platform features.
+
+**Key accomplishments:**
+
+- **Phase 53 — Release & Drain** — shipped `v0.57.5` with signed machine+user MSIs (fixed the sign-before-MSI-harvest order + added a `Verify MSI payload signatures` admin-extract gate); WFP elevated live-uninstall UAT PASS (leaves nothing); drained 3 todos. REQ-RLS/DRN all closed.
+- **Phase 54 — UPST7 audit** — `DIVERGENCE-LEDGER.md` for `v0.57.0..v0.59.0` (40 commits / 14 clusters), per-cluster dispositions + ADR re-confirm + empirical re-export cross-check.
+- **Phase 55 — UPST7 cherry-pick wave** — absorbed the cross-platform straight ports (JSONC profiles, `target_binary`, opencode relocation, timeout constants, proxy 502 hardening, pack-hint robustness, ENV_LOCK test, sigstore 0.8.0, denial/diagnostic polish) with D-19 trailers.
+- **Phase 56 — Fine-grained network filtering** — `allow_domain` URL path + HTTP method restrictions in nono-proxy, endpoint-rules-before-credential ordering; code review caught + fixed 2 fail-open blockers pre-verify.
+- **Phase 57 — Bitwarden credential source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`, `Zeroizing<String>` secrets.
+- **Phase 58 — Session lifecycle hooks** — `session_hooks` profile field; Unix `hook_runtime` preserved; Windows broker-spawned executor + ADR; fail-closed. Live Win11 UAT PASS (2 UAT defects fixed).
+- **Phase 59 — Supervisor IPC robustness** — keep-alive on transient child IPC close, bounded read-timeouts, robust accept; Unix named-socket hardening absorbed; Windows Named-Pipe AIPC path translated. Operator UAT PASS (SC1+SC2, live Win11).
+
+**Tech debt at close** (per the audit, all fail-secure / non-blocking): Phase 58 D-05 Windows hooks run Medium-IL (Low-IL token created but not yet plumbed — ADR-tracked); the superseded v0.57.4 GitHub release still carries unsigned-payload MSIs (distribution hazard — delete/annotate); several fail-secure WR-NN advisories; Phase 58 VALIDATION sign-off was the lone PARTIAL nyquist phase.
+
+**Known deferred items at close:** 55 audit-open items acknowledged & deferred 2026-06-06 (user chose "Acknowledge all & proceed"; see STATE.md `## Deferred Items` → v2.8/v2.9 close). Breakdown: 35 `missing` quick-task slugs (pre-v2.5 stragglers, carried since prior closes) + 15 UAT gaps + 5 verification gaps (pre-v2.0 bookkeeping carried since the v2.2/v2.4 closes).
+
+---
+
 ## v2.7 Windows supervised-run hardening (Shipped: 2026-05-26; archived: 2026-05-28)
 
 **Phases completed:** 2 phases (51, 52), 6 plans, 6 tasks

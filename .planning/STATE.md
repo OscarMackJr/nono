@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.8
-milestone_name: UPST7 + v2.7 Drain & Release
-status: ready_to_plan
-last_updated: "2026-06-06T15:00:00.000Z"
+milestone: none
+milestone_name: (between milestones — v2.8 + v2.9 shipped 2026-06-06)
+status: shipped
+last_updated: "2026-06-06T22:30:00.000Z"
 last_activity: 2026-06-06
 progress:
   total_phases: 10
-  completed_phases: 8
+  completed_phases: 10
   total_plans: 43
-  completed_plans: 40
-  percent: 80
+  completed_plans: 43
+  percent: 100
 ---
 
 # Project State: nono — v2.8 UPST7 + v2.7 Drain & Release
@@ -354,6 +354,25 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 | 260606-mp9 | Fix Unix-only E0716 borrow error in `claude_code_hook.rs` (`wrapped_bash_command`) that broke all 4 Linux/macOS build legs of release run `27031289871` and gated the v0.62.0/v2.9 `Create Release` job. Bound the `nono_exe.display().to_string()` temporary so it outlives the `shlex::try_quote` `Cow` borrow. Windows clippy clean; Linux/macOS cross-target clippy PARTIAL/CI-deferred (host lacks `x86_64-linux-gnu-gcc` for ring/aws-lc-sys — canonical E0716 fix, CI on push is the decisive gate). | 2026-06-06 | 4de294e8 | [260606-mp9-fix-unix-borrow-error-claude-hook](./quick/260606-mp9-fix-unix-borrow-error-claude-hook/) |
 
 ## Deferred Items
+
+### v2.8 + v2.9 close (acknowledged 2026-06-06)
+
+Pre-close `audit-open` reported **55 open items**; user chose "Acknowledge all & proceed" at the combined v2.8 + v2.9 milestone close. Breakdown (all historical / non-blocking):
+
+| Category | Count | Nature |
+|----------|-------|--------|
+| quick_tasks (`missing` slugs) | 35 | Pre-v2.5 quick-task stragglers — slugs referenced but directories absent; carried since the v2.5/v2.7 closes. Bookkeeping only. |
+| uat_gaps | 15 | Partial UAT scenarios from pre-v2.0 phases, carried since the v2.2/v2.4 closes (host-blocked / EDR-instrumented-runner gated). |
+| verification_gaps | 5 | Pre-v2.0 phase verification bookkeeping (`human_needed` close signals living in GH Actions), carried since prior closes. |
+
+**Genuine new tech-debt carry-forwards (→ next milestone), from the v2.8 audit + the v2.9 release:**
+- **Phase 58 D-05 (SECURITY, defense-in-depth):** Windows session hooks run Medium-IL; `create_low_integrity_primary_token()` is created but not plumbed into `CreateProcessAsUserW`. ADR-tracked; close in a dedicated follow-up phase.
+- **v0.57.4 GitHub release** still carries unsigned-payload MSIs (distribution hazard) — delete or annotate.
+- **CI `-Dwarnings` lint debt** keeps CI chronically red (cfg-gated `dead_code` `timeouts.rs` PTY constants, unused `format_bytes_short`/import/`resource_session_id`); harmless to `release.yml` (plain `cargo build`) but a hygiene cleanup. Same cross-target-drift class as the two compile errors that blocked the v2.9 release — see memory `feedback_clippy_cross_target`.
+- **Phase 58 VALIDATION sign-off** was the lone PARTIAL nyquist phase (feature verified passed; sign-off unfinished) — `/gsd:validate-phase 58`.
+- Several fail-secure WR-NN advisories accepted at phase close (see `.planning/milestones/v2.8-MILESTONE-AUDIT.md` `tech_debt:`).
+
+---
 
 Items acknowledged and deferred at milestone close on 2026-04-29 during `/gsd-complete-milestone` v2.2 (user chose "Acknowledge all & proceed"). Supersedes the v2.1-close acknowledgment from 2026-04-21.
 
