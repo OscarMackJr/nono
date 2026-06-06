@@ -293,12 +293,6 @@ impl SupervisorSocket {
             drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
             return Err(err);
         }
-        // TEMPORARY: cycle-3 diagnostics — remove once root cause confirmed.
-        tracing::warn!(
-            "DIAG[appcontainer-cap-pipe]: rendezvous written at {:?}; package_sid_present={}",
-            path,
-            package_sid.is_some(),
-        );
         // Cycle-2 ordering fix (debug session `appcontainer-cap-pipe-unreachable`):
         //
         // `finalize_server_connection` below calls `ConnectNamedPipe`, which BLOCKS
@@ -320,12 +314,6 @@ impl SupervisorSocket {
         // callers): no grant, unchanged behavior.
         if low_integrity {
             if let Some(pkg_sid) = package_sid {
-                // TEMPORARY: cycle-3 diagnostics — remove once root cause confirmed.
-                tracing::warn!(
-                    "DIAG[appcontainer-cap-pipe]: granting FILE_GENERIC_READ to package_sid={} on {:?}",
-                    pkg_sid,
-                    path,
-                );
                 // Validate the SID before calling into the DACL-edit primitive.
                 // `validate_package_sid_for_sddl` enforces `S-1-15-2-` prefix +
                 // digits/hyphens only + length ceiling — same allow-list already
@@ -341,10 +329,6 @@ impl SupervisorSocket {
                 if let Err(err) =
                     crate::sandbox::windows::grant_sid_read_on_path(path, pkg_sid)
                 {
-                    // TEMPORARY: cycle-3 diagnostics — remove once root cause confirmed.
-                    tracing::warn!(
-                        "DIAG[appcontainer-cap-pipe]: rendezvous read-grant FAILED: {err}",
-                    );
                     // SAFETY: `server_handle` is an owned handle created above.
                     drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
                     return Err(NonoError::SandboxInit(format!(
@@ -354,16 +338,6 @@ impl SupervisorSocket {
                         path.display()
                     )));
                 }
-                // TEMPORARY: cycle-3 diagnostics — remove once root cause confirmed.
-                tracing::warn!(
-                    "DIAG[appcontainer-cap-pipe]: rendezvous read-grant OK for {}",
-                    pkg_sid,
-                );
-            } else {
-                // TEMPORARY: cycle-3 diagnostics — remove once root cause confirmed.
-                tracing::warn!(
-                    "DIAG[appcontainer-cap-pipe]: NO package_sid at bind; skipping rendezvous read-grant",
-                );
             }
         }
         let server_file = finalize_server_connection(server_handle, &pipe_name)?;
