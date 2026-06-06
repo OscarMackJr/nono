@@ -50,25 +50,25 @@ patterns-established:
 requirements-completed: [REQ-IPC-01]
 
 # Metrics
-duration: PARTIAL (Tasks 1-2 complete; Task 3 awaiting operator UAT)
-completed: PENDING
+duration: COMPLETE (Tasks 1-3; Task 3 operator UAT PASS 2026-06-06)
+completed: 2026-06-06
 ---
 
-# Phase 59 Plan 03: Windows AIPC IPC Robustness — Partial Summary (Tasks 1-2)
+# Phase 59 Plan 03: Windows AIPC IPC Robustness — Summary (Tasks 1-3)
 
-**PeekNamedPipe deadline-bounded read_frame + capability-pipe re-accept loop on Windows; 4 integration tests green; SC1/SC2 live-repro PENDING operator UAT (Task 3)**
+**PeekNamedPipe deadline-bounded read_frame + capability-pipe re-accept loop on Windows; 4 integration tests green; SC1/SC2 live-repro PASS on real Win11 (Task 3 operator UAT complete)**
 
 ## Status
 
-**PARTIAL** — Tasks 1 and 2 are complete and committed. Task 3 is a `checkpoint:human-verify (gate="blocking")` requiring operator-run live-repro on a real Win11 console. The plan is NOT marked complete until the operator approves.
+**COMPLETE** — Tasks 1-3 done. Task 3 (`checkpoint:human-verify`, gate="blocking") passed operator live-repro on a real Win11 console (build 26200) under the broker/AppContainer arm: sc2 bounded-read PASS + sc1 transient-close re-accept PASS (both `child_exit_code=0`). Driving the live UAT surfaced a pre-existing AppContainer cap-pipe reachability gap (the cap pipe had never been exercised by a real AppContainer child before); it was root-caused and fixed in debug session `appcontainer-cap-pipe-unreachable` (resolved) — see the new section below.
 
 ## Performance
 
 - **Duration:** ~45 min (Tasks 1-2 only)
 - **Started:** 2026-06-06T14:10:00Z
-- **Completed (partial):** 2026-06-06 (Tasks 1-2); Task 3 PENDING
-- **Tasks completed:** 2 of 3
-- **Files modified:** 3
+- **Completed:** 2026-06-06 (Tasks 1-3; Task 3 operator UAT PASS)
+- **Tasks completed:** 3 of 3
+- **Files modified:** 3 (plan) + AppContainer reachability fix (debug session)
 
 ## Accomplishments
 
@@ -83,7 +83,7 @@ completed: PENDING
 
 1. **Task 1: PeekNamedPipe-bounded read_frame in socket_windows.rs** - `c2993a03` (feat)
 2. **Task 2: capability-pipe re-accept loop + Windows-gated lib-surface tests** - `51f54fa8` (feat)
-3. **Task 3: Windows live-repro UAT** - PENDING operator approval
+3. **Task 3: Windows live-repro UAT** - PASS (operator, real Win11 26200, 2026-06-06) — see "Task 3 operator live-repro" + "AppContainer cap-pipe reachability" sections below
 
 ## Files Created/Modified
 
@@ -290,36 +290,65 @@ a Denied-but-responded result on either connection also counts as PASS (the
 channel is alive, the pipe re-accepted). No `Access is denied` / `ERROR_PIPE_BUSY`
 errors in the supervisor output.
 
-### Honest status
+### Operator note (env-var correction)
 
-`aipc-cap-child.exe` compiles clean, passes clippy (`-D warnings -D
-clippy::unwrap_used`), and both selftests PASS on this Windows 11 host (captured
-above). The full operator live-repro under `nono run --profile claude-code` is
-**first-run success not guaranteed** — the WRITE_RESTRICTED / Low-IL broker
-arm is the still-stabilizing path (see Phase 52 notes in [[project_v27_opened]],
-Phase 60 UAT defects [[project_sandbox_the_tools]]). Task 3 remains OPEN until
-the operator runs it on real Win11 hardware and records PASS/FAIL.
+The supervisor injects the cap-pipe rendezvous path as **`NONO_SUPERVISOR_PIPE`**
+(`%TEMP%\nono-cap-<session_id>.pipe`, execution_runtime.rs:336) — NOT `NONO_CAP_FILE`
+(which is the capability-STATE file, a different artifact). The harness initially read
+`NONO_CAP_FILE` and was corrected to `NONO_SUPERVISOR_PIPE` during the live UAT (see the
+AppContainer section below). Also: the live `sc1` mode was redesigned from an
+`aipc_sdk::request_event` round-trip to a pure transport-level re-accept (connect → drop →
+reconnect), because a real `request_event` triggers the supervisor's synchronous `[y/N]`
+approval prompt, which blocks the supervision loop and prevents the re-accept (a test-design
+collision, not a re-accept failure). Request-dispatch reachability was confirmed separately
+(see below).
 
-## SC1 / SC2 Live-Repro (PENDING — Task 3, operator `nono run`)
+## Task 3 operator live-repro — PASS (real Win11 26200, 2026-06-06)
 
-**STATUS: AWAITING OPERATOR UAT** (multi-process helper PASS captured above; full
-`nono run` under restricted-token still needed)
+**STATUS: COMPLETE — SC1 + SC2 PASS on real Win11 under the broker/AppContainer arm.**
 
-The `cap-pipe-live-repro` helper (above) runs clean on this Windows 11 host and proves
-the bounded-read and re-accept logic at the multi-process named-pipe layer. What remains
-is verifying the same behavior through the full supervisor stack — `nono run` under a
-`WRITE_RESTRICTED` child token, Low-IL broker, and the production AIPC pipe SDDL.
+Run from `C:\Users\OMack\Nono` (so `--allow-cwd` covers the dev-layout exe), dev-layout
+`target\release\nono.exe`, profile `claude-code` (`windows_low_il_broker: true`):
 
-### Required Repro (from Task 3)
+- **SC2 (bounded read) — PASS:** `broker: spawned child app_container=true` → `sc2: partial
+  frame (4-byte prefix) sent on cap pipe; stalling 20s...` → `broker: child exited
+  child_exit_code=0`. No `os error 5`; child connected to the cap pipe; supervisor bounded
+  the partial-frame read and stayed responsive (no hang).
+- **SC1 request-dispatch reachability (intermediate run) — CONFIRMED:** an `sc1` variant that
+  sent a real `aipc_sdk::request_event` reached the supervisor's
+  `[nono] Grant event access? name=nono-aipc-cap-child-sc1-probe-1 access=wait+signal [y/N]`
+  approval prompt — proving the cap pipe is fully reachable AND a real AIPC request dispatched
+  to the approval backend end-to-end.
+- **SC1 (transient close → re-accept) — PASS:** `sc1 conn1: established (cap pipe reachable)`
+  → `SC1 RESULT: PASS (cap pipe re-accepted after transient close)` → `child_exit_code=0`.
+  The 59-03 `disconnect_and_reconnect` re-accept is proven live under the AppContainer arm.
 
-On a real Win11 console (NOT git-bash/MSYS — supervised runs need a real console; run
-`target\release\nono.exe` from a profile-covered cwd to skip the broker trust gate):
+Both Phase 59-03 success criteria (SC1 re-accept + SC2 bounded read) are confirmed on real
+Win11 hardware. Task 3 checkpoint satisfied.
 
-1. `cargo build --release -p nono-cli`
-2. **SLOW-CHILD (SC2):** Start a supervised `nono run` whose child opens the AIPC pipe, sends a partial frame, then stalls. Set `NONO_SUPERVISOR_IPC_READ_TIMEOUT=2` (2s) for fast observation. Confirm the supervisor is NOT blocked past the deadline.
-3. **RECONNECT (SC1):** Have the child close its capability-pipe connection then reconnect. Confirm the capability pipe re-accepts and capability expansion still works. Confirm no `Access is denied` / `ERROR_PIPE_BUSY` errors.
+## AppContainer cap-pipe reachability (surfaced + fixed by this UAT)
 
-**Resume signal:** Type "approved" with PASS evidence, or describe any observed failure.
+Driving the Task-3 live repro exposed a **pre-existing latent gap**: the supervisor capability
+pipe had never before been exercised by a real AppContainer child (the deny-all fallback
+backend literally says "capability expansion is not attached to generic child processes yet").
+The AppContainer child runs as the per-run **package SID** (`S-1-15-2-*`) — a different
+principal than the user — so it could not (1) read the user-ACL'd rendezvous file nor (2) open
+the session-SID-scoped cap pipe. Root-caused and fixed in debug session
+`appcontainer-cap-pipe-unreachable` (now in `.planning/debug/resolved/`):
+
+- **FIX 1** — `grant_sid_read_on_path` (new `nono` lib primitive, narrow `FILE_GENERIC_READ`,
+  no-inherit, fail-closed) grants the package SID READ on the `nono-cap-*.pipe` rendezvous,
+  applied inside `bind_impl` AFTER `write_pipe_rendezvous` and BEFORE the blocking
+  `ConnectNamedPipe` (ordering is load-bearing). Reverts via rendezvous-file deletion on Drop.
+- **FIX 2** — `validate_package_sid_for_sddl` (allow-lists `S-1-15-2-`) + a
+  `(A;;0x0012019F;;;<package_sid>)` ACE in `build_capability_pipe_sddl`; `package_sid` threaded
+  `ExecConfig → SupervisorConfig → WindowsSupervisorRuntime → cap-pipe server → bind`.
+- **Harness** — `aipc-cap-child` corrected to read `NONO_SUPERVISOR_PIPE`; `sc1` redesigned to
+  transport-level re-accept.
+
+Security held throughout: validate-before-embed, per-run-package-SID-only, no null/world
+fallback, revert-on-Drop, `// SAFETY:` on all FFI. This is Phase-62-adjacent broker/AppContainer
+hardening surfaced by Phase 59's UAT; full root-cause + commit trail in the resolved debug file.
 
 ## Deviations from Plan
 
