@@ -172,6 +172,134 @@ operator UAT.
 
 **Task-3 operator UAT status: STILL PENDING.**
 
+## AIPC-SDK live-repro child: aipc-cap-child example
+
+### Artifact
+
+**Path:** `crates/nono-cli/examples/aipc-cap-child.rs`
+
+A cross-platform AIPC-SDK child harness designed to be launched as the child
+process under `nono run --profile claude-code`. When the supervisor injects
+`NONO_CAP_FILE` into the child environment, the binary reads it and drives the
+real capability pipe using the `nono::supervisor::socket::SupervisorSocket` and
+`nono::supervisor::aipc_sdk::request_event` pub surface. No `nono_cli::`
+references; no `unsafe`; cross-platform stub on non-Windows.
+
+**SC2 mode (`aipc-cap-child.exe sc2`):** Connects to `NONO_CAP_FILE`, sends a
+4-byte big-endian length prefix announcing 64 bytes (payload never sent), then
+stalls for 20 s. Exercises the supervisor's PeekNamedPipe deadline-poll bounded
+read: the supervisor must detect the partial frame within the configured
+`NONO_SUPERVISOR_IPC_READ_TIMEOUT` and keep the supervision loop responsive
+rather than blocking indefinitely.
+
+**SC1 mode (`aipc-cap-child.exe sc1`):** Makes two sequential connections to
+`NONO_CAP_FILE`, each using `aipc_sdk::request_event` with a named event and
+`EVENT_ACCESS_MASK = 0x0010_0002` (SYNCHRONIZE | EVENT_MODIFY_STATE). Between
+the two connections the child deliberately drops conn1 and waits 500 ms. Prints
+`SC1 RESULT: PASS` if conn2 receives any supervisor Decision (Approved or
+Denied-but-responded), proving the cap pipe re-accepted after the transient
+close. If conn2 gets a transport error (supervisor permanently disabled the
+pipe), prints `SC1 RESULT: FAIL`.
+
+**`--selftest <sc1|sc2>` mode:** Runs the child-side mechanics against an
+in-process mimic pipe — no `nono run` required, no WRITE_RESTRICTED token, no
+SDK dispatcher. The mimic acts as a minimal supervisor: for SC2 it asserts that
+`recv_message_with_timeout(2s)` returns an error containing `[timeout]` within
+4 s; for SC1 it binds, accepts conn1, calls `disconnect_and_reconnect()`, and
+asserts conn2 arrives. Proves the connect/write/reconnect mechanics in
+isolation.
+
+### Captured selftest output (Windows 11 host, 2026-06-06)
+
+```
+$ cargo run --quiet --example aipc-cap-child -p nono-cli -- --selftest sc2
+SELFTEST sc2 RESULT: PASS
+
+$ cargo run --quiet --example aipc-cap-child -p nono-cli -- --selftest sc1
+SELFTEST sc1 RESULT: PASS
+```
+
+**Selftest scope caveat:** Selftest uses a normal named pipe with no
+restricting-SID DACL, no WRITE_RESTRICTED token, and the raw `SupervisorSocket`
+transport (no AIPC dispatcher). It proves only that the child-side
+connect/write/reconnect code paths execute correctly at the transport layer. The
+`aipc_sdk::request_event` path (which requires `NONO_SESSION_TOKEN` in the
+environment and a live supervisor dispatcher) is exercised only under a real
+`nono run` (sc1 / sc2 modes).
+
+### Build
+
+```
+cargo build --release --example aipc-cap-child -p nono-cli
+# Output: target\release\examples\aipc-cap-child.exe
+```
+
+### Operator live-repro commands (Win11 console, dev-layout)
+
+**Profile:** `claude-code` — this is the built-in profile with
+`windows_low_il_broker: true` (confirmed in `crates/nono-cli/data/policy.json`
+line 729). The Low-IL broker arm is required for the production cap-pipe server
+to run (supervisor.rs:411).
+
+**Pre-requisites:** Run from a profile-covered cwd. The `claude-code` profile
+covers `$HOME/.claude` (`%USERPROFILE%\.claude`). Use
+`target\release\nono.exe` (dev-layout) to skip the broker trust gate (unsigned
+`Program Files` install fails the gate by design).
+
+**SC2 — partial frame / bounded read:**
+```
+cd %USERPROFILE%\.claude
+C:\path\to\repo\target\release\nono.exe run --profile claude-code --allow-cwd -- ^
+    C:\path\to\repo\target\release\examples\aipc-cap-child.exe sc2
+```
+
+Set `NONO_SUPERVISOR_IPC_READ_TIMEOUT=2` (seconds) for fast observation (default
+is 5 s):
+```
+set NONO_SUPERVISOR_IPC_READ_TIMEOUT=2
+C:\path\to\repo\target\release\nono.exe run --profile claude-code --allow-cwd -- ^
+    C:\path\to\repo\target\release\examples\aipc-cap-child.exe sc2
+```
+
+**SC1 — reconnect / re-accept + expansion survives:**
+```
+cd %USERPROFILE%\.claude
+C:\path\to\repo\target\release\nono.exe run --profile claude-code --allow-cwd -- ^
+    C:\path\to\repo\target\release\examples\aipc-cap-child.exe sc1
+```
+
+### PASS criteria for the operator
+
+**SC2 PASS:** The `nono run` process stays responsive and eventually exits (or
+can be Ctrl-C'd) after the timeout fires. The supervisor log should contain a
+`[timeout]` keep-alive message (e.g. "Supervisor IPC read deadline exceeded
+..."). The process does NOT hang indefinitely (which would indicate the
+PeekNamedPipe bounded-read is not active). The child prints:
+```
+sc2: partial frame (4-byte prefix) sent on cap pipe; stalling 20s. Supervisor
+read_frame should bound at the configured timeout and keep the supervision loop
+responsive (no indefinite hang).
+```
+Then exits 0 after the stall (or is killed by the supervisor after the
+timeout).
+
+**SC1 PASS:** The child prints `SC1 RESULT: PASS`. Additionally the child
+may print `expansion survives reconnect: CONFIRMED` if the supervisor approved
+the conn2 `request_event`. If the supervisor is configured for approval prompts,
+a Denied-but-responded result on either connection also counts as PASS (the
+channel is alive, the pipe re-accepted). No `Access is denied` / `ERROR_PIPE_BUSY`
+errors in the supervisor output.
+
+### Honest status
+
+`aipc-cap-child.exe` compiles clean, passes clippy (`-D warnings -D
+clippy::unwrap_used`), and both selftests PASS on this Windows 11 host (captured
+above). The full operator live-repro under `nono run --profile claude-code` is
+**first-run success not guaranteed** — the WRITE_RESTRICTED / Low-IL broker
+arm is the still-stabilizing path (see Phase 52 notes in [[project_v27_opened]],
+Phase 60 UAT defects [[project_sandbox_the_tools]]). Task 3 remains OPEN until
+the operator runs it on real Win11 hardware and records PASS/FAIL.
+
 ## SC1 / SC2 Live-Repro (PENDING — Task 3, operator `nono run`)
 
 **STATUS: AWAITING OPERATOR UAT** (multi-process helper PASS captured above; full
