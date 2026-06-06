@@ -31,7 +31,8 @@ granularity: standard
  (completed 2026-06-05)
 - [x] **Phase 57: Bitwarden Credential Source** — `bw://` keystore backend alongside `keyring://`/`env://`/`file://`; `Zeroizing<String>` secret posture
  (completed 2026-06-05)
-- [x] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure (completed 2026-06-05)
+- [x] **Phase 58: Session Lifecycle Hooks** — `session_hooks` profile field; Unix upstream behavior preserved; Windows broker-spawned Low-IL execution design + ADR; fail-closed on hook failure
+ (completed 2026-06-05)
 - [ ] **Phase 59: Supervisor IPC Robustness** — Keep-alive on transient child IPC close, bounded read-timeouts, robust accept; Unix named-socket hardening absorbed cross-platform-core; Windows Named-Pipe AIPC path translated (not cherry-picked)
 
 ### v2.9 — Windows Sandbox-the-Tools (separate track)
@@ -168,7 +169,13 @@ Plans:
   2. IPC read operations on the supervisor side enforce a bounded timeout (configurable or a documented constant); a child that holds an open connection without sending data does not block the supervisor indefinitely
   3. On Unix, the upstream named-socket hardening intent is absorbed (cross-platform-core portions cherry-picked per Phase 54 dispositions) with correct D-19 trailers
   4. On Windows, the Named-Pipe AIPC path (Phase 18) receives the equivalent robustness treatment (keep-alive, bounded timeouts, robust accept); implementation is documented as a translate-not-cherry-pick with the translation rationale in the plan SUMMARY
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+**Wave 1** (no deps)
+- [ ] 59-01-PLAN.md — timeouts.rs SUPERVISOR_IPC_READ_TIMEOUT const + NONO_* env override + MAX_TIMEOUT clamp + Wave 0 net-new cross-platform test scaffold (D-01)
+**Wave 2** (parallel — no file overlap; both depend on 59-01)
+- [ ] 59-02-PLAN.md — Unix set_read_timeout wiring + macOS keep-alive/re-accept unify + updated break-on-close test + SC1/SC2 integration tests; be7681c/4a22e94 documented N/A (socketpair) (D-02, D-04, SC1/SC2/SC3)
+- [ ] 59-03-PLAN.md — Windows PeekNamedPipe bounded read_frame + capability-pipe re-accept loop + Windows-gated tests + operator live-repro UAT + translate-not-cherry-pick SUMMARY rationale (D-03, D-04, D-05, SC4) [autonomous: false]
 
 ### Phase 60: Sandbox-the-Tools — Confined Coding Loop (v2.9)
 **Goal**: A Windows POC user runs the Claude Code TUI at Medium IL and the agent completes a full coding loop — read, run commands, **and edit files** — with every side-effecting operation confined to a Low-IL `nono` jail. File edits work (confined) instead of being denied.
