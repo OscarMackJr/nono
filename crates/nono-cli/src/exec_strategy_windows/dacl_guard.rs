@@ -42,8 +42,9 @@
 use std::path::{Path, PathBuf};
 
 use nono::{
-    grant_sid_traverse_on_path, grant_sid_write_on_path, path_is_owned_by_current_user,
-    revoke_sid_on_path, AccessMode, Result, WindowsFilesystemPolicy,
+    grant_sid_read_on_path, grant_sid_traverse_on_path, grant_sid_write_on_path,
+    path_is_owned_by_current_user, revoke_sid_on_path, AccessMode, NonoError, Result,
+    WindowsFilesystemPolicy,
 };
 
 /// Per-rule state recorded at snapshot time.
@@ -303,6 +304,148 @@ impl AppliedAncestorTraverseGuard {
 impl Drop for AppliedAncestorTraverseGuard {
     fn drop(&mut self) {
         self.revert_all();
+    }
+}
+
+/// RAII guard that grants the per-run AppContainer PACKAGE SID `FILE_GENERIC_READ`
+/// on the supervisor capability-pipe RENDEZVOUS file, and revokes the grant on Drop.
+///
+/// # Why this exists (debug `appcontainer-cap-pipe-unreachable`, FIX 1)
+///
+/// The supervisor writes a `%TEMP%\.nono-<nonce>.json` rendezvous file
+/// (`write_pipe_rendezvous`) with the current user's default ACL. The
+/// AppContainer child (`S-1-15-2-*` package SID — a DIFFERENT principal than
+/// the user) cannot read this file → `ERROR_ACCESS_DENIED` (os error 5) in
+/// `SupervisorSocket::connect` before the pipe is ever opened.
+///
+/// This guard grants the specific per-run package SID `FILE_GENERIC_READ`
+/// (0x00120089) on the rendezvous file AFTER the rendezvous file is created
+/// (the file only exists after `bind_low_integrity_with_*` writes it), and
+/// revokes it on Drop via [`revoke_sid_on_path`].
+///
+/// # When it activates
+///
+/// Only when `package_sid` is `Some(sid)`. When `None` (the `WriteRestricted`
+/// arm, legacy callers, or any non-AppContainer execution), `new()` returns a
+/// no-op guard that performs no DACL edit and no revert. This preserves
+/// byte-identical pre-fix behavior for all existing callers.
+///
+/// # Fail-closed discipline
+///
+/// - `new()` calls `path_is_owned_by_current_user` first. The `%TEMP%`
+///   rendezvous file is user-created, so ownership SHOULD be the current user.
+///   If not (unexpected), returns `Err` (fail-closed — cannot grant without
+///   `WRITE_DAC`).
+/// - Ownership-check errors propagate as `Err` (never swallowed).
+/// - Grant failure propagates as `Err`.
+/// - Drop calls `revoke_sid_on_path` best-effort (errors logged, never panics).
+///
+/// Modeled on [`AppliedAncestorTraverseGuard`]: same apply/revert/Drop shape.
+#[derive(Debug)]
+pub(crate) struct AppliedRendezvousReadGuard {
+    /// The rendezvous file we granted package-SID READ on, or `None` if the
+    /// guard is inactive (no package SID / no grant applied).
+    applied_path: Option<std::path::PathBuf>,
+    /// The package SID; stored for the revert in Drop.
+    package_sid: String,
+}
+
+impl AppliedRendezvousReadGuard {
+    /// Grant `FILE_GENERIC_READ` on `rendezvous_path` to the package SID
+    /// when `package_sid` is `Some`. Returns a no-op guard when `None`.
+    ///
+    /// # Errors
+    ///
+    /// Fail-closed: returns `Err` if `package_sid` is `Some` AND any of:
+    /// - the rendezvous file is not owned by the current user (no `WRITE_DAC`),
+    /// - the ownership check itself fails,
+    /// - `grant_sid_read_on_path` fails.
+    pub(crate) fn new(
+        rendezvous_path: &std::path::Path,
+        package_sid: Option<&str>,
+    ) -> Result<Self> {
+        let psid = match package_sid {
+            None => {
+                // No AppContainer arm active — return a no-op guard.
+                return Ok(Self {
+                    applied_path: None,
+                    package_sid: String::new(),
+                });
+            }
+            Some(s) => s,
+        };
+
+        // The %TEMP% rendezvous file is user-created and should be user-owned.
+        // Granting DACL modifications requires WRITE_DAC, which the owner
+        // holds implicitly. Fail-closed if not owned (unexpected, but safe).
+        match path_is_owned_by_current_user(rendezvous_path) {
+            Ok(true) => {
+                // Owner — proceed with the grant.
+            }
+            Ok(false) => {
+                // Rendezvous file not owned by the current user. This is
+                // unexpected for a %TEMP% file created by this process, but
+                // fail-closed: we cannot edit the DACL without WRITE_DAC.
+                return Err(NonoError::DaclApplyFailed {
+                    path: rendezvous_path.to_path_buf(),
+                    hresult: 0,
+                    hint: format!(
+                        "rendezvous-read guard: rendezvous file {} is not owned by the \
+                         current user; cannot grant package SID READ without WRITE_DAC \
+                         (fail-closed — AppContainer child will be denied access)",
+                        rendezvous_path.display()
+                    ),
+                });
+            }
+            Err(err) => {
+                // Ownership-check error: propagate (fail-closed).
+                tracing::warn!(
+                    path = %rendezvous_path.display(),
+                    error = %err,
+                    "rendezvous-read guard: ownership check failed; cannot grant package SID READ"
+                );
+                return Err(err);
+            }
+        }
+
+        if let Err(err) = grant_sid_read_on_path(rendezvous_path, psid) {
+            tracing::warn!(
+                path = %rendezvous_path.display(),
+                "rendezvous-read guard: grant failed"
+            );
+            return Err(err);
+        }
+
+        tracing::debug!(
+            path = %rendezvous_path.display(),
+            package_sid = %psid,
+            "rendezvous-read guard: granted package SID FILE_GENERIC_READ on rendezvous file"
+        );
+
+        Ok(Self {
+            applied_path: Some(rendezvous_path.to_path_buf()),
+            package_sid: psid.to_string(),
+        })
+    }
+}
+
+impl Drop for AppliedRendezvousReadGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.applied_path.take() {
+            if let Err(err) = revoke_sid_on_path(&path, &self.package_sid) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "rendezvous-read guard: revoke failed; the package SID READ ACE may \
+                     remain on the rendezvous file DACL until it is cleaned up"
+                );
+            } else {
+                tracing::debug!(
+                    path = %path.display(),
+                    "rendezvous-read guard: revoked package SID READ ACE on rendezvous file"
+                );
+            }
+        }
     }
 }
 
@@ -583,6 +726,55 @@ mod tests {
             !guard.applied.iter().any(|p| p.as_path() == root),
             "the drive root ({}) must never be granted (non-owned)",
             root.display()
+        );
+        drop(guard);
+    }
+
+    /// `AppliedRendezvousReadGuard::new` with a valid package SID on a user-owned
+    /// tempfile grants the SID READ access and reverts it on Drop (FIX 1 guard test).
+    #[test]
+    fn rendezvous_read_guard_grants_and_reverts_on_drop() {
+        let dir = tempdir().expect("tempdir");
+        let rendezvous = dir.path().join(".nono-test-rendezvous.json");
+        std::fs::write(&rendezvous, b"{}").expect("write rendezvous stub");
+
+        assert!(
+            !dacl_contains_sid(&rendezvous, TEST_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist on rendezvous DACL"
+        );
+
+        {
+            let guard = AppliedRendezvousReadGuard::new(&rendezvous, Some(TEST_PACKAGE_SID))
+                .expect("guard should succeed on a user-owned tempfile");
+            // Guard is active — the SID's ACE must now be on the file DACL.
+            assert!(
+                dacl_contains_sid(&rendezvous, TEST_PACKAGE_SID),
+                "during guard lifetime the package SID's READ ACE must be on the DACL"
+            );
+            drop(guard);
+        }
+
+        // After drop, the SID's ACE must be reverted.
+        assert!(
+            !dacl_contains_sid(&rendezvous, TEST_PACKAGE_SID),
+            "after guard drop the package SID's ACE must be revoked from the rendezvous DACL"
+        );
+    }
+
+    /// `AppliedRendezvousReadGuard::new(path, None)` returns a no-op guard
+    /// that performs no DACL edit.
+    #[test]
+    fn rendezvous_read_guard_noop_when_no_package_sid() {
+        let dir = tempdir().expect("tempdir");
+        let rendezvous = dir.path().join(".nono-test-noop.json");
+        std::fs::write(&rendezvous, b"{}").expect("write stub");
+
+        let guard = AppliedRendezvousReadGuard::new(&rendezvous, None)
+            .expect("no-op guard must not fail");
+        // No ACE should have been added for any SID.
+        assert!(
+            !dacl_contains_sid(&rendezvous, TEST_PACKAGE_SID),
+            "no-op guard must not add any SID ACE to the rendezvous DACL"
         );
         drop(guard);
     }

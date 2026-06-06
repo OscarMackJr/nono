@@ -1417,6 +1417,28 @@ const SESSION_SID_WRITE_MASK: u32 = {
     FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_EXECUTE | DELETE
 };
 
+/// Read-only access-rights mask granted to the per-run package SID by
+/// [`grant_sid_read_on_path`] on a specific single file (e.g. the supervisor
+/// capability-pipe rendezvous JSON).
+///
+/// `FILE_GENERIC_READ` = 0x00120089 (`STANDARD_RIGHTS_READ` | `FILE_READ_DATA` |
+/// `FILE_READ_ATTRIBUTES` | `FILE_READ_EA` | `SYNCHRONIZE`).
+///
+/// Deliberately narrow: NO write bits (`FILE_GENERIC_WRITE`), NO execute bits
+/// (`FILE_EXECUTE`), NO delete bits (`DELETE`), NO full-control bits
+/// (`WRITE_DAC`, `WRITE_OWNER`). The package SID needs ONLY to read the
+/// rendezvous file content — granting anything beyond read would widen the
+/// trust boundary unnecessarily.
+///
+/// This constant is intentionally a `const` (not a lazy cell) computed from
+/// the `windows_sys` literal so the compiler can constant-fold it.
+///
+/// `FILE_GENERIC_READ` = 0x00120089.
+const PACKAGE_SID_READ_MASK: u32 = {
+    use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
+    FILE_GENERIC_READ
+};
+
 /// Traverse-only access-rights mask granted to the per-run package SID by
 /// [`grant_sid_traverse_on_path`] on a cwd ANCESTOR directory.
 ///
@@ -1756,6 +1778,43 @@ pub fn grant_sid_traverse_on_path(path: &Path, sid: &str) -> Result<()> {
         SET_ACCESS,
         NO_INHERITANCE,
     )
+}
+
+/// Adds an allow-ACE to the DACL of `path` granting the SDDL SID string `sid`
+/// READ-ONLY rights ([`PACKAGE_SID_READ_MASK`] — `FILE_GENERIC_READ` =
+/// 0x00120089), PRESERVING the existing DACL (including inherited ACEs).
+///
+/// Use this to grant an AppContainer package SID read access on a specific
+/// single file owned by the current user (e.g. the supervisor capability-pipe
+/// rendezvous JSON at `%TEMP%\.nono-<nonce>.json`). Always pass
+/// `NO_INHERITANCE` — a read-only grant on a single file must NOT propagate
+/// to descendants.
+///
+/// # Why (debug `appcontainer-cap-pipe-unreachable`, FIX 1)
+///
+/// The AppContainer child runs as the per-run package SID (`S-1-15-2-*`), a
+/// principal DISTINCT from the current user. The rendezvous file is created by
+/// `write_pipe_rendezvous` with the user's default ACL (no package-SID ACE).
+/// The child's `SupervisorSocket::connect` reads this file via
+/// `std::fs::read_to_string`, which fails with `ERROR_ACCESS_DENIED` (os
+/// error 5) because the package SID has no read right on the user-default ACL.
+/// Granting the specific per-run package SID `FILE_GENERIC_READ` on the
+/// rendezvous file — and revoking it on drop via [`revoke_sid_on_path`] — is
+/// the minimal narrowly-scoped fix.
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed, the
+/// current DACL cannot be read, the ACE cannot be merged, or the merged DACL
+/// cannot be written back (fail-closed at every step).
+#[cfg(target_os = "windows")]
+pub fn grant_sid_read_on_path(path: &Path, sid: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::SET_ACCESS;
+    use windows_sys::Win32::Security::NO_INHERITANCE;
+
+    // NO_INHERITANCE: a single-file rendezvous read grant must NOT propagate
+    // to any children (the file has no children; defensive belt-and-suspenders).
+    edit_dacl_for_sid(path, sid, PACKAGE_SID_READ_MASK, SET_ACCESS, NO_INHERITANCE)
 }
 
 /// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting
@@ -4866,6 +4925,55 @@ mod dacl_grant_tests {
     fn grant_traverse_invalid_sid_fails_closed() {
         let dir = tempdir().expect("tempdir");
         let err = grant_sid_traverse_on_path(dir.path(), "not-a-sid")
+            .expect_err("malformed SID must fail closed");
+        assert!(
+            matches!(err, NonoError::DaclApplyFailed { .. }),
+            "malformed SID must yield DaclApplyFailed; got {err:?}"
+        );
+    }
+
+    // Package-SID-shaped test SID (S-1-15-2-*) for the read-grant primitive.
+    const TEST_PACKAGE_SID: &str = "S-1-15-2-10-20-30-40-50-60-70";
+
+    /// `grant_sid_read_on_path` adds the package-SID ACE to a tempfile's DACL
+    /// and `revoke_sid_on_path` removes it (round-trip, FIX 1 primitive test).
+    #[test]
+    fn grant_read_then_revoke_sid_round_trips_on_tempfile() {
+        use super::grant_sid_read_on_path;
+
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("rendezvous.json");
+        std::fs::write(&file, b"{}").expect("write rendezvous stub");
+
+        assert!(
+            !dacl_contains_sid(&file, TEST_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist on file DACL"
+        );
+
+        grant_sid_read_on_path(&file, TEST_PACKAGE_SID).expect("grant read");
+        assert!(
+            dacl_contains_sid(&file, TEST_PACKAGE_SID),
+            "after grant the package SID's ACE must be present on the DACL"
+        );
+
+        revoke_sid_on_path(&file, TEST_PACKAGE_SID).expect("revoke");
+        assert!(
+            !dacl_contains_sid(&file, TEST_PACKAGE_SID),
+            "after revoke the package SID's ACE must be absent from the DACL"
+        );
+    }
+
+    /// A malformed SID string fails the read grant closed with
+    /// `DaclApplyFailed` (never a silent no-op).
+    #[test]
+    fn grant_read_invalid_sid_fails_closed() {
+        use super::grant_sid_read_on_path;
+
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("rendezvous-bad.json");
+        std::fs::write(&file, b"{}").expect("write stub");
+
+        let err = grant_sid_read_on_path(&file, "not-a-sid")
             .expect_err("malformed SID must fail closed");
         assert!(
             matches!(err, NonoError::DaclApplyFailed { .. }),
