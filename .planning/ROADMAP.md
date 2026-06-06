@@ -20,7 +20,7 @@ granularity: standard
 - ✅ **v2.6 UPST6 + v2.5 Drain** — Phases 44, 44.1, 45, 46, 47, 48, 49, 50 (shipped 2026-05-25) — see [`milestones/v2.6-ROADMAP.md`](milestones/v2.6-ROADMAP.md)
 - ✅ **v2.7 Windows supervised-run hardening** — Phases 51, 52 (shipped 2026-05-26) — see [`milestones/v2.7-ROADMAP.md`](milestones/v2.7-ROADMAP.md)
 - **v2.8 UPST7 + v2.7 Drain & Release** — Phases 53–59 (active)
-- **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61, 62 (Phase 60 complete; Phase 61 = ship/release; Phase 62 = out-of-box WFP network enforcement closing Phase 60's F-60-UAT-03; separate initiative from UPST7, builds on merged PR #4)
+- ✅ **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61, 62 (all complete; **PUBLISHED as v0.62.2 2026-06-06**; separate initiative from UPST7, builds on merged PR #4). Phase 60 = confined coding loop; Phase 62 = out-of-box WFP network enforcement (closed Phase 60's F-60-UAT-03); Phase 61 = CI-signed public release. Milestone not yet formally archived.
 
 ## Phases
 
@@ -39,7 +39,7 @@ granularity: standard
 
 - [x] **Phase 60: Confined Coding Loop** — Make the merged PR #4 tool-mediation slice a usable coding agent for Windows POC users: confined Low-IL **file edits** (Write/Edit/MultiEdit/NotebookEdit) via per-call capability mapping instead of deny, plus a usable shell story (PowerShell-runner decision). Network/WebFetch/MCP/Task stay denied (out of POC scope). Input: `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` (§7 answered)
  (completed 2026-05-29)
-- [ ] **Phase 61: Ship/Release v2.9** — Package and release the Phase 60 confined-coding-loop POC **and** Phase 62 WFP kernel network enforcement as a CI-signed public release: lockstep-bump the workspace to 0.58.0, dual-tag `v2.9`+`v0.58.0` off current `main`, produce CI-signed machine+user MSIs via `release.yml` (wrapper AND embedded payloads Authenticode-valid), and write release notes (honest POC / defense-in-depth framing for both features)
+- [x] **Phase 61: Ship/Release v2.9** — Package and release the Phase 60 confined-coding-loop POC **and** Phase 62 WFP kernel network enforcement as a CI-signed public release: lockstep-bump the workspace, dual-tag `v2.9`+`v0.62.2` off `main`, produce CI-signed machine+user MSIs via `release.yml` (wrapper AND embedded payloads Authenticode-valid), and write release notes (honest POC / defense-in-depth framing for both features) **(SHIPPED as v0.62.2 2026-06-06; the v0.62.0/v0.62.1 attempts failed on two latent cfg-gated cross-target compile errors — E0716 + edition-2024 let-chain — fixed in `4de294e8`+`7bb7c7e3`; v0.58.0 leapfrogged to 0.62.x for the upstream tag-collision)**
 - [x] **Phase 62: Add WFP kernel network enforcement for Windows supervised runs** — Make `network.block:true` on a supervised `nono run` enforce WFP kernel filtering out of the box (machine MSI `start=auto`, in-run auto-start-or-fail-closed, non-elevated pipe SDDL); closes Phase 60's F-60-UAT-03. Service-only — no new kernel driver. (REQ-WFP-01, v2.9 track)
  (completed 2026-06-03)
 
@@ -208,7 +208,7 @@ Plans:
 - [x] 61-03-PLAN.md — Pre-tag readiness: drain-fix ancestry (D-08), v0.57.4 verify-absent/delete-if-found (D-07), signing-secret pre-flight (D-02), driver-sys presence
 
 **Wave 3** *(operator-gated; blocked on 61-01/02/03)*
-- [ ] 61-04-PLAN.md — Release notes + tag/push v0.58.0 + release.yml live-verify + v2.9 annotation tag + post-release MSI signature spot-check (D-01, D-02, D-03, D-05, D-06)
+- [x] 61-04-PLAN.md — Release notes + tag/push (shipped v0.62.2) + release.yml live-verify (run 27074741774, 5/5 build legs + Create Release green, signed MSIs) + v2.9 annotation tag + release-notes publish (D-01, D-03, D-05, D-06; D-02 cert was NOT the blocker — two cfg-gated compile errors were) — completed 2026-06-06
 
 ### Phase 62: Add WFP kernel network enforcement for Windows supervised runs
 **Goal**: Make `network.block:true` on a supervised/broker (Low-IL) `nono run` reliably enforce WFP kernel network filtering out of the box on a machine-MSI-installed host — with no manual `nono setup --start-wfp-service` step — and never silently pass through unenforced. Closes Phase 60's F-60-UAT-03 carry-forward. (WFP-via-service is already kernel-enforced; the deliverable is operational reliability, not a new kernel layer — `nono-wfp-driver.sys` minifilter stays v3.0-deferred.)
@@ -238,7 +238,7 @@ Plans:
 - [x] 62-13-PLAN.md -- GAP-CLOSURE F-62-UAT-05 (AppContainer SPAWN FIX, spike-validated): broker registers the per-run AppContainer profile via CreateAppContainerProfile (RAII DeleteAppContainerProfile) BEFORE the SECURITY_CAPABILITIES spawn — 62-12 used Derive-only -> CreateProcessW ERROR_FILE_NOT_FOUND. Spike (examples/spike_wfp_appcontainer.rs) PROVED WFP blocks an AppContainer connection via the existing ALE_USER_ID(packageSid) path (both ALE_USER_ID + ALE_PACKAGE_ID block). Keep ALE_USER_ID; + package-SID FILE_TRAVERSE on user-owned cwd ancestors. Full claude.exe read-grant model deferred
 
 **Wave 2** (blocked on Wave 1 -- requires code and MSI complete)
-- [ ] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5)
+- [x] 62-04-PLAN.md -- HUMAN-UAT: machine-MSI install, reboot, out-of-box enforced block, clean uninstall (REQ-WFP-01 SC1-SC5) — all 5 SC PASS on live Win11 26200 (62-HUMAN-UAT.md, operator-signed 2026-06-03)
 
 ## Future Cycles
 
@@ -263,8 +263,8 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 58. Session Lifecycle Hooks | 3/3 | Complete    | 2026-06-06 |
 | 59. Supervisor IPC Robustness | 3/3 | Complete    | 2026-06-06 |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
-| 61. Ship/Release v2.9 | 3/4 | In Progress|  |
-| 62. WFP kernel network enforcement (Windows supervised) | 12/13 | Complete    | 2026-06-03 |
+| 61. Ship/Release v2.9 | 4/4 | Complete | 2026-06-06 |
+| 62. WFP kernel network enforcement (Windows supervised) | 13/13 | Complete | 2026-06-03 |
 
 ## Coverage
 
