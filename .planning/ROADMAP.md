@@ -172,10 +172,10 @@ Plans:
 **Plans**: 3 plans
 Plans:
 **Wave 1** (no deps)
-- [ ] 59-01-PLAN.md — timeouts.rs SUPERVISOR_IPC_READ_TIMEOUT const + NONO_* env override + MAX_TIMEOUT clamp + Wave 0 net-new cross-platform test scaffold (D-01)
-**Wave 2** (parallel — no file overlap; both depend on 59-01)
-- [ ] 59-02-PLAN.md — Unix set_read_timeout wiring + macOS keep-alive/re-accept unify + updated break-on-close test + SC1/SC2 integration tests; be7681c/4a22e94 documented N/A (socketpair) (D-02, D-04, SC1/SC2/SC3)
-- [ ] 59-03-PLAN.md — Windows PeekNamedPipe bounded read_frame + capability-pipe re-accept loop + Windows-gated tests + operator live-repro UAT + translate-not-cherry-pick SUMMARY rationale (D-03, D-04, D-05, SC4) [autonomous: false]
+- [ ] 59-01-PLAN.md — timeouts.rs SUPERVISOR_IPC_READ_TIMEOUT const + NONO_* env override + MAX_TIMEOUT clamp (IN-CRATE unit tests — nono-cli is bin-only) + Wave 0 net-new per-platform test scaffolds (supervisor_ipc_robustness_unix.rs + _windows.rs) (D-01)
+**Wave 2** (parallel — no file overlap: 59-02 owns supervisor_ipc_robustness_unix.rs, 59-03 owns supervisor_ipc_robustness_windows.rs; both depend on 59-01)
+- [ ] 59-02-PLAN.md — Unix set_read_timeout wiring + macOS keep-alive/re-accept unify (pinned sock_fd_active predicate, fail-secure narrower-by-default) + updated IN-CRATE break-on-close test + IN-CRATE reconnect_survival (SC1, private run_supervisor_loop) + lib-surface bounded_read_timeout (SC2) in supervisor_ipc_robustness_unix.rs; socket.rs in scope; be7681c/4a22e94 documented N/A (socketpair) (D-02, D-04, SC1/SC2/SC3)
+- [ ] 59-03-PLAN.md — Windows PeekNamedPipe bounded read_frame + capability-pipe re-accept loop + Windows-gated tests (lib-surface via recv_message) in supervisor_ipc_robustness_windows.rs + operator live-repro UAT + translate-not-cherry-pick SUMMARY rationale (D-03, D-04, D-05, SC4) [autonomous: false]
 
 ### Phase 60: Sandbox-the-Tools — Confined Coding Loop (v2.9)
 **Goal**: A Windows POC user runs the Claude Code TUI at Medium IL and the agent completes a full coding loop — read, run commands, **and edit files** — with every side-effecting operation confined to a Low-IL `nono` jail. File edits work (confined) instead of being denied.
