@@ -536,7 +536,26 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
                     Some(flags.session.session_id.as_str()),
                 )?;
                 cleanup_capability_state_file(&cap_file_path);
+                // Drop config before after-hook: config holds &str borrows into
+                // hook_env_vars_owned (via env_vars field). Dropping config here releases
+                // those borrows so hook_env_vars_owned remains available for zeroize.
                 drop(config);
+
+                // ---- After-hook execution (Windows Direct) ----
+                // Windows Direct collects an exit code and calls std::process::exit —
+                // it does NOT exec-replace the process, so the after-hook CAN and MUST
+                // run here. Fail-closed (D-01/D-04): ? propagates Err so non-zero hook
+                // exit is surfaced. Mirror the Supervised branch after-hook dispatch.
+                //
+                // FORK DIVERGENCE (D-04): ? propagates Err so CI sees non-zero exit.
+                // Upstream daa55c8 warns and swallows (fail-open); fork propagates Err.
+                if let Some((after, session_id)) =
+                    flags.session_hooks.after.as_ref().zip(hook_session_id.as_deref())
+                {
+                    // FORK DIVERGENCE (D-01/D-04): ? propagates Err, not warn-and-continue
+                    hook_runtime_windows::execute_after_hook(after, session_id, &current_dir, exit_code)?;
+                }
+
                 // Zeroize hook env-var values after injection; values may be credentials (CLAUDE.md §Memory).
                 // config is dropped above so &str borrows into hook_env_vars_owned are no longer live.
                 for (_, value) in &mut hook_env_vars_owned {
@@ -547,6 +566,28 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             }
             #[cfg(not(target_os = "windows"))]
             {
+                // ---- After-hook guard (Unix Direct) ----
+                // On Unix, execute_direct calls execvp() which REPLACES the current process.
+                // There is no opportunity to run an after-hook after exec. This is an
+                // inherent limitation of the Direct strategy on Unix.
+                //
+                // FAIL CLOSED (D-01/D-04): if the profile defines an after-hook AND the
+                // selected strategy is Direct on a non-Windows target, abort BEFORE exec
+                // with a clear error. Silently dropping the after-hook violates the
+                // fail-closed invariant and misrepresents the feature's guarantee.
+                //
+                // Before-hooks are unaffected: they run on the common path (pre-match) and
+                // complete before exec. Only after-hooks are structurally impossible here.
+                if flags.session_hooks.after.is_some() {
+                    return Err(NonoError::ConfigParse(
+                        "after-hooks are not supported with the Direct execution strategy on Unix \
+                         because it replaces the process via exec and never returns. \
+                         Use the default supervised/monitor strategy (omit --direct) \
+                         to enable after-hook execution."
+                            .to_string(),
+                    ));
+                }
+
                 exec_strategy::execute_direct(
                     &config,
                     // Phase 25-01: kernel-level resource enforcement (Linux cgroup v2, macOS setrlimit).
