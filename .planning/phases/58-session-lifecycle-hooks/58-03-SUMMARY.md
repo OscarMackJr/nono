@@ -371,3 +371,84 @@ Operator-driven UAT of the Phase 58 hook feature, after both gap-closure fixes:
 **Out of scope (pre-existing, not Phase 58):** a sandboxed **`powershell.exe` child** (CLR) fails to start under the Windows sandbox with `0xC0000142` (STATUS_DLL_INIT_FAILED) — the documented Phase 60 CLR-under-WriteRestricted limitation. The hook pipeline itself is unaffected; native children (`cmd.exe`) run cleanly. The cwd-coverage gate (`execution directory outside supported allowlist`) also fired correctly when the child cwd was outside the granted paths (fail-secure, working as designed).
 
 **Checkpoint resolution:** human-verify checkpoint APPROVED — feature works end-to-end on real Windows.
+
+---
+
+## Code-Review Hardening (2026-06-06, post-UAT)
+
+Three critical findings from the Phase 58 code review (`58-REVIEW.md`) were applied after UAT completion.
+
+### CR-02 fix: Job Object assignment failure — fail closed on timeout (commit `676a444a`)
+
+**Finding:** `run_hook_windows` silently downgraded a `AssignProcessToJobObject` failure to a
+`warn!` and continued, violating D-01. A hook assigned to no job object cannot be killed by
+`TerminateJobObject`, so the configured `timeout_secs` became a soft advisory — an ungovernable
+hook could block indefinitely.
+
+**Fix:** Use `child.try_wait()` as the liveness gate after assignment failure:
+- **Child already exited** (benign TOCTOU race): warn and proceed — timeout can't fire.
+- **Child still running + timeout configured**: kill child best-effort, close job handle, return
+  `Err(NonoError::CommandExecution(...))` with a clear message (D-01 fail-closed enforced).
+- **Child still running + no timeout**: existing warn + proceed (job not needed for governance).
+
+**Test added:** `test_cr02_timeout_hook_exits_cleanly` — verifies a fast-exiting hook with a
+timeout configured returns `Ok` (benign-exit path preserved). The actual assignment-failure
+scenario requires inducing a specific OS-level race (not deterministic in unit tests); the test
+documents this constraint and the liveness-check logic is covered end-to-end in the
+`test_execute_before_hook_powershell_does_not_clr_fail` integration test.
+
+**Files:** `crates/nono-cli/src/hook_runtime_windows.rs`
+
+### CR-03 fix: After-hook in Direct strategy (commit `a9fb02c4`)
+
+**Finding:** The after-hook was dispatched only inside the `Supervised` branch. In `Direct`
+strategy the after-hook was silently dropped, violating the feature's guarantee.
+
+**Fix (Windows Direct):** After `execute_direct` returns its exit code, dispatch
+`execute_after_hook` before `std::process::exit` (fail-closed; `?` propagates `Err`). Drop
+`config` first to release `&str` borrows from `hook_env_vars_owned`, then invoke the after-hook.
+Mirrors the Supervised branch dispatch exactly.
+
+**Fix (Unix Direct):** `execute_direct` calls `execvp` and replaces the process — no
+after-hook is structurally possible. Added a fail-closed guard: if `session_hooks.after` is
+configured AND strategy is Direct on non-Windows, return `Err` BEFORE exec with a clear
+message ("after-hooks not supported with Direct strategy on Unix because exec replaces the
+process"). Prevents silent drop — the user gets an explicit error rather than an invisible gap.
+
+**Before-hooks unaffected:** they run on the common pre-match path and complete before any
+strategy branch.
+
+**Cross-target note:** the Unix Direct guard is `#[cfg(not(target_os = "windows"))]` code that
+does NOT compile on this Windows host. Clippy verification for that branch is PARTIAL/CI-deferred
+per CLAUDE.md cross-target clippy rule. The Windows Direct branch is Windows-host-verifiable and
+was verified clean.
+
+**Files:** `crates/nono-cli/src/execution_runtime.rs`
+
+### CR-01 fix: Doc/comment accuracy — Medium-IL reality, deferred Low-IL note (commit `83fed38b`)
+
+**Finding:** Module-level doc and inline comments claimed "Hooks run as Low-IL primary token
+processes (D-05)". This is false: the `_low_il_token` token is created by
+`nono::create_low_integrity_primary_token()` but never passed to any spawn call (stable Rust
+`std::process::Command` has no custom-token API). Hooks run at the parent's Medium-IL.
+
+**Fix:** Documentation-only corrections (no runtime behavior change):
+- `hook_runtime_windows.rs` module doc: replaced "runs as Low-IL" with accurate description of
+  current Medium-IL reality + deferred Low-IL note (Research Open Question 1 pointer).
+- `run_hook_windows` function doc: removed false "LowIlPrimary token" claim.
+- `_low_il_token` inline comment: rewritten as "D-05 DEFERRED — NO-OP PLACEHOLDER".
+- `validate_hook_script_windows` mandatory-label warning: corrected to say "parent's IL (Medium-IL)".
+- `adr-58-windows-hook-executor.md`: KNOWN LIMITATION note added to D-05 Goals; Non-goals,
+  Trust Boundary, Invariants, and Decision Table rows updated to reflect current Medium-IL state
+  vs Low-IL target.
+
+**Files:** `crates/nono-cli/src/hook_runtime_windows.rs` (via CR-02 commit),
+`\.planning/architecture/adr-58-windows-hook-executor.md`
+
+### Self-check results
+
+- `cargo build -p nono-cli` → **CLEAN**
+- `cargo clippy -p nono-cli -- -D warnings -D clippy::unwrap_used` → **CLEAN**
+- `cargo test --bin nono -- hook_runtime_windows execution_runtime` → **10/10 PASS** (8 hook_runtime_windows including new CR-02 test, 2 execution_runtime)
+- `cargo test -p nono-cli` → **1207 pass, 4 fail** (same 4 pre-existing baseline failures — `profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name` + 3 `protected_paths::tests::*`; no new failures)
+- Cross-target clippy: **PARTIAL/CI-deferred** — Unix Direct after-hook guard (`#[cfg(not(target_os = "windows"))]`) not compilable on Windows host; deferred to CI per CLAUDE.md rule
