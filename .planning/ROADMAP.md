@@ -174,7 +174,7 @@ Plans:
 **Wave 1** (no deps)
 - [x] 59-01-PLAN.md — timeouts.rs SUPERVISOR_IPC_READ_TIMEOUT const + NONO_* env override + MAX_TIMEOUT clamp (IN-CRATE unit tests — nono-cli is bin-only) + Wave 0 net-new per-platform test scaffolds (supervisor_ipc_robustness_unix.rs + _windows.rs) (D-01)
 **Wave 2** (parallel — no file overlap: 59-02 owns supervisor_ipc_robustness_unix.rs, 59-03 owns supervisor_ipc_robustness_windows.rs; both depend on 59-01)
-- [ ] 59-02-PLAN.md — Unix set_read_timeout wiring + macOS keep-alive/re-accept unify (pinned sock_fd_active predicate, fail-secure narrower-by-default) + updated IN-CRATE break-on-close test + IN-CRATE reconnect_survival (SC1, private run_supervisor_loop) + lib-surface bounded_read_timeout (SC2) in supervisor_ipc_robustness_unix.rs; socket.rs in scope; be7681c/4a22e94 documented N/A (socketpair) (D-02, D-04, SC1/SC2/SC3)
+- [x] 59-02-PLAN.md — Unix set_read_timeout wiring + macOS keep-alive/re-accept unify (pinned sock_fd_active predicate, fail-secure narrower-by-default) + updated IN-CRATE break-on-close test + IN-CRATE reconnect_survival (SC1, private run_supervisor_loop) + lib-surface bounded_read_timeout (SC2) in supervisor_ipc_robustness_unix.rs; socket.rs in scope; be7681c/4a22e94 documented N/A (socketpair) (D-02, D-04, SC1/SC2/SC3)
 - [ ] 59-03-PLAN.md — Windows PeekNamedPipe bounded read_frame + capability-pipe re-accept loop + Windows-gated tests (lib-surface via recv_message) in supervisor_ipc_robustness_windows.rs + operator live-repro UAT + translate-not-cherry-pick SUMMARY rationale (D-03, D-04, D-05, SC4) [autonomous: false]
 
 ### Phase 60: Sandbox-the-Tools — Confined Coding Loop (v2.9)
@@ -261,7 +261,7 @@ UPST8 fires when the maintainer decides the accumulated cherry-pick labor (v0.60
 | 56. Fine-grained Network Filtering | 4/4 | Complete    | 2026-06-05 |
 | 57. Bitwarden Credential Source | 1/1 | Complete    | 2026-06-05 |
 | 58. Session Lifecycle Hooks | 3/3 | Complete    | 2026-06-06 |
-| 59. Supervisor IPC Robustness | 1/3 | In Progress|  |
+| 59. Supervisor IPC Robustness | 2/3 | In Progress|  |
 | 60. Confined Coding Loop (v2.9) | 3/3 | Complete   | 2026-05-29 |
 | 61. Ship/Release v2.9 | 3/4 | In Progress|  |
 | 62. WFP kernel network enforcement (Windows supervised) | 12/13 | Complete    | 2026-06-03 |
