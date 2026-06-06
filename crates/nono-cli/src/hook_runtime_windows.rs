@@ -187,6 +187,40 @@ pub(crate) fn execute_after_hook(
 
 // ===================== Internal Helpers =====================
 
+/// Strip the Windows verbatim / extended-length path prefix before passing a
+/// path to an interpreter command.
+///
+/// `std::fs::canonicalize()` on Windows returns the extended-length verbatim
+/// form `\\?\C:\...` (or `\\?\UNC\server\share\...` for UNC paths). This is
+/// correct for filesystem operations (bypasses MAX_PATH, defeats symlink traversal),
+/// but PowerShell's `-File` flag (and other interpreters) CANNOT resolve the
+/// security zone of a `\\?\`-prefixed path. Under a `RemoteSigned` execution
+/// policy (the Windows default), PowerShell treats the script as untrusted and
+/// refuses to run it, emitting "The file ... is not digitally signed" and exiting
+/// with code 1 — BEFORE any script body runs. This was empirically proven during
+/// live UAT (Phase 58 Plan 03, second UAT gap-closure).
+///
+/// Strip rules:
+/// - `\\?\UNC\server\share\...` → `\\server\share\...`
+/// - `\\?\C:\...`               → `C:\...`
+/// - anything else              → unchanged
+///
+/// IMPORTANT: This stripping is ONLY for the interpreter argument. The canonical
+/// (verbatim-prefixed) path produced by `validate_hook_script_windows` MUST still
+/// be used for all security validation (canonicalization defeats symlink/`..`
+/// traversal — do NOT apply this function before the security checks in
+/// `validate_hook_script_windows`).
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let raw = path.as_os_str().to_string_lossy();
+    if let Some(stripped) = raw.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{stripped}"));
+    }
+    if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped);
+    }
+    path.to_path_buf()
+}
+
 /// Build a hook command with explicit interpreter dispatch (D-05).
 ///
 /// Uses explicit interpreter selection — NOT shell-association lookup
@@ -199,8 +233,22 @@ pub(crate) fn execute_after_hook(
 ///
 /// The no-JSON-injection rule (upstream) is preserved: script path is always
 /// an argument to the interpreter flag, never inline code.
+///
+/// # Verbatim prefix stripping
+///
+/// The `script` argument comes from `validate_hook_script_windows`, which returns
+/// `std::fs::canonicalize()` output. On Windows, that is the extended-length verbatim
+/// form `\\?\C:\...`. The verbatim prefix is stripped via `strip_verbatim_prefix`
+/// BEFORE passing the path to the interpreter — PowerShell's `-File` flag (and other
+/// interpreters) reject `\\?\` paths under `RemoteSigned` policy with "not digitally
+/// signed" / exit 1. The canonical path itself is kept for security-validation purposes;
+/// only the path arg handed to the spawned process is de-verbatim'd.
 fn build_windows_hook_command(script: &Path) -> Result<Command> {
-    let ext = script
+    // Strip the \\?\ verbatim prefix for the interpreter arg.
+    // See `strip_verbatim_prefix` doc comment for the full rationale.
+    let interpreter_path = strip_verbatim_prefix(script);
+
+    let ext = interpreter_path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("");
@@ -214,7 +262,7 @@ fn build_windows_hook_command(script: &Path) -> Result<Command> {
             // -NonInteractive disables interactive input prompts that could hang the hook.
             let mut c = Command::new("powershell.exe");
             c.args(["-NoProfile", "-NonInteractive", "-File"]);
-            c.arg(script);
+            c.arg(&interpreter_path);
             c
         }
         "cmd" | "bat" => {
@@ -224,12 +272,12 @@ fn build_windows_hook_command(script: &Path) -> Result<Command> {
             // in this session via official docs.
             let mut c = Command::new("cmd.exe");
             c.args(["/D", "/C"]);
-            c.arg(script);
+            c.arg(&interpreter_path);
             c
         }
         _ => {
             // Native .exe or extensionless: direct CreateProcess via Command::new.
-            Command::new(script)
+            Command::new(&interpreter_path)
         }
     };
     // Clear all inherited environment; hooks get only NONO_* vars explicitly set,
@@ -888,21 +936,91 @@ mod tests {
         );
     }
 
-    /// Regression test: execute_before_hook must NOT fail with exit code -65536
-    /// (0xFFFF0000 — CLR startup failure) when spawning a PowerShell hook.
+    /// Deterministic unit test: strip_verbatim_prefix strips \\?\ and \\?\UNC\,
+    /// and leaves other paths unchanged.
     ///
-    /// Root cause: build_windows_hook_command called env_clear() which stripped
-    /// SystemRoot/windir/SystemDrive. Without these, powershell.exe cannot
-    /// initialize the CLR and exits with -65536 before any script body runs.
-    /// The fix re-adds those three OS-baseline vars after env_clear().
+    /// This is a pure path-transform assertion — no filesystem access, no PowerShell
+    /// spawn. It is the PRIMARY guard against the \\?\ regression: if strip_verbatim_prefix
+    /// is broken (e.g., reverted), this test fails immediately on any platform that
+    /// compiles the Windows cfg target. Unlike the live-spawn test, this test is not
+    /// subject to the PowerShell execution-policy Bypass workaround that can mask the
+    /// bug in spawned-process tests.
+    #[test]
+    fn test_strip_verbatim_prefix_deterministic() {
+        // \\?\C:\... → C:\...
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\C:\Users\OMack\hook.ps1")),
+            PathBuf::from(r"C:\Users\OMack\hook.ps1"),
+            "Extended-length prefix \\\\?\\C:\\ must be stripped"
+        );
+
+        // \\?\UNC\server\share\... → \\server\share\...
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"\\?\UNC\server\share\dir\file.ps1")),
+            PathBuf::from(r"\\server\share\dir\file.ps1"),
+            "UNC verbatim prefix \\\\?\\UNC\\ must be converted to \\\\\\\\"
+        );
+
+        // Normal absolute path → unchanged
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"C:\Windows\System32\cmd.exe")),
+            PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+            "Normal absolute path must be returned unchanged"
+        );
+
+        // Relative path → unchanged (no prefix to strip)
+        assert_eq!(
+            strip_verbatim_prefix(Path::new(r"relative\path\script.ps1")),
+            PathBuf::from(r"relative\path\script.ps1"),
+            "Relative path must be returned unchanged"
+        );
+
+        // Confirm the exact UAT failure form is stripped:
+        // The live UAT error was: \\?\C:\Users\OMack\AppData\Local\Temp\hook-before.ps1
+        let uat_path = Path::new(r"\\?\C:\Users\OMack\AppData\Local\Temp\hook-before.ps1");
+        let stripped = strip_verbatim_prefix(uat_path);
+        let stripped_str = stripped.to_string_lossy();
+        assert!(
+            !stripped_str.starts_with(r"\\?\"),
+            "strip_verbatim_prefix must remove \\\\?\\  from canonical path; got: {stripped_str}"
+        );
+        assert!(
+            stripped_str.starts_with("C:\\"),
+            "Stripped path must start with drive letter; got: {stripped_str}"
+        );
+    }
+
+    /// End-to-end regression test: execute_before_hook must succeed (Ok + HOOK_OK=yes)
+    /// on a Windows host where powershell.exe is available.
     ///
-    /// This test spawns a real .ps1 hook end-to-end and asserts:
-    /// 1. execute_before_hook returns Ok (NOT the -65536 failure)
-    /// 2. A variable written by the hook to NONO_ENV_FILE is present in the returned vars
+    /// This test guards against TWO distinct defects:
     ///
-    /// Guard: if powershell.exe is unavailable in this environment (e.g., a minimal
-    /// container without PowerShell), the spawn will fail with "program not found" (not
-    /// -65536) and we skip with a message. The DEFAULT path attempts the real spawn.
+    /// 1. [CLR startup failure, -65536] build_windows_hook_command called env_clear()
+    ///    without re-adding SystemRoot/windir/SystemDrive. Without these, powershell.exe
+    ///    cannot initialize the CLR and exits with -65536 before any script body runs.
+    ///    Fixed by re-adding those three OS-baseline vars after env_clear().
+    ///
+    /// 2. [\\?\ verbatim prefix, exit 1] validate_hook_script_windows returns
+    ///    std::fs::canonicalize() output, which on Windows is the extended-length
+    ///    verbatim form \\?\C:\.... PowerShell's -File flag cannot resolve the security
+    ///    zone of a \\?\-prefixed path; under RemoteSigned execution policy (Windows
+    ///    default), PowerShell refuses to run the unsigned script with "not digitally
+    ///    signed" and exits with code 1 — before any script body runs.
+    ///    Fixed by strip_verbatim_prefix in build_windows_hook_command.
+    ///
+    /// ASSERTION POLICY (strengthened after second UAT gap-closure):
+    /// - If execute_before_hook returns Ok → REQUIRE HOOK_OK=yes in the exported vars.
+    /// - If execute_before_hook returns Err → check if the error text indicates a genuine
+    ///   "PowerShell not found / cannot spawn" condition. If so, skip with a message
+    ///   (the test cannot run on a host without powershell.exe). Any OTHER Err — including
+    ///   "exited with code -65536", "exited with code 1", "not digitally signed" — FAILS
+    ///   the test. These are functional failures, not environment limitations.
+    ///
+    /// CAVEAT: cargo test runs in a shell whose Process-scope PowerShell execution policy
+    /// may be "Bypass" (bypasses zone/signature checks for the process), which can mask
+    /// the \\?\ bug in a live-spawn test (Bypass ignores RemoteSigned). The deterministic
+    /// `test_strip_verbatim_prefix_deterministic` is the authoritative regression guard for
+    /// the \\?\ fix; this test validates end-to-end Ok+HOOK_OK correctness.
     #[test]
     fn test_execute_before_hook_powershell_does_not_clr_fail() {
         use std::io::Write;
@@ -933,30 +1051,44 @@ mod tests {
         let result = execute_before_hook(&hook, session_id, workdir);
 
         match &result {
-            Err(e) => {
-                let msg = e.to_string();
-                // -65536 is the specific CLR startup failure this regression test guards against.
-                assert!(
-                    !msg.contains("-65536"),
-                    "execute_before_hook failed with the CLR startup exit code -65536 \
-                     (SystemRoot/windir/SystemDrive baseline env was not re-added after env_clear): {msg}"
-                );
-                // Any other error (e.g., PowerShell not installed in this environment,
-                // or ACL check failure on the temp dir) → skip with a diagnostic message.
-                // This is NOT a -65536 regression, so we do not fail the test.
-                println!(
-                    "test_execute_before_hook_powershell_does_not_clr_fail: execute_before_hook \
-                     returned Err (not -65536): {msg}; skipping HOOK_OK assertion. \
-                     This is acceptable if powershell.exe is unavailable or the temp dir \
-                     fails the owner/ACL check in this CI environment."
-                );
-            }
             Ok(vars) => {
-                // execute_before_hook succeeded — assert the hook's HOOK_OK=yes was exported.
+                // execute_before_hook succeeded — require the hook's HOOK_OK=yes was exported.
                 assert!(
                     vars.iter().any(|(k, v)| k == "HOOK_OK" && v == "yes"),
                     "execute_before_hook returned Ok but HOOK_OK=yes was not in the exported vars; \
                      got: {vars:?}"
+                );
+            }
+            Err(e) => {
+                let msg = e.to_string();
+
+                // NARROWLY ALLOWED SKIP: genuine "powershell.exe not found / cannot spawn"
+                // environment errors. Detect by checking for spawn-failure keywords.
+                // os error 2 = ERROR_FILE_NOT_FOUND (program not found),
+                // os error 3 = ERROR_PATH_NOT_FOUND
+                let is_spawn_failure = msg.contains("program not found")
+                    || msg.contains("os error 2")
+                    || msg.contains("os error 3")
+                    || msg.contains("Failed to spawn hook");
+
+                // All functional failures — including the two defects this test guards against —
+                // MUST fail the test, not skip it.
+                assert!(
+                    is_spawn_failure,
+                    "execute_before_hook returned a FUNCTIONAL failure that must not be skipped:\n\
+                     {msg}\n\n\
+                     If this contains '-65536': the SystemRoot/windir/SystemDrive baseline env \
+                     was not re-added after env_clear (first UAT defect).\n\
+                     If this contains 'code 1' or 'not digitally signed': the \\\\?\\  verbatim \
+                     prefix was not stripped before passing the path to powershell -File (second \
+                     UAT defect). Also verify that test_strip_verbatim_prefix_deterministic passes."
+                );
+
+                // Acceptable skip: genuine spawn failure (PowerShell not installed).
+                println!(
+                    "test_execute_before_hook_powershell_does_not_clr_fail: powershell.exe \
+                     could not be spawned ({msg}); skipping HOOK_OK assertion. \
+                     This is acceptable ONLY if powershell.exe is absent from this environment."
                 );
             }
         }
