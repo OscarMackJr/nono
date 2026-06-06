@@ -557,12 +557,16 @@ impl WindowsSupervisorRuntime {
             // for callers that construct a `SupervisorConfig` without a
             // real interactive backend (SC #4).
 
+            // Replay-protection set: persists across re-accepts so a
+            // reconnecting child cannot replay a previously-seen request ID to
+            // get a second capability grant. Never reset on reconnect (V3).
             let mut seen_request_ids = HashSet::new();
+            let read_timeout = crate::timeouts::supervisor_ipc_read_timeout();
             loop {
                 if terminate_requested.load(Ordering::SeqCst) {
                     break;
                 }
-                match sock.recv_message() {
+                match sock.recv_message_with_timeout(read_timeout) {
                     Ok(msg) => {
                         let mut local_audit: Vec<AuditEntry> = Vec::new();
                         if let Err(e) = handle_windows_supervisor_message(
@@ -589,12 +593,68 @@ impl WindowsSupervisorRuntime {
                         }
                     }
                     Err(e) => {
-                        tracing::debug!(
-                            session_id = %session_id,
-                            error = %e,
-                            "Capability pipe closed",
-                        );
-                        break;
+                        let err_str = e.to_string();
+                        if err_str.contains("[timeout]") {
+                            // Keep-alive: the read deadline elapsed with no data.
+                            // The in-flight partial frame (if any) is discarded
+                            // (fail-closed — no capability granted). Continue the
+                            // loop; do NOT re-accept (T-59-03e mitigated).
+                            tracing::debug!(
+                                session_id = %session_id,
+                                "Capability pipe read timeout (keep-alive); continuing",
+                            );
+                            continue;
+                        } else if err_str.contains("[disconnect]") {
+                            // Transient close: re-arm the same pipe handle so the
+                            // child can reconnect without losing capability expansion
+                            // for the session (SC1 / T-59-03c mitigated).
+                            //
+                            // Security invariants on re-accept (T-59-03d):
+                            // - `seen_request_ids` is NOT reset: replay protection
+                            //   is preserved across reconnect.
+                            // - Session SID/token re-checked on every message by
+                            //   `handle_windows_supervisor_message` (constant-time
+                            //   comparison against `session_token`); no trust cached.
+                            // - No capability granted on the disconnected partial
+                            //   frame (fail-closed per T-59-03e).
+                            tracing::debug!(
+                                session_id = %session_id,
+                                error = %e,
+                                "Capability pipe disconnected; attempting re-accept",
+                            );
+                            if terminate_requested.load(Ordering::SeqCst) {
+                                tracing::debug!(
+                                    session_id = %session_id,
+                                    "Termination requested; skipping re-accept",
+                                );
+                                break;
+                            }
+                            match sock.disconnect_and_reconnect() {
+                                Ok(()) => {
+                                    tracing::debug!(
+                                        session_id = %session_id,
+                                        "Capability pipe re-accepted; continuing",
+                                    );
+                                    continue;
+                                }
+                                Err(re_err) => {
+                                    tracing::warn!(
+                                        session_id = %session_id,
+                                        error = %re_err,
+                                        "Capability pipe re-accept failed; terminating capability expansion",
+                                    );
+                                    break;
+                                }
+                            }
+                        } else {
+                            // Unknown error class — fail-closed.
+                            tracing::debug!(
+                                session_id = %session_id,
+                                error = %e,
+                                "Capability pipe error (unknown class); terminating",
+                            );
+                            break;
+                        }
                     }
                 }
             }

@@ -284,6 +284,27 @@ impl SupervisorSocket {
         self.write_frame(&payload)
     }
 
+    /// Write raw bytes to the transport without framing.
+    ///
+    /// This method bypasses the normal `write_frame` length-prefix protocol
+    /// and sends `bytes` verbatim. It is intended for test harnesses that need
+    /// to construct partial or malformed frames to exercise bounded-read and
+    /// error-classification logic.
+    ///
+    /// # Correctness
+    ///
+    /// Callers are responsible for ensuring the bytes constitute a meaningful
+    /// protocol unit (or intentionally partial frame). Normal production callers
+    /// should use [`send_message`] instead.
+    pub fn write_raw_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer
+            .write_all(bytes)
+            .map_err(|e| NonoError::SandboxInit(format!("Failed to write raw bytes to pipe: {e}")))?;
+        self.writer
+            .flush()
+            .map_err(|e| NonoError::SandboxInit(format!("Failed to flush pipe after raw write: {e}")))
+    }
+
     /// Receive a message from child (supervisor side).
     ///
     /// Bounded by `DEFAULT_READ_TIMEOUT` (5 s). Use
@@ -336,6 +357,69 @@ impl SupervisorSocket {
         serde_json::from_slice(&payload).map_err(|e| {
             NonoError::SandboxInit(format!("Failed to deserialize supervisor response: {e}"))
         })
+    }
+
+    /// Disconnect the current pipe client and re-arm the server for the next
+    /// connection.
+    ///
+    /// On a transient capability-pipe close (the child dropped its end), the
+    /// supervision loop should call this instead of exiting so that a
+    /// re-connecting child can resume capability expansion without permanently
+    /// disabling the expansion channel for the session (SC1 / T-59-03c).
+    ///
+    /// # Re-accept protocol (Pitfall 3 — same handle, not a new instance)
+    ///
+    /// This method calls `DisconnectNamedPipe` then `ConnectNamedPipe` on the
+    /// **existing** server handle rather than creating a new pipe instance.
+    /// This is mandatory for 1-instance control pipes (the supervisor cap pipe
+    /// uses `1` instance): creating a fresh instance would fail with
+    /// `ERROR_PIPE_BUSY` (T-59-03f mitigated).
+    ///
+    /// For AIPC pipes (`PIPE_UNLIMITED_INSTANCES`) either approach works, but
+    /// re-arming the same handle is simpler and cheaper.
+    ///
+    /// # Security invariant
+    ///
+    /// This call does NOT modify `seen_request_ids` or any session-level
+    /// credential. The caller is responsible for re-verifying the session
+    /// SID/token on reconnect and for preserving the `seen_request_ids` replay
+    /// set (V3 — trust must not be cached across reconnect). This method only
+    /// resets the transport layer.
+    pub fn disconnect_and_reconnect(&mut self) -> Result<()> {
+        let server_handle = self.writer.as_raw_handle() as HANDLE;
+
+        // SAFETY: `server_handle` is the live, owned server-side named-pipe
+        // handle stored in `self.writer` for the lifetime of this
+        // `SupervisorSocket`. `DisconnectNamedPipe` flushes the pipe and severs
+        // the existing client connection; the handle remains valid for the
+        // subsequent `ConnectNamedPipe` call.
+        let dc_ok = unsafe { DisconnectNamedPipe(server_handle) };
+        if dc_ok == 0 {
+            let err = std::io::Error::last_os_error();
+            return Err(NonoError::SandboxInit(format!(
+                "DisconnectNamedPipe failed on {}: {err}",
+                self.transport_name
+            )));
+        }
+
+        // SAFETY: `server_handle` remains valid after `DisconnectNamedPipe`.
+        // `ConnectNamedPipe` blocks until a new client connects (PIPE_WAIT
+        // mode). `ERROR_PIPE_CONNECTED` (535) means a client raced in between
+        // Disconnect and Connect — this is treated as success (the
+        // ERROR_PIPE_CONNECTED-is-success idiom from `finalize_server_connection`).
+        let cn_ok = unsafe { ConnectNamedPipe(server_handle, std::ptr::null_mut()) };
+        if cn_ok == 0 {
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(ERROR_PIPE_CONNECTED as i32) {
+                return Err(NonoError::SandboxInit(format!(
+                    "ConnectNamedPipe (re-accept) failed on {}: {err}",
+                    self.transport_name
+                )));
+            }
+            // ERROR_PIPE_CONNECTED: client raced in — treat as success.
+        }
+
+        Ok(())
     }
 
     /// Returns the Windows transport name used by this connection.
