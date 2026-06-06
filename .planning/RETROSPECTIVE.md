@@ -194,6 +194,36 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 
 ---
 
+## Milestone: v2.8 — UPST7 + v2.7 Drain & Release  ·  v2.9 — Windows Sandbox-the-Tools
+
+**Shipped:** 2026-06-06 (archived together) | **Phases:** 10 (v2.8: 53-59 · v2.9: 60-62) | **Plans:** ~38
+
+### What Was Built
+- **v2.8** — Drain-then-sync: shipped the untagged post-v2.7 fixes as signed `v0.57.5` (after fixing a `release.yml` signing-order defect that had shipped unsigned MSI payloads), audited + absorbed the UPST7 window (`v0.57.0..v0.59.0`), then added fine-grained `allow_domain` path/method network filtering (REQ-NET-01), the `bw://` Bitwarden credential source (REQ-CRED-01), `session_hooks` with a Windows broker executor + ADR (REQ-HOOK-01), and supervisor IPC robustness — keep-alive + bounded read-timeouts on Unix and the Windows Named-Pipe AIPC path (REQ-IPC-01). Audit: `tech_debt`, 10/10 reqs, 0 blockers.
+- **v2.9** — A Windows confined coding-loop POC (Low-IL-jailed file/shell tool calls), out-of-box WFP kernel network enforcement for supervised runs, and a CI-signed public release — **published as `v0.62.2`**.
+
+### What Worked
+- **The milestone-close pre-flight caught a false "shipped" claim.** Reading `gh release list` (not the tag list or the "judge by assets, not red ✗" heuristic) revealed v2.9 had never actually published despite `v0.62.0`/`v0.62.1` tags existing. The audit-before-archive discipline turned a bookkeeping task into a real fix.
+- **CI-log forensics to triage release blockers fast:** `gh run cancel` to unlock locked logs immediately + distinguishing `release.yml` (plain `cargo build`) from `ci.yml` (`-Dwarnings`) let me separate the two *hard* compile errors that gate publish from the chronic lint debt that doesn't.
+- Per-phase code review caught real fail-open security blockers pre-verify (Phase 56 CR-01 profile-rule flattening → unrestricted CONNECT tunnel; Phase 58 CR-02/03 fail-closed gaps).
+
+### What Was Inefficient
+- **Two `cfg`-gated compile errors reached *release tags*.** The Windows dev host never compiles `cfg(unix)`/`cfg(not(windows))` branches, so an `E0716` (Phase 60) and an edition-2024 let-chain (Phase 58) shipped uncompiled-on-Unix and broke all 4 Linux/macOS `release.yml` build legs — costing **three release attempts** (`v0.62.0` → `v0.62.1` → `v0.62.2`) because rustc error-recovery hid the second error behind the first (one revealed per attempt).
+- v2.8 and v2.9 were developed interleaved, leaving STATE/ROADMAP/memory drift (the "shipped as v0.62.0" claim) that had to be untangled at close.
+
+### Patterns Established
+- **Fork release-tag rule:** leapfrog the crate version PAST upstream's highest tag to get a collision-free `v*.*.*` trigger (`0.58.0 → 0.62.x`).
+- **Release-vs-CI build distinction** as a triage tool: a red *build leg* is a real publish blocker; only `Create Release`-downstream jobs (crates.io 303, homebrew) are the cosmetic ones — always `gh release list` to confirm a release object exists before declaring "shipped".
+
+### Key Lessons
+- **"Tagged" ≠ "published."** A pushed `v*.*.*` tag whose `release.yml` run failed produces no release object. The v2.7 retro's "version-string sameness is a trap" recurs one layer up: tag-existence is a trap too. (Hardened into memory `feedback_clippy_cross_target` + the corrected `project_v28_opened`.)
+- **The cross-target blind spot is now a *release* hazard, not just a close-gate one.** A Windows-host `cargo build` PASS is no evidence the Unix/macOS release legs compile; CI is the only cross-compile signal (local cross-build blocked by the ring/aws-lc-sys C-toolchain). Lean on CI logs early, before cutting a public tag.
+
+### Cost Observations
+- Not instrumented. Notable: the v2.8 *close* expanded into a full v2.9 release-rescue + dual-milestone archive — most of the session's cost was diagnosing/fixing the unpublished release and reconciling the interleaved-milestone drift, not the archival mechanics.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
