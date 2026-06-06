@@ -81,10 +81,24 @@ FIX 2 — cap-pipe DACL admit (library + CLI plumbing):
 
 ## Current Focus
 
-- hypothesis: ROOT CAUSE FOUND (cycle-3 DIAG) — an ENV-VAR / path mismatch in the harness, NOT a grant/SID/timing bug. The supervisor binds + writes + grants the cap-pipe rendezvous at `NONO_SUPERVISOR_PIPE` (`%TEMP%\nono-cap-<session_id>.pipe`, execution_runtime.rs:336) — DIAG confirmed `package_sid_present=true`, correct `S-1-15-2-*` SID, and `rendezvous read-grant OK` on that file. But the `aipc-cap-child` harness read `NONO_CAP_FILE` (`%TEMP%\.nono-<nonce>.json`, the capability-STATE file, execution_runtime.rs:58/198) — a DIFFERENT artifact, never written/granted as a pipe rendezvous. So the grant (FIX 1) and the pipe DACL ACE (FIX 2) were correct and applied to the right file; the child just read the wrong path. FIX 1 + FIX 2 are RETAINED (they are required for the AppContainer principal to read the rendezvous + open the pipe); the harness now reads `NONO_SUPERVISOR_PIPE` (commit `08c8e902`).
-- next_action: OPERATOR RE-TEST — run sc2 then sc1 from `C:\Users\OMack\Nono` with the rebuilt `target\release\examples\aipc-cap-child.exe`. Expected: no more `os error 5` on the rendezvous read; sc2 connects + supervisor bounds the read; sc1 prints `SC1 RESULT: PASS`. If a NEW error appears at the pipe `CreateFileW` (not the file read), that confirms FIX 1 worked and points at FIX 2 (DACL) needing scrutiny. After PASS: remove the temporary `DIAG[appcontainer-cap-pipe]` instrumentation, mark resolved, fold into 59-03-SUMMARY, close Phase 59.
+- status: ROOT CAUSE CONFIRMED + FIXES VERIFIED LIVE (cycle-3 re-test 2026-06-06 17:52/17:58).
+  - SC2: PASS — child connected, partial frame sent, supervisor bounded-read held, child_exit_code=0. No rendezvous os error 5.
+  - SC1 conn1: REACHED the supervisor's `[nono] Grant event access? [y/N]` approval prompt — cap pipe fully reachable and AIPC request dispatched. conn2 timed out with os error 121 because the synchronous approval prompt blocked the supervisor loop — a TEST-DESIGN collision, not a re-accept failure.
+  - Resolution: sc1 redesigned to pure transport-level re-accept (connect→drop→reconnect, no SDK request) in commit `c8bd649d`. DIAG instrumentation stripped in commit `467575b6`.
+- next_action: OPERATOR RE-TEST of the redesigned sc1 to confirm `SC1 RESULT: PASS` at the transport level.
+  - Run command (from `C:\Users\OMack\Nono`, real PowerShell console, cwd `%USERPROFILE%\.claude`):
+    ```powershell
+    .\target\release\nono.exe run --profile claude-code --allow-cwd -- .\target\release\examples\aipc-cap-child.exe sc1
+    ```
+  - PASS criterion: child prints `SC1 RESULT: PASS (cap pipe re-accepted after transient close)` and exits 0.
+  - After PASS: move to resolved/, fold into 59-03-SUMMARY, close Phase 59.
 
 ## Evidence
+
+- timestamp: 2026-06-06 17:52/17:58 (cycle-3 live re-test with corrected env var `NONO_SUPERVISOR_PIPE`):
+  - **SC2 PASS:** child connected to cap pipe, sent 4-byte partial frame prefix, supervisor bounded-read held (no indefinite hang), `child_exit_code=0`. No `os error 5` on the rendezvous read. FIX 1 + FIX 2 confirmed working end-to-end.
+  - **SC1 conn1 REACHED supervisor approval prompt:** `[nono] Grant event access? [y/N]` printed — the cap pipe is fully reachable and AIPC `request_event` was dispatched. conn2 timed out with `os error 121` (ERROR_SEM_TIMEOUT) because the synchronous prompt blocked the supervisor loop, preventing `disconnect_and_reconnect` from re-arming the pipe. This is a TEST-DESIGN collision, not a re-accept failure. Resolution: sc1 redesigned to transport-level re-accept (connect→drop→reconnect, no SDK request) — see commit `c8bd649d`.
+  - DIAG instrumentation (6 `tracing::warn!` lines, commit `83fde87b`) stripped in commit `467575b6` (root cause confirmed, no longer needed).
 
 - timestamp: 2026-06-06 17:41 (cycle-3 DIAG — ROOT CAUSE) — Operator ran sc2 with the instrumented binary. DIAG output: `cap-pipe server starting; package_sid_present=true, package_sid=Some("S-1-15-2-2890602794-...-3989642421"), rendezvous_path="...\Temp\nono-cap-d462ea5f84c01c72.pipe"`; `rendezvous written at "...\nono-cap-d462ea5f84c01c72.pipe"`; `granting FILE_GENERIC_READ to package_sid=S-1-15-2-... on "...\nono-cap-d462ea5f84c01c72.pipe"`; `rendezvous read-grant OK`. BUT the child still failed: `Failed to read Windows supervisor pipe rendezvous C:\Users\OMack\AppData\Local\Temp\.nono-59b812012197bb8b.json: Access is denied`. The supervisor granted `nono-cap-<id>.pipe`; the child read `.nono-<nonce>.json` — **two different files**. ROOT CAUSE: the harness read `NONO_CAP_FILE` (capability-STATE file, execution_runtime.rs:58/198) instead of `NONO_SUPERVISOR_PIPE` (cap-pipe rendezvous, execution_runtime.rs:305/336 = the `cap_pipe_rendezvous_path` the server binds/writes/grants). The package_sid grant (FIX 1) and the SID identity were both CORRECT and applied to the right file all along — the child was simply reading the wrong env var. Fixed in `08c8e902` (harness now reads `NONO_SUPERVISOR_PIPE`). FIX 1 + FIX 2 retained (required for AppContainer rendezvous-read + pipe-open).
 
