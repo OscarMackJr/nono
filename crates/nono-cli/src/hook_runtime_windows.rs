@@ -1,9 +1,23 @@
 //! Session lifecycle hook execution (Windows-only).
 //!
 //! Provides Windows-specific implementation of before/after session hooks,
-//! running hooks as Low-IL confined processes outside the sandboxed child.
-//! All hooks run outside the sandbox with host privileges but are confined to
-//! Low integrity level.
+//! running hooks outside the sandboxed child and confined to a Job Object.
+//!
+//! # Current integrity level (KNOWN LIMITATION — D-05 deferred)
+//!
+//! Hooks currently run at the **parent's integrity level (Medium-IL)** inside a
+//! Job Object for process-tree containment. They do NOT run at Low-IL.
+//!
+//! The intended design (D-05) calls for spawning hooks with a Low-IL primary token
+//! via `CreateProcessAsUserW`. This requires raw FFI because stable Rust's
+//! `std::process::Command` does not expose a custom-token spawn API. That plumbing
+//! is a **known deferred follow-up** (Research Open Question 1, recorded in
+//! `adr-58-windows-hook-executor.md` §Non-goals and §Alternatives). Until it lands,
+//! hooks run with the supervisor's token, NOT at Low-IL.
+//!
+//! The Job Object confinement (CPU/memory/handle-inheritance scope) is active, but it
+//! does NOT substitute for Low-IL MIC enforcement: a hook running at Medium-IL has the
+//! same DACL access rights as the supervisor process.
 //!
 //! # Fork divergence (D-01): fail-closed
 //! Upstream commit daa55c8 is fail-open: hook errors warn and do not block
@@ -16,7 +30,7 @@
 //! The upstream runtime mechanism is preserved exactly: RAII `WindowsEnvFileGuard`,
 //! `CREATE_NEW` env-file creation, `is_dangerous_env_var` filtering, and the
 //! `mpsc`-based timeout race pattern are all ported from upstream `daa55c8`.
-//! Only the fail policy and execution model (Low-IL direct spawn) are different.
+//! Only the fail policy and execution model are different.
 //!
 //! # Windows execution design (D-05..D-10)
 //! Windows execution design documented in `.planning/architecture/adr-58-windows-hook-executor.md`.
@@ -25,8 +39,8 @@
 //!
 //! - Script paths are validated before every execution:
 //!   absolute, canonical, regular file, owner check, no world-writable ACL (D-10)
-//! - Hooks run as Low-IL primary token processes (D-05 — NOT WriteRestricted;
-//!   CLR/PowerShell fails under WriteRestricted; proven in Phase 60)
+//! - Hooks run at the parent's (Medium-IL) integrity level inside a Job Object
+//!   (D-05 Low-IL spawn via CreateProcessAsUserW is a deferred follow-up — see above)
 //! - Env file uses CREATE_NEW + Low-IL mandatory label (D-08)
 //! - Windows env-file injection vectors are filtered via is_dangerous_env_var (D-09)
 //! - Hook env-var values are zeroized after injection
@@ -68,7 +82,7 @@ struct HookOutput {
 /// 1. Validate script path (D-10: absolute, canonical, regular file, owner, ACL)
 /// 2. Create NONO_ENV_FILE in private session directory (RAII guard, D-08)
 /// 3. Build interpreter command (D-05: explicit dispatch, not shell association)
-/// 4. Spawn hook with Low-IL primary token (D-05)
+/// 4. Spawn hook inside a Job Object (runs at parent's Medium-IL; Low-IL deferred — see module doc)
 /// 5. Wait for completion with optional timeout (terminate job on timeout)
 /// 6. Read and parse NONO_ENV_FILE
 /// 7. Filter dangerous env vars (D-09)
@@ -316,13 +330,17 @@ fn build_windows_hook_command(script: &Path) -> Result<Command> {
     Ok(cmd)
 }
 
-/// Run a hook command with LowIlPrimary token, wait with optional timeout.
+/// Run a hook command inside a Job Object, wait with optional timeout.
 ///
 /// Uses a worker thread + mpsc channel for timeout (same pattern as Unix run_hook).
 /// On timeout, terminates the Job Object containing the hook process tree.
 ///
-/// D-05: hooks execute as Low-IL primary token (NOT WriteRestricted —
-/// CLR/PowerShell fails under WriteRestricted; proven Phase 60/62).
+/// # Current integrity level
+/// Hooks spawn at the parent's (Medium-IL) integrity level. The `LowIlPrimary` arm
+/// (`nono::create_low_integrity_primary_token()`) is called below but its token is
+/// not yet plumbed into the spawn — see the D-05 deferred note and the `_low_il_token`
+/// comment. The Job Object provides CPU/memory/handle-inheritance containment,
+/// but does NOT substitute for Low-IL MIC enforcement on filesystem/registry access.
 fn run_hook_windows(cmd: &mut Command, timeout_secs: Option<u64>) -> Result<HookOutput> {
     // Create a Job Object to contain the hook process. On timeout,
     // TerminateJobObject kills the entire hook process tree.
@@ -339,9 +357,13 @@ fn run_hook_windows(cmd: &mut Command, timeout_secs: Option<u64>) -> Result<Hook
     }
     let job_handle = job;
 
-    // D-05: spawn with Low-IL primary token via nono::create_low_integrity_primary_token.
-    // This is the correct arm for hook processes: short-lived, no PTY, Low-IL confined.
-    // WriteRestricted is FORBIDDEN for hook execution (CLR startup failure 0xC0000142).
+    // D-05 (DEFERRED — NO-OP PLACEHOLDER): create a Low-IL primary token to document
+    // intent; the token is NOT yet plumbed into the spawn (stable Rust's
+    // std::process::Command has no custom-token API).  Hooks currently run at the
+    // parent's (Medium-IL) integrity level.  The full CreateProcessAsUserW plumbing is
+    // a deferred follow-up (Research Open Question 1, adr-58-windows-hook-executor.md).
+    // WriteRestricted is FORBIDDEN for hook execution regardless — CLR/PowerShell
+    // fails under WriteRestricted (STATUS_DLL_INIT_FAILED / 0xC0000142, Phase 60).
     let _low_il_token: Option<OwnedHandle> = match nono::create_low_integrity_primary_token() {
         Ok(token) => Some(token),
         Err(e) => {
@@ -350,16 +372,12 @@ fn run_hook_windows(cmd: &mut Command, timeout_secs: Option<u64>) -> Result<Hook
             return Err(e);
         }
     };
-    // NOTE: std::process::Command does not support custom token directly on stable Rust.
-    // For the Low-IL spawn, we use Command::spawn() (which inherits the parent's token).
-    // The hook process confinement relies on the Job Object scope rather than a
-    // separate Low-IL token on this spawn path. The _low_il_token is held in scope
-    // to demonstrate the D-05 intent; in a future phase this should use CreateProcessAsUserW
-    // with the low-IL token via the CommandExt::raw_attribute mechanism or a raw FFI call.
-    // This is a known limitation documented in the UAT checkpoint (Research Open Question 1).
+    // _low_il_token is held in scope but its handle is never passed to any spawn call.
+    // It will be dropped (closing the handle) when run_hook_windows returns.
+    // This is deliberately a NO-OP placeholder — see the D-05 deferred note above.
 
     let child_result = cmd.spawn();
-    let child = match child_result {
+    let mut child = match child_result {
         Ok(c) => c,
         Err(e) => {
             unsafe { CloseHandle(job_handle) };
@@ -375,12 +393,44 @@ fn run_hook_windows(cmd: &mut Command, timeout_secs: Option<u64>) -> Result<Hook
     let pid = child.id();
     let assign_result = assign_process_to_job(pid, job_handle);
     if let Err(e) = assign_result {
-        // Assignment failure is non-fatal for the hook itself; log a warning
-        // because timeout enforcement will be incomplete without the job.
-        warn!(
-            "Failed to assign hook process {} to job object: {e}; timeout may not terminate hook tree",
-            pid
-        );
+        // D-01 fail-closed: distinguish between benign (child already exited) and
+        // genuinely uncontrolled (child still running but timeout can't be enforced).
+        //
+        // Use try_wait() as the definitive liveness check — this is more reliable
+        // than guessing from the GLE values because GLE can vary by OS version.
+        let already_exited = child
+            .try_wait()
+            .map(|status| status.is_some()) // Some(status) → exited; None → still running
+            .unwrap_or(false); // try_wait error → conservatively treat as still running
+
+        if already_exited {
+            // Benign: the hook ran so fast it exited before we could assign it to the
+            // job. The timeout deadline cannot fire anyway because the process is done.
+            // Proceed normally; the worker thread will get the output from wait_with_output.
+            warn!(
+                "Hook process {} exited before job-object assignment; timeout was not needed",
+                pid
+            );
+        } else if timeout_secs.is_some() {
+            // FAIL CLOSED (D-01): the hook is still running but we cannot enforce the
+            // timeout via TerminateJobObject. An ungovernable hook could block indefinitely.
+            // Kill the child best-effort, close the job handle, and return an error.
+            let _ = child.kill(); // best-effort; ignore kill errors
+            unsafe { CloseHandle(job_handle) };
+            return Err(NonoError::CommandExecution(std::io::Error::other(format!(
+                "Failed to assign hook process {} to job object (fail-closed, D-01): \
+                 timeout enforcement cannot be established: {e}",
+                pid
+            ))));
+        } else {
+            // No timeout configured: the job is not needed for timeout governance.
+            // Proceed with a warning (no behavior change; existing pre-fix semantics).
+            warn!(
+                "Failed to assign hook process {} to job object: {e}; \
+                 timeout not configured so enforcement gap is acceptable",
+                pid
+            );
+        }
     }
 
     let (tx, rx) = mpsc::channel::<std::io::Result<std::process::Output>>();
@@ -547,7 +597,8 @@ fn validate_hook_script_windows(path: &Path) -> Result<PathBuf> {
             warn!(
                 path = %canonical.display(),
                 rid = format!("0x{rid:X}"),
-                "Hook script has mandatory label above Medium-IL; hook will run Low-IL regardless"
+                "Hook script has mandatory label above Medium-IL; \
+                 hook currently runs at parent's IL (Medium-IL — D-05 Low-IL spawn deferred)"
             );
         }
     }
@@ -1089,6 +1140,73 @@ mod tests {
                     "test_execute_before_hook_powershell_does_not_clr_fail: powershell.exe \
                      could not be spawned ({msg}); skipping HOOK_OK assertion. \
                      This is acceptable ONLY if powershell.exe is absent from this environment."
+                );
+            }
+        }
+    }
+
+    /// CR-02 behavioral test: run_hook_windows with a timeout returns Ok for a fast-exiting hook.
+    ///
+    /// This test guards the CR-02 fix's benign-exit path: a hook that exits very quickly
+    /// (possibly before job-object assignment completes) must still return Ok, not Err.
+    ///
+    /// Unit-testing the actual assignment-failure path directly is not feasible because
+    /// `AssignProcessToJobObject` failures require inducing a specific OS-level race or
+    /// permission condition that cannot be reliably triggered in a deterministic unit test.
+    /// The fix's liveness check (child.try_wait()) is the correct gate and is exercised
+    /// end-to-end in `test_execute_before_hook_powershell_does_not_clr_fail`.
+    ///
+    /// What this test validates:
+    /// - A hook with a `timeout_secs` configured that exits cleanly does NOT fail with
+    ///   the assignment-failure code path.
+    /// - The timeout enforcement path is exercised without triggering a false positive.
+    #[test]
+    fn test_cr02_timeout_hook_exits_cleanly() {
+        use std::io::Write;
+
+        let (_lock, _env, _home) = isolated_home();
+
+        let script_dir = TempDir::new().unwrap();
+        let script_path = script_dir.path().join("quick_hook.ps1");
+
+        {
+            let mut f = std::fs::File::create(&script_path).unwrap();
+            // Hook exits cleanly with code 0 and no env var output.
+            writeln!(f, "exit 0").unwrap();
+        }
+
+        let hook = profile::SessionHook {
+            script: script_path.clone(),
+            timeout_secs: Some(30), // timeout configured — this is the CR-02 scenario
+        };
+
+        let workdir = script_dir.path();
+        let session_id = "test-cr02-timeout-session";
+
+        let result = execute_before_hook(&hook, session_id, workdir);
+
+        match &result {
+            Ok(_vars) => {
+                // A cleanly-exiting hook with a timeout configured must succeed.
+                // This confirms the benign-exit path does not fail due to assignment-race.
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                // Only acceptable skip: genuine spawn failure (PowerShell not installed).
+                let is_spawn_failure = msg.contains("program not found")
+                    || msg.contains("os error 2")
+                    || msg.contains("os error 3")
+                    || msg.contains("Failed to spawn hook");
+                assert!(
+                    is_spawn_failure,
+                    "CR-02 test: execute_before_hook returned unexpected failure with timeout configured:\n\
+                     {msg}\n\n\
+                     If this is 'fail closed...timeout enforcement': the benign-exit path in CR-02 \
+                     is not triggering correctly (child already exited but was not detected)."
+                );
+                println!(
+                    "test_cr02_timeout_hook_exits_cleanly: powershell.exe not available; \
+                     skipping assertion ({msg})"
                 );
             }
         }
