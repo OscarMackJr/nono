@@ -260,3 +260,38 @@ implemented as specified:
 - Commit `61b0af8b` — verified in git log (Task 1: env_sanitization.rs)
 - Commit `7cb36c40` — verified in git log (Task 2: hook_runtime_windows.rs full impl + launch.rs)
 - Commit `94286c9c` — verified in git log (Task 3: ADR)
+
+---
+
+## UAT Gap Closure (2026-06-05)
+
+### Defect Found During Live Windows UAT
+
+**Defect:** `execute_before_hook` returned `Err("Before-hook exited with code -65536 (fail-closed)")` on the happy path, before any `.ps1` script body ran.
+
+**Root cause:** `build_windows_hook_command` called `cmd.env_clear()` to isolate the hook environment (correct security behavior), but did not re-add the OS-baseline environment variables required for Windows interpreter and CLR startup. Specifically:
+- `powershell.exe` (and any .NET/CLR process) requires `SystemRoot` at minimum to locate `System32` and initialize the runtime.
+- Without `SystemRoot`, the CLR fails to start and exits with code `-65536` (0xFFFF0000) — a process-level failure that precedes any script execution.
+- Empirically proven: `powershell.exe -NoProfile -NonInteractive -Command "exit 0"` with cleared env + only `NONO_ENV_FILE` set → exit `-65536`. Adding `SystemRoot` back → exit `0`.
+
+**Security analysis — why this is safe:**
+- `SystemRoot`, `windir`, and `SystemDrive` are read-only OS directory paths, NOT code-injection vectors. PATH and PSModulePath (which influence DLL/module loading) remain stripped.
+- `SystemRoot` and `windir` remain in `is_dangerous_env_var()`. That filter guards the hook env-file READ path (Low-IL hook writing to NONO_ENV_FILE → Medium-IL parent reads it, D-09 trust boundary). It does NOT govern what the parent provides TO the hook's interpreter at spawn time — those values come from `std::env::var_os()` (the parent's trusted OS environment, not attacker-controlled input).
+- The fix is strictly scoped: only three vars, present-only (via `std::env::var_os()`), and sourced from the parent's known-good process environment.
+
+**Fix applied (commit `4c467a28`):**
+In `build_windows_hook_command`, after `env_clear()`, re-inject `SystemRoot`, `windir`, and `SystemDrive` from the parent's process environment using `std::env::var_os()`. Each is set only if present. A detailed code comment documents the empirical -65536 proof, the security rationale, and explicitly warns against removing the block.
+
+**Regression test added:**
+`test_execute_before_hook_powershell_does_not_clr_fail` in `hook_runtime_windows::tests`:
+- Spawns a real `.ps1` hook end-to-end via `execute_before_hook`
+- Asserts: (1) returns `Ok` — not the -65536 failure; (2) `HOOK_OK=yes` is present in the returned vars (written by the hook to `$env:NONO_ENV_FILE`)
+- Uses `isolated_home()` helper and a `TempDir` for the script so `WindowsEnvFileGuard` and `validate_hook_script_windows` run against a real filesystem
+- Guards against unavailable-PowerShell environments with a diagnostic skip (not `#[ignore]`)
+- Test result: **PASS** (`cargo test --bin nono -- hook_runtime_windows` → 6/6 pass)
+
+**Self-check post-fix:**
+- `cargo build -p nono-cli` → CLEAN
+- `cargo clippy -p nono-cli -- -D warnings -D clippy::unwrap_used` → CLEAN
+- `cargo test --bin nono -- hook_runtime_windows` → 6/6 PASS (5 original + 1 new regression)
+- `cargo test -p nono-cli` → 1205 pass, 4 fail (same 4 pre-existing baseline failures — no regressions)
