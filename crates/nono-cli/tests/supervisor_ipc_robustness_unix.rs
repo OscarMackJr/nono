@@ -48,36 +48,107 @@ fn scaffold_links_nono_lib() {
 }
 
 // ---------------------------------------------------------------------------
-// TODO placeholders for 59-02 (Wave 2)
+// 59-02 (Wave 2): SC2 bounded_read_timeout integration test
 // ---------------------------------------------------------------------------
 
-// TODO(59-02, SC1): reconnect_survival
-//   Test that the supervisor's poll loop survives a child that closes the IPC
-//   socket and reconnects. The macOS arm's hard-break-on-POLLHUP bug (SC1) is
-//   the regression surface; the fix is the `sock_fd_active` keep-alive from
-//   the Linux arm. Drive via the private `run_supervisor_loop` from an
-//   in-crate `#[cfg(test)]` test in `exec_strategy.rs` (NOT here, because
-//   `run_supervisor_loop` is private to the bin).
-//
-//   Integration-test angle (here, 59-02 can add a test using pub surface):
-//   Use `SupervisorSocket::pair()` + `set_read_timeout()` + `recv_message()`
-//   to simulate a child that closes early and show the supervisor end
-//   receives a timeout/disconnect rather than hanging forever.
+/// SC2 (Phase 59-02): Verify that `SupervisorSocket::recv_message()` honours
+/// the read timeout set via `set_read_timeout()` and returns a bounded error
+/// when the peer holds a partial frame (slowloris-style stall).
+///
+/// This test drives only the `nono` LIBRARY's public surface:
+/// `SupervisorSocket::pair()`, `set_read_timeout()`, and `recv_message()`.
+/// It never references `nono_cli::*` (which is bin-only and unreachable here).
+///
+/// # Protocol
+///
+/// The child side writes only the 4-byte length prefix (payload length = 100)
+/// but never sends the payload bytes. The supervisor side calls
+/// `recv_message()`, which internally calls `read_exact` for the 4-byte
+/// header (succeeds) and then `read_exact` for the payload (stalls).
+/// The 1-second read timeout fires, and `recv_message()` returns an error.
+///
+/// # Acceptance criteria
+///
+/// - `recv_message()` returns `Err` (not `Ok`).
+/// - The elapsed time is ≥ 800ms (the timeout actually fired) and < 5s
+///   (bounded — did not block indefinitely).
+/// - No capability is granted on a partial frame (fail-closed: the error is
+///   surfaced to the caller, not silently swallowed).
+#[test]
+fn bounded_read_timeout() {
+    use std::thread;
+    use std::time::{Duration, Instant};
 
-// TODO(59-02, SC2): bounded_read_timeout
-//   Test that `SupervisorSocket::recv_message()` honours the read timeout
-//   configured via `set_read_timeout()` and returns an error within the
-//   configured deadline when the peer holds a partial frame (slowloris).
-//
-//   Implementation pattern:
-//   1. `SupervisorSocket::pair()` → (supervisor_sock, child_sock).
-//   2. `supervisor_sock.set_read_timeout(Some(Duration::from_millis(200)))`.
-//   3. In a thread, write only the 4-byte length prefix on child_sock (no
-//      payload) to trigger the bounded-read path.
-//   4. `supervisor_sock.recv_message()` must return Err within ~200ms.
-//   5. Assert elapsed time < 1s (bounded, not hung).
-//
-//   Set `NONO_SUPERVISOR_IPC_READ_TIMEOUT` via `EnvVarGuard` to a low value
-//   and use `supervisor_ipc_read_timeout()` in the in-crate test that wires
-//   `set_read_timeout` in `exec_strategy.rs` (59-02 Task 1). The integration
-//   test here drives the lib surface directly.
+    // We use UnixStream::pair() for the raw socket pair so that the child end
+    // can inject a partial frame (header only, no payload) using std::io::Write.
+    // SupervisorSocket::send_message() would send a complete frame, which is
+    // not what we want for the slowloris simulation.
+    //
+    // The supervisor end is wrapped in SupervisorSocket::from_stream() so we can
+    // call set_read_timeout() and recv_message() via the library's public API.
+    let (supervisor_raw, child_raw) = std::os::unix::net::UnixStream::pair()
+        .expect("UnixStream::pair() must succeed on Unix");
+    let mut supervisor_sock = SupervisorSocket::from_stream(supervisor_raw);
+
+    // Wire a 1-second read timeout on the supervisor end (SC2).
+    // This matches the production wiring in exec_strategy.rs (set_read_timeout
+    // called with supervisor_ipc_read_timeout() — 5s by default, overridable).
+    // We use 1s here to keep CI fast while still Nyquist-sampling above the
+    // 200ms poll tick (must wait > 200ms for the timeout to deterministically fire).
+    supervisor_sock
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .expect("set_read_timeout must succeed on Unix");
+
+    // Spawn a thread that acts as the child: write a 4-byte length prefix
+    // announcing a 100-byte payload, then stall (never send the payload).
+    // This simulates a slowloris partial-frame attack on the supervisor.
+    let child_handle = thread::spawn(move || {
+        use std::io::Write;
+        // Write only the length prefix (u32 big-endian = 100) via the raw stream.
+        // SupervisorSocket::send_message() would send a complete frame; we want
+        // to inject a partial frame (header only, no payload) to trigger the
+        // bounded-read path in recv_message() → read_exact(payload).
+        let len_bytes: [u8; 4] = 100u32.to_be_bytes();
+        let mut child = child_raw;
+        // Write the 4-byte length prefix. The supervisor reads this successfully
+        // and then waits for 100 payload bytes that never arrive.
+        let _ = child.write_all(&len_bytes);
+        // Stall: hold the socket open so the supervisor's payload read_exact
+        // blocks waiting for 100 bytes that never arrive. Hold for 3s so the
+        // 1s timeout fires first.
+        thread::sleep(Duration::from_secs(3));
+        // child drops here, closing the socket.
+        drop(child);
+    });
+
+    let t0 = Instant::now();
+    let result = supervisor_sock.recv_message();
+    let elapsed = t0.elapsed();
+
+    // SC2 acceptance: recv_message must return an error (the timeout fired).
+    assert!(
+        result.is_err(),
+        "recv_message() should return an error after the read timeout fires, got Ok"
+    );
+
+    // The error must have fired within a bounded window.
+    // Lower bound: 800ms (timeout is 1s; allow 200ms jitter for slow CI).
+    // Upper bound: 5s (must not have blocked indefinitely).
+    assert!(
+        elapsed >= Duration::from_millis(800),
+        "recv_message() returned too quickly ({}ms); read timeout may not have fired",
+        elapsed.as_millis()
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "recv_message() blocked too long ({}ms); likely blocked indefinitely",
+        elapsed.as_millis()
+    );
+
+    // Fail-closed invariant: the error is surfaced to the caller. No capability
+    // was granted on a partial frame (this is enforced architecturally: the
+    // supervisor's recv_message caller checks the Result before acting on any
+    // message content).
+
+    child_handle.join().expect("child thread should not panic");
+}
