@@ -51,6 +51,15 @@ This ADR records the following locked decisions for the Windows hook executor:
   `NO_WRITE_UP`, which prevents write-up attacks via MIC pre-DACL kernel checks. `WriteRestricted`
   is explicitly forbidden for hook processes.
 
+  **KNOWN LIMITATION (Research Open Question 1 — deferred follow-up):** As of Phase 58, hooks
+  actually run at the **parent's (Medium-IL) integrity level**, not at Low-IL. The
+  `nono::create_low_integrity_primary_token()` call is present but its token is **not plumbed
+  into the spawn** because stable Rust's `std::process::Command` provides no custom-token API.
+  Full `CreateProcessAsUserW` Low-IL plumbing requires raw FFI and is deferred. The Job Object
+  provides process-tree containment (CPU/memory/handle-inheritance scope) but does NOT substitute
+  for MIC Low-IL enforcement on filesystem/registry access. The `hook_runtime_windows.rs` module
+  doc and the `run_hook_windows` inline comments accurately reflect this current state.
+
 - **D-06:** Hook filesystem scope is minimal: session-dir write + cwd write + read on the script
   path only. The hook process cannot write to arbitrary paths outside its designated scope. This
   is the Windows analog of upstream's Unix `EnvFileGuard` RAII pattern, extended with mandatory-label
@@ -88,9 +97,12 @@ This ADR records the following locked decisions for the Windows hook executor:
   This fork returns `Err` and aborts (D-01). There is no profile-level toggle for fail-open
   behavior (considered and rejected in the Alternatives section below).
 
-- **No host-trusted hook execution.** Hooks are NOT run with the user's full Medium-IL token
-  (upstream's design). They run Low-IL. The motivation is least-privilege: a hook that is
-  compromised or malicious has reduced ability to affect the rest of the system.
+- **No host-trusted hook execution (target state).** The design goal (D-05) is that hooks are
+  NOT run with the user's full Medium-IL token (upstream's design). The intended runtime is
+  Low-IL via `LowIlPrimary`. However, as of Phase 58, full Low-IL spawn is deferred (see D-05
+  KNOWN LIMITATION above) — hooks currently run at Medium-IL inside a Job Object. The motivation
+  for the eventual Low-IL enforcement remains: least-privilege confinement so a compromised or
+  malicious hook has reduced ability to affect the rest of the system.
 
 - **No inline script execution.** Hook scripts are always referenced by path (argument to
   `-File`, argument to `/C`), never as inline code. This preserves upstream's no-JSON-injection
@@ -106,7 +118,7 @@ This ADR records the following locked decisions for the Windows hook executor:
 
 | Decision | Options Considered | Choice | Rationale |
 |----------|--------------------|--------|-----------|
-| **Token arm for hook spawn (D-05)** | `LowIlPrimary` vs `WriteRestricted` vs `BrokerLaunchNoPty` vs full user token | `LowIlPrimary` | `WriteRestricted` causes `STATUS_DLL_INIT_FAILED` (0xC0000142) for `powershell.exe` due to `BaseNamedObjects` kernel object access failure — proven in Phase 60. `BrokerLaunchNoPty` is for the main sandboxed child (long-lived, broker-mediated); hooks are short-lived and do not need PTY or broker mediation. Full user token provides no confinement. `LowIlPrimary` is the correct arm for short-lived, non-PTY Low-IL processes. |
+| **Token arm for hook spawn (D-05)** | `LowIlPrimary` vs `WriteRestricted` vs `BrokerLaunchNoPty` vs full user token | `LowIlPrimary` (target; **deferred** — see KNOWN LIMITATION) | `WriteRestricted` causes `STATUS_DLL_INIT_FAILED` (0xC0000142) for `powershell.exe` due to `BaseNamedObjects` kernel object access failure — proven in Phase 60. `BrokerLaunchNoPty` is for the main sandboxed child (long-lived, broker-mediated); hooks are short-lived and do not need PTY or broker mediation. Full user token provides no confinement. `LowIlPrimary` is the correct target arm for short-lived, non-PTY Low-IL processes, but plumbing it via `CreateProcessAsUserW` raw FFI is deferred as Research Open Question 1. **As of Phase 58, hooks spawn with the parent's token (Medium-IL) inside a Job Object.** |
 | **Env-file integrity model (D-08)** | Low-IL mandatory label alone vs DACL-narrowing to hook token SID vs both | Low-IL mandatory label (primary gate); DACL narrowing deferred as V2 | The mandatory label (mask `0x5`) is the primary access control gate: it prevents Medium-IL+ processes other than the parent from being confused about the file's security relevance, and it restricts write-up attacks. DACL narrowing to the hook's specific token SID would require the hook to know its own SID at env-file creation time — which is before the hook spawn. Deferred as defense-in-depth improvement for a future phase. The label alone is sufficient for the V1 trust model. |
 | **Fail policy divergence (D-01)** | Fail-closed (Err) vs fail-open (warn+Ok) vs profile-configurable | Fail-closed (unconditional) | The fork's security model is fail-closed throughout. Hooks are security-relevant side-effects (they can inject env vars into the child). A failing hook that is silently skipped creates a false assumption about the child's execution context. The profile-level toggle option was explicitly rejected: it creates a footgun where operators disable fail-closed for convenience and then forget to re-enable it. |
 | **World-writable ACL check approach (D-10)** | `GetEffectiveRightsFromAclW` vs DACL enumeration with `EqualSid` | DACL enumeration (`GetNamedSecurityInfoW` + `GetAce` + `EqualSid`) | `GetEffectiveRightsFromAclW` was tried and dropped in the fork (see `260522-wn0` debug session): it walks group memberships from the full token but `SetNamedSecurityInfoW(LABEL_*)` runs under the UAC-filtered token, causing false positives for local admins. DACL enumeration with `EqualSid` directly checks whether the `Everyone` SID (`S-1-1-0`) has a write-class ACE, which is the exact threat we are mitigating (T-58-03-03). |
@@ -116,7 +128,8 @@ This ADR records the following locked decisions for the Windows hook executor:
 The primary trust boundary in the Windows hook executor is the **Low-IL-writer → Medium-IL-reader
 env-file gap**:
 
-1. The hook process runs at Low IL (D-05). It writes `KEY=VALUE` entries to the session-dir env
+1. The hook process runs at **Medium-IL** (parent's token — D-05 Low-IL spawn is deferred;
+   see D-05 KNOWN LIMITATION above). It writes `KEY=VALUE` entries to the session-dir env
    file via the `NONO_ENV_FILE` path it receives from the Medium-IL parent.
 
 2. The Medium-IL parent reads this file after the hook exits and injects the pairs into the child's
@@ -171,10 +184,11 @@ The following invariants MUST be preserved in all future modifications to `hook_
    created via `nono::try_set_mandatory_label`. Removing the label apply reduces the trust boundary
    to DACL-only (which is absent in V1).
 
-2. **No host-trusted hook execution:** Hooks MUST NOT run with the user's full Medium-IL token.
-   The `LowIlPrimary` arm (`nono::create_low_integrity_primary_token()`) is the ONLY permitted
-   spawn path. `WriteRestricted` is FORBIDDEN (CLR startup failure). `BrokerLaunchNoPty` is
-   inappropriate for short-lived hook processes (it introduces broker trust-anchor complexity).
+2. **No host-trusted hook execution (target state):** The intended design (D-05) is that hooks
+   run via the `LowIlPrimary` arm. `WriteRestricted` is FORBIDDEN (CLR startup failure).
+   `BrokerLaunchNoPty` is inappropriate for short-lived hook processes. As of Phase 58, the
+   full Low-IL spawn via `CreateProcessAsUserW` is deferred (Research Open Question 1); hooks
+   run at Medium-IL inside a Job Object. See the D-05 KNOWN LIMITATION note in Goals above.
 
 3. **Session-dir + cwd-only scope (D-06):** The hook process's filesystem capability grant MUST
    be restricted to session-dir write + cwd write + read on the script path. No broader grants
