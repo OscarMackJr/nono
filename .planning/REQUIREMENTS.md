@@ -40,7 +40,7 @@
 
 ### Supervisor IPC (IPC)
 
-- [ ] **REQ-IPC-01**: The supervisor survives a transient child IPC close (keep-alive instead of dropping the supervisor loop), enforces bounded read-timeouts, and accepts connections robustly. The Unix side absorbs upstream's named-socket hardening (cross-platform-core); the Windows side translates the robustness intent onto the fork's Named-Pipe AIPC path (Phase 18) — a translate-not-cherry-pick.
+- [x] **REQ-IPC-01**: The supervisor survives a transient child IPC close (keep-alive instead of dropping the supervisor loop), enforces bounded read-timeouts, and accepts connections robustly. The Unix side absorbs upstream's named-socket hardening (cross-platform-core); the Windows side translates the robustness intent onto the fork's Named-Pipe AIPC path (Phase 18) — a translate-not-cherry-pick.
 
 ### Windows Network Enforcement (WFP)
 
@@ -127,7 +127,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-NET-01 | Phase 56 | Complete |
 | REQ-CRED-01 | Phase 57 | Complete |
 | REQ-HOOK-01 | Phase 58 | Complete |
-| REQ-IPC-01 | Phase 59 | Pending |
+| REQ-IPC-01 | Phase 59 | Complete |
 | REQ-WFP-01 | Phase 62 | Complete |
 | REQ-RLS-03 | Phase 61 | Complete |
 | REQ-RLS-04 | Phase 61 | Complete |
