@@ -20,7 +20,7 @@
 
 ### Upstream Sync — Audit (UPST7)
 
-- [ ] **REQ-UPST7-01**: A `DIVERGENCE-LEDGER.md` for upstream `v0.57.0..v0.59.0` is produced (mirroring Phase 42/47 shape): per-cluster dispositions (will-sync / fork-preserve / won't-sync / split), a `windows-touch` column, an `## ADR review` confirming (or revising) the Phase 33 Option A `continue` strategy, an `## Empirical cross-check` of re-export surfaces on fork-shared files (per the `feedback_cluster_isolation_invalid` lesson — diff-inspect, not just `--name-only`), and a fresh upstream re-fetch at audit-open that captures any `v0.59.x` patch releases cut after 2026-05-27.
+- [x] **REQ-UPST7-01**: A `DIVERGENCE-LEDGER.md` for upstream `v0.57.0..v0.59.0` is produced (mirroring Phase 42/47 shape): per-cluster dispositions (will-sync / fork-preserve / won't-sync / split), a `windows-touch` column, an `## ADR review` confirming (or revising) the Phase 33 Option A `continue` strategy, an `## Empirical cross-check` of re-export surfaces on fork-shared files (per the `feedback_cluster_isolation_invalid` lesson — diff-inspect, not just `--name-only`), and a fresh upstream re-fetch at audit-open that captures any `v0.59.x` patch releases cut after 2026-05-27.
 
 ### Upstream Sync — Cherry-pick wave (UPST7)
 
@@ -122,7 +122,7 @@ Acknowledged but not in the v2.8 roadmap.
 | REQ-RLS-02 | Phase 53 | Complete |
 | REQ-DRN-01 | Phase 53 | Complete |
 | REQ-DRN-02 | Phase 53 | Complete |
-| REQ-UPST7-01 | Phase 54 | Pending |
+| REQ-UPST7-01 | Phase 54 | Complete |
 | REQ-UPST7-02 | Phase 55 | Complete |
 | REQ-NET-01 | Phase 56 | Complete |
 | REQ-CRED-01 | Phase 57 | Complete |
