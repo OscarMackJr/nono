@@ -1,18 +1,25 @@
 # Changelog
 
-## [0.62.1] - v2.9 (2026-06-06)
+## [0.62.2] - v2.9 (2026-06-06)
 
 ### Fixed
 
-- **Unix/macOS release build (cross-target drift).** Fixed `error[E0716]: temporary value
-  dropped while borrowed` in `crates/nono-cli/src/claude_code_hook.rs` (`wrapped_bash_command`,
-  `#[cfg(not(target_os = "windows"))]`): the `nono_exe.display().to_string()` temporary was
-  dropped while the `Cow<str>` returned by `shlex::try_quote` still borrowed it. Bound the
-  `String` to a named local so it outlives the borrow. Introduced in `7488dbba` (PR #4, Phase
-  60) and latent on the Windows dev host — which never compiles that `cfg` branch — it broke
-  **all four** Linux/macOS legs of the `v0.62.0` `release.yml` build matrix, gating the
-  `Create Release` job so v2.9 never published. This is a hotfix re-release of v0.62.0 with no
-  other changes.
+- **Unix/macOS release build (cross-target drift) — two latent compile errors.** The `v0.62.0`
+  `release.yml` run failed on all four Linux/macOS build legs, gating `Create Release` so v2.9
+  never published. Both errors lived in `cfg`-gated code the Windows dev host never compiles:
+  1. `error[E0716]: temporary value dropped while borrowed` in
+     `crates/nono-cli/src/claude_code_hook.rs` (`wrapped_bash_command`,
+     `#[cfg(not(target_os = "windows"))]`): the `nono_exe.display().to_string()` temporary was
+     dropped while the `Cow<str>` from `shlex::try_quote` still borrowed it. Bound it to a named
+     local. (introduced `7488dbba`, PR #4 / Phase 60)
+  2. `error: let chains are only allowed in Rust 2024 or later` in
+     `crates/nono-cli/src/hook_runtime.rs` (`EnvFileGuard::drop`, `cfg(unix)`): rewrote the
+     `if let … && let …` let-chain as nested `if let` (this workspace is edition 2021). Also
+     dropped the now-unused `warn` tracing import. (introduced Phase 58)
+
+  Hotfix re-release of v0.62.0 — no other changes. (The first error masked the second behind
+  rustc error recovery, so they surfaced one release attempt apart; `v0.62.1` fixed only the
+  first.)
 
 ## [0.62.0] - v2.9 (2026-06-05)
 
