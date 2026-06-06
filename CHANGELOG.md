@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.62.1] - v2.9 (2026-06-06)
+
+### Fixed
+
+- **Unix/macOS release build (cross-target drift).** Fixed `error[E0716]: temporary value
+  dropped while borrowed` in `crates/nono-cli/src/claude_code_hook.rs` (`wrapped_bash_command`,
+  `#[cfg(not(target_os = "windows"))]`): the `nono_exe.display().to_string()` temporary was
+  dropped while the `Cow<str>` returned by `shlex::try_quote` still borrowed it. Bound the
+  `String` to a named local so it outlives the borrow. Introduced in `7488dbba` (PR #4, Phase
+  60) and latent on the Windows dev host — which never compiles that `cfg` branch — it broke
+  **all four** Linux/macOS legs of the `v0.62.0` `release.yml` build matrix, gating the
+  `Create Release` job so v2.9 never published. This is a hotfix re-release of v0.62.0 with no
+  other changes.
+
 ## [0.62.0] - v2.9 (2026-06-05)
 
 ### Summary

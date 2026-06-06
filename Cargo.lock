@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "nono"
-version = "0.62.0"
+version = "0.62.1"
 dependencies = [
  "der",
  "getrandom 0.4.2",
@@ -2312,7 +2312,7 @@ dependencies = [
 
 [[package]]
 name = "nono-cli"
-version = "0.62.0"
+version = "0.62.1"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -2372,7 +2372,7 @@ dependencies = [
 
 [[package]]
 name = "nono-ffi"
-version = "0.62.0"
+version = "0.62.1"
 dependencies = [
  "cbindgen",
  "nono",
@@ -2380,7 +2380,7 @@ dependencies = [
 
 [[package]]
 name = "nono-proxy"
-version = "0.62.0"
+version = "0.62.1"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.2",
@@ -2410,7 +2410,7 @@ dependencies = [
 
 [[package]]
 name = "nono-shell-broker"
-version = "0.62.0"
+version = "0.62.1"
 dependencies = [
  "nono",
  "thiserror 2.0.18",
