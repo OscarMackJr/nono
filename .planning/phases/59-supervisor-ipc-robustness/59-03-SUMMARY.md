@@ -116,15 +116,76 @@ The **rejected alternative**: a full overlapped-I/O rewrite — replace the bloc
 | `cargo test -p nono-cli --test aipc_handle_brokering_integration` | 5/5 PASS |
 | Cross-target clippy (Linux/macOS) | PARTIAL / deferred to CI (Windows-host cannot run cross-target; files are `#[cfg(target_os = "windows")]`-gated and only exercised on Windows) |
 
-## SC1 / SC2 Live-Repro (PENDING — Task 3)
+## Multi-process live-repro: cap-pipe-live-repro example
 
-**STATUS: AWAITING OPERATOR UAT**
+### Artifact
 
-The CI integration tests prove the API surface and the error-classification logic. Named-pipe `PIPE_WAIT` timing cannot be deterministically exercised in CI (D-05) — a real Win11 console live-repro is required to confirm field behavior.
+**Path:** `crates/nono-cli/examples/cap-pipe-live-repro.rs`
+
+A standalone multi-process live-repro helper that drives the production
+`SupervisorSocket::bind` + `recv_message_with_timeout` + `disconnect_and_reconnect`
+server API across two real OS processes over a 1-instance named pipe — the same
+transport shape as the production capability pipe.
+
+The example is cross-platform: a non-Windows stub plus a `#[cfg(target_os = "windows")]
+mod windows_impl` module that uses only `nono::supervisor::socket::SupervisorSocket`,
+`std::process::Command`, and standard library types. No `unsafe`, no `windows-sys`,
+no `nono_cli::` imports.
+
+### Run command
+
+```
+cargo run --quiet --example cap-pipe-live-repro -p nono-cli -- --scenario both --timeout-secs 2
+```
+
+### Captured PASS output (Windows 11 host, 2026-06-06)
+
+```
+cap-pipe-live-repro: scenario=both timeout=2s
+
+--- SC2: bounded read (slow child) ---
+pipe: \\.\pipe\nono-cap-live-repro-4554-18b687056b5457c4
+SC2 RESULT: PASS (elapsed=2.01s, err="Sandbox initialization failed: [timeout] Supervisor IPC read deadline exceeded after 0 bytes (needed 64); in-flight partial frame discarded (fail-closed)")
+--- SC1: transient close / re-accept ---
+pipe: \\.\pipe\nono-cap-live-repro-4554-18b68705e52f0350
+SC1: conn1 established
+SC1 RESULT: PASS (disconnect_and_reconnect() returned Ok)
+
+OVERALL: PASS
+```
+
+### Scope note
+
+This proves the bounded-read (`[timeout]` tag) and re-accept (`disconnect_and_reconnect()
+→ Ok`) behavior at the **multi-process layer** over the real `SupervisorSocket` server
+API. It is a materially stronger evidence level than the in-process `pair()` integration
+tests — it crosses a real OS process boundary and exercises the real `bind()` +
+`ConnectNamedPipe` server-side lifecycle.
+
+However, it uses a **normal pipe and a normal child** (no `WRITE_RESTRICTED` token, no
+Low-IL broker). It does NOT exercise the `WRITE_RESTRICTED`-token / Low-IL broker path.
+The full `nono run` under a restricted token launched from a real Win11 console (with
+`target\release\nono.exe` from a profile-covered cwd) therefore **REMAINS** the operator's
+Task-3 item. This helper materially de-risks it — the core PeekNamedPipe deadline logic
+and the re-accept protocol are now proven multi-process — but does not replace the
+operator UAT.
+
+**Task-3 operator UAT status: STILL PENDING.**
+
+## SC1 / SC2 Live-Repro (PENDING — Task 3, operator `nono run`)
+
+**STATUS: AWAITING OPERATOR UAT** (multi-process helper PASS captured above; full
+`nono run` under restricted-token still needed)
+
+The `cap-pipe-live-repro` helper (above) runs clean on this Windows 11 host and proves
+the bounded-read and re-accept logic at the multi-process named-pipe layer. What remains
+is verifying the same behavior through the full supervisor stack — `nono run` under a
+`WRITE_RESTRICTED` child token, Low-IL broker, and the production AIPC pipe SDDL.
 
 ### Required Repro (from Task 3)
 
-On a real Win11 console (NOT git-bash/MSYS — supervised runs need a real console; run `target\release\nono.exe` from a profile-covered cwd to skip the broker trust gate):
+On a real Win11 console (NOT git-bash/MSYS — supervised runs need a real console; run
+`target\release\nono.exe` from a profile-covered cwd to skip the broker trust gate):
 
 1. `cargo build --release -p nono-cli`
 2. **SLOW-CHILD (SC2):** Start a supervised `nono run` whose child opens the AIPC pipe, sends a partial frame, then stalls. Set `NONO_SUPERVISOR_IPC_READ_TIMEOUT=2` (2s) for fast observation. Confirm the supervisor is NOT blocked past the deadline.
