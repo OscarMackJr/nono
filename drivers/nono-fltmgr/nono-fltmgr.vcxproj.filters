@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Solution-explorer filter grouping for nono-fltmgr.vcxproj
+  Source: nullFilter.vcxproj.filters structure [CITED: microsoft/Windows-driver-samples]
+-->
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>c;cpp;cxx;cc;def</Extensions>
+    </Filter>
+    <Filter Include="Driver Install">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>inf;inx</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="nono-fltmgr.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="nono-fltmgr.inf">
+      <Filter>Driver Install</Filter>
+    </Inf>
+  </ItemGroup>
+</Project>
