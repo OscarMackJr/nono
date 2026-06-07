@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
-status: active
-last_updated: "2026-06-06"
-last_activity: 2026-06-06
+status: "Roadmap defined; ready for `/gsd:plan-phase 63`"
+last_updated: "2026-06-07T02:23:14.791Z"
+last_activity: 2026-06-06 — Roadmap v2.10 created (Phases 63-66; 9/9 requirements mapped)
 progress:
   total_phases: 4
   completed_phases: 0
@@ -167,11 +167,12 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-06 — v2.10 roadmap creation. Phases 63-66 defined; 9/9 requirements mapped (DRV-01..04 → Phases 63-64-65, EDR-01..02 → Phase 66, MACOS-01..03 → Phases 63-64-65). Research context: HIGH confidence (SUMMARY.md, ARCHITECTURE.md, PITFALLS.md all read). REQUIREMENTS.md traceability updated.
+**Last session:** 2026-06-07T02:23:14.778Z
 
 **Resume with:** `/gsd:plan-phase 63`
 
 **Open questions to resolve at plan-phase:**
+
 - HVCI/VM host state on Win11 26200 — check `msinfo32` before Phase 63 plan
 - Which EDR product is available for Phase 66 (MDE trial needs an M365 tenant ~1 day; Sysmon-only is the fallback)
 - macOS host availability for Phase 65 live `sandbox_init()` re-validation
