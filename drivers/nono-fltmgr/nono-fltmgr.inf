@@ -1,0 +1,72 @@
+; nono-fltmgr.inf — minifilter install configuration
+; Source: nullFilter.inf structure [CITED: microsoft/Windows-driver-samples
+;         filesys/miniFilter/nullFilter]
+;
+; D-06 safeguard: StartType = 3 (SERVICE_DEMAND_START) — the driver is
+; loaded on demand only; it does NOT auto-start at boot, preventing a
+; boot loop if the spike driver causes a load failure on Phase 64.
+;
+; D-08 altitude: Instance1.Altitude is a PLACEHOLDER in the FSFilter
+; Activity Monitor band (360000–389999). The final number is chosen in
+; Phase 64 after running `fltmc filters` on the test VM to find a
+; non-colliding slot AND after the official Microsoft altitude assignment
+; arrives (fsfcomm@microsoft.com request pending — status filled by Plan
+; 63-02).  MUST NOT be in the AV range 320000–329998 (Pitfall 5: altitude
+; collision blinds EDR or fails registration).
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ManufacturerName%
+DriverVer   =
+CatalogFile = nono-fltmgr.cat
+
+[DestinationDirs]
+DefaultDestDir          = 12   ; \Windows\System32\drivers
+MiniFilter.DriverFiles  = 12
+
+[DefaultInstall.NTamd64]
+OptionDesc  = %ServiceDescription%
+CopyFiles   = MiniFilter.DriverFiles
+
+[DefaultInstall.NTamd64.Services]
+AddService = %ServiceName%,,MiniFilter.Service
+
+[MiniFilter.DriverFiles]
+nono-fltmgr.sys
+
+[MiniFilter.Service]
+DisplayName    = %ServiceName%
+Description    = %ServiceDescription%
+ServiceBinary  = %12%\nono-fltmgr.sys          ; %12% = \Windows\System32\drivers
+Dependencies   = "FltMgr"
+ServiceType    = 2                              ; SERVICE_FILE_SYSTEM_DRIVER
+StartType      = 3                              ; SERVICE_DEMAND_START (D-06 boot-loop safeguard)
+ErrorControl   = 1                              ; SERVICE_ERROR_NORMAL
+LoadOrderGroup = "FSFilter Activity Monitor"
+AddReg         = MiniFilter.AddRegistry
+
+[MiniFilter.AddRegistry]
+HKR,"Instances","DefaultInstance",0x00000000,%DefaultInstance%
+HKR,"Instances\%Instance1.Name%","Altitude",0x00000000,%Instance1.Altitude%
+HKR,"Instances\%Instance1.Name%","Flags",0x00010001,%Instance1.Flags%
+
+[DefaultUninstall.NTamd64]
+DelFiles   = MiniFilter.DriverFiles
+
+[DefaultUninstall.NTamd64.Services]
+DelService = %ServiceName%,0x200   ; 0x200 = SPSVCINST_STOPSERVICE
+
+[Strings]
+ManufacturerName    = "nono"
+ServiceName         = "nono-fltmgr"
+ServiceDescription  = "nono Gap 6b minifilter feasibility spike (TEST-SIGNED POC)"
+DefaultInstance     = "nono-fltmgr Instance"
+Instance1.Name      = "nono-fltmgr Instance"
+; PLACEHOLDER altitude — FSFilter Activity Monitor band 360000–389999 (D-08).
+; Phase 64 picks the final non-colliding number after `fltmc filters` enumeration
+; on the test VM and after the Microsoft altitude-assignment reply arrives.
+; MUST NOT use range 320000–329998 (AV/EDR range; Pitfall 5 altitude collision).
+Instance1.Altitude  = "370020"
+Instance1.Flags     = 0x0
