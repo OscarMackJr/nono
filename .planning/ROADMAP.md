@@ -99,8 +99,8 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
   3. The three P1 macOS commits (`8f84d454` platform-rules-after-user-write-allows, `362ada22` and `8f1b0b74` symlink/`$PWD` CWD capture) are cherry-picked with verbatim D-19 `Upstream-commit:` trailers; unit tests assert Seatbelt rule ordering (deny rules appear after the allow rules they override — last-match-wins) and cover both the symlink path and canonical `/private/etc` path for every affected deny group
   4. The build pipeline for both the driver (`drivers/nono-fltmgr/`) and the Rust user-mode client (`fltmgr_client.rs`) is documented in `drivers/README.md`; the existing `nono-wfp-driver.sys` placeholder and MSI are untouched
 **Plans**: 5 plans
-- [ ] 64-01-PLAN.md — Create nono-fltmgr-client crate + Wave 0 macOS test stubs (Wave 1, autonomous; DRV-02, MACOS-02)
-- [ ] 64-02-PLAN.md — Extend nono-fltmgr.c with pre-create callback + ring buffer + IPC port (Wave 1, autonomous; DRV-01, DRV-02)
+- [x] 64-01-PLAN.md — Create nono-fltmgr-client crate + Wave 0 macOS test stubs (Wave 1, autonomous; DRV-02, MACOS-02)
+- [x] 64-02-PLAN.md — Extend nono-fltmgr.c with pre-create callback + ring buffer + IPC port (Wave 1, autonomous; DRV-01, DRV-02)
 - [ ] 64-03-PLAN.md — Implement run_policy_client + cherry-pick 8f1b0b74+362ada22 (Wave 2, autonomous; DRV-02, MACOS-02)
 - [ ] 64-04-PLAN.md — Cherry-pick 8f84d454 + cross-target clippy + VM test-sign+load+deny proof (Wave 3, autonomous+human; DRV-01, DRV-03, MACOS-02)
 - [ ] 64-05-PLAN.md — Write drivers/README.md + make test phase close gate (Wave 4, autonomous; DRV-01..03, MACOS-02)
@@ -130,7 +130,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 63. Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit | 3/3 | Complete    | 2026-06-08 |
-| 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 0/5 | Not started | - |
+| 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 2/5 | In Progress|  |
 | 65. Minifilter ADR + macOS Live Re-validation | 0/TBD | Not started | - |
 | 66. WR-02 EDR HUMAN-UAT | 0/TBD | Not started | - |
 
