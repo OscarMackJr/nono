@@ -690,7 +690,11 @@ if ($h.ToInt64() -eq -1 -and $err -eq 5) {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three questions below carry an inline recommendation that the Phase 64 plans implement
+> (port-ACL fallback → Plan 04 checkpoint; single-slot ring buffer → Plan 02; message-id
+> correlation trivial for the single-connection spike). None are open blockers for planning.
 
 1. **Port ACL for `FltCreateCommunicationPort` in the spike context**
    - What we know: The nullFilter sample uses `FltBuildDefaultSecurityDescriptor` which restricts to the process SID.
