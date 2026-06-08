@@ -995,7 +995,12 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_profile_platform_rules_between_reads_and_writes() {
+    fn test_generate_profile_platform_rules_after_writes() {
+        // Wave 0 RED state (Plan 64-01): asserts the POST-fix ordering where platform
+        // deny rules appear AFTER write-allows (last-match-wins: deny overrides write).
+        // This test MUST FAIL with the pre-cherry-pick macos.rs code (deny is currently
+        // emitted between reads and writes, so deny_pos < write_pos, violating
+        // write_pos < deny_pos). It will turn GREEN when cherry-pick 8f84d454 lands.
         let mut caps = CapabilitySet::new();
         caps.add_fs(FsCapability {
             original: PathBuf::from("/test"),
@@ -1011,21 +1016,18 @@ mod tests {
         let read_pos = profile
             .find("(allow file-read* (subpath \"/test\"))")
             .expect("read rule not found");
-        let deny_pos = profile
-            .find("(deny file-write-unlink)")
-            .expect("deny rule not found");
         let write_pos = profile
             .find("(allow file-write* (subpath \"/test\"))")
             .expect("write rule not found");
+        let deny_pos = profile
+            .find("(deny file-write-unlink)")
+            .expect("deny rule not found");
 
-        // Order: read rules -> platform deny rules -> write rules
+        // Post-fix ordering: read rules -> write rules -> platform deny rules
+        assert!(read_pos < write_pos, "read rules must come before write rules");
         assert!(
-            read_pos < deny_pos,
-            "read rules must come before platform deny rules"
-        );
-        assert!(
-            deny_pos < write_pos,
-            "platform deny rules must come before write rules"
+            write_pos < deny_pos,
+            "platform deny rules must come AFTER write rules (last-match-wins)"
         );
     }
 
@@ -1872,6 +1874,72 @@ mod tests {
         assert!(
             iokit_pos < write_pos,
             "GPU/IOKit rules must come before write rules"
+        );
+    }
+
+    #[test]
+    fn test_platform_rules_after_write_allows() {
+        // Wave 0 RED state (Plan 64-01 D-11 ordering test): asserts that a platform
+        // deny rule appears AFTER write-allows (post-fix: deny AFTER write so that
+        // last-match-wins semantics ensure the deny wins over user write-allows).
+        //
+        // This test MUST FAIL with the pre-cherry-pick macos.rs code where the
+        // platform_rules() loop emits deny rules between reads and writes
+        // (deny_pos < write_pos, violating write_pos < deny_pos).
+        // It will turn GREEN when cherry-pick 8f84d454 lands in Plan 64-03.
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability {
+            original: PathBuf::from("/test"),
+            resolved: PathBuf::from("/test"),
+            access: AccessMode::ReadWrite,
+            is_file: false,
+            source: CapabilitySource::User,
+        });
+        caps.add_platform_rule("(deny file-write-unlink)").unwrap();
+
+        let profile = generate_profile(&caps).unwrap();
+
+        let read_pos = profile
+            .find("(allow file-read* (subpath \"/test\"))")
+            .expect("read rule not found");
+        let write_pos = profile
+            .find("(allow file-write* (subpath \"/test\"))")
+            .expect("write rule not found");
+        let deny_pos = profile
+            .find("(deny file-write-unlink)")
+            .expect("deny rule not found");
+
+        assert!(read_pos < write_pos, "read rules must come before write rules");
+        assert!(
+            write_pos < deny_pos,
+            "platform deny rules must come AFTER write allows (last-match-wins: deny overrides write)"
+        );
+    }
+
+    #[test]
+    fn test_platform_deny_symlink_and_canonical_path() {
+        // Wave 0 test (Plan 64-01 D-11 symlink+canonical coverage):
+        // Validates that both the symlink path (/etc/passwd) and the canonical path
+        // (/private/etc/passwd) can be added as platform deny rules and appear in the
+        // generated profile. This covers the macOS /private/etc symlink drift pitfall
+        // (Pitfall 11): a deny on /etc/passwd alone does not block /private/etc/passwd.
+        //
+        // This test SHOULD PASS immediately — it only asserts that platform rules
+        // added by the caller appear in the output profile. It validates the dual-path
+        // discipline required by D-11, not the ordering fix.
+        let mut caps = CapabilitySet::new();
+        caps.add_platform_rule("(deny file-read* (literal \"/etc/passwd\"))").unwrap();
+        caps.add_platform_rule("(deny file-read* (literal \"/private/etc/passwd\"))").unwrap();
+
+        let profile = generate_profile(&caps).unwrap();
+
+        assert!(
+            profile.contains("(deny file-read* (literal \"/etc/passwd\"))"),
+            "symlink path /etc/passwd must appear in profile"
+        );
+        assert!(
+            profile.contains("(deny file-read* (literal \"/private/etc/passwd\"))"),
+            "canonical path /private/etc/passwd must appear in profile"
         );
     }
 }
