@@ -47,6 +47,11 @@
     <ConfigurationType>Driver</ConfigurationType>
     <DriverType>WDM</DriverType>
     <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <!-- SC2 is a COMPILE proof: build the .sys and stop. The WDK auto test-sign
+         target uses a signtool invocation the newer EWDK rejects (missing /fd),
+         which deletes the unsigned output. Real test/production signing with the
+         altitude-assigned cert is a Phase 64 concern. SignMode=Off keeps the .sys. -->
+    <SignMode>Off</SignMode>
   </PropertyGroup>
 
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
