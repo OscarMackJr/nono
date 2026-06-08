@@ -61,10 +61,12 @@ function Fail($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; $script:fail+
 function Head($m) { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 
 # Invoke az, return parsed JSON ($null on failure). Never throws.
+# NOTE: param is $CmdArgs, NOT $Args — $Args collides with the automatic variable
+# and would splat empty, running `az` with no subcommand.
 function Invoke-Az {
-    param([string[]]$Args)
+    param([string[]]$CmdArgs)
     try {
-        $raw = & az @Args -o json 2>$null
+        $raw = & az @CmdArgs -o json 2>$null
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($raw)) { return $null }
         return $raw | ConvertFrom-Json
     } catch { return $null }
