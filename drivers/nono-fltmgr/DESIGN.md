@@ -103,7 +103,7 @@ simultaneously.
 | Altitude band | FSFilter Activity Monitor (360000–389999) | Activity-Monitor drivers observe I/O without blocking it; appropriate for a spike that intercepts + denies via user-mode decision |
 | AV range to avoid | 320000–329998 | Registering in this range collides with EDR/AV drivers, causing registration failure or blinding the EDR |
 | Phase 63 placeholder | 370020 (nullFilter default) | Temporary; Phase 64 MUST enumerate `fltmc filters` on the test VM and pick a non-colliding number in the Activity-Monitor band |
-| Microsoft assignment | **PENDING** — request drafted (Plan 63-02, 2026-06-07); Send-date: `[pending send — to be filled by user]`; assigned altitude: `[awaiting Microsoft response]` | An official altitude is required before any non-disposable deployment. Draft email body + submission channel recorded in `63-altitude-request.md`. |
+| Microsoft assignment | **PENDING** — request sent 2026-06-07; Send-date: `2026-06-07`; assigned altitude: `[awaiting Microsoft response]` | An official altitude is required before any non-disposable deployment. Draft email body + submission channel recorded in `63-altitude-request.md`. |
 
 ## Scope Boundary
 

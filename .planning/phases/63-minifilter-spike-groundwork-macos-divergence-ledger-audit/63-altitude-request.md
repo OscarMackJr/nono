@@ -77,8 +77,8 @@ oscar.mack.jr@gmail.com
 
 | Field | Value |
 |-------|-------|
-| Status | `pending` — awaiting send by user, then awaiting Microsoft altitude assignment (~30 business days) |
-| Send-date | `[to be filled by user on send: YYYY-MM-DD]` |
+| Status | `pending` — sent 2026-06-07; awaiting Microsoft altitude assignment (~30 business days) |
+| Send-date | `2026-06-07` |
 | Microsoft response | `[to be filled when Microsoft assigns an altitude]` |
 | Assigned altitude | `[to be filled when Microsoft responds]` |
 
@@ -86,8 +86,8 @@ oscar.mack.jr@gmail.com
 
 ## Lifecycle
 
-1. **Drafted** (Plan 63-02, 2026-06-07) — email body drafted by executor; awaiting user send.
-2. **Sent** — user sends the email above to `fsfcomm@microsoft.com`; fills in the Send-date above.
+1. **Drafted** (Plan 63-02, 2026-06-07) — email body drafted by executor.
+2. **Sent** (2026-06-07) — user sent the email to `fsfcomm@microsoft.com`; Send-date recorded above.
 3. **Pending** — Microsoft processes the request (~30 business days).
 4. **Assigned** — Microsoft replies with an official altitude number; record in this file and in `drivers/nono-fltmgr/DESIGN.md` Altitude Configuration table and the INF.
 
