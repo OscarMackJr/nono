@@ -2,7 +2,7 @@
 phase: 64
 slug: minifilter-spike-implementation-macos-p1-cherry-pick-wave
 status: draft
-nyquist_compliant: false
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-08
 ---
@@ -48,8 +48,8 @@ created: 2026-06-08
 | User-mode client receives path+PID, returns allow/deny | A | DRV-02 | T-63-02 | Driver enforces returned decision | Integration (VM) | Manual on Azure VM | Manual-only | ⬜ pending |
 | Driver builds + test-signs + loads on VM | A | DRV-03 | T-63-01 | `SERVICE_DEMAND_START` + snapshot rollback safeguard | Manual (VM) | `fltmc instances` output | Manual-only | ⬜ pending |
 | Platform deny rules appear AFTER write-allows | B | MACOS-02 | T-64-10 | Last-match-wins: deny overrides allow | Unit | `cargo test -p nono -- sandbox::macos::tests::test_platform_rules_after_write_allows` | ❌ W0 (new test) | ⬜ pending |
-| Deny rules cover both `/etc/...` and `/private/etc/...` | B | MACOS-02 | T-64-11 | No symlink bypass of canonical path | Unit | `cargo test -p nono -- sandbox::macos::tests::test_platform_deny_symlink_and_canonical` | ❌ W0 (new test) | ⬜ pending |
-| Existing ordering test updated to post-fix ordering | B | MACOS-02 | T-64-10 | `read_pos < write_pos < deny_pos` | Unit | `cargo test -p nono -- sandbox::macos::tests::test_generate_profile_platform_rules_between_reads_and_writes` | ✅ exists, wrong assertion | ⬜ pending |
+| Deny rules cover both `/etc/...` and `/private/etc/...` | B | MACOS-02 | T-64-11 | No symlink bypass of canonical path | Unit | `cargo test -p nono -- sandbox::macos::tests::test_platform_deny_symlink_and_canonical_path` | ❌ W0 (new test) | ⬜ pending |
+| Existing ordering test updated to post-fix ordering (renamed in Plan 01) | B | MACOS-02 | T-64-10 | `read_pos < write_pos < deny_pos` | Unit | `cargo test -p nono -- sandbox::macos::tests::test_generate_profile_platform_rules_after_writes` | ✅ exists (renamed from `test_generate_profile_platform_rules_between_reads_and_writes`), wrong assertion pre-Plan 01 | ⬜ pending |
 | Cross-target clippy passes on cherry-picked files | B | MACOS-02 | — | No cfg-gated Unix drift | Cross-target build | `cargo clippy -p nono -p nono-cli --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` | ✅ target installed | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
@@ -59,11 +59,11 @@ created: 2026-06-08
 ## Wave 0 Requirements
 
 Track B:
-- [ ] `crates/nono/src/sandbox/macos.rs` — new tests `test_platform_rules_after_write_allows`, `test_platform_deny_symlink_and_canonical`
-- [ ] `crates/nono/src/sandbox/macos.rs` — update existing `test_generate_profile_platform_rules_between_reads_and_writes` (line ~998) to assert post-fix ordering (`read_pos < write_pos < deny_pos`)
+- [ ] `crates/nono/src/sandbox/macos.rs` — new tests `test_platform_rules_after_write_allows`, `test_platform_deny_symlink_and_canonical_path`
+- [ ] `crates/nono/src/sandbox/macos.rs` — rename existing `test_generate_profile_platform_rules_between_reads_and_writes` to `test_generate_profile_platform_rules_after_writes` (line ~998) and update assertions to post-fix ordering (`read_pos < write_pos < deny_pos`)
 
 Track A:
-- [ ] `crates/nono-fltmgr-client/` — new Cargo workspace member (`Cargo.toml` + `src/lib.rs` skeleton with the `#[repr(C)] NonoIpcRequest` static-layout assertion)
+- [ ] `crates/nono-fltmgr-client/` — new Cargo workspace member (`Cargo.toml` + `src/lib.rs` skeleton with the `#[repr(C)] NonoIpcRequest` static-layout assertion + `src/main.rs` CLI binary accepting deny-path as argv[1])
 - [ ] Root `Cargo.toml` — add `"crates/nono-fltmgr-client"` to `[workspace] members`
 - [ ] Scripted deny harness (PowerShell or tiny exe) provisioned on the VM
 
@@ -75,19 +75,19 @@ Track A:
 |----------|-------------|------------|-------------------|
 | Driver test-signs + loads at chosen altitude | DRV-01 / DRV-03 | Kernel driver load requires Secure-Boot-OFF VM + testsigning | `makecert → inf2cat → signtool → certmgr → bcdedit /set testsigning on → pnputil /add-driver`; capture `fltmc instances`/`fltmc filters` |
 | Deny-target open refused (`ERROR_ACCESS_DENIED`) | DRV-01 | Requires loaded kernel driver intercepting `IRP_MJ_CREATE` | Run deny harness on VM; assert exact Win32 error 5 |
-| Kernel↔user policy round-trip enforced | DRV-02 | Requires both driver loaded + `fltmgr_client` running on VM | Start client, trigger create on deny-target, observe path+PID delivery + enforced decision |
+| Kernel↔user policy round-trip enforced | DRV-02 | Requires both driver loaded + `nono_fltmgr_client.exe` running on VM | Run `nono_fltmgr_client.exe C:\nono-deny-test\secret.txt`, trigger create on deny-target, observe path+PID delivery + enforced decision |
 | `aarch64-apple-darwin` clippy/build | MACOS-02 | Cross-toolchain NOT installed on dev host (D-12) | Mark PARTIAL; defer to live macOS CI per `.planning/templates/cross-target-verify-checklist.md` |
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All Track B tasks have automated verify or Wave 0 dependencies
-- [ ] Track A VM-only behaviors documented as manual with capture instructions
-- [ ] Sampling continuity: no 3 consecutive automated-eligible tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (new crate + new/updated macOS tests)
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 60s (Track B)
-- [ ] `nyquist_compliant: true` set in frontmatter (after planner reconciles task IDs)
+- [x] All Track B tasks have automated verify or Wave 0 dependencies
+- [x] Track A VM-only behaviors documented as manual with capture instructions
+- [x] Sampling continuity: no 3 consecutive automated-eligible tasks without automated verify
+- [x] Wave 0 covers all MISSING references (new crate + new/updated macOS tests)
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s (Track B)
+- [x] `nyquist_compliant: true` set in frontmatter (all automated-eligible tasks have `<automated>` elements; Track A tasks are manual-only by design — no automated gate exists for kernel driver load or VM deny-harness execution)
 
 **Approval:** pending
