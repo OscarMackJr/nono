@@ -55,6 +55,7 @@ $Candidates = [ordered]@{
 }
 
 $script:fail = 0
+$script:locBlocked = @()   # families that have quota but are LOCATION-restricted in $Location
 function Pass($m) { Write-Host "  [PASS] $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  [WARN] $m" -ForegroundColor Yellow }
 function Fail($m) { Write-Host "  [FAIL] $m" -ForegroundColor Red; $script:fail++ }
@@ -150,10 +151,15 @@ if ($null -eq $usage) {
             Pass "$size ($fam): $($u.currentValue)/$($u.limit) used ($free free) -> GO"
             $goodFamilies += $size
         } elseif ([int]$u.limit -eq 0) {
-            Fail "$size ($fam): limit 0 (no quota). Request $NeededVcpus vCPUs for $fam in $Location."
+            # Informational only: a zero-quota family you don't need must NOT fail the whole run.
+            Warn "$size ($fam): limit 0 (no quota — fine if another family is GO)."
         } else {
-            Fail "$size ($fam): only $free free (need $NeededVcpus)."
+            Warn "$size ($fam): only $free free (need $NeededVcpus — fine if another family is GO)."
         }
+    }
+    # Only a genuine blocker if NO candidate family has quota.
+    if ($goodFamilies.Count -eq 0) {
+        Fail "No candidate family has quota in $Location. Request >= $NeededVcpus vCPUs for a general-purpose family (or try another region with -Location)."
     }
 }
 
@@ -190,23 +196,32 @@ if ($null -eq $img) {
 # ----------------------------------------------------------------------------
 Head "7. Candidate size availability in $Location"
 foreach ($size in $Candidates.Keys) {
-    $sku = Invoke-Az @("vm", "list-skus", "-l", $Location, "--size", $size,
+    # No --size filter (it can over-filter to empty); match by exact name in JMESPath instead.
+    $sku = Invoke-Az @("vm", "list-skus", "-l", $Location,
                        "--resource-type", "virtualMachines",
                        "--query", "[?name=='$size'] | [0]")
-    if ($null -eq $sku) { Warn "${size}: not offered in $Location (or query blocked)"; continue }
+    if ($null -eq $sku) { Warn "${size}: not in $Location catalog (capacity/region, or query blocked)"; continue }
     $restr = @($sku.restrictions)
-    if ($restr.Count -eq 0) { Pass "${size}: offered, no subscription restrictions" }
-    else {
-        $codes = ($restr | ForEach-Object { $_.reasonCode }) -join ", "
-        Warn "${size}: restricted ($codes)"
+    if ($restr.Count -eq 0) { Pass "${size}: offered, no subscription restrictions"; continue }
+    foreach ($r in $restr) {
+        $locs  = ($r.restrictionInfo.locations -join ",")
+        $zones = ($r.restrictionInfo.zones -join ",")
+        if ($r.type -eq "Zone") {
+            Warn "${size}: ZONE restriction ($($r.reasonCode); zones: $zones) — a non-zonal region deploy still works."
+        } else {
+            $script:locBlocked += $size
+            Warn "${size}: LOCATION restriction ($($r.reasonCode); locations: $locs) — NOT deployable in $Location even with quota; use another region."
+        }
     }
 }
 
 # ----------------------------------------------------------------------------
 Head "VERDICT"
-if ($goodFamilies.Count -gt 0 -and $script:fail -eq 0) {
-    $pick = $goodFamilies[0]
-    Write-Host "GO — at least one family has quota and no blocking checks failed." -ForegroundColor Green
+# Deployable = has quota AND not location-restricted (zone-restricted is fine for a non-zonal deploy).
+$deployable = @($goodFamilies | Where-Object { $_ -notin $script:locBlocked })
+if ($deployable.Count -gt 0 -and $script:fail -eq 0) {
+    $pick = $deployable[0]
+    Write-Host "GO — '$pick' has quota and no blocking checks failed." -ForegroundColor Green
     Write-Host "`nSuggested provisioning command (fill <rg>/<user>/<pass>):" -ForegroundColor White
     Write-Host @"
   az group create -n rg-nono-fltmgr-spike -l $Location
@@ -220,7 +235,16 @@ if ($goodFamilies.Count -gt 0 -and $script:fail -eq 0) {
     --admin-username <user> --admin-password <pass>
 "@ -ForegroundColor Gray
     Write-Host "  Reminder: NOT TrustedLaunch; Secure Boot OFF; then on the VM: bcdedit /set testsigning on + reboot." -ForegroundColor DarkGray
+    if ($script:locBlocked.Count -gt 0) {
+        Write-Host "  (Note: $([string]::Join(', ', $script:locBlocked)) have quota but are location-restricted here; '$pick' was chosen because it is not.)" -ForegroundColor DarkGray
+    }
     exit 0
+} elseif ($goodFamilies.Count -gt 0 -and $deployable.Count -eq 0 -and $script:fail -eq 0) {
+    Write-Host "NOT READY (region capacity) — families have quota ($([string]::Join(', ', $goodFamilies))) but ALL are LOCATION-restricted in $Location." -ForegroundColor Yellow
+    Write-Host "Quota and permissions are fine — this is a regional SKU-availability block. Re-run against another region:" -ForegroundColor White
+    Write-Host "  pwsh ./63-preflight-azure.ps1 -Location westus2" -ForegroundColor Gray
+    Write-Host "  (also worth trying: eastus2, centralus, westus3)" -ForegroundColor DarkGray
+    exit 1
 } else {
     Write-Host "NOT READY — $($script:fail) blocking check(s) failed. Resolve the [FAIL] items above before provisioning." -ForegroundColor Red
     if ($goodFamilies.Count -gt 0) {
