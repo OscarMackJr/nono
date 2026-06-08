@@ -86,7 +86,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
   4. A `DIVERGENCE-LEDGER.md` for upstream `v0.57.0..v0.61.2` scoped to macOS-relevant paths is committed, with every commit classified (will-sync / fork-preserve / won't-sync / split), a `macos-only` column, and a diff-inspect note per the `feedback_cluster_isolation_invalid` lesson; the three P1 commits (`8f84d454`, `362ada22`, `8f1b0b74`) are identified and dispositioned `will-sync`
 **Plans**: 3 plans
 - [x] 63-01-PLAN.md — Author the drivers/nono-fltmgr/ WDK scaffold + DESIGN.md pre-code gate + ADR pointer stub (Wave 1, autonomous; DRV-03)
-- [ ] 63-02-PLAN.md — Provision the Azure test-signing VM, capture SC1, compile the scaffold to .sys, send the Microsoft altitude request (Wave 2, human-gated; DRV-03)
+- [x] 63-02-PLAN.md — Provision the Azure test-signing VM, capture SC1, compile the scaffold to .sys, send the Microsoft altitude request (Wave 2, human-gated; DRV-03)
 - [x] 63-03-PLAN.md — macOS DIVERGENCE-LEDGER audit v0.57.0..v0.61.2, three P1 commits will-sync, supersede Phase 54 C14 (Wave 1, autonomous; MACOS-01)
 
 ### Phase 64: Minifilter Spike Implementation + macOS P1 Cherry-pick Wave
@@ -125,7 +125,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 63. Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit | 2/3 | In Progress|  |
+| 63. Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit | 3/3 | Complete   | 2026-06-08 |
 | 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 0/TBD | Not started | - |
 | 65. Minifilter ADR + macOS Live Re-validation | 0/TBD | Not started | - |
 | 66. WR-02 EDR HUMAN-UAT | 0/TBD | Not started | - |
