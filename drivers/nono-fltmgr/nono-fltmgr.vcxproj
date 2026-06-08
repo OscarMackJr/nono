@@ -13,6 +13,12 @@
 
   NOTE: The .sys binary is a throwaway VM-local compile artifact (Pitfall 6).
         Only the source scaffold is committed to the repo.
+
+  The WDK build logic is supplied by PlatformToolset=WindowsKernelModeDriver10.0
+  through the standard Microsoft.Cpp.* import chain (the WDK/EWDK installs that
+  toolset into $(VCTargetsPath)). Driver projects MUST NOT hand-import
+  $(WDKContentRoot)\build\...\WindowsDriver.props/.targets -- those paths do not
+  exist in the kit and break the build (MSB4019). See SC2 (Phase 63).
 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
@@ -29,18 +35,19 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <TargetName>nono-fltmgr</TargetName>
-    <!-- ConfigurationType=Driver produces a .sys kernel binary -->
-    <ConfigurationType>Driver</ConfigurationType>
-    <!-- DriverType=WDM: minifilters are WDM-class file-system filters (not KMDF) -->
-    <DriverType>WDM</DriverType>
-    <!-- Required for kernel-mode C compilation -->
-    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
   </PropertyGroup>
 
-  <!-- Import WDK property sheets (sets kernel-mode compile/link defaults) -->
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-  <Import Project="$(WDKContentRoot)\build\$(Platform)\WindowsDriver.props"
-          Condition="'$(WDKContentRoot)' != ''" />
+
+  <!-- Driver configuration MUST come after Cpp.Default.props and before Cpp.props.
+       PlatformToolset=WindowsKernelModeDriver10.0 pulls in all WDK build logic; no
+       manual WDK props/targets import is needed (or correct). -->
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+  </PropertyGroup>
 
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <UseDebugLibraries>false</UseDebugLibraries>
@@ -55,22 +62,14 @@
 
   <ItemDefinitionGroup>
     <ClCompile>
-      <!-- Spectre mitigation flags (nullFilter precedent; required for driver certification) -->
+      <!-- Spectre mitigation (nullFilter precedent; required for driver certification) -->
       <SpectreMitigation>Spectre</SpectreMitigation>
-      <!-- Kernel-mode code must not use the CRT: -->
-      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <!-- Kernel entry points need C linkage -->
       <CompileAs>CompileAsC</CompileAs>
-      <!-- fltKernel.h requires kernel include path — provided by WDK toolset -->
-      <AdditionalIncludeDirectories>$(KernelIncludes);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <AdditionalOptions>/kernel %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
-      <!-- Kernel drivers link against FltMgr.lib for FltRegisterFilter etc. -->
+      <!-- Minifilters link against FltMgr.lib for FltRegisterFilter etc. -->
       <AdditionalDependencies>fltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <!-- Required for kernel-mode .sys -->
-      <SubSystem>Native</SubSystem>
-      <Driver>WDM</Driver>
     </Link>
     <Inf>
       <TimeStamp>$(DefaultInfTimeStamp)</TimeStamp>
@@ -85,8 +84,5 @@
     <Inf Include="nono-fltmgr.inf" />
   </ItemGroup>
 
-  <!-- Import WDK targets (sets .sys output extension, HAL linkage, etc.) -->
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <Import Project="$(WDKContentRoot)\build\$(Platform)\WindowsDriver.targets"
-          Condition="'$(WDKContentRoot)' != ''" />
 </Project>
