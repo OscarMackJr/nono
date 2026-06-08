@@ -1,0 +1,30 @@
+[package]
+name = "nono-fltmgr-client"
+version = "0.62.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Spike: user-mode policy client for nono minifilter IPC (Windows only)"
+publish = false
+
+[lib]
+name = "nono_fltmgr_client"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nono_fltmgr_client"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_InstallableFileSystems",
+    "Win32_System_IO",
+] }
+
+[lints]
+workspace = true
