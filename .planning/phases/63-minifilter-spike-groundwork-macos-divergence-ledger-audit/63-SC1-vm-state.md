@@ -1,8 +1,9 @@
 # Phase 63 — SC1: Azure Test-Signing VM State + SC2: Scaffold Compile Proof
 
-**Status:** SC1 CAPTURED (2026-06-08, headless via `az vm run-command` — corporate egress blocks
-RDP/3389, so the VM was driven over the Azure agent channel instead of an interactive desktop).
-SC2 (scaffold compile) PENDING.
+**Status:** SC1 + SC2 CAPTURED (2026-06-08). SC1 was driven headless via `az vm run-command` (corporate
+egress blocks RDP/3389). SC2 (scaffold compile) was completed in an **Azure Bastion** desktop (browser RDP
+over 443) using the **EWDK 26H1** ISO (VS Build Tools 18.3.0) mounted on the VM. The compile-proof surfaced
+and fixed five real scaffold defects (see Notes and Deviations). DRV-03 (partial) SATISFIED.
 
 **Purpose:** Reproducibility evidence for DRV-03 (partial). Proves the Azure Standard-security-type
 VM has TESTSIGNING on, Secure Boot off, HVCI off (SC1), and that the `drivers/nono-fltmgr/` scaffold
@@ -467,16 +468,30 @@ Paste `msbuild -version` output and the `where.exe` results here:
 
 ### msbuild Output Tail
 
-Paste the last ~20 lines of `msbuild nono-fltmgr.vcxproj /p:Configuration=Release /p:Platform=x64`:
+`msbuild nono-fltmgr.vcxproj /p:Configuration=Release /p:Platform=x64` (EWDK 26H1, MSBuild 18.3.0), 2026-06-08:
 
 ```
-[Paste msbuild output tail here — must include "Build succeeded." and "0 Error(s)"]
+ClCompile:
+  CL.exe ... /kernel ... "nono-fltmgr.c"
+  nono-fltmgr.c
+Link:
+  link.exe ... /OUT:"C:\nono-fltmgr\x64\Release\nono-fltmgr.sys" ... fltMgr.lib ntoskrnl.lib hal.lib ... /Driver /ENTRY:"GsDriverEntry" /kernel ...
+  nono-fltmgr.vcxproj -> C:\nono-fltmgr\x64\Release\nono-fltmgr.sys
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:02.01
 ```
 
 ### dir x64\Release\nono-fltmgr.sys listing
 
 ```
-[Paste dir x64\Release\nono-fltmgr.sys output here — proves the .sys was produced]
+ Directory of C:\nono-fltmgr\x64\Release
+
+06/08/2026  08:01 PM             5,120 nono-fltmgr.sys
+               1 File(s)          5,120 bytes
 ```
 
 ---
@@ -485,17 +500,31 @@ Paste the last ~20 lines of `msbuild nono-fltmgr.vcxproj /p:Configuration=Releas
 
 | Field | Value |
 |-------|-------|
-| msbuild exit code | *(0 = success; non-zero = failure with error description)* |
-| `x64\Release\nono-fltmgr.sys` produced | *(Yes / No)* |
-| Build warnings | *(count — 0 expected for a clean scaffold build)* |
-| Errors | *(count — must be 0 for SC2 pass)* |
-| TESTSIGNING confirmed | *(Yes / No — from bcdedit evidence above)* |
-| Secure Boot State | *(Off / On — must be Off)* |
-| HVCI / Memory Integrity | *(Off / On — must be Off for Phase 64 driver loading)* |
+| msbuild exit code | 0 (Build succeeded) |
+| `x64\Release\nono-fltmgr.sys` produced | Yes (5,120 bytes) |
+| Build warnings | 0 |
+| Errors | 0 |
+| TESTSIGNING confirmed | Yes (bcdedit evidence above) |
+| Secure Boot State | Off |
+| HVCI / Memory Integrity | Off |
+| Toolchain | EWDK 26H1, MSBuild 18.3.0, MSVC 14.50, WDK 10.0.28000.0 |
 
 ---
 
 ## Notes and Deviations
 
-*(Record any deviations from the runbook, fallback choices made (e.g. D4s_v4 instead of D4s_v5,
-VS 2022 + WDK 26100 instead of VS 2026 + WDK 28000), or issues encountered here.)*
+**Environment / approach deviations:**
+- **VM size:** `Standard_D4s_v4`, not `D4s_v5` — DSv5/DASv5 families had zero quota in eastus; DSv4 had headroom.
+- **`--security-type Standard` required a feature flag:** `Microsoft.Compute/UseStandardSecurityType` had to be registered (Gen2 defaults to Trusted Launch). Owner self-serve; no Azure admin needed.
+- **SC1 captured headless** via `az vm run-command` CLI equivalents (`Confirm-SecureBootUEFI`, `Win32_DeviceGuard`, `bcdedit`) instead of the msinfo32 GUI export — corporate egress blocks RDP/3389. Same facts, more reproducible.
+- **SC2 built in Azure Bastion** (browser RDP over 443) after the legacy `az vm run-command` channel wedged on an interactive `LaunchBuildEnv.cmd` hang. Toolchain = **EWDK 26H1 ISO** (VS Build Tools 18.3.0), mounted on the VM — not an installed VS 2026/2022 + WDK.
+- **`.sys` is throwaway** (5,120 bytes) — NOT copied off the VM or committed (Pitfall 6).
+
+**Scaffold defects the compile-proof surfaced + fixed (Plan 63-01 `nono-fltmgr.vcxproj`):**
+1. **MSB4019** — hand-imported `$(WDKContentRoot)\build\$(Platform)\WindowsDriver.props/.targets` (paths don't exist in the kit). Removed; WDK logic comes from `PlatformToolset=WindowsKernelModeDriver10.0` via the standard `Microsoft.Cpp.*` chain. (`a250779b`)
+2. **Structural** — `ConfigurationType`/`DriverType`/`PlatformToolset` were in the `Globals` group before `Cpp.Default.props`; moved to a `Configuration` group after it. (`a250779b`)
+3. **MSB4025** — an illegal `--` inside an XML comment. (`b1977e07`)
+4. **stampinf exit 87** — INF stamping on the placeholder INF; INF packaging is a Phase 64 concern, so the INF was dropped from the compile-proof build. (`229658d0`)
+5. **signtool /fd (TestSign)** — the newer EWDK signtool rejects the WDK auto test-sign invocation, which then deleted the unsigned `.sys`. Set `SignMode=Off`; real signing with the altitude-assigned cert is Phase 64. (`57fc6eb7`)
+
+After fixes 1-5, `nono-fltmgr.c` compiled and linked cleanly to `nono-fltmgr.sys` (0 warnings, 0 errors). The corrected `.vcxproj` is committed; the `.inf` remains the altitude-band placeholder source.
