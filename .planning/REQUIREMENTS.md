@@ -11,7 +11,7 @@
 
 - [ ] **DRV-01**: A **test-signed Windows FltMgr minifilter** intercepts `IRP_MJ_CREATE` pre-operation and **denies a targeted file open** (`FLT_PREOP_COMPLETE` returning `STATUS_ACCESS_DENIED`), demonstrated end-to-end on a Secure-Boot-OFF / HVCI-off VM (a process attempting to open the targeted path is refused at the kernel boundary). POC-depth: a single deterministic deny target is sufficient; production policy breadth is out of scope.
 - [ ] **DRV-02**: The minifilter performs a **user-mode policy round-trip** — `FLT_PREOP_PENDING` + `FltSendMessage` over a dedicated `FilterCommunicationPort` (`\NonoPolicyPort`) with a **finite timeout** — and a Rust `#[cfg(windows)]` user-mode client (`fltmgr_client.rs`, via the `Win32_Storage_InstallableFileSystems` `windows-sys` feature) receives the request and returns an allow/deny decision that the driver enforces. The `#[repr(C)]` message struct carries a static layout assertion.
-- [ ] **DRV-03**: A **reproducible driver build + test-signing pipeline** exists and is documented: an out-of-workspace `drivers/nono-fltmgr/` WDK MSBuild project, built and test-signed (`makecert → inf2cat → signtool → certmgr → bcdedit /set testsigning on → pnputil /add-driver`, `SERVICE_DEMAND_START`). The existing `nono-wfp-driver.sys` placeholder and the MSI are **untouched**; the spike binary is for manual test-VM use only and is not production-signed.
+- [x] **DRV-03**: A **reproducible driver build + test-signing pipeline** exists and is documented: an out-of-workspace `drivers/nono-fltmgr/` WDK MSBuild project, built and test-signed (`makecert → inf2cat → signtool → certmgr → bcdedit /set testsigning on → pnputil /add-driver`, `SERVICE_DEMAND_START`). The existing `nono-wfp-driver.sys` placeholder and the MSI are **untouched**; the spike binary is for manual test-VM use only and is not production-signed.
 - [ ] **DRV-04**: A **go/no-go ADR** is committed documenting the interception design, the **measured `FLT_PREOP_PENDING` round-trip latency**, the `windows-drivers-rs`-not-viable (C/C++ driver) decision, the FltMgr-vs-ETW rationale, the chosen altitude (Activity-Monitor/FSFilter range, official-assignment request status), and an explicit recommendation for (or against) a production-driver milestone.
 
 ### EDR — WR-02 HUMAN-UAT (EDR)
@@ -21,7 +21,7 @@
 
 ### macOS — Seatbelt Upstream Parity through v0.61.2 (MACOS)
 
-- [ ] **MACOS-01**: A **`DIVERGENCE-LEDGER.md`** audits upstream `always-further/nono` `v0.57.0..v0.61.2` **scoped to the macOS surface** (a `macos-only` column, mirroring the Phase 42/47 `windows-touch` audit shape), inventorying every macOS-relevant commit — including the UPST7-deferred items (`$PWD` symlink-CWD capture, platform-rules-after-user-write-allows ordering) — with per-commit dispositions (will-sync / fork-preserve / won't-sync) and a diff-inspect note per the `feedback_cluster_isolation_invalid` lesson.
+- [x] **MACOS-01**: A **`DIVERGENCE-LEDGER.md`** audits upstream `always-further/nono` `v0.57.0..v0.61.2` **scoped to the macOS surface** (a `macos-only` column, mirroring the Phase 42/47 `windows-touch` audit shape), inventorying every macOS-relevant commit — including the UPST7-deferred items (`$PWD` symlink-CWD capture, platform-rules-after-user-write-allows ordering) — with per-commit dispositions (will-sync / fork-preserve / won't-sync) and a diff-inspect note per the `feedback_cluster_isolation_invalid` lesson.
 - [ ] **MACOS-02**: The **P1 macOS security/correctness commits** are absorbed with verbatim D-19 `Upstream-commit:` trailers: `8f84d454` (platform rules evaluated after user write-allows — security ordering defect), `362ada22` and `8f1b0b74` (symlink / `$PWD` CWD capture correctness). **Seatbelt rule ordering is asserted by unit tests** (last-match-wins emission order), not merely rule presence; the fork's profile-emission call site is diff-inspected before each cherry-pick (the upstream fix may apply at a different site).
 - [ ] **MACOS-03**: The **Seatbelt layer is re-validated live on a real macOS host** (a `sandbox_init()`-backed `nono` run confirming allow/deny + the absorbed ordering fix), and the **macOS CI build leg is confirmed green before any release tag** — a HARD close gate, not advisory (the v2.9 cross-target-drift guard: two cfg-gated compile errors reached release tags because the Windows host never compiles macOS code). The cherry-pick checklist scans for edition-2024 let-chains / E0716-class borrows and canonical-path (`/private/etc`, `/private/tmp`) coverage.
 
@@ -49,11 +49,11 @@
 |--------|-------|--------|
 | DRV-01 | Phase 64 | Pending |
 | DRV-02 | Phase 64 | Pending |
-| DRV-03 | Phase 63 (partial groundwork) + Phase 64 (complete) | Pending |
+| DRV-03 | Phase 63 (partial groundwork) + Phase 64 (complete) | Complete |
 | DRV-04 | Phase 65 | Pending |
 | EDR-01 | Phase 66 | Pending |
 | EDR-02 | Phase 66 | Pending |
-| MACOS-01 | Phase 63 | Pending |
+| MACOS-01 | Phase 63 | Complete |
 | MACOS-02 | Phase 64 | Pending |
 | MACOS-03 | Phase 65 | Pending |
 
