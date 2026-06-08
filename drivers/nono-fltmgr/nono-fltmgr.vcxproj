@@ -16,9 +16,9 @@
 
   The WDK build logic is supplied by PlatformToolset=WindowsKernelModeDriver10.0
   through the standard Microsoft.Cpp.* import chain (the WDK/EWDK installs that
-  toolset into $(VCTargetsPath)). Driver projects MUST NOT hand-import
-  $(WDKContentRoot)\build\...\WindowsDriver.props/.targets -- those paths do not
-  exist in the kit and break the build (MSB4019). See SC2 (Phase 63).
+  toolset into $(VCTargetsPath)). Driver projects must NOT hand-import the
+  WindowsDriver.props/.targets sheets by path; those paths do not exist in the
+  kit and break the build (MSB4019). See SC2 (Phase 63).
 -->
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
