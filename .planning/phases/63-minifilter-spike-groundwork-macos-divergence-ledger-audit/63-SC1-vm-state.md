@@ -25,6 +25,31 @@ az account show        # confirms your active subscription
 az version             # confirm CLI >= 2.55 (2024+)
 ```
 
+PS C:\Users\OMack> az account show
+{
+  "environmentName": "AzureCloud",
+  "homeTenantId": "8c10ab77-83ad-4002-ae50-e8324fa0e310",
+  "id": "98c2b71b-539f-4801-9c37-229efa10beda",
+  "isDefault": true,
+  "managedByTenants": [],
+  "name": "TWG Architecture POCs",
+  "state": "Enabled",
+  "tenantDefaultDomain": "TWGGLOBAL.onmicrosoft.com",
+  "tenantDisplayName": "TWG",
+  "tenantId": "8c10ab77-83ad-4002-ae50-e8324fa0e310",
+  "user": {
+    "name": "OMack@twgglobal.com",
+    "type": "user"
+  }
+}
+PS C:\Users\OMack> az version
+{
+  "azure-cli": "2.87.0",
+  "azure-cli-core": "2.87.0",
+  "azure-cli-telemetry": "1.1.0",
+  "extensions": {}
+}
+
 If not logged in:
 
 ```powershell
