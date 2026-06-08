@@ -36,8 +36,14 @@ Write-Output ("EWDK mounted at " + $drive + ":")
 Write-Output "=== EWDK root contents ==="
 Get-ChildItem ("${drive}:\") -ErrorAction SilentlyContinue | Select-Object Name | Out-String | Write-Output
 
-# 3. Find the non-interactive env-setup script.
-$setup = Get-ChildItem ("${drive}:\") -Recurse -Filter "SetupBuildEnv.cmd" -ErrorAction SilentlyContinue | Select-Object -First 1
+# 3. Find the non-interactive env-setup script. Check KNOWN paths first (instant);
+#    only a shallow depth-2 scan as fallback. Do NOT recurse the whole 18 GB ISO (minutes!).
+$setup = $null
+$known = @("${drive}:\BuildEnv\SetupBuildEnv.cmd", "${drive}:\SetupBuildEnv.cmd")
+foreach ($k in $known) { if (Test-Path $k) { $setup = Get-Item $k; break } }
+if (-not $setup) {
+    $setup = Get-ChildItem ("${drive}:\") -Filter "SetupBuildEnv.cmd" -Depth 2 -ErrorAction SilentlyContinue | Select-Object -First 1
+}
 Write-Output ("SetupBuildEnv.cmd: " + $(if ($setup) { $setup.FullName } else { "NOT FOUND (will fall back to LaunchBuildEnv)" }))
 
 # 4. Write a wrapper .cmd: set env (non-interactive), then msbuild. Never drops to an interactive shell.
