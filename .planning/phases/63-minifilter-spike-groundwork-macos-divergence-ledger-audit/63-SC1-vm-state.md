@@ -1,7 +1,8 @@
 # Phase 63 — SC1: Azure Test-Signing VM State + SC2: Scaffold Compile Proof
 
-**Status:** AWAITING EXECUTION — runbook drafted; human must provision the VM, paste captures, and
-record the compile result.
+**Status:** SC1 CAPTURED (2026-06-08, headless via `az vm run-command` — corporate egress blocks
+RDP/3389, so the VM was driven over the Azure agent channel instead of an interactive desktop).
+SC2 (scaffold compile) PENDING.
 
 **Purpose:** Reproducibility evidence for DRV-03 (partial). Proves the Azure Standard-security-type
 VM has TESTSIGNING on, Secure Boot off, HVCI off (SC1), and that the `drivers/nono-fltmgr/` scaffold
@@ -381,44 +382,76 @@ This snapshot is the Phase 64 starting point — if the driver install BSODs, re
 
 | Field | Value |
 |-------|-------|
-| Azure region | *(paste region, e.g. eastus)* |
-| VM size | *(paste size, e.g. Standard_D4s_v5)* |
-| Image URN (publisher:offer:sku:version) | *(paste from `az vm show` imageReference output)* |
-| Exact image version (az exactVersion) | *(paste exact version string)* |
-| VM creation date | *(paste date)* |
+| Azure region | eastus |
+| VM size | Standard_D4s_v4 (DSv5/DASv5 had 0 quota; DSv4 had headroom) |
+| Image URN (publisher:offer:sku:version) | MicrosoftWindowsDesktop:windows-11:win11-24h2-pro:latest *(exact version: run `az vm show -g rg-nono-fltmgr-spike -n nono-fltmgr-vm --query storageProfile.imageReference`)* |
+| Exact image version (az exactVersion) | *(pending `az vm show`)* |
+| VM creation date | 2026-06-07 (provisioned; OSProvisioningTimedOut on first attempt — transient — succeeded on delete+retry) |
 | Security type | Standard (NOT Trusted Launch) |
 | Secure Boot at create | Disabled (`--enable-secure-boot false`) |
+| Public IP | 20.51.161.15 |
+| Subscription | TWG Architecture POCs (98c2b71b-539f-4801-9c37-229efa10beda) |
+| Standard-security-type feature | `Microsoft.Compute/UseStandardSecurityType` registered (Owner self-serve) |
 
 ### msinfo32 Captures (Secure Boot / HVCI state)
 
-Paste the relevant msinfo32 lines here:
+> **Deviation:** captured via `az vm run-command` CLI equivalents (`Confirm-SecureBootUEFI`,
+> `Win32_DeviceGuard`) instead of the msinfo32 GUI export — RDP/3389 is blocked by corporate
+> egress, so an interactive desktop wasn't available. Same facts, more reproducible.
 
 ```
-[Paste msinfo32 Secure Boot State, Kernel DMA Protection, Virtualization-based security,
- Memory Integrity lines here]
+=== Secure Boot state ===
+Secure Boot enabled: False          # Confirm-SecureBootUEFI -> Secure Boot State: Off
+
+=== HVCI / Device Guard (Memory Integrity) ===
+VBS status (0=Off, 1=Configured-not-running, 2=Running): 0      # Virtualization-based security: Off
+SecurityServicesRunning (1=CredGuard, 2=HVCI/Memory-Integrity): 0   # Memory Integrity / HVCI: Off
 ```
 
-Expected: `Secure Boot State: Off`, `Virtualization-based security: Not enabled` or `Off`.
+Result: `Secure Boot State: Off`, `Virtualization-based security (VBS): Off`, `HVCI/Memory Integrity: Off`. ✅
 
 ### bcdedit /enum all output (TESTSIGNING state)
 
-Paste the full `bcdedit /enum all` output here. The TESTSIGNING line must read `Yes`:
+Post-reboot `bcdedit` output (Windows Boot Loader entry) — captured via `az vm run-command` 2026-06-08:
 
 ```
-[Paste full bcdedit /enum all output here]
+Windows Boot Loader
+-------------------
+identifier              {current}
+device                  partition=C:
+path                    \Windows\system32\winload.efi
+description             Windows 11
+locale                  en-US
+inherit                 {bootloadersettings}
+recoverysequence        {79531759-49f2-11f1-9285-7ced8d4f4473}
+displaymessageoverride  Recovery
+recoveryenabled         No
+testsigning             Yes
+isolatedcontext         Yes
+allowedinmemorysettings 0x15000075
+osdevice                partition=C:
+systemroot              \Windows
+resumeobject            {79531755-49f2-11f1-9285-7ced8d4f4473}
+nx                      OptIn
+bootmenupolicy          Standard
+bootstatuspolicy        IgnoreAllFailures
+ems                     Yes
 ```
 
-Expected: `testsigning                Yes` in the Windows Boot Loader section.
+Result: `testsigning   Yes` ✅. Set via `bcdedit /set testsigning on` (ExitCode 0, no Secure-Boot-policy
+error → **Pitfall A cleared**), then rebooted to take effect.
 
 ### PowerShell VBS/HVCI status (Get-CimInstance)
 
-Paste the Get-CimInstance DeviceGuard output here:
+`Get-CimInstance Win32_DeviceGuard` (via `az vm run-command`, 2026-06-08):
 
 ```
-[Paste Get-CimInstance Win32_DeviceGuard output here]
+VirtualizationBasedSecurityStatus : 0      # VBS Off
+SecurityServicesRunning           : 0      # no HVCI/CredGuard running
+OS                                : Microsoft Windows 11 Pro | Version 10.0.26100 | Build 26100
 ```
 
-Expected: `VirtualizationBasedSecurityStatus: 0` (Off).
+Result: `VirtualizationBasedSecurityStatus: 0` (Off) ✅ — HVCI off, as required for Phase 64 driver loading.
 
 ### Toolchain Version Verification
 
