@@ -54,7 +54,7 @@ Separate initiative from UPST7 (builds on merged PR #4). The v0.62.0/v0.62.1 rel
 
 ### v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity (Phases 63-66)
 
-- [ ] **Phase 63: Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit** - WDK/VM environment verified, altitude request sent, design doc written; macOS upstream commit inventory v0.57.0..v0.61.2 complete
+- [x] **Phase 63: Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit** (completed 2026-06-08) - WDK/VM environment verified, altitude request sent, design doc written; macOS upstream commit inventory v0.57.0..v0.61.2 complete
 - [ ] **Phase 64: Minifilter Spike Implementation + macOS P1 Cherry-pick Wave** - end-to-end pre-create interception + policy IPC roundtrip proven on test VM; P1 security/correctness macOS commits absorbed
 - [ ] **Phase 65: Minifilter ADR + macOS Live Re-validation** - go/no-go ADR committed with latency data; macOS Seatbelt re-validated on real host with CI macOS build green (hard gate)
 - [ ] **Phase 66: WR-02 EDR HUMAN-UAT** - ~10 pass/fail assertions recorded against real EDR runner; WR-02 closed or explicitly re-scoped
