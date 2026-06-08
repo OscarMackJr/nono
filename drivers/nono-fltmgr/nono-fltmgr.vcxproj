@@ -71,18 +71,19 @@
       <!-- Minifilters link against FltMgr.lib for FltRegisterFilter etc. -->
       <AdditionalDependencies>fltMgr.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <Inf>
-      <TimeStamp>$(DefaultInfTimeStamp)</TimeStamp>
-    </Inf>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClCompile Include="nono-fltmgr.c" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Inf Include="nono-fltmgr.inf" />
-  </ItemGroup>
+  <!--
+    nono-fltmgr.inf is intentionally NOT part of the compile-proof build.
+    SC2 (Phase 63) proves only that the driver SOURCE compiles to a .sys kernel
+    binary. INF stamping/packaging (DriverVer, catalog, altitude install) is a
+    Phase 64 concern, where the real driver + a complete installable INF land.
+    The committed nono-fltmgr.inf remains the altitude-band placeholder source.
+  -->
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
