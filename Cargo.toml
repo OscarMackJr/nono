@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/nono",
     "crates/nono-cli",
+    "crates/nono-fltmgr-client",
     "crates/nono-proxy",
     "crates/nono-shell-broker",
     "bindings/c",
