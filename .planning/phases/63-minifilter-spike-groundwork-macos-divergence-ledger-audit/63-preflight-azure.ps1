@@ -103,6 +103,23 @@ foreach ($ns in @("Microsoft.Compute", "Microsoft.Network")) {
 }
 
 # ----------------------------------------------------------------------------
+Head "2b. Standard security-type feature (opt out of Trusted Launch)"
+Write-Host "  Gen2 VMs default to Trusted Launch; --security-type Standard needs a subscription feature flag." -ForegroundColor DarkGray
+$featOk = $false
+foreach ($fn in @("UseStandardSecurityType", "StandardSecurityTypeAsFirstClassEnum")) {
+    $f = Invoke-Az @("feature", "show", "--namespace", "Microsoft.Compute", "--name", $fn)
+    if ($null -eq $f) { continue }
+    if ($f.properties.state -eq "Registered") { Pass "Microsoft.Compute/$fn = Registered"; $featOk = $true }
+    else { Warn "Microsoft.Compute/$fn = $($f.properties.state)" }
+}
+if (-not $featOk) {
+    Fail "Standard security type not enabled (Trusted Launch is forced). Owner can self-serve — register, wait, re-register provider:"
+    Write-Host "    az feature register --namespace Microsoft.Compute --name UseStandardSecurityType" -ForegroundColor DarkGray
+    Write-Host "    az feature show --namespace Microsoft.Compute --name UseStandardSecurityType --query properties.state -o tsv   # wait for 'Registered'" -ForegroundColor DarkGray
+    Write-Host "    az provider register --namespace Microsoft.Compute" -ForegroundColor DarkGray
+}
+
+# ----------------------------------------------------------------------------
 Head "3. RBAC (VM-deploy capability)"
 Write-Host "  (Entra 'Application Administrator' is a directory role and does NOT grant VM deploy rights.)" -ForegroundColor DarkGray
 $assignee = $acct.user.name
