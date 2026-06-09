@@ -19,12 +19,20 @@ Signature   = "$Windows NT$"
 Class       = "ActivityMonitor"
 ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
 Provider    = %ManufacturerName%
-DriverVer   =
+DriverVer   = 06/09/2026,1.0.0.0
 CatalogFile = nono-fltmgr.cat
 
 [DestinationDirs]
 DefaultDestDir          = 12   ; \Windows\System32\drivers
 MiniFilter.DriverFiles  = 12
+
+; inf2cat requires every copied file to be declared in [SourceDisksFiles],
+; mapped to a disk in [SourceDisksNames]. Disk 1 = the local build output dir.
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+nono-fltmgr.sys = 1,,
 
 [DefaultInstall.NTamd64]
 OptionDesc  = %ServiceDescription%
@@ -60,6 +68,7 @@ DelService = %ServiceName%,0x200   ; 0x200 = SPSVCINST_STOPSERVICE
 
 [Strings]
 ManufacturerName    = "nono"
+DiskName            = "nono-fltmgr Installation Disk"
 ServiceName         = "nono-fltmgr"
 ServiceDescription  = "nono Gap 6b minifilter feasibility spike (TEST-SIGNED POC)"
 DefaultInstance     = "nono-fltmgr Instance"
