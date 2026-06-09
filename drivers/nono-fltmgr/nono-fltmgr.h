@@ -7,7 +7,7 @@
 // BSOD-avoidance contract: see drivers/nono-fltmgr/DESIGN.md (hard pre-code gate).
 //
 // Rust-side mirror: crates/nono-fltmgr-client/src/lib.rs NonoIpcRequest.
-// The _Static_assert / C_ASSERT below MUST match the Rust-side layout assertion:
+// The C_ASSERT below MUST match the Rust-side layout assertion:
 //   size_of::<NonoIpcRequest>() - size_of::<FILTER_MESSAGE_HEADER>() == 532
 //
 // Phase 64 DRV-01/DRV-02 spike. NOT production-ready; test-VM use only.
@@ -52,14 +52,12 @@ typedef struct _NONO_IPC_REQUEST {
 } NONO_IPC_REQUEST, *PNONO_IPC_REQUEST;
 #pragma pack(pop)
 
-// Compile-time size assertion (C11 _Static_assert; supported in VS 2019+ / WDK).
-// If the toolchain does not support _Static_assert, fall back to the WDK macro:
-//   C_ASSERT(sizeof(NONO_IPC_REQUEST) == 532);
+// Compile-time size assertion. Uses the WDK C_ASSERT macro, NOT C11 _Static_assert:
+// the kernel-mode C toolchain (/kernel /TC) does not accept _Static_assert here
+// (it parses as an undeclared identifier -> C2143/C2059). C_ASSERT works in C
+// kernel mode and is the WDK-idiomatic compile-time check.
 // The value 532 MUST match the Rust-side: size_of::<NonoIpcRequest>() - size_of::<FILTER_MESSAGE_HEADER>() == 532
-_Static_assert(sizeof(NONO_IPC_REQUEST) == 532, "NONO_IPC_REQUEST layout changed");
-
-// C_ASSERT fallback (uncomment if _Static_assert is not recognized by the WDK toolchain):
-// C_ASSERT(sizeof(NONO_IPC_REQUEST) == 532);
+C_ASSERT(sizeof(NONO_IPC_REQUEST) == 532);
 
 // ---------------------------------------------------------------------------
 // NONO_IPC_REPLY — user-to-kernel reply payload

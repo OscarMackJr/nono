@@ -80,7 +80,8 @@ simultaneously.
 
 3. **`NonPagedPoolNx` for all callback-reachable allocations.** Any structure allocated in a
    pre-create callback or passed to the worker thread must be allocated with
-   `ExAllocatePool2(POOL_FLAG_NON_PAGED_NX, ...)` (WDK 21H1+) or
+   `ExAllocatePool2(POOL_FLAG_NON_PAGED, ...)` (WDK 21H1+; non-paged is NX by default in the
+   POOL_FLAGS scheme — there is no `POOL_FLAG_NON_PAGED_NX`) or
    `ExAllocatePoolWithTag(NonPagedPoolNx, ...)` (legacy). `PagedPool` is forbidden in
    callbacks that may run at IRQL > PASSIVE_LEVEL.
 

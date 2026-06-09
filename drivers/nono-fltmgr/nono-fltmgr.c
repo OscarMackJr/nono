@@ -20,7 +20,7 @@
 //
 // Design rules enforced:
 //   - Ring buffer lock is RELEASED before FltSendMessage (DESIGN.md Rule 5: no lock across send)
-//   - All callback-reachable allocations: ExAllocatePool2(POOL_FLAG_NON_PAGED_NX, ...) only
+//   - All callback-reachable allocations: ExAllocatePool2(POOL_FLAG_NON_PAGED, ...) only (NX by default)
 //   - Worker thread completes ALL pending IRPs before exit (Pitfall A: IRP leak prevention)
 
 #include <fltKernel.h>
@@ -43,11 +43,11 @@ PFLT_PORT gClientPort = NULL;
 // RESEARCH.md Open Question 2 resolution).
 typedef struct _NONO_RING_ENTRY {
     // Heap-allocated NONO_IPC_REQUEST payload (allocated in NonoPreCreate via
-    // ExAllocatePool2(POOL_FLAG_NON_PAGED_NX); freed in NonoWorkerThread after send).
+    // ExAllocatePool2(POOL_FLAG_NON_PAGED); freed in NonoWorkerThread after send).
     PNONO_IPC_REQUEST pRequest;
 
     // FLT_CALLBACK_DATA for the pending IRP. Used by the worker thread to call
-    // FltCompletePendingPreOp after the policy round-trip.
+    // FltCompletePendedPreOperation after the policy round-trip.
     PFLT_CALLBACK_DATA Data;
 
     // TRUE if this slot holds a pending request, FALSE if empty.
@@ -179,7 +179,7 @@ NonoPreCreate(
     // Allocate ring-buffer payload from NonPagedPoolNx (DESIGN.md T-63-03: required for
     // callback-reachable allocations; PagedPool is forbidden at APC_LEVEL or above).
     PNONO_IPC_REQUEST pReq = (PNONO_IPC_REQUEST)ExAllocatePool2(
-        POOL_FLAG_NON_PAGED_NX,
+        POOL_FLAG_NON_PAGED,  // non-paged + no-execute (NX) by default in the POOL_FLAGS scheme
         sizeof(NONO_IPC_REQUEST),
         'onoN');  // Pool tag 'NoNo' reversed per WDK convention
     if (pReq == NULL) {
@@ -234,7 +234,7 @@ NonoPreCreate(
     // Wake the worker thread.
     KeSetEvent(&g_RingBufferEvent, IO_NO_INCREMENT, FALSE);
 
-    // Return PENDING — IRP is suspended until NonoWorkerThread calls FltCompletePendingPreOp.
+    // Return PENDING — IRP is suspended until NonoWorkerThread calls FltCompletePendedPreOperation.
     // MUST NOT return FLT_PREOP_COMPLETE from here (see RESEARCH.md Anti-Patterns).
     return FLT_PREOP_PENDING;
 }
@@ -327,10 +327,10 @@ NonoWorkerThread(
         pRequest = NULL;
 
         // Complete the pending IRP. Sets Data->IoStatus and invokes completion chain.
-        // FltCompletePendingPreOp is the correct function for completing a PENDING pre-op IRP.
+        // FltCompletePendedPreOperation is the correct function for completing a PENDING pre-op IRP.
         pendingData->IoStatus.Status      = irpStatus;
         pendingData->IoStatus.Information = 0;
-        FltCompletePendingPreOp(pendingData, FLT_PREOP_COMPLETE, NULL);
+        FltCompletePendedPreOperation(pendingData, FLT_PREOP_COMPLETE, NULL);
     }
 
     // Worker thread termination. PsTerminateSystemThread does not return.
@@ -434,7 +434,7 @@ NonoInstanceTeardownStart(
         if (pendingData != NULL) {
             pendingData->IoStatus.Status      = STATUS_SUCCESS;
             pendingData->IoStatus.Information = 0;
-            FltCompletePendingPreOp(pendingData, FLT_PREOP_COMPLETE, NULL);
+            FltCompletePendedPreOperation(pendingData, FLT_PREOP_COMPLETE, NULL);
         }
         if (pRequest != NULL) {
             ExFreePoolWithTag(pRequest, 'onoN');
