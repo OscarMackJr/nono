@@ -2048,7 +2048,7 @@ pub(super) fn handle_windows_supervisor_message(
                 match recorder_mutex.lock() {
                     Ok(mut recorder) => {
                         if let Err(e) =
-                            recorder.record_capability_decision(entry.clone(), reject_stage)
+                            recorder.record_capability_decision_with_reject_stage(entry.clone(), reject_stage)
                         {
                             tracing::warn!(
                                 request_id = %request_id,

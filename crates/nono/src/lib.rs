@@ -46,6 +46,7 @@
 //! - **Other platforms**: Returns `UnsupportedPlatform` error
 
 pub mod agent;
+pub mod audit;
 pub mod capability;
 pub mod diagnostic;
 pub mod error;
