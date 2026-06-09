@@ -223,6 +223,12 @@ pub(crate) fn print_allow_launch_services_warning(silent: bool) {
 fn resolved_workdir(args: &SandboxArgs) -> PathBuf {
     args.workdir
         .clone()
+        .or_else(|| {
+            // $PWD preserves the symlink path; current_dir() resolves it. Prefer
+            // $PWD so the CWD capability covers the symlink form (e.g. /tmp rather
+            // than /private/tmp) when `nono run` is invoked without --workdir.
+            std::env::var("PWD").ok().map(PathBuf::from)
+        })
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."))
 }
