@@ -340,27 +340,31 @@ NonoWorkerThread(
             &replyLen,
             &timeout);
 
-        // Determine the IRP completion status based on the send result.
-        NTSTATUS irpStatus;
-        if (sendStatus == STATUS_TIMEOUT || !NT_SUCCESS(sendStatus)) {
-            // DESIGN.md T-63-02 fail-open: permit I/O on timeout or any send error.
-            // Spike policy: STATUS_TIMEOUT -> allow (STATUS_SUCCESS).
-            irpStatus = STATUS_SUCCESS;
-        } else {
-            // STATUS_SUCCESS: apply the policy decision from the user-mode client.
-            // reply.Decision == 1 -> deny; any other value -> allow (fail-open for out-of-range).
-            irpStatus = (reply.Decision == 1) ? STATUS_ACCESS_DENIED : STATUS_SUCCESS;
-        }
+        // Decide allow vs deny. Fail-open on timeout or any send error (DESIGN.md
+        // T-63-02). Only an explicit reply.Decision == 1 denies.
+        BOOLEAN deny = (sendStatus != STATUS_TIMEOUT)
+                       && NT_SUCCESS(sendStatus)
+                       && (reply.Decision == 1);
 
         // Free the ring-buffer payload (allocated in NonoPreCreate with ExAllocatePool2).
         ExFreePoolWithTag(pRequest, 'onoN');
         pRequest = NULL;
 
-        // Complete the pending IRP. Sets Data->IoStatus and invokes completion chain.
-        // FltCompletePendedPreOperation is the correct function for completing a PENDING pre-op IRP.
-        pendingData->IoStatus.Status      = irpStatus;
-        pendingData->IoStatus.Information = 0;
-        FltCompletePendedPreOperation(pendingData, FLT_PREOP_COMPLETE, NULL);
+        // Complete the pended create. The completion STATUS is NOT the same as the
+        // FLT_PREOP_* code:
+        //   DENY  -> FLT_PREOP_COMPLETE + STATUS_ACCESS_DENIED: we finish the create
+        //            ourselves; the file is never opened and the op is NOT passed down.
+        //   ALLOW -> FLT_PREOP_SUCCESS_NO_CALLBACK: RESUME the create down the stack so
+        //            the file system actually opens the file. Using FLT_PREOP_COMPLETE
+        //            with STATUS_SUCCESS here would "complete" the create WITHOUT opening
+        //            anything, surfacing to the caller as "The parameter is incorrect".
+        if (deny) {
+            pendingData->IoStatus.Status      = STATUS_ACCESS_DENIED;
+            pendingData->IoStatus.Information  = 0;
+            FltCompletePendedPreOperation(pendingData, FLT_PREOP_COMPLETE, NULL);
+        } else {
+            FltCompletePendedPreOperation(pendingData, FLT_PREOP_SUCCESS_NO_CALLBACK, NULL);
+        }
     }
 
     // Worker thread termination. PsTerminateSystemThread does not return.
@@ -464,11 +468,11 @@ NonoInstanceTeardownStart(
         g_RingEntry.Occupied  = FALSE;
         KeReleaseSpinLock(&g_RingLock, oldIrql);
 
-        // Complete the IRP with STATUS_SUCCESS (fail-open) to avoid IRP leak.
+        // Fail-open: RESUME the pended create down the stack (FLT_PREOP_SUCCESS_NO_CALLBACK)
+        // so the file is actually opened. Do NOT use FLT_PREOP_COMPLETE + STATUS_SUCCESS —
+        // that finishes the create without opening anything ("parameter is incorrect").
         if (pendingData != NULL) {
-            pendingData->IoStatus.Status      = STATUS_SUCCESS;
-            pendingData->IoStatus.Information = 0;
-            FltCompletePendedPreOperation(pendingData, FLT_PREOP_COMPLETE, NULL);
+            FltCompletePendedPreOperation(pendingData, FLT_PREOP_SUCCESS_NO_CALLBACK, NULL);
         }
         if (pRequest != NULL) {
             ExFreePoolWithTag(pRequest, 'onoN');
