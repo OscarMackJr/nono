@@ -242,12 +242,19 @@ NonoPreCreate(
     KeAcquireSpinLock(&g_RingLock, &oldIrql);
 
     if (g_RingEntry.Occupied) {
-        // Back-pressure: the single slot is full. Fail-open and free this request.
-        // RESEARCH.md Open Question 2: single-slot is the spike design choice.
+        // Back-pressure: the single slot is busy with another round-trip. We only
+        // reach here for the watched deny-target file (pre-filtered above), whose
+        // policy is DENY, so fail CLOSED (deny) rather than fail-open. This makes the
+        // deny deterministic despite single-slot contention (the slot-winning open
+        // still does the full user-mode round-trip, so DRV-02 is still proven) and is
+        // the fail-secure choice for a security filter. RESEARCH.md Open Question 2:
+        // single-slot is the spike design choice.
         KeReleaseSpinLock(&g_RingLock, oldIrql);
         ExFreePoolWithTag(pReq, 'onoN');
         FltReleaseFileNameInformation(nameInfo);
-        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+        Data->IoStatus.Status      = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        return FLT_PREOP_COMPLETE;
     }
 
     // Enqueue: store request + callback data in the ring slot.
