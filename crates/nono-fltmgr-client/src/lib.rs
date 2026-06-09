@@ -167,13 +167,25 @@ mod client {
             let path = String::from_utf16_lossy(&path_local);
             let path = path.trim_end_matches('\0');
 
-            // Policy: deny if the normalized path matches the configured deny target
-            // (case-insensitive ASCII comparison — Windows paths are case-insensitive).
-            let decision: u32 = if path.eq_ignore_ascii_case(deny_path) {
-                1 // deny
-            } else {
-                0 // allow
+            // Policy: deny if the intercepted path matches the configured deny target.
+            // The kernel reports the OPENED name in device form (e.g.
+            // \Device\HarddiskVolumeN\nono-deny-test\secret.txt), which does NOT
+            // exact-match a "C:\..." deny target. Compare on the path tail (everything
+            // from the first backslash — drive/volume independent) so the device form
+            // and the drive form match. Case-insensitive (Windows paths are).
+            let deny_tail = match deny_path.find('\\') {
+                Some(idx) => &deny_path[idx..],
+                None => deny_path,
             };
+            let is_deny = !deny_tail.is_empty()
+                && path
+                    .to_ascii_lowercase()
+                    .ends_with(&deny_tail.to_ascii_lowercase());
+            let decision: u32 = if is_deny { 1 } else { 0 };
+
+            // Spike diagnostics: log each intercepted create + decision to stderr so the
+            // round-trip is visible and the SC1 evidence can capture the DENY line.
+            eprintln!("[{}] {}", if is_deny { "DENY " } else { "allow" }, path);
 
             // Echo the MessageId so the kernel can correlate the reply to the
             // pending FltSendMessage call (single-connection spike — trivially correct).

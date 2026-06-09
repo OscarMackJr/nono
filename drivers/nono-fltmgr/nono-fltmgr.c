@@ -170,12 +170,15 @@ NonoPreCreate(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    // Get the normalized file name. FLT_FILE_NAME_NORMALIZED resolves symlinks for
-    // accurate path matching. On failure: fail-open (no deny possible without the name).
+    // Get the OPENED file name. In a pre-create callback the create has NOT yet been
+    // processed by the file system, so requesting FLT_FILE_NAME_NORMALIZED here can
+    // DEADLOCK: normalization may issue I/O that re-enters NonoPreCreate (system-wide
+    // hang once a client is connected). FLT_FILE_NAME_OPENED is the name form that is
+    // safe to query in pre-create. On failure: fail-open (no deny without the name).
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     NTSTATUS status = FltGetFileNameInformation(
         Data,
-        FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT,
+        FLT_FILE_NAME_OPENED | FLT_FILE_NAME_QUERY_DEFAULT,
         &nameInfo);
     if (!NT_SUCCESS(status)) {
         // Fail-open: cannot determine the file path; permit the I/O.
