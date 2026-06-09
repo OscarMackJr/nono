@@ -414,9 +414,16 @@ NonoPortMessage(
 // ---------------------------------------------------------------------------
 // NonoInstanceTeardownStart — InstanceTeardownStartCallback
 //
-// Called before an instance of this filter is torn down. Used to close the
-// server port and drain any pending IRP from the ring buffer before
-// FltUnregisterFilter runs, preventing the IRP-leak scenario (PITFALLS Pitfall A).
+// Called before EACH per-volume instance is torn down. Drains any pending IRP
+// from the (global, single-slot) ring buffer so a tearing-down instance never
+// leaks a pended IRP (PITFALLS Pitfall A).
+//
+// IMPORTANT: this callback fires PER INSTANCE (per volume), so it must NOT touch
+// driver-global resources like the communication port. Closing gServerPort here
+// destroyed \NonoPolicyPort for the whole driver the first time ANY volume's
+// instance tore down — the user-mode client then gets ERROR_FILE_NOT_FOUND
+// (0x80070002) on connect. The server port is a driver-wide resource: created
+// once in DriverEntry, closed once in NonoFltUnload.
 // ---------------------------------------------------------------------------
 VOID
 NonoInstanceTeardownStart(
@@ -426,11 +433,8 @@ NonoInstanceTeardownStart(
     UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(ReasonFlags);
 
-    // Close the server port if it is still open.
-    if (gServerPort != NULL) {
-        FltCloseCommunicationPort(gServerPort);
-        gServerPort = NULL;
-    }
+    // Do NOT close gServerPort here (see header comment) — it is driver-wide and
+    // is closed in NonoFltUnload, not per-instance.
 
     // Drain any pending IRP in the ring buffer (Pitfall A: IRP-leak prevention).
     KIRQL oldIrql;
