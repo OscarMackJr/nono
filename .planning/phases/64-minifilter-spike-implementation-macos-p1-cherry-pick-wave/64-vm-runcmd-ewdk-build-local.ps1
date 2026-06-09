@@ -13,7 +13,8 @@ $log     = "$src\msbuild.log"
 $err     = "$src\msbuild.err"
 $wrapper = "$src\dobuild.cmd"
 $proj    = "$src\nono-fltmgr.vcxproj"
-$required = "nono-fltmgr.c","nono-fltmgr.vcxproj","nono-fltmgr.vcxproj.filters","nono-fltmgr.inf"
+# nono-fltmgr.h is required to compile (nono-fltmgr.c #includes it; added in Phase 64 Plan 64-02).
+$required = "nono-fltmgr.c","nono-fltmgr.h","nono-fltmgr.vcxproj","nono-fltmgr.vcxproj.filters","nono-fltmgr.inf"
 
 if (-not (Test-Path $ewdkIso)) { Write-Output "ERROR: $ewdkIso not found. Run 63-vm-runcmd-ewdk-download.ps1 first."; return }
 if (-not (Test-Path $proj))    { Write-Output "ERROR: $proj not found. Copy drivers\nono-fltmgr\ to C:\nono-fltmgr on the VM first."; return }
