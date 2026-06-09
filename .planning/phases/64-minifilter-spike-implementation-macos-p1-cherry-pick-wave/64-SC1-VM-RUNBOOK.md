@@ -125,8 +125,10 @@ VM without a desktop:
 az vm run-command invoke -g rg-nono-fltmgr-spike -n nono-fltmgr-vm `
   --command-id RunPowerShellScript --scripts "bcdedit /enum | Select-String testsigning"
 ```
-> **⚠ Phase 63 lesson:** `az vm run-command` is great for one-liners but **wedges on interactive
-> programs** (like `LaunchBuildEnv.cmd`). Do the build and driver-load from the **Bastion desktop**.
+> **⚠ Phase 63 lesson:** `az vm run-command` is great for one-liners and for the headless build
+> script in §4 Option 1 (which uses the non-interactive `SetupBuildEnv.cmd`), but it **wedges on
+> interactive programs** like `LaunchBuildEnv.cmd`. Do the **driver load** (§6–§7) and the deny
+> harness (§9) from the **Bastion desktop** (they need an interactive elevated console).
 
 **Sanity check on the VM (Bastion desktop, elevated PowerShell — "Run as administrator"):**
 ```powershell
@@ -141,35 +143,77 @@ not `Yes`, run `bcdedit /set testsigning on` then `shutdown /r /t 0` and reconne
 
 ## 4. Build the driver `.sys` on the VM
 
-Copy the repo's `drivers/nono-fltmgr/` folder to the VM (drag-drop through the Bastion clipboard, or
-`scp` if OpenSSH is up). Say you put it at `C:\nono-fltmgr`.
+The build toolchain is the **EWDK ISO** (~15 GB, mounted on the VM). The ISO has two env-setup scripts
+at its root, and the difference is the whole Phase 63 gotcha:
+- **`SetupBuildEnv.cmd`** — configures the *current* shell (non-interactive). Use this for scripts/headless.
+- **`LaunchBuildEnv.cmd`** — opens a *new interactive* build shell. Fine when a human types in it
+  (Bastion); **hangs forever** when piped through `az vm run-command` (no console). This is the wedge.
 
-⚠ **Make sure you copied the latest version** — Phase 64 Plan 64-02 rewrote `nono-fltmgr.c` (the
-pre-create callback, ring buffer, worker thread, and the `\NonoPolicyPort`). An old Phase 63 copy is
-just an empty skeleton and will not deny anything.
+The drive letter the ISO mounts as (`D:`, `E:`, …) is **whatever Windows assigns** — never assume it;
+read it after mounting.
 
-In the **Bastion desktop**, open the EWDK build shell and build:
+⚠ **Stage the latest driver source first.** Phase 64 Plan 64-02 rewrote `nono-fltmgr.c` (pre-create
+callback, ring buffer, worker thread, `\NonoPolicyPort`) and §5 changes the INF altitude. An old
+Phase 63 copy is an empty skeleton and will not deny anything.
+
+### Option 1 — Recommended: headless, no Bastion, no hang
+
+Phase 63/64 ship run-command scripts that mount the ISO, set env via `SetupBuildEnv.cmd`, build with a
+hard 7-minute timeout, and report the `.sys`. Run from the **dev host** (pwsh):
+
+```powershell
+$p63 = ".planning\phases\63-minifilter-spike-groundwork-macos-divergence-ledger-audit"
+$p64 = ".planning\phases\64-minifilter-spike-implementation-macos-p1-cherry-pick-wave"
+
+# First time only — download the EWDK ISO onto the VM (to C:\ewdk\ewdk.iso, ~15 GB):
+az vm run-command invoke -g rg-nono-fltmgr-spike -n nono-fltmgr-vm `
+  --command-id RunPowerShellScript --scripts "@$p63\63-vm-runcmd-ewdk-download.ps1" `
+  --query "value[0].message" -o tsv
+
+# Build the copy you staged at C:\nono-fltmgr on the VM (does NOT fetch from the repo):
+az vm run-command invoke -g rg-nono-fltmgr-spike -n nono-fltmgr-vm `
+  --command-id RunPowerShellScript --scripts "@$p64\64-vm-runcmd-ewdk-build-local.ps1" `
+  --query "value[0].message" -o tsv
+```
+**Expected tail:** `BUILD PASS: nono-fltmgr.sys produced (5,120 bytes)`. The script also prints the
+staged INF altitude so you can confirm §5 took effect.
+
+> Stage the source first by copying `drivers\nono-fltmgr\` into `C:\nono-fltmgr` on the VM (Bastion
+> clipboard drag-drop, or `scp` if OpenSSH is up). `64-vm-runcmd-ewdk-build-local.ps1` builds **that
+> local copy**, so you do NOT have to push Phase 64 changes to `main` first.
+>
+> (There is also `63-vm-runcmd-ewdk-build.ps1`, which *fetches* the scaffold from
+> `raw.githubusercontent.com/OscarMackJr/nono/main` — only use that if your changes are already on `main`.)
+
+### Option 2 — Manual, in the Bastion desktop (interactive)
+
+```powershell
+# On the VM (PowerShell): mount the ISO and READ the drive letter (don't assume D:):
+$img   = Mount-DiskImage -ImagePath C:\ewdk\ewdk.iso -PassThru
+Start-Sleep 4
+$drive = ($img | Get-Volume).DriveLetter
+"EWDK mounted at ${drive}:"
+```
+Then open a **cmd** window and launch the build env (use the letter from above; example `E:`):
 ```cmd
-:: Mount the EWDK ISO if it isn't already (drive letter may differ):
-::   powershell Mount-DiskImage -ImagePath C:\path\to\ewdk.iso
-:: Open the build environment (run from the EWDK mount, e.g. D:):
-D:\LaunchBuildEnv.cmd
-
+E:\LaunchBuildEnv.cmd
+```
+That drops you into a **new shell** with the toolchain on PATH. In *that* shell:
+```cmd
 cd C:\nono-fltmgr
 msbuild nono-fltmgr.vcxproj /p:Configuration=Release /p:Platform=x64
 dir x64\Release\nono-fltmgr.sys
 ```
-**Expected:**
-```
-Build succeeded.
-    0 Warning(s)
-    0 Error(s)
-```
-and a `nono-fltmgr.sys` (~5 KB) in `x64\Release\`.
+**Expected:** `Build succeeded. 0 Warning(s) 0 Error(s)` and a ~5 KB `nono-fltmgr.sys` in `x64\Release\`.
+When done: `Dismount-DiskImage -ImagePath C:\ewdk\ewdk.iso`.
 
-> **⚠ Phase 63 lesson:** if you build through `az vm run-command` instead of Bastion, the build env
-> launcher hangs forever. If `msbuild` errors on INF stamping (`stampinf exit 87`) or test-signing,
-> you have an old `.vcxproj`; re-copy the current repo copy (those were fixed in Phase 63).
+> Prefer not to spawn a new shell? Run `E:\BuildEnv\SetupBuildEnv.cmd` instead of `LaunchBuildEnv.cmd`
+> — it configures the *current* cmd window, then `cd` + `msbuild` in the same window.
+
+> **⚠ Phase 63 lessons:** (1) do **not** run `LaunchBuildEnv.cmd` through `az vm run-command` — it
+> hangs (use Option 1, which uses `SetupBuildEnv.cmd`). (2) If `msbuild` errors on INF stamping
+> (`stampinf exit 87`) or auto test-signing deletes the `.sys`, you have an old `.vcxproj` — re-copy
+> the current repo copy (those were fixed in Phase 63; you sign manually in §6).
 
 ---
 
