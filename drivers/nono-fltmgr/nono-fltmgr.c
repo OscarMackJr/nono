@@ -62,6 +62,13 @@ KEVENT          g_RingBufferEvent;
 BOOLEAN gWorkerRunning      = FALSE;
 HANDLE  gWorkerThreadHandle = NULL;
 
+// Spike scoping (D-02): NonoPreCreate only round-trips creates whose final path
+// component matches this name to user mode. WITHOUT this, every file open on the
+// system would be routed through the single-slot ring + user-mode round-trip,
+// making the desktop unusably slow (appears as a hang). A real capability sandbox
+// scopes by policy; the spike scopes to the deterministic deny-target file name.
+DECLARE_CONST_UNICODE_STRING(gWatchedFileName, L"secret.txt");
+
 // ---------------------------------------------------------------------------
 // Forward declarations
 // ---------------------------------------------------------------------------
@@ -185,8 +192,18 @@ NonoPreCreate(
         return FLT_PREOP_SUCCESS_NO_CALLBACK;
     }
 
-    // Parse the name information to populate nameInfo->Name.
+    // Parse the name information to populate nameInfo->Name / FinalComponent.
     FltParseFileNameInformation(nameInfo);
+
+    // Spike scoping: ignore every create except the watched deny-target file name.
+    // FinalComponent is the leaf (e.g. "secret.txt"). Non-matching creates pass
+    // through immediately (fail-open), so ONLY the target is round-tripped to user
+    // mode — this keeps the rest of the system fast instead of routing every open
+    // through the single-slot ring. Case-insensitive (Windows paths are).
+    if (!RtlEqualUnicodeString(&nameInfo->FinalComponent, &gWatchedFileName, TRUE)) {
+        FltReleaseFileNameInformation(nameInfo);
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
 
     // DESIGN.md T-63-01: DO NOT call ZwCreateFile, NtCreateFile, or any file I/O API here.
     // Allocate ring-buffer payload from NonPagedPoolNx (DESIGN.md T-63-03: required for
