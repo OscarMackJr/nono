@@ -130,7 +130,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 63. Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit | 3/3 | Complete    | 2026-06-08 |
-| 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 5/5 | Complete   | 2026-06-09 |
+| 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 5/5 | Complete    | 2026-06-09 |
 | 65. Minifilter ADR + macOS Live Re-validation | 0/TBD | Not started | - |
 | 66. WR-02 EDR HUMAN-UAT | 0/TBD | Not started | - |
 
