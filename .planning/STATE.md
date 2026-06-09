@@ -165,6 +165,12 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 260516-mxw-fix-handletarget-import-linux
 ```
 
+## Quick Tasks Completed
+
+| Date | Slug | Deliverable |
+|------|------|-------------|
+| 2026-06-08 | vm-driver-signing-runbook | `64-SC1-VM-RUNBOOK.md` — junior-friendly cookbook for the Phase 64 Track A VM minifilter test-signing + deny harness (Phase 63 UAT lessons baked in) |
+
 ## Session Continuity
 
 **Last session:** 2026-06-08T21:20:01.666Z
