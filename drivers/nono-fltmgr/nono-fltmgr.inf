@@ -68,5 +68,5 @@ Instance1.Name      = "nono-fltmgr Instance"
 ; Phase 64 picks the final non-colliding number after `fltmc filters` enumeration
 ; on the test VM and after the Microsoft altitude-assignment reply arrives.
 ; MUST NOT use range 320000–329998 (AV/EDR range; Pitfall 5 altitude collision).
-Instance1.Altitude  = "370020"
+Instance1.Altitude  = "365678"
 Instance1.Flags     = 0x0
