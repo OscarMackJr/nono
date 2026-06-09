@@ -202,16 +202,25 @@ mod client {
                 decision,
             };
 
-            // SAFETY: `reply.header` is the first field of `ReplyBuf` (repr(C)).
-            // The pointer is valid for `size_of::<ReplyBuf>()` bytes. The port handle
-            // is still valid (we only close it after a FilterGetMessage failure above).
-            unsafe {
-                FilterReplyMessage(
-                    port,
-                    std::ptr::addr_of_mut!(reply.header),
-                    std::mem::size_of::<ReplyBuf>() as u32,
-                )
+            // The driver's FltSendMessage reply buffer is NONO_IPC_REPLY (a single
+            // ULONG Decision = 4 bytes), so FilterReplyMessage MUST send exactly
+            // sizeof(FILTER_REPLY_HEADER) + 4 bytes. Do NOT use size_of::<ReplyBuf>():
+            // ReplyBuf is 8-byte aligned (FILTER_REPLY_HEADER contains a u64) so it is
+            // padded to 24 bytes; sending 24 makes FilterReplyMessage fail, the kernel
+            // never receives the decision, and the driver times out and fail-opens
+            // (the create is allowed even though we decided DENY).
+            let reply_size =
+                (std::mem::size_of::<FILTER_REPLY_HEADER>() + std::mem::size_of::<u32>()) as u32;
+
+            // SAFETY: `reply.header` is the first field of `ReplyBuf` (repr(C)); the
+            // buffer is valid for `reply_size` bytes (header at offset 0, decision at
+            // offset 16). The port handle is still valid here.
+            let reply_hr = unsafe {
+                FilterReplyMessage(port, std::ptr::addr_of_mut!(reply.header), reply_size)
             };
+            if reply_hr != 0 {
+                eprintln!("FilterReplyMessage failed (HRESULT=0x{reply_hr:08X}) for {path}");
+            }
         }
 
         Ok(())
