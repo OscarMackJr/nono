@@ -103,7 +103,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
 - [x] 64-02-PLAN.md — Extend nono-fltmgr.c with pre-create callback + ring buffer + IPC port (Wave 1, autonomous; DRV-01, DRV-02)
 - [x] 64-03-PLAN.md — Implement run_policy_client + cherry-pick 8f1b0b74+362ada22 (Wave 2, autonomous; DRV-02, MACOS-02)
 - [x] 64-04-PLAN.md — Cherry-pick 8f84d454 + cross-target clippy + VM test-sign+load+deny proof (Wave 3, autonomous+human; DRV-01, DRV-03, MACOS-02)
-- [ ] 64-05-PLAN.md — Write drivers/README.md + make test phase close gate (Wave 4, autonomous; DRV-01..03, MACOS-02)
+- [x] 64-05-PLAN.md — Write drivers/README.md + make test phase close gate (Wave 4, autonomous; DRV-01..03, MACOS-02)
 
 ### Phase 65: Minifilter ADR + macOS Live Re-validation
 **Goal**: The go/no-go ADR formalizes the spike verdict with latency data, and the macOS Seatbelt layer is confirmed correct on a real macOS host with CI green as a hard close gate
@@ -130,7 +130,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 63. Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit | 3/3 | Complete    | 2026-06-08 |
-| 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 4/5 | In Progress|  |
+| 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 5/5 | Complete   | 2026-06-09 |
 | 65. Minifilter ADR + macOS Live Re-validation | 0/TBD | Not started | - |
 | 66. WR-02 EDR HUMAN-UAT | 0/TBD | Not started | - |
 
