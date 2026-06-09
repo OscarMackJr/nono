@@ -7,11 +7,18 @@
 //! This crate intentionally has no dependency on the `nono` library crate — it is
 //! a standalone spike binary used for VM-side round-trip testing (Plan 04 Step 5).
 
-// On non-Windows targets this crate compiles to nothing.
-// The cfg guard ensures Linux/macOS CI never sees the Windows-sys imports.
+// On non-Windows targets the Windows-sys imports are cfg-gated out entirely.
+// A stub `run_policy_client` is still exposed so the function is callable from
+// build scripts or integration tests on any platform (Plan 64-03 Task 1, D-03).
 #[cfg(not(windows))]
-// empty — compile-to-nothing guarantee for non-Windows CI targets
-const _NON_WINDOWS_STUB: () = ();
+/// Non-Windows stub: the minifilter policy client is Windows-only.
+///
+/// # Errors
+///
+/// Always returns an error — there is no minifilter port to connect to off Windows.
+pub fn run_policy_client(_deny_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    Err("nono-fltmgr-client is Windows-only".into())
+}
 
 #[cfg(windows)]
 mod client {
