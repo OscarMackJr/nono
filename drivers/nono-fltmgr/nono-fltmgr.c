@@ -160,6 +160,16 @@ NonoPreCreate(
     // DESIGN.md T-63-03: assert IRQL at callback entry before any allocation or lock.
     NT_ASSERT(KeGetCurrentIrql() <= APC_LEVEL);
 
+    // Fail-open fast path: if no user-mode policy client is connected, the filter is
+    // transparent. This avoids pending (and thus stalling) I/O when the driver is
+    // loaded but no client has connected yet. Once a client connects, NonoPortConnect
+    // sets gClientPort and creates are evaluated. The unlocked pointer read is a
+    // benign race (worst case: one create near the connect/disconnect edge is
+    // evaluated or not); acceptable for the spike.
+    if (gClientPort == NULL) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
     // Get the normalized file name. FLT_FILE_NAME_NORMALIZED resolves symlinks for
     // accurate path matching. On failure: fail-open (no deny possible without the name).
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
@@ -525,13 +535,11 @@ DriverEntry(
         return status;
     }
 
-    // Start filtering I/O on all volumes.
-    status = FltStartFiltering(gFilterHandle);
-    if (!NT_SUCCESS(status)) {
-        FltUnregisterFilter(gFilterHandle);
-        gFilterHandle = NULL;
-        return status;
-    }
+    // NOTE: FltStartFiltering is deliberately deferred to the END of DriverEntry
+    // (after the ring buffer, comm port, and worker thread are ready). Starting it
+    // here would let IRP_MJ_CREATE reach NonoPreCreate before the ring spinlock is
+    // initialized and before any worker exists to complete pended IRPs -> system hang
+    // on load. This was the cause of the fltmc-load hang.
 
     // Initialize ring buffer synchronization primitives and zero the ring entry.
     KeInitializeEvent(&g_RingBufferEvent, SynchronizationEvent, FALSE);
@@ -596,6 +604,34 @@ DriverEntry(
         gWorkerRunning = FALSE;
         FltCloseCommunicationPort(gServerPort);
         gServerPort = NULL;
+        FltUnregisterFilter(gFilterHandle);
+        gFilterHandle = NULL;
+        return status;
+    }
+
+    // Start filtering LAST. The ring buffer, comm port, and worker thread are all
+    // ready now, so no IRP_MJ_CREATE can reach NonoPreCreate before the driver can
+    // handle and complete it. (This ordering is the fix for the fltmc-load hang.)
+    status = FltStartFiltering(gFilterHandle);
+    if (!NT_SUCCESS(status)) {
+        // Tear down in reverse: stop + join the worker, close the port, unregister.
+        gWorkerRunning = FALSE;
+        KeSetEvent(&g_RingBufferEvent, IO_NO_INCREMENT, FALSE);
+        if (gWorkerThreadHandle != NULL) {
+            PETHREAD pThread = NULL;
+            if (NT_SUCCESS(ObReferenceObjectByHandle(
+                    gWorkerThreadHandle, SYNCHRONIZE, *PsThreadType,
+                    KernelMode, (PVOID *)&pThread, NULL))) {
+                KeWaitForSingleObject(pThread, Executive, KernelMode, FALSE, NULL);
+                ObDereferenceObject(pThread);
+            }
+            ZwClose(gWorkerThreadHandle);
+            gWorkerThreadHandle = NULL;
+        }
+        if (gServerPort != NULL) {
+            FltCloseCommunicationPort(gServerPort);
+            gServerPort = NULL;
+        }
         FltUnregisterFilter(gFilterHandle);
         gFilterHandle = NULL;
         return status;
