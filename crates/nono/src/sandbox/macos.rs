@@ -664,20 +664,9 @@ fn generate_profile(caps: &CapabilitySet) -> Result<String> {
         profile.push_str("(allow file-write* (extension \"com.apple.app-sandbox.read-write\"))\n");
     }
 
-    // SECURITY: Platform deny rules are placed BETWEEN read and write rules.
-    // This matches the research CLI pattern where sensitive path denials come
-    // after read allows but before write allows. In Seatbelt, more specific rules
-    // always win regardless of order; for equal specificity, last-match wins.
-    // Placing deny rules here ensures they override read allows when equally specific,
-    // while write allows below can still override deny-unlink for user-granted paths.
-    for rule in caps.platform_rules() {
-        profile.push_str(rule);
-        profile.push('\n');
-    }
-
     // GPU access (D-12 upstream parity port — upstream v0.31–0.33, refined
     // in v0.34 via commit 4535473). Emits IOKit rules for Metal/AGX GPU
-    // user clients. Emitted in the same slot as platform rules so the
+    // user clients. Emitted between the read and write rules so the
     // upstream ordering contract (read < GPU < write) holds.
     //
     // The exact grant list mirrors upstream's `maybe_enable_macos_gpu`
@@ -714,6 +703,16 @@ fn generate_profile(caps: &CapabilitySet) -> Result<String> {
                 // Read-only doesn't need write access
             }
         }
+    }
+
+    // SECURITY: Platform deny rules are placed AFTER write rules (last-match-wins:
+    // deny overrides preceding write-allows). Port of upstream 8f84d454. In Seatbelt,
+    // more specific rules always win regardless of order; for equal specificity the
+    // last matching rule wins. Emitting platform denies after the user write-allows
+    // ensures a targeted deny (e.g. a sensitive path) overrides a broader write-allow.
+    for rule in caps.platform_rules() {
+        profile.push_str(rule);
+        profile.push('\n');
     }
 
     // Network rules
