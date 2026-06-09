@@ -213,6 +213,20 @@ pub(crate) fn print_allow_launch_services_warning(silent: bool) {
     eprintln!("  Prefer using it from a trusted directory, not inside an untrusted project.");
 }
 
+/// Resolve the working directory used for sandbox preparation.
+///
+/// Prefers an explicit `--workdir`, then the process's current directory,
+/// falling back to `.` as a last resort. The final `unwrap_or_else` fallback
+/// is the pre-existing production default (non-security-critical, not a
+/// security-config load failure), so the `clippy::unwrap_used` rule does not
+/// apply to it (PATTERNS.md annotation).
+fn resolved_workdir(args: &SandboxArgs) -> PathBuf {
+    args.workdir
+        .clone()
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 /// Phase 37 D-12: legacy entry point — thin wrapper that supplies the default
 /// [`crate::profile::ResolveContext`]. Sites outside `nono run` / `nono wrap`
 /// (e.g. `nono shell`, dry-run paths, internal tooling) call this and inherit
@@ -230,11 +244,7 @@ pub(crate) fn prepare_sandbox_with_context(
 ) -> Result<PreparedSandbox> {
     sandbox_state::cleanup_stale_state_files();
 
-    let workdir = args
-        .workdir
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_else(|| PathBuf::from("."));
+    let workdir = resolved_workdir(args);
 
     if let Some(ref config_path) = args.config {
         let json = std::fs::read_to_string(config_path).map_err(|e| {
@@ -466,6 +476,16 @@ pub(crate) fn prepare_sandbox_with_context(
                 info!("Auto-including CWD with {} access (--allow-cwd)", access);
                 let cap = FsCapability::new_dir(cwd_canonical.clone(), access)?;
                 caps.add_fs(cap);
+                #[cfg(target_os = "macos")]
+                {
+                    // When CWD is reached via a symlink (e.g. /tmp -> /private/tmp),
+                    // the canonical path differs. Emit the symlink form as a second
+                    // capability so Seatbelt allows traversal via the symlink path too.
+                    if workdir != cwd_canonical {
+                        let symlink_cap = FsCapability::new_dir(workdir.clone(), access)?;
+                        caps.add_fs(symlink_cap);
+                    }
+                }
             } else if silent {
                 return Err(NonoError::CwdPromptRequired);
             } else {
@@ -473,6 +493,16 @@ pub(crate) fn prepare_sandbox_with_context(
                 if confirmed {
                     let cap = FsCapability::new_dir(cwd_canonical.clone(), access)?;
                     caps.add_fs(cap);
+                    #[cfg(target_os = "macos")]
+                    {
+                        // Symlink-form CWD grant (see --allow-cwd branch above); only
+                        // emitted when the user confirmed sharing, so a declined prompt
+                        // grants nothing (the upstream call-site had no decline branch).
+                        if workdir != cwd_canonical {
+                            let symlink_cap = FsCapability::new_dir(workdir.clone(), access)?;
+                            caps.add_fs(symlink_cap);
+                        }
+                    }
                 } else {
                     info!("User declined CWD sharing. Continuing without automatic CWD access.");
                 }
