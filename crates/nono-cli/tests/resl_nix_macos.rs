@@ -87,19 +87,37 @@ fn macos_timeout_kills_at_deadline() {
         .expect("failed to run nono binary");
     let elapsed = start.elapsed();
 
+    // Surface the child's exit status + captured output on every failure path.
+    // Without this, a fast-exit (e.g. the sandbox refusing to launch `sleep`)
+    // is indistinguishable from a watchdog bug — the bare timing assertion
+    // hides the real cause. (Diagnostics added during the v2.10 Phase 65 macOS
+    // CI rehab to root-cause a "took only 0.0s" failure on the runner.)
+    let ctx = || {
+        format!(
+            "exit={:?} elapsed={:.3}s\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            elapsed.as_secs_f64(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    };
+
     assert!(
         !output.status.success(),
-        "expected child to be killed by timeout, but it exited successfully"
+        "expected child to be killed by timeout, but it exited successfully\n{}",
+        ctx()
     );
     assert!(
         elapsed.as_secs_f64() < 10.0,
-        "expected timeout to kill within 10s, but took {:.1}s",
-        elapsed.as_secs_f64()
+        "expected timeout to kill within 10s, but took {:.1}s\n{}",
+        elapsed.as_secs_f64(),
+        ctx()
     );
     assert!(
         elapsed.as_secs_f64() >= 3.0,
-        "expected timeout to take at least 3s, but took only {:.1}s",
-        elapsed.as_secs_f64()
+        "expected timeout to take at least 3s, but took only {:.1}s\n{}",
+        elapsed.as_secs_f64(),
+        ctx()
     );
 }
 
