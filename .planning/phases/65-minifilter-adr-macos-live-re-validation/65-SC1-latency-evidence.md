@@ -16,6 +16,19 @@ on-VM `DbgPrint` output** (Pitfall 4 / fail-secure: never fabricate measurement 
 
 ---
 
+## Prep status (2026-06-10) — VM staged, capture needs Bastion
+
+Driven via `az vm run-command` (operator session, az authed to "TWG Architecture POCs"):
+
+- ✅ **Safety snapshot** `nono-fltmgr-snap-pre-65-latency` created (OS disk; the expected `nono-fltmgr-snap-testsigning-ready` was absent).
+- ✅ **Instrumented source pushed** — the VM had the *uninstrumented* `nono-fltmgr.c` (0 QPC markers); pushed the committed instrumented copy (`af7cf3c5`, 35 063 B, sha256 `7DF1F95D…`, 17 QPC markers).
+- ✅ **Rebuilt** `.sys` via EWDK (`MSBUILD_EXIT=0`), **re-signed** with `CN=NonoTestSign` (`signtool verify /pa` PASS, 17 136 B), **reloaded** the instrumented driver (`fltmc`: loaded, 6 instances, altitude 365678, no BSOD).
+- ✅ **DebugView** downloaded to `C:\tools\DebugView`; **client** present at `C:\nono-fltmgr\nono_fltmgr_client.exe`; deny target `C:\nono-deny-test\secret.txt` created.
+
+⛔ **Headless capture via `az vm run-command` is blocked (session-0 limits):** DebugView's kernel capture exits immediately (no interactive desktop → 0-byte log), and the P/Invoke `CreateFile` deny-harness does not execute under SYSTEM/session-0 (returns a null handle, `err=0` — results meaningless, NOT evidence the deny regressed). **The SPAN-A/SPAN-B capture must be run in an interactive Bastion desktop** (the proven Phase 63/64 method per `64-SC1-VM-RUNBOOK.md`). The VM is left fully prepped with the instrumented driver loaded; remaining steps = run DebugView + deny harness + `fltmc unload` interactively, then paste the SPAN lines below.
+
+---
+
 ## What this measures
 
 Two QPC spans the instrumented `nono-fltmgr.c` records over ~100 denied creates of

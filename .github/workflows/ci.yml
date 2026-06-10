@@ -122,12 +122,7 @@ jobs:
         run: cargo build --workspace --verbose
 
       - name: Run tests
-        # --no-fail-fast: enumerate ALL failing tests across every binary in one
-        # run instead of stopping at the first failed binary. Temporary CI-rehab
-        # aid (v2.10 Phase 65 / D-11c) so the full pre-existing macOS/Linux
-        # failure set is visible in a single CI cycle. Revert to plain
-        # `cargo test --workspace --verbose` once the suite is green.
-        run: cargo test --workspace --verbose --no-fail-fast
+        run: cargo test --workspace --verbose
 
   windows-build:
     name: Windows Build
