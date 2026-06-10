@@ -10,10 +10,49 @@
 
 #![cfg(target_os = "macos")]
 
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 const NONO_BIN: &str = env!("CARGO_BIN_EXE_nono");
+
+/// Spawn `nono` with `args` and wait at most `limit` for it to exit.
+///
+/// If `nono` does not exit within `limit`, kill it and panic with a clear
+/// message. This bounds the resource-limit tests so a non-firing macOS
+/// `--timeout` watchdog or `RLIMIT_NPROC` enforcement FAILS FAST instead of
+/// hanging the CI `Run tests` step (REQ-RESL-NIX-03 was host-blocked at Phase
+/// 37, so these enforcement paths are first exercised on the macOS CI runner;
+/// the real-host validation is gate-65-A). Output is small for every caller,
+/// so the non-draining try_wait loop cannot pipe-fill-deadlock.
+fn run_bounded(args: &[&str], limit: Duration) -> Output {
+    let mut child = Command::new(NONO_BIN)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn nono");
+    let start = Instant::now();
+    loop {
+        match child.try_wait().expect("try_wait failed") {
+            Some(_) => break,
+            None => {
+                if start.elapsed() > limit {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!(
+                        "nono did not exit within {}s — resource-limit enforcement \
+                         (--timeout watchdog / RLIMIT_NPROC) likely did not fire on this \
+                         host; bounded to avoid a CI hang. Validate on a real macOS host \
+                         (gate-65-A).",
+                        limit.as_secs()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+    child.wait_with_output().expect("wait_with_output failed")
+}
 
 /// REQ-RESL-NIX-03 criterion 3: `--cpu-percent` is rejected at clap parse time on macOS.
 ///
@@ -69,26 +108,27 @@ fn macos_cpu_percent_rejected_at_clap_parse() {
 #[test]
 fn macos_timeout_kills_at_deadline() {
     let start = Instant::now();
-    let output = Command::new(NONO_BIN)
-        .args([
+    // `run_bounded` kills nono after 12s so a non-firing watchdog fails fast
+    // (~12s) instead of blocking on `sleep 60` for the full 60s. With a working
+    // watchdog nono exits at ~5s, well within the bound. `--read=<dir>` grants
+    // read+execute recursively (the old split `--allow-fs-read` /
+    // `--allow-fs-exec` flags were removed; on macOS read paths receive
+    // `file-map-executable`, on Linux `AccessMode::Read` maps to
+    // `ReadFile|ReadDir|Execute`) so the child can exec /bin/* + load libs.
+    let output = run_bounded(
+        &[
             "run",
             "--timeout",
             "5s",
-            // `--read=<dir>` grants read+execute recursively (the old split
-            // `--allow-fs-read` / `--allow-fs-exec` flags were removed; on
-            // macOS read paths receive `file-map-executable`, on Linux
-            // `AccessMode::Read` maps to `ReadFile|ReadDir|Execute`). This
-            // lets the sandboxed child exec /bin/* and load libs from /usr +
-            // /private.
             "--read=/bin",
             "--read=/usr",
             "--read=/private",
             "--",
             "sleep",
             "60",
-        ])
-        .output()
-        .expect("failed to run nono binary");
+        ],
+        Duration::from_secs(12),
+    );
     let elapsed = start.elapsed();
 
     // Surface the child's exit status + captured output on every failure path.
@@ -185,8 +225,11 @@ fn macos_no_warnings_on_resource_flags() {
 fn macos_max_processes_blocks_on_rlimit_nproc() {
     // Use a limit of 5 to account for the current process and nono supervisor
     // already consuming slots. The child (bash) + its subprocesses should hit the limit.
-    let output = Command::new(NONO_BIN)
-        .args([
+    // `sleep 5` (not 60): RLIMIT_NPROC is enforced at fork() time, so the limit
+    // is hit immediately regardless of sleep duration; the shorter sleep just
+    // bounds how long `wait` blocks. `run_bounded` (20s) is the hang safety net.
+    let output = run_bounded(
+        &[
             "run",
             "--max-processes",
             "5",
@@ -202,10 +245,10 @@ fn macos_max_processes_blocks_on_rlimit_nproc() {
             "--",
             "bash",
             "-c",
-            "for i in $(seq 1 20); do sleep 60 & done; wait",
-        ])
-        .output()
-        .expect("failed to run nono binary");
+            "for i in $(seq 1 20); do sleep 5 & done; wait",
+        ],
+        Duration::from_secs(20),
+    );
 
     // The child should exit non-zero due to fork failures (EAGAIN from RLIMIT_NPROC).
     // We don't assert a specific error message since EAGAIN presentation varies

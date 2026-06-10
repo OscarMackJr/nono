@@ -152,7 +152,7 @@ fn linux_max_processes_blocks_eleventh_fork() {
             "bash",
             "-c",
             // Try to spawn 20 background processes; the 11th+ should fail due to pids.max.
-            "for i in $(seq 1 20); do sleep 60 & done; wait",
+            "for i in $(seq 1 20); do sleep 5 & done; wait",
         ])
         .output()
         .expect("failed to run nono binary");
@@ -284,7 +284,7 @@ fn linux_timeout_atomic_kill_grandchildren() {
             "bash",
             "-c",
             // Spawn 10 grandchildren; `wait` would block forever if they survived the kill.
-            "for i in $(seq 1 10); do sleep 60 & done; wait",
+            "for i in $(seq 1 10); do sleep 5 & done; wait",
         ])
         .output()
         .expect("failed to run nono binary");
