@@ -677,6 +677,7 @@ mod tests {
             blocked_commands: vec![],
             bypass_protection_paths: vec![],
             allowed_domains: vec![],
+            domain_endpoints: vec![],
         };
 
         let err = state

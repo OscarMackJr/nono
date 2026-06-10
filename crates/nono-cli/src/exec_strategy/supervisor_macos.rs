@@ -117,8 +117,9 @@ impl MacosResourceLimits {
                 {
                     use nix::sys::resource::{setrlimit, Resource};
                     if let Some(bytes) = memory_bytes {
-                        // T-25-01-05: guard against overflow on 32-bit (belt-and-suspenders).
-                        let limit = bytes.try_into().unwrap_or(nix::libc::rlim_t::MAX);
+                        // macOS `rlim_t` is u64 (all macOS targets are 64-bit), so the
+                        // u64 memory_bytes maps directly — no fallible conversion needed.
+                        let limit: nix::libc::rlim_t = bytes;
                         setrlimit(Resource::RLIMIT_AS, limit, limit)
                             .map_err(std::io::Error::from)?;
                     }

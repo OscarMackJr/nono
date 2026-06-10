@@ -107,7 +107,7 @@ pub(crate) fn apply_resource_limits_unix(
         let _ = session_id;
         let macos = supervisor_macos::MacosResourceLimits::new(limits)?;
         macos.install_pre_exec(cmd);
-        return Ok(UnixResourceLimitGuard::Macos(macos));
+        Ok(UnixResourceLimitGuard::Macos(macos))
     }
 }
 
@@ -941,9 +941,9 @@ pub fn execute_supervised(
             if macos_resource_limits.is_some() {
                 use nix::sys::resource::{setrlimit, Resource};
                 if let Some(bytes) = resource_limits.memory_bytes {
-                    // T-25-01-05: guard against overflow on 32-bit (belt-and-suspenders).
-                    let limit: nix::libc::rlim_t =
-                        bytes.try_into().unwrap_or(nix::libc::rlim_t::MAX);
+                    // macOS `rlim_t` is u64 (all macOS targets are 64-bit), so the u64
+                    // memory_bytes maps directly — no fallible conversion needed.
+                    let limit: nix::libc::rlim_t = bytes;
                     // WR-02: fail closed — if setrlimit fails the sandbox MUST NOT
                     // continue without the requested --memory enforcement.
                     // MacosResourceLimits::new() in the parent does not pre-validate
@@ -1405,31 +1405,29 @@ pub fn execute_supervised(
                 }
             });
             #[cfg(target_os = "macos")]
-            let _timeout_watchdog = timeout_deadline
-                .map(|deadline| {
-                    use nix::unistd::getpgid;
-                    // WR-04: Do NOT fall back to child PID on getpgid failure.
-                    // If the child has already exited and its PID was reused, falling
-                    // back to kill(-child_pid, SIGKILL) could target the wrong process
-                    // group. Instead: if getpgid fails, log and skip the watchdog
-                    // entirely (return None). There is no PID fallback to avoid
-                    // wrong-pgrp kill under PID reuse.
-                    match getpgid(Some(child)) {
-                        Ok(child_pgrp) => Some(supervisor_macos::spawn_macos_timeout_watchdog(
-                            deadline, child_pgrp,
-                        )),
-                        Err(e) => {
-                            warn!(
-                                "getpgid({}) failed ({}); skipping timeout watchdog — \
+            let _timeout_watchdog = timeout_deadline.and_then(|deadline| {
+                use nix::unistd::getpgid;
+                // WR-04: Do NOT fall back to child PID on getpgid failure.
+                // If the child has already exited and its PID was reused, falling
+                // back to kill(-child_pid, SIGKILL) could target the wrong process
+                // group. Instead: if getpgid fails, log and skip the watchdog
+                // entirely (return None). There is no PID fallback to avoid
+                // wrong-pgrp kill under PID reuse.
+                match getpgid(Some(child)) {
+                    Ok(child_pgrp) => Some(supervisor_macos::spawn_macos_timeout_watchdog(
+                        deadline, child_pgrp,
+                    )),
+                    Err(e) => {
+                        warn!(
+                            "getpgid({}) failed ({}); skipping timeout watchdog — \
                                  no PID fallback to avoid wrong-pgrp kill under PID reuse",
-                                child.as_raw(),
-                                e
-                            );
-                            None
-                        }
+                            child.as_raw(),
+                            e
+                        );
+                        None
                     }
-                })
-                .flatten();
+                }
+            });
 
             // NOTE: peer_pid() is NOT called here. For socketpair() created
             // before fork, LOCAL_PEERPID/SO_PEERCRED return the parent's own PID

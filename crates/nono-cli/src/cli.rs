@@ -100,12 +100,12 @@ pub(crate) fn parse_cpu_percent(s: &str) -> std::result::Result<u16, String> {
     #[cfg(target_os = "macos")]
     {
         let _ = s;
-        return Err(
+        Err(
             "--cpu-percent is not supported on macOS: there is no per-process \
              CPU-quota equivalent (no cgroup cpu.max). See REQUIREMENTS.md \
              § REQ-RESL-NIX-03 acceptance criterion 3 (cpu_percent_macos)."
                 .into(),
-        );
+        )
     }
     #[cfg(not(target_os = "macos"))]
     {

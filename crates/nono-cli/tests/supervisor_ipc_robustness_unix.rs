@@ -35,8 +35,8 @@ fn scaffold_links_nono_lib() {
         SupervisorSocket::pair().expect("SupervisorSocket::pair() must succeed on Unix");
 
     // Assert both ends are usable by obtaining their raw fds.
-    // A valid raw fd is >= 0 (a non-negative i32).
-    use std::os::unix::io::AsRawFd;
+    // A valid raw fd is >= 0 (a non-negative i32). `as_raw_fd()` resolves via the
+    // socket end's inherent method, so no `AsRawFd` trait import is needed (-D warnings).
     assert!(
         supervisor_end.as_raw_fd() >= 0,
         "supervisor socket fd must be valid"
