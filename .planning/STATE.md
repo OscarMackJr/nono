@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
 status: executing
-last_updated: "2026-06-10T00:24:56.432Z"
-last_activity: 2026-06-10 -- session 3 resume; macOS-failure watcher relaunched, STATE drift fixed
+last_updated: "2026-06-10T23:36:00.142Z"
+last_activity: 2026-06-10 -- session 3 PAUSED; macOS failure = runner-death (resource starvation), points at #[ignore]-pending-gate-65A
 progress:
   total_phases: 4
   completed_phases: 2
@@ -174,7 +174,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-10 (session 3) — RESUMED via `/gsd-resume-work`. Relaunched the macOS-failure watcher (`bxfwz5ec7`) on live CI run `27300030066` (HEAD `e72d6438`, `Test (macos-latest)` running); fixed the STATE.md "Phase Summary"/progress-bar drift (now 67%, 63+64 ✅, 65 🔄). Awaiting natural CI completion to read the one remaining macOS resl failure. Full handoff: `.planning/phases/65-minifilter-adr-macos-live-re-validation/.continue-here.md`.
+**Last session:** 2026-06-10 (session 3) — resumed, diagnosed the macOS failure, then PAUSED. **Key finding:** `Test (macos-latest)` on run `27300030066` reached `completed=failure` with a **runner death** — check-run annotation = *"hosted runner lost communication with the server"* (CPU/memory/network starvation), NOT a clean assertion. Strongly consistent with a resl **resource-limit** test (RLIMIT_NPROC) starving the runner because macOS enforcement doesn't fire on the GH runner → points hard at the **`#[ignore]`-pending-gate-65A** disposition. Exact test still needs confirming from the full job log (`macjob 80677581956`, 404s until whole-run completion — gotcha #1). Fixed STATE Phase-Summary/progress drift (commit `1dcd8f72`). Full handoff: `.planning/HANDOFF.json` + `.planning/phases/65-minifilter-adr-macos-live-re-validation/.continue-here.md`.
 
 **Stopped at:** Phase 65 mid-execution. The D-11c HARD gate (green `macos-latest` Test+Clippy SHA) is DOWN TO ONE fast-failing test. HEAD `e72d6438`, all pushed. **65-02-SUMMARY.md still NOT written** (gated on the green SHA).
 
