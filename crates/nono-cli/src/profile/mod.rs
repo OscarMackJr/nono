@@ -3105,18 +3105,15 @@ enum ResolvedBase {
 /// profiles. Built-in profiles are loaded as raw profile definitions so
 /// inheritance can resolve before implicit default groups are merged.
 ///
-/// `source_file` is the path to the child profile that initiated the
-/// extends-resolution; when set, the sibling-directory probe skips the file
-/// matching that path to prevent self-references (e.g. `.nono/codex.json`
-/// extending `"codex"`).
-///
-/// Fork-divergence note: upstream's commit `bc443928` adds two additional
-/// resolver branches — pack-store lookup (`find_pack_store_profile`) and
-/// pack-provided rescue (`crate::migration::check_and_run`). The fork does
-/// not have the pack-store subsystem or `migration::check_and_run` in the
-/// same shape; those branches are omitted here and remain out of scope for
-/// Plan 34-04 (C7 cluster). The sibling-resolution behavior (the actual
-/// "fix" in the commit subject) is adopted in full.
+/// If all resolvers miss AND the requested name is in
+/// `migration::PACK_PROVIDED_PROFILES` AND we were entered via
+/// `load_profile` (not `load_profile_no_migrate`), prompt the user to
+/// install the providing pack, then retry the pack-store lookup once.
+/// This handles the v0.42 → v0.43 upgrade case where a user profile
+/// `extends: ["claude-code"]` and the inbuilt `claude-code` is gone:
+/// instead of an inscrutable "base profile not found" error, the user
+/// sees the same install prompt that `--profile always-further/claude` would
+/// produce, with the chain still resolving cleanly on accept.
 fn load_base_profile_raw(
     name: &str,
     context_dir: Option<&Path>,

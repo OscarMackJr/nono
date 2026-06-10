@@ -900,7 +900,7 @@ impl SetupRunner {
             #[cfg(not(target_os = "windows"))]
             println!("  # Run Claude Code with built-in profile (recommended)");
             #[cfg(not(target_os = "windows"))]
-            println!("  nono run --profile claude-code -- claude");
+            println!("  nono run --profile always-further/claude -- claude");
             println!();
             #[cfg(not(target_os = "windows"))]
             println!("  # Run any command with current directory access");
@@ -1306,7 +1306,7 @@ fn print_shell_help_body() {
 
     println!("  You can add these aliases to {}:", shell_rc);
     println!();
-    println!("    alias nono-claude='nono run --profile claude-code -- claude'");
+    println!("    alias nono-claude='nono run --profile always-further/claude -- claude'");
     println!("    alias nono-safe='nono run --allow-cwd --block-net --'");
     println!();
 }

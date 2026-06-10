@@ -39,14 +39,14 @@ nono run --allow ./project-a --allow ./project-b -- command
 # Block network access
 nono run --allow-cwd --block-net -- command
 
-# Use a built-in profile
-nono run --profile claude-code -- claude
+# Use a pack profile (requires: nono pull always-further/claude)
+nono run --profile always-further/claude -- claude
 
-# Use the Codex profile
-nono run --profile codex -- codex
+# Use a built-in profile
+nono run --profile always-further/opencode -- opencode
 
 # Keep a profile but temporarily allow unrestricted network
-nono run --profile claude-code --allow-net -- claude
+nono run --profile always-further/claude --allow-net -- claude
 
 # Start an interactive shell inside the sandbox
 nono shell --allow .
@@ -84,14 +84,20 @@ nono --theme dark-factory run --allow-cwd -- cargo test
 
 Precedence is: CLI flag, then `NONO_THEME`, then config file, then the default `mocha`.
 
-## Built-in Profiles
+## Profiles
+
+### Pack profiles (install via `nono pull`)
+
+| Profile | Install | Command |
+|---------|---------|---------|
+| Claude Code | `nono pull always-further/claude` | `nono run --profile always-further/claude -- claude` |
+| Codex | `nono pull always-further/codex` | `nono run --profile always-further/codex -- codex` |
+
+### Built-in profiles
 
 | Profile | Command |
 |---------|---------|
-| Claude Code | `nono run --profile claude-code -- claude` |
-| Claude Code (No Keychain) | `nono run --profile claude-no-kc -- claude` |
-| Codex | `nono run --profile codex -- codex` |
-| OpenCode | `nono run --profile opencode -- opencode` |
+| OpenCode | `nono run --profile always-further/opencode -- opencode` |
 | OpenClaw | `nono run --profile openclaw -- openclaw gateway` |
 | Swival | `nono run --profile swival -- swival` |
 

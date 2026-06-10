@@ -24,6 +24,10 @@ pub struct Policy {
     /// Built-in profile definitions
     #[serde(default)]
     pub profiles: HashMap<String, ProfileDef>,
+    /// Namespace-form aliases mapping to bare profile names (D-07/D-08).
+    /// e.g. "always-further/claude" -> "claude-code"
+    #[serde(default)]
+    pub profile_aliases: HashMap<String, String>,
 }
 
 /// Policy metadata
@@ -1325,12 +1329,23 @@ pub fn validate_group_exclusions(policy: &Policy, excluded_groups: &[String]) ->
 /// Returns `None` if the profile name is not defined in policy.json.
 pub fn get_policy_profile(name: &str) -> Result<Option<profile::Profile>> {
     let policy = load_embedded_policy()?;
-    match policy.profiles.get(name) {
-        Some(def) => Ok(Some(crate::profile::resolve_and_finalize_profile(
+    // First try canonical bare-name lookup.
+    if let Some(def) = policy.profiles.get(name) {
+        return Ok(Some(crate::profile::resolve_and_finalize_profile(
             def.to_raw_profile(),
-        )?)),
-        None => Ok(None),
+        )?));
     }
+    // Second: check profile_aliases (D-07/D-08).
+    // Aliases map namespace forms ("always-further/claude") to bare names ("claude-code").
+    // Only one hop is permitted — aliases cannot point to other aliases.
+    if let Some(bare_name) = policy.profile_aliases.get(name) {
+        if let Some(def) = policy.profiles.get(bare_name.as_str()) {
+            return Ok(Some(crate::profile::resolve_and_finalize_profile(
+                def.to_raw_profile(),
+            )?));
+        }
+    }
+    Ok(None)
 }
 
 /// List all built-in profile names from embedded policy.json.

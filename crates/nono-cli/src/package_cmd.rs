@@ -60,6 +60,7 @@ pub fn run_pull(args: PullArgs) -> Result<()> {
     )?;
 
     print_pull_summary(&package_ref, &manifest, &pull, &install);
+
     Ok(())
 }
 

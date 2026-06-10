@@ -1102,5 +1102,12 @@
       },
       "interactive": true
     }
+  },
+  "profile_aliases": {
+    "always-further/claude": "claude-code",
+    "swival/default": "swival",
+    "nono-ts/wfp-test-open": "nono-ts-wfp-test-open",
+    "nono-ts/wfp-test-blocked": "nono-ts-wfp-test-blocked",
+    "nono-ts/default": "nono-ts-default"
   }
 }
