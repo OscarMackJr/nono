@@ -113,7 +113,11 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
   1. An ADR committed to `.planning/adr/` documents: the interception design, measured `FLT_PREOP_PENDING` round-trip latency (with the finite-timeout fail-open behavior for the spike), the `windows-drivers-rs`-not-viable decision, the FltMgr-vs-ETW rationale, the chosen altitude and official-assignment request status, and an explicit go or no-go recommendation for a production-driver milestone
   2. `sandbox_init()` succeeds with the updated Seatbelt profile on a real macOS host; `nono run --dry-run --profile claude-code` emits a profile where deny rules appear after the allow rules they override; `nono run --profile claude-code -- cat ~/.ssh/id_rsa` is blocked; both `/etc/hosts` and `/private/etc/hosts` are blocked
   3. The macOS CI build leg in `release.yml` is confirmed green before any release tag — this is a HARD close gate, not advisory; the cherry-pick checklist has been scanned for edition-2024 let-chains and E0716-class borrows; `make test-lib` passes on the macOS host
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 65-01-PLAN.md — QPC latency instrumentation + idempotent VM rebuild/reload + deny-harness re-run (DRV-04)
+- [ ] 65-02-PLAN.md — macOS automatable re-validation: ordering tests + x86_64-apple-darwin clippy + cherry-pick scan + green macos-latest CI SHA (MACOS-03)
+- [ ] 65-03-PLAN.md — go/no-go ADR (six DRV-04 topics, Status: Proposed) + latency appendix (DRV-04)
+- [ ] 65-04-PLAN.md — macOS live sandbox_init() HUMAN-UAT, gate 65-A close-blocking (MACOS-03)
 
 ### Phase 66: WR-02 EDR HUMAN-UAT
 **Goal**: The long-deferred WR-02 EDR validation is executed on a real EDR-instrumented host, producing concrete verdicts on nono's behavior and visibility; WR-02 is closed or explicitly re-scoped
@@ -131,7 +135,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
 |-------|----------------|--------|-----------|
 | 63. Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit | 3/3 | Complete    | 2026-06-08 |
 | 64. Minifilter Spike Implementation + macOS P1 Cherry-pick Wave | 5/5 | Complete    | 2026-06-09 |
-| 65. Minifilter ADR + macOS Live Re-validation | 0/TBD | Not started | - |
+| 65. Minifilter ADR + macOS Live Re-validation | 0/4 | Not started | - |
 | 66. WR-02 EDR HUMAN-UAT | 0/TBD | Not started | - |
 
 ## Future Cycles
