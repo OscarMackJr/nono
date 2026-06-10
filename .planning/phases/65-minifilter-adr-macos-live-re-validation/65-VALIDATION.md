@@ -1,8 +1,8 @@
 ---
 phase: 65
 slug: minifilter-adr-macos-live-re-validation
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-09
 ---
@@ -74,6 +74,6 @@ created: 2026-06-09
 - [ ] Wave 0 covers all MISSING references (none — ordering tests in-tree)
 - [ ] No watch-mode flags
 - [ ] Feedback latency < 30s (local lib tests)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-09
