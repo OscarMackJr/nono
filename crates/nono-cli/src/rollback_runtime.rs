@@ -633,8 +633,12 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
         // Upstream 6ecade2e (AUD-02): sign after metadata is built so the
         // bundle covers the full session context via write_audit_attestation.
         if let (Some(signer), Some(state)) = (audit_signer, audit_state) {
-            meta.audit_attestation =
-                Some(write_audit_attestation(&state.session_dir, &meta, signer, redaction_policy)?);
+            meta.audit_attestation = Some(write_audit_attestation(
+                &state.session_dir,
+                &meta,
+                signer,
+                redaction_policy,
+            )?);
         }
         manager.save_session_metadata(&meta)?;
         audit_saved = true;

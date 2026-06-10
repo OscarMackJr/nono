@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sigstore_verify::types::bundle::SignatureContent;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -409,7 +409,10 @@ impl AuditRecorder {
         entry: AuditEntry,
         reject_stage: Option<RejectStage>,
     ) -> Result<()> {
-        self.append_event(AuditEventPayload::CapabilityDecision { entry, reject_stage })
+        self.append_event(AuditEventPayload::CapabilityDecision {
+            entry,
+            reject_stage,
+        })
     }
 
     /// Record a URL-open request result.
@@ -715,26 +718,28 @@ pub fn append_session_to_ledger_file(
 ) -> Result<LedgerRecord> {
     validate_ledger_session_id(&metadata.session_id)?;
 
-    let mut contents = String::new();
     file.seek(SeekFrom::Start(0))
         .map_err(|e| NonoError::Snapshot(format!("Failed to seek audit ledger: {e}")))?;
-    file.read_to_string(&mut contents)
-        .map_err(|e| NonoError::Snapshot(format!("Failed to read audit ledger: {e}")))?;
 
     let mut previous_chain = None;
     let mut next_sequence = 0u64;
-    for (index, line) in contents.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
+    {
+        let reader = BufReader::new(&mut *file);
+        for (index, line) in reader.lines().enumerate() {
+            let line =
+                line.map_err(|e| NonoError::Snapshot(format!("Failed to read audit ledger: {e}")))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let record: LedgerRecord = serde_json::from_str(&line).map_err(|e| {
+                NonoError::Snapshot(format!(
+                    "Failed to parse audit ledger line {}: {e}",
+                    index.saturating_add(1)
+                ))
+            })?;
+            previous_chain = Some(record.chain_hash);
+            next_sequence = record.sequence.saturating_add(1);
         }
-        let record: LedgerRecord = serde_json::from_str(line).map_err(|e| {
-            NonoError::Snapshot(format!(
-                "Failed to parse audit ledger line {}: {e}",
-                index.saturating_add(1)
-            ))
-        })?;
-        previous_chain = Some(record.chain_hash);
-        next_sequence = record.sequence.saturating_add(1);
     }
 
     let session_digest = compute_session_digest(metadata)?;
@@ -1295,25 +1300,19 @@ pub fn verify_audit_log(
         }
 
         let event_bytes = if let Some(raw) = record.event_json.as_ref() {
-            let reparsed: AuditEventPayload = serde_json::from_str(raw).map_err(|e| {
+            serde_json::from_str::<AuditEventPayload>(raw).map_err(|e| {
                 NonoError::Snapshot(format!(
                     "Failed to parse canonical audit event JSON at line {}: {e}",
                     index.saturating_add(1)
                 ))
             })?;
-            let reparsed_value = serde_json::to_value(&reparsed).map_err(|e| {
+            let canonical_event_bytes = serde_json::to_vec(&record.event).map_err(|e| {
                 NonoError::Snapshot(format!(
-                    "Failed to normalize canonical audit event JSON at line {}: {e}",
+                    "Failed to serialize audit event payload at line {}: {e}",
                     index.saturating_add(1)
                 ))
             })?;
-            let record_value = serde_json::to_value(&record.event).map_err(|e| {
-                NonoError::Snapshot(format!(
-                    "Failed to normalize audit event payload at line {}: {e}",
-                    index.saturating_add(1)
-                ))
-            })?;
-            if reparsed_value != record_value {
+            if raw.as_bytes() != canonical_event_bytes.as_slice() {
                 return Err(NonoError::Snapshot(format!(
                     "Audit event JSON mismatch at line {}",
                     index.saturating_add(1)
@@ -1414,10 +1413,10 @@ pub fn verify_audit_log(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::AccessMode;
-    use crate::supervisor::{ApprovalDecision, CapabilityRequest};
     use crate::supervisor::types::HandleKind;
+    use crate::supervisor::{ApprovalDecision, CapabilityRequest};
     use crate::undo::{ExecutableIdentity, NetworkAuditDecision, NetworkAuditMode};
+    use crate::AccessMode;
     use std::io::BufReader;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -1569,10 +1568,9 @@ mod tests {
             Ok(_) => panic!("alpha verification should reject records missing event_json"),
             Err(err) => err,
         };
-        assert!(
-            err.to_string()
-                .contains("missing canonical event_json bytes")
-        );
+        assert!(err
+            .to_string()
+            .contains("missing canonical event_json bytes"));
     }
 
     #[test]
@@ -1812,12 +1810,10 @@ mod tests {
         .unwrap();
         assert!(!verified.signature_verified);
         assert_eq!(verified.expected_public_key_matches, Some(true));
-        assert!(
-            verified
-                .verification_error
-                .as_deref()
-                .is_some_and(|err| err.contains("event_count"))
-        );
+        assert!(verified
+            .verification_error
+            .as_deref()
+            .is_some_and(|err| err.contains("event_count")));
     }
 
     /// Golden vectors shared with the Python port in
