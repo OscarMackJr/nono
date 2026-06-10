@@ -11,8 +11,8 @@ name = "sign-fixture"
 path = "src/main.rs"
 
 [dependencies]
-sigstore-sign = "0.7.0"
-sigstore-oidc = "0.7.0"
-sigstore-rekor = "0.7.0"
+sigstore-sign = "0.8.0"
+sigstore-oidc = "0.8.0"
+sigstore-rekor = "0.8.0"
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
