@@ -74,11 +74,15 @@ fn macos_timeout_kills_at_deadline() {
             "run",
             "--timeout",
             "5s",
-            "--allow-fs-exec=/bin",
-            "--allow-fs-exec=/usr",
-            "--allow-fs-read=/bin",
-            "--allow-fs-read=/usr",
-            "--allow-fs-read=/private",
+            // `--read=<dir>` grants read+execute recursively (the old split
+            // `--allow-fs-read` / `--allow-fs-exec` flags were removed; on
+            // macOS read paths receive `file-map-executable`, on Linux
+            // `AccessMode::Read` maps to `ReadFile|ReadDir|Execute`). This
+            // lets the sandboxed child exec /bin/* and load libs from /usr +
+            // /private.
+            "--read=/bin",
+            "--read=/usr",
+            "--read=/private",
             "--",
             "sleep",
             "60",
@@ -136,11 +140,15 @@ fn macos_no_warnings_on_resource_flags() {
             "1000",
             "--timeout",
             "60s",
-            "--allow-fs-exec=/bin",
-            "--allow-fs-exec=/usr",
-            "--allow-fs-read=/bin",
-            "--allow-fs-read=/usr",
-            "--allow-fs-read=/private",
+            // `--read=<dir>` grants read+execute recursively (the old split
+            // `--allow-fs-read` / `--allow-fs-exec` flags were removed; on
+            // macOS read paths receive `file-map-executable`, on Linux
+            // `AccessMode::Read` maps to `ReadFile|ReadDir|Execute`). This
+            // lets the sandboxed child exec /bin/* and load libs from /usr +
+            // /private.
+            "--read=/bin",
+            "--read=/usr",
+            "--read=/private",
             "--",
             "echo",
             "hi",
@@ -182,11 +190,15 @@ fn macos_max_processes_blocks_on_rlimit_nproc() {
             "run",
             "--max-processes",
             "5",
-            "--allow-fs-exec=/bin",
-            "--allow-fs-exec=/usr",
-            "--allow-fs-read=/bin",
-            "--allow-fs-read=/usr",
-            "--allow-fs-read=/private",
+            // `--read=<dir>` grants read+execute recursively (the old split
+            // `--allow-fs-read` / `--allow-fs-exec` flags were removed; on
+            // macOS read paths receive `file-map-executable`, on Linux
+            // `AccessMode::Read` maps to `ReadFile|ReadDir|Execute`). This
+            // lets the sandboxed child exec /bin/* and load libs from /usr +
+            // /private.
+            "--read=/bin",
+            "--read=/usr",
+            "--read=/private",
             "--",
             "bash",
             "-c",
