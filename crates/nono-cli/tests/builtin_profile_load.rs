@@ -1,8 +1,13 @@
 //! Integration tests: built-in profiles load with canonical sections (Plan 36-01d).
 //!
-//! Asserts that all 4 AI-agent built-in profiles (claude-code, codex, opencode,
+//! Asserts that the AI-agent built-in profiles (claude-code, codex,
 //! claude-no-kc) deserialise through the embedded policy loader AND carry
 //! the canonical-section surface introduced by Plans 36-01a/b/c/d:
+//!
+//! NOTE: `opencode` was removed from the embedded builtins during the UPST7
+//! sync (Phase 55) and now ships via the registry pack
+//! `always-further/opencode`. See `src/profile/builtin.rs::test_opencode_no_longer_inbuilt`.
+//! It is therefore intentionally NOT covered here.
 //!   - `commands.{allow, deny}` — canonical CommandsConfig (upstream f0abd413)
 //!   - `policy.bypass_protection` — canonical field name (Plan 36-01c rename)
 //!   - NO `override_deny` key in the resolved JSON output
@@ -132,39 +137,11 @@ fn test_builtin_profile_codex_loads_canonical_sections() {
     );
 }
 
-/// T-36-01d-3 (REQ-PORT-CLOSURE-02 #5):
-///
-/// `opencode` built-in profile loads and carries canonical sections.
-#[test]
-fn test_builtin_profile_opencode_loads_canonical_sections() {
-    let json = profile_show_json("opencode");
-
-    assert_eq!(
-        json["name"].as_str().unwrap_or(""),
-        "opencode",
-        "opencode: name field must match"
-    );
-
-    // bypass_protection must be accessible as an empty array.
-    let _bypass = json["policy"]["bypass_protection"]
-        .as_array()
-        .expect("opencode: policy.bypass_protection must be a JSON array");
-
-    // No legacy key in output.
-    assert!(
-        json["policy"]["override_deny"].is_null(),
-        "opencode: policy must not carry override_deny key in canonical JSON output"
-    );
-
-    // filesystem.allow must be present and non-empty (opencode needs its data dirs).
-    let fs_allow = json["filesystem"]["allow"]
-        .as_array()
-        .expect("opencode: filesystem.allow must be a JSON array");
-    assert!(
-        !fs_allow.is_empty(),
-        "opencode: filesystem.allow must be non-empty"
-    );
-}
+// T-36-01d-3 removed: `opencode` is no longer an embedded built-in profile.
+// It moved to the registry pack `always-further/opencode` during the UPST7
+// sync (Phase 55), so `nono profile show opencode` correctly reports
+// "Profile not found" in a clean environment. The removal is asserted by
+// `src/profile/builtin.rs::test_opencode_no_longer_inbuilt`.
 
 /// T-36-01d-4 (REQ-PORT-CLOSURE-02 #5):
 ///
@@ -210,14 +187,16 @@ fn test_builtin_profile_claude_no_keychain_loads_canonical_sections() {
 
 /// T-36-01d-5 (REQ-PORT-CLOSURE-02 #5):
 ///
-/// All 4 AI-agent built-in profiles load successfully via the embedded policy
-/// loader — iterative variant that fails fast on any individual load failure.
+/// All embedded AI-agent built-in profiles load successfully via the embedded
+/// policy loader — iterative variant that fails fast on any individual load
+/// failure.
 ///
 /// Provides a single-shot gate for CI: if any built-in profile regresses,
-/// this test names the offending profile.
+/// this test names the offending profile. `opencode` is excluded — it is a
+/// registry pack, not an embedded builtin (Phase 55 / UPST7).
 #[test]
 fn test_all_builtin_profiles_use_canonical_sections() {
-    let ai_agent_profiles = ["claude-code", "codex", "opencode", "claude-no-kc"];
+    let ai_agent_profiles = ["claude-code", "codex", "claude-no-kc"];
 
     for name in &ai_agent_profiles {
         let json = profile_show_json(name);
