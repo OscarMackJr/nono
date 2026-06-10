@@ -170,6 +170,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 | Date | Slug | Deliverable |
 |------|------|-------------|
 | 2026-06-08 | vm-driver-signing-runbook | `64-SC1-VM-RUNBOOK.md` — junior-friendly cookbook for the Phase 64 Track A VM minifilter test-signing + deny harness (Phase 63 UAT lessons baked in) |
+| 2026-06-10 | cargo-audit-rustls-webpki | Bumped `sign-fixture` sigstore `0.7.0→0.8.0` (commit `4aaa0508`) — drops vulnerable `rustls-webpki 0.102.8` + `sigstore 0.7.0` subtree; `cargo audit` exit 0. Real remediation over `.cargo/audit.toml` ignore. |
 
 ## Session Continuity
 
