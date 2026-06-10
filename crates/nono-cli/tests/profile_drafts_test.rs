@@ -503,39 +503,44 @@ fn promote_shadow_builtin_refused() {
 fn promote_shadow_package_managed_refused() {
     let dir = TempDir::new().expect("create temp dir");
 
-    // Pre-create a fake package store layout and symlink canonical to it.
+    // Stand up a realistic installed pack that registers a profile named
+    // "myagent": <store>/<ns>/<pack>/package.json declaring a Profile artifact
+    // with `install_as: "myagent"`, plus the profile file it points at. This
+    // mirrors how `nono package install` lays out a pack on disk.
+    //
+    // The production package-managed detector used by `profile promote`
+    // (`profile::find_pack_store_profile` -> `reserved_profile_source`) scans
+    // the store for a `package.json` manifest declaring a matching Profile
+    // artifact. A bare symlink-into-the-store (the previous test setup) is NOT
+    // what that detector inspects, so it never triggered the refusal — the
+    // assertion only "passed" on Windows because the test skipped when symlink
+    // creation lacked privilege, and never ran on the cancelled Linux leg.
     // package_store_dir = <dir>/nono/packages
-    // Profile symlink: <dir>/nono/profiles/myagent.json -> <dir>/nono/packages/fake_pkg/profiles/myagent.json
-    let packages_dir = dir
+    let pack_dir = dir
         .path()
         .join("nono")
         .join("packages")
-        .join("fake_pkg")
-        .join("profiles");
-    std::fs::create_dir_all(&packages_dir).expect("create package profile dir");
-    let pkg_profile = packages_dir.join("myagent.json");
-    std::fs::write(&pkg_profile, minimal_profile_json("myagent")).expect("write pkg profile");
-
-    let profiles_dir = dir.path().join("nono").join("profiles");
-    std::fs::create_dir_all(&profiles_dir).expect("create profiles dir");
-
-    #[cfg(unix)]
-    {
-        std::os::unix::fs::symlink(&pkg_profile, profiles_dir.join("myagent.json"))
-            .expect("create symlink");
-    }
-    #[cfg(windows)]
-    {
-        // On Windows, create a symlink (requires SeCreateSymbolicLinkPrivilege or
-        // Developer Mode; skip the test if symlink creation fails).
-        if std::os::windows::fs::symlink_file(&pkg_profile, profiles_dir.join("myagent.json"))
-            .is_err()
-        {
-            // Can't create symlink without elevated privileges — skip test.
-            eprintln!("SKIP: promote_shadow_package_managed_refused (Windows symlink requires elevated privileges)");
-            return;
-        }
-    }
+        .join("testorg")
+        .join("testpack");
+    let pack_profiles_dir = pack_dir.join("profiles");
+    std::fs::create_dir_all(&pack_profiles_dir).expect("create pack profiles dir");
+    std::fs::write(
+        pack_profiles_dir.join("myagent.json"),
+        minimal_profile_json("myagent"),
+    )
+    .expect("write pack profile");
+    std::fs::write(
+        pack_dir.join("package.json"),
+        r#"{
+  "schema_version": 1,
+  "name": "testpack",
+  "artifacts": [
+    { "type": "profile", "path": "profiles/myagent.json", "install_as": "myagent" }
+  ]
+}
+"#,
+    )
+    .expect("write pack manifest");
 
     // Create a draft for the same name
     write_draft_profile(dir.path(), "myagent");
