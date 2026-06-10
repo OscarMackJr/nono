@@ -173,13 +173,19 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-09T23:50:38.080Z
+**Last session:** 2026-06-10 — session resumed; reconciled state with filesystem + live CI.
 
-**Resume with:** `/gsd:plan-phase 63`
+**Stopped at:** Phase 65 mid-execution. Plans 63-01..03, 64-01..05, 65-01/03/04 have SUMMARY files; **65-02-SUMMARY.md is NOT written** — gated on the D-11c HARD gate (a green `macos-latest` CI SHA). Phase 65 deliverables are code-complete and pushed (HEAD `6fc28f9e`). The active thread is a cross-target CI rehabilitation (see `.planning/phases/65-.../.continue-here.md`).
 
-**Open questions to resolve at plan-phase:**
+**Live CI status (run 27257463149, `6fc28f9e`):** GREEN = Rustfmt, Clippy (ubuntu+macos), Build (ubuntu+macos), Windows Smoke/Packaging, FFI Header. RED = **Test (macos-latest)** ← D-11c blocker; plus pre-existing/separately-scoped: Windows Build/Integration/Regression/Security, Integration Tests, Cargo Audit.
 
-- HVCI/VM host state on Win11 26200 — check `msinfo32` before Phase 63 plan
-- Which EDR product is available for Phase 66 (MDE trial needs an M365 tenant ~1 day; Sysmon-only is the fallback)
-- macOS host availability for Phase 65 live `sandbox_init()` re-validation
-- Exact macOS-relevant upstream commit set produced by Phase 63 audit
+**Active blocker — macOS Test leg:** 4 integration tests in `crates/nono-cli/tests/audit_attestation.rs` fail (panic at line 30 `assert_success`). Root cause confirmed: the spawned `nono` exits 1 with `Sandbox initialization failed: Refusing to grant '/Users/runner/work/nono/nono' because it overlaps protected nono state root '/Users/runner/work/nono'`. The GHA checkout path `/Users/runner/work/nono/nono` (repo literally named `nono`, nested under a `nono` workdir) appears to trip the protected-state-root overlap check, picking the OUTER `/Users/runner/work/nono` as the state root. Pre-existing infra/env breakage, NOT a rehab regression.
+
+**Resume options:** (A) fix the macOS Test leg → land D-11c; (B) resolve the Cargo Audit decision (sign-fixture rustls-webpki — bump vs documented-ignore, needs Oscar's security call); (C) the 3 Phase-65 human/infra gates (VM latency, macOS-host UAT) are Oscar's to run.
+
+**Open questions still pending:**
+
+- HVCI/VM host state on Win11 26200 — check `msinfo32` (Phase 64 Track A VM gate)
+- Which EDR product is available for Phase 66 (MDE trial needs an M365 tenant ~1 day; Sysmon-only fallback)
+- macOS host availability for Phase 65 live `sandbox_init()` re-validation (gate-65-A, still OPEN)
+- `STATE.md` drift: the "v2.10 Phase Summary" table + Current-Position progress bar still show all phases "Not started / 0%" — stale; phases 63+64 are complete, 65 in progress (frontmatter `completed_phases: 2` is correct).
