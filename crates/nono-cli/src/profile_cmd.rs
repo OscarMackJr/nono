@@ -3446,7 +3446,7 @@ fn resolve_to_manifest(
 
     Ok(manifest::CapabilityManifest {
         version,
-        schema: Some("https://nono.dev/schemas/capability-manifest.schema.json".to_string()),
+        schema: Some("https://nono.sh/schemas/capability-manifest.schema.json".to_string()),
         filesystem,
         network,
         process,
