@@ -3207,7 +3207,10 @@ mod tests {
             raw.session_hooks.before.is_some(),
             "to_raw_profile() must forward session_hooks.before into the produced Profile"
         );
-        let before = raw.session_hooks.before.unwrap();
+        let before = raw
+            .session_hooks
+            .before
+            .expect("session_hooks.before must be present after to_raw_profile()");
         assert_eq!(
             before.script,
             std::path::PathBuf::from("/usr/local/bin/pre.sh"),

@@ -24,6 +24,10 @@
 //! endpoint, or a valid TUF trusted root on disk (D-32-15 verify-is-offline
 //! invariant). Inline JSON fixtures keep the test hermetic.
 
+// Integration test: assertion-style `unwrap_err()` to inspect rejection messages is
+// idiomatic here; permitted per CLAUDE.md (allow clippy::unwrap_used in test code).
+#![allow(clippy::unwrap_used)]
+
 use std::path::Path;
 
 // ---------------------------------------------------------------------------

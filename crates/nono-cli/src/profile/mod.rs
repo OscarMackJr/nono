@@ -4920,34 +4920,6 @@ mod tests {
         assert!(validate_custom_credential("test", &cred).is_ok());
     }
 
-    // ============================================================================
-    // OAuth2 auth validation tests
-    // ============================================================================
-
-    fn oauth2_cred_builder() -> CustomCredentialDef {
-        // Fork adaptation: upstream includes proxy/tls_client_cert/tls_client_key fields
-        // not yet in fork's CustomCredentialDef (proxy: ProxyInjectConfig not yet ported).
-        CustomCredentialDef {
-            upstream: "https://api.example.com".to_string(),
-            credential_key: None,
-            auth: Some(OAuth2Config {
-                token_url: "https://auth.example.com/oauth/token".to_string(),
-                client_id: "my-client".to_string(),
-                client_secret: "env://CLIENT_SECRET".to_string(),
-                scope: "read write".to_string(),
-            }),
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
-            credential_format: Some("Bearer {}".to_string()),
-            path_pattern: None,
-            path_replacement: None,
-            query_param_name: None,
-            env_var: None,
-            endpoint_rules: vec![],
-            tls_ca: None,
-        }
-    }
-
     #[test]
     fn test_security_config_allowed_commands_deserializes() {
         let json = r#"{
@@ -8173,24 +8145,28 @@ mod session_hooks_tests {
     /// inherited when child.after is None.
     #[test]
     fn test_merge_profiles_session_hooks_child_overrides_per_field() {
-        let mut base = Profile::default();
-        base.session_hooks = SessionHooks {
-            before: Some(SessionHook {
-                script: std::path::PathBuf::from("/base/pre.sh"),
-                timeout_secs: None,
-            }),
-            after: Some(SessionHook {
-                script: std::path::PathBuf::from("/base/post.sh"),
-                timeout_secs: Some(60),
-            }),
+        let base = Profile {
+            session_hooks: SessionHooks {
+                before: Some(SessionHook {
+                    script: std::path::PathBuf::from("/base/pre.sh"),
+                    timeout_secs: None,
+                }),
+                after: Some(SessionHook {
+                    script: std::path::PathBuf::from("/base/post.sh"),
+                    timeout_secs: Some(60),
+                }),
+            },
+            ..Default::default()
         };
-        let mut child = Profile::default();
-        child.session_hooks = SessionHooks {
-            before: Some(SessionHook {
-                script: std::path::PathBuf::from("/child/pre.sh"),
-                timeout_secs: None,
-            }),
-            after: None, // child does not set after → inherits from base
+        let child = Profile {
+            session_hooks: SessionHooks {
+                before: Some(SessionHook {
+                    script: std::path::PathBuf::from("/child/pre.sh"),
+                    timeout_secs: None,
+                }),
+                after: None, // child does not set after → inherits from base
+            },
+            ..Default::default()
         };
         let merged = merge_profiles(base, child);
         let merged_before = merged.session_hooks.before.expect("before must be present");
@@ -8214,13 +8190,15 @@ mod session_hooks_tests {
     /// base.session_hooks.before and base.session_hooks.after unchanged.
     #[test]
     fn test_merge_profiles_session_hooks_child_inherits_when_absent() {
-        let mut base = Profile::default();
-        base.session_hooks = SessionHooks {
-            before: Some(SessionHook {
-                script: std::path::PathBuf::from("/base/pre.sh"),
-                timeout_secs: Some(10),
-            }),
-            after: None,
+        let base = Profile {
+            session_hooks: SessionHooks {
+                before: Some(SessionHook {
+                    script: std::path::PathBuf::from("/base/pre.sh"),
+                    timeout_secs: Some(10),
+                }),
+                after: None,
+            },
+            ..Default::default()
         };
         let child = Profile::default(); // no session_hooks set
         let merged = merge_profiles(base, child);

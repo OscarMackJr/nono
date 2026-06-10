@@ -244,6 +244,10 @@ const KEYRING_SERVICE: &str = nono::keystore::DEFAULT_SERVICE;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
+// The env-guard below mutates process env via set_var/remove_var with a symmetric
+// Drop restore (the CLAUDE.md-endorsed save/restore test pattern); the
+// disallowed_methods ban targets non-test misuse, so scope an allow to the tests.
+#[allow(clippy::disallowed_methods)]
 mod tests {
     use super::*;
 
