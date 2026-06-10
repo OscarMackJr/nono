@@ -52,11 +52,39 @@ typedef struct _NONO_RING_ENTRY {
 
     // TRUE if this slot holds a pending request, FALSE if empty.
     BOOLEAN Occupied;
+
+    // SPAN-B start timestamp (D-02b): QPC tick count captured at enqueue in
+    // NonoPreCreate. Kernel-internal — safe to add here (NONO_RING_ENTRY is NOT
+    // the ABI-locked wire struct; NONO_IPC_REQUEST in the header stays at 532
+    // bytes). The dequeue copy site lifts this into a local before the slot is
+    // cleared so SPAN-B end can compute the full pre-op->completion delta.
+    LARGE_INTEGER EnqueueQpc;
 } NONO_RING_ENTRY, *PNONO_RING_ENTRY;
 
 NONO_RING_ENTRY g_RingEntry;
 KSPIN_LOCK      g_RingLock;
 KEVENT          g_RingBufferEvent;
+
+// ---------------------------------------------------------------------------
+// Latency instrumentation (Phase 65 DRV-04, D-01..D-03)
+//
+// Two QPC-measured spans over denied creates:
+//   SPAN-A (D-02a): kernel-IPC round-trip — brackets the FltSendMessage call.
+//   SPAN-B (D-02b): full pre-op->IRP-completion — enqueue (NonoPreCreate) to
+//                   FltCompletePendedPreOperation (NonoWorkerThread).
+//
+// KeQueryPerformanceCounter is HAL-only (T-63-01 clean) and any-IRQL (T-63-03).
+// Raw ticks are accumulated lock-free (single-slot ring serializes the writers,
+// Assumption A2 — no InterlockedIncrement needed) and sorted + dumped once at
+// unload (outside any timed span; Pitfall 1: no DbgPrint inside a span).
+// Integer-microsecond math only — no kernel floating point.
+// ---------------------------------------------------------------------------
+LARGE_INTEGER g_PerfFreq;               // QPC ticks/sec, cached once in DriverEntry (fixed at boot)
+#define NONO_SAMPLE_MAX 128
+LONG64 g_SpanA[NONO_SAMPLE_MAX];        // SPAN-A raw ticks (D-02a)
+LONG   g_SpanACount = 0;
+LONG64 g_SpanB[NONO_SAMPLE_MAX];        // SPAN-B raw ticks (D-02b)
+LONG   g_SpanBCount = 0;
 
 // Worker thread lifecycle controls.
 BOOLEAN gWorkerRunning      = FALSE;
@@ -262,6 +290,11 @@ NonoPreCreate(
     g_RingEntry.Data     = Data;
     g_RingEntry.Occupied = TRUE;
 
+    // SPAN-B start (D-02b): timestamp the full pre-op->completion span at enqueue,
+    // still under the lock so it pairs atomically with the slot it rides.
+    // KeQueryPerformanceCounter is any-IRQL (T-63-03) — safe at <= APC_LEVEL here.
+    g_RingEntry.EnqueueQpc = KeQueryPerformanceCounter(NULL);
+
     // Lock released before signaling (DESIGN.md Rule 5).
     KeReleaseSpinLock(&g_RingLock, oldIrql);
 
@@ -319,6 +352,9 @@ NonoWorkerThread(
         // Extract the pending request and callback data, then clear the slot atomically.
         PNONO_IPC_REQUEST pRequest     = g_RingEntry.pRequest;
         PFLT_CALLBACK_DATA pendingData = g_RingEntry.Data;
+        // SPAN-B start (D-02b): lift the enqueue timestamp into a local before the
+        // slot is cleared, so SPAN-B end (after completion) can compute the delta.
+        LARGE_INTEGER localEnqueueQpc  = g_RingEntry.EnqueueQpc;
         g_RingEntry.pRequest  = NULL;
         g_RingEntry.Data      = NULL;
         g_RingEntry.Occupied  = FALSE;
@@ -335,6 +371,10 @@ NonoWorkerThread(
         LARGE_INTEGER timeout;
         timeout.QuadPart = -5000000LL;
 
+        // SPAN-A start (D-02a): timestamp immediately before the kernel-IPC round-trip.
+        // No DbgPrint/logging between a0 and a1 (Pitfall 1: logging dominates the span).
+        LARGE_INTEGER a0 = KeQueryPerformanceCounter(NULL);
+
         // FltSendMessage: send the IPC request to the user-mode policy client.
         // gClientPort is NULL if no user-mode client is connected -> FltSendMessage
         // returns a non-success status, triggering the fail-open path below.
@@ -346,6 +386,13 @@ NonoWorkerThread(
             &reply,
             &replyLen,
             &timeout);
+
+        // SPAN-A end (D-02a): record (a1 - a0) ONLY on the non-timeout path. A timeout
+        // measures the 500ms fail-open envelope, not the real round-trip — excluded.
+        LARGE_INTEGER a1 = KeQueryPerformanceCounter(NULL);
+        if (sendStatus != STATUS_TIMEOUT && g_SpanACount < NONO_SAMPLE_MAX) {
+            g_SpanA[g_SpanACount++] = a1.QuadPart - a0.QuadPart;
+        }
 
         // Decide allow vs deny. Fail-open on timeout or any send error (DESIGN.md
         // T-63-02). Only an explicit reply.Decision == 1 denies.
@@ -369,6 +416,12 @@ NonoWorkerThread(
             pendingData->IoStatus.Status      = STATUS_ACCESS_DENIED;
             pendingData->IoStatus.Information  = 0;
             FltCompletePendedPreOperation(pendingData, FLT_PREOP_COMPLETE, NULL);
+            // SPAN-B end (D-02b): full pre-op->completion delta, measured only on the
+            // deny path (the round-tripped, denied creates DRV-04 cares about).
+            LARGE_INTEGER b1 = KeQueryPerformanceCounter(NULL);
+            if (g_SpanBCount < NONO_SAMPLE_MAX) {
+                g_SpanB[g_SpanBCount++] = b1.QuadPart - localEnqueueQpc.QuadPart;
+            }
         } else {
             FltCompletePendedPreOperation(pendingData, FLT_PREOP_SUCCESS_NO_CALLBACK, NULL);
         }
@@ -490,6 +543,49 @@ NonoInstanceTeardownStart(
 }
 
 // ---------------------------------------------------------------------------
+// NonoDumpSpan — sort one latency span and DbgPrint its min/median/p99 (Phase 65)
+//
+// Called from NonoFltUnload AFTER the worker thread is joined, so there is no
+// concurrent writer to g_SpanA/g_SpanB and no lock is needed. This is OUTSIDE
+// any timed span (Pitfall 1), so DbgPrint here is safe.
+//
+// Integer-microsecond math only (no kernel floating point): us = ticks *
+// 1000000 / freq. In-place insertion sort over <= NONO_SAMPLE_MAX (128) samples.
+// ---------------------------------------------------------------------------
+static VOID
+NonoDumpSpan(_In_ PCSTR Label, _Inout_updates_(Count) LONG64 *Samples, _In_ LONG Count, _In_ LONG64 FreqQpc)
+{
+    if (Count <= 0 || FreqQpc <= 0) {
+        DbgPrint("[nono-fltmgr] %s: no samples (count=%ld)\n", Label, Count);
+        return;
+    }
+
+    // In-place insertion sort (ascending). Count is bounded to NONO_SAMPLE_MAX.
+    for (LONG i = 1; i < Count; i++) {
+        LONG64 key = Samples[i];
+        LONG j = i - 1;
+        while (j >= 0 && Samples[j] > key) {
+            Samples[j + 1] = Samples[j];
+            j--;
+        }
+        Samples[j + 1] = key;
+    }
+
+    // Percentile indices (nearest-rank, clamped to the last sample).
+    LONG p99Idx = (Count * 99) / 100;
+    if (p99Idx >= Count) {
+        p99Idx = Count - 1;
+    }
+
+    LONG64 minUs    = Samples[0]          * 1000000LL / FreqQpc;
+    LONG64 medianUs = Samples[Count / 2]  * 1000000LL / FreqQpc;
+    LONG64 p99Us    = Samples[p99Idx]     * 1000000LL / FreqQpc;
+
+    DbgPrint("[nono-fltmgr] %s: iterations=%ld min=%lld us median=%lld us p99=%lld us (freq=%lld)\n",
+             Label, Count, minUs, medianUs, p99Us, FreqQpc);
+}
+
+// ---------------------------------------------------------------------------
 // NonoFltUnload — called when the driver is unloaded (e.g. sc stop nono-fltmgr)
 //
 // Cleanup order (PITFALLS Pitfall 3 / DESIGN.md T-63-02):
@@ -525,6 +621,13 @@ NonoFltUnload(
         ZwClose(gWorkerThreadHandle);
         gWorkerThreadHandle = NULL;
     }
+
+    // Latency dump (Phase 65 D-02/D-03): the worker is now joined, so g_SpanA/g_SpanB
+    // have no concurrent writer and no lock is required. Emitted here (outside any
+    // timed span) via DbgPrint — collect from the kernel debugger / DebugView. The
+    // single-slot ring serialized the accumulation (no InterlockedIncrement needed).
+    NonoDumpSpan("SPAN-A kernel-IPC round-trip", g_SpanA, g_SpanACount, g_PerfFreq.QuadPart);
+    NonoDumpSpan("SPAN-B full pre-op->completion", g_SpanB, g_SpanBCount, g_PerfFreq.QuadPart);
 
     // Close the communication server port (if not already closed by InstanceTeardownStart).
     if (gServerPort != NULL) {
@@ -580,6 +683,11 @@ DriverEntry(
     KeInitializeEvent(&g_RingBufferEvent, SynchronizationEvent, FALSE);
     KeInitializeSpinLock(&g_RingLock);
     RtlZeroMemory(&g_RingEntry, sizeof(g_RingEntry));
+
+    // Latency instrumentation (D-01): cache the QPC frequency once. ticks/sec is
+    // fixed at boot, so caching avoids re-querying it inside any timed span. The
+    // accumulators (g_SpanA/g_SpanB) are zero-initialized as file-scope globals.
+    (void)KeQueryPerformanceCounter(&g_PerfFreq);
 
     // Build a security descriptor for the communication port.
     // FLT_PORT_ALL_ACCESS allows any user-mode process to connect (spike only).
