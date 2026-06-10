@@ -21,7 +21,12 @@ fn run_nono(args: &[&str], home: &Path, cwd: &Path) -> Output {
     cmd.args(args)
         .env("HOME", home)
         .env("XDG_CONFIG_HOME", home.join(".config"))
-        .env("NONO_TEST_HOME", home);
+        .env("NONO_TEST_HOME", home)
+        // Keep $PWD consistent with current_dir (the supervisor's
+        // `derive_workdir` prefers `$PWD`). Harmless for these non-sandboxing
+        // `trust` invocations, but keeps the harness hermetic and consistent
+        // with the other integration tests.
+        .env("PWD", cwd);
     cmd.current_dir(cwd).output().expect("failed to run nono")
 }
 

@@ -22,7 +22,18 @@ fn run_nono(args: &[&str], home: &Path, cwd: &Path) -> Output {
         // closes Phase 27 Blocker 1 (audit_root not env-overridable on
         // Windows) and Blocker 2 (audit/rollback path mismatch under
         // partial env redirection).
-        .env("NONO_TEST_HOME", home);
+        .env("NONO_TEST_HOME", home)
+        // Keep $PWD consistent with the spawned process's working directory.
+        // `Command::current_dir` does NOT update the inherited `PWD` env var,
+        // but the supervisor's `derive_workdir` (sandbox_prepare.rs) PREFERS
+        // `$PWD` over `current_dir()` for macOS symlink-CWD fidelity. Without
+        // this, the spawned nono would resolve its workdir to the test
+        // runner's inherited `$PWD` (the repo root on CI) instead of `cwd`,
+        // and `--allow-cwd` would grant an ancestor of the in-tree
+        // `<NONO_TEST_HOME>/.nono` protected root -> sandbox-init rejection.
+        // Real `nono run` invocations always have `$PWD == cwd` (the shell
+        // guarantees it); this restores that invariant for the test harness.
+        .env("PWD", cwd);
     cmd.current_dir(cwd).output().expect("failed to run nono")
 }
 
@@ -319,9 +330,16 @@ fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
     let keyref = format!("env://{env_var}");
 
     let cmd_args = run_command_args();
+    // `--allow-cwd` grants the (sibling-of-protected-root) workspace so the
+    // sandboxed `/bin/pwd` child can stat its working directory. On macOS
+    // Seatbelt an ungranted CWD makes `/bin/pwd` fail with "Operation not
+    // permitted"; granting CWD is harmless to the audit-attestation surface
+    // this test exercises. Paired with the `PWD == cwd` fix in `run_nono`,
+    // the grant resolves to `workspace` (not the inherited repo root).
     let mut args = vec![
         "run",
         "--audit-integrity",
+        "--allow-cwd",
         "--audit-sign-key",
         &keyref,
         "--",

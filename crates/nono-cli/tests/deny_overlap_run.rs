@@ -49,6 +49,13 @@ fn run_nono(args: &[&str], home: &Path, cwd: &Path) -> Output {
         // Disable the detached-launch path and any interactive prompts —
         // `--allow-cwd` already pre-confirms CWD sharing, but be defensive.
         .env_remove("NONO_DETACHED_LAUNCH")
+        // Keep $PWD consistent with current_dir: the supervisor's
+        // `derive_workdir` prefers `$PWD` over `current_dir()`. Without this,
+        // `--allow-cwd` grants the test runner's inherited `$PWD` (repo root
+        // on CI) instead of `cwd`, which is an ancestor of the in-tree
+        // `<HOME>/.nono` protected root -> sandbox-init rejection masks the
+        // deny-overlap behavior this test asserts.
+        .env("PWD", cwd)
         .current_dir(cwd)
         .output()
         .expect("failed to run nono")

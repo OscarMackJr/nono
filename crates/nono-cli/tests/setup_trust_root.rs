@@ -20,7 +20,12 @@ fn run_nono(args: &[&str], home: &Path, cwd: &Path) -> Output {
         .env("XDG_CONFIG_HOME", home.join(".config"))
         .env("NONO_TEST_HOME", home)
         // Suppress update checks (network).
-        .env("NONO_NO_UPDATE_CHECK", "1");
+        .env("NONO_NO_UPDATE_CHECK", "1")
+        // Keep $PWD consistent with current_dir (the supervisor's
+        // `derive_workdir` prefers `$PWD`). Harmless for these non-sandboxing
+        // `setup` invocations, but keeps the harness hermetic and consistent
+        // with the other integration tests.
+        .env("PWD", cwd);
     cmd.current_dir(cwd).output().expect("failed to run nono")
 }
 
