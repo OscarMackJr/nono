@@ -3949,6 +3949,9 @@ mod tests {
     #[test]
     fn test_safe_env_vars_allowed() {
         assert!(!is_dangerous_env_var("HOME"));
+        // PATH is dangerous on Windows (executable-resolution hijacking, D-09) but a
+        // normal inheritable var on Unix (different threat model) — see is_dangerous_env_var.
+        #[cfg(not(target_os = "windows"))]
         assert!(!is_dangerous_env_var("PATH"));
         assert!(!is_dangerous_env_var("SHELL"));
         assert!(!is_dangerous_env_var("TERM"));

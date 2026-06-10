@@ -57,16 +57,23 @@ pub(crate) fn is_dangerous_env_var(key: &str) -> bool {
         // all capitalizations. These vars can redirect executable resolution, interpreter
         // search paths, and system directories — a Low-IL hook writing them to the env file
         // could hijack the Medium-IL parent's execution context.
-        || key.eq_ignore_ascii_case("PATH") // executable resolution hijacking
-        || key.eq_ignore_ascii_case("PATHEXT") // extension association hijacking
-        || key.eq_ignore_ascii_case("COMSPEC") // cmd interpreter redirect
-        || key.eq_ignore_ascii_case("PSModulePath") // PowerShell module injection
-        || key.eq_ignore_ascii_case("PSModuleAnalysisCachePath") // PS analysis cache poisoning
-        || key.eq_ignore_ascii_case("__PSLockdownPolicy") // PS constrained-language bypass
-        || key.eq_ignore_ascii_case("SystemRoot") // system DLL resolution redirect
-        || key.eq_ignore_ascii_case("windir") // system directory redirect
-        || key.eq_ignore_ascii_case("TEMP") // temp file redirect from parent perspective
-        || key.eq_ignore_ascii_case("TMP") // same as TEMP
+        //
+        // WINDOWS-ONLY (cross-target correctness): on Unix env names are case-sensitive and
+        // the threat model differs — PATH/TEMP must stay inheritable so the sandboxed child
+        // can resolve executables (see test_allows_unrelated_env_vars / test_safe_env_vars_allowed).
+        // The D-09 hardening was added unconditionally, which both broke the documented Unix
+        // contract and would strip PATH from Unix sandbox children. Gate it to Windows.
+        || (cfg!(target_os = "windows")
+            && (key.eq_ignore_ascii_case("PATH") // executable resolution hijacking
+                || key.eq_ignore_ascii_case("PATHEXT") // extension association hijacking
+                || key.eq_ignore_ascii_case("COMSPEC") // cmd interpreter redirect
+                || key.eq_ignore_ascii_case("PSModulePath") // PowerShell module injection
+                || key.eq_ignore_ascii_case("PSModuleAnalysisCachePath") // PS analysis cache poisoning
+                || key.eq_ignore_ascii_case("__PSLockdownPolicy") // PS constrained-language bypass
+                || key.eq_ignore_ascii_case("SystemRoot") // system DLL resolution redirect
+                || key.eq_ignore_ascii_case("windir") // system directory redirect
+                || key.eq_ignore_ascii_case("TEMP") // temp file redirect from parent perspective
+                || key.eq_ignore_ascii_case("TMP"))) // same as TEMP
 }
 
 fn env_key_matches(left: &str, right: &str) -> bool {
