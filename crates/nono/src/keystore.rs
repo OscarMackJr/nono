@@ -2257,6 +2257,16 @@ pub fn build_secret_mappings(
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate the REAL process-global env vars `BW_SESSION`,
+    /// `BWS_ACCESS_TOKEN`, and `PATH`. Rust runs tests in parallel within one
+    /// process, so without this lock one test's `set_var` races another test's
+    /// `remove_var` (CLAUDE.md env-var test-isolation footgun) — e.g.
+    /// `test_load_from_bws_cli_not_found` setting `BWS_ACCESS_TOKEN` while
+    /// `test_load_from_bws_no_token` expects it unset, producing the wrong error
+    /// (observed as a macOS-only flake due to scheduling timing). Poison-tolerant:
+    /// a panicking guarded test must not wedge the others.
+    static BW_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[cfg(all(target_os = "windows", feature = "system-keyring"))]
     #[test]
     fn system_keystore_label_mentions_windows_credential_manager() {
@@ -3788,6 +3798,7 @@ mod tests {
 
     #[test]
     fn test_load_from_bw_no_session() {
+        let _env_guard = BW_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // BW_SESSION absent → KeystoreAccess with actionable message
         let old_val = std::env::var("BW_SESSION").ok();
         // SAFETY: test-only env mutation; restored in the same test function.
@@ -3808,6 +3819,7 @@ mod tests {
 
     #[test]
     fn test_load_from_bw_empty_session() {
+        let _env_guard = BW_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // BW_SESSION="" (empty string) → KeystoreAccess
         let old_val = std::env::var("BW_SESSION").ok();
         // SAFETY: test-only env mutation; restored in the same test function.
@@ -3834,6 +3846,7 @@ mod tests {
 
     #[test]
     fn test_load_from_bws_no_token() {
+        let _env_guard = BW_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // BWS_ACCESS_TOKEN absent → KeystoreAccess with actionable message
         let old_val = std::env::var("BWS_ACCESS_TOKEN").ok();
         // SAFETY: test-only env mutation; restored in the same test function.
@@ -3856,6 +3869,7 @@ mod tests {
 
     #[test]
     fn test_load_from_bw_cli_not_found() {
+        let _env_guard = BW_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Set BW_SESSION to a non-empty value, then set PATH to an empty temp dir.
         // `bw` should not be found → KeystoreAccess with 'bw' and 'not found'.
         let old_session = std::env::var("BW_SESSION").ok();
@@ -3899,6 +3913,7 @@ mod tests {
 
     #[test]
     fn test_load_from_bws_cli_not_found() {
+        let _env_guard = BW_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Set BWS_ACCESS_TOKEN to a non-empty value, then set PATH to an empty temp dir.
         let old_token = std::env::var("BWS_ACCESS_TOKEN").ok();
         let old_path = std::env::var("PATH").unwrap_or_default();
