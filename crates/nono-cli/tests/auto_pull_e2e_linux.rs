@@ -177,11 +177,7 @@ fn spawn_multi_endpoint_server_smoke() {
         resp_str.contains("pong"),
         "expected pong in response; got: {resp_str}"
     );
-    assert_eq!(
-        *counter.lock().unwrap(),
-        1,
-        "expected exactly 1 request"
-    );
+    assert_eq!(*counter.lock().unwrap(), 1, "expected exactly 1 request");
 }
 
 // ---------------------------------------------------------------------------
@@ -234,13 +230,7 @@ fn auto_pull_happy_path_mock() {
     std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
-        .args([
-            "run",
-            "--profile",
-            "mock-ns/mock-pack",
-            "--",
-            "/bin/true",
-        ])
+        .args(["run", "--profile", "mock-ns/mock-pack", "--", "/bin/true"])
         .output()
         .expect("spawn nono");
 
@@ -446,13 +436,7 @@ fn auto_pull_signature_failure_aborts() {
     std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
-        .args([
-            "run",
-            "--profile",
-            "mock-ns/mock-pack",
-            "--",
-            "/bin/true",
-        ])
+        .args(["run", "--profile", "mock-ns/mock-pack", "--", "/bin/true"])
         .output()
         .expect("spawn nono");
 
@@ -549,13 +533,7 @@ fn auto_pull_rejects_non_policy_pack_type() {
     std::env::remove_var("NONO_NO_AUTO_PULL");
 
     let output = Command::new(NONO_BIN)
-        .args([
-            "run",
-            "--profile",
-            "mock-ns/mock-pack",
-            "--",
-            "/bin/true",
-        ])
+        .args(["run", "--profile", "mock-ns/mock-pack", "--", "/bin/true"])
         .output()
         .expect("spawn nono");
 
@@ -572,8 +550,8 @@ fn auto_pull_rejects_non_policy_pack_type() {
     //   "signature/verification failed ..."
     // EITHER is acceptable — the LOCKED requirement is fail-closed rejection.
     let lower = stderr.to_lowercase();
-    let pack_type_rejected = lower.contains("agent pack")
-        || (lower.contains("policy") && lower.contains("pack"));
+    let pack_type_rejected =
+        lower.contains("agent pack") || (lower.contains("policy") && lower.contains("pack"));
     let signature_rejected =
         lower.contains("signature") || lower.contains("verif") || lower.contains("digest");
     assert!(

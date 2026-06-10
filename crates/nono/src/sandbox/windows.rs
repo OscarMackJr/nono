@@ -4554,7 +4554,10 @@ mod app_container_tests {
     fn derive_app_container_sid_yields_package_sid_string() {
         let name = "nono.session.deadbeefcafebabe0123456789abcdef";
         let sid = derive_app_container_sid(name).expect("derive must succeed for a valid name");
-        assert!(!sid.as_psid().is_null(), "derived package PSID must be non-null");
+        assert!(
+            !sid.as_psid().is_null(),
+            "derived package PSID must be non-null"
+        );
 
         let s = package_sid_to_string(&sid).expect("package SID must stringify");
         assert!(
@@ -4573,7 +4576,10 @@ mod app_container_tests {
             .expect("stringify a");
         let b = package_sid_to_string(&derive_app_container_sid(name).expect("derive b"))
             .expect("stringify b");
-        assert_eq!(a, b, "same name must derive the same package SID (single-source)");
+        assert_eq!(
+            a, b,
+            "same name must derive the same package SID (single-source)"
+        );
     }
 
     /// Plan 62-12 FAIL-CLOSED: an empty AppContainer name is rejected before
@@ -4743,7 +4749,6 @@ mod create_low_integrity_primary_token_tests {
         // Must not panic, abort, or call CloseHandle(null).
         drop(owned);
     }
-
 }
 
 /// Library-level tests for the DACL session-SID grant/revoke primitives
@@ -4763,8 +4768,8 @@ mod dacl_grant_tests {
         ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
-        PSECURITY_DESCRIPTOR, PSID,
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        PSID,
     };
 
     /// A unique synthetic SID, shaped like `generate_session_sid`'s
@@ -4973,8 +4978,8 @@ mod dacl_grant_tests {
         let file = dir.path().join("rendezvous-bad.json");
         std::fs::write(&file, b"{}").expect("write stub");
 
-        let err = grant_sid_read_on_path(&file, "not-a-sid")
-            .expect_err("malformed SID must fail closed");
+        let err =
+            grant_sid_read_on_path(&file, "not-a-sid").expect_err("malformed SID must fail closed");
         assert!(
             matches!(err, NonoError::DaclApplyFailed { .. }),
             "malformed SID must yield DaclApplyFailed; got {err:?}"

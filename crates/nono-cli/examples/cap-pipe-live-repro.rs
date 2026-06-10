@@ -178,9 +178,7 @@ mod windows_impl {
                 let tagged_timeout = msg.contains("[timeout]");
                 let bounded = elapsed <= deadline_guard;
                 if tagged_timeout && bounded {
-                    println!(
-                        "SC2 RESULT: PASS (elapsed={elapsed:.2?}, err=\"{msg}\")"
-                    );
+                    println!("SC2 RESULT: PASS (elapsed={elapsed:.2?}, err=\"{msg}\")");
                     true
                 } else {
                     println!(

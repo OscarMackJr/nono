@@ -1094,11 +1094,9 @@ mod tests {
                 ..
             } => {
                 assert_eq!(reason, "endpoint_restricted");
-                assert!(
-                    details
-                        .as_deref()
-                        .is_some_and(|d| d.contains("github.com") && d.contains("/openai/codex"))
-                );
+                assert!(details
+                    .as_deref()
+                    .is_some_and(|d| d.contains("github.com") && d.contains("/openai/codex")));
                 let rules = endpoint_rules.expect("expected endpoint rules");
                 assert_eq!(rules.len(), 1);
                 assert_eq!(rules[0].path, "/atko-cic/**");
@@ -1131,11 +1129,9 @@ mod tests {
             } => {
                 let rules = endpoint_rules.expect("expected endpoint rules");
                 assert_eq!(rules.len(), 1);
-                assert!(
-                    access
-                        .expect("expected access message")
-                        .contains("restricted to 1 endpoint rules")
-                );
+                assert!(access
+                    .expect("expected access message")
+                    .contains("restricted to 1 endpoint rules"));
             }
             _ => panic!("expected allowed result, got: {:?}", result),
         }

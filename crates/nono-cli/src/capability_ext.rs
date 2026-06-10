@@ -686,7 +686,12 @@ impl CapabilitySetExt for CapabilitySet {
         // Directories with read+write access
         for path_template in &fs.allow {
             let path = expand_vars(path_template, workdir)?;
-            validate_requested_dir(&path, "Profile", &protected_roots, allow_parent_of_protected)?;
+            validate_requested_dir(
+                &path,
+                "Profile",
+                &protected_roots,
+                allow_parent_of_protected,
+            )?;
             let label = format!("Profile path '{}' does not exist, skipping", path_template);
             if let Some(mut cap) = try_new_dir(&path, AccessMode::ReadWrite, &label)? {
                 cap.source = CapabilitySource::Profile;
@@ -704,10 +709,20 @@ impl CapabilitySetExt for CapabilitySet {
                 .unwrap_or(false);
 
             let maybe_cap = if reads_file {
-                validate_requested_file(&path, "Profile", &protected_roots, allow_parent_of_protected)?;
+                validate_requested_file(
+                    &path,
+                    "Profile",
+                    &protected_roots,
+                    allow_parent_of_protected,
+                )?;
                 try_new_file(&path, AccessMode::Read, &label)?
             } else {
-                validate_requested_dir(&path, "Profile", &protected_roots, allow_parent_of_protected)?;
+                validate_requested_dir(
+                    &path,
+                    "Profile",
+                    &protected_roots,
+                    allow_parent_of_protected,
+                )?;
                 try_new_dir(&path, AccessMode::Read, &label)?
             };
 
@@ -720,7 +735,12 @@ impl CapabilitySetExt for CapabilitySet {
         // Directories with write-only access
         for path_template in &fs.write {
             let path = expand_vars(path_template, workdir)?;
-            validate_requested_dir(&path, "Profile", &protected_roots, allow_parent_of_protected)?;
+            validate_requested_dir(
+                &path,
+                "Profile",
+                &protected_roots,
+                allow_parent_of_protected,
+            )?;
             let label = format!("Profile path '{}' does not exist, skipping", path_template);
             if let Some(mut cap) = try_new_dir(&path, AccessMode::Write, &label)? {
                 cap.source = CapabilitySource::Profile;

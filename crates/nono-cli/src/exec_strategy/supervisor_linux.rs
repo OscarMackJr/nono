@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::trust_intercept::TrustInterceptor;
-use nono::{AccessMode, UnixSocketCapability, UnixSocketOp, try_canonicalize};
+use nono::{try_canonicalize, AccessMode, UnixSocketCapability, UnixSocketOp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitialCapability {
@@ -135,9 +135,9 @@ pub(super) fn handle_seccomp_notification(
     mut trust_interceptor: Option<&mut TrustInterceptor>,
 ) -> Result<()> {
     use nono::sandbox::{
-        SYS_OPENAT, SYS_OPENAT2, classify_access_from_flags, continue_notif, deny_notif, inject_fd,
-        notif_id_valid, read_notif_path, read_open_how, recv_notif, resolve_notif_path,
-        respond_notif_errno, validate_openat2_size,
+        classify_access_from_flags, continue_notif, deny_notif, inject_fd, notif_id_valid,
+        read_notif_path, read_open_how, recv_notif, resolve_notif_path, respond_notif_errno,
+        validate_openat2_size, SYS_OPENAT, SYS_OPENAT2,
     };
 
     // 1. Receive the notification
@@ -577,7 +577,7 @@ pub(super) fn decide_network_notification(
     sockaddr: &nono::sandbox::SockaddrInfo,
     config: &SupervisorConfig<'_>,
 ) -> NetworkDecision {
-    use nono::sandbox::{SYS_BIND, SYS_CONNECT, UnixSocketKind};
+    use nono::sandbox::{UnixSocketKind, SYS_BIND, SYS_CONNECT};
 
     // AF_UNIX: allow only filesystem-backed (pathname) sockets that match an
     // explicit socket capability. Abstract/unnamed sockets bypass pathname
@@ -1322,10 +1322,10 @@ mod tests {
 
     mod network_decision {
         use super::super::{
-            LinuxNetworkNotifyMode, NetworkDecision, SupervisorConfig, decide_network_notification,
+            decide_network_notification, LinuxNetworkNotifyMode, NetworkDecision, SupervisorConfig,
         };
         use nix::libc;
-        use nono::sandbox::{SYS_BIND, SYS_CONNECT, SockaddrInfo, UnixSocketKind};
+        use nono::sandbox::{SockaddrInfo, UnixSocketKind, SYS_BIND, SYS_CONNECT};
         use nono::supervisor::{ApprovalDecision, CapabilityRequest};
         use nono::{ApprovalBackend, UnixSocketCapability, UnixSocketMode};
         use std::os::unix::net::UnixListener;
@@ -1449,10 +1449,11 @@ mod tests {
             let backend = DenyAllBackend;
             let dir = tempfile::tempdir().expect("tempdir");
             let path = socket_path(&dir, "test.sock");
-            let allowlist = vec![
-                UnixSocketCapability::new_file(&path, UnixSocketMode::ConnectBind)
-                    .expect("socket grant"),
-            ];
+            let allowlist =
+                vec![
+                    UnixSocketCapability::new_file(&path, UnixSocketMode::ConnectBind)
+                        .expect("socket grant"),
+                ];
             let config = make_config(&backend, 0, Vec::new(), &allowlist);
             assert_eq!(
                 decide_network_notification(test_pid(), SYS_BIND, &unix_pathname(&path), &config),
@@ -1529,10 +1530,11 @@ mod tests {
             std::fs::create_dir(&nested).expect("create nested dir");
             let direct_path = socket_path(&dir, "direct.sock");
             let nested_path = nested.join("nested.sock");
-            let allowlist = vec![
-                UnixSocketCapability::new_dir(dir.path(), UnixSocketMode::ConnectBind)
-                    .expect("socket dir grant"),
-            ];
+            let allowlist =
+                vec![
+                    UnixSocketCapability::new_dir(dir.path(), UnixSocketMode::ConnectBind)
+                        .expect("socket dir grant"),
+                ];
             let config = make_config(&backend, 0, Vec::new(), &allowlist);
             assert_eq!(
                 decide_network_notification(
@@ -1561,10 +1563,11 @@ mod tests {
             let nested = dir.path().join("nested");
             std::fs::create_dir(&nested).expect("create nested dir");
             let nested_path = nested.join("nested.sock");
-            let allowlist = vec![
-                UnixSocketCapability::new_dir_subtree(dir.path(), UnixSocketMode::ConnectBind)
-                    .expect("socket subtree grant"),
-            ];
+            let allowlist = vec![UnixSocketCapability::new_dir_subtree(
+                dir.path(),
+                UnixSocketMode::ConnectBind,
+            )
+            .expect("socket subtree grant")];
             let config = make_config(&backend, 0, Vec::new(), &allowlist);
             assert_eq!(
                 decide_network_notification(

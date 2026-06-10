@@ -544,9 +544,8 @@ mod tests {
         );
 
         {
-            let guard =
-                AppliedAncestorTraverseGuard::snapshot_and_apply(&leaf, TEST_PACKAGE_SID)
-                    .expect("apply ancestor traverse");
+            let guard = AppliedAncestorTraverseGuard::snapshot_and_apply(&leaf, TEST_PACKAGE_SID)
+                .expect("apply ancestor traverse");
             // The tempdir parent is user-owned, so it must have received a grant.
             assert!(
                 guard.applied.iter().any(|p| p == &parent),
@@ -586,5 +585,4 @@ mod tests {
         );
         drop(guard);
     }
-
 }

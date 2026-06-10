@@ -62,9 +62,7 @@ mod client {
     // be exactly 532 bytes, matching the C-side `_Static_assert(sizeof(NONO_IPC_REQUEST) == 532)`.
     // This assertion catches Rust/C ABI mismatches at compile time (T-64-SC-01).
     const _: () = assert!(
-        std::mem::size_of::<NonoIpcRequest>()
-            - std::mem::size_of::<FILTER_MESSAGE_HEADER>()
-            == 532,
+        std::mem::size_of::<NonoIpcRequest>() - std::mem::size_of::<FILTER_MESSAGE_HEADER>() == 532,
         "NonoIpcRequest payload size mismatch with C-side NONO_IPC_REQUEST"
     );
 
@@ -161,9 +159,8 @@ mod client {
             //
             // SAFETY: `buf.path_buffer` is a `[u16; 260]` field inside a packed struct.
             // We use `ptr::read_unaligned` to copy it to an aligned local array.
-            let path_local: [u16; 260] = unsafe {
-                std::ptr::read_unaligned(std::ptr::addr_of!(buf.path_buffer))
-            };
+            let path_local: [u16; 260] =
+                unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(buf.path_buffer)) };
             let path = String::from_utf16_lossy(&path_local);
             let path = path.trim_end_matches('\0');
 
@@ -191,9 +188,8 @@ mod client {
             // pending FltSendMessage call (single-connection spike — trivially correct).
             // SAFETY: `buf.header.MessageId` is inside a packed struct; we use
             // `ptr::read_unaligned` to avoid a misaligned reference.
-            let message_id: u64 = unsafe {
-                std::ptr::read_unaligned(std::ptr::addr_of!(buf.header.MessageId))
-            };
+            let message_id: u64 =
+                unsafe { std::ptr::read_unaligned(std::ptr::addr_of!(buf.header.MessageId)) };
             let mut reply = ReplyBuf {
                 header: FILTER_REPLY_HEADER {
                     Status: 0,
@@ -228,4 +224,4 @@ mod client {
 }
 
 #[cfg(windows)]
-pub use client::{NonoIpcReply, NonoIpcRequest, run_policy_client};
+pub use client::{run_policy_client, NonoIpcReply, NonoIpcRequest};

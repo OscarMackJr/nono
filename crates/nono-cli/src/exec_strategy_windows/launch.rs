@@ -1719,8 +1719,7 @@ pub(super) fn spawn_windows_child(
         // mirroring the Phase 17 detached path (`hStdError = stdout_write`) and
         // the ConPTY merge. The stderr pipe pair is created but intentionally
         // unused (closed by `close_child_ends` / `Drop`).
-        let child_stdio: [HANDLE; 3] =
-            [pipes.stdin_read, pipes.stdout_write, pipes.stdout_write];
+        let child_stdio: [HANDLE; 3] = [pipes.stdin_read, pipes.stdout_write, pipes.stdout_write];
         // The UNIQUE inheritable child-end handles to flip + gate via the
         // HANDLE_LIST (stderr_write is NOT inherited under the merge).
         let gated_handles: [HANDLE; 2] = [pipes.stdin_read, pipes.stdout_write];
@@ -3061,9 +3060,7 @@ mod broker_dispatch_tests {
         );
         // VerbatimUNC → plain UNC path (`\\server\share`).
         assert_eq!(
-            super::normalize_windows_launch_path(std::path::Path::new(
-                r"\\?\UNC\server\share\dir"
-            )),
+            super::normalize_windows_launch_path(std::path::Path::new(r"\\?\UNC\server\share\dir")),
             std::path::PathBuf::from(r"\\server\share\dir"),
             "\\\\?\\UNC\\ verbatim prefix must collapse to a plain UNC path"
         );
@@ -3223,8 +3220,7 @@ mod env_filter_tests {
 
         // Capability paths are canonicalized (\\?\-prefixed); the PATH entry must
         // be the stripped plain form, never the verbatim prefix.
-        let ro_plain =
-            super::normalize_windows_launch_path(&ro_dir.path().canonicalize().unwrap());
+        let ro_plain = super::normalize_windows_launch_path(&ro_dir.path().canonicalize().unwrap());
         let ro_lc = ro_plain.to_string_lossy().to_ascii_lowercase();
         assert!(
             path_lc.contains(&ro_lc),
@@ -3244,8 +3240,7 @@ mod env_filter_tests {
         );
 
         // The writable (r+w) grant MUST NOT be added.
-        let rw_plain =
-            super::normalize_windows_launch_path(&rw_dir.path().canonicalize().unwrap());
+        let rw_plain = super::normalize_windows_launch_path(&rw_dir.path().canonicalize().unwrap());
         let rw_lc = rw_plain.to_string_lossy().to_ascii_lowercase();
         assert!(
             !path_lc.contains(&rw_lc),
@@ -3421,8 +3416,8 @@ mod write_deny_low_il_broker_no_pty_tests {
         // --- Create the Medium-IL fixture file with sentinel content ---
         // std::fs::write creates the file at the caller's (Medium) IL by default;
         // PID-suffix keeps parallel test runs from colliding.
-        let fixture = std::env::temp_dir()
-            .join(format!("nono-test-write-deny-{}.tmp", std::process::id()));
+        let fixture =
+            std::env::temp_dir().join(format!("nono-test-write-deny-{}.tmp", std::process::id()));
         std::fs::write(&fixture, b"sentinel").unwrap_or_else(|e| {
             panic!(
                 "failed to create write-deny fixture {}: {e}",

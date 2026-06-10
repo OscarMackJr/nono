@@ -744,7 +744,10 @@ mod domain_endpoint_state_tests {
         let state = SandboxState::from_caps(&caps, &[], &[], &[]);
         let json = serde_json::to_string(&state).unwrap();
         // domain_endpoints should not appear in JSON when empty
-        assert!(!json.contains("domain_endpoints"), "empty domain_endpoints should be skipped in serialization; got: {json}");
+        assert!(
+            !json.contains("domain_endpoints"),
+            "empty domain_endpoints should be skipped in serialization; got: {json}"
+        );
     }
 
     #[test]

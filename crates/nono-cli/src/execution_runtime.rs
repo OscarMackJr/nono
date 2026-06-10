@@ -1,3 +1,7 @@
+#[cfg(unix)]
+use crate::hook_runtime;
+#[cfg(windows)]
+use crate::hook_runtime_windows;
 #[cfg(not(target_os = "windows"))]
 use crate::launch_runtime::select_threading_context;
 use crate::launch_runtime::LaunchPlan;
@@ -6,10 +10,6 @@ use crate::proxy_runtime::start_proxy_runtime;
 use crate::sandbox_state::{DomainEndpointState, EndpointRuleState};
 use crate::supervised_runtime::{execute_supervised_runtime, SupervisedRuntimeContext};
 use crate::{config, exec_strategy, output, sandbox_state, session, DETACHED_SESSION_ID_ENV};
-#[cfg(unix)]
-use crate::hook_runtime;
-#[cfg(windows)]
-use crate::hook_runtime_windows;
 use nono::{CapabilitySet, NonoError, Result, Sandbox};
 use std::path::Path;
 #[cfg(not(target_os = "windows"))]
@@ -272,8 +272,11 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     // ---- Before-hook execution ----
     // FORK DIVERGENCE (D-01/D-03): ? propagates Err (session aborts).
     // Upstream daa55c8 warns and continues (fail-open); fork propagates Err (fail-closed).
-    let mut hook_env_vars_owned: Vec<(String, String)> = if let Some((before, session_id)) =
-        flags.session_hooks.before.as_ref().zip(hook_session_id.as_deref())
+    let mut hook_env_vars_owned: Vec<(String, String)> = if let Some((before, session_id)) = flags
+        .session_hooks
+        .before
+        .as_ref()
+        .zip(hook_session_id.as_deref())
     {
         #[cfg(unix)]
         {
@@ -430,9 +433,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             p.filesystem
                 .suppress_save_prompt
                 .iter()
-                .map(|raw| {
-                    crate::profile_save_runtime::canonicalize_suppress_path(raw)
-                })
+                .map(|raw| crate::profile_save_runtime::canonicalize_suppress_path(raw))
                 .collect()
         })
         .unwrap_or_default();
@@ -549,11 +550,19 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
                 //
                 // FORK DIVERGENCE (D-04): ? propagates Err so CI sees non-zero exit.
                 // Upstream daa55c8 warns and swallows (fail-open); fork propagates Err.
-                if let Some((after, session_id)) =
-                    flags.session_hooks.after.as_ref().zip(hook_session_id.as_deref())
+                if let Some((after, session_id)) = flags
+                    .session_hooks
+                    .after
+                    .as_ref()
+                    .zip(hook_session_id.as_deref())
                 {
                     // FORK DIVERGENCE (D-01/D-04): ? propagates Err, not warn-and-continue
-                    hook_runtime_windows::execute_after_hook(after, session_id, &current_dir, exit_code)?;
+                    hook_runtime_windows::execute_after_hook(
+                        after,
+                        session_id,
+                        &current_dir,
+                        exit_code,
+                    )?;
                 }
 
                 // Zeroize hook env-var values after injection; values may be credentials (CLAUDE.md §Memory).
@@ -628,15 +637,23 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             // ---- After-hook execution ----
             // FORK DIVERGENCE (D-04): ? propagates Err so CI sees non-zero exit.
             // Upstream daa55c8 warns and swallows (fail-open); fork propagates Err (fail-closed).
-            if let Some((after, session_id)) =
-                flags.session_hooks.after.as_ref().zip(hook_session_id.as_deref())
+            if let Some((after, session_id)) = flags
+                .session_hooks
+                .after
+                .as_ref()
+                .zip(hook_session_id.as_deref())
             {
                 #[cfg(unix)]
                 // FORK DIVERGENCE (D-01/D-03): ? propagates Err, not warn-and-continue
                 hook_runtime::execute_after_hook(after, session_id, &current_dir, exit_code)?;
                 #[cfg(windows)]
                 // FORK DIVERGENCE (D-01/D-03): ? propagates Err, not warn-and-continue
-                hook_runtime_windows::execute_after_hook(after, session_id, &current_dir, exit_code)?;
+                hook_runtime_windows::execute_after_hook(
+                    after,
+                    session_id,
+                    &current_dir,
+                    exit_code,
+                )?;
                 #[cfg(not(any(unix, windows)))]
                 {
                     let _ = (after, session_id, exit_code);
@@ -735,8 +752,8 @@ mod tests {
     fn test_execute_sandboxed_before_hook_err_aborts_session() {
         use crate::hook_runtime;
         use crate::profile;
-        use tempfile::TempDir;
         use std::os::unix::fs::PermissionsExt;
+        use tempfile::TempDir;
 
         let (_lock, _env, _home) = {
             let lock = match crate::test_env::ENV_LOCK.lock() {

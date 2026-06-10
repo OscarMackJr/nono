@@ -6,9 +6,9 @@ use crate::learn;
 use crate::profile;
 #[cfg(not(target_os = "windows"))]
 use crate::profile_save_runtime::{
-    PreparedProfileSave, SaveAction, command_name, confirm, patch_has_policy_overrides,
-    print_patch_preview, print_profile_save, suggested_profile_name, would_shadow_existing_profile,
-    write_profile,
+    command_name, confirm, patch_has_policy_overrides, print_patch_preview, print_profile_save,
+    suggested_profile_name, would_shadow_existing_profile, write_profile, PreparedProfileSave,
+    SaveAction,
 };
 use colored::Colorize;
 use nono::{NonoError, Result};

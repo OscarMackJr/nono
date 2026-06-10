@@ -572,7 +572,10 @@ mod tests {
         };
 
         let result = execute_before_hook(&hook, "test-fail-closed", Path::new("/tmp"));
-        assert!(result.is_err(), "fail-closed: before-hook exit 1 must return Err");
+        assert!(
+            result.is_err(),
+            "fail-closed: before-hook exit 1 must return Err"
+        );
     }
 
     /// FORK DIVERGENCE TEST (D-01/D-03): before-hook timeout must return Err,
@@ -596,7 +599,10 @@ mod tests {
         let elapsed = start.elapsed();
 
         assert!(elapsed < Duration::from_secs(10), "timeout took too long");
-        assert!(result.is_err(), "fail-closed: before-hook timeout must return Err");
+        assert!(
+            result.is_err(),
+            "fail-closed: before-hook timeout must return Err"
+        );
     }
 
     /// FORK DIVERGENCE TEST (D-04): after-hook that exits 1 must return Err,
@@ -616,7 +622,10 @@ mod tests {
         };
 
         let result = execute_after_hook(&hook, "test-after-fail-closed", Path::new("/tmp"), 0);
-        assert!(result.is_err(), "fail-closed: after-hook exit 1 must return Err");
+        assert!(
+            result.is_err(),
+            "fail-closed: after-hook exit 1 must return Err"
+        );
     }
 
     /// Basic before-hook: exports env vars and filters dangerous vars.

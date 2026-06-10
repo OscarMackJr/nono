@@ -5,8 +5,8 @@
 //! for `nono run`.
 
 use nono::supervisor::policy;
-use nono::supervisor::{HandleKind, HandleTarget, SocketProtocol, SocketRole};
 use nono::supervisor::ResourceGrant;
+use nono::supervisor::{HandleKind, HandleTarget, SocketProtocol, SocketRole};
 use nono::{AccessMode, ApprovalBackend, ApprovalDecision, CapabilityRequest, NonoError, Result};
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -87,9 +87,9 @@ impl ApprovalBackend for TerminalApproval {
             // transfer mechanism (SCM_RIGHTS on Unix, handle-dup on Windows).
             // We supply sideband_file_descriptor as a typed placeholder so
             // the variant is well-formed at the ApprovalBackend boundary.
-            Ok(ApprovalDecision::Approved(ResourceGrant::sideband_file_descriptor(
-                request.access,
-            )))
+            Ok(ApprovalDecision::Approved(
+                ResourceGrant::sideband_file_descriptor(request.access),
+            ))
         } else {
             eprintln!("[nono] Access denied.");
             Ok(ApprovalDecision::Denied {

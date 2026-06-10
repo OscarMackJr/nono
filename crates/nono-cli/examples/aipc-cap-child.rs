@@ -100,10 +100,7 @@ mod windows_impl {
             .and_then(|i| args.get(i + 1).cloned())
             .or_else(|| {
                 // First positional arg that doesn't start with '-'
-                args.iter()
-                    .skip(1)
-                    .find(|a| !a.starts_with('-'))
-                    .cloned()
+                args.iter().skip(1).find(|a| !a.starts_with('-')).cloned()
             });
 
         match mode.as_deref() {
@@ -355,7 +352,8 @@ mod windows_impl {
             let mut server = match SupervisorSocket::bind(Path::new(&mimic_pipe)) {
                 Ok(s) => s,
                 Err(e) => {
-                    tx.send(Err(format!("mimic SC1: bind (conn1) failed: {e}"))).ok();
+                    tx.send(Err(format!("mimic SC1: bind (conn1) failed: {e}")))
+                        .ok();
                     return;
                 }
             };
@@ -365,7 +363,10 @@ mod windows_impl {
                     tx.send(Ok(())).ok();
                 }
                 Err(e) => {
-                    tx.send(Err(format!("mimic SC1: disconnect_and_reconnect failed: {e}"))).ok();
+                    tx.send(Err(format!(
+                        "mimic SC1: disconnect_and_reconnect failed: {e}"
+                    )))
+                    .ok();
                 }
             }
         });

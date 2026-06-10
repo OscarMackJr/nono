@@ -372,7 +372,10 @@ fn linux_cpu_percent_throttles_yes_loop() {
         .output()
         .expect("invoke pgrep");
     let pgrep_stdout = String::from_utf8_lossy(&pgrep.stdout);
-    let workload_pid: Option<u32> = pgrep_stdout.lines().next().and_then(|l| l.trim().parse().ok());
+    let workload_pid: Option<u32> = pgrep_stdout
+        .lines()
+        .next()
+        .and_then(|l| l.trim().parse().ok());
 
     let workload_pid = match workload_pid {
         Some(p) => p,

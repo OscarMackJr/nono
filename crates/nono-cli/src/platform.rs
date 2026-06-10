@@ -808,10 +808,7 @@ HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion
         );
         // Missing 0x prefix.
         let output_no_prefix = "    UBR    REG_DWORD    abc\n";
-        assert_eq!(
-            parse_windows_registry_value(output_no_prefix, "UBR"),
-            None,
-        );
+        assert_eq!(parse_windows_registry_value(output_no_prefix, "UBR"), None,);
     }
 
     /// Phase 44 WR-04 P43 regression: Ord antisymmetry must hold on

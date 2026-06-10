@@ -588,9 +588,7 @@ pub fn run_outdated(args: OutdatedArgs) -> Result<()> {
         // Phase 44 IN-03 P43 (REQ-REVIEW-FU-01 D-44-B5): defense-in-depth
         // guard mirroring `run_update`. Reject keys whose `splitn(2, '/')`
         // produces an empty namespace or name segment.
-        let (namespace, name) = if parts.len() == 2
-            && !parts[0].is_empty()
-            && !parts[1].is_empty()
+        let (namespace, name) = if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty()
         {
             (parts[0], parts[1])
         } else {

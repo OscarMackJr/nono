@@ -1839,8 +1839,7 @@ mod tests {
         };
         let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let report =
-            uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
+        let report = uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
         assert_eq!(report.status_label, "removed");
         assert!(
             report.details.contains("wfp objects purged"),
@@ -1866,8 +1865,7 @@ mod tests {
         };
         let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let report =
-            uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
+        let report = uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
         assert_eq!(report.status_label, "nothing to remove");
         assert!(
             calls.into_inner().is_empty(),
@@ -1899,8 +1897,7 @@ mod tests {
         };
         let purge = |_p: &std::path::Path| -> Result<String> { Ok("purged".into()) };
 
-        let report =
-            uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
+        let report = uninstall_windows_wfp_with_runner(&config, query, run, purge).unwrap();
         assert_eq!(report.status_label, "removed");
         let calls = calls.into_inner();
         assert!(
@@ -1952,7 +1949,9 @@ mod tests {
         );
         let report = result.unwrap();
         assert!(
-            report.details.contains("wfp object purge skipped (best-effort)"),
+            report
+                .details
+                .contains("wfp object purge skipped (best-effort)"),
             "report details must record the skipped-purge note; got: {}",
             report.details
         );
@@ -2202,13 +2201,12 @@ mod tests {
             }
         };
 
-        let mock_start =
-            |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
-                Ok(WindowsWfpStartReport {
-                    status_label: "running",
-                    details: "service started by mock".to_string(),
-                })
-            };
+        let mock_start = |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+            Ok(WindowsWfpStartReport {
+                status_label: "running",
+                details: "service started by mock".to_string(),
+            })
+        };
 
         let mock_runner = |_cfg: &WfpProbeConfig,
                            _req: &WfpRuntimeActivationRequest|
@@ -2232,7 +2230,11 @@ mod tests {
             mock_runner,
             mock_start,
         );
-        assert!(result.is_ok(), "Expected Ok after auto-start, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Expected Ok after auto-start, got: {:?}",
+            result
+        );
         let guard = result.unwrap();
         assert!(guard.is_some(), "Expected Some(NetworkEnforcementGuard)");
         match guard.unwrap() {
@@ -2254,15 +2256,13 @@ mod tests {
         let config = make_exec_config(&command, &resolved_program, &current_dir, &caps);
         let probe_config = make_test_probe_config();
 
-        let mock_probe =
-            |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
-                Ok(WfpProbeStatus::BackendServiceStopped)
-            };
+        let mock_probe = |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
+            Ok(WfpProbeStatus::BackendServiceStopped)
+        };
 
-        let mock_start =
-            |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
-                Err(nono::NonoError::Setup("elevation required".to_string()))
-            };
+        let mock_start = |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
+            Err(nono::NonoError::Setup("elevation required".to_string()))
+        };
 
         let mock_runner = |_cfg: &WfpProbeConfig,
                            _req: &WfpRuntimeActivationRequest|
@@ -2312,10 +2312,9 @@ mod tests {
         let config = make_exec_config(&command, &resolved_program, &current_dir, &caps);
         let probe_config = make_test_probe_config();
 
-        let mock_probe =
-            |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
-                Ok(WfpProbeStatus::BackendServiceMissing)
-            };
+        let mock_probe = |_cfg: &WfpProbeConfig| -> Result<WfpProbeStatus> {
+            Ok(WfpProbeStatus::BackendServiceMissing)
+        };
 
         // This closure must never be called; panic if it is.
         let mock_start = |_cfg: &WfpProbeConfig| -> Result<WindowsWfpStartReport> {
@@ -2402,7 +2401,7 @@ mod tests {
     #[test]
     fn test_wfp_backend_binary_missing_is_fail_closed() {
         let status = build_wfp_probe_status(
-            false,                        // binary missing
+            false, // binary missing
             WindowsServiceState::Running,
             WindowsServiceState::Running,
         );

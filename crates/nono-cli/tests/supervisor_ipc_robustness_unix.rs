@@ -31,8 +31,8 @@ use nono::supervisor::socket::SupervisorSocket;
 /// `nono-cli` integration-test crate — the only surface reachable here.
 #[test]
 fn scaffold_links_nono_lib() {
-    let (supervisor_end, child_end) = SupervisorSocket::pair()
-        .expect("SupervisorSocket::pair() must succeed on Unix");
+    let (supervisor_end, child_end) =
+        SupervisorSocket::pair().expect("SupervisorSocket::pair() must succeed on Unix");
 
     // Assert both ends are usable by obtaining their raw fds.
     // A valid raw fd is >= 0 (a non-negative i32).
@@ -41,10 +41,7 @@ fn scaffold_links_nono_lib() {
         supervisor_end.as_raw_fd() >= 0,
         "supervisor socket fd must be valid"
     );
-    assert!(
-        child_end.as_raw_fd() >= 0,
-        "child socket fd must be valid"
-    );
+    assert!(child_end.as_raw_fd() >= 0, "child socket fd must be valid");
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +83,8 @@ fn bounded_read_timeout() {
     //
     // The supervisor end is wrapped in SupervisorSocket::from_stream() so we can
     // call set_read_timeout() and recv_message() via the library's public API.
-    let (supervisor_raw, child_raw) = std::os::unix::net::UnixStream::pair()
-        .expect("UnixStream::pair() must succeed on Unix");
+    let (supervisor_raw, child_raw) =
+        std::os::unix::net::UnixStream::pair().expect("UnixStream::pair() must succeed on Unix");
     let mut supervisor_sock = SupervisorSocket::from_stream(supervisor_raw);
 
     // Wire a 1-second read timeout on the supervisor end (SC2).

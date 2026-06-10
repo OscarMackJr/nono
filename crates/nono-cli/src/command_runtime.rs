@@ -28,8 +28,8 @@ fn resolve_profile_binary(
 ) -> Option<String> {
     let binary = loaded.binary.as_ref()?;
 
-    let is_user_profile =
-        crate::profile::is_user_override(profile_name) || crate::profile::is_file_path_ref(profile_name);
+    let is_user_profile = crate::profile::is_user_override(profile_name)
+        || crate::profile::is_file_path_ref(profile_name);
 
     if !is_user_profile {
         if !silent {
@@ -50,8 +50,8 @@ fn resolve_program_from_profile_or_cli(
     loaded_profile: Option<(&str, &crate::profile::Profile)>,
     silent: bool,
 ) -> Result<(OsString, Vec<OsString>)> {
-    let profile_binary = loaded_profile
-        .and_then(|(name, prof)| resolve_profile_binary(name, prof, silent));
+    let profile_binary =
+        loaded_profile.and_then(|(name, prof)| resolve_profile_binary(name, prof, silent));
 
     if let Some(binary) = profile_binary {
         if !cli_command.is_empty() && !silent {

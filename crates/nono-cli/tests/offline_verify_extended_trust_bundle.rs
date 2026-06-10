@@ -212,9 +212,8 @@ fn legacy_bundle_parses_and_falls_back_to_artifact_name() {
     );
 
     // 2e. validate_bundle_relative_path accepts the fallback path (single component).
-    let validated =
-        validate_bundle_relative_path(installed_path, artifact_name, "test/legacy-pkg")
-            .expect("fallback installed_path 'groups.json' should be safe");
+    let validated = validate_bundle_relative_path(installed_path, artifact_name, "test/legacy-pkg")
+        .expect("fallback installed_path 'groups.json' should be safe");
     assert_eq!(validated, Path::new("groups.json"));
 }
 
@@ -231,8 +230,7 @@ fn invalid_installed_path_values_are_rejected() {
     let pack_ref = "attacker/pkg";
 
     // Case A: path traversal with parent-dir component.
-    let result_a =
-        validate_bundle_relative_path("../../etc/passwd", artifact_name, pack_ref);
+    let result_a = validate_bundle_relative_path("../../etc/passwd", artifact_name, pack_ref);
     assert!(
         result_a.is_err(),
         "path traversal '../../etc/passwd' must be rejected"
@@ -244,8 +242,7 @@ fn invalid_installed_path_values_are_rejected() {
     );
 
     // Case B: absolute path.
-    let result_b =
-        validate_bundle_relative_path("/etc/passwd", artifact_name, pack_ref);
+    let result_b = validate_bundle_relative_path("/etc/passwd", artifact_name, pack_ref);
     assert!(
         result_b.is_err(),
         "absolute path '/etc/passwd' must be rejected"

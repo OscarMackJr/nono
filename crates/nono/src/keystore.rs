@@ -1462,9 +1462,9 @@ enum BwSelector {
 ///
 /// Assumes the URI has already been validated by `validate_bw_uri`.
 fn parse_bw_item_uri(uri: &str) -> Result<(String, BwSelector)> {
-    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
-        NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri))
-    })?;
+    let path = uri
+        .strip_prefix(BW_URI_PREFIX)
+        .ok_or_else(|| NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri)))?;
     let segments: Vec<&str> = path.split('/').collect();
 
     let item_id = segments.get(1).ok_or_else(|| {
@@ -1801,14 +1801,11 @@ fn load_totp_via_bw_get_totp(item_id: &str, parent_uri: &str) -> Result<Zeroizin
 ///   (see keystore.rs line ~200 comment).
 fn load_from_bws(uri: &str) -> Result<Zeroizing<String>> {
     // Parse the secret UUID from the URI (validated before this call).
-    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
-        NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri))
-    })?;
+    let path = uri
+        .strip_prefix(BW_URI_PREFIX)
+        .ok_or_else(|| NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri)))?;
     let secret_uuid = path.split('/').nth(1).ok_or_else(|| {
-        NonoError::ConfigParse(format!(
-            "bw://secret/ URI missing UUID segment: {}",
-            uri
-        ))
+        NonoError::ConfigParse(format!("bw://secret/ URI missing UUID segment: {}", uri))
     })?;
 
     // Pre-flight: BWS_ACCESS_TOKEN must be set and non-empty.
@@ -1898,9 +1895,9 @@ fn load_from_bws(uri: &str) -> Result<Zeroizing<String>> {
 #[must_use = "loaded secret should be used or explicitly dropped"]
 fn load_from_bw_dispatch(uri: &str) -> Result<Zeroizing<String>> {
     validate_bw_uri(uri)?;
-    let path = uri.strip_prefix(BW_URI_PREFIX).ok_or_else(|| {
-        NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri))
-    })?;
+    let path = uri
+        .strip_prefix(BW_URI_PREFIX)
+        .ok_or_else(|| NonoError::ConfigParse(format!("invalid bw:// URI: {}", uri)))?;
     match path.split('/').next() {
         Some(BW_ITEM_SEGMENT) => load_from_bw(uri),
         Some(BW_SECRET_SEGMENT) => load_from_bws(uri),
@@ -3615,7 +3612,9 @@ mod tests {
     #[test]
     fn test_is_bw_uri_true() {
         assert!(is_bw_uri("bw://item/abc123/password"));
-        assert!(is_bw_uri("bw://secret/550e8400-e29b-41d4-a716-446655440000"));
+        assert!(is_bw_uri(
+            "bw://secret/550e8400-e29b-41d4-a716-446655440000"
+        ));
     }
 
     #[test]
@@ -3662,8 +3661,7 @@ mod tests {
 
     #[test]
     fn test_validate_bw_uri_forbidden_char() {
-        let err = validate_bw_uri("bw://item/abc;drop/password")
-            .expect_err("should be rejected");
+        let err = validate_bw_uri("bw://item/abc;drop/password").expect_err("should be rejected");
         assert!(
             err.to_string().contains("forbidden character"),
             "got: {}",
@@ -3674,8 +3672,7 @@ mod tests {
     #[test]
     fn test_validate_bw_uri_id_with_injection_char() {
         // & is in FORBIDDEN_URI_CHARS
-        let err = validate_bw_uri("bw://item/abc&def/password")
-            .expect_err("should be rejected");
+        let err = validate_bw_uri("bw://item/abc&def/password").expect_err("should be rejected");
         assert!(
             err.to_string().contains("forbidden character"),
             "got: {}",
@@ -3685,19 +3682,14 @@ mod tests {
 
     #[test]
     fn test_validate_bw_uri_query_rejected() {
-        let err = validate_bw_uri("bw://item/abc123/password?debug=1")
-            .expect_err("should be rejected");
-        assert!(
-            err.to_string().contains("query"),
-            "got: {}",
-            err
-        );
+        let err =
+            validate_bw_uri("bw://item/abc123/password?debug=1").expect_err("should be rejected");
+        assert!(err.to_string().contains("query"), "got: {}", err);
     }
 
     #[test]
     fn test_validate_bw_uri_fragment_rejected() {
-        let err = validate_bw_uri("bw://item/abc123/password#h")
-            .expect_err("should be rejected");
+        let err = validate_bw_uri("bw://item/abc123/password#h").expect_err("should be rejected");
         // Fragment '#' is rejected by the query/fragment check
         assert!(
             err.to_string().contains("fragment") || err.to_string().contains("query"),
@@ -3721,18 +3713,19 @@ mod tests {
     #[test]
     fn test_validate_bw_uri_item_missing_selector() {
         // bw://item/<id> with no selector segment should be rejected
-        let err = validate_bw_uri("bw://item/abc123")
-            .expect_err("should be rejected: missing selector");
+        let err =
+            validate_bw_uri("bw://item/abc123").expect_err("should be rejected: missing selector");
         assert!(!err.to_string().is_empty(), "got empty error");
     }
 
     #[test]
     fn test_validate_bw_uri_unknown_first_segment() {
-        let err = validate_bw_uri("bw://vault/abc123/password")
-            .expect_err("should be rejected");
+        let err = validate_bw_uri("bw://vault/abc123/password").expect_err("should be rejected");
         assert!(
-            err.to_string().contains("'item'") || err.to_string().contains("'secret'")
-                || err.to_string().contains("item/") || err.to_string().contains("secret/"),
+            err.to_string().contains("'item'")
+                || err.to_string().contains("'secret'")
+                || err.to_string().contains("item/")
+                || err.to_string().contains("secret/"),
             "got: {}",
             err
         );
@@ -3916,8 +3909,7 @@ mod tests {
         // SAFETY: test-only PATH override; restored in the same test function.
         unsafe { std::env::set_var("PATH", dir.path().as_os_str()) };
 
-        let result =
-            load_from_bw_dispatch("bw://secret/550e8400-e29b-41d4-a716-446655440000");
+        let result = load_from_bw_dispatch("bw://secret/550e8400-e29b-41d4-a716-446655440000");
 
         // Restore env ASAP.
         match old_token {
@@ -4001,7 +3993,10 @@ mod tests {
             "login": { "password": "" }
         });
         let result = json_str_field(&json, &["login", "password"], "bw://item/abc/<redacted>");
-        assert!(result.is_err(), "empty string should not be returned as a secret");
+        assert!(
+            result.is_err(),
+            "empty string should not be returned as a secret"
+        );
     }
 
     #[test]
@@ -4025,8 +4020,7 @@ mod tests {
             ]
         });
         let selector = BwSelector::CustomField("missing".to_string());
-        let result =
-            extract_bw_field(&json, &selector, "abc123", "bw://item/abc123/field/missing");
+        let result = extract_bw_field(&json, &selector, "abc123", "bw://item/abc123/field/missing");
         assert!(result.is_err());
     }
 
@@ -4045,8 +4039,8 @@ mod tests {
 
     #[test]
     fn test_build_mappings_bw_uri_with_var() {
-        let mappings = build_mappings_from_list("bw://item/abc123/password=MY_SECRET")
-            .expect("should parse");
+        let mappings =
+            build_mappings_from_list("bw://item/abc123/password=MY_SECRET").expect("should parse");
         assert_eq!(
             mappings.get("bw://item/abc123/password"),
             Some(&"MY_SECRET".to_string())

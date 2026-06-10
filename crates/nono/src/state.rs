@@ -262,10 +262,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         // On Windows, path separators are backslashes which must be escaped
         // in JSON strings. Use serde_json to serialize path strings safely.
-        let original_str = dir
-            .path()
-            .to_string_lossy()
-            .replace('\\', "\\\\");
+        let original_str = dir.path().to_string_lossy().replace('\\', "\\\\");
         let resolved_str = dir
             .path()
             .canonicalize()

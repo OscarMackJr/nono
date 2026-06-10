@@ -354,9 +354,14 @@ mod tests {
         std::fs::create_dir_all(&protected).expect("mkdir");
         let child = protected.join("rollbacks").join("future-session");
 
-        let err =
-            validate_requested_path_against_protected_roots(&child, false, "CLI", &[protected], false)
-                .expect_err("blocked");
+        let err = validate_requested_path_against_protected_roots(
+            &child,
+            false,
+            "CLI",
+            &[protected],
+            false,
+        )
+        .expect_err("blocked");
         assert!(
             err.to_string()
                 .contains("overlaps protected nono state root"),

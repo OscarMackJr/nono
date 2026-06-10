@@ -32,9 +32,7 @@ fn main() {
 
     let deny_path = &args[1];
 
-    eprintln!(
-        "nono-fltmgr-client: connecting to \\NonoPolicyPort (deny target: {deny_path})"
-    );
+    eprintln!("nono-fltmgr-client: connecting to \\NonoPolicyPort (deny target: {deny_path})");
 
     match nono_fltmgr_client::run_policy_client(deny_path) {
         Ok(()) => {

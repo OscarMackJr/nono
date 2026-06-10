@@ -2467,10 +2467,7 @@ pub fn load_profile(name_or_path: &str) -> Result<Profile> {
 /// branch: when `ctx.no_auto_pull` is `true` AND the pack is not installed
 /// locally, returns [`NonoError::ProfileNotFound`] verbatim (D-11) instead
 /// of triggering auto-pull.
-pub fn load_profile_with_context(
-    name_or_path: &str,
-    ctx: &ResolveContext,
-) -> Result<Profile> {
+pub fn load_profile_with_context(name_or_path: &str, ctx: &ResolveContext) -> Result<Profile> {
     // Registry reference (namespace/name) — detect before the file path check
     // since the `/` would otherwise be treated as a path separator.
     if is_registry_ref(name_or_path) {
@@ -2547,10 +2544,7 @@ pub(crate) fn is_file_path_ref(s: &str) -> bool {
 /// is not installed locally, returns [`NonoError::ProfileNotFound`] with
 /// the package-ref string preserved verbatim per D-11; otherwise the
 /// existing auto-pull behavior fires.
-fn load_registry_profile_with_context(
-    name_or_path: &str,
-    ctx: &ResolveContext,
-) -> Result<Profile> {
+fn load_registry_profile_with_context(name_or_path: &str, ctx: &ResolveContext) -> Result<Profile> {
     let package_ref = crate::package::parse_package_ref(name_or_path)?;
     let install_dir =
         crate::package::package_install_dir(&package_ref.namespace, &package_ref.name)?;
@@ -2563,9 +2557,7 @@ fn load_registry_profile_with_context(
             // hint to stderr so users can self-diagnose. NO network attempt
             // is made — auto-pull is structurally skipped.
             let err = NonoError::ProfileNotFound(name_or_path.to_string());
-            if let Some(footer) =
-                crate::diagnostic_formatter::format_error_footer(&err, ctx)
-            {
+            if let Some(footer) = crate::diagnostic_formatter::format_error_footer(&err, ctx) {
                 eprintln!("{footer}");
             }
             return Err(err);
@@ -3106,7 +3098,10 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 .network
                 .network_profile
                 .merge(base.network.network_profile),
-            allow_domain: merge_allow_domain(&base.network.allow_domain, &child.network.allow_domain),
+            allow_domain: merge_allow_domain(
+                &base.network.allow_domain,
+                &child.network.allow_domain,
+            ),
             open_port: dedup_append(&base.network.open_port, &child.network.open_port),
             listen_port: dedup_append(&base.network.listen_port, &child.network.listen_port),
             connect_port: dedup_append(&base.network.connect_port, &child.network.connect_port),
@@ -3271,7 +3266,10 @@ pub(crate) fn merge_allow_domain(
         if !domains.contains(&domain) {
             domains.push(domain.clone());
         }
-        rules.entry(domain).or_default().extend_from_slice(endpoints);
+        rules
+            .entry(domain)
+            .or_default()
+            .extend_from_slice(endpoints);
     }
 
     domains
@@ -6291,7 +6289,10 @@ mod tests {
         .expect("parse profile with supported aliases");
 
         assert!(profile.network.block);
-        assert_eq!(profile.network.allow_domain, vec![AllowDomainEntry::Plain("api.openai.com".to_string())]);
+        assert_eq!(
+            profile.network.allow_domain,
+            vec![AllowDomainEntry::Plain("api.openai.com".to_string())]
+        );
         assert_eq!(profile.network.open_port, vec![3000]);
         assert_eq!(
             profile.network.upstream_proxy.as_deref(),
@@ -7639,9 +7640,9 @@ mod resolve_context_tests {
                     "D-11 demands the package-ref string is preserved verbatim"
                 );
             }
-            Err(other) => panic!(
-                "expected ProfileNotFound under --no-auto-pull suppression, got: {other:?}"
-            ),
+            Err(other) => {
+                panic!("expected ProfileNotFound under --no-auto-pull suppression, got: {other:?}")
+            }
             Ok(_) => panic!(
                 "load_profile_with_context must NOT succeed when the pack is \
                  not installed and --no-auto-pull is set"
@@ -7659,10 +7660,8 @@ mod resolve_context_tests {
         // load_profile and load_profile_with_context(default) produce
         // identical errors.
         let result_legacy = load_profile("nonexistent-profile-37-02-test");
-        let result_ctx = load_profile_with_context(
-            "nonexistent-profile-37-02-test",
-            &ResolveContext::default(),
-        );
+        let result_ctx =
+            load_profile_with_context("nonexistent-profile-37-02-test", &ResolveContext::default());
 
         // Both must return ProfileNotFound for the same input.
         assert!(matches!(result_legacy, Err(NonoError::ProfileNotFound(_))));
@@ -7823,7 +7822,10 @@ mod windows_low_il_broker_tests {
 
         let no_binary = br#"{ "meta": { "name": "no-bin" } }"#;
         let no_bin_profile = parse_profile_bytes(no_binary).expect("parse no-binary");
-        assert!(no_bin_profile.binary.is_none(), "binary should default to None");
+        assert!(
+            no_bin_profile.binary.is_none(),
+            "binary should default to None"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -7914,7 +7916,8 @@ mod allow_domain_tests {
 
     #[test]
     fn allow_domain_entry_with_endpoints_deserializes() {
-        let json = r#"{"domain":"api.github.com","endpoints":[{"method":"GET","path":"/repos/**"}]}"#;
+        let json =
+            r#"{"domain":"api.github.com","endpoints":[{"method":"GET","path":"/repos/**"}]}"#;
         let entry: AllowDomainEntry = serde_json::from_str(json).unwrap();
         match entry {
             AllowDomainEntry::WithEndpoints { domain, endpoints } => {
@@ -7932,7 +7935,10 @@ mod allow_domain_tests {
         let json = r#"["api.openai.com", {"domain":"api.github.com","endpoints":[{"method":"GET","path":"/repos/**"}]}]"#;
         let entries: Vec<AllowDomainEntry> = serde_json::from_str(json).unwrap();
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0], AllowDomainEntry::Plain("api.openai.com".to_string()));
+        assert_eq!(
+            entries[0],
+            AllowDomainEntry::Plain("api.openai.com".to_string())
+        );
         match &entries[1] {
             AllowDomainEntry::WithEndpoints { domain, endpoints } => {
                 assert_eq!(domain, "api.github.com");
@@ -7976,7 +7982,10 @@ mod allow_domain_tests {
         let child = vec![AllowDomainEntry::Plain("api.openai.com".to_string())];
         let result = merge_allow_domain(&base, &child);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], AllowDomainEntry::Plain("api.openai.com".to_string()));
+        assert_eq!(
+            result[0],
+            AllowDomainEntry::Plain("api.openai.com".to_string())
+        );
     }
 
     #[test]
@@ -8045,7 +8054,10 @@ mod allow_domain_tests {
         let json = r#"{"allow_domain":["api.openai.com",{"domain":"api.github.com","endpoints":[{"method":"GET","path":"/repos/**"}]}]}"#;
         let config: NetworkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.allow_domain.len(), 2);
-        assert_eq!(config.allow_domain[0], AllowDomainEntry::Plain("api.openai.com".to_string()));
+        assert_eq!(
+            config.allow_domain[0],
+            AllowDomainEntry::Plain("api.openai.com".to_string())
+        );
         match &config.allow_domain[1] {
             AllowDomainEntry::WithEndpoints { domain, .. } => assert_eq!(domain, "api.github.com"),
             AllowDomainEntry::Plain(_) => panic!("expected WithEndpoints"),

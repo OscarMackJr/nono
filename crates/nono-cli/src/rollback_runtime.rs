@@ -588,7 +588,8 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
         })?;
         network_events.extend(supervisor_events.drain(..));
     }
-    let (audit_event_count, audit_integrity_summary) = if let Some(recorder_mutex) = audit_recorder {
+    let (audit_event_count, audit_integrity_summary) = if let Some(recorder_mutex) = audit_recorder
+    {
         let mut recorder = recorder_mutex
             .lock()
             .map_err(|_| NonoError::Snapshot("Audit recorder lock poisoned".to_string()))?;

@@ -1023,7 +1023,10 @@ mod tests {
             .expect("deny rule not found");
 
         // Post-fix ordering: read rules -> write rules -> platform deny rules
-        assert!(read_pos < write_pos, "read rules must come before write rules");
+        assert!(
+            read_pos < write_pos,
+            "read rules must come before write rules"
+        );
         assert!(
             write_pos < deny_pos,
             "platform deny rules must come AFTER write rules (last-match-wins)"
@@ -1908,7 +1911,10 @@ mod tests {
             .find("(deny file-write-unlink)")
             .expect("deny rule not found");
 
-        assert!(read_pos < write_pos, "read rules must come before write rules");
+        assert!(
+            read_pos < write_pos,
+            "read rules must come before write rules"
+        );
         assert!(
             write_pos < deny_pos,
             "platform deny rules must come AFTER write allows (last-match-wins: deny overrides write)"
@@ -1927,8 +1933,10 @@ mod tests {
         // added by the caller appear in the output profile. It validates the dual-path
         // discipline required by D-11, not the ordering fix.
         let mut caps = CapabilitySet::new();
-        caps.add_platform_rule("(deny file-read* (literal \"/etc/passwd\"))").unwrap();
-        caps.add_platform_rule("(deny file-read* (literal \"/private/etc/passwd\"))").unwrap();
+        caps.add_platform_rule("(deny file-read* (literal \"/etc/passwd\"))")
+            .unwrap();
+        caps.add_platform_rule("(deny file-read* (literal \"/private/etc/passwd\"))")
+            .unwrap();
 
         let profile = generate_profile(&caps).unwrap();
 

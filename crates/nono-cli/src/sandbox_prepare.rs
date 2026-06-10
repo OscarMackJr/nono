@@ -380,8 +380,15 @@ pub(crate) fn prepare_sandbox_with_context(
     // upstream's loaded_profile.as_ref() block is intentionally omitted —
     // fork has no `command_blocking_deprecation` flow at this site
     // (deprecation warnings emit at profile-load time instead).
-    let profile_allow_domain_strings: Vec<String> = profile_allow_domain.iter().map(|e| e.domain().to_string()).collect();
-    print_allow_domain_port_warnings(&profile_allow_domain_strings, "profile allow_domain", silent);
+    let profile_allow_domain_strings: Vec<String> = profile_allow_domain
+        .iter()
+        .map(|e| e.domain().to_string())
+        .collect();
+    print_allow_domain_port_warnings(
+        &profile_allow_domain_strings,
+        "profile allow_domain",
+        silent,
+    );
     print_allow_domain_port_warnings(&args.allow_proxy, "--allow-domain", silent);
 
     #[cfg(target_os = "linux")]

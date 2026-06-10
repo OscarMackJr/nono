@@ -3357,7 +3357,8 @@ mod tests {
     }
 
     #[test]
-    fn test_set_gpu_toggles_flag() {        let mut caps = CapabilitySet::new();
+    fn test_set_gpu_toggles_flag() {
+        let mut caps = CapabilitySet::new();
         assert!(!caps.gpu());
         caps.set_gpu(true);
         assert!(caps.gpu());

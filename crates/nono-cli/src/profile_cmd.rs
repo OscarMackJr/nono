@@ -1573,11 +1573,16 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
             );
         }
         if !net.allow_domain.is_empty() {
-            let display: Vec<String> = net.allow_domain.iter().map(|e| match e {
-                profile::AllowDomainEntry::Plain(s) => s.clone(),
-                profile::AllowDomainEntry::WithEndpoints { domain, endpoints } =>
-                    format!("{} ({} endpoint rules)", domain, endpoints.len()),
-            }).collect();
+            let display: Vec<String> = net
+                .allow_domain
+                .iter()
+                .map(|e| match e {
+                    profile::AllowDomainEntry::Plain(s) => s.clone(),
+                    profile::AllowDomainEntry::WithEndpoints { domain, endpoints } => {
+                        format!("{} ({} endpoint rules)", domain, endpoints.len())
+                    }
+                })
+                .collect();
             println!(
                 "    {}: {}",
                 theme::fg("allow_domain", t.subtext),
@@ -2068,14 +2073,20 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
         }
     }
 
-    let ad1: Vec<String> = p1.network.allow_domain.iter().map(|e| e.domain().to_string()).collect();
-    let ad2: Vec<String> = p2.network.allow_domain.iter().map(|e| e.domain().to_string()).collect();
+    let ad1: Vec<String> = p1
+        .network
+        .allow_domain
+        .iter()
+        .map(|e| e.domain().to_string())
+        .collect();
+    let ad2: Vec<String> = p2
+        .network
+        .allow_domain
+        .iter()
+        .map(|e| e.domain().to_string())
+        .collect();
     let net_vec_diffs = diff_string_vecs(&[
-        (
-            "allow_domain",
-            &ad1,
-            &ad2,
-        ),
+        ("allow_domain", &ad1, &ad2),
         (
             "credentials",
             p1.network.resolved_credentials(),
@@ -3255,15 +3266,13 @@ fn resolve_to_manifest(
             profile::AllowDomainEntry::WithEndpoints { domain, endpoints }
                 if !endpoints.is_empty() =>
             {
-                let host: manifest::NetworkEndpointHost =
-                    domain.as_str().try_into().ok()?;
+                let host: manifest::NetworkEndpointHost = domain.as_str().try_into().ok()?;
                 let rules = endpoints
                     .iter()
                     .filter_map(|r| {
                         let method: manifest::EndpointRuleMethod =
                             r.method.as_str().try_into().ok()?;
-                        let path: manifest::EndpointRulePath =
-                            r.path.as_str().try_into().ok()?;
+                        let path: manifest::EndpointRulePath = r.path.as_str().try_into().ok()?;
                         Some(manifest::EndpointRule { method, path })
                     })
                     .collect();
@@ -3275,7 +3284,12 @@ fn resolve_to_manifest(
 
     let network = Some(manifest::Network {
         mode: network_mode,
-        allow_domains: prof.network.allow_domain.iter().map(|e| e.domain().to_string()).collect(),
+        allow_domains: prof
+            .network
+            .allow_domain
+            .iter()
+            .map(|e| e.domain().to_string())
+            .collect(),
         endpoints: manifest_endpoints,
         dns: true,
         ports: if prof.network.listen_port.is_empty() && prof.network.open_port.is_empty() {

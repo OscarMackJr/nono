@@ -41,6 +41,7 @@ mod broker {
     use nono::{NonoError, OwnedHandle, Result as NonoResult};
     use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
     use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
+    use windows_sys::Win32::Security::{TOKEN_ADJUST_DEFAULT, TOKEN_QUERY};
     use windows_sys::Win32::System::Console::AllocConsole;
     use windows_sys::Win32::System::Threading::{
         CreateProcessAsUserW, CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
@@ -49,9 +50,6 @@ mod broker {
         EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
         PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
         STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
-    };
-    use windows_sys::Win32::Security::{
-        TOKEN_ADJUST_DEFAULT, TOKEN_QUERY,
     };
 
     /// D-08: argv-only IPC. CapabilitySet/Profile NOT passed (RESEARCH §3a —
@@ -333,13 +331,11 @@ mod broker {
                 }
                 None => None,
             };
-        let app_container_sid: Option<nono::OwnedAppContainerSid> = match args
-            .app_container_name
-            .as_deref()
-        {
-            Some(name) => Some(nono::derive_app_container_sid(name)?),
-            None => None,
-        };
+        let app_container_sid: Option<nono::OwnedAppContainerSid> =
+            match args.app_container_name.as_deref() {
+                Some(name) => Some(nono::derive_app_container_sid(name)?),
+                None => None,
+            };
         // For the legacy/PTY path only: build the plain Low-IL primary token.
         // For the AppContainer path the child token is produced by the lowbox at
         // spawn time, so no primary token is built here.
@@ -426,14 +422,13 @@ mod broker {
         // can reach nothing extra). `security_caps` and `app_container_sid`
         // MUST outlive the CreateProcessW call below — both are owned by `run`'s
         // stack and dropped only after the spawn returns.
-        let security_caps: Option<SECURITY_CAPABILITIES> = app_container_sid.as_ref().map(|sid| {
-            SECURITY_CAPABILITIES {
+        let security_caps: Option<SECURITY_CAPABILITIES> =
+            app_container_sid.as_ref().map(|sid| SECURITY_CAPABILITIES {
                 AppContainerSid: sid.as_psid(),
                 Capabilities: std::ptr::null_mut(),
                 CapabilityCount: 0,
                 Reserved: 0,
-            }
-        });
+            });
         if let Some(ref caps) = security_caps {
             let ok = unsafe {
                 // SAFETY: attr_list was initialized with slot count 2 above (the
@@ -633,10 +628,7 @@ mod broker {
                 unsafe {
                     // SAFETY: terminate the suspended child before bailing so we
                     // never leave an unlabeled (un-resumed) process behind.
-                    windows_sys::Win32::System::Threading::TerminateProcess(
-                        child_process.raw(),
-                        1,
-                    );
+                    windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
                 }
                 return Err(NonoError::SandboxInit(format!(
                     "OpenProcessToken on AppContainer child failed (GetLastError={err})"
@@ -646,10 +638,7 @@ mod broker {
             if let Err(e) = nono::apply_low_il_label_to_token(child_token.raw()) {
                 unsafe {
                     // SAFETY: see above — fail closed by terminating the child.
-                    windows_sys::Win32::System::Threading::TerminateProcess(
-                        child_process.raw(),
-                        1,
-                    );
+                    windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
                 }
                 return Err(e);
             }
@@ -663,10 +652,7 @@ mod broker {
                 let err = unsafe { GetLastError() };
                 unsafe {
                     // SAFETY: fail closed — terminate rather than leave suspended.
-                    windows_sys::Win32::System::Threading::TerminateProcess(
-                        child_process.raw(),
-                        1,
-                    );
+                    windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
                 }
                 return Err(NonoError::SandboxInit(format!(
                     "ResumeThread on AppContainer child failed (GetLastError={err})"
@@ -1001,8 +987,7 @@ mod broker {
                 "--cwd",
                 r"C:\",
             ]);
-            let parsed =
-                parse_args(&raw).expect("parse without --no-pty must succeed");
+            let parsed = parse_args(&raw).expect("parse without --no-pty must succeed");
             assert!(
                 !parsed.no_pty,
                 "BrokerArgs.no_pty must be false when --no-pty is absent"

@@ -145,9 +145,9 @@ mod tests {
 
     impl ApprovalBackend for TestGrantBackend {
         fn request_capability(&self, _request: &CapabilityRequest) -> Result<ApprovalDecision> {
-            Ok(ApprovalDecision::Approved(ResourceGrant::sideband_file_descriptor(
-                _request.access,
-            )))
+            Ok(ApprovalDecision::Approved(
+                ResourceGrant::sideband_file_descriptor(_request.access),
+            ))
         }
 
         fn backend_name(&self) -> &str {

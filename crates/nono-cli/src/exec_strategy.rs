@@ -1140,53 +1140,53 @@ pub fn execute_supervised(
                     }
                 } else if install_network_notify {
                     if let Some(fd) = child_sock_fd {
-                    let notify_result = if config.seccomp_proxy_fallback {
-                        let has_bind = match effective_caps.network_mode() {
-                            nono::NetworkMode::ProxyOnly { bind_ports, .. } => {
-                                !bind_ports.is_empty()
-                            }
-                            _ => false,
+                        let notify_result = if config.seccomp_proxy_fallback {
+                            let has_bind = match effective_caps.network_mode() {
+                                nono::NetworkMode::ProxyOnly { bind_ports, .. } => {
+                                    !bind_ports.is_empty()
+                                }
+                                _ => false,
+                            };
+                            nono::sandbox::install_seccomp_proxy_filter(has_bind)
+                        } else {
+                            nono::sandbox::install_seccomp_af_unix_filter()
                         };
-                        nono::sandbox::install_seccomp_proxy_filter(has_bind)
-                    } else {
-                        nono::sandbox::install_seccomp_af_unix_filter()
-                    };
 
-                    match notify_result {
-                        Ok(proxy_notify_fd) => {
-                            if let Err(_e) = nono::supervisor::socket::send_fd_via_socket(
-                                fd,
-                                proxy_notify_fd.as_raw_fd(),
-                            ) {
+                        match notify_result {
+                            Ok(proxy_notify_fd) => {
+                                if let Err(_e) = nono::supervisor::socket::send_fd_via_socket(
+                                    fd,
+                                    proxy_notify_fd.as_raw_fd(),
+                                ) {
+                                    // CR-01: static byte string in post-fork child.
+                                    const MSG_PROXY_SEND: &[u8] =
+                                        b"nono: failed to send proxy seccomp notify fd\n";
+                                    // SAFETY: write and _exit are async-signal-safe.
+                                    unsafe {
+                                        libc::write(
+                                            libc::STDERR_FILENO,
+                                            MSG_PROXY_SEND.as_ptr().cast::<libc::c_void>(),
+                                            MSG_PROXY_SEND.len(),
+                                        );
+                                        libc::_exit(126);
+                                    }
+                                }
+                            }
+                            Err(_e) => {
                                 // CR-01: static byte string in post-fork child.
-                                const MSG_PROXY_SEND: &[u8] =
-                                    b"nono: failed to send proxy seccomp notify fd\n";
+                                const MSG_PROXY_FAIL: &[u8] =
+                                    b"nono: seccomp proxy filter not available\n";
                                 // SAFETY: write and _exit are async-signal-safe.
                                 unsafe {
                                     libc::write(
                                         libc::STDERR_FILENO,
-                                        MSG_PROXY_SEND.as_ptr().cast::<libc::c_void>(),
-                                        MSG_PROXY_SEND.len(),
+                                        MSG_PROXY_FAIL.as_ptr().cast::<libc::c_void>(),
+                                        MSG_PROXY_FAIL.len(),
                                     );
                                     libc::_exit(126);
                                 }
                             }
                         }
-                        Err(_e) => {
-                            // CR-01: static byte string in post-fork child.
-                            const MSG_PROXY_FAIL: &[u8] =
-                                b"nono: seccomp proxy filter not available\n";
-                            // SAFETY: write and _exit are async-signal-safe.
-                            unsafe {
-                                libc::write(
-                                    libc::STDERR_FILENO,
-                                    MSG_PROXY_FAIL.as_ptr().cast::<libc::c_void>(),
-                                    MSG_PROXY_FAIL.len(),
-                                );
-                                libc::_exit(126);
-                            }
-                        }
-                    }
                     }
                 }
 
@@ -1396,15 +1396,14 @@ pub fn execute_supervised(
             // Linux: writes "1\n" to cgroup.kill at deadline (atomically kills all descendants).
             // macOS: sends SIGKILL to child process group at deadline.
             #[cfg(target_os = "linux")]
-            let _timeout_watchdog = timeout_deadline
-                .and_then(|deadline| {
-                    if let Some(ref session) = unix_resource_guard {
-                        let cgroup_path = session.path.clone();
-                        Some(spawn_linux_timeout_watchdog(deadline, cgroup_path))
-                    } else {
-                        None
-                    }
-                });
+            let _timeout_watchdog = timeout_deadline.and_then(|deadline| {
+                if let Some(ref session) = unix_resource_guard {
+                    let cgroup_path = session.path.clone();
+                    Some(spawn_linux_timeout_watchdog(deadline, cgroup_path))
+                } else {
+                    None
+                }
+            });
             #[cfg(target_os = "macos")]
             let _timeout_watchdog = timeout_deadline
                 .map(|deadline| {
@@ -4240,10 +4239,7 @@ mod tests {
         drop(pty_slave);
 
         // Use a unique session ID to avoid colliding with any running nono sessions.
-        let session_id = format!(
-            "test-reconnect-survival-{}",
-            std::process::id()
-        );
+        let session_id = format!("test-reconnect-survival-{}", std::process::id());
 
         // Transfer ownership of the master fd to PtyProxy.
         let pty_proxy_result = crate::pty_proxy::PtyProxy::new(
@@ -4262,8 +4258,7 @@ mod tests {
             }
         };
 
-        let (parent_stream, child_stream) = UnixStream::pair()
-            .expect("socketpair failed");
+        let (parent_stream, child_stream) = UnixStream::pair().expect("socketpair failed");
 
         let backend = DenyAll;
         let sup_cfg = SupervisorConfig {
@@ -4340,8 +4335,8 @@ mod tests {
                     child,
                     &mut sock,
                     &sup_cfg,
-                    None,              // no startup timeout
-                    None,              // no trust interceptor
+                    None,                 // no startup timeout
+                    None,                 // no trust interceptor
                     Some(&mut pty_proxy), // SC1: pty is Some → demote-not-break
                     &mut false,
                 );

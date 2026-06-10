@@ -47,7 +47,9 @@
 #![cfg(windows)]
 
 use crate::{exec_strategy, profile, session};
-use nono::{path_is_owned_by_current_user, try_set_mandatory_label, NonoError, OwnedHandle, Result};
+use nono::{
+    path_is_owned_by_current_user, try_set_mandatory_label, NonoError, OwnedHandle, Result,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -59,13 +61,13 @@ use tracing::{debug, error, warn};
 
 use std::os::windows::ffi::OsStrExt;
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE};
-use windows_sys::Win32::Security::{
-    ACL, ACCESS_ALLOWED_ACE, ACE_HEADER, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-};
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
 };
 use windows_sys::Win32::Security::GetAce;
+use windows_sys::Win32::Security::{
+    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
 };
@@ -532,11 +534,7 @@ fn validate_hook_script_windows(path: &Path) -> Result<PathBuf> {
 
     // 2. Canonical — std::fs::canonicalize adds \\?\ prefix on Windows automatically.
     let canonical = path.canonicalize().map_err(|e| {
-        NonoError::ConfigParse(format!(
-            "Hook script not found: {}: {}",
-            path.display(),
-            e
-        ))
+        NonoError::ConfigParse(format!("Hook script not found: {}: {}", path.display(), e))
     })?;
 
     // 3. Regular file check
@@ -917,11 +915,15 @@ mod tests {
         );
         // Safe vars must pass through
         assert!(
-            filtered.iter().any(|(k, v)| k == "MY_VAR" && v == "safe_value"),
+            filtered
+                .iter()
+                .any(|(k, v)| k == "MY_VAR" && v == "safe_value"),
             "MY_VAR must pass through"
         );
         assert!(
-            filtered.iter().any(|(k, v)| k == "MY_OTHER_VAR" && v == "also_safe"),
+            filtered
+                .iter()
+                .any(|(k, v)| k == "MY_OTHER_VAR" && v == "also_safe"),
             "MY_OTHER_VAR must pass through"
         );
     }
@@ -1087,7 +1089,11 @@ mod tests {
         // Hook body: append HOOK_OK=yes to $env:NONO_ENV_FILE
         {
             let mut f = std::fs::File::create(&script_path).unwrap();
-            writeln!(f, "Add-Content -Path $env:NONO_ENV_FILE -Value 'HOOK_OK=yes'").unwrap();
+            writeln!(
+                f,
+                "Add-Content -Path $env:NONO_ENV_FILE -Value 'HOOK_OK=yes'"
+            )
+            .unwrap();
         }
 
         // Build a SessionHook pointing at the script.

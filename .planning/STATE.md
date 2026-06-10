@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
 status: executing
-last_updated: "2026-06-10T00:19:27.866Z"
-last_activity: 2026-06-10 -- Phase 65 planning complete
+last_updated: "2026-06-10T00:24:56.432Z"
+last_activity: 2026-06-10 -- Phase 65 execution started
 progress:
   total_phases: 4
   completed_phases: 2
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.10 milestone started 2026-06-06; v2.8 + v2.9 shi
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 64 — minifilter-spike-implementation-macos-p1-cherry-pick-wave
+**Current Focus:** Phase 65 — minifilter-adr-macos-live-re-validation
 
 ## Current Position
 
-Phase: 65
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-10 -- Phase 65 planning complete
+Phase: 65 (minifilter-adr-macos-live-re-validation) — EXECUTING
+Plan: 1 of 4
+Status: Executing Phase 65
+Last activity: 2026-06-10 -- Phase 65 execution started
 
 Progress: ░░░░░░░░░░ 0% (0/4 phases complete)
 

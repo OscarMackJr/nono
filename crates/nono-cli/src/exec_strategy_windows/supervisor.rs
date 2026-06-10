@@ -522,21 +522,22 @@ impl WindowsSupervisorRuntime {
             // capture would detect the `runtime_containment_job.0` access
             // below and capture only the inner field, triggering an E0277.
             let runtime_containment_job_local: SendableHandle = runtime_containment_job;
-            let mut sock = match nono::SupervisorSocket::bind_low_integrity_with_session_and_package_sid(
-                &rendezvous_path,
-                session_sid.as_deref(),
-                package_sid.as_deref(),
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(
-                        session_id = %session_id,
-                        error = %e,
-                        "Failed to bind Windows capability pipe; capability expansion disabled for this session",
-                    );
-                    return;
-                }
-            };
+            let mut sock =
+                match nono::SupervisorSocket::bind_low_integrity_with_session_and_package_sid(
+                    &rendezvous_path,
+                    session_sid.as_deref(),
+                    package_sid.as_deref(),
+                ) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!(
+                            session_id = %session_id,
+                            error = %e,
+                            "Failed to bind Windows capability pipe; capability expansion disabled for this session",
+                        );
+                        return;
+                    }
+                };
 
             // Cycle-2 ordering fix (debug session `appcontainer-cap-pipe-unreachable`):
             // The rendezvous READ grant for the AppContainer package SID is now applied
@@ -1153,9 +1154,8 @@ impl WindowsSupervisorRuntime {
                 // runtime, which outlives this thread — the runtime is dropped
                 // only after the child exits). ManuallyDrop prevents a
                 // double-close; the runtime owns the handle.
-                let mut child_stdin = ManuallyDrop::new(unsafe {
-                    std::fs::File::from_raw_handle(stdin_write as _)
-                });
+                let mut child_stdin =
+                    ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(stdin_write as _) });
                 let mut stdin = std::io::stdin();
                 let mut buf = [0u8; 4096];
                 loop {
@@ -2868,18 +2868,16 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
-                match decision {
-                    nono::ApprovalDecision::Approved(grant) => {
-                        assert_eq!(
-                            grant.resource_kind,
-                            nono::supervisor::GrantedResourceKind::Event
-                        );
-                        close_grant_handle_if_any(&grant);
-                    }
-                    other => panic!("expected Approved decision, got {other:?}"),
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => match decision {
+                nono::ApprovalDecision::Approved(grant) => {
+                    assert_eq!(
+                        grant.resource_kind,
+                        nono::supervisor::GrantedResourceKind::Event
+                    );
+                    close_grant_handle_if_any(&grant);
                 }
-            }
+                other => panic!("expected Approved decision, got {other:?}"),
+            },
             other => panic!("unexpected response: {other:?}"),
         }
 
@@ -2982,18 +2980,16 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
-                match decision {
-                    nono::ApprovalDecision::Approved(grant) => {
-                        assert_eq!(
-                            grant.resource_kind,
-                            nono::supervisor::GrantedResourceKind::Mutex
-                        );
-                        close_grant_handle_if_any(&grant);
-                    }
-                    other => panic!("expected Approved decision, got {other:?}"),
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => match decision {
+                nono::ApprovalDecision::Approved(grant) => {
+                    assert_eq!(
+                        grant.resource_kind,
+                        nono::supervisor::GrantedResourceKind::Mutex
+                    );
+                    close_grant_handle_if_any(&grant);
                 }
-            }
+                other => panic!("expected Approved decision, got {other:?}"),
+            },
             other => panic!("unexpected response: {other:?}"),
         }
         assert_eq!(backend.calls(), 1);
@@ -3143,20 +3139,21 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
-                match decision {
-                    nono::ApprovalDecision::Approved(grant) => {
-                        assert_eq!(
-                            grant.transfer,
-                            nono::supervisor::ResourceTransferKind::DuplicatedWindowsHandle
-                        );
-                        assert_eq!(grant.resource_kind, nono::supervisor::GrantedResourceKind::Pipe);
-                        assert_eq!(grant.access, nono::AccessMode::Read);
-                        close_grant_handle_if_any(&grant);
-                    }
-                    other => panic!("expected Approved decision, got {other:?}"),
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => match decision {
+                nono::ApprovalDecision::Approved(grant) => {
+                    assert_eq!(
+                        grant.transfer,
+                        nono::supervisor::ResourceTransferKind::DuplicatedWindowsHandle
+                    );
+                    assert_eq!(
+                        grant.resource_kind,
+                        nono::supervisor::GrantedResourceKind::Pipe
+                    );
+                    assert_eq!(grant.access, nono::AccessMode::Read);
+                    close_grant_handle_if_any(&grant);
                 }
-            }
+                other => panic!("expected Approved decision, got {other:?}"),
+            },
             other => panic!("unexpected response: {other:?}"),
         }
         assert_eq!(backend.calls(), 1);
@@ -3254,32 +3251,31 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
-                match decision {
-                    nono::ApprovalDecision::Approved(grant) => {
-                        assert_eq!(
-                            grant.transfer,
-                            nono::supervisor::ResourceTransferKind::SocketProtocolInfoBlob
-                        );
-                        assert_eq!(
-                            grant.resource_kind,
-                            nono::supervisor::GrantedResourceKind::Socket
-                        );
-                        let blob = grant.protocol_info_blob.as_ref().expect("blob present");
-                        assert_eq!(
-                            blob.len(),
-                            std::mem::size_of::<windows_sys::Win32::Networking::WinSock::WSAPROTOCOL_INFOW>(
-                            ),
-                            "blob length must match WSAPROTOCOL_INFOW size"
-                        );
-                        assert!(
-                            grant.raw_handle.is_none(),
-                            "socket grants don't carry raw_handle"
-                        );
-                    }
-                    other => panic!("expected Approved decision, got {other:?}"),
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => match decision {
+                nono::ApprovalDecision::Approved(grant) => {
+                    assert_eq!(
+                        grant.transfer,
+                        nono::supervisor::ResourceTransferKind::SocketProtocolInfoBlob
+                    );
+                    assert_eq!(
+                        grant.resource_kind,
+                        nono::supervisor::GrantedResourceKind::Socket
+                    );
+                    let blob = grant.protocol_info_blob.as_ref().expect("blob present");
+                    assert_eq!(
+                        blob.len(),
+                        std::mem::size_of::<
+                            windows_sys::Win32::Networking::WinSock::WSAPROTOCOL_INFOW,
+                        >(),
+                        "blob length must match WSAPROTOCOL_INFOW size"
+                    );
+                    assert!(
+                        grant.raw_handle.is_none(),
+                        "socket grants don't carry raw_handle"
+                    );
                 }
-            }
+                other => panic!("expected Approved decision, got {other:?}"),
+            },
             other => panic!("unexpected response: {other:?}"),
         }
         assert_eq!(backend.calls(), 1);
@@ -3462,18 +3458,16 @@ mod capability_handler_tests {
 
         let response = child.recv_response().expect("response");
         match response {
-            nono::supervisor::SupervisorResponse::Decision { decision, .. } => {
-                match decision {
-                    nono::ApprovalDecision::Approved(grant) => {
-                        assert_eq!(
-                            grant.resource_kind,
-                            nono::supervisor::GrantedResourceKind::JobObject
-                        );
-                        close_grant_handle_if_any(&grant);
-                    }
-                    other => panic!("expected Approved decision, got {other:?}"),
+            nono::supervisor::SupervisorResponse::Decision { decision, .. } => match decision {
+                nono::ApprovalDecision::Approved(grant) => {
+                    assert_eq!(
+                        grant.resource_kind,
+                        nono::supervisor::GrantedResourceKind::JobObject
+                    );
+                    close_grant_handle_if_any(&grant);
                 }
-            }
+                other => panic!("expected Approved decision, got {other:?}"),
+            },
             other => panic!("unexpected response: {other:?}"),
         }
         assert_eq!(backend.calls(), 1);

@@ -934,9 +934,7 @@ fn run_verify(args: TrustVerifyArgs) -> Result<()> {
 ///   (or whitespace-only).
 /// - `NONO_TRUST_OIDC_ISSUER` is set to a non-empty value that fails
 ///   `url::Url::parse`.
-fn read_required_oidc_issuer(
-    user_issuer: Option<&str>,
-) -> std::result::Result<String, String> {
+fn read_required_oidc_issuer(user_issuer: Option<&str>) -> std::result::Result<String, String> {
     if let Some(s) = user_issuer {
         return Ok(s.to_string());
     }
@@ -953,9 +951,8 @@ fn read_required_oidc_issuer(
     // letting `validate_oidc_issuer` produce a less specific message
     // downstream. Mirrors the historical
     // `configured_oidc_issuer_rejects_malformed_env_value` semantics.
-    Url::parse(&env_value).map_err(|e| {
-        format!("NONO_TRUST_OIDC_ISSUER='{env_value}' is not a valid URL: {e}")
-    })?;
+    Url::parse(&env_value)
+        .map_err(|e| format!("NONO_TRUST_OIDC_ISSUER='{env_value}' is not a valid URL: {e}"))?;
     Ok(env_value)
 }
 
@@ -2259,8 +2256,7 @@ mod tests {
     #[test]
     fn read_required_oidc_issuer_returns_env_value_when_user_unset_and_env_set() {
         let _g = OidcEnvGuard::set("https://token.actions.githubusercontent.com");
-        let got = read_required_oidc_issuer(None)
-            .expect("explicitly-set env-var should succeed");
+        let got = read_required_oidc_issuer(None).expect("explicitly-set env-var should succeed");
         assert_eq!(got, "https://token.actions.githubusercontent.com");
     }
 
@@ -2271,8 +2267,8 @@ mod tests {
     #[test]
     fn read_required_oidc_issuer_fails_closed_when_both_unset() {
         let _g = OidcEnvGuard::remove();
-        let err = read_required_oidc_issuer(None)
-            .expect_err("both inputs absent should fail closed");
+        let err =
+            read_required_oidc_issuer(None).expect_err("both inputs absent should fail closed");
         assert!(
             err.contains("keyless bundle requires --issuer"),
             "error must name --issuer; got: {err}"
@@ -2302,8 +2298,7 @@ mod tests {
     #[test]
     fn read_required_oidc_issuer_rejects_malformed_env_url() {
         let _g = OidcEnvGuard::set("not a valid url at all");
-        let err = read_required_oidc_issuer(None)
-            .expect_err("malformed URL should fail closed");
+        let err = read_required_oidc_issuer(None).expect_err("malformed URL should fail closed");
         assert!(
             err.contains("NONO_TRUST_OIDC_ISSUER"),
             "error must name the env-var; got: {err}"

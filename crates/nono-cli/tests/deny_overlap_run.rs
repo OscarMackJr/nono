@@ -115,8 +115,8 @@ fn run_allow_cwd_with_profile_deny_under_workdir_fails_closed() {
     // bug is tracked separately at
     // .planning/todos/pending/44-class-d-validator-preflight-investigation.md.
     let validator_message = stderr.contains("Landlock deny-overlap");
-    let runtime_denial = stderr.contains("Permission denied")
-        && stderr.contains("No path denials were observed");
+    let runtime_denial =
+        stderr.contains("Permission denied") && stderr.contains("No path denials were observed");
     assert!(
         validator_message || runtime_denial,
         "expected validator pre-flight OR runtime Landlock denial in stderr, got:\n{stderr}",

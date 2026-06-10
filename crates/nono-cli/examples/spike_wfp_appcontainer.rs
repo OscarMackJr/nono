@@ -76,8 +76,8 @@ mod windows_spike {
         FreeSid, GetSecurityDescriptorLength, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SID,
     };
     use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-        FILE_SHARE_READ, FILE_SHARE_WRITE,
+        CreateFileW, CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, FILE_GENERIC_READ,
+        FILE_GENERIC_WRITE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     use windows_sys::Win32::System::Rpc::RPC_C_AUTHN_WINNT;
     use windows_sys::Win32::System::Threading::{
@@ -124,7 +124,14 @@ mod windows_spike {
         // SAFETY: name/display/desc are nul-terminated UTF-16; no capabilities;
         // sid is a valid out-pointer freed below.
         let hr = unsafe {
-            CreateAppContainerProfile(name.as_ptr(), display.as_ptr(), desc.as_ptr(), null(), 0, &mut sid)
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                display.as_ptr(),
+                desc.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
         };
         if hr == 0 {
             if !sid.is_null() {
@@ -261,7 +268,10 @@ mod windows_spike {
         // SAFETY: engine valid; key points to an initialized GUID.
         let status = unsafe { FwpmSubLayerDeleteByKey0(engine.0, &SPIKE_SUBLAYER_GUID) };
         if status != 0 && status != FWP_E_SUBLAYER_NOT_FOUND as u32 {
-            eprintln!("[cleanup] FwpmSubLayerDeleteByKey0: {}", fmt_err(status, ""));
+            eprintln!(
+                "[cleanup] FwpmSubLayerDeleteByKey0: {}",
+                fmt_err(status, "")
+            );
         }
     }
 
@@ -300,11 +310,7 @@ mod windows_spike {
     /// Install ONE outbound BLOCK filter at FWPM_LAYER_ALE_AUTH_CONNECT_V4 with
     /// the given condition. Replicates nono-wfp-service.rs add_policy_filter,
     /// INCLUDING the 62-07 non-null displayData.name and the 62-08 SD→FWP_BYTE_BLOB.
-    fn add_block_filter(
-        engine: &WfpEngine,
-        key: GUID,
-        condition: Condition,
-    ) -> Result<(), String> {
+    fn add_block_filter(engine: &WfpEngine, key: GUID, condition: Condition) -> Result<(), String> {
         // sd_blob / sid_value must outlive FwpmFilterAdd0 (declared before
         // `conditions`, which borrow them).
         let mut sd_blob = FWP_BYTE_BLOB {
@@ -581,9 +587,8 @@ mod windows_spike {
         si.StartupInfo.hStdInput = INVALID_HANDLE_VALUE;
 
         // Mutable command line (CreateProcessW may write into it).
-        let mut cmdline: Vec<u16> = to_utf16_null(OsStr::new(
-            "curl.exe -sS -m 5 https://api.ipify.org",
-        ));
+        let mut cmdline: Vec<u16> =
+            to_utf16_null(OsStr::new("curl.exe -sS -m 5 https://api.ipify.org"));
         let cwd = to_utf16_null(OsStr::new("C:\\Windows\\System32"));
 
         let mut pi: PROCESS_INFORMATION = zeroed();
@@ -669,9 +674,9 @@ mod windows_spike {
     fn looks_like_ipv4(token: &str) -> bool {
         let parts: Vec<&str> = token.split('.').collect();
         parts.len() == 4
-            && parts
-                .iter()
-                .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u8>().is_ok())
+            && parts.iter().all(|p| {
+                !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u8>().is_ok()
+            })
     }
 
     pub fn run() -> ExitCode {

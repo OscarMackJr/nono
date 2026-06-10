@@ -33,8 +33,7 @@ pub(crate) struct EffectiveProxySettings {
 /// Upstream-commit: 75b2265 (adapted: guard URL parse behind explicit http/https scheme check
 /// to avoid mangling `host:port` entries — CR-02 fix)
 fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
-    let looks_like_url =
-        input.starts_with("http://") || input.starts_with("https://");
+    let looks_like_url = input.starts_with("http://") || input.starts_with("https://");
     if looks_like_url {
         if let Ok(parsed) = url::Url::parse(input) {
             if let Some(host) = parsed.host_str() {
@@ -316,19 +315,13 @@ mod tests {
     #[test]
     fn parse_allow_domain_url_with_root_path_produces_plain() {
         let entry = parse_allow_domain_arg("https://api.github.com/");
-        assert_eq!(
-            entry,
-            AllowDomainEntry::Plain("api.github.com".to_string())
-        );
+        assert_eq!(entry, AllowDomainEntry::Plain("api.github.com".to_string()));
     }
 
     #[test]
     fn parse_allow_domain_url_no_path_produces_plain() {
         let entry = parse_allow_domain_arg("https://api.github.com");
-        assert_eq!(
-            entry,
-            AllowDomainEntry::Plain("api.github.com".to_string())
-        );
+        assert_eq!(entry, AllowDomainEntry::Plain("api.github.com".to_string()));
     }
 
     #[test]
@@ -412,8 +405,7 @@ mod tests {
 
         assert_eq!(effective.allow_domain.len(), 1);
         assert_eq!(
-            effective.allow_domain[0],
-            endpoint_entry,
+            effective.allow_domain[0], endpoint_entry,
             "WithEndpoints entry must survive end-to-end without being flattened to Plain"
         );
     }

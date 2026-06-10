@@ -142,12 +142,9 @@ impl Transport for UreqTransport {
             // residual-risk section in Plan 05 documents this; we cannot
             // distinguish "missing root" from "proxy 403" without an
             // additional discriminator tough does not expose.
-            Err(ureq::Error::StatusCode(code)) if code == 403 || code == 404 || code == 410 => {
-                Err(TransportError::new(
-                    TransportErrorKind::FileNotFound,
-                    url.as_str(),
-                ))
-            }
+            Err(ureq::Error::StatusCode(code)) if code == 403 || code == 404 || code == 410 => Err(
+                TransportError::new(TransportErrorKind::FileNotFound, url.as_str()),
+            ),
             Err(e) => Err(TransportError::new_with_cause(
                 TransportErrorKind::Other,
                 url.as_str(),
@@ -411,16 +408,13 @@ mod tests {
 
     #[async_trait]
     impl Transport for StaticMapTransport {
-        async fn fetch(
-            &self,
-            url: Url,
-        ) -> std::result::Result<TransportStream, TransportError> {
+        async fn fetch(&self, url: Url) -> std::result::Result<TransportStream, TransportError> {
             let key = url.path().trim_start_matches('/').to_string();
             match self.files.get(&key) {
                 Some(bytes) => {
-                    let s = stream::iter(std::iter::once(
-                        Ok::<Bytes, TransportError>(Bytes::from(bytes.clone())),
-                    ));
+                    let s = stream::iter(std::iter::once(Ok::<Bytes, TransportError>(
+                        Bytes::from(bytes.clone()),
+                    )));
                     Ok(Box::pin(s))
                 }
                 None => Err(TransportError::new(
@@ -447,18 +441,11 @@ mod tests {
     fn load_fixture(name: &str) -> HashMap<String, Vec<u8>> {
         let root = fixture_dir(name);
         let mut map = HashMap::new();
-        fn walk(
-            root: &std::path::Path,
-            prefix: &str,
-            map: &mut HashMap<String, Vec<u8>>,
-        ) {
+        fn walk(root: &std::path::Path, prefix: &str, map: &mut HashMap<String, Vec<u8>>) {
             for entry in std::fs::read_dir(root).expect("read fixture dir") {
                 let entry = entry.expect("dir entry");
                 let path = entry.path();
-                let name = entry
-                    .file_name()
-                    .into_string()
-                    .expect("utf-8 filename");
+                let name = entry.file_name().into_string().expect("utf-8 filename");
                 let key = if prefix.is_empty() {
                     name.clone()
                 } else {
@@ -497,9 +484,7 @@ mod tests {
     /// Helper dispatched into from `refresh_production_trusted_root`'s
     /// `#[cfg(test)]` env-seam when `NONO_TEST_TUF_FIXTURE` is set
     /// (R-50-07). Test 6 drives this through the public wrapper.
-    pub(super) async fn refresh_via_fixture_env_seam(
-        fixture_name: &str,
-    ) -> Result<TrustedRoot> {
+    pub(super) async fn refresh_via_fixture_env_seam(fixture_name: &str) -> Result<TrustedRoot> {
         let files = load_fixture(fixture_name);
         let embedded = embedded_root_for_fixture(&files);
         let transport = StaticMapTransport {
@@ -542,7 +527,10 @@ mod tests {
 
         let trusted_root = result.expect("happy-path returns Ok");
         let json = serde_json::to_string_pretty(&trusted_root).expect("serialize");
-        assert!(!json.is_empty(), "serialized trusted_root must be non-empty");
+        assert!(
+            !json.is_empty(),
+            "serialized trusted_root must be non-empty"
+        );
         assert!(json.contains('{'), "serialized output must be JSON");
     }
 
@@ -634,8 +622,7 @@ mod tests {
     /// and needs regenerating via the regen script.
     #[tokio::test]
     async fn cache_bytes_match_baseline() {
-        const BASELINE: &[u8] =
-            include_bytes!("../tests/fixtures/tuf/trusted_root_baseline.json");
+        const BASELINE: &[u8] = include_bytes!("../tests/fixtures/tuf/trusted_root_baseline.json");
 
         let files = load_fixture("tuf-repo-happy");
         let embedded = embedded_root_for_fixture(&files);
@@ -708,8 +695,7 @@ mod tests {
 
         // Round-trip parse via the same API the offline verify path
         // uses for the cache file.
-        let reread =
-            TrustedRoot::from_file(&cache_path).expect("from_file round-trip");
+        let reread = TrustedRoot::from_file(&cache_path).expect("from_file round-trip");
         // Re-serialize and assert byte-equality with what we wrote —
         // proves the offline reader produces equivalent state from the
         // cache file (Phase 32 D-32-01 offline reader unaffected).
@@ -754,23 +740,23 @@ mod tests {
             Err(p) => p.into_inner(),
         };
 
-        let _guard = crate::test_env::EnvVarGuard::set_all(&[(
-            "NONO_TEST_TUF_FIXTURE",
-            "tuf-repo-happy",
-        )]);
+        let _guard =
+            crate::test_env::EnvVarGuard::set_all(&[("NONO_TEST_TUF_FIXTURE", "tuf-repo-happy")]);
 
         // Call the PUBLIC wrapper. The #[cfg(test)] env-seam inside
         // refresh_production_trusted_root will detect
         // NONO_TEST_TUF_FIXTURE and dispatch into
         // refresh_via_fixture_env_seam("tuf-repo-happy").
         let result = refresh_production_trusted_root().await;
-        let trusted_root =
-            result.expect("public wrapper via env-seam returns Ok");
+        let trusted_root = result.expect("public wrapper via env-seam returns Ok");
 
         // Sanity: serializable JSON output, just like the happy-path
         // test.
         let json = serde_json::to_string_pretty(&trusted_root).expect("serialize");
-        assert!(!json.is_empty(), "serialized trusted_root must be non-empty");
+        assert!(
+            !json.is_empty(),
+            "serialized trusted_root must be non-empty"
+        );
         assert!(json.contains('{'), "serialized output must be JSON");
     }
 }

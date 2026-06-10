@@ -189,21 +189,14 @@ fn capability_pipe_reconnect_named_pipe() {
     use windows_sys::Win32::Storage::FileSystem::{CreateFileW, OPEN_EXISTING};
     use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, DisconnectNamedPipe};
 
-    let pipe_name = format!(
-        r"\\.\pipe\nono-ipc-reconnect-{}-{}",
-        std::process::id(),
-        {
-            use std::time::{SystemTime, UNIX_EPOCH};
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos()
-        }
-    );
-    let wide_name: Vec<u16> = pipe_name
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let pipe_name = format!(r"\\.\pipe\nono-ipc-reconnect-{}-{}", std::process::id(), {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .subsec_nanos()
+    });
+    let wide_name: Vec<u16> = pipe_name.encode_utf16().chain(std::iter::once(0)).collect();
 
     // Step 1: Create the AIPC pipe server handle (PIPE_UNLIMITED_INSTANCES,
     // PIPE_WAIT, Low-IL SDDL).

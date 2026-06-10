@@ -326,9 +326,7 @@ impl SupervisorSocket {
                     drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
                     return Err(err);
                 }
-                if let Err(err) =
-                    crate::sandbox::windows::grant_sid_read_on_path(path, pkg_sid)
-                {
+                if let Err(err) = crate::sandbox::windows::grant_sid_read_on_path(path, pkg_sid) {
                     // SAFETY: `server_handle` is an owned handle created above.
                     drop(unsafe { OwnedHandle::from_raw_handle(server_handle) });
                     return Err(NonoError::SandboxInit(format!(
@@ -388,12 +386,12 @@ impl SupervisorSocket {
     /// protocol unit (or intentionally partial frame). Normal production callers
     /// should use [`send_message`] instead.
     pub fn write_raw_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        self.writer
-            .write_all(bytes)
-            .map_err(|e| NonoError::SandboxInit(format!("Failed to write raw bytes to pipe: {e}")))?;
-        self.writer
-            .flush()
-            .map_err(|e| NonoError::SandboxInit(format!("Failed to flush pipe after raw write: {e}")))
+        self.writer.write_all(bytes).map_err(|e| {
+            NonoError::SandboxInit(format!("Failed to write raw bytes to pipe: {e}"))
+        })?;
+        self.writer.flush().map_err(|e| {
+            NonoError::SandboxInit(format!("Failed to flush pipe after raw write: {e}"))
+        })
     }
 
     /// Receive a message from child (supervisor side).
@@ -1941,10 +1939,9 @@ mod tests {
         supervisor
             .send_response(&SupervisorResponse::Decision {
                 request_id: "req-001".to_string(),
-                decision: ApprovalDecision::Approved(ResourceGrant::duplicated_windows_file_handle(
-                    0x1234,
-                    AccessMode::Read,
-                )),
+                decision: ApprovalDecision::Approved(
+                    ResourceGrant::duplicated_windows_file_handle(0x1234, AccessMode::Read),
+                ),
             })
             .expect("Failed to send response");
 
@@ -2396,7 +2393,12 @@ mod tests {
         // blocks until a client connects — we need both ends alive
         // concurrently.
         let server_handle = std::thread::spawn(move || {
-            SupervisorSocket::bind_impl(&rendezvous_for_server, true, Some(&server_thread_sid), None)
+            SupervisorSocket::bind_impl(
+                &rendezvous_for_server,
+                true,
+                Some(&server_thread_sid),
+                None,
+            )
         });
 
         // Wait briefly for the rendezvous file to be written — the server
@@ -2462,7 +2464,8 @@ mod tests {
         // Pre-fix guard: when session_sid is None, the DACL MUST NOT contain
         // any `S-1-5-117-*` (session-SID) ACE. This preserves byte-identical
         // SDDL for in-process / AIPC callers.
-        let baseline_sddl = build_capability_pipe_sddl(None, None).expect("no-SID path must succeed");
+        let baseline_sddl =
+            build_capability_pipe_sddl(None, None).expect("no-SID path must succeed");
         assert_eq!(baseline_sddl, CAPABILITY_PIPE_SDDL);
         let baseline_aces = extract_dacl_aces_from_sddl(&baseline_sddl);
         assert!(
@@ -2579,10 +2582,8 @@ mod tests {
             "typical AppContainer package SID with multiple sub-authorities"
         );
         assert!(
-            validate_package_sid_for_sddl(
-                "S-1-15-2-4294967295-0-0-0-1234567890-9876543210-0"
-            )
-            .is_ok(),
+            validate_package_sid_for_sddl("S-1-15-2-4294967295-0-0-0-1234567890-9876543210-0")
+                .is_ok(),
             "maximum-component u32 values"
         );
 
@@ -2648,7 +2649,10 @@ mod tests {
         let psid = "S-1-15-2-10-20-30-40";
         let sddl = build_capability_pipe_sddl(None, Some(psid))
             .expect("valid package SID with no session SID must build");
-        let package_ace = format!("(A;;{mask};;;{psid})", mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK);
+        let package_ace = format!(
+            "(A;;{mask};;;{psid})",
+            mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK
+        );
         assert!(
             sddl.starts_with("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)"),
             "SDDL must retain the D:P protected prefix: {sddl}"
@@ -2677,8 +2681,14 @@ mod tests {
         let psid = "S-1-15-2-10-20-30-40";
         let sddl = build_capability_pipe_sddl(Some(ssid), Some(psid))
             .expect("valid session + package SID must build");
-        let session_ace = format!("(A;;{mask};;;{ssid})", mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK);
-        let package_ace = format!("(A;;{mask};;;{psid})", mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK);
+        let session_ace = format!(
+            "(A;;{mask};;;{ssid})",
+            mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK
+        );
+        let package_ace = format!(
+            "(A;;{mask};;;{psid})",
+            mask = CAPABILITY_PIPE_RESTRICTING_SID_MASK
+        );
         assert!(
             sddl.contains(&session_ace),
             "SDDL must embed the session-SID ACE: {sddl}"
@@ -2704,9 +2714,9 @@ mod tests {
         let session_sid = "S-1-5-117-1-2-3-4";
         let bad_package_sids = [
             "S-1-15-2-1)(A;;GA;;;WD", // injection via ACE
-            "S-1-5-21-1-2-3-4",        // wrong prefix (user SID)
-            "",                         // empty
-            "S-1-15-2-1 ",              // trailing space
+            "S-1-5-21-1-2-3-4",       // wrong prefix (user SID)
+            "",                       // empty
+            "S-1-15-2-1 ",            // trailing space
         ];
         for bad in &bad_package_sids {
             assert!(
