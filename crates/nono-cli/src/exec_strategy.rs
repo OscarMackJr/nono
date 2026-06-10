@@ -584,6 +584,14 @@ pub fn execute_supervised(
 
     info!("Executing (supervised): {} {:?}", program, cmd_args);
 
+    // resource_session_id names the Linux cgroup (used only in the
+    // #[cfg(target_os = "linux")] CgroupSession block below). On macOS the
+    // supervised path applies setrlimit without a session id, so the param is
+    // intentionally unused there — mirror the existing `let _ =` idiom (see the
+    // unix_resource_guard silencer) to satisfy `-D warnings`.
+    #[cfg(target_os = "macos")]
+    let _ = resource_session_id;
+
     // Use pre-resolved program path (resolved before fork)
     let program_path = config.resolved_program;
 

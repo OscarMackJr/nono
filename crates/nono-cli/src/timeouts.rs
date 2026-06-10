@@ -8,11 +8,6 @@ use tracing::warn;
 
 // exec_strategy
 
-/// Quiet period to drain final PTY output after child exit before parent
-/// diagnostics/prompts take over the terminal.
-#[cfg(unix)]
-pub const POST_EXIT_PTY_DRAIN_TIMEOUT: Duration = Duration::from_millis(100);
-
 /// Poll interval for the non-blocking `waitpid` loop.
 #[cfg(unix)]
 pub const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -27,10 +22,6 @@ pub const ATTACH_SOCKET_READ_TIMEOUT: Duration = Duration::from_millis(500);
 /// supervisor time to replay buffered screen content.
 #[cfg(unix)]
 pub const ATTACH_STDIN_DELAY: Duration = Duration::from_millis(250);
-
-/// Sleep before retrying a session connection that failed with `SessionGone`.
-#[cfg(unix)]
-pub const ATTACH_RETRY_DELAY: Duration = Duration::from_millis(150);
 
 // startup_runtime
 
@@ -102,13 +93,6 @@ pub fn supervisor_ipc_read_timeout() -> Duration {
 /// the variable is absent or unparseable.
 pub fn detach_startup_timeout() -> Duration {
     env_duration_secs("NONO_DETACH_STARTUP_TIMEOUT", DETACH_STARTUP_TIMEOUT)
-}
-
-/// Read `NONO_PTY_DRAIN_TIMEOUT` (milliseconds). Returns the default when
-/// the variable is absent or unparseable.
-#[cfg(unix)]
-pub fn pty_drain_timeout() -> Duration {
-    env_duration_millis("NONO_PTY_DRAIN_TIMEOUT", POST_EXIT_PTY_DRAIN_TIMEOUT)
 }
 
 /// Read `NONO_PTY_ATTACH_TIMEOUT` (milliseconds). Returns the default when

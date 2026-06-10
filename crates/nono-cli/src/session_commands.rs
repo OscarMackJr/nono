@@ -5,6 +5,11 @@
 
 use crate::cli::{AttachArgs, DetachArgs, InspectArgs, LogsArgs, PruneArgs, PsArgs, StopArgs};
 use crate::command_display::{format_command_line, truncate_chars};
+// format_bytes_short is only used in the Linux cgroup-v2 memory display below
+// (non-test) and by the unit tests in this module on every host. On macOS/Windows
+// non-test the import would otherwise be unused (-D warnings); the `test` arm keeps
+// it in scope for `limits_block_format_tests`.
+#[cfg(any(target_os = "linux", test))]
 use crate::format_util::format_bytes_short;
 use crate::session::{self, SessionAttachment, SessionRecord, SessionStatus};
 use colored::Colorize;

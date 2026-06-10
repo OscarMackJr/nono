@@ -40,6 +40,12 @@
 /// assert_eq!(format_bytes_short(1024 * 1024 * 1024), "1G");
 /// assert_eq!(format_bytes_short(1500), "1500"); // non-round fall-through
 /// ```
+///
+/// Used only by the Linux cgroup-v2 memory display and the Windows resource
+/// display; macOS has no non-test caller, so it is gated out of the macOS bin
+/// build to satisfy `-D warnings`. The `test` arm keeps it available to the unit
+/// tests (here and in `session_commands`) on every host, including macOS.
+#[cfg(any(not(target_os = "macos"), test))]
 pub fn format_bytes_short(bytes: u64) -> String {
     const KIB: u64 = 1024;
     const MIB: u64 = 1024 * 1024;
