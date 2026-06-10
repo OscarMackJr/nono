@@ -174,19 +174,23 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-10 — session resumed; reconciled state with filesystem + live CI.
+**Last session:** 2026-06-10 (session 2) — drove the D-11c CI rehab + Azure VM latency prep. PAUSED. Full handoff: `.planning/phases/65-minifilter-adr-macos-live-re-validation/.continue-here.md`.
 
-**Stopped at:** Phase 65 mid-execution. Plans 63-01..03, 64-01..05, 65-01/03/04 have SUMMARY files; **65-02-SUMMARY.md is NOT written** — gated on the D-11c HARD gate (a green `macos-latest` CI SHA). Phase 65 deliverables are code-complete and pushed (HEAD `6fc28f9e`). The active thread is a cross-target CI rehabilitation (see `.planning/phases/65-.../.continue-here.md`).
+**Stopped at:** Phase 65 mid-execution. The D-11c HARD gate (green `macos-latest` Test+Clippy SHA) is DOWN TO ONE fast-failing test. HEAD `e72d6438`, all pushed. **65-02-SUMMARY.md still NOT written** (gated on the green SHA).
 
-**Live CI status (run 27257463149, `6fc28f9e`):** GREEN = Rustfmt, Clippy (ubuntu+macos), Build (ubuntu+macos), Windows Smoke/Packaging, FFI Header. RED = **Test (macos-latest)** ← D-11c blocker; plus pre-existing/separately-scoped: Windows Build/Integration/Regression/Security, Integration Tests, Cargo Audit.
+**Progress this session (HEAD `e72d6438`):**
+- **Cargo Audit → GREEN** (`4aaa0508`: sign-fixture sigstore `0.7→0.8`, drops vulnerable `rustls-webpki 0.102.8`; quick task `20260610-cargo-audit-rustls-webpki`).
+- **macOS Build → GREEN**; **macOS Clippy → GREEN**.
+- **macOS Test: 5 failure classes fixed** (audit_attestation `$PWD` harness bug `d21663a6`; builtin_profile_load stale-opencode `28219919`; profile_drafts symlink→manifest `c80e8664`; resl_nix `--allow-fs-*`→`--read` `924354f4`; resl_nix bounding `e72d6438`). `--no-fail-fast` enumeration aid added (`391d41ac`) then reverted (`9fb8ae06`).
+- **macOS Test now FAILS FAST** (the 30-min hang is GONE) on ONE bounded resl test — exact failure not yet read (cancelling runs drops logs; see handoff gotcha #1). Watcher `bovnybrkn` is waiting for run `27300030066` to complete naturally to surface it.
+- **Azure spike-VM latency gate: VM fully prepped** (instrumented driver pushed/built/signed/loaded; the missing-instrumentation gap closed). Capture itself is Bastion-interactive (session-0 limits). Recorded in `65-SC1-latency-evidence.md`.
 
-**Active blocker — macOS Test leg:** 4 integration tests in `crates/nono-cli/tests/audit_attestation.rs` fail (panic at line 30 `assert_success`). Root cause confirmed: the spawned `nono` exits 1 with `Sandbox initialization failed: Refusing to grant '/Users/runner/work/nono/nono' because it overlaps protected nono state root '/Users/runner/work/nono'`. The GHA checkout path `/Users/runner/work/nono/nono` (repo literally named `nono`, nested under a `nono` workdir) appears to trip the protected-state-root overlap check, picking the OUTER `/Users/runner/work/nono` as the state root. Pre-existing infra/env breakage, NOT a rehab regression.
-
-**Resume options:** (A) fix the macOS Test leg → land D-11c; (B) resolve the Cargo Audit decision (sign-fixture rustls-webpki — bump vs documented-ignore, needs Oscar's security call); (C) the 3 Phase-65 human/infra gates (VM latency, macOS-host UAT) are Oscar's to run.
+**Active blocker:** the ONE remaining macOS resl failure — likely a genuine never-validated Phase-37 enforcement gap (macOS `--timeout` watchdog / `RLIMIT_NPROC` not firing on the runner). If so, the `#[ignore]`-pending-gate-65A vs fix decision is next (Oscar). See handoff.
 
 **Open questions still pending:**
 
-- HVCI/VM host state on Win11 26200 — check `msinfo32` (Phase 64 Track A VM gate)
-- Which EDR product is available for Phase 66 (MDE trial needs an M365 tenant ~1 day; Sysmon-only fallback)
-- macOS host availability for Phase 65 live `sandbox_init()` re-validation (gate-65-A, still OPEN)
-- `STATE.md` drift: the "v2.10 Phase Summary" table + Current-Position progress bar still show all phases "Not started / 0%" — stale; phases 63+64 are complete, 65 in progress (frontmatter `completed_phases: 2` is correct).
+- The exact macOS resl failure (read from a naturally-completed run — do NOT cancel).
+- macOS host availability for gate-65-A live `sandbox_init()` re-validation (still OPEN; also the resl enforcement tests' real validation venue).
+- Azure VM Bastion latency capture (VM prepped; Oscar's interactive step).
+- Which EDR product for Phase 66 (MDE trial ~1 day; Sysmon fallback).
+- `STATE.md` drift: the "v2.10 Phase Summary" table + progress bar still show "Not started / 0%" — stale; 63+64 complete, 65 in progress (frontmatter `completed_phases: 2` is correct).
