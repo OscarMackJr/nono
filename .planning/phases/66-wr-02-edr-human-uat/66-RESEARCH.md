@@ -649,7 +649,9 @@ None — no new automated test files are needed. The entire deliverable is the `
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three are operationally addressed in `66-01-PLAN.md`'s assertion methodology (baseline-stamp items a/e capture the TESTSIGNING + audit-policy state; A-P1-05's dual-outcome framing handles the Defender behavioral-alert uncertainty). None gates code — the UAT resolves them empirically.
 
 1. **Is Audit Process Creation enabled on `nono-fltmgr-vm`?**
    - What we know: Azure VMs do not always have it enabled by default.
