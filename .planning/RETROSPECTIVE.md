@@ -224,6 +224,39 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 
 ---
 
+## Milestone: v2.10 — Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
+
+**Shipped:** 2026-06-11 | **Phases:** 4 (63-66) | **Plans:** 13 | **Tag:** `v2.10` (no new crate release)
+
+### What Was Built
+- **Gap 6b minifilter feasibility spike (DRV-01/02/03)** — a test-signed Windows FltMgr minifilter (`drivers/nono-fltmgr/`, out-of-workspace C/C++ WDK) that live-proves a kernel→user→kernel `IRP_MJ_CREATE` deny over `\NonoPolicyPort` on a Secure-Boot-OFF/HVCI-OFF Azure VM.
+- **Go/no-go ADR (DRV-04), Accepted: No-go/Conditional-go** — with measured `FLT_PREOP_PENDING` latency (SPAN medians 0.553/0.569 ms, ~900× under the fail-open envelope); `DRV-PROD-01` deferred to v2.11/v3.0.
+- **WR-02 CLOSED (EDR-01/02)** — the EDR HUMAN-UAT deferred since v2.1, executed live under Sysmon+Defender EDR-proxy (two passes, no-exclusion → with-exclusion).
+- **macOS Seatbelt parity through `v0.61.2` (MACOS-01/02/03)** — DIVERGENCE-LEDGER + P1 ordering/CWD cherry-picks + gate-65-A live re-validation PASS + macOS CI green HARD gate.
+
+### What Worked
+- **Host-availability gates were planned up-front, not discovered.** The roadmap pre-declared the three host gates (WDK VM, real macOS host, EDR-instrumented Windows host) so the autonomous phases (groundwork, audit, ADR drafting) ran to completion and only the genuinely human/host-bound steps blocked — keeping the spike productive across context exhaustions.
+- **The macOS CI HARD gate caught a real enforcement gap.** Treating green `macos-latest` as close-blocking (the v2.9 cross-target-drift lesson applied) surfaced that macOS `--timeout`/`RLIMIT_NPROC` doesn't fire on a real host — a never-validated Phase-37 claim, now filed as a defect instead of silently shipping.
+- **Evidence-derived verdict, not pre-committed.** DRV-04 weighed five inputs (latency, cert cost, maintenance, spike-defect signal, security-gap-closed) against the existing model and landed No-go/Conditional-go honestly — the spike's job was to de-risk a decision, and it did.
+
+### What Was Inefficient
+- **CI-log availability fought the macOS-failure diagnosis.** GitHub only serves a job log after the *whole* run completes, so cancelling mid-run to "check faster" repeatedly destroyed the log (BlobNotFound), burning cycles — the fix was to let the slow ubuntu long-pole finish naturally. (Durable gotcha captured in the Phase 65 checkpoint.)
+- **A runner-death masqueraded as a clean test failure.** The host-dependent resl test spawned processes unbounded on the GH macOS runner (no RLIMIT enforcement) → starved the runner → "lost communication," which read as an opaque failure until the check-run annotations API revealed the cause. Env-gating the test off CI (`NONO_RESL_HOST_VALIDATED`) was the right move, not a code change to `macos.rs`.
+- **Interactive-only capture steps (Bastion/DebugView) don't fit `az run-command`.** The latency capture was inherently session-0-hostile; recognizing this earlier would have saved a couple of empty-log attempts.
+
+### Patterns Established
+- **Spike milestone shape:** autonomous groundwork/audit/ADR-draft phases + explicitly host-gated validation phases, with the go/no-go ADR shipped `Proposed` and flipped to `Accepted` only on human D-06 sign-off (decision stays the human's).
+- **EDR validation as EDR-proxy:** when cloud-EDR (MDE) is unavailable, Sysmon + Defender AV is a representative proxy sufficient to close the boundary claims — with the "validated under EDR-proxy, not cloud-EDR" caveat recorded explicitly rather than over-claiming.
+
+### Key Lessons
+- **A favorable measurement doesn't flip a No-go.** Latency landed ~900× under envelope, but it was never the limiting factor — the deciding inputs were recurring cert/maintenance cost and the fragility signal (18 spike defects). Measuring the non-binding input is still worth it to *retire* it as an objection.
+- **"Test passes on CI" can hide "enforcement never validated."** The macOS resl tests had been green for milestones by virtue of being host-blocked/unexercised; forcing real-host validation (gate-65-A) is what converted an assumed-true requirement into a found defect.
+
+### Cost Observations
+- Not instrumented. Notable: most wall-clock went to host-bound work (VM driver build/sign/load, macOS CI rehab, EDR host prep) and CI-log forensics, not planning/archival mechanics. Several context exhaustions across the milestone; the per-phase `.continue-here` checkpoints carried state across them effectively.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -235,6 +268,8 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 | v2.1 Resource Limits + AIPC + Cleanup | 7 | 25 | Added decimal-phase same-milestone gap closure (Phase 18.1); established `examples/<probe>.rs` harness pattern; mechanical D-21 invariance guards |
 | v2.2 Windows/macOS Parity Sweep | 3 | 9 | Cherry-pick-per-commit chain with `Upstream-commit:` trailer scaled to ~33k LOC; CONTEXT-STOP triggers as circuit-breaker (22-05 split); D-20 manual-replay fallback when D-02 thresholds breach; twin-script drift inventory tooling; discriminant-only fallback when full extraction is feature-gated |
 | v2.5 Backlog Drain + UPST5 | 4 | 24 | `split` as fourth audit-cluster disposition (DIVERGENCE-LEDGER amendment when cluster isolation falsifies mid-execution); cross-target clippy verification promoted from memory to CLAUDE.md MUST/NEVER enforcement rule; `## Empirical cross-check` subsection in DIVERGENCE-LEDGER; first UPST cycle where `windows-touch:yes` column fires; worktree-mode `human_needed` close-status convention matures across 3 of 4 phases |
+| v2.8 UPST7 + v2.9 Sandbox-the-Tools | 10 | ~38 | Interleaved dual-milestone develop/ship/archive; fork release-tag leapfrog rule (crate version past upstream's highest); release-vs-CI build distinction as triage tool; `gh release list` (not tag-existence) as the "shipped" signal |
+| v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork/audit/ADR-draft + explicitly host-gated validation); go/no-go ADR ships `Proposed`, human D-06 flip to `Accepted`; macOS CI green as HARD close gate surfaces a real enforcement defect; EDR-proxy (Sysmon+Defender) as MDE stand-in with explicit caveat; per-phase `.continue-here` checkpoints carry state across context exhaustions |
 
 ### Cumulative Quality
 

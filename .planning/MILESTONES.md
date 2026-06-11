@@ -1,5 +1,29 @@
 # Milestones
 
+## v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity (Shipped: 2026-06-11)
+
+**Phases completed:** 4 phases (63, 64, 65, 66), 13 plans.
+
+**Tag:** `v2.10` (milestone marker), origin `OscarMackJr/nono`. No new crate release — v2.10 is a feasibility spike + HUMAN-UAT + macOS-parity cycle with no shipped runtime change (the production driver and MSI are intentionally untouched).
+
+**Delivered:** A de-risking feasibility verdict for a Windows kernel-mode filesystem minifilter (Gap 6b), execution of the long-deferred WR-02 EDR HUMAN-UAT, and macOS Seatbelt upstream parity through `v0.61.2` re-validated live — closing the three heaviest standing deferrals without shipping a production driver.
+
+**Key accomplishments:**
+
+- **Phase 63/64 — Minifilter feasibility spike (DRV-01/02/03)** — built and live-proved a test-signed Windows FltMgr minifilter on a Secure-Boot-OFF/HVCI-OFF Azure VM: `IRP_MJ_CREATE` pre-op pends a watched create, round-trips path+PID to a Rust user-mode policy client over `\NonoPolicyPort` (`FltSendMessage`, finite timeout), and enforces `STATUS_ACCESS_DENIED` — a real kernel→user→kernel deny. Out-of-workspace C/C++ WDK MSBuild project (`drivers/nono-fltmgr/`); `windows-drivers-rs` ruled out. Existing `nono-wfp-driver.sys` placeholder + MSI untouched.
+- **Phase 65 — Go/no-go ADR (DRV-04), Accepted** — `adr-65-minifilter-go-no-go.md` records the verdict with measured `FLT_PREOP_PENDING` latency (SPAN-A/B medians 0.553/0.569 ms, ~900× under the 500 ms fail-open envelope). Verdict: **No-go / Conditional-go** — WFP+AppContainer/Low-IL already delivers kernel-enforced isolation, so a production minifilter is an incremental gain at high recurring cert/maintenance cost + a strong fragility signal (18 spike defects). `DRV-PROD-01` deferred to v2.11/v3.0.
+- **Phase 65 — macOS Seatbelt parity (MACOS-01/02/03)** — DIVERGENCE-LEDGER audit of upstream `v0.57.0..v0.61.2` (macOS-scoped) + P1 security/correctness cherry-picks (`8f84d454` platform-rules-after-user-write-allows ordering; `362ada22`/`8f1b0b74` `$PWD`/symlink CWD capture) with ordering asserted by unit tests; **gate-65-A Seatbelt re-validation PASS on a real macOS host** (A1–A4).
+- **Phase 65 — macOS CI HARD close gate** — green `macos-latest` Test+Clippy SHA `d9144663` (D-11c), reached by env-gating the two host-dependent resl enforcement tests off the CI runner (where macOS `--timeout`/`RLIMIT_NPROC` does not fire and was killing the runner) with `macos.rs` unmodified. Closes the v2.9 cfg-gated-compile-error class that broke two release tags.
+- **Phase 66 — WR-02 CLOSED (EDR-01/02)** — long-deferred EDR HUMAN-UAT executed live on `nono-fltmgr-vm` (Sysmon v15.20 + Defender AV 4.18) in two passes (no-exclusion → with-exclusion): Low-IL/AppContainer containment survives AV exclusions; T1134.002 token-downgrade at the broker chain ran without tripping Defender; finding — the confined child is invisible to Sysmon telemetry. Caveat: validated under a representative **EDR-proxy**, not cloud-EDR (MDE re-run is an EDR-agnostic follow-up).
+
+**A5 finding (filed as v2.11 defect):** macOS `--timeout`/`RLIMIT_NPROC` resl enforcement does NOT fire on a real host (REQ-RESL-NIX-03) — separate from the Seatbelt/MACOS-03 PASS.
+
+**Note:** No `/gsd:audit-milestone` was run (consistent with v2.7/2.8/2.9); close evidence is per-phase (all SUMMARYs present, gate-65-A PASS, WR-02 CLOSED, ADR Accepted `563df1ed`). Repo stays PUBLIC pending Microsoft minifilter-altitude approval.
+
+**Known deferred items at close:** 65 audit-open items acknowledged 2026-06-11 (see STATE.md § Deferred Items → v2.10 close). 3 genuinely new → v2.11 carry-forwards: untrusted-POC-cert broker on clean host, MSI VC++ prereq, macOS resl enforcement defect. The remaining 62 are documented historical stragglers, dormant seeds, and prior-close UAT/verification bookkeeping.
+
+---
+
 ## v2.9 Windows Sandbox-the-Tools — Confined Coding Loop (Shipped: 2026-06-06)
 
 **Phases completed:** 3 phases (60, 61, 62), 18 plans.

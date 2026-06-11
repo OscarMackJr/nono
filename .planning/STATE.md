@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
-status: completed
+status: Awaiting next milestone
 stopped_at: context exhaustion at 75% (2026-06-11)
-last_updated: "2026-06-11T21:35:40.164Z"
-last_activity: 2026-06-11 -- Phase 66 WR-02 EDR HUMAN-UAT executed + CLOSED (commit e5f20062)
+last_updated: "2026-06-11T21:51:33.975Z"
+last_activity: 2026-06-11 — Milestone v2.10 completed and archived
 progress:
   total_phases: 4
   completed_phases: 4
@@ -22,16 +22,14 @@ See: `.planning/PROJECT.md` (v2.10 milestone started 2026-06-06; v2.8 + v2.9 shi
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 65 — minifilter-adr-macos-live-re-validation
+**Current Focus:** v2.10 shipped & archived (2026-06-11). Awaiting next milestone — start with `/gsd:new-milestone`.
 
 ## Current Position
 
-Phase: 66 (wr-02-edr-human-uat) — ✅ COMPLETE (WR-02 CLOSED 2026-06-11). Last open phase = 65 (host gates).
-Plan: 66-01 ✅ DONE (UAT executed live + verdict + SUMMARY; EDR-01/02 satisfied)
-Status: v2.10 nearly done. **Phase 66 COMPLETE.** Only Phase 65's host/human gates remain: gate-65-A live macOS re-validation (A1–A5) + go/no-go ADR Oscar sign-off. Phase 65 latency + D-11c already done.
-Last activity: 2026-06-11 -- Phase 66 WR-02 EDR HUMAN-UAT executed + CLOSED (commit e5f20062)
-
-Progress: █████████░ 92% (11/12 plans; phases 63 + 64 + 66 complete; 65 = host-gated only)
+Phase: Milestone v2.10 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-11 — Milestone v2.10 completed and archived
 
 ### v2.10 Phase Summary (active)
 
@@ -39,7 +37,7 @@ Progress: █████████░ 92% (11/12 plans; phases 63 + 64 + 66 c
 |-------|------|--------------|--------|
 | 63 | Minifilter spike groundwork (WDK/VM/design doc) + macOS DIVERGENCE-LEDGER audit | DRV-03 (partial), MACOS-01 | ✅ Complete |
 | 64 | Minifilter spike implementation (intercept + deny + IPC roundtrip on test VM) + macOS P1 cherry-pick wave | DRV-01, DRV-02, DRV-03 (complete), MACOS-02 | ✅ Complete |
-| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | ✅ Complete — D-11c green + latency captured + gate-65-A Seatbelt PASS; ADR `Proposed` (sign-off pending); resl A5 macOS-enforcement defect filed |
+| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | ✅ Complete — D-11c green + latency captured + gate-65-A Seatbelt PASS; **ADR Accepted** `563df1ed` (No-go/Conditional-go); resl A5 macOS-enforcement defect filed → v2.11 |
 | 66 | WR-02 EDR HUMAN-UAT (no new code; real EDR host required) | EDR-01, EDR-02 | ✅ Complete — **WR-02 CLOSED** (validated under Sysmon+Defender EDR-proxy) |
 
 ### Host-availability gates
@@ -110,6 +108,18 @@ Progress: █████████░ 92% (11/12 plans; phases 63 + 64 + 66 c
 - **Zero-source-edits invariant honored:** `git diff plan_base_sha(eb8c9b82)..HEAD -- crates/ bindings/ scripts/ Makefile` = 0. Drift re-run idempotent (exit 0, 40 commits). DCO sign-off on all commits.
 
 ## Deferred Items
+
+### v2.10 close (acknowledged 2026-06-11)
+
+Pre-close `audit-open` reported **65 open items**; user chose "Acknowledge all & proceed". Breakdown: **35** `missing`/`unknown` quick-task slugs (pre-v2.5 stragglers, carried since prior closes) + **17** UAT gaps (phases 35/36/37/41/43/44/45/48/49/50/55/56/57/60/62/65/66) + **5** verification gaps (phases 41/44/49/56/57) + **5** dormant seeds (001-silent-enterprise-deployment, 002-network-egress-hardening, 003-siem-edr-telemetry, 004-multi-engine-pluggability, 005-zt-infra-attestation) + **3** new v2.11 carry-forward todos. The 3 todos are the only genuinely new items and are scoped to v2.11:
+
+| Todo | Headline |
+|------|----------|
+| `20260611-poc-cert-broker-clean-host` | v0.62.2 signed with untrusted POC cert → broker non-functional out-of-box on a clean Windows host (most consequential for distribution) |
+| `20260611-msi-vcredist-prereq` | MSI doesn't bundle/declare VC++ x64 runtime → 1603 on a clean host |
+| `20260611-macos-resl-enforcement-broken` | macOS `--timeout`/`RLIMIT_NPROC` enforcement doesn't fire on a real host (REQ-RESL-NIX-03; the Phase 65 gate-65-A A5 finding) |
+
+The Phase 65/66 UAT-gap rows reflect the macOS-resl A5 finding (filed as the todo above) and the EDR-proxy-vs-cloud-EDR caveat (WR-02 closed "under EDR-proxy", MDE re-run is an EDR-agnostic follow-up) — both already characterized, neither an undocumented regression.
 
 ### v2.9 + v2.8 close (acknowledged 2026-06-06)
 
@@ -190,3 +200,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 - **gate-65-A** live `sandbox_init()` re-validation on a real macOS host (`65-HUMAN-UAT.md`, 5 assertions incl. the gated resl enforcement tests via `NONO_RESL_HOST_VALIDATED=1`). **IN PROGRESS** on `oscarmack@MacBookPro` (nono 0.62.2 dev build). Note: A1's `--dry-run` does NOT dump the Seatbelt sexp — use `nono run -vv --profile claude-code -- /usr/bin/true 2>&1 | grep -A40 "Generated Seatbelt profile"` (debug log, macos.rs:810); A4 `make test-lib` is the programmatic ordering proof. **65-HUMAN-UAT.md A1 command still needs fixing.** Close-blocking for the phase.
 - **Go/no-go ADR sign-off** — `adr-65-minifilter-go-no-go.md` is `Status: Proposed`; latency precondition now met; lean No-go/Conditional-go recommendation awaits Oscar's flip to Accepted (D-06, not auto-flipped).
 - **Phase 66 EDR UAT — KICKED OFF 2026-06-11.** **EDR decision: Sysmon + built-in Defender AV** (MDE not available — only the NonoTestSign driver cert on hand; MDE re-run is an EDR-agnostic follow-up). **Host = Azure VM `nono-fltmgr-vm`, READY:** signed v0.62.2 **machine** MSI validated (Authenticode Valid — required: the broker trust gate only spawns from a signed Program-Files install, so EDR-02(b) is only exercisable here); Defender AV 4.18.26050.15 **Normal** mode, EICAR quarantine proven (`ActionSuccess=True`); Sysmon v15.20 schema 4.91 running w/ SwiftOnSecurity config, events flowing. ≥24h bake satisfied (Defender live for days). UAT command (both boundaries): `nono run --profile claude-code -- cmd /c whoami /groups` (claude-code sets `windows_low_il_broker:true` → broker `create_low_integrity_primary_token` + `CreateProcessAsUserW(low_il_token)`). **Pending:** `bcdedit /set testsigning off` + reboot for a clean baseline (or record the posture); the **`66-HUMAN-UAT.md` checklist itself** (≥10 assertions, 2 passes no-exclusion→with-exclusion, EDR-02 MIC-boundary + T1134.002 alert-vs-quarantine) — needs `/gsd:plan-phase 66` (detection-method research). **Caveat for close-out:** Sysmon+Defender = representative EDR-proxy, not cloud-EDR → WR-02 closes "validated under EDR-proxy," not "under MDE."
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
