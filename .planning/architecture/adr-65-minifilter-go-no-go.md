@@ -1,7 +1,7 @@
 # Minifilter Spike Go/No-Go (Gap 6b FltMgr feasibility verdict)
 
-**Status:** Proposed
-<!-- D-06: ships Proposed; flip only after Oscar's human review (see the D-06 gate under §6) -->
+**Status:** Accepted
+<!-- D-06: shipped Proposed; flipped to Accepted 2026-06-11 after Oscar's human review (latency input confirmed populated per §2; see the D-06 gate under §6). Confirms the lean No-go / Conditional-go verdict: DRV-PROD-01 deferred to v2.11/v3.0. -->
 **Date:** 2026-06-09
 **Phase:** 65 (minifilter-adr-macos-live-re-validation)
 **Decision IDs:** D-01..D-09 (Phase 65 CONTEXT)
