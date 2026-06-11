@@ -1,19 +1,18 @@
 # Minifilter Spike — Latency Measurement Appendix (Phase 65 DRV-04)
 
-**Captured:** 2026-06-09 (tables PENDING the on-VM run — see status below)
+**Captured:** 2026-06-11 (on-VM run complete — see tables below)
 **VM:** `nono-fltmgr-vm` (rg `rg-nono-fltmgr-spike`, `20.51.161.15`, Win11 26200)
 **Altitude:** 365678 (FSFilter Activity-Monitor band, non-colliding)
-**QPC frequency (`g_PerfFreq`):** _<ticks/sec — fill from the unload dump>_
+**QPC frequency (`g_PerfFreq`):** 10000000 (10 MHz)
 **Driver build:** instrumented `nono-fltmgr.c` (commit `af7cf3c5`); `.sys` is VM-local
 and never committed (T-63-05).
 
-> **Status — PENDING on-VM run.** This appendix is the presentation layer (milliseconds)
-> of the raw integer-microsecond data captured in
-> [`65-SC1-latency-evidence.md`](../phases/65-minifilter-adr-macos-live-re-validation/65-SC1-latency-evidence.md).
-> That evidence file is the source of truth; its gate is OPEN until the instrumented
-> `.sys` is rebuilt and the deny harness re-run on the spike VM (plan 65-01 Task 2,
-> `az`-driven, blocking-human). No values are filled here without real `DbgPrint`
-> output (fail-secure — never fabricate measurement data).
+> **Status — ✅ CAPTURED 2026-06-11 (gate PASS).** This appendix is the presentation
+> layer (milliseconds) of the raw integer-microsecond data captured in
+> [`65-SC1-latency-evidence.md`](../phases/65-minifilter-adr-macos-live-re-validation/65-SC1-latency-evidence.md)
+> — the source of truth. Captured on the spike VM after 100 denied creates (`denied
+> 100 / 100`), instrumented `.sys` dumped via DebugView at `fltmc unload`. Values below
+> are converted from the literal `DbgPrint` lines, not fabricated.
 
 This appendix exists so the core ADR
 ([`adr-65-minifilter-go-no-go.md`](adr-65-minifilter-go-no-go.md)) stays concise and
@@ -31,13 +30,13 @@ references the raw tables here rather than inlining them (D-08).
 
 | Iterations | Min (ms) | Median (ms) | p99 (ms) |
 |-----------|----------|-------------|----------|
-| _PENDING_ | _PENDING_ | _PENDING_  | _PENDING_ |
+| 100 | 0.387 | 0.553 | 1.460 |
 
 ## SPAN-B — Full pre-op → IRP completion (`STATUS_ACCESS_DENIED`), D-02b
 
 | Iterations | Min (ms) | Median (ms) | p99 (ms) |
 |-----------|----------|-------------|----------|
-| _PENDING_ | _PENDING_ | _PENDING_  | _PENDING_ |
+| 100 | 0.486 | 0.569 | 1.478 |
 
 > Values are converted from the in-driver integer-microsecond measurements
 > (`us = ticks * 1000000 / g_PerfFreq`) to milliseconds for presentation here.

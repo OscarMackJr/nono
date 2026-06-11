@@ -1,6 +1,6 @@
 # 65-01 SUMMARY — Minifilter latency instrumentation (DRV-04)
 
-**Status:** Task 1 COMPLETE; Task 2 (on-VM measurement) **GATE OPEN / blocking-human**.
+**Status:** Task 1 COMPLETE; Task 2 (on-VM measurement) ✅ **COMPLETE 2026-06-11** — latency captured on the spike VM (100 denied creates; SPAN-A median 0.553 ms / SPAN-B median 0.569 ms; both ~900× under the 500 ms fail-open envelope). Gate **PASS**; appendix + go/no-go ADR latency cells populated.
 
 ## What was built
 

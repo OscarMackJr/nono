@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
 status: executing
-last_updated: "2026-06-11T00:00:00.000Z"
-last_activity: 2026-06-11 -- D-11c CI HARD gate GREEN (macos-latest Test+Clippy success @ d9144663, PR #6); 65-02 closed via NONO_RESL_HOST_VALIDATED env-gate
+last_updated: "2026-06-11T13:00:00.000Z"
+last_activity: 2026-06-11 -- 65-02 D-11c CI gate GREEN (env-gate) + 65-01 latency CAPTURED on VM (SPAN medians 0.553/0.569 ms, ~900x under envelope); evidence+ADR populated
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State: nono — v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
@@ -182,8 +182,10 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 **Stopped at:** Phase 65 — plan 65-02 CLOSED; D-11c gate cleared. **Not yet done:** merge PR #6 into fork `main`; push `main` (close-out doc commit). Local `main` is 3 planning commits + the close-out ahead of `origin/main` (`e72d6438`), all `.planning/`-only and public-safe.
 
-**Remaining Phase 65 (all host/human gates — Oscar):**
+**Latency capture (65-01 Task 2) ✅ DONE 2026-06-11:** on `nono-fltmgr-vm`, 100 denied creates (`denied 100/100`), instrumented `.sys` dumped via DebugView at `fltmc unload`. **SPAN-A** median 0.553 ms (min 0.387, p99 1.460); **SPAN-B** median 0.569 ms (min 0.486, p99 1.478); QPC 10 MHz. Ordering A<B at every percentile; both ~900× under the 500 ms fail-open envelope → favorable. Recorded in `65-SC1-latency-evidence.md` (PASS), `adr-65-latency-appendix.md`, and the go/no-go ADR latency section. DebugView gotcha: kernel DbgPrint needs Capture Kernel + Enable Verbose Kernel Output *before* unload; the `0x80000000` GENERIC_READ literal must be passed as decimal `2147483648` in PowerShell P/Invoke.
 
-- **gate-65-A** live `sandbox_init()` re-validation on a real macOS host (`65-HUMAN-UAT.md`, 5 assertions incl. the gated resl enforcement tests via `NONO_RESL_HOST_VALIDATED=1`). Close-blocking for the phase.
-- **Azure VM Bastion latency capture** — VM `nono-fltmgr-vm` prepped (instrumented driver built/signed/loaded); SPAN capture is interactive-Bastion (`64-SC1-VM-RUNBOOK.md`).
+**Remaining Phase 65 (host/human gates — Oscar):**
+
+- **gate-65-A** live `sandbox_init()` re-validation on a real macOS host (`65-HUMAN-UAT.md`, 5 assertions incl. the gated resl enforcement tests via `NONO_RESL_HOST_VALIDATED=1`). **IN PROGRESS** on `oscarmack@MacBookPro` (nono 0.62.2 dev build). Note: A1's `--dry-run` does NOT dump the Seatbelt sexp — use `nono run -vv --profile claude-code -- /usr/bin/true 2>&1 | grep -A40 "Generated Seatbelt profile"` (debug log, macos.rs:810); A4 `make test-lib` is the programmatic ordering proof. **65-HUMAN-UAT.md A1 command still needs fixing.** Close-blocking for the phase.
+- **Go/no-go ADR sign-off** — `adr-65-minifilter-go-no-go.md` is `Status: Proposed`; latency precondition now met; lean No-go/Conditional-go recommendation awaits Oscar's flip to Accepted (D-06, not auto-flipped).
 - **Phase 66 EDR product choice** (MDE trial ~1 day vs Sysmon fallback).

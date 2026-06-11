@@ -57,11 +57,13 @@ instrumentation (commit `af7cf3c5`) measuring two spans over ~100 denied creates
 SPAN-A (kernel-IPC round-trip) and SPAN-B (full pre-op → IRP completion). Raw min/median/p99
 are in [`adr-65-latency-appendix.md`](adr-65-latency-appendix.md).
 
-> **Latency input status: PENDING the on-VM run** (plan 65-01 Task 2, blocking-human).
-> The measured median is **one input among five** — DRV-04 deliberately does NOT define
-> a pass/fail latency threshold (Open Question 3). The expectation is both medians sit
-> well under the 500 ms fail-open envelope; the verdict's latency column is confirmed
-> once the appendix is populated.
+> **Latency input status: ✅ CAPTURED 2026-06-11 (plan 65-01 Task 2).** Measured on the
+> spike VM over 100 denied creates: **SPAN-A median 0.553 ms** (p99 1.460 ms), **SPAN-B
+> median 0.569 ms** (p99 1.478 ms), QPC freq 10 MHz. The measured median is **one input
+> among five** — DRV-04 deliberately does NOT define a pass/fail latency threshold (Open
+> Question 3). Both medians sit **~900× under** the 500 ms fail-open envelope and the
+> SPAN-A < SPAN-B ordering holds at every percentile — the verdict's latency column is
+> now **confirmed** (favorable). Raw tables: appendix.
 
 ## 3. `windows-drivers-rs` not viable (C/C++ driver decision)
 
@@ -100,8 +102,10 @@ altitude.
 | **No-go** (WFP+AppContainer suffices) | Accepts the current model; no new kernel-create deny. The existing model is already kernel-enforced and structurally sound | **None** | **None** (no new kernel surface) | n/a | **Lean Yes** |
 | **Conditional-go** (gated) | Defer Go until a **specific** capability gap is identified that AppContainer/WFP cannot express (e.g. content-level or per-handle file policy), AND latency lands well under envelope | Deferred | Deferred | Mitigated by re-scoping to a hardened multi-slot design | **Viable fallback** |
 
-> Latency (the fifth input) is presented in the appendix and is PENDING the VM run; it
-> is weighed as one input, not a gate. No pass/fail latency threshold is invented (D-05).
+> Latency (the fifth input) is now CAPTURED (2026-06-11): SPAN-A/B medians 0.553/0.569 ms,
+> ~900× under the 500 ms fail-open envelope — **favorable**, and it does not change the
+> verdict (latency was never the limiting factor). Weighed as one input, not a gate; no
+> pass/fail latency threshold is invented (D-05).
 
 ### Go/No-Go Recommendation
 

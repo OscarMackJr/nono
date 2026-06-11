@@ -1,10 +1,10 @@
 # Phase 65 — SC1 Latency Evidence (DRV-04, D-01..D-04)
 
-**Status:** ⛔ **GATE OPEN / PENDING VM RUN** — staged 2026-06-09. This is the
-blocking-human gate for plan 65-01 Task 2. The instrumentation (Task 1) is committed
-(`af7cf3c5`); this file captures the on-VM measured latency once the deny harness is
-re-run against the instrumented `.sys`. **No values below may be filled without real
-on-VM `DbgPrint` output** (Pitfall 4 / fail-secure: never fabricate measurement data).
+**Status:** ✅ **CAPTURED / GATE PASS** — measured on-VM 2026-06-11. Real `DbgPrint`
+unload-dump output from the instrumented `.sys` (Task 1 instrumentation `af7cf3c5`),
+captured via DebugView in an interactive Bastion desktop after 100 denied creates of
+the watched target (deny harness reported `denied 100 / 100`). Values below are the
+literal unload-dump lines — not fabricated.
 
 **VM:** `nono-fltmgr-vm` (rg `rg-nono-fltmgr-spike`, IP `20.51.161.15`), Windows 11
 26200, Standard security type, Secure Boot OFF, TESTSIGNING ON, HVCI OFF.
@@ -12,7 +12,7 @@ on-VM `DbgPrint` output** (Pitfall 4 / fail-secure: never fabricate measurement 
 **Test-sign cert:** `CN=NonoTestSign`, thumbprint
 `C40C9572077EDBCEFE7BE51779D29F4BC0C074A7` (reuse if present; recreate via
 `New-SelfSignedCertificate` per runbook §10b if the VM was rebuilt).
-**QPC frequency (g_PerfFreq):** _<fill from the unload dump line>_
+**QPC frequency (g_PerfFreq):** 10000000 (10 MHz; reported in both SPAN dump lines)
 
 ---
 
@@ -85,35 +85,38 @@ az vm run-command invoke -g rg-nono-fltmgr-spike -n nono-fltmgr-vm `
 
 | Iterations | Min (µs) | Median (µs) | p99 (µs) |
 |-----------|----------|-------------|----------|
-| _PENDING_ | _PENDING_ | _PENDING_  | _PENDING_ |
+| 100 | 387 | 553 | 1460 |
 
 Raw `DbgPrint` output:
 
 ```
-<paste the SPAN-A unload-dump line here>
+[nono-fltmgr] SPAN-A kernel-IPC round-trip: iterations=100 min=387 us median=553 us p99=1460 us (freq=10000000)
 ```
 
 ## SPAN-B — Full pre-op → IRP completion (STATUS_ACCESS_DENIED), D-02b
 
 | Iterations | Min (µs) | Median (µs) | p99 (µs) |
 |-----------|----------|-------------|----------|
-| _PENDING_ | _PENDING_ | _PENDING_  | _PENDING_ |
+| 100 | 486 | 569 | 1478 |
 
 Raw `DbgPrint` output:
 
 ```
-<paste the SPAN-B unload-dump line here>
+[nono-fltmgr] SPAN-B full pre-op->completion: iterations=100 min=486 us median=569 us p99=1478 us (freq=10000000)
 ```
 
 ---
 
 ## Acceptance gate (plan 65-01 Task 2)
 
-- [ ] SPAN-A + SPAN-B each report iterations (~100), min, median, p99 in µs + QPC freq + VM context
-- [ ] `git ls-files drivers/nono-fltmgr/*.sys` is empty (the `.sys` is VM-local — T-63-05)
-- [ ] SPAN-A median < SPAN-B median; both ≪ 500 000 µs (the 500 ms fail-open envelope)
+- [x] SPAN-A + SPAN-B each report iterations (~100), min, median, p99 in µs + QPC freq + VM context — 100 iters each, freq 10 MHz, VM `nono-fltmgr-vm` @ altitude 365678
+- [x] `git ls-files drivers/nono-fltmgr/*.sys` is empty (the `.sys` is VM-local — T-63-05) — verified empty 2026-06-11
+- [x] SPAN-A median < SPAN-B median; both ≪ 500 000 µs (the 500 ms fail-open envelope) — 553 < 569 µs (ordered at every percentile: min 387<486, p99 1460<1478); both ~900× under the 500 ms envelope
 
-**FINAL:** _PASS / FAIL — fill after the VM run with the median+p99 for both spans._
+**FINAL:** ✅ **PASS** (measured 2026-06-11). SPAN-A median 553 µs / p99 1460 µs; SPAN-B median
+569 µs / p99 1478 µs; QPC freq 10 MHz; 100 iterations each. Ordering SPAN-A < SPAN-B holds at
+min/median/p99; both medians ≈ 0.55 ms ≪ the 500 ms `FltSendMessage` fail-open envelope (T-63-02).
+Feeds plan 65-03 `adr-65-latency-appendix.md`.
 
 > Gate resume-signal (plan 65-01 Task 2): type **"approved"** with the SPAN-A and
 > SPAN-B median+p99 numbers, or describe the VM/build issue. This evidence file is the

@@ -56,7 +56,7 @@ Separate initiative from UPST7 (builds on merged PR #4). The v0.62.0/v0.62.1 rel
 
 - [x] **Phase 63: Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit** (completed 2026-06-08) - WDK/VM environment verified, altitude request sent, design doc written; macOS upstream commit inventory v0.57.0..v0.61.2 complete
 - [x] **Phase 64: Minifilter Spike Implementation + macOS P1 Cherry-pick Wave** (completed 2026-06-09) - end-to-end pre-create interception + policy IPC roundtrip proven on test VM; P1 security/correctness macOS commits absorbed
-- [ ] **Phase 65: Minifilter ADR + macOS Live Re-validation** - go/no-go ADR committed with latency data; macOS Seatbelt re-validated on real host with CI macOS build green (hard gate). **D-11c CI HARD gate ✅ GREEN 2026-06-11** (macos-latest Test+Clippy `success` @ `d9144663`, PR #6); still open: gate-65-A live `sandbox_init()` re-validation + Azure VM Bastion latency capture (both need a host)
+- [ ] **Phase 65: Minifilter ADR + macOS Live Re-validation** - go/no-go ADR committed with latency data; macOS Seatbelt re-validated on real host with CI macOS build green (hard gate). **D-11c CI HARD gate ✅ GREEN** + **latency capture ✅ DONE** (SPAN medians 0.553/0.569 ms) 2026-06-11; still open: gate-65-A live `sandbox_init()` re-validation (needs a macOS host) + the go/no-go ADR Oscar sign-off (latency precondition now met)
 - [ ] **Phase 66: WR-02 EDR HUMAN-UAT** - ~10 pass/fail assertions recorded against real EDR runner; WR-02 closed or explicitly re-scoped
 
 ## Phase Details
@@ -114,7 +114,7 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
   2. `sandbox_init()` succeeds with the updated Seatbelt profile on a real macOS host; `nono run --dry-run --profile claude-code` emits a profile where deny rules appear after the allow rules they override; `nono run --profile claude-code -- cat ~/.ssh/id_rsa` is blocked; both `/etc/hosts` and `/private/etc/hosts` are blocked
   3. The macOS CI build leg in `release.yml` is confirmed green before any release tag — this is a HARD close gate, not advisory; the cherry-pick checklist has been scanned for edition-2024 let-chains and E0716-class borrows; `make test-lib` passes on the macOS host
 **Plans**: 4 plans
-- [ ] 65-01-PLAN.md — QPC latency instrumentation + idempotent VM rebuild/reload + deny-harness re-run (DRV-04)
+- [x] 65-01-PLAN.md — QPC latency instrumentation + idempotent VM rebuild/reload + deny-harness re-run (DRV-04) (completed 2026-06-11; latency captured on VM — SPAN-A/B medians 0.553/0.569 ms, gate PASS)
 - [x] 65-02-PLAN.md — macOS automatable re-validation: ordering tests + x86_64-apple-darwin clippy + cherry-pick scan + green macos-latest CI SHA (MACOS-03) (completed 2026-06-11; D-11c green @ `d9144663` via env-gate fix PR #6)
 - [ ] 65-03-PLAN.md — go/no-go ADR (six DRV-04 topics, Status: Proposed) + latency appendix (DRV-04)
 - [ ] 65-04-PLAN.md — macOS live sandbox_init() HUMAN-UAT, gate 65-A close-blocking (MACOS-03)
