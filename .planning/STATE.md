@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
 status: executing
-last_updated: "2026-06-11T13:00:00.000Z"
-last_activity: 2026-06-11 -- 65-02 D-11c CI gate GREEN (env-gate) + 65-01 latency CAPTURED on VM (SPAN medians 0.553/0.569 ms, ~900x under envelope); evidence+ADR populated
+last_updated: "2026-06-11T20:00:00.000Z"
+last_activity: 2026-06-11 -- Phase 66 WR-02 EDR HUMAN-UAT executed live + CLOSED (EDR-01/02 satisfied); confined-child-invisible-to-Sysmon finding + 2 release-packaging todos
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 12
-  completed_plans: 10
-  percent: 83
+  completed_plans: 11
+  percent: 92
 ---
 
 # Project State: nono — v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
@@ -25,12 +25,12 @@ See: `.planning/PROJECT.md` (v2.10 milestone started 2026-06-06; v2.8 + v2.9 shi
 
 ## Current Position
 
-Phase: 65 (minifilter-adr-macos-live-re-validation) — EXECUTING (plan 2 of 4 CLOSED)
-Plan: 2 of 4 — ✅ DONE (65-02-SUMMARY written; D-11c CI HARD gate GREEN @ d9144663)
-Status: Phase 65 D-11c gate CLEARED. Remaining: gate-65-A live macOS re-validation + Azure VM Bastion latency capture (both need a host); merge PR #6
-Last activity: 2026-06-11 -- D-11c green via NONO_RESL_HOST_VALIDATED env-gate; close-out docs written
+Phase: 66 (wr-02-edr-human-uat) — ✅ COMPLETE (WR-02 CLOSED 2026-06-11). Last open phase = 65 (host gates).
+Plan: 66-01 ✅ DONE (UAT executed live + verdict + SUMMARY; EDR-01/02 satisfied)
+Status: v2.10 nearly done. **Phase 66 COMPLETE.** Only Phase 65's host/human gates remain: gate-65-A live macOS re-validation (A1–A5) + go/no-go ADR Oscar sign-off. Phase 65 latency + D-11c already done.
+Last activity: 2026-06-11 -- Phase 66 WR-02 EDR HUMAN-UAT executed + CLOSED (commit e5f20062)
 
-Progress: ███████░░░ 75% (2/4 phases complete: 63 + 64 done; 65 at 3/4 plans, host-gated)
+Progress: █████████░ 92% (11/12 plans; phases 63 + 64 + 66 complete; 65 = host-gated only)
 
 ### v2.10 Phase Summary (active)
 
@@ -39,7 +39,7 @@ Progress: ███████░░░ 75% (2/4 phases complete: 63 + 64 done;
 | 63 | Minifilter spike groundwork (WDK/VM/design doc) + macOS DIVERGENCE-LEDGER audit | DRV-03 (partial), MACOS-01 | ✅ Complete |
 | 64 | Minifilter spike implementation (intercept + deny + IPC roundtrip on test VM) + macOS P1 cherry-pick wave | DRV-01, DRV-02, DRV-03 (complete), MACOS-02 | ✅ Complete |
 | 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | 🔄 Executing (code-complete; D-11c gate down to 1 macOS test) |
-| 66 | WR-02 EDR HUMAN-UAT (no new code; real EDR host required) | EDR-01, EDR-02 | Not started |
+| 66 | WR-02 EDR HUMAN-UAT (no new code; real EDR host required) | EDR-01, EDR-02 | ✅ Complete — **WR-02 CLOSED** (validated under Sysmon+Defender EDR-proxy) |
 
 ### Host-availability gates
 
