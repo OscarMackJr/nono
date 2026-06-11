@@ -1,37 +1,36 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.10
-milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
-status: Awaiting next milestone
-stopped_at: context exhaustion at 75% (2026-06-11)
-last_updated: "2026-06-11T21:51:33.975Z"
-last_activity: 2026-06-11 — Milestone v2.10 completed and archived
+milestone: v2.11
+milestone_name: Clean-Host Distribution Cleanup + UPST8
+status: planning
+last_updated: "2026-06-11T22:42:41.175Z"
+last_activity: 2026-06-11
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 13
-  completed_plans: 13
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# Project State: nono — v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
+# Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v2.10 milestone started 2026-06-06; v2.8 + v2.9 shipped 2026-06-06, archived). Phase numbering continues from Phase 62 (Phases 63-66). Roadmap: 4 phases defined.
+See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped + archived 2026-06-11). Phase numbering continues from Phase 66 (Phases 67+).
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** v2.10 shipped & archived (2026-06-11). Awaiting next milestone — start with `/gsd:new-milestone`.
+**Current Focus:** v2.11 — defining requirements (clean-host MSI install, macOS resl fix, interim broker trust path, UPST8). Real publicly-trusted code signing is cert-gated → deferred to the next (enterprise distribution) milestone.
 
 ## Current Position
 
-Phase: Milestone v2.10 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-11 — Milestone v2.10 completed and archived
+Status: Defining requirements
+Last activity: 2026-06-11 — Milestone v2.11 started
 
-### v2.10 Phase Summary (active)
+### v2.10 Phase Summary (shipped 2026-06-11 — historical; archived at `milestones/v2.10-ROADMAP.md`)
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|

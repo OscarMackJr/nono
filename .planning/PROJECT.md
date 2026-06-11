@@ -2,7 +2,9 @@
 
 ## Current State
 
-**Shipped (2026-06-11): v2.10 — Kernel-Driver Spike + EDR UAT + macOS Upstream Parity.** No active milestone; next cycle starts via `/gsd:new-milestone`.
+**Active milestone: v2.11 — Clean-Host Distribution Cleanup + UPST8** (started 2026-06-11; Phases 67+). The cert-independent cleanup done while the trusted-signing cert is in flight; the big enterprise distribution effort (trusted signing + silent fleet deployment, SEED-001…005) is the milestone after.
+
+**Shipped (2026-06-11): v2.10 — Kernel-Driver Spike + EDR UAT + macOS Upstream Parity.**
 
 - **v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity** — 4 phases (63-66), tag `v2.10`, no new crate release (feasibility-spike + HUMAN-UAT cycle; production driver and MSI intentionally untouched). De-risked the two heaviest "v3.0" Windows deferrals and brought the dormant macOS Seatbelt backend to upstream parity through `v0.61.2`. **Gap 6b minifilter spike** (DRV-01/02/03): a test-signed FltMgr minifilter live-proved a kernel→user→kernel `IRP_MJ_CREATE` deny over `\NonoPolicyPort` on a Secure-Boot-OFF VM. **Go/no-go ADR (DRV-04), Accepted: No-go/Conditional-go** — WFP+AppContainer/Low-IL already gives kernel-enforced isolation; a production driver is incremental gain at high cert/maintenance cost + strong fragility signal (latency favorable: SPAN medians 0.553/0.569 ms); `DRV-PROD-01` deferred to v2.11/v3.0. **WR-02 CLOSED** (EDR-01/02): long-deferred EDR HUMAN-UAT executed live under Sysmon+Defender EDR-proxy (Low-IL containment survives AV exclusions; T1134.002 token-downgrade un-quarantined; confined child invisible to Sysmon). **macOS Seatbelt parity** (MACOS-01/02/03): DIVERGENCE-LEDGER `v0.57.0..v0.61.2` + P1 ordering/CWD cherry-picks + gate-65-A live re-validation PASS + macOS CI green HARD gate. A5 finding: macOS `--timeout`/`RLIMIT_NPROC` resl enforcement doesn't fire on a real host (REQ-RESL-NIX-03 defect → v2.11). 9/9 reqs satisfied. See `.planning/milestones/v2.10-ROADMAP.md`.
 
@@ -18,6 +20,21 @@
 **Prior:** v2.6 — UPST6 + v2.5 Drain (2026-05-25). 7 phases (44, 44.1, 45, 46, 47, 48, 49, 50). See `.planning/milestones/v2.6-ROADMAP.md`. (v2.5 detail below retained as historical context.)
 
 v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed Linux backends (Phase 37 — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `NonoError::UnsupportedKernelFeature` fail-closed on cgroup v1 + cargo-install-style registry-profile auto-pull with sigstore-sign keyless OIDC signing; 5 e2e integration tests + multi-endpoint mock TCP server; sigstore-rust v0.7.0 bump closing 2 pre-existing TUF flakes), reset pre-existing CI red across all 7 lanes (Phase 41 — Linux/macOS Clippy + 5 Windows CI jobs back to green; MSI validator `-BrokerPath` mismatch resolved; cross-target clippy verification protocol codified in CLAUDE.md as enforcement-shaped MUST/NEVER rule; v24 broker code-review closure: `BrokerNotFound` FFI remap + null/INVALID handle rejection + empty-list rejection + Job-object test SKIP→FAIL policy), audited upstream `v0.53.0..v0.54.0` divergence (Phase 42 UPST5 audit — first cycle where `windows-touch` column fires: 7 clusters / 18 commits / 4 will-sync + 2 fork-preserve + 1 won't-sync; 3 windows-touch:yes commits dispositioned; per-cell L/M/H ADR review confirmed Phase 33 Option A `continue`), and executed the UPST5 sync (Phase 43 — 11 D-19 cherry-picks + 3 D-20 manual replays; new cross-platform `crates/nono-cli/src/platform.rs` module from upstream `ce06bd59` + Windows registry detection extensions; D-43-E1 Windows-only-files invariant respected; 2208 tests passing on Windows host; Cluster 2 reclassified `will-sync → split` mid-flight with source migration deferred to v2.6/UPST6). 13/13 v2.5 requirements satisfied at codebase level (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 + REQ-CI-01/02/03 + REQ-BROKER-CR-01..04 + REQ-UPST5-01/02). Cross-phase integration **clean** at close (7/7 wiring + 5/5 E2E flows WIRED per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`); milestone status `tech_debt` with 32 deferred items acknowledged at close (post-merge CI verifications on push + 16 REVIEW.md warnings + REQUIREMENTS.md checkbox drift). 172 commits since v2.4 (`25e88e61..a9b64440`, 5 days).
+
+## Current Milestone: v2.11 Clean-Host Distribution Cleanup + UPST8
+
+**Goal:** Make the public release work out-of-the-box on a clean host and fix the macOS resource-limit bug — the cert-independent cleanup, done while the trusted-signing cert is in flight — then absorb the deferred non-macOS upstream sync.
+
+**Target features:**
+- **Clean-host MSI install** — the machine MSI installs on a fresh Win11 host with no manual steps: the VC++ x64 runtime prerequisite is handled (bundle redist / static-CRT build / declared prereq) and `nono-wfp-service` start is made non-fatal so a service hiccup doesn't roll back the whole product. *(closes `msi-vcredist-prereq`)*
+- **macOS resl enforcement fix** — `--timeout` and `--max-processes` actually fire on a real macOS host (supervisor watchdog + `RLIMIT_NPROC` path), re-validated with `NONO_RESL_HOST_VALIDATED=1`. *(closes `macos-resl-enforcement-broken` / REQ-RESL-NIX-03)*
+- **Interim broker trust path** — clean-host users get a supported path for the supervised/broker route without real trusted signing yet: documented limitation + shipped cert/import step + a `nono setup --trust-broker` helper. *(partial close of `poc-cert-broker-clean-host`; real publicly-trusted signing is cert-gated and deferred to the enterprise milestone)*
+- **UPST8 upstream sync** — audit + cherry-pick the non-macOS slice of upstream `v0.60.0..v0.61.2`.
+
+**Out of scope (explicit deferrals to the enterprise milestone):**
+- **Real publicly-trusted code signing (Azure Trusted Signing)** — BLOCKED on an incoming cert; the anchor of the next (enterprise distribution) milestone.
+- **Silent/headless fleet deployment** (GPO/SCCM/Intune, machine-wide provisioning — SEED-001) and the rest of the enterprise horizon (SEED-002…005).
+- **DRV-PROD-01** production minifilter (gated No-go/Conditional-go per ADR-65).
 
 <details>
 <summary>Previously v2.10 Milestone scope (archived; shipped 2026-06-11)</summary>
