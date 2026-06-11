@@ -58,23 +58,45 @@ No new drift defect surfaced. `macos.rs` left unmodified.
 
 ---
 
-## Task 2 — Green `macos-latest` CI SHA (D-11c HARD gate)
+## Task 2 — Green `macos-latest` CI SHA (D-11c HARD gate) — ✅ SATISFIED
 
-⛔ **GATE: pending CI run.** The decisive signal for the macOS legs is a green
-`macos-latest` CI run on the phase HEAD (the Windows host cannot compile macOS code —
-the exact v2.9 regression). To be filled after the phase branch is pushed and CI runs:
+✅ **GATE GREEN (2026-06-11).** Both `macos-latest` legs are `conclusion: success`
+on the phase fix HEAD. The Windows dev host cannot compile macOS code (the exact
+v2.9 regression), so this CI run is the decisive signal.
 
-- **Run URL:** _<gh run view URL>_
-- **Commit SHA:** _<phase HEAD SHA>_
-- **`Test (macos-latest)` leg:** _conclusion: <success>_
-- **`clippy (macos-latest)` leg:** _conclusion: <success>_
+- **Run URL:** https://github.com/OscarMackJr/nono/actions/runs/27345465703
+- **Commit SHA:** `d91446633e43aea0b8c1de46df3720f5812c12e1` (`d9144663`)
+- **PR:** OscarMackJr/nono #6 (`fix/macos-resl-host-gate`, based on phase HEAD `e72d6438`)
+- **`Test (macos-latest)` leg:** **conclusion: success**
+- **`Clippy (macos-latest)` leg:** **conclusion: success**
 
-### 🔒 HARD GATE (D-11c)
+### How the green was reached (D-11c CI rehab + the runner-hang fix)
 
-**NO release tag may be cut before a green `macos-latest` CI SHA is recorded above.**
-This is the literal, tag-blocking gate — not advisory. A Windows-host `cargo check` is
-NOT a substitute (T-65-FALSEGREEN / Pitfall 4). Only `conclusion: success` on BOTH the
-`test` and `clippy` macos-latest legs satisfies it.
+The macOS `test` leg was red across the prior session for two distinct reasons, both
+now resolved:
 
-> Gate resume-signal (plan 65-02 Task 2): type **"approved"** with the green
-> `macos-latest` run URL + SHA, or describe the red leg.
+1. **5 stale/harness failure classes** fixed on `e72d6438` (audit_attestation `$PWD`,
+   builtin_profile_load opencode-pack relocation, profile_drafts manifest, resl_nix
+   `--allow-fs-*`→`--read` flags, resl_nix bounding). See STATE "Progress this session".
+2. **The resl enforcement tests hung the runner.** Once the flag fix let them actually
+   launch children, `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc`
+   exercised macOS `--timeout`/`RLIMIT_NPROC` enforcement (REQ-RESL-NIX-03, **never
+   host-validated** — Phase 37 was host-blocked) for the first time on the GH runner,
+   where it does **not** fire; `run_bounded` did not reliably reap the sandboxed/detached
+   children, so `cargo test` hung 25+ min until the runner "lost communication" (runs
+   `27291915409`, `27300030066`). Fixed in PR #6 (`d9144663`) by gating those two
+   host-dependent enforcement tests behind `NONO_RESL_HOST_VALIDATED`: they **skip on
+   CI** (greening this leg) and **run on a real macOS host at gate-65-A**. The
+   host-independent macOS resl tests still run on CI. **`macos.rs` is unmodified** — the
+   change is test-harness only (`crates/nono-cli/tests/resl_nix_macos.rs`).
+
+### 🔒 HARD GATE (D-11c) — CLEARED
+
+The literal, tag-blocking gate is satisfied: `conclusion: success` on BOTH the
+`Test (macos-latest)` and `Clippy (macos-latest)` legs at SHA `d9144663`. A Windows-host
+`cargo check` was NOT used as a substitute (T-65-FALSEGREEN / Pitfall 4). A release tag
+may now be cut on or after this SHA.
+
+> Note: the two `#[gated]` enforcement assertions move to gate-65-A (plan 65-04
+> HUMAN-UAT) — they are validated on a real macOS host with `NONO_RESL_HOST_VALIDATED=1`,
+> not on the hosted runner.

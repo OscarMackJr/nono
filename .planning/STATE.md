@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
 status: executing
-last_updated: "2026-06-10T23:36:00.142Z"
-last_activity: 2026-06-10 -- session 3 PAUSED; macOS failure = runner-death (resource starvation), points at #[ignore]-pending-gate-65A
+last_updated: "2026-06-11T00:00:00.000Z"
+last_activity: 2026-06-11 -- D-11c CI HARD gate GREEN (macos-latest Test+Clippy success @ d9144663, PR #6); 65-02 closed via NONO_RESL_HOST_VALIDATED env-gate
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 12
-  completed_plans: 8
-  percent: 67
+  completed_plans: 9
+  percent: 75
 ---
 
 # Project State: nono — v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
@@ -25,12 +25,12 @@ See: `.planning/PROJECT.md` (v2.10 milestone started 2026-06-06; v2.8 + v2.9 shi
 
 ## Current Position
 
-Phase: 65 (minifilter-adr-macos-live-re-validation) — EXECUTING (plan 2 of 4)
-Plan: 2 of 4 — code-complete; close-out gated on green macos-latest Test+Clippy SHA (D-11c)
-Status: Executing Phase 65 — D-11c CI rehab down to ONE fast-failing macOS resl test
-Last activity: 2026-06-10 -- D-11c CI rehab + Azure VM latency prep
+Phase: 65 (minifilter-adr-macos-live-re-validation) — EXECUTING (plan 2 of 4 CLOSED)
+Plan: 2 of 4 — ✅ DONE (65-02-SUMMARY written; D-11c CI HARD gate GREEN @ d9144663)
+Status: Phase 65 D-11c gate CLEARED. Remaining: gate-65-A live macOS re-validation + Azure VM Bastion latency capture (both need a host); merge PR #6
+Last activity: 2026-06-11 -- D-11c green via NONO_RESL_HOST_VALIDATED env-gate; close-out docs written
 
-Progress: ██████░░░░ 67% (2/4 phases complete: 63 + 64 done)
+Progress: ███████░░░ 75% (2/4 phases complete: 63 + 64 done; 65 at 3/4 plans, host-gated)
 
 ### v2.10 Phase Summary (active)
 
@@ -174,22 +174,16 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-10 (session 3) — resumed, diagnosed the macOS failure, then PAUSED. **Key finding:** `Test (macos-latest)` on run `27300030066` reached `completed=failure` with a **runner death** — check-run annotation = *"hosted runner lost communication with the server"* (CPU/memory/network starvation), NOT a clean assertion. Strongly consistent with a resl **resource-limit** test (RLIMIT_NPROC) starving the runner because macOS enforcement doesn't fire on the GH runner → points hard at the **`#[ignore]`-pending-gate-65A** disposition. Exact test still needs confirming from the full job log (`macjob 80677581956`, 404s until whole-run completion — gotcha #1). Fixed STATE Phase-Summary/progress drift (commit `1dcd8f72`). Full handoff: `.planning/HANDOFF.json` + `.planning/phases/65-minifilter-adr-macos-live-re-validation/.continue-here.md`.
+**Last session:** 2026-06-11 — resumed, **confirmed + fixed the macOS failure, and CLOSED plan 65-02.** The chronic `Test (macos-latest)` red was a **real `cargo test` hang** (not a clean assertion): after the prior flag fix let the resl tests actually launch children, `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc` exercised macOS `--timeout`/`RLIMIT_NPROC` enforcement (REQ-RESL-NIX-03, never host-validated — Phase 37 host-blocked) for the first time on the GH runner, where it does NOT fire and `run_bounded` did not reap the sandboxed/detached children → 25+ min hang → "runner lost communication" (runs `27291915409`, `27300030066`). The earlier "failures" were a now-fixed flag bug, not real. **Fix (user-selected env-gate):** gated both tests behind `NONO_RESL_HOST_VALIDATED` → skip on CI, run at gate-65-A. `macos.rs` UNCHANGED (test-harness only).
 
-**Stopped at:** Phase 65 mid-execution. The D-11c HARD gate (green `macos-latest` Test+Clippy SHA) is DOWN TO ONE fast-failing test. HEAD `e72d6438`, all pushed. **65-02-SUMMARY.md still NOT written** (gated on the green SHA).
+**D-11c HARD gate ✅ GREEN:** PR #6 (`fix/macos-resl-host-gate`, `d9144663`) run [`27345465703`](https://github.com/OscarMackJr/nono/actions/runs/27345465703) — `Test (macos-latest)` + `Clippy (macos-latest)` both `success`. Evidence in `65-MACOS-CI-EVIDENCE.md`; gate-65-A UAT extended with Assertion 5 (the gated tests on a real host). `65-02-SUMMARY.md` written.
 
-**Progress this session (HEAD `e72d6438`):**
-- **Cargo Audit → GREEN** (`4aaa0508`: sign-fixture sigstore `0.7→0.8`, drops vulnerable `rustls-webpki 0.102.8`; quick task `20260610-cargo-audit-rustls-webpki`).
-- **macOS Build → GREEN**; **macOS Clippy → GREEN**.
-- **macOS Test: 5 failure classes fixed** (audit_attestation `$PWD` harness bug `d21663a6`; builtin_profile_load stale-opencode `28219919`; profile_drafts symlink→manifest `c80e8664`; resl_nix `--allow-fs-*`→`--read` `924354f4`; resl_nix bounding `e72d6438`). `--no-fail-fast` enumeration aid added (`391d41ac`) then reverted (`9fb8ae06`).
-- **macOS Test now FAILS FAST** (the 30-min hang is GONE) on ONE bounded resl test — exact failure not yet read (cancelling runs drops logs; see handoff gotcha #1). Watcher `bxfwz5ec7` (session 3) is waiting for run `27300030066` to complete naturally to surface it.
-- **Azure spike-VM latency gate: VM fully prepped** (instrumented driver pushed/built/signed/loaded; the missing-instrumentation gap closed). Capture itself is Bastion-interactive (session-0 limits). Recorded in `65-SC1-latency-evidence.md`.
+**Repo-hygiene this session:** cancelled local commit `74a47742` (the `.gitignore` "go-private" commit) — repo STAYS PUBLIC until Microsoft approves the minifilter altitude; `build_notes/` + `.gsd/` are ignored again (on disk, untracked, NOT exposed). `main` tip reset to `eca48beb` (74a47742 recoverable via reflog). PR #6 is on the FORK only (not pushed to upstream `always-further/nono`).
 
-**Active blocker:** the ONE remaining macOS resl failure — likely a genuine never-validated Phase-37 enforcement gap (macOS `--timeout` watchdog / `RLIMIT_NPROC` not firing on the runner). If so, the `#[ignore]`-pending-gate-65A vs fix decision is next (Oscar). See handoff.
+**Stopped at:** Phase 65 — plan 65-02 CLOSED; D-11c gate cleared. **Not yet done:** merge PR #6 into fork `main`; push `main` (close-out doc commit). Local `main` is 3 planning commits + the close-out ahead of `origin/main` (`e72d6438`), all `.planning/`-only and public-safe.
 
-**Open questions still pending:**
+**Remaining Phase 65 (all host/human gates — Oscar):**
 
-- The exact macOS resl failure (read from a naturally-completed run — do NOT cancel).
-- macOS host availability for gate-65-A live `sandbox_init()` re-validation (still OPEN; also the resl enforcement tests' real validation venue).
-- Azure VM Bastion latency capture (VM prepped; Oscar's interactive step).
-- Which EDR product for Phase 66 (MDE trial ~1 day; Sysmon fallback).
+- **gate-65-A** live `sandbox_init()` re-validation on a real macOS host (`65-HUMAN-UAT.md`, 5 assertions incl. the gated resl enforcement tests via `NONO_RESL_HOST_VALIDATED=1`). Close-blocking for the phase.
+- **Azure VM Bastion latency capture** — VM `nono-fltmgr-vm` prepped (instrumented driver built/signed/loaded); SPAN capture is interactive-Bastion (`64-SC1-VM-RUNBOOK.md`).
+- **Phase 66 EDR product choice** (MDE trial ~1 day vs Sysmon fallback).
