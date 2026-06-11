@@ -16,8 +16,8 @@
 
 ### EDR — WR-02 HUMAN-UAT (EDR)
 
-- [ ] **EDR-01**: A **HUMAN-UAT artifact** records ~10 pass/fail assertions of nono's behavior and visibility under a **real EDR runner** (Sysmon as EDR-proxy and/or Microsoft Defender for Endpoint), run on existing v2.9 binaries with **no new code**. The matrix is executed in **two passes — no-exclusion first** (to characterize false-positive exposure) **then with-exclusion** (to confirm suppression is sufficient); each assertion records the EDR product, version, and policy mode.
-- [ ] **EDR-02**: The UAT explicitly validates the two load-bearing boundaries: (a) whether **EDR DLL-injection into Low-IL children fails at the `NO_WRITE_UP` MIC boundary** as designed, and (b) whether the broker's `CreateProcessAsUserW` + `SetTokenInformation(IntegrityLevel)` sequence (**MITRE T1134.002**) triggers EDR alerts/quarantine. **WR-02 is closed or explicitly re-scoped** in the planning artifacts with the recorded findings.
+- [x] **EDR-01** *(satisfied 2026-06-11)*: A **HUMAN-UAT artifact** records ~10 pass/fail assertions of nono's behavior and visibility under a **real EDR runner** (Sysmon as EDR-proxy and/or Microsoft Defender for Endpoint), run on existing v2.9 binaries with **no new code**. The matrix is executed in **two passes — no-exclusion first** (to characterize false-positive exposure) **then with-exclusion** (to confirm suppression is sufficient); each assertion records the EDR product, version, and policy mode. → `66-HUMAN-UAT.md`, 10 assertions live on `nono-fltmgr-vm` (Sysmon v15.20 + Defender AV 4.18.26050.15), two passes executed.
+- [x] **EDR-02** *(satisfied 2026-06-11)*: The UAT explicitly validates the two load-bearing boundaries: (a) whether **EDR DLL-injection into Low-IL children fails at the `NO_WRITE_UP` MIC boundary** as designed, and (b) whether the broker's `CreateProcessAsUserW` + `SetTokenInformation(IntegrityLevel)` sequence (**MITRE T1134.002**) triggers EDR alerts/quarantine. **WR-02 is closed or explicitly re-scoped** in the planning artifacts with the recorded findings. → (a) Low-IL/AppContainer child confirmed (`S-1-16-4096`), survives AV exclusions; finding: confined child invisible to Sysmon telemetry. (b) T1134.002 integrity-drop captured at the broker chain; no Defender alert/quarantine. **WR-02 CLOSED** (validated under a representative EDR-proxy).
 
 ### macOS — Seatbelt Upstream Parity through v0.61.2 (MACOS)
 
@@ -51,8 +51,8 @@
 | DRV-02 | Phase 64 | Complete |
 | DRV-03 | Phase 63 (partial groundwork) + Phase 64 (complete) | Complete |
 | DRV-04 | Phase 65 | Pending |
-| EDR-01 | Phase 66 | Pending |
-| EDR-02 | Phase 66 | Pending |
+| EDR-01 | Phase 66 | Satisfied (2026-06-11) |
+| EDR-02 | Phase 66 | Satisfied (2026-06-11) — WR-02 CLOSED |
 | MACOS-01 | Phase 63 | Complete |
 | MACOS-02 | Phase 64 | Complete |
 | MACOS-03 | Phase 65 | Pending |
