@@ -1,12 +1,28 @@
 # Phase 65 — macOS Live `sandbox_init()` HUMAN-UAT (gate 65-A, MACOS-03 D-10 live)
 
-**Status:** ⛔ **OPEN / BLOCKS PHASE CLOSE.** No macOS host is confirmed available at
-authoring time (2026-06-09). This checklist stages the four live `sandbox_init()` deny
-assertions that only a real macOS host can confirm. It is **close-blocking**: gate 65-A
-stays OPEN until run on a real macOS host. **Do NOT mark any item `pass` without real
-host output** — Windows/CI evidence is NOT a substitute (Pitfall 4 / T-65-NOHOST).
+**Status:** ✅ **PASS / CLOSED (2026-06-11).** Run live on a real macOS host
+(`Oscars-MacBook-Pro`, Apple Silicon / aarch64-apple-darwin). The **macOS Seatbelt
+backend — MACOS-03's actual scope — re-validated cleanly** (A1–A4): file/path deny
+enforcement, the SSH-key protected-path block, and all 722 native `nono` lib tests
+(incl. the ordering + dual-path-deny contracts) pass on the host.
 
-**Host:** _<hostname>_  |  **macOS version:** _<sw_vers>_  |  **Date:** _<run date>_
+**Assertion 5 (resl resource-limit ENFORCEMENT) FAILED** — but it tests a *different*
+feature (REQ-RESL-NIX-03 `setrlimit`/`--timeout` watchdog, **not** Seatbelt) that was
+opportunistically bundled here. Disposition (operator decision 2026-06-11): **close
+MACOS-03 PASS; file the resl failure as a separate REQ-RESL-NIX-03 defect** (todo
+`20260611-macos-resl-enforcement-broken`). See A5 below.
+
+**Host:** `Oscars-MacBook-Pro` (Apple Silicon)  |  **macOS version:** _aarch64-apple-darwin (sw_vers not captured)_  |  **Date:** 2026-06-11
+
+### Results
+
+| # | Verdict | Evidence |
+|---|---------|----------|
+| A1 deny-after-allow ordering (profile dump) | ✅ | `-vv` dumped a valid Seatbelt profile (`(deny default)` + allows); ordering authoritatively proven by A4 |
+| A2 SSH key blocked | ✅ | `~/.ssh/id_rsa` absent → substituted `~/.ssh/id_ed25519` → `Operation not permitted` + "Sandbox denial: 1 path blocked … [permanently restricted]" (NOT leaked) |
+| A3 dual-path `/etc` ↔ `/private/etc` | ✅ (via A4) | `/etc/hosts` readable by design (non-protected system file in claude-code); dual-path **deny** contract proven natively by A4's `test_platform_deny_symlink_and_canonical_path` (`/etc/passwd`) |
+| A4 library tests | ✅✅ | `make test-lib` → **722 passed; 0 failed** incl. `test_generate_profile_platform_rules_after_writes`, `test_platform_rules_after_write_allows`, `test_platform_deny_symlink_and_canonical_path` |
+| A5 resl enforcement (REQ-RESL-NIX-03) | ❌ FAIL | `NONO_RESL_HOST_VALIDATED=1` → both `macos_timeout_kills_at_deadline` (nono not killed within 12s) and `macos_max_processes_blocks_on_rlimit_nproc` (not within 20s) FAILED. macOS `--timeout` watchdog + `RLIMIT_NPROC` genuinely do not fire on a real host — filed as REQ-RESL-NIX-03 defect, NOT a MACOS-03/Seatbelt blocker |
 
 The unit tests + CI prove the Seatbelt profile *generation* contract; only a real macOS
 host proves the OS actually *enforces* the denies. These four assertions are the runtime
@@ -131,8 +147,9 @@ real REQ-RESL-NIX-03 defect (do not flip to pass).
 
 ## Sign-off
 
-- **Gate 65-A (live `sandbox_init()` enforcement):** _PASS / FAIL / blocked: no macOS host_
-- **Host / macOS version / date:** _<stamp>_
+- **Gate 65-A (live `sandbox_init()` Seatbelt enforcement, MACOS-03):** ✅ **PASS** (A1–A4 on a real macOS host)
+- **A5 resl resource-limit enforcement (REQ-RESL-NIX-03):** ❌ FAIL — macOS `--timeout`/`RLIMIT_NPROC` don't fire; filed as defect `20260611-macos-resl-enforcement-broken` (NOT a MACOS-03 blocker; operator-dispositioned 2026-06-11)
+- **Host / macOS version / date:** `Oscars-MacBook-Pro` (Apple Silicon) / aarch64-apple-darwin / 2026-06-11 — operator: Oscar Mack Jr
 - **Green `macos-latest` CI SHA (D-11c HARD gate, runs alongside this live gate):**
   ✅ **SATISFIED 2026-06-11** — run
   [`27345465703`](https://github.com/OscarMackJr/nono/actions/runs/27345465703), SHA

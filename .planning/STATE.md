@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v2.10
 milestone_name: Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
-status: executing
-last_updated: "2026-06-11T20:00:00.000Z"
-last_activity: 2026-06-11 -- Phase 66 WR-02 EDR HUMAN-UAT executed live + CLOSED (EDR-01/02 satisfied); confined-child-invisible-to-Sysmon finding + 2 release-packaging todos
+status: completed
+stopped_at: context exhaustion at 75% (2026-06-11)
+last_updated: "2026-06-11T21:35:40.164Z"
+last_activity: 2026-06-11 -- Phase 66 WR-02 EDR HUMAN-UAT executed + CLOSED (commit e5f20062)
 progress:
   total_phases: 4
-  completed_phases: 3
-  total_plans: 12
-  completed_plans: 11
-  percent: 92
+  completed_phases: 4
+  total_plans: 13
+  completed_plans: 13
+  percent: 100
 ---
 
 # Project State: nono — v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
@@ -38,7 +39,7 @@ Progress: █████████░ 92% (11/12 plans; phases 63 + 64 + 66 c
 |-------|------|--------------|--------|
 | 63 | Minifilter spike groundwork (WDK/VM/design doc) + macOS DIVERGENCE-LEDGER audit | DRV-03 (partial), MACOS-01 | ✅ Complete |
 | 64 | Minifilter spike implementation (intercept + deny + IPC roundtrip on test VM) + macOS P1 cherry-pick wave | DRV-01, DRV-02, DRV-03 (complete), MACOS-02 | ✅ Complete |
-| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | 🔄 Executing (code-complete; D-11c gate down to 1 macOS test) |
+| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | ✅ Complete — D-11c green + latency captured + gate-65-A Seatbelt PASS; ADR `Proposed` (sign-off pending); resl A5 macOS-enforcement defect filed |
 | 66 | WR-02 EDR HUMAN-UAT (no new code; real EDR host required) | EDR-01, EDR-02 | ✅ Complete — **WR-02 CLOSED** (validated under Sysmon+Defender EDR-proxy) |
 
 ### Host-availability gates
@@ -174,13 +175,13 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-11 — resumed, **confirmed + fixed the macOS failure, and CLOSED plan 65-02.** The chronic `Test (macos-latest)` red was a **real `cargo test` hang** (not a clean assertion): after the prior flag fix let the resl tests actually launch children, `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc` exercised macOS `--timeout`/`RLIMIT_NPROC` enforcement (REQ-RESL-NIX-03, never host-validated — Phase 37 host-blocked) for the first time on the GH runner, where it does NOT fire and `run_bounded` did not reap the sandboxed/detached children → 25+ min hang → "runner lost communication" (runs `27291915409`, `27300030066`). The earlier "failures" were a now-fixed flag bug, not real. **Fix (user-selected env-gate):** gated both tests behind `NONO_RESL_HOST_VALIDATED` → skip on CI, run at gate-65-A. `macos.rs` UNCHANGED (test-harness only).
+**Last session:** 2026-06-11T21:35:40.157Z
 
 **D-11c HARD gate ✅ GREEN:** PR #6 (`fix/macos-resl-host-gate`, `d9144663`) run [`27345465703`](https://github.com/OscarMackJr/nono/actions/runs/27345465703) — `Test (macos-latest)` + `Clippy (macos-latest)` both `success`. Evidence in `65-MACOS-CI-EVIDENCE.md`; gate-65-A UAT extended with Assertion 5 (the gated tests on a real host). `65-02-SUMMARY.md` written.
 
 **Repo-hygiene this session:** cancelled local commit `74a47742` (the `.gitignore` "go-private" commit) — repo STAYS PUBLIC until Microsoft approves the minifilter altitude; `build_notes/` + `.gsd/` are ignored again (on disk, untracked, NOT exposed). `main` tip reset to `eca48beb` (74a47742 recoverable via reflog). PR #6 is on the FORK only (not pushed to upstream `always-further/nono`).
 
-**Stopped at:** Phase 65 — plan 65-02 CLOSED; D-11c gate cleared. **Not yet done:** merge PR #6 into fork `main`; push `main` (close-out doc commit). Local `main` is 3 planning commits + the close-out ahead of `origin/main` (`e72d6438`), all `.planning/`-only and public-safe.
+**Stopped at:** context exhaustion at 75% (2026-06-11)
 
 **Latency capture (65-01 Task 2) ✅ DONE 2026-06-11:** on `nono-fltmgr-vm`, 100 denied creates (`denied 100/100`), instrumented `.sys` dumped via DebugView at `fltmc unload`. **SPAN-A** median 0.553 ms (min 0.387, p99 1.460); **SPAN-B** median 0.569 ms (min 0.486, p99 1.478); QPC 10 MHz. Ordering A<B at every percentile; both ~900× under the 500 ms fail-open envelope → favorable. Recorded in `65-SC1-latency-evidence.md` (PASS), `adr-65-latency-appendix.md`, and the go/no-go ADR latency section. DebugView gotcha: kernel DbgPrint needs Capture Kernel + Enable Verbose Kernel Output *before* unload; the `0x80000000` GENERIC_READ literal must be passed as decimal `2147483648` in PowerShell P/Invoke.
 
