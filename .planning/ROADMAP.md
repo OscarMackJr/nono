@@ -127,7 +127,9 @@ See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase de
   1. A HUMAN-UAT artifact (`.planning/phases/66-edr-human-uat/66-HUMAN-UAT.md`) records ~10 pass/fail assertions executed in two passes — no-exclusion first (to characterize false-positive exposure) then with-exclusion (to confirm suppression is sufficient) — against a real EDR runner (Sysmon as EDR-proxy and/or Microsoft Defender for Endpoint), installed via the production-signed MSI on a host where the EDR has been running for at least 24 hours; each assertion records the EDR product, version, and policy mode
   2. The UAT explicitly validates whether EDR DLL-injection into Low-IL children fails at the `NO_WRITE_UP` MIC boundary as designed, and whether the broker's `CreateProcessAsUserW` + `SetTokenInformation(IntegrityLevel)` sequence (MITRE T1134.002) triggers EDR alerts or quarantine
   3. WR-02 is formally closed in the planning artifacts with the recorded findings, or explicitly re-scoped with a concrete next step if the results are inconclusive; the UAT artifact distinguishes "EDR did not alert" from "EDR did not quarantine" for every test scenario
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 66-01-PLAN.md — Author 66-HUMAN-UAT.md (10 assertions, two-pass, WR-02 decision table) + blocking-human operator UAT run + WR-02 close-out (Wave 1; EDR-01, EDR-02)
 
 ## Progress
 
