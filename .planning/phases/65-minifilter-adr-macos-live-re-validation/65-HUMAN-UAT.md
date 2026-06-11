@@ -16,21 +16,33 @@ confirmation of what `crates/nono/src/sandbox/macos.rs` asserts at compile time.
 
 ---
 
-## Assertion 1 — Dry-run deny-after-allow ordering
+## Assertion 1 — deny-after-allow ordering (debug-log profile dump)
 
 Mirrors `macos.rs` lines ~1026–1030 (`read_pos < write_pos < deny_pos`, last-match-wins).
 
+> ⚠️ **`--dry-run` does NOT print the raw Seatbelt profile** — it only shows a
+> human-readable capability summary. The generated Seatbelt sexp is logged at **debug**
+> level in `macos.rs` (`debug!("Generated Seatbelt profile:\n{}", profile)`) on a *real*
+> run. Use `-vv` (debug) and grep for it. The profile is logged *before* the sandbox
+> applies, so it appears even if the child command is itself denied.
+
 ```
-nono run --dry-run --profile claude-code
+./target/debug/nono run -vv --profile claude-code -- /usr/bin/true 2>&1 | grep -A40 "Generated Seatbelt profile"
 ```
 
-**Expected:** `file-write*` allow rules emitted, THEN `platform (deny ...)` lines AFTER
-them (deny overrides the preceding write-allows).
+**Expected:** `(allow file-write* …)` allow rules emitted, THEN `(deny …)` / `platform`
+deny lines AFTER them (deny overrides the preceding write-allows, last-match-wins).
+
+> This is a visual confirmation only — **Assertion 4 (`make test-lib`) is the
+> authoritative, programmatic proof** of the same ordering
+> (`test_generate_profile_platform_rules_after_writes` asserts `read_pos < write_pos <
+> deny_pos` natively on the host). If A4 passes, the ordering contract holds regardless
+> of this eyeball.
 
 **Result:** [ ] pass  /  [ ] blocked
 
 ```
-<paste dry-run output here — confirm deny lines appear after the write-allow lines>
+<paste the "Generated Seatbelt profile" block here — confirm (deny …) lines appear after the (allow file-write* …) lines>
 ```
 
 ---
