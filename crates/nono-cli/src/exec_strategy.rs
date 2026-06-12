@@ -1472,6 +1472,26 @@ pub fn execute_supervised(
             setup_signal_forwarding(child, pty_proxy.as_ref().map(|p| p.poll_fds().0));
             let _signal_forwarding_guard = SignalForwardingGuard;
 
+            // D3 (Phase 68-02): Parent-side setpgid(child, child) closes the fork/setpgid race.
+            //
+            // POSIX double-setpgid idiom: parent sets child's pgid = child_pid immediately
+            // after fork, before getpgid(child) is called for the watchdog. The child also
+            // calls setpgid(0,0) in its arm (deployed in 68-01). Whichever executes first
+            // succeeds; the second is idempotent (POSIX). This ensures getpgid(child) at the
+            // watchdog spawn site always returns child_pid, not the parent's pgid. Permitted
+            // from parent on a child that has not yet called execve (POSIX).
+            #[cfg(target_os = "macos")]
+            {
+                use nix::unistd::setpgid;
+                if let Err(e) = setpgid(child, child) {
+                    warn!(
+                        "parent setpgid({pid}, {pid}) failed ({e}); watchdog will still attempt \
+                         getpgid — non-fatal (double-setpgid race may have lost to child arm)",
+                        pid = child.as_raw(),
+                    );
+                }
+            }
+
             // Spawn timeout watchdog AFTER child is spawned.
             // Linux: writes "1\n" to cgroup.kill at deadline (atomically kills all descendants).
             // macOS: sends SIGKILL to child process group at deadline.
