@@ -51,13 +51,13 @@
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| DIST-01 | TBD | Not started |
-| DIST-02 | TBD | Not started |
-| TRUST-01 | TBD | Not started |
-| TRUST-02 | TBD | Not started |
-| RESL-MAC-01 | TBD | Not started |
-| RESL-MAC-02 | TBD | Not started |
-| UPST8-01 | TBD | Not started |
-| UPST8-02 | TBD | Not started |
+| DIST-01 | Phase 67 — Clean-Host Windows Install | Not started |
+| DIST-02 | Phase 67 — Clean-Host Windows Install | Not started |
+| TRUST-01 | Phase 67 — Clean-Host Windows Install | Not started |
+| TRUST-02 | Phase 67 — Clean-Host Windows Install | Not started |
+| RESL-MAC-01 | Phase 68 — macOS Resource-Limit Enforcement Fix | Not started |
+| RESL-MAC-02 | Phase 68 — macOS Resource-Limit Enforcement Fix | Not started |
+| UPST8-01 | Phase 69 — UPST8 Audit | Not started |
+| UPST8-02 | Phase 70 — UPST8 Cherry-pick Sync | Not started |
 
-**Coverage:** filled by the roadmapper — every requirement maps to exactly one phase.
+**Coverage:** 8/8 v1 requirements mapped to exactly one phase. No orphans, no duplicates. Phases 67 and 68 are independent (parallel-safe, each host-gated); Phase 69 → 70 is the UPST8 audit-then-sync pair (linear, cadence-ordered after Phase 55).

@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
-status: planning
-last_updated: "2026-06-11T22:42:41.175Z"
+status: active
+last_updated: "2026-06-11T23:30:00.000Z"
 last_activity: 2026-06-11
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,37 +17,61 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped + archived 2026-06-11). Phase numbering continues from Phase 66 (Phases 67+).
+See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped + archived 2026-06-11). Phase numbering continues from Phase 66 (Phases 67-70).
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** v2.11 — defining requirements (clean-host MSI install, macOS resl fix, interim broker trust path, UPST8). Real publicly-trusted code signing is cert-gated → deferred to the next (enterprise distribution) milestone.
+**Current Focus:** v2.11 — roadmap complete (4 phases, 8/8 reqs mapped). Make the public release work out-of-the-box on a clean host + fix the macOS resl bug + absorb the non-macOS UPST8 slice. Real publicly-trusted code signing is cert-gated → deferred to the next (enterprise distribution) milestone.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started — roadmap complete; ready to plan
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-11 — Milestone v2.11 started
+Status: Roadmap complete (4 phases, 0/4 started)
+Last activity: 2026-06-11 — v2.11 roadmap authored (Phases 67-70)
 
-### v2.10 Phase Summary (shipped 2026-06-11 — historical; archived at `milestones/v2.10-ROADMAP.md`)
+### v2.11 Phase Summary (active)
+
+| Phase | Goal | Requirements | SC | Status | Host gate |
+|-------|------|--------------|----|--------|-----------|
+| 67 | Clean-Host Windows Install — machine MSI completes on a fresh Win11 host (VC++ handled, service-start non-fatal); interim auditable broker-trust helper + docs | DIST-01, DIST-02, TRUST-01, TRUST-02 | 4 | ⬜ Not started | Clean Win11 host (no VC++, no pre-trusted cert); production-signed MSI |
+| 68 | macOS Resource-Limit Enforcement Fix — `--timeout` + `--max-processes` actually fire on a real macOS host (watchdog + `RLIMIT_NPROC`) | RESL-MAC-01, RESL-MAC-02 | 4 | ⬜ Not started | Real macOS host (`NONO_RESL_HOST_VALIDATED=1`) |
+| 69 | UPST8 Audit — DIVERGENCE-LEDGER for the non-macOS slice of upstream `v0.60.0..v0.61.2` | UPST8-01 | 4 | ⬜ Not started | Host-agnostic |
+| 70 | UPST8 Cherry-pick Sync — absorb will-sync commits (D-19 trailers, invariants preserved, suite green) | UPST8-02 | 4 | ⬜ Not started | Host-agnostic; cross-target clippy via CI |
+
+**Dependencies:** Phases 67 and 68 are independent and parallel-safe (each host-gated). Phase 69 → 70 is the UPST8 audit-then-sync pair (linear; cadence-ordered after Phase 55, mirroring Phase 54/55).
+
+### Host-availability gates (v2.11)
+
+| Phase | Gate | Notes |
+|-------|------|-------|
+| 67 | Clean Windows 11 host with NO VC++ x64 runtime and NO pre-trusted nono cert | Must install + run the **production-signed** machine MSI, not a dev-layout binary (the D-32-12 broker trust gate only fires from a signed Program-Files install). Verify clean-uninstall leaves no orphaned WFP filters / service registration. |
+| 68 | Real macOS host for `NONO_RESL_HOST_VALIDATED=1` re-validation | `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc` must PASS; CI runners cannot validate (they hang — the two tests stay env-gated off the runner). Closes the Phase 65 gate-65-A "A5" finding. |
+| 70 | Cross-target clippy (Linux + macOS) | Per `.planning/templates/cross-target-verify-checklist.md`; Windows dev host can't cross-compile (ring/aws-lc-sys C-toolchain) → CI is the load-bearing signal. Phase 68 also touches cfg-gated Unix code → same gate. |
+
+<details>
+<summary>v2.10 Phase Summary (shipped 2026-06-11 — historical; archived at `milestones/v2.10-ROADMAP.md`)</summary>
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
 | 63 | Minifilter spike groundwork (WDK/VM/design doc) + macOS DIVERGENCE-LEDGER audit | DRV-03 (partial), MACOS-01 | ✅ Complete |
 | 64 | Minifilter spike implementation (intercept + deny + IPC roundtrip on test VM) + macOS P1 cherry-pick wave | DRV-01, DRV-02, DRV-03 (complete), MACOS-02 | ✅ Complete |
-| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | ✅ Complete — D-11c green + latency captured + gate-65-A Seatbelt PASS; **ADR Accepted** `563df1ed` (No-go/Conditional-go); resl A5 macOS-enforcement defect filed → v2.11 |
+| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | ✅ Complete — D-11c green + latency captured + gate-65-A Seatbelt PASS; **ADR Accepted** `563df1ed` (No-go/Conditional-go); resl A5 macOS-enforcement defect filed → v2.11 (Phase 68) |
 | 66 | WR-02 EDR HUMAN-UAT (no new code; real EDR host required) | EDR-01, EDR-02 | ✅ Complete — **WR-02 CLOSED** (validated under Sysmon+Defender EDR-proxy) |
 
-### Host-availability gates
-
-| Phase | Gate | Notes |
-|-------|------|-------|
-| 63-B | Hyper-V Secure-Boot-OFF VM with WDK installed | Check HVCI state with `msinfo32` before starting; HVCI default-on on Win11 26200 silently rejects test-signed drivers |
-| 65-A | Real macOS host for `sandbox_init()` re-validation | `make test-lib` + live `nono run` required; CI macOS build is the HARD close gate |
-| 66 | Real Windows host with EDR agent running ≥24 hours | Must use production-signed MSI, not dev-layout binary; Sysmon free EDR-proxy fallback if MDE unavailable |
+</details>
 
 ## Key Decisions
+
+### v2.11 decisions
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| DIST + TRUST kept together in one phase (67) | 67 | The MSI install fix and the interim broker-trust path are the same "make the public release work on a clean Win11 host" story; both are exercised in the same clean-host UAT. |
+| Real publicly-trusted signing (Azure Trusted Signing) is OUT OF SCOPE | — | BLOCKED on an incoming cert; deferred to the next (enterprise distribution) milestone. v2.11 TRUST reqs are the interim cert-import helper + docs only — never weakening the D-32-12 gate. |
+| macOS resl fix is a real nono supervisor/setrlimit bug fix, not a test-gate change | 68 | The Phase 65 A5 finding: the watchdog/`RLIMIT_NPROC` path genuinely doesn't fire on macOS. Test re-gating (the v2.10 CI-green workaround) is NOT the fix. |
+| UPST8 scoped to the non-macOS slice of `v0.60.0..v0.61.2` only | 69-70 | The macOS slice of that window was already absorbed in v2.10 (Phases 63-65 / MACOS-01..03). |
+| UPST8 follows the Phase 54/55 audit-then-sync two-phase shape | 69-70 | Mirrors every prior UPST cycle (33/34, 39/40, 42/43, 47, 54/55); cadence-ordered linearly after Phase 55. |
 
 ### v2.10 decisions
 
@@ -79,46 +103,40 @@ Last activity: 2026-06-11 — Milestone v2.11 started
 
 ## Accumulated Context
 
-### Pitfall guards active this milestone
+### Constraints active this milestone
 
-- **BSOD from IRQL violation (Pitfall 1):** ring-buffer + worker-thread IPC design must be in the Phase 63 plan before any driver code is written; `NonPagedPoolNx` only in callback context
-- **Own-I/O recursion BSOD (Pitfall 2):** no driver-originated file I/O (`ZwCreateFile`); all logging via `FltSendMessage` to user mode
-- **System hang from blocking `FltSendMessage` (Pitfall 3):** finite `Timeout` mandatory; `STATUS_TIMEOUT` = permit-and-log for the spike
-- **TESTSIGNING + HVCI silent failure (Pitfall 4):** document `msinfo32` state at Phase 63 start; use Hyper-V VM
-- **Altitude conflict with EDR (Pitfall 5):** choose Activity-Monitor/FSFilter range; enumerate with `fltmc filters` before deploy
-- **macOS cross-target drift (Pitfall 9):** scan every macOS cherry-pick for edition-2024 let-chains and E0716 patterns; CI macOS green required before tag
-- **Seatbelt deny-after-allow ordering (Pitfall 10):** unit tests must assert ordering, not just rule presence
-- **macOS `/private/etc` symlink drift (Pitfall 11):** emit both symlink and canonical path for every macOS deny path
+- **Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude — verify no `build_notes/`/`.gsd/` staged before any `git push` (the "go-private" commit `74a47742` was cancelled 2026-06-11).
+- **Cross-target clippy (Linux + macOS) is a MUST** per CLAUDE.md for any cfg-gated Unix code (fires on Phases 68 and 70); Windows dev host can't cross-compile → CI is the load-bearing signal. Scan every macOS cherry-pick for edition-2024 let-chains + E0716 (the class that broke v0.62.0/v0.62.1 release tags).
+- **TRUST helper never weakens the D-32-12 gate** — it imports a cert into trust stores (operator-auditable); it never bypasses the gate or trusts an unsigned/wrong-signer binary.
 
-### Cross-phase parallelism notes
+### Pitfall guards carried forward (UPST + macOS)
 
-- **Phase 63:** Track A (macOS audit: `git log v0.57.0..v0.61.2` scoped to macOS paths — any host, read-only) is fully parallel to Track B (minifilter groundwork: requires WDK VM). No file overlap.
-- **Phase 66** (EDR UAT) has zero code dependencies on Phases 63-65. Can start as soon as an EDR host is available. Recommended: schedule after Phase 64-A so any new macOS profile content can be included in the UAT scope, but this is advisory, not blocking.
+- **macOS cross-target drift (Pitfall 9):** scan every macOS cherry-pick for edition-2024 let-chains and E0716 patterns; CI macOS green required before tag.
+- **Seatbelt deny-after-allow ordering (Pitfall 10):** unit tests must assert ordering, not just rule presence.
+- **macOS `/private/etc` symlink drift (Pitfall 11):** emit both symlink and canonical path for every macOS deny path.
+- **DIVERGENCE-LEDGER cluster isolation can be empirically false (`feedback_cluster_isolation_invalid`):** UPST8 audit (Phase 69) must diff-inspect re-export surfaces, not just `--name-only`.
 
-### Plan 54-01 Close — UPST7 Audit (2026-06-04)
+### Plan 54-01 Close — UPST7 Audit (2026-06-04) — UPST8 predecessor context
 
 - **Range:** v0.57.0..v0.59.0 | **upstream_head_at_audit:** `48d39f36` | **refetch_date:** 2026-06-04 | **drift_tool_sh_sha:** `0834aa66` (pin held).
-- **40 unique commits** (drift source of truth; the 260527-sgo gap analysis under-counted at ~19), **14 clusters**. Disposition breakdown: **will-sync 8** (allow_domain, proxy-502, bw://, profile JSONC/target_binary/opencode, pack-hints, diagnostic polish, timeout constants, policy-test) · **split 3** (C2 supervisor named-socket IPC→Ph59, C5 TLS-intercept ordering→Ph56, C8 session hooks→Ph58) · **won't-sync 3** (release commits, C13 sigstore→reclassified split, C14 macOS-only). **windows-touch:yes = 2** (C2, C8).
-- **ADR review:** **(a) confirm** Phase 33 Option A `continue` (5-dim L/M/H: security M, windows L, maintenance M, divergence M, contributor L). Does NOT supersede Phase 33 ADR.
-- **Cross-cluster re-export:** pub-use scan **clean** (no Phase-43-class trap); one **function-call** prereq C5→C3 (`partition_allow_domain`).
-- **SC4 TLS-intercept verdict:** **fork-preserve** — fork `RouteStore`/`CredentialStore` already decouples endpoint-before-credential; upstream `tls_intercept/` absent in fork; `credential.rs` untouched by `22e6c40` (byte-identical preserved). Small `proxy_runtime.rs` filter-allowlist port rides WITH Phase 56 allow_domain. (Phase 56 prerequisite note delivered.)
-- **Empirical cross-check:** 5 fork-shared files walked (route.rs, credential.rs, keystore.rs, profile/mod.rs, platform.rs); **zero drift-tool gaps** (route.rs/credential.rs fork-original → 0 upstream commits; profile/mod.rs 6 merges correctly excluded; platform.rs 0 → no java-dev cluster in range).
-- **v0.60.0 scope:** range kept v0.57.0..v0.59.0; **v0.60.0..v0.61.1 deferred to UPST8** (re-fetch surfaced v0.60.0 `9a05a4ff` + v0.61.0 + v0.61.1 — larger than the v0.60.0-alone set the plan anticipated). UPST8 stub appended to ROADMAP § Future Cycles (commit `0b49c697`).
-- **Zero-source-edits invariant honored:** `git diff plan_base_sha(eb8c9b82)..HEAD -- crates/ bindings/ scripts/ Makefile` = 0. Drift re-run idempotent (exit 0, 40 commits). DCO sign-off on all commits.
+- **40 unique commits**, **14 clusters**. Disposition breakdown: **will-sync 8** · **split 3** · **won't-sync 3**. **windows-touch:yes = 2** (C2, C8).
+- **ADR review:** **(a) confirm** Phase 33 Option A `continue` (5-dim L/M/H). Does NOT supersede Phase 33 ADR.
+- **v0.60.0 scope deferred to UPST8:** the v0.57.0..v0.59.0 audit kept range; **v0.60.0..v0.61.1 deferred to UPST8** (re-fetch surfaced v0.60.0 `9a05a4ff` + v0.61.0 + v0.61.1). **v2.11 Phase 69 extends the upper bound to `v0.61.2` and scopes to the non-macOS surface** (the macOS slice of v0.60.0..v0.61.2 was absorbed in v2.10 Phases 63-65). Re-fetch upstream at Phase 69 audit-open and record the new head SHA.
+- **Zero-source-edits invariant honored** for the audit; drift re-run idempotent; DCO sign-off on all commits.
 
 ## Deferred Items
 
 ### v2.10 close (acknowledged 2026-06-11)
 
-Pre-close `audit-open` reported **65 open items**; user chose "Acknowledge all & proceed". Breakdown: **35** `missing`/`unknown` quick-task slugs (pre-v2.5 stragglers, carried since prior closes) + **17** UAT gaps (phases 35/36/37/41/43/44/45/48/49/50/55/56/57/60/62/65/66) + **5** verification gaps (phases 41/44/49/56/57) + **5** dormant seeds (001-silent-enterprise-deployment, 002-network-egress-hardening, 003-siem-edr-telemetry, 004-multi-engine-pluggability, 005-zt-infra-attestation) + **3** new v2.11 carry-forward todos. The 3 todos are the only genuinely new items and are scoped to v2.11:
+Pre-close `audit-open` reported **65 open items**; user chose "Acknowledge all & proceed". Breakdown: **35** `missing`/`unknown` quick-task slugs (pre-v2.5 stragglers, carried since prior closes) + **17** UAT gaps (phases 35/36/37/41/43/44/45/48/49/50/55/56/57/60/62/65/66) + **5** verification gaps (phases 41/44/49/56/57) + **5** dormant seeds (001-silent-enterprise-deployment, 002-network-egress-hardening, 003-siem-edr-telemetry, 004-multi-engine-pluggability, 005-zt-infra-attestation) + **3** new v2.11 carry-forward todos. The 3 todos are the only genuinely new items and are now scoped into v2.11:
 
-| Todo | Headline |
-|------|----------|
-| `20260611-poc-cert-broker-clean-host` | v0.62.2 signed with untrusted POC cert → broker non-functional out-of-box on a clean Windows host (most consequential for distribution) |
-| `20260611-msi-vcredist-prereq` | MSI doesn't bundle/declare VC++ x64 runtime → 1603 on a clean host |
-| `20260611-macos-resl-enforcement-broken` | macOS `--timeout`/`RLIMIT_NPROC` enforcement doesn't fire on a real host (REQ-RESL-NIX-03; the Phase 65 gate-65-A A5 finding) |
+| Todo | Headline | v2.11 phase |
+|------|----------|-------------|
+| `20260611-poc-cert-broker-clean-host` | v0.62.2 signed with untrusted POC cert → broker non-functional out-of-box on a clean Windows host (most consequential for distribution) | Phase 67 (TRUST-01/02, partial close — real signing is enterprise-milestone-gated) |
+| `20260611-msi-vcredist-prereq` | MSI doesn't bundle/declare VC++ x64 runtime → 1603 on a clean host | Phase 67 (DIST-01) |
+| `20260611-macos-resl-enforcement-broken` | macOS `--timeout`/`RLIMIT_NPROC` enforcement doesn't fire on a real host (REQ-RESL-NIX-03; the Phase 65 gate-65-A A5 finding) | Phase 68 (RESL-MAC-01/02) |
 
-The Phase 65/66 UAT-gap rows reflect the macOS-resl A5 finding (filed as the todo above) and the EDR-proxy-vs-cloud-EDR caveat (WR-02 closed "under EDR-proxy", MDE re-run is an EDR-agnostic follow-up) — both already characterized, neither an undocumented regression.
+The Phase 65/66 UAT-gap rows reflect the macOS-resl A5 finding (now Phase 68) and the EDR-proxy-vs-cloud-EDR caveat (WR-02 closed "under EDR-proxy", MDE re-run is an EDR-agnostic follow-up) — both already characterized, neither an undocumented regression.
 
 ### v2.9 + v2.8 close (acknowledged 2026-06-06)
 
@@ -184,22 +202,15 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-11T21:35:40.157Z
+**Last session:** 2026-06-11 — v2.11 roadmap authored.
 
-**D-11c HARD gate ✅ GREEN:** PR #6 (`fix/macos-resl-host-gate`, `d9144663`) run [`27345465703`](https://github.com/OscarMackJr/nono/actions/runs/27345465703) — `Test (macos-latest)` + `Clippy (macos-latest)` both `success`. Evidence in `65-MACOS-CI-EVIDENCE.md`; gate-65-A UAT extended with Assertion 5 (the gated tests on a real host). `65-02-SUMMARY.md` written.
+**v2.11 roadmap complete (2026-06-11):** Phases 67-70 defined, 8/8 reqs mapped (100% coverage). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Phases 67 (clean-host Win install: DIST-01/02 + TRUST-01/02) and 68 (macOS resl: RESL-MAC-01/02) are independent + host-gated + parallel-safe. Phases 69 (UPST8 audit: UPST8-01) → 70 (UPST8 sync: UPST8-02) are the linear audit-then-sync pair, cadence-ordered after Phase 55.
 
-**Repo-hygiene this session:** cancelled local commit `74a47742` (the `.gitignore` "go-private" commit) — repo STAYS PUBLIC until Microsoft approves the minifilter altitude; `build_notes/` + `.gsd/` are ignored again (on disk, untracked, NOT exposed). `main` tip reset to `eca48beb` (74a47742 recoverable via reflog). PR #6 is on the FORK only (not pushed to upstream `always-further/nono`).
-
-**Stopped at:** context exhaustion at 75% (2026-06-11)
-
-**Latency capture (65-01 Task 2) ✅ DONE 2026-06-11:** on `nono-fltmgr-vm`, 100 denied creates (`denied 100/100`), instrumented `.sys` dumped via DebugView at `fltmc unload`. **SPAN-A** median 0.553 ms (min 0.387, p99 1.460); **SPAN-B** median 0.569 ms (min 0.486, p99 1.478); QPC 10 MHz. Ordering A<B at every percentile; both ~900× under the 500 ms fail-open envelope → favorable. Recorded in `65-SC1-latency-evidence.md` (PASS), `adr-65-latency-appendix.md`, and the go/no-go ADR latency section. DebugView gotcha: kernel DbgPrint needs Capture Kernel + Enable Verbose Kernel Output *before* unload; the `0x80000000` GENERIC_READ literal must be passed as decimal `2147483648` in PowerShell P/Invoke.
-
-**Remaining Phase 65 (host/human gates — Oscar):**
-
-- **gate-65-A** live `sandbox_init()` re-validation on a real macOS host (`65-HUMAN-UAT.md`, 5 assertions incl. the gated resl enforcement tests via `NONO_RESL_HOST_VALIDATED=1`). **IN PROGRESS** on `oscarmack@MacBookPro` (nono 0.62.2 dev build). Note: A1's `--dry-run` does NOT dump the Seatbelt sexp — use `nono run -vv --profile claude-code -- /usr/bin/true 2>&1 | grep -A40 "Generated Seatbelt profile"` (debug log, macos.rs:810); A4 `make test-lib` is the programmatic ordering proof. **65-HUMAN-UAT.md A1 command still needs fixing.** Close-blocking for the phase.
-- **Go/no-go ADR sign-off** — `adr-65-minifilter-go-no-go.md` is `Status: Proposed`; latency precondition now met; lean No-go/Conditional-go recommendation awaits Oscar's flip to Accepted (D-06, not auto-flipped).
-- **Phase 66 EDR UAT — KICKED OFF 2026-06-11.** **EDR decision: Sysmon + built-in Defender AV** (MDE not available — only the NonoTestSign driver cert on hand; MDE re-run is an EDR-agnostic follow-up). **Host = Azure VM `nono-fltmgr-vm`, READY:** signed v0.62.2 **machine** MSI validated (Authenticode Valid — required: the broker trust gate only spawns from a signed Program-Files install, so EDR-02(b) is only exercisable here); Defender AV 4.18.26050.15 **Normal** mode, EICAR quarantine proven (`ActionSuccess=True`); Sysmon v15.20 schema 4.91 running w/ SwiftOnSecurity config, events flowing. ≥24h bake satisfied (Defender live for days). UAT command (both boundaries): `nono run --profile claude-code -- cmd /c whoami /groups` (claude-code sets `windows_low_il_broker:true` → broker `create_low_integrity_primary_token` + `CreateProcessAsUserW(low_il_token)`). **Pending:** `bcdedit /set testsigning off` + reboot for a clean baseline (or record the posture); the **`66-HUMAN-UAT.md` checklist itself** (≥10 assertions, 2 passes no-exclusion→with-exclusion, EDR-02 MIC-boundary + T1134.002 alert-vs-quarantine) — needs `/gsd:plan-phase 66` (detection-method research). **Caveat for close-out:** Sysmon+Defender = representative EDR-proxy, not cloud-EDR → WR-02 closes "validated under EDR-proxy," not "under MDE."
+**Predecessor context (carried):** v2.10 shipped tag `v2.10` 2026-06-11; gate-65-A Seatbelt PASS; WR-02 CLOSED; ADR-65 Accepted (No-go/Conditional-go, DRV-PROD-01 deferred). The Phase 65 A5 finding (macOS resl enforcement doesn't fire) is now Phase 68. Repo STAYS PUBLIC (commit `74a47742` cancelled; `build_notes/`+`.gsd/` ignored, untracked).
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- `/gsd:plan-phase 67` — clean-host Windows install (needs a clean Win11 host for the install + broker UAT; production-signed MSI, not dev-layout).
+- `/gsd:plan-phase 68` — macOS resl enforcement fix (needs a real macOS host for `NONO_RESL_HOST_VALIDATED=1` re-validation). Parallel-safe with 67.
+- `/gsd:plan-phase 69` then `70` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI).
+- Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
