@@ -40,6 +40,12 @@
 
 use crate::launch_runtime::ResourceLimits;
 use nono::{NonoError, Result};
+// `nono-cli` has no direct `libc` dependency; it reaches libc through nix's public
+// re-export (matching `use nix::libc;` in exec_strategy.rs). Gated to macOS because
+// this module compiles on all targets (the `mod supervisor_macos;` declaration is not
+// cfg-gated) but every bare `libc::` use below is inside `#[cfg(target_os = "macos")]`.
+#[cfg(target_os = "macos")]
+use nix::libc;
 
 /// Read the current number of processes owned by the current UID.
 ///
