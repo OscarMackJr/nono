@@ -1,6 +1,6 @@
 ---
 slug: macos-resl-not-firing
-status: root-cause-found
+status: investigating
 trigger: "Phase 68-01 fix (setpgid(0,0) + libc::setrlimit(RLIMIT_NPROC, baseline+N)) does not make macOS --timeout and --max-processes enforcement fire on a real host, despite compiling and running."
 created: 2026-06-12
 updated: 2026-06-12
@@ -81,22 +81,28 @@ paths** — all of `crates/nono-cli/src/exec_strategy/supervisor_macos.rs` and t
 
 ## Current Focus
 
-hypothesis: ROOT CAUSE FOUND — NOT a code defect. The macOS UAT tested a STALE binary built
-  from `origin/main` (848ce71d), which does NOT contain the Phase 68 fix commits (1b2e2ad0,
-  f94c1c1b, 3583bacc — local-only, 17 commits ahead, unpushed). Proof: the host printed the exact
-  warning string Phase 68 deleted from source; child PGID == parent PGID (no setpgid, = old code);
-  the host test tree had 4 tests (missing the Phase 68 D-09 5th test). All H2'(a/b/c) hypotheses
-  describe NEW code that never ran on the host — moot for this data.
-test: Deploy the fix and re-test against it. (a) push local `main` → `origin/main`
-  (push-safety verified clean: no build_notes//.gsd/); (b) on the Mac: `git pull origin main`,
-  CONFIRM the fix landed (`grep -rc "absent from nix" crates/` MUST be 0; D-09 test present),
-  `cargo build -p nono-cli`, then re-run `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli
-  --test resl_nix_macos -- --nocapture`.
-expecting: Re-test yields the FIRST real signal on the fix. If both gated tests now PASS → fix
-  works, phase verifiable. If they still FAIL → re-open with the H2'(a/b/c) host probes (which
-  will now be meaningful because the new setpgid/setrlimit code is actually running).
-next_action: get user authorization to push (outward-facing, public repo); then hand the Mac the
-  re-pull + verify-fix-landed + rebuild + re-test sequence.
+hypothesis: H-REAP (post-deploy, real signal). With the fix actually running (binary e9fbedc7),
+  all THREE enforcement tests hang — including `macos_memory_limit_kills_at_rlimit_as` whose
+  RLIMIT_AS path PREDATES Phase 68. Since python3's allocate-then-exit child finishes in <1s
+  regardless of RLIMIT_AS, the 10s hang means the macOS supervisor does not detect/reap the
+  child's exit. Dominant hypothesis: the macOS run_supervisor_loop fails to terminate when the
+  child exits, masking every enforcement mechanism. Open sub-question: did Phase 68's added
+  `setpgid(0,0)` REGRESS reaping (old-code probe showed nono/bash exiting ~t=3s; new code hangs),
+  or is reaping independently broken and Phase 68's fix simply unobservable behind it?
+test: Two host probes on the DEPLOYED binary (e9fbedc7), both with `--allow-cwd` to remove the
+  cwd-prompt confound and `NONO_LOG=debug` + a `ps` watcher:
+  (P-A) PURE REAP, no enforcement: `nono run --allow-cwd --read=/bin --read=/usr --read=/private
+    -- sleep 3`. Does nono exit at ~3s (reaping OK) or hang past 3s (reaping broken)?
+  (P-B) MEMORY w/ marker: `nono run --allow-cwd --memory 32m --read=... --read=/usr/lib --
+    python3 -c "x=bytearray(256*1024*1024); print('ALLOCATED', flush=True)"`. Does "ALLOCATED"
+    print (RLIMIT_AS NOT enforced) or python die first (enforced)? Does nono linger after python
+    exits (reaping bug)?
+expecting: P-A is the discriminator. sleep 3 hanging => pure supervisor-reap defect (fix that
+  first; it gates everything). sleep 3 exiting cleanly at 3s => reaping is fine and the bug is in
+  each enforcement mechanism (watchdog kill targeting + setrlimit efficacy) — pivot back to H2'.
+  P-B tells us whether RLIMIT_AS fires and whether nono reaps a fast-exiting child.
+next_action: CHECKPOINT — hand P-A and P-B to the user to run on Oscars-MacBook-Pro and paste
+  the logs + `ps` + `time` output back.
 
 ## Root Cause
 
@@ -290,6 +296,28 @@ static `--read` grants (no IPC socket) so they bypass it — it is a confound, n
     the macOS supervised long-lived-child path, distinct from RLIMIT_NPROC efficacy.
     Host data needed to confirm whether bash actually exits at ~5s while nono hangs
     (=> reaping bug) or bash stays alive (=> enforcement + something keeps it running).
+
+- timestamp: 2026-06-12 (FIRST REAL SIGNAL — gated tests vs the DEPLOYED fix, binary e9fbedc7)
+  checked: `NONO_RESL_HOST_VALIDATED=1 cargo test --test resl_nix_macos` after the compile
+    fixes (53501113 + fa6c2dc6). The new code is confirmed running: `running 5 tests` (the
+    Phase 68 D-09 test is present) and the build compiled the actual fix.
+  found: 2 pass / 3 FAIL. `macos_cpu_percent_rejected` + `macos_no_warnings_on_resource_flags`
+    pass. ALL THREE enforcement tests HANG to their bounds: timeout (12s), max-processes (20s),
+    AND **`macos_memory_limit_kills_at_rlimit_as` (10s)**. The memory test is the key new datum:
+    RLIMIT_AS enforcement is PRE-Phase-68 (the `--memory`/RLIMIT_AS child-arm block existed
+    before this work), yet it ALSO hangs. Its child `python3 -c "x=bytearray(256MB)"` allocates-
+    then-exits in well under 1s REGARDLESS of whether RLIMIT_AS fires, so a 10s hang cannot be a
+    "limit too weak" result — it can only mean nono does not detect/reap the child's exit.
+  implication: The defect is BROADER than Phase 68's setpgid/NPROC changes — it sits in the
+    macOS supervised path shared by all three (RLIMIT_AS predates Phase 68). Dominant hypothesis
+    H-REAP: the macOS run_supervisor_loop fails to terminate/reap a child that exits on its own
+    (or stays alive), so nono hangs and every enforcement mechanism is masked. The passing
+    `macos_no_warnings` test (echo hi via `.output()`) shows SOME supervised child does get
+    reaped — so the bug is conditional (child kind / how the harness waits). NOTE: this means
+    Phase 68's specific fix may be CORRECT but unobservable until the reaping defect is fixed —
+    OR Phase 68's `setpgid(0,0)` itself regressed reaping (the prior OLD-code probe showed
+    nono/bash exiting by ~t=3s; the NEW code hangs). Must isolate with a no-enforcement reap
+    probe (`sleep 3`, no flags) and a python-with-marker probe on the DEPLOYED binary.
 
 ## Eliminated
 
