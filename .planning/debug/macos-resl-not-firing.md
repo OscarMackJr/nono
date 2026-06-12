@@ -35,6 +35,15 @@ session is the diagnostic input. The confirmed defect set:
 OPEN DATA POINT for the re-plan: P-A (`sleep 3`, no flags) — did nono exit at ~3s (basic reaping OK)
 or hang (reaping broken)? Not yet confirmed; cheap to capture on the host during planning research.
 
+PROVENANCE (2026-06-12, blame): D1+D2+D3 are all FORK-authored macOS/Unix code on `origin/main`
+(`OscarMackJr/nono`), NOT upstream and NOT Windows-specific. D1 set_read_timeout wiring = `e9032edd`
+(Phase 59-02, oscarmackjr-twg); D2 RLIMIT_AS fail-closed child block = `28df5c50` (Phase 25-03,
+oscarmackjr-twg); the `set_read_timeout` *method* alone is upstream (Luke Hinds `d46d6026`).
+`upstream/main` (always-further/nono, local ref possibly stale) has 0 hits for `supervisor_ipc_read_timeout`
+and the RLIMIT_AS child block. These are macOS resource-limit + supervisor-IPC features the fork built but
+never ran on a real Mac (Windows dev host → Windows `cargo check` only). The re-plan fixes the fork's own
+macOS code; there is no upstream "known-good" to diff against for these paths.
+
 Cross-cutting lesson: the Phase 68 macOS code was authored on a Windows host and shipped through a
 Windows-only `cargo check` that cannot compile Apple cfg arms — two compile errors + fmt debt slipped
 through ([[feedback_clippy_cross_target]], 3rd+ recurrence). The re-plan MUST treat a real macOS
