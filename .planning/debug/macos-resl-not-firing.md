@@ -107,11 +107,11 @@ pre-fix source, so the UAT exercised the old no-op behavior. This is a deploymen
 not a defect in the setpgid/setrlimit fix. The fix's correctness remains UNVERIFIED pending a
 re-test against the actually-deployed code.
 
-## Resolution (pending user-authorized push + Mac re-test)
+## Resolution
 
-1. Push local `main` → `origin/main` (safety-checked: 17 commits, no build_notes//.gsd/).
-2. Mac: `git pull origin main` → verify fix landed → `cargo build -p nono-cli` → re-run gated tests.
-3. Evaluate the FIRST real signal; only then conclude on the fix.
+1. ✅ DONE — pushed local `main` → `origin/main` (848ce71d..63dfd9a5, 18 commits, safety-checked clean). 2026-06-12.
+2. PENDING — Mac: `git pull origin main` → **verify fix landed** (`grep -rc "absent from nix" crates/` MUST be 0; D-09 test present; `cargo test` should now show 5 tests not 4) → `cargo build -p nono-cli` → re-run `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`.
+3. PENDING — Evaluate the FIRST real signal. PASS → phase 68 verifiable. FAIL → re-open `/gsd:debug continue macos-resl-not-firing` with the H2'(a/b/c) host probes (now meaningful — the new setpgid/setrlimit code will actually be running).
 
 ## Out of scope (do NOT chase here — separate filed bug)
 

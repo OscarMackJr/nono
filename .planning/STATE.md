@@ -27,8 +27,8 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 Phase: 68 (macos-resl-enforcement-fix) — BLOCKED (human-verify gate FAILED on real macOS host)
 Plan: 1 of 1 (NOT complete — Tasks 1+2+3-automated committed `1b2e2ad0`..`cc9f8c94`, but the fix does not make enforcement fire)
-Status: macOS UAT 2026-06-12 — `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc` BOTH still FAIL (`NONO_RESL_HOST_VALIDATED=1`). macOS build succeeded → changes live but insufficient/wrong-path. Confound: separate pre-existing `audit_attestation` sandbox-init failure `set_read_timeout EINVAL (os error 22)` on AF_UNIX socketpair (Phase 59 IPC; not 68's target). Next: `/gsd:debug` for systematic host-iterated root-cause.
-Last activity: 2026-06-12 -- Phase 68-01 macOS host UAT FAILED; fix insufficient; routing to debug
+Status: ROOT CAUSE FOUND (debug `macos-resl-not-firing`, status root-cause-found) — the 2026-06-12 macOS UAT tested a STALE binary: the fix commits (1b2e2ad0/f94c1c1b/3583bacc) were local-only/unpushed, so the Mac's `git pull origin main` (848ce71d) + `cargo build` compiled PRE-fix code (host printed the exact warning Phase 68 deleted; child PGID==parent PGID; only 4 tests not 5). NOT a code defect. **Fix now PUSHED to origin/main `63dfd9a5` (2026-06-12).** AWAITING Mac re-test against the deployed fix (`git pull` → verify fix landed → `cargo build` → `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`). Separate confound still filed: audit_attestation set_read_timeout EINVAL (Phase 59 IPC).
+Last activity: 2026-06-12 -- Phase 68-01 UAT root-caused to stale binary; fix pushed to origin 63dfd9a5; awaiting Mac re-test
 
 ### v2.11 Phase Summary (active)
 
