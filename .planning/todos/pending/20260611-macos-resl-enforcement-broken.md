@@ -3,6 +3,7 @@
 **Captured:** 2026-06-11 (Phase 65 gate-65-A live macOS UAT, Assertion 5)
 **Severity:** high — a documented REQ-RESL-NIX-03 feature is non-functional on macOS
 **Source:** `.planning/phases/65-minifilter-adr-macos-live-re-validation/65-HUMAN-UAT.md` (A5)
+**Resolves phase:** 68 — macOS Resource-Limit Enforcement Fix (v2.11; RESL-MAC-01/RESL-MAC-02)
 
 ## Problem
 On a **real macOS host** (`Oscars-MacBook-Pro`, Apple Silicon), with `NONO_RESL_HOST_VALIDATED=1`:

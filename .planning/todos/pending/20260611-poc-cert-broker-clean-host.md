@@ -3,6 +3,7 @@
 **Captured:** 2026-06-11 (Phase 66 WR-02 EDR UAT, clean-host install) — **headline finding**
 **Severity:** high — the public release's supervised/broker path does not work out-of-the-box
 **Source:** `.planning/phases/66-wr-02-edr-human-uat/66-HUMAN-UAT.md` (findings)
+**Resolves phase:** 67 — Clean-Host Windows Install (v2.11; TRUST-01/TRUST-02 interim trust path only — real publicly-trusted signing is DIST-SIGN-01, deferred to the enterprise milestone)
 
 ## Problem
 v0.62.2 is Authenticode-signed with a **self-signed `CN=nono Test Signing` POC cert**. On any
