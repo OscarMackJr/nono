@@ -390,6 +390,34 @@ SO_RCVTIMEO with a poll/recv-deadline on macOS (or skip the read-timeout on macO
     quiet-hangs) — likely a timing/peer-state interaction (e.g. set_read_timeout EINVAL only once the
     child end has closed early). This exceeds a single-defect debug fix.
 
+- timestamp: 2026-06-12 (68-02 host UAT on Oscars-MacBook-Pro, binary 1be54bec — D1/D2 FIXED, D3 NOT)
+  checked: the D1/D2 sanity runs + the full `NONO_RESL_HOST_VALIDATED=1` gated suite.
+  found:
+    * **D1 FIXED** ✅ — `nono run --memory 4g/32m -- echo hi` now prints `hi` and exits; the
+      `Failed to set socket read timeout` abort is GONE (platform-gate to Linux worked).
+    * **D2 FIXED** ✅ — same runs print `setrlimit(RLIMIT_AS) not enforced on macOS (best-effort);
+      continuing` then `hi`; the `_exit(126)` abort is GONE (downgrade worked).
+    * **D3 NOT FIXED** ❌ — gated suite still 2 pass / 3 FAIL: `macos_timeout_kills_at_deadline`
+      (12s hang), `macos_max_processes_blocks_on_rlimit_nproc` (20s hang), `macos_memory_limit_kills_at_rlimit_as`
+      (10s hang). SMOKING GUN line: `WARN parent setpgid(18774, 18774) failed (ESRCH: No such process);
+      watchdog will still attempt getpgid`.
+  implication: The D3 **double-setpgid is INEFFECTIVE**. The parent's `setpgid(child, child)` (placed
+    ~line 1487, after signal-forwarding setup) loses the race: by then the child has already exited
+    (ESRCH, seen for instant `echo hi`) or exec'd (EACCES, expected for `sleep`). POSIX forbids the
+    parent setpgid'ing a child that has execve'd. So the only effective pgrp set is the child's OWN
+    `setpgid(0,0)` — i.e. D3's behavior is UNCHANGED from pre-68-02, which is why timeout/max-proc still
+    hang identically. The non-PTY wait loop (`wait_for_child_with_startup_timeout`, exec_strategy.rs
+    2086-2105) polls `waitpid(WNOHANG)` + 200ms sleep and returns on child exit — reaping WORKS (P-A
+    `sleep 3` exits at 3s). So the hangs = the CHILDREN don't die: `sleep 60` needs the `--timeout`
+    watchdog `kill(-child_pgrp, SIGKILL)` which MISSES; max-proc bash + memory python3 also fail to
+    exit/get-killed. The real open question is now NARROW: why does the watchdog `kill(-child_pgrp)`
+    miss when the child IS its own pgrp leader (via its own setpgid(0,0))? Candidates: (a) the watchdog
+    thread never fires / getpgid(child) returns a stale/parent pgrp; (b) the child STOPS via SIGTTIN/
+    SIGTTOU (own pgrp ≠ terminal foreground group) and WNOHANG-without-WUNTRACED reports it as StillAlive
+    forever; (c) the kill targets the wrong group. A correct D3 fix likely needs a fork→exec SYNC BARRIER
+    (pipe: child blocks until the parent has setpgid'd it) OR a different kill strategy — NOT the
+    naive double-setpgid. This is a redesign, not a one-liner.
+
 ## Eliminated
 
 - hypothesis: H1 — the modified ForkResult::Child arm / setrlimit / setpgid /
