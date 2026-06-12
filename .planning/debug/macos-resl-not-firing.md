@@ -1,6 +1,7 @@
 ---
 slug: macos-resl-not-firing
-status: investigating
+status: diagnosed
+handoff: re-scoped to a planned phase (user decision 2026-06-12) — fix is multi-defect, deferred to /gsd:plan-phase 68
 trigger: "Phase 68-01 fix (setpgid(0,0) + libc::setrlimit(RLIMIT_NPROC, baseline+N)) does not make macOS --timeout and --max-processes enforcement fire on a real host, despite compiling and running."
 created: 2026-06-12
 updated: 2026-06-12
@@ -9,6 +10,35 @@ requirements: [RESL-MAC-01, RESL-MAC-02]
 ---
 
 # Debug Session: macOS RESL enforcement still not firing (Phase 68)
+
+## ✅ DIAGNOSIS COMPLETE — handoff to re-plan (2026-06-12)
+
+This session diagnosed why Phase 68's macOS RESL fix doesn't work on a real host. Two non-bugs were
+cleared first (a stale/undeployed binary, then two macOS-only compile errors — see Evidence + the
+Resolution sub-steps below), which got us to a real test of the actual fix. The real test exposed
+that **the macOS supervised path has multiple foundational defects, broader than Phase 68's planned
+2-bug scope.** Per user decision, the FIX is re-scoped to planned work (`/gsd:plan-phase 68`); this
+session is the diagnostic input. The confirmed defect set:
+
+- **D1 — `set_read_timeout` / SO_RCVTIMEO EINVAL on the AF_UNIX supervisor socket** (exec_strategy.rs:1381,
+  socket.rs:194). Fires in the CORE RESL supervised path (NOT rollback-only — earlier "out of scope"
+  call was falsified by probe P-B). Aborts/destabilizes supervised runs. Pre-dates Phase 68 (Phase 59 IPC).
+  Fix direction: replace SO_RCVTIMEO with a poll/recv-deadline on macOS (or skip the read-timeout there).
+- **D2 — `setrlimit(RLIMIT_AS, N)` fails in the child** (exec_strategy.rs:1003) for `--memory`. macOS
+  rejects the low RLIMIT_AS; the child `_exit(126)`s. Memory enforcement broken at the syscall level.
+  Pre-dates Phase 68. Needs its own root-cause (why setrlimit(RLIMIT_AS) EINVAL/EPERMs on macOS arm64).
+- **D3 — `--timeout` watchdog + `--max-processes` non-enforcement** — Phase 68's original targets
+  (setpgid + RLIMIT_NPROC). The Phase 68 code change may be correct but is unobservable behind D1/D2.
+  Note: the deployed Phase 68 source (commits 1b2e2ad0/f94c1c1b/3583bacc + compile fixes 53501113/
+  fa6c2dc6) is ON origin/main; re-plan should decide whether to keep, revise, or gate it.
+
+OPEN DATA POINT for the re-plan: P-A (`sleep 3`, no flags) — did nono exit at ~3s (basic reaping OK)
+or hang (reaping broken)? Not yet confirmed; cheap to capture on the host during planning research.
+
+Cross-cutting lesson: the Phase 68 macOS code was authored on a Windows host and shipped through a
+Windows-only `cargo check` that cannot compile Apple cfg arms — two compile errors + fmt debt slipped
+through ([[feedback_clippy_cross_target]], 3rd+ recurrence). The re-plan MUST treat a real macOS
+build+test (host or CI) as the load-bearing gate, not Windows `cargo check`.
 
 ## ⚠ Platform constraint (READ FIRST — shapes the whole investigation)
 

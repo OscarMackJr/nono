@@ -3,7 +3,7 @@
 **Captured:** 2026-06-12 (surfaced during Phase 68-01 macOS host UAT on Oscars-MacBook-Pro)
 **Severity:** high — supervised runs that open the capability-expansion IPC socket (e.g. rollback/snapshots) fail to start on macOS
 **Source:** `cargo test -p nono-cli` on real macOS host — `audit_attestation` 3 tests fail at "Applying sandbox..."
-**Relation to Phase 68:** SEPARATE bug. Phase 68 (RESL enforcement) never touched the IPC layer. The RESL tests use only static `--read` grants (no IPC socket) so they bypass this — it is a confound for the RESL failures, not their cause. Filed standalone so Phase 68 debug stays scoped.
+**Relation to Phase 68:** ⚠ CORRECTED 2026-06-12 — this is a **Phase 68 BLOCKER (defect D1)**, NOT a separate side issue. Host probe P-B proved the EINVAL fires in the CORE RESL supervised path (`exec_strategy.rs:1381`, `supervisor_sock` Some for every supervised run with an IPC socket — macOS rejects SO_RCVTIMEO on the AF_UNIX socketpair, at least once the child end has closed). The earlier "RESL tests bypass it / out of scope" claim was FALSIFIED. See `.planning/debug/macos-resl-not-firing.md` (DIAGNOSIS COMPLETE block) — to be folded into the re-planned Phase 68.
 
 ## Problem
 On a real macOS host, supervised runs that create the supervisor IPC socket fail at sandbox init:

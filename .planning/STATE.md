@@ -21,12 +21,12 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 68 — macos-resl-enforcement-fix (BLOCKED: macOS host UAT failed; fix insufficient — needs `/gsd:debug`)
+**Current Focus:** Phase 68 — macos-resl-enforcement-fix (DIAGNOSED multi-defect; RE-SCOPED to a planned phase — next `/gsd:plan-phase 68`)
 
 ## Current Position
 
-Phase: 68 (macos-resl-enforcement-fix) — BLOCKED (human-verify gate FAILED on real macOS host)
-Plan: 1 of 1 (NOT complete — Tasks 1+2+3-automated committed `1b2e2ad0`..`cc9f8c94`, but the fix does not make enforcement fire)
+Phase: 68 (macos-resl-enforcement-fix) — BLOCKED → RE-SCOPE. Debug `macos-resl-not-firing` (status: diagnosed) found the macOS supervised path has THREE foundational defects, broader than the planned 2-bug scope: **D1** `set_read_timeout`/SO_RCVTIMEO EINVAL on the AF_UNIX supervisor socket (core RESL path; todo 20260612-...-rcvtimeo-einval), **D2** `setrlimit(RLIMIT_AS)` fails in child → `--memory` broken (todo 20260612-...-rlimit-as), **D3** `--timeout`/`--max-processes` non-enforcement (original targets). D1+D2 PREDATE Phase 68. Phase 68's setpgid/NPROC fix is deployed on origin/main (`1b2e2ad0`/`f94c1c1b`/`3583bacc` + macOS compile fixes `53501113`/`fa6c2dc6`, head `173f8386`) but unobservable behind D1/D2. Per user decision 2026-06-12, fix re-scoped to planned work. NEXT: `/gsd:plan-phase 68` covering D1+D2+D3 (planning input = debug file DIAGNOSIS COMPLETE block). Load-bearing gate must be a real macOS build+test, NOT Windows `cargo check`.
+Plan: 1 of 1 (NOT complete — Tasks 1+2+3-automated committed `1b2e2ad0`..`cc9f8c94` + compile fixes; fix deployed but blocked behind D1/D2; re-plan will decide keep/revise/gate)
 Status: ROOT CAUSE FOUND (debug `macos-resl-not-firing`, status root-cause-found) — the 2026-06-12 macOS UAT tested a STALE binary: the fix commits (1b2e2ad0/f94c1c1b/3583bacc) were local-only/unpushed, so the Mac's `git pull origin main` (848ce71d) + `cargo build` compiled PRE-fix code (host printed the exact warning Phase 68 deleted; child PGID==parent PGID; only 4 tests not 5). NOT a code defect. **Fix now PUSHED to origin/main `63dfd9a5` (2026-06-12).** AWAITING Mac re-test against the deployed fix (`git pull` → verify fix landed → `cargo build` → `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`). Separate confound still filed: audit_attestation set_read_timeout EINVAL (Phase 59 IPC).
 Last activity: 2026-06-12 -- Phase 68-01 UAT root-caused to stale binary; fix pushed to origin 63dfd9a5; awaiting Mac re-test
 

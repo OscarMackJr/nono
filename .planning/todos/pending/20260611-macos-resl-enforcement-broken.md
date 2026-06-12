@@ -47,3 +47,17 @@ with host-side diagnostics (see suggested first probe below). Confound to keep s
 Suggested first host probe (Mac): run the timeout case with verbose logging to learn which exec path runs and
 whether the watchdog thread is even spawned:
 `NONO_LOG=debug ./target/debug/nono run --timeout 5s --read=/bin --read=/usr --read=/private -- sleep 60`
+
+## Diagnosis complete 2026-06-12 — RE-SCOPED to a planned phase (defect D3 of a multi-defect set)
+Debug session `.planning/debug/macos-resl-not-firing.md` (status: diagnosed) ran Attempt 1 to ground on a
+real host and found the macOS supervised path has THREE foundational defects, broader than this todo's
+original `--timeout`/`--max-processes` framing:
+- **D1** `set_read_timeout`/SO_RCVTIMEO EINVAL on the AF_UNIX supervisor socket (core RESL path) — todo
+  `20260612-macos-supervisor-ipc-rcvtimeo-einval.md`.
+- **D2** `setrlimit(RLIMIT_AS)` fails in the child → `--memory` broken — todo
+  `20260612-macos-rlimit-as-setrlimit-fails.md`.
+- **D3** `--timeout` watchdog + `--max-processes` non-enforcement (THIS todo; Phase 68's original targets).
+D1+D2 PREDATE Phase 68. Phase 68's setpgid/RLIMIT_NPROC fix is deployed on origin/main (commits 1b2e2ad0/
+f94c1c1b/3583bacc + compile fixes 53501113/fa6c2dc6) but is unobservable behind D1/D2. Per user decision
+(2026-06-12), the fix is re-scoped to planned work — next: `/gsd:plan-phase 68` covering D1+D2+D3. The
+debug file's DIAGNOSIS COMPLETE block is the planning input.
