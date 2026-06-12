@@ -1,0 +1,273 @@
+---
+slug: macos-resl-not-firing
+status: root-cause-found
+trigger: "Phase 68-01 fix (setpgid(0,0) + libc::setrlimit(RLIMIT_NPROC, baseline+N)) does not make macOS --timeout and --max-processes enforcement fire on a real host, despite compiling and running."
+created: 2026-06-12
+updated: 2026-06-12
+phase: 68
+requirements: [RESL-MAC-01, RESL-MAC-02]
+---
+
+# Debug Session: macOS RESL enforcement still not firing (Phase 68)
+
+## ⚠ Platform constraint (READ FIRST — shapes the whole investigation)
+
+The bug **only reproduces on macOS** (Apple Silicon, `Oscars-MacBook-Pro`). The dev host running
+this debug session is **Windows (win32, PowerShell)** and **cannot build or run the macOS code
+paths** — all of `crates/nono-cli/src/exec_strategy/supervisor_macos.rs` and the
+`#[cfg(target_os = "macos")]` arms in `exec_strategy.rs` are cfg-gated out on Windows. Therefore:
+
+- The debugger **cannot reproduce locally**. Investigation = static code analysis (read the macOS
+  code paths) → form hypotheses → produce **specific host-side commands for the USER to run on the
+  Mac** → user pastes output → refine. This is a human-in-the-loop, checkpoint-heavy session.
+- Do NOT propose "run the test locally to confirm." Propose Mac commands and ask the user to run them.
+- Any code fix will likewise need the user to `cargo build -p nono-cli` + re-run the gated tests on
+  the Mac to verify.
+
+## Symptoms (prefilled from Phase 68 execute-phase UAT)
+
+- **Expected:** `nono run --timeout 5s -- sleep 60` SIGKILLs the child at ~5s (exit non-zero,
+  elapsed 3–10s). `nono run --max-processes 5 -- bash -c "for i in $(seq 1 20); do sleep 5 & done; wait"`
+  causes `fork()` to fail with EAGAIN past the cap (child exits non-zero).
+- **Actual:** Both hang until the test harness's bounded kill fires:
+  - `macos_timeout_kills_at_deadline` → FAILED: "nono did not exit within 12s" (watchdog never SIGKILLs).
+  - `macos_max_processes_blocks_on_rlimit_nproc` → FAILED: "nono did not exit within 20s" (no EAGAIN).
+- **Error messages:** None from the RESL path itself — it just doesn't enforce. (Test panic is the
+  harness's bounded-timeout guard, not a nono error.)
+- **Timeline:** REQ-RESL-NIX-03 macOS enforcement was never host-validated (Phase 37 host-blocked).
+  Phase 65 gate-65-A first confirmed it broken on a real host (the "A5" finding). Phase 68-01 attempted
+  a fix (this session debugs why that fix is a runtime no-op).
+- **Reproduction (on the Mac):**
+  ```
+  NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos -- --nocapture
+  ```
+  (Tests at `crates/nono-cli/tests/resl_nix_macos.rs`. Each spawns the release/debug `nono` binary
+  via `run_bounded`. `cargo build -p nono-cli` SUCCEEDS on macOS — the fix IS in the binary.)
+
+## What the Phase 68-01 fix changed (already applied, commits 1b2e2ad0, f94c1c1b, 3583bacc)
+
+- `supervisor_macos.rs`: added `uid_process_count()` (parent-side `sysctl(KERN_PROC_UID)`),
+  `MacosResourceLimits::baseline_uid_count`, and replaced the `tracing::warn!` RLIMIT_NPROC no-op in
+  `install_pre_exec` (**Direct path**) with real `libc::setrlimit(RLIMIT_NPROC, baseline+N)`.
+- `exec_strategy.rs` `ForkResult::Child` arm (**Supervised path**, CR-01 region): added `setpgid(0,0)`
+  (so the watchdog's `kill(-child_pgrp, SIGKILL)` targets only the child group) and replaced the
+  `MSG_RLIMIT_NPROC_UNAVAILABLE` no-op with real `libc::setrlimit(RLIMIT_NPROC)` + `_exit(126)` on fail.
+- Watchdog (unchanged, parent arm `exec_strategy.rs:~1409`): `match getpgid(Some(child))` →
+  `supervisor_macos::spawn_macos_timeout_watchdog(deadline, child_pgrp)` which sleeps to the deadline
+  then `kill(-child_pgrp, SIGKILL)` (WR-04: no PID fallback on getpgid Err).
+
+## Leading hypotheses to test (static-analysis candidates)
+
+1. **Wrong exec strategy / path not reached.** Default `nono run` selects Supervised (`select_exec_strategy`).
+   Does the macOS supervised run actually go through the `ForkResult::Child` arm that was modified, or a
+   different launch path (PTY setup, posix_spawn, `std::process::Command`) that bypasses both the modified
+   child arm AND `install_pre_exec`? If neither modified site executes, the fix is a no-op by construction.
+   → First probe: `NONO_LOG=debug ./target/debug/nono run --timeout 5s --read=/bin --read=/usr --read=/private -- sleep 60`
+   on the Mac. Look for: which strategy is logged, whether `spawn_macos_timeout_watchdog` is reached,
+   whether getpgid succeeds, whether the setpgid/setrlimit child-arm log lines appear.
+2. **Watchdog thread spawns but the kill misses / the parent never reaps.** `kill(-child_pgrp, ...)`
+   could target the wrong group (if setpgid ran in the child but the parent captured getpgid BEFORE the
+   child's setpgid took effect — a fork race), or the supervisor's `wait()` blocks elsewhere so even a
+   killed child doesn't let nono exit. → Check whether `sleep 60` actually dies at ~5s (`ps`/Activity
+   Monitor during the run) even if nono itself doesn't exit — that distinguishes "kill missed" from
+   "child died but supervisor hangs".
+3. **RLIMIT_NPROC applied but ineffective.** macOS RLIMIT_NPROC is UID-wide; if the baseline read is
+   wrong (e.g. baseline already ≥ hard limit, or the cap logic clamps target to the existing soft so it
+   never tightens), setrlimit "succeeds" but doesn't constrain. → Probe: a tiny `nono run --max-processes 1`
+   and observe; add temporary debug logging of the computed rlim_cur/rlim_max.
+4. **Timeout-only runs may not create the watchdog at all** if `timeout_deadline` is None on the path
+   taken, or if the watchdog is gated behind a `supervisor_sock`/IPC condition that isn't met for static
+   `--read` runs.
+
+## Current Focus
+
+hypothesis: ROOT CAUSE FOUND — NOT a code defect. The macOS UAT tested a STALE binary built
+  from `origin/main` (848ce71d), which does NOT contain the Phase 68 fix commits (1b2e2ad0,
+  f94c1c1b, 3583bacc — local-only, 17 commits ahead, unpushed). Proof: the host printed the exact
+  warning string Phase 68 deleted from source; child PGID == parent PGID (no setpgid, = old code);
+  the host test tree had 4 tests (missing the Phase 68 D-09 5th test). All H2'(a/b/c) hypotheses
+  describe NEW code that never ran on the host — moot for this data.
+test: Deploy the fix and re-test against it. (a) push local `main` → `origin/main`
+  (push-safety verified clean: no build_notes//.gsd/); (b) on the Mac: `git pull origin main`,
+  CONFIRM the fix landed (`grep -rc "absent from nix" crates/` MUST be 0; D-09 test present),
+  `cargo build -p nono-cli`, then re-run `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli
+  --test resl_nix_macos -- --nocapture`.
+expecting: Re-test yields the FIRST real signal on the fix. If both gated tests now PASS → fix
+  works, phase verifiable. If they still FAIL → re-open with the H2'(a/b/c) host probes (which
+  will now be meaningful because the new setpgid/setrlimit code is actually running).
+next_action: get user authorization to push (outward-facing, public repo); then hand the Mac the
+  re-pull + verify-fix-landed + rebuild + re-test sequence.
+
+## Root Cause
+
+The Phase 68 fix was never deployed to the macOS test host. The fix commits exist only on the
+Windows dev host's local `main` (17 commits ahead of `origin/main`, unpushed). The Mac's
+`git pull origin main` fetched `848ce71d` (which lacks the fix) and `cargo build` compiled
+pre-fix source, so the UAT exercised the old no-op behavior. This is a deployment/sync confound,
+not a defect in the setpgid/setrlimit fix. The fix's correctness remains UNVERIFIED pending a
+re-test against the actually-deployed code.
+
+## Resolution (pending user-authorized push + Mac re-test)
+
+1. Push local `main` → `origin/main` (safety-checked: 17 commits, no build_notes//.gsd/).
+2. Mac: `git pull origin main` → verify fix landed → `cargo build -p nono-cli` → re-run gated tests.
+3. Evaluate the FIRST real signal; only then conclude on the fix.
+
+## Out of scope (do NOT chase here — separate filed bug)
+
+The `audit_attestation` sandbox-init failure `Failed to set socket read timeout: Invalid argument
+(os error 22)` on the AF_UNIX supervisor socketpair is a SEPARATE pre-existing Phase 59 IPC bug
+(`crates/nono/src/supervisor/socket.rs:194`, wired `exec_strategy.rs:1378`). Filed at
+`.planning/todos/pending/20260612-macos-supervisor-ipc-rcvtimeo-einval.md`. The RESL tests use only
+static `--read` grants (no IPC socket) so they bypass it — it is a confound, not the cause.
+
+## Evidence
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: launch_runtime.rs::select_exec_strategy (lines 543-558)
+  found: Unconditionally returns ExecStrategy::Supervised. All five inputs are
+    `let _ =`-discarded. So a default `nono run --timeout`/`--max-processes` ALWAYS
+    takes the Supervised path.
+  implication: H1's premise "wrong strategy" is false at the strategy-selection level.
+    The Supervised raw-fork path is the one that runs.
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: exec_strategy.rs supervised macOS path: setpgid (966-987), setrlimit
+    NPROC/AS in ForkResult::Child (989-1064), watchdog spawn in ForkResult::Parent
+    (1484-1507). Gating: setrlimit on `macos_resource_limits.is_some()` (=
+    resource_limits non-empty), watchdog on `timeout_deadline.is_some()`.
+  found: ALL three modified sites are structurally ON the default supervised path.
+    `timeout` flows RunArgs -> ResourceLimits.timeout -> timeout_deadline (877-879);
+    `max_processes` flows into MacosResourceLimits and the child arm. The modified
+    code is reached for `--timeout`/`--max-processes` runs.
+  implication: H1 (modified sites bypassed / structural no-op) is REFUTED by static
+    reading. The fix code IS on-path. The no-op is a RUNTIME failure of the
+    mechanism, not a path-selection miss. Pivot to H2 (watchdog kill misses / wrong
+    pgrp) and H3 (rlimit ineffective).
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: supervised_runtime.rs:343-434, 472-496 — execute_supervised is ALWAYS
+    called with `Some(&supervisor_cfg)`. exec_strategy.rs:626-627: on macOS
+    `needs_child_ipc = supervisor.is_some()` (NO extra static-grant gating, unlike
+    Linux 619-624). So `socket_pair = Some(SupervisorSocket::pair())` is created for
+    EVERY macOS supervised run, including the static-`--read` RESL tests.
+  found: The debug file's "Out of scope" claim — "RESL tests use only static --read
+    grants (no IPC socket) so they bypass [the set_read_timeout EINVAL]" — is FALSE
+    on macOS. The socketpair IS created and `sock.set_read_timeout(...)?` at line 1378
+    DOES run for these tests.
+  implication: IMPORTANT NUANCE. However, line 1378 uses `?` — if it errored, the
+    function returns Err BEFORE the watchdog spawn (1484) and supervisor loop (1550),
+    giving nono a FAST non-zero exit. The observed symptom is a 12s/20s HANG (the
+    test's `try_wait` loop keeps seeing nono alive). A fast Err-exit cannot produce
+    that hang. Therefore EITHER set_read_timeout does NOT error for socketpair on
+    macOS (the filed EINVAL is on the named-socket bind path, socket.rs:194, not the
+    socketpair path), OR it errors and something else hangs. The hang symptom is
+    only consistent with: nono reaches run_supervisor_loop and blocks there because
+    the watchdog never SIGKILLs the child. => set_read_timeout is NOT the cause of the
+    hang (consistent with marking it out of scope), but the analysis CONFIRMS nono
+    proceeds past 1378 into the supervisor loop.
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: supervised_runtime.rs::should_allocate_pty (125-131) +
+    create_session_runtime_state (184). For a non-interactive, non-detached
+    `nono run -- sleep 60` (exactly the RESL test invocation), should_allocate_pty
+    returns FALSE.
+  found: pty_pair = None for the RESL tests. Therefore in the child arm,
+    setup_child_pty/setsid is NOT called (line 1091-1093 skipped); the child's process
+    group is established SOLELY by `setpgid(0,0)` at line 974. In the parent,
+    pty_proxy = None, so run_supervisor_loop runs with `pty = None`.
+  implication: The watchdog's target pgrp depends entirely on the child's
+    `setpgid(0,0)` (974) winning the race against the parent's `getpgid(Some(child))`
+    (1493). There is NO parent-side setpgid and NO synchronization barrier between
+    fork() and the parent's getpgid read — classic POSIX fork/setpgid race. This is
+    the prime suspect for H2.
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: run_supervisor_loop (macOS variant, 2589-2828). Child-kill on a deadline
+    happens ONLY via `startup_deadline` (2776-2788), which is `startup_timeout`, NOT
+    `--timeout`. The `--timeout` kill is delivered exclusively by the detached
+    watchdog thread `spawn_macos_timeout_watchdog` (supervisor_macos.rs:316) doing
+    `kill(-child_pgrp, SIGKILL)`. For `sleep 60`, the child never writes/closes the
+    supervisor socket, so the loop just polls (200ms) + waitpid(WNOHANG) forever until
+    something kills the child.
+  found: If the watchdog's `kill(-child_pgrp, SIGKILL)` targets a wrong/empty pgrp
+    (ESRCH), the child is never killed, the supervisor loop spins indefinitely, and
+    nono hangs until the test's bounded kill — EXACTLY the observed symptom.
+  implication: Root-cause candidate confirmed by mechanism. Need host confirmation of
+    WHICH way the kill misses (wrong pgrp vs ESRCH) before fixing. The robust fix
+    (independent of the race outcome) is to ALSO call `setpgid(child, child)` in the
+    PARENT immediately after fork (idempotent double-setpgid idiom) so the parent both
+    closes the race AND learns the deterministic pgrp without getpgid — OR capture the
+    pgrp deterministically as `child` itself once setpgid is guaranteed.
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: The PASSING test `macos_no_warnings_on_resource_flags` runs a supervised
+    `nono run --memory 4g --max-processes 1000 --timeout 60s --read=... -- echo hi`
+    via blocking `.output()` and is NOT in the failing set.
+  found: A supervised macOS run with the socketpair created DOES complete for a
+    short-lived child (`echo hi`). So the supervisor-loop reaping + socketpair teardown
+    work for a child that exits on its own. The failure is specific to children that
+    stay alive long enough to require external termination (`sleep 60`) or that fork
+    a tree under a low cap (`bash ... wait`).
+  implication: Rules out "supervised macOS path is universally broken." Narrows to the
+    long-lived-child termination/enforcement path.
+
+- timestamp: 2026-06-12 (HOST PROBE 1+2 on Oscars-MacBook-Pro — DECISIVE)
+  checked: /tmp/nono-maxproc.log runtime stderr + `ps` watcher PGID columns.
+  found (SMOKING GUN): the --max-processes run printed the EXACT string
+    `nono: --max-processes is unavailable on macOS (RLIMIT_NPROC absent from nix v0.31's
+    macOS subset); continuing without enforcement`. That literal string was DELETED from
+    the source by Phase 68 (commit f94c1c1b) — `grep -rc "absent from nix" crates/` = 0 in
+    the current tree. A binary that prints it was built from PRE-Phase-68 source.
+    Corroboration: (1) host `ps` shows the child sleep/bash with PGID == the PARENT nono's
+    PGID (16006/16165), i.e. NO `setpgid(0,0)` ran — exactly the old code; (2) the FIRST
+    UAT listed `running 4 tests`, missing the Phase 68 D-09 test `macos_memory_limit_
+    kills_at_rlimit_as` (added in 3583bacc) — so the Mac's test tree is pre-Phase-68 too.
+  implication: The Mac compiled and ran code that does NOT contain the fix. Every host
+    probe describes the OLD no-op behavior. The static-analysis hypotheses H2'(a/b/c)
+    about setpgid races / watchdog targeting are MOOT for this data — that new code never
+    executed on the host.
+
+- timestamp: 2026-06-12 (git deployment-state check — ROOT CAUSE)
+  checked: `git rev-list --left-right --count origin/main...HEAD` = `0 17`;
+    `git merge-base --is-ancestor 1b2e2ad0 848ce71d` = false; the Mac's earlier
+    `git pull origin main` advanced to `848ce71d`.
+  found: The Phase 68 fix commits (1b2e2ad0, f94c1c1b, 3583bacc + tracking) live ONLY on
+    the Windows dev host's local `main`, which is 17 commits AHEAD of `origin/main` and was
+    never pushed. `origin/main` = 848ce71d does NOT contain the fix. The Mac's
+    `git pull origin main` + `cargo build` therefore compiled pre-fix source.
+  implication: ROOT CAUSE. The "fix doesn't work" signal is a STALE-BINARY / undeployed-fix
+    confound, NOT a defect in the Phase 68 code. The fix's real correctness is UNVERIFIED —
+    it must be deployed (push origin/main → Mac re-pull + rebuild) and re-tested before any
+    conclusion about whether setpgid + setrlimit actually work. Push-safety verified: no
+    build_notes/ or .gsd/ paths in the 17 unpushed commits (public-repo gate honored).
+
+- timestamp: 2026-06-12 (static analysis pass 1)
+  checked: `--max-processes` repro semantics. `bash -c "for i in $(seq 1 20); do sleep
+    5 & done; wait"` — with NO enforcement all 20 `sleep 5 &` start, `wait` returns at
+    ~5s, bash exits 0. With enforcement, fork EAGAINs past the cap, the failed `&`
+    jobs error, `wait` returns at ~5s, bash exits non-zero. EITHER WAY bash exits at
+    ~5s. The child arm RLIMIT_NPROC setrlimit clamps soft to the existing hard limit
+    (exec_strategy.rs:1041-1046) so it cannot EPERM/_exit(126) spuriously.
+  found: The observed 20s HANG for `--max-processes` is NOT explained by an ineffective
+    RLIMIT_NPROC (H3) — weak enforcement would still let bash exit at ~5s, not hang.
+    The hang means nono is not detecting/reaping bash's exit, i.e. the supervisor loop
+    keeps `waitpid(bash, WNOHANG) == StillAlive` (or the child tree is not exiting).
+    This is a termination/reaping bug, plausibly SHARED with the timeout repro's
+    "child never dies / nono never exits" mechanism.
+  implication: Two failing tests likely share a common reaping/termination defect in
+    the macOS supervised long-lived-child path, distinct from RLIMIT_NPROC efficacy.
+    Host data needed to confirm whether bash actually exits at ~5s while nono hangs
+    (=> reaping bug) or bash stays alive (=> enforcement + something keeps it running).
+
+## Eliminated
+
+- hypothesis: H1 — the modified ForkResult::Child arm / setrlimit / setpgid /
+    watchdog sites are not on the path a default `nono run --timeout`/`--max-processes`
+    with static `--read` grants takes (structural no-op).
+  evidence: select_exec_strategy always returns Supervised; the macOS supervised
+    raw-fork path contains all three modified sites; gating conditions
+    (resource_limits non-empty, timeout_deadline Some) are satisfied by the test
+    invocations; timeout/max_processes flow into the right fields. The fix code IS
+    executed at runtime. (See Evidence entries 1-2.)
+  timestamp: 2026-06-12
