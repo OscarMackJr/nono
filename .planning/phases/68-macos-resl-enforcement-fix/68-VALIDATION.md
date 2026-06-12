@@ -1,13 +1,13 @@
 ---
 phase: 68
 slug: macos-resl-enforcement-fix
-status: in-progress
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 t1_committed: true
 t2_committed: true
 t3_committed: true
-t4_host_uat: pending
+t4_host_uat: pass
 created: 2026-06-12
 ---
 
@@ -65,9 +65,9 @@ created: 2026-06-12
 
 ## Validation Sign-Off
 
-- [x] D1/D2/D3 code committed (T1: 924b4d60, T2: c3cf3855, T3: 648c5856); async-signal-safety 5/5 PASS on dev host
-- [ ] Real-macOS-host gate (Checkpoint T4): `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos` 5/5 PASS on Oscars-MacBook-Pro
-- [ ] Cross-target macOS+Linux CI lanes green on head SHA (deferred to GH Actions — PARTIAL per cross-target-verify-checklist.md)
-- [ ] `nyquist_compliant: true` set in frontmatter (after T4 PASS)
+- [x] D1/D2/D3 code committed (T1: 924b4d60, T2: c3cf3855, T3: 648c5856) + harness/baseline fixes (b8822a55, 828a332c); async-signal-safety 5/5 PASS on dev host
+- [x] Real-macOS-host gate (Checkpoint T4): `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos` **5/5 PASS** on Oscars-MacBook-Pro (head 828a332c, 2026-06-12)
+- [~] Cross-target macOS+Linux CI lanes green on head SHA (PARTIAL/deferred to GH Actions per cross-target-verify-checklist.md — macOS host build is the load-bearing gate and is satisfied)
+- [x] `nyquist_compliant: true` set in frontmatter (T4 PASS)
 
-**Approval:** pending T4 host UAT
+**Approval:** approved 2026-06-12 (real macOS host UAT 5/5; RESL-MAC-01 + RESL-MAC-02 satisfied)

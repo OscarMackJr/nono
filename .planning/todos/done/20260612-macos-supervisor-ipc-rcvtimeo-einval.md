@@ -39,3 +39,6 @@ this also reproduces at the Phase 59 base commit (regression vs. always-broken-o
 ## Acceptance
 `cargo test -p nono-cli --test audit_attestation` passes on a real macOS host, and a supervised
 `nono run --rollback ...` reaches "Applying sandbox..." → child execution without the `set_read_timeout` EINVAL.
+
+## RESOLVED 2026-06-12 (Phase 68-02, D1)
+Fixed: set_read_timeout platform-gated to #[cfg(target_os = "linux")] (commit c3cf3855); macOS supervised runs no longer abort on SO_RCVTIMEO EINVAL. Confirmed on host. See 68-02-SUMMARY.md.

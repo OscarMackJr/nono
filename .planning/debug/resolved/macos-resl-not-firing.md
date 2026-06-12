@@ -1,7 +1,7 @@
 ---
 slug: macos-resl-not-firing
-status: diagnosed
-handoff: re-scoped to a planned phase (user decision 2026-06-12) — fix is multi-defect, deferred to /gsd:plan-phase 68
+status: resolved
+resolution: "Fixed via Phase 68-02. Real macOS host UAT 5/5 PASS (head 828a332c). D1 (SO_RCVTIMEO→Linux-only) + D2 (RLIMIT_AS best-effort) + the run_bounded cwd-prompt test hang + the proc_listpids baseline overcount (824→~474). The --timeout watchdog (D3) was already working via the child's setpgid(0,0); the gated-test 'non-firing' was largely a test-harness stdin/prompt bug. RESL-MAC-01 + RESL-MAC-02 satisfied. Carry-forward: --memory/RLIMIT_AS best-effort on macOS (todo 20260612-macos-rlimit-as-setrlimit-fails)."
 trigger: "Phase 68-01 fix (setpgid(0,0) + libc::setrlimit(RLIMIT_NPROC, baseline+N)) does not make macOS --timeout and --max-processes enforcement fire on a real host, despite compiling and running."
 created: 2026-06-12
 updated: 2026-06-12

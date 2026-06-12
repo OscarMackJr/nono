@@ -59,8 +59,8 @@ granularity: standard
 **Host gate**: Real macOS host for the `NONO_RESL_HOST_VALIDATED=1` enforcement re-validation (CI runners can't validate — they hang; the two tests stay env-gated off the runner).
 **Plans**: 2 plans
 Plans:
-- [ ] 68-01-PLAN.md -- macOS resl enforcement fix (setpgid + RLIMIT_NPROC): both Direct and Supervised paths, uid_process_count helper, host UAT + cross-target CI deferred
-- [ ] 68-02-PLAN.md -- D1/D2/D3 three-defect fix: parent-setpgid race + SO_RCVTIMEO platform-gate + RLIMIT_AS downgrade
+- [x] 68-01-PLAN.md -- macOS resl enforcement fix (setpgid + RLIMIT_NPROC): both Direct and Supervised paths, uid_process_count helper, host UAT + cross-target CI deferred
+- [x] 68-02-PLAN.md -- D1/D2/D3 three-defect fix: parent-setpgid race + SO_RCVTIMEO platform-gate + RLIMIT_AS downgrade
 **UI hint**: no
 
 ### Phase 69: UPST8 Audit
@@ -155,7 +155,7 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
-| 68. macOS Resource-Limit Enforcement Fix | 0/TBD | Not started | - |
+| 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
 | 69. UPST8 Audit | 0/TBD | Not started | - |
 | 70. UPST8 Cherry-pick Sync | 0/TBD | Not started | - |
 

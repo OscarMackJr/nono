@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 68 — macos-resl-enforcement-fix
+**Current Focus:** Phase 68 — macos-resl-enforcement-fix (EXECUTED — both plans complete; RESL-MAC-01 + RESL-MAC-02 satisfied on a real macOS host, 5/5 gated tests; ready for verification)
 
 ## Current Position
 
-Phase: 68 (macos-resl-enforcement-fix) — EXECUTING
-Plan: 1 of 2
-Status: Executing Phase 68
-Last activity: 2026-06-12 -- Phase 68 execution started
+Phase: 68 (macos-resl-enforcement-fix) — EXECUTED (2/2 plans; host UAT 5/5 PASS)
+Plan: 2 of 2 complete
+Status: RESL-MAC-01 (`--timeout` SIGKILLs child at deadline) + RESL-MAC-02 (`--max-processes` EAGAINs fork past cap) both PASS with NONO_RESL_HOST_VALIDATED=1 on Oscars-MacBook-Pro (head 828a332c). 68-02 fixed D1 (SO_RCVTIMEO→Linux-only), D2 (RLIMIT_AS best-effort), the run_bounded cwd-prompt test hang, and the proc_listpids baseline overcount (824→~474 cap). Watchdog (D3) confirmed firing (SIGKILL 137 at deadline). Debug `macos-resl-not-firing` RESOLVED. Next: phase verification (gsd-verifier / /gsd:verify-work) then ship. Carry-forward: --memory/RLIMIT_AS is best-effort on macOS (todo 20260612-macos-rlimit-as-setrlimit-fails).
+Last activity: 2026-06-12 -- Phase 68 EXECUTED — macOS host UAT 5/5; RESL-MAC-01/02 satisfied
 
 ### v2.11 Phase Summary (active)
 

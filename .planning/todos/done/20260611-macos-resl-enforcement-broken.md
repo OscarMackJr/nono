@@ -61,3 +61,6 @@ D1+D2 PREDATE Phase 68. Phase 68's setpgid/RLIMIT_NPROC fix is deployed on origi
 f94c1c1b/3583bacc + compile fixes 53501113/fa6c2dc6) but is unobservable behind D1/D2. Per user decision
 (2026-06-12), the fix is re-scoped to planned work — next: `/gsd:plan-phase 68` covering D1+D2+D3. The
 debug file's DIAGNOSIS COMPLETE block is the planning input.
+
+## RESOLVED 2026-06-12 (Phase 68-02)
+Fixed. macOS host UAT 5/5 PASS (head 828a332c). RESL-MAC-01 (--timeout) + RESL-MAC-02 (--max-processes) satisfied. The watchdog was working via the child setpgid(0,0); the "non-firing" was largely a test-harness cwd-prompt stdin hang + a proc_listpids baseline overcount (824->~474), both fixed. See .planning/debug/resolved/macos-resl-not-firing.md + 68-02-SUMMARY.md.
