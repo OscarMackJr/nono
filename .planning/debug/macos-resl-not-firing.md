@@ -107,9 +107,28 @@ pre-fix source, so the UAT exercised the old no-op behavior. This is a deploymen
 not a defect in the setpgid/setrlimit fix. The fix's correctness remains UNVERIFIED pending a
 re-test against the actually-deployed code.
 
+## Second defect (exposed once the fix actually compiled on the Mac): macOS-only compile error
+
+- timestamp: 2026-06-12 (Mac `cargo build` after deploying the fix)
+  symptom: "cannot find module or crate libc" on macOS.
+  root cause: Phase 68 Task 1 added bare `libc::` calls to `supervisor_macos.rs`, but that module
+    had no `libc` in scope. `nono-cli` has NO direct `libc` dependency — it reaches libc via nix's
+    re-export. `exec_strategy.rs` works because of `use nix::libc;` (line 25); `supervisor_macos.rs`
+    had no such import (its pre-existing code used fully-qualified `nix::libc::rlim_t`). The new bare
+    `libc::` failed to resolve → E0433. **Windows `cargo check` could not catch it** (the
+    `mod supervisor_macos;` is not cfg-gated, but every bare `libc::` use is `#[cfg(target_os="macos")]`)
+    — the THIRD recurrence of the cross-target compile gap ([[feedback_clippy_cross_target]]).
+  fix: `#[cfg(target_os = "macos")] use nix::libc;` in supervisor_macos.rs (commit 53501113, pushed).
+  note: This is WHY the first push still couldn't be tested — the fix never compiled on the Mac.
+    Reviewed both files' new macOS code statically after the fix; no other unresolved `libc::`,
+    all unsafe extern calls are inside `unsafe` blocks, `macos_baseline_uid_count` is cfg-gated, and
+    the `baseline_uid_count()` accessor exists. Residual risk: cannot fully compile macOS from the
+    Windows host — if `cargo build` surfaces a further macOS-only error, fix iteratively.
+
 ## Resolution
 
 1. ✅ DONE — pushed local `main` → `origin/main` (848ce71d..63dfd9a5, 18 commits, safety-checked clean). 2026-06-12.
+1b. ✅ DONE — fixed the macOS compile error (missing `use nix::libc;`), pushed `53501113`. 2026-06-12.
 2. PENDING — Mac: `git pull origin main` → **verify fix landed** (`grep -rc "absent from nix" crates/` MUST be 0; D-09 test present; `cargo test` should now show 5 tests not 4) → `cargo build -p nono-cli` → re-run `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`.
 3. PENDING — Evaluate the FIRST real signal. PASS → phase 68 verifiable. FAIL → re-open `/gsd:debug continue macos-resl-not-firing` with the H2'(a/b/c) host probes (now meaningful — the new setpgid/setrlimit code will actually be running).
 
