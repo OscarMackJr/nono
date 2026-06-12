@@ -5,7 +5,7 @@
 //! | CLI flag             | Mechanism                  | Notes                        |
 //! |----------------------|----------------------------|------------------------------|
 //! | `--memory <bytes>`   | `RLIMIT_AS` (address space) | Not RSS — see § RLIMIT_AS vs RSS |
-//! | `--max-processes <N>`| `RLIMIT_NPROC`             | Counts against user total    |
+//! | `--max-processes <N>`| `RLIMIT_NPROC`             | UID-wide bound — see § RLIMIT_NPROC semantics |
 //! | `--cpu-percent`      | Rejected at clap parse time | No per-process quota on macOS |
 //! | `--timeout <dur>`    | Supervisor `Instant` + `kill(pgrp, SIGKILL)` |        |
 //!
@@ -25,9 +25,80 @@
 //! not used because it measures aggregate CPU consumption, not rate.
 //! `--cpu-percent` is rejected at clap parse time per REQ-RESL-NIX-03
 //! acceptance criterion 3.
+//!
+//! ## RLIMIT_NPROC semantics (D-03)
+//!
+//! `RLIMIT_NPROC` on macOS counts **all processes owned by the UID** (not just
+//! descendants of the sandboxed child, unlike Linux `pids.max` which is
+//! descendant-tree-scoped). The baseline+N bounding strategy means the agent's
+//! effective budget for additional processes is N, but other processes owned by
+//! the same UID can consume those slots. This UID-wide scope is inherently racy
+//! (new UID processes can spawn between the parent's baseline count and the
+//! child's `setrlimit` apply), and is accepted behavior — there is no practical
+//! fix without kernel-level true-descendant scoping. The baseline+N strategy
+//! still meaningfully limits agent fork storms on lightly-loaded developer machines.
 
 use crate::launch_runtime::ResourceLimits;
 use nono::{NonoError, Result};
+
+/// Read the current number of processes owned by the current UID.
+///
+/// Uses `sysctl(KERN_PROC_UID)` to query the kernel's process table and
+/// returns the count of `kinfo_proc` entries for the calling user's UID.
+///
+/// This count is used by [`MacosResourceLimits::new`] to compute a
+/// `baseline_uid_count` before `fork()`, which is then captured by value
+/// into the `pre_exec` closure and the supervised child arm to compute
+/// `RLIMIT_NPROC = baseline + N` (the agent gets N additional processes).
+///
+/// # Safety note
+///
+/// `sysctl` is NOT async-signal-safe — it may allocate kernel-side and
+/// interact with locks. This function MUST be called in the **parent before
+/// `fork()`** only. It is not safe to call from inside a `pre_exec` closure
+/// or any post-fork child arm.
+///
+/// # Errors
+///
+/// Returns `Err(NonoError::SandboxInit(...))` if the `sysctl` call fails.
+#[cfg(target_os = "macos")]
+fn uid_process_count() -> Result<u64> {
+    let uid = unsafe { libc::getuid() };
+    let mut mib: [libc::c_int; 4] = [
+        libc::CTL_KERN,
+        libc::KERN_PROC,
+        libc::KERN_PROC_UID,
+        uid as libc::c_int,
+    ];
+    let mut len: libc::size_t = 0;
+    // First call: pass null buffer to query required size.
+    // SAFETY: sysctl is a direct kernel call; not async-signal-safe — must only be
+    // called in the parent before fork. The null output pointer with a zero old_len
+    // queries the required buffer size without reading any data.
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            4,
+            std::ptr::null_mut(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ret != 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "sysctl(KERN_PROC_UID) failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // Divide total byte length by per-entry size to get process count.
+    // checked_div guards against a hypothetical zero size_of (impossible in practice,
+    // but required by the unwrap policy).
+    let count = len
+        .checked_div(std::mem::size_of::<libc::kinfo_proc>())
+        .unwrap_or(0);
+    Ok(count as u64)
+}
 
 /// macOS resource-limit applier using `setrlimit` in a `pre_exec` hook.
 ///
@@ -35,12 +106,25 @@ use nono::{NonoError, Result};
 /// The limits are applied inside the forked child's `pre_exec` hook, before
 /// `execve`, so the resource caps are in effect from the first instruction
 /// of the sandboxed binary.
+///
+/// ## `baseline_uid_count` field
+///
+/// This field holds the per-UID process count read from the kernel (via
+/// `sysctl(KERN_PROC_UID)`) **in the parent before `fork()`**. It is a plain
+/// `u64` captured by value into the `pre_exec` closure — no allocation, no
+/// locks, no async-signal-unsafe calls inside the closure. The
+/// `RLIMIT_NPROC` soft and hard limits are set to `baseline_uid_count + N`
+/// (capped at the existing hard limit to avoid EPERM).
 #[derive(Debug)]
 pub(crate) struct MacosResourceLimits {
     /// `RLIMIT_AS` soft + hard limit in bytes (from `--memory`). None = no limit.
     memory_bytes: Option<u64>,
     /// `RLIMIT_NPROC` soft + hard limit (from `--max-processes`). None = no limit.
     max_processes: Option<u32>,
+    /// Per-UID process count read in the parent before fork (via `sysctl(KERN_PROC_UID)`).
+    /// Used to compute `RLIMIT_NPROC = baseline_uid_count + N`. Zero when `max_processes`
+    /// is `None` (no sysctl needed). Captured by `Copy` into the `pre_exec` closure.
+    baseline_uid_count: u64,
     // Note: `timeout` is consumed by the supervisor watchdog (`spawn_macos_timeout_watchdog`),
     // not by the pre_exec hook. It is not stored here.
 }
@@ -57,17 +141,31 @@ impl MacosResourceLimits {
     ///
     /// # Errors
     ///
-    /// Returns `Err(NonoError::NotSupportedOnPlatform { feature: "cpu_percent_macos" })`
-    /// if `limits.cpu_percent.is_some()`.
+    /// - Returns `Err(NonoError::NotSupportedOnPlatform { feature: "cpu_percent_macos" })`
+    ///   if `limits.cpu_percent.is_some()`.
+    /// - Returns `Err(NonoError::SandboxInit(...))` if `limits.max_processes.is_some()` and
+    ///   the `sysctl(KERN_PROC_UID)` call to compute the baseline UID process count fails.
+    ///   Fail-closed per D-07: the run is aborted before fork rather than launching an
+    ///   unbounded child.
     pub(crate) fn new(limits: &ResourceLimits) -> Result<Self> {
         if limits.cpu_percent.is_some() {
             return Err(NonoError::NotSupportedOnPlatform {
                 feature: "cpu_percent_macos".into(),
             });
         }
+        // Read the per-UID baseline process count from the kernel before fork.
+        // This is required to compute RLIMIT_NPROC = baseline + N.
+        // Fail-closed (D-07): if sysctl fails, abort before spawning an unbounded child.
+        let baseline_uid_count = if limits.max_processes.is_some() {
+            uid_process_count()?
+        } else {
+            // No max-processes limit requested — skip sysctl (no baseline needed).
+            0
+        };
         Ok(Self {
             memory_bytes: limits.memory_bytes,
             max_processes: limits.max_processes,
+            baseline_uid_count,
         })
     }
 
@@ -82,10 +180,14 @@ impl MacosResourceLimits {
     /// context. The only operations performed inside the closure are:
     ///
     /// - `setrlimit(RLIMIT_AS, ...)` — async-signal-safe per POSIX
+    /// - `getrlimit(RLIMIT_NPROC, ...)` — async-signal-safe per POSIX
     /// - `setrlimit(RLIMIT_NPROC, ...)` — async-signal-safe per POSIX
     ///
     /// No Rust allocator, no Mutex, no `format!` macros are called inside the closure.
-    /// All values (`memory_bytes`, `max_processes`) are `Copy` types captured by value.
+    /// All values (`memory_bytes`, `max_processes`, `baseline_uid_count`) are `Copy`
+    /// types captured by value. `baseline_uid_count` was computed in the parent before
+    /// fork via `sysctl(KERN_PROC_UID)` — which is NOT async-signal-safe — and is
+    /// captured as a plain `u64`. No sysctl call occurs inside the closure.
     ///
     /// The `nix::errno::Errno` → `std::io::Error` conversion uses
     /// `std::io::Error::from` (nix's public `From<Errno> for std::io::Error` impl)
@@ -107,10 +209,13 @@ impl MacosResourceLimits {
         use std::os::unix::process::CommandExt;
         let memory_bytes = self.memory_bytes;
         let max_processes = self.max_processes;
+        let baseline_uid_count = self.baseline_uid_count;
 
         // SAFETY: pre_exec runs in the forked child, post-fork pre-exec.
-        // setrlimit is async-signal-safe (POSIX). No heap allocation or locks
-        // are taken inside the closure. All captured values are Copy.
+        // setrlimit/getrlimit are async-signal-safe (POSIX). No heap allocation
+        // or locks are taken inside the closure. All captured values are Copy.
+        // baseline_uid_count was computed in the parent before fork — sysctl is
+        // not called inside this closure (it is not async-signal-safe).
         unsafe {
             cmd.pre_exec(move || -> std::io::Result<()> {
                 #[cfg(target_os = "macos")]
@@ -123,20 +228,44 @@ impl MacosResourceLimits {
                         setrlimit(Resource::RLIMIT_AS, limit, limit)
                             .map_err(std::io::Error::from)?;
                     }
-                    if let Some(_n) = max_processes {
-                        // nix v0.31 does not expose RLIMIT_NPROC on macOS (BSD/Linux extension
-                        // not in nix's macOS subset). --max-processes is silently unenforced
-                        // here; the supervisor logs a warning so operators know. Future:
-                        // implement via Mach kernel task_policy_set if a true equivalent exists.
-                        tracing::warn!(
-                            "--max-processes is not enforced on macOS \
-                             (RLIMIT_NPROC unavailable in nix v0.31's macOS subset)"
-                        );
+                    if let Some(n) = max_processes {
+                        // Compute RLIMIT_NPROC = baseline_uid_count + N (baseline+N strategy, D-01).
+                        // baseline_uid_count is a Copy u64 captured from the parent before fork —
+                        // no sysctl or allocation inside this closure.
+                        //
+                        // D-03: RLIMIT_NPROC on macOS is UID-wide (not descendant-tree-scoped
+                        // like Linux pids.max). The bound means the agent's effective budget for
+                        // additional processes is N, but other UID processes can consume those
+                        // slots. This is accepted behavior; the race between the parent's sysctl
+                        // read and the child's setrlimit apply is inherent to macOS's UID-wide
+                        // accounting.
+                        let target: libc::rlim_t =
+                            baseline_uid_count.saturating_add(u64::from(n));
+                        // Read existing hard limit to avoid EPERM when raising above it (Pitfall 3).
+                        // getrlimit is async-signal-safe per POSIX.
+                        let mut existing: libc::rlimit =
+                            libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                        // SAFETY: getrlimit is async-signal-safe. existing is stack-allocated.
+                        let got = libc::getrlimit(libc::RLIMIT_NPROC, &mut existing);
+                        let hard = if got == 0 && existing.rlim_max != libc::RLIM_INFINITY {
+                            existing.rlim_max
+                        } else {
+                            target
+                        };
+                        let soft = target.min(hard);
+                        let rl = libc::rlimit {
+                            rlim_cur: soft,
+                            rlim_max: soft,
+                        };
+                        // SAFETY: setrlimit is async-signal-safe per POSIX; no heap allocation.
+                        if libc::setrlimit(libc::RLIMIT_NPROC, &rl) != 0 {
+                            return Err(std::io::Error::last_os_error());
+                        }
                     }
                 }
                 #[cfg(not(target_os = "macos"))]
                 {
-                    let _ = (memory_bytes, max_processes);
+                    let _ = (memory_bytes, max_processes, baseline_uid_count);
                 }
                 Ok(())
             });
@@ -151,6 +280,12 @@ impl MacosResourceLimits {
 /// `kill(-pgrp, SIGKILL)`, which delivers SIGKILL to all processes in the group
 /// simultaneously. This covers the child and any grandchildren that inherit the
 /// same process group.
+///
+/// The child must call `setpgid(0, 0)` immediately after `fork()` in the
+/// supervised child arm so that the child is its own process-group leader
+/// (`pgid == child_pid`). This ensures `getpgid(child)` in the parent returns
+/// `child_pid` deterministically and `kill(-child_pgrp, SIGKILL)` targets only
+/// the agent tree, not the parent's process group.
 ///
 /// # Watchdog behaviour
 ///
@@ -221,5 +356,27 @@ mod tests {
         let r = result.unwrap();
         assert!(r.memory_bytes.is_none());
         assert!(r.max_processes.is_none());
+        assert_eq!(r.baseline_uid_count, 0, "no max_processes → baseline should be 0");
+    }
+
+    #[test]
+    fn new_with_max_processes_reads_baseline() {
+        let limits = ResourceLimits {
+            cpu_percent: None,
+            memory_bytes: None,
+            max_processes: Some(5),
+            timeout: None,
+        };
+        let result = MacosResourceLimits::new(&limits);
+        // On a real macOS host, sysctl should succeed and baseline > 0.
+        assert!(
+            result.is_ok(),
+            "max_processes set → new() should succeed (sysctl available): {result:?}"
+        );
+        let r = result.unwrap();
+        assert!(
+            r.baseline_uid_count > 0,
+            "expected baseline_uid_count > 0 on a running macOS host (sysctl returned process list)"
+        );
     }
 }
