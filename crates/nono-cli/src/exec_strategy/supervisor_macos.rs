@@ -169,6 +169,15 @@ impl MacosResourceLimits {
         })
     }
 
+    /// Return the per-UID process count read from the kernel before fork.
+    ///
+    /// Used by `exec_strategy.rs` to extract the baseline count as a `Copy` `u64`
+    /// before the fork, so the child arm can compute `RLIMIT_NPROC = baseline + N`
+    /// without accessing the struct across the fork boundary.
+    pub(crate) fn baseline_uid_count(&self) -> u64 {
+        self.baseline_uid_count
+    }
+
     /// Install a `pre_exec` hook on `cmd` that applies `setrlimit` in the forked child.
     ///
     /// The hook runs in the forked child, post-fork pre-exec (before `execve`), so the

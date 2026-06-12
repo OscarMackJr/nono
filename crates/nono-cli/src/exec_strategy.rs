@@ -860,6 +860,18 @@ pub fn execute_supervised(
         Some(supervisor_macos::MacosResourceLimits::new(resource_limits)?)
     };
 
+    // Pre-compute the baseline UID process count for RLIMIT_NPROC enforcement
+    // in the supervised child arm (D-01, D-02). MacosResourceLimits::new()
+    // calls uid_process_count() internally when max_processes.is_some(), so
+    // the count is already baked into the struct. Extract it as a plain Copy
+    // u64 here so the child arm can use it without accessing the struct after
+    // fork (avoiding any accidental allocation from the Option wrapper).
+    #[cfg(target_os = "macos")]
+    let macos_baseline_uid_count: u64 = macos_resource_limits
+        .as_ref()
+        .map(|r| r.baseline_uid_count())
+        .unwrap_or(0);
+
     // Pre-compute the deadline for the timeout watchdog (spawned after fork).
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let timeout_deadline = resource_limits
@@ -935,6 +947,45 @@ pub fn execute_supervised(
                 }
             }
 
+            // On macOS: place the child in its own process group immediately after fork
+            // (D-04, D-05, D-06). This makes getpgid(child) in the parent return
+            // child_pid deterministically, so the timeout watchdog's
+            // kill(-child_pgrp, SIGKILL) targets only the agent tree — not the parent's
+            // process group.
+            //
+            // On the PTY supervised path, setup_child_pty will call setsid() which
+            // supersedes this (setsid creates a new session and process group). Both
+            // orderings are safe; setpgid(0,0) here ensures the non-PTY path is also
+            // covered (D-05).
+            //
+            // WR-04 / D-06: failure is tolerated (write MSG + continue). If setpgid
+            // fails, getpgid in the parent may return the parent's pgrp; the WR-04
+            // skip-on-Err logic in the watchdog spawn block fires and the watchdog is
+            // skipped rather than targeting a wrong group. This is the conservative
+            // choice consistent with the defensive rewrite intent of D-04.
+            #[cfg(target_os = "macos")]
+            {
+                const MSG_SETPGID_FAIL: &[u8] =
+                    b"nono: setpgid(0,0) failed in supervised child; continuing\n";
+                // SAFETY: setpgid is a direct kernel call (POSIX); safe in post-fork
+                // context. Making the child its own process-group leader so the timeout
+                // watchdog's kill(-child_pgrp, SIGKILL) targets only the agent tree,
+                // not the parent's process group. No userspace lock interaction.
+                let pgid_ret = unsafe { libc::setpgid(0, 0) };
+                if pgid_ret != 0 {
+                    // Non-fatal: tolerated per D-06/RESEARCH.md Open Question 1.
+                    // WR-04 skip-on-Err in the watchdog spawn block provides the safety net.
+                    // SAFETY: write is async-signal-safe.
+                    unsafe {
+                        libc::write(
+                            libc::STDERR_FILENO,
+                            MSG_SETPGID_FAIL.as_ptr().cast::<libc::c_void>(),
+                            MSG_SETPGID_FAIL.len(),
+                        );
+                    }
+                }
+            }
+
             // On macOS, apply setrlimit BEFORE the sandbox is applied.
             // setrlimit is async-signal-safe per POSIX. No allocation.
             #[cfg(target_os = "macos")]
@@ -964,24 +1015,50 @@ pub fn execute_supervised(
                         }
                     }
                 }
-                if let Some(_n) = resource_limits.max_processes {
-                    // Plan 41-10 Class C: nix v0.31 does not expose Resource::RLIMIT_NPROC
-                    // on macOS (BSD/Linux extension not in nix's macOS subset). Mirrors the
-                    // disposition in supervisor_macos.rs::install_pre_exec: log a warning
-                    // (via async-signal-safe libc::write, since tracing::warn! is unsafe
-                    // in pre_exec) and continue. Sandbox boundary (Seatbelt) is unaffected;
-                    // --max-processes is silently unenforced on macOS until a Mach-kernel
-                    // task_policy_set equivalent is implemented.
-                    const MSG_RLIMIT_NPROC_UNAVAILABLE: &[u8] =
-                        b"nono: --max-processes is unavailable on macOS \
-                          (RLIMIT_NPROC absent from nix v0.31's macOS subset); continuing without enforcement\n";
-                    // SAFETY: write is async-signal-safe.
-                    unsafe {
-                        libc::write(
-                            libc::STDERR_FILENO,
-                            MSG_RLIMIT_NPROC_UNAVAILABLE.as_ptr().cast::<libc::c_void>(),
-                            MSG_RLIMIT_NPROC_UNAVAILABLE.len(),
-                        );
+                if let Some(n) = resource_limits.max_processes {
+                    // Real RLIMIT_NPROC enforcement via raw libc::setrlimit (D-02).
+                    // nix v0.31 does not expose Resource::RLIMIT_NPROC on macOS; use
+                    // libc::RLIMIT_NPROC directly (= 7 on both aarch64-apple-darwin and
+                    // x86_64-apple-darwin, verified in libc 0.2.186).
+                    //
+                    // baseline+N strategy (D-01, D-03): macos_baseline_uid_count was
+                    // computed in the parent before fork via sysctl(KERN_PROC_UID) —
+                    // which is NOT async-signal-safe. It is a Copy u64 captured from
+                    // the parent; no sysctl or allocation occurs here.
+                    //
+                    // D-03: RLIMIT_NPROC on macOS is UID-wide (not descendant-tree-scoped
+                    // like Linux pids.max). The baseline+N bound means the agent's effective
+                    // budget for additional processes is N, but other UID processes can
+                    // consume those slots. This is accepted behavior.
+                    const MSG_RLIMIT_NPROC_FAIL: &[u8] =
+                        b"nono: setrlimit(RLIMIT_NPROC) failed in supervised child; aborting\n";
+                    let target_soft: libc::rlim_t =
+                        macos_baseline_uid_count.saturating_add(u64::from(n));
+                    // Read existing hard limit to avoid EPERM when raising above it (Pitfall 3).
+                    // SAFETY: getrlimit is async-signal-safe per POSIX.
+                    let mut existing: libc::rlimit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                    let got = unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut existing) };
+                    let hard_limit = if got == 0 && existing.rlim_max != libc::RLIM_INFINITY {
+                        existing.rlim_max
+                    } else {
+                        target_soft
+                    };
+                    let soft = target_soft.min(hard_limit);
+                    let rl = libc::rlimit {
+                        rlim_cur: soft,
+                        rlim_max: soft,
+                    };
+                    // SAFETY: setrlimit, write, and _exit are async-signal-safe per POSIX.
+                    // macos_baseline_uid_count is a Copy u64 from the parent — no allocation.
+                    if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &rl) } != 0 {
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_RLIMIT_NPROC_FAIL.as_ptr().cast::<libc::c_void>(),
+                                MSG_RLIMIT_NPROC_FAIL.len(),
+                            );
+                            libc::_exit(126);
+                        }
                     }
                 }
             }
