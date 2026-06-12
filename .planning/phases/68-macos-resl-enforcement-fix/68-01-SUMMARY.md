@@ -55,7 +55,9 @@ metrics:
 
 ## Status
 
-Tasks 1 and 2 are complete. Task 3 is in-progress — the automated steps (D-09 bonus test + Windows host suite + cross-target deferred status) are done; the human-verify gate (real macOS host UAT with `NONO_RESL_HOST_VALIDATED=1`) is awaiting the user.
+**BLOCKED — human-verify gate FAILED on real macOS host (2026-06-12, Oscars-MacBook-Pro).** Tasks 1 and 2 are committed and the Task-3 automated steps are done, but the fix does **not** achieve the phase goal: both gated RESL tests still fail on the real host (`macos_timeout_kills_at_deadline` and `macos_max_processes_blocks_on_rlimit_nproc` both hit the bounded timeout — enforcement still does not fire). The macOS build/compile succeeded, so the changes are live in the tested binary but are insufficient or target a path the supervised run does not take. Routing to systematic debugging (`/gsd:debug`).
+
+**Separate pre-existing defect surfaced (NOT Phase 68's target):** `audit_attestation` supervised+rollback tests fail at sandbox init with `Failed to set socket read timeout: Invalid argument (os error 22)` — macOS rejects `SO_RCVTIMEO` on the AF_UNIX supervisor socketpair (`crates/nono/src/supervisor/socket.rs:194`, wired Phase 59 `exec_strategy.rs:1378` with a valid 5s value). Phase 68 never touched the IPC layer. The RESL tests use only static `--read` grants (no IPC socket) so they bypass this bug — it is a confound, not the cause of the RESL failures. Filed as a separate todo for its own phase/debug.
 
 ## What Was Built
 
@@ -88,11 +90,22 @@ Tasks 1 and 2 are complete. Task 3 is in-progress — the automated steps (D-09 
 
 **Cross-target clippy:** PARTIAL/deferred-to-CI. Windows dev host cannot run `--target x86_64-unknown-linux-gnu` or `--target x86_64-apple-darwin` (ring/aws-lc-sys C toolchain missing). GH Actions Linux + macOS Clippy lanes on head SHA are the decisive signal per `.planning/templates/cross-target-verify-checklist.md`.
 
-## Task 3 Human Gate (Pending)
+## Task 3 Human Gate (FAILED)
 
-**Status: AWAITING USER — checkpoint:human-verify (blocking)**
+**Status: FAILED — checkpoint:human-verify (blocking). Ran on `Oscars-MacBook-Pro` 2026-06-12.**
 
-The user must run the gated tests on `Oscars-MacBook-Pro` with `NONO_RESL_HOST_VALIDATED=1`. See checkpoint message below.
+```
+NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos -- --nocapture
+  macos_cpu_percent_rejected_at_clap_parse ... ok
+  macos_no_warnings_on_resource_flags ........ ok
+  macos_timeout_kills_at_deadline ............ FAILED  (nono did not exit within 12s)
+  macos_max_processes_blocks_on_rlimit_nproc . FAILED  (nono did not exit within 20s)
+  → 2 passed; 2 failed
+```
+
+Enforcement still does not fire on a real host. `cargo build -p nono-cli` succeeded (changes are live in the binary). Phase goal NOT met → debug.
+
+Separately, `cargo test -p nono-cli` (full suite) showed `audit_attestation` 3 failures at sandbox init: `Failed to set socket read timeout: Invalid argument (os error 22)` (pre-existing macOS SO_RCVTIMEO/AF_UNIX bug; see Status block).
 
 ## Commits
 

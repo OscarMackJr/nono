@@ -4,13 +4,13 @@ milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
 status: executing
 last_updated: "2026-06-12T17:19:07.102Z"
-last_activity: 2026-06-12 -- Phase 68 execution started
+last_activity: 2026-06-12 -- Phase 68 BLOCKED: macOS host UAT failed (RESL enforcement still not firing)
 progress:
   total_phases: 4
   completed_phases: 1
   total_plans: 1
-  completed_plans: 1
-  percent: 100
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 68 — macos-resl-enforcement-fix (Tasks 1+2 complete; Task 3 awaiting macOS host UAT)
+**Current Focus:** Phase 68 — macos-resl-enforcement-fix (BLOCKED: macOS host UAT failed; fix insufficient — needs `/gsd:debug`)
 
 ## Current Position
 
-Phase: 68 (macos-resl-enforcement-fix) — EXECUTING (checkpoint: human-verify at Task 3)
-Plan: 1 of 1 (in-progress — Tasks 1+2+3-automated committed; Task 3 human gate pending)
-Status: Awaiting macOS host UAT (`NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos` on Oscars-MacBook-Pro)
-Last activity: 2026-06-12 -- Phase 68-01 Tasks 1+2+3-automated committed; checkpoint:human-verify reached
+Phase: 68 (macos-resl-enforcement-fix) — BLOCKED (human-verify gate FAILED on real macOS host)
+Plan: 1 of 1 (NOT complete — Tasks 1+2+3-automated committed `1b2e2ad0`..`cc9f8c94`, but the fix does not make enforcement fire)
+Status: macOS UAT 2026-06-12 — `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc` BOTH still FAIL (`NONO_RESL_HOST_VALIDATED=1`). macOS build succeeded → changes live but insufficient/wrong-path. Confound: separate pre-existing `audit_attestation` sandbox-init failure `set_read_timeout EINVAL (os error 22)` on AF_UNIX socketpair (Phase 59 IPC; not 68's target). Next: `/gsd:debug` for systematic host-iterated root-cause.
+Last activity: 2026-06-12 -- Phase 68-01 macOS host UAT FAILED; fix insufficient; routing to debug
 
 ### v2.11 Phase Summary (active)
 
