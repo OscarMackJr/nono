@@ -237,6 +237,68 @@ fn macos_no_warnings_on_resource_flags() {
     );
 }
 
+/// D-09 bonus (secondary): `--memory 32m` kills the child at RLIMIT_AS via virtual-address exhaustion.
+///
+/// This is a secondary assertion added during Phase 68 to catch any silent gap in
+/// the `RLIMIT_AS` enforcement path while real-host UAT is running. It does NOT add
+/// a new requirement — RESL-MAC-01 and RESL-MAC-02 remain the only gating reqs.
+///
+/// The child attempts to allocate 256 MB via `python3`; under `--memory 32m` the
+/// RLIMIT_AS (virtual address space) limit is hit during `bytearray()` allocation
+/// and the child is killed. If `python3` is not available on the host, the test is
+/// skipped gracefully.
+#[test]
+fn macos_memory_limit_kills_at_rlimit_as() {
+    if !host_enforcement_validated() {
+        eprintln!(
+            "SKIP macos_memory_limit_kills_at_rlimit_as: host enforcement validation not enabled. \
+             Run on a real macOS host with NONO_RESL_HOST_VALIDATED=1 (D-09 bonus)."
+        );
+        return;
+    }
+
+    // Check if python3 is available — skip gracefully if not.
+    let python3_available = Command::new("which")
+        .arg("python3")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !python3_available {
+        eprintln!(
+            "SKIP macos_memory_limit_kills_at_rlimit_as: python3 not found on this host \
+             (D-09 bonus — secondary; skip is acceptable)."
+        );
+        return;
+    }
+
+    // Attempt a 256 MB bytearray allocation under a 32 MB RLIMIT_AS limit.
+    // RLIMIT_AS bounds virtual address space; the bytearray() call triggers a
+    // large mmap which exceeds the limit and causes SIGKILL / SIGBUS / MemoryError.
+    let output = run_bounded(
+        &[
+            "run",
+            "--memory",
+            "32m",
+            "--read=/bin",
+            "--read=/usr",
+            "--read=/private",
+            "--read=/usr/lib",
+            "--",
+            "python3",
+            "-c",
+            "x=bytearray(256*1024*1024)",
+        ],
+        Duration::from_secs(10),
+    );
+
+    // The child should exit non-zero (killed by RLIMIT_AS or Python MemoryError).
+    assert!(
+        !output.status.success(),
+        "expected child to be killed by RLIMIT_AS (--memory 32m), but it exited successfully. \
+         Check that --memory is enforced via setrlimit(RLIMIT_AS) on macOS."
+    );
+}
+
 /// REQ-RESL-NIX-03 criterion 2: `--max-processes 5` blocks the sixth fork on macOS.
 ///
 /// RLIMIT_NPROC limits the total number of processes for the user. Spawning more
