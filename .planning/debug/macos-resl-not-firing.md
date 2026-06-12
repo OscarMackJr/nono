@@ -438,6 +438,21 @@ SO_RCVTIMEO with a poll/recv-deadline on macOS (or skip the read-timeout on macO
     setpgid(0,0) carries it. Whether to keep or remove the parent setpgid is a cleanup question, not a
     correctness one.
 
+- timestamp: 2026-06-12 (gated suite after stdin fix — 4/5 PASS; RESL-MAC-01 DONE)
+  checked: `NONO_RESL_HOST_VALIDATED=1 cargo test --test resl_nix_macos` on b8822a55.
+  found: 4 passed / 1 failed, finished in 8.02s (NO hangs — the stdin fix resolved the prompt stall).
+    PASS: macos_cpu_percent_rejected, macos_no_warnings_on_resource_flags, macos_memory_limit_kills_at_rlimit_as
+    (D-09), and **macos_timeout_kills_at_deadline ✅ → RESL-MAC-01 SATISFIED on a real macOS host.**
+    FAIL (clean, not a hang): macos_max_processes_blocks_on_rlimit_nproc — "expected child to fail with
+    RLIMIT_NPROC violation (EAGAIN), but it exited successfully." The bash child ran all its forks; no EAGAIN.
+  implication: Only RESL-MAC-02 remains. `setrlimit(RLIMIT_NPROC, baseline+N)` is not blocking fork on
+    macOS in this test. Three candidate causes to discriminate with one host probe: (a) macOS doesn't
+    enforce the RLIMIT_NPROC soft limit for non-root (analogous to the RLIMIT_AS/D2 limitation → accept +
+    document + adjust test, best-effort); (b) baseline overcount (proc_listpids over-reports) → limit set
+    too high → fixable; (c) test expectation wrong — bash exits 0 even when background `&` forks EAGAIN, so
+    `assert !success` can't detect partial enforcement → fix the test to detect fork failures. Next: probe
+    whether `fork: Resource temporarily unavailable`/EAGAIN errors appear at all under `--max-processes`.
+
 ## Eliminated
 
 - hypothesis: H1 — the modified ForkResult::Child arm / setrlimit / setpgid /
