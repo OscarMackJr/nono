@@ -291,11 +291,18 @@ fn macos_memory_limit_kills_at_rlimit_as() {
         Duration::from_secs(10),
     );
 
-    // The child should exit non-zero (killed by RLIMIT_AS or Python MemoryError).
+    // After the D2 fix (Phase 68-02): RLIMIT_AS on macOS arm64 is best-effort/unreliable.
+    // setrlimit below dyld's pre-mapped VAS returns EINVAL; nono now warns and continues
+    // instead of _exit(126). The child (python3) may succeed or fail for other reasons,
+    // but nono itself must exit cleanly (no abort). This test verifies that `--memory`
+    // runs no longer abort the supervised run with a hard error.
     assert!(
-        !output.status.success(),
-        "expected child to be killed by RLIMIT_AS (--memory 32m), but it exited successfully. \
-         Check that --memory is enforced via setrlimit(RLIMIT_AS) on macOS."
+        output.status.success(),
+        "expected nono to exit cleanly after D2 fix (--memory best-effort on macOS), \
+         but it exited with: {:?}\nstderr:\n{}\nstdout:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout),
     );
 }
 

@@ -234,8 +234,14 @@ impl MacosResourceLimits {
                         // macOS `rlim_t` is u64 (all macOS targets are 64-bit), so the
                         // u64 memory_bytes maps directly — no fallible conversion needed.
                         let limit: nix::libc::rlim_t = bytes;
-                        setrlimit(Resource::RLIMIT_AS, limit, limit)
-                            .map_err(std::io::Error::from)?;
+                        // D2 (Phase 68-02): macOS arm64 RLIMIT_AS is not reliably enforced.
+                        // dyld pre-maps several hundred MiB of VAS; setrlimit below the current
+                        // VAS usage returns EINVAL. Best-effort: ignore the error and continue
+                        // to exec. The supervised path emits MSG_RLIMIT_AS_WARN to stderr.
+                        // RLIMIT_NPROC enforcement below remains fail-closed.
+                        if setrlimit(Resource::RLIMIT_AS, limit, limit).is_err() {
+                            // best-effort on macOS — continue to exec
+                        }
                     }
                     if let Some(n) = max_processes {
                         // Compute RLIMIT_NPROC = baseline_uid_count + N (baseline+N strategy, D-01).

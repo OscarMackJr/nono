@@ -995,24 +995,26 @@ pub fn execute_supervised(
                     // macOS `rlim_t` is u64 (all macOS targets are 64-bit), so the u64
                     // memory_bytes maps directly — no fallible conversion needed.
                     let limit: nix::libc::rlim_t = bytes;
-                    // WR-02: fail closed — if setrlimit fails the sandbox MUST NOT
-                    // continue without the requested --memory enforcement.
-                    // MacosResourceLimits::new() in the parent does not pre-validate
-                    // RLIMIT_AS against the system hard limit, so EINVAL/EPERM at
-                    // setrlimit() time would otherwise silently degrade enforcement.
+                    // D2 (Phase 68-02): RLIMIT_AS is not reliably enforced on macOS arm64.
+                    // dyld pre-maps several hundred MiB of VAS before main() runs; setrlimit
+                    // below current VAS usage returns EINVAL. This is a documented macOS kernel
+                    // limitation (not enforced, or EINVAL for small values). Best-effort: warn
+                    // and continue. `--memory` is best-effort on macOS. Do NOT _exit(126) —
+                    // the supervised run must proceed to RLIMIT_NPROC + execve.
+                    // CR-01: const MSG_* + libc::write (no format!, no heap alloc).
                     if setrlimit(Resource::RLIMIT_AS, limit, limit).is_err() {
-                        const MSG_RLIMIT_AS_FAIL: &[u8] =
-                            b"nono: setrlimit(RLIMIT_AS) failed in pre-exec child; aborting\n";
-                        // SAFETY: write and _exit are async-signal-safe; we are in
-                        // the post-fork child branch where heap allocation is unsafe.
+                        const MSG_RLIMIT_AS_WARN: &[u8] =
+                            b"nono: setrlimit(RLIMIT_AS) not enforced on macOS (best-effort); continuing\n";
+                        // SAFETY: write is async-signal-safe. We are in the post-fork child
+                        // branch where heap allocation is unsafe.
                         unsafe {
                             libc::write(
                                 libc::STDERR_FILENO,
-                                MSG_RLIMIT_AS_FAIL.as_ptr().cast::<libc::c_void>(),
-                                MSG_RLIMIT_AS_FAIL.len(),
+                                MSG_RLIMIT_AS_WARN.as_ptr().cast::<libc::c_void>(),
+                                MSG_RLIMIT_AS_WARN.len(),
                             );
-                            libc::_exit(126);
                         }
+                        // Do NOT _exit(126) — execution continues to RLIMIT_NPROC + execve.
                     }
                 }
                 if let Some(n) = resource_limits.max_processes {
