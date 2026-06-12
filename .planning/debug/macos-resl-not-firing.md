@@ -150,13 +150,15 @@ re-test against the actually-deployed code.
 2. PENDING — Mac: `git pull origin main` → **verify fix landed** (`grep -rc "absent from nix" crates/` MUST be 0; D-09 test present; `cargo test` should now show 5 tests not 4) → `cargo build -p nono-cli` → re-run `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`.
 3. PENDING — Evaluate the FIRST real signal. PASS → phase 68 verifiable. FAIL → re-open `/gsd:debug continue macos-resl-not-firing` with the H2'(a/b/c) host probes (now meaningful — the new setpgid/setrlimit code will actually be running).
 
-## Out of scope (do NOT chase here — separate filed bug)
+## ~~Out of scope~~ — CORRECTED 2026-06-12: the set_read_timeout EINVAL IS in scope
 
-The `audit_attestation` sandbox-init failure `Failed to set socket read timeout: Invalid argument
-(os error 22)` on the AF_UNIX supervisor socketpair is a SEPARATE pre-existing Phase 59 IPC bug
-(`crates/nono/src/supervisor/socket.rs:194`, wired `exec_strategy.rs:1378`). Filed at
-`.planning/todos/pending/20260612-macos-supervisor-ipc-rcvtimeo-einval.md`. The RESL tests use only
-static `--read` grants (no IPC socket) so they bypass it — it is a confound, not the cause.
+EARLIER ASSUMPTION (FALSIFIED): "the `set_read_timeout` EINVAL is a separate rollback-only Phase 59
+bug; RESL tests bypass it." Host probe P-B disproved this — the EINVAL fires in the core RESL
+supervised path (`exec_strategy.rs:1381`, `supervisor_sock` Some for every supervised run with an IPC
+socket; macOS does not accept SO_RCVTIMEO on the AF_UNIX socketpair, at least once the child end has
+closed). The todo `.planning/todos/pending/20260612-macos-supervisor-ipc-rcvtimeo-einval.md` is the
+SAME root defect and is now a blocker for Phase 68, not a side issue. Fix direction unchanged: replace
+SO_RCVTIMEO with a poll/recv-deadline on macOS (or skip the read-timeout on macOS).
 
 ## Evidence
 
@@ -318,6 +320,36 @@ static `--read` grants (no IPC socket) so they bypass it — it is a confound, n
     OR Phase 68's `setpgid(0,0)` itself regressed reaping (the prior OLD-code probe showed
     nono/bash exiting by ~t=3s; the NEW code hangs). Must isolate with a no-enforcement reap
     probe (`sleep 3`, no flags) and a python-with-marker probe on the DEPLOYED binary.
+
+- timestamp: 2026-06-12 (HOST PROBES P-A + P-B on the DEPLOYED binary — MULTI-DEFECT)
+  checked: /tmp/nono-sleep3.log (P-A: `nono run --allow-cwd --read=... -- sleep 3`, no enforcement
+    flags) and /tmp/nono-mem.log (P-B: `--memory 32m -- python3 -c "bytearray(256MB); print(...)"`).
+  found:
+    * P-B printed TWO errors:
+      (1) `nono: setrlimit(RLIMIT_AS) failed in pre-exec child; aborting` — the SUPERVISED child arm
+          RLIMIT_AS block (exec_strategy.rs:1003 `setrlimit(Resource::RLIMIT_AS, limit, limit).is_err()`
+          → MSG_RLIMIT_AS_FAIL + _exit(126)) FIRES: setrlimit(RLIMIT_AS, 32 MiB) FAILS on macOS, so the
+          child aborts before exec. RLIMIT_AS enforcement is itself broken at the syscall level (this
+          path PREDATES Phase 68).
+      (2) `nono: Sandbox initialization failed: Failed to set socket read timeout: Invalid argument
+          (os error 22)` — the PARENT's `sock.set_read_timeout(...)?` at exec_strategy.rs:1381 EINVALs.
+          This is the SAME `set_read_timeout` EINVAL I had filed as a separate "Phase 59 IPC / rollback-
+          only" bug and marked OUT OF SCOPE. **That was WRONG** — it fires in the core RESL supervised
+          path (socketpair, no rollback). set_read_timeout runs whenever `supervisor_sock` is Some
+          (1380), i.e. for every supervised run with an IPC socket.
+    * P-A (`sleep 3`, no flags) printed NEITHER error — only "Applying sandbox..." then quiet. AMBIGUOUS:
+      need to know if nono EXITED at ~3s (basic reaping OK) or HUNG (reaping broken). [ps watcher / `time`
+      output still needed from the user.]
+  implication: The macOS supervised path has MULTIPLE foundational defects, broader than Phase 68's
+    original 2-bug scope (max-processes no-op + timeout wrong-pgrp):
+      D1. `set_read_timeout`/SO_RCVTIMEO EINVAL on the AF_UNIX supervisor socket — breaks/aborts
+          supervised runs (in-scope, not the rollback-only confound I assumed).
+      D2. `setrlimit(RLIMIT_AS, N)` fails in the child for `--memory` — memory enforcement broken.
+      D3. the original `--timeout` watchdog + `--max-processes` non-enforcement (Phase 68 targets).
+    D1+D2 PREDATE Phase 68. Phase 68's setpgid/NPROC fix sits on top of an already-broken macOS
+    supervised foundation. The behavior is state-dependent (echo-hi passes, memory aborts, sleep
+    quiet-hangs) — likely a timing/peer-state interaction (e.g. set_read_timeout EINVAL only once the
+    child end has closed early). This exceeds a single-defect debug fix.
 
 ## Eliminated
 
