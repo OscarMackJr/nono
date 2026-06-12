@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
 status: executing
-last_updated: "2026-06-12T17:04:10.861Z"
-last_activity: 2026-06-12 -- Phase 68 planning complete
+last_updated: "2026-06-12T17:19:07.102Z"
+last_activity: 2026-06-12 -- Phase 68 execution started
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 1
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 100
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** v2.11 — roadmap complete (4 phases, 8/8 reqs mapped). Make the public release work out-of-the-box on a clean host + fix the macOS resl bug + absorb the non-macOS UPST8 slice. Real publicly-trusted code signing is cert-gated → deferred to the next (enterprise distribution) milestone.
+**Current Focus:** Phase 68 — macos-resl-enforcement-fix (Tasks 1+2 complete; Task 3 awaiting macOS host UAT)
 
 ## Current Position
 
-Phase: Not started — roadmap complete; ready to plan
-Plan: —
-Status: Ready to execute
-Last activity: 2026-06-12 -- Phase 68 planning complete
+Phase: 68 (macos-resl-enforcement-fix) — EXECUTING (checkpoint: human-verify at Task 3)
+Plan: 1 of 1 (in-progress — Tasks 1+2+3-automated committed; Task 3 human gate pending)
+Status: Awaiting macOS host UAT (`NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos` on Oscars-MacBook-Pro)
+Last activity: 2026-06-12 -- Phase 68-01 Tasks 1+2+3-automated committed; checkpoint:human-verify reached
 
 ### v2.11 Phase Summary (active)
 
@@ -70,6 +70,9 @@ Last activity: 2026-06-12 -- Phase 68 planning complete
 | DIST + TRUST kept together in one phase (67) | 67 | The MSI install fix and the interim broker-trust path are the same "make the public release work on a clean Win11 host" story; both are exercised in the same clean-host UAT. |
 | Real publicly-trusted signing (Azure Trusted Signing) is OUT OF SCOPE | — | BLOCKED on an incoming cert; deferred to the next (enterprise distribution) milestone. v2.11 TRUST reqs are the interim cert-import helper + docs only — never weakening the D-32-12 gate. |
 | macOS resl fix is a real nono supervisor/setrlimit bug fix, not a test-gate change | 68 | The Phase 65 A5 finding: the watchdog/`RLIMIT_NPROC` path genuinely doesn't fire on macOS. Test re-gating (the v2.10 CI-green workaround) is NOT the fix. |
+| D-01: baseline+N RLIMIT_NPROC bounding — parent reads per-UID count via sysctl(KERN_PROC_UID) before fork | 68 | Matches Linux pids.max intent; accepted UID-wide race (D-03). `uid_process_count()` fails closed on sysctl error. |
+| D-04: setpgid(0,0) in supervised child arm — child becomes own pgrp leader | 68 | Fixes timeout watchdog kill miss; watchdog kill(-pgrp) now targets only agent tree. Tolerated on failure (WR-04 skip-on-Err is the safety net). |
+| D-10: cross-target clippy PARTIAL/deferred-to-CI for Phase 68 | 68 | Windows dev host cannot cross-compile (ring/aws-lc-sys C toolchain missing); GH Actions Linux + macOS Clippy lanes are the load-bearing signal. |
 | UPST8 scoped to the non-macOS slice of `v0.60.0..v0.61.2` only | 69-70 | The macOS slice of that window was already absorbed in v2.10 (Phases 63-65 / MACOS-01..03). |
 | UPST8 follows the Phase 54/55 audit-then-sync two-phase shape | 69-70 | Mirrors every prior UPST cycle (33/34, 39/40, 42/43, 47, 54/55); cadence-ordered linearly after Phase 55. |
 
@@ -202,7 +205,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-12T14:00:22.744Z
+**Last session:** 2026-06-12T17:19:07.089Z
 
 **v2.11 roadmap complete (2026-06-11):** Phases 67-70 defined, 8/8 reqs mapped (100% coverage). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Phases 67 (clean-host Win install: DIST-01/02 + TRUST-01/02) and 68 (macOS resl: RESL-MAC-01/02) are independent + host-gated + parallel-safe. Phases 69 (UPST8 audit: UPST8-01) → 70 (UPST8 sync: UPST8-02) are the linear audit-then-sync pair, cadence-ordered after Phase 55.
 
