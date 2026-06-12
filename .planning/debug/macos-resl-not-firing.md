@@ -453,6 +453,23 @@ SO_RCVTIMEO with a poll/recv-deadline on macOS (or skip the read-timeout on macO
     `assert !success` can't detect partial enforcement → fix the test to detect fork failures. Next: probe
     whether `fork: Resource temporarily unavailable`/EAGAIN errors appear at all under `--max-processes`.
 
+- timestamp: 2026-06-12 (max-processes probe — ROOT CAUSE = baseline overcount, FIXABLE)
+  checked: `ulimit -u` inside the sandboxed child + actual UID proc count + fork-EAGAIN count.
+  found: actual UID procs = **476**; default RLIMIT_NPROC = 2784; **nono-applied RLIMIT_NPROC for
+    `--max-processes 5` = 824**; fork-EAGAIN errors = 0. Cap should be baseline+5 ≈ 481; nono applied
+    824 ⇒ implied baseline ≈ 819 vs the real 476. **`uid_process_count()` OVERCOUNTS by ~340.**
+  implication: NOT a macOS limitation — macOS DOES enforce RLIMIT_NPROC (2784 is a real cap); nono set
+    the soft limit far too loose (824) so the test's ~40 forks never approached it. Root cause: the
+    `proc_listpids(PROC_UID_ONLY, uid, NULL, 0)` size-query over-reports on macOS (returns an upper
+    bound, not the UID-filtered count). FIX (b): use the two-call proc_listpids pattern — allocate a
+    buffer of the reported size, call again WITH the buffer, and count the actual non-zero pids returned
+    (~476). uid_process_count runs in the PARENT pre-fork (NOT async-signal-safe context), so the Vec
+    allocation is fine. SECONDARY FIX (c): the test `bash -c "...&; wait"` exits 0 even when background
+    forks EAGAIN, so `assert !success` can't observe enforcement — change the child to exit non-zero
+    when it cannot spawn the requested number of processes (e.g. compare `jobs -rp | wc -l` to the
+    target). Both needed for RESL-MAC-02 to be real + test-provable. RESL-MAC-01 (timeout) is already
+    DONE on the host.
+
 ## Eliminated
 
 - hypothesis: H1 — the modified ForkResult::Child arm / setrlimit / setpgid /
