@@ -506,7 +506,9 @@ macOS `RLIMIT_NPROC` is UID-wide, unlike Linux `pids.max` which is descendant-tr
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three resolved in 68-01-PLAN.md task actions: Q1 setpgid-failure → tolerate+warn (`MSG_SETPGID_FAIL`; WR-04 skip-on-err is the safety net); Q2 sysctl constants → CI macOS lane is the compile gate; Q3 `--memory` bonus → appended to `resl_nix_macos.rs` (Task 3).
 
 1. **Should `setpgid(0,0)` failure be fail-closed (D-07) or tolerated?**
    - What we know: D-07 says "abort the run with a clear error" when a limit cannot be applied. `setpgid` is not strictly a "limit" (it's process group isolation for the watchdog). WR-04 already provides a skip path if `getpgid` fails in the parent.

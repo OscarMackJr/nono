@@ -83,7 +83,7 @@ real fix.
   (`NONO_RESL_HOST_VALIDATED=1`)**. The host is available (`Oscars-MacBook-Pro`,
   Apple Silicon — the same host that surfaced A5). Tests stay env-gated OFF the CI
   runner (they hang there); CI keeps only the build/clippy/skip-path green.
-- **D-09 (bonus, no new requirement):** Add **one lightweight `--memory` /
+- **D-09:** (bonus, no new requirement) Add **one lightweight `--memory` /
   RLIMIT_AS live assertion** to the real-host validation while the host UAT is
   running, to catch any third silent gap. Keep it secondary — do NOT expand the
   roadmap scope or add a requirement; RESL-MAC-01/02 remain the only gating reqs.
