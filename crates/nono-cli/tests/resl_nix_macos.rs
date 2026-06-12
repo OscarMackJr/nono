@@ -337,29 +337,33 @@ fn macos_max_processes_blocks_on_rlimit_nproc() {
         return;
     }
 
-    // Use a limit of 5 to account for the current process and nono supervisor
-    // already consuming slots. The child (bash) + its subprocesses should hit the limit.
-    // `sleep 5` (not 60): RLIMIT_NPROC is enforced at fork() time, so the limit
-    // is hit immediately regardless of sleep duration; the shorter sleep just
-    // bounds how long `wait` blocks. `run_bounded` (20s) is the hang safety net.
+    // Limit 5 → RLIMIT_NPROC = baseline_uid_count + 5 (baseline = the parent's accurate
+    // per-UID process count via the two-call proc_listpids in supervisor_macos.rs). The child
+    // then tries to spawn 50 background `sleep`s — far more than the +5 headroom — so fork()
+    // returns EAGAIN for all but a handful.
+    //
+    // DETECTION (Phase 68-02): a background fork that EAGAINs does NOT change bash's exit code
+    // (`wait` returns 0 for the jobs that DID start), so asserting on bash's exit was unable to
+    // observe enforcement. Instead the child counts how many jobs actually started
+    // (`jobs -rp | wc -l`) and exits 1 when fewer than the requested target started — i.e. it
+    // exits non-zero IFF RLIMIT_NPROC blocked forks. `2>/dev/null` hushes the per-fork EAGAIN
+    // spam; `kill $(jobs -rp)` cleans up the started sleeps so none are orphaned.
     let output = run_bounded(
         &[
             "run",
             "--max-processes",
             "5",
-            // `--read=<dir>` grants read+execute recursively (the old split
-            // `--allow-fs-read` / `--allow-fs-exec` flags were removed; on
-            // macOS read paths receive `file-map-executable`, on Linux
-            // `AccessMode::Read` maps to `ReadFile|ReadDir|Execute`). This
-            // lets the sandboxed child exec /bin/* and load libs from /usr +
-            // /private.
+            // `--read=<dir>` grants read+execute recursively so the sandboxed child can exec
+            // /bin/* and load libs from /usr + /private.
             "--read=/bin",
             "--read=/usr",
             "--read=/private",
             "--",
             "bash",
             "-c",
-            "for i in $(seq 1 20); do sleep 5 & done; wait",
+            "target=50; for i in $(seq 1 $target); do sleep 30 & done 2>/dev/null; \
+             running=$(jobs -rp | wc -l | tr -d ' '); kill $(jobs -rp) 2>/dev/null; \
+             [ $running -lt $target ] && exit 1 || exit 0",
         ],
         Duration::from_secs(20),
     );

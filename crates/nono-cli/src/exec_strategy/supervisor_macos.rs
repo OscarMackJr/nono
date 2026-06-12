@@ -49,14 +49,16 @@ use nix::libc;
 
 /// Read the current number of processes owned by the current UID.
 ///
-/// Uses `proc_listpids(PROC_UID_ONLY, uid, NULL, 0)` to query the byte length of
-/// the kernel's pid list for the calling user's UID, then divides by
-/// `size_of::<c_int>()` (a pid is a 32-bit int) to obtain the process count.
+/// Uses the **two-call `proc_listpids(PROC_UID_ONLY, ...)` pattern**: a first call with a
+/// NULL buffer to get a buffer-size upper bound, then a second call WITH the buffer to read
+/// the actual UID-filtered pid list, counting the non-zero pids returned. A single NULL-buffer
+/// size query is NOT used as the count because on macOS it over-reports (observed ~819 vs a
+/// real ~476), which would set `RLIMIT_NPROC = baseline+N` far too loose to ever fire.
 ///
 /// `proc_listpids` is used rather than `sysctl(KERN_PROC_UID)` because the `libc`
 /// crate (0.2.x) does NOT expose the macOS `kinfo_proc` struct on Apple targets,
 /// so the sysctl entry-size division (`size_of::<kinfo_proc>()`) cannot be
-/// expressed. `proc_listpids` needs no struct layout — it reports a raw byte count.
+/// expressed. `proc_listpids` needs no struct layout — it reports pids directly.
 ///
 /// This count is used by [`MacosResourceLimits::new`] to compute a
 /// `baseline_uid_count` before `fork()`, which is then captured by value
@@ -79,25 +81,58 @@ fn uid_process_count() -> Result<u64> {
     // constant; its value is 4 per <sys/proc_info.h> (PROC_ALL_PIDS=1, PROC_PGRP_ONLY=2,
     // PROC_TTY_ONLY=3, PROC_UID_ONLY=4).
     const PROC_UID_ONLY: u32 = 4;
+    let pid_size = std::mem::size_of::<libc::c_int>();
     let uid = unsafe { libc::getuid() };
-    // NULL buffer + 0 size => proc_listpids returns the number of bytes the pid list
-    // would occupy (= count * size_of::<pid_t>()), without writing any pids.
-    // SAFETY: proc_listpids is a direct libproc kernel call; NOT async-signal-safe —
-    // must only be called in the parent before fork.
-    let bytes = unsafe { libc::proc_listpids(PROC_UID_ONLY, uid, std::ptr::null_mut(), 0) };
-    if bytes <= 0 {
+
+    // FIRST call (NULL buffer): query a buffer size. On macOS this is an UPPER BOUND, NOT the
+    // UID-filtered count — it over-reports (observed ~819 when the real per-UID count was ~476).
+    // A single NULL-buffer call therefore yields a baseline far above actual usage, making
+    // RLIMIT_NPROC = baseline+N too loose to ever fire. So we use the two-call pattern below.
+    // SAFETY: proc_listpids is a direct libproc kernel call; NOT async-signal-safe — must only
+    // be called in the parent before fork (this fn is). Passing NULL/0 only queries a size.
+    let size = unsafe { libc::proc_listpids(PROC_UID_ONLY, uid, std::ptr::null_mut(), 0) };
+    if size <= 0 {
         return Err(NonoError::SandboxInit(format!(
-            "proc_listpids(PROC_UID_ONLY) failed: {}",
+            "proc_listpids(PROC_UID_ONLY) size query failed: {}",
             std::io::Error::last_os_error()
         )));
     }
-    // Each pid is a 32-bit int; divide the byte count by size_of::<c_int>() for the
-    // process count. checked_div guards against a hypothetical zero size_of (required
-    // by the unwrap policy; impossible in practice).
-    let count = (bytes as usize)
-        .checked_div(std::mem::size_of::<libc::c_int>())
+
+    // SECOND call (with a real buffer): the kernel writes the actual UID-filtered pid list.
+    // Allocate `cap` i32 slots (zero-initialized) sized to the upper-bound estimate.
+    let cap = (size as usize).checked_div(pid_size).unwrap_or(0);
+    let mut pids = vec![0i32; cap];
+    let buf_len = pids
+        .len()
+        .checked_mul(pid_size)
+        .and_then(|n| libc::c_int::try_from(n).ok())
         .unwrap_or(0);
-    Ok(count as u64)
+    // SAFETY: `pids` owns `buf_len` bytes of writable storage; proc_listpids writes at most
+    // `buf_len` bytes. Parent-before-fork only (see note above).
+    let written = unsafe {
+        libc::proc_listpids(
+            PROC_UID_ONLY,
+            uid,
+            pids.as_mut_ptr().cast::<libc::c_void>(),
+            buf_len,
+        )
+    };
+    if written <= 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "proc_listpids(PROC_UID_ONLY) buffer call failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // The kernel may zero-pad the trailing slots and report `written` covering the full buffer.
+    // Count the actual non-zero pids within the written range for an accurate per-UID count.
+    // (A real pid is never 0, so zero entries are padding.)
+    let returned = (written as usize)
+        .checked_div(pid_size)
+        .unwrap_or(0)
+        .min(pids.len());
+    let actual = pids[..returned].iter().filter(|&&pid| pid != 0).count();
+    Ok(actual as u64)
 }
 
 /// macOS resource-limit applier using `setrlimit` in a `pre_exec` hook.
