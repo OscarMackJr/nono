@@ -1376,7 +1376,13 @@ pub fn execute_supervised(
             // Setting a read timeout bounds the stall; a WouldBlock/TimedOut error in
             // recv_message is treated as a non-fatal keep-alive condition (not a kill).
             // Error propagated with ? — fail-secure (abort, not silent degradation).
-            #[cfg(unix)]
+            //
+            // D1 (Phase 68-02): macOS setsockopt(SO_RCVTIMEO) returns EINVAL on AF_UNIX
+            // SOCK_STREAM socketpairs — a macOS kernel limitation. The macOS supervisor
+            // loop uses poll(200ms) which provides bounded IPC read behavior without
+            // requiring socket-level timeouts. Linux: SO_RCVTIMEO is supported; preserve
+            // existing Phase 59-02 slowloris protection.
+            #[cfg(target_os = "linux")]
             if let Some(ref sock) = supervisor_sock {
                 sock.set_read_timeout(Some(crate::timeouts::supervisor_ipc_read_timeout()))?;
             }
