@@ -128,7 +128,19 @@ re-test against the actually-deployed code.
 ## Resolution
 
 1. ✅ DONE — pushed local `main` → `origin/main` (848ce71d..63dfd9a5, 18 commits, safety-checked clean). 2026-06-12.
-1b. ✅ DONE — fixed the macOS compile error (missing `use nix::libc;`), pushed `53501113`. 2026-06-12.
+1b. ✅ DONE — fixed macOS compile error #1 (missing `use nix::libc;`), pushed `53501113`. 2026-06-12.
+1c. ✅ DONE — fixed macOS compile error #2 (`libc::kinfo_proc` absent for Apple in libc 0.2.x):
+    rewrote `uid_process_count()` to use `proc_listpids(PROC_UID_ONLY, uid, NULL, 0)` (byte count /
+    size_of::<c_int>()); `PROC_UID_ONLY=4` defined locally. Audited ALL libc symbols the new macOS
+    code uses against the cached libc-0.2.186 apple module — every other symbol (RLIMIT_NPROC,
+    RLIM_INFINITY, rlim_t, setrlimit, getrlimit, rlimit, setpgid, getuid, proc_listpids, write,
+    _exit, STDERR_FILENO, c_void, c_int, size_t) is present. Also applied pending rustfmt to the
+    Phase 68 macOS blocks. Pushed `fa6c2dc6`. resl_nix_async_signal_safety stays 5/5.
+    NOTE: these two compile errors are the SAME cross-target gap root cause — the Phase 68 macOS
+    code was authored on a Windows host and never compiled for Apple before deploy
+    ([[feedback_clippy_cross_target]], 3rd+ recurrence). After fa6c2dc6 the full libc-symbol audit
+    is done, so further macOS compile errors are unlikely (but cannot be 100% ruled out without a
+    real macOS/CI compile).
 2. PENDING — Mac: `git pull origin main` → **verify fix landed** (`grep -rc "absent from nix" crates/` MUST be 0; D-09 test present; `cargo test` should now show 5 tests not 4) → `cargo build -p nono-cli` → re-run `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`.
 3. PENDING — Evaluate the FIRST real signal. PASS → phase 68 verifiable. FAIL → re-open `/gsd:debug continue macos-resl-not-firing` with the H2'(a/b/c) host probes (now meaningful — the new setpgid/setrlimit code will actually be running).
 
