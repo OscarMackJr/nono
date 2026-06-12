@@ -21,7 +21,7 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 68 — macos-resl-enforcement-fix (DIAGNOSED multi-defect; RE-SCOPED to a planned phase — next `/gsd:plan-phase 68`)
+**Current Focus:** Phase 68 — macos-resl-enforcement-fix (RE-PLANNED: 68-02 covers D1+D2+D3, plan-checker PASSED — next `/gsd:execute-phase 68`, runs on the Mac)
 
 ## Current Position
 

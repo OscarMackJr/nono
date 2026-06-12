@@ -532,7 +532,12 @@ Not applicable — this is a code-only bug fix phase; no stored data, live servi
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED — operationally handled in 68-02-PLAN.md)
+
+> Both questions are resolved by the plan, not by further research: **Q1 RESOLVED** — captured as the
+> blocking Checkpoint P-A gate (first step on the macOS host, before any code edit; the plan halts and
+> re-plans if nono hangs). **Q2 RESOLVED** — the plan uses `nix::unistd::setpgid(child, child)`; the
+> import is already in scope (T1 action confirms).
 
 1. **Does the P-A probe (`sleep 3`, no enforcement) confirm basic reaping works or is reaping broken independently?**
    - What we know: P-A outcome was ambiguous (quiet output, unknown if nono exited at 3s or hung).
