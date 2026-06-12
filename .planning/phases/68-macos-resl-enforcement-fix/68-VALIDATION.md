@@ -1,9 +1,13 @@
 ---
 phase: 68
 slug: macos-resl-enforcement-fix
-status: draft
+status: in-progress
 nyquist_compliant: false
 wave_0_complete: false
+t1_committed: true
+t2_committed: true
+t3_committed: true
+t4_host_uat: pending
 created: 2026-06-12
 ---
 
@@ -40,12 +44,13 @@ created: 2026-06-12
 
 *Populated by the planner (68-02-PLAN.md). Each defect maps to a proof:*
 
-| Defect | Proof |
-|--------|-------|
-| D3 (watchdog/pgrp) | `macos_timeout_kills_at_deadline` PASS on host; `macos_max_processes_blocks_on_rlimit_nproc` PASS |
-| D1 (set_read_timeout) | `--memory`/supervised runs no longer print `Failed to set socket read timeout`; supervised run completes on host |
-| D2 (RLIMIT_AS) | no `_exit(126)` abort on `--memory`; D-09 test assertion flipped + passes/skips cleanly |
-| P-A reaping (open) | host probe: `time nono run --allow-cwd --read=... -- sleep 3` exits at ~3s |
+| Defect | Proof | Status |
+|--------|-------|--------|
+| P-A reaping | host probe: `time nono run --allow-cwd --read=... -- sleep 3` exits at ~3s | PASS (user-reported 2026-06-12) |
+| D3 (watchdog/pgrp) | `macos_timeout_kills_at_deadline` PASS on host; `macos_max_processes_blocks_on_rlimit_nproc` PASS | pending T4 |
+| D1 (set_read_timeout) | `--memory`/supervised runs no longer print `Failed to set socket read timeout`; supervised run completes on host | pending T4 |
+| D2 (RLIMIT_AS) | no `_exit(126)` abort on `--memory`; D-09 test assertion flipped + passes/skips cleanly | code committed; pending T4 host |
+| async-signal-safety invariants | `cargo test -p nono-cli --test resl_nix_async_signal_safety` 5/5 PASS (Windows dev host) | PASS (commits 924b4d60, c3cf3855, 648c5856) |
 
 ---
 
@@ -60,9 +65,9 @@ created: 2026-06-12
 
 ## Validation Sign-Off
 
-- [ ] D1/D2/D3 each have an automated proof (host-gated where needed)
-- [ ] Real-macOS-host gate is the pre-verify requirement (NOT Windows `cargo check`)
-- [ ] Cross-target macOS+Linux CI lanes green on head SHA
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] D1/D2/D3 code committed (T1: 924b4d60, T2: c3cf3855, T3: 648c5856); async-signal-safety 5/5 PASS on dev host
+- [ ] Real-macOS-host gate (Checkpoint T4): `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos` 5/5 PASS on Oscars-MacBook-Pro
+- [ ] Cross-target macOS+Linux CI lanes green on head SHA (deferred to GH Actions — PARTIAL per cross-target-verify-checklist.md)
+- [ ] `nyquist_compliant: true` set in frontmatter (after T4 PASS)
 
-**Approval:** pending
+**Approval:** pending T4 host UAT
