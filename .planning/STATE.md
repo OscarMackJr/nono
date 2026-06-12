@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
 status: executing
-last_updated: "2026-06-12T17:19:07.102Z"
-last_activity: 2026-06-12 -- Phase 68 BLOCKED: macOS host UAT failed (RESL enforcement still not firing)
+last_updated: "2026-06-12T20:24:21.931Z"
+last_activity: 2026-06-12 -- Phase 68 execution started
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 1
-  completed_plans: 0
-  percent: 0
+  completed_phases: 0
+  total_plans: 2
+  completed_plans: 1
+  percent: 50
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 68 — macos-resl-enforcement-fix (RE-PLANNED: 68-02 covers D1+D2+D3, plan-checker PASSED — next `/gsd:execute-phase 68`, runs on the Mac)
+**Current Focus:** Phase 68 — macos-resl-enforcement-fix
 
 ## Current Position
 
-Phase: 68 (macos-resl-enforcement-fix) — BLOCKED → RE-SCOPE. Debug `macos-resl-not-firing` (status: diagnosed) found the macOS supervised path has THREE foundational defects, broader than the planned 2-bug scope: **D1** `set_read_timeout`/SO_RCVTIMEO EINVAL on the AF_UNIX supervisor socket (core RESL path; todo 20260612-...-rcvtimeo-einval), **D2** `setrlimit(RLIMIT_AS)` fails in child → `--memory` broken (todo 20260612-...-rlimit-as), **D3** `--timeout`/`--max-processes` non-enforcement (original targets). D1+D2 PREDATE Phase 68. Phase 68's setpgid/NPROC fix is deployed on origin/main (`1b2e2ad0`/`f94c1c1b`/`3583bacc` + macOS compile fixes `53501113`/`fa6c2dc6`, head `173f8386`) but unobservable behind D1/D2. Per user decision 2026-06-12, fix re-scoped to planned work. NEXT: `/gsd:plan-phase 68` covering D1+D2+D3 (planning input = debug file DIAGNOSIS COMPLETE block). Load-bearing gate must be a real macOS build+test, NOT Windows `cargo check`.
-Plan: 1 of 1 (NOT complete — Tasks 1+2+3-automated committed `1b2e2ad0`..`cc9f8c94` + compile fixes; fix deployed but blocked behind D1/D2; re-plan will decide keep/revise/gate)
-Status: ROOT CAUSE FOUND (debug `macos-resl-not-firing`, status root-cause-found) — the 2026-06-12 macOS UAT tested a STALE binary: the fix commits (1b2e2ad0/f94c1c1b/3583bacc) were local-only/unpushed, so the Mac's `git pull origin main` (848ce71d) + `cargo build` compiled PRE-fix code (host printed the exact warning Phase 68 deleted; child PGID==parent PGID; only 4 tests not 5). NOT a code defect. **Fix now PUSHED to origin/main `63dfd9a5` (2026-06-12).** AWAITING Mac re-test against the deployed fix (`git pull` → verify fix landed → `cargo build` → `NONO_RESL_HOST_VALIDATED=1 cargo test -p nono-cli --test resl_nix_macos`). Separate confound still filed: audit_attestation set_read_timeout EINVAL (Phase 59 IPC).
-Last activity: 2026-06-12 -- Phase 68-01 UAT root-caused to stale binary; fix pushed to origin 63dfd9a5; awaiting Mac re-test
+Phase: 68 (macos-resl-enforcement-fix) — EXECUTING
+Plan: 1 of 2
+Status: Executing Phase 68
+Last activity: 2026-06-12 -- Phase 68 execution started
 
 ### v2.11 Phase Summary (active)
 
