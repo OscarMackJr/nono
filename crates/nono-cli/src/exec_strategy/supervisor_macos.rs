@@ -49,8 +49,14 @@ use nix::libc;
 
 /// Read the current number of processes owned by the current UID.
 ///
-/// Uses `sysctl(KERN_PROC_UID)` to query the kernel's process table and
-/// returns the count of `kinfo_proc` entries for the calling user's UID.
+/// Uses `proc_listpids(PROC_UID_ONLY, uid, NULL, 0)` to query the byte length of
+/// the kernel's pid list for the calling user's UID, then divides by
+/// `size_of::<c_int>()` (a pid is a 32-bit int) to obtain the process count.
+///
+/// `proc_listpids` is used rather than `sysctl(KERN_PROC_UID)` because the `libc`
+/// crate (0.2.x) does NOT expose the macOS `kinfo_proc` struct on Apple targets,
+/// so the sysctl entry-size division (`size_of::<kinfo_proc>()`) cannot be
+/// expressed. `proc_listpids` needs no struct layout — it reports a raw byte count.
 ///
 /// This count is used by [`MacosResourceLimits::new`] to compute a
 /// `baseline_uid_count` before `fork()`, which is then captured by value
@@ -59,49 +65,37 @@ use nix::libc;
 ///
 /// # Safety note
 ///
-/// `sysctl` is NOT async-signal-safe — it may allocate kernel-side and
-/// interact with locks. This function MUST be called in the **parent before
-/// `fork()`** only. It is not safe to call from inside a `pre_exec` closure
-/// or any post-fork child arm.
+/// `proc_listpids` is NOT async-signal-safe — it allocates kernel-side and may
+/// take locks. This function MUST be called in the **parent before `fork()`**
+/// only. It is not safe to call from inside a `pre_exec` closure or any
+/// post-fork child arm.
 ///
 /// # Errors
 ///
-/// Returns `Err(NonoError::SandboxInit(...))` if the `sysctl` call fails.
+/// Returns `Err(NonoError::SandboxInit(...))` if `proc_listpids` fails.
 #[cfg(target_os = "macos")]
 fn uid_process_count() -> Result<u64> {
+    // PROC_UID_ONLY selects processes by effective UID. libc does not export this
+    // constant; its value is 4 per <sys/proc_info.h> (PROC_ALL_PIDS=1, PROC_PGRP_ONLY=2,
+    // PROC_TTY_ONLY=3, PROC_UID_ONLY=4).
+    const PROC_UID_ONLY: u32 = 4;
     let uid = unsafe { libc::getuid() };
-    let mut mib: [libc::c_int; 4] = [
-        libc::CTL_KERN,
-        libc::KERN_PROC,
-        libc::KERN_PROC_UID,
-        uid as libc::c_int,
-    ];
-    let mut len: libc::size_t = 0;
-    // First call: pass null buffer to query required size.
-    // SAFETY: sysctl is a direct kernel call; not async-signal-safe — must only be
-    // called in the parent before fork. The null output pointer with a zero old_len
-    // queries the required buffer size without reading any data.
-    let ret = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            4,
-            std::ptr::null_mut(),
-            &mut len,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if ret != 0 {
+    // NULL buffer + 0 size => proc_listpids returns the number of bytes the pid list
+    // would occupy (= count * size_of::<pid_t>()), without writing any pids.
+    // SAFETY: proc_listpids is a direct libproc kernel call; NOT async-signal-safe —
+    // must only be called in the parent before fork.
+    let bytes = unsafe { libc::proc_listpids(PROC_UID_ONLY, uid, std::ptr::null_mut(), 0) };
+    if bytes <= 0 {
         return Err(NonoError::SandboxInit(format!(
-            "sysctl(KERN_PROC_UID) failed: {}",
+            "proc_listpids(PROC_UID_ONLY) failed: {}",
             std::io::Error::last_os_error()
         )));
     }
-    // Divide total byte length by per-entry size to get process count.
-    // checked_div guards against a hypothetical zero size_of (impossible in practice,
-    // but required by the unwrap policy).
-    let count = len
-        .checked_div(std::mem::size_of::<libc::kinfo_proc>())
+    // Each pid is a 32-bit int; divide the byte count by size_of::<c_int>() for the
+    // process count. checked_div guards against a hypothetical zero size_of (required
+    // by the unwrap policy; impossible in practice).
+    let count = (bytes as usize)
+        .checked_div(std::mem::size_of::<libc::c_int>())
         .unwrap_or(0);
     Ok(count as u64)
 }
@@ -116,7 +110,7 @@ fn uid_process_count() -> Result<u64> {
 /// ## `baseline_uid_count` field
 ///
 /// This field holds the per-UID process count read from the kernel (via
-/// `sysctl(KERN_PROC_UID)`) **in the parent before `fork()`**. It is a plain
+/// `proc_listpids(PROC_UID_ONLY)`) **in the parent before `fork()`**. It is a plain
 /// `u64` captured by value into the `pre_exec` closure — no allocation, no
 /// locks, no async-signal-unsafe calls inside the closure. The
 /// `RLIMIT_NPROC` soft and hard limits are set to `baseline_uid_count + N`
@@ -127,9 +121,9 @@ pub(crate) struct MacosResourceLimits {
     memory_bytes: Option<u64>,
     /// `RLIMIT_NPROC` soft + hard limit (from `--max-processes`). None = no limit.
     max_processes: Option<u32>,
-    /// Per-UID process count read in the parent before fork (via `sysctl(KERN_PROC_UID)`).
+    /// Per-UID process count read in the parent before fork (via `proc_listpids(PROC_UID_ONLY)`).
     /// Used to compute `RLIMIT_NPROC = baseline_uid_count + N`. Zero when `max_processes`
-    /// is `None` (no sysctl needed). Captured by `Copy` into the `pre_exec` closure.
+    /// is `None` (no kernel query needed). Captured by `Copy` into the `pre_exec` closure.
     baseline_uid_count: u64,
     // Note: `timeout` is consumed by the supervisor watchdog (`spawn_macos_timeout_watchdog`),
     // not by the pre_exec hook. It is not stored here.
@@ -150,7 +144,7 @@ impl MacosResourceLimits {
     /// - Returns `Err(NonoError::NotSupportedOnPlatform { feature: "cpu_percent_macos" })`
     ///   if `limits.cpu_percent.is_some()`.
     /// - Returns `Err(NonoError::SandboxInit(...))` if `limits.max_processes.is_some()` and
-    ///   the `sysctl(KERN_PROC_UID)` call to compute the baseline UID process count fails.
+    ///   the `proc_listpids(PROC_UID_ONLY)` call to compute the baseline UID process count fails.
     ///   Fail-closed per D-07: the run is aborted before fork rather than launching an
     ///   unbounded child.
     pub(crate) fn new(limits: &ResourceLimits) -> Result<Self> {
@@ -161,11 +155,11 @@ impl MacosResourceLimits {
         }
         // Read the per-UID baseline process count from the kernel before fork.
         // This is required to compute RLIMIT_NPROC = baseline + N.
-        // Fail-closed (D-07): if sysctl fails, abort before spawning an unbounded child.
+        // Fail-closed (D-07): if the query fails, abort before spawning an unbounded child.
         let baseline_uid_count = if limits.max_processes.is_some() {
             uid_process_count()?
         } else {
-            // No max-processes limit requested — skip sysctl (no baseline needed).
+            // No max-processes limit requested — skip the kernel query (no baseline needed).
             0
         };
         Ok(Self {
@@ -201,8 +195,8 @@ impl MacosResourceLimits {
     /// No Rust allocator, no Mutex, no `format!` macros are called inside the closure.
     /// All values (`memory_bytes`, `max_processes`, `baseline_uid_count`) are `Copy`
     /// types captured by value. `baseline_uid_count` was computed in the parent before
-    /// fork via `sysctl(KERN_PROC_UID)` — which is NOT async-signal-safe — and is
-    /// captured as a plain `u64`. No sysctl call occurs inside the closure.
+    /// fork via `proc_listpids(PROC_UID_ONLY)` — which is NOT async-signal-safe — and is
+    /// captured as a plain `u64`. No kernel-query call occurs inside the closure.
     ///
     /// The `nix::errno::Errno` → `std::io::Error` conversion uses
     /// `std::io::Error::from` (nix's public `From<Errno> for std::io::Error` impl)
@@ -254,12 +248,13 @@ impl MacosResourceLimits {
                         // slots. This is accepted behavior; the race between the parent's sysctl
                         // read and the child's setrlimit apply is inherent to macOS's UID-wide
                         // accounting.
-                        let target: libc::rlim_t =
-                            baseline_uid_count.saturating_add(u64::from(n));
+                        let target: libc::rlim_t = baseline_uid_count.saturating_add(u64::from(n));
                         // Read existing hard limit to avoid EPERM when raising above it (Pitfall 3).
                         // getrlimit is async-signal-safe per POSIX.
-                        let mut existing: libc::rlimit =
-                            libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                        let mut existing: libc::rlimit = libc::rlimit {
+                            rlim_cur: 0,
+                            rlim_max: 0,
+                        };
                         // SAFETY: getrlimit is async-signal-safe. existing is stack-allocated.
                         let got = libc::getrlimit(libc::RLIMIT_NPROC, &mut existing);
                         let hard = if got == 0 && existing.rlim_max != libc::RLIM_INFINITY {
@@ -371,7 +366,10 @@ mod tests {
         let r = result.unwrap();
         assert!(r.memory_bytes.is_none());
         assert!(r.max_processes.is_none());
-        assert_eq!(r.baseline_uid_count, 0, "no max_processes → baseline should be 0");
+        assert_eq!(
+            r.baseline_uid_count, 0,
+            "no max_processes → baseline should be 0"
+        );
     }
 
     #[test]

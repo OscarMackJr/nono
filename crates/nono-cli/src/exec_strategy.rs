@@ -1036,7 +1036,10 @@ pub fn execute_supervised(
                         macos_baseline_uid_count.saturating_add(u64::from(n));
                     // Read existing hard limit to avoid EPERM when raising above it (Pitfall 3).
                     // SAFETY: getrlimit is async-signal-safe per POSIX.
-                    let mut existing: libc::rlimit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+                    let mut existing: libc::rlimit = libc::rlimit {
+                        rlim_cur: 0,
+                        rlim_max: 0,
+                    };
                     let got = unsafe { libc::getrlimit(libc::RLIMIT_NPROC, &mut existing) };
                     let hard_limit = if got == 0 && existing.rlim_max != libc::RLIM_INFINITY {
                         existing.rlim_max
