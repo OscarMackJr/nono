@@ -27,6 +27,16 @@ const NONO_BIN: &str = env!("CARGO_BIN_EXE_nono");
 fn run_bounded(args: &[&str], limit: Duration) -> Output {
     let mut child = Command::new(NONO_BIN)
         .args(args)
+        // CRITICAL: redirect stdin to /dev/null. These tests run from the repo dir, which
+        // is NOT in the --read grant set, so nono prompts `Share <cwd>? [y/N]`. Without a
+        // stdin redirect, nono blocks reading that prompt from the harness's inherited
+        // (TTY) stdin — the child is never spawned and the run hangs to the bound, which
+        // looks like a resource-limit "non-firing" failure but is really a prompt stall.
+        // `Stdio::null()` gives the prompt EOF → auto-deny cwd → continue, exactly as the
+        // passing `.output()`-based tests already do. (Phase 68 debug: this was the real
+        // cause of the macos_timeout/max_processes/memory test hangs; enforcement itself
+        // works — a manual `--allow-cwd` run SIGKILLs the child at the deadline.)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

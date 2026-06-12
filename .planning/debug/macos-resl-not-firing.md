@@ -418,6 +418,26 @@ SO_RCVTIMEO with a poll/recv-deadline on macOS (or skip the read-timeout on macO
     (pipe: child blocks until the parent has setpgid'd it) OR a different kill strategy — NOT the
     naive double-setpgid. This is a redesign, not a one-liner.
 
+- timestamp: 2026-06-12 (FOCUSED TIMEOUT PROBE — BREAKTHROUGH: enforcement WORKS; tests had a harness bug)
+  checked: `NONO_LOG=debug nono run --allow-cwd --timeout 5s --read=... -- sleep 60` on the host.
+  found: It WORKED. Output: `WARN parent setpgid(19742,19742) failed (EACCES)` then `[nono] Session
+    stopped.` + `Command killed by SIGKILL (exit code 137)`. exit 137 = 128+SIGKILL → the `--timeout`
+    watchdog fired at 5s, `kill(-child_pgrp, SIGKILL)` hit `sleep 60`, and nono exited. The parent
+    setpgid EACCES is HARMLESS — the child's own `setpgid(0,0)` already made it its own pgrp leader, so
+    `getpgid(child)` returned the right group and the kill landed.
+  implication: ROOT CAUSE of the GATED-TEST hangs identified, and it is NOT an enforcement bug. The
+    `--timeout` watchdog (D3) WORKS on the deployed binary. The tests hang because `run_bounded`
+    (resl_nix_macos.rs) spawns nono WITHOUT `--allow-cwd` and WITHOUT a stdin redirect → nono blocks on
+    the interactive `Share <cwd>? [y/N]` prompt reading from the harness's inherited stdin (never
+    answered under `cargo test`), so the CHILD IS NEVER SPAWNED and the run stalls to the bound. The
+    passing `macos_no_warnings_on_resource_flags` test uses `.output()` (stdin=/dev/null → prompt EOF →
+    auto-resolve → child runs), which is why it passed while the `run_bounded` tests hung. This also
+    retro-explains the entire saga's "non-firing" signal on a real host. FIX: add `.stdin(Stdio::null())`
+    to `run_bounded` (mirrors `.output()`); enforcement is then actually exercised. NOTE: D3's
+    parent-side double-setpgid is effectively a no-op (always EACCES/ESRCH) but ALSO harmless — the child
+    setpgid(0,0) carries it. Whether to keep or remove the parent setpgid is a cleanup question, not a
+    correctness one.
+
 ## Eliminated
 
 - hypothesis: H1 — the modified ForkResult::Child arm / setrlimit / setpgid /
