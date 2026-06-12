@@ -57,7 +57,9 @@ granularity: standard
   3. `macos_timeout_kills_at_deadline` and `macos_max_processes_blocks_on_rlimit_nproc` both PASS with `NONO_RESL_HOST_VALIDATED=1` on a real macOS host.
   4. The fix touches cfg-gated Unix code, so cross-target clippy (Linux + macOS) is verified per `.planning/templates/cross-target-verify-checklist.md` and the macOS CI build leg stays green.
 **Host gate**: Real macOS host for the `NONO_RESL_HOST_VALIDATED=1` enforcement re-validation (CI runners can't validate â€” they hang; the two tests stay env-gated off the runner).
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 68-01-PLAN.md — macOS resl enforcement fix (setpgid + RLIMIT_NPROC): both Direct and Supervised paths, uid_process_count helper, host UAT + cross-target CI deferred
 **UI hint**: no
 
 ### Phase 69: UPST8 Audit
