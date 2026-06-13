@@ -29,7 +29,7 @@ granularity: standard
 
 - [ ] **Phase 67: Clean-Host Windows Install** — The machine MSI installs to completion on a fresh Win11 host (VC++ runtime handled, service-start non-fatal) and the supervised/broker path works there via an interim, auditable cert-trust helper + docs.
 - [ ] **Phase 68: macOS Resource-Limit Enforcement Fix** — `nono run --timeout` and `--max-processes` actually fire on a real macOS host (supervisor watchdog + `RLIMIT_NPROC`), re-validated with `NONO_RESL_HOST_VALIDATED=1`.
-- [ ] **Phase 69: UPST8 Audit** — A DIVERGENCE-LEDGER audits the non-macOS slice of upstream `v0.60.0..v0.61.2` with per-commit dispositions, `windows-touch` column, and ADR-cadence review.
+- [x] **Phase 69: UPST8 Audit** — A DIVERGENCE-LEDGER audits the non-macOS slice of upstream `v0.60.0..v0.61.2` with per-commit dispositions, `windows-touch` column, and ADR-cadence review.
 - [ ] **Phase 70: UPST8 Cherry-pick Sync** — The will-sync UPST8 commits are absorbed with D-19 trailers, Windows-only-files invariant preserved, cross-target clippy + full suite green.
 
 ## Phase Details
