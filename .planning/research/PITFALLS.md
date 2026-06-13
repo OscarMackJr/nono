@@ -1,266 +1,168 @@
 # Pitfalls Research
 
-**Domain:** Security-critical Rust sandbox — v2.10 new feature surfaces (kernel minifilter spike, EDR HUMAN-UAT, macOS Seatbelt upstream parity)
-**Researched:** 2026-06-06
-**Confidence:** HIGH (codebase-grounded; cross-referenced against project retrospectives v2.7–v2.9 and WDK/MSDN authoritative docs)
+**Domain:** Persistent, multi-tenant, user-mode Windows agent-confinement daemon — launch-and-confine of arbitrary AI engines + a long-running multi-client capability pipe + `AI_AGENT` process marking (nono v2.12 "AI Agent Abstraction")
+**Researched:** 2026-06-13
+**Confidence:** HIGH (grounded in the in-tree `socket_windows.rs` / `exec_strategy_windows/launch.rs` code, the banked spike 001-003 findings, project memory, and verified Win32 job-object semantics)
 
-This file is scoped to v2.10 only. It does not repeat the v2.0–v2.9 pitfalls (ConPTY, WFP weight ordering, ETW admin check, etc.) that remain in the archived v2.0 PITFALLS.md. Generic Rust advice is omitted.
+> Scope note: this file covers ONLY the pitfalls that are *new with a persistent multi-tenant daemon*. The per-invocation traps already banked in the milestone context (post-hoc IL-drop is demote-only; user-owned workspace R-B3; exe/interpreter coverage gate; absolute grants; CLM on the hook path; broker dev-layout/signing R-B4; LangChain in-process `exec()`) are NOT re-derived here — they carry forward unchanged and are referenced where a daemon amplifies them.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: IRQL Violation in Pre-Create Callback — BSOD
+### Pitfall 1: Multi-tenant capability pipe with no server-side client authentication (cross-tenant capability theft)
 
 **What goes wrong:**
-A pre-create callback acquires a lock, calls a memory allocator tagged `PagedPool`, or calls `FltSendMessage` while the IRQL is above `APC_LEVEL`. The kernel BSODs immediately with `IRQL_NOT_LESS_OR_EQUAL` or `KERNEL_AUTO_BOOST_LOCK_ACQUISITION_WITH_RAISED_IRQL`. On a spike host this means a hard reboot, 3–10 minutes of lost iteration time, and a potential Windows Startup Repair loop if the driver registered as a boot-start filter.
+The daemon serves N agents over one persistent multi-instance pipe (`PIPE_UNLIMITED_INSTANCES`). Agent A connects to a pipe instance and is served Agent B's capability grants — or escalates its own — because the daemon never proves *which tenant* is on the connection. The current single-tenant code (`socket_windows.rs`) verifies the **server** PID from the client side (`verify_connected_server_pid` / `GetNamedPipeServerProcessId`, line ~1840) but does the inverse — the **server authenticating the client** — only implicitly via the SDDL DACL. A single shared DACL that admits "any Low-IL same-session process" admits *every* tenant to *every* instance.
 
 **Why it happens:**
-Pre-create callbacks are called at `IRQL = PASSIVE_LEVEL` for most creates, but the minifilter stack can call them at `APC_LEVEL` in certain fast I/O or paging paths. Spike code written at a desk (always `PASSIVE_LEVEL`) silently accumulates assumptions that break on the first real paging operation. The FltMgr docs note that `FltSendMessage` itself blocks until a user-mode reader calls `FilterGetMessage`; if no reader is running or the reader is on the same thread that triggered the I/O, the kernel thread deadlocks at `APC_LEVEL` and the watchdog fires a BSOD.
+The single-tenant supervisor pipe never needed to distinguish callers — there was one child. Generalizing to N tenants, the obvious move is "reuse the proven pipe, bump instance count to unlimited," which silently drops the one-child assumption that made the DACL sufficient. `CreateNamedPipeW` instances under one name are indistinguishable at the DACL level unless each instance is built with a *distinct* per-tenant security descriptor.
 
 **How to avoid:**
-- Use `NonPagedPoolNx` for any allocations reachable from callback context; never `PagedPool`.
-- Never hold a resource (`ERESOURCE`, `FastMutex`) across a `FltSendMessage` call.
-- In the spike, set `FltSendMessage` with a finite `Timeout` (e.g., 500 ms) so a missing user-mode reader returns `STATUS_TIMEOUT`, not an infinite wait.
-- Before calling any Ke/Ex/IO routine in the callback, assert the IRQL: `NT_ASSERT(KeGetCurrentIrql() <= APC_LEVEL)`.
-- For the spike's pre-create callback, do the minimum work at callback time (record filename + PID into a pre-allocated ring buffer) and defer all user-mode communication to a worker thread running at `PASSIVE_LEVEL`.
+- Bind the connection to a tenant identity the kernel vouches for, not a self-reported id in the JSON frame. On the server side call `ImpersonateNamedPipeClient` + `GetTokenInformation` to read the connected client's token (session SID / AppContainer package SID / job membership), then `RevertToSelf`. Match that against the tenant the grant belongs to *before* answering any capability request.
+- Prefer **per-tenant pipe instances with per-tenant SDDL**: derive a distinct security descriptor per agent embedding that agent's session/package SID (the machinery already exists — `bind_low_integrity_with_session_and_package_sid`, per-SID DACL ACEs). One name, but each accepted instance carries only its own tenant's SID in the DACL.
+- Treat any `agent_id` field in the wire frame as *untrusted routing hint only* — authorize against the impersonated token, never the field.
+- Use `GetNamedPipeClientProcessId` and confirm the PID is inside that tenant's `AI_AGENT` job (`IsProcessInJob`).
 
 **Warning signs:**
-BSOD minidump `!analyze -v` reports `IRQL_NOT_LESS_OR_EQUAL` with a stack trace terminating inside the minifilter's callback. First occurrence is typically on a file open from the paging subsystem (`\pagefile.sys` or during a DLL map).
+- The accept loop reuses one `CAPABILITY_PIPE_SDDL` constant for all tenants.
+- Capability lookups key off a field parsed from the request body.
+- No `ImpersonateNamedPipeClient` call anywhere in the daemon accept path.
+- A test that connects as "tenant B" and successfully reads tenant A's grants is missing.
 
 **Phase to address:**
-Phase 63 (kernel minifilter spike). The ring-buffer design and worker-thread IPC pattern must be defined in the spike's plan before a single line of driver code is written.
+Persistent multi-tenant daemon phase (the IPC generalization). This is the load-bearing security property of the whole daemon — gate the phase on a cross-tenant-denial test.
 
 ---
 
-### Pitfall 2: Filtering Your Own I/O — Infinite Recursion BSOD
+### Pitfall 2: `AI_AGENT` marker spoofing — a non-agent claims the marker, or an agent sheds it
 
 **What goes wrong:**
-The minifilter's pre-create callback fires on a `FltCreateFile` call the minifilter itself issued (e.g., to open a log file, read a trust database, or communicate with a user-mode component via a file-backed channel). The callback fires again, issues the same `FltCreateFile`, and the stack overflows — BSOD `DRIVER_OVERRAN_STACK_BUFFER` or `KERNEL_STACK_OVERFLOW`.
+The marker (named job object + SID) is used to decide "this process is a confined agent." Two failure directions:
+- **Forge:** a non-agent process opens the well-known named job via `OpenJobObjectW("nono-ai-agent-<id>")` and `AssignProcessToJobObject`s itself in (or names its own job with the expected pattern) so it is *treated as* a marked agent and granted capabilities over the pipe.
+- **Shed:** a confined agent escapes the marker so the daemon stops applying policy — e.g. it spawns a descendant that breaks out of the job (a child created with `CREATE_BREAKAWAY_FROM_JOB` when the job permits breakaway), or it relies on the marker being a mutable, self-reported attribute (env var, argv).
 
 **Why it happens:**
-Unlike legacy filter drivers, FltMgr's generated I/O model is non-recursive by default **only** when the minifilter uses its own instance via `FltCreateFile` with an instance below itself. If the minifilter issues I/O at the same altitude level, or uses the native `ZwCreateFile`, the request re-enters the filter stack from the top and the callback fires again. The spike is particularly vulnerable because the typical "log to a file" pattern uses `ZwCreateFile`.
+A named job object is, by design, **openable by name** by any same-session process with the right access — the name is a rendezvous, not a secret. If marking == "is in a job whose name matches a pattern," the pattern is guessable and the job is openable. Env-var / argv markers are trivially forgeable. The "shed" direction happens because job membership is escapable unless breakaway is explicitly denied and the marker is set *at spawn under the daemon's control*, not adopted post-hoc.
 
 **How to avoid:**
-- All driver-originated I/O must use `FltCreateFile` with the minifilter's own instance, NOT `ZwCreateFile` or `NtCreateFile`.
-- In the pre-create callback, check `FltGetRequestorProcess` / `IoGetRequestorProcess` and skip processing if the requestor is the driver's own work-item context. Store a "driver PID" marker at `DriverEntry` time.
-- For the spike, avoid all driver-originated file I/O. Use `FltSendMessage` to push data to user mode; let user mode write logs. This eliminates the entire recursion surface.
+- The marker must be **established by the daemon at spawn-time** (launch-and-confine), bound to the confining token, not a label a process can self-apply. The authoritative identity is the **restricting/session SID and AppContainer package SID baked into the token** the daemon created — those cannot be forged by a same-user process (it cannot mint another principal's token).
+- Do not name jobs with a guessable scheme as the *trust* signal. Use the named job for *kill-group / enumeration / resource caps*; use the token SID for *authorization*. (STACK.md already says: "Use a SID *in addition* (for WFP/pipe DACL scoping), not instead.")
+- Deny breakaway: do NOT set `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` / `..._BREAKAWAY_OK` on the `AI_AGENT` job (the existing launch sets `KILL_ON_JOB_CLOSE | DIE_ON_UNHANDLED_EXCEPTION` — confirm breakaway is not also enabled).
+- ACL the job object so only the daemon (SYSTEM/owner) gets `JOB_OBJECT_ALL_ACCESS`; agents get no `OpenJobObjectW` rights to their own or others' jobs.
+- For *adopted* (not launched) agents, treat the marker as **best-effort/untrusted** — adoption-after-spawn cannot achieve launch-time soundness (post-hoc IL-drop is demote-only). Never grant capabilities purely on "found a process in an AI_AGENT-named job."
 
 **Warning signs:**
-BSOD with a stack trace showing the same callback symbol repeated 100+ times. The first occurrence is always on a path the driver opens internally.
+- Authorization decisions read the job name or an env var.
+- The job object's DACL allows the agent's own SID `OpenJobObjectW`.
+- No test that a process *outside* the daemon's spawn path can/can't acquire the marker.
+- Breakaway flags are set "to make subprocess management easier."
 
 **Phase to address:**
-Phase 63 design doc must call out "no driver-originated file I/O; all logging/communication via FltSendMessage to user-mode service."
+Per-agent `AI_AGENT` marker phase (inside the daemon work). Pair the marker with the launch-and-confine phase so the marker is always a spawn-time property.
 
 ---
 
-### Pitfall 3: Blocking the User Thread Indefinitely in Pre-Create — System Hang
+### Pitfall 3: Trying to launch-and-confine an in-process-`exec()` engine that is already running (structural impossibility)
 
 **What goes wrong:**
-`FltSendMessage` is called inside the pre-create callback with `Timeout = NULL` (wait forever), and the user-mode component (nono supervisor) is not running, is slow, or deadlocks. The calling thread blocks at kernel level, holding the original `IRP_MJ_CREATE` request open. Any other thread that transitively opens the same file (or any file on the same volume) may deadlock behind it. The system visually appears frozen; explorer.exe hangs.
+For LangChain's `PythonREPLTool` (and any in-process `exec()` tool), the risky operation runs **inside the engine process** — there is no child process to wrap. The sound model (FEATURES.md) is that nono **parents the python interpreter itself**, so the whole interpreter is sandboxed and the in-process `exec()` is confined transitively. The pitfall is the daemon trying to "confine the tool call" of an engine *it did not launch* — there is structurally nothing to confine: the daemon can only post-hoc IL-drop the running interpreter, which is leaky/unsound (handles opened before the drop survive; no restricting SID retrofit; network uncovered; per `windows-confinement-model.md`).
 
 **Why it happens:**
-`FltSendMessage` with `NULL` timeout is the "simplest" code path shown in driver tutorials. For a test driver run in a controlled lab it "works." In real use (EDR UAT, macOS parity test environment, any CI runner) the supervisor process may not be alive at the time a file open occurs during boot.
+The Claude PreToolUse mental model ("intercept each tool call → `nono run`") is sticky. It works because Claude's *shell* tool spawns a child. It does **not** generalize to in-process `exec()` — there is no spawn to intercept. Teams reach for the daemon's "adopt a running agent" path, hit post-hoc IL-drop, and ship an unsound boundary believing it equivalent to launch-time.
 
 **How to avoid:**
-- Always pass a finite `Timeout` to `FltSendMessage`. For the spike, 200 ms is sufficient; treat `STATUS_TIMEOUT` as "permit the operation" (fail-open on communication loss is acceptable for a spike; document this clearly in the ADR).
-- The production ADR must decide the fail-direction: fail-open (permit) vs. fail-closed (block). For a security spike the ADR should default to fail-open-on-timeout so the system remains bootable, with an explicit note that production must revisit.
-- Register a `FilterUnloadCallback` and a `InstanceTeardownStartCallback` so the driver un-registers cleanly when the user-mode component exits, preventing queued messages from blocking.
+- The daemon must be the **parent** of the interpreter for in-process engines. Confinement is applied to `python.exe` at spawn, before any `exec()` runs. Confined-because-the-whole-process-is-sandboxed is the only sound story.
+- Where the daemon cannot be the parent (engine already running, IDE-embedded), be explicit that this is **demote-only** incident response, not confinement — and the `nono-py` binding's answer is to apply confinement **from inside the process at startup** (the binding's `confined_run` / in-process sandbox-self), before the agent does any work.
+- Document the hard limit: an engine that does in-process risky ops and is launched by a third party cannot be soundly confined by an external daemon. This is a contract on E2 ("a launch command nono can own").
 
 **Warning signs:**
-Mouse/keyboard become unresponsive 5–30 seconds after loading the driver. `!irp` in WinDbg shows a `IRP_MJ_CREATE` stuck in the minifilter's callback waiting on a `KEVENT`.
+- A code path that "confines LangChain" by finding a running `python.exe` and dropping its IL.
+- The `nono-py` binding offering only an external-launch API and no in-process sandbox-self entry point.
+- Tests that prove confinement only via a subprocess `ShellTool`, never via `PythonREPLTool` `exec()`.
 
 **Phase to address:**
-Phase 63 spike plan. The timeout value and fail-direction must be explicit ADR decisions, not left as implementation details.
+Engine abstraction boundary + `nono-py` binding phase. The binding must demonstrate in-process confinement (sandbox-self at startup), not just external launch.
 
 ---
 
-### Pitfall 4: TESTSIGNING + HVCI/Secure Boot Interaction — Driver Refuses to Load, No Error Message
+### Pitfall 4: Persistent-daemon attack surface — a privileged, always-on target that an escaped agent can pivot through
 
 **What goes wrong:**
-`bcdedit /set testsigning on` is run, a self-signed driver is deployed, and `sc start` returns success — but the driver never actually loads and no BSOD or error appears. Alternatively, `bcdedit` itself refuses with "The value is protected by Secure Boot policy and cannot be modified or deleted."
+The per-invocation `nono run` model is ephemeral: the supervisor exists only for one child and dies with it. A persistent daemon is a long-lived process with elevated reach (it launches confined processes, manipulates tokens, owns job objects, talks to the elevated `nono-wfp-service`, holds open handles to every tenant). If the daemon runs as SYSTEM/admin, an agent that escapes confinement (or a malicious capability request) can pivot through the daemon to **all tenants** and to **the host** — a far worse blast radius than escaping one ephemeral supervisor. The daemon is now persistent state that survives between agents, so a compromise persists too.
 
 **Why it happens:**
-Three independent blockers can each produce silent-failure:
-1. **Secure Boot is on:** `bcdedit /set testsigning on` is rejected. The developer disables Secure Boot in UEFI, but then BitLocker (if enabled) triggers a recovery key prompt on next boot — if the key is unavailable, the machine is unbootable.
-2. **HVCI (Memory Integrity) is on:** On Windows 11 build 26200 (the project's target host), HVCI is enabled by default on most OEM machines. A test-signed driver built without HVCI-compatible practices (no executable kernel memory, no `MmMapIoSpaceEx` with `PAGE_EXECUTE`) is silently rejected by the hypervisor at load time even with `TESTSIGNING ON`.
-3. **The test cert is not in the Trusted Root / Trusted Publishers store of the TARGET machine** (common when the cert was generated on a different machine).
+The existing in-tree service pattern (`nono-wfp-service`) runs as **LocalSystem** because WFP filter installation requires it. Cloning that pattern for the agent daemon ("it's just a second instance of a service we already ship") inherits SYSTEM privilege the *launcher* role does not need. The daemon conflates two roles: the unprivileged launcher/IPC role and the privileged network-enforcement role.
 
 **How to avoid:**
-- Before the spike starts, document the host machine's configuration: `msinfo32.exe` → Device Security section. Check Secure Boot state AND HVCI/Memory Integrity state.
-- If HVCI is on: the test cert must be added to the Trusted Root store on the target host, AND the driver must be built with HVCI-compatible constraints. The WDK has a "HVCI Compatibility" test; run it before attempting to load.
-- Use a VM (Hyper-V with Secure Boot OFF) for the spike rather than the bare-metal dev host. This avoids the BitLocker/Secure Boot/HVCI triad entirely and enables kernel debugging over a virtual serial/pipe without needing a second physical machine.
-- Document the exact `bcdedit` state (`/enum all`) as a reproducibility artifact in the spike's PLAN.md.
+- **Least-privilege split.** Run the agent-launcher daemon at the *user's* privilege (it launches same-user confined children; it does not need SYSTEM). Keep WFP filter manipulation in the existing separate elevated `nono-wfp-service` behind its own narrow control-pipe protocol. Do not merge the launcher into the elevated service.
+- Harden the daemon's own control surface like the capability pipe: bounded (64 KiB) length-prefixed frames (already the pattern), strict deserialization, reject oversized/malformed, per-client authorization (Pitfall 1).
+- The daemon must never expand a running agent's capabilities (no escape hatch — core nono invariant). Capability *grants* are decided at launch; the pipe answers queries, it does not widen the sandbox.
+- Isolate tenants from each other in the daemon's own memory/state: a compromised request handler for tenant A must not be able to read tenant B's grants, handles, or tokens. Avoid one global handle table indexed by client-supplied id.
+- Treat every capability request as hostile input — it may originate from a prompt-injected agent.
 
 **Warning signs:**
-`sc start nono-minifilter` returns `ERROR_SERVICE_ALREADY_RUNNING` or `ERROR_SUCCESS` but `fltmc instances` shows no instance. The Windows Event Log System channel will have an event from source `Microsoft-Windows-FilterManager` with Event ID 3 or 6 indicating the driver failed integrity checks.
+- The daemon binary registered as a `start=auto` SYSTEM SCM service like `nono-wfp-service`.
+- The launcher and WFP-control responsibilities in one process.
+- Any code path that, on request, calls a "grant more access to PID N" function.
+- Shared mutable global state keyed by an untrusted tenant id.
 
 **Phase to address:**
-Phase 63 pre-spike environment setup task (plan step 1, before any driver code).
+Persistent multi-tenant daemon phase — specifically the daemon-hosting/privilege-model sub-task. Write the privilege model down (ADR) before coding the service host.
 
 ---
 
-### Pitfall 5: Altitude Conflict With Installed EDR — Driver Fails to Register or EDR Goes Blind
+### Pitfall 5: Token & job-object handle lifetime in a long-running process (leaks, reuse, orphans)
 
 **What goes wrong:**
-Two scenarios from the same root cause — the spike uses an altitude value that collides with an installed EDR driver:
-- **Scenario A:** The spike driver fails to start (`FltRegisterFilter` returns `STATUS_FLT_INSTANCE_ALTITUDE_COLLISION`) because an EDR driver already claimed that altitude.
-- **Scenario B:** The spike uses an altitude in the `320000–329998` Anti-Virus range (the most common EDR range). The EDR's callback stack is disrupted; the EDR vendor flags the machine as compromised and quarantines files or blocks execution.
+The per-invocation model leaks nothing of consequence — the process dies and the kernel reclaims everything. A daemon that lives for days accumulates:
+- **Handle leaks:** every launched agent allocates a job handle, a token, pipe instances, process/thread handles. The existing `Drop` impls (`launch.rs` `CloseHandle(self.job)` etc.) assume a short-lived owner. If the daemon stores per-agent state in a map and an agent exits without the entry being cleaned, handles leak until the daemon exhausts the desktop heap / handle table.
+- **Token reuse across agents:** reusing one confining token (or job) for multiple agents collapses tenant isolation — agent B inherits agent A's restricting SID / workspace relabel, so B can write A's workspace, and WFP scoping (per-package-SID) blurs.
+- **Orphaned jobs:** `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set (`launch.rs:222`) and the daemon holds the only job handle, so the job's processes die when the daemon closes the handle — good for teardown but a footgun if the daemon restarts/crashes (all agents die) or if a handle is closed early. Conversely, if the daemon drops a job-handle reference but the agent is still running and no one holds `KILL_ON_JOB_CLOSE`, the job becomes an unreferenced orphan with no kill-group.
 
 **Why it happens:**
-Microsoft allocates altitude ranges per functional category. The Anti-Virus range (`320000–329998`) is where CrowdStrike, Defender, SentinelOne, etc. operate. Developers pick round numbers (e.g., `320000`) or borrow from a tutorial without checking what is already registered. `fltmc` shows all registered altitudes; developers skip this check.
+Lifetime correctness that is *automatic* for an ephemeral process becomes *manual bookkeeping* in a daemon. The proven code was written for one child; reuse "to avoid re-allocating tokens" is a tempting micro-optimization that destroys isolation.
 
 **How to avoid:**
-- Request an official altitude from Microsoft before deploying any driver, even for spikes. The request form is fast (~1 week) and free. Use the Activity Monitor range (`360000–389998`) or the FSFilter range (`400000–409998`) for a trust/monitor spike; these are below the AV range and minimize EDR conflict risk.
-- For the spike's test environment, enumerate existing minifilters with `fltmc filters` and `fltmc instances` and pick an altitude that does not conflict.
-- In the spike's ADR, document the chosen altitude and the rationale (category, why not AV range).
-- The EDR UAT (Phase 64) MUST run AFTER the spike's altitude is finalized. Running UAT with a placeholder altitude risks triggering EDR false positives that contaminate the UAT results.
+- **One fresh confining token + one fresh job per agent.** Never reuse a token or job across tenants. Mint per-agent (the SID nonce machinery — `getrandom` `create_nonce_hex` / `generate_session_sid` — already exists for this).
+- Tie every per-agent resource (token, job, pipe instances, process handles) to a single owning struct with a `Drop` that closes all of them, and remove it from the registry on agent exit. Reap exited agents promptly: wait on the job's completion port / process handle and clean up deterministically, not lazily.
+- Decide the crash-teardown policy deliberately: `KILL_ON_JOB_CLOSE` means a daemon crash kills all agents (fail-secure, arguably correct). If you want agents to survive a daemon restart, you need a different ownership model (re-`OpenJobObjectW` on restart) — but then you must re-establish trust on adoption (Pitfall 2).
+- Audit for handle growth: the daemon should expose/log a live count of open jobs/tokens/pipe instances; a monotonically rising count under steady tenant churn is a leak.
 
 **Warning signs:**
-`FltRegisterFilter` returns a non-`STATUS_SUCCESS` NTSTATUS at DriverEntry time. `fltmc filters` shows another driver at or adjacent to the chosen altitude. EDR console shows a "suspicious driver loaded" alert.
+- A "token pool" or "reuse the job if the workspace matches" optimization.
+- Per-agent state stored in a map with no removal-on-exit path.
+- Handle count rising over hours of use with stable concurrent-agent count.
+- No integration test that launches→exits 100 agents and asserts handle count returns to baseline.
 
 **Phase to address:**
-Phase 63 (altitude selection in design doc). Phase 64 (EDR UAT must run with spike's final altitude, not a placeholder).
+Persistent multi-tenant daemon phase (token/job *reuse* across agents was the explicitly unspiked part of spike 003/004). Make per-agent fresh-token + deterministic-reap a success criterion.
 
 ---
 
-### Pitfall 6: Spike Scope Creep Into Production — "While We're Here" Additions
+### Pitfall 6: Nested-job collisions and silent confinement loss (Windows 8+ job hierarchy semantics)
 
 **What goes wrong:**
-The spike starts as a test-signed POC to validate the pre-create trust interception design. Partway through, a contributor adds:
-- Driver signing pipeline integration (CI-triggered `.cat` generation)
-- A full user-mode ↔ kernel IPC protocol with versioning
-- Installation via INF/MSI
-
-Each addition is "small," but collectively they convert the spike into a production driver — without WHQL certification, without cross-version testing, without the security review a production driver requires.
+On Windows 8+ a process can belong to a *hierarchy* of nested jobs, but with hard constraints: `AssignProcessToJobObject` on an already-jobbed process succeeds only if the target job is empty or in the existing hierarchy, **and the target job has no UI limits and no conflicting limits**. Two daemon-specific failures:
+- The agent engine (e.g. a `node`/`python` launched from a parent that *already* placed it in a job — common under some shells, terminals, or CI runners) is already in a job; the daemon's `AssignProcessToJobObject` into the `AI_AGENT` job fails or only nests, and resource/kill semantics don't behave as the daemon assumes.
+- The daemon nests its `AI_AGENT` job under an outer job whose limits silently override or conflict, so the confinement/resource caps the daemon thinks it set don't actually apply.
 
 **Why it happens:**
-Kernel driver development is genuinely difficult; contributors naturally want to make progress on the production deliverable while the kernel environment is set up. The spike's success criteria ("prove pre-create trust interception is feasible") are fuzzy, making it easy to justify additions as "still proving feasibility."
+The single-`nono run` path controlled the full spawn and rarely hit pre-existing jobs. A daemon launching arbitrary engines from arbitrary contexts (and adopting running ones) routinely meets already-jobbed processes. The Win32 nested-job rules are subtle and the failure is often silent (limits don't apply) rather than a hard error.
 
 **How to avoid:**
-- Write the spike's success criteria as a binary go/no-go gate before any code: "Does a test-signed minifilter on Windows 11 build 26200 intercept `IRP_MJ_CREATE` for a specific executable path and send the path + PID to a user-mode process via `FltSendMessage` before the create completes? YES or NO."
-- The spike's plan must include an explicit "out of scope" list: no CI signing pipeline, no INF/MSI, no versioned IPC protocol, no cross-version testing, no HVCI certification.
-- The ADR produced by the spike must explicitly scope what "production" would require vs. what the spike proved.
-- Treat the spike as throwaway code. If the spike's driver code gets committed to the main repo, it signals scope creep has already occurred.
+- Spawn the engine **suspended and assign it to the `AI_AGENT` job before it runs any code** (the launch path already creates suspended; `launch.rs:2005` terminates on assign failure — keep that fail-secure stance). This guarantees the job is established first.
+- On `AssignProcessToJobObject` failure, **fail secure** — terminate the suspended process, never let an unconfined agent run (the existing `terminate_suspended_process` on assign failure is the correct pattern; ensure the daemon path keeps it).
+- Detect pre-existing job membership (`IsProcessInJob` against the default/NULL job) for adopt-mode; if the process is already in a foreign job with conflicting limits, refuse to claim it as confined.
+- Do not set UI limits on the `AI_AGENT` job (UI limits block nesting).
 
 **Warning signs:**
-The spike's PR includes a `Cargo.toml` change, a new `scripts/build-driver.ps1`, or any CI workflow change. If any of these appear, the spike has crossed into production scope.
+- `AssignProcessToJobObject` return value ignored or only logged.
+- Resource caps (`JOB_OBJECT_LIMIT_JOB_MEMORY`, active-process limit — already wired in `launch.rs`) not actually observed in testing.
+- Launching engines from terminals/CI without testing the already-jobbed case.
 
 **Phase to address:**
-Phase 63. The spike phase plan must have an explicit success-criteria section and an explicit out-of-scope list before the first task executes.
-
----
-
-### Pitfall 7: EDR UAT Proving the Wrong Thing — Contaminated Results
-
-**What goes wrong:**
-The WR-02 EDR HUMAN-UAT executes on a machine where:
-- The EDR was installed the same day (hasn't learned the baseline)
-- nono's broker binary is freshly compiled and unsigned (unsigned = EDR-suspicious by definition)
-- The test runs from a dev-layout path (`target\release\nono.exe`) not the production MSI install path
-
-The UAT "passes" with no EDR alerts, but only because the EDR was not monitoring at the time, or "fails" with alerts that would not occur in normal deployment. Either result is not actionable.
-
-**Why it happens:**
-WR-02 has been deferred since v2.1. The instinct when finally running it is to "get it done quickly" — run nono, see if the EDR quarantines anything, report pass/fail. But UAT validity depends on the environment being representative.
-
-**How to avoid:**
-- The EDR UAT plan must specify: (a) which EDR product (at minimum Defender + one third-party), (b) that the EDR has been running on the machine for ≥24 hours before the test (baseline established), (c) that nono is installed via the production signed MSI (not dev-layout), (d) that the test exercises the token-manipulation paths (Low-IL broker, `CreateProcessAsUser`, mandatory label) specifically, because those are the paths most likely to generate alerts.
-- Record the EDR version, policy mode (audit vs. block), and alert log state before and after each test case.
-- "EDR did not quarantine" and "EDR did not alert" are different outcomes; the UAT must distinguish them (check the EDR console, not just whether the test binary ran).
-- If the EDR generates a false-positive alert, document the exact alert + rule triggering it in the UAT artifact. This is valuable signal for the production ADR, not a test failure.
-
-**Warning signs:**
-UAT plan has a single pass/fail criterion ("nono run succeeded"). No EDR product or version specified. Test binary is from `target\release\`.
-
-**Phase to address:**
-Phase 64. The phase plan must define the environment preconditions and per-test-case criteria before the UAT is attempted.
-
----
-
-### Pitfall 8: EDR Flagging Broker Token Manipulation as Malicious — Quarantine Loop
-
-**What goes wrong:**
-The EDR's behavioral engine flags `CreateProcessAsUserW` called by `nono-shell-broker.exe` (a non-system process creating processes under a different token) as `T1134.002 — Create Process with Token`. The EDR quarantines `nono-shell-broker.exe`. On next `nono run`, the broker is missing, nono falls back or errors, and the user's machine is partially broken.
-
-**Why it happens:**
-nono's broker legitimately uses token manipulation to enforce Low-IL mandatory labels. This is indistinguishable from a privilege-escalation attack at the API level: the sequence `OpenProcessToken` → `DuplicateTokenEx` → `SetTokenInformation(TokenIntegrityLevel)` → `CreateProcessAsUserW` is exactly MITRE ATT&CK T1134. Modern EDRs flag this pattern out of the box.
-
-**How to avoid:**
-- The production MSI installer must add `nono-shell-broker.exe` and `nono.exe` to the EDR's exclusion list via documented exclusion APIs (CrowdStrike, Defender, SentinelOne all have management APIs or Group Policy exclusion paths). Include this in the MSI's custom action or installation guide.
-- The WR-02 UAT must specifically test the "EDR quarantines broker" failure mode: run the UAT once WITHOUT exclusions to characterize which EDR rules fire, then run again WITH exclusions to confirm the exclusions are sufficient.
-- The spike ADR must include a "EDR exclusion requirements" section so production packaging knows what to exclude.
-- Never test with an unsigned broker binary in the EDR environment — unsigned + token manipulation = highest-confidence malicious verdict.
-
-**Warning signs:**
-After `nono run`, `nono-shell-broker.exe` disappears from disk. The EDR console shows a "process isolation" or "quarantine" event for `nono-shell-broker.exe` within the first 30 seconds.
-
-**Phase to address:**
-Phase 64. Phase 63's spike ADR should note the exclusion requirement even though the spike itself runs in a test environment without an EDR.
-
----
-
-### Pitfall 9: macOS Seatbelt Changes Silently Compile on Windows — Ship Broken Unix Code
-
-**What goes wrong:**
-A macOS-relevant upstream commit is cherry-picked (e.g., `$PWD` symlink-CWD capture, or platform-rules-after-user-write-allows ordering fix). The change touches `#[cfg(target_os = "macos")]` or `#[cfg(unix)]` blocks. Windows-host `cargo build` and `cargo clippy --workspace` pass because those blocks are not compiled. The change is committed, tagged, and pushed. The `release.yml` macOS build leg fails with a compile error. This is exactly what happened twice in v2.9 (`E0716` in `claude_code_hook.rs`, edition-2024 let-chain in `hook_runtime.rs`).
-
-**Why it happens:**
-The project's CLAUDE.md encodes this as a MUST rule, but the local cross-target build is blocked by the `ring`/`aws-lc-sys` C-toolchain — cross-compilation from Windows to macOS requires macOS SDK headers that cannot be legally redistributed. The only cross-compile signal is CI. When a session runs fast and the developer doesn't wait for CI before merging, the broken code reaches a release tag.
-
-**How to avoid:**
-- Any commit touching a file that contains `#[cfg(target_os = "macos")]`, `#[cfg(unix)]`, `#[cfg(not(windows))]`, or any file under `crates/nono/src/sandbox/macos.rs` or `crates/nono-cli/src/exec_strategy/` MUST NOT be tagged until the CI macOS build leg is green.
-- The macOS parity phase plan must include a CI-green gate as a REQUIRED close condition (not PARTIAL, not deferred) because the entire value of the phase is macOS code being correct.
-- Use `cargo check --target x86_64-apple-darwin` via the WSL cross-toolchain as a fast pre-commit signal if available. If not available (blocked by ring/aws-lc-sys), mark the gate as CI-deferred in the plan's CLOSE-GATE.md and DO NOT push a release tag until CI completes.
-- After cherry-picking any upstream macOS commit, scan the commit for `let ... && let ...` chains (edition-2024 syntax) and `E0716` lifetime patterns (temporary dropped while borrowed). These are the two compile error classes that hit v2.9.
-
-**Warning signs:**
-A macOS-touching commit is merged to `main` and a `v*.*.*` release tag is pushed within the same session without a CI macOS green check. The `release.yml` run shows a red macOS build leg within ~10 minutes of the tag push.
-
-**Phase to address:**
-Phase 65 (macOS Seatbelt parity sync). The phase plan's CLOSE-GATE.md must list "macOS `release.yml` build leg green" as a required gate, not advisory.
-
----
-
-### Pitfall 10: Seatbelt Rule Ordering — Deny After Allow Is Silently Ignored on macOS
-
-**What goes wrong:**
-An upstream commit reorders rules so that platform deny rules (e.g., `deny file-read* ~/.ssh`) appear AFTER broad user-written allow rules (e.g., `allow file-read* (subpath "/Users/alice")`). On macOS Seatbelt, the last matching rule wins. The allow rule fires, the deny is never evaluated, and `~/.ssh` is readable by the sandboxed process.
-
-**Why it happens:**
-The upstream commit being cherry-picked might fix the ordering in the upstream's code, but the fork's rule emission order (inside `policy.rs`'s `CapabilitySetExt` call chain) is different. A blind cherry-pick changes the upstream's ordering logic without verifying that the fork's rule emission produces the same final Seatbelt profile string order. The fork emits rules at a different call site than upstream.
-
-**How to avoid:**
-- After cherry-picking any commit that touches rule ordering, emit the actual Seatbelt profile string for a representative profile (e.g., `claude-code`) with `nono run --dry-run --profile claude-code` on a macOS host and manually verify that deny rules appear after the allow rules they are intended to override.
-- Unit tests for Seatbelt profile generation must assert rule ordering, not just rule presence. The test fixture should assert the exact string position of the deny rule relative to the allow rule for at least one sensitive group (`ssh_config`, `git_credentials`).
-- The CLAUDE.md "Strictly allow-list: cannot express deny-within-allow" note applies to Linux Landlock; macOS Seatbelt CAN deny within an allow, but only if the deny appears after the allow in the profile string. This asymmetry is a recurring source of confusion when porting upstream commits across platforms.
-
-**Warning signs:**
-`nono run --profile claude-code -- cat ~/.ssh/id_rsa` exits 0 and prints key content on a macOS host after the cherry-pick.
-
-**Phase to address:**
-Phase 65. The phase plan must include a "rule order validation" task that runs the dry-run profile emission and manually inspects sensitive group ordering on a macOS host.
-
----
-
-### Pitfall 11: macOS `/private/etc` Symlink Path Drift in Upstream Cherry-Picks
-
-**What goes wrong:**
-An upstream commit adds a new deny group (e.g., `hosts_file`) that emits `(deny file-read* (literal "/etc/hosts"))`. On macOS, `/etc` is a symlink to `/private/etc`. The sandboxed process opens `/private/etc/hosts` (the canonical path), which is not matched by the literal `/etc/hosts` rule. The deny is silently skipped.
-
-**Why it happens:**
-The upstream codebase runs integration tests on Linux (where `/etc` is canonical) and may not test the symlink resolution on macOS. When the fork cherry-picks the commit, it inherits the same gap. The fork's existing code in `macos.rs` has partial symlink handling, but new deny paths from upstream cherry-picks bypass it if the deny emitter is in `policy.rs` (library side) rather than `sandbox/macos.rs`.
-
-**How to avoid:**
-- Any new path literal emitted in a deny rule for macOS must be validated against `std::fs::canonicalize()` on macOS. If the canonical path differs from the literal, both must be emitted: `(deny file-read* (literal "/etc/hosts") (literal "/private/etc/hosts"))`.
-- Add a macOS-specific test in `crates/nono/src/sandbox/macos.rs` that asserts both the symlink path and the canonical path are covered for every new sensitive deny group.
-- This applies specifically to: `/etc`, `/tmp` (→ `/private/tmp`), and any vendor-specific macOS paths added by upstream.
-
-**Warning signs:**
-`nono run --profile claude-code -- cat /etc/hosts` is blocked, but `nono run --profile claude-code -- cat /private/etc/hosts` succeeds on macOS.
-
-**Phase to address:**
-Phase 65. Add a symlink-coverage check to the phase's verification checklist.
+Generic launch-and-confine (productionize) phase, hardened in the daemon phase for the adopt path.
 
 ---
 
@@ -268,101 +170,101 @@ Phase 65. Add a symlink-coverage check to the phase's verification checklist.
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Spike driver committed to main repo | Avoids managing a throwaway branch | Spike code becomes "production" without WHQL/HVCI audit; entropy accumulates | Never — keep spike in a scratch branch or separate repo |
-| `FltSendMessage` with `NULL` timeout | Simplest code | System hang on supervisor exit; boot-blocking on crash | Never in any non-lab driver |
-| Using `ZwCreateFile` instead of `FltCreateFile` in driver callbacks | Familiar Win32-like API | Recursion BSOD on first self-generated I/O | Never in minifilter callbacks |
-| Cherry-picking macOS upstream commits without waiting for CI green | Faster development | Broken macOS build leg reaches release tags (happened twice in v2.9) | Never for release-tagged commits |
-| Running EDR UAT with unsigned dev-layout binary | Faster setup | UAT results not representative; false negatives on real deployment | Never — UAT must use production-signed MSI binary |
-| Seatbelt deny rules without ordering tests | Less test scaffolding | Silent allow-over-deny on macOS (`~/.ssh` readable) — security regression | Never for sensitive deny groups |
-
----
+| Reuse one capability-pipe SDDL for all tenants | Less code; reuse proven constant | Cross-tenant capability theft (Pitfall 1) | Never for multi-tenant |
+| Reuse one confining token/job across agents | Avoid per-agent token mint cost | Tenant isolation collapse; WFP scope blur (Pitfall 5) | Never |
+| Run the daemon as LocalSystem like `nono-wfp-service` | Mirror the in-tree service pattern; one binary | Huge blast radius on escape (Pitfall 4) | Only the WFP-control role; never the launcher role |
+| Mark agents with an env var / argv flag | Trivial to set/read | Forgeable marker (Pitfall 2) | Never as a trust signal; OK as a *hint* alongside token SID |
+| Lazy cleanup of exited-agent state | Simpler accept loop | Handle leak over days (Pitfall 5) | Never in a long-running daemon |
+| Post-hoc IL-drop to "confine" an adopted agent | Confine things you didn't launch | Unsound boundary (handles survive, no restricting SID, no network) | Only as a demote/IR lever, explicitly labeled |
+| Self-reported `agent_id` in the wire frame for authz | Simple routing | Spoofable tenant identity (Pitfall 1) | As routing hint only, never for authorization |
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| FltMgr + user-mode supervisor | `FltSendMessage` inside pre-create callback with no timeout | Pass a finite `Timeout`; handle `STATUS_TIMEOUT` as permit-and-log |
-| Driver + HVCI host | Assume `TESTSIGNING ON` is sufficient | Check HVCI state with `msinfo32`; use a VM or disable Memory Integrity for the spike |
-| EDR + broker binary | Run unsigned binary during UAT | Install production-signed MSI, add EDR exclusions, then run UAT |
-| Seatbelt + upstream cherry-pick | Trust that upstream tested macOS paths | Manually verify profile emission and rule order on a macOS host post-cherry-pick |
-| macOS `/etc` symlinks | Emit only the literal path in deny rules | Emit both symlink and canonical (`/etc` + `/private/etc`) for every macOS deny path |
+| Multi-instance named pipe (`PIPE_UNLIMITED_INSTANCES`) | Assume DACL alone isolates tenants | `ImpersonateNamedPipeClient` + per-tenant SID match before serving; per-tenant SDDL |
+| `nono-wfp-service` (elevated) | Merge launcher into the elevated service | Keep launcher at user privilege; call the WFP service over its existing narrow control pipe |
+| AppContainer per-agent SID | `DeriveAppContainerSidFromAppContainerName` only | Must also `CreateAppContainerProfile` (memory `windows_appcontainer_wfp_validated`; derive-only → `CreateProcessW ERROR_FILE_NOT_FOUND`) |
+| Spawning under the broker arm | Run from `Program Files` install | Needs dev-layout or signed `nono.exe` (R-B4 broker trust gate) |
+| Engine launched from a parent that pre-jobs it | Assume `AssignProcessToJobObject` always works | Spawn suspended, assign first, fail-secure on assign failure; handle nested-job rules (Pitfall 6) |
+| `env_clear()` before spawning CLR/PowerShell engines | Strip all env for hygiene | Preserve `SystemRoot`/`windir`/`SystemDrive` baseline (memory `windows_hook_interpreter_spawn_gotchas`; else CLR `0xFFFF0000`) |
 
----
+## Performance Traps
+
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| One thread per tenant (sync `PeekNamedPipe` poll) generalized to N | Thread-count blowup; scheduler thrash | Use `tokio::net::windows::named_pipe` task-per-connection for the daemon (STACK.md) | Tens+ of concurrent agents |
+| Handle table growth from un-reaped agents | Daemon `OpenProcess`/`CreateFile` start failing after hours | Deterministic per-agent `Drop` + reap on exit (Pitfall 5) | Long uptime under churn |
+| Unbounded capability-request queue per client | Memory growth; one chatty agent starves others | Bounded per-tenant frames (64 KiB cap exists) + per-tenant fairness/timeout | A misbehaving/looping agent |
+| Re-deriving AppContainer profile per request | Latency spike per launch | Derive+register once per agent, cache the SID | Many short-lived launches |
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Spike driver with `fail-closed-on-timeout` (blocks all opens when supervisor not running) | System unbootable if supervisor crashes at boot | Spike must fail-open on timeout; production ADR decides fail-direction explicitly |
-| EDR exclusion applied to entire nono install directory | Excludes future malicious binaries dropped into that directory | Exclude specific executables by path + hash or Authenticode signature, not directory |
-| Seatbelt deny rule absent canonical macOS path | `~/.ssh`, `~/Library/Keychains` accessible via canonical path | Always emit both symlink and canonical form for macOS deny paths |
-| macOS-only code change tagged before CI green | Broken macOS sandbox ships to users | Never push release tag without CI macOS build leg green |
-| Spike altitude in AV range (320000–329998) | EDR disruption, false-positive quarantine of system files | Choose Activity Monitor range; request official altitude from Microsoft |
+| Authorize capability requests by client-supplied id | Cross-tenant capability theft | Authorize by impersonated client token / job membership (Pitfall 1) |
+| Named job is the trust signal | Marker forgery by any same-session process opening the job by name | Trust the token SID, not the job name; ACL the job to daemon-only (Pitfall 2) |
+| Daemon runs as SYSTEM | Escaped agent pivots to all tenants + host | Least-privilege launcher; isolate WFP-control in its own elevated service (Pitfall 4) |
+| Job allows breakaway | Agent child escapes confinement/marker | Do not set breakaway flags; verify children stay in-job |
+| Post-hoc IL-drop treated as confinement | Leaky boundary: pre-drop handles survive, no restricting SID, network uncovered | Launch-time confinement only; IL-drop = demote-only |
+| Capability pipe answers "expand access" requests | Defeats the no-escape-hatch invariant | Grants fixed at launch; pipe is query-only |
+| Trusting an adopted (not launched) process as confined | Adoption can't achieve launch-time soundness | Adopt = best-effort demote; never grant on adoption alone |
 
----
+## UX Pitfalls
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Silent confined-write failure (admin-owned workspace) | "Why didn't my agent write the file?" — fails secure but opaque | Clear diagnostic naming R-B3 + `takeown`/non-elevated-create guidance |
+| Engine refused for uncovered exe/interpreter with a cryptic error | User can't tell which binary to `--allow` | Diagnostic naming the exact uncovered exe/interpreter path |
+| Relative-path grant silently resolves to `C:\` and is denied | Confusing deny on a path the user "did grant" | Reject/normalize relative grants; require absolute (banked contract) |
+| Daemon crash kills all agents (KILL_ON_JOB_CLOSE) with no warning | All running agents vanish | Document the teardown policy; surface daemon health; consider supervised restart |
+| Cursor-on-Windows appears supported then fails | User wastes time; thinks nono is broken | Per-engine fit doc: Cursor CLI is WSL-only (FEATURES.md) |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Driver loads on first try:** Verify with `fltmc instances` — `sc start` success does NOT mean the driver registered with FltMgr. Check Event ID 3/6 from `Microsoft-Windows-FilterManager`.
-- [ ] **Pre-create callback fires:** Insert a `DbgPrint` in the callback and attach WinDbg or use DebugView — no output means the instance setup callback rejected the volume or the altitude was not registered correctly.
-- [ ] **EDR UAT used production binary:** Confirm via file timestamp + authenticode signature on the binary under test — dev-layout binaries are never signed.
-- [ ] **macOS Seatbelt deny rules cover canonical paths:** `cat /private/etc/hosts` must be blocked, not just `cat /etc/hosts`.
-- [ ] **Seatbelt rule ordering validated:** `nono run --dry-run --profile claude-code` emits a profile where deny rules appear AFTER the allow rules they override.
-- [ ] **CI macOS build leg green before release tag:** `gh run list --workflow release.yml` shows green for the macOS build leg, not just the Windows leg.
-- [ ] **Spike ADR documents go/no-go verdict explicitly:** ADR must conclude with "proceed to production driver" or "defer — feasibility not proven"; "interesting results" is not a verdict.
-
----
+- [ ] **Multi-tenant pipe:** Often missing *server-side* client authentication — verify a "connect as tenant B, read tenant A's grants" test fails closed.
+- [ ] **AI_AGENT marker:** Often missing forge/shed resistance — verify a non-daemon-spawned process cannot acquire the marker and a child cannot break away from the job.
+- [ ] **Per-agent isolation:** Often missing fresh-token-per-agent — verify two concurrent agents cannot write each other's relabeled workspace and have distinct WFP package SIDs.
+- [ ] **Handle lifetime:** Often missing reap-on-exit — verify launch+exit of 100 agents returns handle/job count to baseline.
+- [ ] **Daemon privilege:** Often missing least-privilege split — verify the launcher daemon is NOT SYSTEM and the WFP role is separate.
+- [ ] **In-process engine:** Often missing the sandbox-self path — verify LangChain `PythonREPLTool` `exec()` (not just `ShellTool`) is confined via the binding.
+- [ ] **Assign-to-job failure:** Often missing fail-secure — verify a process that can't be assigned to its `AI_AGENT` job is terminated, never run unconfined.
+- [ ] **Adopt mode:** Often mislabeled as confinement — verify adoption is documented/coded as demote-only, not a capability grant.
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| BSOD from IRQL violation | MEDIUM | Hard reboot; if boot-start filter, use WinRE → bcdedit to disable the driver service before boot; remove the allocation and replace with `NonPagedPoolNx` |
-| Recursion BSOD from own I/O | MEDIUM | Same as above; remove `ZwCreateFile` call from callback; replace with FltCreateFile-based non-recursive path |
-| TESTSIGNING blocked by Secure Boot | LOW | Disable Secure Boot in UEFI (have BitLocker recovery key ready); or switch to a VM |
-| Driver refuses to load (HVCI conflict) | LOW–MEDIUM | Disable Memory Integrity in Windows Security settings; rebuild driver with HVCI-compatible settings and re-test |
-| Altitude conflict with EDR | LOW | Change the altitude in the driver's registry key (`HKLM\SYSTEM\CurrentControlSet\Services\<driver>\Instances\<instance>\Altitude`) to a non-conflicting value and restart |
-| EDR quarantines broker binary | MEDIUM | Restore from quarantine in EDR console; add binary-level exclusion; re-run UAT |
-| macOS broken build from cfg-gated error | LOW | Fix the compile error, push a new tag (leapfrog version per fork release rule), wait for CI |
-| Seatbelt deny-order regression | HIGH | Add canonical path variant and ordering assertion; validate on macOS host; security regression must be confirmed fixed by live test before release |
-
----
+| Cross-tenant capability theft shipped | HIGH | Add server-side impersonation/token-match; rev the wire protocol; revoke trust in client-supplied id; audit any grants served |
+| Token/job reuse across agents | MEDIUM | Refactor to per-agent fresh token+job; add isolation test; no data migration needed |
+| Daemon shipped as SYSTEM | MEDIUM | Re-register launcher at user privilege; move WFP calls behind the existing elevated service; re-test |
+| Marker forgeable | MEDIUM | Switch authz to token SID; ACL the job daemon-only; add forge test |
+| Handle leak in production | LOW-MEDIUM | Add per-agent owning struct + reap-on-exit; restart daemon to reclaim; add growth assertion test |
+| "Confined" an in-process engine post-hoc | HIGH | Re-architect to parent the interpreter (or in-process sandbox-self via binding); relabel adoption as demote-only |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| IRQL violation BSOD (Pitfall 1) | Phase 63 — ring-buffer design in plan before code | `!analyze -v` minidump shows no IRQL_NOT_LESS_OR_EQUAL from nono code |
-| Own-I/O recursion BSOD (Pitfall 2) | Phase 63 — no driver-originated file I/O rule in design doc | No BSOD during 10-minute soak with 100 concurrent file opens |
-| Blocking user thread indefinitely (Pitfall 3) | Phase 63 — finite `Timeout` in plan spec | Supervisor exit while driver loaded: file opens complete within 250 ms |
-| TESTSIGNING + HVCI/Secure Boot (Pitfall 4) | Phase 63 — environment setup task before driver code | `fltmc instances` shows driver registered; `!analyze` shows no load error |
-| Altitude conflict with EDR (Pitfall 5) | Phase 63 design + Phase 64 UAT ordering | `fltmc filters` shows no altitude collision on the UAT machine |
-| Spike scope creep (Pitfall 6) | Phase 63 plan — explicit success criteria and out-of-scope list | Spike PR contains no `Cargo.toml` changes and no CI workflow changes |
-| EDR UAT proving wrong thing (Pitfall 7) | Phase 64 plan — environment preconditions section | UAT artifact includes EDR product + version + policy mode + alert log |
-| EDR quarantining broker (Pitfall 8) | Phase 64 — "no exclusion" run first, then "with exclusion" run | Broker binary present on disk after both UAT runs; EDR alert log documented |
-| macOS cfg-gated compile errors ship (Pitfall 9) | Phase 65 — CI macOS green required in CLOSE-GATE.md | `gh release list` shows a published release with macOS build assets |
-| Seatbelt deny-after-allow ordering (Pitfall 10) | Phase 65 — rule order assertion in unit tests | `nono run --profile claude-code -- cat ~/.ssh/id_rsa` is blocked on macOS |
-| macOS `/private/etc` symlink drift (Pitfall 11) | Phase 65 — canonical path coverage in cherry-pick checklist | Both `/etc/hosts` and `/private/etc/hosts` blocked on macOS host |
-
----
+| 1. Cross-tenant capability theft | Persistent multi-tenant daemon (IPC) | Negative test: tenant B denied tenant A's grants; impersonation in accept path |
+| 2. AI_AGENT marker forge/shed | Daemon — marker sub-task | Negative tests: non-spawned process can't get marker; child can't break away; job ACL'd daemon-only |
+| 3. In-process-exec engine confinement | Engine abstraction + `nono-py` binding | LangChain `PythonREPLTool` `exec()` confined via sandbox-self at startup |
+| 4. Daemon attack surface / privilege | Daemon — service-host/privilege model (ADR) | Launcher runs non-SYSTEM; WFP role separate; bounded/authorized control surface |
+| 5. Token/job lifetime, reuse, orphans | Daemon — token/job reuse (was unspiked) | Fresh token+job per agent; 100-agent reap returns to baseline handle count |
+| 6. Nested-job collisions / silent loss | Generic launch-and-confine (productionize) + daemon adopt path | Already-jobbed engine handled; assign-failure fails secure; resource caps observed |
 
 ## Sources
 
-- Microsoft WDK: [Writing Pre-operation Callback Routines](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/writing-preoperation-callback-routines)
-- Microsoft WDK: [FltSendMessage function](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/fltkernel/nf-fltkernel-fltsendmessage)
-- Microsoft WDK: [I/O Requests Generated by the Minifilter Driver](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/i-o-requests-generated-by-the-minifilter-driver)
-- Microsoft WDK: [Load Order Groups and Altitudes for Minifilter Drivers](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/load-order-groups-and-altitudes-for-minifilter-drivers)
-- Microsoft WDK: [Loading Test Signed Code](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/the-testsigning-boot-configuration-option)
-- Microsoft WDK: [Driver Compatibility with HVCI](https://learn.microsoft.com/en-us/windows-hardware/test/hlk/testref/driver-compatibility-with-device-guard)
-- MITRE ATT&CK: [T1134.002 Create Process with Token](https://attack.mitre.org/techniques/T1134/002/)
-- Tier Zero Security: [Abusing MiniFilter Altitude to blind EDR](https://tierzerosecurity.co.nz/2024/03/27/blind-edr.html)
-- Project Zero: [Hunting for Bugs in Windows Mini-Filter Drivers](https://projectzero.google/2021/01/hunting-for-bugs-in-windows-mini-filter.html)
-- OSR Community: [Minifilter BSOD KERNEL_AUTO_BOOST_LOCK_ACQUISITION_WITH_RAISED_IRQL](https://community.osr.com/discussion/291805/minifilter-bsod-kernel-auto-boost-lock-acquisition-with-raised-irql)
-- nono RETROSPECTIVE.md — v2.8/v2.9 entry, cross-target drift lessons
-- nono PROJECT.md — v2.10 milestone scope and Key Decisions §4
-- nono CLAUDE.md — § Coding Standards, cross-target clippy rule; § Platform-Specific Notes macOS `/etc` symlink note
-- memory/feedback_clippy_cross_target — two cfg-gated compile errors reached release tags in v2.9
+- In-tree code (HIGH — authoritative, current):
+  - `crates/nono/src/supervisor/socket_windows.rs` — SDDL pipe scoping, per-session/package SID ACEs, `PIPE_UNLIMITED_INSTANCES`, `verify_connected_server_pid` (server-PID verify, line ~1840), 64 KiB framing, no server-side `ImpersonateNamedPipeClient` (the multi-tenant gap).
+  - `crates/nono-cli/src/exec_strategy_windows/launch.rs` — job-object lifecycle: `CreateJobObjectW`, `AssignProcessToJobObject`, `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | DIE_ON_UNHANDLED_EXCEPTION` (line ~222), suspended-spawn + `terminate_suspended_process` on assign failure (line ~2005), resource-cap flags.
+- Banked spike findings (HIGH):
+  - `.claude/skills/spike-findings-nono/references/windows-confinement-model.md` (spikes 001 INVALIDATED / 002 PARTIAL — post-hoc IL-drop leaky).
+  - `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` (spike 003 VALIDATED; exe-coverage, absolute grants, R-B3, R-B4; the unspiked multi-tenant marker/token-reuse parts).
+- Sibling research (HIGH): `.planning/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md` (v2.12).
+- Project memory (HIGH): `windows_appcontainer_wfp_validated`, `windows_hook_interpreter_spawn_gotchas`, `feedback_windows_supervised_needs_real_console`, `windows_appcontainer_cap_pipe_reachability`.
+- Verified Win32 semantics (MEDIUM-HIGH): [AssignProcessToJobObject (jobapi2.h)](https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject) — Windows 8+ nested-job rules (already-jobbed process: target must be empty/in-hierarchy, no UI limits); [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects); [Why is my process in a Job if I didn't put it there?](https://learn.microsoft.com/en-us/archive/blogs/alejacma/why-is-my-process-in-a-job-if-i-didnt-put-it-there).
 
 ---
-*Pitfalls research for: nono v2.10 — kernel minifilter spike, EDR HUMAN-UAT, macOS Seatbelt upstream parity*
-*Researched: 2026-06-06*
+*Pitfalls research for: persistent multi-tenant Windows agent-confinement daemon (nono v2.12)*
+*Researched: 2026-06-13*

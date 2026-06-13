@@ -1,334 +1,158 @@
-# Stack Research: v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity
+# Stack Research
 
-**Project:** nono — v2.10 new capabilities (minifilter spike, EDR HUMAN-UAT, macOS parity)
-**Researched:** 2026-06-06
-**Confidence:** HIGH (codebase-confirmed baselines; WDK/MSDN verified; windows-sys docs.rs confirmed)
-**Scope:** Additive changes ONLY relative to the existing baseline. Do not re-research anything already in Cargo.toml.
+**Domain:** Engine-agnostic AI-agent confinement on Windows — persistent local security daemon (launcher + multi-tenant capability IPC) + process-marking + binding-exposed confined-run API (nono v2.12 "AI Agent Abstraction")
+**Researched:** 2026-06-13
+**Confidence:** HIGH (every NEW dependency already lives in-tree at a pinned version; only deltas verified against crates.io)
 
----
+## Executive Framing
 
-## Existing Baseline (Confirmed in Cargo.toml — Do Not Re-research)
+This is a *subsequent* milestone. The dominant finding is that **almost nothing new needs to be added to the stack**. The validated blueprint (spike 003) and the existing Windows backend already supply every primitive the three target features require:
 
-| What | Confirmed state |
-|------|----------------|
-| `windows-sys = "0.59"` with features including `Win32_Storage_FileSystem`, `Win32_Security`, `Win32_System_Services`, `Win32_System_Threading`, `Win32_System_Diagnostics_Etw`, `Win32_NetworkManagement_WindowsFilteringPlatform` | `crates/nono-cli/Cargo.toml` L145 — source-confirmed |
-| `ferrisetw = "1.2"` (ETW consumer — already adopted; v2.0 STACK.md was uncertain, now resolved) | `crates/nono-cli/Cargo.toml` L147 — source-confirmed |
-| `nono-wfp-service` binary with real `FwpmFilterAdd0` kernel WFP enforcement (service-only model, D-05) | Phase 62 debug doc + `exec_strategy_windows/network.rs` |
-| `windows-service = "0.7"` for SCM management | `crates/nono-cli/Cargo.toml` L144 |
-| Rust 1.95 MSRV (workspace.package.rust-version) | `Cargo.toml` L7 |
-| macOS sandbox backend: `sandbox_init()` FFI with Seatbelt profile DSL | `crates/nono/src/sandbox/macos.rs` |
-| Upstream high-water mark: v0.57.0 (fork's last sync); target: v0.61.2 | git log + PROJECT.md |
+- The persistent daemon's confining primitive is `nono run -- <exe>` — already engine-neutral (cmd/powershell/python proven identically).
+- A long-running user-mode Windows service already exists in-tree (`nono-wfp-service`, built on `windows-service 0.7`), so the daemon is a *second instance of a pattern the repo already ships and signs in the MSI*, not a green-field service.
+- The multi-tenant capability pipe is a generalization of `crates/nono/src/supervisor/socket_windows.rs`, which already implements SDDL-scoped named pipes, `PIPE_UNLIMITED_INSTANCES` (in `bind_aipc_pipe`), bounded reads, disconnect/re-accept, and per-SID DACL ACEs.
+- Job-object lifecycle (`CreateJobObjectW`/`AssignProcessToJobObject`/`QueryInformationJobObject`/`TerminateJobObject`) is already used in `exec_strategy_windows/`.
+- The bindings already exist (`../nono-py` PyO3 0.28, `../nono-ts` napi 2).
 
----
+The work is **composition plus a thin amount of net-new Win32** (named job objects for the `AI_AGENT` marker; multi-client accept-loop generalization), not new framework adoption. The single most important "what NOT to add" is the kernel driver — explicitly out of scope and already covered by the WFP+AppContainer/Low-IL model (ADR-65 No-go).
 
-## Feature A: Windows Kernel Minifilter Spike (Gap 6b POC)
+## Recommended Stack
 
-### What Is New
+### Core Technologies
 
-The driver itself (`nono-minifilter.sys`) is C/C++ code built with the WDK, not Rust. The user-mode component that communicates with it is Rust, using the existing `windows-sys` crate with one new feature flag. This is a hard language boundary: the .sys is C, the nono-cli integration is Rust.
+| Technology | Version | Purpose | Why Recommended |
+|------------|---------|---------|-----------------|
+| `windows-sys` | **0.59** (keep workspace pin — do NOT bump) | Raw Win32 FFI for named job objects, multi-client named pipes, SID derivation, token/SID query | Already the workspace-wide pin (`crates/nono/Cargo.toml` line 63). Every API the daemon/marker/IPC needs is present in 0.59: `Win32_System_JobObjects`, `Win32_System_Pipes`, `Win32_System_Services`, `Win32_Security`, `Win32_Security_Authorization`, `Win32_Security_Isolation`. 0.61.2 exists but a bump is gratuitous churn with cross-target-drift risk (memory `feedback_clippy_cross_target`) and buys nothing for this milestone. |
+| `windows-service` | **0.7** (in-tree; latest 0.8.1) | Long-running Windows service host: SCM dispatch (`define_windows_service!`, `service_dispatcher`, `service_control_handler`), start/stop/control lifecycle | Already in-tree at 0.7 (`nono-cli/Cargo.toml` line 144) powering `nono-wfp-service`. The agent daemon is the SAME pattern (SCM-registered, MSI-installed, control-pipe-driven). 0.8.1 (latest, MSRV 1.71) adds polish but 0.7 is sufficient; align the daemon to whatever `nono-wfp-service` uses to avoid a split dependency. |
+| `nono` (internal lib) | 0.62.2 (current) | The confining primitive (`Sandbox::apply`, `CapabilitySet`, `SupervisorSocket`, broker arms) | The daemon launches each engine *through* `nono`'s existing Low-IL broker arm (`windows_low_il_broker:true`) — this is the validated sound model, not a new mechanism. |
+| `tokio` | 1.x (workspace; features `net`/`io-util`/`sync`/`time`/`macros`) | Async multi-client accept loop + per-tenant task supervision in the daemon | Already the async runtime for CLI/proxy AND already used inside `nono-wfp-service`'s control-pipe loop. A multi-tenant pipe server is naturally one accept-task-per-connection over `tokio::net::windows::named_pipe` (or the existing sync `PeekNamedPipe` poll generalized). |
 
-### A1: Driver Build Toolchain (C/C++, outside Cargo)
+### Supporting Libraries
 
-| Tool | Version | Purpose | Why This Version |
-|------|---------|---------|-----------------|
-| WDK | 28000.1761 (latest, 2026-05) | Kernel driver headers, FltMgr.lib, build templates, `inf2cat`, `signtool`, `certmgr` | Current recommended; WDK 26100.6584 is the alternative if VS 2022 is required instead of VS 2026. SDK and WDK build numbers must match. |
-| Visual Studio | 2026 Community or Professional | C/C++ compiler, WDK VSIX integration, driver project templates | WDK 28000.1761 targets VS 2026; VS 2022 pairs with WDK 26100.6584. Required components: "Desktop development with C++", six Spectre-mitigated library individual components (see WDK install guide), "Windows Driver Kit" individual component. |
-| Windows SDK | 10.0.28000.1 (matching WDK) | Headers + SDK tools (`signtool.exe`, `makecert.exe`, `certmgr.exe`) | SDK build number must exactly match WDK build number; install via the direct SDK download link rather than relying on VS installer. |
-| FltMgr.lib | Ships with WDK | Import library for FltMgr minifilter API | Comes with WDK; no separate download. Link via `#pragma comment(lib, "FltMgr.lib")` in the driver project. |
-| `inf2cat.exe` | Ships with WDK | Generates the .cat catalog file from the driver .inf | Required for the test-signing pipeline before `signtool` can sign the package. |
+| Library | Version | Purpose | When to Use |
+|---------|---------|---------|-------------|
+| `tokio::net::windows::named_pipe` (`NamedPipeServer`/`ServerOptions`) | part of `tokio` 1.x | Async multi-client named-pipe server with `create()` re-arm idiom | Preferred for the NEW multi-tenant pipe IF the daemon's accept loop moves to async. The existing `socket_windows.rs` is sync (`PeekNamedPipe` deadline-poll); you can either generalize that to N clients with one thread/connection, or adopt tokio's named-pipe server. Recommend tokio for the daemon (many concurrent tenants) and keep the sync path for the per-`nono run` supervisor. |
+| `getrandom` | 0.4 (workspace) | Per-tenant pipe-name nonce + per-agent token/marker nonce | Already used by `socket_windows.rs` (`unique_pair_name`, `create_nonce_hex`). Reuse verbatim for per-`AI_AGENT` rendezvous naming. |
+| `sha2` | 0.11 (workspace) | Stable pipe-name derivation from rendezvous path / agent id | Already used in `pipe_name_from_rendezvous_path`. Reuse for deterministic multi-tenant pipe names. |
+| `serde` / `serde_json` | workspace | Capability-request wire protocol over the multi-tenant pipe (already the `SupervisorMessage`/`SupervisorResponse` framing) | The per-agent capability protocol IS the existing length-prefixed JSON frame — extend `SupervisorMessage` with an agent/tenant id; do not invent a new wire format. |
+| `tracing` / `tracing-subscriber` | 0.1 / 0.3 (`env-filter`) | Daemon structured logging + Windows Event Log surface | `nono-wfp-service` already does both (Event Log source + tracing); mirror it. |
+| `pyo3` | **0.28** (keep; latest 0.28.3) | `nono-py` confined-run API surface | `../nono-py` already pins `pyo3 0.28`, `extension-module`, `tokio rt-multi-thread`. Add a `confined_run(...)` that delegates to the same daemon/launcher path; no new binding framework. Bump the internal `nono`/`nono-proxy` dep from the stale `0.57.0` pins to `0.62.x` as part of exposing the new API. |
+| `napi` / `napi-derive` / `napi-build` | **2** (keep; 3.8.4 exists) | `nono-ts` confined-run API surface | `../nono-ts` pins `napi 2` (`napi9` feature). A napi-3 migration is a separate, larger effort — do NOT couple it to this milestone. Expose `confinedRun(...)` on the existing napi 2 surface; bump the internal `nono` dep from `0.33.0` to `0.62.x`. |
 
-The EWDK (Enterprise WDK) ISO is a self-contained alternative if VS installation on the spike box is impractical: it contains VS 2026 Build Tools 18.3.0 + SDK + WDK in one mountable ISO.
+### Net-New Win32 surface (no new crate — additions to existing `windows-sys 0.59` feature set)
 
-### A2: Driver API Surface (FltMgr — kernel-mode C)
+| Win32 API | Module (already enabled) | Purpose | Notes |
+|-----------|--------------------------|---------|-------|
+| `CreateJobObjectW(attrs, name)` with a **named** job | `Win32_System_JobObjects` | The `AI_AGENT` marker: one named job per tenant (e.g. session-scoped `nono-ai-agent-<id>`) | Already imported (unnamed) in `exec_strategy_windows/mod.rs`. The new bit is passing a name + reopening via `OpenJobObjectW`. Named jobs ARE the recommended user-mode "process marker" — durable, kernel-tracked, enumerable, and they double as the kill-group + resource cap. |
+| `AssignProcessToJobObject` | `Win32_System_JobObjects` | Bind each launched engine (and its descendants) into its `AI_AGENT` job | Already used. `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` already wired — gives clean teardown of an escaped/misbehaving agent. |
+| `IsProcessInJob` / `QueryInformationJobObject` | `Win32_System_JobObjects` | Identify whether an arbitrary PID is a marked `AI_AGENT`; enumerate a tenant's processes | `IsProcessInJob` already imported (test-gated). This is the user-mode answer to "mark/identify AI_AGENT processes" without `PsSetCreateProcessNotifyRoutine`. |
+| `OpenJobObjectW` | `Win32_System_JobObjects` | Daemon re-opens a named job to adopt/inspect/terminate a tenant across calls | NEW import; present in 0.59. |
+| `CreateNamedPipeW(... PIPE_UNLIMITED_INSTANCES ...)` | `Win32_System_Pipes` | Multi-client capability pipe (one persistent name, N concurrent tenants) | Already used in `bind_aipc_pipe` (the single-instance control pipe uses `1`; the multi-tenant daemon pipe uses `PIPE_UNLIMITED_INSTANCES`). |
+| `ConvertSidToStringSidW` / `ConvertStringSecurityDescriptorToSecurityDescriptorW` | `Win32_Security_Authorization` | Per-tenant SDDL DACL ACE so each agent's Low-IL/AppContainer SID reaches only its own pipe instance | Already used; the per-session-SID + per-package-SID ACE machinery in `socket_windows.rs` is exactly the multi-tenant scoping primitive. |
+| `DeriveAppContainerSidFromAppContainerName` / `CreateAppContainerProfile` | `Win32_Security_Isolation` (already enabled) | Per-agent AppContainer identity for WFP network scoping | Already the proven network-scoping identity (memory `windows_appcontainer_wfp_validated`). Derive-only is NOT enough — must register the profile. |
 
-All APIs are in `<fltKernel.h>` (ships with WDK). No additional headers needed beyond the standard minifilter project template.
-
-| API | Header | Purpose in Spike |
-|-----|--------|-----------------|
-| `FltRegisterFilter` | fltKernel.h | Register minifilter with FltMgr in `DriverEntry` |
-| `FltStartFiltering` | fltKernel.h | Activate after registration |
-| `FltUnregisterFilter` | fltKernel.h | Clean unload in `FilterUnload` callback |
-| `FltCreateCommunicationPort` | fltKernel.h | Create kernel-side communication port for user-mode messaging |
-| `FltSendMessage` | fltKernel.h | Push pre-create event data to waiting user-mode reader; use with finite `Timeout` (e.g., 500 ms as `LARGE_INTEGER`) — NEVER NULL timeout in a spike (BSOD risk if user-mode reader absent; see PITFALLS.md) |
-| `FLT_CALLBACK_DATA` | fltKernel.h | Pre-create callback argument; provides file name, process info, I/O parameters |
-| `FltGetFileNameInformation` | fltKernel.h | Retrieve file name from callback data; use `FLT_FILE_NAME_NORMALIZED` |
-| `FltReleaseFileNameInformation` | fltKernel.h | Release name buffer after use |
-| `IoGetRequestorProcess` / `PsGetProcessId` | ntddk.h | Get requestor PID for the callback event |
-
-**INF/load-order configuration:**
-- `LoadOrderGroup = "FSFilter Activity Monitor"` (same group as Sysmon, at altitude 385201)
-- Spike altitude: request a test altitude in the 320000–329998 range from Microsoft, or use 370020 (nullFilter sample default) on a test-only host. Do NOT use a Sysmon-adjacent altitude on a production host.
-- `StartType = SERVICE_DEMAND_START` (3) — the spike driver is loaded on demand, not at boot. This avoids the boot-start driver embedding-signature requirement.
-- `ServiceType = SERVICE_FILE_SYSTEM_DRIVER` (2)
-- `Dependencies = "FltMgr"`
-
-### A3: User-Mode Communication (Rust side — existing windows-sys crate)
-
-The user-mode component (inside `nono-cli` or a helper binary) calls FltLib APIs to connect to the driver's communication port and receive events.
-
-**New `windows-sys` feature flag required:**
-
-```toml
-# In crates/nono-cli/Cargo.toml, under [target.'cfg(target_os = "windows")'.dependencies]:
-windows-sys = { version = "0.59", features = [
-    # ... existing features (DO NOT remove) ...
-    "Win32_Storage_InstallableFileSystems",   # NEW for minifilter user-mode comm
-] }
-```
-
-This feature exposes `FilterConnectCommunicationPort`, `FilterGetMessage`, `FilterSendMessage`, and `FilterReplyMessage` — all confirmed present in `windows_sys::Win32::Storage::InstallableFileSystems` at docs.rs.
-
-| User-Mode API (in windows-sys) | Purpose |
-|-------------------------------|---------|
-| `FilterConnectCommunicationPort` | Open connection to driver's communication port by name (e.g., `L"\\NonoPocPort"`) |
-| `FilterGetMessage` | Blocking read of `FILTER_MESSAGE_HEADER` + payload from driver via `FltSendMessage` |
-| `FilterSendMessage` | Send a message DOWN to the driver (not needed for receive-only POC) |
-| `FilterReplyMessage` | Reply to a `FltSendMessage` that requested a reply |
-
-For the spike (prove pre-create interception only), the user-mode side only needs `FilterConnectCommunicationPort` + `FilterGetMessage` in a loop. The Rust wrapper is ~50 lines of `unsafe` code following the same RAII + `// SAFETY:` pattern used in `exec_strategy_windows/launch.rs`.
-
-**Integration point with existing nono-wfp-service:** The minifilter communicates via a named FltMgr communication port, not via the existing WFP named-pipe IPC. These are independent channels. The spike does NOT touch `nono-wfp-service` or the existing WFP enforcement path at all — it is an additive POC component.
-
-**Where the spike code lives:** A new standalone binary or test harness, NOT wired into production `nono run` paths. The spike is explicitly a POC; production integration is deferred pending the go/no-go ADR.
-
-### A4: Test-Signing Pipeline
-
-The spike requires TESTSIGNING mode on the test host. This is a one-time host setup:
-
-```
-# Step 1: Generate test certificate (in WDK Developer Command Prompt)
-makecert -r -pe -ss PrivateCertStore -n CN=NonoMinifilterTest NonoTest.cer
-
-# Step 2: Build the .sys (via VS/WDK)
-
-# Step 3: Generate catalog file
-inf2cat /v /driver:.\driver-package /os:10_x64
-
-# Step 4: Sign the .cat
-signtool sign /v /s PrivateCertStore /n NonoMinifilterTest /t http://timestamp.digicert.com nono-minifilter.cat
-
-# Step 5: Embed-sign the .sys (required for 64-bit Windows; demand-start still needs this)
-signtool sign /v /s PrivateCertStore /n NonoMinifilterTest /t http://timestamp.digicert.com nono-minifilter.sys
-
-# Step 6: Install test cert on the host
-certmgr.exe /add NonoTest.cer /s /r localMachine root
-certmgr.exe /add NonoTest.cer /s /r localMachine trustedpublisher
-
-# Step 7: Enable test-signing (requires elevation; requires reboot)
-bcdedit /set testsigning on
-# Reboot
-
-# Step 8: Install driver
-pnputil /add-driver nono-minifilter.inf /install
-# OR: sc create + sc start for demand-start non-PnP
-```
-
-**HVCI/Memory Integrity blocker:** On Windows 11 22H2+, HVCI (Hypervisor-Protected Code Integrity) is on by default. HVCI blocks test-signed drivers unless the host has it disabled. Check via `msinfo32.exe` → "Virtualization-based security" or `System Information`. To disable: Settings → Windows Security → Device Security → Core isolation → Memory integrity → Off. Requires reboot. The dev spike host must have HVCI disabled or use a dedicated VM (Hyper-V with nested virtualization, or a bare-metal test box).
-
-**Recommended spike host:** A dedicated VM or bare-metal machine with HVCI disabled, NOT the primary dev box. BSOD risk during driver development is real (see PITFALLS.md).
-
-**Secure Boot interaction:** If `bcdedit /set testsigning on` returns "The value is protected by Secure Boot policy", Secure Boot must be disabled in BIOS/UEFI first. For a test VM this is straightforward; for the main dev machine, leave Secure Boot on and use a dedicated VM.
-
-### A5: Rust-to-C Boundary Summary
-
-| Boundary | What crosses it | How |
-|----------|----------------|-----|
-| Kernel driver (C) → User-mode Rust | Pre-create event data: file path + PID | `FltSendMessage` kernel-side → `FilterGetMessage` user-side; message struct defined in a shared C header (`nono_minifilter_ipc.h`), manually mirrored as a `#[repr(C)]` struct in Rust |
-| User-mode Rust → Kernel driver (C) | Connection open, optional reply | `FilterConnectCommunicationPort` + `FilterReplyMessage` via `windows-sys` unsafe FFI |
-| Rust Cargo build | Does NOT build the .sys | The driver project is a separate Visual Studio/MSBuild project; the Rust build produces only the user-mode component |
-
-**No new Rust crates are needed for the user-mode side** beyond the one feature flag addition to `windows-sys`. The driver side is C/C++ + WDK, outside Cargo.
-
-### A6: What NOT to Add
-
-| Avoid | Why |
-|-------|-----|
-| Attempting to write the .sys in Rust (e.g., `windows-kernel-rs`) | No production-ready Rust kernel driver framework exists for FltMgr minifilters; the WDK C/C++ path is the only auditable, supportable route. Spike must be deliverable quickly. |
-| Using the EWDK COM automation path | Only needed for CI driver builds; for a spike, VS IDE is faster to iterate with. |
-| `sc create bintype= kernel` without INF | Non-PnP demand-start works for the spike but skips the filter registration needed for FltMgr altitude assignment. Use `pnputil /add-driver` with the INF. |
-| Wiring the spike into `nono run` production paths | The spike is POC-only. Production integration deferred to post-ADR milestone. |
-
----
-
-## Feature B: WR-02 EDR HUMAN-UAT
-
-### B1: EDR Options for a Dev/Test Host
-
-The UAT needs an EDR that can be installed on the dev host (Windows 11, build 26200), captures relevant telemetry (process creation, file access, network calls), and can be set up without enterprise enrollment complexity.
-
-| Option | Practicality | What It Captures | Setup Cost |
-|--------|-------------|-----------------|-----------|
-| **Microsoft Defender for Endpoint (MDE) P2 — 90-day trial** | HIGH — no credit card, adds to existing Microsoft account; works on Windows 11 workstation; provides cloud-based alert portal at security.microsoft.com | Process tree, file events, network connections, Low-IL/AppContainer process launches, driver load events | Moderate: requires M365 tenant (free trial available), onboarding script download, ~10 min setup. Onboarding script is a `.cmd` that runs once. |
-| **Sysmon (Sysinternals)** | HIGH — free, no license, installs in 30 seconds, self-contained, logs to Windows Event Log (Channel: `Microsoft-Windows-Sysmon/Operational`) | Process create (EID 1), network connect (EID 3), file creation (EID 11), driver load (EID 6), pipe events (EID 17/18), image load (EID 7) | Very low: `sysmon64.exe -accepteula -i sysmonconfig.xml`; use SwiftOnSecurity config as baseline |
-| **Windows Defender Antivirus (built-in) + Event Log** | BASELINE — already present; zero setup | Process launches, network blocks, SmartScreen events | Zero — already running on any Windows 11 host |
-| **Commercial EDR trial (CrowdStrike Falcon, SentinelOne)** | LOW — trials require sales contact or credit card; install is simple but tenant setup takes days | Full EDR visibility | High: procurement overhead makes this impractical for a developer-run UAT |
-
-**Recommendation for WR-02:** Use **Sysmon + MDE trial** in combination. Sysmon gives immediate local event log visibility with zero tenant complexity; MDE trial gives the cloud-portal alert view that a real enterprise deployment would produce. Together they cover both the "does a real EDR see nono's activity?" question and the "what does the alert look like in a SOC console?" question.
-
-If tenant setup for MDE is too slow for the milestone schedule, **Sysmon alone** is sufficient to close WR-02 as a valid EDR-proxy validation. Sysmon is widely used as an EDR proxy in security research and is explicitly designed to replicate EDR telemetry coverage.
-
-### B2: Telemetry Capture for the UAT
-
-| What to Capture | Tool | Event IDs / Method |
-|-----------------|------|--------------------|
-| nono process spawning Low-IL child | Sysmon | EID 1 (process create), EID 17/18 (pipe connect for supervisor) |
-| nono-wfp-service loading | Sysmon | EID 6 (driver load) for any driver activity; Windows Event Log for SCM service start |
-| AppContainer child process launch | Sysmon | EID 1 with IntegrityLevel field |
-| WFP filter installation | MDE or Windows Security Center | Network events, firewall policy change audit |
-| nono binary itself | Sysmon EID 1, MDE Process events | Confirm visibility under both |
-
-**Tooling needed (zero new Rust/Cargo dependencies):**
-- `sysmon64.exe -accepteula -i config.xml` — install Sysmon
-- `Get-WinEvent -LogName 'Microsoft-Windows-Sysmon/Operational' -MaxEvents 100` — PowerShell query
-- MDE onboarding `.cmd` from security.microsoft.com (if MDE trial chosen)
-- Sysmon config: SwiftOnSecurity `sysmonconfig-export.xml` from GitHub (de-facto baseline config)
-
-**No new Cargo dependencies.** This is a HUMAN-UAT (operator-run), not an automated integration test. The deliverable is a set of recorded verdicts against success criteria, not new test code.
-
----
-
-## Feature C: macOS Seatbelt Upstream Parity (v0.57.0 → v0.61.2)
-
-### C1: What's in the Upstream Window
-
-The fork's macOS high-water mark is v0.57.0. The target is v0.61.2. Confirmed macOS-relevant commits in the window (from `git log v0.57.0..upstream/main`):
-
-| Commit | Version | Description | Files |
-|--------|---------|-------------|-------|
-| `8f84d454` | ~v0.58 | `fix(macos): emit platform rules after user write allows` | `crates/nono/src/sandbox/macos.rs` |
-| `fe233db4` (PR #680) | ~v0.58 | `fix(sandbox): preserve symlink path when adding CWD capability on macOS` | `crates/nono-cli/src/sandbox_prepare.rs`, `crates/nono-cli/src/profile/mod.rs` |
-| `729697c2` | ~v0.60 | `feat(proxy): add --trust-proxy-ca for macOS system trust store integration` | proxy + macOS Keychain handling |
-| `2f4e1a37` | ~v0.60 | `fix(proxy): clean up Keychain on trust failure and expand security docs` | proxy macOS Keychain |
-| `6c472224` | ~v0.60 | `refactor(proxy): consolidate Keychain CA storage to single combined PEM entry` | proxy macOS |
-
-The two Seatbelt-core fixes (`8f84d454` and `fe233db4`) are the highest-risk items — they touch `macos.rs` and sandbox preparation directly. The proxy/Keychain changes are macOS-relevant but touch `nono-proxy`, not the sandbox primitive.
-
-Non-macOS commits in the window (v0.58–v0.61.2) include: session hooks, Bitwarden creds, fine-grained `allow_domain`, supervisor socket IPC, interactive denial selector, RPM artifacts, JSONC writing, registry refs in profile extends, diagnostic suppress-system-service option. These are also in scope for the UPST8 audit but are not macOS-specific.
-
-### C2: Toolchain for macOS Re-validation
-
-No new Rust crates are needed. The macOS Seatbelt backend uses private `libc`/`sandbox_init()` FFI which is already in place.
+### Development Tools
 
 | Tool | Purpose | Notes |
 |------|---------|-------|
-| macOS host (Intel or Apple Silicon, macOS 12+) | Compile and run the macOS backend | The existing cross-target CI covers compilation; live re-validation needs a real macOS host. `sandbox_init()` is a runtime-only call; CI can compile but cannot sandbox-exec. |
-| `cargo clippy --workspace --target x86_64-apple-darwin` + `--target aarch64-apple-darwin` | Cross-target clippy per CLAUDE.md rule | Required for all commits touching `#[cfg(target_os = "macos")]` code. On Windows host = PARTIAL (CI-deferred). On macOS host = full local verify. |
-| `git cherry-pick` or `git diff` | Cherry-pick upstream commits into fork | Standard workflow per prior UPST cycles. DIVERGENCE-LEDGER pattern required. |
-| `sandbox-exec -p '(version 1)(allow default)'` | Manual Seatbelt profile syntax test | macOS built-in; tests profile DSL syntax before the full `sandbox_init()` call |
+| `cbindgen` 0.29 | C header regen for FFI | Unchanged; only relevant if the daemon control surface is also exposed via C FFI (not required). |
+| `maturin` | Build/publish `nono-py` wheels | Existing nono-py toolchain; pyo3 0.28.3 compatible. |
+| `@napi-rs/cli` | Build `nono-ts` native addon | Existing napi 2 toolchain. |
+| Cross-target clippy (`x86_64-unknown-linux-gnu` + `x86_64-apple-darwin`) | Catch cfg-gated drift | MANDATORY per CLAUDE.md. The daemon is Windows-only (`#[cfg(target_os = "windows")]`) — provide a non-Windows stub `main` exactly like `nono-wfp-service.rs` does so the workspace `cargo check` stays green on Unix. |
 
-**No new Cargo dependencies for the macOS parity work.** The commits in scope are fixes and features that use the existing Seatbelt + `nix` + `libc` surface.
+## Installation
 
-### C3: macOS-Specific MSRV Note
+```toml
+# crates/nono-cli/Cargo.toml — the daemon is a new bin (or new crate) reusing the existing service dep.
+# No new dependency line if it lives in nono-cli alongside nono-wfp-service.
+windows-service = "0.7"   # already present; optionally → "0.8.1"
 
-The workspace MSRV is currently `rust-version = "1.95"` (confirmed in `Cargo.toml`). The upstream macOS commits do not introduce APIs that require a Rust version newer than 1.95. No MSRV bump is expected from the macOS parity work.
+# crates/nono/Cargo.toml — windows-sys feature additions (same 0.59 crate, add features only if missing):
+#   Win32_System_JobObjects, Win32_System_Pipes, Win32_Security_Isolation are ALREADY enabled.
+#   No version change.
 
----
+# ../nono-py/Cargo.toml — bump stale internal pins to expose confined_run:
+nono = "0.62"        # was "0.57.0"
+nono-proxy = "0.62"  # was "0.57.0"
+pyo3 = { version = "0.28", features = ["extension-module"] }   # unchanged
 
-## Complete Additive Dependency Table
-
-| Package / Change | Where | Feature | Why |
-|---------|-------|---------|-----|
-| `windows-sys` feature `Win32_Storage_InstallableFileSystems` | `crates/nono-cli/Cargo.toml` `[target.'cfg(target_os = "windows")'.dependencies]` | New feature flag on existing dep | Exposes `FilterConnectCommunicationPort` + `FilterGetMessage` for user-mode FltMgr comm port |
-
-**That is the only Cargo.toml change across all three v2.10 features.**
-
-All other new work is:
-- A new C/C++ Visual Studio + WDK project (outside Cargo) for the minifilter `.sys`
-- A new Rust source file for the user-mode spike harness (new `use` imports in the `Win32_Storage_InstallableFileSystems` module)
-- A shared `#[repr(C)]` IPC struct mirroring the C-side message header
-- A HUMAN-UAT runbook (no new code)
-- Cherry-picks + manual replays into existing Rust files for macOS parity
-
----
-
-## Driver vs. Rust-Userspace Boundary (Explicit)
-
+# ../nono-ts/Cargo.toml — bump stale internal pin:
+nono = "0.62"        # was "0.33.0"
+napi = { version = "2", default-features = false, features = ["napi9"] }   # unchanged
 ```
-┌─────────────────────────────────────────┐
-│  Kernel (C, WDK, IRQL constraints)      │
-│  nono-minifilter.sys                    │
-│  - FltRegisterFilter                    │
-│  - Pre-create callback                  │
-│  - FltCreateCommunicationPort           │
-│  - FltSendMessage → named port          │
-│  Language: C                            │
-│  Build: Visual Studio + WDK             │
-│  Signed: test-signed .cat + embedded    │
-└──────────────┬──────────────────────────┘
-               │ FltMgr named communication port
-               │ (\\NonoPocPort)
-               │ FILTER_MESSAGE_HEADER + payload
-               │ #[repr(C)] struct mirrored in Rust
-               ▼
-┌─────────────────────────────────────────┐
-│  User-mode (Rust, safe wrapper)         │
-│  Spike harness in nono-cli or binary    │
-│  - FilterConnectCommunicationPort       │
-│  - FilterGetMessage (blocking loop)     │
-│  - windows-sys Win32_Storage_           │
-│    InstallableFileSystems               │
-│  Language: Rust                         │
-│  Build: Cargo                           │
-└─────────────────────────────────────────┘
-```
-
-The shared IPC message struct must be defined ONCE in C (the driver source) and manually replicated in Rust as a `#[repr(C, packed)]` struct with the same field types and layout. This is the single most fragile point of the C↔Rust boundary; a layout mismatch causes silent data corruption or reads from garbage memory. The spike plan must include a static size/offset assertion on the C side and a matching Rust-side `assert_eq!(size_of::<NonoMinifilterMessage>(), EXPECTED_SIZE)`.
-
----
-
-## Integration with Existing nono-wfp-service
-
-The minifilter spike is INDEPENDENT of `nono-wfp-service`. They coexist without conflict:
-
-| Component | Mechanism | Port / Channel |
-|-----------|-----------|---------------|
-| `nono-wfp-service` (existing) | `FwpmFilterAdd0` at ALE_AUTH layers | Named pipe IPC (`NONO_WFP_PIPE`) |
-| `nono-minifilter.sys` (new spike) | `FltSendMessage` at pre-create callback | FltMgr named comm port (`\\NonoPocPort`) |
-
-The WFP service enforces network; the minifilter spike intercepts file opens. They operate on different kernel components (BFE/FWPM vs FltMgr) and different named channels. No code changes to `nono-wfp-service` are needed for the spike.
-
----
 
 ## Alternatives Considered
 
-| Recommended | Alternative | Why Not |
-|-------------|-------------|---------|
-| WDK + VS 2026 for driver build | Rust kernel driver frameworks (e.g., `windows-kernel-rs`) | No production FltMgr minifilter support in Rust ecosystem; spike must be deliverable; C is the only auditable path |
-| `windows-sys` `Win32_Storage_InstallableFileSystems` for user-mode | `fltlib` P/Invoke via `libloading` dynamic load | `windows-sys` is already a dependency and follows the established codebase pattern; dynamic loading adds complexity for no benefit |
-| Sysmon + MDE trial for EDR UAT | CrowdStrike/SentinelOne trial | Commercial trials require sales contact; Sysmon is the de-facto EDR-proxy in security research and sufficient for WR-02 |
-| TESTSIGNING + self-signed cert for spike | Attestation signing (cross-signed EV cert) | Attestation signing requires hardware EV cert purchase; out of scope for a feasibility spike |
-| Demand-start driver (`SERVICE_DEMAND_START`) | Boot-start driver | Boot-start requires embedded signature AND kernel debugger discipline; demand-start is safer for spike iteration and does not require embedding |
+| Recommended | Alternative | When to Use Alternative |
+|-------------|-------------|-------------------------|
+| `windows-sys` 0.59 (keep) | `windows-sys` 0.61.2 (latest) | Only if a future milestone needs an API absent from 0.59. None of the daemon/marker/IPC APIs are. Bumping now adds cross-target-drift risk for zero functional gain. |
+| `windows-service` 0.7 (in-tree) | `windows-service` 0.8.1; Microsoft's newer `windows-services` 0.26.1 | 0.8.1 if you want the latest of the same crate (low-risk minor). `windows-services` (MS, different crate) only if starting green-field — not worth diverging from the crate `nono-wfp-service` already ships. |
+| Named **job object** as the `AI_AGENT` marker | Token group SID / synthetic restricting SID; a sentinel env var; a named mutex | Job objects win: kernel-tracked, descendant-capturing, enumerable (`IsProcessInJob`), double as kill-group + resource caps, and survive across daemon calls via `OpenJobObjectW`. A SID/marker alone gives identity but not containment or teardown. Use a SID *in addition* (for WFP/pipe DACL scoping), not instead. |
+| `tokio` async multi-client pipe server | Generalize the existing sync `PeekNamedPipe` deadline-poll to N threads | Sync-per-thread is fine for a handful of tenants and reuses proven code; tokio scales better for many concurrent agents and matches `nono-wfp-service`. Choose sync if you want minimal new code; tokio if tenant count is unbounded. |
+| Extend `SupervisorMessage` JSON frame with a tenant id | New protobuf/bincode protocol | The length-prefixed JSON frame is proven, bounded (64 KiB), replay-guarded, and already serde-derived. A new wire format is unjustified risk. |
+| Reuse `nono run` broker arm as the launcher | Post-hoc token IL-drop (spike 002) | Post-hoc demote is **demote-only/unsound** (leaky) — ship it ONLY as a supplementary "demote a misbehaving agent" control, never as the confinement boundary. Launch-time confinement is the sound model. |
 
----
+## What NOT to Use
 
-## Version Compatibility Notes
+| Avoid | Why | Use Instead |
+|-------|-----|-------------|
+| **Any kernel driver / minifilter / `PsSetCreateProcessNotifyRoutine`** | Out of scope by milestone definition AND by ADR-65 (No-go/Conditional-go): WFP+AppContainer/Low-IL already gives kernel-enforced isolation; a production driver is high cert/maintenance cost for incremental gain. User-mode only. | Named job objects (`IsProcessInJob`) for marking/identification; broker-arm launch-time confinement; WFP service for network. |
+| **Post-hoc token IL-drop as the primary confinement model** | Spike 002: feasible but leaky/unsound (demote-only). Handles/objects opened before the drop survive. | Launch-time confinement via the broker arm (spike 003, VALIDATED). Layer IL-drop only as a "demote escaped agent" supplementary control. |
+| **`windows-sys` version bump (0.59 → 0.61.x) "to be current"** | Gratuitous churn; cross-target-drift hazard (two cfg-gated compile errors already reached release tags — memory `feedback_clippy_cross_target`). No needed API is missing from 0.59. | Stay on the workspace 0.59 pin; add *features*, not versions. |
+| **napi 2 → napi 3 migration coupled to this milestone** | napi 3.x is a breaking surface (3.8.4 latest); migrating is its own effort that would balloon scope and risk the binding build. | Expose `confinedRun` on the existing napi 2 surface; defer the napi-3 migration to a dedicated binding-maintenance task. |
+| **A brand-new wire protocol for capability IPC** | The existing framed JSON (`SupervisorMessage`) is proven, bounded, replay-guarded, timeout-bounded, and re-accept-capable. | Add a tenant/agent-id field to the existing message types. |
+| **Assuming the engine inherits the launcher CWD** | PowerShell did not (relative write resolved to `C:\`, correctly denied) — a recurring contract. | Express ALL grants as absolute paths (banked contract). |
+| **Launching the agent workspace from an elevated context** | Elevated-created dirs are `BUILTIN\Administrators`-owned → no `WRITE_DAC` for the label/DACL grant → confined writes fail-secure (R-B3). | Workspace MUST be user-owned (`takeown /F` or create non-elevated). |
+| **Deriving an AppContainer SID without `CreateAppContainerProfile`** | Derive-only SID → `CreateProcessW` `ERROR_FILE_NOT_FOUND` (memory `windows_appcontainer_wfp_validated`); `env_clear()` strips `SystemRoot` → CLR `0xFFFF0000` (memory `windows_hook_interpreter_spawn_gotchas`). | Register the profile via `CreateAppContainerProfile`; preserve `SystemRoot`/`windir`/`SystemDrive` baseline env. |
 
-| Component | Version | Compatibility Constraint |
-|-----------|---------|--------------------------|
-| WDK | 28000.1761 | Must match SDK build number exactly (both 28000.x) |
-| Visual Studio | 2026 | WDK 28000.1761 VSIX targets VS 2026; VS 2022 requires WDK 26100.6584 |
-| `windows-sys` | 0.59 (existing) | `Win32_Storage_InstallableFileSystems` feature confirmed present at this version (docs.rs). No version bump needed. |
-| Rust MSRV | 1.95 (existing workspace) | No bump required; minifilter user-mode Rust code uses only stable `unsafe` + `windows-sys` |
-| macOS MSRV | 1.95 | Upstream macOS commits v0.58–v0.61.2 do not introduce newer Rust requirements |
+## Stack Patterns by Variant
 
----
+**If the daemon serves a small, known number of concurrent agents:**
+- Generalize the existing sync `socket_windows.rs` accept loop to one thread per tenant (reuse `PeekNamedPipe` deadline-poll + disconnect/re-accept verbatim).
+- Because it maximizes reuse of proven, audited code and avoids a tokio accept-loop in the security-critical path.
+
+**If the daemon must scale to many concurrent agents:**
+- Use `tokio::net::windows::named_pipe` `ServerOptions` with `PIPE_UNLIMITED_INSTANCES` + one task per connection, mirroring `nono-wfp-service`'s tokio control loop.
+- Because per-connection tasks scale without thread-count blowup and reuse the existing async runtime.
+
+**If exposing confined-run through Python (LangChain agent, spike 005 proof):**
+- `nono-py` `confined_run(exe, args, allow=[...], profile=...)` delegating to the same broker-arm launch path; prove the abstraction by confining a real Python/LangChain agent with NO Claude hook.
+- Because the binding must demonstrate "engine is a variable" — python was the strongest spike-003 proof.
+
+**If marking/identifying an already-running agent (adopt, not launch):**
+- Re-open the tenant's named job via `OpenJobObjectW` + `IsProcessInJob`; apply post-hoc IL-drop ONLY as a demote control (never as the boundary).
+- Because adoption-after-spawn cannot retroactively achieve launch-time soundness — flag it as best-effort demote.
+
+## Version Compatibility
+
+| Package A | Compatible With | Notes |
+|-----------|-----------------|-------|
+| `windows-sys 0.59` | `windows-service 0.7`/`0.8.1` | `windows-service` brings its own `windows-sys`; both resolve fine. Confirmed by current in-tree `nono-wfp-service` build. |
+| `pyo3 0.28.3` | Rust 1.95 (workspace MSRV), `tokio 1` | nono-py already builds on this combo (edition 2024, rust 1.95). |
+| `napi 2 (napi9)` | Rust 1.77+ (nono-ts MSRV), Node 10+ | Existing nono-ts pin; do not bump to napi 3 in this milestone. |
+| `nono 0.62.x` | nono-py / nono-ts internal pins (currently stale 0.57.0 / 0.33.0) | Bumping the internal pin is REQUIRED to expose the new confined-run API; pin to `0.62`. |
+| `windows-service 0.7` vs `0.8.1` | Both MSRV ≤ 1.95 | 0.8.1 MSRV is 1.71; safe. Align daemon to whichever `nono-wfp-service` uses to keep one version. |
+
+## Integration Points with Existing Backend
+
+- **Launcher primitive:** daemon → existing broker arm (`windows_low_il_broker:true`) → `Sandbox::apply` on a `CapabilitySet`. No new confinement code; honor exe/interpreter coverage gate + absolute grants + user-owned workspace.
+- **Multi-tenant IPC:** generalize `crates/nono/src/supervisor/socket_windows.rs` (`bind_low_integrity_with_session_and_package_sid`, `bind_aipc_pipe` with `PIPE_UNLIMITED_INSTANCES`, `disconnect_and_reconnect`, framed JSON). Add a tenant/agent id to `SupervisorMessage`.
+- **Service host:** model the daemon binary on `crates/nono-cli/src/bin/nono-wfp-service.rs` (SCM dispatch, Event Log, control pipe, non-Windows stub `main`, MSI registration). MSI service-start was made non-fatal in v2.11 — reuse that posture.
+- **Marker:** add named-job-object create/open to `exec_strategy_windows/` (job lifecycle already lives there).
+- **Bindings:** add `confined_run`/`confinedRun` to `../nono-py` and `../nono-ts`; bump internal `nono` pins to 0.62.x.
+- **Cross-target discipline:** daemon + marker code is `cfg(target_os = "windows")`; provide Unix stubs and run cross-target clippy (CLAUDE.md MUST).
 
 ## Sources
 
-- `crates/nono-cli/Cargo.toml` — existing `windows-sys 0.59` feature list, `ferrisetw = "1.2"` (source-confirmed, HIGH)
-- [Microsoft Learn: Download the WDK](https://learn.microsoft.com/en-us/windows-hardware/drivers/download-the-wdk) — WDK 28000.1761 + VS 2026 recommendation (MSDN current, HIGH)
-- [Microsoft Learn: Test Signing](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/test-signing) — test-sign pipeline: `makecert` → `inf2cat` → `signtool` → `certmgr` → `bcdedit /set testsigning on` (MSDN, HIGH)
-- [docs.rs: windows_sys::Win32::Storage::InstallableFileSystems](https://docs.rs/windows-sys/latest/windows_sys/Win32/Storage/InstallableFileSystems/index.html) — `FilterConnectCommunicationPort`, `FilterGetMessage`, `FilterSendMessage`, `FilterReplyMessage` confirmed present (docs.rs, HIGH)
-- [Microsoft Learn: Communication Between User-mode and Minifilters](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/communication-between-user-mode-and-kernel-mode) — `FltCreateCommunicationPort` + `FilterConnectCommunicationPort` pattern (MSDN, HIGH)
-- [Windows driver samples: nullFilter](https://github.com/microsoft/Windows-driver-samples/blob/main/filesys/miniFilter/nullFilter/nullFilter.inf) — altitude 370020, LoadOrderGroup FSFilter Activity Monitor, `StartType = SERVICE_DEMAND_START` (Microsoft GitHub, HIGH)
-- [Microsoft Learn: Load Order Groups and Altitudes](https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/load-order-groups-and-altitudes-for-minifilter-drivers) — altitude assignment for Activity Monitor group (MSDN, HIGH)
-- `.planning/debug/resolved/wfp-driver-gate-placeholder.md` — confirms nono-wfp-driver.sys is a placeholder; nono-wfp-service has real FwpmFilterAdd0 (source-confirmed, HIGH)
-- `git log v0.57.0..upstream/main` — macOS-relevant upstream commits confirmed: `8f84d454` (platform rules order), PR #680 `fe233db4` (symlink CWD), `729697c2`/`2f4e1a37`/`6c472224` (proxy Keychain) (git-confirmed, HIGH)
-- [Microsoft Learn: MDE Trial User Guide](https://learn.microsoft.com/en-us/defender-endpoint/defender-endpoint-trial-user-guide) — 90-day trial, no credit card required (MSDN, MEDIUM)
-- [Sysmon documentation](https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon) — Event IDs, install procedure (MSDN, HIGH)
-- HVCI default-on since Windows 11 22H2 — confirmed via Microsoft blog post on Windows 11 security defaults (MEDIUM — behavior confirmed, specific build number is 22H2 or 23H2+)
+- In-tree: `crates/nono/Cargo.toml` (windows-sys 0.59 + feature set), `crates/nono-cli/Cargo.toml` (windows-service 0.7), `crates/nono/src/supervisor/socket_windows.rs` (named-pipe IPC, SDDL, PIPE_UNLIMITED_INSTANCES, re-accept), `crates/nono-cli/src/bin/nono-wfp-service.rs` (existing user-mode service pattern), `crates/nono-cli/src/exec_strategy_windows/mod.rs` (job-object lifecycle), `../nono-py/Cargo.toml` (pyo3 0.28), `../nono-ts/Cargo.toml` (napi 2) — HIGH confidence (authoritative, current code).
+- Spike blueprint: `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` (spike 003 VALIDATED; contracts) — HIGH.
+- Project memory: `windows_appcontainer_wfp_validated`, `windows_hook_interpreter_spawn_gotchas`, `feedback_clippy_cross_target`, `project_v210_opened` (ADR-65) — HIGH.
+- [crates.io windows-service](https://crates.io/crates/windows-service) — latest 0.8.1, MSRV 1.71 — MEDIUM (web).
+- [docs.rs pyo3](https://docs.rs/crate/pyo3/latest) — latest 0.28.3 (0.28.0/0.28.1 yanked) — MEDIUM (web).
+- [docs.rs napi](https://docs.rs/crate/napi/latest) — latest 3.8.4 (we deliberately stay on 2) — MEDIUM (web).
+- [docs.rs windows-sys](https://docs.rs/crate/windows-sys/latest) — latest 0.61.2 (we deliberately stay on 0.59) — MEDIUM (web).
+- [Microsoft Learn: Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects) — named-job marker semantics — MEDIUM.
 
 ---
-
-*Stack research for: nono v2.10 — kernel minifilter spike, EDR HUMAN-UAT, macOS Seatbelt parity*
-*Researched: 2026-06-06*
+*Stack research for: engine-agnostic AI-agent confinement on Windows (nono v2.12)*
+*Researched: 2026-06-13*
