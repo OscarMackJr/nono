@@ -66,12 +66,34 @@ Per engine, a line:
 
 ## Investigation Trail
 
-- 2026-06-13: Built std-only launcher that mediates cmd/powershell/(python) through `nono run --allow-cwd`,
-  each attempting a granted write + an outside write, and checks file outcomes. Compiles clean (debug).
-  Verdict PENDING the operator's real-Win11 run (needs the broker + runner profile + a user-owned grant dir).
+- 2026-06-13: Built std-only launcher (v1) that mediates cmd/powershell/(python) through `nono run --allow-cwd`.
+  Compiles clean (debug).
+- 2026-06-13: **Operator run v1** (Win11 26200.8390). Results:
+  - **cmd → CONFINED ✓** — `granted_cmd.txt` landed in `daemon_grant`; outside write `Access is denied`. A
+    real engine confined correctly via the persistent launcher. (The substantive pass.)
+  - **powershell → CHECK ✗ (harness bug, not confinement):** the relative write resolved to
+    `C:\granted_powershell.txt` — powershell did NOT inherit the launcher's CWD as `$PWD`, so the write went to
+    `C:\` and was (correctly) denied. Confinement worked; the test wrote to the wrong place.
+  - **python → CHECK ✗ (fail-secure + a real finding):** `nono: ... filesystem policy does not cover the
+    executable path required for launch: ...\Python312\python.exe`. nono refused to launch python because the
+    runner profile doesn't cover python's exe path. Not a confinement failure — and a **SEED-004 design
+    requirement**: an engine-agnostic daemon must grant/cover each engine's executable path.
+- 2026-06-13: **v2 fix** — switched all writes to ABSOLUTE paths (no CWD dependence), and added
+  `--allow <exe-dir>` for engines outside the default-covered system paths (python). Recompiled clean.
+  Re-run PENDING for a clean all-engines verdict.
+
+## Findings (so far)
+
+1. **Engine-neutral confinement works** — cmd confined identically to the proven claude/cmd path, via one
+   persistent launcher. The "engine as a variable" claim holds at the launch level.
+2. **Executable-coverage requirement (design):** nono fail-secure refuses to launch an engine whose binary
+   path isn't covered by the policy. The daemon/abstraction (005) must enumerate + cover each engine's exe path
+   (and interpreter, e.g. python.exe). This is part of "what every engine must expose."
+3. **CWD is per-engine** — engines don't uniformly inherit the launcher CWD as their working directory; grants
+   should be expressed as absolute paths, not assumed-relative-to-CWD.
 
 ## Results
 
-_Pending operator run. Paste the `[SPIKE-003]` lines. VALIDATED if every engine is `CONFINED ✓`; then reassess
-004 (persistent token/job + multi-tenant AI_AGENT marker/IPC) and 005 (engine-agnostic abstraction via the
-nono-py binding)._
+_v2 re-run PENDING. VALIDATED if every engine is `CONFINED ✓` with absolute paths + exe-dir coverage; then
+reassess 004 (persistent token/job + multi-tenant AI_AGENT marker/IPC) and 005 (engine-agnostic abstraction +
+the executable-coverage contract, via the nono-py binding)._
