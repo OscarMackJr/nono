@@ -334,6 +334,39 @@ never lands → report which case.
 
 Result: ____  Notes: ____
 
+### A6-4 (DECISIVE — is CLM real on the genuine hook path?). Resolves the A6-1=FullLanguage contradiction.
+
+A6-1 (direct `nono run -- powershell.exe`) returned **`FullLanguage`**, which contradicts the CLM
+premise behind R-A6. This check measures the SAME thing through the **real Claude Code hook path**
+(Bash tool → hook rewrite → `nono run` → confined AppContainer shell) — the exact context where the
+original "CLM" was reported.
+
+**How to run — you do NOT wrap claude in `nono run`.** In the sandbox-the-tools model, `claude` runs
+unsandboxed at Medium-IL and the PreToolUse hook confines each *tool call*:
+
+1. Ensure the nono PreToolUse hook is active (the `CLAUDE_CONFIG_DIR` deployment), `NONO_EXE` → the
+   rebuilt dev `nono.exe`.
+2. Launch `claude` (NOT `nono run -- claude`) from a project dir WITHOUT a `.claude` subdir.
+3. In the session, ask Claude to run each line below **with the Bash tool** (e.g. prompt:
+   *"Run this with the Bash tool: `$ExecutionContext.SessionState.LanguageMode`"*). The hook rewrites
+   the Bash call into the confined shell, so the line executes on the real path.
+
+```
+$ExecutionContext.SessionState.LanguageMode
+[System.IO.File]::WriteAllText("$PWD\dotnet_probe.txt","hi"); Test-Path "$PWD\dotnet_probe.txt"
+```
+
+**Interpretation:**
+- **`FullLanguage` + `True`** → CLM never applied on the hook path either; the old `[System.IO.File]`
+  payloads would have worked. R-A6's CLM premise is **falsified** — the byte vehicle is harmless but
+  should be reframed (BOM-free hardening) or reverted; reopen `confined-write-clm-blocked` and find
+  what (if anything) actually failed originally (likely a malformed-base64 `FormatException` the
+  nested session misread as CLM).
+- **`ConstrainedLanguage` / write fails** → CLM is real on the hook path (but not the direct A6-1
+  path) — itself a finding worth chasing — and R-A6 **stands**.
+
+Result: ____  Notes: ____
+
 ---
 
 ## Sign-off
@@ -345,8 +378,10 @@ Result: ____  Notes: ____
 | B4-3 production ENFORCES | | | |
 | A1-1 wrapper JSON clean + fail-closed | | | |
 | A1-2 Claude Code E2E under NONO_LOG | | | |
-| A6-1 arm forces ConstrainedLanguage | | | |
+| A6-1 LanguageMode on direct path (observed: FullLanguage) | | | |
 | A6-2 confined Write byte-vehicle: byte-faithful, no BOM | | | |
 | A6-3 E2E Write/Edit/MultiEdit land, no BOM, literal | | | |
+| A6-4 DECISIVE: LanguageMode + .NET write on real hook path | | | |
 
-All PASS → the R-B4, R-A1 and R-A6 commits are field-verified; safe to merge `fix/win-confinement-rb4-ra1`.
+R-B4 + R-A1: all their checks PASS → merge-ready independently.
+R-A6: blocked on A6-4 — if the real hook path is FullLanguage, reassess/reframe before merging.
