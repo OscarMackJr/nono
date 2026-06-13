@@ -7,11 +7,58 @@ use std::fs;
 use std::path::Path;
 
 fn main() {
-    // Rebuild if data files change
+    // Rebuild if data files change.
+    //
+    // NOTE: `rerun-if-changed=data/` only tracks the directory entry's own mtime,
+    // not the files nested inside it. Editing a file under data/hooks/ does NOT
+    // update data/'s mtime, so cargo would otherwise keep embedding a STALE copy
+    // (a real hazard: it would re-embed the pre-R-A1 vulnerable hook script).
+    // Declare explicit per-file directives for every file we embed below so any
+    // edit reliably retriggers this build script.
     println!("cargo:rerun-if-changed=data/");
+    println!("cargo:rerun-if-changed=data/policy.json");
+    println!("cargo:rerun-if-changed=data/network-policy.json");
+    println!("cargo:rerun-if-changed=data/hooks/nono-hook.sh");
+    println!("cargo:rerun-if-changed=data/hooks/nono-tool-hook.ps1");
+    println!("cargo:rerun-if-changed=data/nono-profile.schema.json");
 
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR not set");
     let out_path = Path::new(&out_dir);
+
+    // === Bake the compile-time Cargo target root for the dev-build trust gate ===
+    // R-B4 fix: the Windows broker Authenticode self-trust-anchor gate is skipped
+    // ONLY for genuine local Cargo dev builds. The skip must key off a signal an
+    // attacker outside this build cannot forge — NOT a runtime path substring.
+    //
+    // OUT_DIR has the canonical Cargo layout `<target>/<profile>/build/<pkg>-<hash>/out`.
+    // Walking up 4 ancestors yields `<target>` (the Cargo target dir for THIS build,
+    // honoring CARGO_TARGET_DIR overrides). We bake its absolute path into the binary.
+    // At runtime, `is_dev_build_layout` requires the running exe to live UNDER this
+    // exact baked root (component-wise, after canonicalization). An attacker cannot
+    // reproduce the developer machine's absolute target path, and a copied binary at
+    // e.g. `C:\Users\victim\target\release\nono.exe` is NOT under the baked root.
+    //
+    // Production MSI/release binaries are built by the signed pipeline and installed
+    // to `Program Files\nono\` etc. — never under this baked target dir — so the gate
+    // ENFORCES Authenticode there. `cargo test --release` runs test binaries from
+    // `<target>/release/deps/`, which IS under the baked root, so the unsigned dev
+    // broker is correctly skipped (the documented `#[cfg(debug_assertions)]` hazard
+    // is avoided because this is a path-provenance signal, not a build profile flag).
+    match out_path.ancestors().nth(4) {
+        Some(target_root) => {
+            println!(
+                "cargo:rustc-env=NONO_DEV_TARGET_ROOT={}",
+                target_root.display()
+            );
+        }
+        None => {
+            // Fail-closed: if we cannot derive the target root, bake an empty value.
+            // The runtime check treats an empty/missing baked root as "no dev skip",
+            // so the gate is ENFORCED rather than bypassed.
+            println!("cargo:warning=Could not derive Cargo target root from OUT_DIR; broker dev-skip will be disabled");
+            println!("cargo:rustc-env=NONO_DEV_TARGET_ROOT=");
+        }
+    }
 
     // === Embed policy JSON ===
     let policy_path = Path::new("data/policy.json");
