@@ -46,7 +46,12 @@ granularity: standard
   3. The launcher fails SECURE with an actionable message when an engine's executable/interpreter path is not covered by the launch policy — never silent partial confinement (core nono coverage-gate invariant).
   4. The launcher fails SECURE with a clear R-B3 diagnostic when the granted workspace is not owned by the session user (admin-owned dir → no `WRITE_DAC` → confined write would fail opaquely) — the diagnostic names the ownership problem, not a generic deny.
   5. Per-engine fit is documented (launch-and-confine vs hook vs Cursor-WSL-only), and the job-assignment path is hardened against nested-job collisions: spawn suspended, assign to the agent job BEFORE any code runs, fail-secure (terminate) on assign failure, no UI limits on the job.
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 71-01-PLAN.md — windows_interpreters profile field + aider/langchain-python engine profiles (ENG-03)
+- [ ] 71-02-PLAN.md — SC5 named foreign-job (GLE-5) diagnostic + fail-secure assign negative test (P6)
+- [ ] 71-03-PLAN.md — library fail-secure primitives: interpreter coverage gate + path_has_write_owner helper (ENG-02)
+- [ ] 71-04-PLAN.md — CLI integration: --workspace flag, child-CWD/grant, interpreter resolution, R-B3 pre-launch gate (ENG-01, ENG-02)
+- [ ] 71-05-PLAN.md — 71-HUMAN-UAT.md + SC1 real-Win11 Aider end-to-end gate (ENG-01)
 
 ### Phase 72: nono-py Binding + In-Process-Exec Proof
 **Goal**: The engine abstraction is proven in code — a real Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook, exercising both the external-spawn shape and the in-process-self-confine shape — and the abstraction-boundary contract (E1-E5) is written down as a stable boundary other engines implement against. Depends only on Phase 71 launch semantics; independent of the daemon (parallel-capable with Phase 73).
