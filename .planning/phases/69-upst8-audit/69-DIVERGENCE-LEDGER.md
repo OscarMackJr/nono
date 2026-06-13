@@ -40,7 +40,7 @@ macOS top-up."
 `exec_strategy_windows/`, registry, WFP, or any Windows-specific surface. Every overlap-range
 commit (7 of 9) carries a Phase 63 pointer. The 2 tail commits (`db073750`, `52809dda`) carry no
 Phase 63 pointer and no macOS-relevant code — the "macOS un-audited" flag is vacuously satisfied.
-ADR review outcome: **(a) confirm Option A 'continue'** (pending Task 6 fill-in).
+ADR review outcome: **(a) confirm Option A 'continue'** — see ## ADR review.
 
 - Clusters: 4
 - will-sync: 3 | fork-preserve: 0 | won't-sync: 1 | split: 0 (Task 5 re-export scan may flip C4 to split)
@@ -182,7 +182,17 @@ The Task 5 re-export diff-inspect scan confirms the disposition stays will-sync.
 
 ## ADR review
 
-<!-- To be populated in Task 6 (human ADR judgment checkpoint) -->
+**Preamble:** This section verdicts the Phase 33 ADR `docs/architecture/upstream-parity-strategy.md` Option A `continue` (Accepted 2026-05-11; re-confirmed at v2.4, v2.5, v2.6, and v2.8 closes). Phase 69 UPST8 is the 9-commit (drift-scoped; 14 raw commits including merges) `v0.60.0..v0.62.0` evidence base — the smallest UPST cycle yet, smaller than Phase 54's 40-commit set. This ledger verdicts the ADR but does NOT supersede it; the Phase 33 ADR stays Accepted. Per D-07, the expected outcome is to confirm Option A `continue`.
+
+| dimension | verdict | rationale |
+|-----------|---------|-----------|
+| security | M | C2 (deny-by-default network.block + remove implicit credential routes) is additive security hardening; well-mitigated by the C2→C3 cherry-pick ordering constraint. Not a correctness fix, so M not H. |
+| windows | L | 0/4 clusters windows-touch:yes; no Windows-specific divergence; no Phase 70 cross-target clippy work required. |
+| maintenance | L | 9 commits — smallest UPST cycle yet (vs UPST7's 40); 3 low-complexity will-sync clusters; one ordering note. |
+| divergence | L | No new structural fork surface; C1 won't-sync follows the established version-bump pattern; trending toward convergence. |
+| contributor | L | Clean absorption; Phase 70 feeds back via the Phase 40/43 umbrella-PR pattern (project_cross_fork_pr_pattern); no new obstacles. |
+
+**Outcome:** (a) Confirm. Phase 33 ADR Option A 'continue' — the 9-commit evidence base (3 will-sync, 1 won't-sync, 0 windows-touch, security pressure M and well-mitigated, smallest-cycle maintenance cost, no new structural divergence) supports continuing the parity strategy. The C2→C3 ordering constraint is noted but warrants no carve-out. No future-supersede trigger this cycle. Does NOT supersede the Phase 33 ADR.
 
 ## Empirical cross-check
 
