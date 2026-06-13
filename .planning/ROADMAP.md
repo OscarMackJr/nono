@@ -74,8 +74,8 @@ Plans:
   4. Upstream is re-fetched at audit-open and the head SHA + refetch date are recorded.
 **Plans**: 1 plan
 Plans:
-- [ ] 69-01-PLAN.md — UPST8 audit (v0.60.0..v0.62.0 non-macOS divergence ledger; D-01 range correction: SC says v0.61.2 ceiling but audit extends to v0.62.0 = SHA 52809dda)
-**SC divergence note**: D-01 extends the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language should be updated to reflect `v0.62.0` after Phase 69 closes.
+- [x] 69-01-PLAN.md — UPST8 audit (v0.60.0..v0.62.0 non-macOS divergence ledger; D-01 range correction: SC says v0.61.2 ceiling but audit extends to v0.62.0 = SHA 52809dda)
+**SC divergence note**: D-01 extends the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language should be updated to reflect `v0.62.0` after Phase 69 closes. The ROADMAP SC says `v0.60.0..v0.61.2`; the actual audit covers `v0.60.0..v0.62.0`; consider updating REQUIREMENTS.md UPST8-01 acceptance to `v0.62.0`.
 **UI hint**: no
 
 ### Phase 70: UPST8 Cherry-pick Sync
@@ -159,7 +159,7 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 |-------|----------------|--------|-----------|
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
 | 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
-| 69. UPST8 Audit | 0/1 | Planned | - |
+| 69. UPST8 Audit | 1/1 | Complete | 2026-06-13 |
 | 70. UPST8 Cherry-pick Sync | 0/TBD | Not started | - |
 
 ## Future Cycles
