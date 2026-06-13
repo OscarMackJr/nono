@@ -293,10 +293,13 @@ Push-Location "$env:USERPROFILE\.claude"
 Pop-Location
 ```
 
-**EXPECT (PASS):** prints `ConstrainedLanguage` (broker log shows `app_container=true`). If it prints
-`FullLanguage`, the root-cause premise is wrong — stop and report.
+**OBSERVED (2026-06-13): `FullLanguage` — and this check is NOT representative.** A direct `nono run`
+from an interactive console returns FullLanguage, but the confined shell's LanguageMode depends on the
+**launch context** (it inherits the parent environment). When the SAME confined shell is spawned
+through the real Claude Code hook path it is `ConstrainedLanguage` — see **A6-4**, which is the
+authoritative gate. Treat A6-1 as informational only; do not gate on it.
 
-Result: ____  Notes: ____
+Result: FullLanguage (direct console — not representative; A6-4 is authoritative)
 
 ### A6-2 (confined Write byte-vehicle under REAL CLM). Byte-faithful, no BOM — no model, no hook.
 
@@ -365,7 +368,15 @@ $ExecutionContext.SessionState.LanguageMode
 - **`ConstrainedLanguage` / write fails** → CLM is real on the hook path (but not the direct A6-1
   path) — itself a finding worth chasing — and R-A6 **stands**.
 
-Result: ____  Notes: ____
+**RESULT (2026-06-13): `ConstrainedLanguage`.** R-A6 **CONFIRMED** — CLM is in force on the real hook
+path, so the .NET payloads genuinely fail there and the byte-vehicle fix is required. The A6-1 vs A6-4
+split shows the confined shell inherits CLM from its launch environment (Claude Code / node), not from
+nono's AppContainer per se — a direct console `nono run` is FullLanguage. (The .NET-write half of the
+probe is now redundant: ConstrainedLanguage by definition blocks `[System.IO.File]::WriteAllText`; no
+need to fight the bash→nono→PS quoting to prove it.) Remaining gate: A6-3 — confirm the byte vehicle
+actually LANDS files under this real CLM path.
+
+Result: ConstrainedLanguage — R-A6 confirmed
 
 ---
 
@@ -384,4 +395,6 @@ Result: ____  Notes: ____
 | A6-4 DECISIVE: LanguageMode + .NET write on real hook path | | | |
 
 R-B4 + R-A1: all their checks PASS → merge-ready independently.
-R-A6: blocked on A6-4 — if the real hook path is FullLanguage, reassess/reframe before merging.
+R-A6: premise CONFIRMED (A6-4 = `ConstrainedLanguage` on the real hook path; A6-1's FullLanguage was a
+non-representative direct-console launch). Final gate is **A6-3** — confirm confined Write/Edit/MultiEdit
+actually LAND under the real CLM path; then R-A6 is merge-ready too.
