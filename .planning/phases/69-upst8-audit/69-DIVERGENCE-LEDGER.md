@@ -125,7 +125,8 @@ code). Security-relevant; absorbing keeps the fork current on cross-platform sec
 **Phase 63 pointer:** Both commits appear in Phase 63 Cluster C18 (network-policy security +
 deny-by-default, cross-platform UPST8, disposition: will-sync). Phase 63 already diff-inspected
 `bd4c469a` re-export surface: `strict_filter: bool` field addition is intra-cluster; clean.
-**Cross-cluster re-export check:** Placeholder — to be filled in Task 5.
+**Cross-cluster re-export check:** Diff-inspected lead commit bd4c469a (git show bd4c469a) for pub use / pub mod / extern crate / pub(crate). No re-export deps. New pub symbols (strict_filter:bool in ProxyConfig, new_strict() on HostFilter, network_block_requested:bool in PreparedSandbox) are all intra-cluster additions. HOWEVER full diff-inspect surfaced a FIELD-EXISTENCE cross-cluster dep: bd4c469a's PreparedSandbox struct literal references suppressed_system_service_operations, a field introduced by cc21229f (C3). C2 compiles only if C3 is applied first.
+**Prerequisite enumeration:** C2 (bd4c469a) requires C3 (cc21229f) absorbed first — cherry-pick ordering constraint for Phase 70 (mirrors Phase 54 C5->C3 function-call dep). NOT a re-export-isolation failure; disposition stays will-sync (no split flip).
 
 | sha | subject | upstream-tag | categories | files-changed | windows-touch |
 |-----|---------|--------------|------------|---------------|---------------|
@@ -149,7 +150,7 @@ and `sandbox_state.rs`; purely cross-platform profile resolution logic. Neither 
 macOS-specific code (no `sandbox/macos.rs`, no `#[cfg(target_os = "macos")]` blocks added).
 **Phase 63 pointer:** Both commits appear in Phase 63 Cluster C19 (UPST8 new profile/diagnostic
 features, cross-platform, disposition: will-sync).
-**Cross-cluster re-export check:** Placeholder — to be filled in Task 5.
+**Cross-cluster re-export check:** Clean — diff-inspected lead commit cc21229f (git show cc21229f) for pub use / pub mod / extern crate / pub(crate); the new pub(crate) suppressed_system_service_operations field is intra-cluster; no cross-cluster deps detected. Secondary commit 20cc5df9 also clean (no new exported symbols).
 
 | sha | subject | upstream-tag | categories | files-changed | windows-touch |
 |-----|---------|--------------|------------|---------------|---------------|
@@ -170,8 +171,8 @@ adds `--force` recovery behavior to the `nono pull` command, touching `package_c
 `profile_runtime.rs`, and `wiring.rs` — all cross-platform surfaces. Confirmed no macOS-relevant
 code: `git show db073750 | grep -i macos` returns nothing. Therefore the "macOS un-audited —
 needs a future macOS top-up" flag is vacuously satisfied (zero macOS-relevant lines in this commit).
-The Task 5 re-export diff-inspect scan may flip this to `split` if cross-cluster deps are detected.
-**Cross-cluster re-export check:** Placeholder — to be filled in Task 5.
+The Task 5 re-export diff-inspect scan confirms the disposition stays will-sync.
+**Cross-cluster re-export check:** Clean — diff-inspected lead commit db073750 (git show db073750) for pub use / pub mod / extern crate / pub(crate); no new exported symbols across package_cmd.rs/profile_runtime.rs/wiring.rs; no reference to C2/C3 symbols; no cross-cluster deps detected. Disposition stays will-sync (NOT flipped to split).
 
 | sha | subject | upstream-tag | categories | files-changed | windows-touch |
 |-----|---------|--------------|------------|---------------|---------------|
@@ -185,8 +186,48 @@ The Task 5 re-export diff-inspect scan may flip this to `split` if cross-cluster
 
 ## Empirical cross-check
 
-<!-- To be populated in Task 5 (cross-cluster re-export diff-inspect checkpoint) -->
+Spot-checked 6 fork-shared files against `git log 9a05a4ff..52809dda -- <file>` to confirm drift-tool coverage. All in-range non-merge commits are accounted for.
+
+### File: crates/nono-proxy/src/filter.rs
+
+- **Upstream log result (9a05a4ff..52809dda):** 1 commit: bd4c469a
+- **Cluster mapping:** C2 (network-policy security hardening)
+- **Drift coverage verdict:** PASS — commit bd4c469a present in C2 commit-row table
+
+### File: crates/nono-proxy/src/server.rs
+
+- **Upstream log result (9a05a4ff..52809dda):** 1 commit: bd4c469a
+- **Cluster mapping:** C2 (network-policy security hardening)
+- **Drift coverage verdict:** PASS — commit bd4c469a present in C2 commit-row table
+
+### File: crates/nono-cli/src/policy.rs
+
+- **Upstream log result (9a05a4ff..52809dda):** 1 commit: cc21229f
+- **Cluster mapping:** C3 (profile/diagnostic feature additions)
+- **Drift coverage verdict:** PASS — commit cc21229f present in C3 commit-row table
+
+### File: crates/nono/src/net_filter.rs
+
+- **Upstream log result (9a05a4ff..52809dda):** 1 commit: bd4c469a
+- **Cluster mapping:** C2 (network-policy security hardening)
+- **Drift coverage verdict:** PASS — commit bd4c469a present in C2 commit-row table
+
+### File: crates/nono-cli/src/network_policy.rs
+
+- **Upstream log result (9a05a4ff..52809dda):** 1 commit: 0fb59375
+- **Cluster mapping:** C2 (network-policy security hardening)
+- **Drift coverage verdict:** PASS — commit 0fb59375 present in C2 commit-row table
+
+### File: crates/nono-cli/src/sandbox_prepare.rs
+
+- **Upstream log result (9a05a4ff..52809dda):** 2 commits: bd4c469a, cc21229f
+- **Cluster mapping:** C2 (bd4c469a — deny-by-default PreparedSandbox field), C3 (cc21229f — suppressed_system_service_operations field)
+- **Drift coverage verdict:** PASS — both commits present in their respective cluster commit-row tables
+
+**Summary:** 6 files walked; zero drift-tool gaps; all in-range non-merge commits accounted for. The sandbox_prepare.rs two-commit result also confirms the C2→C3 field-existence ordering dep (bd4c469a references suppressed_system_service_operations, which cc21229f introduces).
 
 ## Cross-cluster re-export deps detected
 
-<!-- To be populated in Task 5 (cross-cluster re-export diff-inspect checkpoint) -->
+No `pub use` / `pub mod` / `extern crate` re-export deps detected across the 3 will-sync clusters scanned (C2, C3, C4). The Phase 43 `8b888a1c` cross-cluster-isolation trap does not recur in this range.
+
+**One field-existence cross-cluster dep (surfaced by full diff-inspect, not the pub-use scan):** C2 (`bd4c469a`) → C3 (`cc21229f`) via the `suppressed_system_service_operations` field in `PreparedSandbox`. Cherry-pick ordering constraint: absorb C3 before C2 in Phase 70. Mirrors Phase 54 C5→C3.
