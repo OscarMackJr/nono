@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
 status: executing
-last_updated: "2026-06-13T02:16:49.288Z"
+last_updated: "2026-06-13T02:30:55.611Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 6
-  completed_plans: 4
-  percent: 67
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -26,7 +26,7 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 ## Current Position
 
 Phase: 70 (upst8-cherry-pick-sync) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 Status: Ready to execute
 Last activity: 2026-06-13
 
@@ -78,6 +78,7 @@ Last activity: 2026-06-13
 | D-70-01: UPST8-01 acceptance criteria extended to v0.62.0 upper bound | 70 | Phase 69 DIVERGENCE-LEDGER D-01 found 3 tail commits (v0.61.2..v0.62.0) outside original scope; scope extended |
 | cc21229f adapted inline (collect_ignored_denial_paths absent from fork) | 70 | Upstream helper + SandboxArgs::suppress_save_prompt not yet in fork; inlined using existing canonicalize_suppress_path, cfg-gated on non-Windows |
 | 20cc5df9 sandbox_state.rs conflict: HEAD side taken for domain_endpoint_state_tests | 70 | Fork's Phase 56 module not in upstream; profile_save_runtime.rs registry-ref feature auto-merged cleanly |
+| db073750 D-20 manual replay (C4): execute_with_options deferred, ExecuteOptions added | 70 | Fork's wiring.rs is yaml_merge system; upstream's WriteFile execute system not yet ported (v2.5-FU-3); ExecuteOptions used from install_package for forward-compat API |
 
 ### v2.10 decisions
 
@@ -223,7 +224,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-13T02:16:49.274Z
+**Last session:** 2026-06-13T02:30:55.595Z
 
 **v2.11 roadmap complete (2026-06-11):** Phases 67-70 defined, 8/8 reqs mapped (100% coverage). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Phases 67 (clean-host Win install: DIST-01/02 + TRUST-01/02) and 68 (macOS resl: RESL-MAC-01/02) are independent + host-gated + parallel-safe. Phases 69 (UPST8 audit: UPST8-01) → 70 (UPST8 sync: UPST8-02) are the linear audit-then-sync pair, cadence-ordered after Phase 55.
 
