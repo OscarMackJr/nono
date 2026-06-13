@@ -107,6 +107,10 @@ pub(crate) struct ProxyLaunchOptions {
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
     pub(crate) allow_launch_services_active: bool,
+    /// True when the user requested `network.block` or `--block-net`.
+    /// Propagated to `ProxyConfig.strict_filter` so the filter denies
+    /// unlisted hosts instead of falling back to allow-all.
+    pub(crate) network_block: bool,
 }
 
 /// Optional resource caps applied to the sandboxed agent tree.

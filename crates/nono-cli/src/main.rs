@@ -296,6 +296,7 @@ mod tests {
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
+            network_block_requested: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.
@@ -353,6 +354,7 @@ mod tests {
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
+            network_block_requested: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.
