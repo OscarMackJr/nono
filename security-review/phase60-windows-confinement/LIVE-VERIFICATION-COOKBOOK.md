@@ -325,20 +325,31 @@ in-process Write/Edit/MultiEdit tools; the hook denies each and Claude auto-retr
 Bash command; then you verify the resulting file from a **separate, normal** PowerShell console.
 
 **Setup (once).** Hook active (the `CLAUDE_CONFIG_DIR` deployment), `NONO_EXE` → the rebuilt
-`target\debug\nono.exe`. Launch `claude` (NOT `nono run -- claude`) from a granted project dir that has
-no `.claude` subdir:
+`target\debug\nono.exe`. The project dir MUST be **owned by the session user** — if not, the
+mandatory-label/DACL grant is skipped (finding R-B3) and confined writes there are denied. Create it
+fresh as yourself, with no `.claude` subdir (else the self-disable guard fires):
 ```powershell
-$env:NONO_EXE        = "C:\Users\OMack\Nono\target\debug\nono.exe"
+$env:NONO_EXE          = "C:\Users\OMack\Nono\target\debug\nono.exe"
 $env:CLAUDE_CONFIG_DIR = "C:\temp\nono-uat-cfg"   # minimal settings.json with ONLY the nono hook
-cd C:\Users\OMack\nonoUAT                          # the granted CWD; files land here
+mkdir C:\Users\OMack\a6test -Force | Out-Null      # fresh + user-owned
+(Get-Acl C:\Users\OMack\a6test).Owner              # MUST be your user, else confined writes are denied (R-B3)
+cd C:\Users\OMack\a6test                            # the granted CWD; files land here
 claude
 ```
 
-#### A6-3a — Write (the headline check)
+> **Two non-defects to expect (don't chase them as R-A6 failures):**
+> 1. **`é`/non-ASCII mojibake is an input-layer issue, not the hook.** Typing `é` into a Windows
+>    terminal can double-decode its UTF-8 bytes `C3 A9` as CP437 → `├⌐` *before Claude sees it*; the
+>    hook then faithfully encodes the corrupted content. The hook is byte-faithful (verified: clean
+>    `héllo` in → `104,195,169,108,108,111` out). Keep A6-3a ASCII so this can't masquerade as a bug.
+> 2. **Confined writes are denied in a dir the session user doesn't own** (R-B3). Use the user-owned
+>    `a6test` above; `~/.claude` is user-owned too but can't be the project dir (self-disable guard).
+
+#### A6-3a — Write (the headline check; ASCII content)
 
 In the Claude session, prompt verbatim:
 
-> Use the Write tool to create `a6_write.txt` with exactly this content and nothing else: héllo
+> Use the Write tool to create `a6_write.txt` with exactly this content and nothing else: hello world
 
 **Expected in-session:** the Write tool is **denied** with a byte-vehicle `additionalContext`
 (`$bytes = [byte[]]@(...); Set-Content … -Encoding Byte`), and Claude **auto-retries it as a Bash call**
@@ -346,10 +357,13 @@ that exits 0. (No manual PowerShell — the point is to exercise the real hook.)
 
 **Verify from a SEPARATE normal PowerShell console** (not inside the sandbox):
 ```powershell
-Format-Hex C:\Users\OMack\nonoUAT\a6_write.txt
+Format-Hex C:\Users\OMack\a6test\a6_write.txt
 ```
-**EXPECT (PASS):** bytes `68 C3 A9 6C 6C 6F` (= `héllo`; `é` = `C3 A9`), length **6**, **no leading `EF BB BF`**.
-**FAIL:** a leading `EF BB BF` BOM, a mangled `é` (e.g. `3F` `?` or `E9` alone), or the file missing.
+**EXPECT (PASS):** bytes `68 65 6C 6C 6F 20 77 6F 72 6C 64` (= `hello world`), length **11**, **no leading `EF BB BF`**.
+**FAIL:** a leading `EF BB BF` BOM, or the file missing.
+
+(Non-ASCII byte-faithfulness is already proven separately — A6-2 wrote `68 69 C3 A9`, and the hook emits
+`content.as_bytes()` verbatim — so this check stays ASCII to avoid the terminal `é`-mojibake gremlin.)
 
 Result: ____  Notes: ____
 
@@ -361,8 +375,8 @@ In the same session:
 
 Verify (separate console):
 ```powershell
-Get-Content -Raw C:\Users\OMack\nonoUAT\a6_edit.txt   # EXPECT: alpha DELTA gamma
-Format-Hex      C:\Users\OMack\nonoUAT\a6_edit.txt     # EXPECT: starts 61 6C 70 68 61 ... NO leading EF BB BF
+Get-Content -Raw C:\Users\OMack\a6test\a6_edit.txt   # EXPECT: alpha DELTA gamma
+Format-Hex      C:\Users\OMack\a6test\a6_edit.txt     # EXPECT: starts 61 6C 70 68 61 ... NO leading EF BB BF
 ```
 **EXPECT (PASS):** content is `alpha DELTA gamma`, no BOM at head or mid-file.
 
@@ -375,8 +389,8 @@ Result: ____  Notes: ____
 
 Verify (separate console):
 ```powershell
-Get-Content -Raw C:\Users\OMack\nonoUAT\a6_multi.txt   # EXPECT: OK tail
-Format-Hex      C:\Users\OMack\nonoUAT\a6_multi.txt     # EXPECT: 4F 4B 20 74 61 69 6C, NO EF BB BF
+Get-Content -Raw C:\Users\OMack\a6test\a6_multi.txt   # EXPECT: OK tail
+Format-Hex      C:\Users\OMack\a6test\a6_multi.txt     # EXPECT: 4F 4B 20 74 61 69 6C, NO EF BB BF
 ```
 **EXPECT (PASS):** content is exactly `OK tail` — proving `foo.bar(1+2)` was matched **literally** (not as
 a regex: a regex would treat `.`, `()`, `+` specially) and the deletion removed `remove_me ` exactly. No BOM.
