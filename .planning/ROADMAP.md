@@ -1,8 +1,8 @@
 ---
-milestone: v2.11
-milestone_name: Clean-Host Distribution Cleanup + UPST8
+milestone: v2.12
+milestone_name: AI Agent Abstraction
 status: active
-created: 2026-06-11
+created: 2026-06-13
 last_updated: 2026-06-13
 granularity: standard
 ---
@@ -23,100 +23,89 @@ granularity: standard
 - ✅ **v2.8 UPST7 + v2.7 Drain & Release** — Phases 53-59 (shipped 2026-06-06; tags `v2.8`+`v0.57.5`) — see [`milestones/v2.8-ROADMAP.md`](milestones/v2.8-ROADMAP.md)
 - ✅ **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61, 62 (published as `v0.62.2` 2026-06-06) — see [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md)
 - ✅ **v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity** — Phases 63-66 (shipped 2026-06-11; tag `v2.10`) — see [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md)
-- 🚧 **v2.11 Clean-Host Distribution Cleanup + UPST8** — Phases 67-70 (active; started 2026-06-11)
+- ✅ **v2.11 Clean-Host Distribution Cleanup + UPST8** — Phases 67-70 (shipped 2026-06-13) — see [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md)
+- 🚧 **v2.12 AI Agent Abstraction** — Phases 71-75 (active; started 2026-06-13)
 
 ## Phases
 
-- [ ] **Phase 67: Clean-Host Windows Install** — The machine MSI installs to completion on a fresh Win11 host (VC++ runtime handled, service-start non-fatal) and the supervised/broker path works there via an interim, auditable cert-trust helper + docs.
-- [ ] **Phase 68: macOS Resource-Limit Enforcement Fix** — `nono run --timeout` and `--max-processes` actually fire on a real macOS host (supervisor watchdog + `RLIMIT_NPROC`), re-validated with `NONO_RESL_HOST_VALIDATED=1`.
-- [x] **Phase 69: UPST8 Audit** — A DIVERGENCE-LEDGER audits the non-macOS slice of upstream `v0.60.0..v0.61.2` with per-commit dispositions, `windows-touch` column, and ADR-cadence review.
-- [x] **Phase 70: UPST8 Cherry-pick Sync** — The will-sync UPST8 commits are absorbed with D-19 trailers, Windows-only-files invariant preserved, cross-target clippy + full suite green.
+- [ ] **Phase 71: Engine-Agnostic Launch Productionization** — A user can confine *any* non-Claude AI agent engine end-to-end via per-engine launch profiles through one engine-neutral `nono run` path, with fail-secure exe/interpreter coverage + R-B3 workspace-ownership diagnostics.
+- [ ] **Phase 72: nono-py Binding + In-Process-Exec Proof** — A Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook — both `confined_run` (spawn-confined) and `confine` (self-confine at startup) — and the engine-abstraction contract is documented as a stable boundary.
+- [ ] **Phase 73: AI_AGENT Marker** — Each confined agent carries an unforgeable `AI_AGENT` identity bound to its daemon-minted token SID (named job objects, if used, are kill-group/enumeration only — never authorization).
+- [ ] **Phase 74: Persistent Multi-Tenant Daemon** — A least-privilege persistent daemon launches/confines multiple concurrent agents over one tenant-isolated capability pipe (server-side `ImpersonateNamedPipeClient` + per-tenant SID), fresh token+job per agent, deterministically reaped, split from the elevated WFP service. *(riskiest — former spike 004)*
+- [ ] **Phase 75: Supplementary Controls + Secondary Engines** — An operator can demote a running agent (post-hoc IL-drop, demote-only); outbound egress is WFP-scoped per agent; and the abstraction is proven across ≥2 engines (Copilot CLI) and ≥2 bindings (`nono-ts` parity with `nono-py`).
 
 ## Phase Details
 
-### Phase 67: Clean-Host Windows Install
-**Goal**: An operator can install the public machine MSI to completion on a fresh Windows 11 host with no manual steps, and run the supervised/broker path there without manual `certmgr` work — the cert-independent half of "make the public release work out-of-the-box."
-**Depends on**: Nothing (independent of Phases 68-70; can run in parallel)
-**Requirements**: DIST-01, DIST-02, TRUST-01, TRUST-02
+### Phase 71: Engine-Agnostic Launch Productionization
+**Goal**: nono can parent-and-confine any covered AI agent engine (starting with Aider + a LangChain-Python profile) through one engine-neutral launch path — the validated spike-003 path promoted to a first-class, de-spiked code path that every later phase consumes. This is the foundation; the daemon, binding, and marker all sit on top of it.
+**Depends on**: Nothing (first phase of v2.12; builds on the existing `exec_strategy_windows/launch.rs` broker arm + `windows_low_il_broker:true`)
+**Requirements**: ENG-01, ENG-02, ENG-03
 **Success Criteria** (what must be TRUE):
-  1. A clean-host machine-MSI install completes (does NOT fail `1603` / `0xC0000135` STATUS_DLL_NOT_FOUND) on a fresh Win11 host with no VC++ x64 runtime pre-installed — the CRT dependency is satisfied structurally (bundled redist / `+crt-static` / declared-and-checked prereq, chosen at plan time).
-  2. A `nono-wfp-service` start failure during install does NOT roll back the product — the install completes and leaves a usable `nono.exe`; the clean-uninstall invariant (no orphaned WFP filters / service registration) is preserved.
-  3. `nono setup --trust-broker` (or equivalent) imports the shipped code-signing cert into LocalMachine `Root` + `TrustedPublisher` so `nono run --profile claude-code` spawns the broker on a clean host with no manual `Import-Certificate`; the helper states what it trusts and why and never silently weakens the D-32-12 gate for an untrusted binary.
-  4. The clean-host trust limitation and the supported interim path are documented (e.g. `docs/cli/development/windows-signing-guide.mdx`), the cert + import step ship with the release, and the doc plainly states public releases use a self-signed POC cert for the supervised path until publicly-trusted signing lands (pointing at the `--trust-broker` helper as the supported path).
-**Host gate**: Clean Windows 11 host (no VC++ runtime, no pre-trusted cert) for the install + broker-spawn UAT. Must use the production-signed MSI, not a dev-layout binary (the broker trust gate only fires from a signed Program-Files install).
+  1. A user runs a non-Claude engine (Aider) confined end-to-end on a real Win11 host through the engine-neutral path: files written inside the granted absolute workspace land; writes outside it are denied (`NO_WRITE_UP`) — and the engine's in-process and subprocess operations are confined transitively (nono is the parent, not a per-tool hook).
+  2. A user can declare a per-engine launch profile (executable + interpreter path(s) like `python.exe`, an ABSOLUTE writable workspace, a network identity) and launch any profiled engine through that single path — engines do NOT inherit the launcher CWD (relative writes must resolve against the declared absolute workspace, per the PowerShell→`C:\` trap).
+  3. The launcher fails SECURE with an actionable message when an engine's executable/interpreter path is not covered by the launch policy — never silent partial confinement (core nono coverage-gate invariant).
+  4. The launcher fails SECURE with a clear R-B3 diagnostic when the granted workspace is not owned by the session user (admin-owned dir → no `WRITE_DAC` → confined write would fail opaquely) — the diagnostic names the ownership problem, not a generic deny.
+  5. Per-engine fit is documented (launch-and-confine vs hook vs Cursor-WSL-only), and the job-assignment path is hardened against nested-job collisions: spawn suspended, assign to the agent job BEFORE any code runs, fail-secure (terminate) on assign failure, no UI limits on the job.
 **Plans**: TBD
-**UI hint**: no
 
-### Phase 68: macOS Resource-Limit Enforcement Fix
-**Goal**: `nono run --timeout` and `--max-processes` deliver real enforcement on a real macOS host — fixing the nono supervisor-watchdog / `setrlimit` bug surfaced as the Phase 65 gate-65-A "A5" finding (REQ-RESL-NIX-03 defect), not merely re-gating the tests.
-**Depends on**: Nothing (independent of Phases 67/69/70; can run in parallel)
-**Requirements**: RESL-MAC-01, RESL-MAC-02
+### Phase 72: nono-py Binding + In-Process-Exec Proof
+**Goal**: The engine abstraction is proven in code — a real Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook, exercising both the external-spawn shape and the in-process-self-confine shape — and the abstraction-boundary contract (E1-E5) is written down as a stable boundary other engines implement against. Depends only on Phase 71 launch semantics; independent of the daemon (parallel-capable with Phase 73).
+**Depends on**: Phase 71 (consumes the productionized launch semantics)
+**Requirements**: ABI-01, ABI-02
 **Success Criteria** (what must be TRUE):
-  1. `nono run --timeout <D>` SIGKILLs the child at the deadline on a real macOS host — the supervisor wall-clock watchdog fires (it is nono's own cross-platform code; non-firing is a nono bug, fixed here).
-  2. `nono run --max-processes <N>` makes the child's `fork()` fail (EAGAIN) past the cap on a real macOS host, via `setrlimit(RLIMIT_NPROC)` applied before `exec` (accounting for macOS `RLIMIT_NPROC` counting all per-UID processes — may need a different bounding strategy than Linux `pids.max`).
-  3. `macos_timeout_kills_at_deadline` and `macos_max_processes_blocks_on_rlimit_nproc` both PASS with `NONO_RESL_HOST_VALIDATED=1` on a real macOS host.
-  4. The fix touches cfg-gated Unix code, so cross-target clippy (Linux + macOS) is verified per `.planning/templates/cross-target-verify-checklist.md` and the macOS CI build leg stays green.
-**Host gate**: Real macOS host for the `NONO_RESL_HOST_VALIDATED=1` enforcement re-validation (CI runners can't validate — they hang; the two tests stay env-gated off the runner).
-**Plans**: 2 plans
-Plans:
-- [x] 68-01-PLAN.md -- macOS resl enforcement fix (setpgid + RLIMIT_NPROC): both Direct and Supervised paths, uid_process_count helper, host UAT + cross-target CI deferred
-- [x] 68-02-PLAN.md -- D1/D2/D3 three-defect fix: parent-setpgid race + SO_RCVTIMEO platform-gate + RLIMIT_AS downgrade
-**UI hint**: no
+  1. A Python/LangChain agent is confined via `confined_run(exe, args, allow, profile)` (Shape A — spawn a confined child, identical to spike 003) with NO Claude hook in the loop, and writes outside the granted workspace are denied.
+  2. The same agent can self-confine via an in-process `confine(caps)` entrypoint (Shape B — `Sandbox::apply` on the CURRENT process at startup) so its in-process `exec()` tools are bounded: a LangChain `PythonREPLTool` `exec()` write outside the workspace is denied, while a write inside is allowed.
+  3. Shape B's soundness boundary is enforced and documented: `confine()` must be called at process startup BEFORE any privileged handle is opened, and the binding docs state the agent must call it first.
+  4. The internal `nono` pin in `nono-py` is bumped from `0.57.0` to `0.62.x` (pyo3 0.28 kept; no napi/pyo3 major migration) and the binding builds + tests green.
+  5. The engine-abstraction contract (E1: executable/interpreter path; E2: an ownable launch command; E3: an absolute workspace grant; E4: a network identity; E5: an optional pre-exec interception point) is documented as a stable boundary that other engines implement against.
+**Plans**: TBD
 
-### Phase 69: UPST8 Audit
-**Goal**: A DIVERGENCE-LEDGER inventories the non-macOS slice of upstream `always-further/nono` `v0.60.0..v0.61.2` so the will-sync set is known before any cherry-pick — mirroring the Phase 54 audit shape.
-**Depends on**: Phase 55 (UPST7 cherry-pick wave closed — the cadence rule preserves linear ordering; independent of Phases 67/68)
-**Requirements**: UPST8-01
+### Phase 73: AI_AGENT Marker
+**Goal**: Every confined agent carries an unforgeable `AI_AGENT` identity that a non-agent process cannot claim and a confined agent cannot shed — the authorization signal the multi-tenant daemon will key on. Depends only on Phase 71; independent of Phase 72 (parallel-capable). The daemon prerequisite.
+**Depends on**: Phase 71 (the marker is established at the productionized launch's spawn-time)
+**Requirements**: MARK-01
 **Success Criteria** (what must be TRUE):
-  1. `DIVERGENCE-LEDGER.md` audits `v0.60.0..v0.61.2` scoped to the non-macOS surface (the macOS slice was absorbed in v2.10), inventorying every relevant commit with a per-commit disposition (will-sync / fork-preserve / won't-sync / split).
-  2. The ledger includes a `windows-touch` column and an ADR-cadence review per the Phase 33 Option A `continue` rule (does not silently supersede the Phase 33 ADR).
-  3. A diff-inspect note records the re-export / cross-cluster cross-check per the `feedback_cluster_isolation_invalid` lesson (don't trust `--name-only` isolation).
-  4. Upstream is re-fetched at audit-open and the head SHA + refetch date are recorded.
-**Plans**: 1 plan
-Plans:
-- [x] 69-01-PLAN.md — UPST8 audit (v0.60.0..v0.62.0 non-macOS divergence ledger; D-01 range correction: SC says v0.61.2 ceiling but audit extends to v0.62.0 = SHA 52809dda)
-**SC divergence note (D-01, amended by D-70-01)**: D-01 extended the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language has been updated to reflect `v0.62.0` (see D-70-01 in Plan 70-01). The ROADMAP Phase 69 SC originally said `v0.60.0..v0.61.2`; the actual audit covered `v0.60.0..v0.62.0`; REQUIREMENTS.md UPST8-01 acceptance now references `v0.62.0`.
-**UI hint**: no
+  1. A launched agent is marked with an unforgeable identity bound to its spawn-time token SID (minted by the launcher/daemon), and this SID — NOT a job name, env var, or argv — is what authorization keys on.
+  2. A non-agent process (one the launcher did not spawn) cannot acquire the `AI_AGENT` identity: it cannot mint or impersonate the token SID, and opening the named job by name does not confer the identity.
+  3. A confined agent cannot shed the marker — job breakaway is denied (`JOB_OBJECT_LIMIT_BREAKAWAY_OK` NOT set / breakaway refused) and the job object is ACL'd daemon-only.
+  4. Given an arbitrary PID, the system correctly classifies it as `AI_AGENT` or not (`IsProcessInJob` / `QueryInformationJobObject` for enumeration + the token-SID check for authorization); the named job is used for kill-group / descendant capture / resource caps only.
+  5. Adopted (not-launched) agents are explicitly handled as best-effort / demote-only (the marker is sound only for launcher-spawned agents — adoption is documented as a weaker guarantee).
+**Plans**: TBD
 
-### Phase 70: UPST8 Cherry-pick Sync
-**Goal**: The will-sync UPST8 commits land on fork `main` with the fork's invariants preserved and the workspace green — mirroring the Phase 55 cherry-pick-wave shape.
-**Depends on**: Phase 69 (audit dispositions drive the cherry-pick set)
-**Requirements**: UPST8-02
+### Phase 74: Persistent Multi-Tenant Daemon
+**Goal**: A persistent, least-privilege local daemon launches and confines multiple concurrent agents over one tenant-isolated capability pipe, with correct per-agent token/job lifetime in a process that lives for days — the marquee (and riskiest) v2.12 capability. This is launch-and-confine (Phase 71) + marker (Phase 73) + a multi-client pipe + the genuinely unspiked token/job-reuse risk, isolated inside this phase. It MUST NOT begin until Phase 71 is a gated, working single-launch code path and Phase 73 exists — that ordering IS the quality gate.
+**Depends on**: Phase 71 (working single-launch path — hard gate) AND Phase 73 (marker)
+**Requirements**: DMON-01, DMON-02, DMON-03
 **Success Criteria** (what must be TRUE):
-  1. The will-sync upstream commits (C3: cc21229f + 20cc5df9; C4: db073750; C2: 0fb59375 + bd4c469a) are cherry-picked with verbatim D-19 `Upstream-commit:` trailer blocks (or D-20 `Upstream-replayed-from:` where direct cherry-pick conflicts dominate); actual range `v0.60.0..v0.62.0` per D-70-01 (SC amended from v0.61.2 to v0.62.0 per 69-DIVERGENCE-LEDGER.md D-01; +3 tail commits absorbed in Phase 70).
-  2. The Windows-only-files invariant holds (no `*_windows.rs` / `exec_strategy_windows/` drift from upstream) and the fork-divergence catalog is preserved (RouteStore/CredentialStore decoupling, validate_path_within, hooks.rs retention).
-  3. Cross-target clippy (Linux + macOS) is verified per `.planning/templates/cross-target-verify-checklist.md` (VERIFIED or PARTIAL with explicit CI deferral — never silently skipped).
-  4. The full workspace test suite passes post-sync with no new green->red transitions vs plan base SHA `6667177e`.
-**Plans**: 3 plans
-Plans:
-- [x] 70-01-PROFILE-DIAGNOSTIC-FEATURES-PLAN.md — D-70-01 REQ/SC amendment (v0.62.0 upper bound) + C3 cherry-picks (cc21229f + 20cc5df9): diagnostics.suppress_system_services profile option + registry-ref-in-extends; establishes PreparedSandbox.suppressed_system_service_operations prerequisite for Plan 70-03
-- [x] 70-02-NONO-PULL-FORCE-RECOVERY-PLAN.md — C4 cherry-pick (db073750): nono pull --force metadata recovery; surface-disjoint from C3/C2; Wave 1 parallel with 70-01
-- [x] 70-03-NETWORK-POLICY-SECURITY-PLAN.md — C2 cherry-picks (0fb59375 + bd4c469a): remove implicit credential routes from embedded profiles + deny-by-default under network.block; depends on 70-01 (C3 prerequisite field); substantive threat model for the network-deny + credential-injection posture
-**UI hint**: no
+  1. The daemon launches and confines multiple concurrent agents, each with a FRESH confining token + a FRESH job object (no reuse across tenants — reuse would collapse isolation: B inheriting A's restricting SID / workspace relabel / WFP scope); two concurrent confined agents are each served independently over one persistent pipe, each scoped to its own SID.
+  2. The capability pipe ISOLATES tenants: the daemon authenticates each client server-side (`ImpersonateNamedPipeClient` + `GetTokenInformation` + per-tenant SID match / per-tenant SDDL pipe instances), treats any `agent_id` in the wire frame as an untrusted routing hint only, and a cross-tenant request (tenant B asking for tenant A's grants) is DENIED — proven with a negative test.
+  3. Agents are deterministically reaped on exit (wait on job completion / process handle; every per-agent resource tied to one owning struct with a `Drop` that closes all handles): running N agents over time returns to baseline handle/job count — proven with a 100-agent launch/exit handle-count-returns-to-baseline test (no leak).
+  4. The daemon runs at LEAST privilege (USER, not LocalSystem) and is SPLIT from the elevated `nono-wfp-service`, so an escaped agent cannot pivot to SYSTEM or to other tenants; the pipe is query-only and never expands a running agent's capabilities (no escape hatch). The privilege model is recorded as an ADR written BEFORE the service host is coded.
+  5. The daemon is modeled on the proven `nono-wfp-service.rs` shape (SCM dispatch, Event Log, control pipe, non-Windows stub, MSI registration, non-fatal start) and reuses the framed JSON `SupervisorMessage` wire protocol (extended with a tenant id ONLY if `session_id` proves insufficient — no net-new wire protocol).
+**Research flag**: Plan this phase with `--research-phase 74`. Two mechanisms are unspiked / net-new: (a) token/job REUSE-vs-fresh across many tenants (the explicitly unspiked part of spike 003/004 — the milestone's highest-risk unknown; scope a spike INSIDE the phase gated on fresh-token isolation + deterministic reap + cross-tenant denial); (b) whether server-side `ImpersonateNamedPipeClient` (NOT currently in `socket_windows.rs` — it verifies the *server* PID from the client side today) composes with the existing Low-IL/AppContainer cap-pipe SDDL DACL handshake. Also re-assert: AppContainer per-agent SID needs `CreateAppContainerProfile` (not derive-only, else `CreateProcessW` `ERROR_FILE_NOT_FOUND`); preserve `SystemRoot`/`windir`/`SystemDrive` env baseline (else CLR `0xFFFF0000`).
+**Plans**: TBD
+
+### Phase 75: Supplementary Controls + Secondary Engines
+**Goal**: Round out the milestone with the supplementary (never-the-boundary) controls and the second-engine/second-binding parity that proves the abstraction generalizes — all low-cost adds once the launch-time default (Phases 71-74) is proven. Demote must FOLLOW a proven launch-time default; it is an incident-response lever, not a confinement model.
+**Depends on**: Phase 74 (demote is a daemon verb; WFP-per-agent keys on the daemon's per-tenant identity) — and Phase 72 (nono-ts parity mirrors the nono-py binding shape)
+**Requirements**: SUPP-01, SUPP-02, SUPP-03
+**Success Criteria** (what must be TRUE):
+  1. An operator can demote a running/misbehaving agent on the fly (post-hoc token IL-drop) as a daemon "demote tenant" verb, with the leak/soundness limits documented (spike-002 finding: this is demote-only, explicitly NOT a standalone confinement boundary — never the "detect-and-confine-as-primary" anti-feature).
+  2. Outbound network egress is scoped PER confined agent — WFP filtering keyed to each agent's identity (E4 SID per tenant) via the existing elevated `nono-wfp-service` — so each agent's network policy is enforced independently (one agent's allowed domain does not leak to another).
+  3. GitHub Copilot CLI ships as a second non-Claude engine profile (a second `node.exe` engine), confined through the same engine-neutral launch path proven in Phase 71.
+  4. The `nono-ts` (Node) binding reaches parity with `nono-py`: both `confinedRun` (spawn-confined) and `confine` (self-confine) exist, with the internal `nono` pin bumped `0.33.0` → `0.62.x` (napi 2 kept — no napi 3 migration).
+  5. The abstraction is demonstrably proven across ≥2 engines (Aider + Copilot CLI) and ≥2 bindings (`nono-py` + `nono-ts`) — closing the "engine is a variable" claim in code.
+**Plans**: TBD
 
 <details>
-<summary>✅ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59) — SHIPPED 2026-06-06</summary>
+<summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>
 
-- [x] Phase 53: Release & Drain (3/4) — completed 2026-05-29 (shipped v0.57.5)
-- [x] Phase 54: UPST7 Audit (1/1) — completed 2026-06-04
-- [x] Phase 55: UPST7 Cherry-pick Wave (7/7) — completed 2026-06-05
-- [x] Phase 56: Fine-grained Network Filtering (4/4) — completed 2026-06-05
-- [x] Phase 57: Bitwarden Credential Source (1/1) — completed 2026-06-05
-- [x] Phase 58: Session Lifecycle Hooks (3/3) — completed 2026-06-06
-- [x] Phase 59: Supervisor IPC Robustness (3/3) — completed 2026-06-06
+- [ ] Phase 67: Clean-Host Windows Install (DIST-01/02, TRUST-01/02) — host-gated UAT pending (clean Win11 host)
+- [x] Phase 68: macOS Resource-Limit Enforcement Fix (2/2) — completed 2026-06-12
+- [x] Phase 69: UPST8 Audit (1/1) — completed 2026-06-13
+- [x] Phase 70: UPST8 Cherry-pick Sync (3/3) — completed 2026-06-13
 
-Audit: `tech_debt`, 10/10 reqs satisfied, 0 blockers. Full detail: [`milestones/v2.8-ROADMAP.md`](milestones/v2.8-ROADMAP.md).
-
-</details>
-
-<details>
-<summary>✅ v2.9 Windows Sandbox-the-Tools — Confined Coding Loop (Phases 60-62) — PUBLISHED as v0.62.2 2026-06-06</summary>
-
-- [x] Phase 60: Confined Coding Loop (3/3) — completed 2026-05-29
-- [x] Phase 61: Ship/Release v2.9 (4/4) — completed 2026-06-06 (published v0.62.2)
-- [x] Phase 62: WFP kernel network enforcement — Windows supervised (13/13) — completed 2026-06-03
-
-Separate initiative from UPST7 (builds on merged PR #4). The v0.62.0/v0.62.1 release attempts failed on two latent cfg-gated cross-target compile errors (E0716 + edition-2024 let-chain), fixed in `4de294e8`+`7bb7c7e3` → v0.62.2 published. Full detail: [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md).
+Phases 68/69/70 complete; Phase 67 carries forward host-gated. Full detail: [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md).
 
 </details>
 
@@ -125,87 +114,97 @@ Separate initiative from UPST7 (builds on merged PR #4). The v0.62.0/v0.62.1 rel
 
 - [x] Phase 63: Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit (3/3) — completed 2026-06-08
 - [x] Phase 64: Minifilter Spike Implementation + macOS P1 Cherry-pick Wave (5/5) — completed 2026-06-09
-- [x] Phase 65: Minifilter ADR + macOS Live Re-validation (4/4) — completed 2026-06-11 (D-11c CI green; gate-65-A Seatbelt PASS; go/no-go ADR **Accepted** — No-go/Conditional-go)
-- [x] Phase 66: WR-02 EDR HUMAN-UAT (1/1) — completed 2026-06-11 (**WR-02 CLOSED** under Sysmon+Defender EDR-proxy)
+- [x] Phase 65: Minifilter ADR + macOS Live Re-validation (4/4) — completed 2026-06-11
+- [x] Phase 66: WR-02 EDR HUMAN-UAT (1/1) — completed 2026-06-11
 
-9/9 reqs satisfied (DRV-01..04, EDR-01..02, MACOS-01..03). DRV-PROD-01 (production driver) deferred to v2.11/v3.0 per ADR-65. Full detail: [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md).
-
-</details>
-
-## Phase Details (archived)
-
-<details>
-<summary>✅ v2.8 UPST7 + v2.7 Drain & Release — Phase Details (archived)</summary>
-
-See [`milestones/v2.8-ROADMAP.md`](milestones/v2.8-ROADMAP.md) for full phase detail blocks.
+9/9 reqs satisfied. Full detail: [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md).
 
 </details>
 
 <details>
-<summary>✅ v2.9 Windows Sandbox-the-Tools — Phase Details (archived)</summary>
+<summary>✅ v2.8 / v2.9 (Phases 53-62) — SHIPPED 2026-06-06</summary>
 
-See [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md) for full phase detail blocks.
-
-</details>
-
-<details>
-<summary>✅ v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity — Phase Details (archived)</summary>
-
-See [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md) for full phase detail blocks (Phases 63-66).
+v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Windows Sandbox-the-Tools (Phases 60-62, published `v0.62.2`). Full detail: [`milestones/v2.8-ROADMAP.md`](milestones/v2.8-ROADMAP.md) / [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md).
 
 </details>
 
 ## Progress
 
-v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (clean Win11; real macOS) — runnable in parallel. Phase 69→70 is the UPST8 audit-then-sync pair (linear). Prior milestones (63-66) archived above.
+v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation) FIRST**, then **72 ∥ 73** (parallel — both depend only on 71), then **74** (the riskiest daemon; hard-gated behind a working single-launch path 71 + marker 73), then **75** (supplementary controls + secondary engines). The daemon (74) MUST NOT precede a solid single-launch path.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 67. Clean-Host Windows Install | 0/TBD | Not started | - |
-| 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
-| 69. UPST8 Audit | 1/1 | Complete    | 2026-06-13 |
-| 70. UPST8 Cherry-pick Sync | 3/3 | Complete    | 2026-06-13 |
+| 71. Engine-Agnostic Launch Productionization | 0/TBD | Not started | - |
+| 72. nono-py Binding + In-Process-Exec Proof | 0/TBD | Not started | - |
+| 73. AI_AGENT Marker | 0/TBD | Not started | - |
+| 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |
+| 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
 
-## Future Cycles
+## Dependency Graph
 
-### Carried v2-deferred requirements (from v2.8)
+```
+                  ┌──────────────────────────────┐
+                  │ 71 Engine-Agnostic Launch      │  (foundation — everything sits on top)
+                  │    (ENG-01/02/03)              │
+                  └───────────┬──────────────────┘
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+  ┌────────────────────────┐    ┌────────────────────────┐
+  │ 72 nono-py Binding      │    │ 73 AI_AGENT Marker      │   (72 ∥ 73 — parallel)
+  │    (ABI-01/02)          │    │    (MARK-01)            │
+  └───────────┬────────────┘    └───────────┬────────────┘
+              │                              │
+              │            ┌─────────────────┘
+              │            ▼
+              │   ┌────────────────────────────────┐
+              │   │ 74 Multi-Tenant Daemon          │  (RISKIEST — gated behind 71 working + 73)
+              │   │    (DMON-01/02/03)              │  research-flag 74
+              │   └───────────┬────────────────────┘
+              │               │
+              └───────┬───────┘
+                      ▼
+          ┌────────────────────────────────┐
+          │ 75 Supplementary + 2nd Engines  │  (demote, per-agent WFP, Copilot, nono-ts)
+          │    (SUPP-01/02/03)              │
+          └────────────────────────────────┘
+```
 
-These were defined but deferred during v2.8 (not yet milestone-scoped):
+## Pitfall → Phase Ownership
 
-- **REQ-WSRH-AUDIT-01** — profile-wide audit of which heavy-runtime binaries hit the `WriteRestricted` gate.
-- **REQ-RLS-ATTEST-01** — evaluate `actions/attest-build-provenance` vs the existing sigstore/TUF + Authenticode pipeline.
-- **REQ-UPST-RESID-01** — residual v0.44–v0.57 macОS-learn-diagnostics refactors (`b5f0a3ab`, `bbdf7b85`, `wiring.rs`).
-- **REQ-DENY-PREFLIGHT-01** — Linux-host-gated `validate_deny_overlaps` preflight investigation (security equivalence already proven).
-- **REQ-UNDO-TOCTOU-01** — full fd-relative TOCTOU hardening of `validate_restore_target` (standalone security phase, ~2-3 wk).
+Each load-bearing pitfall is owned by exactly one phase as a success-criterion-with-negative-test (per research PITFALLS.md):
 
-### Deferred to the Enterprise Distribution Milestone (next milestone)
-
-The big distribution effort is scoped after v2.11, gated on the incoming publicly-trusted cert:
-
-- **DIST-SIGN-01** *(BLOCKED on incoming cert)* — publicly-trusted Authenticode signing (Azure Trusted Signing) so the broker gate passes with no manual cert trust — the real fix that supersedes the v2.11 `TRUST-01` interim helper.
-- **DIST-SILENT-01 (SEED-001, P0)** — silent/headless/unattended install + GPO/SCCM/Intune packaging + machine-wide provisioning + auto-provisioned secure scratch space.
-- **ENT-EGRESS-01 (SEED-002, P1)** — enterprise-policy-managed egress allowlists reconciling `nono-proxy` + `nono-wfp-service`.
-- **ENT-SIEM-01 (SEED-003, P2)** — structured security-event telemetry to Event Log / Syslog for SIEM/EDR.
-- **ENT-MULTI-01 (SEED-004, P3)** — multi-engine pluggability (confine any `AI_AGENT`-labeled token).
-- **ENT-ATTEST-01 (SEED-005, P3)** — signed/attested policy overrides via the external ZT-Infra ledger.
-- **DRV-PROD-01** *(gated No-go/Conditional-go per ADR-65)* — production EV/WHQL-signed Gap 6b minifilter.
+| Pitfall | Owner phase | How it's baked in |
+|---------|-------------|-------------------|
+| Nested-job collisions / silent confinement loss (P6) | 71 | SC5 — spawn suspended, assign before any code runs, fail-secure on assign failure, no UI limits |
+| R-B3 user-owned workspace / exe-coverage fail-secure (carry-forward) | 71 | SC3 + SC4 — fail-secure coverage gate + R-B3 ownership diagnostic |
+| In-process-exec() cannot be confined post-hoc (P3) | 72 | SC2 + SC3 — `confine()` self-confine at startup before any privileged handle |
+| AI_AGENT marker forge/shed (P2) | 73 | SC1-SC4 — unforgeable token SID (not a named job), deny breakaway, daemon-only job ACL |
+| Cross-tenant capability theft (P1, load-bearing) | 74 | SC2 — server-side `ImpersonateNamedPipeClient` + per-tenant SID; cross-tenant-denial negative test |
+| Daemon attack surface / privilege (P4) | 74 | SC4 — least-privilege USER daemon split from elevated WFP service; privilege-model ADR first |
+| Token & job-object handle lifetime (P5) | 74 | SC1 + SC3 — fresh token+job per agent, deterministic reap, 100-agent baseline test |
+| "Detect-and-confine as primary model" anti-feature | 75 | SC1 — demote stays an IR lever, never the boundary |
 
 ## Next
 
-**v2.11 is active.** Start with the independent, parallel-safe phases as hosts become available:
-- `/gsd:plan-phase 67` — needs a clean Windows 11 host for the install + broker UAT (production-signed MSI, not dev-layout).
-- `/gsd:plan-phase 68` — needs a real macOS host for the `NONO_RESL_HOST_VALIDATED=1` re-validation.
-- `/gsd:execute-phase 70` — UPST8 cherry-pick sync; Wave 1 plans (70-01 + 70-02) are parallel-safe; 70-03 depends on 70-01.
+**v2.12 is active.** Build in dependency order:
+- `/gsd:plan-phase 71` — engine-agnostic launch productionization (the foundation; standard patterns, spike-003 VALIDATED — skip research-phase). Needs a real Win11 host for the Aider end-to-end gate.
+- `/gsd:plan-phase 72` and `/gsd:plan-phase 73` — parallel-safe once 71 lands (binding proof ∥ marker; both standard-pattern, skip research-phase).
+- `/gsd:plan-phase 74 --research-phase 74` — the riskiest daemon; hard-gated behind a working 71 + 73. Research the token/job reuse-vs-fresh mechanism and the `ImpersonateNamedPipeClient`-vs-cap-pipe-DACL composition BEFORE coding.
+- `/gsd:plan-phase 75` — supplementary controls + Copilot profile + nono-ts parity (proven shapes; skip research-phase).
 
-**Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude (verify no `build_notes/`/`.gsd/` staged before any push). Real publicly-trusted signing is cert-gated and OUT OF SCOPE this milestone.
+**Constraints honored this milestone:** user-mode only (no kernel driver — ADR-65 No-go); isolation ≥ the per-invocation `nono run` model (`NO_WRITE_UP`, deny network unless granted); composition over existing subsystems (broker-arm launch, `socket_windows.rs` capability pipe, `nono-wfp-service` shape) — no new framework adoption, no new wire protocol, windows-sys stays 0.59 / pyo3 0.28 / napi 2.
+
+**Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude (verify no `build_notes/`/`.gsd/` staged before any push).
 
 ## References
 
-- `.planning/PROJECT.md` — project context + current state.
-- `.planning/REQUIREMENTS.md` — v2.11 requirements (DIST-01/02, TRUST-01/02, RESL-MAC-01/02, UPST8-01/02) + traceability.
-- `.planning/MILESTONES.md` — shipped milestone history (v1.0 → v2.10).
-- `.planning/milestones/v2.10-REQUIREMENTS.md` — archived v2.10 requirements (DRV-01..04, EDR-01..02, MACOS-01..03).
-- `.planning/research/SUMMARY.md` — HIGH-confidence research; build-order recommendations.
-- `.planning/research/PITFALLS.md` — pitfall→phase ownership; cross-target drift guards.
-- `.planning/templates/cross-target-verify-checklist.md` — mandatory Linux+macOS clippy protocol for cfg-gated Unix code (Phases 68, 70).
-- `.planning/milestones/v2.8-ROADMAP.md` / `v2.9-ROADMAP.md` — archived v2.8/v2.9 (Phase 54/55 UPST audit-then-sync precedent for Phases 69/70).
+- `.planning/PROJECT.md` — project context + current state (v2.12 milestone scope).
+- `.planning/REQUIREMENTS.md` — v2.12 requirements (ENG-01..03, ABI-01..02, MARK-01, DMON-01..03, SUPP-01..03) + traceability.
+- `.planning/MILESTONES.md` — shipped milestone history (v1.0 → v2.11).
+- `.planning/research/SUMMARY.md` — HIGH-confidence research; the A-E build-order recommendation this roadmap implements (Phases 71-75).
+- `.planning/research/PITFALLS.md` — pitfall→phase ownership; the load-bearing daemon security properties.
+- `.planning/research/ARCHITECTURE.md` — Shape A/B in-process-exec data flow; the 4 new components over 3 existing subsystems.
+- `.planning/research/STACK.md` — deliberate non-bumps (windows-sys 0.59, napi 2); net-new Win32 (named job objects).
+- `.planning/templates/cross-target-verify-checklist.md` — mandatory Linux+macOS clippy protocol for any cfg-gated Unix code touched.
+- `.planning/milestones/v2.11-ROADMAP.md` — archived v2.11 (Phases 67-70).

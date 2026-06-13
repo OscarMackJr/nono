@@ -3,251 +3,161 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
 status: planning
-last_updated: "2026-06-13T21:37:23.048Z"
+last_updated: "2026-06-13T22:30:00.000Z"
 last_activity: 2026-06-13
 progress:
-  total_phases: 0
+  total_phases: 5
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
 ---
 
-# Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
+# Project State: nono — v2.12 AI Agent Abstraction
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped + archived 2026-06-11). Phase numbering continues from Phase 66 (Phases 67-70).
+See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68/69/70 complete, Phase 67 host-gated carry-forward). Phase numbering continues from Phase 70 (Phases 71-75 — NOT reset to 1).
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 70 complete — UPST8 sync done; awaiting human-verify checkpoint for C2 network policy security; Phases 67 (clean-host Win install) and 68 (macOS resl fix) pending host-gated UAT
+**Current Focus:** v2.12 roadmap complete — 5 phases (71-75) defined, 12/12 reqs mapped (100% coverage). Ready for `/gsd:plan-phase 71` (the engine-agnostic launch foundation). This is a **composition** milestone over existing subsystems (broker-arm launch, `socket_windows.rs` cap pipe, `nono-wfp-service` shape) + one net-new marker; the persistent multi-tenant daemon (Phase 74) is the riskiest, hard-gated behind a working single-launch path.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (roadmap complete; awaiting `/gsd:plan-phase 71`)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-13 — Milestone v2.12 started
+Status: Roadmap complete — 71-75 defined
+Last activity: 2026-06-13 — v2.12 roadmap created (Phases 71-75, 12/12 reqs mapped)
 
-### v2.11 Phase Summary (active)
+### v2.12 Phase Summary (active)
 
 | Phase | Goal | Requirements | SC | Status | Host gate |
 |-------|------|--------------|----|--------|-----------|
-| 67 | Clean-Host Windows Install — machine MSI completes on a fresh Win11 host (VC++ handled, service-start non-fatal); interim auditable broker-trust helper + docs | DIST-01, DIST-02, TRUST-01, TRUST-02 | 4 | ⬜ Not started | Clean Win11 host (no VC++, no pre-trusted cert); production-signed MSI |
-| 68 | macOS Resource-Limit Enforcement Fix — `--timeout` + `--max-processes` actually fire on a real macOS host (watchdog + `RLIMIT_NPROC`) | RESL-MAC-01, RESL-MAC-02 | 4 | ⬜ Not started | Real macOS host (`NONO_RESL_HOST_VALIDATED=1`) |
-| 69 | UPST8 Audit — DIVERGENCE-LEDGER for the non-macOS slice of upstream `v0.60.0..v0.61.2` | UPST8-01 | 4 | ⬜ Not started | Host-agnostic |
-| 70 | UPST8 Cherry-pick Sync — absorb will-sync commits (D-19 trailers, invariants preserved, suite green) | UPST8-02 | 4 | ⬜ Not started | Host-agnostic; cross-target clippy via CI |
+| 71 | Engine-Agnostic Launch Productionization — parent-and-confine any covered engine (Aider + LangChain-Python) through one engine-neutral path; de-spike the validated 003 path; fail-secure coverage + R-B3 diagnostic | ENG-01, ENG-02, ENG-03 | 5 | ⬜ Not started | Real Win11 host (Aider end-to-end) |
+| 72 | nono-py Binding + In-Process-Exec Proof — confine a real LangChain agent with NO Claude hook via `confined_run` (Shape A) + `confine` (Shape B); document the E1-E5 contract | ABI-01, ABI-02 | 5 | ⬜ Not started | Win11 host w/ Python; nono-py build |
+| 73 | AI_AGENT Marker — unforgeable spawn-time token SID (not a named job); deny breakaway; daemon-only job ACL; classify arbitrary PID | MARK-01 | 5 | ⬜ Not started | Win11 host |
+| 74 | Persistent Multi-Tenant Daemon (RISKIEST — former spike 004) — least-priv USER daemon, multi-client tenant-isolated pipe, fresh token+job per agent, deterministic reap | DMON-01, DMON-02, DMON-03 | 5 | ⬜ Not started | Win11 host; **research-flag 74** |
+| 75 | Supplementary Controls + Secondary Engines — demote (demote-only), per-agent WFP egress, Copilot CLI profile, nono-ts parity | SUPP-01, SUPP-02, SUPP-03 | 5 | ⬜ Not started | Win11 host; node/nono-ts build |
 
-**Dependencies:** Phases 67 and 68 are independent and parallel-safe (each host-gated). Phase 69 → 70 is the UPST8 audit-then-sync pair (linear; cadence-ordered after Phase 55, mirroring Phase 54/55).
+**Dependencies:** **71 FIRST** (foundation — everything sits on top). **72 ∥ 73** (parallel — both depend only on 71). **74** depends on 71 (working single-launch path — HARD GATE) + 73 (marker). **75** depends on 74 (demote/WFP are daemon-keyed) + 72 (nono-ts mirrors nono-py). The daemon (74) MUST NOT precede a solid single-launch path — that ordering IS the quality gate.
 
-### Host-availability gates (v2.11)
+### Research / spike flags (v2.12)
+
+| Phase | Flag | Notes |
+|-------|------|-------|
+| 74 | `/gsd:plan-phase 74 --research-phase 74` | Two unspiked/net-new mechanisms: (a) **token/job reuse-vs-fresh across many tenants** — the explicitly UNSPIKED part of spike 003/004, the milestone's highest-risk unknown; scope a spike INSIDE the phase gated on fresh-token isolation + deterministic reap + cross-tenant denial. (b) whether server-side **`ImpersonateNamedPipeClient`** (NOT in `socket_windows.rs` today — it verifies the *server* PID from the client side) composes with the existing Low-IL/AppContainer cap-pipe SDDL DACL handshake. Privilege-model ADR written BEFORE coding the service host. |
+| 72 | (optional, in-phase validation) | Shape B (`Sandbox::apply` on the CURRENT process at startup) is a usage pattern the bindings have not exercised; soundness boundary = must precede any privileged handle open. |
+| 71, 73, 75 | skip `--research-phase` | Standard patterns: spike 003 VALIDATED (71); named-job Win32 documented + unnamed-job lifecycle already in `exec_strategy_windows/` (73); demote (spike 002) + WFP (Phase 62) + node-engine profiles (Claude) all proven shapes (75). |
+
+### Host-availability gates (v2.12)
 
 | Phase | Gate | Notes |
 |-------|------|-------|
-| 67 | Clean Windows 11 host with NO VC++ x64 runtime and NO pre-trusted nono cert | Must install + run the **production-signed** machine MSI, not a dev-layout binary (the D-32-12 broker trust gate only fires from a signed Program-Files install). Verify clean-uninstall leaves no orphaned WFP filters / service registration. |
-| 68 | Real macOS host for `NONO_RESL_HOST_VALIDATED=1` re-validation | `macos_timeout_kills_at_deadline` + `macos_max_processes_blocks_on_rlimit_nproc` must PASS; CI runners cannot validate (they hang — the two tests stay env-gated off the runner). Closes the Phase 65 gate-65-A "A5" finding. |
-| 70 | Cross-target clippy (Linux + macOS) | Per `.planning/templates/cross-target-verify-checklist.md`; Windows dev host can't cross-compile (ring/aws-lc-sys C-toolchain) → CI is the load-bearing signal. Phase 68 also touches cfg-gated Unix code → same gate. |
+| 71 | Real Win11 host | Aider confined end-to-end; the broker-arm launch (`windows_low_il_broker:true`) only works from a real host. Re-assert: AppContainer SID needs `CreateAppContainerProfile` (not derive-only → `ERROR_FILE_NOT_FOUND`); preserve `SystemRoot`/`windir`/`SystemDrive` env baseline (else CLR `0xFFFF0000`). |
+| 72 | Win11 host + Python; nono-py build | LangChain `PythonREPLTool` exec() write-deny test; internal nono pin bump 0.57.0 → 0.62.x. |
+| 74 | Win11 host | 2 concurrent agents over one pipe; cross-tenant-denial negative test; 100-agent launch/exit handle-baseline test. |
+| 75 | Win11 host + node; nono-ts build | Copilot CLI profile (node engine); nono-ts pin bump 0.33.0 → 0.62.x (napi 2 kept). |
 
 <details>
-<summary>v2.10 Phase Summary (shipped 2026-06-11 — historical; archived at `milestones/v2.10-ROADMAP.md`)</summary>
+<summary>v2.11 Phase Summary (Phases 67-70; 68/69/70 complete, 67 host-gated — archived at `milestones/v2.11-ROADMAP.md`)</summary>
 
 | Phase | Goal | Requirements | Status |
 |-------|------|--------------|--------|
-| 63 | Minifilter spike groundwork (WDK/VM/design doc) + macOS DIVERGENCE-LEDGER audit | DRV-03 (partial), MACOS-01 | ✅ Complete |
-| 64 | Minifilter spike implementation (intercept + deny + IPC roundtrip on test VM) + macOS P1 cherry-pick wave | DRV-01, DRV-02, DRV-03 (complete), MACOS-02 | ✅ Complete |
-| 65 | Minifilter go/no-go ADR + macOS live re-validation HUMAN-UAT (CI macOS green — HARD gate) | DRV-04, MACOS-03 | ✅ Complete — D-11c green + latency captured + gate-65-A Seatbelt PASS; **ADR Accepted** `563df1ed` (No-go/Conditional-go); resl A5 macOS-enforcement defect filed → v2.11 (Phase 68) |
-| 66 | WR-02 EDR HUMAN-UAT (no new code; real EDR host required) | EDR-01, EDR-02 | ✅ Complete — **WR-02 CLOSED** (validated under Sysmon+Defender EDR-proxy) |
+| 67 | Clean-Host Windows Install (MSI VC++ handled, service-start non-fatal, interim broker-trust helper) | DIST-01, DIST-02, TRUST-01, TRUST-02 | ⬜ Host-gated UAT pending (clean Win11) |
+| 68 | macOS Resource-Limit Enforcement Fix (`--timeout` + `--max-processes` fire on real macOS) | RESL-MAC-01, RESL-MAC-02 | ✅ Complete 2026-06-12 |
+| 69 | UPST8 Audit (DIVERGENCE-LEDGER `v0.60.0..v0.62.0` non-macOS) | UPST8-01 | ✅ Complete 2026-06-13 |
+| 70 | UPST8 Cherry-pick Sync (5 will-sync commits absorbed) | UPST8-02 | ✅ Complete 2026-06-13 |
 
 </details>
 
 ## Key Decisions
 
-### v2.11 decisions
+### v2.12 decisions
 
 | Decision | Phase | Rationale |
 |----------|-------|-----------|
-| DIST + TRUST kept together in one phase (67) | 67 | The MSI install fix and the interim broker-trust path are the same "make the public release work on a clean Win11 host" story; both are exercised in the same clean-host UAT. |
-| Real publicly-trusted signing (Azure Trusted Signing) is OUT OF SCOPE | — | BLOCKED on an incoming cert; deferred to the next (enterprise distribution) milestone. v2.11 TRUST reqs are the interim cert-import helper + docs only — never weakening the D-32-12 gate. |
-| macOS resl fix is a real nono supervisor/setrlimit bug fix, not a test-gate change | 68 | The Phase 65 A5 finding: the watchdog/`RLIMIT_NPROC` path genuinely doesn't fire on macOS. Test re-gating (the v2.10 CI-green workaround) is NOT the fix. |
-| D-01: baseline+N RLIMIT_NPROC bounding — parent reads per-UID count via sysctl(KERN_PROC_UID) before fork | 68 | Matches Linux pids.max intent; accepted UID-wide race (D-03). `uid_process_count()` fails closed on sysctl error. |
-| D-04: setpgid(0,0) in supervised child arm — child becomes own pgrp leader | 68 | Fixes timeout watchdog kill miss; watchdog kill(-pgrp) now targets only agent tree. Tolerated on failure (WR-04 skip-on-Err is the safety net). |
-| D-10: cross-target clippy PARTIAL/deferred-to-CI for Phase 68 | 68 | Windows dev host cannot cross-compile (ring/aws-lc-sys C toolchain missing); GH Actions Linux + macOS Clippy lanes are the load-bearing signal. |
-| UPST8 scoped to the non-macOS slice of `v0.60.0..v0.61.2` only | 69-70 | The macOS slice of that window was already absorbed in v2.10 (Phases 63-65 / MACOS-01..03). |
-| UPST8 follows the Phase 54/55 audit-then-sync two-phase shape | 69-70 | Mirrors every prior UPST cycle (33/34, 39/40, 42/43, 47, 54/55); cadence-ordered linearly after Phase 55. |
-| D-70-01: UPST8-01 acceptance criteria extended to v0.62.0 upper bound | 70 | Phase 69 DIVERGENCE-LEDGER D-01 found 3 tail commits (v0.61.2..v0.62.0) outside original scope; scope extended |
-| cc21229f adapted inline (collect_ignored_denial_paths absent from fork) | 70 | Upstream helper + SandboxArgs::suppress_save_prompt not yet in fork; inlined using existing canonicalize_suppress_path, cfg-gated on non-Windows |
-| 20cc5df9 sandbox_state.rs conflict: HEAD side taken for domain_endpoint_state_tests | 70 | Fork's Phase 56 module not in upstream; profile_save_runtime.rs registry-ref feature auto-merged cleanly |
-| db073750 D-20 manual replay (C4): execute_with_options deferred, ExecuteOptions added | 70 | Fork's wiring.rs is yaml_merge system; upstream's WriteFile execute system not yet ported (v2.5-FU-3); ExecuteOptions used from install_package for forward-compat API |
+| Phase order is dependency-driven A→(B∥C)→D→E (= 71→(72∥73)→74→75) | all | Research SUMMARY § Implications: launch productionization is the foundation everything consumes; daemon is launch+marker+pipe+unspiked-reuse-risk and cannot start until 71 is a gated working path + 73 exists. Quality gate enforced structurally. |
+| ENG-01/02/03 all in Phase 71 (one engine-agnostic launch phase) | 71 | They form one coherent capability (the productionized launch-and-confine path + profiles + fail-secure gates); splitting them would create partial-feature boundaries. |
+| Daemon (74) is the riskiest piece and is research-flagged | 74 | Token/job reuse across tenants is the one genuinely unspiked mechanism (former spike 004); `ImpersonateNamedPipeClient` is net-new to `socket_windows.rs`. Spike-inside-the-phase. |
+| Demote (SUPP-01) is demote-only, NOT a standalone boundary | 75 | Spike 002 PARTIAL: post-hoc IL-drop is leaky; it stays an IR lever layered on a proven launch-time default — never the "detect-and-confine-as-primary" anti-feature. |
+| AI_AGENT marker = unforgeable token SID, NOT a named job | 73 | Pitfall 2: a named job is openable by name (rendezvous, not secret); env/argv markers are forgeable. Named job is kill-group/enumeration/resource-caps only; the token SID is the authorization signal. |
+| Least-privilege USER daemon SPLIT from the elevated WFP service; privilege-model ADR FIRST | 74 | Pitfall 4: a SYSTEM-level always-on launcher gives an escaped agent a pivot to all tenants + the host. ADR written before the service host is coded. |
+| Composition over green-field: no new wire protocol, windows-sys 0.59 / pyo3 0.28 / napi 2 kept | all | Research STACK.md: every new dep already lives in-tree pinned; deltas are features + net-new Win32 (named job objects). Deliberate non-bumps avoid gratuitous cross-target-drift churn and a napi-3 scope balloon. |
 
-### v2.10 decisions
+<details>
+<summary>v2.11 decisions (archived)</summary>
 
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| Minifilter driver is C/C++ MSBuild in `drivers/nono-fltmgr/`, NOT a Cargo crate | 63 | `windows-drivers-rs` is early-stage/KMDF-only; WDK requires C/C++ |
-| Spike driver NOT bundled in the MSI; `nono-wfp-driver.sys` placeholder unchanged | 63 | Test-signed driver requires TESTSIGNING ON; safe only on dedicated test VM |
-| Dedicated `\NonoPolicyPort` FilterCommunicationPort; does NOT reuse WFP named pipe | 63-64 | FltMgr IPC is synchronous kernel APC-based; cannot layer on tokio async pipe |
-| `FltSendMessage` finite timeout (fail-open on timeout) for the spike | 63 | Prevents system hang if supervisor not running; production ADR decides fail-direction |
-| Altitude in Activity-Monitor/FSFilter range (NOT AV range 320000-329998) | 63 | AV-range altitude risks EDR driver disruption and altitude collision |
-| macOS CI build leg green is HARD close gate for Phase 65 | 65 | v2.9 shipped two cfg-gated compile errors on release tags because Windows host never compiles macOS branches |
-| EDR UAT runs no-exclusion first, then with-exclusion | 66 | Running only-with-exclusion proves nothing; characterize alerts before suppressing them |
+See `.planning/milestones/v2.11-ROADMAP.md`. Key: DIST+TRUST kept together in Phase 67; real Azure Trusted Signing OUT OF SCOPE (cert-gated → enterprise milestone); macOS resl fix is a real supervisor/setrlimit bug fix (D-01 baseline+N RLIMIT_NPROC, D-04 setpgid); UPST8 scoped to non-macOS slice, D-70-01 extended range to v0.62.0.
 
-### Key Decisions (carried from v1.0)
+</details>
 
-- **Supervisor-Broker Pattern:** Research confirms this is the only way to manage elevated tasks like WFP while maintaining user-level CLI (2026-04-04).
-- **WFP as Primary Network Backend:** Moving away from temporary firewall rules for true kernel-level enforcement (2026-04-04).
-- **Named Job Objects:** Chosen for agent lifecycle management to ensure atomic stop/list capabilities (2026-04-04).
-- **SID-Based Filtering:** Prioritized over App-ID to ensure child processes inherit network restrictions (2026-04-04).
-- **Double-Launch Strategy:** Used `DETACHED_PROCESS` to decouple the supervisor from the parent terminal (2026-04-04).
-- **Restricted Tokens:** Used to apply the session-unique SID to the process tree (2026-04-04).
-- **RFC 3161 Timestamping:** Upgraded from legacy /t to /tr + /td sha256 (2026-04-05).
-- **WFP Startup Orphan Sweep:** Enumerates NONO_SUBLAYER_GUID filters and removes stale ones at startup (2026-04-05).
-- **Machine MSI Owns EventLog Registration:** SYSTEM\CurrentControlSet\Services\EventLog\Application\nono-wfp-service (2026-04-05).
-- **MSRV 1.77:** Bumped from 1.74 to align with windows-sys 0.59 (2026-04-05).
-- **WaitNamedPipeW Readiness Probe:** run_detached_launch() uses WaitNamedPipeW(50ms) per iteration on Windows (2026-04-05).
-- **Single SID Generation Point:** Session SID generated once at ExecConfig construction (2026-04-06).
-- **Driver Gate Removed:** activate_policy_mode no longer checks for a kernel driver binary artifact (2026-04-06).
+### Key Decisions (carried from v1.0 — still load-bearing for v2.12)
+
+- **Supervisor-Broker Pattern:** the only way to manage elevated tasks (WFP) while keeping a user-level CLI; the daemon (74) reuses this split.
+- **WFP as Primary Network Backend:** kernel-level enforcement; SUPP-02 per-agent egress keys on it via the elevated `nono-wfp-service`.
+- **Named Job Objects:** agent lifecycle (atomic stop/list) — but for v2.12 the marker's authorization signal is the token SID, NOT the job name (see v2.12 decisions).
+- **SID-Based Filtering:** child processes inherit network restrictions; per-tenant SID is the v2.12 isolation primitive.
+- **Restricted Tokens / Low-IL broker arm (`windows_low_il_broker:true`):** the validated confining primitive the launcher uses unchanged.
 
 ## Accumulated Context
 
 ### Constraints active this milestone
 
+- **User-mode only — no kernel driver / minifilter / `PsSetCreateProcessNotifyRoutine`** (ADR-65 No-go). Composition over existing subsystems.
+- **Isolation ≥ the per-invocation `nono run` model** — `NO_WRITE_UP` write-deny + deny-network-unless-granted must be preserved by every new path (launcher, daemon, binding).
 - **Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude — verify no `build_notes/`/`.gsd/` staged before any `git push` (the "go-private" commit `74a47742` was cancelled 2026-06-11).
-- **Cross-target clippy (Linux + macOS) is a MUST** per CLAUDE.md for any cfg-gated Unix code (fires on Phases 68 and 70); Windows dev host can't cross-compile → CI is the load-bearing signal. Scan every macOS cherry-pick for edition-2024 let-chains + E0716 (the class that broke v0.62.0/v0.62.1 release tags).
-- **TRUST helper never weakens the D-32-12 gate** — it imports a cert into trust stores (operator-auditable); it never bypasses the gate or trusts an unsigned/wrong-signer binary.
+- **Cross-target clippy (Linux + macOS) is a MUST** per CLAUDE.md for any cfg-gated Unix code touched; Windows dev host can't cross-compile (ring/aws-lc-sys C-toolchain) → CI is the load-bearing signal. (The binding work in 72/75 is mostly Windows-surfaced, but scan any `cfg`-gated changes.)
 
-### Pitfall guards carried forward (UPST + macOS)
+### Pitfall guards carried into v2.12 (per research PITFALLS.md)
 
-- **macOS cross-target drift (Pitfall 9):** scan every macOS cherry-pick for edition-2024 let-chains and E0716 patterns; CI macOS green required before tag.
-- **Seatbelt deny-after-allow ordering (Pitfall 10):** unit tests must assert ordering, not just rule presence.
-- **macOS `/private/etc` symlink drift (Pitfall 11):** emit both symlink and canonical path for every macOS deny path.
-- **DIVERGENCE-LEDGER cluster isolation can be empirically false (`feedback_cluster_isolation_invalid`):** UPST8 audit (Phase 69) must diff-inspect re-export surfaces, not just `--name-only`.
+The per-invocation pitfalls carry forward UNCHANGED (post-hoc IL-drop demote-only, R-B3 user-owned workspace, exe-coverage gate, absolute grants, broker dev-layout/signing). Each NEW pitfall is owned by exactly one phase as a success-criterion-with-negative-test:
 
-### Plan 70-03 Close — C2 Network Policy Security Hardening (2026-06-13)
+| Pitfall | Owner | Bake-in |
+|---------|-------|---------|
+| P6 nested-job collisions / silent confinement loss | 71 | spawn suspended, assign before any code runs, fail-secure on assign failure, no UI limits |
+| R-B3 user-owned workspace + exe-coverage fail-secure | 71 | fail-secure coverage gate + R-B3 ownership diagnostic |
+| P3 in-process-exec() cannot be confined post-hoc | 72 | `confine()` self-confine at startup before any privileged handle |
+| P2 AI_AGENT marker forge/shed | 73 | unforgeable token SID (not a named job); deny breakaway; daemon-only job ACL |
+| P1 cross-tenant capability theft (load-bearing) | 74 | server-side `ImpersonateNamedPipeClient` + per-tenant SID; cross-tenant-denial negative test |
+| P4 daemon attack surface / privilege | 74 | least-priv USER daemon split from elevated WFP service; privilege-model ADR first |
+| P5 token & job-object handle lifetime | 74 | fresh token+job per agent; deterministic reap; 100-agent handle-baseline test |
+| "detect-and-confine as primary model" anti-feature | 75 | demote stays an IR lever, never the boundary |
 
-- **C2 commits:** 0fb59375 (fork: `1f5b6193`) + bd4c469a (fork: `35282744`)
-- **Security effect:** Embedded profiles (opencode/developer/codex/claude-code) no longer carry implicit credential routes; proxy now enforces deny-by-default under network.block via ProxyConfig.strict_filter + HostFilter::new_strict()
-- **Conflicts in bd4c469a:** 4 files (sandbox_prepare.rs, launch_runtime.rs, proxy_runtime.rs, main.rs); 4 auto-merged; upstream refactored helpers (cwd_access_requirement etc.) rejected (Edition 2021 incompatible; fork has equivalent inline logic)
-- **RouteStore/CredentialStore decoupling (Phase 56):** PRESERVED — server.rs auto-merged cleanly; no regression
-- **Test result:** 779+1219+162 pass; 5 pre-existing failures (red->red carry-forward); 0 new regressions
-- **Cross-target clippy:** PARTIAL — Windows host cannot cross-compile; GH Actions CI is load-bearing signal
-- **D-70-E1 C2:** PASS (0 Windows-only files); D-70-E1 phase-wide: PASS (0 Windows-only files across all 5 cherry-picks)
-- **Phase-wide D-19/D-20 count:** 5 (all will-sync commits absorbed: C3×2 + C4×1 D-20 + C2×2)
-- **UPST8-02:** SATISFIED — all 5 will-sync commits on main with correct trailers
-- **Human-verify checkpoint:** AWAITING — automated checks PASS; awaiting user confirmation
+### Re-assert per phase (banked AppContainer/CLR gotchas)
 
-### Plan 69-01 Close — UPST8 Audit (2026-06-13)
-
-- **Range:** `9a05a4ff..52809dda` (v0.60.0..v0.62.0, D-01 corrected; SC says v0.61.2 ceiling — flagged for +3 update to REQUIREMENTS.md UPST8-01)
-- **upstream_head_at_audit:** `849cda42c0541f18915708cd3ff31d61c12d136d` | **refetch_date:** 2026-06-13 | **drift_tool_sh_sha:** `0834aa66` (pin held)
-- **9 unique commits** (drift-tool count), **4 clusters**. Disposition breakdown: **will-sync 3** (C2 network-policy security, C3 profile/diagnostic features, C4 nono-pull recovery) · **won't-sync 1** (C1 release bumps) · **split 0** · **fork-preserve 0**.
-- **windows-touch:yes = 0** — no Phase 70 cross-target clippy work required for any cluster.
-- **macOS-overlap:** 7 of 9 commits are in the overlap range (v0.60.0..v0.61.2); all 7 carry Phase 63 pointers. 2 tail commits (db073750, 52809dda) have no Phase 63 pointer and contain no macOS-relevant code — "macOS un-audited" flag vacuously satisfied.
-- **Cross-cluster re-export deps:** 1 field-existence ordering dep — C2 (bd4c469a) → C3 (cc21229f) via `suppressed_system_service_operations` in `PreparedSandbox`. Cherry-pick ordering: absorb C3 before C2 in Phase 70. No re-export-isolation failures; no split flips. Mirrors Phase 54 C5→C3 dep.
-- **Empirical cross-check:** 6 files walked (filter.rs, server.rs, policy.rs, net_filter.rs, network_policy.rs, sandbox_prepare.rs); zero drift-tool gaps; all PASS.
-- **ADR review outcome:** (a) Confirm. Phase 33 ADR Option A 'continue' — 5-dimension L/M/H (security=M, windows=L, maintenance=L, divergence=L, contributor=L). Does NOT supersede Phase 33 ADR.
-- **SC divergence flag:** ROADMAP says v0.61.2 ceiling; D-01 extended to v0.62.0; REQUIREMENTS.md UPST8-01 acceptance language should be updated to reflect v0.62.0 (+3 tail commits).
-- **Zero-source-edits invariant honored:** `git diff plan_base_sha..HEAD -- crates/ bindings/ scripts/ Makefile` returns 0 lines.
-- **DCO sign-off:** All commits carry `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>`.
-- **Next:** Phase 70 (UPST8 Cherry-pick Sync) — absorb will-sync clusters C2, C3, C4 with D-19 trailers; cherry-pick order: C3 before C2 (ordering constraint).
-
-### Plan 54-01 Close — UPST7 Audit (2026-06-04) — UPST8 predecessor context
-
-- **Range:** v0.57.0..v0.59.0 | **upstream_head_at_audit:** `48d39f36` | **refetch_date:** 2026-06-04 | **drift_tool_sh_sha:** `0834aa66` (pin held).
-- **40 unique commits**, **14 clusters**. Disposition breakdown: **will-sync 8** · **split 3** · **won't-sync 3**. **windows-touch:yes = 2** (C2, C8).
-- **ADR review:** **(a) confirm** Phase 33 Option A `continue` (5-dim L/M/H). Does NOT supersede Phase 33 ADR.
-- **v0.60.0 scope deferred to UPST8:** the v0.57.0..v0.59.0 audit kept range; **v0.60.0..v0.61.1 deferred to UPST8** (re-fetch surfaced v0.60.0 `9a05a4ff` + v0.61.0 + v0.61.1). **v2.11 Phase 69 extends the upper bound to `v0.61.2` and scopes to the non-macOS surface** (the macOS slice of v0.60.0..v0.61.2 was absorbed in v2.10 Phases 63-65). Re-fetch upstream at Phase 69 audit-open and record the new head SHA.
-- **Zero-source-edits invariant honored** for the audit; drift re-run idempotent; DCO sign-off on all commits.
+- **AppContainer per-agent SID:** `CreateAppContainerProfile`, NOT derive-only (else `CreateProcessW` `ERROR_FILE_NOT_FOUND`). (memory `windows_appcontainer_wfp_validated`)
+- **Env baseline for CLR/PowerShell children:** preserve `SystemRoot`/`windir`/`SystemDrive` (else CLR `0xFFFF0000`). (memory `windows_hook_interpreter_spawn_gotchas`)
+- **Cap-pipe DACL handshake:** the Low-IL/AppContainer rendezvous (package-SID READ grant before the blocking `ConnectNamedPipe`; child learns the pipe via `NONO_SUPERVISOR_PIPE`). (memory `windows_appcontainer_cap_pipe_reachability`)
 
 ## Deferred Items
 
-### v2.10 close (acknowledged 2026-06-11)
+### v2.11 carry-forward (open)
 
-Pre-close `audit-open` reported **65 open items**; user chose "Acknowledge all & proceed". Breakdown: **35** `missing`/`unknown` quick-task slugs (pre-v2.5 stragglers, carried since prior closes) + **17** UAT gaps (phases 35/36/37/41/43/44/45/48/49/50/55/56/57/60/62/65/66) + **5** verification gaps (phases 41/44/49/56/57) + **5** dormant seeds (001-silent-enterprise-deployment, 002-network-egress-hardening, 003-siem-edr-telemetry, 004-multi-engine-pluggability, 005-zt-infra-attestation) + **3** new v2.11 carry-forward todos. The 3 todos are the only genuinely new items and are now scoped into v2.11:
+- **Phase 67 clean-host Windows install** (DIST-01/02, TRUST-01/02) — host-gated UAT pending a clean Win11 host (no VC++, no pre-trusted cert); production-signed MSI, not dev-layout. Independent of v2.12 work; can be exercised when a clean host is available.
 
-| Todo | Headline | v2.11 phase |
-|------|----------|-------------|
-| `20260611-poc-cert-broker-clean-host` | v0.62.2 signed with untrusted POC cert → broker non-functional out-of-box on a clean Windows host (most consequential for distribution) | Phase 67 (TRUST-01/02, partial close — real signing is enterprise-milestone-gated) |
-| `20260611-msi-vcredist-prereq` | MSI doesn't bundle/declare VC++ x64 runtime → 1603 on a clean host | Phase 67 (DIST-01) |
-| `20260611-macos-resl-enforcement-broken` | macOS `--timeout`/`RLIMIT_NPROC` enforcement doesn't fire on a real host (REQ-RESL-NIX-03; the Phase 65 gate-65-A A5 finding) | Phase 68 (RESL-MAC-01/02) |
+### v2 (deferred from v2.12 scope — not yet milestone-scoped)
 
-The Phase 65/66 UAT-gap rows reflect the macOS-resl A5 finding (now Phase 68) and the EDR-proxy-vs-cloud-EDR caveat (WR-02 closed "under EDR-proxy", MDE re-run is an EDR-agnostic follow-up) — both already characterized, neither an undocumented regression.
+- **Signed-policy / decentralized attestation** (SEED-005 / R-T1) — X-Large; its own milestone.
+- **Sound adoption of an already-running agent** nono did not launch — blocked by the post-hoc-IL-drop leak (spike 002); needs a different mechanism.
+- **Cursor native-Windows confinement** — Cursor's agent CLI is Linux/macOS/WSL-only (engine limitation, not nono's).
 
-### v2.9 + v2.8 close (acknowledged 2026-06-06)
+### Historical (acknowledged at prior closes — see git history / MILESTONES.md)
 
-Pre-close `audit-open` reported 55 open items; user chose "Acknowledge all & proceed". Breakdown: 35 `missing` quick-task slugs (pre-v2.5 stragglers, carried since prior closes) + 15 UAT gaps + 5 verification gaps (pre-v2.0 bookkeeping carried since the v2.2/v2.4 closes).
-
-### v2.7 close (acknowledged 2026-05-28)
-
-Pre-close `audit-open` reported 45 open items; user chose "Acknowledge all & proceed". Breakdown:
-
-- **~42 historical (already deferred at prior closes):** 29 `missing` quick-task slugs (pre-v2.5 stragglers) + 10 UAT gaps + 3 verification gaps (pre-v2.0 phases 01/07/13/17/18 bookkeeping, carried since the v2.2/v2.4 closes).
-- **Genuine new carry-forwards (resolved in v2.8):** WFP elevated live-uninstall UAT, v0.57.3 MSI rebuild, untagged post-`637a426c` fixes, 3 pending todos — all closed by v2.8 Phase 53.
-
-### Phase-level verification gaps (3 — orchestrator post-merge)
-
-| Phase | Item | Disposition |
-|-------|------|-------------|
-| 37 | VERIFICATION.md `status: human_needed` — Success Criterion 6 (`.github/workflows/phase-37-linux-resl.yml` live run on `ubuntu-24.04`) | Orchestrator post-merge push triggers workflow; structurally complete + YAML-valid + commits unpushed per worktree-mode discipline. |
-| 41 | VERIFICATION.md `status: human_needed` — cross-target Linux/macOS clippy + 8 GH Actions lanes on HEAD `b78dba87` | Decisive close signal lives in GH Actions; Windows host cannot run cross-target clippy. Class E env_vars flake explicitly deferred per Plan 41-10 disposition. |
-| 43 | VERIFICATION.md `status: human_needed` — umbrella PR open + baseline-aware CI lane diff vs `13cc0628` | 6 PR-SECTION.md contribution artifacts staged; orchestrator concatenates + `gh pr create` post-merge. |
-
-### Partial UAT scenarios (13 across 3 phases)
-
-| Phase | File | Open scenarios |
-|-------|------|----------------|
-| 37 | `.planning/phases/37-linux-resl-backends-pkgs-auto-pull/37-HUMAN-UAT.md` | 5 |
-| 41 | `.planning/phases/41-ci-cleanup-v24-broker-code-review-closure/41-HUMAN-UAT.md` | 6 |
-| 43 | `.planning/phases/43-upst5-sync-execution/43-HUMAN-UAT.md` | 2 |
-
-### Historical quick-task slugs (21 — pre-v2.5 stragglers)
-
-Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pre-date the v2.5 milestone by months and appear to be cleanup debris from prior milestones.
-
-```
-260405-v0e-investigate-and-fix-exec-strategy-rs-unc
-260405-vjj-fix-pr-555-signoffs-and-merge-conflicts-
-260406-ajy-assess-windows-functional-equivalence-to
-260406-bem-research-and-roadmap-windows-gap-closure
-260410-nlt-fix-three-uat-gaps-in-phase-10-etw-learn
-260412-ajy-safe-layer-roadmap-input
-260417-kem-fix-envvarguard-migration-migrate-48-fla
-260417-wla-fix-windows-createprocess-handle-uaf
-260419-cmp-upstream-036-windows-parity
-260424-upr-review-upstream-037-to-040
-260428-rsu-refresh-stack-onto-upstream-tip
-260508-m99-broker-process-poc-minimal-rust-binary-t
-260509-rib-clean-up-windows-poc-handoff-mdx-apply-9
-260509-s9m-verify-that-the-sigstore-functionality-i
-260509-stb-fix-windows-poc-handoff-mdx-block-net-se
-260510-im9-investigate-windows-test-failures-in-cra
-260511-jxg-cmd-unc-cwd-supervised
-260511-jxk-label-guard-drop-on-sigint
-260513-f5n-update-the-poc-runbook-windows-poc-hando
-260514-0gu-bump-fork-version-0-37-1-to-0-53-0
-260516-mxw-fix-handletarget-import-linux
-```
-
-## Quick Tasks Completed
-
-| Date | Slug | Deliverable |
-|------|------|-------------|
-| 2026-06-08 | vm-driver-signing-runbook | `64-SC1-VM-RUNBOOK.md` — junior-friendly cookbook for the Phase 64 Track A VM minifilter test-signing + deny harness (Phase 63 UAT lessons baked in) |
-| 2026-06-10 | cargo-audit-rustls-webpki | Bumped `sign-fixture` sigstore `0.7.0→0.8.0` (commit `4aaa0508`) — drops vulnerable `rustls-webpki 0.102.8` + `sigstore 0.7.0` subtree; `cargo audit` exit 0. Real remediation over `.cargo/audit.toml` ignore. |
+Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — mostly pre-v2.5 `missing` quick-task slugs + historical UAT/verification bookkeeping. Carried, none blocking. Detail in MILESTONES.md per-milestone close notes.
 
 ## Session Continuity
 
-**Last session:** 2026-06-13T02:47:12.755Z
+**Last session:** 2026-06-13 — v2.12 roadmap created.
 
-**v2.11 roadmap complete (2026-06-11):** Phases 67-70 defined, 8/8 reqs mapped (100% coverage). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Phases 67 (clean-host Win install: DIST-01/02 + TRUST-01/02) and 68 (macOS resl: RESL-MAC-01/02) are independent + host-gated + parallel-safe. Phases 69 (UPST8 audit: UPST8-01) → 70 (UPST8 sync: UPST8-02) are the linear audit-then-sync pair, cadence-ordered after Phase 55.
+**v2.12 roadmap complete (2026-06-13):** Phases 71-75 defined, 12/12 reqs mapped (100% coverage, no orphans, no duplicates). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order is dependency-driven: 71 (foundation) → (72 ∥ 73 parallel) → 74 (riskiest daemon; hard-gated behind working 71 + 73; research-flagged) → 75 (supplementary). Composition milestone over broker-arm launch + `socket_windows.rs` cap pipe + `nono-wfp-service` shape; user-mode only (ADR-65 No-go); isolation ≥ `nono run`.
 
-**Predecessor context (carried):** v2.10 shipped tag `v2.10` 2026-06-11; gate-65-A Seatbelt PASS; WR-02 CLOSED; ADR-65 Accepted (No-go/Conditional-go, DRV-PROD-01 deferred). The Phase 65 A5 finding (macOS resl enforcement doesn't fire) is now Phase 68. Repo STAYS PUBLIC (commit `74a47742` cancelled; `build_notes/`+`.gsd/` ignored, untracked).
+**Predecessor context (carried):** v2.11 Phases 68/69/70 complete (macOS resl fix shipped; UPST8 audited + synced to v0.62.0). Phase 67 (clean-host Win install) host-gated, carries forward. v2.10 shipped tag `v2.10` 2026-06-11; ADR-65 Accepted (No-go/Conditional-go on the kernel driver — the constraint anchoring v2.12's user-mode-only rule). Repo STAYS PUBLIC.
 
 ## Operator Next Steps
 
-- `/gsd:plan-phase 67` — clean-host Windows install (needs a clean Win11 host for the install + broker UAT; production-signed MSI, not dev-layout).
-- `/gsd:plan-phase 68` — macOS resl enforcement fix (needs a real macOS host for `NONO_RESL_HOST_VALIDATED=1` re-validation). Parallel-safe with 67.
-- `/gsd:plan-phase 69` then `70` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI).
+- `/gsd:plan-phase 71` — engine-agnostic launch productionization (the FOUNDATION; spike-003 VALIDATED, skip `--research-phase`). Needs a real Win11 host for the Aider end-to-end gate.
+- `/gsd:plan-phase 72` and `/gsd:plan-phase 73` — parallel-safe once 71 lands (binding proof ∥ marker; both standard-pattern).
+- `/gsd:plan-phase 74 --research-phase 74` — the riskiest daemon; HARD-GATED behind a working 71 + 73. Research token/job reuse-vs-fresh + `ImpersonateNamedPipeClient`-vs-cap-pipe-DACL composition + the privilege-model ADR BEFORE coding.
+- `/gsd:plan-phase 75` — supplementary controls + Copilot profile + nono-ts parity (proven shapes).
 - Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
-
-| 2026-06-13 | fast | R-B4/R-A1 live-verification cookbook | ✅ |

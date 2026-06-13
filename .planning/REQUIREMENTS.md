@@ -48,7 +48,30 @@
 
 ## Traceability
 
-_(Filled by the roadmapper — maps each REQ-ID to exactly one phase.)_
+Every v1 requirement maps to exactly one phase. Coverage: **12/12 mapped, no orphans, no duplicates.**
 
-| Requirement | Phase |
-|-------------|-------|
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| ENG-01 | Phase 71 — Engine-Agnostic Launch Productionization | Pending |
+| ENG-02 | Phase 71 — Engine-Agnostic Launch Productionization | Pending |
+| ENG-03 | Phase 71 — Engine-Agnostic Launch Productionization | Pending |
+| ABI-01 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Pending |
+| ABI-02 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Pending |
+| MARK-01 | Phase 73 — AI_AGENT Marker | Pending |
+| DMON-01 | Phase 74 — Persistent Multi-Tenant Daemon | Pending |
+| DMON-02 | Phase 74 — Persistent Multi-Tenant Daemon | Pending |
+| DMON-03 | Phase 74 — Persistent Multi-Tenant Daemon | Pending |
+| SUPP-01 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |
+| SUPP-02 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |
+| SUPP-03 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |
+
+### Coverage by phase
+
+| Phase | Requirements | Count |
+|-------|--------------|-------|
+| 71 — Engine-Agnostic Launch Productionization | ENG-01, ENG-02, ENG-03 | 3 |
+| 72 — nono-py Binding + In-Process-Exec Proof | ABI-01, ABI-02 | 2 |
+| 73 — AI_AGENT Marker | MARK-01 | 1 |
+| 74 — Persistent Multi-Tenant Daemon | DMON-01, DMON-02, DMON-03 | 3 |
+| 75 — Supplementary Controls + Secondary Engines | SUPP-01, SUPP-02, SUPP-03 | 3 |
+| **Total** | | **12** |
