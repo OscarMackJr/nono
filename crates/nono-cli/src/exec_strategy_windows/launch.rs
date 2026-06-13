@@ -1369,9 +1369,9 @@ pub(super) fn spawn_windows_child(
             // Phase 32 D-32-11/13/14: Authenticode self-trust-anchor.
             // On every dispatch (no cache, D-32-14), require broker.exe's Authenticode
             // signer subject + thumbprint to match nono.exe's own. Fail-closed; no
-            // escape hatch (D-32-12). Dev-build skip via install-layout detector
-            // (Pitfall 6 — #[cfg(debug_assertions)] would false-trigger under cargo
-            // test --release).
+            // escape hatch (D-32-12). Dev-build skip keys off the compile-time-baked
+            // Cargo target root (R-B4 fix — not an attacker-forgeable path substring;
+            // #[cfg(debug_assertions)] would false-trigger under cargo test --release).
             if !is_dev_build_layout(&nono_exe) {
                 verify_broker_authenticode(&nono_exe, &broker_path)?;
             } else {
@@ -1694,7 +1694,7 @@ pub(super) fn spawn_windows_child(
 
         // Phase 32 D-32-11/13/14: Authenticode self-trust-anchor — same
         // invariant as the BrokerLaunch arm (T-51C-04). Fail-closed; dev-build
-        // skip via install-layout detector (Pitfall 6).
+        // skip keys off the compile-time-baked Cargo target root (R-B4 fix).
         if !is_dev_build_layout(&nono_exe) {
             verify_broker_authenticode(&nono_exe, &broker_path)?;
         } else {
@@ -2023,25 +2023,72 @@ pub(super) fn spawn_windows_child(
     ))
 }
 
-/// Returns `true` when `nono.exe` is running from a Cargo `target` directory
-/// (dev build layout). Returns `false` for production install layouts such as
-/// `Program Files\nono\` or `LocalAppData\Programs\nono\`.
+/// The compile-time-baked absolute path of THIS build's Cargo target directory
+/// (`<target>`), derived in `build.rs` from `OUT_DIR.ancestors().nth(4)` and
+/// honoring any `CARGO_TARGET_DIR` override. Empty when the target root could not
+/// be derived at build time (fail-closed: the dev-skip is then disabled and the
+/// Authenticode gate is ENFORCED).
+const DEV_TARGET_ROOT: &str = env!("NONO_DEV_TARGET_ROOT");
+
+/// Returns `true` ONLY when `nono.exe` is running from THIS build's own Cargo
+/// `target` directory — the compile-time-baked absolute path on the developer's
+/// machine (`DEV_TARGET_ROOT`). Returns `false` for production install layouts
+/// (`Program Files\nono\`, `LocalAppData\Programs\nono\`) AND for any
+/// attacker-chosen path that merely *looks* like a Cargo layout (e.g.
+/// `C:\Users\victim\target\release\nono.exe`).
 ///
-/// Used to skip broker Authenticode self-trust-anchor verification in dev builds
-/// (Phase 32 D-32-12 implementation note + Pitfall 6). Using an install-layout
-/// substring detector instead of `#[cfg(debug_assertions)]` is critical:
-/// `cargo test --release` compiles WITHOUT debug_assertions, so a
+/// # Security (R-B4)
+///
+/// Used to skip broker Authenticode self-trust-anchor verification in genuine
+/// local dev builds (Phase 32 D-32-12 + Pitfall 6). The original detector matched
+/// any runtime path *containing* `\target\release\` (etc.) — an attacker-forgeable
+/// substring. This is a trust-anchor bypass: an unsigned `nono.exe` +
+/// `nono-shell-broker.exe` placed under any `...\target\release\...` directory
+/// skipped the gate entirely. The fix keys the skip off a **compile-time-baked
+/// absolute path** an attacker outside this build cannot reproduce, and compares
+/// using canonicalized `Path` *components* (never string `starts_with`, which is
+/// the original bug class).
+///
+/// # `#[cfg(debug_assertions)]` is deliberately NOT used
+///
+/// `cargo test --release` compiles WITHOUT `debug_assertions`, so a
 /// `#[cfg(debug_assertions)]` gate would falsely apply strict Authenticode checks
-/// to release-mode test runs where `nono-shell-broker.exe` is unsigned.
-///
-/// Detection strings cover Windows-style backslashes AND Unix-style forward
-/// slashes (the latter for macOS/Linux test suite runs).
+/// to release-mode test runs where `nono-shell-broker.exe` is unsigned. This
+/// provenance check works in both profiles: release-mode test binaries run from
+/// `<target>\release\deps\`, which IS under the baked `<target>` root, so the
+/// unsigned dev broker is correctly skipped.
 fn is_dev_build_layout(nono_exe_path: &std::path::Path) -> bool {
-    let s = nono_exe_path.to_string_lossy();
-    s.contains(r"\target\debug\")
-        || s.contains(r"\target\release\")
-        || s.contains("/target/debug/")
-        || s.contains("/target/release/")
+    is_under_dev_target_root(nono_exe_path, DEV_TARGET_ROOT)
+}
+
+/// Core decision for [`is_dev_build_layout`], parameterized on the baked target
+/// root so it can be unit-tested deterministically (the real `DEV_TARGET_ROOT` is
+/// a per-machine compile-time value).
+///
+/// Returns `true` iff `exe_path`, after canonicalization, lives under
+/// `dev_target_root` (also canonicalized) using component-wise [`Path::starts_with`].
+/// Fail-closed on every uncertainty: an empty baked root, a non-existent/
+/// uncanonicalizable root, or any path that does not resolve under it all yield
+/// `false` (gate ENFORCED).
+fn is_under_dev_target_root(exe_path: &std::path::Path, dev_target_root: &str) -> bool {
+    // Empty baked root => build.rs could not derive it => fail-closed (enforce gate).
+    if dev_target_root.is_empty() {
+        return false;
+    }
+    let baked_root = std::path::Path::new(dev_target_root);
+
+    // Canonicalize both sides so symlinks / `..` / `\\?\` / case differences cannot
+    // be used to slip a path past the component comparison (TOCTOU is not a concern
+    // here: this is a trust *classification*, not an enforcement boundary, and the
+    // attacker would have to win against the baked absolute root regardless).
+    // If either side cannot be canonicalized, fail-closed.
+    let (canon_root, canon_exe) = match (baked_root.canonicalize(), exe_path.canonicalize()) {
+        (Ok(r), Ok(e)) => (r, e),
+        _ => return false,
+    };
+
+    // Component-wise containment — NOT string starts_with (the original R-B4 bug).
+    canon_exe.starts_with(&canon_root)
 }
 
 /// Perform the Authenticode self-trust-anchor verification for broker.exe.
@@ -2079,8 +2126,8 @@ pub(crate) fn verify_broker_authenticode(
                      Self-trust-anchor unavailable; refusing to spawn broker. \
                      This install is not Authenticode-signed: install a signed release \
                      MSI (signing setup: docs/cli/development/windows-signing-guide.mdx), \
-                     or run nono from a dev-build layout (target\\release or \
-                     target\\debug) where this gate is intentionally skipped."
+                     or run nono from your own Cargo dev build (under this machine's \
+                     compile-time target dir) where this gate is intentionally skipped."
                 ),
             })
         }
@@ -2163,53 +2210,134 @@ mod detached_token_gate_tests {
 
 #[cfg(test)]
 mod broker_authenticode_layout_tests {
-    use super::is_dev_build_layout;
+    use super::is_under_dev_target_root;
+    use std::fs;
+    use std::path::Path;
 
-    /// D-32-12 dev-skip mechanism unit acceptance.
-    /// Verifies that the install-layout substring detector matches Cargo
-    /// target directories (dev-build) and does NOT match production install
-    /// paths (Program Files, AppData).
+    /// Helper: create `dir`, drop an empty `nono.exe` at `exe_rel` under it, and
+    /// return both canonicalizable absolute paths. Real on-disk files are required
+    /// because `is_under_dev_target_root` canonicalizes both sides (fail-closed on
+    /// non-existent paths), exactly as it does at runtime.
+    fn make_exe(root: &Path, exe_rel: &str) -> std::path::PathBuf {
+        let exe = root.join(exe_rel);
+        if let Some(parent) = exe.parent() {
+            fs::create_dir_all(parent).expect("create exe parent dirs");
+        }
+        fs::write(&exe, b"").expect("write fake exe");
+        exe
+    }
+
+    /// R-B4 regression: a binary that genuinely lives under THIS build's baked
+    /// Cargo target root counts as dev-build (gate skipped). Mirrors both the
+    /// debug/release `<target>\<profile>\nono.exe` and the test-binary
+    /// `<target>\<profile>\deps\<name>.exe` layouts.
     #[test]
-    fn is_dev_build_layout_detection() {
-        // Dev-build paths (should match → true)
+    fn real_baked_target_root_is_dev_build() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target_root = tmp.path().join("target");
+
+        // Broker/exe sitting directly in `<target>\release\`.
+        let exe = make_exe(&target_root, "release/nono.exe");
         assert!(
-            is_dev_build_layout(std::path::Path::new(
-                r"C:\Users\dev\nono\target\debug\nono.exe"
-            )),
-            "Windows debug target path should be detected as dev-build"
+            is_under_dev_target_root(&exe, &target_root.to_string_lossy()),
+            "exe under the baked target root MUST be detected as dev-build (gate skipped)"
         );
+
+        // Test binary sitting in `<target>\release\deps\` — still under the root.
+        let test_exe = make_exe(&target_root, "release/deps/launch-abc123.exe");
         assert!(
-            is_dev_build_layout(std::path::Path::new(
-                r"C:\Users\dev\nono\target\release\nono.exe"
-            )),
-            "Windows release target path should be detected as dev-build"
+            is_under_dev_target_root(&test_exe, &target_root.to_string_lossy()),
+            "test binary under <target>\\release\\deps MUST be detected as dev-build \
+             (this is the cargo test --release constraint)"
         );
+
+        // Debug profile likewise.
+        let debug_exe = make_exe(&target_root, "debug/nono.exe");
         assert!(
-            is_dev_build_layout(std::path::Path::new("/home/dev/nono/target/debug/nono")),
-            "Unix debug target path should be detected as dev-build"
+            is_under_dev_target_root(&debug_exe, &target_root.to_string_lossy()),
+            "exe under <target>\\debug MUST be detected as dev-build"
         );
+    }
+
+    /// R-B4 regression — THE BUG: an attacker-chosen path that merely *looks* like
+    /// a Cargo layout (`...\target\release\nono.exe`) but is NOT under the baked
+    /// dev target root must NOT count as dev-build. The gate stays ENFORCED.
+    #[test]
+    fn attacker_lookalike_target_path_is_not_dev_build() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // The genuine baked root for this hypothetical build.
+        let dev_root = tmp.path().join("dev").join("target");
+        make_exe(&dev_root, "release/nono.exe"); // baked root exists & is canonicalizable
+
+        // Attacker drops an unsigned binary at a *different* directory that still
+        // contains the `target\release` segment — the original substring detector
+        // would have wrongly skipped the gate here.
+        let attacker_root = tmp.path().join("victim");
+        let attacker_exe = make_exe(&attacker_root, "target/release/nono.exe");
+
         assert!(
-            is_dev_build_layout(std::path::Path::new("/home/dev/nono/target/release/nono")),
-            "Unix release target path should be detected as dev-build"
+            !is_under_dev_target_root(&attacker_exe, &dev_root.to_string_lossy()),
+            "attacker path containing target\\release but OUTSIDE the baked dev root \
+             must NOT be treated as dev-build (R-B4: gate must be ENFORCED)"
         );
-        // Production install paths (should NOT match → false)
+    }
+
+    /// Production install layouts must never be treated as dev-build.
+    #[test]
+    fn production_install_paths_are_not_dev_build() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dev_root = tmp.path().join("target");
+        make_exe(&dev_root, "release/nono.exe");
+
+        // Simulated Program Files-style install, outside the baked root.
+        let prod_exe = make_exe(tmp.path(), "Program Files/nono/nono.exe");
         assert!(
-            !is_dev_build_layout(std::path::Path::new(r"C:\Program Files\nono\nono.exe")),
-            "Program Files install path must NOT be detected as dev-build"
+            !is_under_dev_target_root(&prod_exe, &dev_root.to_string_lossy()),
+            "production install path must NOT be detected as dev-build (gate ENFORCED)"
         );
+    }
+
+    /// Fail-closed: an empty baked root (build.rs could not derive it) disables the
+    /// dev skip entirely, so the Authenticode gate is ENFORCED for every path.
+    #[test]
+    fn empty_baked_root_disables_dev_skip() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let exe = make_exe(tmp.path(), "target/release/nono.exe");
         assert!(
-            !is_dev_build_layout(std::path::Path::new(
-                r"C:\Users\op\AppData\Local\Programs\nono\nono.exe"
-            )),
-            "AppData local install path must NOT be detected as dev-build"
+            !is_under_dev_target_root(&exe, ""),
+            "an empty baked target root must fail-closed (gate ENFORCED)"
         );
+    }
+
+    /// End-to-end with the REAL compile-time-baked `DEV_TARGET_ROOT`: this test
+    /// binary itself runs from `<baked target>\<profile>\deps\`, so the live
+    /// `is_dev_build_layout` MUST classify it as dev-build. This pins the
+    /// `cargo test --release` constraint against the actual baked value (not a
+    /// synthetic root), proving release-mode test runs keep skipping the gate.
+    #[test]
+    fn current_test_binary_is_dev_build_via_baked_root() {
+        let exe = std::env::current_exe().expect("current_exe");
         assert!(
-            !is_dev_build_layout(std::path::Path::new("/usr/local/bin/nono")),
-            "/usr/local/bin/nono must NOT be detected as dev-build"
+            super::is_dev_build_layout(&exe),
+            "the running test binary lives under the baked Cargo target root and \
+             MUST be detected as dev-build (cargo test / cargo test --release constraint); \
+             baked DEV_TARGET_ROOT={:?}, exe={:?}",
+            super::DEV_TARGET_ROOT,
+            exe
         );
+    }
+
+    /// Fail-closed: a non-existent / uncanonicalizable exe path is never dev-build.
+    #[test]
+    fn uncanonicalizable_exe_is_not_dev_build() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dev_root = tmp.path().join("target");
+        make_exe(&dev_root, "release/nono.exe");
+
+        let missing = dev_root.join("release").join("does-not-exist.exe");
         assert!(
-            !is_dev_build_layout(std::path::Path::new("/opt/nono/nono")),
-            "/opt/nono/nono must NOT be detected as dev-build"
+            !is_under_dev_target_root(&missing, &dev_root.to_string_lossy()),
+            "a non-existent exe path must fail-closed (gate ENFORCED)"
         );
     }
 }
