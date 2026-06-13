@@ -331,11 +331,18 @@ fresh as yourself, with no `.claude` subdir (else the self-disable guard fires):
 ```powershell
 $env:NONO_EXE          = "C:\Users\OMack\Nono\target\debug\nono.exe"
 $env:CLAUDE_CONFIG_DIR = "C:\temp\nono-uat-cfg"   # minimal settings.json with ONLY the nono hook
-mkdir C:\Users\OMack\a6test -Force | Out-Null      # fresh + user-owned
-(Get-Acl C:\Users\OMack\a6test).Owner              # MUST be your user, else confined writes are denied (R-B3)
-cd C:\Users\OMack\a6test                            # the granted CWD; files land here
+mkdir C:\Users\OMack\a6test -Force | Out-Null
+# GOTCHA: an ELEVATED console makes new dirs owned by BUILTIN\Administrators, not you —
+# which trips R-B3 (nono can't grant a DACL/label without WRITE_DAC, so confined writes are denied).
+takeown /F C:\Users\OMack\a6test | Out-Null         # force ownership to your user account
+(Get-Acl C:\Users\OMack\a6test).Owner               # MUST show your user (e.g. OMack...), NOT BUILTIN\Administrators
+cd C:\Users\OMack\a6test                             # the granted CWD; files land here
 claude
 ```
+
+> If `Owner` is `BUILTIN\Administrators`, confined writes WILL be denied with
+> `Access to the path '…' is denied` (R-B3) — that is the directory setup, not the hook. Re-run
+> `takeown` (or create the dir from a non-elevated console) until `Owner` is your user.
 
 > **Two non-defects to expect (don't chase them as R-A6 failures):**
 > 1. **`é`/non-ASCII mojibake is an input-layer issue, not the hook.** Typing `é` into a Windows
