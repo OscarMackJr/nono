@@ -78,10 +78,13 @@ whether it must pivot to a **daemon-as-launcher** model.
 
 | # | Name | Type | Validates | Verdict | Tags |
 |---|------|------|-----------|---------|------|
-| 002 | post-hoc-token-confine | standard | Given an arbitrary process the daemon did NOT spawn, when it tries to apply nono confinement from outside (lower IL on the running primary token), then NEW unauthorized writes are denied — **KILLER**: settles whether "confine any AI_AGENT token" is feasible or must pivot to daemon-as-launcher | IN PROGRESS | windows, daemon, token, integrity, security |
+| 002 | post-hoc-token-confine | standard | Given an arbitrary process the daemon did NOT spawn, when it lowers the running primary token's IL from outside, then NEW unauthorized writes are denied — **KILLER** | ⚠ PARTIAL | windows, daemon, token, integrity, security |
 | 003 | daemon-as-launcher | standard | Given a persistent daemon, when an arbitrary engine is launched *through* it (engine-neutral generalization of the broker), then it runs confined regardless of engine (cmd.exe AND python.exe) | DEFINED (pending 002) | windows, daemon, broker, launcher |
 | 004 | agent-marker-multitenant | standard | Given multiple agents launched via the daemon, when it marks each (AI_AGENT job/SID/PID registry) and serves per-agent capability requests over one persistent multi-client pipe, then policies resolve independently and the marker is tamper-evident | DEFINED (pending 002) | windows, daemon, ipc, multitenant |
 | 005 | engine-agnostic-abstraction | standard | Given the nono-py/C binding, when a raw Python/LangChain agent invokes the nono primitive directly (no Claude hook), then it is confined equivalently — proving ≥2 engines through one abstraction boundary | DEFINED (pending 002) | bindings, python, abstraction, engine-agnostic |
 
-**Run order = risk order:** 002 first (killer). If 002 invalidates post-hoc confinement (expected — Windows
-won't relabel a running token soundly), 003–005 build the daemon-as-launcher model instead.
+**Run order = risk order:** 002 first (killer). **Result (2026-06-13): PARTIAL** — surprisingly, post-hoc
+IL-drop of a *running* token DOES work and blocks new writes, but it's not sound (handle-leak window, no
+restricting-SID retrofit, blunt vs authorized writes, no network). So SEED-004's literal "detect-and-confine"
+is feasible-but-leaky; **daemon-as-launcher (003) remains the sound primary model**, with post-hoc IL-drop as a
+supplementary "demote a running/escaped agent" control. 003–005 still pending.
