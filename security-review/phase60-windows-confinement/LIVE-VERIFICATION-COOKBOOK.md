@@ -372,7 +372,10 @@ Format-Hex C:\Users\OMack\a6test\a6_write.txt
 (Non-ASCII byte-faithfulness is already proven separately — A6-2 wrote `68 69 C3 A9`, and the hook emits
 `content.as_bytes()` verbatim — so this check stays ASCII to avoid the terminal `é`-mojibake gremlin.)
 
-Result: ____  Notes: ____
+Result: **PASS (2026-06-13)** — after `takeown` made `a6test` user-owned, the confined byte-vehicle
+Write landed exactly `hello world` (11 bytes, no trailing newline, no BOM) through the real hook path
+under CLM; child exit 0. The two earlier failures were the terminal `é`-mojibake and the
+Administrators-owned dir (R-B3), not the fix.
 
 #### A6-3b — Edit (non-start substring; literal replace, no BOM)
 
@@ -464,7 +467,10 @@ Result: ConstrainedLanguage — R-A6 confirmed
 | A6-3 E2E Write/Edit/MultiEdit land, no BOM, literal | | | |
 | A6-4 DECISIVE: LanguageMode + .NET write on real hook path | | | |
 
-R-B4 + R-A1: all their checks PASS → merge-ready independently.
-R-A6: premise CONFIRMED (A6-4 = `ConstrainedLanguage` on the real hook path; A6-1's FullLanguage was a
-non-representative direct-console launch). Final gate is **A6-3** — confirm confined Write/Edit/MultiEdit
-actually LAND under the real CLM path; then R-A6 is merge-ready too.
+R-B4 + R-A1: all checks PASS → merge-ready.
+R-A6: **FIELD-VERIFIED (2026-06-13)** — A6-4 confirmed real CLM on the hook path, and A6-3a confirmed a
+confined Write LANDS byte-faithfully (`hello world`, 11 bytes, no BOM) through the real hook path once
+the project dir is user-owned. A6-3b/c (Edit/MultiEdit) use the same now-proven byte vehicle + a
+CLM-safe byte-replace loop (validated under powershell.exe) — optional extra coverage, low risk.
+
+**All three fixes (R-B4, R-A1, R-A6) are field-verified — `fix/win-confinement-rb4-ra1` is merge-ready.**
