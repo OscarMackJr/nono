@@ -265,12 +265,31 @@ Edit/MultiEdit) — no .NET method calls, no UTF-8 BOM.
 
 > Rebuild after `ef1ea822` so the fixed payloads are in the binary: `cargo build -p nono-cli --bin nono`.
 
+### A6-0 (confirm the binary embeds the R-A6 fix — broker-free, no quoting traps).
+
+The version banner (`nono v0.62.2`) is the crate version and does NOT change with the fix, so it
+is not a reliable check. Instead, ask the hook directly what payload it emits — this runs in-process
+(no broker, no AppContainer, no `$`-quoting), so it always works from any console:
+
+```powershell
+$j = '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"x.txt","content":"hi"},"tool_use_id":"t"}'
+Push-Location C:\Temp   # any dir WITHOUT a .claude subdir (else the self-disable guard fires)
+$j | & C:\Users\OMack\Nono\target\debug\nono.exe claude-code-hook
+Pop-Location
+```
+
+**EXPECT (correct binary):** `additionalContext` contains `Set-Content` + `-Encoding Byte` (the CLM-safe
+byte vehicle) and does **NOT** contain `[System.IO.File]::WriteAllText` / `[Convert]::FromBase64String`.
+If you still see `[System.IO.File]::WriteAllText`, the build is pre-`ef1ea822` — rebuild.
+
 ### A6-1 (root cause confirm). The arm forces Constrained Language Mode.
 
 ```powershell
 # From a profile-covered dir (e.g. %USERPROFILE%\.claude) so the broker/AppContainer arm is selected.
 Push-Location "$env:USERPROFILE\.claude"
-& C:\Users\OMack\Nono\target\debug\nono.exe run --profile claude-code-tools-windows-runner --allow-cwd -- powershell.exe -NoProfile -NonInteractive -Command "$ExecutionContext.SessionState.LanguageMode"
+# NOTE: SINGLE-quote the -Command payload so your outer console does NOT expand $-variables
+# (double quotes let the console eat $ExecutionContext / $b before they reach the confined shell).
+& C:\Users\OMack\Nono\target\debug\nono.exe run --profile claude-code-tools-windows-runner --allow-cwd -- powershell.exe -NoProfile -NonInteractive -Command '$ExecutionContext.SessionState.LanguageMode'
 Pop-Location
 ```
 
@@ -285,7 +304,8 @@ Result: ____  Notes: ____
 # Runs the exact CLM-safe Write vehicle inside the AppContainer; proves Set-Content -Encoding Byte
 # works under CLM and is BOM-free. Bytes 68 69 C3 A9 = "hi" + é (U+00E9) in UTF-8.
 Push-Location "$env:USERPROFILE\.claude"
-& C:\Users\OMack\Nono\target\debug\nono.exe run --profile claude-code-tools-windows-runner --allow-cwd -- powershell.exe -NoProfile -NonInteractive -Command "$b = [byte[]]@(104,105,195,169); Set-Content -LiteralPath 'a6_write.txt' -Value $b -Encoding Byte"
+# SINGLE-quote the payload (outer console must not expand $b); absolute path avoids nested quotes.
+& C:\Users\OMack\Nono\target\debug\nono.exe run --profile claude-code-tools-windows-runner --allow-cwd -- powershell.exe -NoProfile -NonInteractive -Command '$b = [byte[]]@(104,105,195,169); Set-Content -LiteralPath C:\Users\OMack\.claude\a6_write.txt -Value $b -Encoding Byte'
 Format-Hex "$env:USERPROFILE\.claude\a6_write.txt"
 Pop-Location
 ```
