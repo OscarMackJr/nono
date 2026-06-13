@@ -79,7 +79,7 @@ whether it must pivot to a **daemon-as-launcher** model.
 | # | Name | Type | Validates | Verdict | Tags |
 |---|------|------|-----------|---------|------|
 | 002 | post-hoc-token-confine | standard | Given an arbitrary process the daemon did NOT spawn, when it lowers the running primary token's IL from outside, then NEW unauthorized writes are denied — **KILLER** | ⚠ PARTIAL | windows, daemon, token, integrity, security |
-| 003 | daemon-as-launcher | standard | Given a persistent daemon, when an arbitrary engine is launched *through* it (engine-neutral generalization of the broker), then it runs confined regardless of engine (cmd.exe AND python.exe) | DEFINED (pending 002) | windows, daemon, broker, launcher |
+| 003 | daemon-as-launcher | standard | Given one persistent launcher, when it launches multiple distinct engines (cmd, powershell, python) through `nono run`, then each runs confined identically (granted write lands, outside write denied) | IN PROGRESS | windows, daemon, broker, launcher, engine-agnostic |
 | 004 | agent-marker-multitenant | standard | Given multiple agents launched via the daemon, when it marks each (AI_AGENT job/SID/PID registry) and serves per-agent capability requests over one persistent multi-client pipe, then policies resolve independently and the marker is tamper-evident | DEFINED (pending 002) | windows, daemon, ipc, multitenant |
 | 005 | engine-agnostic-abstraction | standard | Given the nono-py/C binding, when a raw Python/LangChain agent invokes the nono primitive directly (no Claude hook), then it is confined equivalently — proving ≥2 engines through one abstraction boundary | DEFINED (pending 002) | bindings, python, abstraction, engine-agnostic |
 
