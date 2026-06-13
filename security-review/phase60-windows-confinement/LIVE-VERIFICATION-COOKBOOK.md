@@ -317,23 +317,72 @@ Pop-Location
 
 Result: ____  Notes: ____
 
-### A6-3 (E2E through the real hook). Denied Write/Edit/MultiEdit → confined Bash retry → files land.
+### A6-3 (E2E through the real hook — does the byte-vehicle fix actually LAND under real CLM?)
 
-In a real Claude Code session with the nono tool-wrapping hook (the working `CLAUDE_CONFIG_DIR`
-deployment, `NONO_EXE` → the rebuilt dev `nono.exe`), from a project dir WITHOUT a `.claude` subdir:
+This is the **only** check that must run inside a live Claude Code session — CLM appears only on the
+Claude-spawned path (A6-4), not on a direct console `nono run` (A6-1). You drive Claude to use the
+in-process Write/Edit/MultiEdit tools; the hook denies each and Claude auto-retries the byte-vehicle
+Bash command; then you verify the resulting file from a **separate, normal** PowerShell console.
 
-1. **Write** a small file with non-ASCII content (e.g. `héllo`). EXPECT: denied → Bash retry → file lands.
-2. **Edit** a *non-start* substring of an existing file (so the whole content is rewritten through the vehicle). EXPECT: lands, replacement correct.
-3. **MultiEdit** with ≥2 edits including one whose `old_string` contains regex metacharacters (e.g. `foo.bar(1+2)`) and one deletion (`new_string: ""`). EXPECT: all edits applied literally.
+**Setup (once).** Hook active (the `CLAUDE_CONFIG_DIR` deployment), `NONO_EXE` → the rebuilt
+`target\debug\nono.exe`. Launch `claude` (NOT `nono run -- claude`) from a granted project dir that has
+no `.claude` subdir:
+```powershell
+$env:NONO_EXE        = "C:\Users\OMack\Nono\target\debug\nono.exe"
+$env:CLAUDE_CONFIG_DIR = "C:\temp\nono-uat-cfg"   # minimal settings.json with ONLY the nono hook
+cd C:\Users\OMack\nonoUAT                          # the granted CWD; files land here
+claude
+```
 
-Then `Format-Hex` each resulting file:
+#### A6-3a — Write (the headline check)
 
-**EXPECT (PASS):** every file is byte-faithful (non-ASCII preserved), has **no `EF BB BF` BOM** at the
-head or anywhere mid-file, the Edit/MultiEdit replacements are literal (regex metacharacters treated as
-literal text), and the deletion removed exactly its `old_string`.
+In the Claude session, prompt verbatim:
 
-**FAIL:** a leading/embedded `EF BB BF`, mangled non-ASCII, a regex-interpreted match, or a file that
-never lands → report which case.
+> Use the Write tool to create `a6_write.txt` with exactly this content and nothing else: héllo
+
+**Expected in-session:** the Write tool is **denied** with a byte-vehicle `additionalContext`
+(`$bytes = [byte[]]@(...); Set-Content … -Encoding Byte`), and Claude **auto-retries it as a Bash call**
+that exits 0. (No manual PowerShell — the point is to exercise the real hook.)
+
+**Verify from a SEPARATE normal PowerShell console** (not inside the sandbox):
+```powershell
+Format-Hex C:\Users\OMack\nonoUAT\a6_write.txt
+```
+**EXPECT (PASS):** bytes `68 C3 A9 6C 6C 6F` (= `héllo`; `é` = `C3 A9`), length **6**, **no leading `EF BB BF`**.
+**FAIL:** a leading `EF BB BF` BOM, a mangled `é` (e.g. `3F` `?` or `E9` alone), or the file missing.
+
+Result: ____  Notes: ____
+
+#### A6-3b — Edit (non-start substring; literal replace, no BOM)
+
+In the same session:
+1. Prompt: *"Use the Write tool to create `a6_edit.txt` with exactly: `alpha BETA gamma`"* (lands via the vehicle).
+2. Prompt: *"Use the Edit tool on `a6_edit.txt`: replace `BETA` with `DELTA`."*
+
+Verify (separate console):
+```powershell
+Get-Content -Raw C:\Users\OMack\nonoUAT\a6_edit.txt   # EXPECT: alpha DELTA gamma
+Format-Hex      C:\Users\OMack\nonoUAT\a6_edit.txt     # EXPECT: starts 61 6C 70 68 61 ... NO leading EF BB BF
+```
+**EXPECT (PASS):** content is `alpha DELTA gamma`, no BOM at head or mid-file.
+
+Result: ____  Notes: ____
+
+#### A6-3c — MultiEdit (regex metacharacters treated literally + a deletion)
+
+1. Prompt: *"Use the Write tool to create `a6_multi.txt` with exactly: `foo.bar(1+2) remove_me tail`"*.
+2. Prompt: *"Use the MultiEdit tool on `a6_multi.txt` with two edits: (1) replace `foo.bar(1+2)` with `OK`; (2) replace `remove_me ` with the empty string."*
+
+Verify (separate console):
+```powershell
+Get-Content -Raw C:\Users\OMack\nonoUAT\a6_multi.txt   # EXPECT: OK tail
+Format-Hex      C:\Users\OMack\nonoUAT\a6_multi.txt     # EXPECT: 4F 4B 20 74 61 69 6C, NO EF BB BF
+```
+**EXPECT (PASS):** content is exactly `OK tail` — proving `foo.bar(1+2)` was matched **literally** (not as
+a regex: a regex would treat `.`, `()`, `+` specially) and the deletion removed `remove_me ` exactly. No BOM.
+
+**FAIL (any sub-check):** leading/embedded `EF BB BF`, mangled non-ASCII, a regex-interpreted match, or a
+file that never lands → report which one.
 
 Result: ____  Notes: ____
 
