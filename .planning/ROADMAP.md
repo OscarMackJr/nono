@@ -3,7 +3,7 @@ milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
 status: active
 created: 2026-06-11
-last_updated: 2026-06-11
+last_updated: 2026-06-12
 granularity: standard
 ---
 
@@ -72,7 +72,10 @@ Plans:
   2. The ledger includes a `windows-touch` column and an ADR-cadence review per the Phase 33 Option A `continue` rule (does not silently supersede the Phase 33 ADR).
   3. A diff-inspect note records the re-export / cross-cluster cross-check per the `feedback_cluster_isolation_invalid` lesson (don't trust `--name-only` isolation).
   4. Upstream is re-fetched at audit-open and the head SHA + refetch date are recorded.
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 69-01-PLAN.md — UPST8 audit (v0.60.0..v0.62.0 non-macOS divergence ledger; D-01 range correction: SC says v0.61.2 ceiling but audit extends to v0.62.0 = SHA 52809dda)
+**SC divergence note**: D-01 extends the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language should be updated to reflect `v0.62.0` after Phase 69 closes.
 **UI hint**: no
 
 ### Phase 70: UPST8 Cherry-pick Sync
@@ -156,7 +159,7 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 |-------|----------------|--------|-----------|
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
 | 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
-| 69. UPST8 Audit | 0/TBD | Not started | - |
+| 69. UPST8 Audit | 0/1 | Planned | - |
 | 70. UPST8 Cherry-pick Sync | 0/TBD | Not started | - |
 
 ## Future Cycles
@@ -188,7 +191,7 @@ The big distribution effort is scoped after v2.11, gated on the incoming publicl
 **v2.11 is active.** Start with the independent, parallel-safe phases as hosts become available:
 - `/gsd:plan-phase 67` — needs a clean Windows 11 host for the install + broker UAT (production-signed MSI, not dev-layout).
 - `/gsd:plan-phase 68` — needs a real macOS host for the `NONO_RESL_HOST_VALIDATED=1` re-validation.
-- `/gsd:plan-phase 69` then `70` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI).
+- `/gsd:execute-phase 69` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI for Phase 70).
 
 **Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude (verify no `build_notes/`/`.gsd/` staged before any push). Real publicly-trusted signing is cert-gated and OUT OF SCOPE this milestone.
 
