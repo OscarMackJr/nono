@@ -75,7 +75,7 @@ Plans:
 **Plans**: 1 plan
 Plans:
 - [x] 69-01-PLAN.md — UPST8 audit (v0.60.0..v0.62.0 non-macOS divergence ledger; D-01 range correction: SC says v0.61.2 ceiling but audit extends to v0.62.0 = SHA 52809dda)
-**SC divergence note**: D-01 extends the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language should be updated to reflect `v0.62.0` after Phase 69 closes. The ROADMAP SC says `v0.60.0..v0.61.2`; the actual audit covers `v0.60.0..v0.62.0`; consider updating REQUIREMENTS.md UPST8-01 acceptance to `v0.62.0`.
+**SC divergence note (D-01, amended by D-70-01)**: D-01 extended the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language has been updated to reflect `v0.62.0` (see D-70-01 in Plan 70-01). The ROADMAP Phase 69 SC originally said `v0.60.0..v0.61.2`; the actual audit covered `v0.60.0..v0.62.0`; REQUIREMENTS.md UPST8-01 acceptance now references `v0.62.0`.
 **UI hint**: no
 
 ### Phase 70: UPST8 Cherry-pick Sync
@@ -83,7 +83,7 @@ Plans:
 **Depends on**: Phase 69 (audit dispositions drive the cherry-pick set)
 **Requirements**: UPST8-02
 **Success Criteria** (what must be TRUE):
-  1. The will-sync upstream commits (C3: cc21229f + 20cc5df9; C4: db073750; C2: 0fb59375 + bd4c469a) are cherry-picked with verbatim D-19 `Upstream-commit:` trailer blocks (or D-20 `Upstream-replayed-from:` where direct cherry-pick conflicts dominate); actual range `v0.60.0..v0.62.0` per D-70-01 (SC amended from v0.61.2 per 69-DIVERGENCE-LEDGER.md D-01).
+  1. The will-sync upstream commits (C3: cc21229f + 20cc5df9; C4: db073750; C2: 0fb59375 + bd4c469a) are cherry-picked with verbatim D-19 `Upstream-commit:` trailer blocks (or D-20 `Upstream-replayed-from:` where direct cherry-pick conflicts dominate); actual range `v0.60.0..v0.62.0` per D-70-01 (SC amended from v0.61.2 to v0.62.0 per 69-DIVERGENCE-LEDGER.md D-01; +3 tail commits absorbed in Phase 70).
   2. The Windows-only-files invariant holds (no `*_windows.rs` / `exec_strategy_windows/` drift from upstream) and the fork-divergence catalog is preserved (RouteStore/CredentialStore decoupling, validate_path_within, hooks.rs retention).
   3. Cross-target clippy (Linux + macOS) is verified per `.planning/templates/cross-target-verify-checklist.md` (VERIFIED or PARTIAL with explicit CI deferral — never silently skipped).
   4. The full workspace test suite passes post-sync with no new green->red transitions vs plan base SHA `6667177e`.
