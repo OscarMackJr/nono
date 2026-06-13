@@ -426,6 +426,7 @@ mod tests {
             suppressed_system_service_operations: Vec::new(),
             allowed_env_vars: None,
             denied_env_vars: None,
+            set_vars: None,
             network_block_requested: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),

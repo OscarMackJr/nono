@@ -207,6 +207,8 @@ pub(crate) struct ExecutionFlags {
     pub(crate) proxy: ProxyLaunchOptions,
     pub(crate) redaction_policy: nono::ScrubPolicy,
     pub(crate) resource_limits: ResourceLimits,
+    /// Expanded `environment.set_vars` (key, expanded-value), `None` if absent.
+    pub(crate) set_vars: Option<Vec<(String, String)>>,
     pub(crate) startup_timeout_secs: Option<u64>,
     /// Phase 58: session lifecycle hooks to execute before/after the sandboxed
     /// child. Runtime dispatch is platform-specific (`hook_runtime.rs` on Unix,
@@ -245,6 +247,7 @@ impl ExecutionFlags {
             proxy: ProxyLaunchOptions::default(),
             redaction_policy: nono::ScrubPolicy::secure_default(),
             resource_limits: ResourceLimits::default(),
+            set_vars: None,
             startup_timeout_secs: None,
             // Phase 58: default to no session hooks.
             session_hooks: crate::profile::SessionHooks::default(),
@@ -397,6 +400,7 @@ pub(crate) fn prepare_run_launch_plan(
             proxy,
             redaction_policy,
             resource_limits,
+            set_vars: prepared.set_vars,
             startup_timeout_secs,
             // Phase 58: wire session_hooks from PreparedSandbox into
             // ExecutionFlags. Source: upstream daa55c8 launch_runtime.rs.

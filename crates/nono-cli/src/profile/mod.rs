@@ -2080,6 +2080,20 @@ pub struct EnvironmentConfig {
     /// Use this to strip specific secrets while keeping everything else inherited.
     #[serde(default)]
     pub deny_vars: Vec<String>,
+
+    /// Static environment variables injected into the sandboxed process.
+    ///
+    /// Maps variable names to values, set after allow/deny filtering and before
+    /// credential injection (so injected credentials win on conflict). Values
+    /// support the same expansion as profile paths (`$HOME`, `~`, `$WORKDIR`,
+    /// `$TMPDIR`, `$XDG_*`, `$NONO_PACKAGES`).
+    ///
+    /// `PATH` and any `NONO_*` key are reserved and rejected at parse time.
+    /// Unlike inherited host variables, keys here are NOT subject to the
+    /// dangerous-variable blocklist: setting one explicitly is a deliberate,
+    /// auditable operator decision.
+    #[serde(default)]
+    pub set_vars: std::collections::HashMap<String, String>,
 }
 
 /// Configuration for supervisor-delegated URL opening.
@@ -2793,6 +2807,14 @@ pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
     validate_profile_custom_credentials(&profile)?;
     validate_env_credential_keys(&profile)?;
     validate_profile_aipc_tokens(&profile)?;
+    // Validate environment.set_vars keys (reserved/invalid keys are fatal)
+    if let Some(env_config) = profile.environment.as_ref() {
+        if !env_config.set_vars.is_empty() {
+            if let Some(err) = crate::exec_strategy::validate_set_vars(&env_config.set_vars) {
+                return Err(NonoError::ProfileParse(err));
+            }
+        }
+    }
     Ok(profile)
 }
 
@@ -2847,6 +2869,15 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
     // request. Reuses Profile::resolve_aipc_allowlist's per-type from_token
     // parsers.
     validate_profile_aipc_tokens(&profile)?;
+
+    // Validate environment.set_vars keys (reserved/invalid keys are fatal)
+    if let Some(env_config) = profile.environment.as_ref() {
+        if !env_config.set_vars.is_empty() {
+            if let Some(err) = crate::exec_strategy::validate_set_vars(&env_config.set_vars) {
+                return Err(NonoError::ProfileParse(err));
+            }
+        }
+    }
 
     Ok(profile)
 }
@@ -3199,6 +3230,11 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
                 // deny_vars merges identically to allow_vars.
                 deny_vars: dedup_append(&base_env.deny_vars, &child_env.deny_vars),
+                set_vars: {
+                    let mut merged = base_env.set_vars.clone();
+                    merged.extend(child_env.set_vars.clone());
+                    merged
+                },
             }),
         },
         // NOTE: WorkdirAccess::None serves as both "not specified" and "explicitly no access".
@@ -4237,6 +4273,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["GH_TOKEN".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4244,6 +4281,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["ANTHROPIC_API_KEY".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4260,6 +4298,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["GH_TOKEN".into(), "ANTHROPIC_API_KEY".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4267,6 +4306,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["ANTHROPIC_API_KEY".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -7906,6 +7946,40 @@ mod windows_low_il_broker_tests {
     // -------------------------------------------------------------------------
     // JSONC parsing tests (C7 upstream 53a0c521)
     // -------------------------------------------------------------------------
+
+    #[test]
+    fn set_vars_parses_valid_keys() {
+        let json = br#"{
+            "meta": { "name": "set-vars-valid" },
+            "environment": {
+                "set_vars": { "RUST_LOG": "debug", "FOO": "$HOME/.config" }
+            }
+        }"#;
+        let profile = parse_profile_bytes(json).expect("valid set_vars should parse");
+        let env = profile.environment.expect("environment present");
+        assert_eq!(env.set_vars.get("RUST_LOG"), Some(&"debug".to_string()));
+        assert_eq!(env.set_vars.get("FOO"), Some(&"$HOME/.config".to_string()));
+    }
+
+    #[test]
+    fn set_vars_rejects_reserved_path_key() {
+        let json = br#"{
+            "meta": { "name": "set-vars-path" },
+            "environment": { "set_vars": { "PATH": "/usr/bin" } }
+        }"#;
+        let err = parse_profile_bytes(json).expect_err("PATH in set_vars must be rejected");
+        assert!(err.to_string().contains("PATH"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn set_vars_rejects_reserved_nono_prefix() {
+        let json = br#"{
+            "meta": { "name": "set-vars-nono" },
+            "environment": { "set_vars": { "NONO_FOO": "bar" } }
+        }"#;
+        let err = parse_profile_bytes(json).expect_err("NONO_* in set_vars must be rejected");
+        assert!(err.to_string().contains("NONO_"), "unexpected error: {err}");
+    }
 
     #[test]
     fn jsonc_comments_and_trailing_commas() {

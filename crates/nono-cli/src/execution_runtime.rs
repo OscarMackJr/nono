@@ -471,6 +471,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         af_unix_mediation: flags.af_unix_mediation,
         allowed_env_vars: flags.allowed_env_vars,
         denied_env_vars: flags.denied_env_vars,
+        set_vars: flags.set_vars.unwrap_or_default(),
     };
     // Plan 62-12 (F-62-UAT-05 redesign): the SINGLE per-run identifier for the
     // WFP-enforced broker-no-PTY arm is the AppContainer moniker
