@@ -21,7 +21,27 @@
 
 v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed Linux backends (Phase 37 — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `NonoError::UnsupportedKernelFeature` fail-closed on cgroup v1 + cargo-install-style registry-profile auto-pull with sigstore-sign keyless OIDC signing; 5 e2e integration tests + multi-endpoint mock TCP server; sigstore-rust v0.7.0 bump closing 2 pre-existing TUF flakes), reset pre-existing CI red across all 7 lanes (Phase 41 — Linux/macOS Clippy + 5 Windows CI jobs back to green; MSI validator `-BrokerPath` mismatch resolved; cross-target clippy verification protocol codified in CLAUDE.md as enforcement-shaped MUST/NEVER rule; v24 broker code-review closure: `BrokerNotFound` FFI remap + null/INVALID handle rejection + empty-list rejection + Job-object test SKIP→FAIL policy), audited upstream `v0.53.0..v0.54.0` divergence (Phase 42 UPST5 audit — first cycle where `windows-touch` column fires: 7 clusters / 18 commits / 4 will-sync + 2 fork-preserve + 1 won't-sync; 3 windows-touch:yes commits dispositioned; per-cell L/M/H ADR review confirmed Phase 33 Option A `continue`), and executed the UPST5 sync (Phase 43 — 11 D-19 cherry-picks + 3 D-20 manual replays; new cross-platform `crates/nono-cli/src/platform.rs` module from upstream `ce06bd59` + Windows registry detection extensions; D-43-E1 Windows-only-files invariant respected; 2208 tests passing on Windows host; Cluster 2 reclassified `will-sync → split` mid-flight with source migration deferred to v2.6/UPST6). 13/13 v2.5 requirements satisfied at codebase level (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 + REQ-CI-01/02/03 + REQ-BROKER-CR-01..04 + REQ-UPST5-01/02). Cross-phase integration **clean** at close (7/7 wiring + 5/5 E2E flows WIRED per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`); milestone status `tech_debt` with 32 deferred items acknowledged at close (post-merge CI verifications on push + 16 REVIEW.md warnings + REQUIREMENTS.md checkbox drift). 172 commits since v2.4 (`25e88e61..a9b64440`, 5 days).
 
-## Current Milestone: v2.11 Clean-Host Distribution Cleanup + UPST8
+## Current Milestone: v2.12 AI Agent Abstraction
+
+**Goal:** Generalize nono's Windows confinement beyond Claude Code into an engine-agnostic model — confine *any* AI agent engine (Aider, GitHub Copilot CLI, Cursor, custom Python/LangChain) with the same OS-enforced isolation, replacing the Claude-specific PreToolUse hook. (SEED-004.)
+
+**Target features:**
+- **Engine-agnostic launcher** — productionize the validated daemon-as-launcher (spike 003): generalize the confined `nono run` path to mediate non-Claude engines, honoring the exe/interpreter-coverage contract, absolute grants, and user-owned workspace (R-B3).
+- **Persistent multi-tenant daemon** — a long-running local service that adopts/launches multiple agents, marks each (`AI_AGENT` job/SID), and serves per-agent capability requests over one persistent multi-client pipe (generalizes the supervisor IPC). *(riskiest — former spike 004)*
+- **Engine abstraction boundary + `nono-py` binding** — define what every engine must expose for nono to mediate it, and prove it by confining a real Python/LangChain agent through the binding with no Claude hook. *(former spike 005)*
+- **Post-hoc demote control (supplementary)** — layer spike 002's running-token IL-drop as a "demote a misbehaving/escaped agent" control (not a standalone boundary).
+
+**Key context:** Built on the `spike-findings-nono` blueprint (SEED-004; spikes 001–003). Daemon-as-launcher (confine at spawn) is the proven sound model; post-hoc IL-drop is demote-only. User-mode only — no kernel driver / process-creation callbacks. Must preserve isolation ≥ the per-invocation `nono run` model (`NO_WRITE_UP`, deny network unless granted).
+
+**Out of scope (deferred to a separate enterprise-hardening milestone):**
+- **Signed-policy / decentralized attestation** (SEED-005 / review R-T1) — X-Large; a milestone of its own.
+- **Silent/headless enterprise deployment** (SEED-001), **network egress allowlisting** (SEED-002), **SIEM/EDR telemetry** (SEED-003).
+- **Real publicly-trusted code signing** (Azure Trusted Signing) — cert-gated.
+
+<details>
+<summary>Previously v2.11 Milestone scope (complete 2026-06-11)</summary>
+
+## Milestone scope (archived): v2.11 Clean-Host Distribution Cleanup + UPST8
 
 **Goal:** Make the public release work out-of-the-box on a clean host and fix the macOS resource-limit bug — the cert-independent cleanup, done while the trusted-signing cert is in flight — then absorb the deferred non-macOS upstream sync.
 
@@ -35,6 +55,8 @@ v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed
 - **Real publicly-trusted code signing (Azure Trusted Signing)** — BLOCKED on an incoming cert; the anchor of the next (enterprise distribution) milestone.
 - **Silent/headless fleet deployment** (GPO/SCCM/Intune, machine-wide provisioning — SEED-001) and the rest of the enterprise horizon (SEED-002…005).
 - **DRV-PROD-01** production minifilter (gated No-go/Conditional-go per ADR-65).
+
+</details>
 
 <details>
 <summary>Previously v2.10 Milestone scope (archived; shipped 2026-06-11)</summary>

@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.11
-milestone_name: Clean-Host Distribution Cleanup + UPST8
-status: milestone_complete
-last_updated: "2026-06-13T02:47:12.771Z"
+milestone: v2.12
+milestone_name: AI Agent Abstraction
+status: planning
+last_updated: "2026-06-13T21:37:23.048Z"
 last_activity: 2026-06-13
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 ## Current Position
 
-Phase: 70
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-13
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-13 — Milestone v2.12 started
 
 ### v2.11 Phase Summary (active)
 
@@ -249,4 +249,5 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 - `/gsd:plan-phase 68` — macOS resl enforcement fix (needs a real macOS host for `NONO_RESL_HOST_VALIDATED=1` re-validation). Parallel-safe with 67.
 - `/gsd:plan-phase 69` then `70` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI).
 - Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
+
 | 2026-06-13 | fast | R-B4/R-A1 live-verification cookbook | ✅ |
