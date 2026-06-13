@@ -30,7 +30,7 @@ granularity: standard
 - [ ] **Phase 67: Clean-Host Windows Install** — The machine MSI installs to completion on a fresh Win11 host (VC++ runtime handled, service-start non-fatal) and the supervised/broker path works there via an interim, auditable cert-trust helper + docs.
 - [ ] **Phase 68: macOS Resource-Limit Enforcement Fix** — `nono run --timeout` and `--max-processes` actually fire on a real macOS host (supervisor watchdog + `RLIMIT_NPROC`), re-validated with `NONO_RESL_HOST_VALIDATED=1`.
 - [x] **Phase 69: UPST8 Audit** — A DIVERGENCE-LEDGER audits the non-macOS slice of upstream `v0.60.0..v0.61.2` with per-commit dispositions, `windows-touch` column, and ADR-cadence review.
-- [ ] **Phase 70: UPST8 Cherry-pick Sync** — The will-sync UPST8 commits are absorbed with D-19 trailers, Windows-only-files invariant preserved, cross-target clippy + full suite green.
+- [x] **Phase 70: UPST8 Cherry-pick Sync** — The will-sync UPST8 commits are absorbed with D-19 trailers, Windows-only-files invariant preserved, cross-target clippy + full suite green.
 
 ## Phase Details
 
@@ -91,7 +91,7 @@ Plans:
 Plans:
 - [x] 70-01-PROFILE-DIAGNOSTIC-FEATURES-PLAN.md — D-70-01 REQ/SC amendment (v0.62.0 upper bound) + C3 cherry-picks (cc21229f + 20cc5df9): diagnostics.suppress_system_services profile option + registry-ref-in-extends; establishes PreparedSandbox.suppressed_system_service_operations prerequisite for Plan 70-03
 - [x] 70-02-NONO-PULL-FORCE-RECOVERY-PLAN.md — C4 cherry-pick (db073750): nono pull --force metadata recovery; surface-disjoint from C3/C2; Wave 1 parallel with 70-01
-- [ ] 70-03-NETWORK-POLICY-SECURITY-PLAN.md — C2 cherry-picks (0fb59375 + bd4c469a): remove implicit credential routes from embedded profiles + deny-by-default under network.block; depends on 70-01 (C3 prerequisite field); substantive threat model for the network-deny + credential-injection posture
+- [x] 70-03-NETWORK-POLICY-SECURITY-PLAN.md — C2 cherry-picks (0fb59375 + bd4c469a): remove implicit credential routes from embedded profiles + deny-by-default under network.block; depends on 70-01 (C3 prerequisite field); substantive threat model for the network-deny + credential-injection posture
 **UI hint**: no
 
 <details>
@@ -164,7 +164,7 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
 | 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
 | 69. UPST8 Audit | 1/1 | Complete    | 2026-06-13 |
-| 70. UPST8 Cherry-pick Sync | 2/3 | In Progress|  |
+| 70. UPST8 Cherry-pick Sync | 3/3 | Complete   | 2026-06-13 |
 
 ## Future Cycles
 

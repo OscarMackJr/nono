@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
-status: executing
-last_updated: "2026-06-13T02:30:55.611Z"
+status: verifying
+last_updated: "2026-06-13T02:47:12.771Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 4
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 6
-  completed_plans: 5
-  percent: 83
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -21,13 +21,13 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 70 — upst8-cherry-pick-sync
+**Current Focus:** Phase 70 complete — UPST8 sync done; awaiting human-verify checkpoint for C2 network policy security; Phases 67 (clean-host Win install) and 68 (macOS resl fix) pending host-gated UAT
 
 ## Current Position
 
-Phase: 70 (upst8-cherry-pick-sync) — EXECUTING
+Phase: 70 (upst8-cherry-pick-sync) — VERIFYING
 Plan: 3 of 3
-Status: Ready to execute
+Status: All 3 plans complete — awaiting human-verify checkpoint approval
 Last activity: 2026-06-13
 
 ### v2.11 Phase Summary (active)
@@ -122,6 +122,19 @@ Last activity: 2026-06-13
 - **Seatbelt deny-after-allow ordering (Pitfall 10):** unit tests must assert ordering, not just rule presence.
 - **macOS `/private/etc` symlink drift (Pitfall 11):** emit both symlink and canonical path for every macOS deny path.
 - **DIVERGENCE-LEDGER cluster isolation can be empirically false (`feedback_cluster_isolation_invalid`):** UPST8 audit (Phase 69) must diff-inspect re-export surfaces, not just `--name-only`.
+
+### Plan 70-03 Close — C2 Network Policy Security Hardening (2026-06-13)
+
+- **C2 commits:** 0fb59375 (fork: `1f5b6193`) + bd4c469a (fork: `35282744`)
+- **Security effect:** Embedded profiles (opencode/developer/codex/claude-code) no longer carry implicit credential routes; proxy now enforces deny-by-default under network.block via ProxyConfig.strict_filter + HostFilter::new_strict()
+- **Conflicts in bd4c469a:** 4 files (sandbox_prepare.rs, launch_runtime.rs, proxy_runtime.rs, main.rs); 4 auto-merged; upstream refactored helpers (cwd_access_requirement etc.) rejected (Edition 2021 incompatible; fork has equivalent inline logic)
+- **RouteStore/CredentialStore decoupling (Phase 56):** PRESERVED — server.rs auto-merged cleanly; no regression
+- **Test result:** 779+1219+162 pass; 5 pre-existing failures (red->red carry-forward); 0 new regressions
+- **Cross-target clippy:** PARTIAL — Windows host cannot cross-compile; GH Actions CI is load-bearing signal
+- **D-70-E1 C2:** PASS (0 Windows-only files); D-70-E1 phase-wide: PASS (0 Windows-only files across all 5 cherry-picks)
+- **Phase-wide D-19/D-20 count:** 5 (all will-sync commits absorbed: C3×2 + C4×1 D-20 + C2×2)
+- **UPST8-02:** SATISFIED — all 5 will-sync commits on main with correct trailers
+- **Human-verify checkpoint:** AWAITING — automated checks PASS; awaiting user confirmation
 
 ### Plan 69-01 Close — UPST8 Audit (2026-06-13)
 
@@ -224,7 +237,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-13T02:30:55.595Z
+**Last session:** 2026-06-13T02:47:12.755Z
 
 **v2.11 roadmap complete (2026-06-11):** Phases 67-70 defined, 8/8 reqs mapped (100% coverage). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Phases 67 (clean-host Win install: DIST-01/02 + TRUST-01/02) and 68 (macOS resl: RESL-MAC-01/02) are independent + host-gated + parallel-safe. Phases 69 (UPST8 audit: UPST8-01) → 70 (UPST8 sync: UPST8-02) are the linear audit-then-sync pair, cadence-ordered after Phase 55.
 
