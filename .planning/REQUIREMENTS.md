@@ -24,7 +24,7 @@
 
 ### Upstream Sync (UPST8)
 
-- [ ] **UPST8-01**: A `DIVERGENCE-LEDGER.md` **audits upstream `always-further/nono` `v0.60.0..v0.61.2`** scoped to the **non-macOS** surface (the macOS slice was absorbed in v2.10), inventorying every relevant commit with per-commit dispositions (will-sync / fork-preserve / won't-sync / split), a `windows-touch` column, an ADR-cadence review (per the Phase 33 Option A `continue` rule), and a diff-inspect note per the `feedback_cluster_isolation_invalid` lesson. Re-fetch upstream at audit-open and record the head SHA.
+- [x] **UPST8-01**: A `DIVERGENCE-LEDGER.md` **audits upstream `always-further/nono` `v0.60.0..v0.61.2`** scoped to the **non-macOS** surface (the macOS slice was absorbed in v2.10), inventorying every relevant commit with per-commit dispositions (will-sync / fork-preserve / won't-sync / split), a `windows-touch` column, an ADR-cadence review (per the Phase 33 Option A `continue` rule), and a diff-inspect note per the `feedback_cluster_isolation_invalid` lesson. Re-fetch upstream at audit-open and record the head SHA.
 - [ ] **UPST8-02**: The **will-sync upstream commits are cherry-picked** with verbatim D-19 `Upstream-commit:` trailer blocks, preserving the Windows-only-files invariant (no `*_windows.rs` / `exec_strategy_windows/` drift from upstream) and the fork-divergence catalog; D-20 manual replays are used where direct cherry-pick conflicts dominate. Cross-target clippy (Linux + macOS) verified per `.planning/templates/cross-target-verify-checklist.md`; the full workspace test suite passes post-sync.
 
 ## v2 Requirements (Deferred to the Enterprise Distribution Milestone)

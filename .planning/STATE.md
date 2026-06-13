@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
-status: executing
+status: ready_to_plan
 last_updated: "2026-06-13T00:39:25.331Z"
 last_activity: 2026-06-13 -- Phase 69 execution started
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 3
   completed_plans: 3
-  percent: 67
+  percent: 50
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 ## Current Position
 
-Phase: 70 (UPST8 Cherry-pick Sync) — NEXT
-Plan: 0 of TBD
-Status: Phase 69 complete; Phase 70 next
-Last activity: 2026-06-13 -- Phase 69 Plan 69-01 closed
+Phase: 70
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-13
 
 ### v2.11 Phase Summary (active)
 
