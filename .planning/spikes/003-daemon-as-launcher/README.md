@@ -3,7 +3,7 @@ spike: 003
 name: daemon-as-launcher
 type: standard
 validates: "Given one persistent launcher process, when it launches multiple distinct engines (cmd, powershell, python) through the confined nono primitive, then each runs confined identically — a write to the granted workdir lands, a write outside it is denied"
-verdict: PENDING
+verdict: VALIDATED
 related: [001, 002]
 tags: [windows, daemon, broker, launcher, engine-agnostic, seed-004]
 ---
@@ -80,7 +80,11 @@ Per engine, a line:
     requirement**: an engine-agnostic daemon must grant/cover each engine's executable path.
 - 2026-06-13: **v2 fix** — switched all writes to ABSOLUTE paths (no CWD dependence), and added
   `--allow <exe-dir>` for engines outside the default-covered system paths (python). Recompiled clean.
-  Re-run PENDING for a clean all-engines verdict.
+- 2026-06-13: **Operator run v2 — VALIDATED.** All three engines `CONFINED ✓`:
+  - cmd: `granted_cmd.txt` landed; outside `Access is denied`.
+  - powershell: `granted_powershell.txt` landed (absolute path); outside `UnauthorizedAccessException`.
+  - python: launched after `--allow ...\Python312` (banner shows `r+w ...\Python312`); `granted_python.txt`
+    landed; outside `PermissionError [Errno 13]`. The strongest engine-variable proof (a real non-shell engine).
 
 ## Findings (so far)
 
@@ -94,6 +98,16 @@ Per engine, a line:
 
 ## Results
 
-_v2 re-run PENDING. VALIDATED if every engine is `CONFINED ✓` with absolute paths + exe-dir coverage; then
-reassess 004 (persistent token/job + multi-tenant AI_AGENT marker/IPC) and 005 (engine-agnostic abstraction +
-the executable-coverage contract, via the nono-py binding)._
+**VALIDATED (2026-06-13).** One persistent launcher confined **3 distinct engines** (cmd, powershell, python)
+identically — granted write lands in the relabeled-Low workdir, outside write denied (`NO_WRITE_UP`). The
+"engine as a variable" core of SEED-004 holds at the launch level; the Claude-specificity was only ever in the
+hook, not in the confinement primitive.
+
+**Banked findings for the build / spike 005 abstraction contract:**
+1. **Engine neutrality confirmed** on a real non-shell engine (python), not just shells.
+2. **Executable-coverage contract:** the launch policy MUST cover each engine's executable (and interpreter)
+   path, or nono fail-secure refuses to launch it. The daemon/abstraction must enumerate + grant these.
+3. **CWD is per-engine:** express grants as absolute paths; don't assume an engine inherits the launcher CWD.
+
+**Not covered here (next spikes):** persistent token/job *reuse* and a multi-tenant `AI_AGENT` marker + IPC
+(004); the formal abstraction boundary proven via the `nono-py` binding on a real Python/LangChain agent (005).
