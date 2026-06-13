@@ -111,71 +111,76 @@ fn verify_profile_packs(packs: &[String]) -> crate::Result<()> {
             continue;
         }
 
-        let locked = lockfile.packages.get(pack_ref);
-        if let Some(locked_pkg) = locked {
-            for (artifact_name, locked_artifact) in &locked_pkg.artifacts {
-                let artifact_path = install_dir.join(artifact_name);
-                if !artifact_path.exists() {
-                    return Err(nono::NonoError::PackageInstall(format!(
-                        "pack '{}' is missing artifact '{}'. Reinstall with: nono pull {} --force",
-                        pack_ref, artifact_name, pack_ref
-                    )));
-                }
+        // D-20 replay of db073750 (C4): require a lockfile entry — missing entry
+        // means the package was installed without proper metadata tracking.
+        // Fail hard so users know to reinstall rather than silently skipping.
+        let locked_pkg = lockfile.packages.get(pack_ref).ok_or_else(|| {
+            nono::NonoError::PackageVerification {
+                package: pack_ref.clone(),
+                reason: format!(
+                    "pack '{}' has no lockfile entry - reinstall with: nono pull {} --force",
+                    pack_ref, pack_ref
+                ),
+            }
+        })?;
 
-                let bytes = std::fs::read(&artifact_path).map_err(|e| {
-                    nono::NonoError::PackageInstall(format!(
-                        "failed to read artifact '{}' in pack '{}': {}",
-                        artifact_name, pack_ref, e
-                    ))
-                })?;
-                let digest = Sha256::digest(&bytes);
-                let hash = digest
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect::<String>();
-                if hash != locked_artifact.sha256 {
-                    return Err(nono::NonoError::PackageInstall(format!(
-                        "pack '{}' artifact '{}' has been tampered with.\n\
-                         Expected: {}\n\
-                         Found:    {}\n\
-                         Reinstall with: nono pull {} --force",
-                        pack_ref, artifact_name, locked_artifact.sha256, hash, pack_ref
-                    )));
-                }
+        for (artifact_name, locked_artifact) in &locked_pkg.artifacts {
+            let artifact_path = install_dir.join(artifact_name);
+            if !artifact_path.exists() {
+                return Err(nono::NonoError::PackageInstall(format!(
+                    "pack '{}' is missing artifact '{}'. Reinstall with: nono pull {} --force",
+                    pack_ref, artifact_name, pack_ref
+                )));
+            }
+
+            let bytes = std::fs::read(&artifact_path).map_err(|e| {
+                nono::NonoError::PackageInstall(format!(
+                    "failed to read artifact '{}' in pack '{}': {}",
+                    artifact_name, pack_ref, e
+                ))
+            })?;
+            let digest = Sha256::digest(&bytes);
+            let hash = digest
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            if hash != locked_artifact.sha256 {
+                return Err(nono::NonoError::PackageInstall(format!(
+                    "pack '{}' artifact '{}' has been tampered with.\n\
+                     Expected: {}\n\
+                     Found:    {}\n\
+                     Reinstall with: nono pull {} --force",
+                    pack_ref, artifact_name, locked_artifact.sha256, hash, pack_ref
+                )));
             }
         }
 
+        // D-20 replay of db073750 (C4): require a .nono-trust.bundle — if the
+        // bundle is missing the pack cannot be re-verified and the install is
+        // considered corrupted. Fail hard so users know to reinstall.
         let bundle_path = install_dir.join(".nono-trust.bundle");
-        if bundle_path.exists() {
-            // A trust bundle without a lockfile provenance record means we
-            // cannot verify who signed it. Fail hard rather than silently
-            // accepting any valid Sigstore signer.
-            let pinned_signer = match locked {
-                None => {
-                    return Err(nono::NonoError::PackageVerification {
-                        package: pack_ref.clone(),
-                        reason: format!(
-                            "pack '{}' has a trust bundle but no lockfile entry — \
-                             reinstall with: nono pull {} --force",
-                            pack_ref, pack_ref
-                        ),
-                    });
-                }
-                Some(pkg) => pkg
-                    .provenance
-                    .as_ref()
-                    .map(|p| p.signer_identity.as_str())
-                    .ok_or_else(|| nono::NonoError::PackageVerification {
-                        package: pack_ref.clone(),
-                        reason: format!(
-                            "pack '{}' has a trust bundle but no signer identity in the \
-                             lockfile — reinstall with: nono pull {} --force",
-                            pack_ref, pack_ref
-                        ),
-                    })?,
-            };
-            verify_stored_bundles(&install_dir, &bundle_path, pack_ref, Some(pinned_signer))?;
+        if !bundle_path.exists() {
+            return Err(nono::NonoError::PackageVerification {
+                package: pack_ref.clone(),
+                reason: format!(
+                    "pack '{}' is missing .nono-trust.bundle - reinstall with: nono pull {} --force",
+                    pack_ref, pack_ref
+                ),
+            });
         }
+
+        let pinned_signer = locked_pkg
+            .provenance
+            .as_ref()
+            .map(|p| p.signer_identity.as_str())
+            .ok_or_else(|| nono::NonoError::PackageVerification {
+                package: pack_ref.clone(),
+                reason: format!(
+                    "pack '{}' has no signer identity in the lockfile - reinstall with: nono pull {} --force",
+                    pack_ref, pack_ref
+                ),
+            })?;
+        verify_stored_bundles(&install_dir, &bundle_path, pack_ref, Some(pinned_signer))?;
     }
 
     Ok(())
@@ -791,5 +796,121 @@ mod tests {
             .as_ref()
             .map(|env_config| env_config.allow_vars.clone());
         assert_eq!(allowed, None);
+    }
+
+    // -------------------------------------------------------------------------
+    // D-20 replay of db073750 (C4): verify_profile_packs strict lockfile + bundle checks
+    // -------------------------------------------------------------------------
+
+    fn with_config_env<F, R>(f: F) -> R
+    where
+        F: FnOnce(&std::path::Path) -> R,
+    {
+        let _guard = crate::test_env::lock_env();
+        let tmp = tempfile::TempDir::new().expect("failed to create tempdir");
+        let config_dir = tmp.path().canonicalize().expect("failed to canonicalize tempdir");
+        let config_str = config_dir.to_str().expect("tempdir path is not valid UTF-8");
+        // On Windows, APPDATA takes priority over XDG_CONFIG_HOME in
+        // `resolve_user_config_dir`. Set both so the test works cross-platform.
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("XDG_CONFIG_HOME", config_str),
+            ("APPDATA", config_str),
+        ]);
+        f(&config_dir)
+    }
+
+    fn create_pack_dir(config_dir: &std::path::Path, namespace: &str, name: &str) -> std::path::PathBuf {
+        let install_dir = config_dir
+            .join("nono")
+            .join("packages")
+            .join(namespace)
+            .join(name);
+        std::fs::create_dir_all(&install_dir).expect("failed to create pack dir");
+        install_dir
+    }
+
+    fn write_lockfile_with_artifact(pack_ref: &str, artifact_name: &str, artifact_bytes: &[u8]) {
+        use sha2::Digest as _;
+        let digest = sha2::Sha256::digest(artifact_bytes);
+        let sha256 = digest
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+
+        let mut artifacts = std::collections::BTreeMap::new();
+        artifacts.insert(
+            artifact_name.to_string(),
+            crate::package::LockedArtifact {
+                sha256,
+                artifact_type: crate::package::ArtifactType::Profile,
+                installed_path: None,
+            },
+        );
+
+        let mut packages = std::collections::BTreeMap::new();
+        packages.insert(
+            pack_ref.to_string(),
+            crate::package::LockedPackage {
+                version: "1.0.0".to_string(),
+                installed_at: "2026-01-01T00:00:00Z".to_string(),
+                pinned: false,
+                provenance: Some(crate::package::PackageProvenance {
+                    signer_identity:
+                        "https://github.com/acme/repo/.github/workflows/release.yml@refs/tags/v1.0.0"
+                            .to_string(),
+                    repository: "acme/repo".to_string(),
+                    workflow: ".github/workflows/release.yml".to_string(),
+                    git_ref: "refs/tags/v1.0.0".to_string(),
+                    rekor_log_index: 1,
+                    signed_at: "2026-01-01T00:00:00Z".to_string(),
+                }),
+                artifacts,
+            },
+        );
+
+        let lockfile = crate::package::Lockfile {
+            lockfile_version: crate::package::LOCKFILE_VERSION,
+            registry: "https://registry.example.test".to_string(),
+            packages,
+        };
+        crate::package::write_lockfile(&lockfile).expect("failed to write lockfile");
+    }
+
+    /// D-20 replay of db073750 (C4): a pack directory that exists but has no
+    /// lockfile entry must now be a hard PackageVerification error rather than
+    /// a soft "not installed" continue.
+    #[test]
+    fn verify_profile_packs_requires_lockfile_entry_for_installed_pack() {
+        let result = with_config_env(|config_dir| {
+            create_pack_dir(config_dir, "acme", "widget");
+            super::verify_profile_packs(&["acme/widget".to_string()])
+        });
+
+        let err = result.expect_err("installed pack without lockfile entry must fail verification");
+        assert!(
+            err.to_string().contains("no lockfile entry"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// D-20 replay of db073750 (C4): a pack with a lockfile entry but no
+    /// .nono-trust.bundle must be a hard PackageVerification error.
+    #[test]
+    fn verify_profile_packs_requires_trust_bundle_for_locked_pack() {
+        let result = with_config_env(|config_dir| {
+            let install_dir = create_pack_dir(config_dir, "acme", "widget");
+            let artifact_bytes = br#"{"meta":{"name":"widget"}}"#;
+            std::fs::write(install_dir.join("package.json"), artifact_bytes)
+                .expect("failed to write package artifact");
+            write_lockfile_with_artifact("acme/widget", "package.json", artifact_bytes);
+
+            super::verify_profile_packs(&["acme/widget".to_string()])
+        });
+
+        let err = result.expect_err("locked pack without trust bundle must fail verification");
+        assert!(
+            err.to_string().contains("missing .nono-trust.bundle"),
+            "unexpected error: {err}"
+        );
     }
 }
