@@ -159,17 +159,22 @@ impl CredentialStore {
                 let secret = match nono::keystore::load_secret_by_ref(KEYRING_SERVICE, key) {
                     Ok(s) => s,
                     Err(nono::NonoError::SecretNotFound(msg)) => {
-                        debug!(
-                            "Credential '{}' not available, skipping route: {}",
-                            normalized_prefix, msg
+                        let redacted = redact_credential_ref(key);
+                        let hint = build_credential_miss_hint(key);
+                        warn!(
+                            "Credential '{}' not available for route '{}': {}.{} \
+                             Managed-credential requests on this route will be denied.",
+                            redacted, normalized_prefix, msg, hint
                         );
                         continue;
                     }
                     Err(nono::NonoError::KeystoreAccess(msg)) => {
+                        let redacted = redact_credential_ref(key);
                         warn!(
                             "Credential '{}' not available for route '{}': {}. \
-                             Managed-credential requests on this route will be denied until the credential is available.",
-                            key, normalized_prefix, msg
+                             Managed-credential requests on this route will be denied until the credential is available. \
+                             Set NONO_KEYRING_TIMEOUT_SECS=N (default 120) to wait longer for keychain unlock; 0 disables the timeout.",
+                            redacted, normalized_prefix, msg
                         );
                         continue;
                     }
@@ -205,6 +210,7 @@ impl CredentialStore {
                         query_param_name: route.query_param_name.clone(),
                     },
                 );
+                continue;
             }
         }
 
@@ -259,6 +265,82 @@ impl CredentialStore {
 /// The keyring service name used by nono for all credentials.
 /// Uses the same constant as `nono::keystore::DEFAULT_SERVICE` to ensure consistency.
 const KEYRING_SERVICE: &str = nono::keystore::DEFAULT_SERVICE;
+
+/// Redact a credential reference for safe display in warnings.
+///
+/// Delegates to the appropriate URI-specific redaction helper so that
+/// secrets (account names, file paths, field names) are never echoed raw.
+fn redact_credential_ref(key: &str) -> String {
+    if nono::keystore::is_op_uri(key) {
+        nono::keystore::redact_op_uri(key)
+    } else if nono::keystore::is_apple_password_uri(key) {
+        nono::keystore::redact_apple_password_uri(key)
+    } else if nono::keystore::is_keyring_uri(key) {
+        nono::keystore::redact_keyring_uri(key)
+    } else if nono::keystore::is_bw_uri(key) {
+        nono::keystore::redact_bw_uri(key)
+    } else if nono::keystore::is_file_uri(key) {
+        nono::keystore::redact_file_uri(key)
+    } else {
+        key.to_string()
+    }
+}
+
+/// Build a hint for the credential-not-found warning that probes other
+/// credential sources for the same name.
+///
+/// Targets the most common confusion pattern in the wild: a route shipped
+/// with `credential_key: env://X` while the user stored their secret in
+/// the system keyring (or vice versa). When we detect the secret in a
+/// *different* source, we name it explicitly so the user can fix the
+/// route's URI in one edit.
+///
+/// The probe is deliberately scoped: we only check the obvious "you put
+/// it in the wrong place" cases (env↔keyring), not URI-managed sources
+/// like `op://` or `apple-password://` whose lookups have side effects.
+fn build_credential_miss_hint(key: &str) -> String {
+    // Case 1: `env://X` failed → the env var isn't set. Check whether a
+    // bare-name keyring entry exists; if so, suggest dropping the prefix.
+    if let Some(var) = key.strip_prefix("env://") {
+        if nono::keystore::load_secret_by_ref(KEYRING_SERVICE, var).is_ok() {
+            return format!(
+                " Tip: a keyring entry exists for '{}'. Change credential_key to bare \
+                 '{}' (no env:// prefix) to use the keyring, or set the env var.",
+                var, var
+            );
+        }
+        return format!(
+            " Looked for env var '{}' (not set). To add to the macOS keychain: \
+             security add-generic-password -s \"nono\" -a \"{}\" -w  — and set credential_key \
+             to bare '{}' (no env:// prefix).",
+            var, var, var
+        );
+    }
+
+    // Case 2: bare key (default keyring) failed → check whether the env
+    // var of the same name is set; if so, suggest the env:// URI.
+    if !key.contains("://") {
+        if std::env::var_os(key).is_some() {
+            return format!(
+                " Tip: env var '{}' is set on the host. Change credential_key to \
+                 'env://{}' to use it, or add a keyring entry for '{}'.",
+                key, key, key
+            );
+        }
+        if cfg!(target_os = "macos") {
+            return format!(
+                " To add it to the macOS keychain: security add-generic-password \
+                 -s \"nono\" -a \"{}\" -w",
+                key
+            );
+        }
+    }
+
+    // URI-managed sources (op://, apple-password://, file://, keyring://)
+    // — no automatic cross-probe; the URI scheme is itself an explicit
+    // statement of where to look, so we trust the user's intent.
+    String::new()
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
