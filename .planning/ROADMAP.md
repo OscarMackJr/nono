@@ -89,7 +89,7 @@ Plans:
   4. The full workspace test suite passes post-sync with no new green->red transitions vs plan base SHA `6667177e`.
 **Plans**: 3 plans
 Plans:
-- [ ] 70-01-PROFILE-DIAGNOSTIC-FEATURES-PLAN.md — D-70-01 REQ/SC amendment (v0.62.0 upper bound) + C3 cherry-picks (cc21229f + 20cc5df9): diagnostics.suppress_system_services profile option + registry-ref-in-extends; establishes PreparedSandbox.suppressed_system_service_operations prerequisite for Plan 70-03
+- [x] 70-01-PROFILE-DIAGNOSTIC-FEATURES-PLAN.md — D-70-01 REQ/SC amendment (v0.62.0 upper bound) + C3 cherry-picks (cc21229f + 20cc5df9): diagnostics.suppress_system_services profile option + registry-ref-in-extends; establishes PreparedSandbox.suppressed_system_service_operations prerequisite for Plan 70-03
 - [ ] 70-02-NONO-PULL-FORCE-RECOVERY-PLAN.md — C4 cherry-pick (db073750): nono pull --force metadata recovery; surface-disjoint from C3/C2; Wave 1 parallel with 70-01
 - [ ] 70-03-NETWORK-POLICY-SECURITY-PLAN.md — C2 cherry-picks (0fb59375 + bd4c469a): remove implicit credential routes from embedded profiles + deny-by-default under network.block; depends on 70-01 (C3 prerequisite field); substantive threat model for the network-deny + credential-injection posture
 **UI hint**: no
@@ -164,7 +164,7 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
 | 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
 | 69. UPST8 Audit | 1/1 | Complete    | 2026-06-13 |
-| 70. UPST8 Cherry-pick Sync | 0/3 | Not started | - |
+| 70. UPST8 Cherry-pick Sync | 1/3 | In Progress|  |
 
 ## Future Cycles
 
