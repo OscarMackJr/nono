@@ -249,3 +249,4 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 - `/gsd:plan-phase 68` — macOS resl enforcement fix (needs a real macOS host for `NONO_RESL_HOST_VALIDATED=1` re-validation). Parallel-safe with 67.
 - `/gsd:plan-phase 69` then `70` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI).
 - Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
+| 2026-06-13 | fast | R-B4/R-A1 live-verification cookbook | ✅ |
