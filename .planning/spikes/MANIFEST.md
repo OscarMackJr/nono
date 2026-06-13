@@ -42,3 +42,46 @@ Low-integrity client. **Recommended direction (architecture pivot, no further co
 sandbox-the-tools, not sandbox-the-TUI — run `claude` at Medium IL with its real TUI, and wrap the operations
 it spawns (Bash/file/network) with `nono run` via Claude Code hooks. Updated the research seed
 (`.planning/research/windows-low-il-tui-blocked.md`) accordingly.
+
+---
+
+# Series 2 — SEED-004: Engine-Agnostic Confinement (daemon + token-label)
+
+> Spike numbering continues from the shared directory sequence (next dir = `002`). Series 1's
+> cancelled `002–004` rows above were never built (no directories); this series owns the `002+` dirs.
+
+## Idea
+
+Generalize the (now-hardened, sandbox-the-tools) confinement model **beyond Claude Code** so nono can
+mediate *any* agent engine — Aider, GitHub Copilot CLI, Cursor, a custom Python/LangChain loop. The seed's
+vision: a long-running local **security daemon** that detects/labels arbitrary `AI_AGENT` process tokens and
+confines them, replacing the Claude-Code-specific `PreToolUse → nono run` hook. Reference:
+`.planning/seeds/SEED-004-multi-engine-agent-pluggability.md`.
+
+The pivotal Windows constraint: confinement (mandatory label / restricting SID) is set at process
+**creation**; you generally cannot lower a *running* process's primary-token integrity from outside. So the
+killer question is whether the seed's literal "detect-and-confine-after-the-fact" model is feasible, or
+whether it must pivot to a **daemon-as-launcher** model.
+
+## Requirements
+
+- Carried forward from prior work: confinement of *spawned tool processes* via Low-IL primary token /
+  AppContainer + WFP is proven (broker arm; `windows_appcontainer_wfp_validated`); the TUI itself is OS-blocked
+  (spike 001). Do NOT re-test those.
+- Spikes are standalone `windows-sys` Rust binaries (mirroring spike 001 / poc-broker), run by the operator on
+  real Win11 and reported back. User-mode only — no kernel driver / `PsSetCreateProcessNotifyRoutine`
+  (out of scope per the WFP-driver placeholder pattern).
+- Any proposed engine-agnostic model MUST preserve isolation ≥ the current per-invocation `nono run` model
+  (NO_WRITE_UP for unauthorized FS, deny outbound network unless granted).
+
+## Spikes
+
+| # | Name | Type | Validates | Verdict | Tags |
+|---|------|------|-----------|---------|------|
+| 002 | post-hoc-token-confine | standard | Given an arbitrary process the daemon did NOT spawn, when it tries to apply nono confinement from outside (lower IL on the running primary token), then NEW unauthorized writes are denied — **KILLER**: settles whether "confine any AI_AGENT token" is feasible or must pivot to daemon-as-launcher | IN PROGRESS | windows, daemon, token, integrity, security |
+| 003 | daemon-as-launcher | standard | Given a persistent daemon, when an arbitrary engine is launched *through* it (engine-neutral generalization of the broker), then it runs confined regardless of engine (cmd.exe AND python.exe) | DEFINED (pending 002) | windows, daemon, broker, launcher |
+| 004 | agent-marker-multitenant | standard | Given multiple agents launched via the daemon, when it marks each (AI_AGENT job/SID/PID registry) and serves per-agent capability requests over one persistent multi-client pipe, then policies resolve independently and the marker is tamper-evident | DEFINED (pending 002) | windows, daemon, ipc, multitenant |
+| 005 | engine-agnostic-abstraction | standard | Given the nono-py/C binding, when a raw Python/LangChain agent invokes the nono primitive directly (no Claude hook), then it is confined equivalently — proving ≥2 engines through one abstraction boundary | DEFINED (pending 002) | bindings, python, abstraction, engine-agnostic |
+
+**Run order = risk order:** 002 first (killer). If 002 invalidates post-hoc confinement (expected — Windows
+won't relabel a running token soundly), 003–005 build the daemon-as-launcher model instead.

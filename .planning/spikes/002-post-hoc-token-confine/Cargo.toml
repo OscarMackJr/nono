@@ -1,0 +1,23 @@
+# Empty [workspace] table keeps this spike OUT of the root nono workspace.
+[workspace]
+
+[package]
+name = "post-hoc-token-confine"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone SEED-004 spike 002 — NOT a workspace member (lives under .planning/spikes/).
+# Build with `cargo build` from this directory.
+
+[[bin]]
+name = "post-hoc-token-confine"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+] }
