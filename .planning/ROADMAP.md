@@ -164,7 +164,7 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
 | 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
 | 69. UPST8 Audit | 1/1 | Complete    | 2026-06-13 |
-| 70. UPST8 Cherry-pick Sync | 3/3 | Complete   | 2026-06-13 |
+| 70. UPST8 Cherry-pick Sync | 3/3 | Complete    | 2026-06-13 |
 
 ## Future Cycles
 

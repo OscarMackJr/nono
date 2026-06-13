@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
-status: verifying
+status: milestone_complete
 last_updated: "2026-06-13T02:47:12.771Z"
 last_activity: 2026-06-13
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 6
   completed_plans: 6
   percent: 100
@@ -25,9 +25,9 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 ## Current Position
 
-Phase: 70 (upst8-cherry-pick-sync) — VERIFYING
-Plan: 3 of 3
-Status: All 3 plans complete — awaiting human-verify checkpoint approval
+Phase: 70
+Plan: Not started
+Status: Milestone complete
 Last activity: 2026-06-13
 
 ### v2.11 Phase Summary (active)
