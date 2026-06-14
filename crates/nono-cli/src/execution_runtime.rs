@@ -103,6 +103,8 @@ fn recommended_builtin_profile(program: &Path) -> Option<&'static str> {
         "opencode" => Some("opencode"),
         "openclaw" => Some("openclaw"),
         "swival" => Some("swival"),
+        // D-04: engine IS the profile — map aider.exe to the aider built-in.
+        "aider" | "aider.exe" => Some("aider"),
         _ => None,
     }
 }
@@ -785,6 +787,16 @@ mod tests {
         assert_eq!(
             recommended_builtin_profile(Path::new("/usr/local/bin/codex")),
             Some("codex")
+        );
+        // D-04: aider.exe maps to the aider built-in profile (Windows file_name).
+        assert_eq!(
+            recommended_builtin_profile(Path::new("C:\\Users\\user\\.local\\bin\\aider.exe")),
+            Some("aider")
+        );
+        // Unix form (without .exe suffix).
+        assert_eq!(
+            recommended_builtin_profile(Path::new("/usr/local/bin/aider")),
+            Some("aider")
         );
     }
 

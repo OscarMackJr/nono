@@ -1614,6 +1614,12 @@ pub struct SandboxArgs {
     #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
     pub workdir: Option<PathBuf>,
 
+    /// Absolute path to the writable workspace. Defaults to the current
+    /// directory (canonicalized) when omitted. Set as the child engine's CWD
+    /// AND the writable grant (single source of truth).
+    #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
+    pub workspace: Option<PathBuf>,
+
     // ── Network ──────────────────────────────────────────────────────────
     /// Block outbound network access (allowed by default)
     #[arg(
@@ -2016,6 +2022,12 @@ pub struct WrapSandboxArgs {
     #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
     pub workdir: Option<PathBuf>,
 
+    /// Absolute path to the writable workspace. Defaults to the current
+    /// directory (canonicalized) when omitted. Set as the child engine's CWD
+    /// AND the writable grant (single source of truth).
+    #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
+    pub workspace: Option<PathBuf>,
+
     // ── Network ──────────────────────────────────────────────────────────
     /// Block outbound network access (allowed by default)
     #[arg(
@@ -2186,6 +2198,7 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             bypass_protection: args.bypass_protection,
             allow_cwd: args.allow_cwd,
             workdir: args.workdir,
+            workspace: args.workspace,
             block_net: args.block_net,
             allow_net: false,
             network_profile: None,
