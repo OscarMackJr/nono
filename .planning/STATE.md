@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 
 ## Current Position
 
-Phase: 73 (ai-agent-marker) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 73
-Last activity: 2026-06-14 -- Phase 73 execution started
+Phase: 73 (ai-agent-marker) — CODE-COMPLETE, host-gated UAT pending
+Plan: 3 of 3 executed
+Status: Code-complete — blocking human-verify Win11 UAT pending (73-03 final gate)
+Last activity: 2026-06-14 -- Phase 73 executed (3 plans, 2 waves); AI_AGENT marker wired + `nono classify` shipped
 
 ### v2.12 Phase Summary (active)
 
@@ -36,7 +36,7 @@ Last activity: 2026-06-14 -- Phase 73 execution started
 |-------|------|--------------|----|--------|-----------|
 | 71 | Engine-Agnostic Launch Productionization — parent-and-confine any covered engine (Aider + LangChain-Python) through one engine-neutral path; de-spike the validated 003 path; fail-secure coverage + R-B3 diagnostic | ENG-01, ENG-02, ENG-03 | 5 | ⬜ Not started | Real Win11 host (Aider end-to-end) |
 | 72 | nono-py Binding + In-Process-Exec Proof — confine a real LangChain agent with NO Claude hook via `confined_run` (Shape A) + `confine` (Shape B); document the E1-E5 contract | ABI-01, ABI-02 | 5 | ✅ Complete (2026-06-14) | Win11 host w/ Python; nono-py build |
-| 73 | AI_AGENT Marker — unforgeable spawn-time token SID (not a named job); deny breakaway; daemon-only job ACL; classify arbitrary PID | MARK-01 | 5 | ⬜ Not started | Win11 host |
+| 73 | AI_AGENT Marker — unforgeable spawn-time token SID (not a named job); deny breakaway; daemon-only job ACL; classify arbitrary PID | MARK-01 | 5 | 🔶 Code-complete (UAT pending) | Win11 host |
 | 74 | Persistent Multi-Tenant Daemon (RISKIEST — former spike 004) — least-priv USER daemon, multi-client tenant-isolated pipe, fresh token+job per agent, deterministic reap | DMON-01, DMON-02, DMON-03 | 5 | ⬜ Not started | Win11 host; **research-flag 74** |
 | 75 | Supplementary Controls + Secondary Engines — demote (demote-only), per-agent WFP egress, Copilot CLI profile, nono-ts parity | SUPP-01, SUPP-02, SUPP-03 | 5 | ⬜ Not started | Win11 host; node/nono-ts build |
 

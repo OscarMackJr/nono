@@ -82,7 +82,7 @@ granularity: standard
 **Plans**: 3 plans
 - [x] 73-01-PLAN.md — nono crate: AgentRegistry, AgentClassification, read_process_appcontainer_sid + non-Windows stubs + lib.rs re-export (MARK-01 SC2/SC4 unit paths)
 - [x] 73-02-PLAN.md — Job object SDDL hardening: create_process_containment signature refactor + explicit DACL + negative tests job_never_has_breakaway_ok + job_security_descriptor_denies_low_il (MARK-01 SC3)
-- [ ] 73-03-PLAN.md — CLI verb nono classify + mint→registry wiring in execution_runtime.rs + SC4 in-process integration tests + SC5 adopted-agent doc (MARK-01 SC1/SC4/SC5)
+- [x] 73-03-PLAN.md — CLI verb nono classify + mint→registry wiring in execution_runtime.rs + SC4 in-process integration tests + SC5 adopted-agent doc (MARK-01 SC1/SC4/SC5)
 
 ### Phase 74: Persistent Multi-Tenant Daemon
 **Goal**: A persistent, least-privilege local daemon launches and confines multiple concurrent agents over one tenant-isolated capability pipe, with correct per-agent token/job lifetime in a process that lives for days — the marquee (and riskiest) v2.12 capability. This is launch-and-confine (Phase 71) + marker (Phase 73) + a multi-client pipe + the genuinely unspiked token/job-reuse risk, isolated inside this phase. It MUST NOT begin until Phase 71 is a gated, working single-launch code path and Phase 73 exists — that ordering IS the quality gate.
@@ -148,7 +148,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 |-------|----------------|--------|-----------|
 | 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
-| 73. AI_AGENT Marker | 2/3 | In Progress|  |
+| 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
 | 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |
 | 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
 
