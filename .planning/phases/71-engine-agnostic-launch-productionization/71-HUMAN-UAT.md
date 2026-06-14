@@ -373,7 +373,7 @@ Filled in from the live run on a real Win11 host.
 | SC1-1 | Inside-workspace write lands | **PASS** | `inside.txt` landed under `$ws` (relative path), child exit 0 |
 | SC1-2a | Relative escape `..\outside.txt` is DENIED | PENDING | not yet run (the absolute case 2b was exercised instead) |
 | SC1-2b | Absolute `C:\outside.txt` is DENIED | **PASS** | `PermissionError: [Errno 13] Permission denied: 'C:\outside.txt'`, child exit 1, `Test-Path → False` |
-| SC1-3 | `python.exe` subprocess write DENIED (transitive) | PENDING | top-level python only so far; needs the python-spawns-python (or Aider) variant |
+| SC1-3 | `python.exe` subprocess write DENIED (transitive) | **PASS** | grandchild python (spawned by the confined child via `subprocess`, NOT launched/validated by nono) got `PermissionError [Errno 13]` writing `C:/outside2.txt`; `grandchild_rc=1`, child exit 0, `Test-Path → False` — label inherited transitively (T-71-14) |
 | SC2 | Relative write resolves INSIDE workspace (no C:\\ trap) | **PASS** | `inside.txt` resolved to `$ws`, not `C:\` — child CWD = absolute workspace |
 | ENG-02-A | Admin-owned workspace → named R-B3 refusal pre-spawn | PENDING | optional spot-check, not yet run |
 | ENG-02-B | Uncovered interpreter → named coverage refusal | **PASS** | first run refused pre-spawn naming `…\Python312\python.exe` + the exact `--allow` fix (D-07) |
@@ -381,13 +381,15 @@ Filled in from the live run on a real Win11 host.
 **Run evidence (langchain-python, child in AppContainer `app_container=true`):**
 - Negative: `& nono run --profile langchain-python --workspace $ws --allow $py -- python.exe -c "open(r'C:\outside.txt','w').write('x')"` → `PermissionError [Errno 13]`; `Test-Path C:\outside.txt = False`.
 - Positive: `… -- python.exe -c "open('inside.txt','w').write('hi')"` → exit 0; `Test-Path $ws\inside.txt = True`.
+- Transitive (T-71-14): `… -- python.exe transitive_test.py` where the script does `subprocess.run([sys.executable,'-c',"open('C:/outside2.txt','w')…"])` → `grandchild_rc=1`, `PermissionError [Errno 13]`, child exit 0, `Test-Path C:\outside2.txt = False`.
+- Bonus fail-secure layer observed: the inline `-c` variant of the transitive probe was refused PRE-LAUNCH by `validate_windows_command_args` (the literal `C:\outside2.txt` in argv is an uncovered absolute-path argument) — defense-in-depth beyond the label.
 
 **NO_WRITE_UP confirmation (SC1-2):** Did the OS denial message include `NO_WRITE_UP`,
 `UnauthorizedAccessException`, or `Access is denied`? [x] YES — surfaced as Python `PermissionError [Errno 13] Permission denied` (the user-mode manifestation of the mandatory-label write-up block).
 
 ### Overall Verdict
 
-[ ] **PASS (interim)** — SC1 core (inside lands / outside denied) and SC2 PASS via `langchain-python`; ENG-02-B PASS. Pending before final sign-off: SC1-3 transitive subprocess + literal Aider run (operator chose to also run Aider).
+[x] **PASS (langchain-python engine)** — SC1 core fully proven on real Win11 26200: inside-write LANDS (SC1-1), outside-write DENIED (SC1-2b), transitive subprocess DENIED (SC1-3, T-71-14), relative-write CWD inside workspace (SC2); ENG-02-B coverage refusal PASS. Confinement is OS-enforced (AppContainer + mandatory label), inherited transitively. Optional/pending: SC1-2a relative-escape, ENG-02-A admin-owned refusal, and the operator-requested **literal Aider** run (needs `pip install aider-chat` + LLM API key).
 [ ] **FAIL** — one or more steps failed; describe below.
 
 **Failure description (if FAIL):**
