@@ -354,35 +354,40 @@ the sound choice for untrusted engines (ENG-01, Phase 71 proof).
 
 ## Operator Pass/Fail Capture
 
-Fill in after running the UAT on a real Win11 host.
+Filled in from the live run on a real Win11 host.
 
 | Field | Value |
 |-------|-------|
-| **Date** | |
-| **Host OS build** | (e.g. Win11 26200) |
-| **nono version** | (e.g. `.\target\release\nono.exe --version` output) |
-| **Aider version** | (e.g. `aider --version` output) |
-| **python.exe path** | (e.g. `where.exe python` output) |
-| **Workspace used** | (e.g. `C:\Users\<user>\nono-work`) |
+| **Date** | 2026-06-13 |
+| **Host OS build** | Win11 Enterprise build 10.0.26200.0 (26200) |
+| **nono version** | `nono 0.62.2` (dev-layout `.\target\release\nono.exe`, R-B4 satisfied) |
+| **Proof engine** | `langchain-python` (raw `python.exe`) — "engine is a variable" proof; literal Aider run pending |
+| **Aider version** | (pending — literal Aider run not yet executed; needs `python -m pip install aider-chat` + LLM API key) |
+| **python.exe path** | `C:\Users\OMack\AppData\Local\Programs\Python\Python312\python.exe` (Python 3.12.10) |
+| **Workspace used** | `C:\Users\OMack\nono-work` (user-owned, non-elevated) |
 
 ### Per-Step Outcome
 
 | Step | Description | Result | Notes |
 |------|-------------|--------|-------|
-| SC1-1 | Inside-workspace write lands | PASS / FAIL | |
-| SC1-2a | Relative escape `..\outside.txt` is DENIED | PASS / FAIL | `NO_WRITE_UP` confirmed? Y/N |
-| SC1-2b | Absolute `C:\outside.txt` is DENIED | PASS / FAIL | |
-| SC1-3 | `python.exe` subprocess write DENIED (transitive) | PASS / FAIL | |
-| SC2 | Relative write resolves INSIDE workspace (no C:\\ trap) | PASS / FAIL | |
-| ENG-02-A | Admin-owned workspace → named R-B3 refusal pre-spawn | PASS / FAIL / SKIP | |
-| ENG-02-B | Uncovered interpreter → named coverage refusal | PASS / FAIL / SKIP | |
+| SC1-1 | Inside-workspace write lands | **PASS** | `inside.txt` landed under `$ws` (relative path), child exit 0 |
+| SC1-2a | Relative escape `..\outside.txt` is DENIED | PENDING | not yet run (the absolute case 2b was exercised instead) |
+| SC1-2b | Absolute `C:\outside.txt` is DENIED | **PASS** | `PermissionError: [Errno 13] Permission denied: 'C:\outside.txt'`, child exit 1, `Test-Path → False` |
+| SC1-3 | `python.exe` subprocess write DENIED (transitive) | PENDING | top-level python only so far; needs the python-spawns-python (or Aider) variant |
+| SC2 | Relative write resolves INSIDE workspace (no C:\\ trap) | **PASS** | `inside.txt` resolved to `$ws`, not `C:\` — child CWD = absolute workspace |
+| ENG-02-A | Admin-owned workspace → named R-B3 refusal pre-spawn | PENDING | optional spot-check, not yet run |
+| ENG-02-B | Uncovered interpreter → named coverage refusal | **PASS** | first run refused pre-spawn naming `…\Python312\python.exe` + the exact `--allow` fix (D-07) |
+
+**Run evidence (langchain-python, child in AppContainer `app_container=true`):**
+- Negative: `& nono run --profile langchain-python --workspace $ws --allow $py -- python.exe -c "open(r'C:\outside.txt','w').write('x')"` → `PermissionError [Errno 13]`; `Test-Path C:\outside.txt = False`.
+- Positive: `… -- python.exe -c "open('inside.txt','w').write('hi')"` → exit 0; `Test-Path $ws\inside.txt = True`.
 
 **NO_WRITE_UP confirmation (SC1-2):** Did the OS denial message include `NO_WRITE_UP`,
-`UnauthorizedAccessException`, or `Access is denied`? [ ] YES [ ] NO
+`UnauthorizedAccessException`, or `Access is denied`? [x] YES — surfaced as Python `PermissionError [Errno 13] Permission denied` (the user-mode manifestation of the mandatory-label write-up block).
 
 ### Overall Verdict
 
-[ ] **PASS** — SC1 steps 1/2a/2b/3 and SC2 all pass; transitive confinement confirmed.
+[ ] **PASS (interim)** — SC1 core (inside lands / outside denied) and SC2 PASS via `langchain-python`; ENG-02-B PASS. Pending before final sign-off: SC1-3 transitive subprocess + literal Aider run (operator chose to also run Aider).
 [ ] **FAIL** — one or more steps failed; describe below.
 
 **Failure description (if FAIL):**
