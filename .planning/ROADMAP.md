@@ -47,7 +47,7 @@ granularity: standard
   4. The launcher fails SECURE with a clear R-B3 diagnostic when the granted workspace is not owned by the session user (admin-owned dir → no `WRITE_DAC` → confined write would fail opaquely) — the diagnostic names the ownership problem, not a generic deny.
   5. Per-engine fit is documented (launch-and-confine vs hook vs Cursor-WSL-only), and the job-assignment path is hardened against nested-job collisions: spawn suspended, assign to the agent job BEFORE any code runs, fail-secure (terminate) on assign failure, no UI limits on the job.
 **Plans**: 5 plans
-- [ ] 71-01-PLAN.md — windows_interpreters profile field + aider/langchain-python engine profiles (ENG-03)
+- [x] 71-01-PLAN.md — windows_interpreters profile field + aider/langchain-python engine profiles (ENG-03)
 - [ ] 71-02-PLAN.md — SC5 named foreign-job (GLE-5) diagnostic + fail-secure assign negative test (P6)
 - [ ] 71-03-PLAN.md — library fail-secure primitives: interpreter coverage gate + path_has_write_owner helper (ENG-02)
 - [ ] 71-04-PLAN.md — CLI integration: --workspace flag, child-CWD/grant, interpreter resolution, R-B3 pre-launch gate (ENG-01, ENG-02)
@@ -139,7 +139,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 71. Engine-Agnostic Launch Productionization | 0/TBD | Not started | - |
+| 71. Engine-Agnostic Launch Productionization | 1/5 | In Progress|  |
 | 72. nono-py Binding + In-Process-Exec Proof | 0/TBD | Not started | - |
 | 73. AI_AGENT Marker | 0/TBD | Not started | - |
 | 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |
