@@ -3,7 +3,7 @@ milestone: v2.12
 milestone_name: AI Agent Abstraction
 status: active
 created: 2026-06-13
-last_updated: 2026-06-13
+last_updated: 2026-06-14
 granularity: standard
 ---
 
@@ -59,11 +59,15 @@ granularity: standard
 **Requirements**: ABI-01, ABI-02
 **Success Criteria** (what must be TRUE):
   1. A Python/LangChain agent is confined via `confined_run(exe, args, allow, profile)` (Shape A — spawn a confined child, identical to spike 003) with NO Claude hook in the loop, and writes outside the granted workspace are denied.
-  2. The same agent can self-confine via an in-process `confine(caps)` entrypoint (Shape B — `Sandbox::apply` on the CURRENT process at startup) so its in-process `exec()` tools are bounded: a LangChain `PythonREPLTool` `exec()` write outside the workspace is denied, while a write inside is allowed.
-  3. Shape B's soundness boundary is enforced and documented: `confine()` must be called at process startup BEFORE any privileged handle is opened, and the binding docs state the agent must call it first.
+  2. The same agent can self-confine via `confine(profile, allow)` (Shape B — BORN CONFINED at its own entrypoint via a broker re-exec before any privileged handle is opened): a LangChain `PythonREPLTool` `exec()` write outside the granted workspace is DENIED (Low-IL / Job / AppContainer enforced), while a write inside is ALLOWED. [Reworded 2026-06-14 per D-05: Windows `Sandbox::apply` is preview-only; Shape B is realized as a born-confined self-re-exec via nono.exe broker.]
+  3. Shape B's soundness boundary is enforced and documented: `confine()` invokes nono.exe as the FIRST operation at process startup (before any privileged handle is opened — ORDERING IS THE INVARIANT), producing a Low-IL born-confined child; the binding docs state the agent must call `confine()` before any other operation. [Reworded 2026-06-14 per D-05: Windows-equivalent of the soundness invariant.]
   4. The internal `nono` pin in `nono-py` is bumped from `0.57.0` to `0.62.x` (pyo3 0.28 kept; no napi/pyo3 major migration) and the binding builds + tests green.
   5. The engine-abstraction contract (E1: executable/interpreter path; E2: an ownable launch command; E3: an absolute workspace grant; E4: a network identity; E5: an optional pre-exec interception point) is documented as a stable boundary that other engines implement against.
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 72-01-PLAN.md — Shape B soundness spike (real Win11 host) + ROADMAP SC2/SC3 reword (ABI-01)
+- [ ] 72-02-PLAN.md — nono pin bump + windows_confined_run.rs (confined_run + confine) + lib.rs registration + __init__.py exports (ABI-01)
+- [ ] 72-03-PLAN.md — proj/DESIGN-engine-abstraction.md E1-E5 contract + zt-infra E5 mapping + ../nono-py/docs link (ABI-02)
+- [ ] 72-04-PLAN.md — examples/15_langchain_confined.py + tests/test_confined_run.py + Win11 UAT gate (ABI-01)
 
 ### Phase 73: AI_AGENT Marker
 **Goal**: Every confined agent carries an unforgeable `AI_AGENT` identity that a non-agent process cannot claim and a confined agent cannot shed — the authorization signal the multi-tenant daemon will key on. Depends only on Phase 71; independent of Phase 72 (parallel-capable). The daemon prerequisite.
@@ -140,7 +144,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
-| 72. nono-py Binding + In-Process-Exec Proof | 0/TBD | Not started | - |
+| 72. nono-py Binding + In-Process-Exec Proof | 0/4 | Not started | - |
 | 73. AI_AGENT Marker | 0/TBD | Not started | - |
 | 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |
 | 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
@@ -183,7 +187,7 @@ Each load-bearing pitfall is owned by exactly one phase as a success-criterion-w
 |---------|-------------|-------------------|
 | Nested-job collisions / silent confinement loss (P6) | 71 | SC5 — spawn suspended, assign before any code runs, fail-secure on assign failure, no UI limits |
 | R-B3 user-owned workspace / exe-coverage fail-secure (carry-forward) | 71 | SC3 + SC4 — fail-secure coverage gate + R-B3 ownership diagnostic |
-| In-process-exec() cannot be confined post-hoc (P3) | 72 | SC2 + SC3 — `confine()` self-confine at startup before any privileged handle |
+| In-process-exec() cannot be confined post-hoc (P3) | 72 | SC2 + SC3 — `confine()` born-confined broker re-exec at process startup before any privileged handle (Windows-equivalent; ordering is the invariant) |
 | AI_AGENT marker forge/shed (P2) | 73 | SC1-SC4 — unforgeable token SID (not a named job), deny breakaway, daemon-only job ACL |
 | Cross-tenant capability theft (P1, load-bearing) | 74 | SC2 — server-side `ImpersonateNamedPipeClient` + per-tenant SID; cross-tenant-denial negative test |
 | Daemon attack surface / privilege (P4) | 74 | SC4 — least-privilege USER daemon split from elevated WFP service; privilege-model ADR first |
@@ -213,3 +217,4 @@ Each load-bearing pitfall is owned by exactly one phase as a success-criterion-w
 - `.planning/research/STACK.md` — deliberate non-bumps (windows-sys 0.59, napi 2); net-new Win32 (named job objects).
 - `.planning/templates/cross-target-verify-checklist.md` — mandatory Linux+macOS clippy protocol for any cfg-gated Unix code touched.
 - `.planning/milestones/v2.11-ROADMAP.md` — archived v2.11 (Phases 67-70).
+- `proj/DESIGN-engine-abstraction.md` — E1-E5 engine-abstraction contract (authored in Phase 72, plan 72-03).
