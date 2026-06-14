@@ -301,6 +301,10 @@ pub struct ExecConfig<'a> {
     pub protected_paths: &'a [std::path::PathBuf],
     /// Base profile name to derive a saved user patch from after run-time denials.
     pub profile_save_base: Option<&'a str>,
+    /// Denied paths that should not be offered in the save-profile prompt.
+    pub ignored_denial_paths: &'a [std::path::PathBuf],
+    /// Non-filesystem sandbox operations suppressed from diagnostic footers.
+    pub suppressed_system_service_operations: &'a [String],
     /// Optional startup timeout for known interactive CLIs that were launched
     /// without their recommended built-in profile.
     pub startup_timeout: Option<StartupTimeoutConfig<'a>>,
@@ -1703,12 +1707,16 @@ pub fn execute_supervised(
             };
             #[cfg(not(target_os = "macos"))]
             let sandbox_violations = Vec::new();
+            let visible_sandbox_violations = filter_suppressed_system_service_violations(
+                &sandbox_violations,
+                config.suppressed_system_service_operations,
+            );
 
             // Resolve policy explanations for denied paths so the diagnostic
             // can show group names and fix guidance inline. On macOS this is
             // also the source for the run-time profile save prompt.
             let policy_explanations =
-                build_policy_explanations(&denials, &sandbox_violations, config.caps);
+                build_policy_explanations(&denials, &visible_sandbox_violations, config.caps);
             let prompt_policy_explanations = policy_explanations.clone();
             let prompt_error_observation = error_observation.clone();
 
@@ -1718,7 +1726,7 @@ pub fn execute_supervised(
                     exit_code,
                     &denials,
                     &ipc_denials,
-                    &sandbox_violations,
+                    &visible_sandbox_violations,
                     &error_observation,
                 );
 
@@ -1756,6 +1764,9 @@ pub fn execute_supervised(
                     .with_session_id(diag_session_id)
                     .with_policy_explanations(policy_explanations)
                     .with_suppressed_paths(config.ignored_denial_paths)
+                    .with_suppressed_system_service_operations(
+                        config.suppressed_system_service_operations,
+                    )
                     .with_canonical_denial_paths(canonical_denial_paths);
                 if let Some(program) = config.command.first() {
                     formatter = formatter.with_command(nono::diagnostic::CommandContext {
@@ -1773,6 +1784,7 @@ pub fn execute_supervised(
                 exit_code,
                 &prompt_policy_explanations,
                 &prompt_error_observation,
+                &visible_sandbox_violations,
             ) {
                 // Clear the forwarding target before prompting. The child is
                 // already dead; keeping CHILD_PID set would cause forward_signal
@@ -1927,16 +1939,36 @@ fn should_print_diagnostic_footer(
             || error_observation.has_findings())
 }
 
+fn filter_suppressed_system_service_violations(
+    sandbox_violations: &[nono::SandboxViolation],
+    suppressed_operations: &[String],
+) -> Vec<nono::SandboxViolation> {
+    if suppressed_operations.is_empty() {
+        return sandbox_violations.to_vec();
+    }
+
+    sandbox_violations
+        .iter()
+        .filter(|violation| {
+            nono::diagnostic::seatbelt_operation_to_access(&violation.operation).is_some()
+                || !suppressed_operations.contains(&violation.operation)
+        })
+        .cloned()
+        .collect()
+}
+
 fn should_offer_profile_save(
     no_diagnostics: bool,
     exit_code: i32,
     policy_explanations: &[nono::diagnostic::PolicyExplanation],
     error_observation: &nono::diagnostic::ErrorObservation,
+    sandbox_violations: &[nono::SandboxViolation],
 ) -> bool {
     !no_diagnostics
         && (exit_code != 0
             || !policy_explanations.is_empty()
-            || !error_observation.path_hints.is_empty())
+            || !error_observation.path_hints.is_empty()
+            || !sandbox_violations.is_empty())
 }
 
 /// Close inherited file descriptors, keeping stdin/stdout/stderr and specified FDs.
@@ -3946,6 +3978,28 @@ mod tests {
             0,
             &explanations,
             &observation,
+            &[],
+        ));
+    }
+
+    #[test]
+    fn test_suppressed_system_service_violations_do_not_offer_profile_save() {
+        let explanations = Vec::new();
+        let observation = nono::diagnostic::ErrorObservation::default();
+        let violations = vec![nono::SandboxViolation {
+            operation: "forbidden-exec-sugid".to_string(),
+            target: None,
+        }];
+        let suppressed = vec!["forbidden-exec-sugid".to_string()];
+        let visible = filter_suppressed_system_service_violations(&violations, &suppressed);
+
+        assert!(visible.is_empty());
+        assert!(!should_offer_profile_save(
+            false,
+            0,
+            &explanations,
+            &observation,
+            &visible,
         ));
     }
 
@@ -3986,12 +4040,14 @@ mod tests {
             1,
             &explanations,
             &observation,
+            &[],
         ));
         assert!(!should_offer_profile_save(
             true,
             1,
             &explanations,
             &observation,
+            &[],
         ));
     }
 

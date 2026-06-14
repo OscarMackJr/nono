@@ -20,10 +20,45 @@
 //!
 //! Acceptance criterion #1 (idempotent JSON-merge install records) is
 //! EXPLICITLY scope-trimmed per D-36-C1; deferred to v2.5-FU-3.
+//!
+//! # D-20 replay of db073750 (C4 — Plan 70-02)
+//!
+//! `ExecuteOptions` and `execute_with_options` are forward-compatibility stubs
+//! ported from upstream db073750. They expose the `--force` recovery API surface
+//! so callers can pass `ExecuteOptions { allow_unmanaged_identical_write_files: true }`
+//! today. The full WriteFile/execute wiring is deferred to v2.5-FU-3; when that
+//! work lands, `execute_with_options` will route `force` into the execute path.
 
 use nono::{NonoError, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+// ---------------------------------------------------------------------------
+// ExecuteOptions — forward-compatible stub for db073750 (C4 Plan 70-02)
+// ---------------------------------------------------------------------------
+
+/// Options for wiring directive execution.
+///
+/// D-20 replay of upstream db073750: This struct is the public API surface for
+/// `--force` recovery. The `allow_unmanaged_identical_write_files` flag allows a
+/// `write_file` directive to adopt an existing unmanaged destination when its
+/// content exactly matches the pack source (SHA-256 byte-exact comparison, not
+/// length or mtime). This avoids errors when a file already exists with correct
+/// content but its management metadata (lockfile entry, `.nono-trust.bundle`) was
+/// lost.
+///
+/// The full WriteFile execute path is deferred to v2.5-FU-3. This struct is
+/// exported now so callers that thread `force` through the install path can
+/// construct the options consistently.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExecuteOptions {
+    /// Allows a `WriteFile` directive to claim an existing unmanaged destination
+    /// only when its content already exactly matches the pack source (SHA-256
+    /// byte-exact comparison). Used for `nono pull --force` recovery after
+    /// local package metadata loss.
+    pub allow_unmanaged_identical_write_files: bool,
+}
+
 
 // ---------------------------------------------------------------------------
 // YamlMergeDirective — the yaml_merge directive struct
@@ -393,6 +428,35 @@ mod tests {
         assert!(
             msg.contains("source and target must differ"),
             "error must explain why self-merge is rejected; got: {msg}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: ExecuteOptions struct construction (D-20 replay db073750)
+    // -----------------------------------------------------------------------
+    /// D-20 replay of upstream db073750 (C4 Plan 70-02): Locks the
+    /// `ExecuteOptions` struct API surface. `allow_unmanaged_identical_write_files`
+    /// controls force-mode file adoption (SHA-256 byte-exact match).
+    /// Production use: `install_package` in `package_cmd.rs` constructs this
+    /// struct and logs the flag for tracing. Full WriteFile wiring lands v2.5-FU-3.
+    #[test]
+    fn execute_options_default_is_non_force() {
+        let opts = ExecuteOptions::default();
+        assert!(
+            !opts.allow_unmanaged_identical_write_files,
+            "default ExecuteOptions must NOT allow unmanaged file adoption (fail-safe)"
+        );
+    }
+
+    /// Force-mode ExecuteOptions allows unmanaged identical file adoption.
+    #[test]
+    fn execute_options_force_enables_adoption() {
+        let opts = ExecuteOptions {
+            allow_unmanaged_identical_write_files: true,
+        };
+        assert!(
+            opts.allow_unmanaged_identical_write_files,
+            "force ExecuteOptions must allow unmanaged identical file adoption"
         );
     }
 }

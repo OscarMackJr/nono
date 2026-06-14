@@ -618,6 +618,31 @@ mod tests {
         Ok(())
     }
 
+    // Regression guard for security finding R-A1: the hook wrapper must NOT merge
+    // the nono process's stderr into the stdout it echoes as the JSON contract.
+    // Merging via `2>&1` allowed env-gated tracing output (NONO_LOG/RUST_LOG) to
+    // corrupt the JSON so Claude Code could not parse permissionDecision.
+    #[test]
+    fn test_embedded_tool_hook_separates_stderr_from_json_contract(
+    ) -> std::result::Result<(), Box<dyn Error>> {
+        let script = get_embedded_script("nono-tool-hook.ps1").ok_or("Script not found")?;
+        // Must never merge stderr into stdout on the success path.
+        assert!(
+            !script.contains("2>&1"),
+            "R-A1 regression: hook uses 2>&1, merging stderr into the JSON contract"
+        );
+        // Must redirect native stderr to a separate channel (a temp file).
+        assert!(
+            script.contains("2>$stderrFile"),
+            "hook must redirect nono stderr to a separate file, not stdout"
+        );
+        assert!(script.contains("GetTempFileName"));
+        // Temp file must be cleaned up in a finally block.
+        assert!(script.contains("finally"));
+        assert!(script.contains("Remove-Item"));
+        Ok(())
+    }
+
     #[test]
     fn test_update_claude_settings_registers_powershell_hook(
     ) -> std::result::Result<(), Box<dyn Error>> {

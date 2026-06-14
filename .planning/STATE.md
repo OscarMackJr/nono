@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
-status: executing
-last_updated: "2026-06-12T20:24:21.931Z"
-last_activity: 2026-06-12 -- Phase 68 execution started
+status: milestone_complete
+last_updated: "2026-06-13T02:47:12.771Z"
+last_activity: 2026-06-13
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_phases: 4
+  total_plans: 6
+  completed_plans: 6
+  percent: 100
 ---
 
 # Project State: nono — v2.11 Clean-Host Distribution Cleanup + UPST8
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.11 milestone started 2026-06-11; v2.10 shipped +
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms; every nono command that works on Linux/macOS should work on Windows with equivalent security guarantees, or be explicitly documented as intentionally unsupported with a clear rationale.
 
-**Current Focus:** Phase 68 — macos-resl-enforcement-fix (EXECUTED — both plans complete; RESL-MAC-01 + RESL-MAC-02 satisfied on a real macOS host, 5/5 gated tests; ready for verification)
+**Current Focus:** Phase 70 complete — UPST8 sync done; awaiting human-verify checkpoint for C2 network policy security; Phases 67 (clean-host Win install) and 68 (macOS resl fix) pending host-gated UAT
 
 ## Current Position
 
-Phase: 68 (macos-resl-enforcement-fix) — EXECUTED (2/2 plans; host UAT 5/5 PASS)
-Plan: 2 of 2 complete
-Status: RESL-MAC-01 (`--timeout` SIGKILLs child at deadline) + RESL-MAC-02 (`--max-processes` EAGAINs fork past cap) both PASS with NONO_RESL_HOST_VALIDATED=1 on Oscars-MacBook-Pro (head 828a332c). 68-02 fixed D1 (SO_RCVTIMEO→Linux-only), D2 (RLIMIT_AS best-effort), the run_bounded cwd-prompt test hang, and the proc_listpids baseline overcount (824→~474 cap). Watchdog (D3) confirmed firing (SIGKILL 137 at deadline). Debug `macos-resl-not-firing` RESOLVED. Next: phase verification (gsd-verifier / /gsd:verify-work) then ship. Carry-forward: --memory/RLIMIT_AS is best-effort on macOS (todo 20260612-macos-rlimit-as-setrlimit-fails).
-Last activity: 2026-06-12 -- Phase 68 EXECUTED — macOS host UAT 5/5; RESL-MAC-01/02 satisfied
+Phase: 70
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-06-13
 
 ### v2.11 Phase Summary (active)
 
@@ -75,6 +75,10 @@ Last activity: 2026-06-12 -- Phase 68 EXECUTED — macOS host UAT 5/5; RESL-MAC-
 | D-10: cross-target clippy PARTIAL/deferred-to-CI for Phase 68 | 68 | Windows dev host cannot cross-compile (ring/aws-lc-sys C toolchain missing); GH Actions Linux + macOS Clippy lanes are the load-bearing signal. |
 | UPST8 scoped to the non-macOS slice of `v0.60.0..v0.61.2` only | 69-70 | The macOS slice of that window was already absorbed in v2.10 (Phases 63-65 / MACOS-01..03). |
 | UPST8 follows the Phase 54/55 audit-then-sync two-phase shape | 69-70 | Mirrors every prior UPST cycle (33/34, 39/40, 42/43, 47, 54/55); cadence-ordered linearly after Phase 55. |
+| D-70-01: UPST8-01 acceptance criteria extended to v0.62.0 upper bound | 70 | Phase 69 DIVERGENCE-LEDGER D-01 found 3 tail commits (v0.61.2..v0.62.0) outside original scope; scope extended |
+| cc21229f adapted inline (collect_ignored_denial_paths absent from fork) | 70 | Upstream helper + SandboxArgs::suppress_save_prompt not yet in fork; inlined using existing canonicalize_suppress_path, cfg-gated on non-Windows |
+| 20cc5df9 sandbox_state.rs conflict: HEAD side taken for domain_endpoint_state_tests | 70 | Fork's Phase 56 module not in upstream; profile_save_runtime.rs registry-ref feature auto-merged cleanly |
+| db073750 D-20 manual replay (C4): execute_with_options deferred, ExecuteOptions added | 70 | Fork's wiring.rs is yaml_merge system; upstream's WriteFile execute system not yet ported (v2.5-FU-3); ExecuteOptions used from install_package for forward-compat API |
 
 ### v2.10 decisions
 
@@ -118,6 +122,34 @@ Last activity: 2026-06-12 -- Phase 68 EXECUTED — macOS host UAT 5/5; RESL-MAC-
 - **Seatbelt deny-after-allow ordering (Pitfall 10):** unit tests must assert ordering, not just rule presence.
 - **macOS `/private/etc` symlink drift (Pitfall 11):** emit both symlink and canonical path for every macOS deny path.
 - **DIVERGENCE-LEDGER cluster isolation can be empirically false (`feedback_cluster_isolation_invalid`):** UPST8 audit (Phase 69) must diff-inspect re-export surfaces, not just `--name-only`.
+
+### Plan 70-03 Close — C2 Network Policy Security Hardening (2026-06-13)
+
+- **C2 commits:** 0fb59375 (fork: `1f5b6193`) + bd4c469a (fork: `35282744`)
+- **Security effect:** Embedded profiles (opencode/developer/codex/claude-code) no longer carry implicit credential routes; proxy now enforces deny-by-default under network.block via ProxyConfig.strict_filter + HostFilter::new_strict()
+- **Conflicts in bd4c469a:** 4 files (sandbox_prepare.rs, launch_runtime.rs, proxy_runtime.rs, main.rs); 4 auto-merged; upstream refactored helpers (cwd_access_requirement etc.) rejected (Edition 2021 incompatible; fork has equivalent inline logic)
+- **RouteStore/CredentialStore decoupling (Phase 56):** PRESERVED — server.rs auto-merged cleanly; no regression
+- **Test result:** 779+1219+162 pass; 5 pre-existing failures (red->red carry-forward); 0 new regressions
+- **Cross-target clippy:** PARTIAL — Windows host cannot cross-compile; GH Actions CI is load-bearing signal
+- **D-70-E1 C2:** PASS (0 Windows-only files); D-70-E1 phase-wide: PASS (0 Windows-only files across all 5 cherry-picks)
+- **Phase-wide D-19/D-20 count:** 5 (all will-sync commits absorbed: C3×2 + C4×1 D-20 + C2×2)
+- **UPST8-02:** SATISFIED — all 5 will-sync commits on main with correct trailers
+- **Human-verify checkpoint:** AWAITING — automated checks PASS; awaiting user confirmation
+
+### Plan 69-01 Close — UPST8 Audit (2026-06-13)
+
+- **Range:** `9a05a4ff..52809dda` (v0.60.0..v0.62.0, D-01 corrected; SC says v0.61.2 ceiling — flagged for +3 update to REQUIREMENTS.md UPST8-01)
+- **upstream_head_at_audit:** `849cda42c0541f18915708cd3ff31d61c12d136d` | **refetch_date:** 2026-06-13 | **drift_tool_sh_sha:** `0834aa66` (pin held)
+- **9 unique commits** (drift-tool count), **4 clusters**. Disposition breakdown: **will-sync 3** (C2 network-policy security, C3 profile/diagnostic features, C4 nono-pull recovery) · **won't-sync 1** (C1 release bumps) · **split 0** · **fork-preserve 0**.
+- **windows-touch:yes = 0** — no Phase 70 cross-target clippy work required for any cluster.
+- **macOS-overlap:** 7 of 9 commits are in the overlap range (v0.60.0..v0.61.2); all 7 carry Phase 63 pointers. 2 tail commits (db073750, 52809dda) have no Phase 63 pointer and contain no macOS-relevant code — "macOS un-audited" flag vacuously satisfied.
+- **Cross-cluster re-export deps:** 1 field-existence ordering dep — C2 (bd4c469a) → C3 (cc21229f) via `suppressed_system_service_operations` in `PreparedSandbox`. Cherry-pick ordering: absorb C3 before C2 in Phase 70. No re-export-isolation failures; no split flips. Mirrors Phase 54 C5→C3 dep.
+- **Empirical cross-check:** 6 files walked (filter.rs, server.rs, policy.rs, net_filter.rs, network_policy.rs, sandbox_prepare.rs); zero drift-tool gaps; all PASS.
+- **ADR review outcome:** (a) Confirm. Phase 33 ADR Option A 'continue' — 5-dimension L/M/H (security=M, windows=L, maintenance=L, divergence=L, contributor=L). Does NOT supersede Phase 33 ADR.
+- **SC divergence flag:** ROADMAP says v0.61.2 ceiling; D-01 extended to v0.62.0; REQUIREMENTS.md UPST8-01 acceptance language should be updated to reflect v0.62.0 (+3 tail commits).
+- **Zero-source-edits invariant honored:** `git diff plan_base_sha..HEAD -- crates/ bindings/ scripts/ Makefile` returns 0 lines.
+- **DCO sign-off:** All commits carry `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>`.
+- **Next:** Phase 70 (UPST8 Cherry-pick Sync) — absorb will-sync clusters C2, C3, C4 with D-19 trailers; cherry-pick order: C3 before C2 (ordering constraint).
 
 ### Plan 54-01 Close — UPST7 Audit (2026-06-04) — UPST8 predecessor context
 
@@ -205,7 +237,7 @@ Pre-v2.5 task slugs marked `missing` or `unknown` in `.planning/quick/`. Most pr
 
 ## Session Continuity
 
-**Last session:** 2026-06-12T17:19:07.089Z
+**Last session:** 2026-06-13T02:47:12.755Z
 
 **v2.11 roadmap complete (2026-06-11):** Phases 67-70 defined, 8/8 reqs mapped (100% coverage). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Phases 67 (clean-host Win install: DIST-01/02 + TRUST-01/02) and 68 (macOS resl: RESL-MAC-01/02) are independent + host-gated + parallel-safe. Phases 69 (UPST8 audit: UPST8-01) → 70 (UPST8 sync: UPST8-02) are the linear audit-then-sync pair, cadence-ordered after Phase 55.
 

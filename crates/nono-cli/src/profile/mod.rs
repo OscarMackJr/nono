@@ -1940,6 +1940,19 @@ impl LinuxAfUnixMediation {
     }
 }
 
+/// Diagnostic output controls.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticsConfig {
+    /// Non-filesystem sandbox operations to suppress from diagnostic footers.
+    ///
+    /// This does not grant access and does not change sandbox enforcement. It
+    /// only hides recurring non-actionable system-service diagnostics, such as
+    /// `forbidden-exec-sugid`, from post-run output.
+    #[serde(default)]
+    pub suppress_system_services: Vec<String>,
+}
+
 /// Linux-specific profile controls.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2140,6 +2153,8 @@ pub struct Profile {
     #[serde(default)]
     pub network: NetworkConfig,
     #[serde(default)]
+    pub diagnostics: DiagnosticsConfig,
+    #[serde(default)]
     pub linux: LinuxConfig,
     /// ALIAS(canonical="env_credentials", introduced="v0.0.0", remove_by="indefinite", issue="#143")
     #[serde(default, alias = "secrets")]
@@ -2262,6 +2277,8 @@ struct ProfileDeserialize {
     #[serde(default)]
     network: NetworkConfig,
     #[serde(default)]
+    diagnostics: DiagnosticsConfig,
+    #[serde(default)]
     linux: LinuxConfig,
     /// ALIAS(canonical="env_credentials", introduced="v0.0.0", remove_by="indefinite", issue="#143")
     #[serde(default, alias = "secrets")]
@@ -2317,6 +2334,7 @@ impl From<ProfileDeserialize> for Profile {
             filesystem: raw.filesystem,
             policy: raw.policy,
             network: raw.network,
+            diagnostics: raw.diagnostics,
             linux: raw.linux,
             env_credentials: raw.env_credentials,
             environment: raw.environment,
@@ -3139,6 +3157,12 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 .linux
                 .af_unix_mediation
                 .or(base.linux.af_unix_mediation),
+        },
+        diagnostics: DiagnosticsConfig {
+            suppress_system_services: dedup_append(
+                &base.diagnostics.suppress_system_services,
+                &child.diagnostics.suppress_system_services,
+            ),
         },
         env_credentials: SecretsConfig {
             mappings: {
@@ -4991,6 +5015,7 @@ mod tests {
                 upstream_proxy: None,
                 upstream_bypass: Vec::new(),
             },
+            diagnostics: DiagnosticsConfig::default(),
             linux: LinuxConfig::default(),
             env_credentials: SecretsConfig {
                 mappings: {
@@ -5080,6 +5105,7 @@ mod tests {
                 upstream_proxy: None,
                 upstream_bypass: Vec::new(),
             },
+            diagnostics: DiagnosticsConfig::default(),
             linux: LinuxConfig::default(),
             env_credentials: SecretsConfig {
                 mappings: {
@@ -5841,6 +5867,29 @@ mod tests {
         let creds = merged.network.resolved_credentials();
         assert!(creds.contains(&"base_cred".to_string()));
         assert!(creds.contains(&"child_cred".to_string()));
+    }
+
+    #[test]
+    fn test_merge_profiles_diagnostics_suppressions_append() {
+        let mut base = base_profile();
+        base.diagnostics.suppress_system_services = vec![
+            "forbidden-exec-sugid".to_string(),
+            "mach-lookup".to_string(),
+        ];
+        let mut child = child_profile();
+        child.diagnostics.suppress_system_services =
+            vec!["forbidden-exec-sugid".to_string(), "signal".to_string()];
+
+        let merged = merge_profiles(base, child);
+
+        assert_eq!(
+            merged.diagnostics.suppress_system_services,
+            vec![
+                "forbidden-exec-sugid".to_string(),
+                "mach-lookup".to_string(),
+                "signal".to_string(),
+            ]
+        );
     }
 
     #[test]

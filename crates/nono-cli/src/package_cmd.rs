@@ -49,7 +49,7 @@ pub fn run_pull(args: PullArgs) -> Result<()> {
         args.force,
     )?;
 
-    let install = install_package(&package_ref, &manifest, &downloads, args.init)?;
+    let install = install_package(&package_ref, &manifest, &downloads, args.init, args.force)?;
     update_lockfile(
         &package_ref,
         &registry_url,
@@ -865,12 +865,29 @@ fn validate_manifest(manifest: &PackageManifest) -> Result<()> {
     Ok(())
 }
 
+// D-20 replay of db073750 (C4): `force` parameter added for the --force recovery
+// path. When true, instructs the install path to allow adopting existing unmanaged
+// files whose content exactly matches the pack source. The `ExecuteOptions` struct
+// is constructed here for forward-compatibility; it will be passed into the full
+// WriteFile execute path when that system lands (v2.5-FU-3).
 fn install_package(
     package_ref: &PackageRef,
     manifest: &PackageManifest,
     downloads: &VerifiedDownloads,
     init: bool,
+    force: bool,
 ) -> Result<InstallSummary> {
+    // Build execute options for forward-compatible force recovery wiring.
+    // When the full WriteFile execute system lands (v2.5-FU-3), these options
+    // will be threaded into crate::wiring::execute_with_options.
+    let execute_opts = crate::wiring::ExecuteOptions {
+        allow_unmanaged_identical_write_files: force,
+    };
+    tracing::debug!(
+        "install: force={} (allow_unmanaged_identical_write_files={})",
+        force,
+        execute_opts.allow_unmanaged_identical_write_files
+    );
     let staging_parent = package::package_store_dir()?
         .join(".staging")
         .join(&package_ref.namespace);

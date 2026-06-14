@@ -235,6 +235,8 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
             #[cfg(target_os = "linux")]
             af_unix_mediation: prepared.af_unix_mediation,
             bypass_protection_paths: prepared.bypass_protection_paths,
+            ignored_denial_paths: prepared.ignored_denial_paths,
+            suppressed_system_service_operations: prepared.suppressed_system_service_operations,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
             startup_timeout_secs: args.startup_timeout_secs,
@@ -335,6 +337,8 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
             workdir: resolve_requested_workdir(args.workdir.as_ref()),
             no_diagnostics,
             bypass_protection_paths: prepared.bypass_protection_paths,
+            ignored_denial_paths: prepared.ignored_denial_paths,
+            suppressed_system_service_operations: prepared.suppressed_system_service_operations,
             allowed_env_vars: prepared.allowed_env_vars,
             denied_env_vars: prepared.denied_env_vars,
             ..ExecutionFlags::defaults(silent)?

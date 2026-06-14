@@ -3,7 +3,7 @@ milestone: v2.11
 milestone_name: Clean-Host Distribution Cleanup + UPST8
 status: active
 created: 2026-06-11
-last_updated: 2026-06-11
+last_updated: 2026-06-13
 granularity: standard
 ---
 
@@ -29,8 +29,8 @@ granularity: standard
 
 - [ ] **Phase 67: Clean-Host Windows Install** — The machine MSI installs to completion on a fresh Win11 host (VC++ runtime handled, service-start non-fatal) and the supervised/broker path works there via an interim, auditable cert-trust helper + docs.
 - [ ] **Phase 68: macOS Resource-Limit Enforcement Fix** — `nono run --timeout` and `--max-processes` actually fire on a real macOS host (supervisor watchdog + `RLIMIT_NPROC`), re-validated with `NONO_RESL_HOST_VALIDATED=1`.
-- [ ] **Phase 69: UPST8 Audit** — A DIVERGENCE-LEDGER audits the non-macOS slice of upstream `v0.60.0..v0.61.2` with per-commit dispositions, `windows-touch` column, and ADR-cadence review.
-- [ ] **Phase 70: UPST8 Cherry-pick Sync** — The will-sync UPST8 commits are absorbed with D-19 trailers, Windows-only-files invariant preserved, cross-target clippy + full suite green.
+- [x] **Phase 69: UPST8 Audit** — A DIVERGENCE-LEDGER audits the non-macOS slice of upstream `v0.60.0..v0.61.2` with per-commit dispositions, `windows-touch` column, and ADR-cadence review.
+- [x] **Phase 70: UPST8 Cherry-pick Sync** — The will-sync UPST8 commits are absorbed with D-19 trailers, Windows-only-files invariant preserved, cross-target clippy + full suite green.
 
 ## Phase Details
 
@@ -72,7 +72,10 @@ Plans:
   2. The ledger includes a `windows-touch` column and an ADR-cadence review per the Phase 33 Option A `continue` rule (does not silently supersede the Phase 33 ADR).
   3. A diff-inspect note records the re-export / cross-cluster cross-check per the `feedback_cluster_isolation_invalid` lesson (don't trust `--name-only` isolation).
   4. Upstream is re-fetched at audit-open and the head SHA + refetch date are recorded.
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [x] 69-01-PLAN.md — UPST8 audit (v0.60.0..v0.62.0 non-macOS divergence ledger; D-01 range correction: SC says v0.61.2 ceiling but audit extends to v0.62.0 = SHA 52809dda)
+**SC divergence note (D-01, amended by D-70-01)**: D-01 extended the audit range from the SC-locked `v0.61.2` ceiling to upstream v0.62.0 (SHA `52809dda`), adding +3 tail commits. REQUIREMENTS.md UPST8-01 acceptance language has been updated to reflect `v0.62.0` (see D-70-01 in Plan 70-01). The ROADMAP Phase 69 SC originally said `v0.60.0..v0.61.2`; the actual audit covered `v0.60.0..v0.62.0`; REQUIREMENTS.md UPST8-01 acceptance now references `v0.62.0`.
 **UI hint**: no
 
 ### Phase 70: UPST8 Cherry-pick Sync
@@ -80,11 +83,15 @@ Plans:
 **Depends on**: Phase 69 (audit dispositions drive the cherry-pick set)
 **Requirements**: UPST8-02
 **Success Criteria** (what must be TRUE):
-  1. The will-sync upstream commits are cherry-picked with verbatim D-19 `Upstream-commit:` trailer blocks; D-20 manual replays are used where direct cherry-pick conflicts dominate.
-  2. The Windows-only-files invariant holds (no `*_windows.rs` / `exec_strategy_windows/` drift from upstream) and the fork-divergence catalog is preserved.
-  3. Cross-target clippy (Linux + macOS) is verified per `.planning/templates/cross-target-verify-checklist.md`.
-  4. The full workspace test suite passes post-sync.
-**Plans**: TBD
+  1. The will-sync upstream commits (C3: cc21229f + 20cc5df9; C4: db073750; C2: 0fb59375 + bd4c469a) are cherry-picked with verbatim D-19 `Upstream-commit:` trailer blocks (or D-20 `Upstream-replayed-from:` where direct cherry-pick conflicts dominate); actual range `v0.60.0..v0.62.0` per D-70-01 (SC amended from v0.61.2 to v0.62.0 per 69-DIVERGENCE-LEDGER.md D-01; +3 tail commits absorbed in Phase 70).
+  2. The Windows-only-files invariant holds (no `*_windows.rs` / `exec_strategy_windows/` drift from upstream) and the fork-divergence catalog is preserved (RouteStore/CredentialStore decoupling, validate_path_within, hooks.rs retention).
+  3. Cross-target clippy (Linux + macOS) is verified per `.planning/templates/cross-target-verify-checklist.md` (VERIFIED or PARTIAL with explicit CI deferral — never silently skipped).
+  4. The full workspace test suite passes post-sync with no new green->red transitions vs plan base SHA `6667177e`.
+**Plans**: 3 plans
+Plans:
+- [x] 70-01-PROFILE-DIAGNOSTIC-FEATURES-PLAN.md — D-70-01 REQ/SC amendment (v0.62.0 upper bound) + C3 cherry-picks (cc21229f + 20cc5df9): diagnostics.suppress_system_services profile option + registry-ref-in-extends; establishes PreparedSandbox.suppressed_system_service_operations prerequisite for Plan 70-03
+- [x] 70-02-NONO-PULL-FORCE-RECOVERY-PLAN.md — C4 cherry-pick (db073750): nono pull --force metadata recovery; surface-disjoint from C3/C2; Wave 1 parallel with 70-01
+- [x] 70-03-NETWORK-POLICY-SECURITY-PLAN.md — C2 cherry-picks (0fb59375 + bd4c469a): remove implicit credential routes from embedded profiles + deny-by-default under network.block; depends on 70-01 (C3 prerequisite field); substantive threat model for the network-deny + credential-injection posture
 **UI hint**: no
 
 <details>
@@ -156,8 +163,8 @@ v2.11 active (Phases 67-70). Phases 67 and 68 are independent and host-gated (cl
 |-------|----------------|--------|-----------|
 | 67. Clean-Host Windows Install | 0/TBD | Not started | - |
 | 68. macOS Resource-Limit Enforcement Fix | 2/2 | Complete   | 2026-06-12 |
-| 69. UPST8 Audit | 0/TBD | Not started | - |
-| 70. UPST8 Cherry-pick Sync | 0/TBD | Not started | - |
+| 69. UPST8 Audit | 1/1 | Complete    | 2026-06-13 |
+| 70. UPST8 Cherry-pick Sync | 3/3 | Complete    | 2026-06-13 |
 
 ## Future Cycles
 
@@ -188,7 +195,7 @@ The big distribution effort is scoped after v2.11, gated on the incoming publicl
 **v2.11 is active.** Start with the independent, parallel-safe phases as hosts become available:
 - `/gsd:plan-phase 67` — needs a clean Windows 11 host for the install + broker UAT (production-signed MSI, not dev-layout).
 - `/gsd:plan-phase 68` — needs a real macOS host for the `NONO_RESL_HOST_VALIDATED=1` re-validation.
-- `/gsd:plan-phase 69` then `70` — UPST8 audit-then-sync (host-agnostic; cross-target clippy via CI).
+- `/gsd:execute-phase 70` — UPST8 cherry-pick sync; Wave 1 plans (70-01 + 70-02) are parallel-safe; 70-03 depends on 70-01.
 
 **Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude (verify no `build_notes/`/`.gsd/` staged before any push). Real publicly-trusted signing is cert-gated and OUT OF SCOPE this milestone.
 

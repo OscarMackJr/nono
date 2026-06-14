@@ -84,6 +84,11 @@ pub(crate) struct PreparedSandbox {
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
     pub(crate) bypass_protection_paths: Vec<PathBuf>,
+    pub(crate) ignored_denial_paths: Vec<PathBuf>,
+    /// cc21229f (C3): non-filesystem sandbox operations suppressed from
+    /// the diagnostic footer. Sandbox enforcement is unchanged; this only
+    /// controls reporting. Required by Plan 70-03 (C2 prerequisite).
+    pub(crate) suppressed_system_service_operations: Vec<String>,
     /// Plan 34-08a Task 3 (D-20 manual replay of upstream `1b412a7`):
     /// allow-list of environment variable names from the loaded profile's
     /// `environment.allow_vars` block. See [`crate::profile_runtime::PreparedProfile::allowed_env_vars`]
@@ -93,6 +98,10 @@ pub(crate) struct PreparedSandbox {
     /// controlled deny-list of environment variable names from the loaded
     /// profile's `environment.deny_vars` block.
     pub(crate) denied_env_vars: Option<Vec<String>>,
+    /// True when the profile or CLI requested `network.block`. Carried
+    /// through because a CLI proxy flag (e.g. `--credential`) may later
+    /// override `caps` to `ProxyOnly`, losing the original intent.
+    pub(crate) network_block_requested: bool,
     /// Plan 18.1-03 G-06: the loaded profile (if any) is preserved past
     /// profile destructuring so its `capabilities.aipc` widening can be
     /// resolved at Windows supervisor construction time via
@@ -328,12 +337,15 @@ pub(crate) fn prepare_sandbox_with_context(
                 open_url_origins: Vec::new(),
                 open_url_allow_localhost: false,
                 bypass_protection_paths: Vec::new(),
+                ignored_denial_paths: Vec::new(),
+                suppressed_system_service_operations: Vec::new(),
                 // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): manifest path
                 // has no loaded Profile and no env-filter block.
                 allowed_env_vars: None,
                 // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
                 // deny_vars also unset on the manifest path.
                 denied_env_vars: None,
+                network_block_requested: args.block_net,
                 // Plan 18.1-03 G-06: manifest path has no loaded Profile —
                 // AIPC widening defaults to hard-coded supervisor allowlist.
                 loaded_profile: None,
@@ -369,6 +381,8 @@ pub(crate) fn prepare_sandbox_with_context(
         open_url_allow_localhost,
         allow_launch_services: profile_allow_launch_services,
         bypass_protection_paths,
+        ignored_denial_paths,
+        suppressed_system_service_operations,
         allowed_env_vars: profile_allowed_env_vars,
         denied_env_vars: profile_denied_env_vars,
     } = prepared_profile;
@@ -542,6 +556,14 @@ pub(crate) fn prepare_sandbox_with_context(
         return Err(NonoError::NoCapabilities);
     }
 
+    // Capture the profile's `network.block` intent before `loaded_profile`
+    // is consumed below.
+    let profile_network_block = loaded_profile
+        .as_ref()
+        .map(|p| p.network.block)
+        .unwrap_or(false);
+    let network_block_requested = args.block_net || profile_network_block;
+
     // Plan 18.1-03 G-06: clone env_credentials.mappings out by reference so
     // `loaded_profile` stays owned and can be preserved in `PreparedSandbox`
     // for downstream AIPC-allowlist resolution at Windows supervisor
@@ -582,12 +604,15 @@ pub(crate) fn prepare_sandbox_with_context(
             open_url_origins,
             open_url_allow_localhost,
             bypass_protection_paths,
+            ignored_denial_paths,
+            suppressed_system_service_operations,
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): forward the
             // env-filter allow-list from PreparedProfile to PreparedSandbox.
             allowed_env_vars: profile_allowed_env_vars,
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // forward the env-filter deny-list.
             denied_env_vars: profile_denied_env_vars,
+            network_block_requested,
             // Plan 18.1-03 G-06: preserve the loaded profile so
             // `Profile::resolve_aipc_allowlist` can be consulted at the
             // Windows supervisor construction site.

@@ -288,12 +288,15 @@ mod tests {
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,
             bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): test fixture
             // has no env-filter allow-list.
             allowed_env_vars: None,
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
+            network_block_requested: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.
@@ -343,12 +346,15 @@ mod tests {
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,
             bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
             // Plan 34-08a Task 3 (D-20 replay of `1b412a7`): test fixture
             // has no env-filter allow-list.
             allowed_env_vars: None,
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
+            network_block_requested: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.

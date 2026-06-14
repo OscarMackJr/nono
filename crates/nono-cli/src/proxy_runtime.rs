@@ -128,6 +128,7 @@ pub(crate) fn prepare_proxy_launch_options(
         open_url_origins: prepared.open_url_origins.clone(),
         open_url_allow_localhost: prepared.open_url_allow_localhost,
         allow_launch_services_active: prepared.allow_launch_services_active,
+        network_block: prepared.network_block_requested,
     })
 }
 
@@ -216,6 +217,7 @@ pub(crate) fn build_proxy_config_from_flags(
     }
     resolved.routes.extend(endpoint_routes);
     let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts);
+    proxy_config.strict_filter = proxy.network_block;
 
     if let Some(ref addr) = proxy.upstream_proxy {
         proxy_config.external_proxy = Some(nono_proxy::config::ExternalProxyConfig {
@@ -394,8 +396,11 @@ mod tests {
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,
             bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
             allowed_env_vars: None,
             denied_env_vars: None,
+            network_block_requested: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
         };
@@ -407,6 +412,35 @@ mod tests {
         assert_eq!(
             effective.allow_domain[0], endpoint_entry,
             "WithEndpoints entry must survive end-to-end without being flattened to Plain"
+        );
+    }
+
+    /// `network_block: true` must set `strict_filter` on the generated `ProxyConfig`.
+    #[test]
+    fn test_build_proxy_config_propagates_network_block_to_strict_filter() {
+        let proxy = ProxyLaunchOptions {
+            active: true,
+            network_block: true,
+            ..ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
+        assert!(
+            config.strict_filter,
+            "network_block: true must set strict_filter on ProxyConfig"
+        );
+    }
+
+    #[test]
+    fn test_build_proxy_config_strict_filter_off_when_no_block() {
+        let proxy = ProxyLaunchOptions {
+            active: true,
+            network_block: false,
+            ..ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
+        assert!(
+            !config.strict_filter,
+            "strict_filter must default off when network_block is false"
         );
     }
 }
