@@ -3748,3 +3748,83 @@ mod write_deny_low_il_broker_no_pty_tests {
         );
     }
 }
+
+/// SC5 / P6 negative test: proves the foreign-job (GLE-5) diagnostic and the
+/// generic GLE branch both produce correct messages, and that
+/// `apply_process_handle_to_containment` returns `Err` on an invalid job handle
+/// (structural fail-secure assertion).
+///
+/// Test 1 (GLE-5 message): `assign_failure_message(5)` contains "did not create"
+/// and is prefixed with `Job Object assignment failed (GLE=5)`.
+/// Test 2 (generic GLE message): `assign_failure_message(1)` contains "GLE=1".
+/// Test 3 (structural fail-secure): passing an invalid job handle
+/// (`INVALID_HANDLE_VALUE`) to `apply_process_handle_to_containment` returns
+/// `Err`, never `Ok` — proving the assign-failure path propagates an error
+/// rather than silently continuing.
+///
+/// Live spawn scaffolding is NOT required: the pure-helper tests cover the
+/// message branch deterministically; the structural test uses an obviously
+/// invalid handle (GLE will be non-5) which exercises the generic branch and
+/// proves `Err` propagation. The full suspend→assign→resume fail-secure
+/// sequence (terminate_suspended_process + propagate) is covered by the SC1
+/// HUMAN-UAT (Plan 05) where a real engine spawn is verified end-to-end.
+#[cfg(all(test, target_os = "windows"))]
+mod assign_failure_tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+
+    /// GLE-5 (ERROR_ACCESS_DENIED) → "did not create" substring present.
+    #[test]
+    fn assign_failure_message_gle5_contains_did_not_create() {
+        let msg = assign_failure_message(5);
+        assert!(
+            msg.contains("did not create"),
+            "GLE-5 message must name the foreign-job cause ('did not create'); got: {msg}"
+        );
+        assert!(
+            msg.contains("GLE=5"),
+            "GLE-5 message must include 'GLE=5' for diagnostics; got: {msg}"
+        );
+    }
+
+    /// Generic GLE (non-5) → "GLE=<value>" in the message.
+    #[test]
+    fn assign_failure_message_generic_gle_contains_gle_value() {
+        let msg = assign_failure_message(1);
+        assert!(
+            msg.contains("GLE=1"),
+            "Generic GLE message must include the GLE value; got: {msg}"
+        );
+        // Must NOT claim "did not create" — that is the GLE-5-only narrative.
+        assert!(
+            !msg.contains("did not create"),
+            "Generic GLE message must not contain 'did not create' (that is the GLE-5 branch); got: {msg}"
+        );
+    }
+
+    /// Structural fail-secure: an invalid job handle makes
+    /// `apply_process_handle_to_containment` return `Err` — it never returns
+    /// `Ok` on assign failure.
+    ///
+    /// Uses `INVALID_HANDLE_VALUE` as the job; `AssignProcessToJobObject` will
+    /// fail (GLE will be non-zero), proving the Err path is taken.
+    /// The `process` argument is an arbitrary small non-null value — it is
+    /// never dereferenced by the kernel before the job-handle validity check
+    /// fails first.
+    #[test]
+    fn apply_process_handle_to_containment_invalid_job_returns_err() {
+        // A ProcessContainment with an invalid job handle — use INVALID_HANDLE_VALUE
+        // which is a well-known sentinel that Win32 APIs reject.
+        let bad_containment = ProcessContainment {
+            job: INVALID_HANDLE_VALUE,
+        };
+        // Use a similarly invalid process handle; Win32 validates the job first.
+        let result =
+            apply_process_handle_to_containment(&bad_containment, INVALID_HANDLE_VALUE);
+        assert!(
+            result.is_err(),
+            "apply_process_handle_to_containment must return Err on an invalid job handle \
+             (fail-secure — never silently continue with uncontained child)"
+        );
+    }
+}
