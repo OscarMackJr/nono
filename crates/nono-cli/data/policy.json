@@ -387,13 +387,20 @@
       }
     },
     "python_runtime": {
-      "description": "Python runtime paths (pyenv, conda, uv)",
+      "description": "Python runtime paths (pyenv, conda, uv; Windows python.org per-user/all-users installs)",
       "allow": {
         "read": [
           "~/.pyenv",
           "~/.local/lib",
           "~/.local/share/uv",
-          "~/.conda"
+          "~/.conda",
+          "~/AppData/Local/Programs/Python",
+          "C:/Program Files/Python313",
+          "C:/Program Files/Python312",
+          "C:/Program Files/Python311",
+          "C:/Python313",
+          "C:/Python312",
+          "C:/Python311"
         ]
       }
     },
