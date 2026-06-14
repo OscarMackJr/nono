@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write   # OIDC token for azure/login → Azure Trusted Signing (keyless)
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +24,12 @@ jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    # Environment gives the GitHub OIDC token an `environment:Development` subject claim that
+    # matches the Azure Trusted Signing federated credential (subject
+    # repo:OscarMackJr/nono:environment:Development). Keep this environment WITHOUT protection
+    # rules (required reviewers / wait timers) — they would pause every matrix leg, not just the
+    # Windows signing leg. To gate only signing, split it into its own job instead.
+    environment: Development
     strategy:
       fail-fast: false
       matrix:
@@ -121,42 +128,47 @@ jobs:
       # runs that target an actual tag. The RELEASE_TAG env var is always set to the
       # tag name (push) or the provided input tag (workflow_dispatch), so this step
       # correctly gates on those cases via the tag-triggered workflow definition above.
-      - name: Check signing secrets (Windows)
+      # D-02 remediation (quick-task 260603-i31): Authenticode signing now uses Azure
+      # Trusted Signing (keyless, Microsoft-trusted root) instead of a self-signed/base64
+      # PFX. Auth is GitHub OIDC → azure/login; the SP needs the "Trusted Signing
+      # Certificate Profile Signer" role on the Trusted Signing account. Fail-closed is
+      # preserved: if the OIDC creds / account are absent this step errors and no unsigned
+      # artifact is ever uploaded (D-13). Setup cookbook:
+      # .planning/quick/260603-i31-cosign-sigstore-signing-authority/AZURE-TRUSTED-SIGNING-COOKBOOK.md
+      - name: Azure login (OIDC) for Trusted Signing
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT)) {
-            Write-Error "WINDOWS_SIGNING_CERT and WINDOWS_SIGNING_CERT_PASSWORD must be set. Set these repository secrets before releasing Windows artifacts. See docs/cli/development/windows-signing-guide.mdx."
-            exit 1
-          }
-          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_SIGNING_CERT_PASSWORD)) {
-            Write-Error "WINDOWS_SIGNING_CERT and WINDOWS_SIGNING_CERT_PASSWORD must be set. Set these repository secrets before releasing Windows artifacts. See docs/cli/development/windows-signing-guide.mdx."
-            exit 1
-          }
-          Write-Host "Signing secrets present — proceeding to sign."
-        env:
-          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
-          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # Phase 53 (UAT-B fix): sign the payload binaries BEFORE the MSI is built so
       # build-windows-msi.ps1 harvests SIGNED binaries. Previously signing ran AFTER
       # Package, which left the MSI-embedded nono.exe / broker / wfp-service
       # Authenticode-unsigned even though the loose .exe assets and the MSI wrapper
       # verified Valid — an operator installing the MSI got NotSigned binaries.
-      - name: Sign Windows binaries (pre-package)
+      # Signs the top-level workspace binaries in the release dir (nono.exe,
+      # nono-shell-broker.exe, nono-wfp-service.exe) IN PLACE before Package harvests
+      # them into the MSIs (preserves the Phase 53 sign-before-package order). Filter is
+      # top-level *.exe, no recurse — deps/, examples/, build/ subdirs are excluded.
+      # Signing any extra unshipped top-level workspace .exe is harmless (not harvested).
+      # NOTE (verify against the action's current README when wiring live): input names
+      # files-folder / files-folder-filter / file-digest / timestamp-rfc3161 are the v0
+      # form; auth is taken from the azure/login session above (no client secret stored).
+      - name: Sign Windows binaries (pre-package) — Azure Trusted Signing
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $binary = Join-Path $PWD "target\\${{ matrix.target }}\\release\\${{ matrix.artifact }}"
-          $broker = Join-Path $PWD "target\\${{ matrix.target }}\\release\\nono-shell-broker.exe"
-          $service = Join-Path $PWD "target\\${{ matrix.target }}\\release\\nono-wfp-service.exe"
-          .\scripts\sign-windows-artifacts.ps1 `
-            -CertBase64 $env:WINDOWS_SIGNING_CERT `
-            -CertPassword $env:WINDOWS_SIGNING_CERT_PASSWORD `
-            -ArtifactPaths @($binary, $broker, $service)
-        env:
-          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
-          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}                 # e.g. https://eus.codesigning.azure.net
+          trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\target\${{ matrix.target }}\release
+          files-folder-filter: exe
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       # D-11: build both machine and user MSIs from the now-signed binaries above
       # (the MSI package wrappers are signed in the step after packaging)
@@ -215,19 +227,22 @@ jobs:
       # wrappers themselves. The broker is signed with the SAME Authenticode key as
       # nono.exe so the Phase 28 chain-walker (parse_signer_subject) records a consistent
       # signer for any audit-ledger trace involving the broker process.
-      - name: Sign Windows MSIs
+      # Signs the two MSI package WRAPPERS (the embedded payload binaries were already
+      # signed in the pre-package step, so the MSIs embed signed binaries). Filter is
+      # top-level *.msi in artifact_staging — exactly the machine + user MSIs.
+      - name: Sign Windows MSIs — Azure Trusted Signing
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $machineMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-machine.msi"
-          $userMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-user.msi"
-          .\scripts\sign-windows-artifacts.ps1 `
-            -CertBase64 $env:WINDOWS_SIGNING_CERT `
-            -CertPassword $env:WINDOWS_SIGNING_CERT_PASSWORD `
-            -ArtifactPaths @($machineMsi, $userMsi)
-        env:
-          WINDOWS_SIGNING_CERT: ${{ secrets.WINDOWS_SIGNING_CERT }}
-          WINDOWS_SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        uses: azure/trusted-signing-action@v0
+        with:
+          endpoint: ${{ vars.TRUSTED_SIGNING_ENDPOINT }}
+          trusted-signing-account-name: ${{ vars.TRUSTED_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.TRUSTED_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\artifact_staging
+          files-folder-filter: msi
+          files-folder-recurse: false
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
 
       # Secondary Authenticode verification via PowerShell after signtool verify.
       # Both checks must pass before artifact upload (D-13).
