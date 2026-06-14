@@ -9,7 +9,7 @@
 
 ### Engine-Agnostic Launch (ENG)
 
-- [ ] **ENG-01**: A user can run a non-Claude agent engine (e.g. Aider) confined by nono end-to-end on a real Win11 host — files written inside the granted workspace land; writes outside it are denied (`NO_WRITE_UP`) — regardless of engine.
+- [x] **ENG-01**: A user can run a non-Claude agent engine (e.g. Aider) confined by nono end-to-end on a real Win11 host — files written inside the granted workspace land; writes outside it are denied (`NO_WRITE_UP`) — regardless of engine.
 - [ ] **ENG-02**: The launcher fails **secure with an actionable message** when an engine's executable/interpreter path is not covered by the launch policy, or when the granted workspace is not owned by the session user (R-B3) — never silent partial confinement.
 - [x] **ENG-03**: A user can declare a **per-engine launch profile** (executable + interpreter path(s), absolute writable workspace, network identity) and launch any profiled engine through one engine-neutral path.
 
@@ -52,7 +52,7 @@ Every v1 requirement maps to exactly one phase. Coverage: **12/12 mapped, no orp
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| ENG-01 | Phase 71 — Engine-Agnostic Launch Productionization | Pending |
+| ENG-01 | Phase 71 — Engine-Agnostic Launch Productionization | Complete |
 | ENG-02 | Phase 71 — Engine-Agnostic Launch Productionization | Pending |
 | ENG-03 | Phase 71 — Engine-Agnostic Launch Productionization | Complete |
 | ABI-01 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Pending |
