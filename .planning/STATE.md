@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
 status: executing
-last_updated: "2026-06-14T19:13:16.006Z"
-last_activity: 2026-06-14 -- Phase 73 planning complete
+last_updated: "2026-06-14T22:50:26.242Z"
+last_activity: 2026-06-14 -- Phase 73 execution started
 progress:
   total_phases: 5
   completed_phases: 2
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 72 COMPLETE (verified PASSED 2026-06-14) — next: Phase 73 (AI_AGENT Marker) ∥ or Phase 71 productionization
+**Current Focus:** Phase 73 — ai-agent-marker
 
 ## Current Position
 
-Phase: 73
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-14 -- Phase 73 planning complete
+Phase: 73 (ai-agent-marker) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 73
+Last activity: 2026-06-14 -- Phase 73 execution started
 
 ### v2.12 Phase Summary (active)
 

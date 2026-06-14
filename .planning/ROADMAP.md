@@ -80,8 +80,8 @@ granularity: standard
   4. Given an arbitrary PID, the system correctly classifies it as `AI_AGENT` or not (`IsProcessInJob` / `QueryInformationJobObject` for enumeration + the token-SID check for authorization); the named job is used for kill-group / descendant capture / resource caps only.
   5. Adopted (not-launched) agents are explicitly handled as best-effort / demote-only (the marker is sound only for launcher-spawned agents — adoption is documented as a weaker guarantee).
 **Plans**: 3 plans
-- [ ] 73-01-PLAN.md — nono crate: AgentRegistry, AgentClassification, read_process_appcontainer_sid + non-Windows stubs + lib.rs re-export (MARK-01 SC2/SC4 unit paths)
-- [ ] 73-02-PLAN.md — Job object SDDL hardening: create_process_containment signature refactor + explicit DACL + negative tests job_never_has_breakaway_ok + job_security_descriptor_denies_low_il (MARK-01 SC3)
+- [x] 73-01-PLAN.md — nono crate: AgentRegistry, AgentClassification, read_process_appcontainer_sid + non-Windows stubs + lib.rs re-export (MARK-01 SC2/SC4 unit paths)
+- [x] 73-02-PLAN.md — Job object SDDL hardening: create_process_containment signature refactor + explicit DACL + negative tests job_never_has_breakaway_ok + job_security_descriptor_denies_low_il (MARK-01 SC3)
 - [ ] 73-03-PLAN.md — CLI verb nono classify + mint→registry wiring in execution_runtime.rs + SC4 in-process integration tests + SC5 adopted-agent doc (MARK-01 SC1/SC4/SC5)
 
 ### Phase 74: Persistent Multi-Tenant Daemon
@@ -148,7 +148,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 |-------|----------------|--------|-----------|
 | 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
-| 73. AI_AGENT Marker | 0/3 | Not started | - |
+| 73. AI_AGENT Marker | 2/3 | In Progress|  |
 | 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |
 | 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
 
