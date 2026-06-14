@@ -486,6 +486,19 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         let psid = nono::derive_app_container_sid(&windows_app_container_name)?;
         nono::package_sid_to_string(&psid)?
     };
+    // Plan 71-04 Task 2 (D-07/ENG-02): resolve interpreter bare names from
+    // the profile's `windows_interpreters` to absolute paths (shebang assist
+    // ∪ PATH), then thread the resolved set into ExecConfig for the coverage
+    // gate in `prepare_live_windows_launch`. Fail-secure: unresolved names
+    // pass through as-is so the gate names them in the refusal message.
+    #[cfg(target_os = "windows")]
+    let windows_resolved_interpreters: Vec<std::path::PathBuf> = {
+        let declared: &[String] = loaded_profile
+            .as_ref()
+            .map(|p| p.windows_interpreters.as_slice())
+            .unwrap_or(&[]);
+        exec_strategy::resolve_interpreter_paths(&resolved_program, declared)
+    };
     #[cfg(target_os = "windows")]
     let config = exec_strategy::ExecConfig {
         command: &command,
@@ -512,6 +525,8 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         prefers_low_il_broker: loaded_profile
             .as_ref()
             .is_some_and(|p| p.windows_low_il_broker),
+        // Plan 71-04 Task 2: resolved interpreter paths (D-07).
+        interpreters: windows_resolved_interpreters,
     };
 
     // Resource limits are now kernel-enforced on Linux (cgroup v2) and macOS

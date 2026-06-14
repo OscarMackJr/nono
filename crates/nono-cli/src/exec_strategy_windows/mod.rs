@@ -185,6 +185,16 @@ pub struct ExecConfig<'a> {
     /// `cfg(target_os = "windows")` paths (same structural pattern as
     /// `session_sid` — present on all platforms, Windows-meaningful only).
     pub prefers_low_il_broker: bool,
+    /// Plan 71-04 Task 2 (D-07/ENG-02): resolved interpreter paths for the
+    /// engine's entry-point binary (e.g. `python.exe` for an aider console-
+    /// script stub). Derived from `profile.windows_interpreters` via
+    /// `resolve_interpreter_paths` (shebang assist ∪ PATH). Passed into
+    /// `validate_windows_launch_paths` so the coverage gate covers the
+    /// interpreter. Empty = no interpreter coverage required. Fail-secure:
+    /// an uncovered interpreter causes the gate to refuse with a named
+    /// diagnostic (Plan 03). Windows-only-meaningful; field exists on all
+    /// platforms to avoid cfg splits.
+    pub interpreters: Vec<PathBuf>,
 }
 
 pub struct SupervisorConfig<'a> {
@@ -328,11 +338,15 @@ fn prepare_live_windows_launch(
     session_id: Option<&str>,
 ) -> Result<PreparedWindowsLaunch> {
     let fs_policy = Sandbox::windows_filesystem_policy(config.caps);
+    // Thread the resolved interpreter set into the coverage gate (D-07/ENG-02,
+    // Plan 71-04 Task 2). `config.interpreters` is resolved by
+    // `resolve_interpreter_paths` (shebang assist ∪ PATH) before this
+    // function is called; an uncovered interpreter causes fail-secure refusal.
     Sandbox::validate_windows_launch_paths(
         &fs_policy,
         config.resolved_program,
         config.current_dir,
-        &[], // Plan 04 threads the resolved interpreter set here
+        &config.interpreters,
     )?;
     Sandbox::validate_windows_command_args(
         &fs_policy,
@@ -946,4 +960,205 @@ pub fn execute_supervised(
         exit_code
     );
     Ok(exit_code)
+}
+
+// ── Interpreter resolution (Task 2, Plan 71-04) ─────────────────────────────
+
+/// Read the distlib console-script embedded shebang from a Windows PE binary.
+///
+/// Distlib console-script stubs (`.exe` created by pip/distlib for Python
+/// entry-point scripts) embed a `#!` shebang line right after the PE image,
+/// identifying the exact `sys.executable` path that was used at install time.
+///
+/// Returns the interpreter path if found; `None` if not readable, not a
+/// distlib stub, or the embedded path is empty. Failure degrades gracefully
+/// to PATH-based resolution — never panics, never grants.
+///
+/// **DIAGNOSTIC ASSIST ONLY.** The returned path is a coverage-check
+/// *candidate*; it NEVER produces an auto-grant (D-07, T-71-13).
+#[cfg(target_os = "windows")]
+pub(crate) fn read_distlib_shebang(exe_path: &Path) -> Option<PathBuf> {
+    // Scan the binary for the "#!" marker that distlib places after the PE
+    // stub. We search from the beginning so both old (header-only) and new
+    // (appended-zip) distlib variants are covered.
+    let data = std::fs::read(exe_path).ok()?;
+    let shebang_pos = data.windows(2).position(|w| w == b"#!")?;
+    let after = &data[shebang_pos + 2..];
+    // Path ends at the first CR, LF, or NUL byte.
+    let end = after
+        .iter()
+        .position(|&b| b == b'\n' || b == b'\r' || b == b'\0')?;
+    let path_str = std::str::from_utf8(&after[..end]).ok()?.trim();
+    if path_str.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(path_str))
+}
+
+/// Resolve declared interpreter bare names (from `windows_interpreters`) to
+/// absolute paths.
+///
+/// Resolution order (Open Q1, D-07):
+/// 1. Try the distlib embedded shebang of `program` (the EXACT `sys.executable`).
+/// 2. Fall back to `which::which` PATH resolution.
+/// 3. If neither resolves, return the declared bare name as-is so the
+///    coverage gate still fires a fail-secure refusal naming it.
+///
+/// This is a **DIAGNOSTIC ASSIST ONLY** — returned paths are candidates for
+/// the coverage gate; they NEVER produce auto-grants (D-07, T-71-13).
+/// All coverage decisions happen inside `validate_launch_paths` (Plan 03).
+#[cfg(target_os = "windows")]
+pub(crate) fn resolve_interpreter_paths(program: &Path, declared: &[String]) -> Vec<PathBuf> {
+    // Attempt the distlib shebang read once for all declared interpreters
+    // (the shebang names the SINGLE interpreter this program was built for).
+    let shebang_candidate = read_distlib_shebang(program);
+    declared
+        .iter()
+        .map(|bare_name| {
+            // Step 1: if the distlib shebang names this interpreter (by file
+            // name, case-insensitive), prefer it as the absolute path.
+            if let Some(ref shebang_path) = shebang_candidate {
+                let shebang_file = shebang_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if shebang_file.eq_ignore_ascii_case(bare_name) {
+                    tracing::debug!(
+                        "interpreter {}: resolved via distlib shebang → {}",
+                        bare_name,
+                        shebang_path.display()
+                    );
+                    return shebang_path.clone();
+                }
+            }
+            // Step 2: PATH resolution via which::which.
+            match which::which(bare_name) {
+                Ok(abs_path) => {
+                    tracing::debug!(
+                        "interpreter {}: resolved via PATH → {}",
+                        bare_name,
+                        abs_path.display()
+                    );
+                    abs_path
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        "interpreter {}: not resolved (shebang mismatch + not on PATH); \
+                         coverage gate will fail-secure",
+                        bare_name
+                    );
+                    // Pass through as-is; the gate will name this bare name
+                    // in the refusal message (never silent partial confinement).
+                    PathBuf::from(bare_name)
+                }
+            }
+        })
+        .collect()
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod interpreter_resolve_tests {
+    use super::{read_distlib_shebang, resolve_interpreter_paths};
+    use std::io::Write as _;
+    use std::path::{Path, PathBuf};
+
+    // ── read_distlib_shebang ─────────────────────────────────────────────
+
+    /// Given a file that contains a distlib-style `#!...interpreter` shebang,
+    /// `read_distlib_shebang` returns the embedded interpreter path.
+    #[test]
+    fn shebang_read_extracts_interpreter_from_fixture() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("aider.exe");
+        // Simulate a distlib console-script stub: PE-like preamble + #! shebang.
+        let mut f = std::fs::File::create(&exe).expect("create fixture");
+        f.write_all(b"MZ\x90\x00\x00\x00PE\x00\x00")
+            .expect("write preamble");
+        f.write_all(b"#!C:\\Python311\\python.exe\r\n")
+            .expect("write shebang");
+        drop(f);
+
+        let result = read_distlib_shebang(&exe);
+        assert_eq!(
+            result,
+            Some(PathBuf::from(r"C:\Python311\python.exe")),
+            "should extract the interpreter path from the embedded shebang"
+        );
+    }
+
+    /// When no `#!` marker exists in the file, `read_distlib_shebang` returns
+    /// `None` (graceful fallback to PATH resolution path).
+    #[test]
+    fn shebang_read_returns_none_when_no_shebang() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("notadistlib.exe");
+        std::fs::write(&exe, b"MZ\x90\x00regular PE binary, no shebang")
+            .expect("write fixture");
+
+        assert_eq!(
+            read_distlib_shebang(&exe),
+            None,
+            "no #! marker → should return None"
+        );
+    }
+
+    /// `read_distlib_shebang` returns `None` for a non-existent path (no panic).
+    #[test]
+    fn shebang_read_returns_none_for_missing_file() {
+        let result = read_distlib_shebang(Path::new(r"C:\does\not\exist.exe"));
+        assert_eq!(result, None, "missing file → should return None, not panic");
+    }
+
+    // ── resolve_interpreter_paths ────────────────────────────────────────
+
+    /// The shebang utility is diagnostic-only: `resolve_interpreter_paths` never
+    /// returns a grant — it only returns candidate paths for coverage checking.
+    /// Verify the return type carries only paths (not grants, not Err).
+    #[test]
+    fn resolve_interpreter_paths_returns_candidate_paths_not_grants() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("aider.exe");
+        // Embed a shebang naming python.exe.
+        let mut f = std::fs::File::create(&exe).expect("create fixture");
+        f.write_all(b"MZpefake#!C:\\Python311\\python.exe\r\n")
+            .expect("write shebang");
+        drop(f);
+
+        let candidates = resolve_interpreter_paths(&exe, &["python.exe".to_string()]);
+        // Must return a Vec<PathBuf>, not a grant or error.
+        // The shebang hit should produce the embedded path.
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0], PathBuf::from(r"C:\Python311\python.exe"));
+    }
+
+    /// When the shebang names a different interpreter than declared, and the
+    /// declared name is not on PATH, the bare name is returned as-is so the
+    /// coverage gate fires a named refusal.
+    #[test]
+    fn resolve_interpreter_paths_falls_back_to_bare_name_when_unresolvable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("engine.exe");
+        // No shebang, no #! marker.
+        std::fs::write(&exe, b"MZ fake PE").expect("write fixture");
+
+        let declared = vec!["definitely-not-on-path-xyz123.exe".to_string()];
+        let candidates = resolve_interpreter_paths(&exe, &declared);
+        // Bare name is returned as-is (gate will name it in the refusal).
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0],
+            PathBuf::from("definitely-not-on-path-xyz123.exe"),
+            "unresolvable interpreter → bare name returned for fail-secure gate"
+        );
+    }
+
+    /// Empty declared interpreter slice → empty resolution result.
+    #[test]
+    fn resolve_interpreter_paths_empty_slice_returns_empty() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let exe = dir.path().join("nointerp.exe");
+        std::fs::write(&exe, b"MZ fake PE").expect("write fixture");
+        let result = resolve_interpreter_paths(&exe, &[]);
+        assert!(result.is_empty(), "empty declared slice → empty result");
+    }
 }

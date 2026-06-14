@@ -3288,6 +3288,8 @@ mod env_filter_tests {
             allowed_env_vars,
             denied_env_vars,
             prefers_low_il_broker: false,
+            // Test helper: no interpreter coverage required for launch.rs unit tests.
+            interpreters: Vec::new(),
         }
     }
 
