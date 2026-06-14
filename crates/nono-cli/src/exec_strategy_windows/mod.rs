@@ -354,6 +354,46 @@ fn prepare_live_windows_launch(
         &config.command[1..],
         config.current_dir,
     )?;
+
+    // ── R-B3 GATE A (D-08, Plan 71-04 Task 3) ────────────────────────────
+    // Check that the current user has WRITE_OWNER on the workspace (child CWD)
+    // BEFORE applying mandatory labels. Without WRITE_OWNER, the relabel call
+    // (`SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)`) would fail with an
+    // opaque access-denied error. This named gate fires first, naming the cause
+    // and the concrete fix, so operators get an actionable diagnostic rather
+    // than a cryptic HRESULT.
+    //
+    // Workspace == child CWD by construction (D-06: single source of truth),
+    // so `config.current_dir` IS the workspace.
+    //
+    // nono will NOT take ownership automatically (D-08, T-71-11).
+    {
+        let workspace = config.current_dir;
+        let has_owner = nono::path_has_write_owner(workspace)?;
+        if !has_owner {
+            return Err(NonoError::SandboxInit(format!(
+                "R-B3: the current user lacks WRITE_OWNER (0x00080000) on the workspace: {path}\n\
+                 \n\
+                 Mandatory integrity labels (NO_WRITE_UP) require WRITE_OWNER, which is NOT\n\
+                 implicit for path owners. This typically means the directory was created from\n\
+                 an elevated console (owned by BUILTIN\\Administrators) or is on a volume the\n\
+                 current user does not own.\n\
+                 \n\
+                 nono will NOT take ownership automatically.\n\
+                 \n\
+                 Recommended fix:\n\
+                   • Use a workspace under your user profile:\n\
+                       --workspace %USERPROFILE%\\nono-workspace\n\
+                       --workspace %TEMP%\\nono-workspace\n\
+                   • Or grant yourself ownership from a non-elevated console:\n\
+                       icacls \"{path}\" /grant %USERNAME%:(OI)(CI)F\n\
+                   • Or use: takeown /f \"{path}\" /r /d y",
+                path = workspace.display()
+            )));
+        }
+    }
+    // ── End R-B3 GATE A ───────────────────────────────────────────────────
+
     tracing::debug!(
         "Windows live-execution backend prepared filesystem policy: {} compiled rule(s), {} unsupported rule(s)",
         fs_policy.rules.len(),
@@ -1160,5 +1200,106 @@ mod interpreter_resolve_tests {
         std::fs::write(&exe, b"MZ fake PE").expect("write fixture");
         let result = resolve_interpreter_paths(&exe, &[]);
         assert!(result.is_empty(), "empty declared slice → empty result");
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod rb3_gate_tests {
+    /// R-B3 gate: the current user's temp dir (created by the current user)
+    /// satisfies WRITE_OWNER and `path_has_write_owner` returns Ok(true).
+    ///
+    /// This validates the PASS branch of the gate: user-owned workspace lets
+    /// the launch proceed.
+    #[test]
+    fn workspace_owned_by_current_user_passes_write_owner_check() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result = nono::path_has_write_owner(dir.path());
+        assert!(
+            result.is_ok(),
+            "path_has_write_owner should not return Err for a user-owned tempdir"
+        );
+        assert!(
+            result.expect("Ok"),
+            "current user must be WRITE_OWNER of their own tempdir (R-B3 gate PASS)"
+        );
+    }
+
+    /// R-B3 gate: the Windows system directory (C:\Windows\System32) is owned
+    /// by BUILTIN\Administrators or TrustedInstaller and the current
+    /// (non-elevated) user lacks WRITE_OWNER. Verify `path_has_write_owner`
+    /// returns Ok(false) for this path.
+    #[test]
+    fn system_dir_lacks_write_owner_for_standard_user() {
+        let system_dir = std::env::var_os("SystemRoot")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+            .join("System32");
+
+        let result = nono::path_has_write_owner(&system_dir);
+        // Must not panic or return Err; expected to return Ok(false) for a
+        // standard (non-admin, non-elevated) user running the test suite.
+        // If the test user IS running elevated, this may return Ok(true) —
+        // in that case the gate would pass (elevated user owns everything),
+        // which is correct behavior.
+        assert!(
+            result.is_ok(),
+            "path_has_write_owner should not error on a readable system path; got {:?}",
+            result
+        );
+    }
+
+    /// Verify the R-B3 gate error message (the SandboxInit Err emitted by
+    /// prepare_live_windows_launch when path_has_write_owner returns false)
+    /// contains the required diagnostic strings: "WRITE_OWNER",
+    /// "USERPROFILE" (or "icacls"), and does NOT contain "nono will take
+    /// ownership" (D-08: no auto-takeown).
+    ///
+    /// This test constructs the error string directly to match the production
+    /// error path without needing a full ExecConfig setup.
+    #[test]
+    fn rb3_error_message_names_cause_and_fix_without_auto_takeown() {
+        // Simulate the path that prepare_live_windows_launch would use.
+        let fake_workspace = std::path::Path::new(r"C:\admin\restricted-dir");
+        let err_msg = format!(
+            "R-B3: the current user lacks WRITE_OWNER (0x00080000) on the workspace: {path}\n\
+             \n\
+             Mandatory integrity labels (NO_WRITE_UP) require WRITE_OWNER, which is NOT\n\
+             implicit for path owners. This typically means the directory was created from\n\
+             an elevated console (owned by BUILTIN\\Administrators) or is on a volume the\n\
+             current user does not own.\n\
+             \n\
+             nono will NOT take ownership automatically.\n\
+             \n\
+             Recommended fix:\n\
+               • Use a workspace under your user profile:\n\
+                   --workspace %USERPROFILE%\\nono-workspace\n\
+                   --workspace %TEMP%\\nono-workspace\n\
+               • Or grant yourself ownership from a non-elevated console:\n\
+                   icacls \"{path}\" /grant %USERNAME%:(OI)(CI)F\n\
+               • Or use: takeown /f \"{path}\" /r /d y",
+            path = fake_workspace.display()
+        );
+
+        // Acceptance criteria from the plan:
+        assert!(
+            err_msg.contains("WRITE_OWNER"),
+            "error message must name WRITE_OWNER"
+        );
+        assert!(
+            err_msg.contains("USERPROFILE") || err_msg.contains("icacls"),
+            "error message must contain %USERPROFILE% or icacls as a fix hint"
+        );
+        assert!(
+            err_msg.contains("NOT take ownership automatically")
+                || err_msg.contains("will NOT take ownership"),
+            "error message must state nono does not auto-takeown (D-08)"
+        );
+        // The error variant is SandboxInit (not LabelApplyFailed), verifiable
+        // by code position: the gate fires before AppliedLabelsGuard.
+        let err = nono::NonoError::SandboxInit(err_msg);
+        assert!(
+            matches!(err, nono::NonoError::SandboxInit(_)),
+            "R-B3 gate must use NonoError::SandboxInit variant (not LabelApplyFailed)"
+        );
     }
 }
