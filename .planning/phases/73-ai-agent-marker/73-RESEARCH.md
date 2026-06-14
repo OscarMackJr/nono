@@ -605,22 +605,25 @@ Error: OpenProcess(pid=9999) failed (GLE=87) — process may not exist
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **GetTokenInformation(TokenAppContainerSid) behavior for non-AppContainer on older Win10**
    - What we know: On Win11 26200 (the dev/test host), `needed = 0` is the expected return for non-AppContainer tokens.
    - What's unclear: Whether Win10 1809/2004 behaves identically or returns `ERROR_INVALID_PARAMETER`.
    - Recommendation: Add a defensive check: if `needed < size_of::<TOKEN_APPCONTAINER_INFORMATION>()`, return `Ok(None)`. This handles both the `needed=0` and the unlikely alternative-error cases safely.
+   - **RESOLVED:** Plan 01 Task 1 action includes the defensive guard: `if needed < size_of::<TOKEN_APPCONTAINER_INFORMATION>() { return Ok(None) }` immediately after the needed==0 check. Covers both Win11 fast-path and any older-Win10 variant that returns a non-zero but undersized `needed`.
 
 2. **OwnedHandle re-use in nono crate**
    - What we know: `OwnedHandle` is defined in `crates/nono/src/sandbox/windows.rs` and re-exported from `crates/nono/src/lib.rs`.
    - What's unclear: Whether `agent.rs` should be a new file or its code should live in `sandbox/windows.rs`.
    - Recommendation: New file `crates/nono/src/agent.rs` with `use super::sandbox::windows::OwnedHandle` (or the re-exported `nono::OwnedHandle`). Keeps the sandbox module focused on sandbox policy; the agent module on identity.
+   - **RESOLVED:** New file `crates/nono/src/agent.rs` using `use crate::sandbox::windows::OwnedHandle`. Confirmed in Plan 01 action import structure and `files_modified`. Keeps the sandbox module focused on sandbox policy; the agent module on identity.
 
 3. **Arc<Mutex<AgentRegistry>> threading path**
    - What we know: The launch path in `execution_runtime.rs` runs on the same thread that calls `spawn_windows_child`.
    - What's unclear: Whether passing `Arc<Mutex<AgentRegistry>>` through `ExecConfig` or a separate parameter is cleaner.
    - Recommendation: Pass as a separate parameter to `run_windows_supervised` and `run_windows_direct` (similar to how `cap_file` is threaded). Avoids cluttering `ExecConfig` with authz concerns.
+   - **RESOLVED:** Separate parameter threaded into the per-run launch path (Plan 03 Task 1 action Step 1), analogous to how `cap_file` is threaded. Arc is created fresh per `nono run` invocation and dropped at run exit.
 
 ---
 
