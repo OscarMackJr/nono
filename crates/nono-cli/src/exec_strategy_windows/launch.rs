@@ -3304,6 +3304,212 @@ mod broker_dispatch_tests {
         }
     }
 
+    // ==================================================================
+    // Phase 73 D-04 (MARK-01) — SC4 in-process integration tests.
+    //
+    // These are the AUTHORITATIVE proof of SC1/SC4: a real AppContainer-
+    // confined child whose package SID was inserted into a fresh
+    // AgentRegistry in the SAME process classifies as AiAgent, while a
+    // self-made AppContainer absent from the registry classifies as
+    // NotAnAgent (D-02: registry membership, not the AppContainer
+    // namespace, is the authorization predicate). Both are #[ignore]'d —
+    // they require a real Win11 host with CreateAppContainerProfile
+    // permission and spawn live processes; the default `cargo test` skips
+    // them so it stays green in CI / on non-host dev machines.
+    // ==================================================================
+
+    /// Spawn a real AppContainer-confined child (`cmd.exe /c ping -n 30
+    /// 127.0.0.1` — long-lived so the caller can classify it before it
+    /// exits) using the same `SECURITY_CAPABILITIES { AppContainerSid,
+    /// CapabilityCount: 0 }` sequence the production broker uses (mirrors
+    /// `examples/spike_wfp_appcontainer.rs::spawn_appcontainer_curl`).
+    ///
+    /// Returns the child `PROCESS_INFORMATION`; the caller MUST
+    /// `TerminateProcess` + close both handles. The AppContainer PROFILE
+    /// for `package_sid_psid` MUST already be registered (via
+    /// `nono::create_app_container_profile`) or `CreateProcessW` fails
+    /// `ERROR_FILE_NOT_FOUND` — see the AppContainer carve-out in CONTEXT.md.
+    fn spawn_appcontainer_child(
+        package_sid_psid: windows_sys::Win32::Security::PSID,
+    ) -> PROCESS_INFORMATION {
+        use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
+        use windows_sys::Win32::System::Threading::{
+            DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
+            UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT,
+            LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            STARTUPINFOEXW,
+        };
+
+        // Probe the required attribute-list size for 1 slot, then initialize.
+        let mut attr_size: usize = 0;
+        unsafe {
+            // SAFETY: documented probe idiom — null list returns required size.
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+        }
+        let mut attr_buf = vec![0u8; attr_size];
+        let attr_list: LPPROC_THREAD_ATTRIBUTE_LIST =
+            attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        let ok = unsafe {
+            // SAFETY: attr_list points to attr_buf sized by the probe for 1 slot.
+            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+        };
+        assert!(ok != 0, "InitializeProcThreadAttributeList failed");
+
+        // Empty capability set: the most restrictive lowbox.
+        let caps = SECURITY_CAPABILITIES {
+            AppContainerSid: package_sid_psid,
+            Capabilities: std::ptr::null_mut(),
+            CapabilityCount: 0,
+            Reserved: 0,
+        };
+        let ok = unsafe {
+            // SAFETY: attr_list initialized for 1 slot; `caps` and its
+            // AppContainerSid (owned by the caller's OwnedAppContainerSid)
+            // outlive the CreateProcessW call below.
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                &caps as *const SECURITY_CAPABILITIES as *mut _,
+                std::mem::size_of::<SECURITY_CAPABILITIES>(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(
+            ok != 0,
+            "UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed; GetLastError={}",
+            unsafe { GetLastError() }
+        );
+
+        let mut si: STARTUPINFOEXW = unsafe {
+            // SAFETY: STARTUPINFOEXW is a plain Win32 struct safe to zero-init.
+            std::mem::zeroed()
+        };
+        si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.lpAttributeList = attr_list;
+
+        // Long-lived child so the caller can classify it before it exits.
+        let mut cmdline: Vec<u16> = std::ffi::OsStr::new("cmd.exe /c ping -n 30 127.0.0.1")
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let cwd: Vec<u16> = std::ffi::OsStr::new("C:\\Windows\\System32")
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+
+        let mut pi: PROCESS_INFORMATION = unsafe {
+            // SAFETY: PROCESS_INFORMATION is a plain struct safe to zero-init;
+            // populated by CreateProcessW on success.
+            std::mem::zeroed()
+        };
+        let lp_si = &si.StartupInfo as *const STARTUPINFOW;
+        let created = unsafe {
+            // SAFETY: cmdline/cwd are nul-terminated UTF-16; `si` carries the
+            // EXTENDED_STARTUPINFO_PRESENT SECURITY_CAPABILITIES attribute that
+            // places the child in the AppContainer identified by package_sid_psid.
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                EXTENDED_STARTUPINFO_PRESENT,
+                std::ptr::null(),
+                cwd.as_ptr(),
+                lp_si,
+                &mut pi,
+            )
+        };
+        unsafe {
+            // SAFETY: attr_list was initialized above and is no longer needed.
+            DeleteProcThreadAttributeList(attr_list);
+        }
+        assert!(
+            created != 0,
+            "CreateProcessW (AppContainer child) failed; GetLastError={}",
+            unsafe { GetLastError() }
+        );
+        pi
+    }
+
+    /// SC4 (AUTHORITATIVE in-process proof of SC1): a real AppContainer-
+    /// confined child whose package SID was inserted into a fresh
+    /// `AgentRegistry` in the SAME process classifies as `AiAgent`.
+    ///
+    /// requires: real Win11 host, dev-layout nono.exe at target/release/nono.exe,
+    /// dev-layout nono-shell-broker.exe, CreateAppContainerProfile permission.
+    #[test]
+    #[ignore = "requires real Win11 host + CreateAppContainerProfile; run with --ignored on a real host"]
+    fn sc4_classify_real_agent() {
+        // 1. Fresh registry (single-threaded test — no Arc/Mutex needed).
+        let mut registry = nono::AgentRegistry::new();
+        // 2. Mint a per-run AppContainer name + register its profile (REQUIRED —
+        //    derive-only → CreateProcess(SECURITY_CAPABILITIES) ERROR_FILE_NOT_FOUND).
+        let name = crate::exec_strategy::generate_app_container_name();
+        let _profile = nono::create_app_container_profile(&name)
+            .expect("CreateAppContainerProfile (user-space) must succeed");
+        // 3. Derive the package SID string — the marker value.
+        let sid = nono::derive_app_container_sid(&name).expect("derive package SID");
+        let sid_str = nono::package_sid_to_string(&sid).expect("package SID to string");
+        // 4. Insert into the registry BEFORE spawning — the launcher mint step.
+        registry.insert(sid_str.clone());
+        // 5. Spawn a real confined child inside that AppContainer.
+        let pi = spawn_appcontainer_child(sid.as_psid());
+        // 6. Classify the live child by PID (the authoritative registry check).
+        let result = registry.classify(pi.dwProcessId);
+        // 7. Cleanup BEFORE asserting so a failed assert never leaks the child.
+        unsafe {
+            // SAFETY: handles are valid from CreateProcessW; closed exactly once.
+            let _ = TerminateProcess(pi.hProcess, 0);
+            let _ = CloseHandle(pi.hThread);
+            let _ = CloseHandle(pi.hProcess);
+        }
+        // 8. The authoritative SC1/SC4 assertion.
+        assert!(
+            matches!(result, nono::AgentClassification::AiAgent { .. }),
+            "a launched + registered confined child must classify as AiAgent; got {result:?}"
+        );
+    }
+
+    /// SC4 spoof case: a real AppContainer process whose SID was NOT inserted
+    /// into the registry classifies as `NotAnAgent` — proving registry
+    /// membership (not the `nono.session.*`/AppContainer namespace) is the sole
+    /// authorization predicate (D-02). A correct namespace alone is forgeable;
+    /// only the minted-SID set is sound.
+    ///
+    /// requires: real Win11 host, CreateAppContainerProfile permission (user-space).
+    #[test]
+    #[ignore = "requires real Win11 host + CreateAppContainerProfile; run with --ignored on a real host"]
+    fn sc4_classify_spoof_not_agent() {
+        // 1. Fresh, EMPTY registry — nothing is ever inserted.
+        let registry = nono::AgentRegistry::new();
+        // 2. Mint + register a fresh AppContainer profile (the "spoof": a real
+        //    AppContainer the launcher did NOT mint into its registry).
+        let name = crate::exec_strategy::generate_app_container_name();
+        let _profile = nono::create_app_container_profile(&name)
+            .expect("CreateAppContainerProfile (user-space) must succeed");
+        let sid = nono::derive_app_container_sid(&name).expect("derive package SID");
+        // 3. Spawn a real AppContainer child — but DO NOT insert its SID.
+        let pi = spawn_appcontainer_child(sid.as_psid());
+        // 4. Classify.
+        let result = registry.classify(pi.dwProcessId);
+        // 5. Cleanup before asserting.
+        unsafe {
+            // SAFETY: handles are valid from CreateProcessW; closed exactly once.
+            let _ = TerminateProcess(pi.hProcess, 0);
+            let _ = CloseHandle(pi.hThread);
+            let _ = CloseHandle(pi.hProcess);
+        }
+        // 6. A real AppContainer absent from the registry MUST be NotAnAgent (D-02).
+        assert_eq!(
+            result,
+            nono::AgentClassification::NotAnAgent,
+            "a self-made AppContainer absent from the registry must classify as NotAnAgent (D-02)"
+        );
+    }
+
     // ------------------------------------------------------------------
     // Phase 31 Plan 31-03 — Nyquist gap-fill: pin `build_broker_command_line`'s
     // quoting + UTF-16 encoding behavior. The end-to-end shape is exercised by

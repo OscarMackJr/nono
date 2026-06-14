@@ -275,3 +275,62 @@ forward-compat mappings) increment the minor version.
 Future implementations (nono-ts Phase 75, daemon Phase 74, zt-infra integration) must document
 their compliance with each E-point's invariants against the version of this contract they were
 built to.
+
+
+## AI_AGENT Marker: Scope and Adopted-Agent Limits
+
+**Added: Phase 73 (MARK-01), 2026-06-14.**
+
+The `AI_AGENT` marker is sound **only for agents the launcher spawned**. An agent is marked by
+inserting its per-run AppContainer package SID (minted at `BrokerLaunchNoPty` spawn time, the same
+SID that is the E4 network identity) into the launcher's in-memory `AgentRegistry`. **The registry
+is the authorization predicate** — membership in the minting authority's private set, *not* the
+`nono.session.*` namespace and *not* job-object membership (both are enumeration pre-filters only,
+and both are forgeable because the package SID is a pure function of the AppContainer name).
+
+### Standalone `nono classify` is structural / non-authoritative
+
+A standalone `nono classify <pid>` invocation runs in a **separate process** from the launcher. Its
+`AgentRegistry` is always empty (created fresh, no inserts). The command therefore **cannot** make a
+registry-backed `AI_AGENT` authorization claim cross-process. It performs a structural pre-filter
+only:
+
+- Is the PID's token an AppContainer token (does it carry an `S-1-15-2-*` package SID)?
+- Is the process in a job object?
+
+A "structural match" means both conditions hold. This is **non-authoritative**: a self-created
+AppContainer in a self-created job passes the structural filter but is NOT in any launcher's
+`AgentRegistry`. The output always includes a disclaimer: *"(NOTE: This check is structural only —
+not an authorization decision. Registry-backed authoritative classification requires Phase 74
+daemon.)"* The standalone verb **never** prints `AI_AGENT`.
+
+Registry-backed cross-process authoritative classification is explicitly **Phase 74** (daemon
+scope — the persistent daemon shares its `AgentRegistry` across clients and is the only component
+that can authoritatively answer "is this PID one of my agents?").
+
+### Adopted agents (not launched by this nono instance)
+
+An "adopted" agent is a process nono did not spawn — for example, a pre-existing running AI agent
+that an operator wants to retroactively confine or classify.
+
+**Current behavior for an adopted agent (best-effort only):**
+
+- `nono classify <pid>` performs the structural pre-filter described above; on an adopted agent it
+  can only ever return "structural match (non-authoritative)" or "not an agent".
+- The structural pre-filter is **non-authoritative**: a self-created AppContainer passes the filter
+  but is absent from the `AgentRegistry` and therefore cannot be authoritatively classified as
+  `AI_AGENT`.
+- There is **no sound way** to mark an adopted (running) agent and retroactively grant it `AI_AGENT`
+  status — doing so would require adding its SID to the registry after the fact, which opens a
+  forgery window (any process that arranged to carry a matching AppContainer SID would be falsely
+  authorized).
+
+**Demote-only model (per spike-002 findings):**
+
+Post-hoc token IL-drop (demote) is an incident-response lever, **not** a confinement model. Demote
+is a one-way operation: reducing integrity level does not retroactively confine operations the
+process already performed. An adopted-agent demote is implemented in Phase 75 (SUPP-01) as a
+supplementary control layered on a proven spawn-time default — never as the primary boundary.
+
+**Recommendation:** To confine a new agent session, always launch it through `nono run` (or the
+`nono-py` / `nono-ts` bindings). Do not rely on post-hoc adoption as a primary security boundary.
