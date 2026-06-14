@@ -35,8 +35,13 @@ cargo build --release -p nono-cli
 the caller inherits a git-bash/MSYS pseudo-console (no real Win32 console handle). This is not
 a bug — the broker broker requires a proper Win32 console context.
 
-**Action:** Open a native PowerShell 5 window (`powershell.exe` or `Windows Terminal →
+**Action:** Open a native PowerShell window (`powershell.exe` or `Windows Terminal →
 PowerShell`) — NOT a git-bash shell, NOT the Bash tool in this dev environment.
+
+> **Are you in cmd.exe?** If your prompt looks like `C:\Users\<you>\nono-work>` (a bare path
+> with `>` and no `PS` prefix) you are in **cmd.exe**, not PowerShell. Every command in this
+> runbook is PowerShell (`$env:USERPROFILE`, `& $nono ...`, backtick line-continuations) and
+> will not run in cmd. Launch `powershell.exe` and continue there.
 
 ### P-3: User-owned workspace directory (R-B3 — WRITE_OWNER pre-launch gate)
 
@@ -49,28 +54,75 @@ Plan 04 (commit `ddb335ab`) wires an R-B3 GATE A **before** spawn: `path_has_wri
 is called and nono refuses with a named diagnostic if WRITE_OWNER is absent. The recommended
 workspace is `%USERPROFILE%\nono-work` (user-created, user-owned).
 
-**Action:**
+R-B3 checks **NTFS ownership** (owner SID == current-user SID), NOT ACL grants — so you do
+**not** need to edit/`icacls`-grant any permissions. With default permissions, a folder you
+create under `%USERPROFILE%` is owned by you and passes. nono deliberately does NOT auto-take
+ownership (decision D-08) — it is your job to satisfy this precondition.
+
+> **Admin-account trap (READ THIS if your account is a local Administrator):** When you `mkdir`
+> from an **elevated** ("Run as Administrator") console, Windows sets the folder owner to
+> `BUILTIN\Administrators`, NOT your user SID — and R-B3 then refuses the launch. The fix is not
+> to change permissions; it is to **create the folder from a normal, non-elevated console**.
+> You do not need elevation for anything in SC1 (lowering your own object's integrity label and
+> creating an AppContainer profile are unprivileged), so run the entire UAT non-elevated.
+
+**Action (in a NON-elevated PowerShell window):**
 
 ```powershell
-mkdir $env:USERPROFILE\nono-work     # creates user-owned dir; no elevation
-# DO NOT use C:\nono-work or any dir created from an elevated prompt
+mkdir $env:USERPROFILE\nono-work                  # user-owned; no elevation
+# DO NOT use C:\nono-work or any dir created from an elevated prompt.
+
+# Verify YOU own it (must print <MACHINE>\<you>, NOT BUILTIN\Administrators):
+(Get-Acl $env:USERPROFILE\nono-work).Owner
+```
+
+If that prints `BUILTIN\Administrators` (you created it elevated earlier), either delete and
+recreate it non-elevated, or reassign ownership to yourself:
+
+```powershell
+icacls $env:USERPROFILE\nono-work /setowner "$env:USERNAME"
+(Get-Acl $env:USERPROFILE\nono-work).Owner        # re-confirm it now shows you
 ```
 
 ### P-4: Aider installed on the UAT host
 
 Aider (`aider.exe`) is the engine under test. It is NOT a nono dependency — install it on the
-UAT host only.
+UAT host only. `[ASSUMED]` — verify on PyPI at UAT time: https://pypi.org/project/aider-chat/
+
+**`pipx` is commonly NOT installed** (e.g. this host has Python 3.12 + pip but no pipx). Do not
+assume `pipx install aider-chat` will work — pick one of these, in order of least friction:
 
 ```powershell
+# Option A (simplest — uses the pip you already have; installs aider.exe into
+# <python>\Scripts which is already on PATH). Recommended for a one-off UAT:
+python -m pip install aider-chat
+aider --version          # confirm a version string; note where.exe aider for the capture table
+
+# Option B (isolated via pipx — requires bootstrapping pipx first, then RESTART the shell
+# so the updated PATH takes effect before the second command):
+python -m pip install --user pipx
+python -m pipx ensurepath
+#   <-- close and reopen PowerShell here -->
 pipx install aider-chat
-# Verify on PyPI at UAT time: https://pypi.org/project/aider-chat/
-# Confirm: aider --version  (should print a version string)
 ```
 
-**Fallback (if Aider install is problematic):** The `langchain-python` profile with a bare
-`python.exe` call independently proves "engine is a variable" — spike-003 used raw python as
-the strongest confinement proof. Run `python.exe -c "open('test.py','w').write('x')"` in place
-of `aider.exe` steps, substituting `--profile langchain-python`.
+> Note for the interpreter-coverage gate (D-07): whichever route you pick determines WHERE
+> `python.exe` lives (Option A → `…\Programs\Python\Python3xx\python.exe`; Option B → a pipx
+> venv under `…\.local\pipx\venvs\aider-chat\Scripts\python.exe`). If that location is not
+> covered by the `aider` profile's `python_runtime` group, nono will refuse pre-spawn and
+> **name the exact path plus the `--allow <dir>` fix** — apply it and re-run. That refusal is
+> ENG-02 working as designed, not a UAT failure.
+
+**Fallback — no Aider install needed (recommended if Aider fights you):** The `langchain-python`
+profile with a bare `python.exe` call independently proves "engine is a variable" — spike-003
+used raw python as the strongest confinement proof, and `python.exe` is already on this host.
+Substitute `--profile langchain-python -- python.exe <args>` for the `aider.exe` steps below,
+e.g. to prove an outside-write is denied:
+
+```powershell
+& $nono run --profile langchain-python --workspace $ws -- python.exe -c "open(r'C:\outside.txt','w').write('x')"
+Test-Path C:\outside.txt    # must be False — write denied by the inherited Low-IL label
+```
 
 ### P-5: AppContainer / CLR gotchas to watch
 
@@ -106,8 +158,8 @@ $ws     = "$env:USERPROFILE\nono-work"
 # Clean slate inside the workspace
 Remove-Item "$ws\*" -Recurse -Force -ErrorAction SilentlyContinue
 
-# Confirm workspace ownership (should show your username, not Administrators):
-icacls $ws | Select-String "OWNER" ; whoami
+# Confirm workspace ownership (must show <MACHINE>\<you>, not BUILTIN\Administrators):
+(Get-Acl $ws).Owner ; whoami
 ```
 
 ### SC1 Step 1 — Write inside the granted workspace LANDS
