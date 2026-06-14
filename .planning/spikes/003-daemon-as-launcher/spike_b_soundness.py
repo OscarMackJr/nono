@@ -16,15 +16,29 @@ The four invariants verified:
                     of this source.
   (b) CONFINEMENT -- the child process runs under Low Mandatory Level (token
                     groups from whoami /groups include "Mandatory Label\\Low
-                    Mandatory Level").
-  (c) DENY        -- a write to C:\\deny_probe.txt inside the child is denied
-                    (child exits non-zero, file does not exist).
+                    Mandatory Level").  whoami.exe is run as a SUBPROCESS *inside*
+                    the confined Python child (the engine-coverage gate requires
+                    the confined command to be the Python interpreter).
+  (c) DENY        -- a write to a user-writable path OUTSIDE the workspace inside
+                    the child is denied (child exits non-zero, file does not exist).
+                    Uses $HOME\\nono_deny_probe.txt (not C:\\ root) to prove real
+                    sandbox enforcement, not mere OS ACL.
   (d) ALLOW       -- a write inside the granted workspace succeeds (child exits 0,
                     file exists and contains the expected probe byte).
 
 Usage (PowerShell on real Win11 host — NOT git-bash):
   $ws = "$env:TEMP\\nono-spike-b-ws"
   New-Item -ItemType Directory -Path $ws -Force
+  # cwd MUST be the repo root (so dev-layout nono.exe is found)
+  python .planning\\spikes\\003-daemon-as-launcher\\spike_b_soundness.py `
+      --nono .\\target\\release\\nono.exe `
+      --profile langchain-python `
+      --workspace $ws `
+      --python-dir (Split-Path (Get-Command python).Source)
+
+  # --python-dir defaults to the directory of the current interpreter, so
+  # if 'python' on your PATH is the same Python that runs this script you
+  # can omit --python-dir:
   python .planning\\spikes\\003-daemon-as-launcher\\spike_b_soundness.py `
       --nono .\\target\\release\\nono.exe `
       --profile langchain-python `
@@ -41,6 +55,7 @@ Prerequisites:
   - langchain-python profile built into nono.exe (from Phase 71)
   - Workspace directory must be USER-OWNED (R-B3) -- use $env:TEMP subdirectory
   - Run from PowerShell (real console), NOT git-bash (see project memory gotcha)
+  - Run with cwd = repo root (default --nono path is relative to repo root)
 """
 
 # ORDERING INVARIANT BEGINS HERE: This comment is evidence.
@@ -55,10 +70,16 @@ import sys
 import textwrap
 
 
-DENY_PROBE_PATH = r"C:\deny_probe.txt"
+def _deny_probe_path() -> str:
+    """Return a user-writable deny path OUTSIDE the workspace.
+
+    Uses $HOME\\nono_deny_probe.txt rather than C:\\ root to prove real sandbox
+    enforcement (not mere OS ACL denial on protected system paths).
+    """
+    return os.path.join(os.path.expanduser("~"), "nono_deny_probe.txt")
 
 
-def _check_prerequisites(nono_path: str, workspace: str) -> None:
+def _check_prerequisites(nono_path: str, workspace: str, python_dir: str) -> None:
     """Check prerequisites before running. These checks happen BEFORE main() logic
     but AFTER the argument parse — no privileged I/O occurs at module import time.
 
@@ -81,8 +102,19 @@ def _check_prerequisites(nono_path: str, workspace: str) -> None:
         print("    New-Item -ItemType Directory -Path $ws -Force")
         sys.exit(2)
 
+    if not os.path.isdir(python_dir):
+        print(f"[PREREQ FAIL] Python interpreter directory does not exist: {python_dir}")
+        print("  Pass --python-dir pointing to the directory that contains python.exe")
+        sys.exit(2)
 
-def run_spike(nono_path: str, profile: str, workspace: str) -> bool:
+    python_exe = os.path.join(python_dir, "python.exe")
+    if not os.path.isfile(python_exe):
+        print(f"[PREREQ FAIL] python.exe not found in --python-dir: {python_exe}")
+        print("  Pass --python-dir pointing to the directory that contains python.exe")
+        sys.exit(2)
+
+
+def run_spike(nono_path: str, profile: str, workspace: str, python_dir: str) -> bool:
     """Execute the four soundness invariant checks.
 
     ORDERING INVARIANT (a): The nono.exe invocations below are the FIRST
@@ -95,46 +127,65 @@ def run_spike(nono_path: str, profile: str, workspace: str) -> bool:
     all_pass = True
     results = {}
 
+    python_exe = os.path.join(python_dir, "python.exe")
+    deny_path = _deny_probe_path()
+
     print("[SPIKE-B] Shape B born-confined self-re-exec soundness spike")
-    print(f"[SPIKE-B] nono.exe  = {nono_path}")
-    print(f"[SPIKE-B] profile   = {profile}")
-    print(f"[SPIKE-B] workspace = {workspace}")
-    print(f"[SPIKE-B] deny-path = {DENY_PROBE_PATH}")
+    print(f"[SPIKE-B] nono.exe    = {nono_path}")
+    print(f"[SPIKE-B] profile     = {profile}")
+    print(f"[SPIKE-B] workspace   = {workspace}")
+    print(f"[SPIKE-B] python-dir  = {python_dir}")
+    print(f"[SPIKE-B] python.exe  = {python_exe}")
+    print(f"[SPIKE-B] deny-path   = {deny_path}")
     print()
 
     # -------------------------------------------------------------------------
     # Invariant (b): CONFINEMENT
-    # Run whoami /groups inside a confined child to confirm the child's token
-    # carries "Mandatory Label\Low Mandatory Level".
+    # Run whoami /groups as a SUBPROCESS *inside* the confined Python child to
+    # confirm the child's token carries "Mandatory Label\Low Mandatory Level".
+    #
+    # NOTE: The engine-coverage gate in the langchain-python profile requires
+    # the confined command to BE the Python interpreter — whoami.exe directly
+    # would be refused with "does not cover the interpreter required for launch".
+    # We therefore launch python.exe and run whoami /groups from inside it.
     # -------------------------------------------------------------------------
     print("[SPIKE-B] --- Invariant (b): CONFINEMENT (child token IL label) ---")
-    # FIRST substantive nono.exe call — ordering invariant satisfied.
-    whoami_result = subprocess.run(
+    # FIRST substantive nono.exe call — ordering invariant (a) satisfied.
+    il_code = (
+        "import subprocess; "
+        "r = subprocess.run(['whoami', '/groups'], capture_output=True, text=True); "
+        "print(r.stdout); "
+        "print(r.stderr, file=__import__('sys').stderr)"
+    )
+    il_result = subprocess.run(
         [
             nono_path,
             "run",
             "--profile", profile,
             "--allow", workspace,
+            "--allow", python_dir,
             "--",
-            "whoami.exe",
-            "/groups",
+            python_exe,
+            "-c",
+            il_code,
         ],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=180,
+        cwd=workspace,  # CWD-COVERAGE GATE (D-52-01): child cwd must be inside allowed workspace
     )
-    whoami_stdout = whoami_result.stdout or ""
-    whoami_stderr = whoami_result.stderr or ""
-    whoami_combined = whoami_stdout + whoami_stderr
+    il_stdout = il_result.stdout or ""
+    il_stderr = il_result.stderr or ""
+    il_combined = il_stdout + il_stderr
 
     # whoami /groups output on a Low-IL process contains this exact string:
     low_il_marker = "Low Mandatory Level"
-    has_low_il = low_il_marker in whoami_combined
+    has_low_il = low_il_marker in il_combined
 
-    print(f"  nono exit code : {whoami_result.returncode}")
-    print(f"  whoami stdout  :\n{textwrap.indent(whoami_stdout.strip(), '    ')}")
-    if whoami_stderr.strip():
-        print(f"  whoami stderr  :\n{textwrap.indent(whoami_stderr.strip(), '    ')}")
+    print(f"  nono exit code : {il_result.returncode}")
+    print(f"  child stdout   :\n{textwrap.indent(il_stdout.strip(), '    ')}")
+    if il_stderr.strip():
+        print(f"  child stderr   :\n{textwrap.indent(il_stderr.strip(), '    ')}")
     print(f"  Low-IL marker present: {has_low_il}")
 
     if has_low_il:
@@ -148,54 +199,60 @@ def run_spike(nono_path: str, profile: str, workspace: str) -> bool:
 
     # -------------------------------------------------------------------------
     # Invariant (c): DENY outside workspace
-    # A confined child attempts to write C:\deny_probe.txt — must be denied.
+    # A confined Python child attempts to write $HOME\nono_deny_probe.txt —
+    # must be denied.  Uses $HOME (user-writable) to prove real sandbox
+    # enforcement, not mere OS ACL on a protected system path like C:\.
     # -------------------------------------------------------------------------
     print("[SPIKE-B] --- Invariant (c): DENY write outside workspace ---")
     # Clean up any leftover probe from a prior run
     try:
-        if os.path.exists(DENY_PROBE_PATH):
-            os.remove(DENY_PROBE_PATH)
+        if os.path.exists(deny_path):
+            os.remove(deny_path)
     except OSError:
         pass  # may not be writable anyway — that is the expected state
 
+    deny_code = (
+        f"import sys; "
+        f"f = open(r'{deny_path}', 'w'); "
+        f"f.write('DENY_PROBE'); f.close(); "
+        f"print('outside write succeeded (BAD)', file=sys.stderr)"
+    )
     deny_result = subprocess.run(
         [
             nono_path,
             "run",
             "--profile", profile,
             "--allow", workspace,
+            "--allow", python_dir,
             "--",
-            "python.exe",
+            python_exe,
             "-c",
-            # Write a probe byte to a path OUTSIDE the workspace
-            f"import sys; "
-            f"f = open(r'{DENY_PROBE_PATH}', 'w'); "
-            f"f.write('DENY_PROBE'); f.close(); "
-            f"print('outside write succeeded (BAD)', file=sys.stderr)",
+            deny_code,
         ],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=180,
+        cwd=workspace,  # CWD-COVERAGE GATE (D-52-01)
     )
     deny_stdout = deny_result.stdout or ""
     deny_stderr = deny_result.stderr or ""
 
     # The child must NOT have created the deny probe
-    deny_file_exists = os.path.exists(DENY_PROBE_PATH)
+    deny_file_exists = os.path.exists(deny_path)
     # The child should exit non-zero (PermissionError), and the probe must not exist
     deny_blocked = (deny_result.returncode != 0) and (not deny_file_exists)
 
     print(f"  nono exit code        : {deny_result.returncode}")
     print(f"  child stdout          : {deny_stdout.strip()!r}")
     print(f"  child stderr          : {deny_stderr.strip()!r}")
-    print(f"  deny_probe.txt exists : {deny_file_exists}")
+    print(f"  deny_probe exists     : {deny_file_exists}  (path: {deny_path})")
     print(f"  Write blocked         : {deny_blocked}")
 
     if deny_blocked:
         print("[SPIKE-B] (c) DENY: PASS — write outside workspace was denied (file absent, exit != 0)")
     else:
-        if not deny_blocked and deny_file_exists:
-            print("[SPIKE-B] (c) DENY: FAIL — deny_probe.txt was CREATED (confinement did not block the write!)")
+        if deny_file_exists:
+            print("[SPIKE-B] (c) DENY: FAIL — deny probe was CREATED (confinement did not block the write!)")
         elif deny_result.returncode == 0:
             print("[SPIKE-B] (c) DENY: FAIL — child exited 0 (expected non-zero for PermissionError)")
         else:
@@ -206,7 +263,7 @@ def run_spike(nono_path: str, profile: str, workspace: str) -> bool:
 
     # -------------------------------------------------------------------------
     # Invariant (d): ALLOW write inside workspace
-    # A confined child writes workspace\ok.txt — must succeed.
+    # A confined Python child writes workspace\ok.txt — must succeed.
     # -------------------------------------------------------------------------
     print("[SPIKE-B] --- Invariant (d): ALLOW write inside workspace ---")
     allow_probe_path = os.path.join(workspace, "ok.txt")
@@ -217,21 +274,23 @@ def run_spike(nono_path: str, profile: str, workspace: str) -> bool:
     except OSError:
         pass
 
+    allow_code = f"open(r'{allow_probe_path}', 'w').write('ALLOW_PROBE')"
     allow_result = subprocess.run(
         [
             nono_path,
             "run",
             "--profile", profile,
             "--allow", workspace,
+            "--allow", python_dir,
             "--",
-            "python.exe",
+            python_exe,
             "-c",
-            # Write a probe byte to a path INSIDE the workspace
-            f"open(r'{allow_probe_path}', 'w').write('ALLOW_PROBE')",
+            allow_code,
         ],
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=180,
+        cwd=workspace,  # CWD-COVERAGE GATE (D-52-01)
     )
     allow_stdout = allow_result.stdout or ""
     allow_stderr = allow_result.stderr or ""
@@ -328,16 +387,27 @@ def main() -> None:
             "Must already exist. Recommended: $env:TEMP\\nono-spike-b-ws"
         ),
     )
+    parser.add_argument(
+        "--python-dir",
+        default=os.path.dirname(sys.executable),
+        help=(
+            "Directory containing python.exe to use as the confined engine "
+            "(default: directory of the current interpreter). "
+            "This directory is passed as --allow to nono so the interpreter "
+            "path is in the policy allowlist, satisfying the engine-coverage gate."
+        ),
+    )
     args = parser.parse_args()
 
     # Resolve nono path relative to CWD (support both absolute and relative)
     nono_path = os.path.abspath(args.nono)
+    python_dir = os.path.abspath(args.python_dir)
 
     # Prerequisite checks (path existence only — no data I/O)
-    _check_prerequisites(nono_path, args.workspace)
+    _check_prerequisites(nono_path, args.workspace, python_dir)
 
     # Run the four soundness invariant checks
-    passed = run_spike(nono_path, args.profile, args.workspace)
+    passed = run_spike(nono_path, args.profile, args.workspace, python_dir)
     sys.exit(0 if passed else 1)
 
 
