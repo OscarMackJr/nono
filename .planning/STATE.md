@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
-status: executing
+status: ready_to_plan
 last_updated: "2026-06-14T14:01:37.587Z"
-last_activity: 2026-06-14 -- Phase 72 planning complete
+last_activity: 2026-06-14 -- Phase 72 execution complete — verified PASSED (4/4 plans, ABI-01+ABI-02; live UAT 4/4 pytest + example PASS)
 progress:
   total_phases: 5
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
-  completed_plans: 5
-  percent: 56
+  completed_plans: 9
+  percent: 40
 ---
 
 # Project State: nono — v2.12 AI Agent Abstraction
@@ -21,21 +21,21 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 71 — engine-agnostic-launch-productionization
+**Current Focus:** Phase 72 COMPLETE (verified PASSED 2026-06-14) — next: Phase 73 (AI_AGENT Marker) ∥ or Phase 71 productionization
 
 ## Current Position
 
-Phase: 71 — COMPLETE
-Plan: 5 of 5
-Status: Ready to execute
-Last activity: 2026-06-14 -- Phase 72 planning complete
+Phase: 73
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-14
 
 ### v2.12 Phase Summary (active)
 
 | Phase | Goal | Requirements | SC | Status | Host gate |
 |-------|------|--------------|----|--------|-----------|
 | 71 | Engine-Agnostic Launch Productionization — parent-and-confine any covered engine (Aider + LangChain-Python) through one engine-neutral path; de-spike the validated 003 path; fail-secure coverage + R-B3 diagnostic | ENG-01, ENG-02, ENG-03 | 5 | ⬜ Not started | Real Win11 host (Aider end-to-end) |
-| 72 | nono-py Binding + In-Process-Exec Proof — confine a real LangChain agent with NO Claude hook via `confined_run` (Shape A) + `confine` (Shape B); document the E1-E5 contract | ABI-01, ABI-02 | 5 | ⬜ Not started | Win11 host w/ Python; nono-py build |
+| 72 | nono-py Binding + In-Process-Exec Proof — confine a real LangChain agent with NO Claude hook via `confined_run` (Shape A) + `confine` (Shape B); document the E1-E5 contract | ABI-01, ABI-02 | 5 | ✅ Complete (2026-06-14) | Win11 host w/ Python; nono-py build |
 | 73 | AI_AGENT Marker — unforgeable spawn-time token SID (not a named job); deny breakaway; daemon-only job ACL; classify arbitrary PID | MARK-01 | 5 | ⬜ Not started | Win11 host |
 | 74 | Persistent Multi-Tenant Daemon (RISKIEST — former spike 004) — least-priv USER daemon, multi-client tenant-isolated pipe, fresh token+job per agent, deterministic reap | DMON-01, DMON-02, DMON-03 | 5 | ⬜ Not started | Win11 host; **research-flag 74** |
 | 75 | Supplementary Controls + Secondary Engines — demote (demote-only), per-agent WFP egress, Copilot CLI profile, nono-ts parity | SUPP-01, SUPP-02, SUPP-03 | 5 | ⬜ Not started | Win11 host; node/nono-ts build |

@@ -15,8 +15,8 @@
 
 ### Engine Abstraction & Bindings (ABI)
 
-- [ ] **ABI-01**: A Python/LangChain agent can be confined through the **`nono-py` binding with no Claude hook** — both by launching it confined (`confined_run`) and by self-confining at interpreter startup (`confine`) so its in-process `exec()` tools are bounded.
-- [ ] **ABI-02**: The **engine-abstraction contract** (what every engine must expose: executable/interpreter path, an ownable launch command, an absolute workspace grant, a network identity, and an optional pre-exec hook) is documented as a stable boundary other engines implement against.
+- [x] **ABI-01**: A Python/LangChain agent can be confined through the **`nono-py` binding with no Claude hook** — both by launching it confined (`confined_run`) and by self-confining at interpreter startup (`confine`) so its in-process `exec()` tools are bounded.
+- [x] **ABI-02**: The **engine-abstraction contract** (what every engine must expose: executable/interpreter path, an ownable launch command, an absolute workspace grant, a network identity, and an optional pre-exec hook) is documented as a stable boundary other engines implement against.
 
 ### AI_AGENT Marker (MARK)
 
@@ -55,8 +55,8 @@ Every v1 requirement maps to exactly one phase. Coverage: **12/12 mapped, no orp
 | ENG-01 | Phase 71 — Engine-Agnostic Launch Productionization | Complete |
 | ENG-02 | Phase 71 — Engine-Agnostic Launch Productionization | Complete |
 | ENG-03 | Phase 71 — Engine-Agnostic Launch Productionization | Complete |
-| ABI-01 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Pending |
-| ABI-02 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Pending |
+| ABI-01 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Complete |
+| ABI-02 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Complete |
 | MARK-01 | Phase 73 — AI_AGENT Marker | Pending |
 | DMON-01 | Phase 74 — Persistent Multi-Tenant Daemon | Pending |
 | DMON-02 | Phase 74 — Persistent Multi-Tenant Daemon | Pending |

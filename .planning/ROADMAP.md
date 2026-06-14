@@ -29,7 +29,7 @@ granularity: standard
 ## Phases
 
 - [x] **Phase 71: Engine-Agnostic Launch Productionization** — A user can confine *any* non-Claude AI agent engine end-to-end via per-engine launch profiles through one engine-neutral `nono run` path, with fail-secure exe/interpreter coverage + R-B3 workspace-ownership diagnostics.
-- [ ] **Phase 72: nono-py Binding + In-Process-Exec Proof** — A Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook — both `confined_run` (spawn-confined) and `confine` (self-confine at startup) — and the engine-abstraction contract is documented as a stable boundary.
+- [x] **Phase 72: nono-py Binding + In-Process-Exec Proof** — A Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook — both `confined_run` (spawn-confined) and `confine` (self-confine at startup) — and the engine-abstraction contract is documented as a stable boundary.
 - [ ] **Phase 73: AI_AGENT Marker** — Each confined agent carries an unforgeable `AI_AGENT` identity bound to its daemon-minted token SID (named job objects, if used, are kill-group/enumeration only — never authorization).
 - [ ] **Phase 74: Persistent Multi-Tenant Daemon** — A least-privilege persistent daemon launches/confines multiple concurrent agents over one tenant-isolated capability pipe (server-side `ImpersonateNamedPipeClient` + per-tenant SID), fresh token+job per agent, deterministically reaped, split from the elevated WFP service. *(riskiest — former spike 004)*
 - [ ] **Phase 75: Supplementary Controls + Secondary Engines** — An operator can demote a running agent (post-hoc IL-drop, demote-only); outbound egress is WFP-scoped per agent; and the abstraction is proven across ≥2 engines (Copilot CLI) and ≥2 bindings (`nono-ts` parity with `nono-py`).
@@ -64,10 +64,10 @@ granularity: standard
   4. The internal `nono` pin in `nono-py` is bumped from `0.57.0` to `0.62.x` (pyo3 0.28 kept; no napi/pyo3 major migration) and the binding builds + tests green.
   5. The engine-abstraction contract (E1: executable/interpreter path; E2: an ownable launch command; E3: an absolute workspace grant; E4: a network identity; E5: an optional pre-exec interception point) is documented as a stable boundary that other engines implement against.
 **Plans**: 4 plans
-- [ ] 72-01-PLAN.md — Shape B soundness spike (real Win11 host) + ROADMAP SC2/SC3 reword (ABI-01)
-- [ ] 72-02-PLAN.md — nono pin bump + windows_confined_run.rs (confined_run + confine) + lib.rs registration + __init__.py exports (ABI-01)
-- [ ] 72-03-PLAN.md — proj/DESIGN-engine-abstraction.md E1-E5 contract + zt-infra E5 mapping + ../nono-py/docs link (ABI-02)
-- [ ] 72-04-PLAN.md — examples/15_langchain_confined.py + tests/test_confined_run.py + Win11 UAT gate (ABI-01)
+- [x] 72-01-PLAN.md — Shape B soundness spike (real Win11 host) + ROADMAP SC2/SC3 reword (ABI-01)
+- [x] 72-02-PLAN.md — nono pin bump + windows_confined_run.rs (confined_run + confine) + lib.rs registration + __init__.py exports (ABI-01)
+- [x] 72-03-PLAN.md — proj/DESIGN-engine-abstraction.md E1-E5 contract + zt-infra E5 mapping + ../nono-py/docs link (ABI-02)
+- [x] 72-04-PLAN.md — examples/15_langchain_confined.py + tests/test_confined_run.py + Win11 UAT gate (ABI-01)
 
 ### Phase 73: AI_AGENT Marker
 **Goal**: Every confined agent carries an unforgeable `AI_AGENT` identity that a non-agent process cannot claim and a confined agent cannot shed — the authorization signal the multi-tenant daemon will key on. Depends only on Phase 71; independent of Phase 72 (parallel-capable). The daemon prerequisite.
@@ -144,7 +144,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
-| 72. nono-py Binding + In-Process-Exec Proof | 0/4 | Not started | - |
+| 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 0/TBD | Not started | - |
 | 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |
 | 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
