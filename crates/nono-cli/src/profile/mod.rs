@@ -2235,6 +2235,13 @@ pub struct Profile {
     /// built-in profile for v2.7.
     #[serde(default)]
     pub windows_low_il_broker: bool,
+    /// Windows-only. Bare exe names of the interpreter(s) this engine's launch
+    /// program will spawn (e.g. `python.exe` for a console-script entry point).
+    /// Resolved to absolute paths at launch (shebang-of-program ∪ PATH) and
+    /// coverage-checked by `validate_launch_paths`. Ignored on Linux/macOS
+    /// (deserialize-only). Empty = no interpreter coverage required.
+    #[serde(default)]
+    pub windows_interpreters: Vec<String>,
     /// Phase 58: session lifecycle hooks. Field is cross-platform;
     /// deserialization occurs on all platforms. Runtime execution is
     /// platform-gated in `hook_runtime.rs` (Unix) /
@@ -2305,6 +2312,13 @@ struct ProfileDeserialize {
     unsafe_macos_seatbelt_rules: Vec<String>,
     #[serde(default)]
     windows_low_il_broker: bool,
+    /// Windows-only. See `Profile::windows_interpreters` doc-comment.
+    /// `deny_unknown_fields` on `ProfileDeserialize` requires this entry for
+    /// round-tripping — omitting it would cause a deserialization error for
+    /// any profile JSON containing `windows_interpreters`. Deserializes on all
+    /// platforms; runtime use is Windows-only.
+    #[serde(default)]
+    windows_interpreters: Vec<String>,
     /// Phase 58: session lifecycle hooks. `deny_unknown_fields` on
     /// `ProfileDeserialize` requires this entry for round-tripping — omitting
     /// it would cause a deserialization error for any profile JSON containing
@@ -2348,6 +2362,11 @@ impl From<ProfileDeserialize> for Profile {
             capabilities: raw.capabilities,
             unsafe_macos_seatbelt_rules: raw.unsafe_macos_seatbelt_rules,
             windows_low_il_broker: raw.windows_low_il_broker,
+            // Phase 71 Plan 01 (D-02): forward windows_interpreters verbatim.
+            // Deserializes on all platforms; consumed by validate_launch_paths
+            // on Windows only. Exhaustively enumerated here so rustc's
+            // struct-literal completeness check catches any future field additions.
+            windows_interpreters: raw.windows_interpreters,
             // Phase 58: forward session_hooks verbatim. Exhaustively enumerated
             // here so rustc's struct-literal completeness check catches any
             // future field additions.
@@ -3243,6 +3262,11 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
         // profile without the field defaults to false and does not override
         // a base profile that has it set (T-51A-02 mitigation).
         windows_low_il_broker: base.windows_low_il_broker || child.windows_low_il_broker,
+        // Phase 71 Plan 01 (D-02): child's declared interpreters take precedence;
+        // if child is empty, inherit base. This is append-union semantics (same as
+        // skipdirs/packs/command_args) so a derived profile can extend the base
+        // interpreter coverage list.
+        windows_interpreters: dedup_append(&base.windows_interpreters, &child.windows_interpreters),
         // Phase 58: child overrides base per hook slot. Option-semantics:
         // child wins per slot (not OR). Source: upstream daa55c8 profile/mod.rs
         // merge semantics.
