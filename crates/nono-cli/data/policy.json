@@ -874,6 +874,42 @@
       },
       "interactive": false
     },
+    "aider": {
+      "extends": "default",
+      "meta": {
+        "name": "aider",
+        "version": "1.0.0",
+        "description": "Aider AI pair-programming engine (Python entry point)",
+        "author": "nono-project"
+      },
+      "security": {
+        "groups": ["python_runtime", "git_config", "unlink_protection"],
+        "signal_mode": "isolated"
+      },
+      "filesystem": {},
+      "network": { "block": false },
+      "workdir": { "access": "readwrite" },
+      "windows_low_il_broker": true,
+      "windows_interpreters": ["python.exe"]
+    },
+    "langchain-python": {
+      "extends": "default",
+      "meta": {
+        "name": "langchain-python",
+        "version": "1.0.0",
+        "description": "Generic LangChain-Python agent (Python interpreter engine)",
+        "author": "nono-project"
+      },
+      "security": {
+        "groups": ["python_runtime", "git_config", "unlink_protection"],
+        "signal_mode": "isolated"
+      },
+      "filesystem": {},
+      "network": { "block": false },
+      "workdir": { "access": "readwrite" },
+      "windows_low_il_broker": true,
+      "windows_interpreters": ["python.exe"]
+    },
     "python-dev": {
       "extends": "default",
       "meta": {
