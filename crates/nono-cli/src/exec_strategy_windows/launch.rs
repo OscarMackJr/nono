@@ -244,6 +244,31 @@ pub(super) fn create_process_containment(session_id: Option<&str>) -> Result<Pro
     Ok(ProcessContainment { job })
 }
 
+/// Construct a human-readable error message for an `AssignProcessToJobObject`
+/// failure, distinguishing the foreign-job collision (GLE 5 =
+/// `ERROR_ACCESS_DENIED`) from generic assignment failures.
+///
+/// Extracted as a pure helper so it is directly unit-testable without a live
+/// process handle.
+pub(super) fn assign_failure_message(gle: u32) -> String {
+    // ERROR_ACCESS_DENIED (5): the child is already a member of a Job Object
+    // that nono did not create, and that job disallows breakaway.
+    // Nested-job collision → nono cannot guarantee descendant capture / kill-group.
+    if gle == 5 {
+        format!(
+            "Job Object assignment failed (GLE={gle}): the child is already a member of \
+             a Job Object nono did not create (and that job disallows breakaway). \
+             nono cannot guarantee descendant capture/kill-group for this launch and \
+             refuses to continue (fail-secure)."
+        )
+    } else {
+        format!(
+            "Job Object assignment failed (GLE={gle}): AssignProcessToJobObject returned \
+             a non-success code. The child process has been terminated (fail-secure)."
+        )
+    }
+}
+
 pub(super) fn apply_process_handle_to_containment(
     containment: &ProcessContainment,
     process: HANDLE,
@@ -255,9 +280,11 @@ pub(super) fn apply_process_handle_to_containment(
         AssignProcessToJobObject(containment.job, process)
     };
     if ok == 0 {
-        return Err(NonoError::SandboxInit(
-            "Failed to assign Windows child process to process containment job object".to_string(),
-        ));
+        // SAFETY: GetLastError is a thread-local lookup with no side effects;
+        // called immediately after the failed FFI call so no intervening Win32
+        // API can overwrite the error code.
+        let gle = unsafe { GetLastError() };
+        return Err(NonoError::SandboxInit(assign_failure_message(gle)));
     }
     Ok(())
 }
