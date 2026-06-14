@@ -5512,7 +5512,7 @@ mod timeout_deadline_tests {
         }
 
         let containment =
-            create_process_containment(None).expect("create containment for deadline test");
+            create_process_containment(None, None).expect("create containment for deadline test");
 
         // Spawn a long-lived suspended child by hand so we can AssignProcess
         // before ResumeThread — mirrors spawn_windows_child's ordering.
