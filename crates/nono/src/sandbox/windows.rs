@@ -3678,6 +3678,107 @@ mod tests {
             .expect("Phase 21: single-file policy covering the executable path must be accepted");
     }
 
+    // ── Task 1 RED: validate_launch_paths interpreter coverage ──────────────
+
+    #[test]
+    fn validate_launch_paths_refuses_uncovered_interpreter() {
+        // Program is covered; the interpreter that program would spawn is NOT.
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+        let program = bin_dir.join("engine.exe");
+        std::fs::write(&program, "binary").expect("write program");
+
+        // Interpreter lives in a DIFFERENT directory that is not in the policy.
+        let interp_dir = tempdir().expect("interp tempdir");
+        let interpreter = interp_dir.path().join("python.exe");
+        std::fs::write(&interpreter, "binary").expect("write interpreter");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
+        let policy = compile_filesystem_policy(&caps);
+
+        let err =
+            validate_launch_paths(&policy, &program, dir.path(), &[interpreter.clone()])
+                .expect_err("uncovered interpreter must be refused");
+
+        let msg = err.to_string();
+        // D-07: message must name the interpreter path
+        assert!(
+            msg.contains(&interpreter.to_string_lossy().as_ref().to_lowercase())
+                || msg.contains("python.exe")
+                || msg.contains("interpreter"),
+            "error must mention the uncovered interpreter; got: {msg}"
+        );
+        // D-07: message must name the wrapper program
+        assert!(
+            msg.contains("engine.exe") || msg.contains(&program.to_string_lossy().as_ref().to_lowercase()),
+            "error must mention the wrapper program; got: {msg}"
+        );
+        // D-07: message must contain a fix hint
+        assert!(
+            msg.contains("--allow") || msg.contains("allow"),
+            "error must contain an --allow fix hint; got: {msg}"
+        );
+        // D-07: must mention partial confinement
+        assert!(
+            msg.contains("partially-confined")
+                || msg.contains("partial confinement")
+                || msg.contains("not cover"),
+            "error must reference partial confinement risk; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_launch_paths_accepts_covered_program_and_interpreter() {
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+        let program = bin_dir.join("engine.exe");
+        std::fs::write(&program, "binary").expect("write program");
+        let interpreter = bin_dir.join("python.exe");
+        std::fs::write(&interpreter, "binary").expect("write interpreter");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
+        let policy = compile_filesystem_policy(&caps);
+
+        // Both program and interpreter are under the same allowed dir → Ok
+        validate_launch_paths(&policy, &program, dir.path(), &[interpreter])
+            .expect("covered program and interpreter must be accepted");
+    }
+
+    #[test]
+    fn validate_launch_paths_empty_interpreter_slice_is_unchanged() {
+        // An empty interpreter slice reproduces the pre-extension behavior:
+        // only program + current_dir are checked.
+        let dir = tempdir().expect("tempdir");
+        let program = dir.path().join("tool.exe");
+        std::fs::write(&program, "binary").expect("write program");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
+        let policy = compile_filesystem_policy(&caps);
+
+        validate_launch_paths(&policy, &program, dir.path(), &[])
+            .expect("empty interpreter slice must leave existing behavior unchanged");
+    }
+
+    // ── Task 2 RED: path_has_write_owner helper ──────────────────────────────
+
+    #[test]
+    fn path_has_write_owner_returns_true_for_userprofile_tempdir() {
+        // A directory we create in %TEMP% is user-owned and the user holds
+        // WRITE_OWNER on it (mandatory-label relabel will succeed).
+        let dir = tempdir().expect("tempdir");
+        let result = path_has_write_owner(dir.path())
+            .expect("WRITE_OWNER query must not error on a user-created tempdir");
+        assert!(
+            result,
+            "user-created tempdir must be reported as having WRITE_OWNER (relabel-capable)"
+        );
+    }
+
     #[test]
     fn runtime_state_dir_prefers_writable_current_dir_inside_policy() {
         let dir = tempdir().expect("tempdir");
