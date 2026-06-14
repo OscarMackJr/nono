@@ -2,7 +2,7 @@
 phase: 71-engine-agnostic-launch-productionization
 plan: "05"
 subsystem: human-uat-script
-tags: [human-uat, sc1, aider, windows, engine-agnostic, pending-operator]
+tags: [human-uat, sc1, aider, windows, engine-agnostic, operator-approved]
 dependency_graph:
   requires: [71-01-engine-profiles, 71-02-coverage-gate, 71-03-rb3-gate, 71-04-cli-integration]
   provides: [71-HUMAN-UAT.md]
@@ -15,12 +15,13 @@ key_files:
     - .planning/phases/71-engine-agnostic-launch-productionization/71-HUMAN-UAT.md
   modified: []
 decisions:
-  - "Task 1 (author UAT script) is complete and committed; Task 2 (live SC1 run on a real Win11 host) is PENDING OPERATOR — not executed, not fabricated"
+  - "Task 1 (author UAT script) complete and committed; Task 2 (live SC1 run) APPROVED by operator 2026-06-13 on real Win11 26200"
+  - "SC1 proven via the langchain-python engine (raw python.exe): inside-write lands, outside-write denied, transitive grandchild-subprocess denied (T-71-14), relative-write CWD inside workspace; ENG-02 interpreter-coverage + command-argument fail-secure gates fired. Literal aider.exe run deferred (needs pip + LLM API key) — langchain-python is the documented sufficient proof (spike-003 precedent)"
   - "Script models prior phase HUMAN-UAT format (Phase 60) with preconditions, numbered SC steps, expected outcomes, ENG-02 spot-checks, SC5 per-engine fit table, and operator pass/fail capture"
 metrics:
   duration_minutes: 15
-  completed_date: "2026-06-14"
-  tasks_completed: 1
+  completed_date: "2026-06-13"
+  tasks_completed: 2
   tasks_total: 2
   files_changed: 1
 ---
@@ -33,18 +34,37 @@ Authored `71-HUMAN-UAT.md` (345 lines) providing the operator-runnable SC1 accep
 for Aider end-to-end confinement on a real Win11 host — script committed, live UAT run pending
 operator.
 
-## Status: PENDING OPERATOR (Task 2 not executed)
+## Status: COMPLETE — operator approved (2026-06-13)
 
-Plan 71-05 has TWO tasks:
+Plan 71-05 has TWO tasks, both now complete:
 
 | Task | Type | Status |
 |------|------|--------|
 | Task 1: Author 71-HUMAN-UAT.md | auto | COMPLETE (commit `3a122a1c`) |
-| Task 2: SC1 live run on a real Win11 host | checkpoint:human-verify (gate=blocking-human) | PENDING OPERATOR |
+| Task 2: SC1 live run on a real Win11 host | checkpoint:human-verify (gate=blocking-human) | COMPLETE — APPROVED 2026-06-13 |
 
-Task 2 requires a real Win11 host, a real Aider install, and the `BrokerLaunchNoPty` arm
-exercised with a real Low-IL relabel + AppContainer path. It cannot be run in this dev
-environment and has NOT been executed. No SC1 pass/fail result is claimed here.
+Task 2 was executed by the operator on a real Win11 26200 host using the dev-layout
+`target\release\nono.exe` (nono 0.62.2). SC1 was proven via the `langchain-python` engine
+(raw `python.exe`, Python 3.12.10) — the broker arm registered a per-run AppContainer and
+spawned the confined child (`app_container=true`). Captured outcomes (recorded in
+`71-HUMAN-UAT.md`):
+
+- **SC1-1** inside-workspace write LANDS (`inside.txt` under `$ws`, exit 0) — PASS
+- **SC1-2b** absolute `C:\outside.txt` write DENIED (`PermissionError [Errno 13]`, `Test-Path False`) — PASS
+- **SC1-3** transitive grandchild-subprocess write DENIED (T-71-14: grandchild python spawned by the
+  confined child, never validated by nono, blocked by the inherited label) — PASS
+- **SC2** relative write resolves INSIDE the absolute workspace (no PowerShell→C:\ trap) — PASS
+- **ENG-02-B** uncovered-interpreter coverage refusal naming the exact `python.exe` + `--allow` fix — PASS
+- Bonus: `validate_windows_command_args` refused an inline-`-c` probe pre-launch (uncovered absolute-path
+  argv) — additional defense-in-depth layer observed live
+
+Literal `aider.exe` deferred (needs `pip install aider-chat` + an LLM API key, not configured on the
+host); the `langchain-python` engine is the documented sufficient SC1 proof. Optional ENG-02-A
+admin-owned-workspace refusal and SC1-2a relative-escape spot-checks were not exercised (non-blocking).
+
+A follow-on fix landed during the UAT (commit `1b473b4a`): the `python_runtime` group now covers the
+standard Windows python.org install paths, so the engine profiles no longer require `--allow` for the
+common per-user Python install (the gap that the D-07 refusal surfaced live).
 
 ## Tasks Completed
 
@@ -137,9 +157,8 @@ file access patterns, or schema changes.
 
 ## ROADMAP Status
 
-Plan 71-05 is NOT marked complete. Task 2 (live SC1 run) is PENDING OPERATOR. The ROADMAP
-plan-progress for 71-05 will be updated to complete only after the operator executes Task 2 and
-types the resume signal.
+Plan 71-05 is COMPLETE. Task 2 (live SC1 run) was executed and APPROVED by the operator on
+2026-06-13. ROADMAP plan-progress for 71-05 is updated to complete.
 
 ## Self-Check: PASSED
 

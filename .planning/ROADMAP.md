@@ -51,7 +51,7 @@ granularity: standard
 - [x] 71-02-PLAN.md — SC5 named foreign-job (GLE-5) diagnostic + fail-secure assign negative test (P6)
 - [x] 71-03-PLAN.md — library fail-secure primitives: interpreter coverage gate + path_has_write_owner helper (ENG-02)
 - [x] 71-04-PLAN.md — CLI integration: --workspace flag, child-CWD/grant, interpreter resolution, R-B3 pre-launch gate (ENG-01, ENG-02)
-- [ ] 71-05-PLAN.md — 71-HUMAN-UAT.md + SC1 real-Win11 Aider end-to-end gate (ENG-01)
+- [x] 71-05-PLAN.md — 71-HUMAN-UAT.md + SC1 real-Win11 Aider end-to-end gate (ENG-01)
 
 ### Phase 72: nono-py Binding + In-Process-Exec Proof
 **Goal**: The engine abstraction is proven in code — a real Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook, exercising both the external-spawn shape and the in-process-self-confine shape — and the abstraction-boundary contract (E1-E5) is written down as a stable boundary other engines implement against. Depends only on Phase 71 launch semantics; independent of the daemon (parallel-capable with Phase 73).
@@ -139,7 +139,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 71. Engine-Agnostic Launch Productionization | 4/5 | In Progress|  |
+| 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
 | 72. nono-py Binding + In-Process-Exec Proof | 0/TBD | Not started | - |
 | 73. AI_AGENT Marker | 0/TBD | Not started | - |
 | 74. Persistent Multi-Tenant Daemon | 0/TBD | Not started | - |

@@ -400,5 +400,12 @@ Filled in from the live run on a real Win11 host.
 
 ### Resume Signal
 
-After completing the UAT: type `"approved"` (with this table filled in and pasted into this
-document) to continue, or describe which step failed and the observed behavior.
+**APPROVED — 2026-06-13 (operator: Oscar Mack Jr).** SC1 accepted as PASS on the strength of the
+`langchain-python` (raw `python.exe`) live proof on Win11 26200: inside-write lands, outside-write
+denied, transitive grandchild-subprocess denied (T-71-14), relative-write CWD inside the workspace,
+and the ENG-02 interpreter-coverage + command-argument fail-secure gates fired as designed. The
+engine-neutral launch path (ENG-01) is demonstrated sound on real hardware — "the engine is a
+variable." The literal `aider.exe` run was deferred (requires `pip install aider-chat` + an LLM API
+key, which was not configured on the host); the `langchain-python` engine is the documented,
+sufficient SC1 proof (spike-003 precedent). Optional ENG-02-A admin-owned-workspace refusal and
+SC1-2a relative-escape spot-checks were not exercised (non-blocking).
