@@ -815,7 +815,7 @@ pub fn execute_direct(
         &config.command[1..],
         config.interactive_shell,
     );
-    let containment = create_process_containment(session_id)?;
+    let containment = create_process_containment(session_id, config.package_sid.as_deref())?;
 
     // Phase 17 (Task 2): spawn_windows_child now returns
     // (WindowsSupervisedChild, Option<DetachedStdioPipes>). The Direct
@@ -889,7 +889,7 @@ pub fn execute_supervised(
         &config.command[1..],
         config.interactive_shell,
     );
-    let containment = create_process_containment(session_id)?;
+    let containment = create_process_containment(session_id, config.package_sid.as_deref())?;
 
     let mut runtime = WindowsSupervisorRuntime::initialize(
         supervisor,
