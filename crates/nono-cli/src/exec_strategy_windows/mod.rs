@@ -332,6 +332,7 @@ fn prepare_live_windows_launch(
         &fs_policy,
         config.resolved_program,
         config.current_dir,
+        &[], // Plan 04 threads the resolved interpreter set here
     )?;
     Sandbox::validate_windows_command_args(
         &fs_policy,
