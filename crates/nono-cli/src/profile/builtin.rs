@@ -190,6 +190,66 @@ mod tests {
     }
 
     #[test]
+    fn test_get_builtin_aider() {
+        let profile = get_builtin("aider").expect("aider profile not found");
+        assert_eq!(profile.meta.name, "aider");
+        assert_eq!(profile.workdir.access, WorkdirAccess::ReadWrite);
+        assert!(
+            profile
+                .security
+                .groups
+                .contains(&"python_runtime".to_string()),
+            "aider profile must include python_runtime group"
+        );
+        assert!(
+            profile
+                .security
+                .groups
+                .contains(&"git_config".to_string()),
+            "aider profile must include git_config group"
+        );
+        assert!(
+            profile
+                .security
+                .groups
+                .contains(&"unlink_protection".to_string()),
+            "aider profile must include unlink_protection group"
+        );
+        assert!(
+            profile.windows_low_il_broker,
+            "aider profile must set windows_low_il_broker: true"
+        );
+        assert_eq!(
+            profile.windows_interpreters,
+            vec!["python.exe".to_string()],
+            "aider profile must declare python.exe interpreter coverage"
+        );
+    }
+
+    #[test]
+    fn test_get_builtin_langchain_python() {
+        let profile = get_builtin("langchain-python").expect("langchain-python profile not found");
+        assert_eq!(profile.meta.name, "langchain-python");
+        assert_eq!(profile.workdir.access, WorkdirAccess::ReadWrite);
+        assert!(
+            profile
+                .security
+                .groups
+                .contains(&"python_runtime".to_string()),
+            "langchain-python profile must include python_runtime group"
+        );
+        assert!(
+            profile.windows_low_il_broker,
+            "langchain-python profile must set windows_low_il_broker: true"
+        );
+        assert_eq!(
+            profile.windows_interpreters,
+            vec!["python.exe".to_string()],
+            "langchain-python profile must declare python.exe interpreter coverage"
+        );
+    }
+
+    #[test]
     fn test_opencode_no_longer_inbuilt() {
         // Removed: opencode is now shipped via the registry pack
         // `always-further/opencode`, not embedded in policy.json.
