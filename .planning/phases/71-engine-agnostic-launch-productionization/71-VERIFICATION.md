@@ -1,20 +1,21 @@
 ---
 phase: 71-engine-agnostic-launch-productionization
 verified: 2026-06-14T00:00:00Z
-status: human_needed
-score: 5/6 must-haves verified
-overrides_applied: 0
-human_verification:
-  - test: "Run nono with the literal aider.exe binary (not langchain-python) end-to-end on Win11"
-    expected: "Inside-workspace write lands; outside write denied; aider's internal python subprocess confined transitively"
-    why_human: "SC1 roadmap text names Aider specifically. The langchain-python proof is operationally equivalent but the literal aider.exe was explicitly deferred (needs pip install aider-chat + LLM API key). Operator must decide if the langchain-python substitution closes SC1 for final milestone sign-off, or if the literal aider.exe run is required before Phase 72 begins."
+status: passed
+score: 6/6 must-haves verified
+overrides_applied: 1
+operator_decisions:
+  - decision: "SC1 accepted on the langchain-python (raw python.exe) live proof; literal aider.exe substitution approved"
+    by: "Oscar Mack Jr"
+    date: "2026-06-13"
+    rationale: "The langchain-python proof exercises the identical production path (same BrokerLaunchNoPty arm, same per-run AppContainer, same mandatory-label inheritance) and proved inside-lands / outside-denied / transitive-grandchild-denied (T-71-14) / relative-CWD-inside-workspace on live Win11 26200. REQUIREMENTS ENG-01 wording is 'e.g. Aider' (engine-neutral by design); spike-003 used raw python as the strongest confinement proof. Literal aider.exe deferred (needs pip install aider-chat + LLM API key) as a non-blocking optional follow-up."
 ---
 
 # Phase 71: Engine-Agnostic Launch Productionization — Verification Report
 
 **Phase Goal:** nono can parent-and-confine any covered AI agent engine (starting with Aider + a LangChain-Python profile) through one engine-neutral launch path — the validated spike-003 path promoted to a first-class, de-spiked code path that every later phase consumes.
 **Verified:** 2026-06-14
-**Status:** human_needed
+**Status:** passed (SC1 operator-accepted on langchain-python proof, 2026-06-13)
 **Re-verification:** No — initial verification
 
 ---

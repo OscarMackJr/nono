@@ -28,7 +28,7 @@ granularity: standard
 
 ## Phases
 
-- [ ] **Phase 71: Engine-Agnostic Launch Productionization** — A user can confine *any* non-Claude AI agent engine end-to-end via per-engine launch profiles through one engine-neutral `nono run` path, with fail-secure exe/interpreter coverage + R-B3 workspace-ownership diagnostics.
+- [x] **Phase 71: Engine-Agnostic Launch Productionization** — A user can confine *any* non-Claude AI agent engine end-to-end via per-engine launch profiles through one engine-neutral `nono run` path, with fail-secure exe/interpreter coverage + R-B3 workspace-ownership diagnostics.
 - [ ] **Phase 72: nono-py Binding + In-Process-Exec Proof** — A Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook — both `confined_run` (spawn-confined) and `confine` (self-confine at startup) — and the engine-abstraction contract is documented as a stable boundary.
 - [ ] **Phase 73: AI_AGENT Marker** — Each confined agent carries an unforgeable `AI_AGENT` identity bound to its daemon-minted token SID (named job objects, if used, are kill-group/enumeration only — never authorization).
 - [ ] **Phase 74: Persistent Multi-Tenant Daemon** — A least-privilege persistent daemon launches/confines multiple concurrent agents over one tenant-isolated capability pipe (server-side `ImpersonateNamedPipeClient` + per-tenant SID), fresh token+job per agent, deterministically reaped, split from the elevated WFP service. *(riskiest — former spike 004)*
