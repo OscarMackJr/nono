@@ -12,7 +12,7 @@ requires:
 provides:
   - "examples/15_langchain_confined.py: Shape B born-confined PythonREPLTool proof with graceful langchain-absent fallback"
   - "tests/test_confined_run.py: 4 win32-only pytest tests with nono_exe_path fixture; importorskip guard; proven invocation contract"
-  - "DEFERRED: live UAT (build + run) to orchestrator + human operator per Task 2 checkpoint"
+  - "LIVE UAT PASS (orchestrator-driven, Win11 26200, nono v0.62.2): maturin develop --release built the extension into an isolated venv; 4/4 pytest tests pass; example file-only proof PASS/PASS"
 
 affects:
   - 72-UAT
@@ -65,9 +65,24 @@ completed: 2026-06-14
 - **Tasks:** 1 of 2 (Task 1: write code + commit; Task 2: human-verify checkpoint — awaiting orchestrator)
 - **Files modified:** 2 (nono-py repo: examples + tests)
 
+## Live UAT Results (orchestrator-driven, 2026-06-14)
+
+Built the extension into an isolated venv (`maturin develop --release`, 2m09s) and ran the suite on Win11 26200 with `NONO_EXE` → dev-layout `nono.exe` v0.62.2.
+
+**`pytest tests/test_confined_run.py` → 4 passed** (test_write_inside_workspace_allowed, test_write_outside_workspace_denied, test_no_profile_or_allow_raises, test_confine_already_confined_guard). **Example file-only proof → `[PASS]` outside-denied + `[PASS]` inside-allowed, exit 0.**
+
+Driving the UAT surfaced **4 Windows-only test-harness defects** (none soundness failures — the binding enforces correctly; the broker minted Low-IL + AppContainer children throughout). All fixed in nono-py commit `57c2b7e`:
+
+1. **conftest.py unconditional `sandboxed_exec` import** broke all collection on Windows (it is Unix-only per 72-02). → conditional import; `_sandboxed_exec_available` treats absence as unavailable.
+2. **venv launcher unconfinable under AppContainer** (`sys.executable` venv python exits 106 even with the whole `.venv` tree granted). → run the **base** interpreter (`sys.base_prefix`) via new `_confined_python()`; grant `sys.base_prefix`.
+3. **R-B3 workspace ownership**: pytest `tmp_path` sits under an Administrators-owned `pytest-of-<user>` root; `tempfile.mkdtemp` stamps a restrictive non-inherited ACL. → `nono_workspace` fixture: `os.mkdir` under `%TEMP%` (inherits user FullControl) + `icacls /setowner *<SID>` (works elevated/CI; SID avoids offline-DC failures).
+4. **Deny-test false-pass risk**: a non-zero exit from a launch/init *refusal* (coverage / R-B3) was indistinguishable from a real write-denial. → guard asserts no launch-refusal marker is present, so the test only passes on genuine OS write-denial.
+
+Durable note: nono's interpreter-coverage + cwd-coverage (D-52-01) + R-B3 ownership gates all fire **fail-secure** — corroborating evidence that nono refuses partially-confined / unsound launches.
+
 ## Accomplishments
 
-- `examples/15_langchain_confined.py` written: Shape B born-confined proof via `confine(profile='langchain-python', allow=[ws, interpreter_dir])`; `PythonREPLTool` deny + allow assertions with `[PASS]`/`[FAIL]` output; degrades to `confined_run` fallback when langchain not installed (graceful degradation per robustness requirement)
+- `examples/15_langchain_confined.py` written: Shape B born-confined proof via `confine(profile='langchain-python', allow=[ws, *interpreter_dirs])`; `PythonREPLTool` deny + allow assertions with `[PASS]`/`[FAIL]` output; degrades to `confined_run` fallback when langchain not installed (graceful degradation per robustness requirement). UAT-hardened: base interpreter, user-owned workspace, venv caveat on the Shape B path
 - `tests/test_confined_run.py` written: 4 win32-only integration tests; module-level `pytestmark` + `pytest.importorskip("nono_py")` so `--collect-only` is clean before build; `nono_exe_path` session fixture with 3-step resolution; API matched exactly to `windows_confined_run.rs` `#[pyo3(signature)]` declarations
 - py_compile PASS on both files (Python 3.12.10)
 - pytest `--collect-only` with `--noconftest` shows "1 skipped" (clean — importorskip fires when nono_py not built); no collection errors
