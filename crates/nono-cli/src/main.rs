@@ -8,6 +8,9 @@ mod audit_commands;
 mod audit_integrity;
 mod audit_session;
 mod capability_ext;
+// AI_AGENT marker classify verb (Phase 73 D-04). NOT cfg-gated — compiles on
+// all platforms via the nono::AgentRegistry non-Windows stub.
+mod classify_runtime;
 mod claude_code_hook;
 mod cli;
 mod cli_bootstrap;

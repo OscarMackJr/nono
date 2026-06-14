@@ -742,6 +742,28 @@ pub enum Commands {
 ")]
     Why(Box<WhyArgs>),
 
+    /// Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono classify <PID> [flags]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono classify 1234                           # Structural check of PID 1234
+  nono classify 1234 --json                    # JSON output for tooling
+
+\x1b[1mNOTE\x1b[0m
+  This check is STRUCTURAL ONLY and NON-AUTHORITATIVE. A standalone `nono
+  classify` runs in a separate process with an empty AgentRegistry, so it can
+  never emit an authoritative AI_AGENT claim — it only reports whether the PID
+  has an AppContainer token and is in a job object. Registry-backed
+  authoritative classification is the Phase 74 daemon.
+")]
+    Classify(ClassifyArgs),
+
     // ── Session management ───────────────────────────────────────────────
     /// Manage rollback sessions (browse, restore, cleanup)
     #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
@@ -3063,6 +3085,21 @@ pub struct LogsArgs {
     /// Show last N events
     #[arg(long, value_name = "N")]
     pub tail: Option<usize>,
+
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `nono classify <PID>` (Phase 73 D-04).
+///
+/// The check is structural/non-authoritative; see the `Commands::Classify`
+/// help text. The registry is empty in standalone mode, so the verb never
+/// emits an authoritative AI_AGENT verdict.
+#[derive(Parser, Debug)]
+pub struct ClassifyArgs {
+    /// Process ID to classify
+    pub pid: u32,
 
     /// Output as JSON
     #[arg(long)]

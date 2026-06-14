@@ -158,6 +158,7 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         Commands::Wrap(args) => args.sandbox.verbose,
         Commands::Setup(args) => args.verbose,
         Commands::Why(_)
+        | Commands::Classify(_)
         | Commands::Rollback(_)
         | Commands::Trust(_)
         | Commands::Audit(_)

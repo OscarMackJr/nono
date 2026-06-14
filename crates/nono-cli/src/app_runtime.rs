@@ -1,4 +1,5 @@
 use crate::audit_commands;
+use crate::classify_runtime;
 use crate::claude_code_hook;
 use crate::cli::{Cli, Commands, RunArgs, SessionCommands, SetupArgs};
 use crate::command_runtime::{run_sandbox, run_shell, run_wrap};
@@ -56,6 +57,16 @@ fn dispatch_command(
             run_command_with_banner_and_update(update_handle, silent, || run_wrap(*args, silent))
         }
         Commands::Why(args) => run_command_with_update(update_handle, silent, || run_why(*args)),
+        Commands::Classify(args) => run_command_with_update(update_handle, silent, || {
+            // Phase 73 D-04: standalone classify runs in its own process, so its
+            // AgentRegistry is created fresh and empty here — it can never emit an
+            // authoritative AI_AGENT verdict. The verb relies on the structural
+            // pre-filter; the registry is threaded to keep the sound predicate in
+            // the call path for the Phase 74 daemon to consume.
+            let registry =
+                std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
+            classify_runtime::run_classify(args, registry)
+        }),
         Commands::Setup(args) => {
             run_command_with_banner_and_update(update_handle, silent, || run_setup(args))
         }
