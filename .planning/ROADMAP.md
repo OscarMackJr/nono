@@ -95,7 +95,14 @@ granularity: standard
   4. The daemon runs at LEAST privilege (USER, not LocalSystem) and is SPLIT from the elevated `nono-wfp-service`, so an escaped agent cannot pivot to SYSTEM or to other tenants; the pipe is query-only and never expands a running agent's capabilities (no escape hatch). The privilege model is recorded as an ADR written BEFORE the service host is coded.
   5. The daemon is modeled on the proven `nono-wfp-service.rs` shape (SCM dispatch, Event Log, control pipe, non-Windows stub, MSI registration, non-fatal start) and reuses the framed JSON `SupervisorMessage` wire protocol (extended with a tenant id ONLY if `session_id` proves insufficient — no net-new wire protocol).
 **Research flag**: Plan this phase with `--research-phase 74`. Two mechanisms are unspiked / net-new: (a) token/job REUSE-vs-fresh across many tenants (the explicitly unspiked part of spike 003/004 — the milestone's highest-risk unknown; scope a spike INSIDE the phase gated on fresh-token isolation + deterministic reap + cross-tenant denial); (b) whether server-side `ImpersonateNamedPipeClient` (NOT currently in `socket_windows.rs` — it verifies the *server* PID from the client side today) composes with the existing Low-IL/AppContainer cap-pipe SDDL DACL handshake. Also re-assert: AppContainer per-agent SID needs `CreateAppContainerProfile` (not derive-only, else `CreateProcessW` `ERROR_FILE_NOT_FOUND`); preserve `SystemRoot`/`windir`/`SystemDrive` env baseline (else CLR `0xFFFF0000`).
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+- [ ] 74-01-PLAN.md — ADR (privilege model) + Wave 0 spike harness: fresh-token isolation + handle baseline + cross-tenant denial (DMON-01/02/03)
+- [ ] 74-02-PLAN.md — nono lib primitives: AgentRegistry::remove + authenticate_pipe_client + ImpersonationGuard (DMON-01/02)
+- [ ] 74-03-PLAN.md — nono-agentd binary skeleton: second [[bin]] + non-Windows stub + SCM dispatch + DaemonState/AgentTenant RAII (DMON-01/03)
+- [ ] 74-04-PLAN.md — Daemon accept loop (per-tenant SDDL + impersonation auth) + launch orchestration (fresh token+job + reap task) (DMON-01/02/03)
+- [ ] 74-05-PLAN.md — CLI verbs: nono daemon start|stop|status|install|uninstall + nono agent launch|list (DMON-01/03)
+- [ ] 74-06-PLAN.md — 74-HUMAN-UAT.md + Win11 UAT gate: SC1-SC5 go/no-go (DMON-01/02/03)
 
 ### Phase 75: Supplementary Controls + Secondary Engines
 **Goal**: Round out the milestone with the supplementary (never-the-boundary) controls and the second-engine/second-binding parity that proves the abstraction generalizes — all low-cost adds once the launch-time default (Phases 71-74) is proven. Demote must FOLLOW a proven launch-time default; it is an incident-response lever, not a confinement model.
