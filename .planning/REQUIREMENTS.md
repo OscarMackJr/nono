@@ -26,7 +26,7 @@
 
 - [x] **DMON-01**: A persistent local daemon launches and confines **multiple concurrent agents**, each with a fresh token + job object, deterministically reaped on agent exit — running N agents over time returns to baseline handle/job count (no leak).
 - [x] **DMON-02**: The daemon's multi-tenant capability pipe **isolates tenants** — it authenticates each client server-side (`ImpersonateNamedPipeClient` + per-tenant SID match) so one agent cannot read or use another agent's capabilities (a cross-tenant request is denied).
-- [ ] **DMON-03**: The daemon runs at **least privilege** (user, not LocalSystem) and is split from the elevated WFP-control service, so a confined agent that escapes cannot pivot to SYSTEM or to other tenants. (Backed by a privilege-model ADR.)
+- [x] **DMON-03**: The daemon runs at **least privilege** (user, not LocalSystem) and is split from the elevated WFP-control service, so a confined agent that escapes cannot pivot to SYSTEM or to other tenants. (Backed by a privilege-model ADR.)
 
 ### Supplementary Controls & Reach (SUPP)
 
@@ -60,7 +60,7 @@ Every v1 requirement maps to exactly one phase. Coverage: **12/12 mapped, no orp
 | MARK-01 | Phase 73 — AI_AGENT Marker | Pending |
 | DMON-01 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
 | DMON-02 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
-| DMON-03 | Phase 74 — Persistent Multi-Tenant Daemon | Pending |
+| DMON-03 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
 | SUPP-01 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |
 | SUPP-02 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |
 | SUPP-03 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |

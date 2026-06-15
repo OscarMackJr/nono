@@ -100,7 +100,7 @@ Plans:
 **Wave 1**
 - [x] 74-01-PLAN.md — ADR (privilege model) + Wave 0 spike harness: fresh-token isolation + handle baseline + cross-tenant denial (DMON-01/02/03)
 - [x] 74-02-PLAN.md — nono lib primitives: AgentRegistry::remove + authenticate_pipe_client + ImpersonationGuard (DMON-01/02)
-- [ ] 74-03-PLAN.md — nono-agentd binary skeleton: second [[bin]] + non-Windows stub + SCM dispatch + DaemonState/AgentTenant RAII (DMON-01/03)
+- [x] 74-03-PLAN.md — nono-agentd binary skeleton: second [[bin]] + non-Windows stub + SCM dispatch + DaemonState/AgentTenant RAII (DMON-01/03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 74-04-PLAN.md — Daemon accept loop (per-tenant SDDL + impersonation auth) + launch orchestration (fresh token+job + reap task) (DMON-01/02/03)
@@ -163,7 +163,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
-| 74. Persistent Multi-Tenant Daemon | 2/6 | In Progress|  |
+| 74. Persistent Multi-Tenant Daemon | 3/6 | In Progress|  |
 | 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
 
 ## Dependency Graph
