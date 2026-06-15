@@ -28,6 +28,19 @@ pub(crate) mod launch;
 /// Daemon-side operator control-pipe server (Plan 74-07 Wave 5).
 pub(crate) mod control_loop;
 
+// ─── WFP wire-protocol types (Plan 75-01, SUPP-02) ───────────────────────────
+//
+// The `nono-agentd` binary is compiled WITHOUT the rest of `nono-cli` crate
+// (it is loaded only via `#[path]`). Including the shared contract file via
+// `#[path]` makes `WfpRuntimeActivationRequest` and friends available to the
+// `launch` and `control_loop` modules without duplicating definitions.
+/// WFP runtime wire-protocol types (shared with `nono-cli`).
+///
+/// Path-included here because `nono-agentd` is a standalone binary that pulls
+/// in `agent_daemon` via `#[path]` and cannot reach `crate::windows_wfp_contract`.
+#[path = "../windows_wfp_contract.rs"]
+pub(crate) mod wfp_contract;
+
 // ─── Embedded policy data ─────────────────────────────────────────────────────
 
 /// Embedded policy JSON (compiled into binary by build.rs).

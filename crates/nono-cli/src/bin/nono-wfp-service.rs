@@ -916,11 +916,27 @@ mod windows_impl {
         let invalid_request = || {
             build_invalid_activation_response_for(&request.request_kind, &request.runtime_target)
         };
-        let target_program = request
-            .target_program_path
-            .as_ref()
-            .map(std::path::PathBuf::from)
-            .ok_or_else(invalid_request)?;
+        // When `session_sid` is set the WFP filter is keyed to the AppContainer
+        // package SID — `target_program_path` is NOT needed by
+        // `install_wfp_policy_filters` / `remove_wfp_policy_filters` in that branch
+        // (they use the SID to build a security descriptor instead of an AppID blob).
+        // Use an empty PathBuf sentinel in that case so the rest of the routing
+        // code compiles uniformly. The `session_sid.is_some()` branch in the
+        // `install_wfp_policy_filters` / `remove_wfp_policy_filters` callers will
+        // never dereference the sentinel path.  [Rule 1 fix — Plan 75-01]
+        let target_program = if request.session_sid.is_some() {
+            request
+                .target_program_path
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default() // sentinel empty path for SID-keyed requests
+        } else {
+            request
+                .target_program_path
+                .as_ref()
+                .map(std::path::PathBuf::from)
+                .ok_or_else(invalid_request)?
+        };
         let outbound_rule = request
             .outbound_rule_name
             .clone()
@@ -1635,7 +1651,11 @@ mod windows_impl {
                 Ok(fields) => fields,
                 Err(response) => return response,
             };
-        if !target_program.exists() {
+        // Skip the target-program-exists check for SID-keyed requests: when
+        // `session_sid` is set the service uses the SID to build a security
+        // descriptor; the target_program sentinel path is never accessed.
+        // [Rule 1 fix — Plan 75-01]
+        if request.session_sid.is_none() && !target_program.exists() {
             return build_prerequisites_missing_response(format!(
                 "target program for network-policy enforcement does not exist: {}",
                 target_program.display()
