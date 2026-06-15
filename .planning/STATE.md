@@ -169,7 +169,7 @@ Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — m
 ## Operator Next Steps
 
 - **Phase 74 COMPLETE + human UAT PASS (2026-06-15, close `dc68720c`).** 8/8 plans incl. 2 gap-closure (74-07 control plane, 74-08 operator UX); SC1–SC5 all green on real Win11. (Supersedes the prior "await spike green" note — the full phase shipped.)
-- **NEXT: Phase 73 (AI_AGENT Marker)** — the only remaining incomplete v2.12 phase (pure nono work; does not consume zt-infra). `/gsd:plan-phase 73` → `/gsd:execute-phase 73`.
-- **Then Phase 75** (supplementary controls + secondary engines) — carries the Phase-74 carry-forwards: SCM user-service install/start hardening, `launch_agent`↔`create_process_containment` dedup, `terminal_approval` interactive-console hang, per-agent WFP egress (SUPP-02).
+- **Phase 73 (AI_AGENT Marker) is ALREADY COMPLETE** (3/3, 2026-06-14 — its top ROADMAP checkbox was just flipped; it was a stale-box gotcha, not pending work). Phases 71/72/73/74 all done.
+- **NEXT (and only remaining v2.12 phase): Phase 75** (supplementary controls + secondary engines — SUPP-01 demote / SUPP-02 per-agent WFP egress / SUPP-03 2nd engine + nono-ts parity). Carries the Phase-74 carry-forwards: SCM user-service install/start hardening, `launch_agent`↔`create_process_containment` dedup, `terminal_approval` interactive-console hang. `/gsd:plan-phase 75` → `/gsd:execute-phase 75`.
 - zt-infra: leave un-installed; if a POC is wanted later, use the local provisioner per `proj/POC-zt-infra-e5-local-provisioner.md` (its own future milestone, SEED-005).
 - Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
