@@ -62,22 +62,115 @@ pub(crate) fn run_daemon(args: DaemonArgs) -> Result<()> {
     }
 }
 
-/// `nono daemon start` — start nono-agentd via the SCM.
+/// `nono daemon start` — start nono-agentd.
 ///
-/// On Windows: runs `sc start nono-agentd`. Phase 75 may replace this with
-/// a proper SCM Rust API call or direct control-pipe request.
+/// On Windows: if the SCM service is installed, starts it via `sc start`.
+/// If the SCM service is NOT installed (dev-layout), spawns `nono-agentd.exe`
+/// as a detached background process from the same directory as the current
+/// executable. This supports the development workflow where the daemon is run
+/// without SCM registration.
 ///
 /// On non-Windows: prints a diagnostic and returns `Ok(())`.
 fn daemon_start() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        windows_sc_command(
-            &["start", DAEMON_SERVICE_NAME],
-            "nono daemon start",
-            "nono-agentd started successfully.",
-            "nono-agentd may already be running, or the service is not installed. \
-             Try `nono daemon install` first.",
-        )
+        use std::os::windows::process::CommandExt;
+        use std::process::Command;
+
+        // Check if the SCM service is installed by querying it.
+        let sc_query = Command::new("sc")
+            .args(["query", DAEMON_SERVICE_NAME])
+            .output()
+            .map_err(|e| {
+                NonoError::SandboxInit(format!(
+                    "nono daemon start: failed to run `sc query {DAEMON_SERVICE_NAME}`: {e}"
+                ))
+            })?;
+
+        let sc_stdout = String::from_utf8_lossy(&sc_query.stdout);
+        let service_exists = sc_query.status.success()
+            || sc_stdout.contains("RUNNING")
+            || sc_stdout.contains("STOPPED")
+            || sc_stdout.contains("STATE");
+
+        if service_exists && !sc_stdout.contains("1060") && !sc_stdout.contains("does not exist") {
+            // SCM service is installed — start via `sc start`.
+            println!("[SCM] Starting nono-agentd via Service Control Manager...");
+            return windows_sc_command(
+                &["start", DAEMON_SERVICE_NAME],
+                "nono daemon start",
+                "nono-agentd started successfully.",
+                "nono-agentd may already be running, or the service is not installed. \
+                 Try `nono daemon install` first.",
+            );
+        }
+
+        // Dev-layout: no SCM service. Spawn nono-agentd.exe as a detached
+        // background process from the same directory as the current executable.
+        let current_exe = std::env::current_exe().map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "nono daemon start: failed to resolve current executable path: {e}"
+            ))
+        })?;
+
+        let exe_dir = current_exe.parent().ok_or_else(|| {
+            NonoError::SandboxInit(
+                "nono daemon start: failed to resolve executable directory".into(),
+            )
+        })?;
+
+        let agentd_exe = exe_dir.join("nono-agentd.exe");
+        if !agentd_exe.exists() {
+            return Err(NonoError::SandboxInit(format!(
+                "nono daemon start: nono-agentd.exe not found at {}. \
+                 Build the workspace with `cargo build -p nono-cli` first, \
+                 or use `nono daemon install` + `nono daemon start` for SCM mode.",
+                agentd_exe.display()
+            )));
+        }
+
+        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS ensures the daemon outlives
+        // this CLI invocation and is not attached to the current console session.
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+
+        let child = Command::new(&agentd_exe)
+            // `--foreground` causes nono-agentd to skip SCM service_dispatcher
+            // and run its accept + control loops directly.
+            .arg("--foreground")
+            .creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+            .spawn()
+            .map_err(|e| {
+                NonoError::SandboxInit(format!(
+                    "nono daemon start: failed to spawn nono-agentd.exe as background process: {e}"
+                ))
+            })?;
+
+        // Detach: we do NOT wait for the child — it runs independently.
+        // Dropping `child` here does not kill it (the process was DETACHED).
+        let pid = child.id();
+
+        // Brief pause to let the daemon initialize its pipes before returning.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // Verify the daemon came up by probing the control pipe.
+        let pipe_up = std::path::Path::new(r"\\.\pipe\nono-agentd-control").exists();
+        if pipe_up {
+            println!(
+                "[dev-layout] nono-agentd started as background process (pid={pid}).",
+            );
+            println!("Use `nono daemon status` to confirm, `nono daemon stop` to stop.");
+        } else {
+            println!(
+                "[dev-layout] nono-agentd spawned (pid={pid}); control pipe not yet visible \
+                 — daemon may still be initializing.",
+            );
+        }
+
+        // Detach: std::mem::forget prevents the child from being killed on drop.
+        std::mem::forget(child);
+
+        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -87,21 +180,70 @@ fn daemon_start() -> Result<()> {
     }
 }
 
-/// `nono daemon stop` — send a STOP to the SCM service.
+/// `nono daemon stop` — stop a running nono-agentd.
 ///
-/// On Windows: runs `sc stop nono-agentd`. Phase 75 may add a direct
-/// control-pipe stop message.
+/// On Windows: if the SCM service is installed and running, uses `sc stop`.
+/// Otherwise (dev-layout), sends a `{"action":"shutdown"}` request to the
+/// control pipe if the daemon supports it; if not, prints a diagnostic with
+/// the process name for manual `Stop-Process`.
 ///
 /// On non-Windows: prints a diagnostic and returns `Ok(())`.
 fn daemon_stop() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        windows_sc_command(
-            &["stop", DAEMON_SERVICE_NAME],
-            "nono daemon stop",
-            "nono-agentd stopped.",
-            "nono-agentd may not be running, or the service is not installed.",
-        )
+        use std::process::Command;
+
+        // Check if an SCM service is registered and running.
+        let sc_query = Command::new("sc")
+            .args(["query", DAEMON_SERVICE_NAME])
+            .output()
+            .map_err(|e| {
+                NonoError::SandboxInit(format!(
+                    "nono daemon stop: failed to run `sc query {DAEMON_SERVICE_NAME}`: {e}"
+                ))
+            })?;
+
+        let sc_stdout = String::from_utf8_lossy(&sc_query.stdout);
+        let scm_running =
+            sc_stdout.contains("RUNNING") && !sc_stdout.contains("does not exist");
+
+        if scm_running {
+            // SCM service is running — stop via `sc stop`.
+            println!("[SCM] Stopping nono-agentd via Service Control Manager...");
+            return windows_sc_command(
+                &["stop", DAEMON_SERVICE_NAME],
+                "nono daemon stop",
+                "nono-agentd stopped.",
+                "nono-agentd may not be running, or the service is not installed.",
+            );
+        }
+
+        // Dev-layout or SCM-not-registered: try a control-pipe shutdown request.
+        let shutdown_payload = r#"{"action":"shutdown"}"#;
+        match windows_control_pipe_request(shutdown_payload) {
+            Ok(resp) => {
+                println!("nono-agentd stopped (dev-layout): {}", resp.trim());
+                return Ok(());
+            }
+            Err(ref e) if is_pipe_not_found(e) => {
+                println!(
+                    "nono-agentd status: NOT RUNNING \
+                     (control pipe not found; daemon is already stopped)"
+                );
+                return Ok(());
+            }
+            Err(_) => {
+                // Shutdown action not supported (daemon may not serve it yet) —
+                // fall through to print diagnostic.
+            }
+        }
+
+        // Fallback: inform the user how to stop the background process manually.
+        println!(
+            "nono-agentd (dev-layout): use PowerShell to stop the background process:\n\
+             Stop-Process -Name nono-agentd -ErrorAction SilentlyContinue"
+        );
+        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -113,11 +255,37 @@ fn daemon_stop() -> Result<()> {
 
 /// `nono daemon status` — print whether the daemon is running.
 ///
-/// On Windows: queries the SCM via `sc query`.
+/// On Windows: FIRST probes the control pipe (`\\.\pipe\nono-agentd-control`)
+/// with a short-timeout `list` request. If the probe succeeds, the daemon is
+/// RUNNING regardless of SCM registration (covers dev-layout background spawns).
+/// Falls back to `sc query` for SCM-only status (STOPPED / NOT INSTALLED).
+///
 /// On non-Windows: prints a diagnostic and returns `Ok(())`.
 fn daemon_status() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
+        // Primary check: probe the control pipe with a {"action":"list"} request.
+        // This is truthful for BOTH SCM-managed and dev-layout background daemons.
+        let probe_payload = r#"{"action":"list"}"#;
+        match windows_control_pipe_request(probe_payload) {
+            Ok(_) => {
+                println!("nono-agentd status: RUNNING");
+                return Ok(());
+            }
+            Err(ref e) if is_pipe_not_found(e) => {
+                // Pipe not present — daemon is not running. Fall through to SCM check.
+            }
+            Err(ref e) => {
+                // Pipe exists but request failed — daemon is up but may be busy.
+                // Report running with a note.
+                println!(
+                    "nono-agentd status: RUNNING (control pipe reachable; status probe error: {e})"
+                );
+                return Ok(());
+            }
+        }
+
+        // Fallback: query the SCM service registration for STOPPED/NOT INSTALLED state.
         use std::process::Command;
 
         let output = Command::new("sc")
@@ -131,14 +299,17 @@ fn daemon_status() -> Result<()> {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        if output.status.success() && stdout.contains("RUNNING") {
-            println!("nono-agentd status: RUNNING");
-        } else if stdout.contains("STOPPED") {
-            println!("nono-agentd status: STOPPED");
+        if stdout.contains("STOPPED") {
+            println!("nono-agentd status: STOPPED (SCM service registered but not running)");
         } else if output.status.success() {
             println!("nono-agentd status: {}", stdout.trim());
         } else {
-            println!("nono-agentd status: NOT INSTALLED (use `nono daemon install`)");
+            // Neither SCM-registered nor control-pipe-reachable.
+            println!(
+                "nono-agentd status: NOT RUNNING \
+                 (not in SCM; use `nono daemon start` to start in dev-layout, \
+                 or `nono daemon install` + `nono daemon start` for SCM mode)"
+            );
         }
 
         Ok(())
