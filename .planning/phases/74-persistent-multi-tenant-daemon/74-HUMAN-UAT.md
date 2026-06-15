@@ -235,22 +235,21 @@ accept loop and control loop) and the daemon exits cleanly.
 **Dev-validated on Win11 build 26200 (2026-06-15):**
 
 ```
-Launched agent:   tenant_id=9805b826e41729cdf3d30d8e869f6b39   profile=aider
-  sid=S-1-15-2-4194181214-2299273401-2390484096-2024065141-3009441876-859840219-1047527710   pid=28848
-Launched agent:   tenant_id=692b151b84f322b40ab8c00dc0bad736   profile=aider
-  sid=S-1-15-2-3758960487-1416308204-3545803209-3860120738-3688480973-4053348959-2360816473   pid=34644
+Launched agent:   tenant_id=c7afb7f84612c089...   profile=aider
+  sid=S-1-15-2-1980992479-...   pid=17696
+Launched agent:   tenant_id=9139cef5419cfa11...   profile=aider
+  sid=S-1-15-2-764603010-...   pid=33908
 Tenant agents (2):
-  9805b826e41729cd  profile=nono.session.9805b826e41729cd  sid=S-1-15-2-4194181214-...  pid=28848
-  692b151b84f322b4  profile=nono.session.692b151b84f322b4  sid=S-1-15-2-3758960487-...  pid=34644
+  c7afb7f84612c089  profile=aider  sid=S-1-15-2-1980992479-...  pid=17696
+  9139cef5419cfa11  profile=aider  sid=S-1-15-2-764603010-...   pid=33908
 nono-agentd status: RUNNING
 nono-agentd stopped (dev-layout): nono-agentd: shutdown initiated.
 nono-agentd status: NOT RUNNING
 ```
 
-> **Profile name in list output:** `nono agent list` shows the AppContainer profile moniker
-> (`nono.session.<uuid>`) rather than the user-facing profile name (`aider`). This is cosmetic:
-> the moniker IS the per-agent AppContainer profile name created at launch. The SID uniqueness
-> is the security-critical check, not the display name.
+> **Profile name in list output (Plan 74-08):** `nono agent list` shows the user-facing engine
+> profile name (`profile=aider`), not the internal AppContainer moniker. The distinct package
+> SIDs remain the security-critical check.
 
 ### SC1 Setup
 
@@ -273,14 +272,13 @@ In a NEW PowerShell window (Window 2), from the nono source tree root:
 ```powershell
 $nono = "$PWD\target\release\nono.exe"
 
-& $nono agent launch --profile aider -- C:\Windows\System32\notepad.exe
+& $nono agent launch --profile aider -- notepad.exe
 ```
 
-> Using `C:\Windows\System32\notepad.exe` (full path required — the daemon runs detached without
-> the system PATH entries). `notepad.exe` is a GUI application that survives in AppContainer
-> because it does not require network or console access.
->
-> Alternatively, use any other long-running executable available with its full path.
+> **Plan 74-08:** a BARE executable name (`notepad.exe`) is now resolved to an absolute path via
+> `SearchPathW` before launch; an absolute path (`C:\Windows\System32\notepad.exe`) also works.
+> An unresolvable name returns a clear "executable not found" error, not a raw os-error-2.
+> `notepad.exe` is a GUI app that survives in AppContainer (no network/console needed).
 
 **Expected output:**
 ```
@@ -300,7 +298,7 @@ In a THIRD PowerShell window (Window 3):
 ```powershell
 $nono = "$PWD\target\release\nono.exe"
 
-& $nono agent launch --profile aider -- C:\Windows\System32\notepad.exe
+& $nono agent launch --profile aider -- notepad.exe
 ```
 
 **Expected output:**
@@ -328,8 +326,8 @@ $nono = "$PWD\target\release\nono.exe"
 
 ```
 Tenant agents (2):
-  <uuid-A-prefix>  profile=nono.session.<uuid-A-prefix>  sid=S-1-15-2-<A-octets>  pid=<A-pid>
-  <uuid-B-prefix>  profile=nono.session.<uuid-B-prefix>  sid=S-1-15-2-<B-octets>  pid=<B-pid>
+  <uuid-A-prefix>  profile=aider  sid=S-1-15-2-<A-octets>  pid=<A-pid>
+  <uuid-B-prefix>  profile=aider  sid=S-1-15-2-<B-octets>  pid=<B-pid>
 ```
 
 **SC1 PASS criterion (all three sub-criteria required):**
