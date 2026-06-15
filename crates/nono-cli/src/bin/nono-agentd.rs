@@ -147,16 +147,17 @@ mod windows_impl {
                 )))
             })?;
 
-        let daemon_state = super::agent_daemon::DaemonState::new();
+        let daemon_state = Arc::new(super::agent_daemon::DaemonState::new());
 
         rt.block_on(async {
-            // Wave 2 (Plan 74-04) wires in the real accept loop:
-            //   agent_daemon::run_accept_loop(daemon_state, shutdown).await
-            //
-            // Skeleton placeholder: park on the shutdown signal so the service
-            // compiles, starts cleanly, and responds to SCM STOP without spinning.
-            let _ = daemon_state;
-            shutdown.notified().await;
+            // Wave 2 (Plan 74-04): real accept loop.
+            // run_accept_loop drives the DMON-02 multi-tenant pipe server and
+            // blocks until `shutdown` fires (SCM STOP control).
+            super::agent_daemon::accept_loop::run_accept_loop(
+                Arc::clone(&daemon_state),
+                Arc::clone(&shutdown),
+            )
+            .await;
         });
 
         status_handle.set_service_status(ServiceStatus {
@@ -219,15 +220,15 @@ mod windows_impl {
             // Non-fatal in foreground mode — continue without clean shutdown.
         }
 
-        let daemon_state = super::agent_daemon::DaemonState::new();
+        let daemon_state = Arc::new(super::agent_daemon::DaemonState::new());
 
         rt.block_on(async {
-            // Wave 2 (Plan 74-04) wires in the real accept loop:
-            //   agent_daemon::run_accept_loop(daemon_state, shutdown).await
-            //
-            // Skeleton placeholder: park until Ctrl-C or external notification.
-            let _ = daemon_state;
-            shutdown.notified().await;
+            // Wave 2 (Plan 74-04): real accept loop.
+            super::agent_daemon::accept_loop::run_accept_loop(
+                Arc::clone(&daemon_state),
+                Arc::clone(&shutdown),
+            )
+            .await;
         });
 
         eprintln!("nono-agentd: foreground mode stopped.");
