@@ -513,7 +513,14 @@ mod windows_impl {
             "handle_launch: launching agent"
         );
 
-        match super::super::launch::launch_agent(Arc::clone(state), exe, args, caps).await
+        match super::super::launch::launch_agent(
+            Arc::clone(state),
+            exe,
+            args,
+            caps,
+            resolved_profile_name.clone(),
+        )
+        .await
         {
             Ok(tenant_id) => {
                 // Look up the minted package SID + pid for the response.
@@ -594,7 +601,9 @@ mod windows_impl {
             lines.push_str(&format!(
                 "\n  {tenant_id}  profile={profile}  sid={sid}  pid={pid}",
                 tenant_id = &tenant_id[..tenant_id.len().min(16)],
-                profile = tenant.profile_name,
+                // Display the engine profile (e.g. "aider"), not the internal
+                // AppContainer moniker (nono.session.<id>). Fix 3 (74-08).
+                profile = tenant.engine_profile,
                 sid = tenant.package_sid,
             ));
         }
@@ -741,6 +750,7 @@ mod tests {
             tenant_id: "aaaa1234bbbb5678cccc9012".to_string(),
             package_sid: "S-1-15-2-1111-2222-3333-4444-5555-6666-7777".to_string(),
             profile_name: "nono.session.aaaa1234bbbb5678".to_string(),
+            engine_profile: "aider".to_string(),
             caps: nono::CapabilitySet::new(),
             job_handle: make_handle(),
             process_handle: make_handle(),
@@ -760,9 +770,11 @@ mod tests {
             result.contains("S-1-15-2-1111-2222-3333-4444-5555-6666-7777"),
             "List must contain the package SID; got: {result}"
         );
+        // Fix 3 (74-08): `handle_list` now shows `engine_profile` (e.g. "aider"),
+        // not the internal AppContainer profile_name ("nono.session.<id>").
         assert!(
-            result.contains("nono.session.aaaa1234bbbb5678"),
-            "List must contain the profile_name; got: {result}"
+            result.contains("profile=aider"),
+            "List must contain the engine profile name 'aider'; got: {result}"
         );
     }
 

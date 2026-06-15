@@ -66,6 +66,7 @@ mod windows_impl {
         SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
+    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
         InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
@@ -99,10 +100,22 @@ mod windows_impl {
         exe: PathBuf,
         args: Vec<String>,
         caps: nono::CapabilitySet,
+        engine_profile: String,
     ) -> nono::Result<String> {
         // Step 1: Generate a unique tenant_id and AppContainer profile name.
         let tenant_id = generate_tenant_id()?;
         let profile_name = format!("nono.session.{}", &tenant_id[..16]);
+
+        // Step 1b: Resolve the exe to an absolute path.
+        //
+        // CreateProcessW(lpApplicationName) does NOT PATH-search bare names;
+        // passing "notepad.exe" → ERROR_FILE_NOT_FOUND (os error 2). We resolve
+        // via `SearchPathW` BEFORE any coverage/profile validation so the
+        // absolute path is used for both the OS-level confinement boundary and
+        // any future exe-coverage check. Confinement is UNCHANGED — the
+        // AppContainer token and Job Object apply to the resolved executable, not
+        // the bare name.
+        let exe = resolve_exe_path(exe)?;
 
         tracing::info!(
             tenant_id = %tenant_id,
@@ -219,6 +232,7 @@ mod windows_impl {
             tenant_id: tenant_id.clone(),
             package_sid: package_sid.clone(),
             profile_name: profile_name.clone(),
+            engine_profile: engine_profile.clone(),
             caps,
             job_handle: job_owned,
             process_handle: process_owned,
@@ -511,6 +525,109 @@ mod windows_impl {
         }
     }
 
+    /// Resolve an executable path to an absolute `PathBuf`.
+    ///
+    /// # Resolution rules
+    ///
+    /// 1. If the given path is already absolute AND exists on disk → return as-is.
+    /// 2. Otherwise, search via `SearchPathW` with `lpPath = null` (uses the
+    ///    standard Windows search order: current directory, then each `PATH`
+    ///    directory, then `System32`, etc.) and `lpExtension = ".exe"`.
+    /// 3. If `SearchPathW` returns 0 → return a CLEAR error message instead of
+    ///    propagating a raw `os error 2` from `CreateProcessW`.
+    ///
+    /// The resolved absolute path is then passed to `spawn_appcontainer_process_suspended`
+    /// so that `CreateProcessW(lpApplicationName)` receives a fully-qualified path.
+    /// Confinement (AppContainer token + Job Object) is unchanged — it is applied
+    /// to the resolved binary, not to the bare name.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err` with a human-readable message if the exe cannot be located.
+    fn resolve_exe_path(exe: PathBuf) -> nono::Result<PathBuf> {
+        // Fast path: already an absolute path that exists on disk.
+        if exe.is_absolute() && exe.exists() {
+            return Ok(exe);
+        }
+
+        // Convert the executable name to UTF-16 for the Win32 API.
+        let exe_str = exe.to_string_lossy();
+        let exe_wide: Vec<u16> = exe_str
+            .encode_utf16()
+            .chain(std::iter::once(0u16))
+            .collect();
+
+        // Extension hint: ".exe" in UTF-16, null-terminated.
+        let ext_wide: Vec<u16> = ".exe\0".encode_utf16().collect();
+
+        // Phase 1: probe to get the required buffer length.
+        // SAFETY: `SearchPathW` with a null `lpPath` uses the standard Windows
+        // search path. Passing `null` for the output buffer is the documented
+        // probe idiom — it returns the required character count (including the
+        // null terminator) without writing anything. `null` for the file-part
+        // pointer is permitted when we do not need the filename offset.
+        let needed = unsafe {
+            SearchPathW(
+                std::ptr::null(),      // lpPath: null → use standard search path
+                exe_wide.as_ptr(),     // lpFileName: the bare name (e.g. "notepad.exe")
+                ext_wide.as_ptr(),     // lpExtension: append ".exe" if no extension
+                0,                     // nBufferLength: 0 for probe
+                std::ptr::null_mut(),  // lpBuffer: null for probe
+                std::ptr::null_mut(),  // lpFilePart: not needed
+            )
+        };
+
+        if needed == 0 {
+            // SearchPathW returned 0: not found on any search path.
+            return Err(NonoError::SandboxInit(format!(
+                "agent launch: executable '{exe_str}' not found \
+                 (provide an absolute path or ensure it is on PATH)"
+            )));
+        }
+
+        // Phase 2: allocate buffer and retrieve the full path.
+        let buf_len = needed as usize + 1; // +1 for safety (needed already includes null)
+        let mut buf: Vec<u16> = vec![0u16; buf_len];
+
+        // SAFETY: `buf` is a writable buffer of `buf_len` u16 elements (>= `needed`).
+        // `exe_wide` and `ext_wide` are valid null-terminated UTF-16 strings.
+        // `SearchPathW` writes at most `buf_len` characters including the null terminator.
+        let written = unsafe {
+            SearchPathW(
+                std::ptr::null(),
+                exe_wide.as_ptr(),
+                ext_wide.as_ptr(),
+                buf_len as u32,
+                buf.as_mut_ptr(),
+                std::ptr::null_mut(),
+            )
+        };
+
+        if written == 0 || written as usize >= buf_len {
+            return Err(NonoError::SandboxInit(format!(
+                "agent launch: SearchPathW for '{exe_str}' failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+
+        // Trim to the actual length (written does NOT include the null terminator).
+        buf.truncate(written as usize);
+        // SAFETY: `buf` contains valid UTF-16 from SearchPathW.
+        let os_str = {
+            use std::os::windows::ffi::OsStringExt as _;
+            std::ffi::OsString::from_wide(&buf)
+        };
+        let resolved = std::path::PathBuf::from(os_str);
+
+        tracing::debug!(
+            exe = %exe.display(),
+            resolved = %resolved.display(),
+            "launch_agent: exe resolved via SearchPathW"
+        );
+
+        Ok(resolved)
+    }
+
     /// Spawn a process in the AppContainer with `CREATE_SUSPENDED`.
     ///
     /// Returns `(process_handle, thread_handle)`. Caller owns both and must
@@ -735,6 +852,7 @@ mod tests {
             tenant_id: tenant_id.clone(),
             package_sid: package_sid.clone(),
             profile_name: "nono.test.launch-insert-74-04".to_string(),
+            engine_profile: "test-engine".to_string(),
             caps: nono::CapabilitySet::new(),
             job_handle: make_handle(),
             process_handle: make_handle(),
@@ -808,6 +926,7 @@ mod tests {
                 tenant_id: tenant_id.clone(),
                 package_sid: package_sid.clone(),
                 profile_name: "nono.test.reap-74-04".to_string(),
+                engine_profile: "test-engine".to_string(),
                 caps: nono::CapabilitySet::new(),
                 job_handle: make_handle(),
                 process_handle: make_handle(),

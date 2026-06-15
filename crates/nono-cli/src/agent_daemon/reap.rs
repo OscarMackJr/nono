@@ -59,6 +59,15 @@ pub(crate) struct AgentTenant {
     /// same name that was passed to `CreateAppContainerProfile` at spawn time.
     pub profile_name: String,
 
+    /// Engine profile requested by the operator (e.g. `"aider"`).
+    ///
+    /// This is the human-readable profile name from `policy.json` that the
+    /// operator passed to `nono agent launch --profile <name>`. It is distinct
+    /// from `profile_name` (the internal AppContainer moniker `nono.session.<id>`).
+    /// `handle_list` displays this field so operators see `profile=aider` rather
+    /// than the opaque `nono.session.<id>` string.
+    pub engine_profile: String,
+
     /// The capability grant for this agent.
     ///
     /// Immutable after `AgentTenant` is constructed. The daemon MUST NOT
@@ -256,6 +265,7 @@ mod tests {
             tenant_id: "test-tenant-drop-74-03".to_string(),
             package_sid: "S-1-15-2-fake-test-74-03".to_string(),
             profile_name: "nono.test.fake-profile.drop.74-03".to_string(),
+            engine_profile: "test-engine".to_string(),
             caps: nono::CapabilitySet::new(),
             job_handle,
             process_handle: proc_handle,

@@ -139,6 +139,16 @@ fn daemon_start() -> Result<()> {
             // and run its accept + control loops directly.
             .arg("--foreground")
             .creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+            // Null all three standard streams so the daemon does NOT hold
+            // open the parent console's handles. Without this the operator's
+            // shell blocks until the daemon exits (even with DETACHED_PROCESS),
+            // because the inherited stdout/stderr file descriptors keep the
+            // console pipe alive. Stdio::null() maps each stream to NUL:
+            // the daemon's tracing output goes to its log file (configured
+            // via nono-agentd's own tracing-subscriber).
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| {
                 NonoError::SandboxInit(format!(
