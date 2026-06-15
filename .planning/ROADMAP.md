@@ -97,11 +97,18 @@ granularity: standard
 **Research flag**: Plan this phase with `--research-phase 74`. Two mechanisms are unspiked / net-new: (a) token/job REUSE-vs-fresh across many tenants (the explicitly unspiked part of spike 003/004 — the milestone's highest-risk unknown; scope a spike INSIDE the phase gated on fresh-token isolation + deterministic reap + cross-tenant denial); (b) whether server-side `ImpersonateNamedPipeClient` (NOT currently in `socket_windows.rs` — it verifies the *server* PID from the client side today) composes with the existing Low-IL/AppContainer cap-pipe SDDL DACL handshake. Also re-assert: AppContainer per-agent SID needs `CreateAppContainerProfile` (not derive-only, else `CreateProcessW` `ERROR_FILE_NOT_FOUND`); preserve `SystemRoot`/`windir`/`SystemDrive` env baseline (else CLR `0xFFFF0000`).
 **Plans**: 6 plans
 Plans:
+**Wave 1**
 - [ ] 74-01-PLAN.md — ADR (privilege model) + Wave 0 spike harness: fresh-token isolation + handle baseline + cross-tenant denial (DMON-01/02/03)
 - [ ] 74-02-PLAN.md — nono lib primitives: AgentRegistry::remove + authenticate_pipe_client + ImpersonationGuard (DMON-01/02)
 - [ ] 74-03-PLAN.md — nono-agentd binary skeleton: second [[bin]] + non-Windows stub + SCM dispatch + DaemonState/AgentTenant RAII (DMON-01/03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 74-04-PLAN.md — Daemon accept loop (per-tenant SDDL + impersonation auth) + launch orchestration (fresh token+job + reap task) (DMON-01/02/03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 74-05-PLAN.md — CLI verbs: nono daemon start|stop|status|install|uninstall + nono agent launch|list (DMON-01/03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
 - [ ] 74-06-PLAN.md — 74-HUMAN-UAT.md + Win11 UAT gate: SC1-SC5 go/no-go (DMON-01/02/03)
 
 ### Phase 75: Supplementary Controls + Secondary Engines

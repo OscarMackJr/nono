@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
-status: verifying
-last_updated: "2026-06-15T00:07:41.760Z"
-last_activity: 2026-06-14 -- Phase 73 executed (3 plans, 2 waves); AI_AGENT marker wired + `nono classify` shipped
+status: executing
+last_updated: "2026-06-15T01:04:19.818Z"
+last_activity: 2026-06-15 -- Phase 74 planning complete
 progress:
   total_phases: 5
   completed_phases: 3
-  total_plans: 12
+  total_plans: 18
   completed_plans: 12
-  percent: 100
+  percent: 67
 ---
 
 # Project State: nono — v2.12 AI Agent Abstraction
@@ -27,8 +27,8 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 
 Phase: 73 (ai-agent-marker) — CODE-COMPLETE, host-gated UAT pending
 Plan: 3 of 3 executed
-Status: Code-complete — blocking human-verify Win11 UAT pending (73-03 final gate)
-Last activity: 2026-06-14 -- Phase 73 executed (3 plans, 2 waves); AI_AGENT marker wired + `nono classify` shipped
+Status: Ready to execute
+Last activity: 2026-06-15 -- Phase 74 planning complete
 
 ### v2.12 Phase Summary (active)
 
