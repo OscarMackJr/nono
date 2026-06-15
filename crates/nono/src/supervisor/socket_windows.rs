@@ -1611,7 +1611,16 @@ fn current_logon_sid() -> Result<String> {
 /// second-pass: the package SID is the token IDENTITY, so a single allow-ACE
 /// in the DACL's first pass suffices for `CreateFileW(GENERIC_READ |
 /// GENERIC_WRITE)` to succeed.
-fn build_capability_pipe_sddl(
+/// Build a capability-pipe SDDL string for the daemon accept loop.
+///
+/// Returns the base SDDL (no session/package SID filters) when both arguments
+/// are `None`. Embeds per-tenant `session_sid` and/or `package_sid` ACEs when
+/// provided (used by the daemon accept loop for per-connection pipe isolation).
+///
+/// Called by `nono-cli`'s `agent_daemon::accept_loop` via
+/// `nono::supervisor::build_capability_pipe_sddl(None, None)` to construct
+/// the Low-IL SDDL for each new pipe instance.
+pub fn build_capability_pipe_sddl(
     session_sid: Option<&str>,
     package_sid: Option<&str>,
 ) -> Result<String> {
