@@ -270,7 +270,7 @@ fn create_one_pipe(sa: &SECURITY_ATTRIBUTES, label: &str) -> Result<(HANDLE, HAN
     Ok((read, write))
 }
 
-pub(super) fn create_process_containment(
+pub(crate) fn create_process_containment(
     session_id: Option<&str>,
     package_sid: Option<&str>,
 ) -> Result<ProcessContainment> {
@@ -372,7 +372,7 @@ pub(super) fn assign_failure_message(gle: u32) -> String {
     }
 }
 
-pub(super) fn apply_process_handle_to_containment(
+pub(crate) fn apply_process_handle_to_containment(
     containment: &ProcessContainment,
     process: HANDLE,
 ) -> Result<()> {

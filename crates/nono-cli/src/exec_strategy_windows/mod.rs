@@ -602,8 +602,8 @@ pub(crate) struct WindowsWfpUninstallReport {
 }
 
 #[derive(Debug)]
-struct ProcessContainment {
-    job: HANDLE,
+pub(crate) struct ProcessContainment {
+    pub(crate) job: HANDLE,
 }
 
 // Phase 31 D-06: `OwnedHandle` lifted into the `nono` crate. Re-exported here
