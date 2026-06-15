@@ -641,22 +641,20 @@ However, re-assert the carry-forward from Phase 74 (durable operational items):
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **A1: ALE_USER_ID vs ALE_PACKAGE_ID empirical verification**
+1. **A1: ALE_USER_ID vs ALE_PACKAGE_ID empirical verification** — **RESOLVED: accepted as a monitored assumption with a UAT gate.**
    - What we know: The WFP service currently uses `FWPM_CONDITION_ALE_USER_ID` + SID-scoped SD with `session_sid`. The Phase 62 spike validated this blocks traffic for the SID. The Phase 62 spike used the user's own SID (not an AppContainer package SID), so the ALE_USER_ID + AppContainer SID combo has NOT been directly tested in-tree.
    - What's unclear: Does `FWPM_CONDITION_ALE_USER_ID` match on AppContainer SIDs in the token, or only on the user SID?
-   - Recommendation: Plan a SC (verifiable gate) in the SUPP-02 implementation plan to confirm per-agent isolation on Win11: launch two agents with different allowed domains, confirm Agent A's allowed domain does not work from Agent B's process.
+   - **RESOLUTION:** Plan 75-05 (SC2 / A1 gate) is the empirical check on Win11 — launch two agents with different allowed domains and confirm Agent A's domain does not work from Agent B's process. If `FWPM_CONDITION_ALE_USER_ID` does not match AppContainer SIDs, a gap-closure plan (75-06) switches the keying field to `FWPM_CONDITION_ALE_PACKAGE_ID`. The assumption is accepted for planning; the live gate de-risks it before phase sign-off.
 
-2. **D-03 planning decision: does demote also delete the WFP filter?**
+2. **D-03 planning decision: does demote also delete the WFP filter?** — **RESOLVED: YES.**
    - What we know: D-03 leaves this to planning. Research recommendation is YES (see § Demote Mechanism rationale).
-   - What's unclear: Whether the planner agrees this is the right coupling.
-   - Recommendation: Lock in the first SUPP-01 plan with a note that demote DOES call `wfp_filter_remove(package_sid)` as a sub-step, since leaving egress open after IL-drop is a security regression.
+   - **RESOLUTION:** Locked in plan 75-02 — `handle_demote` DOES call `wfp_filter_remove(package_sid)` after a successful IL-drop, since leaving egress open after an IL-drop is a security regression. WFP-cut failure on demote is non-fatal (logged warning; the demote itself still succeeds).
 
-3. **WFP filter GUID scheme for daemon-originated filters**
+3. **WFP filter GUID scheme for daemon-originated filters** — **RESOLVED: deferred to executor read-first of `build_policy_filter_specs`.**
    - What we know: The service's `build_policy_filter_specs` uses `spec.key` (a GUID field); the GUID is derived from `outbound_rule_name`/`inbound_rule_name` in the request. The rule names for SUPP-02 are `nono-agent-{tenant_id}` (unique per agent).
-   - What's unclear: Exactly how the service converts rule names to GUIDs (is it a hash, or are GUIDs in the request?). If GUIDs are passed in the request from the daemon, the daemon must generate them deterministically and store them for the deactivation request.
-   - Recommendation: Read `build_policy_filter_specs` in `nono-wfp-service.rs` carefully during planning to confirm the GUID derivation scheme and ensure the deactivation request can reconstruct the same GUIDs.
+   - **RESOLUTION:** Plan 75-01's `<read_first>` mandates reading `build_policy_filter_specs` in `nono-wfp-service.rs` to confirm the GUID derivation scheme so the deactivation request reconstructs the same GUIDs. Acceptance criterion: the deactivate request removes exactly the filter the activate request installed (verified by the `wfp_filter_remove_at_reap` test). No daemon-side GUID storage is needed if derivation is deterministic from the rule name.
 
 ---
 

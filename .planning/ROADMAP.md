@@ -127,10 +127,15 @@ Plans:
   5. The abstraction is demonstrably proven across ≥2 engines (Aider + Copilot CLI) and ≥2 bindings (`nono-py` + `nono-ts`) — closing the "engine is a variable" claim in code.
 **Plans**: 5 plans
 Plans:
+**Wave 1**
 - [ ] 75-01-PLAN.md — SUPP-02: per-agent WFP filter add at launch / remove at reap + D-05 fail-secure gate (SUPP-02)
-- [ ] 75-02-PLAN.md — SUPP-01: ControlRequest::Demote + handle_demote (IL-drop + WFP-cut) + agent_demote CLI verb (SUPP-01)
 - [ ] 75-03-PLAN.md — SUPP-03a: copilot-cli engine profile in policy.json (native PE, no windows_interpreters) (SUPP-03)
 - [ ] 75-04-PLAN.md — SUPP-03b: nono-ts confinedRun/confine parity + nono pin bump 0.33.0 → 0.62 + cross-target clippy (SUPP-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 75-02-PLAN.md — SUPP-01: ControlRequest::Demote + handle_demote (IL-drop + WFP-cut) + agent_demote CLI verb (SUPP-01)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 75-05-PLAN.md — Live Win11 UAT: SC1-SC5 gates + A1/A2/A4 assumption confirmations (SUPP-01, SUPP-02, SUPP-03)
 
 <details>

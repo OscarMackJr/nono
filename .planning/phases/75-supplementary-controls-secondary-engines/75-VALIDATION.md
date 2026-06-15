@@ -83,11 +83,11 @@ created: 2026-06-15
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 150s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (confirmed at plan time — every autonomous task carries an automated verify command)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [ ] Wave 0 covers all MISSING references (set on Wave 0 completion)
+- [x] No watch-mode flags (all test commands are single-shot `cargo test` / `npm test` — no `--watch`/`--watchAll`)
+- [x] Feedback latency < 150s
+- [ ] `nyquist_compliant: true` set in frontmatter (set on Wave 0 completion)
 
-**Approval:** pending
+**Approval:** pending — sign off after Wave 0 test stubs land on Win11 host
