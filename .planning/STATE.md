@@ -160,11 +160,16 @@ Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — m
 
 **Predecessor context (carried):** v2.11 Phases 68/69/70 complete (macOS resl fix shipped; UPST8 audited + synced to v0.62.0). Phase 67 (clean-host Win install) host-gated, carries forward. v2.10 shipped tag `v2.10` 2026-06-11; ADR-65 Accepted (No-go/Conditional-go on the kernel driver — the constraint anchoring v2.12's user-mode-only rule). Repo STAYS PUBLIC.
 
+## Quick Tasks Completed
+
+| Date | Slug | Outcome |
+|------|------|---------|
+| 2026-06-15 | zt-infra-e5-poc-runbook | Advisory + docs: zt-infra integration is dormant SEED-005 (P3), NOT on the Phase 73/75 path — wait. Added `proj/POC-zt-infra-e5-local-provisioner.md` (AWS-free E5 composition runbook via the zt-infra local provisioner) + a concrete SEED-005 pointer. Docs/POC only; no source changes. Commits `0f5f3b93`+`1cd0e996`. |
+
 ## Operator Next Steps
 
-- **IMMEDIATE:** Run `NONO_DAEMON_INTEGRATION_TESTS=1 cargo test -p nono-cli daemon_handle_baseline -- --nocapture` on a real Win11 host with dev-layout nono.exe. Type "approved + spike green" when all 4 clauses pass, or report failures for replanning.
-- After spike green: `/gsd:execute-phase 74` will continue with Plan 74-02 (daemon binary skeleton) as Wave 1.
-- `/gsd:plan-phase 71` — engine-agnostic launch productionization (the FOUNDATION; spike-003 VALIDATED, skip `--research-phase`). Needs a real Win11 host for the Aider end-to-end gate.
-- `/gsd:plan-phase 72` and `/gsd:plan-phase 73` — parallel-safe once 71 lands (binding proof ∥ marker; both standard-pattern).
-- `/gsd:plan-phase 75` — supplementary controls + Copilot profile + nono-ts parity (proven shapes).
+- **Phase 74 COMPLETE + human UAT PASS (2026-06-15, close `dc68720c`).** 8/8 plans incl. 2 gap-closure (74-07 control plane, 74-08 operator UX); SC1–SC5 all green on real Win11. (Supersedes the prior "await spike green" note — the full phase shipped.)
+- **NEXT: Phase 73 (AI_AGENT Marker)** — the only remaining incomplete v2.12 phase (pure nono work; does not consume zt-infra). `/gsd:plan-phase 73` → `/gsd:execute-phase 73`.
+- **Then Phase 75** (supplementary controls + secondary engines) — carries the Phase-74 carry-forwards: SCM user-service install/start hardening, `launch_agent`↔`create_process_containment` dedup, `terminal_approval` interactive-console hang, per-agent WFP egress (SUPP-02).
+- zt-infra: leave un-installed; if a POC is wanted later, use the local provisioner per `proj/POC-zt-infra-e5-local-provisioner.md` (its own future milestone, SEED-005).
 - Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
