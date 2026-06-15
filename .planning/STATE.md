@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
 status: executing
-last_updated: "2026-06-15T02:10:00.000Z"
-last_activity: 2026-06-15 -- Phase 74 Plan 01 executed (ADR + spike harness; awaiting human checkpoint)
+last_updated: "2026-06-15T12:24:11.601Z"
+last_activity: 2026-06-15
 progress:
   total_phases: 5
   completed_phases: 3
   total_plans: 18
-  completed_plans: 12
-  percent: 67
+  completed_plans: 14
+  percent: 78
 ---
 
 # Project State: nono — v2.12 AI Agent Abstraction
@@ -26,9 +26,9 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 ## Current Position
 
 Phase: 74 (persistent-multi-tenant-daemon) — EXECUTING
-Plan: 1 of 6 — AT CHECKPOINT (human-verify, blocking)
-Status: Executing Phase 74 — Plan 74-01 code-complete, awaiting spike green
-Last activity: 2026-06-15 -- Phase 74 Plan 01: ADR + spike harness committed; awaiting human checkpoint "approved + spike green"
+Plan: 2 of 6 — COMPLETE
+Status: Executing Phase 74 — Plan 74-02 code-complete; Wave 1 library primitives committed
+Last activity: 2026-06-15
 
 ### v2.12 Phase Summary (active)
 
@@ -86,6 +86,8 @@ Last activity: 2026-06-15 -- Phase 74 Plan 01: ADR + spike harness committed; aw
 | Composition over green-field: no new wire protocol, windows-sys 0.59 / pyo3 0.28 / napi 2 kept | all | Research STACK.md: every new dep already lives in-tree pinned; deltas are features + net-new Win32 (named job objects). Deliberate non-bumps avoid gratuitous cross-target-drift churn and a napi-3 scope balloon. |
 | A2: TokenAppContainerSid = 31i32 in windows-sys 0.59 (not 56 as noted in RESEARCH.md) | 74 Plan 01 | Confirmed from windows-sys-0.59.0/src/Windows/Win32/Security/mod.rs at compile time. |
 | A6: broker trust gate checks nono.exe CALLER path + Authenticode; broker binary must match | 74 Plan 01 | Code read of launch.rs is_dev_build_layout() + verify_broker_authenticode(); daemon binary (nono-agentd.exe) needs same trust-gate treatment as nono.exe in production. |
+| authenticate_pipe_client is pub unsafe fn (not pub(crate)) — daemon accept loop in nono-cli calls it cross-crate | 74 Plan 02 | `pub(crate)` cannot be re-exported from a `pub mod`; the daemon binary in nono-cli requires `pub` for cross-crate access. `unsafe fn` is semantically correct for a raw-HANDLE parameter API per clippy `not_unsafe_ptr_arg_deref`. |
+| ImpersonationGuard RAII guarantees RevertToSelf on ALL exit paths (including panic) | 74 Plan 02 | STRIDE T-74-02-01 (EoP) mitigation: Drop calls RevertToSelf unconditionally; even when not impersonating (safe no-op). Full end-to-end test in daemon_handle_baseline.rs (nono-cli); unit test verifies RAII mechanism without requiring SeImpersonatePrivilege. |
 
 <details>
 <summary>v2.11 decisions (archived)</summary>
@@ -150,7 +152,7 @@ Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — m
 
 ## Session Continuity
 
-**Last session:** 2026-06-15T02:10:00.000Z
+**Last session:** 2026-06-15T12:24:11.585Z
 
 **Phase 74 Plan 01 executed (2026-06-15):** Wave 0 — ADR + spike harness. `proj/ADR-74-privilege-model.md` committed first (SC4 ordering gate; 369a7c45). `crates/nono-cli/tests/daemon_handle_baseline.rs` committed with 4 test functions (d9788fa0). Harness compiles cleanly on Windows host. AWAITING human checkpoint "approved + spike green" before Wave 1. A2 answered: `TokenAppContainerSid = 31i32` in windows-sys 0.59. A6 answered: trust gate checks CALLER (nono.exe) not broker. A1 pending spike run.
 
