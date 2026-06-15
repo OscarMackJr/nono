@@ -837,22 +837,22 @@ impl Drop for AgentTenant {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **`SeImpersonatePrivilege` for per-user SCM service**
+1. **`SeImpersonatePrivilege` for per-user SCM service** — **RESOLVED (A1)**
    - What we know: Interactive users have `SeImpersonatePrivilege` by default on Win10/11. SCM service processes also receive it.
-   - What's unclear: Whether a per-user `SERVICE_USER_OWN_PROCESS` service registered under the interactive user's account retains `SeImpersonatePrivilege` — the token may be a "service token" with a reduced privilege set even for the user's own account.
-   - Recommendation: Test in the spike harness. If the privilege is absent, the workaround is to acquire it via `AdjustTokenPrivileges` (requires the process already have it in the disabled state) or to fall back to `GetNamedPipeClientProcessId` + `IsProcessInJob` as the auth mechanism (no impersonation required). The per-tenant SDDL remains the primary gate even without impersonation.
+   - What was unclear: Whether a per-user `SERVICE_USER_OWN_PROCESS` service registered under the interactive user's account retains `SeImpersonatePrivilege`.
+   - **Accepted position:** ASSUMED PRESENT. Interactive users and the service tokens derived from their logon sessions carry `SeImpersonatePrivilege` on Win10/11 by default (documented Windows behavior). If the Wave 0 spike (74-01) proves the privilege absent in the per-user service token, the daemon falls back to SDDL-primary + `GetNamedPipeClientProcessId` + `IsProcessInJob` auth (no impersonation). The per-tenant SDDL remains the primary gate in both branches; impersonation is defense-in-depth on top.
 
-2. **`TokenAppContainerSid` exact variant name in `windows-sys 0.59`**
+2. **`TokenAppContainerSid` exact variant name in `windows-sys 0.59`** — **RESOLVED (A2)**
    - What we know: The Win32 `TOKEN_INFORMATION_CLASS` enum has `TokenAppContainerSid = 56`.
-   - What's unclear: Whether `windows-sys 0.59` exposes this as `TokenAppContainerSid` (the constant name) or as a numeric literal.
-   - Recommendation: Verify in `windows_sys::Win32::Security` crate docs before coding. If absent, use the numeric value `56u32` with an `unsafe` cast (as the existing code does for some constants).
+   - What was unclear: Whether `windows-sys 0.59` exposes this as `TokenAppContainerSid` by name or only as a numeric value.
+   - **Accepted position:** Use the named constant `TokenAppContainerSid` if present in `windows_sys::Win32::Security`; otherwise use the numeric literal `56u32` with a cast and a comment citing this decision. Build-time failure (compile error) is the safe outcome if neither resolves — caught at build, never a runtime regression. The executor must check and record the actual constant form used in 74-02-SUMMARY.md.
 
-3. **Broker trust gate for `nono-agentd.exe`**
+3. **Broker trust gate for `nono-agentd.exe`** — **RESOLVED (A6)**
    - What we know: The broker trust gate (`R-B4`) validates the calling binary. Today the caller is `nono.exe`.
-   - What's unclear: Whether the trust gate validates the CALLING binary (`nono-agentd.exe`) or the BROKER binary (`nono-shell-broker.exe`). If it validates the caller, `nono-agentd.exe` may fail the gate unless it is signed / in the expected path.
-   - Recommendation: Implement `nono-agentd` as a second binary TARGET within `crates/nono-cli` (same crate, second `[[bin]]` in `Cargo.toml`). The broker trust gate validates the broker binary path, not the caller — verify by reading the broker trust gate implementation in `launch.rs`. If the caller path IS checked, the simplest fix is to have the daemon binary be named `nono-agentd.exe` and added to the MSI's trusted-path list.
+   - What was unclear: Whether the gate validates the CALLING binary (`nono-agentd.exe`) or the BROKER binary (`nono-shell-broker.exe`).
+   - **Accepted position:** Implement `nono-agentd` as a second `[[bin]]` target inside `crates/nono-cli`; the gate validates the BROKER binary path (not the caller). The executor MUST confirm this by code-reading the broker trust-gate logic in `exec_strategy_windows/launch.rs` during 74-01 and recording the finding in 74-01-SUMMARY.md. If the caller path IS checked, the fix is to ensure `nono-agentd.exe` is built from the same signed nono-cli crate so it passes the path whitelist.
 
 ---
 
@@ -953,11 +953,13 @@ impl Drop for AgentTenant {
 | Handle accounting (reap) | MEDIUM | Design is proven correct; empirical baseline test is the spike's job |
 | Pitfalls | HIGH | P1/P4/P5 from milestone research are grounded in in-tree code |
 
-### Open Questions
+### Open Questions (RESOLVED)
 
-1. Does `SeImpersonatePrivilege` exist in a per-user `SERVICE_USER_OWN_PROCESS` token on Win11 26200? (Spike probe: call `ImpersonateNamedPipeClient` from the daemon and check the error code.)
-2. What is the exact variant name for `TokenAppContainerSid` in `windows-sys 0.59`? (Compile-time: try `TokenAppContainerSid` and `TOKEN_INFORMATION_CLASS(56)`.)
-3. Does the broker trust gate (R-B4) check the CALLER binary or the BROKER binary? (Code-read: look at the broker trust-gate implementation in `launch.rs` before coding the daemon's launch invocation.)
+All three open questions from this section are resolved with accepted positions. See `## Open Questions (RESOLVED)` above for the full decision rationale.
+
+1. **A1 — `SeImpersonatePrivilege`:** ASSUMED PRESENT; fallback to SDDL-primary + `GetNamedPipeClientProcessId` + `IsProcessInJob` if the spike (74-01) proves absent.
+2. **A2 — `TokenAppContainerSid` variant name:** Use the named constant if present in windows-sys 0.59; else use `56u32`. Build failure is the safe outcome. Executor records the actual form in 74-02-SUMMARY.md.
+3. **A6 — Broker trust gate:** Implement `nono-agentd` as a second `[[bin]]` in `crates/nono-cli`; gate validates BROKER binary (not caller). Executor confirms by code-reading `launch.rs` during 74-01.
 
 ### Ready for Planning
 

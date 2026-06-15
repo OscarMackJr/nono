@@ -39,7 +39,7 @@ created: 2026-06-14
 
 | Req / SC | Behavior | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |----------|----------|-----------|-----------------|-----------|-------------------|-------------|--------|
-| DMON-01 / SC1 | 2 concurrent confined agents, each served independently over one pipe, each scoped to own SID | T-tenant-isolation | Fresh token + fresh job per agent; no SID/workspace/WFP reuse | integration (Win11 host) | `NONO_DAEMON_INTEGRATION_TESTS=1 cargo test -p nono-cli daemon_concurrent_agents` | ❌ W0 | ⬜ pending |
+| DMON-01 / SC1 | 2 concurrent confined agents, each served independently over one pipe, each scoped to own SID | T-tenant-isolation | Fresh token + fresh job per agent; no SID/workspace/WFP reuse | integration (Win11 host) | `NONO_DAEMON_INTEGRATION_TESTS=1 cargo test -p nono-cli daemon_concurrent_agents` | ❌ W0 (Plan 74-01 Task 2 -- 4th test fn in daemon_handle_baseline.rs) | ⬜ pending |
 | DMON-01 / SC3 | 100-agent launch/exit returns handle/job count to baseline (no leak) | T-handle-leak | Deterministic `Drop` reap closes every per-agent handle | integration (Win11 host, spike) | `NONO_DAEMON_INTEGRATION_TESTS=1 cargo test -p nono-cli daemon_handle_baseline` | ❌ W0 | ⬜ pending |
 | DMON-02 / SC2 | Cross-tenant-denial: tenant B denied tenant A's grants | T-cross-tenant-theft | Per-tenant SDDL + impersonation + registry SID match; fail-secure deny | integration (in-process impersonation) | `cargo test -p nono-cli daemon_cross_tenant_denial` | ❌ W0 | ⬜ pending |
 | DMON-03 / SC4 | Privilege-model ADR exists; daemon runs as USER not SYSTEM; split from WFP service | T-privilege-pivot | Least-privilege USER; query-only pipe (no escape hatch) | manual + doc check | Review `proj/ADR-74-privilege-model.md`; `sc qc nono-agentd` (manual) | ❌ W0 | ⬜ pending |
@@ -53,7 +53,7 @@ created: 2026-06-14
 ## Wave 0 Requirements
 
 - [ ] `proj/ADR-74-privilege-model.md` — privilege-model ADR (MUST be first; SC4 ordering gate — ADR before service host is coded)
-- [ ] Spike harness `crates/nono-cli/tests/daemon_handle_baseline.rs` — 100-agent reap + fresh-token isolation proof + cross-tenant denial (in-process impersonation variant)
+- [ ] Spike harness `crates/nono-cli/tests/daemon_handle_baseline.rs` — 100-agent reap + fresh-token isolation proof + cross-tenant denial (in-process impersonation variant) + `daemon_concurrent_agents` (SC1: two concurrent agents with distinct SIDs; 4th test fn in Plan 74-01 Task 2)
 - [ ] `crates/nono-cli/tests/daemon_cross_tenant_denial.rs` — or folded into the spike harness file
 
 *The three Wave-0 spike clauses (fresh-token isolation, deterministic reap, cross-tenant denial) MUST pass on a real Win11 host before Wave 1 daemon-binary implementation begins.*
