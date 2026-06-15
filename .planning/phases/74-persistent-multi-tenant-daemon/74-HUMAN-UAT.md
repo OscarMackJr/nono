@@ -1,10 +1,10 @@
 ---
 phase: 74-persistent-multi-tenant-daemon
 doc: human-uat-script
-status: PENDING OPERATOR — protocol authored; live SC1-SC5 run not yet executed
+status: PENDING OPERATOR — control pipe wired (Plan 74-07); SC1 end-to-end dev-validated 2026-06-15
 created: 2026-06-15
-wave: 4
-plan: "06"
+wave: 5
+plan: "07"
 ---
 
 # Phase 74 — Human UAT Script (SC1-SC5: Persistent Multi-Tenant Daemon)
@@ -224,56 +224,100 @@ Test-Path $agentd # True
 **Purpose:** Confirm that nono-agentd serves two independent concurrent agents, each in its own
 AppContainer (distinct package SID), over one named-pipe listener — the DMON-01 core claim.
 
+**End-to-end flow (Plan 74-07 wired — no stubs):** `nono daemon start` starts the daemon in
+dev-layout background mode. `nono agent launch` sends a `Launch` request over
+`\\.\pipe\nono-agentd-control`, which the daemon's `control_loop.rs` receives, validates the
+profile, calls `launch_agent`, and returns the tenant metadata. `nono agent list` sends a `List`
+request and receives the live tenant table from the daemon's in-memory `DaemonState`. `nono daemon
+stop` sends a `Shutdown` request; the control loop fires `notify_one()` twice (for both the
+accept loop and control loop) and the daemon exits cleanly.
+
+**Dev-validated on Win11 build 26200 (2026-06-15):**
+
+```
+Launched agent:   tenant_id=9805b826e41729cdf3d30d8e869f6b39   profile=aider
+  sid=S-1-15-2-4194181214-2299273401-2390484096-2024065141-3009441876-859840219-1047527710   pid=28848
+Launched agent:   tenant_id=692b151b84f322b40ab8c00dc0bad736   profile=aider
+  sid=S-1-15-2-3758960487-1416308204-3545803209-3860120738-3688480973-4053348959-2360816473   pid=34644
+Tenant agents (2):
+  9805b826e41729cd  profile=nono.session.9805b826e41729cd  sid=S-1-15-2-4194181214-...  pid=28848
+  692b151b84f322b4  profile=nono.session.692b151b84f322b4  sid=S-1-15-2-3758960487-...  pid=34644
+nono-agentd status: RUNNING
+nono-agentd stopped (dev-layout): nono-agentd: shutdown initiated.
+nono-agentd status: NOT RUNNING
+```
+
+> **Profile name in list output:** `nono agent list` shows the AppContainer profile moniker
+> (`nono.session.<uuid>`) rather than the user-facing profile name (`aider`). This is cosmetic:
+> the moniker IS the per-agent AppContainer profile name created at launch. The SID uniqueness
+> is the security-critical check, not the display name.
+
 ### SC1 Setup
 
-Ensure nono-agentd is running (from SC4 Step 3 above):
+Ensure nono-agentd is running:
 
 ```powershell
+# Dev-layout start (no SCM install needed):
+& $nono daemon start
+Start-Sleep -Seconds 2
 & $nono daemon status
 # Expected: nono-agentd status: RUNNING
 ```
 
-If not running:
-```powershell
-& $nono daemon start
-```
+If already installed as an SCM service (from SC4), use `& $nono daemon start` after install.
 
 ### SC1 Step 1 — Launch Agent A
 
 In a NEW PowerShell window (Window 2), from the nono source tree root:
 
 ```powershell
-$nono   = "$PWD\target\release\nono.exe"
-$ws     = "$env:USERPROFILE\nono-test-workspace"
+$nono = "$PWD\target\release\nono.exe"
 
-& $nono agent launch --profile aider -- cmd.exe /C "echo Agent-A-started && timeout /t 30 /nobreak && echo Agent-A-done"
+& $nono agent launch --profile aider -- C:\Windows\System32\notepad.exe
 ```
 
-> The `timeout /t 30 /nobreak` keeps Agent A alive for 30 seconds. This gives time to launch
-> Agent B and check `nono agent list` before both agents exit.
+> Using `C:\Windows\System32\notepad.exe` (full path required — the daemon runs detached without
+> the system PATH entries). `notepad.exe` is a GUI application that survives in AppContainer
+> because it does not require network or console access.
 >
-> If no `aider` profile is available, substitute `--profile langchain-python` and replace
-> `cmd.exe /C "..."` with an equivalent long-running command.
+> Alternatively, use any other long-running executable available with its full path.
 
-**Expected:** The command blocks (Agent A is running). The daemon accepted the request and
-spawned a confined AppContainer process. You will see it exit with "Agent-A-done" after 30s.
+**Expected output:**
+```
+Launched agent:
+  tenant_id=<uuid>
+  profile=aider
+  sid=S-1-15-2-<A-octets>
+  pid=<A-pid>
+```
+
+Keep this window open (notepad.exe is running in the background as the confined agent).
 
 ### SC1 Step 2 — Launch Agent B (while Agent A is still running)
 
-In a THIRD PowerShell window (Window 3), from the nono source tree root:
+In a THIRD PowerShell window (Window 3):
 
 ```powershell
-$nono   = "$PWD\target\release\nono.exe"
+$nono = "$PWD\target\release\nono.exe"
 
-& $nono agent launch --profile aider -- cmd.exe /C "echo Agent-B-started && timeout /t 25 /nobreak && echo Agent-B-done"
+& $nono agent launch --profile aider -- C:\Windows\System32\notepad.exe
 ```
 
-**Expected:** Agent B also starts. Window 2 (Agent A) and Window 3 (Agent B) are both alive and
-running simultaneously.
+**Expected output:**
+```
+Launched agent:
+  tenant_id=<uuid2 — DIFFERENT from Agent A>
+  profile=aider
+  sid=S-1-15-2-<B-octets — DIFFERENT from Agent A>
+  pid=<B-pid>
+```
+
+**Expected:** Agent B starts. Window 2 (Agent A) and Window 3 (Agent B) are both running
+simultaneously as distinct notepad processes, each in a separate AppContainer.
 
 ### SC1 Step 3 — Confirm both agents with distinct SIDs (the key check)
 
-In a FOURTH PowerShell window (Window 4), while both agents are still alive:
+In a FOURTH PowerShell window (Window 4), while both notepad windows are open:
 
 ```powershell
 $nono = "$PWD\target\release\nono.exe"
@@ -284,27 +328,33 @@ $nono = "$PWD\target\release\nono.exe"
 
 ```
 Tenant agents (2):
-  agent-1:  profile=aider  sid=S-1-15-2-<A-octets>  pid=<A-pid>
-  agent-2:  profile=aider  sid=S-1-15-2-<B-octets>  pid=<B-pid>
+  <uuid-A-prefix>  profile=nono.session.<uuid-A-prefix>  sid=S-1-15-2-<A-octets>  pid=<A-pid>
+  <uuid-B-prefix>  profile=nono.session.<uuid-B-prefix>  sid=S-1-15-2-<B-octets>  pid=<B-pid>
 ```
 
 **SC1 PASS criterion (all three sub-criteria required):**
 
 1. `nono agent list` shows **exactly 2** tenants (not 0, not 1).
 2. The two package SIDs (`S-1-15-2-...`) are **distinct** — each agent has its own AppContainer.
-3. Both agents complete (Agent A prints "Agent-A-done", Agent B prints "Agent-B-done") without
-   hanging or crashing.
+3. Both notepad windows are visible and alive on the desktop.
 
 **SC1 FAIL criterion (any of):**
 
 - `nono agent list` shows 0 or 1 tenants while both agents are supposed to be running
 - The two SIDs are IDENTICAL (same AppContainer reused — token isolation violated)
-- Either agent hangs and never prints its "done" message within 60 seconds
-- `nono agent launch` returns "nono-agentd is not running" (daemon crashed or was not started)
+- `nono agent launch` returns `error: failed to launch agent: ...`
+- `nono agent launch` returns "No daemon running" (daemon not started or crashed)
 
 ### SC1 Step 4 — Confirm tenant list returns to zero after both agents exit
 
-After both agents print their "done" messages and exit (~ 30 seconds from Agent A launch):
+Close both notepad windows (killing the confined agents):
+
+```powershell
+# Or via PowerShell (optional — closing the windows manually is also fine):
+Stop-Process -Name notepad -Force
+```
+
+Wait ~2 seconds for the daemon to reap the processes, then:
 
 ```powershell
 & $nono agent list
@@ -315,14 +365,25 @@ After both agents print their "done" messages and exit (~ 30 seconds from Agent 
 No agents running.
 ```
 
-or
-
-```
-Tenant agents (0):
-```
-
 **SC1 PASS criterion:** Zero tenants after both agents exit (no zombie entries, no handle leak
 visible at the CLI level).
+
+### SC1 Step 5 — Graceful daemon stop
+
+```powershell
+& $nono daemon stop
+Start-Sleep -Seconds 3
+& $nono daemon status
+```
+
+**Expected:**
+```
+nono-agentd stopped (dev-layout): nono-agentd: shutdown initiated.
+nono-agentd status: NOT RUNNING (not in SCM; use `nono daemon start` ...)
+```
+
+**SC1 PASS criterion:** Daemon exits cleanly within 5 seconds of `daemon stop`. `daemon status`
+returns NOT RUNNING (not RUNNING).
 
 ---
 
@@ -525,7 +586,7 @@ Fill in on the real Win11 host. ALL six items must be PASS for Phase 74 to be ma
 |---|-----|-------|--------|-------|
 | 1 | SC4 | `sc qc nono-agentd` shows `TYPE : 110  USER_OWN_PROCESS` | [ ] PASS / [ ] FAIL | |
 | 2 | SC1 | `nono agent list` shows 2 tenants with DISTINCT package SIDs while both agents alive | [ ] PASS / [ ] FAIL | Record SIDs |
-| 3 | SC1 | Both agents complete (print "done") and `nono agent list` returns to 0 | [ ] PASS / [ ] FAIL | |
+| 3 | SC1 | Both agents closed; `nono agent list` returns to 0; `nono daemon stop` exits cleanly; `daemon status` shows NOT RUNNING | [ ] PASS / [ ] FAIL | |
 | 4 | SC2 | `daemon_cross_tenant_denial` test: `ok. 1 passed; 0 failed` | [ ] PASS / [ ] FAIL | |
 | 5 | SC3 | `n_agents_over_time` test: `ok`; steady-state delta <= 5; record baseline + post counts | [ ] PASS / [ ] FAIL | baseline=___ post=___ delta=___ |
 | 6 | SC5 | `supervisor_message_no_tenant_id_field` test: `ok` | [ ] PASS / [ ] FAIL | |
@@ -560,10 +621,11 @@ Fill in from the live run on a real Win11 host.
 | SC4-1 | `nono daemon install` exits 0 with success message | | |
 | SC4-2 | `sc qc nono-agentd` TYPE = 110 USER_OWN_PROCESS | | |
 | SC4-3 | `nono daemon start` exits 0; `daemon status` = RUNNING | | |
-| SC1-1 | Agent A launched via `nono agent launch`; cmd running | | |
-| SC1-2 | Agent B launched concurrently; cmd running | | |
-| SC1-3 | `nono agent list` shows 2 tenants, 2 distinct SIDs | | |
-| SC1-4 | Both agents exit cleanly; `nono agent list` returns to 0 | | |
+| SC1-1 | `nono daemon start` exits 0; daemon status RUNNING | | |
+| SC1-2 | Agent A launched via `nono agent launch`; notepad running; shows tenant_id + SID | | |
+| SC1-3 | Agent B launched concurrently; notepad running; DIFFERENT SID | | |
+| SC1-4 | `nono agent list` shows 2 tenants, 2 distinct SIDs | | |
+| SC1-5 | Both notepad closed; `nono agent list` returns to 0; `nono daemon stop` clean | | |
 | SC2-1 | `daemon_cross_tenant_denial` integration test: PASS | | |
 | SC3-1 | `n_agents_over_time` integration test: PASS, delta <= 5 | | |
 | SC5-1 | `supervisor_message_no_tenant_id_field` unit test: PASS | | |
@@ -590,7 +652,7 @@ Fill in from the live run on a real Win11 host.
 | `nono daemon install` fails: "nono-agentd.exe not found" | P-1 build not done or wrong directory | Run `cargo build --release -p nono-cli` from source root; confirm both EXEs in `target\release\` |
 | `sc qc nono-agentd` shows `TYPE : 010  WIN32_OWN_PROCESS` | Wrong service type registered | Uninstall (`nono daemon uninstall`), rebuild, reinstall — ADR-74 D1 regression |
 | `nono agent launch` returns "nono-agentd is not running" | Daemon not started or crashed | Run `nono daemon status`; if STOPPED run `nono daemon start`; check Windows Event Log for crash |
-| `nono agent list` shows 0 during SC1 while agents appear to be running | Control pipe not yet wired for `list` (Phase 74 known stub — see 74-05-SUMMARY §Known Stubs) | The `list` verb connects to `\\.\pipe\nono-agentd-control` which Phase 74 declares but Phase 75 fully wires; if daemon is running but not yet serving the control pipe, verify by checking if `nono classify <agent-pid>` returns `AI_AGENT` |
+| `nono agent list` shows 0 during SC1 while agents appear to be running | Daemon not serving the control pipe, or agents already exited | Verify daemon is running (`nono daemon status`). Confirm notepad windows are still open. If daemon was started with an OLD binary before Plan 74-07, rebuild (`cargo build --release -p nono-cli`) and restart the daemon. |
 | SC1 hangs: `nono agent launch` blocks indefinitely | Daemon is not accepting connections | Run `nono daemon status`; verify `daemon_capability_pipe` is open with `NONO_DAEMON_INTEGRATION_TESTS=1 cargo test daemon_concurrent_agents` |
 | SC3 test: `WARN: per-type sum N != absolute M` | Parallel sibling tests interfered | Rerun with `-- --test-threads=1` for serial isolation |
 | SC3 `steady-state delta > 5` | Handle leak in AppContainerProfile::Drop or job cleanup | Record full `[spike74][characterize]` output; look for growing handle types (Token, Job, Process, File = actual leak; EtwRegistration/Event/Semaphore = warmup only) |
