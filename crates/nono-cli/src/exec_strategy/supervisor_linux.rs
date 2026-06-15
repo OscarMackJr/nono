@@ -398,7 +398,7 @@ pub(super) fn handle_seccomp_notification(
         record_denial(
             denials,
             DenialRecord {
-                path: path.clone(),
+                path: canonicalized.clone(),
                 access,
                 reason: DenialReason::RateLimited,
             },
@@ -433,7 +433,7 @@ pub(super) fn handle_seccomp_notification(
                 record_denial(
                     denials,
                     DenialRecord {
-                        path: path.clone(),
+                        path: canonicalized.clone(),
                         access,
                         reason: DenialReason::PolicyBlocked,
                     },
@@ -467,7 +467,7 @@ pub(super) fn handle_seccomp_notification(
                 record_denial(
                     denials,
                     DenialRecord {
-                        path: path.clone(),
+                        path: canonicalized.clone(),
                         access,
                         reason: DenialReason::UserDenied,
                     },
@@ -480,7 +480,7 @@ pub(super) fn handle_seccomp_notification(
             record_denial(
                 denials,
                 DenialRecord {
-                    path: path.clone(),
+                    path: canonicalized.clone(),
                     access,
                     reason: DenialReason::BackendError,
                 },
