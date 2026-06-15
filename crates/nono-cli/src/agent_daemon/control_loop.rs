@@ -431,6 +431,10 @@ mod windows_impl {
                 if let Err(e) = write_framed_response(&mut server, &resp).await {
                     tracing::warn!(error = %e, "handle_control_connection: write error on shutdown response");
                 }
+                // Notify BOTH the control loop AND the accept loop (two concurrent
+                // waiters on the same Notify: notify_one() wakes only one, so
+                // we call it twice to ensure both loops receive the shutdown signal).
+                shutdown.notify_one();
                 shutdown.notify_one();
                 return Ok(());
             }

@@ -113,8 +113,11 @@ mod windows_impl {
         let event_handler = move |control_event| -> ServiceControlHandlerResult {
             match control_event {
                 ServiceControl::Stop => {
-                    // `notify_one` stores a permit so a STOP is never lost even
-                    // if the accept loop is not currently parked on `notified()`.
+                    // Call notify_one() twice — once for run_accept_loop and once for
+                    // run_control_loop. Both loops park on the same Arc<Notify> and
+                    // notify_one() only wakes ONE waiter per call, so we need two calls
+                    // to guarantee both concurrent loops receive the shutdown signal.
+                    shutdown_handler.notify_one();
                     shutdown_handler.notify_one();
                     ServiceControlHandlerResult::NoError
                 }
@@ -258,6 +261,10 @@ mod windows_impl {
         ) -> windows_sys::Win32::Foundation::BOOL {
             if ctrl_type == CTRL_C_EVENT {
                 if let Some(notify) = SHUTDOWN_SIGNAL.get() {
+                    // Call notify_one() twice — once for run_accept_loop and once for
+                    // run_control_loop. Both loops park on the same Arc<Notify>; one
+                    // call only wakes ONE of the two concurrent loop waiters.
+                    notify.notify_one();
                     notify.notify_one();
                 }
                 // Return TRUE to indicate we handled the event.
