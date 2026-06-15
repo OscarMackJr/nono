@@ -249,6 +249,58 @@ mod tests {
         );
     }
 
+    /// SUPP-03a (Phase 75 Plan 03): copilot-cli profile is present in policy.json
+    /// with the native-PE shape (windows_low_il_broker: true, no windows_interpreters).
+    ///
+    /// D-06 finding: copilot.exe is a native PE, NOT a node.exe-wrapped npm script.
+    /// Therefore windows_interpreters must be absent (empty vec), unlike aider/langchain-python
+    /// which need python.exe coverage.
+    #[test]
+    fn copilot_cli_profile_present() {
+        let profile = get_builtin("copilot-cli").expect("copilot-cli profile not found");
+        assert_eq!(
+            profile.meta.name, "copilot-cli",
+            "copilot-cli: meta.name must match the lookup key"
+        );
+        assert!(
+            profile.windows_low_il_broker,
+            "copilot-cli profile must set windows_low_il_broker: true (native PE engine)"
+        );
+        assert_eq!(
+            profile.workdir.access,
+            WorkdirAccess::ReadWrite,
+            "copilot-cli: workdir.access must be ReadWrite"
+        );
+        assert_eq!(
+            profile.security.signal_mode,
+            Some(crate::profile::ProfileSignalMode::Isolated),
+            "copilot-cli: security.signal_mode must be 'isolated'"
+        );
+        assert!(
+            !profile.network.block,
+            "copilot-cli: network must not be blocked (copilot.exe needs GitHub API)"
+        );
+    }
+
+    /// SUPP-03a (Phase 75 Plan 03): copilot-cli profile must NOT have windows_interpreters
+    /// set (or must have an empty list), confirming the native-PE shape.
+    ///
+    /// This test distinguishes copilot-cli from aider/langchain-python (which need
+    /// python.exe coverage) and confirms D-06: copilot.exe does not run through a
+    /// node.exe wrapper at the primary entry point. If SC3 UAT reveals node.exe as
+    /// a grandchild, windows_interpreters: ["node.exe"] would be added and this test updated.
+    #[test]
+    fn copilot_cli_profile_is_native_pe() {
+        let profile = get_builtin("copilot-cli").expect("copilot-cli profile not found");
+        assert!(
+            profile.windows_interpreters.is_empty(),
+            "copilot-cli profile must NOT have windows_interpreters (native PE, not a node/python \
+             wrapper); got: {:?}. If SC3 UAT shows node.exe grandchild spawns, add \
+             windows_interpreters: [\"node.exe\"] at that point.",
+            profile.windows_interpreters
+        );
+    }
+
     #[test]
     fn test_opencode_no_longer_inbuilt() {
         // Removed: opencode is now shipped via the registry pack
