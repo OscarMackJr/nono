@@ -899,6 +899,23 @@
       "windows_low_il_broker": true,
       "windows_interpreters": ["python.exe"]
     },
+    "copilot-cli": {
+      "extends": "default",
+      "meta": {
+        "name": "copilot-cli",
+        "version": "1.0.0",
+        "description": "GitHub Copilot CLI (copilot.exe native PE engine — v1.0.62+). Native PE: no windows_interpreters needed. If SC3 UAT shows copilot.exe spawning node.exe as a grandchild, add windows_interpreters: [node.exe] at that point.",
+        "author": "nono-project"
+      },
+      "security": {
+        "groups": [],
+        "signal_mode": "isolated"
+      },
+      "filesystem": {},
+      "network": { "block": false },
+      "workdir": { "access": "readwrite" },
+      "windows_low_il_broker": true
+    },
     "langchain-python": {
       "extends": "default",
       "meta": {
