@@ -38,13 +38,12 @@
 //!
 //! All production code is gated on `#[cfg(target_os = "windows")]`.
 
-// `launch_agent` is `pub(crate)` inside `windows_impl` below.
-// Re-exported via `crate::agent_daemon::launch::windows_impl::launch_agent`
-// when called by Wave 3 daemon management commands (Plan 74-06+).
+// Wave 5 (Plan 74-07) re-export for control_loop.rs.
+#[cfg(target_os = "windows")]
+pub(crate) use windows_impl::launch_agent;
 
-// Wave 3 (Plan 74-06+) will wire `launch_agent` into the daemon management
-// command handler. Until then, all `windows_impl` functions are intentionally
-// compiled but not called from `nono-agentd`. Allow dead_code for this module.
+// All `windows_impl` functions are called by `control_loop.rs` (Wave 5);
+// `#[allow(dead_code)]` is retained for non-called helpers within this module.
 #[cfg(target_os = "windows")]
 #[allow(dead_code)]
 mod windows_impl {

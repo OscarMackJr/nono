@@ -10,8 +10,9 @@
 //! | Module | Status | Plan |
 //! |--------|--------|------|
 //! | `reap` | **Implemented** (AgentTenant RAII) | 74-03 |
-//! | `accept_loop` | Placeholder | 74-04 |
-//! | `launch` | Placeholder | 74-04 |
+//! | `accept_loop` | **Implemented** (capability pipe accept loop) | 74-04 |
+//! | `launch` | **Implemented** (AppContainer spawn + reap) | 74-04 |
+//! | `control_loop` | **Implemented** (operator control pipe server) | 74-07 |
 //!
 //! # Thread safety
 //!
@@ -20,10 +21,45 @@
 //! `tokio::spawn` boundaries.
 
 pub(crate) mod reap;
-/// Placeholder — implemented in Plan 74-04 (Wave 2).
+/// Implemented in Plan 74-04 (Wave 2).
 pub(crate) mod accept_loop;
-/// Placeholder — implemented in Plan 74-04 (Wave 2).
+/// Implemented in Plan 74-04 (Wave 2).
 pub(crate) mod launch;
+/// Daemon-side operator control-pipe server (Plan 74-07 Wave 5).
+pub(crate) mod control_loop;
+
+// ─── Embedded policy data ─────────────────────────────────────────────────────
+
+/// Embedded policy JSON (compiled into binary by build.rs).
+///
+/// This constant mirrors `crates/nono-cli/src/config/embedded.rs:EMBEDDED_POLICY_JSON`.
+/// It is included directly here because `nono-agentd` is a standalone binary that
+/// only pulls in `agent_daemon` via `#[path]` and cannot use `crate::config`.
+const EMBEDDED_POLICY_JSON: &str = include_str!(concat!(env!("OUT_DIR"), "/policy.json"));
+
+/// Return `true` if `profile_name` is a known profile in the embedded policy.
+///
+/// Used by `control_loop` to validate profile names before calling `launch_agent`
+/// (T-74-07-03: unknown profile → fail-secure error response, never launch).
+///
+/// Parsing is minimal: we extract only the `"profiles"` object's top-level keys
+/// from the embedded JSON. A parse failure is conservative — we return `false`
+/// (fail-secure).
+pub(crate) fn is_known_profile(profile_name: &str) -> bool {
+    // Parse the embedded policy JSON using serde_json::Value for minimal overhead.
+    // Fail-closed: if parsing fails, treat the profile as unknown.
+    let policy: serde_json::Value = match serde_json::from_str(EMBEDDED_POLICY_JSON) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    // Check if `policy["profiles"][profile_name]` exists.
+    policy
+        .get("profiles")
+        .and_then(|p| p.as_object())
+        .map(|profiles| profiles.contains_key(profile_name))
+        .unwrap_or(false)
+}
 
 use reap::AgentTenant;
 use std::collections::HashMap;

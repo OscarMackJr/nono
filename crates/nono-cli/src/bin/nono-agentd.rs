@@ -150,14 +150,19 @@ mod windows_impl {
         let daemon_state = Arc::new(super::agent_daemon::DaemonState::new());
 
         rt.block_on(async {
-            // Wave 2 (Plan 74-04): real accept loop.
-            // run_accept_loop drives the DMON-02 multi-tenant pipe server and
-            // blocks until `shutdown` fires (SCM STOP control).
-            super::agent_daemon::accept_loop::run_accept_loop(
-                Arc::clone(&daemon_state),
-                Arc::clone(&shutdown),
-            )
-            .await;
+            // Wave 5 (Plan 74-07): run both loops concurrently so the daemon
+            // serves BOTH the capability pipe and the operator control pipe.
+            // Both are interruptible by the same `shutdown` notifier.
+            tokio::join!(
+                super::agent_daemon::accept_loop::run_accept_loop(
+                    Arc::clone(&daemon_state),
+                    Arc::clone(&shutdown),
+                ),
+                super::agent_daemon::control_loop::run_control_loop(
+                    Arc::clone(&daemon_state),
+                    Arc::clone(&shutdown),
+                ),
+            );
         });
 
         status_handle.set_service_status(ServiceStatus {
@@ -223,12 +228,17 @@ mod windows_impl {
         let daemon_state = Arc::new(super::agent_daemon::DaemonState::new());
 
         rt.block_on(async {
-            // Wave 2 (Plan 74-04): real accept loop.
-            super::agent_daemon::accept_loop::run_accept_loop(
-                Arc::clone(&daemon_state),
-                Arc::clone(&shutdown),
-            )
-            .await;
+            // Wave 5 (Plan 74-07): run both loops concurrently.
+            tokio::join!(
+                super::agent_daemon::accept_loop::run_accept_loop(
+                    Arc::clone(&daemon_state),
+                    Arc::clone(&shutdown),
+                ),
+                super::agent_daemon::control_loop::run_control_loop(
+                    Arc::clone(&daemon_state),
+                    Arc::clone(&shutdown),
+                ),
+            );
         });
 
         eprintln!("nono-agentd: foreground mode stopped.");
