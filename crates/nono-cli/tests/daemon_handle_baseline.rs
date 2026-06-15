@@ -67,6 +67,18 @@ use std::collections::HashSet;
 use std::os::windows::ffi::OsStrExt;
 use std::sync::{Arc, Mutex};
 
+// ---------------------------------------------------------------------------
+// Serialization mutex — prevents parallel test threads from perturbing each
+// other's GetProcessHandleCount and NtQuerySystemInformation snapshots.
+//
+// Handle counts are process-global; sibling tests running concurrently churn
+// handles between SC3's cold/post-warmup snapshots, producing negative per-type
+// deltas (mathematically impossible for a single consistent snapshot pair).
+// Acquiring this mutex at the top of every test guarantees one test at a time,
+// so all handle-count and handle-type measurements are internally consistent.
+// ---------------------------------------------------------------------------
+static SERIAL: Mutex<()> = Mutex::new(());
+
 use nono::{derive_app_container_sid, package_sid_to_string};
 use nono::AppContainerProfile;
 
@@ -473,6 +485,7 @@ fn print_handle_type_delta(before: &HandleTypeMap, after: &HandleTypeMap, label:
 #[test]
 fn fresh_token_isolation_agents_have_distinct_package_sids() {
     require_integration!();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
     const AGENT_COUNT: usize = 10;
     let mut sids: HashSet<String> = HashSet::new();
@@ -558,6 +571,7 @@ fn fresh_token_isolation_agents_have_distinct_package_sids() {
 #[test]
 fn n_agents_over_time_returns_to_baseline_handle_count() {
     require_integration!();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
     const TOTAL_CYCLES: usize = 100;
     const WARMUP_CYCLES: usize = 10;
@@ -684,6 +698,22 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
             for (delta, _idx, name) in &warmup_deltas {
                 eprintln!("[spike74][characterize]   {name}: {delta:+}");
             }
+        }
+
+        // ---- Soft consistency check: per-type sum must match the absolute delta from the
+        // same NtQuerySystemInformation snapshots (cold_types → before_snapshot totals).
+        // Both sides derive from the same API call pair, so they MUST agree algebraically.
+        // A divergence here means the snapshots were taken in a split state (OS bug or
+        // future code regression — should not happen with the SERIAL mutex held).
+        let cold_total: i64 = cold_types.values().map(|(_, c)| *c as i64).sum();
+        let warm_total: i64 = before_snapshot.values().map(|(_, c)| *c as i64).sum();
+        let abs_from_snapshots: i64 = warm_total - cold_total;
+        if total_warmup != abs_from_snapshots {
+            eprintln!(
+                "[spike74][characterize] WARN: per-type sum {total_warmup:+} != absolute {abs_from_snapshots:+} \
+                 — snapshot inconsistency (the two NtQuerySystemInformation snapshots are internally \
+                 inconsistent; run alone or with --test-threads=1 for a clean characterization)"
+            );
         }
     }
 
@@ -928,6 +958,7 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
 #[test]
 fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance() {
     require_integration!();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
     use windows_sys::Win32::System::Threading::{
         OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_QUERY_INFORMATION,
@@ -1172,6 +1203,7 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
 #[test]
 fn daemon_concurrent_agents() {
     require_integration!();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
 
     const AGENT_COUNT: usize = 2;
 
