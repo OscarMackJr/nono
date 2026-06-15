@@ -70,11 +70,17 @@ pub(crate) fn run_daemon(args: DaemonArgs) -> Result<()> {
 /// executable. This supports the development workflow where the daemon is run
 /// without SCM registration.
 ///
+/// The dev-layout spawn uses raw `CreateProcessW` with `bInheritHandles=FALSE`
+/// so the long-lived daemon inherits ZERO handles from the launching shell.
+/// `std::process::Command` cannot be used here because it unconditionally sets
+/// `bInheritHandles=TRUE` whenever stdio is redirected (even to `Stdio::null()`),
+/// which causes the daemon to hold the shell's inheritable handles open and
+/// blocks the operator's shell until the daemon exits.
+///
 /// On non-Windows: prints a diagnostic and returns `Ok(())`.
 fn daemon_start() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        use std::os::windows::process::CommandExt;
         use std::process::Command;
 
         // Check if the SCM service is installed by querying it.
@@ -129,58 +135,19 @@ fn daemon_start() -> Result<()> {
             )));
         }
 
-        // CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS ensures the daemon outlives
-        // this CLI invocation and is not attached to the current console session.
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-
-        let child = Command::new(&agentd_exe)
-            // `--foreground` causes nono-agentd to skip SCM service_dispatcher
-            // and run its accept + control loops directly.
-            .arg("--foreground")
-            .creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
-            // Null all three standard streams so the daemon does NOT hold
-            // open the parent console's handles. Without this the operator's
-            // shell blocks until the daemon exits (even with DETACHED_PROCESS),
-            // because the inherited stdout/stderr file descriptors keep the
-            // console pipe alive. Stdio::null() maps each stream to NUL:
-            // the daemon's tracing output goes to its log file (configured
-            // via nono-agentd's own tracing-subscriber).
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| {
-                NonoError::SandboxInit(format!(
-                    "nono daemon start: failed to spawn nono-agentd.exe as background process: {e}"
-                ))
-            })?;
-
-        // Detach: we do NOT wait for the child — it runs independently.
-        // Dropping `child` here does not kill it (the process was DETACHED).
-        let pid = child.id();
-
-        // Brief pause to let the daemon initialize its pipes before returning.
-        std::thread::sleep(std::time::Duration::from_millis(300));
-
-        // Verify the daemon came up by probing the control pipe.
-        let pipe_up = std::path::Path::new(r"\\.\pipe\nono-agentd-control").exists();
-        if pipe_up {
-            println!(
-                "[dev-layout] nono-agentd started as background process (pid={pid}).",
-            );
-            println!("Use `nono daemon status` to confirm, `nono daemon stop` to stop.");
-        } else {
-            println!(
-                "[dev-layout] nono-agentd spawned (pid={pid}); control pipe not yet visible \
-                 — daemon may still be initializing.",
-            );
-        }
-
-        // Detach: std::mem::forget prevents the child from being killed on drop.
-        std::mem::forget(child);
-
-        Ok(())
+        // Raw CreateProcessW with bInheritHandles=FALSE.
+        //
+        // We MUST use the raw Win32 API here rather than std::process::Command
+        // because Rust's Command sets bInheritHandles=TRUE whenever stdio streams
+        // are redirected (including Stdio::null()). With bInheritHandles=TRUE the
+        // daemon inherits the launching shell's inheritable handles (e.g. the
+        // console stdout pipe), which keeps them alive and blocks the operator's
+        // shell until the daemon exits — even with DETACHED_PROCESS set.
+        //
+        // With bInheritHandles=FALSE the daemon inherits ZERO handles from the
+        // launcher. The daemon allocates its own console (or none, given
+        // CREATE_NO_WINDOW) and manages its own file handles independently.
+        daemon_start_raw_spawn(&agentd_exe)
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -188,6 +155,139 @@ fn daemon_start() -> Result<()> {
         println!("nono-agentd is Windows-only.");
         Ok(())
     }
+}
+
+/// Spawn `nono-agentd.exe` via raw `CreateProcessW` with `bInheritHandles=FALSE`.
+///
+/// This is the dev-layout background spawn path. Using raw `CreateProcessW` is
+/// the only way on Windows to spawn a child with `bInheritHandles=FALSE` from
+/// Rust — `std::process::Command` forces `bInheritHandles=TRUE` whenever any
+/// stdio stream is redirected, including `Stdio::null()`.
+///
+/// Creation flags:
+/// - `DETACHED_PROCESS` (0x0000_0008): child is not attached to the parent's
+///   console session; it receives no console at all.
+/// - `CREATE_NEW_PROCESS_GROUP` (0x0000_0200): child gets its own signal group
+///   so Ctrl+C in the operator's shell does not propagate to the daemon.
+/// - `CREATE_NO_WINDOW` (0x0800_0000): belt-and-suspenders; suppresses any
+///   default console window the loader might allocate.
+///
+/// On success, both `hProcess` and `hThread` from `PROCESS_INFORMATION` are
+/// closed immediately — we do not wait on or control the daemon after launch.
+///
+/// # Errors
+///
+/// Returns `Err` with a human-readable message including `GLE=<n>` if
+/// `CreateProcessW` fails, so the operator knows which OS error occurred.
+#[cfg(target_os = "windows")]
+fn daemon_start_raw_spawn(agentd_exe: &std::path::Path) -> Result<()> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError};
+    use windows_sys::Win32::System::Threading::{
+        CreateProcessW, PROCESS_INFORMATION, STARTUPINFOW,
+    };
+
+    // dwCreationFlags:
+    //   DETACHED_PROCESS         = 0x0000_0008
+    //   CREATE_NEW_PROCESS_GROUP = 0x0000_0200
+    //   CREATE_NO_WINDOW         = 0x0800_0000
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    // Build the application path as a null-terminated UTF-16 string.
+    // lpApplicationName receives the fully-qualified path; lpCommandLine is null
+    // (the OS uses the exe name alone, equivalent to no arguments).
+    // We append `--foreground` via the command-line buffer so the daemon skips
+    // SCM service_dispatcher and runs its accept + control loops directly.
+    use std::os::windows::ffi::OsStrExt as _;
+    let app_wide: Vec<u16> = agentd_exe
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0u16))
+        .collect();
+
+    // Build a mutable command-line buffer ("path\to\nono-agentd.exe" --foreground).
+    // CreateProcessW may modify the buffer in place (documented behaviour).
+    let exe_str = agentd_exe.to_string_lossy();
+    let cmd_str = if exe_str.contains(' ') {
+        format!("\"{}\" --foreground", exe_str)
+    } else {
+        format!("{} --foreground", exe_str)
+    };
+    let mut cmd_wide: Vec<u16> = cmd_str
+        .encode_utf16()
+        .chain(std::iter::once(0u16))
+        .collect();
+
+    // Zero-initialise STARTUPINFOW; set cb to the struct size.
+    // hStdInput / hStdOutput / hStdError are left as null because
+    // bInheritHandles=FALSE makes them irrelevant — the child receives no
+    // inherited handles and will use its own (or none with CREATE_NO_WINDOW).
+    // SAFETY: STARTUPINFOW is a plain-data struct; zeroed() is the documented
+    // initialisation idiom for the fields we do not set.
+    let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+    si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+
+    // SAFETY: PROCESS_INFORMATION is a plain-data output struct; zeroed() is correct.
+    let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+
+    let ok = unsafe {
+        // SAFETY:
+        // - `app_wide` is a valid null-terminated UTF-16 absolute path.
+        // - `cmd_wide` is a valid null-terminated UTF-16 command line;
+        //   CreateProcessW may write to the buffer but it is large enough.
+        // - `bInheritHandles=0` (FALSE): daemon inherits zero handles from the
+        //   launcher; the parent's console and pipe handles are NOT passed down.
+        //   This is the critical invariant — avoids the daemon holding the
+        //   launcher's stdout pipe open (which would block the operator's shell).
+        // - All pointer params (lpProcessAttributes, lpThreadAttributes,
+        //   lpEnvironment, lpCurrentDirectory) are null → use safe defaults.
+        // - `si.cb` is correctly set; `&si` and `&mut pi` are valid output params.
+        CreateProcessW(
+            app_wide.as_ptr(),              // lpApplicationName
+            cmd_wide.as_mut_ptr(),          // lpCommandLine (mutable, may be modified)
+            std::ptr::null(),               // lpProcessAttributes
+            std::ptr::null(),               // lpThreadAttributes
+            0,                              // bInheritHandles = FALSE
+            DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+            std::ptr::null_mut(),           // lpEnvironment (inherit from parent)
+            std::ptr::null(),               // lpCurrentDirectory (inherit from parent)
+            &si,                            // lpStartupInfo
+            &mut pi,                        // lpProcessInformation (output)
+        )
+    };
+
+    if ok == 0 {
+        let gle = unsafe { GetLastError() };
+        return Err(NonoError::SandboxInit(format!(
+            "nono daemon start: CreateProcessW(nono-agentd.exe) failed: GLE={gle}"
+        )));
+    }
+
+    // We do not wait for, signal, or control the daemon — close both handles
+    // immediately so nono.exe holds no references to the daemon process.
+    // SAFETY: pi.hProcess and pi.hThread are valid handles set by CreateProcessW.
+    unsafe { CloseHandle(pi.hProcess) };
+    unsafe { CloseHandle(pi.hThread) };
+
+    let pid = pi.dwProcessId;
+
+    // Brief pause to let the daemon initialize its pipes before returning.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+
+    // Verify the daemon came up by probing the control pipe.
+    let pipe_up = std::path::Path::new(r"\\.\pipe\nono-agentd-control").exists();
+    if pipe_up {
+        println!("[dev-layout] nono-agentd started as background process (pid={pid}).");
+        println!("Use `nono daemon status` to confirm, `nono daemon stop` to stop.");
+    } else {
+        println!(
+            "[dev-layout] nono-agentd spawned (pid={pid}); control pipe not yet visible \
+             — daemon may still be initializing.",
+        );
+    }
+
+    Ok(())
 }
 
 /// `nono daemon stop` — stop a running nono-agentd.
