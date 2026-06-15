@@ -198,6 +198,51 @@ Note on parallel test runs: when run alongside sibling tests (default Rust test 
 - `RevertToSelf()` + cleanup (TerminateProcess, CloseHandle x2)
 - A1 confirmed: `ImpersonateLoggedOnUser` with a real AppContainer token succeeds from the test process context.
 
+**SC3 characterization note — serialization fix (commit `71681a00`):**
+
+The default full-suite `cargo test` run has sibling tests running in parallel by default. Parallel
+execution churned process-global handle counts between SC3's cold and post-warmup NtQuerySystemInformation
+snapshots, producing negative per-type deltas (mathematically impossible for a single consistent
+snapshot pair). Fixed by adding a process-wide `static SERIAL: Mutex<()>` and acquiring it at the top
+of all 4 test functions — guarantees one test at a time so all handle measurements are internally
+consistent.
+
+A soft consistency check was also added: after computing the per-type sum from the NtQuery snapshot pair
+(`cold_types → before_snapshot`), it is compared against the absolute from the same pair. If they ever
+diverge, a `[spike74][characterize] WARN: per-type sum N != absolute M — snapshot inconsistency` line
+is emitted so any future regression is immediately visible.
+
+**Default full-suite run (commit `71681a00`, 3/3 runs identical — run 3 shown):**
+
+```
+running 4 tests
+...
+[spike74][handles] cold baseline handle count: 145
+[spike74][characterize] cold handle-type snapshot taken (cold_baseline=145, 16 distinct type indices)
+[spike74][handles] post-warmup handle count: 148 (one-time delta=3)
+[spike74][characterize] WARMUP per-type handle delta (cold -> post-warmup, total=+4):
+[spike74][characterize]   Event: +3
+[spike74][characterize]   Thread: +1
+[spike74][characterize] WARMUP first-cycle handle delta (pre-cycle-0 -> post-cycle-0-drop, total=+4):
+[spike74][characterize]   Event: +3
+[spike74][characterize]   Thread: +1
+[spike74][handles] after cycle 35: handle count = 148 (plateau-delta=0)
+[spike74][handles] after cycle 60: handle count = 148 (plateau-delta=0)
+[spike74][handles] after cycle 85: handle count = 148 (plateau-delta=0)
+[spike74][characterize] steady-state per-type delta (post-warmup -> post-100) (empty => no per-cycle leak):
+[spike74][characterize]   (none — steady-state total=+0)
+[spike74][handles] PASS: 100 cycles — one-time warmup cost=3 handles; steady-state delta=0 (target: <= 5)
+test n_agents_over_time_returns_to_baseline_handle_count ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Per-type sum (+4 = Event+3 + Thread+1) equals the NtQuery-derived absolute (+4). No negative types.
+No WARN line. Consistent across 3 back-to-back runs.
+
+When run alone (cold process), the full +66 canonical breakdown appears (EtwRegistration+26,
+Event+12, Semaphore+12, ALPC Port+3, Key+3, IRTimer+2, WaitCompletionPacket+2, File+2,
+Thread+1, Mutant+1, TpWorkerFactory+1, IoCompletion+1) — sum=+66, absolute=+66, no WARN.
+
 **Status:** AWAITING HUMAN RE-CONFIRMATION (authoritative gate for Wave 1 unblock)
 
 ## Deviations from Plan
