@@ -18,8 +18,12 @@
 //!    The steady-state delta (post-warmup→post-run) must be ≤ 5.
 //!    Proves that `AppContainerProfile::Drop` correctly calls
 //!    `DeleteAppContainerProfile` and frees all handles per cycle.
-//!    Handle-type characterization (via NtQuerySystemInformation) attributes
-//!    the one-time warmup to concrete types (Wdk) so it is not a disguised leak.
+//!    Handle-type characterization (via NtQuerySystemInformation) uses THREE snapshots:
+//!    (1) cold (before warmup), (2) post-warmup plateau, (3) post-full-run.
+//!    The WARMUP delta (cold→post-warmup) names the ~65 one-time handles by kernel
+//!    object type (Event/Thread/ALPC Port/IoCompletion/TpWorkerFactory/Key/Section etc.).
+//!    The STEADY-STATE delta (post-warmup→post-full-run) must be empty (zero per-cycle
+//!    growth); any growth in security-critical types (Token/File/Job) triggers a WARN.
 //!
 //! 3. **Cross-tenant denial** (`daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance`):
 //!    A pipe instance created with tenant A's AppContainer package SID as the
@@ -258,13 +262,21 @@ fn snapshot_handle_types_for_current_pid() -> HandleTypeMap {
     // alignment UB — the Vec<u8> is heap-allocated and may not satisfy usize
     // alignment requirements for the pointer-size field.
     let entry_stride = std::mem::size_of::<SystemHandleTableEntryInfo>(); // 24 on x64
-    if buf.len() < 4 {
+    if buf.len() < 8 {
         unsafe { FreeLibrary(ntdll) };
         return HandleTypeMap::new();
     }
     let count = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    // SYSTEM_HANDLE_INFORMATION layout on x64:
+    //   offset 0: NumberOfHandles ULONG  (4 bytes)
+    //   offset 4: _padding_               (4 bytes, aligns the Handles[] array
+    //              which contains pointer-sized fields to 8-byte boundary)
+    //   offset 8: Handles[] SYSTEM_HANDLE_TABLE_ENTRY_INFO[count]
+    //
+    // NOTE: On 32-bit, entries_start would be 4 (no alignment gap), but this
+    // test only runs on 64-bit Windows hosts.
+    let entries_start: usize = if cfg!(target_pointer_width = "64") { 8 } else { 4 };
     // Sanity check: count * stride must fit in the buffer.
-    let entries_start = 4usize; // sizeof(u32) for the count field
     if count.saturating_mul(entry_stride) > buf.len().saturating_sub(entries_start) {
         eprintln!(
             "[spike74][characterize] handle buffer sanity failed: count={count} stride={entry_stride} \
@@ -359,25 +371,59 @@ fn query_object_type_name(handle: HANDLE) -> Option<String> {
         return None;
     }
 
-    // UNICODE_STRING layout: u16 Length, u16 MaxLength, *u16 Buffer
-    // Buffer pointer is embedded relative to buf base.
-    if returned < 8 {
+    // OBJECT_TYPE_INFORMATION starts with a UNICODE_STRING for TypeName:
+    //   offset  0: Length      (u16) — byte length of the string (not including NUL)
+    //   offset  2: MaxLength   (u16)
+    //   offset  4: _padding_   (4 bytes on x64, 0 on x86)
+    //   offset  8: Buffer      (*u16) — absolute virtual address of string data in buf
+    //                                   (NtQueryObject puts string data inline after struct)
+    //
+    // On x64 the UNICODE_STRING itself is 16 bytes; on x86 it is 8 bytes.
+    // The string data follows immediately at offset `us_size` in the output buffer.
+    //
+    // We derive the inline string offset from the Buffer pointer: since NtQueryObject
+    // writes the struct and string data contiguously into our `buf`, the string data
+    // is at `buf_ptr + offset_of_buffer_field_value - (buf_base_ptr)`.
+    // A simpler approach: compute offset as `buf[data_ptr_field] - &buf[0]` using
+    // the absolute pointer value. We read the ptr from the buf directly.
+    if (returned as usize) < 16 {
         return None;
     }
     let length = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-    // Buffer pointer is at offset 4 (after Length + MaxLength), but it is an
-    // absolute pointer that may not be in our buf at all — NtQueryObject fills
-    // it pointing into the same output buffer at some offset past the struct.
-    // On 64-bit: struct = 2+2+4(pad)+8(ptr) = 16 bytes; data follows.
-    // We read Length/2 u16 code units starting at offset 16.
-    if length == 0 {
+    if length == 0 || length % 2 != 0 {
         return None;
     }
     let char_count = length / 2;
-    let data_offset: usize = if cfg!(target_pointer_width = "64") { 16 } else { 8 };
-    if buf.len() < data_offset + length {
+
+    // Read the Buffer absolute pointer from the UNICODE_STRING.
+    // On x64: offset 8, 8 bytes little-endian. On x86: offset 4, 4 bytes.
+    let (buf_ptr_offset, ptr_size) = if cfg!(target_pointer_width = "64") { (8usize, 8usize) } else { (4usize, 4usize) };
+    if buf.len() < buf_ptr_offset + ptr_size {
         return None;
     }
+    // Read the absolute virtual-address pointer value from the buffer.
+    let abs_ptr: usize = if ptr_size == 8 {
+        let bytes = [buf[buf_ptr_offset], buf[buf_ptr_offset+1],
+                     buf[buf_ptr_offset+2], buf[buf_ptr_offset+3],
+                     buf[buf_ptr_offset+4], buf[buf_ptr_offset+5],
+                     buf[buf_ptr_offset+6], buf[buf_ptr_offset+7]];
+        usize::from_le_bytes(bytes)
+    } else {
+        let bytes = [buf[buf_ptr_offset], buf[buf_ptr_offset+1],
+                     buf[buf_ptr_offset+2], buf[buf_ptr_offset+3]];
+        u32::from_le_bytes(bytes) as usize
+    };
+    // The base address of our output buffer in process memory.
+    let buf_base = buf.as_ptr() as usize;
+    // Compute the offset of the string data within our buffer.
+    if abs_ptr < buf_base {
+        return None; // pointer points before our buffer — something is wrong
+    }
+    let data_offset = abs_ptr - buf_base;
+    if data_offset.saturating_add(length) > buf.len() {
+        return None; // string data extends beyond our buffer
+    }
+
     let u16_slice: Vec<u16> = buf[data_offset..]
         .chunks_exact(2)
         .take(char_count)
@@ -496,11 +542,15 @@ fn fresh_token_isolation_agents_have_distinct_package_sids() {
 /// (all 138, zero net per-cycle growth) proves this.
 ///
 /// To guard against real per-cycle leaks while tolerating benign warmup, this test:
-/// 1. Runs WARMUP_CYCLES first-pass cycles (establishes the plateau).
-/// 2. Records a `post_warmup` handle count (the plateau level).
-/// 3. Snapshots handle types before and after the full run to attribute any delta.
-/// 4. Runs the remaining cycles.
-/// 5. Asserts `post_full_run ≤ post_warmup + EPSILON_STEADY` (per-cycle growth must be ~0).
+/// 1. Takes a COLD handle-type snapshot (before any warmup cycles).
+/// 2. Runs WARMUP_CYCLES first-pass cycles (establishes the plateau).
+/// 3. Records a `post_warmup` handle count (the plateau level).
+/// 4. Takes a POST-WARMUP handle-type snapshot (the plateau types).
+/// 5. Prints the WARMUP per-type delta (cold → post-warmup) — names the ~65 one-time handles.
+/// 6. Runs the remaining (TOTAL_CYCLES - WARMUP_CYCLES) steady-state cycles.
+/// 7. Takes a POST-FULL-RUN handle-type snapshot.
+/// 8. Prints the STEADY-STATE per-type delta (post-warmup → post-full-run); warns on suspect types.
+/// 9. Asserts `post_full_run ≤ post_warmup + EPSILON_STEADY` (per-cycle growth must be ~0).
 ///
 /// A real Token/File/Job handle leak (e.g., `DeleteAppContainerProfile` not called)
 /// accumulates 200+ handles over 100 cycles and is immediately visible via the
@@ -518,8 +568,42 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
     let cold_baseline = get_process_handle_count();
     eprintln!("[spike74][handles] cold baseline handle count: {cold_baseline}");
 
+    // ---- COLD handle-type snapshot — taken BEFORE the FIRST warmup cycle ----
+    //
+    // Strategy: snapshot handle types immediately before AND after the VERY FIRST
+    // `create_app_container_profile` call in this test's warmup loop.  That first
+    // call is when the OS initialises the AppX Deployment Service RPC channel and
+    // its associated threadpool — the source of the ~65 one-time handles.
+    //
+    // NOTE: In a parallel test run (default Rust test runner), sibling tests in
+    // this binary may have already called `CreateAppContainerProfile` before this
+    // test body starts, pre-paying the warmup cost.  In that case `cold_baseline`
+    // will already be near the plateau (~142) and the first-cycle delta will be
+    // small (< 10).  The cumulative type breakdown (all warmup cycles combined)
+    // still characterises the sustained types at the plateau.
+    //
+    // Run with `-- --test-threads=1` for guaranteed ordering if you need a pristine
+    // cold characterisation from a truly unwarmed process state.
+    let cold_types = snapshot_handle_types_for_current_pid();
+    eprintln!(
+        "[spike74][characterize] cold handle-type snapshot taken \
+         (cold_baseline={cold_baseline}, {} distinct type indices)",
+        cold_types.len()
+    );
+
     // ---- Warmup phase: pay one-time OS RPC/threadpool init costs ----
+    //
+    // We snapshot handle types around the FIRST cycle to capture any single-call
+    // delta.  Subsequent cycles should show zero type growth (steady state).
+    let mut first_cycle_pre: Option<HandleTypeMap> = None;
+    let mut first_cycle_post: Option<HandleTypeMap> = None;
+
     for i in 0..WARMUP_CYCLES {
+        // Capture pre-first-cycle snapshot.
+        if i == 0 {
+            first_cycle_pre = Some(snapshot_handle_types_for_current_pid());
+        }
+
         let name = unique_profile_name("handles-warm", i);
         let profile = nono::create_app_container_profile(&name)
             .unwrap_or_else(|e| panic!("create_app_container_profile failed at warmup {i}: {e}"));
@@ -529,17 +613,133 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
             .unwrap_or_else(|e| panic!("package_sid_to_string failed at warmup {i}: {e}"));
         drop(owned_sid);
         drop(profile);
+
+        // Capture post-first-cycle snapshot (after profile is dropped so we see
+        // the net handle delta, not just the transient create-then-delete spike).
+        if i == 0 {
+            first_cycle_post = Some(snapshot_handle_types_for_current_pid());
+        }
     }
 
     let post_warmup = get_process_handle_count();
+    let warmup_delta = post_warmup.saturating_sub(cold_baseline);
     eprintln!(
         "[spike74][handles] post-warmup handle count: {post_warmup} \
-         (one-time delta={})",
-        post_warmup.saturating_sub(cold_baseline)
+         (one-time delta={warmup_delta})"
     );
 
-    // ---- Characterize: snapshot handle types at the plateau ----
+    // ---- Characterize: snapshot handle types at the post-warmup plateau ----
+    // This snapshot is taken immediately after warmup (before steady-state cycles).
     let before_snapshot = snapshot_handle_types_for_current_pid();
+
+    // ---- Print the WARMUP per-type delta: COLD → POST-WARMUP (whole warmup phase) ----
+    // This names the net one-time warmup handles by kernel object type using the
+    // full warmup window (cold_types → before_snapshot).  When sibling tests have
+    // pre-paid the RPC warmup, this delta will be small/zero and a note is printed.
+    {
+        let mut indices: std::collections::BTreeSet<u8> = std::collections::BTreeSet::new();
+        indices.extend(cold_types.keys().copied());
+        indices.extend(before_snapshot.keys().copied());
+
+        let mut warmup_deltas: Vec<(i64, u8, String)> = indices
+            .iter()
+            .filter_map(|idx| {
+                let cold_count = cold_types.get(idx).map(|(_, c)| *c).unwrap_or(0);
+                let warm_count = before_snapshot.get(idx).map(|(_, c)| *c).unwrap_or(0);
+                let delta = warm_count as i64 - cold_count as i64;
+                if delta == 0 {
+                    return None;
+                }
+                let name = before_snapshot
+                    .get(idx)
+                    .map(|(n, _)| n.as_str())
+                    .filter(|n| !n.is_empty())
+                    .or_else(|| {
+                        cold_types
+                            .get(idx)
+                            .map(|(n, _)| n.as_str())
+                            .filter(|n| !n.is_empty())
+                    })
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| format!("TypeIndex#{idx}"));
+                Some((delta, *idx, name))
+            })
+            .collect();
+        warmup_deltas.sort_by(|a, b| b.0.abs().cmp(&a.0.abs()).then(a.1.cmp(&b.1)));
+
+        let total_warmup: i64 = warmup_deltas.iter().map(|(d, _, _)| d).sum();
+        eprintln!(
+            "[spike74][characterize] WARMUP per-type handle delta \
+             (cold -> post-warmup, total={total_warmup:+}):"
+        );
+        if warmup_deltas.is_empty() {
+            // Zero delta here means sibling tests pre-paid the warmup cost before this
+            // test body started.  The first-cycle breakdown below captures what was added
+            // within this test's own warmup loop.
+            eprintln!(
+                "[spike74][characterize]   (delta=0 — warmup likely pre-paid by sibling tests; \
+                 see first-cycle breakdown below)"
+            );
+        } else {
+            for (delta, _idx, name) in &warmup_deltas {
+                eprintln!("[spike74][characterize]   {name}: {delta:+}");
+            }
+        }
+    }
+
+    // ---- Print the FIRST-CYCLE per-type delta ----
+    // This is the tightest measurement window: types added by the FIRST
+    // create→derive→drop cycle in THIS test (before and after that cycle).
+    // If the OS RPC channel was cold entering this cycle, this will show the full
+    // ~65-handle warmup.  If it was already warm (parallel run), this shows the
+    // per-cycle residual (expected: 0 or near-0, confirming no per-cycle leak).
+    if let (Some(pre), Some(post)) = (first_cycle_pre, first_cycle_post) {
+        let mut indices: std::collections::BTreeSet<u8> = std::collections::BTreeSet::new();
+        indices.extend(pre.keys().copied());
+        indices.extend(post.keys().copied());
+
+        let mut first_deltas: Vec<(i64, u8, String)> = indices
+            .iter()
+            .filter_map(|idx| {
+                let pre_count = pre.get(idx).map(|(_, c)| *c).unwrap_or(0);
+                let post_count = post.get(idx).map(|(_, c)| *c).unwrap_or(0);
+                let delta = post_count as i64 - pre_count as i64;
+                if delta == 0 {
+                    return None;
+                }
+                let name = post
+                    .get(idx)
+                    .map(|(n, _)| n.as_str())
+                    .filter(|n| !n.is_empty())
+                    .or_else(|| {
+                        pre.get(idx)
+                            .map(|(n, _)| n.as_str())
+                            .filter(|n| !n.is_empty())
+                    })
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| format!("TypeIndex#{idx}"));
+                Some((delta, *idx, name))
+            })
+            .collect();
+        first_deltas.sort_by(|a, b| b.0.abs().cmp(&a.0.abs()).then(a.1.cmp(&b.1)));
+
+        let first_total: i64 = first_deltas.iter().map(|(d, _, _)| d).sum();
+        eprintln!(
+            "[spike74][characterize] WARMUP first-cycle handle delta \
+             (pre-cycle-0 -> post-cycle-0-drop, total={first_total:+}):"
+        );
+        if first_deltas.is_empty() {
+            eprintln!(
+                "[spike74][characterize]   (delta=0 after first cycle drop — \
+                 OS RPC channel was already warmed before cycle 0; \
+                 use --test-threads=1 for cold-process characterisation)"
+            );
+        } else {
+            for (delta, _idx, name) in &first_deltas {
+                eprintln!("[spike74][characterize]   {name}: {delta:+}");
+            }
+        }
+    }
 
     // ---- Main cycles: assert no per-cycle growth ----
     for i in 0..(TOTAL_CYCLES - WARMUP_CYCLES) {
@@ -579,15 +779,83 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
     let post_full_run = get_process_handle_count();
     // ---- Characterize: snapshot after full run and print per-type deltas ----
     let after_snapshot = snapshot_handle_types_for_current_pid();
-    print_handle_type_delta(
-        &before_snapshot,
-        &after_snapshot,
-        &format!(
-            "handle-type delta: post-warmup plateau → post-{TOTAL_CYCLES}-cycles \
-             (delta={})",
-            post_full_run.saturating_sub(post_warmup)
-        ),
-    );
+
+    // ---- Print the STEADY-STATE per-type delta (post-warmup plateau → post-full-run) ----
+    // Empty output here means zero per-cycle handle growth — the ideal case.
+    {
+        let steady_total = post_full_run as i64 - post_warmup as i64;
+        eprintln!(
+            "[spike74][characterize] steady-state per-type delta \
+             (post-warmup -> post-{TOTAL_CYCLES}) (empty => no per-cycle leak):"
+        );
+
+        let mut indices: std::collections::BTreeSet<u8> = std::collections::BTreeSet::new();
+        indices.extend(before_snapshot.keys().copied());
+        indices.extend(after_snapshot.keys().copied());
+
+        let mut steady_deltas: Vec<(i64, u8, String)> = indices
+            .iter()
+            .filter_map(|idx| {
+                let pre_count = before_snapshot.get(idx).map(|(_, c)| *c).unwrap_or(0);
+                let post_count = after_snapshot.get(idx).map(|(_, c)| *c).unwrap_or(0);
+                let delta = post_count as i64 - pre_count as i64;
+                if delta == 0 {
+                    return None;
+                }
+                let name = after_snapshot
+                    .get(idx)
+                    .map(|(n, _)| n.as_str())
+                    .filter(|n| !n.is_empty())
+                    .or_else(|| {
+                        before_snapshot
+                            .get(idx)
+                            .map(|(n, _)| n.as_str())
+                            .filter(|n| !n.is_empty())
+                    })
+                    .map(|s| s.to_owned())
+                    .unwrap_or_else(|| format!("TypeIndex#{idx}"));
+                Some((delta, *idx, name))
+            })
+            .collect();
+        steady_deltas.sort_by(|a, b| b.0.abs().cmp(&a.0.abs()).then(a.1.cmp(&b.1)));
+
+        if steady_deltas.is_empty() {
+            eprintln!("[spike74][characterize]   (none — steady-state total={steady_total:+})");
+        } else {
+            for (delta, _idx, name) in &steady_deltas {
+                eprintln!("[spike74][characterize]   {name}: {delta:+}");
+            }
+
+            // Soft diagnostic: warn if any security-critical handle types are growing
+            // in the steady-state window. These types must NOT leak per-cycle.
+            // The hard assertion below catches the total; this names the culprit.
+            const SUSPECT_TYPES: &[&str] = &[
+                "Token", "File", "Job", "Section",
+                "ALPC Port", "Key",
+            ];
+            for (delta, _idx, name) in &steady_deltas {
+                if *delta > 0
+                    && SUSPECT_TYPES.iter().any(|s| name.eq_ignore_ascii_case(s))
+                {
+                    eprintln!(
+                        "[spike74][characterize] WARN: suspect per-cycle growth of \
+                         security-critical handle type '{name}': +{delta} over \
+                         {} steady-state cycles — check DeleteAppContainerProfile/FreeSid",
+                        TOTAL_CYCLES - WARMUP_CYCLES
+                    );
+                }
+            }
+        }
+        // Also emit the legacy tabular view for cross-reference.
+        print_handle_type_delta(
+            &before_snapshot,
+            &after_snapshot,
+            &format!(
+                "handle-type delta (tabular): post-warmup plateau → post-{TOTAL_CYCLES}-cycles \
+                 (delta={steady_total:+})"
+            ),
+        );
+    }
 
     eprintln!(
         "[spike74][handles] post-full-run handle count: {post_full_run} \
