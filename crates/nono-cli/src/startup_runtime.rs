@@ -16,6 +16,11 @@ pub(crate) fn allows_pre_exec_update_check(command: &Commands) -> bool {
             | Commands::Wrap(_)
             | Commands::Completions(_)
             | Commands::PackUpdateHintHelper(_)
+            // Phase 74 D-05: daemon and agent verbs are latency-sensitive
+            // (they drive service lifecycle / pipe connections); skip the
+            // background update check to avoid adding startup overhead.
+            | Commands::Daemon(_)
+            | Commands::Agent(_)
     )
 }
 

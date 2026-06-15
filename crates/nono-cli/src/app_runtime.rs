@@ -1,3 +1,4 @@
+use crate::agent_cli;
 use crate::audit_commands;
 use crate::classify_runtime;
 use crate::claude_code_hook;
@@ -67,6 +68,15 @@ fn dispatch_command(
                 std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
             classify_runtime::run_classify(args, registry)
         }),
+        // Phase 74 D-05: daemon lifecycle and agent management verbs.
+        // Thin clients over nono-agentd; daemon verbs drive the per-user SCM
+        // service; agent verbs are fail-secure when the daemon is not running.
+        Commands::Daemon(args) => {
+            run_command_with_update(update_handle, silent, || agent_cli::run_daemon(args))
+        }
+        Commands::Agent(args) => {
+            run_command_with_update(update_handle, silent, || agent_cli::run_agent(args))
+        }
         Commands::Setup(args) => {
             run_command_with_banner_and_update(update_handle, silent, || run_setup(args))
         }

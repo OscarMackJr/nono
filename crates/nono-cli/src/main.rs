@@ -11,6 +11,10 @@ mod capability_ext;
 // AI_AGENT marker classify verb (Phase 73 D-04). NOT cfg-gated — compiles on
 // all platforms via the nono::AgentRegistry non-Windows stub.
 mod classify_runtime;
+// Daemon lifecycle (nono daemon start|stop|status|install|uninstall) and
+// agent verbs (nono agent launch|list) — Phase 74 D-05 operator CLI surface.
+// NOT cfg-gated: the module stubs non-Windows paths via cfg blocks internally.
+mod agent_cli;
 mod claude_code_hook;
 mod cli;
 mod cli_bootstrap;
