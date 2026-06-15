@@ -1,0 +1,39 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-06-15T22:20:44.472Z",
+  "phase": "75",
+  "phase_name": "supplementary-controls-secondary-engines",
+  "phase_dir": ".planning/phases/75-supplementary-controls-secondary-engines",
+  "plan": 2,
+  "task": 0,
+  "total_tasks": 5,
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "75-01 SUPP-02 per-agent WFP add/remove + D-05 gate", "status": "done", "commit": "8da346d6"},
+    {"id": 3, "name": "75-03 copilot-cli native-PE engine profile", "status": "done", "commit": "69057404"},
+    {"id": 4, "name": "75-04 nono-ts confinedRun/confine parity + pin 0.62", "status": "done", "commit": "c336bde0 (nono) / e218827 (nono-ts)"}
+  ],
+  "remaining_tasks": [
+    {"id": 2, "name": "75-02 SUPP-01 operator demote (ControlRequest::Demote + handle_demote + CLI verb)", "status": "not_started", "wave": 2, "note": "was about to dispatch when paused; depends on 75-01 wfp_filter_remove (DONE)"},
+    {"id": 5, "name": "75-05 live Win11 UAT (SC1-SC5 + A1/A2/A4)", "status": "not_started", "wave": 3, "autonomous": false, "note": "human checkpoint — needs real Win11 host"}
+  ],
+  "blockers": [
+    {"description": "75-05 requires a real Win11 host for SC3 (Copilot end-to-end) + SC5 (nono-ts confined-run) + A1 (per-agent WFP isolation) UAT gates", "type": "human_action", "workaround": "none — host-gated by design"}
+  ],
+  "human_actions_pending": [
+    {"action": "Run Wave 3 live Win11 UAT (plan 75-05) and approve/report findings", "context": "SC3/SC5/A1 are real-host gates, not build-green-only (D-08)", "blocking": true}
+  ],
+  "decisions": [
+    {"decision": "Execute sequentially on the main tree with worktrees OFF", "rationale": "75-04 modifies the SIBLING nono-ts repo (../nono-ts, NOT a submodule) — Claude Code worktree isolation would break the ../nono-ts relative path and the commit protocol; plus known Windows worktree file-lock/CWD fragility; plus security-critical code", "phase": "75"},
+    {"decision": "nono-ts commits go on branch 44-broker-ffi-lockstep", "rationale": "that is the active bindings dev branch (same one nono-py uses), not main", "phase": "75"},
+    {"decision": "nono pin in nono-ts is a PATH dep { path = \"../Nono/crates/nono\", version = \"0.62\" }", "rationale": "crates.io nono 0.62.0 fails to build on Windows (Unix MetadataExt not cfg-gated); matches nono-py's local-path approach; version constraint 0.62 preserved", "phase": "75"},
+    {"decision": "Cross-target clippy (Linux+macOS) recorded as PARTIAL for all touched cfg-gated code", "rationale": "Win11 dev host cannot cross-compile (ring/aws-lc C toolchain absent); deferred to CI per cross-target-verify-checklist.md", "phase": "75"},
+    {"decision": "D-03 locked YES — demote also cuts the per-agent WFP filter (75-02)", "rationale": "leaving egress open after IL-drop is a security regression; WFP-cut failure on demote is non-fatal", "phase": "75"}
+  ],
+  "uncommitted_files": [
+    ".planning/spikes/003-daemon-as-launcher/daemon_grant/ (pre-existing Phase-74 debris, untracked, unrelated)",
+    "check_changes.py / fix_74_01.py / fix_74_03.py / fix_t1_ac.py (pre-existing stray scripts, untracked, unrelated)"
+  ],
+  "next_action": "Re-run /gsd:execute-phase 75 — it resumes at Wave 2 (75-02, the only incomplete implementation plan). Dispatch a gsd-executor for 75-02 WITHOUT worktree isolation (sequential on main tree). Then stop at Wave 3 (75-05) human UAT gate.",
+  "context_notes": "Wave 1 (75-01, 75-03, 75-04) is complete, committed, and integration-build-clean (nono-cli builds; nono-ts exports confirmed). I was mid-dispatch of the 75-02 executor (prompt fully prepared) when the user paused. 75-02 is self-contained: ControlRequest::Demote + handle_demote (OpenProcessToken + SetTokenInformation(TokenIntegrityLevel, Low)) + nono agent demote CLI verb. Critical: handle_demote MUST call wfp_filter_remove (pub(crate) at crates/nono-cli/src/agent_daemon/launch.rs:265) for the D-03 WFP-cut, and MUST document the spike-002 leak limits in both the doc comment and CLI help. Demote targets a daemon tenant_id only (D-02), does NOT reap (D-03), unknown tenant_id -> clear error. Do NOT weaken the Medium-IL control-pipe SDDL (prevents Low-IL self-demote)."
+}
