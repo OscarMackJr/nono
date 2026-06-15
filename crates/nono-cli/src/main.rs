@@ -112,6 +112,7 @@ mod provision_windows;
 #[cfg(not(target_os = "windows"))]
 mod startup_prompt;
 mod startup_runtime;
+mod state_paths;
 mod supervised_runtime;
 mod terminal_approval;
 mod theme;
