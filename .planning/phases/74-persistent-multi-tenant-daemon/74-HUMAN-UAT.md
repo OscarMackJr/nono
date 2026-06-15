@@ -108,12 +108,23 @@ sc.exe query nono-agentd
 # If RUNNING or STOPPED: run  sc.exe stop nono-agentd ; sc.exe delete nono-agentd  first
 ```
 
-### P-5: Non-elevated PowerShell session
+### P-5: Elevation — install step needs admin; everything else non-elevated
 
-nono-agentd registers as a per-user SCM service (`type= userservice` / `SERVICE_USER_OWN_PROCESS`
-in HKCU namespace). This does NOT require elevation. Run the entire UAT from a normal
-(non-elevated) PowerShell window. If you run elevated, `SC_MANAGER_CONNECT` may route the user
-service to the machine-wide SCM namespace, giving misleading `sc qc` output.
+nono-agentd runs as a per-user service (`type= userservice` / `SERVICE_USER_OWN_PROCESS`), so the
+daemon itself NEVER runs elevated. BUT **registering** the user-service *template* (`sc create
+… type= userservice`) writes to the machine-wide SCM and therefore requires a **one-time
+administrator** elevation — a non-elevated `nono daemon install` fails with
+`OpenSCManager FAILED 5: Access is denied`. This is expected Windows behavior (admin to register;
+USER to run), not a privilege-model violation.
+
+**Procedure:**
+- Run **`nono daemon install` ONCE from an elevated (Run as administrator) PowerShell.**
+- Run **everything else** — `daemon start/status/stop`, `agent launch/list`, all SC tests —
+  from a **normal non-elevated** PowerShell window (agents must be launched non-elevated so the
+  R-B3 workspace ownership + broker trust gates behave correctly).
+- Alternatively, skip `install` entirely and use the **dev-layout** `nono daemon start` (no admin)
+  for SC1-SC5; the daemon still runs as the interactive user — confirm via the nono-agentd process
+  owner — but `sc qc` TYPE 110 (the SCM-registration proof) is then not exercised.
 
 ---
 
