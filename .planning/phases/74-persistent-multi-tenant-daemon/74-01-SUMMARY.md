@@ -148,11 +148,45 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 | `daemon_concurrent_agents` | PASS | 2 distinct SIDs, 2 independent pipe instances, no deadlock |
 | A1 (`SeImpersonatePrivilege` confirmed) | PASS | `ImpersonateLoggedOnUser` with real AppContainer B token succeeded; impersonation confirmed working from test process context |
 
-**Handle warmup characterization (SC3):**
-- cold_baseline = 81, post_warmup = 152 → one-time cost = 71 handles
-- Steady-state plateau: handle count = 145 at cycles 25/50/75/100 (dead flat, zero net growth)
-- NtQuerySystemInformation handle-type breakdown: delta = 0 across all types for the steady-state window (plateau-level snapshot before vs. after 90 cycles). The +71 one-time cost is attributable to the AppX Deployment Service RPC channel initialization (standard Windows behavior on the first `CreateAppContainerProfile` call). No Token/File/Job/AppContainer handle grows per-cycle — Drop paths (DeleteAppContainerProfile + FreeSid) are correctly cleaning up.
-- Assertion changed: from `post <= cold_baseline + 5` to `post_full_run <= post_warmup + EPSILON_STEADY` (steady-state guard, not cold-baseline guard). This is the real per-cycle-leak guard.
+**Handle warmup characterization (SC3) — NAMED (commit 969090dc):**
+
+Run the test ALONE (not with siblings) to see the full cold breakdown:
+```
+cargo test -p nono-cli --test daemon_handle_baseline n_agents_over_time -- --nocapture
+```
+
+Confirmed breakdown on Win11 build 26200 (fresh process, test run alone):
+```
+[spike74][characterize] WARMUP per-type handle delta (cold -> post-warmup, total=+66):
+[spike74][characterize]   EtwRegistration: +26
+[spike74][characterize]   Event: +12
+[spike74][characterize]   Semaphore: +12
+[spike74][characterize]   ALPC Port: +3
+[spike74][characterize]   Key: +3
+[spike74][characterize]   IRTimer: +2
+[spike74][characterize]   WaitCompletionPacket: +2
+[spike74][characterize]   File: +2
+[spike74][characterize]   Thread: +1
+[spike74][characterize]   Mutant: +1
+[spike74][characterize]   TpWorkerFactory: +1
+[spike74][characterize]   IoCompletion: +1
+[spike74][characterize] steady-state per-type delta (post-warmup -> post-100) (empty => no per-cycle leak):
+[spike74][characterize]   (none — steady-state total=+0)
+```
+
+**Interpretation:** The +65–71 one-time warmup is entirely RPC/threadpool infrastructure:
+- `EtwRegistration` (+26): Event Tracing for Windows provider registrations in the AppX Deployment Service RPC path
+- `Event`/`Semaphore` (+24): synchronization objects for the AppX RPC thread model
+- `ALPC Port` (+3): AppX Deployment Service's Local Procedure Call channel (confirms: these are RPC binding handles, NOT per-agent leaks)
+- `Key` (+3): registry keys for AppContainer profile storage (HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer)
+- `IRTimer`/`WaitCompletionPacket`/`IoCompletion`/`TpWorkerFactory` (+6): thread-pool I/O completion infrastructure
+- `File`/`Thread`/`Mutant` (+4): minor infrastructure handles
+
+**None of Token, Job, Process, or Section grow in the warmup — no token-reuse, no job-object leak, no AppContainer credential leak.**
+
+**Steady-state delta = 0**: after warmup plateau, 90 additional create→derive→drop cycles add zero handles. Drop paths (`DeleteAppContainerProfile` + `FreeSid`) correctly clean up per-cycle.
+
+Note on parallel test runs: when run alongside sibling tests (default Rust test runner), sibling tests pre-pay the AppX RPC warmup before the handle-count test body starts. The test detects this (prints "warmup likely pre-paid by sibling tests") and falls back to the first-cycle delta window. Run with `-- --test-threads=1` for guaranteed cold characterization, or run the test alone with the positional name filter (as above).
 
 **SC2 technique used (how tenant B's token was minted):**
 - Profile B created via `nono::create_app_container_profile(&tenant_b_name)` 
@@ -214,6 +248,22 @@ test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fini
 - **Added feature:** `Win32_System_LibraryLoader` in `nono-cli`'s windows-sys features for NtQuerySystemInformation dynamic load
 - **Commit:** `73975be0`
 - **Security note:** This approach is BETTER than the original — it proves the SDDL gate works against a REAL AppContainer token (the actual threat model), not a hand-crafted synthetic Low-IL token. SC2 is more meaningful than originally designed.
+
+**7. [Rule 1 - Bug] SC3 characterization: NtQuerySystemInformation buffer parse offset wrong (entries_start=4 should be 8)**
+
+- **Found during:** Post-merge fix iteration (commit 969090dc)
+- **Issue:** `SYSTEM_HANDLE_INFORMATION` on x64 has a 4-byte alignment gap between `NumberOfHandles` (ULONG, 4 bytes) and the `Handles[]` array (which contains `SYSTEM_HANDLE_TABLE_ENTRY_INFO` entries that have a pointer-sized `Object` field requiring 8-byte alignment). Using `entries_start = 4` caused the PID comparison loop to read from the padding bytes instead of the first entry, so all PID checks failed silently and every snapshot returned an empty type map.
+- **Fix:** Changed `entries_start` to `8` on x64 (`if cfg!(target_pointer_width = "64") { 8 } else { 4 }`). This makes the first entry start at the correct 8-byte-aligned offset.
+- **Files modified:** `crates/nono-cli/tests/daemon_handle_baseline.rs`
+- **Commit:** `969090dc`
+
+**8. [Rule 1 - Bug] SC3 characterization: NtQueryObject type name read from wrong offset**
+
+- **Found during:** Post-merge fix iteration (commit 969090dc)
+- **Issue:** `query_object_type_name` assumed type name data started at a fixed offset (16 bytes = size of UNICODE_STRING) after the struct header. In reality, `UNICODE_STRING.Buffer` is an absolute virtual-address pointer; NtQueryObject stores the string data inline at some offset after the full `OBJECT_TYPE_INFORMATION` struct, and the Buffer pointer tells you where. Reading from offset 16 skipped into unrelated struct fields, producing garbled Unicode output (Korean/Ethiopic characters from random bytes interpreted as UTF-16).
+- **Fix:** Read the `Buffer` absolute pointer from the UNICODE_STRING (offset 8 on x64), subtract the buffer base address to compute the inline data offset, then read `Length/2` UTF-16 code units from that offset. Added guards for `abs_ptr < buf_base` and data extending beyond buffer.
+- **Files modified:** `crates/nono-cli/tests/daemon_handle_baseline.rs`
+- **Commit:** `969090dc`
 
 **6. [Rule 1 - Bug] SC3 handle reap: cold-baseline assertion misspecified (one-time OS warmup)**
 
