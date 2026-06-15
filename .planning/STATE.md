@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
 status: verifying
-last_updated: "2026-06-15T18:42:20.555Z"
+last_updated: "2026-06-15T18:58:27.107Z"
 last_activity: 2026-06-15
 progress:
   total_phases: 5
@@ -152,7 +152,7 @@ Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — m
 
 ## Session Continuity
 
-**Last session:** 2026-06-15T18:42:20.542Z
+**Last session:** 2026-06-15T18:58:27.093Z
 
 **Phase 74 Plan 01 executed (2026-06-15):** Wave 0 — ADR + spike harness. `proj/ADR-74-privilege-model.md` committed first (SC4 ordering gate; 369a7c45). `crates/nono-cli/tests/daemon_handle_baseline.rs` committed with 4 test functions (d9788fa0). Harness compiles cleanly on Windows host. AWAITING human checkpoint "approved + spike green" before Wave 1. A2 answered: `TokenAppContainerSid = 31i32` in windows-sys 0.59. A6 answered: trust gate checks CALLER (nono.exe) not broker. A1 pending spike run.
 
