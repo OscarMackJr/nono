@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v2.12
 milestone_name: AI Agent Abstraction
 status: executing
-last_updated: "2026-06-15T01:04:19.818Z"
-last_activity: 2026-06-15 -- Phase 74 planning complete
+last_updated: "2026-06-15T02:10:00.000Z"
+last_activity: 2026-06-15 -- Phase 74 Plan 01 executed (ADR + spike harness; awaiting human checkpoint)
 progress:
   total_phases: 5
   completed_phases: 3
@@ -21,14 +21,14 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 73 — ai-agent-marker
+**Current Focus:** Phase 74 — persistent-multi-tenant-daemon
 
 ## Current Position
 
-Phase: 73 (ai-agent-marker) — CODE-COMPLETE, host-gated UAT pending
-Plan: 3 of 3 executed
-Status: Ready to execute
-Last activity: 2026-06-15 -- Phase 74 planning complete
+Phase: 74 (persistent-multi-tenant-daemon) — EXECUTING
+Plan: 1 of 6 — AT CHECKPOINT (human-verify, blocking)
+Status: Executing Phase 74 — Plan 74-01 code-complete, awaiting spike green
+Last activity: 2026-06-15 -- Phase 74 Plan 01: ADR + spike harness committed; awaiting human checkpoint "approved + spike green"
 
 ### v2.12 Phase Summary (active)
 
@@ -37,7 +37,7 @@ Last activity: 2026-06-15 -- Phase 74 planning complete
 | 71 | Engine-Agnostic Launch Productionization — parent-and-confine any covered engine (Aider + LangChain-Python) through one engine-neutral path; de-spike the validated 003 path; fail-secure coverage + R-B3 diagnostic | ENG-01, ENG-02, ENG-03 | 5 | ⬜ Not started | Real Win11 host (Aider end-to-end) |
 | 72 | nono-py Binding + In-Process-Exec Proof — confine a real LangChain agent with NO Claude hook via `confined_run` (Shape A) + `confine` (Shape B); document the E1-E5 contract | ABI-01, ABI-02 | 5 | ✅ Complete (2026-06-14) | Win11 host w/ Python; nono-py build |
 | 73 | AI_AGENT Marker — unforgeable spawn-time token SID (not a named job); deny breakaway; daemon-only job ACL; classify arbitrary PID | MARK-01 | 5 | 🔶 Code-complete (UAT pending) | Win11 host |
-| 74 | Persistent Multi-Tenant Daemon (RISKIEST — former spike 004) — least-priv USER daemon, multi-client tenant-isolated pipe, fresh token+job per agent, deterministic reap | DMON-01, DMON-02, DMON-03 | 5 | ⬜ Not started | Win11 host; **research-flag 74** |
+| 74 | Persistent Multi-Tenant Daemon (RISKIEST — former spike 004) — least-priv USER daemon, multi-client tenant-isolated pipe, fresh token+job per agent, deterministic reap | DMON-01, DMON-02, DMON-03 | 5 | 🔵 In-progress (Plan 01 at checkpoint) | Win11 host; **research-flag 74** |
 | 75 | Supplementary Controls + Secondary Engines — demote (demote-only), per-agent WFP egress, Copilot CLI profile, nono-ts parity | SUPP-01, SUPP-02, SUPP-03 | 5 | ⬜ Not started | Win11 host; node/nono-ts build |
 
 **Dependencies:** **71 FIRST** (foundation — everything sits on top). **72 ∥ 73** (parallel — both depend only on 71). **74** depends on 71 (working single-launch path — HARD GATE) + 73 (marker). **75** depends on 74 (demote/WFP are daemon-keyed) + 72 (nono-ts mirrors nono-py). The daemon (74) MUST NOT precede a solid single-launch path — that ordering IS the quality gate.
@@ -84,6 +84,8 @@ Last activity: 2026-06-15 -- Phase 74 planning complete
 | AI_AGENT marker = unforgeable token SID, NOT a named job | 73 | Pitfall 2: a named job is openable by name (rendezvous, not secret); env/argv markers are forgeable. Named job is kill-group/enumeration/resource-caps only; the token SID is the authorization signal. |
 | Least-privilege USER daemon SPLIT from the elevated WFP service; privilege-model ADR FIRST | 74 | Pitfall 4: a SYSTEM-level always-on launcher gives an escaped agent a pivot to all tenants + the host. ADR written before the service host is coded. |
 | Composition over green-field: no new wire protocol, windows-sys 0.59 / pyo3 0.28 / napi 2 kept | all | Research STACK.md: every new dep already lives in-tree pinned; deltas are features + net-new Win32 (named job objects). Deliberate non-bumps avoid gratuitous cross-target-drift churn and a napi-3 scope balloon. |
+| A2: TokenAppContainerSid = 31i32 in windows-sys 0.59 (not 56 as noted in RESEARCH.md) | 74 Plan 01 | Confirmed from windows-sys-0.59.0/src/Windows/Win32/Security/mod.rs at compile time. |
+| A6: broker trust gate checks nono.exe CALLER path + Authenticode; broker binary must match | 74 Plan 01 | Code read of launch.rs is_dev_build_layout() + verify_broker_authenticode(); daemon binary (nono-agentd.exe) needs same trust-gate treatment as nono.exe in production. |
 
 <details>
 <summary>v2.11 decisions (archived)</summary>
@@ -148,7 +150,9 @@ Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — m
 
 ## Session Continuity
 
-**Last session:** 2026-06-15T00:07:41.746Z
+**Last session:** 2026-06-15T02:10:00.000Z
+
+**Phase 74 Plan 01 executed (2026-06-15):** Wave 0 — ADR + spike harness. `proj/ADR-74-privilege-model.md` committed first (SC4 ordering gate; 369a7c45). `crates/nono-cli/tests/daemon_handle_baseline.rs` committed with 4 test functions (d9788fa0). Harness compiles cleanly on Windows host. AWAITING human checkpoint "approved + spike green" before Wave 1. A2 answered: `TokenAppContainerSid = 31i32` in windows-sys 0.59. A6 answered: trust gate checks CALLER (nono.exe) not broker. A1 pending spike run.
 
 **v2.12 roadmap complete (2026-06-13):** Phases 71-75 defined, 12/12 reqs mapped (100% coverage, no orphans, no duplicates). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order is dependency-driven: 71 (foundation) → (72 ∥ 73 parallel) → 74 (riskiest daemon; hard-gated behind working 71 + 73; research-flagged) → 75 (supplementary). Composition milestone over broker-arm launch + `socket_windows.rs` cap pipe + `nono-wfp-service` shape; user-mode only (ADR-65 No-go); isolation ≥ `nono run`.
 
@@ -156,8 +160,9 @@ Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — m
 
 ## Operator Next Steps
 
+- **IMMEDIATE:** Run `NONO_DAEMON_INTEGRATION_TESTS=1 cargo test -p nono-cli daemon_handle_baseline -- --nocapture` on a real Win11 host with dev-layout nono.exe. Type "approved + spike green" when all 4 clauses pass, or report failures for replanning.
+- After spike green: `/gsd:execute-phase 74` will continue with Plan 74-02 (daemon binary skeleton) as Wave 1.
 - `/gsd:plan-phase 71` — engine-agnostic launch productionization (the FOUNDATION; spike-003 VALIDATED, skip `--research-phase`). Needs a real Win11 host for the Aider end-to-end gate.
 - `/gsd:plan-phase 72` and `/gsd:plan-phase 73` — parallel-safe once 71 lands (binding proof ∥ marker; both standard-pattern).
-- `/gsd:plan-phase 74 --research-phase 74` — the riskiest daemon; HARD-GATED behind a working 71 + 73. Research token/job reuse-vs-fresh + `ImpersonateNamedPipeClient`-vs-cap-pipe-DACL composition + the privilege-model ADR BEFORE coding.
 - `/gsd:plan-phase 75` — supplementary controls + Copilot profile + nono-ts parity (proven shapes).
 - Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
