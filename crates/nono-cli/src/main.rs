@@ -26,6 +26,7 @@ mod config;
 mod credential_runtime;
 mod deprecated_policy;
 mod deprecated_schema;
+mod diagnostic;
 mod diagnostic_formatter;
 mod exec_identity;
 #[cfg(target_os = "windows")]

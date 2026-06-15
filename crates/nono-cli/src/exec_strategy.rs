@@ -16,6 +16,7 @@ mod supervisor_linux;
 #[cfg(target_os = "macos")]
 mod supervisor_macos;
 
+use crate::diagnostic::{DiagnosticFormatter, DiagnosticMode};
 use crate::rollback_runtime::{
     finalize_supervised_exit, AuditState, RollbackExitContext, RollbackRuntimeState,
 };
@@ -28,8 +29,8 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
 use nono::supervisor::{ApprovalDecision, SupervisorMessage, SupervisorResponse};
 use nono::{
-    ApprovalBackend, CapabilitySet, DenialReason, DenialRecord, DiagnosticFormatter,
-    DiagnosticMode, NonoError, Result, Sandbox, SupervisorSocket,
+    ApprovalBackend, CapabilitySet, DenialReason, DenialRecord, NonoError, Result, Sandbox,
+    SupervisorListener, SupervisorSocket, UnixSocketCapability, UnixSocketMode,
 };
 use std::collections::HashSet;
 use std::ffi::{CString, OsStr};
@@ -169,31 +170,37 @@ const MAX_DENIAL_RECORDS: usize = 1000;
 /// Hard cap on request IDs tracked for replay detection.
 const MAX_TRACKED_REQUEST_IDS: usize = 4096;
 
+struct ProfileSaveOffer<'a> {
+    policy_explanations: &'a [crate::diagnostic::PolicyExplanation],
+    error_observation: &'a crate::diagnostic::ErrorObservation,
+    caps: &'a CapabilitySet,
+    command: &'a [String],
+    compared_profile: Option<&'a str>,
+    sandbox_violations: &'a [nono::SandboxViolation],
+    ignored_denial_paths: &'a [std::path::PathBuf],
+}
+
 fn offer_profile_save_for_child(
     pty: Option<&mut crate::pty_proxy::PtyProxy>,
-    policy_explanations: &[nono::diagnostic::PolicyExplanation],
-    error_observation: &nono::diagnostic::ErrorObservation,
-    caps: &CapabilitySet,
-    command: &[String],
-    compared_profile: Option<&str>,
+    offer: ProfileSaveOffer<'_>,
 ) -> Result<()> {
     if let Some(proxy) = pty {
         let _released_terminal = proxy.release_terminal_for_prompt();
         return crate::profile_save_runtime::offer_save_run_profile(
-            policy_explanations,
-            error_observation,
-            caps,
-            command,
-            compared_profile,
+            offer.policy_explanations,
+            offer.error_observation,
+            offer.caps,
+            offer.command,
+            offer.compared_profile,
         );
     }
 
     crate::profile_save_runtime::offer_save_run_profile(
-        policy_explanations,
-        error_observation,
-        caps,
-        command,
-        compared_profile,
+        offer.policy_explanations,
+        offer.error_observation,
+        offer.caps,
+        offer.command,
+        offer.compared_profile,
     )
 }
 
@@ -1677,7 +1684,7 @@ pub fn execute_supervised(
             let error_observation = pty_proxy
                 .as_ref()
                 .map(|p| {
-                    nono::diagnostic::analyze_error_output(
+                    crate::diagnostic::analyze_error_output(
                         &p.screen_plaintext(),
                         config.protected_paths,
                         Some(config.current_dir),
@@ -1767,7 +1774,7 @@ pub fn execute_supervised(
                     )
                     .with_canonical_denial_paths(canonical_denial_paths);
                 if let Some(program) = config.command.first() {
-                    formatter = formatter.with_command(nono::diagnostic::CommandContext {
+                    formatter = formatter.with_command(crate::diagnostic::CommandContext {
                         program: program.clone(),
                         resolved_path: config.resolved_program.to_path_buf(),
                         args: nono::scrub_argv_with_policy(config.command, redaction_policy),
@@ -1813,11 +1820,15 @@ pub fn execute_supervised(
                 clear_signal_forwarding_target();
                 offer_profile_save_for_child(
                     pty_proxy.as_mut(),
-                    &prompt_policy_explanations,
-                    &prompt_error_observation,
-                    config.caps,
-                    config.command,
-                    config.profile_save_base,
+                    ProfileSaveOffer {
+                        policy_explanations: &prompt_policy_explanations,
+                        error_observation: &prompt_error_observation,
+                        caps: config.caps,
+                        command: config.command,
+                        compared_profile: config.profile_save_base,
+                        sandbox_violations: &visible_sandbox_violations,
+                        ignored_denial_paths: config.ignored_denial_paths,
+                    },
                 )?;
             }
 
@@ -1836,8 +1847,8 @@ fn build_policy_explanations(
     denials: &[nono::diagnostic::DenialRecord],
     sandbox_violations: &[nono::SandboxViolation],
     caps: &nono::CapabilitySet,
-) -> Vec<nono::diagnostic::PolicyExplanation> {
-    use nono::diagnostic::PolicyExplanation;
+) -> Vec<crate::diagnostic::PolicyExplanation> {
+    use crate::diagnostic::PolicyExplanation;
     use nono::AccessMode;
     use std::collections::BTreeMap;
 
@@ -1890,8 +1901,6 @@ fn build_policy_explanations(
         match crate::query_ext::query_path(&path, access, caps, &[]) {
             Ok(crate::query_ext::QueryResult::Denied {
                 reason,
-                details,
-                policy_source,
                 suggested_flag,
                 ..
             }) => {
@@ -1899,8 +1908,6 @@ fn build_policy_explanations(
                     path,
                     access,
                     reason,
-                    details,
-                    policy_source,
                     suggested_flag,
                 });
             }
@@ -1950,7 +1957,7 @@ fn should_print_diagnostic_footer(
     denials: &[nono::diagnostic::DenialRecord],
     ipc_denials: &[nono::diagnostic::IpcDenialRecord],
     sandbox_violations: &[nono::SandboxViolation],
-    error_observation: &nono::diagnostic::ErrorObservation,
+    error_observation: &crate::diagnostic::ErrorObservation,
 ) -> bool {
     !no_diagnostics
         && (exit_code != 0
@@ -1981,8 +1988,8 @@ fn filter_suppressed_system_service_violations(
 fn should_offer_profile_save(
     no_diagnostics: bool,
     exit_code: i32,
-    policy_explanations: &[nono::diagnostic::PolicyExplanation],
-    error_observation: &nono::diagnostic::ErrorObservation,
+    policy_explanations: &[crate::diagnostic::PolicyExplanation],
+    error_observation: &crate::diagnostic::ErrorObservation,
     sandbox_violations: &[nono::SandboxViolation],
 ) -> bool {
     !no_diagnostics
@@ -3962,7 +3969,7 @@ mod tests {
             target: Some("/tmp/secret.txt".to_string()),
         }];
         let denials = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
 
         assert!(should_print_diagnostic_footer(
             false,
@@ -3984,15 +3991,13 @@ mod tests {
 
     #[test]
     fn test_profile_save_prompt_triggers_on_policy_explanation_with_zero_exit() {
-        let explanations = vec![nono::diagnostic::PolicyExplanation {
+        let explanations = vec![crate::diagnostic::PolicyExplanation {
             path: PathBuf::from("/tmp/secret.txt"),
             access: nono::AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            details: None,
-            policy_source: None,
             suggested_flag: Some("--read-file /tmp/secret.txt".to_string()),
         }];
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
 
         assert!(should_offer_profile_save(
             false,
@@ -4004,9 +4009,27 @@ mod tests {
     }
 
     #[test]
+    fn test_profile_save_prompt_triggers_on_user_preferences_violation_with_zero_exit() {
+        let explanations = Vec::new();
+        let observation = crate::diagnostic::ErrorObservation::default();
+        let violations = vec![nono::SandboxViolation {
+            operation: "user-preference-read".to_string(),
+            target: Some("kcfpreferencesanyapplication".to_string()),
+        }];
+
+        assert!(should_offer_profile_save(
+            false,
+            0,
+            &explanations,
+            &observation,
+            &violations,
+        ));
+    }
+
+    #[test]
     fn test_suppressed_system_service_violations_do_not_offer_profile_save() {
         let explanations = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
         let violations = vec![nono::SandboxViolation {
             operation: "forbidden-exec-sugid".to_string(),
             target: None,
@@ -4054,7 +4077,7 @@ mod tests {
     #[test]
     fn test_profile_save_prompt_preserves_nonzero_exit_behavior() {
         let explanations = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
 
         assert!(should_offer_profile_save(
             false,

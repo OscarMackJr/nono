@@ -69,10 +69,7 @@ pub use capability::{
     AccessMode, CapabilitySet, CapabilitySource, FsCapability, IpcMode, NetworkMode,
     ProcessInfoMode, SignalMode, SocketScope, UnixSocketCapability, UnixSocketMode, UnixSocketOp,
 };
-pub use diagnostic::{
-    CommandContext, DenialReason, DenialRecord, DiagnosticFormatter, DiagnosticMode,
-    IpcDenialRecord, SandboxViolation,
-};
+pub use diagnostic::{DenialReason, DenialRecord, IpcDenialRecord, SandboxViolation};
 pub use error::{NonoError, Result, CGROUP_V2_HINT};
 pub use keystore::{
     is_apple_password_uri, is_env_uri, is_file_uri, is_keyring_uri, is_op_uri, load_secret_by_ref,
