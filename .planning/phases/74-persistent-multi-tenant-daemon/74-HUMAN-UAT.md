@@ -110,9 +110,9 @@ sc.exe query nono-agentd
 
 ### P-5: Elevation — install step needs admin; everything else non-elevated
 
-nono-agentd runs as a per-user service (`type= userservice` / `SERVICE_USER_OWN_PROCESS`), so the
-daemon itself NEVER runs elevated. BUT **registering** the user-service *template* (`sc create
-… type= userservice`) writes to the machine-wide SCM and therefore requires a **one-time
+nono-agentd runs as a per-user service (`sc.exe type= userown` / `SERVICE_USER_OWN_PROCESS`), so
+the daemon itself NEVER runs elevated. BUT **registering** the user-service *template* (`sc create
+… type= userown`) writes to the machine-wide SCM and therefore requires a **one-time
 administrator** elevation — a non-elevated `nono daemon install` fails with
 `OpenSCManager FAILED 5: Access is denied`. This is expected Windows behavior (admin to register;
 USER to run), not a privilege-model violation.
@@ -124,7 +124,7 @@ USER to run), not a privilege-model violation.
   R-B3 workspace ownership + broker trust gates behave correctly).
 - Alternatively, skip `install` entirely and use the **dev-layout** `nono daemon start` (no admin)
   for SC1-SC5; the daemon still runs as the interactive user — confirm via the nono-agentd process
-  owner — but `sc qc` TYPE 110 (the SCM-registration proof) is then not exercised.
+  owner — but `sc qc` TYPE 50 (the SCM-registration proof) is then not exercised.
 
 ---
 
@@ -145,7 +145,7 @@ test exercises a high-privilege multi-tenant surface — dangerous rather than p
 
 **Expected output:**
 ```
-nono-agentd installed as a per-user service (type= userservice).
+nono-agentd installed as a per-user service (type= userown).
 Use `nono daemon start` to start it.
 ```
 
@@ -164,7 +164,7 @@ sc.exe qc nono-agentd
 [SC] QueryServiceConfig SUCCESS
 
 SERVICE_NAME: nono-agentd
-        TYPE               : 110  USER_OWN_PROCESS
+        TYPE               : 50  USER_OWN_PROCESS TEMPLATE
         START_TYPE         : 2   AUTO_START
         ERROR_CONTROL      : 1   NORMAL
         BINARY_PATH_NAME   : <path>\target\release\nono-agentd.exe --service-mode
@@ -172,22 +172,23 @@ SERVICE_NAME: nono-agentd
         TAG                : 0
         DISPLAY_NAME       : nono-agentd
         DEPENDENCIES       :
-        SERVICE_START_NAME : LocalSystem
+        SERVICE_START_NAME :
 ```
 
-> IMPORTANT — the `SERVICE_START_NAME: LocalSystem` field in the `sc qc` output is NOT the
-> service account for `USER_OWN_PROCESS` services. For user services (`TYPE: 110 USER_OWN_PROCESS`),
-> Windows stores the running account in the per-user SCM namespace (HKCU), not in the
-> `SERVICE_START_NAME` field used by machine-wide services. The key field is `TYPE : 110` —
-> this confirms the service runs as the interactive user, NOT as LocalSystem.
+> **Verified on Win11 build 26200 (2026-06-15):** the actual `TYPE` is **`50  USER_OWN_PROCESS
+> TEMPLATE`** (`SERVICE_USER_OWN_PROCESS` = 0x50, registered as a per-user-service template), and
+> `SERVICE_START_NAME` is **empty** — directly confirming the service is NOT LocalSystem. (An
+> earlier draft of this doc guessed "110"; the real code is 50. The pass signal is the
+> `USER_OWN_PROCESS` *name* + empty/non-LocalSystem start account, not a specific number.)
 >
-> Contrast with `nono-wfp-service`: that service shows `TYPE : 010  WIN32_OWN_PROCESS` and
-> `SERVICE_START_NAME : LocalSystem` — a system-privilege service. The `110` vs `010` TYPE
-> distinction is the SC4 pass/fail signal.
+> Contrast with `nono-wfp-service`: `TYPE : 10  WIN32_OWN_PROCESS` + `SERVICE_START_NAME :
+> LocalSystem` — a system-privilege service. `USER_OWN_PROCESS` vs `WIN32_OWN_PROCESS` is the
+> SC4 pass/fail signal.
 
-**SC4 PASS criterion:** `TYPE : 110  USER_OWN_PROCESS` is present.
-**SC4 FAIL criterion:** `TYPE : 010  WIN32_OWN_PROCESS` or any `LocalSystem`/`SYSTEM` in the
-service type field. If FAIL, STOP the UAT — do not proceed to SC1.
+**SC4 PASS criterion:** the `TYPE` field names `USER_OWN_PROCESS` (value 50, optionally with the
+`TEMPLATE` suffix) AND `SERVICE_START_NAME` is empty or otherwise not a SYSTEM account.
+**SC4 FAIL criterion:** `TYPE : 10  WIN32_OWN_PROCESS` (or any non-USER own-process type) or a
+`LocalSystem`/`SYSTEM` service-start account. If FAIL, STOP the UAT — do not proceed to SC1.
 
 ### SC4 Step 3 — Start the service and confirm separation from nono-wfp-service
 
@@ -207,7 +208,7 @@ sc.exe query nono-agentd
 sc.exe query nono-wfp-service  # if installed — must show as a SEPARATE service
 ```
 
-**Expected:** Two independent service entries; nono-agentd at `110 USER_OWN_PROCESS`, nono-wfp-service
+**Expected:** Two independent service entries; nono-agentd at `50 USER_OWN_PROCESS`, nono-wfp-service
 (if installed) at `010 WIN32_OWN_PROCESS`. No shared binary. No cross-dependency.
 
 ---
@@ -276,70 +277,40 @@ Start-Sleep -Seconds 2
 
 If already installed as an SCM service (from SC4), use `& $nono daemon start` after install.
 
-### SC1 Step 1 — Launch Agent A
+> **CRITICAL — agents reap FAST in this AppContainer (run launch + list as ONE block):**
+> A confined agent runs with NO network capability and a restricted window station, so common
+> "idle" processes self-exit almost immediately: `notepad.exe` can't create its window (exits
+> ~1-2s) and `ping.exe` can't do ICMP (exits at once). The daemon *correctly* reaps them on exit.
+> Therefore the multi-window "launch in window 2, launch in window 3, list in window 4" approach
+> does NOT work — by the time you type `list` by hand, the agents have already reaped (you'll see
+> "No agents running", which is the reap working, not a failure). Instead, launch BOTH agents and
+> `list` in a SINGLE pasted block so `list` fires before reap.
 
-In a NEW PowerShell window (Window 2), from the nono source tree root:
+### SC1 Step 1-3 — Launch two agents and list (single block)
 
-```powershell
-$nono = "$PWD\target\release\nono.exe"
-
-& $nono agent launch --profile aider -- notepad.exe
-```
-
-> **Plan 74-08:** a BARE executable name (`notepad.exe`) is now resolved to an absolute path via
-> `SearchPathW` before launch; an absolute path (`C:\Windows\System32\notepad.exe`) also works.
-> An unresolvable name returns a clear "executable not found" error, not a raw os-error-2.
-> `notepad.exe` is a GUI app that survives in AppContainer (no network/console needed).
-
-**Expected output:**
-```
-Launched agent:
-  tenant_id=<uuid>
-  profile=aider
-  sid=S-1-15-2-<A-octets>
-  pid=<A-pid>
-```
-
-Keep this window open (notepad.exe is running in the background as the confined agent).
-
-### SC1 Step 2 — Launch Agent B (while Agent A is still running)
-
-In a THIRD PowerShell window (Window 3):
+In your non-elevated PowerShell, paste this as one block:
 
 ```powershell
-$nono = "$PWD\target\release\nono.exe"
-
-& $nono agent launch --profile aider -- notepad.exe
-```
-
-**Expected output:**
-```
-Launched agent:
-  tenant_id=<uuid2 — DIFFERENT from Agent A>
-  profile=aider
-  sid=S-1-15-2-<B-octets — DIFFERENT from Agent A>
-  pid=<B-pid>
-```
-
-**Expected:** Agent B starts. Window 2 (Agent A) and Window 3 (Agent B) are both running
-simultaneously as distinct notepad processes, each in a separate AppContainer.
-
-### SC1 Step 3 — Confirm both agents with distinct SIDs (the key check)
-
-In a FOURTH PowerShell window (Window 4), while both notepad windows are open:
-
-```powershell
-$nono = "$PWD\target\release\nono.exe"
+& $nono agent launch --profile aider -- notepad.exe | Out-Null
+& $nono agent launch --profile aider -- notepad.exe | Out-Null
 & $nono agent list
 ```
 
-**Expected output (format illustrative; actual SIDs will differ):**
+> `notepad.exe` (bare name) is resolved via `SearchPathW` (Plan 74-08); an absolute path also works.
+> Each launch mints a fresh AppContainer profile + distinct package SID (the security-critical fact),
+> printed in the launch response and reflected in `list`.
+
+**Expected output (SIDs will differ):**
 
 ```
 Tenant agents (2):
   <uuid-A-prefix>  profile=aider  sid=S-1-15-2-<A-octets>  pid=<A-pid>
   <uuid-B-prefix>  profile=aider  sid=S-1-15-2-<B-octets>  pid=<B-pid>
 ```
+
+If `list` shows 0 or 1, you ran it too slowly (the agents reaped) — re-run the three-line block
+together. The reap-to-zero after the agents exit is verified separately in Step 4 and is itself a
+demonstration of SC3 (deterministic reap) end-to-end.
 
 **SC1 PASS criterion (all three sub-criteria required):**
 
@@ -536,8 +507,9 @@ no-wire-authz invariant (SC5 / DMON-03). Record the failure message and do not m
 **Purpose:** Confirm that Waves 0-4 did not introduce regressions into the existing test suite.
 
 ```powershell
-# Unit tier (lib only; no host-gated integration tests; < 30 seconds):
-cargo test -p nono-cli --lib
+# nono-cli is a BIN-ONLY crate (no lib target) — use --bin, NOT --lib
+# (`cargo test -p nono-cli --lib` errors: "no library targets found").
+cargo test -p nono-cli --bin nono
 ```
 
 **Expected outcome:** All non-integration tests pass. The 4 pre-existing baseline failures
@@ -593,13 +565,13 @@ Fill in on the real Win11 host. ALL six items must be PASS for Phase 74 to be ma
 
 | # | SC | Check | Result | Notes |
 |---|-----|-------|--------|-------|
-| 1 | SC4 | `sc qc nono-agentd` shows `TYPE : 110  USER_OWN_PROCESS` | [ ] PASS / [ ] FAIL | |
+| 1 | SC4 | `sc qc nono-agentd` shows `TYPE : 50  USER_OWN_PROCESS` | [ ] PASS / [ ] FAIL | |
 | 2 | SC1 | `nono agent list` shows 2 tenants with DISTINCT package SIDs while both agents alive | [ ] PASS / [ ] FAIL | Record SIDs |
 | 3 | SC1 | Both agents closed; `nono agent list` returns to 0; `nono daemon stop` exits cleanly; `daemon status` shows NOT RUNNING | [ ] PASS / [ ] FAIL | |
 | 4 | SC2 | `daemon_cross_tenant_denial` test: `ok. 1 passed; 0 failed` | [ ] PASS / [ ] FAIL | |
 | 5 | SC3 | `n_agents_over_time` test: `ok`; steady-state delta <= 5; record baseline + post counts | [ ] PASS / [ ] FAIL | baseline=___ post=___ delta=___ |
 | 6 | SC5 | `supervisor_message_no_tenant_id_field` test: `ok` | [ ] PASS / [ ] FAIL | |
-| 7 | REG | `cargo test -p nono-cli --lib` — no NEW failures beyond the 4 pre-existing ones | [ ] PASS / [ ] FAIL | |
+| 7 | REG | `cargo test -p nono-cli --bin nono` — no NEW failures beyond the 4 pre-existing ones | [ ] PASS / [ ] FAIL | |
 
 ---
 
@@ -615,7 +587,7 @@ Fill in from the live run on a real Win11 host.
 | **nono-agentd binary** | dev-layout `.\target\release\nono-agentd.exe` |
 | **nono version string** | (run `.\target\release\nono.exe --version`) |
 | **Workspace used** | (e.g., `C:\Users\<you>\nono-test-workspace`) |
-| **SC4 TYPE field** | (paste: `TYPE : 110  USER_OWN_PROCESS` or actual value) |
+| **SC4 TYPE field** | (paste: `TYPE : 50  USER_OWN_PROCESS` or actual value) |
 | **SC1 Agent A SID** | S-1-15-2-... |
 | **SC1 Agent B SID** | S-1-15-2-... (must differ from A) |
 | **SC3 cold baseline handles** | |
@@ -628,7 +600,7 @@ Fill in from the live run on a real Win11 host.
 |------|-------------|--------|-------|
 | P-1 | Build succeeds; nono.exe + nono-agentd.exe both in target\release | | |
 | SC4-1 | `nono daemon install` exits 0 with success message | | |
-| SC4-2 | `sc qc nono-agentd` TYPE = 110 USER_OWN_PROCESS | | |
+| SC4-2 | `sc qc nono-agentd` TYPE = 50 USER_OWN_PROCESS | | |
 | SC4-3 | `nono daemon start` exits 0; `daemon status` = RUNNING | | |
 | SC1-1 | `nono daemon start` exits 0; daemon status RUNNING | | |
 | SC1-2 | Agent A launched via `nono agent launch`; notepad running; shows tenant_id + SID | | |
@@ -683,7 +655,7 @@ the OS-level gate (SDDL) via a real AppContainer B process. A synthetic token ap
 require `SE_TCB_PRIVILEGE` (not held by interactive users on Win11); using a real spawned child
 is both feasible and a stronger security proof.
 
-**Privilege model (SC4 / ADR-74 Decision 1):** `TYPE : 110  USER_OWN_PROCESS` is the SCM
+**Privilege model (SC4 / ADR-74 Decision 1):** `TYPE : 50  USER_OWN_PROCESS` is the SCM
 service type code for `SERVICE_USER_OWN_PROCESS`. The split from `nono-wfp-service` (which runs
 as `TYPE : 010  WIN32_OWN_PROCESS` at LocalSystem) means an escaped agent reaching the daemon
 gains only interactive-user-level access, not SYSTEM-level access.
