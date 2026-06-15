@@ -30,6 +30,10 @@ conf-files = ["/etc/nono/profiles/"]
 name = "nono"
 path = "src/main.rs"
 
+[[bin]]
+name = "nono-agentd"
+path = "src/bin/nono-agentd.rs"
+
 [features]
 default = ["system-keyring"]
 # Enables OS system keyring access (macOS Keychain / Linux Secret Service).
