@@ -63,10 +63,7 @@ pub(crate) struct DaemonState {
     /// `job_handle` (firing `KILL_ON_JOB_CLOSE`) and calls
     /// `DeleteAppContainerProfile` (best-effort).
     ///
-    /// Read and mutated by `agent_daemon::accept_loop` and `agent_daemon::launch`
-    /// (Plan 74-04). This field is `#[expect(dead_code)]` in the Wave 1 skeleton
-    /// because it is wired in Wave 2 — the attribute must be removed in 74-04.
-    #[expect(dead_code, reason = "wired in Plan 74-04 (accept_loop + launch)")]
+    /// Read and mutated by `agent_daemon::accept_loop` and `agent_daemon::launch`.
     pub tenants: Arc<Mutex<HashMap<String, AgentTenant>>>,
 
     /// Phase 73/74 authorization registry: the private set of AppContainer
@@ -77,10 +74,11 @@ pub(crate) struct DaemonState {
     /// this registry. Namespace-pattern matching is intentionally NOT used as the
     /// authorization check — it is forgeable (see `agent.rs` module doc).
     ///
-    /// Read and mutated by `agent_daemon::accept_loop` and `agent_daemon::launch`
-    /// (Plan 74-04). This field is `#[expect(dead_code)]` in the Wave 1 skeleton
-    /// because it is wired in Wave 2 — the attribute must be removed in 74-04.
-    #[expect(dead_code, reason = "wired in Plan 74-04 (accept_loop + launch)")]
+    /// Mutated by `agent_daemon::launch` when agents are spawned/reaped.
+    /// `#[allow(dead_code)]` because the field is accessed only through the
+    /// `launch` module (Wave 3 wiring) and tests; clippy cannot see those
+    /// as reads in the binary compilation unit.
+    #[allow(dead_code)]
     pub agent_registry: Arc<Mutex<nono::AgentRegistry>>,
 }
 

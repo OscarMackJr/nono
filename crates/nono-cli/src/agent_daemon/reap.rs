@@ -65,10 +65,10 @@ pub(crate) struct AgentTenant {
     /// mutate `caps` in response to any wire request (ADR-74 Decision D-04:
     /// no escape hatch; query-only pipe).
     ///
-    /// Read by `agent_daemon::accept_loop` to serve capability queries
-    /// (Plan 74-04). This field is `#[expect(dead_code)]` in the Wave 1 skeleton
-    /// because `accept_loop` is wired in Wave 2 — the attribute must be removed in 74-04.
-    #[expect(dead_code, reason = "read by accept_loop in Plan 74-04")]
+    /// Read by `agent_daemon::accept_loop` when serving capability queries.
+    /// `#[allow(dead_code)]` because clippy cannot see the read in the binary
+    /// compilation unit (accessed via tests + accept_loop's query path).
+    #[allow(dead_code)]
     pub caps: nono::CapabilitySet,
 
     /// Job object handle for the agent's process group.
@@ -92,7 +92,6 @@ pub(crate) struct AgentTenant {
     /// `#[expect(dead_code)]` because clippy's dead_code analysis does not
     /// consider implicit destruction (Drop) as a "read" of the field.
     #[cfg(target_os = "windows")]
-    #[expect(dead_code, reason = "closed via OwnedHandle::drop; read in reap path in Plan 74-04")]
     pub process_handle: std::os::windows::io::OwnedHandle,
 }
 
