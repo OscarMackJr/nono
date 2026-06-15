@@ -129,7 +129,7 @@ Plans:
 Plans:
 **Wave 1**
 - [x] 75-01-PLAN.md — SUPP-02: per-agent WFP filter add at launch / remove at reap + D-05 fail-secure gate (SUPP-02)
-- [ ] 75-03-PLAN.md — SUPP-03a: copilot-cli engine profile in policy.json (native PE, no windows_interpreters) (SUPP-03)
+- [x] 75-03-PLAN.md — SUPP-03a: copilot-cli engine profile in policy.json (native PE, no windows_interpreters) (SUPP-03)
 - [ ] 75-04-PLAN.md — SUPP-03b: nono-ts confinedRun/confine parity + nono pin bump 0.33.0 → 0.62 + cross-target clippy (SUPP-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -179,7 +179,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
 | 74. Persistent Multi-Tenant Daemon | 8/8 | Complete   | 2026-06-15 |
-| 75. Supplementary Controls + Secondary Engines | 1/5 | In Progress|  |
+| 75. Supplementary Controls + Secondary Engines | 2/5 | In Progress|  |
 
 ## Dependency Graph
 
