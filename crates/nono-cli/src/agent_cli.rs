@@ -434,9 +434,10 @@ fn daemon_status() -> Result<()> {
 
 /// `nono daemon install` — register nono-agentd as a per-user SCM service.
 ///
-/// ADR-74 Decision 1: registers as `type= userservice` (SERVICE_USER_OWN_PROCESS,
-/// NOT LocalSystem/SYSTEM). T-74-05-04 mitigation: `type= userservice` is
-/// mandatory and always present in the `sc create` invocation.
+/// ADR-74 Decision 1: registers as `type= userown` (SERVICE_USER_OWN_PROCESS,
+/// NOT LocalSystem/SYSTEM). T-74-05-04 mitigation: the user-own type is
+/// mandatory and always present in the `sc create` invocation (`userown` is the
+/// valid `sc.exe` token; `userservice` is NOT a valid value).
 ///
 /// On non-Windows: prints a diagnostic and returns `Ok(())`.
 fn daemon_install() -> Result<()> {
@@ -474,8 +475,11 @@ fn daemon_install() -> Result<()> {
             )
         })?;
 
-        // ADR-74 Decision 1: type= userservice (per-user, NOT LocalSystem).
-        // T-74-05-04: `type= userservice` is ALWAYS present — never omit.
+        // ADR-74 Decision 1: type= userown (SERVICE_USER_OWN_PROCESS — per-user,
+        // NOT LocalSystem). `sc.exe` accepts <own|share|...|userown|usershare>;
+        // there is NO `userservice` token (that hardcoded value failed with
+        // exit 1639 "Invalid type= field"). T-74-05-04: the user-own type is
+        // ALWAYS present — never omit; never fall back to `own` (= LocalSystem).
         let binpath = format!("{agentd_str} --service-mode");
 
         let output = Command::new("sc")
@@ -483,7 +487,7 @@ fn daemon_install() -> Result<()> {
                 "create",
                 DAEMON_SERVICE_NAME,
                 "type=",
-                "userservice",
+                "userown",
                 "start=",
                 "auto",
                 "binpath=",
@@ -497,7 +501,7 @@ fn daemon_install() -> Result<()> {
             })?;
 
         if output.status.success() {
-            println!("nono-agentd installed as a per-user service (type= userservice).");
+            println!("nono-agentd installed as a per-user service (type= userown).");
             println!("Use `nono daemon start` to start it.");
             Ok(())
         } else {
