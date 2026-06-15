@@ -110,10 +110,10 @@ Plans:
 
 **Wave 5 (gap closure)** *(SC1 end-to-end control plane + operator UX polish)*
 - [x] 74-07-PLAN.md — daemon control-pipe server (launch/list → launch_agent + tenant table) + dev-layout daemon start/status (DMON-01/02/03)
-- [ ] 74-08-PLAN.md — operator UX polish: daemon-start clean detach + bare-exe SearchPathW resolution + engine-profile in list (DMON-01/03)
+- [x] 74-08-PLAN.md — operator UX polish: daemon-start clean detach + bare-exe SearchPathW resolution + engine-profile in list (DMON-01/03)
 
 **Wave 4** *(blocked on Wave 5 — UAT validates the now-wired SC1 end-to-end)*
-- [ ] 74-06-PLAN.md — 74-HUMAN-UAT.md + Win11 UAT gate: SC1-SC5 go/no-go (DMON-01/02/03) — AWAITING HUMAN UAT
+- [x] 74-06-PLAN.md — 74-HUMAN-UAT.md + Win11 UAT gate: SC1-SC5 go/no-go (DMON-01/02/03) — AWAITING HUMAN UAT
 
 ### Phase 75: Supplementary Controls + Secondary Engines
 **Goal**: Round out the milestone with the supplementary (never-the-boundary) controls and the second-engine/second-binding parity that proves the abstraction generalizes — all low-cost adds once the launch-time default (Phases 71-74) is proven. Demote must FOLLOW a proven launch-time default; it is an incident-response lever, not a confinement model.
@@ -167,7 +167,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | 71. Engine-Agnostic Launch Productionization | 5/5 | Complete   | 2026-06-14 |
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
-| 74. Persistent Multi-Tenant Daemon | 6/7 | Awaiting UAT | - |
+| 74. Persistent Multi-Tenant Daemon | 8/8 | Complete   | 2026-06-15 |
 | 75. Supplementary Controls + Secondary Engines | 0/TBD | Not started | - |
 
 ## Dependency Graph
