@@ -41,6 +41,12 @@
 // Wave 5 (Plan 74-07) re-export for control_loop.rs.
 #[cfg(target_os = "windows")]
 pub(crate) use windows_impl::launch_agent;
+// GAP-75-B fix: expose resolve_exe_path to control_loop.rs so handle_launch
+// can resolve bare exe names (e.g. "claude") to absolute paths BEFORE calling
+// build_daemon_capability_set (which calls resolved_exe.parent() and fails on
+// empty parent of a bare name).
+#[cfg(target_os = "windows")]
+pub(crate) use windows_impl::resolve_exe_path;
 // Plan 75-07-T2: re-export DaemonDaclGuard so reap.rs can reference it in the
 // AgentTenant::dacl_guard field type (`super::launch::DaemonDaclGuard`).
 #[cfg(target_os = "windows")]
@@ -1088,7 +1094,7 @@ mod windows_impl {
     /// # Errors
     ///
     /// Returns `Err` with a human-readable message if the exe cannot be located.
-    fn resolve_exe_path(exe: PathBuf) -> nono::Result<PathBuf> {
+    pub(crate) fn resolve_exe_path(exe: PathBuf) -> nono::Result<PathBuf> {
         // Fast path: already an absolute path that exists on disk.
         if exe.is_absolute() && exe.exists() {
             return Ok(exe);
@@ -1952,6 +1958,39 @@ mod tests {
             state.tenants.lock().unwrap().len(),
             0,
             "tenants must be empty after reap"
+        );
+    }
+
+    /// GAP-75-B regression: bare exe name resolves to an absolute, existing path.
+    ///
+    /// `resolve_exe_path(PathBuf::from("cmd"))` must return Ok(abs_path) where
+    /// abs_path is absolute and whose file stem is "cmd" (cmd.exe exists on every
+    /// Windows host via SearchPathW).  This is the same bare-name path that
+    /// caused `build_daemon_capability_set` to fail with "Path does not exist"
+    /// before the GAP-75-B fix in handle_launch (control_loop.rs).
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn resolve_exe_path_bare_name_returns_absolute() {
+        let resolved = super::windows_impl::resolve_exe_path(std::path::PathBuf::from("cmd"))
+            .expect(
+                "resolve_exe_path(\"cmd\") must succeed on Windows (cmd.exe is always on PATH)",
+            );
+        assert!(
+            resolved.is_absolute(),
+            "resolved path must be absolute, got: {}",
+            resolved.display()
+        );
+        assert!(
+            resolved.exists(),
+            "resolved path must exist on disk, got: {}",
+            resolved.display()
+        );
+        let stem = resolved.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        assert_eq!(
+            stem.to_ascii_lowercase(),
+            "cmd",
+            "resolved file stem must be 'cmd', got: {}",
+            resolved.display()
         );
     }
 }

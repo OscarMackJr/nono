@@ -495,6 +495,20 @@ mod windows_impl {
         let exe = PathBuf::from(&cmd[0]);
         let args: Vec<String> = cmd[1..].to_vec();
 
+        // GAP-75-B fix: resolve the exe to an absolute path BEFORE building
+        // the capability set. `build_daemon_capability_set` calls
+        // `resolved_exe.parent()`, which returns an empty path for bare names
+        // like "claude" — causing `allow_path("")` to fail with "Path does not
+        // exist". `resolve_exe_path` uses SearchPathW so the full path is known
+        // before any cap derivation. `launch_agent` fast-paths on the already-
+        // absolute path (is_absolute() && exists() → returned as-is).
+        let exe = match super::super::launch::resolve_exe_path(exe) {
+            Ok(p) => p,
+            Err(e) => {
+                return format!("error: could not resolve executable: {e}");
+            }
+        };
+
         // Build a real CapabilitySet from the named profile per GAP-75-B.
         // Grants cover: engine exe dir (Read), interpreter dirs (Read),
         // SystemRoot+System32+SysWOW64 (Read), per-tenant workspace under
