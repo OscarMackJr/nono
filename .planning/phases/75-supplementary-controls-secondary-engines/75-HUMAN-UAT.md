@@ -1,14 +1,45 @@
 ---
 phase: 75-supplementary-controls-secondary-engines
 doc: human-uat-script
-status: PENDING OPERATOR
+status: BLOCKED — gaps_found (live run 2026-06-15)
 created: 2026-06-15
+updated: 2026-06-15
 wave: 3
 plan: "05"
 requirements: [SUPP-01, SUPP-02, SUPP-03]
 ---
 
 # Phase 75 — Human UAT Script (SC1–SC5: Supplementary Controls + Secondary Engines)
+
+## ⚠ Live UAT Run 2026-06-15 — Findings & Blockers (READ FIRST)
+
+A partial live run on the Win11 dev host (build 26200) was performed. **Two real defects were found that block the behavioral gates (SC1/SC3/SC5). The Phase 75 *unit-level* code is sound; the blockers are in the Phase-74 daemon launch path, surfaced for the first time by running a real engine.**
+
+### What PASSED
+| Item | Result | Evidence |
+|------|--------|----------|
+| **SC4** — daemon privilege split | ✅ PASS | `sc qc nono-agentd` → `TYPE: 50 USER_OWN_PROCESS TEMPLATE`, empty `SERVICE_START_NAME` |
+| **Launch mechanism** (daemon mints confined agent) | ✅ PASS | every `agent launch` returns `tenant_id` + unique per-tenant `sid=S-1-15-2-…` + `pid` |
+| **demote verb** plumbing | ✅ partial | parses, reaches the daemon, returns a clean `tenant_id not found` for a gone tenant (D-02) — could not IL-drop a *live* agent (none stay alive, see GAP-75-B) |
+| nono-ts build/tests, full CI sweep | ✅ PASS | no new Phase-75 regressions (pre-flight table below) |
+
+### What's BLOCKED + root cause (two real defects)
+- **GAP-75-A — `nono daemon start` cannot start the user-service template.** `daemon_start()` (`agent_cli.rs`) takes the `sc start nono-agentd` path when a service is registered, but you cannot `sc start` a `USER_OWN_PROCESS TEMPLATE` (type 50) → `exit 5 Access denied`. The working raw-spawn path only runs when *no* service is registered. **Workaround used:** launch the daemon in foreground mode directly — `Start-Process -FilePath "$PWD\target\release\nono-agentd.exe" -WindowStyle Hidden` (no `--service-mode` → `run_foreground_mode`), then `nono daemon status` → RUNNING.
+- **GAP-75-B (real SC1/SC3/SC5 blocker) — daemon-launched agents are capability-less.** `handle_launch` (`control_loop.rs:508`) passes `nono::CapabilitySet::new()` (**empty**) to `launch_agent`, and `launch_agent` (`agent_daemon/launch.rs`) never applies any package-SID DACL grants. So a confined agent gets **zero filesystem access** beyond the AppContainer default (System32). Real engines die loading their own runtime: Python → `python312.dll not installed`; `node.exe` / `claude.exe` would fail identically. The per-invocation `nono run` path does this correctly via `exec_strategy_windows/dacl_guard.rs` (`AppliedDaclGrantsGuard` + package-SID `FILE_TRAVERSE` on workspace ancestors). **This is the "`launch_agent`↔`create_process_containment` dedup" Phase-74 carry-forward.** Phase 74 only ever exercised the daemon with fast-exit agents that never read a file, so this was never caught until now.
+
+### Verified CLI corrections (the scaffolded steps below use wrong flags)
+- `nono agent launch` has **no `--workspace` flag** — usage is `nono agent launch --profile <PROFILE> [-- <CMD>...]` (the workspace is daemon-side). Wherever a step shows `--workspace <dir>`, drop it.
+- Engines installed on this host (all present): python `…\Programs\Python\Python312\python.exe`, node `C:\Program Files\nodejs\node.exe`, copilot `…\WinGet\Links\copilot.exe`, claude `C:\Users\OMack\.local\bin\claude.exe`.
+
+### Disposition
+SC1/SC3/SC5 are **blocked-on-coverage**, not failed-on-Phase-75-logic. Route to gap-closure:
+- **75-06** → GAP-75-A (daemon-start user-service fix) **and** GAP-75-B (build real caps from the profile + apply package-SID DACL grants in `launch_agent`, revoke on reap — reuse `dacl_guard`). GAP-75-B is the priority; it unblocks all behavioral gates.
+- Validate the coverage fix against **claude.exe** (self-contained native binary, already proven confined via `nono run`) so any residual failure isolates cleanly to the daemon path.
+- Once 75-06 lands, re-run SC1 → SC3 → SC5 with the corrected commands.
+
+**The sections below are the original scaffold (kept for reference); apply the CLI corrections above when re-running.**
+
+---
 
 SC1 (demote does not reap), SC2 (per-agent WFP isolation / A1 gate), SC3 (Copilot CLI confined
 end-to-end), and SC5 (nono-ts confinedRun on Win11) cannot be verified by unit tests alone: they
