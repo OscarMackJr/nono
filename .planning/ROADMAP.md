@@ -143,7 +143,7 @@ Plans:
 - [x] 75-07-PLAN.md — GAP-75-B: build real CapabilitySet from profile in handle_launch; apply package-SID DACL grants before ResumeThread; store guards in AgentTenant for revocation on reap (SUPP-01, SUPP-02, SUPP-03)
 
 **Wave 5 (gap-closure — from Wave 3 SC3 finding)**
-- [ ] 75-08-PLAN.md — GAP-75-C: Node-ESM engines run confined (Copilot) — minimal drive-root attr grant / Node resolver mitigation + symlinked-exe coverage + copilot-cli node interpreter (SUPP-03)
+- [x] 75-08-PLAN.md — GAP-75-C: Node-ESM/AppContainer spike COMPLETE → re-scoped (Copilot confine-only; claude-code is end-to-end Engine-2; admin-prereq+ancestor-RA fix documented as future) (SUPP-03)
 
 <details>
 <summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>

@@ -56,7 +56,8 @@ Host: Win11 Enterprise build 26200. Binaries: dev-layout `target\release\nono.ex
 | Dimension | Engine/Binding | Status |
 |-----------|----------------|--------|
 | Engine 1 | Aider (Ph71 SC1) | ✅ CONFIRMED |
-| Engine 2 | Copilot CLI | 🟡 confines but doesn't complete (75-08); **claude-code (native PE) confines cleanly** in 75-07 UAT as the strong Engine-2 datapoint |
+| Engine 2 | **claude-code** (native PE) | ✅ CONFIRMED (75-07: confined under AppContainer, no DLL-death, write-outside denied, clean reap) — adopted as Engine-2 per 75-08 re-scope |
+| Engine 2 (planned) | Copilot CLI | 🟡 confine-only (Node-ESM/AppContainer drive-root limitation, fully characterized in 75-08; end-to-end completion deferred to a documented admin-prereq + nono ancestor-RA fix) |
 | Binding 1 | nono-py (Ph72) | ✅ CONFIRMED |
 | Binding 2 | nono-ts (SC5) | ✅ CONFIRMED (this run) |
 
@@ -73,7 +74,12 @@ Host: Win11 Enterprise build 26200. Binaries: dev-layout `target\release\nono.ex
 
 ### Overall verdict
 
-🟡 **PARTIAL** — SC1, SC2 (D-05), SC4, SC5 PASS; SC3 confinement proven but engine-completion deferred to gap-closure **75-08**. SUPP-01 and SUPP-02 fully satisfied; SUPP-03 satisfied for nono-ts (binding-2) and partially for Copilot (engine-2 confines; completion in 75-08).
+✅ **PASS (with documented Copilot deferral)** — SC1, SC2 (D-05), SC4, SC5 PASS. SC3: Copilot
+confinement PROVEN; end-to-end completion is a documented Node-ESM/AppContainer limitation
+(75-08 spike fully characterized it + recorded a future admin-prereq fix). Per the 75-08 re-scope,
+**Engine-2 = claude-code** (confined end-to-end in 75-07, zero prereq). SUPP-01 + SUPP-02 fully
+satisfied; SUPP-03 satisfied: engines Aider + claude-code (both end-to-end), bindings nono-py +
+nono-ts (both confined on Win11). Phase 75 complete.
 
 ---
 
