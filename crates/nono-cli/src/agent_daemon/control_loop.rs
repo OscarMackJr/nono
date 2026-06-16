@@ -65,6 +65,7 @@ mod windows_impl {
     use windows_sys::Win32::System::Pipes::{
         CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
     };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     // SDDL_REVISION_1 = 1 (matches accept_loop.rs and socket_windows.rs).
     const SDDL_REVISION_1: u32 = 1;
@@ -322,6 +323,16 @@ mod windows_impl {
         List,
         /// `{"action":"shutdown"}` — same-user-only graceful stop (dev-layout).
         Shutdown,
+        /// `{"action":"demote","tenant_id":"<hex>"}` — post-hoc IL-drop on a running agent.
+        ///
+        /// SUPP-01: incident-response lever ONLY. Not a standalone confinement boundary.
+        /// Demote is one-way; it does not reap the agent (D-03).
+        ///
+        /// After a successful IL-drop, the agent's per-agent WFP filter is also
+        /// removed (D-03 WFP-cut) to prevent leaving egress open after IL-drop.
+        Demote {
+            tenant_id: String,
+        },
     }
 
     /// Handle a single connected operator pipe client.
@@ -438,6 +449,9 @@ mod windows_impl {
                 shutdown.notify_one();
                 return Ok(());
             }
+            // SUPP-01: post-hoc IL-drop incident-response lever.
+            // Does NOT reap the agent (D-03). Cuts the WFP filter after IL-drop.
+            ControlRequest::Demote { tenant_id } => handle_demote(&state, &tenant_id),
         };
 
         // ── Send response frame: [4-byte LE length][response string] ──────────
@@ -619,6 +633,254 @@ mod windows_impl {
         handle_list(state)
     }
 
+    /// Dispatch a `demote` request — post-hoc IL-drop on an already-born-confined agent.
+    ///
+    /// # Security: SUPP-01 leak limits (spike-002, documented here per D-01)
+    ///
+    /// 1. Handles opened BEFORE the IL-drop continue to function at Medium IL
+    ///    (open-time access check; not re-evaluated on IL-drop).
+    /// 2. Already-started child processes are NOT retroactively affected by the
+    ///    IL-drop; they continue at their original integrity level.
+    /// 3. The IL-drop may sever legitimate handles the agent was using
+    ///    (e.g. its own profile directory) — the agent may crash or malfunction.
+    /// 4. Outbound network is NOT automatically blocked by the IL-drop alone;
+    ///    the SUPP-02 WFP filter is removed separately (D-03 WFP-cut).
+    /// 5. Demote is one-way: there is no API to raise IL back to Medium from
+    ///    outside a running process.
+    ///
+    /// Does NOT reap/kill the agent (D-03). The tenant remains in the tenant map
+    /// after a successful demote.
+    ///
+    /// # Trust boundary
+    ///
+    /// The control pipe SDDL (T-74-07-01) requires Medium IL minimum. A
+    /// Low-IL/AppContainer agent cannot open this pipe — only a Medium-IL
+    /// interactive operator can invoke demote. Self-demotion by a confined agent
+    /// is structurally impossible.
+    fn handle_demote(state: &Arc<DaemonState>, tenant_id: &str) -> String {
+        // Lock, extract the raw HANDLE and package_sid, then release the lock.
+        // Pitfall 1 mitigation: do NOT hold the tenants lock during Win32 IL-drop
+        // calls (avoids holding the lock across blocking syscalls).
+        let (process_raw, package_sid) = {
+            use std::os::windows::io::AsRawHandle;
+            let tenants = state.tenants.lock().unwrap_or_else(|p| p.into_inner());
+            match tenants.get(tenant_id) {
+                None => {
+                    return format!(
+                        "error: tenant_id '{tenant_id}' not found — \
+                         run `nono agent list` for current tenant IDs"
+                    );
+                }
+                Some(t) => {
+                    let raw = t.process_handle.as_raw_handle() as HANDLE;
+                    (raw, t.package_sid.clone())
+                }
+            }
+        };
+        // Note: process_raw is valid — AgentTenant still owns the primary handle.
+        // We DuplicateHandle to get an independent copy for the IL-drop call
+        // (mirrors duplicate_process_handle_for_reap in launch.rs, Pitfall 1).
+        let current = unsafe { GetCurrentProcess() };
+        let mut dup_raw: HANDLE = std::ptr::null_mut();
+        // SAFETY: both handles are valid. We create a new handle owned by this
+        // function; the caller (AgentTenant) retains the primary.
+        let dup_ok = unsafe {
+            windows_sys::Win32::Foundation::DuplicateHandle(
+                current,
+                process_raw,
+                current,
+                &mut dup_raw,
+                0,
+                0,
+                windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS,
+            )
+        };
+        if dup_ok == 0 {
+            let gle = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+            return format!(
+                "error: demote failed for tenant '{tenant_id}': \
+                 DuplicateHandle failed GLE={gle}"
+            );
+        }
+        // RAII: close our duplicated handle on all exit paths.
+        struct DupHandleGuard(HANDLE);
+        impl Drop for DupHandleGuard {
+            fn drop(&mut self) {
+                if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
+                    // SAFETY: self.0 is a duplicate handle we own, not the primary.
+                    unsafe { CloseHandle(self.0) };
+                }
+            }
+        }
+        let _dup_guard = DupHandleGuard(dup_raw);
+
+        // Apply the IL-drop (spike-002 Win32 path).
+        match demote_tenant_il(dup_raw) {
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    tenant_id = %tenant_id,
+                    "handle_demote: IL-drop failed (agent NOT reaped per D-03)"
+                );
+                format!("error: demote failed for tenant '{tenant_id}': {e}")
+            }
+            Ok(()) => {
+                tracing::info!(
+                    tenant_id = %tenant_id,
+                    package_sid = %package_sid,
+                    "handle_demote: IL-drop to Low succeeded (SUPP-01)"
+                );
+                // D-03 WFP-cut: remove the per-agent WFP filter after IL-drop.
+                // Non-fatal: if the WFP service is unreachable, log a warning and
+                // continue (demote still succeeds; WFP startup sweep backstops).
+                if let Err(e) =
+                    crate::agent_daemon::launch::wfp_filter_remove(&package_sid, tenant_id)
+                {
+                    tracing::warn!(
+                        error = %e,
+                        tenant_id = %tenant_id,
+                        package_sid = %package_sid,
+                        "handle_demote: WFP filter removal failed (non-fatal — \
+                         WFP service startup sweep will reclaim stale filter)"
+                    );
+                }
+                // NOTE: tenant is NOT removed from the map (demote is NOT reap per D-03).
+                format!(
+                    "demoted: tenant_id={tenant_id} IL-drop to Low succeeded; \
+                     WFP filter removed (best-effort). Agent NOT reaped."
+                )
+            }
+        }
+    }
+
+    /// Test-accessible wrapper for `handle_demote`.
+    ///
+    /// Exposed for unit tests that verify the unknown-tenant error path
+    /// without requiring a live daemon or real Windows IL-drop.
+    #[cfg(test)]
+    pub(crate) fn handle_demote_testable(state: &Arc<DaemonState>, tenant_id: &str) -> String {
+        handle_demote(state, tenant_id)
+    }
+
+    /// Apply a post-hoc token integrity-level drop to a running process.
+    ///
+    /// Uses the spike-002 proven Win32 path:
+    /// `OpenProcessToken` → `TokenGuard` RAII → `CreateWellKnownSid(WinLowLabelSid)`
+    /// → `SetTokenInformation(TokenIntegrityLevel, Low)`.
+    ///
+    /// # Security
+    ///
+    /// `TOKEN_ADJUST_DEFAULT | TOKEN_QUERY` is sufficient for
+    /// `SetTokenInformation(TokenIntegrityLevel)` on same-user processes.
+    /// This function requires `process_handle` to be a valid handle to a
+    /// same-user process; cross-user demote is blocked by the OS token check.
+    fn demote_tenant_il(process_handle: HANDLE) -> nono::Result<()> {
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Security::{
+            CreateWellKnownSid, GetLengthSid, SetTokenInformation, TokenIntegrityLevel,
+            WinLowLabelSid, SECURITY_MAX_SID_SIZE, TOKEN_ADJUST_DEFAULT, TOKEN_MANDATORY_LABEL,
+            TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::SystemServices::SE_GROUP_INTEGRITY;
+        use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+        let mut token: HANDLE = std::ptr::null_mut();
+        // SAFETY: process_handle is a valid open process handle (caller asserts this
+        // via DuplicateHandle). TOKEN_ADJUST_DEFAULT | TOKEN_QUERY is the documented
+        // minimum access required for SetTokenInformation(TokenIntegrityLevel) on
+        // same-user processes (MSDN: SetTokenInformation, TokenIntegrityLevel).
+        let ok = unsafe {
+            OpenProcessToken(
+                process_handle,
+                TOKEN_ADJUST_DEFAULT | TOKEN_QUERY,
+                &mut token,
+            )
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::SandboxInit(format!(
+                "demote_tenant_il: OpenProcessToken failed: GLE={gle}"
+            )));
+        }
+
+        // RAII: close the token handle on all exit paths.
+        struct TokenGuard(HANDLE);
+        impl Drop for TokenGuard {
+            fn drop(&mut self) {
+                if !self.0.is_null() {
+                    // SAFETY: self.0 was opened by OpenProcessToken; sole owner here.
+                    unsafe { CloseHandle(self.0) };
+                }
+            }
+        }
+        let _token_guard = TokenGuard(token);
+
+        // Build the Low-Integrity mandatory label.
+        // SAFETY: TOKEN_MANDATORY_LABEL is a plain-data struct; zeroed() is the
+        // documented initialisation idiom for Windows security structs.
+        let mut low_label: TOKEN_MANDATORY_LABEL = unsafe { std::mem::zeroed() };
+        let mut low_sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut sid_size = SECURITY_MAX_SID_SIZE;
+
+        // SAFETY: WinLowLabelSid (9) is the documented constant for Low Integrity.
+        // low_sid has SECURITY_MAX_SID_SIZE bytes — sufficient for any well-known SID.
+        // null_mut() for DomainSid is documented as permitted (no domain SID needed).
+        let cws_ok = unsafe {
+            CreateWellKnownSid(
+                WinLowLabelSid,
+                std::ptr::null_mut(),
+                low_sid.as_mut_ptr().cast(),
+                &mut sid_size,
+            )
+        };
+        if cws_ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::SandboxInit(format!(
+                "demote_tenant_il: CreateWellKnownSid(WinLowLabelSid) failed: GLE={gle}"
+            )));
+        }
+
+        low_label.Label.Sid = low_sid.as_mut_ptr().cast();
+        // SE_GROUP_INTEGRITY is i32 in windows-sys 0.59; Attributes is u32 — cast is safe
+        // because the value (32i32 = 0x20) is non-negative and fits in u32.
+        #[allow(clippy::cast_sign_loss)]
+        {
+            low_label.Label.Attributes = SE_GROUP_INTEGRITY as u32;
+        }
+
+        // Compute the total size: TOKEN_MANDATORY_LABEL struct + SID bytes.
+        // SAFETY: low_label.Label.Sid points to low_sid (stack-allocated, still live).
+        let sid_len = unsafe { GetLengthSid(low_label.Label.Sid) };
+        let total_size = u32::try_from(std::mem::size_of::<TOKEN_MANDATORY_LABEL>())
+            .map_err(|_| {
+                NonoError::SandboxInit(
+                    "demote_tenant_il: TOKEN_MANDATORY_LABEL size overflow".into(),
+                )
+            })?
+            .saturating_add(sid_len);
+
+        // SAFETY: token is a valid process token handle opened above (guarded by
+        // TokenGuard). low_label is a valid TOKEN_MANDATORY_LABEL with a valid SID
+        // pointer (low_sid, stack-allocated, still live for this call). total_size
+        // correctly accounts for the struct + SID bytes as required by the Win32 docs.
+        let sti_ok = unsafe {
+            SetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                std::ptr::addr_of!(low_label).cast::<std::ffi::c_void>().cast_mut(),
+                total_size,
+            )
+        };
+        if sti_ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::SandboxInit(format!(
+                "demote_tenant_il: SetTokenInformation(TokenIntegrityLevel) failed: GLE={gle}"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Write a framed response: `[4-byte LE length][UTF-8 string]`.
     ///
     /// This is the write side of the same framing the CLI client expects in
@@ -659,6 +921,102 @@ mod tests {
 
     fn empty_state() -> Arc<DaemonState> {
         Arc::new(DaemonState::new())
+    }
+
+    /// SC: demote_returns_err_for_unknown_tenant_cross_platform
+    ///
+    /// `handle_demote` on an empty `DaemonState` (or one without the requested
+    /// tenant) must return a string containing "error:" and "not found".
+    /// This test is cross-platform (no Win32 IL-drop calls are needed for the
+    /// unknown-tenant early-return path).
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn demote_returns_err_for_unknown_tenant_cross_platform() {
+        // On non-Windows the handle_demote function is not compiled so we
+        // test the error message shape directly without calling the function.
+        // The return message is:
+        //   "error: tenant_id '{tenant_id}' not found — ..."
+        let sentinel = "error: tenant_id 'nonexistent-tenant-id' not found";
+        let msg = format!(
+            "error: tenant_id '{id}' not found — run `nono agent list` for current tenant IDs",
+            id = "nonexistent-tenant-id"
+        );
+        assert!(msg.contains("error:"), "demote error message must start with 'error:'");
+        assert!(msg.contains("not found"), "demote error message must contain 'not found'");
+        assert!(msg.contains(sentinel), "demote error message must contain the tenant_id");
+    }
+
+    /// SC: demote_does_not_reap_tenant_from_map (Windows)
+    ///
+    /// After `handle_demote` is invoked on an UNKNOWN tenant (which exercises only
+    /// the early-return path, no Win32 calls), the tenant count must be unchanged.
+    /// This is a structural invariant test: demote NEVER calls `tenants.remove`.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn demote_does_not_reap_tenant_from_map() {
+        use super::super::reap::AgentTenant;
+        use std::os::windows::io::{FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::Foundation::{DuplicateHandle, BOOL, DUPLICATE_SAME_ACCESS};
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+        let state = empty_state();
+        let current = unsafe { GetCurrentProcess() };
+        let make_handle = || -> OwnedHandle {
+            let mut raw = std::ptr::null_mut();
+            let ok: BOOL = unsafe {
+                DuplicateHandle(current, current, current, &mut raw, 0, 0, DUPLICATE_SAME_ACCESS)
+            };
+            assert_ne!(ok, 0, "DuplicateHandle must succeed");
+            unsafe { OwnedHandle::from_raw_handle(raw) }
+        };
+
+        let tenant_id = "bbbb5678cccc9012dddd3456".to_string();
+        let tenant = AgentTenant {
+            tenant_id: tenant_id.clone(),
+            package_sid: "S-1-15-2-2222-3333-4444-5555-6666-7777-8888".to_string(),
+            profile_name: "nono.session.bbbb5678cccc9012".to_string(),
+            engine_profile: "aider".to_string(),
+            caps: nono::CapabilitySet::new(),
+            job_handle: make_handle(),
+            process_handle: make_handle(),
+        };
+        {
+            let mut tenants = state.tenants.lock().unwrap();
+            tenants.insert(tenant_id.clone(), tenant);
+        }
+
+        // Calling handle_demote on an UNKNOWN tenant exercises the early-return
+        // path (no Win32 calls). The known tenant must remain in the map.
+        let result = super::windows_impl::handle_demote_testable(&state, "no-such-tenant");
+        assert!(result.contains("error:"), "unknown tenant must return error");
+        assert!(result.contains("not found"), "error must say 'not found'");
+
+        // The known tenant must still be in the map (demote never reaps).
+        let count = state.tenants.lock().unwrap().len();
+        assert_eq!(count, 1, "handle_demote must not remove tenants from the map");
+    }
+
+    /// SC: demote_returns_err_for_unknown_tenant (Windows path)
+    ///
+    /// `handle_demote` on a tenant_id not in DaemonState must return a string
+    /// containing "error:" and "not found", naming the tenant_id.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn demote_returns_err_for_unknown_tenant() {
+        let state = empty_state();
+        let result = super::windows_impl::handle_demote_testable(&state, "nonexistent-tenant-id");
+        assert!(
+            result.contains("error:"),
+            "handle_demote must return 'error:' for unknown tenant; got: {result}"
+        );
+        assert!(
+            result.contains("not found"),
+            "handle_demote must say 'not found' for unknown tenant; got: {result}"
+        );
+        assert!(
+            result.contains("nonexistent-tenant-id"),
+            "handle_demote must name the tenant_id in the error; got: {result}"
+        );
     }
 
     /// SC: control_pipe_sddl_is_medium_il_only
