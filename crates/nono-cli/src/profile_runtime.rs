@@ -808,8 +808,13 @@ mod tests {
     {
         let _guard = crate::test_env::lock_env();
         let tmp = tempfile::TempDir::new().expect("failed to create tempdir");
-        let config_dir = tmp.path().canonicalize().expect("failed to canonicalize tempdir");
-        let config_str = config_dir.to_str().expect("tempdir path is not valid UTF-8");
+        let config_dir = tmp
+            .path()
+            .canonicalize()
+            .expect("failed to canonicalize tempdir");
+        let config_str = config_dir
+            .to_str()
+            .expect("tempdir path is not valid UTF-8");
         // On Windows, APPDATA takes priority over XDG_CONFIG_HOME in
         // `resolve_user_config_dir`. Set both so the test works cross-platform.
         let _env = crate::test_env::EnvVarGuard::set_all(&[
@@ -819,7 +824,11 @@ mod tests {
         f(&config_dir)
     }
 
-    fn create_pack_dir(config_dir: &std::path::Path, namespace: &str, name: &str) -> std::path::PathBuf {
+    fn create_pack_dir(
+        config_dir: &std::path::Path,
+        namespace: &str,
+        name: &str,
+    ) -> std::path::PathBuf {
         let install_dir = config_dir
             .join("nono")
             .join("packages")

@@ -33,7 +33,7 @@ This seed will surface during `/gsd:new-milestone` when the milestone scope matc
 - Existing attestation stack: `sigstore-rs` (`sigstore-verify`, `sigstore-sign`) — already a dependency; the signature-verification primitive for signed overrides.
 - `crates/nono-cli/src/policy.rs` — the group/deny policy resolver whose ruleset would be temporarily mutated on a verified override.
 - `crates/nono/src/capability.rs` — `CapabilitySet` (the runtime ruleset that an attested override would expand for a repo context).
-- External: **ZT-Infra v2 decentralized ledger project** (not in this repo — the integration dependency).
+- External: **ZT-Infra v2 decentralized ledger project** (not in this repo — the integration dependency). Live codebase: `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2` (Apache-2.0 AWS control plane; `POST /actions` allow/deny + hash-chained KMS-signed audit + optional DAAL ledger). Cheapest local exercise = the **local provisioner**, no AWS: `cd provisioner && npm install && npm start` → `POST http://127.0.0.1:3000/actions` (see its `README.md` "Local Provisioner"). A nono-side POC runbook for the E5 composition (zt-infra decides → `confined_run` enforces) is at [`proj/POC-zt-infra-e5-local-provisioner.md`](../../proj/POC-zt-infra-e5-local-provisioner.md). NOTE (2026-06-15): this seed is NOT on the Phase 73 or 75 path — both are pure nono work; this remains its own future milestone.
 
 ## Notes
 

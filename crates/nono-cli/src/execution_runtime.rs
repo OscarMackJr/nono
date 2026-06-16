@@ -103,6 +103,8 @@ fn recommended_builtin_profile(program: &Path) -> Option<&'static str> {
         "opencode" => Some("opencode"),
         "openclaw" => Some("openclaw"),
         "swival" => Some("swival"),
+        // D-04: engine IS the profile — map aider.exe to the aider built-in.
+        "aider" | "aider.exe" => Some("aider"),
         _ => None,
     }
 }
@@ -484,6 +486,38 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         let psid = nono::derive_app_container_sid(&windows_app_container_name)?;
         nono::package_sid_to_string(&psid)?
     };
+    // Phase 73 D-04 (MARK-01): register the minted AppContainer package SID into
+    // the per-run AgentRegistry at spawn time. This is the SHIPPING-path proof of
+    // SC1 ("a launched agent is marked"): the moment a BrokerLaunchNoPty agent's
+    // package SID is derived, the launcher records it in its private authorization
+    // set. The registry is per-run, in-memory, single-launch (CONTEXT.md "Deferred
+    // Ideas" — persistence + cross-process sharing are Phase 74's daemon). It is
+    // created fresh here and dropped when the run completes. `Arc<Mutex<_>>` matches
+    // the threading shape Phase 74 will consume over the cap pipe (RESEARCH.md Open
+    // Question 3 RESOLVED). The insert uses `.clone()` so `windows_package_sid`
+    // remains available for the `ExecConfig.package_sid` move below.
+    #[cfg(target_os = "windows")]
+    let agent_registry = std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
+    #[cfg(target_os = "windows")]
+    {
+        agent_registry
+            .lock()
+            .map_err(|_| nono::NonoError::SandboxInit("AgentRegistry mutex poisoned".into()))?
+            .insert(windows_package_sid.clone());
+    }
+    // Plan 71-04 Task 2 (D-07/ENG-02): resolve interpreter bare names from
+    // the profile's `windows_interpreters` to absolute paths (shebang assist
+    // ∪ PATH), then thread the resolved set into ExecConfig for the coverage
+    // gate in `prepare_live_windows_launch`. Fail-secure: unresolved names
+    // pass through as-is so the gate names them in the refusal message.
+    #[cfg(target_os = "windows")]
+    let windows_resolved_interpreters: Vec<std::path::PathBuf> = {
+        let declared: &[String] = loaded_profile
+            .as_ref()
+            .map(|p| p.windows_interpreters.as_slice())
+            .unwrap_or(&[]);
+        exec_strategy::resolve_interpreter_paths(&resolved_program, declared)
+    };
     #[cfg(target_os = "windows")]
     let config = exec_strategy::ExecConfig {
         command: &command,
@@ -510,6 +544,8 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         prefers_low_il_broker: loaded_profile
             .as_ref()
             .is_some_and(|p| p.windows_low_il_broker),
+        // Plan 71-04 Task 2: resolved interpreter paths (D-07).
+        interpreters: windows_resolved_interpreters,
     };
 
     // Resource limits are now kernel-enforced on Linux (cgroup v2) and macOS
@@ -785,6 +821,16 @@ mod tests {
         assert_eq!(
             recommended_builtin_profile(Path::new("/usr/local/bin/codex")),
             Some("codex")
+        );
+        // D-04: aider.exe maps to the aider built-in profile (Windows file_name).
+        assert_eq!(
+            recommended_builtin_profile(Path::new("C:\\Users\\user\\.local\\bin\\aider.exe")),
+            Some("aider")
+        );
+        // Unix form (without .exe suffix).
+        assert_eq!(
+            recommended_builtin_profile(Path::new("/usr/local/bin/aider")),
+            Some("aider")
         );
     }
 

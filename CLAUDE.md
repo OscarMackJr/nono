@@ -192,6 +192,7 @@ make fmt             # Auto-format
 - [DESIGN-undo-system.md](proj/DESIGN-undo-system.md) - Content-addressable snapshot system
 - [Landlock docs](https://landlock.io/)
 - [macOS Sandbox Guide](https://developer.apple.com/library/archive/documentation/Security/Conceptual/AppSandboxDesignGuide/)
+- **Spike findings for nono** (engine-agnostic confinement patterns, constraints, gotchas; SEED-004) → `Skill("spike-findings-nono")`
 
 <!-- GSD:project-start source:PROJECT.md -->
 ## Project

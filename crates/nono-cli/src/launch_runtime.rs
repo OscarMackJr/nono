@@ -309,7 +309,9 @@ pub(crate) fn prepare_run_launch_plan(
         prepared.capability_elevation = false;
     }
 
-    let scan_root = resolve_requested_workdir(args.workdir.as_ref());
+    // D-06: workspace takes priority over workdir as the child CWD.
+    let effective_workdir = args.workspace.as_ref().or(args.workdir.as_ref());
+    let scan_root = resolve_requested_workdir(effective_workdir);
     let trust = prepare_trust_launch_options(
         &mut prepared,
         scan_root.clone(),
@@ -350,7 +352,9 @@ pub(crate) fn prepare_run_launch_plan(
         loaded_profile: prepared.loaded_profile,
         flags: ExecutionFlags {
             strategy,
-            workdir: resolve_requested_workdir(args.workdir.as_ref()),
+            // D-06: workspace is the single source of truth for the child CWD;
+            // it takes priority over workdir when both are provided.
+            workdir: resolve_requested_workdir(args.workspace.as_ref().or(args.workdir.as_ref())),
             no_diagnostics,
             silent,
             capability_elevation: prepared.capability_elevation,

@@ -158,6 +158,7 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         Commands::Wrap(args) => args.sandbox.verbose,
         Commands::Setup(args) => args.verbose,
         Commands::Why(_)
+        | Commands::Classify(_)
         | Commands::Rollback(_)
         | Commands::Trust(_)
         | Commands::Audit(_)
@@ -182,7 +183,10 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::OpenUrlHelper(_)
         | Commands::PackUpdateHintHelper(_)
         | Commands::ClaudeCodeHook
-        | Commands::Completions(_) => 0,
+        | Commands::Completions(_)
+        // Phase 74 D-05: daemon/agent verbs have no verbose flag.
+        | Commands::Daemon(_)
+        | Commands::Agent(_) => 0,
     }
 }
 

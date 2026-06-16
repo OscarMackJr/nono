@@ -1,0 +1,15 @@
+# Empty [workspace] table keeps this spike OUT of the root nono workspace.
+[workspace]
+
+[package]
+name = "daemon-as-launcher"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone SEED-004 spike 003 — std-only (delegates confinement to `nono run`,
+# so no windows-sys needed; documented deviation from the spike-001 convention).
+
+[[bin]]
+name = "daemon-as-launcher"
+path = "src/main.rs"

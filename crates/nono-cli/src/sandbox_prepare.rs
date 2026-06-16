@@ -224,14 +224,17 @@ pub(crate) fn print_allow_launch_services_warning(silent: bool) {
 
 /// Resolve the working directory used for sandbox preparation.
 ///
-/// Prefers an explicit `--workdir`, then the process's current directory,
-/// falling back to `.` as a last resort. The final `unwrap_or_else` fallback
-/// is the pre-existing production default (non-security-critical, not a
-/// security-config load failure), so the `clippy::unwrap_used` rule does not
-/// apply to it (PATTERNS.md annotation).
+/// Prefers an explicit `--workspace` (D-06: single source of truth — the
+/// workspace IS the child CWD; takes priority over `--workdir`), then
+/// `--workdir`, then the process's current directory, falling back to `.` as a
+/// last resort. The final `unwrap_or_else` fallback is the pre-existing
+/// production default (non-security-critical, not a security-config load
+/// failure), so the `clippy::unwrap_used` rule does not apply to it
+/// (PATTERNS.md annotation).
 fn resolved_workdir(args: &SandboxArgs) -> PathBuf {
-    args.workdir
+    args.workspace
         .clone()
+        .or_else(|| args.workdir.clone())
         .or_else(|| {
             // $PWD preserves the symlink path; current_dir() resolves it. Prefer
             // $PWD so the CWD capability covers the symlink form (e.g. /tmp rather
@@ -477,6 +480,28 @@ pub(crate) fn prepare_sandbox_with_context(
         &open_url_origins,
         open_url_allow_localhost,
     )?;
+
+    // D-06 workspace grant: when --workspace is explicitly declared, it IS the
+    // writable engine working directory — grant read+write unconditionally (no
+    // prompt). This is the "single source of truth" for both child CWD and the
+    // writable grant (T-71-09). The grant is expressed with the canonicalized
+    // absolute path (footgun #1: component-wise, never string starts_with).
+    if let Some(ref ws) = args.workspace {
+        let ws_canonical = ws
+            .canonicalize()
+            .map_err(|e| NonoError::PathCanonicalization {
+                path: ws.clone(),
+                source: e,
+            })?;
+        if !caps.path_covered_with_access(&ws_canonical, AccessMode::ReadWrite) {
+            info!(
+                "Auto-granting workspace read+write access (--workspace): {}",
+                ws_canonical.display()
+            );
+            let cap = FsCapability::new_dir(ws_canonical, AccessMode::ReadWrite)?;
+            caps.add_fs(cap);
+        }
+    }
 
     let cwd_access = if let Some(ref access) = profile_workdir_access {
         match access {

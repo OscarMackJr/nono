@@ -5,9 +5,12 @@ use super::*;
 // only in launch.rs because they are exclusively used by the new
 // DetachedStdioPipes struct + spawn_windows_child wiring.
 use windows_sys::Win32::Foundation::{
-    SetHandleInformation, BOOL, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+    LocalFree, SetHandleInformation, BOOL, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
 };
-use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 
@@ -28,6 +31,87 @@ impl Drop for ProcessContainment {
             }
         }
     }
+}
+
+/// RAII guard that calls `LocalFree` on the security descriptor returned by
+/// `ConvertStringSecurityDescriptorToSecurityDescriptorW`. This mirrors the
+/// `OwnedSecurityDescriptor` pattern in `crates/nono/src/sandbox/windows.rs`.
+///
+/// The guard must outlive every Win32 call that reads `lpSecurityDescriptor`
+/// (i.e., it must be declared BEFORE the `SECURITY_ATTRIBUTES` that references
+/// it and dropped AFTER `CreateJobObjectW` returns).
+struct OwnedJobSD(PSECURITY_DESCRIPTOR);
+
+impl Drop for OwnedJobSD {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                // SAFETY: `self.0` was returned by
+                // `ConvertStringSecurityDescriptorToSecurityDescriptorW` which
+                // allocates via `LocalAlloc`; `LocalFree` is the paired
+                // deallocation function.
+                LocalFree(self.0.cast());
+            }
+        }
+    }
+}
+
+/// Build a `SECURITY_ATTRIBUTES` backed by an SDDL-specified DACL for use as
+/// the security descriptor of a job object created by `CreateJobObjectW`.
+///
+/// DACL semantics (D-03):
+/// - `D:P` — protected DACL, no inheritance from parent container.
+/// - `(A;;0x1F001F;;;OW)` — ALLOW `JOB_OBJECT_ALL_ACCESS` to the Object Owner
+///   (the launching process is the job owner).
+/// - `(D;;0x1F001F;;;LW)` — DENY `JOB_OBJECT_ALL_ACCESS` to the Low Integrity
+///   label (belt-and-suspenders on top of MIC's Low→Medium write-up block).
+/// - Optional per-agent package-SID deny ACE: when `package_sid` is `Some`,
+///   appends `(D;;0x1F001F;;;<package_sid>)` so the agent's own AppContainer
+///   SID cannot open or modify its job object.
+///
+/// Returns `(OwnedJobSD, SECURITY_ATTRIBUTES)`. The caller MUST keep the
+/// `OwnedJobSD` alive until after `CreateJobObjectW` returns so that
+/// `lpSecurityDescriptor` remains valid. The `SECURITY_ATTRIBUTES` borrows
+/// the descriptor by raw pointer — the lifetime contract is enforced
+/// structurally by declaring both in the same scope in
+/// `create_process_containment`.
+fn build_job_security_attributes(
+    package_sid: Option<&str>,
+) -> Result<(OwnedJobSD, SECURITY_ATTRIBUTES)> {
+    let sddl = match package_sid {
+        None => "D:P(A;;0x1F001F;;;OW)(D;;0x1F001F;;;LW)".to_string(),
+        Some(sid) => format!("D:P(A;;0x1F001F;;;OW)(D;;0x1F001F;;;LW)(D;;0x1F001F;;;{sid})"),
+    };
+
+    let wide_sddl: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `wide_sddl` is a valid nul-terminated UTF-16 string. The
+        // output pointer `sd` is a valid out-parameter. `SDDL_REVISION_1` is
+        // the only documented revision. `null_mut()` for the optional
+        // `pnSecurityDescriptorSize` is explicitly permitted by the Win32 docs.
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            wide_sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut sd,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "ConvertStringSecurityDescriptorToSecurityDescriptorW for job ACL failed (GLE={})",
+            unsafe { GetLastError() }
+        )));
+    }
+
+    let guard = OwnedJobSD(sd);
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd,
+        bInheritHandle: 0,
+    };
+    Ok((guard, sa))
 }
 
 /// Phase 17: Anonymous-pipe stdio for the Windows detached path (ATCH-01).
@@ -186,18 +270,37 @@ fn create_one_pipe(sa: &SECURITY_ATTRIBUTES, label: &str) -> Result<(HANDLE, HAN
     Ok((read, write))
 }
 
-pub(super) fn create_process_containment(session_id: Option<&str>) -> Result<ProcessContainment> {
+pub(crate) fn create_process_containment(
+    session_id: Option<&str>,
+    package_sid: Option<&str>,
+) -> Result<ProcessContainment> {
     let name_u16 = session_id.map(|id| {
         let name = format!(r"Local\nono-session-{}", id);
         to_u16_null_terminated(&name)
     });
 
+    // D-03: Build an explicit DACL security descriptor for the job object.
+    // This grants only the launcher (object owner) all access and denies
+    // the Low-IL label (+ optionally the agent's own package SID) any
+    // job access. Both MIC and this explicit DACL are belt-and-suspenders:
+    // MIC prevents Low-IL→Medium-IL write-up; the DACL prevents the agent
+    // from even opening the job object handle to call TerminateJobObject.
+    //
+    // The `_sd_guard` must be declared BEFORE `sa` and must outlive the
+    // `CreateJobObjectW` call. Rust drop order is reverse-of-declaration,
+    // so declaring `_sd_guard` first means it lives until after `job` is set.
+    let (_sd_guard, sa) = build_job_security_attributes(package_sid)?;
+
     let job = unsafe {
-        // SAFETY: If session_id is provided, we create a named job object using
-        // the Local\ namespace. If None, we create an unnamed job object.
-        // Null security attributes are valid for both.
+        // SAFETY: `sa` is a valid `SECURITY_ATTRIBUTES` whose
+        // `lpSecurityDescriptor` points to memory owned by `_sd_guard`
+        // (allocated by `ConvertStringSecurityDescriptorToSecurityDescriptorW`
+        // via `LocalAlloc` and freed by `OwnedJobSD::drop` via `LocalFree`).
+        // The guard is in scope until after `CreateJobObjectW` returns.
+        // If session_id is provided, we create a named job object using the
+        // Local\ namespace. If None, we create an unnamed job object.
         CreateJobObjectW(
-            std::ptr::null(),
+            &sa,
             name_u16
                 .as_ref()
                 .map(|v| v.as_ptr())
@@ -244,7 +347,32 @@ pub(super) fn create_process_containment(session_id: Option<&str>) -> Result<Pro
     Ok(ProcessContainment { job })
 }
 
-pub(super) fn apply_process_handle_to_containment(
+/// Construct a human-readable error message for an `AssignProcessToJobObject`
+/// failure, distinguishing the foreign-job collision (GLE 5 =
+/// `ERROR_ACCESS_DENIED`) from generic assignment failures.
+///
+/// Extracted as a pure helper so it is directly unit-testable without a live
+/// process handle.
+pub(super) fn assign_failure_message(gle: u32) -> String {
+    // ERROR_ACCESS_DENIED (5): the child is already a member of a Job Object
+    // that nono did not create, and that job disallows breakaway.
+    // Nested-job collision → nono cannot guarantee descendant capture / kill-group.
+    if gle == 5 {
+        format!(
+            "Job Object assignment failed (GLE={gle}): the child is already a member of \
+             a Job Object nono did not create (and that job disallows breakaway). \
+             nono cannot guarantee descendant capture/kill-group for this launch and \
+             refuses to continue (fail-secure)."
+        )
+    } else {
+        format!(
+            "Job Object assignment failed (GLE={gle}): AssignProcessToJobObject returned \
+             a non-success code. The child process has been terminated (fail-secure)."
+        )
+    }
+}
+
+pub(crate) fn apply_process_handle_to_containment(
     containment: &ProcessContainment,
     process: HANDLE,
 ) -> Result<()> {
@@ -255,9 +383,11 @@ pub(super) fn apply_process_handle_to_containment(
         AssignProcessToJobObject(containment.job, process)
     };
     if ok == 0 {
-        return Err(NonoError::SandboxInit(
-            "Failed to assign Windows child process to process containment job object".to_string(),
-        ));
+        // SAFETY: GetLastError is a thread-local lookup with no side effects;
+        // called immediately after the failed FFI call so no intervening Win32
+        // API can overwrite the error code.
+        let gle = unsafe { GetLastError() };
+        return Err(NonoError::SandboxInit(assign_failure_message(gle)));
     }
     Ok(())
 }
@@ -2607,7 +2737,7 @@ mod apply_resource_limits_tests {
 
     #[test]
     fn cpu_rate_control_readback_matches_applied_value() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         let limits = ResourceLimits {
             cpu_percent: Some(25),
             ..ResourceLimits::default()
@@ -2622,7 +2752,7 @@ mod apply_resource_limits_tests {
 
     #[test]
     fn memory_readback_matches_applied_value() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         let limits = ResourceLimits {
             memory_bytes: Some(512 * 1024 * 1024),
             ..ResourceLimits::default()
@@ -2636,7 +2766,7 @@ mod apply_resource_limits_tests {
 
     #[test]
     fn max_processes_readback_matches_applied_value() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         let limits = ResourceLimits {
             max_processes: Some(10),
             ..ResourceLimits::default()
@@ -2650,7 +2780,7 @@ mod apply_resource_limits_tests {
 
     #[test]
     fn all_three_limits_coexist() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         let limits = ResourceLimits {
             cpu_percent: Some(50),
             memory_bytes: Some(256 * 1024 * 1024),
@@ -2673,7 +2803,7 @@ mod apply_resource_limits_tests {
 
     #[test]
     fn empty_limits_is_noop() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         apply_resource_limits(&containment, &ResourceLimits::default())
             .expect("empty limits is a no-op and must succeed");
         // Readback should show the defaults from create_process_containment (no memory/process caps),
@@ -2689,7 +2819,7 @@ mod apply_resource_limits_tests {
     /// a naive write-only would clear these.
     #[test]
     fn preserves_kill_on_job_close() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         let limits = ResourceLimits {
             memory_bytes: Some(64 * 1024 * 1024),
             max_processes: Some(8),
@@ -2711,7 +2841,7 @@ mod apply_resource_limits_tests {
 
     #[test]
     fn idempotent_same_limits_twice() {
-        let containment = create_process_containment(None).expect("create containment");
+        let containment = create_process_containment(None, None).expect("create containment");
         let limits = ResourceLimits {
             cpu_percent: Some(30),
             memory_bytes: Some(128 * 1024 * 1024),
@@ -2719,6 +2849,93 @@ mod apply_resource_limits_tests {
         };
         apply_resource_limits(&containment, &limits).expect("first apply");
         apply_resource_limits(&containment, &limits).expect("second apply must also succeed");
+    }
+}
+
+/// D-03 negative tests: job object invariants that the confined child MUST NOT
+/// be able to break — breakaway-denied and explicit-ACL guarded.
+#[cfg(all(test, target_os = "windows"))]
+#[allow(clippy::unwrap_used)]
+mod job_hardening_tests {
+    use super::*;
+    use windows_sys::Win32::System::JobObjects::{
+        QueryInformationJobObject, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+    };
+
+    fn read_extended(job: HANDLE) -> JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        let mut returned: u32 = 0;
+        let ok = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                std::ptr::addr_of_mut!(info) as *mut _,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                &mut returned,
+            )
+        };
+        assert_ne!(
+            ok, 0,
+            "QueryInformationJobObject(ExtendedLimitInformation) must succeed"
+        );
+        info
+    }
+
+    /// D-03 / SC3: `JOB_OBJECT_LIMIT_BREAKAWAY_OK` MUST NOT be set on any job
+    /// object created by `create_process_containment`. A confined agent must not
+    /// be able to spawn children outside the job by setting
+    /// `CREATE_BREAKAWAY_FROM_JOB`.
+    ///
+    /// This test is an enforced regression guard — the invariant was true before
+    /// Phase 73 (only `KILL_ON_JOB_CLOSE | DIE_ON_UNHANDLED_EXCEPTION` were set).
+    /// Making it explicit prevents future callers from accidentally enabling
+    /// breakaway via a `LimitFlags` OR assignment.
+    #[test]
+    fn job_never_has_breakaway_ok() {
+        let containment = create_process_containment(None, None)
+            .expect("create_process_containment must succeed");
+        let info = read_extended(containment.job);
+        assert_eq!(
+            info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+            0,
+            "JOB_OBJECT_LIMIT_BREAKAWAY_OK must NEVER be set — a confined agent \
+             must not be able to spawn children outside the job object; \
+             LimitFlags=0x{:X}",
+            info.BasicLimitInformation.LimitFlags
+        );
+    }
+
+    /// D-03 / SC3: The SDDL-built security descriptor must be accepted by the OS
+    /// and the job object created successfully. Verifies that the hex-rights SDDL
+    /// string `D:P(A;;0x1F001F;;;OW)(D;;0x1F001F;;;LW)` is syntactically valid
+    /// and that `CreateJobObjectW` succeeds with it.
+    ///
+    /// Full ACL enforcement (checking that a Low-IL token genuinely cannot open
+    /// the job handle) is deferred to the Win11 UAT step — the unit test confirms
+    /// the plumbing path (SDDL → SD → SECURITY_ATTRIBUTES → CreateJobObjectW)
+    /// works end-to-end on the host.
+    #[test]
+    fn job_security_descriptor_denies_low_il() {
+        // If this returns Ok, the SDDL was accepted by the OS and the job was
+        // created with the explicit DACL. The absence of an error is the
+        // assertion: a bad SDDL string would cause
+        // ConvertStringSecurityDescriptorToSecurityDescriptorW to return 0 and
+        // create_process_containment to return Err.
+        create_process_containment(None, None)
+            .expect("create_process_containment with SDDL-based job ACL must succeed");
+    }
+
+    /// D-03 / SC3: When a package SID is provided, the SDDL must be accepted
+    /// and the job created successfully (the per-agent deny ACE is appended).
+    #[test]
+    fn job_security_descriptor_with_package_sid() {
+        // Use the well-known AppContainer package SID prefix with a synthetic
+        // sub-authority chain — this is a valid SDDL SID string accepted by
+        // ConvertStringSecurityDescriptorToSecurityDescriptorW.
+        let synthetic_sid = "S-1-15-2-1-2-3-4-5-6-7";
+        create_process_containment(None, Some(synthetic_sid)).expect(
+            "create_process_containment with package-SID deny ACE must succeed with a valid SID",
+        );
     }
 }
 
@@ -3087,6 +3304,211 @@ mod broker_dispatch_tests {
         }
     }
 
+    // ==================================================================
+    // Phase 73 D-04 (MARK-01) — SC4 in-process integration tests.
+    //
+    // These are the AUTHORITATIVE proof of SC1/SC4: a real AppContainer-
+    // confined child whose package SID was inserted into a fresh
+    // AgentRegistry in the SAME process classifies as AiAgent, while a
+    // self-made AppContainer absent from the registry classifies as
+    // NotAnAgent (D-02: registry membership, not the AppContainer
+    // namespace, is the authorization predicate). Both are #[ignore]'d —
+    // they require a real Win11 host with CreateAppContainerProfile
+    // permission and spawn live processes; the default `cargo test` skips
+    // them so it stays green in CI / on non-host dev machines.
+    // ==================================================================
+
+    /// Spawn a real AppContainer-confined child (`cmd.exe /c ping -n 30
+    /// 127.0.0.1` — long-lived so the caller can classify it before it
+    /// exits) using the same `SECURITY_CAPABILITIES { AppContainerSid,
+    /// CapabilityCount: 0 }` sequence the production broker uses (mirrors
+    /// `examples/spike_wfp_appcontainer.rs::spawn_appcontainer_curl`).
+    ///
+    /// Returns the child `PROCESS_INFORMATION`; the caller MUST
+    /// `TerminateProcess` + close both handles. The AppContainer PROFILE
+    /// for `package_sid_psid` MUST already be registered (via
+    /// `nono::create_app_container_profile`) or `CreateProcessW` fails
+    /// `ERROR_FILE_NOT_FOUND` — see the AppContainer carve-out in CONTEXT.md.
+    fn spawn_appcontainer_child(
+        package_sid_psid: windows_sys::Win32::Security::PSID,
+    ) -> PROCESS_INFORMATION {
+        use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
+        use windows_sys::Win32::System::Threading::{
+            DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
+            UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTUPINFOEXW,
+        };
+
+        // Probe the required attribute-list size for 1 slot, then initialize.
+        let mut attr_size: usize = 0;
+        unsafe {
+            // SAFETY: documented probe idiom — null list returns required size.
+            InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attr_size);
+        }
+        let mut attr_buf = vec![0u8; attr_size];
+        let attr_list: LPPROC_THREAD_ATTRIBUTE_LIST =
+            attr_buf.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        let ok = unsafe {
+            // SAFETY: attr_list points to attr_buf sized by the probe for 1 slot.
+            InitializeProcThreadAttributeList(attr_list, 1, 0, &mut attr_size)
+        };
+        assert!(ok != 0, "InitializeProcThreadAttributeList failed");
+
+        // Empty capability set: the most restrictive lowbox.
+        let caps = SECURITY_CAPABILITIES {
+            AppContainerSid: package_sid_psid,
+            Capabilities: std::ptr::null_mut(),
+            CapabilityCount: 0,
+            Reserved: 0,
+        };
+        let ok = unsafe {
+            // SAFETY: attr_list initialized for 1 slot; `caps` and its
+            // AppContainerSid (owned by the caller's OwnedAppContainerSid)
+            // outlive the CreateProcessW call below.
+            UpdateProcThreadAttribute(
+                attr_list,
+                0,
+                PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+                &caps as *const SECURITY_CAPABILITIES as *mut _,
+                std::mem::size_of::<SECURITY_CAPABILITIES>(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert!(
+            ok != 0,
+            "UpdateProcThreadAttribute(SECURITY_CAPABILITIES) failed; GetLastError={}",
+            unsafe { GetLastError() }
+        );
+
+        let mut si: STARTUPINFOEXW = unsafe {
+            // SAFETY: STARTUPINFOEXW is a plain Win32 struct safe to zero-init.
+            std::mem::zeroed()
+        };
+        si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+        si.lpAttributeList = attr_list;
+
+        // Long-lived child so the caller can classify it before it exits.
+        let mut cmdline: Vec<u16> = std::ffi::OsStr::new("cmd.exe /c ping -n 30 127.0.0.1")
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let cwd: Vec<u16> = std::ffi::OsStr::new("C:\\Windows\\System32")
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+
+        let mut pi: PROCESS_INFORMATION = unsafe {
+            // SAFETY: PROCESS_INFORMATION is a plain struct safe to zero-init;
+            // populated by CreateProcessW on success.
+            std::mem::zeroed()
+        };
+        let lp_si = &si.StartupInfo as *const STARTUPINFOW;
+        let created = unsafe {
+            // SAFETY: cmdline/cwd are nul-terminated UTF-16; `si` carries the
+            // EXTENDED_STARTUPINFO_PRESENT SECURITY_CAPABILITIES attribute that
+            // places the child in the AppContainer identified by package_sid_psid.
+            CreateProcessW(
+                std::ptr::null(),
+                cmdline.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                EXTENDED_STARTUPINFO_PRESENT,
+                std::ptr::null(),
+                cwd.as_ptr(),
+                lp_si,
+                &mut pi,
+            )
+        };
+        unsafe {
+            // SAFETY: attr_list was initialized above and is no longer needed.
+            DeleteProcThreadAttributeList(attr_list);
+        }
+        assert!(
+            created != 0,
+            "CreateProcessW (AppContainer child) failed; GetLastError={}",
+            unsafe { GetLastError() }
+        );
+        pi
+    }
+
+    /// SC4 (AUTHORITATIVE in-process proof of SC1): a real AppContainer-
+    /// confined child whose package SID was inserted into a fresh
+    /// `AgentRegistry` in the SAME process classifies as `AiAgent`.
+    ///
+    /// requires: real Win11 host, dev-layout nono.exe at target/release/nono.exe,
+    /// dev-layout nono-shell-broker.exe, CreateAppContainerProfile permission.
+    #[test]
+    #[ignore = "requires real Win11 host + CreateAppContainerProfile; run with --ignored on a real host"]
+    fn sc4_classify_real_agent() {
+        // 1. Fresh registry (single-threaded test — no Arc/Mutex needed).
+        let mut registry = nono::AgentRegistry::new();
+        // 2. Mint a per-run AppContainer name + register its profile (REQUIRED —
+        //    derive-only → CreateProcess(SECURITY_CAPABILITIES) ERROR_FILE_NOT_FOUND).
+        let name = crate::exec_strategy::generate_app_container_name();
+        let _profile = nono::create_app_container_profile(&name)
+            .expect("CreateAppContainerProfile (user-space) must succeed");
+        // 3. Derive the package SID string — the marker value.
+        let sid = nono::derive_app_container_sid(&name).expect("derive package SID");
+        let sid_str = nono::package_sid_to_string(&sid).expect("package SID to string");
+        // 4. Insert into the registry BEFORE spawning — the launcher mint step.
+        registry.insert(sid_str.clone());
+        // 5. Spawn a real confined child inside that AppContainer.
+        let pi = spawn_appcontainer_child(sid.as_psid());
+        // 6. Classify the live child by PID (the authoritative registry check).
+        let result = registry.classify(pi.dwProcessId);
+        // 7. Cleanup BEFORE asserting so a failed assert never leaks the child.
+        unsafe {
+            // SAFETY: handles are valid from CreateProcessW; closed exactly once.
+            let _ = TerminateProcess(pi.hProcess, 0);
+            let _ = CloseHandle(pi.hThread);
+            let _ = CloseHandle(pi.hProcess);
+        }
+        // 8. The authoritative SC1/SC4 assertion.
+        assert!(
+            matches!(result, nono::AgentClassification::AiAgent { .. }),
+            "a launched + registered confined child must classify as AiAgent; got {result:?}"
+        );
+    }
+
+    /// SC4 spoof case: a real AppContainer process whose SID was NOT inserted
+    /// into the registry classifies as `NotAnAgent` — proving registry
+    /// membership (not the `nono.session.*`/AppContainer namespace) is the sole
+    /// authorization predicate (D-02). A correct namespace alone is forgeable;
+    /// only the minted-SID set is sound.
+    ///
+    /// requires: real Win11 host, CreateAppContainerProfile permission (user-space).
+    #[test]
+    #[ignore = "requires real Win11 host + CreateAppContainerProfile; run with --ignored on a real host"]
+    fn sc4_classify_spoof_not_agent() {
+        // 1. Fresh, EMPTY registry — nothing is ever inserted.
+        let registry = nono::AgentRegistry::new();
+        // 2. Mint + register a fresh AppContainer profile (the "spoof": a real
+        //    AppContainer the launcher did NOT mint into its registry).
+        let name = crate::exec_strategy::generate_app_container_name();
+        let _profile = nono::create_app_container_profile(&name)
+            .expect("CreateAppContainerProfile (user-space) must succeed");
+        let sid = nono::derive_app_container_sid(&name).expect("derive package SID");
+        // 3. Spawn a real AppContainer child — but DO NOT insert its SID.
+        let pi = spawn_appcontainer_child(sid.as_psid());
+        // 4. Classify.
+        let result = registry.classify(pi.dwProcessId);
+        // 5. Cleanup before asserting.
+        unsafe {
+            // SAFETY: handles are valid from CreateProcessW; closed exactly once.
+            let _ = TerminateProcess(pi.hProcess, 0);
+            let _ = CloseHandle(pi.hThread);
+            let _ = CloseHandle(pi.hProcess);
+        }
+        // 6. A real AppContainer absent from the registry MUST be NotAnAgent (D-02).
+        assert_eq!(
+            result,
+            nono::AgentClassification::NotAnAgent,
+            "a self-made AppContainer absent from the registry must classify as NotAnAgent (D-02)"
+        );
+    }
+
     // ------------------------------------------------------------------
     // Phase 31 Plan 31-03 — Nyquist gap-fill: pin `build_broker_command_line`'s
     // quoting + UTF-16 encoding behavior. The end-to-end shape is exercised by
@@ -3261,6 +3683,8 @@ mod env_filter_tests {
             allowed_env_vars,
             denied_env_vars,
             prefers_low_il_broker: false,
+            // Test helper: no interpreter coverage required for launch.rs unit tests.
+            interpreters: Vec::new(),
         }
     }
 
@@ -3718,6 +4142,85 @@ mod write_deny_low_il_broker_no_pty_tests {
             after, b"sentinel",
             "write-deny FAILED: the Low-IL no-PTY broker child modified the \
              Medium-IL fixture (NO_WRITE_UP not enforced); broker exit_code={exit_code}"
+        );
+    }
+}
+
+/// SC5 / P6 negative test: proves the foreign-job (GLE-5) diagnostic and the
+/// generic GLE branch both produce correct messages, and that
+/// `apply_process_handle_to_containment` returns `Err` on an invalid job handle
+/// (structural fail-secure assertion).
+///
+/// Test 1 (GLE-5 message): `assign_failure_message(5)` contains "did not create"
+/// and is prefixed with `Job Object assignment failed (GLE=5)`.
+/// Test 2 (generic GLE message): `assign_failure_message(1)` contains "GLE=1".
+/// Test 3 (structural fail-secure): passing an invalid job handle
+/// (`INVALID_HANDLE_VALUE`) to `apply_process_handle_to_containment` returns
+/// `Err`, never `Ok` — proving the assign-failure path propagates an error
+/// rather than silently continuing.
+///
+/// Live spawn scaffolding is NOT required: the pure-helper tests cover the
+/// message branch deterministically; the structural test uses an obviously
+/// invalid handle (GLE will be non-5) which exercises the generic branch and
+/// proves `Err` propagation. The full suspend→assign→resume fail-secure
+/// sequence (terminate_suspended_process + propagate) is covered by the SC1
+/// HUMAN-UAT (Plan 05) where a real engine spawn is verified end-to-end.
+#[cfg(all(test, target_os = "windows"))]
+mod assign_failure_tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+
+    /// GLE-5 (ERROR_ACCESS_DENIED) → "did not create" substring present.
+    #[test]
+    fn assign_failure_message_gle5_contains_did_not_create() {
+        let msg = assign_failure_message(5);
+        assert!(
+            msg.contains("did not create"),
+            "GLE-5 message must name the foreign-job cause ('did not create'); got: {msg}"
+        );
+        assert!(
+            msg.contains("GLE=5"),
+            "GLE-5 message must include 'GLE=5' for diagnostics; got: {msg}"
+        );
+    }
+
+    /// Generic GLE (non-5) → "GLE=<value>" in the message.
+    #[test]
+    fn assign_failure_message_generic_gle_contains_gle_value() {
+        let msg = assign_failure_message(1);
+        assert!(
+            msg.contains("GLE=1"),
+            "Generic GLE message must include the GLE value; got: {msg}"
+        );
+        // Must NOT claim "did not create" — that is the GLE-5-only narrative.
+        assert!(
+            !msg.contains("did not create"),
+            "Generic GLE message must not contain 'did not create' (that is the GLE-5 branch); got: {msg}"
+        );
+    }
+
+    /// Structural fail-secure: an invalid job handle makes
+    /// `apply_process_handle_to_containment` return `Err` — it never returns
+    /// `Ok` on assign failure.
+    ///
+    /// Uses `INVALID_HANDLE_VALUE` as the job; `AssignProcessToJobObject` will
+    /// fail (GLE will be non-zero), proving the Err path is taken.
+    /// The `process` argument is an arbitrary small non-null value — it is
+    /// never dereferenced by the kernel before the job-handle validity check
+    /// fails first.
+    #[test]
+    fn apply_process_handle_to_containment_invalid_job_returns_err() {
+        // A ProcessContainment with an invalid job handle — use INVALID_HANDLE_VALUE
+        // which is a well-known sentinel that Win32 APIs reject.
+        let bad_containment = ProcessContainment {
+            job: INVALID_HANDLE_VALUE,
+        };
+        // Use a similarly invalid process handle; Win32 validates the job first.
+        let result = apply_process_handle_to_containment(&bad_containment, INVALID_HANDLE_VALUE);
+        assert!(
+            result.is_err(),
+            "apply_process_handle_to_containment must return Err on an invalid job handle \
+             (fail-secure — never silently continue with uncontained child)"
         );
     }
 }

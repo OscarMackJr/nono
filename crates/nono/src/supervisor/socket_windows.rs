@@ -29,20 +29,24 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TokenGroups, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
-    SID_AND_ATTRIBUTES, TOKEN_GROUPS, TOKEN_QUERY,
+    GetTokenInformation, RevertToSelf, TokenAppContainerSid, TokenGroups, PSECURITY_DESCRIPTOR,
+    SECURITY_ATTRIBUTES, SID_AND_ATTRIBUTES, TOKEN_APPCONTAINER_INFORMATION, TOKEN_GROUPS,
+    TOKEN_QUERY,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX,
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, CreatePipe, DisconnectNamedPipe,
-    GetNamedPipeServerProcessId, PeekNamedPipe, WaitNamedPipeW, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    GetNamedPipeServerProcessId, ImpersonateNamedPipeClient, PeekNamedPipe, WaitNamedPipeW,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    PIPE_WAIT,
 };
 use windows_sys::Win32::System::SystemServices::SE_GROUP_LOGON_ID;
 use windows_sys::Win32::System::Threading::OpenProcessToken;
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetCurrentProcessId, GetProcessId};
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetCurrentProcessId, GetCurrentThread, GetProcessId, OpenThreadToken,
+};
 
 /// SDDL revision used by `ConvertStringSecurityDescriptorToSecurityDescriptorW`.
 const SDDL_REVISION_1: u32 = 1;
@@ -1607,7 +1611,16 @@ fn current_logon_sid() -> Result<String> {
 /// second-pass: the package SID is the token IDENTITY, so a single allow-ACE
 /// in the DACL's first pass suffices for `CreateFileW(GENERIC_READ |
 /// GENERIC_WRITE)` to succeed.
-fn build_capability_pipe_sddl(
+/// Build a capability-pipe SDDL string for the daemon accept loop.
+///
+/// Returns the base SDDL (no session/package SID filters) when both arguments
+/// are `None`. Embeds per-tenant `session_sid` and/or `package_sid` ACEs when
+/// provided (used by the daemon accept loop for per-connection pipe isolation).
+///
+/// Called by `nono-cli`'s `agent_daemon::accept_loop` via
+/// `nono::supervisor::build_capability_pipe_sddl(None, None)` to construct
+/// the Low-IL SDDL for each new pipe instance.
+pub fn build_capability_pipe_sddl(
     session_sid: Option<&str>,
     package_sid: Option<&str>,
 ) -> Result<String> {
@@ -1890,6 +1903,285 @@ fn create_anonymous_pipe() -> Result<(File, File)> {
 
 fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+// ─── Phase 74 Plan 02: per-pipe-client authentication ──────────────────────
+//
+// `authenticate_pipe_client` calls `ImpersonateNamedPipeClient` on a freshly
+// connected pipe handle to adopt the client's security context, then extracts
+// the client's AppContainer package SID via `GetTokenInformation(
+// TokenAppContainerSid)`.  `RevertToSelf` is called on EVERY exit path
+// (success, error, or panic) via `ImpersonationGuard::drop`.
+//
+// This is the server-side defense-in-depth layer.  The PRIMARY isolation gate
+// is the per-tenant SDDL DACL on the pipe instance (only the designated
+// AppContainer SID may connect at all).  `authenticate_pipe_client` is a
+// defense-in-depth cross-check: after the OS-level DACL passes, we verify
+// that the connected client's token actually carries the expected package SID
+// and is therefore the tenant we believe it to be.
+//
+// Phase 74-01 spike (A1): `SeImpersonatePrivilege` is present for the
+// interactive user service context; `ImpersonateLoggedOnUser` with a real
+// AppContainer token succeeded (test `daemon_cross_tenant_denial_...` PASS).
+// `ImpersonateNamedPipeClient` requires the same privilege — confirmed viable.
+//
+// Phase 74-01 spike (A2): `TokenAppContainerSid` in windows-sys 0.59 is the
+// named constant `TokenAppContainerSid = 31i32` (NOT the legacy SDK value of
+// 56).  This code uses the named constant directly.
+
+/// RAII guard that calls `RevertToSelf` on drop.
+///
+/// Created immediately after a successful `ImpersonateNamedPipeClient` call.
+/// Guarantees that the current thread reverts to its own security context
+/// when this guard goes out of scope — including on early-return error paths
+/// and (best-effort) on unwind paths.
+///
+/// `RevertToSelf` is infallible from Windows's contract perspective when
+/// the thread IS currently impersonating (the invariant we maintain here).
+/// We call it unconditionally in `drop`; if it fails the process is in an
+/// inconsistent state and should be treated as a fatal condition by callers.
+struct ImpersonationGuard;
+
+impl Drop for ImpersonationGuard {
+    fn drop(&mut self) {
+        // SAFETY: `RevertToSelf` is called unconditionally. The guard is
+        // only created after a successful `ImpersonateNamedPipeClient`, so
+        // the thread is guaranteed to be in an impersonated state here.
+        // `RevertToSelf` with no active impersonation is also safe (it is a
+        // no-op), providing defense-in-depth if the guard is ever
+        // constructed incorrectly.
+        let _ = unsafe { RevertToSelf() };
+    }
+}
+
+/// Authenticate a connected pipe client by impersonating it and extracting
+/// the AppContainer package SID from its token.
+///
+/// This is the server-side defense-in-depth authentication layer for the
+/// daemon's multi-tenant accept loop.  Call it after `ConnectNamedPipe`
+/// returns success.  The primary isolation gate is the per-tenant SDDL DACL
+/// on the pipe instance; this function is an additional cross-check that the
+/// connected client's token carries the expected AppContainer package SID.
+///
+/// ## Call sequence
+///
+/// 1. `ImpersonateNamedPipeClient(pipe_handle)` — adopt the client context.
+/// 2. [`ImpersonationGuard`] created immediately — guarantees `RevertToSelf`
+///    on ALL subsequent exit paths.
+/// 3. `OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, ...)` — open the
+///    impersonated token.
+/// 4. `GetTokenInformation(token, TokenAppContainerSid, ...)` two-pass
+///    probe+fill — extract the `TOKEN_APPCONTAINER_INFORMATION` buffer.
+/// 5. `ConvertSidToStringSidW` — convert the PSID to SDDL form.
+/// 6. `CloseHandle(token)` — release the token handle.
+/// 7. Return `Ok(sid_string)`; guard drops → `RevertToSelf`.
+///
+/// ## Fail-secure
+///
+/// On ANY error (impersonation failed, non-AppContainer token, SID
+/// conversion failure), returns `Err(NonoError::SandboxInit(...))` and the
+/// thread reverts to its own security context before returning.  The daemon
+/// accept loop MUST close the pipe instance on `Err` without sending a
+/// response.
+///
+/// ## Errors
+///
+/// - `ImpersonateNamedPipeClient` fails — client disconnected before auth,
+///   or the calling process lacks `SeImpersonatePrivilege`.
+/// - `OpenThreadToken` fails — unexpected; always present after successful
+///   impersonation.
+/// - `GetTokenInformation(TokenAppContainerSid)` returns `needed = 0` — the
+///   client is NOT an AppContainer process; not a daemon tenant.
+/// - `ConvertSidToStringSidW` fails — invalid SID from token (should not
+///   happen for a well-formed AppContainer token).
+/// # Safety
+///
+/// The caller must ensure that `pipe_handle` is a valid, connected named-pipe
+/// server-side HANDLE returned by a successful `ConnectNamedPipe` call.
+/// Passing a null handle, `INVALID_HANDLE_VALUE`, or any other invalid handle
+/// is undefined behaviour from the OS perspective; the function performs a
+/// best-effort null + `INVALID_HANDLE_VALUE` check but cannot validate
+/// arbitrary invalid handles.
+pub unsafe fn authenticate_pipe_client(pipe_handle: HANDLE) -> Result<String> {
+    use std::mem::size_of;
+
+    // Fail-secure: a null or invalid handle must never be impersonated.
+    // INVALID_HANDLE_VALUE is the Windows sentinel for a failed handle;
+    // null is the Rust sentinel for an uninitialized HANDLE.
+    if pipe_handle.is_null() || pipe_handle == INVALID_HANDLE_VALUE {
+        return Err(NonoError::SandboxInit(
+            "authenticate_pipe_client: pipe_handle is null or INVALID_HANDLE_VALUE — \
+             refusing to impersonate"
+                .to_string(),
+        ));
+    }
+
+    // Step 1: Impersonate the pipe client.  On failure we have NOT changed
+    // the thread security context, so no guard is needed yet.
+    // SAFETY: `pipe_handle` is a valid named-pipe server-side handle per the
+    // function's safety contract (null and INVALID_HANDLE_VALUE are rejected
+    // above).  `ImpersonateNamedPipeClient` is thread-local and reverts by
+    // the RAII guard created on the line immediately below.
+    let ok = ImpersonateNamedPipeClient(pipe_handle);
+    if ok == 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "authenticate_pipe_client: ImpersonateNamedPipeClient failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // Step 2: RAII guard — `RevertToSelf` will run on every exit path
+    // below (success or error).  Created unconditionally after the
+    // successful impersonation.
+    let _guard = ImpersonationGuard;
+
+    // Step 3: Open the impersonated thread token.
+    let mut token: HANDLE = std::ptr::null_mut();
+    let ok = unsafe {
+        // SAFETY: `GetCurrentThread()` returns a pseudo-handle valid for the
+        // lifetime of the thread. `token` is a valid out-pointer.
+        // `bOpenAsSelf = 0` (FALSE) — we want the IMPERSONATED token, not the
+        // thread's primary token.
+        OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut token)
+    };
+    if ok == 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "authenticate_pipe_client: OpenThreadToken failed after impersonation: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    // Wrap token in OwnedHandle so it is closed even on early return.
+    let token_owned = unsafe {
+        // SAFETY: `token` is a valid, open token handle returned by
+        // `OpenThreadToken`.  We own it from this point.
+        std::os::windows::io::OwnedHandle::from_raw_handle(token)
+    };
+    let token_raw = token_owned.as_raw_handle() as HANDLE;
+
+    // Step 4a: Probe the required buffer size for TokenAppContainerSid.
+    // TokenAppContainerSid = 31i32 in windows-sys 0.59 (named constant
+    // from Win32/Security/mod.rs; see 74-01-SUMMARY.md §A2 for the
+    // correction from 56u32 cited in RESEARCH.md).
+    let mut needed: u32 = 0;
+    let _ = unsafe {
+        // SAFETY: null buffer + 0 length is the documented probe pattern.
+        // Return value is always FALSE (error) on the probe call; ignored.
+        GetTokenInformation(
+            token_raw,
+            TokenAppContainerSid,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        )
+    };
+
+    // needed == 0 means the token has no AppContainer SID.  This is the
+    // expected result for a non-AppContainer (Medium-IL) client process.
+    // Fail-secure: reject the connection.
+    if needed == 0 {
+        return Err(NonoError::SandboxInit(
+            "authenticate_pipe_client: client token has no AppContainer SID \
+             (not an AppContainer process — deny per fail-secure policy)"
+                .to_string(),
+        ));
+    }
+    // Defensive size guard: malformed token returning less than the struct.
+    if (needed as usize) < size_of::<TOKEN_APPCONTAINER_INFORMATION>() {
+        return Err(NonoError::SandboxInit(format!(
+            "authenticate_pipe_client: TokenAppContainerSid buffer size {needed} \
+             is smaller than TOKEN_APPCONTAINER_INFORMATION — malformed token"
+        )));
+    }
+
+    // Step 4b: Fill the buffer with the actual TOKEN_APPCONTAINER_INFORMATION.
+    let mut buf = vec![0u8; needed as usize];
+    let ok = unsafe {
+        // SAFETY: `buf` is sized by the probe above; `token_raw` is a live
+        // token handle.  The API writes `TOKEN_APPCONTAINER_INFORMATION`
+        // (a single PSID field) into the start of the buffer.
+        GetTokenInformation(
+            token_raw,
+            TokenAppContainerSid,
+            buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+            needed,
+            &mut needed,
+        )
+    };
+    if ok == 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "authenticate_pipe_client: GetTokenInformation(TokenAppContainerSid) failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // Step 5: Cast the buffer and read the PSID pointer.
+    // The PSID points INTO the buffer — do NOT free it separately.
+    let info = unsafe {
+        // SAFETY: `buf` is at least `size_of::<TOKEN_APPCONTAINER_INFORMATION>()`
+        // bytes (verified above and filled by GetTokenInformation).  The
+        // reference lifetime is bounded by `buf`, which is alive in this scope.
+        &*(buf.as_ptr().cast::<TOKEN_APPCONTAINER_INFORMATION>())
+    };
+
+    // Null PSID: some Windows builds return the struct with a null pointer
+    // instead of needed=0 for non-AppContainer tokens.  Fail-secure.
+    if info.TokenAppContainer.is_null() {
+        return Err(NonoError::SandboxInit(
+            "authenticate_pipe_client: TokenAppContainer SID pointer is null — \
+             client token is not an AppContainer (deny)"
+                .to_string(),
+        ));
+    }
+
+    // Step 6: Convert the PSID to SDDL string form while `buf` is alive.
+    // DO NOT wrap `info.TokenAppContainer` in any RAII type that calls
+    // `FreeSid` — the PSID is owned by the Vec<u8> buffer (double-free UB).
+    let sid_string = {
+        let mut str_ptr: windows_sys::core::PWSTR = std::ptr::null_mut();
+        let ok = unsafe {
+            // SAFETY: `info.TokenAppContainer` is a valid PSID owned by `buf`
+            // (kept alive in this scope).  On success the callee allocates a
+            // null-terminated UTF-16 string freed below via `LocalFree`.
+            ConvertSidToStringSidW(info.TokenAppContainer, &mut str_ptr)
+        };
+        if ok == 0 || str_ptr.is_null() {
+            return Err(NonoError::SandboxInit(format!(
+                "authenticate_pipe_client: ConvertSidToStringSidW failed: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        // Copy the UTF-16 string into a Rust String.
+        let s = unsafe {
+            // SAFETY: `str_ptr` points to a null-terminated UTF-16 string
+            // allocated by ConvertSidToStringSidW; we scan for the terminator
+            // to determine the length, then copy.
+            let mut len = 0usize;
+            while *str_ptr.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(str_ptr, len);
+            String::from_utf16_lossy(slice)
+        };
+        unsafe {
+            // SAFETY: `str_ptr` was allocated by `ConvertSidToStringSidW`
+            // and is freed exactly once here via `LocalFree` as documented.
+            let _ = LocalFree(str_ptr.cast::<std::ffi::c_void>());
+        }
+        s
+    };
+    // `buf` drops here — the PSID inside it is no longer referenced.
+
+    // Step 7: Close the token handle explicitly (token_owned will also drop,
+    // but prefer explicit close so the handle lifetime is obvious).
+    let token_to_close = token_owned.as_raw_handle() as HANDLE;
+    drop(token_owned);
+    // token_to_close is now invalid (OwnedHandle::drop already closed it).
+    // Nothing to do; the drop above already closed the handle.
+    let _ = token_to_close; // suppress unused-variable warning
+
+    // Return the SDDL-form SID string.
+    // `_guard` drops here → `RevertToSelf()` reverts impersonation.
+    Ok(sid_string)
 }
 
 #[cfg(test)]
@@ -3108,5 +3400,198 @@ mod tests {
         unsafe {
             CloseHandle(handle);
         }
+    }
+
+    // ── Phase 74 Plan 02: authenticate_pipe_client + SC5 guard tests ──────
+
+    /// SC5 wire-protocol guard: `SupervisorMessage` and `CapabilityRequest`
+    /// MUST NOT gain a new `tenant_id` or `agent_id` field.
+    ///
+    /// Tenant identity is derived from the connected pipe client's
+    /// AppContainer package SID (via `authenticate_pipe_client`), NOT carried
+    /// in the wire protocol.  This test serializes a `SupervisorMessage` to
+    /// JSON and asserts the invariant at the type level.
+    ///
+    /// Per 74-CONTEXT.md D-02 (locked): "session_id is the routing hint;
+    /// tenant identity is the kernel-vouched SID returned by
+    /// authenticate_pipe_client — never a wire field."
+    #[test]
+    fn supervisor_message_no_tenant_id_field() {
+        use crate::capability::AccessMode;
+        use crate::supervisor::types::{CapabilityRequest, HandleKind, SupervisorMessage};
+        use std::path::PathBuf;
+
+        let req = CapabilityRequest {
+            request_id: "sc5-guard-001".to_string(),
+            #[allow(deprecated)]
+            path: PathBuf::from("/tmp/sc5-guard"),
+            access: AccessMode::Read,
+            reason: Some("SC5 wire-protocol guard test".to_string()),
+            child_pid: 99_999,
+            session_id: "sc5-session-001".to_string(),
+            session_token: "sc5-token".to_string(),
+            kind: HandleKind::File,
+            target: None,
+            access_mask: 0,
+        };
+        let msg = SupervisorMessage::Request(req);
+        let json = serde_json::to_string(&msg).expect("SupervisorMessage must serialize to JSON");
+
+        // Primary SC5 invariant: no tenant identity field on the wire.
+        assert!(
+            !json.contains("tenant_id"),
+            "SupervisorMessage MUST NOT contain a 'tenant_id' field — \
+             tenant identity is derived from the kernel-vouched SID, not the wire frame. \
+             JSON: {json}"
+        );
+        assert!(
+            !json.contains("agent_id"),
+            "SupervisorMessage MUST NOT contain an 'agent_id' field — \
+             tenant identity is derived from the kernel-vouched SID, not the wire frame. \
+             JSON: {json}"
+        );
+
+        // Confirm session_id IS present (it remains the routing hint).
+        assert!(
+            json.contains("session_id"),
+            "SupervisorMessage must still carry 'session_id' as the routing hint. \
+             JSON: {json}"
+        );
+        // Confirm 'sc5-session-001' is the value (round-trip sanity).
+        assert!(
+            json.contains("sc5-session-001"),
+            "session_id value must survive JSON serialization. JSON: {json}"
+        );
+    }
+
+    /// `ImpersonationGuard` drops → `RevertToSelf` is called.
+    ///
+    /// This test verifies two properties of the RAII contract:
+    ///
+    /// 1. When there is NO active impersonation on the current thread,
+    ///    dropping an `ImpersonationGuard` calls `RevertToSelf` (a no-op in
+    ///    that case) and does NOT panic.
+    ///
+    /// 2. The thread remains in its original (non-impersonated) state after
+    ///    the guard is dropped: `OpenThreadToken(bOpenAsSelf=FALSE)` must fail
+    ///    (no impersonation token on the thread).
+    ///
+    /// Full end-to-end verification (with active impersonation) is covered by
+    /// the integration test `daemon_handle_baseline.rs` (Plan 74-01) which
+    /// runs in a privileged context that can obtain AppContainer impersonation
+    /// tokens.  This unit test validates the RAII mechanism itself.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn impersonation_guard_reverts_on_drop() {
+        use windows_sys::Win32::Foundation::CloseHandle;
+
+        // Pre-condition: confirm the current thread is NOT impersonating.
+        // OpenThreadToken(bOpenAsSelf=FALSE) must fail if not impersonating.
+        let mut thread_token_pre: HANDLE = std::ptr::null_mut();
+        let ok_pre = unsafe {
+            // SAFETY: GetCurrentThread() is a pseudo-handle valid for this
+            // thread; thread_token_pre is a valid out-pointer;
+            // bOpenAsSelf=0 (FALSE) reads the impersonated context.
+            OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut thread_token_pre)
+        };
+        if !thread_token_pre.is_null() {
+            unsafe {
+                // SAFETY: close any unexpected handle immediately so the test
+                // doesn't leak resources even if we skip below.
+                CloseHandle(thread_token_pre);
+            }
+        }
+        // If the thread IS already impersonating (e.g. parent test left stale
+        // context), skip the guard-drop assertion to avoid a false pass.
+        // This should never happen in a clean unit-test run.
+        if ok_pre != 0 {
+            // Thread is impersonating — not the state this test expects.
+            // Revert and re-run to get a clean baseline.
+            unsafe { RevertToSelf() };
+        }
+
+        // Property 1: dropping an ImpersonationGuard when NOT impersonating
+        // must not panic.  RevertToSelf() is always safe to call.
+        {
+            let _guard = ImpersonationGuard;
+            // _guard drops here → RevertToSelf() called (no-op when not
+            // impersonating, but must not panic).
+        }
+
+        // Property 2: thread must NOT be in an impersonated state after drop.
+        let mut thread_token_after: HANDLE = std::ptr::null_mut();
+        let ok_after = unsafe {
+            // SAFETY: same calling convention as above.
+            OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 0, &mut thread_token_after)
+        };
+        if !thread_token_after.is_null() {
+            unsafe {
+                // SAFETY: close the unexpected thread token before asserting.
+                CloseHandle(thread_token_after);
+            }
+        }
+        assert_eq!(
+            ok_after, 0,
+            "OpenThreadToken(bOpenAsSelf=FALSE) must FAIL — thread must not be \
+             impersonating after ImpersonationGuard drop. If this assertion fails, \
+             ImpersonationGuard::drop did not call RevertToSelf."
+        );
+    }
+
+    /// `authenticate_pipe_client` on an INVALID_HANDLE_VALUE must return
+    /// `Err` and must NOT leave the thread in an impersonated state.
+    ///
+    /// This test verifies the fail-secure contract for the error path:
+    /// when `ImpersonateNamedPipeClient` fails (because the handle is
+    /// invalid), the function returns `Err` and the thread remains in its
+    /// own security context (no impersonation guard was created — nothing
+    /// to revert).
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn authenticate_pipe_client_reverts_on_error() {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        // INVALID_HANDLE_VALUE causes authenticate_pipe_client to return Err
+        // before even attempting ImpersonateNamedPipeClient (the null/invalid
+        // guard at the top of the function fires first).
+        // SAFETY: We intentionally pass INVALID_HANDLE_VALUE to test the
+        // fail-secure error path.
+        let result = unsafe { authenticate_pipe_client(INVALID_HANDLE_VALUE) };
+        assert!(
+            result.is_err(),
+            "authenticate_pipe_client must return Err for an invalid pipe handle"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        // The function's null/invalid-handle guard fires BEFORE
+        // ImpersonateNamedPipeClient, so the error names the guard condition.
+        assert!(
+            err_msg.contains("authenticate_pipe_client"),
+            "error message must identify the function: {err_msg}"
+        );
+
+        // Confirm the thread is NOT in an impersonated state: OpenThreadToken
+        // with bOpenAsSelf=FALSE must fail (no impersonation token on thread).
+        let mut thread_token: HANDLE = std::ptr::null_mut();
+        let ok = unsafe {
+            // SAFETY: GetCurrentThread() + valid out-pointer; bOpenAsSelf=0 reads
+            // the impersonated context (only succeeds if impersonation is active).
+            OpenThreadToken(
+                GetCurrentThread(),
+                TOKEN_QUERY,
+                0, // bOpenAsSelf = FALSE
+                &mut thread_token,
+            )
+        };
+        if !thread_token.is_null() {
+            unsafe {
+                // SAFETY: close any unexpected thread token immediately.
+                CloseHandle(thread_token);
+            }
+        }
+        assert_eq!(
+            ok, 0,
+            "OpenThreadToken(bOpenAsSelf=FALSE) must FAIL after authenticate_pipe_client \
+             returns Err — no impersonation must remain active. If this fails, the \
+             thread security context was leaked."
+        );
     }
 }

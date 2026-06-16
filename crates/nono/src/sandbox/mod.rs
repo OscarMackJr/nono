@@ -830,15 +830,22 @@ impl Sandbox {
     }
 
     /// Validate whether the current Windows filesystem policy can enforce the
-    /// launch-time paths required by the child process.
+    /// launch-time paths required by the child process, including any
+    /// interpreter(s) the wrapper program will spawn.
+    ///
+    /// `interpreters` must contain the absolute, resolved paths of every
+    /// interpreter the wrapper spawns (e.g. `python.exe` for a console-script
+    /// wrapper). Pass an empty slice when no interpreter coverage is required.
+    /// This is the single coverage chokepoint — do NOT add a parallel gate.
     #[cfg(target_os = "windows")]
     #[must_use = "launch-time filesystem validation result should be checked"]
     pub fn validate_windows_launch_paths(
         policy: &WindowsFilesystemPolicy,
         program: &Path,
         current_dir: &Path,
+        interpreters: &[std::path::PathBuf],
     ) -> Result<()> {
-        windows::validate_launch_paths(policy, program, current_dir)
+        windows::validate_launch_paths(policy, program, current_dir, interpreters)
     }
 
     /// Validate absolute Windows command arguments against the compiled

@@ -1149,7 +1149,9 @@ pub fn try_set_mandatory_label(path: &Path, mask: u32) -> Result<()> {
             // If the ownership query itself fails, fall through to the
             // catch-all: propagating the ownership-query error here would
             // mask the actual apply-failure status code.
-            match path_is_owned_by_current_user(path) {
+            // Delegates to path_has_write_owner (the single source of truth
+            // for the WRITE_OWNER predicate — Plan 71-03 Task 2).
+            match path_has_write_owner(path) {
                 Ok(true) => format!(
                     "The current user lacks WRITE_OWNER (0x00080000) on this path. \
                      Mandatory integrity labels require WRITE_OWNER, which is NOT implicit for path owners. \
@@ -1179,6 +1181,50 @@ pub fn try_set_mandatory_label(path: &Path, mask: u32) -> Result<()> {
         hresult: status,
         hint,
     })
+}
+
+/// Returns `Ok(true)` if the current process user can successfully relabel
+/// `path` with a mandatory integrity label — i.e., the user holds `WRITE_OWNER`
+/// (0x00080000) on the path. Returns `Ok(false)` if the user lacks this right.
+/// Propagates any security-descriptor query error as `Err` (fail-closed).
+///
+/// # Purpose
+///
+/// This is the R-B3 pre-launch predicate: the CLI's pre-launch gate uses this
+/// to refuse a non-relabelable workspace **before** spawn, emitting a named
+/// diagnostic instead of letting `SetNamedSecurityInfoW(LABEL_*)` fail
+/// opaquely inside the launch sequence (D-08). A returned `Ok(false)` means
+/// the mandatory-label relabel will fail with `ERROR_ACCESS_DENIED`.
+///
+/// `WRITE_OWNER` is NOT implicitly granted to the path's NTFS owner — it must
+/// appear as an explicit or inherited ACE in the DACL. User-profile-subtree
+/// paths (`%USERPROFILE%\*`, `%TEMP%\*`) carry it; drive-root user directories
+/// (e.g. `C:\poc\*`) often do not (they inherit only
+/// `Authenticated Users: Modify` = mask 0x1301BF, missing 0x00080000).
+///
+/// # Implementation note
+///
+/// The effective-rights approach (`GetEffectiveRightsFromAclW`) was explicitly
+/// dropped (debug session 260522-wn0) because it walks the **full** (unfiltered)
+/// token's group memberships, yielding false positives for local admins under
+/// the UAC-filtered token that `SetNamedSecurityInfoW(LABEL_*)` actually runs
+/// under. This helper uses NTFS owner-SID equality (via
+/// [`path_is_owned_by_current_user`]) as the proxy for WRITE_OWNER on standard
+/// (non-admin) accounts — the same proxy the apply-time error branch already
+/// uses. This is the single source of truth that [`try_set_mandatory_label`]
+/// now delegates to.
+///
+/// # Errors
+///
+/// * [`NonoError::LabelApplyFailed`] if any security-descriptor or token query
+///   fails. Never silently returns `Ok(true)` on error (fail-closed).
+#[must_use = "the WRITE_OWNER predicate result must be acted upon"]
+pub fn path_has_write_owner(path: &Path) -> Result<bool> {
+    // Delegate to the established owner-SID-equality proxy. This is the same
+    // mechanism the try_set_mandatory_label ERROR_ACCESS_DENIED branch uses
+    // (debug 260522-wn0 v2). On standard user accounts, WRITE_OWNER is present
+    // iff the user is the NTFS owner. Fail-closed: Err propagates.
+    path_is_owned_by_current_user(path)
 }
 
 /// Returns `Ok(true)` if `path`'s NTFS owner SID equals the current process
@@ -2088,10 +2134,28 @@ pub fn compile_filesystem_policy(caps: &CapabilitySet) -> WindowsFilesystemPolic
     WindowsFilesystemPolicy { rules, unsupported }
 }
 
+/// Validate that the Windows filesystem policy covers all paths required for
+/// a confined launch: the wrapper executable, every declared interpreter the
+/// wrapper will spawn, and (for user-intent-directory policies) the working
+/// directory.
+///
+/// # Errors
+///
+/// Returns [`NonoError::UnsupportedPlatform`] if:
+/// * The policy contains unsupported capability shapes.
+/// * The wrapper program path is not covered (Read).
+/// * Any interpreter path is not covered (Read) — this is the D-07 fail-secure
+///   interpreter-coverage gate: nono will not launch a partially-confined engine.
+/// * The working directory is outside the policy allowlist (user-intent rules).
+///
+/// This is the **single coverage chokepoint** — do NOT add a parallel gate.
+/// All callers must pass the complete interpreter set; use an empty slice when
+/// no interpreter coverage is required.
 pub fn validate_launch_paths(
     policy: &WindowsFilesystemPolicy,
     program: &Path,
     current_dir: &Path,
+    interpreters: &[std::path::PathBuf],
 ) -> Result<()> {
     if !policy.unsupported.is_empty() {
         return Err(NonoError::UnsupportedPlatform(format!(
@@ -2110,10 +2174,41 @@ pub fn validate_launch_paths(
     let program = normalize_windows_path(&program);
 
     if !policy.covers_path(&program, crate::AccessMode::Read) {
+        // D-07: name the executable AND the --allow fix so the user can act.
+        let parent_hint = program
+            .parent()
+            .map(|p| format!("--allow {}", p.display()))
+            .unwrap_or_else(|| "--allow <executable directory>".to_string());
         return Err(NonoError::UnsupportedPlatform(format!(
-            "Windows filesystem policy does not cover the executable path required for launch: {}",
+            "Windows filesystem policy does not cover the executable path required for launch: {}. \
+             nono will not launch a partially-confined engine. Add coverage with `{parent_hint}` \
+             or extend the profile's filesystem allow list.",
             program.display()
         )));
+    }
+
+    // D-07: coverage-check every declared interpreter the wrapper will spawn.
+    // Reuses normalize_candidate_path (canon + normalize_windows_path) and
+    // policy.covers_path (component-wise, case-insensitive — NEVER string
+    // starts_with; see CLAUDE.md footgun #1).
+    for interp in interpreters {
+        let normalized = normalize_candidate_path(interp);
+        if !policy.covers_path(&normalized, crate::AccessMode::Read) {
+            // Name: (a) uncovered interpreter, (b) wrapper program, (c) fix.
+            let parent_hint = normalized
+                .parent()
+                .map(|p| format!("--allow {}", p.display()))
+                .unwrap_or_else(|| "--allow <interpreter directory>".to_string());
+            return Err(NonoError::UnsupportedPlatform(format!(
+                "Windows filesystem policy does not cover the interpreter required for launch: {}. \
+                 The wrapper program ({}) would spawn this interpreter, but it is outside the \
+                 policy allowlist — nono will not launch a partially-confined engine. \
+                 Add coverage with `{parent_hint}` or extend the profile's \
+                 `windows_interpreters` coverage.",
+                normalized.display(),
+                program.display(),
+            )));
+        }
     }
 
     let current_dir = current_dir
@@ -3638,7 +3733,8 @@ mod tests {
         caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
         let policy = compile_filesystem_policy(&caps);
 
-        validate_launch_paths(&policy, &program, dir.path()).expect("launch paths should validate");
+        validate_launch_paths(&policy, &program, dir.path(), &[])
+            .expect("launch paths should validate");
     }
 
     #[test]
@@ -3653,7 +3749,7 @@ mod tests {
             .expect("allow path");
         let policy = compile_filesystem_policy(&caps);
 
-        let err = validate_launch_paths(&policy, &program, allowed.path())
+        let err = validate_launch_paths(&policy, &program, allowed.path(), &[])
             .expect_err("executable outside policy should fail");
         assert!(err.to_string().contains("executable path"));
     }
@@ -3674,8 +3770,111 @@ mod tests {
 
         // Single-file grant now a supported WindowsFilesystemRule; the executable
         // path (&file) is covered by the rule, so validate_launch_paths accepts.
-        validate_launch_paths(&policy, &file, dir.path())
+        validate_launch_paths(&policy, &file, dir.path(), &[])
             .expect("Phase 21: single-file policy covering the executable path must be accepted");
+    }
+
+    // ── Task 1 RED: validate_launch_paths interpreter coverage ──────────────
+
+    #[test]
+    fn validate_launch_paths_refuses_uncovered_interpreter() {
+        // Program is covered; the interpreter that program would spawn is NOT.
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+        let program = bin_dir.join("engine.exe");
+        std::fs::write(&program, "binary").expect("write program");
+
+        // Interpreter lives in a DIFFERENT directory that is not in the policy.
+        let interp_dir = tempdir().expect("interp tempdir");
+        let interpreter = interp_dir.path().join("python.exe");
+        std::fs::write(&interpreter, "binary").expect("write interpreter");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
+        let policy = compile_filesystem_policy(&caps);
+
+        let err = validate_launch_paths(&policy, &program, dir.path(), &[interpreter.clone()])
+            .expect_err("uncovered interpreter must be refused");
+
+        let msg = err.to_string();
+        // D-07: message must name the interpreter path
+        let interp_str = interpreter.to_string_lossy().to_lowercase();
+        let prog_str = program.to_string_lossy().to_lowercase();
+        let msg_lower = msg.to_lowercase();
+        assert!(
+            msg_lower.contains(&interp_str)
+                || msg.contains("python.exe")
+                || msg.contains("interpreter"),
+            "error must mention the uncovered interpreter; got: {msg}"
+        );
+        // D-07: message must name the wrapper program
+        assert!(
+            msg.contains("engine.exe") || msg_lower.contains(&prog_str),
+            "error must mention the wrapper program; got: {msg}"
+        );
+        // D-07: message must contain a fix hint
+        assert!(
+            msg.contains("--allow") || msg.contains("allow"),
+            "error must contain an --allow fix hint; got: {msg}"
+        );
+        // D-07: must mention partial confinement
+        assert!(
+            msg.contains("partially-confined")
+                || msg.contains("partial confinement")
+                || msg.contains("not cover"),
+            "error must reference partial confinement risk; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_launch_paths_accepts_covered_program_and_interpreter() {
+        let dir = tempdir().expect("tempdir");
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("mkdir bin");
+        let program = bin_dir.join("engine.exe");
+        std::fs::write(&program, "binary").expect("write program");
+        let interpreter = bin_dir.join("python.exe");
+        std::fs::write(&interpreter, "binary").expect("write interpreter");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
+        let policy = compile_filesystem_policy(&caps);
+
+        // Both program and interpreter are under the same allowed dir → Ok
+        validate_launch_paths(&policy, &program, dir.path(), &[interpreter])
+            .expect("covered program and interpreter must be accepted");
+    }
+
+    #[test]
+    fn validate_launch_paths_empty_interpreter_slice_is_unchanged() {
+        // An empty interpreter slice reproduces the pre-extension behavior:
+        // only program + current_dir are checked.
+        let dir = tempdir().expect("tempdir");
+        let program = dir.path().join("tool.exe");
+        std::fs::write(&program, "binary").expect("write program");
+
+        let mut caps = CapabilitySet::new();
+        caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
+        let policy = compile_filesystem_policy(&caps);
+
+        validate_launch_paths(&policy, &program, dir.path(), &[])
+            .expect("empty interpreter slice must leave existing behavior unchanged");
+    }
+
+    // ── Task 2 RED: path_has_write_owner helper ──────────────────────────────
+
+    #[test]
+    fn path_has_write_owner_returns_true_for_userprofile_tempdir() {
+        // A directory we create in %TEMP% is user-owned and the user holds
+        // WRITE_OWNER on it (mandatory-label relabel will succeed).
+        let dir = tempdir().expect("tempdir");
+        let result = path_has_write_owner(dir.path())
+            .expect("WRITE_OWNER query must not error on a user-created tempdir");
+        assert!(
+            result,
+            "user-created tempdir must be reported as having WRITE_OWNER (relabel-capable)"
+        );
     }
 
     #[test]

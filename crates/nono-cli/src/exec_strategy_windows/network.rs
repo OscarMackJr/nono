@@ -1982,6 +1982,7 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             prefers_low_il_broker: false,
+            interpreters: Vec::new(),
         };
         let probe_config = make_test_probe_config();
 
@@ -2048,6 +2049,7 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             prefers_low_il_broker: false,
+            interpreters: Vec::new(),
         };
         let probe_config = make_test_probe_config();
 
@@ -2174,6 +2176,7 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             prefers_low_il_broker: false,
+            interpreters: Vec::new(),
         }
     }
 

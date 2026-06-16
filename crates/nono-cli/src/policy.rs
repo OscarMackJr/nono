@@ -148,6 +148,12 @@ pub struct ProfileDef {
     /// claude-code built-in profile sets this to true in v2.7.
     #[serde(default)]
     pub windows_low_il_broker: bool,
+    /// Phase 71 Plan 01 (D-02): Windows-only. Bare exe names of the interpreter(s)
+    /// this engine's launch program will spawn (e.g. `python.exe`). Engine profiles
+    /// (aider, langchain-python) declare this in policy.json; forwarded verbatim
+    /// via `to_raw_profile()`. Ignored on Linux/macOS (deserialize-only).
+    #[serde(default)]
+    pub windows_interpreters: Vec<String>,
     /// Phase 58: session lifecycle hooks from policy.json built-in profiles.
     /// Built-in profiles may declare session_hooks in policy.json; forwarded
     /// verbatim via `to_raw_profile()`.
@@ -214,6 +220,9 @@ impl ProfileDef {
             // Phase 51 D-03: forward windows_low_il_broker from policy.json.
             // Only the claude-code built-in profile sets this to true.
             windows_low_il_broker: self.windows_low_il_broker,
+            // Phase 71 Plan 01 (D-02): forward windows_interpreters from policy.json.
+            // Engine profiles (aider, langchain-python) declare interpreter coverage here.
+            windows_interpreters: self.windows_interpreters.clone(),
             // Phase 58: forward session_hooks from policy.json built-in profile verbatim.
             session_hooks: self.session_hooks.clone(),
         }

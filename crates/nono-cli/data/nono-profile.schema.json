@@ -113,6 +113,11 @@
       "type": "boolean",
       "description": "Windows-only. Routes non-PTY supervised launches through the Low-IL broker arm instead of WRITE_RESTRICTED, eliminating STATUS_DLL_INIT_FAILED for heavy-runtime children (Electron, CLR, Node SEA). Ignored on Linux and macOS."
     },
+    "windows_interpreters": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Windows-only. Bare exe names of the interpreter(s) this engine's launch program will spawn (e.g. 'python.exe' for a console-script entry point). Resolved to absolute paths at launch and coverage-checked by validate_launch_paths. Ignored on Linux and macOS (deserialize-only). Empty = no interpreter coverage required."
+    },
     "packs": {
       "type": "array",
       "items": { "type": "string" },

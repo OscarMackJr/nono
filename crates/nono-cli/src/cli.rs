@@ -246,6 +246,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1mEXPLORATION & DEBUGGING\x1b[0m
   learn      Trace a command to discover required filesystem paths
   why        Check why a path or network operation would be allowed or denied
+  classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         Inspect the unsupported Windows session-management surface
@@ -258,6 +259,10 @@ const ROOT_HELP_TEMPLATE: &str = "\
   rollback   Manage rollback sessions (browse, restore, cleanup)
   audit      View audit trail of sandboxed commands
   trust      Manage file trust and attestation
+
+\x1b[1mDAEMON & AGENTS\x1b[0m
+  daemon     Manage the nono-agentd persistent daemon (per-user service)
+  agent      Launch and list confined agents via the daemon
 
 \x1b[1mPACKAGES\x1b[0m
   pull       Install a signed package from the registry
@@ -542,6 +547,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1mEXPLORATION & DEBUGGING\x1b[0m
   learn      [deprecated] Use `nono run` to learn from sandbox denials
   why        Check why a path or network operation would be allowed or denied
+  classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         List running or detached sandbox sessions
@@ -554,6 +560,10 @@ const ROOT_HELP_TEMPLATE: &str = "\
   rollback   Manage rollback sessions (browse, restore, cleanup)
   audit      View audit trail of sandboxed commands
   trust      Manage file trust and attestation
+
+\x1b[1mDAEMON & AGENTS\x1b[0m
+  daemon     Manage the nono-agentd persistent daemon (per-user service, Windows)
+  agent      Launch and list confined agents via the daemon (Windows)
 
 \x1b[1mPACKS\x1b[0m
   pull       Install a signed nono pack from the registry
@@ -741,6 +751,74 @@ pub enum Commands {
   nono why --self --path /tmp --op write       # Inside sandbox, query own capabilities
 ")]
     Why(Box<WhyArgs>),
+
+    /// Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono classify <PID> [flags]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono classify 1234                           # Structural check of PID 1234
+  nono classify 1234 --json                    # JSON output for tooling
+
+\x1b[1mNOTE\x1b[0m
+  This check is STRUCTURAL ONLY and NON-AUTHORITATIVE. A standalone `nono
+  classify` runs in a separate process with an empty AgentRegistry, so it can
+  never emit an authoritative AI_AGENT claim — it only reports whether the PID
+  has an AppContainer token and is in a job object. Registry-backed
+  authoritative classification is the Phase 74 daemon.
+")]
+    Classify(ClassifyArgs),
+
+    // ── Daemon & agent management ────────────────────────────────────────
+    /// Manage the nono-agentd persistent daemon (per-user multi-tenant agent service)
+    #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono daemon <command>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono daemon install                            # Register as per-user SCM service
+  nono daemon start                              # Start the daemon (foreground or SCM)
+  nono daemon status                             # Check if the daemon is running
+  nono daemon stop                               # Stop the running daemon
+  nono daemon uninstall                          # Remove SCM service registration
+
+\x1b[1mNOTE\x1b[0m
+  Runs as SERVICE_USER_OWN_PROCESS — NOT LocalSystem/SYSTEM.
+  Windows-only; on other platforms prints a diagnostic and exits.
+")]
+    Daemon(DaemonArgs),
+
+    /// Launch and list confined agents via the nono-agentd daemon
+    #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono agent <command>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono agent launch --profile aider -- aider       # Launch aider as a confined agent
+  nono agent launch --profile langchain -- python run.py  # Launch a langchain agent
+  nono agent list                                  # List running confined agents
+
+\x1b[1mNOTE\x1b[0m
+  Requires the nono-agentd daemon to be running.
+  Use `nono daemon start` first if the daemon is not running.
+  Windows-only; on other platforms prints a diagnostic and exits.
+")]
+    Agent(AgentArgs),
 
     // ── Session management ───────────────────────────────────────────────
     /// Manage rollback sessions (browse, restore, cleanup)
@@ -1614,6 +1692,12 @@ pub struct SandboxArgs {
     #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
     pub workdir: Option<PathBuf>,
 
+    /// Absolute path to the writable workspace. Defaults to the current
+    /// directory (canonicalized) when omitted. Set as the child engine's CWD
+    /// AND the writable grant (single source of truth).
+    #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
+    pub workspace: Option<PathBuf>,
+
     // ── Network ──────────────────────────────────────────────────────────
     /// Block outbound network access (allowed by default)
     #[arg(
@@ -2016,6 +2100,12 @@ pub struct WrapSandboxArgs {
     #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
     pub workdir: Option<PathBuf>,
 
+    /// Absolute path to the writable workspace. Defaults to the current
+    /// directory (canonicalized) when omitted. Set as the child engine's CWD
+    /// AND the writable grant (single source of truth).
+    #[arg(long, value_name = "DIR", help_heading = "FILESYSTEM")]
+    pub workspace: Option<PathBuf>,
+
     // ── Network ──────────────────────────────────────────────────────────
     /// Block outbound network access (allowed by default)
     #[arg(
@@ -2186,6 +2276,7 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             bypass_protection: args.bypass_protection,
             allow_cwd: args.allow_cwd,
             workdir: args.workdir,
+            workspace: args.workspace,
             block_net: args.block_net,
             allow_net: false,
             network_profile: None,
@@ -3054,6 +3145,100 @@ pub struct LogsArgs {
     /// Output as JSON
     #[arg(long)]
     pub json: bool,
+}
+
+/// Arguments for `nono classify <PID>` (Phase 73 D-04).
+///
+/// The check is structural/non-authoritative; see the `Commands::Classify`
+/// help text. The registry is empty in standalone mode, so the verb never
+/// emits an authoritative AI_AGENT verdict.
+#[derive(Parser, Debug)]
+pub struct ClassifyArgs {
+    /// Process ID to classify
+    pub pid: u32,
+
+    /// Output as JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+/// Top-level args for `nono daemon <subcommand>`.
+///
+/// Wraps the nested `DaemonCommands` enum. All subcommands operate on the
+/// per-user `nono-agentd` service (ADR-74 Decision 1: USER_OWN_PROCESS).
+#[derive(clap::Args, Debug)]
+pub struct DaemonArgs {
+    #[command(subcommand)]
+    pub command: DaemonCommands,
+}
+
+/// Subcommands for `nono daemon`.
+///
+/// All variants are unit structs for Phase 74 — arguments may be added
+/// in Phase 75 when the control-pipe protocol is fully wired.
+#[derive(Subcommand, Debug)]
+pub enum DaemonCommands {
+    /// Start the daemon (foreground process or SCM service)
+    Start,
+    /// Send a stop request to the running daemon
+    Stop,
+    /// Print the daemon's current status (running / stopped)
+    Status,
+    /// Register nono-agentd as a per-user SCM service (type= userservice)
+    Install,
+    /// Remove the nono-agentd per-user SCM service registration
+    Uninstall,
+}
+
+/// Top-level args for `nono agent <subcommand>`.
+///
+/// Wraps the nested `AgentCommands` enum. All subcommands communicate with
+/// the running `nono-agentd` daemon; fail-secure when the daemon is not running.
+#[derive(clap::Args, Debug)]
+pub struct AgentArgs {
+    #[command(subcommand)]
+    pub command: AgentCommands,
+}
+
+/// Subcommands for `nono agent`.
+///
+/// Note: there is intentionally NO `Query` variant — D-05 fence (ADR-74).
+/// For PID inspection, use `nono classify <PID>` (Phase 73).
+#[derive(Subcommand, Debug)]
+pub enum AgentCommands {
+    /// Launch a confined agent through the daemon
+    Launch(AgentLaunchArgs),
+    /// List running confined agents (tenant IDs and package SIDs)
+    List,
+    /// Apply a post-hoc IL-drop (supplementary incident-response lever) to a running agent.
+    ///
+    /// SUPP-01: demote is a further IL-drop + WFP-cut on an already-born-confined
+    /// agent. It is NOT a standalone confinement boundary. Leak limits apply:
+    ///
+    /// 1. Handles opened before the IL-drop continue at Medium IL (open-time check;
+    ///    not re-evaluated on drop).
+    /// 2. Already-started child processes are NOT retroactively affected.
+    /// 3. The IL-drop may crash the agent (legitimate handles may be severed).
+    /// 4. Outbound network is severed concurrently via the SUPP-02 WFP filter (D-03).
+    /// 5. Demote is one-way — there is no API to raise IL back to Medium from outside.
+    ///
+    /// Use `nono agent list` to find tenant IDs. The agent is NOT reaped after demote.
+    Demote {
+        /// Tenant ID from `nono agent list` (32-char hex string)
+        tenant_id: String,
+    },
+}
+
+/// Arguments for `nono agent launch`.
+#[derive(clap::Args, Debug)]
+pub struct AgentLaunchArgs {
+    /// Profile name from policy.json (e.g. "aider", "langchain-python")
+    #[arg(long)]
+    pub profile: String,
+
+    /// Command and arguments to run as the confined agent (after `--`)
+    #[arg(last = true)]
+    pub cmd: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -4928,6 +5113,8 @@ mod tests {
         "wrap",
         "learn",
         "why",
+        // Phase 73 D-04: AI_AGENT structural classification verb.
+        "classify",
         "ps",
         "stop",
         "detach",
@@ -4949,6 +5136,9 @@ mod tests {
         "search",
         "list",
         "completion",
+        // Phase 74 D-05: daemon lifecycle and agent management verbs.
+        "daemon",
+        "agent",
     ];
 
     #[test]

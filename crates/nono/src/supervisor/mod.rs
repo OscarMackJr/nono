@@ -43,8 +43,9 @@ pub use aipc_sdk::{
 pub use socket::SupervisorSocket;
 #[cfg(target_os = "windows")]
 pub use socket::{
-    bind_aipc_pipe, broker_event_to_process, broker_job_object_to_process, broker_mutex_to_process,
-    broker_pipe_to_process, broker_socket_to_process, broker_target_pid, BrokerTargetProcess,
+    authenticate_pipe_client, bind_aipc_pipe, broker_event_to_process,
+    broker_job_object_to_process, broker_mutex_to_process, broker_pipe_to_process,
+    broker_socket_to_process, broker_target_pid, build_capability_pipe_sddl, BrokerTargetProcess,
 };
 pub use types::{
     ApprovalDecision,
