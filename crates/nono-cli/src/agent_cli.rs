@@ -39,11 +39,13 @@ use nono::{NonoError, Result};
 /// The CLI connects here for `agent launch` and `agent list`. The daemon
 /// (Phase 75) will listen on this name. Phase 74 declares it here for
 /// consistency; connecting when the daemon is not running surfaces a clear error.
+#[cfg(target_os = "windows")]
 pub(crate) const DAEMON_CONTROL_PIPE_NAME: &str = r"\\.\pipe\nono-agentd-control";
 
 /// SCM service name registered by `nono daemon install`.
 ///
 /// Matches `SERVICE_NAME` in `bin/nono-agentd.rs`.
+#[cfg(target_os = "windows")]
 const DAEMON_SERVICE_NAME: &str = "nono-agentd";
 
 // ─── Daemon lifecycle commands ────────────────────────────────────────────────
@@ -978,6 +980,7 @@ fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
 ///
 /// Distinguishes "daemon not running" from other I/O errors so callers can
 /// provide a targeted user message instead of a raw error.
+#[cfg(target_os = "windows")]
 fn is_pipe_not_found(err: &nono::NonoError) -> bool {
     let msg = err.to_string();
     // GLE=2: ERROR_FILE_NOT_FOUND (pipe does not exist — daemon not running)
