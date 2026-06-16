@@ -80,6 +80,28 @@ pub(crate) struct AgentTenant {
     #[allow(dead_code)]
     pub caps: nono::CapabilitySet,
 
+    /// Package-SID DACL grants guard (Plan 75-07-T2 / GAP-75-B).
+    ///
+    /// Applied at step 6.6 in `launch_agent` BEFORE `ResumeThread` (Pitfall-3
+    /// ordering). Revoked automatically when `AgentTenant` drops via
+    /// `DaemonDaclGuard::drop` → `revert_all` (LIFO: write grants first, then
+    /// traverse grants). `None` only when the guard was not yet applied (pre-T2
+    /// code paths or unit-test construction with `None`).
+    ///
+    /// **Declared BEFORE `job_handle` and `process_handle`** so Rust's
+    /// field-drop order (declaration order, top-to-bottom) revokes DACL grants
+    /// before the job handle is closed. Logically safe after process death but
+    /// orderly cleanup is correct behaviour.
+    ///
+    /// `#[expect(dead_code)]` because clippy's dead_code analysis does not
+    /// consider implicit destruction (Drop) or Option field presence as a "read".
+    #[cfg(target_os = "windows")]
+    #[expect(
+        dead_code,
+        reason = "revoked via DaemonDaclGuard::drop in AgentTenant::drop (field-drop order)"
+    )]
+    pub dacl_guard: Option<super::launch::DaemonDaclGuard>,
+
     /// Job object handle for the agent's process group.
     ///
     /// MUST have `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` set. When this
@@ -270,6 +292,7 @@ mod tests {
             profile_name: "nono.test.fake-profile.drop.74-03".to_string(),
             engine_profile: "test-engine".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle,
             process_handle: proc_handle,
         };
@@ -349,6 +372,7 @@ mod tests {
             profile_name: "nono.test.wfp-drop.75-01".to_string(),
             engine_profile: "aider".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle,
             process_handle: proc_handle,
         };

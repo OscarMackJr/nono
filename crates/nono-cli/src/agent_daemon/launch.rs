@@ -41,6 +41,10 @@
 // Wave 5 (Plan 74-07) re-export for control_loop.rs.
 #[cfg(target_os = "windows")]
 pub(crate) use windows_impl::launch_agent;
+// Plan 75-07-T2: re-export DaemonDaclGuard so reap.rs can reference it in the
+// AgentTenant::dacl_guard field type (`super::launch::DaemonDaclGuard`).
+#[cfg(target_os = "windows")]
+pub(crate) use windows_impl::DaemonDaclGuard;
 // Plan 75-01 (SUPP-02): forward-export for control_loop.rs handle_demote (Plan 75-02).
 // allow(unused_imports): this is an intentional forward-export; plan 75-02 will add
 // the handle_demote caller. Suppressed to keep CI green in the interim.
@@ -57,8 +61,221 @@ mod windows_impl {
     use super::super::DaemonState;
     use nono::NonoError;
     use std::os::windows::io::FromRawHandle;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
+
+    // ── Local DaemonDaclGuard (GAP-75-B / Plan 75-07-T2) ─────────────────────
+    //
+    // This guard is defined LOCALLY in this module, NOT imported from
+    // exec_strategy_windows::dacl_guard. The nono-agentd binary loads agent_daemon
+    // via #[path] and does NOT declare exec_strategy_windows (module-independence
+    // invariant, launch.rs module-doc lines 27-31). Mirrored from
+    // AppliedDaclGrantsGuard + AppliedAncestorTraverseGuard in dacl_guard.rs.
+
+    /// Per-agent DACL RAII guard for daemon-launched AppContainer agents.
+    ///
+    /// Applied at step 6.6 in `launch_agent` — AFTER the WFP gate (step 6.5)
+    /// and BEFORE `ResumeThread` (step 8), while the child process is still
+    /// SUSPENDED (Pitfall-3 ordering). Reverted automatically on drop (agent reap).
+    ///
+    /// # Fields
+    ///
+    /// - `write_applied`: paths on which `nono::grant_sid_write_on_path` was called
+    ///   (the per-tenant workspace leaf). Revoked LIFO on `revert_all`.
+    /// - `traverse_applied`: paths on which `nono::grant_sid_traverse_on_path` was
+    ///   called (read-only engine/interpreter dirs + workspace ancestors). Revoked
+    ///   LIFO on `revert_all` after write grants.
+    /// - `package_sid`: the AppContainer package SID string used for all grants.
+    ///
+    /// # Fail-closed discipline
+    ///
+    /// Any grant failure or ownership-check error calls `revert_all` on the
+    /// already-applied grants before returning `Err`. No partial-grant state is
+    /// ever returned to the caller.
+    pub(crate) struct DaemonDaclGuard {
+        /// Paths granted write access (workspace leaf). Revoked LIFO first.
+        write_applied: Vec<PathBuf>,
+        /// Paths granted traverse access (read-only dirs + workspace ancestors). Revoked LIFO.
+        traverse_applied: Vec<PathBuf>,
+        /// The AppContainer package SID for which ACEs were applied.
+        package_sid: String,
+    }
+
+    impl DaemonDaclGuard {
+        /// Apply package-SID DACL grants for a daemon-launched agent.
+        ///
+        /// Three passes:
+        ///
+        /// 1. **Read-only rules** (engine dir, interpreter dirs, system dirs):
+        ///    for each rule where `!rule.access.contains(Write)`, check ownership
+        ///    and call `grant_sid_traverse_on_path`. Skip non-owned paths (warn).
+        ///    Fail-closed on ownership-check error.
+        ///
+        /// 2. **Workspace write grant**: call `path_is_owned_by_current_user` on
+        ///    the workspace; call `grant_sid_write_on_path` (inheritable=true for
+        ///    directory). Fail-closed if not owned (daemon always creates the workspace —
+        ///    not-owned is anomalous). Revert and return `Err` on any error.
+        ///
+        /// 3. **Workspace ancestors**: walk `workspace.ancestors().skip(1)`.
+        ///    Stop at first non-owned ancestor (relies on lowbox bypass-traverse from
+        ///    there up, as in `AppliedAncestorTraverseGuard`). Fail-closed on error.
+        ///
+        /// # Pitfall-3 ordering
+        ///
+        /// Called AFTER step 6.5 (WFP gate), BEFORE step 8 (ResumeThread). The agent
+        /// process is SUSPENDED and cannot issue any pipe requests until ResumeThread.
+        pub(crate) fn apply(
+            policy: &nono::WindowsFilesystemPolicy,
+            workspace: &Path,
+            package_sid: &str,
+        ) -> nono::Result<Self> {
+            let mut guard = Self {
+                write_applied: Vec::new(),
+                traverse_applied: Vec::new(),
+                package_sid: package_sid.to_string(),
+            };
+
+            // Pass 1 — read-only rules (traverse grant for AppContainer to stat/enter).
+            for rule in &policy.rules {
+                if rule.access.contains(nono::AccessMode::Write) {
+                    // Workspace write rule is handled in pass 2.
+                    continue;
+                }
+                match nono::path_is_owned_by_current_user(&rule.path) {
+                    Ok(true) => {
+                        if let Err(e) = nono::grant_sid_traverse_on_path(&rule.path, package_sid) {
+                            tracing::warn!(
+                                path = %rule.path.display(),
+                                error = %e,
+                                "daemon dacl guard: traverse grant failed; reverting applied grants"
+                            );
+                            guard.revert_all();
+                            return Err(e);
+                        }
+                        guard.traverse_applied.push(rule.path.clone());
+                    }
+                    Ok(false) => {
+                        tracing::warn!(
+                            path = %rule.path.display(),
+                            "daemon dacl guard: read-only path not owned by current user; \
+                             skipping traverse grant (relying on lowbox bypass-traverse)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %rule.path.display(),
+                            error = %e,
+                            "daemon dacl guard: ownership check failed on read-only path; \
+                             reverting applied grants (fail-closed)"
+                        );
+                        guard.revert_all();
+                        return Err(e);
+                    }
+                }
+            }
+
+            // Pass 2 — workspace write grant.
+            match nono::path_is_owned_by_current_user(workspace) {
+                Ok(true) => {
+                    // Directory rule: inheritable=true so files the agent creates inherit.
+                    if let Err(e) = nono::grant_sid_write_on_path(workspace, package_sid, true) {
+                        tracing::warn!(
+                            workspace = %workspace.display(),
+                            error = %e,
+                            "daemon dacl guard: write grant on workspace failed; reverting"
+                        );
+                        guard.revert_all();
+                        return Err(e);
+                    }
+                    guard.write_applied.push(workspace.to_path_buf());
+                }
+                Ok(false) => {
+                    // Daemon always creates the workspace; not-owned is anomalous → fail-secure.
+                    guard.revert_all();
+                    return Err(NonoError::SandboxInit(format!(
+                        "daemon dacl: workspace not owned by current user (anomalous — \
+                         daemon must create the workspace before calling apply): {}",
+                        workspace.display()
+                    )));
+                }
+                Err(e) => {
+                    guard.revert_all();
+                    return Err(e);
+                }
+            }
+
+            // Pass 3 — workspace ancestors: grant traverse up the user-owned chain.
+            for ancestor in workspace.ancestors().skip(1) {
+                match nono::path_is_owned_by_current_user(ancestor) {
+                    Ok(true) => {
+                        if let Err(e) = nono::grant_sid_traverse_on_path(ancestor, package_sid) {
+                            tracing::warn!(
+                                ancestor = %ancestor.display(),
+                                error = %e,
+                                "daemon dacl guard: ancestor traverse grant failed; reverting"
+                            );
+                            guard.revert_all();
+                            return Err(e);
+                        }
+                        guard.traverse_applied.push(ancestor.to_path_buf());
+                    }
+                    Ok(false) => {
+                        // First non-owned ancestor (e.g. C:\Users, C:\). STOP —
+                        // reaching these relies on the lowbox bypass-traverse privilege.
+                        tracing::debug!(
+                            ancestor = %ancestor.display(),
+                            "daemon dacl guard: ancestor not owned; stopping walk \
+                             (relying on lowbox bypass-traverse from here up)"
+                        );
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            ancestor = %ancestor.display(),
+                            error = %e,
+                            "daemon dacl guard: ancestor ownership check failed; reverting"
+                        );
+                        guard.revert_all();
+                        return Err(e);
+                    }
+                }
+            }
+
+            Ok(guard)
+        }
+
+        /// Revert all applied grants, LIFO. Write grants are revoked first (workspace leaf),
+        /// then traverse grants (read-only dirs + workspace ancestors from innermost outward).
+        /// Errors are logged but never panic — Drop-safe.
+        fn revert_all(&mut self) {
+            // Revoke write grants first (workspace leaf).
+            while let Some(path) = self.write_applied.pop() {
+                if let Err(e) = nono::revoke_sid_on_path(&path, &self.package_sid) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "daemon dacl guard: write grant revoke failed; package SID may remain"
+                    );
+                }
+            }
+            // Revoke traverse grants (LIFO — innermost ancestors first).
+            while let Some(path) = self.traverse_applied.pop() {
+                if let Err(e) = nono::revoke_sid_on_path(&path, &self.package_sid) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %e,
+                        "daemon dacl guard: traverse grant revoke failed; package SID may remain"
+                    );
+                }
+            }
+        }
+    }
+
+    impl Drop for DaemonDaclGuard {
+        fn drop(&mut self) {
+            self.revert_all();
+        }
+    }
 
     use windows_sys::Win32::Foundation::{
         CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE, INVALID_HANDLE_VALUE,
@@ -354,10 +571,6 @@ mod windows_impl {
         // workspace directory without a second signature change in Task 2.
         workspace: PathBuf,
     ) -> nono::Result<String> {
-        // workspace will be consumed by DaemonDaclGuard::apply at step 6.6 (Plan 75-07-T2).
-        // Acknowledge until then to silence the unused-variable warning.
-        let _workspace_pending_dacl = &workspace;
-
         // Step 1: Generate a unique tenant_id and AppContainer profile name.
         let tenant_id = generate_tenant_id()?;
         let profile_name = format!("nono.session.{}", &tenant_id[..16]);
@@ -471,6 +684,38 @@ mod windows_impl {
             );
         }
 
+        // Step 6.6 — Package-SID DACL grants (Pitfall-3 ordering: AFTER WFP, BEFORE ResumeThread).
+        //
+        // The agent process is still SUSPENDED so the step 7a registry insert preceding
+        // this block is safe — the agent cannot issue pipe requests until ResumeThread
+        // at step 8. What is NOT safe is any ordering AFTER ResumeThread.
+        //
+        // On grant failure: terminate the suspended process (same fail-secure pattern
+        // as steps 6 and 6.5 — T-75-07-05 mitigation).
+        let policy = nono::Sandbox::windows_filesystem_policy(&caps);
+        let dacl_guard = match DaemonDaclGuard::apply(&policy, &workspace, &package_sid) {
+            Ok(g) => g,
+            Err(e) => {
+                // SAFETY: process_handle_raw and thread_handle_raw are valid; they were
+                // returned by spawn_appcontainer_process_suspended and have not been
+                // wrapped or closed yet. Termination on grant failure mirrors the
+                // fail-secure pattern at steps 6 and 6.5.
+                unsafe { TerminateProcess(process_handle_raw, 1) };
+                unsafe { CloseHandle(process_handle_raw) };
+                unsafe { CloseHandle(thread_handle_raw) };
+                // job_guard drops here → closes job handle → KILL_ON_JOB_CLOSE fires.
+                return Err(NonoError::SandboxInit(format!(
+                    "launch_agent: DaemonDaclGuard::apply failed \
+                         (suspended process terminated, fail-secure): {e}"
+                )));
+            }
+        };
+        tracing::info!(
+            tenant_id = %tenant_id,
+            package_sid = %package_sid,
+            "launch_agent: package-SID DACL grants applied (step 6.6)"
+        );
+
         // Transfer job ownership to AgentTenant: disarm the guard before
         // wrapping in OwnedHandle so we don't double-close.
         let job_raw_owned = job_guard.0;
@@ -508,12 +753,17 @@ mod windows_impl {
         std::mem::forget(profile);
 
         // Step 7b: Insert AgentTenant into DaemonState::tenants AFTER registry.
+        // dacl_guard is stored in the tenant so its Drop revokes the package-SID
+        // DACL grants when the agent reaps (AgentTenant::drop field-drop order
+        // ensures DACL revocation before job/process handle close — declared first
+        // in reap.rs per the struct field ordering requirement).
         let tenant = AgentTenant {
             tenant_id: tenant_id.clone(),
             package_sid: package_sid.clone(),
             profile_name: profile_name.clone(),
             engine_profile: engine_profile.clone(),
             caps,
+            dacl_guard: Some(dacl_guard),
             job_handle: job_owned,
             process_handle: process_owned,
         };
@@ -1105,6 +1355,269 @@ mod tests {
         Arc::new(DaemonState::new())
     }
 
+    // ── Task 2 (75-07-T2): DaemonDaclGuard unit tests ────────────────────────
+
+    // A package-SID-shaped (S-1-15-2-*) test SID for the DaemonDaclGuard tests.
+    // Distinct suffix from dacl_guard.rs TEST_PACKAGE_SID to avoid ACE collision
+    // in parallel test runs.
+    #[cfg(target_os = "windows")]
+    const TEST_PACKAGE_SID: &str = "S-1-15-2-10-20-30-40-50-60-71";
+
+    /// Returns true iff `path`'s DACL contains an ACE for `sid`.
+    ///
+    /// Mirrored verbatim from `exec_strategy_windows::dacl_guard::tests::dacl_contains_sid`.
+    /// NOT imported from there (pub(crate) to exec_strategy_windows — not accessible
+    /// from agent_daemon tests; module-independence invariant in launch.rs lines 27-31).
+    #[cfg(target_os = "windows")]
+    fn dacl_contains_sid(path: &std::path::Path, sid: &str) -> bool {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::{
+            EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
+            PSECURITY_DESCRIPTOR, PSID,
+        };
+
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut want_sid: PSID = std::ptr::null_mut();
+        // SAFETY: valid nul-terminated UTF-16 SID string + valid out-pointer.
+        let ok = unsafe { ConvertStringSidToSidW(wide_sid.as_ptr(), &mut want_sid) };
+        assert!(ok != 0 && !want_sid.is_null(), "parse test SID");
+
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW(DACL) must succeed");
+
+        let mut found = false;
+        if !dacl.is_null() {
+            // SAFETY: `dacl` points into the SD we own until LocalFree below.
+            let ace_count = unsafe { (*dacl).AceCount };
+            for index in 0..ace_count {
+                let mut ace = std::ptr::null_mut();
+                // SAFETY: `dacl` is valid; `ace` is a valid out-pointer.
+                let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+                if got == 0 || ace.is_null() {
+                    continue;
+                }
+                // SAFETY: allow/deny ACEs share the SidStart layout; we read
+                // the embedded SID at that offset.
+                let ace_sid = unsafe {
+                    (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID
+                };
+                // SAFETY: both SIDs are valid for the duration of the call.
+                if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        // SAFETY: both allocations came from Win32 and must be LocalFree'd.
+        unsafe {
+            if !want_sid.is_null() {
+                let _ = LocalFree(want_sid as _);
+            }
+            if !sd.is_null() {
+                let _ = LocalFree(sd as _);
+            }
+        }
+        found
+    }
+
+    /// Verify DaemonDaclGuard applies a write-grant ACE on a workspace dir and
+    /// reverts it when the guard drops. Mirrors
+    /// `writable_rule_applies_sid_ace_and_reverts_on_drop` in dacl_guard.rs.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_dacl_guard_applies_and_reverts_write_grant() {
+        use super::windows_impl::DaemonDaclGuard;
+        use nono::{CapabilitySource, WindowsFilesystemPolicy, WindowsFilesystemRule};
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let workspace = dir.path().to_path_buf();
+
+        let policy = WindowsFilesystemPolicy {
+            rules: vec![WindowsFilesystemRule {
+                path: workspace.clone(),
+                access: nono::AccessMode::ReadWrite,
+                is_file: false,
+                source: CapabilitySource::User,
+            }],
+            unsupported: vec![],
+        };
+
+        assert!(
+            !dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+            "test precondition: test SID must not pre-exist on the DACL"
+        );
+
+        {
+            let guard = DaemonDaclGuard::apply(&policy, &workspace, TEST_PACKAGE_SID)
+                .expect("DaemonDaclGuard::apply must succeed on a user-owned tempdir");
+            assert!(
+                dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+                "during guard lifetime the package SID's ACE must be present on the DACL"
+            );
+            drop(guard);
+        }
+
+        assert!(
+            !dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+            "after guard drop the package SID's ACE must be revoked"
+        );
+    }
+
+    /// Verify that when a mid-loop grant fails, already-applied grants are reverted.
+    /// Mirrors `mid_loop_grant_failure_reverts_already_applied` in dacl_guard.rs.
+    ///
+    /// Strategy: policy has one real owned ReadWrite rule (workspace) and one Read
+    /// rule pointing at a nonexistent path (so grant_sid_traverse_on_path fails on
+    /// the missing path). DaemonDaclGuard::apply must return Err AND have reverted
+    /// the workspace write grant.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_dacl_guard_mid_loop_failure_reverts_already_applied() {
+        use super::windows_impl::DaemonDaclGuard;
+        use nono::{CapabilitySource, WindowsFilesystemPolicy, WindowsFilesystemRule};
+        use tempfile::tempdir;
+
+        let dir = tempdir().expect("tempdir");
+        let workspace = dir.path().to_path_buf();
+        // A nonexistent path: grant_sid_traverse_on_path will fail on it.
+        let bad_path = workspace.join("nonexistent-read-dir-for-mid-loop-test");
+
+        let policy = WindowsFilesystemPolicy {
+            rules: vec![
+                // Read rule for a nonexistent path — traverse grant will fail.
+                WindowsFilesystemRule {
+                    path: bad_path.clone(),
+                    access: nono::AccessMode::Read,
+                    is_file: false,
+                    source: CapabilitySource::User,
+                },
+                // Write rule for the actual workspace — applied in pass 2 AFTER
+                // the read-only rules pass (pass 1). If pass 1 fails on the bad_path
+                // ownership check (missing paths → ownership Err), revert is called
+                // before the write grant. Either ordering must result in Err +
+                // dacl_contains_sid(workspace) = false.
+                WindowsFilesystemRule {
+                    path: workspace.clone(),
+                    access: nono::AccessMode::ReadWrite,
+                    is_file: false,
+                    source: CapabilitySource::User,
+                },
+            ],
+            unsupported: vec![],
+        };
+
+        let result = DaemonDaclGuard::apply(&policy, &workspace, TEST_PACKAGE_SID);
+        assert!(
+            result.is_err(),
+            "DaemonDaclGuard::apply must fail when a grant target does not exist"
+        );
+
+        // Any grants applied before the failure must have been reverted.
+        assert!(
+            !dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+            "after mid-loop failure the workspace SID ACE must be reverted (fail-secure)"
+        );
+    }
+
+    /// Verify that DaemonDaclGuard revokes BOTH the write grant on the workspace
+    /// and traverse grants on ancestor dirs when the guard drops (reap revocation).
+    /// Mirrors the Warning-2 requirement: reap revocation must cover traverse paths.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_dacl_guard_reap_revokes_traverse_paths() {
+        use super::windows_impl::DaemonDaclGuard;
+        use nono::{CapabilitySource, WindowsFilesystemPolicy, WindowsFilesystemRule};
+        use tempfile::tempdir;
+
+        // Create a nested dir: outer/ (Read) + outer/workspace/ (ReadWrite workspace).
+        let outer_dir = tempdir().expect("outer tempdir");
+        let workspace = outer_dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("create workspace subdir");
+        let outer = outer_dir.path().to_path_buf();
+
+        let policy = WindowsFilesystemPolicy {
+            rules: vec![
+                // A Read rule on the outer dir → traverse grant in pass 1.
+                WindowsFilesystemRule {
+                    path: outer.clone(),
+                    access: nono::AccessMode::Read,
+                    is_file: false,
+                    source: CapabilitySource::User,
+                },
+                // The workspace itself → write grant in pass 2.
+                WindowsFilesystemRule {
+                    path: workspace.clone(),
+                    access: nono::AccessMode::ReadWrite,
+                    is_file: false,
+                    source: CapabilitySource::User,
+                },
+            ],
+            unsupported: vec![],
+        };
+
+        assert!(
+            !dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+            "precondition: test SID must not pre-exist on workspace DACL"
+        );
+        assert!(
+            !dacl_contains_sid(&outer, TEST_PACKAGE_SID),
+            "precondition: test SID must not pre-exist on outer dir DACL"
+        );
+
+        {
+            let guard = DaemonDaclGuard::apply(&policy, &workspace, TEST_PACKAGE_SID)
+                .expect("DaemonDaclGuard::apply must succeed");
+
+            // During guard lifetime: BOTH the workspace (write) and outer (traverse)
+            // must carry the SID ACE.
+            assert!(
+                dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+                "workspace write grant must be present during guard lifetime"
+            );
+            assert!(
+                dacl_contains_sid(&outer, TEST_PACKAGE_SID),
+                "outer dir traverse grant must be present during guard lifetime"
+            );
+            drop(guard);
+        }
+
+        // After drop: BOTH grants must be revoked.
+        assert!(
+            !dacl_contains_sid(&workspace, TEST_PACKAGE_SID),
+            "workspace write grant must be revoked after guard drop (reap revocation)"
+        );
+        assert!(
+            !dacl_contains_sid(&outer, TEST_PACKAGE_SID),
+            "outer dir traverse grant must be revoked after guard drop (reap revocation)"
+        );
+    }
+
     // ── SUPP-02 unit tests (Plan 75-01) ──────────────────────────────────────
 
     /// SC: wfp_filter_add_constructs_request
@@ -1318,6 +1831,7 @@ mod tests {
             profile_name: "nono.test.launch-insert-74-04".to_string(),
             engine_profile: "test-engine".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle: make_handle(),
             process_handle: make_handle(),
         };
@@ -1406,6 +1920,7 @@ mod tests {
                 profile_name: "nono.test.reap-74-04".to_string(),
                 engine_profile: "test-engine".to_string(),
                 caps: nono::CapabilitySet::new(),
+                dacl_guard: None,
                 job_handle: make_handle(),
                 process_handle: make_handle(),
             };

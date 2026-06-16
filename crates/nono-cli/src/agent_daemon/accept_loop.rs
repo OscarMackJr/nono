@@ -623,6 +623,7 @@ mod tests {
             profile_name: "nono.test.tenant-a".to_string(),
             engine_profile: "test-engine-a".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle: make_handle(),
             process_handle: make_handle(),
         };
@@ -633,6 +634,7 @@ mod tests {
             profile_name: "nono.test.tenant-b".to_string(),
             engine_profile: "test-engine-b".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle: make_handle(),
             process_handle: make_handle(),
         };

@@ -1019,6 +1019,7 @@ mod tests {
             profile_name: "nono.session.bbbb5678cccc9012".to_string(),
             engine_profile: "aider".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle: make_handle(),
             process_handle: make_handle(),
         };
@@ -1166,6 +1167,7 @@ mod tests {
             profile_name: "nono.session.aaaa1234bbbb5678".to_string(),
             engine_profile: "aider".to_string(),
             caps: nono::CapabilitySet::new(),
+            dacl_guard: None,
             job_handle: make_handle(),
             process_handle: make_handle(),
         };
