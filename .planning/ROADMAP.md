@@ -139,7 +139,7 @@ Plans:
 - [ ] 75-05-PLAN.md — Live Win11 UAT: SC1-SC5 gates + A1/A2/A4 assumption confirmations (SUPP-01, SUPP-02, SUPP-03)
 
 **Wave 4 (gap-closure — runs after Wave 3 UAT findings)**
-- [ ] 75-06-PLAN.md — GAP-75-A: daemon_start type-50 user-own-template detection + raw-spawn fallback (SUPP-01, SUPP-02, SUPP-03)
+- [x] 75-06-PLAN.md — GAP-75-A: daemon_start type-50 user-own-template detection + raw-spawn fallback (SUPP-01, SUPP-02, SUPP-03)
 - [ ] 75-07-PLAN.md — GAP-75-B: build real CapabilitySet from profile in handle_launch; apply package-SID DACL grants before ResumeThread; store guards in AgentTenant for revocation on reap (SUPP-01, SUPP-02, SUPP-03)
 
 <details>
@@ -183,7 +183,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
 | 74. Persistent Multi-Tenant Daemon | 8/8 | Complete   | 2026-06-15 |
-| 75. Supplementary Controls + Secondary Engines | 4/5 | In Progress|  |
+| 75. Supplementary Controls + Secondary Engines | 5/7 | In Progress|  |
 
 ## Dependency Graph
 
