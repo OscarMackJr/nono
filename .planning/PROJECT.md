@@ -2,7 +2,11 @@
 
 ## Current State
 
-**Active milestone: v2.11 — Clean-Host Distribution Cleanup + UPST8** (started 2026-06-11; Phases 67+). The cert-independent cleanup done while the trusted-signing cert is in flight; the big enterprise distribution effort (trusted signing + silent fleet deployment, SEED-001…005) is the milestone after.
+**No active milestone.** Latest shipped: **v2.12 — AI Agent Abstraction** (2026-06-16; tag `v2.12`). Run `/gsd:new-milestone` to define the next one.
+
+**Shipped (2026-06-16): v2.12 — AI Agent Abstraction.** 5 phases (71-75), 28 plans, tag `v2.12` (not a `v*.*.*` release tag — no crate publish). Generalized nono's Windows confinement beyond Claude Code into an **engine-neutral** model: any AI agent engine confined through one `nono run`/daemon launch path. P71 productionized the engine-agnostic launcher (per-engine profiles + `windows_interpreters`, fail-secure coverage + R-B3 gates); P72 the `nono-py` binding (`confined_run` + born-confined `confine`, no Claude hook) + the E1-E5 engine-abstraction contract; P73 the unforgeable `AI_AGENT` marker (AgentRegistry bound to the daemon-minted AppContainer SID + `nono classify`); P74 (marquee) the persistent multi-tenant daemon `nono-agentd` (concurrent confined agents, fresh token+job each, tenant-isolated control pipe, least-privilege USER, split from the WFP service); P75 supplementary controls (operator demote, per-agent WFP egress) + 2nd engine + `nono-ts` parity. **12/12 requirements satisfied; milestone audit PASSED** (caught + closed a MARK-01 verification gap before archive). SC3 re-scope: Copilot CLI confine-only (Node-ESM/AppContainer drive-root `lstat` limit), **claude-code is the end-to-end Engine-2**. Shipped on branch `fix/win-confinement-rb4-ra1` (merge to main separately). See `.planning/milestones/v2.12-ROADMAP.md`.
+
+**Shipped (2026-06-13): v2.11 — Clean-Host Distribution Cleanup + UPST8.** 4 phases (67-70). Cert-independent distribution cleanup + the UPST8 upstream-sync window; Phase 67 (clean-host Windows install UAT) carries forward host-gated. See `.planning/milestones/v2.11-ROADMAP.md`.
 
 **Shipped (2026-06-11): v2.10 — Kernel-Driver Spike + EDR UAT + macOS Upstream Parity.**
 
@@ -21,11 +25,21 @@
 
 v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed Linux backends (Phase 37 — cgroup v2 `memory.max` / `cpu.max` / `pids.max` + `NonoError::UnsupportedKernelFeature` fail-closed on cgroup v1 + cargo-install-style registry-profile auto-pull with sigstore-sign keyless OIDC signing; 5 e2e integration tests + multi-endpoint mock TCP server; sigstore-rust v0.7.0 bump closing 2 pre-existing TUF flakes), reset pre-existing CI red across all 7 lanes (Phase 41 — Linux/macOS Clippy + 5 Windows CI jobs back to green; MSI validator `-BrokerPath` mismatch resolved; cross-target clippy verification protocol codified in CLAUDE.md as enforcement-shaped MUST/NEVER rule; v24 broker code-review closure: `BrokerNotFound` FFI remap + null/INVALID handle rejection + empty-list rejection + Job-object test SKIP→FAIL policy), audited upstream `v0.53.0..v0.54.0` divergence (Phase 42 UPST5 audit — first cycle where `windows-touch` column fires: 7 clusters / 18 commits / 4 will-sync + 2 fork-preserve + 1 won't-sync; 3 windows-touch:yes commits dispositioned; per-cell L/M/H ADR review confirmed Phase 33 Option A `continue`), and executed the UPST5 sync (Phase 43 — 11 D-19 cherry-picks + 3 D-20 manual replays; new cross-platform `crates/nono-cli/src/platform.rs` module from upstream `ce06bd59` + Windows registry detection extensions; D-43-E1 Windows-only-files invariant respected; 2208 tests passing on Windows host; Cluster 2 reclassified `will-sync → split` mid-flight with source migration deferred to v2.6/UPST6). 13/13 v2.5 requirements satisfied at codebase level (REQ-RESL-NIX-01/02/03 + REQ-PKGS-04 + REQ-CI-01/02/03 + REQ-BROKER-CR-01..04 + REQ-UPST5-01/02). Cross-phase integration **clean** at close (7/7 wiring + 5/5 E2E flows WIRED per `.planning/milestones/v2.5-MILESTONE-AUDIT.md`); milestone status `tech_debt` with 32 deferred items acknowledged at close (post-merge CI verifications on push + 16 REVIEW.md warnings + REQUIREMENTS.md checkbox drift). 172 commits since v2.4 (`25e88e61..a9b64440`, 5 days).
 
-## Current Milestone: v2.12 AI Agent Abstraction
+## Next Milestone Goals
 
-**Goal:** Generalize nono's Windows confinement beyond Claude Code into an engine-agnostic model — confine *any* AI agent engine (Aider, GitHub Copilot CLI, Cursor, custom Python/LangChain) with the same OS-enforced isolation, replacing the Claude-specific PreToolUse hook. (SEED-004.)
+**TBD — run `/gsd:new-milestone`.** v2.12 (AI Agent Abstraction) shipped 2026-06-16. Candidate carry-forwards for the next cycle (from the v2.12 audit + prior milestones):
+- **Copilot CLI end-to-end confinement** — Node-ESM/AppContainer drive-root `lstat` fix (one-time-admin `C:\`+`C:\Users` `RA` grant + nono ancestor `FILE_READ_ATTRIBUTES`); spec'd in `75-08`.
+- **Cross-process authoritative `nono classify`** — daemon control-pipe `Classify` verb (Phase 73 deferred the cross-process path by design).
+- **A1 empirical per-agent WFP isolation** (needs a network-scoped test profile); **nono-ts `confinedRun` ergonomics** (default Low-IL broker arm + auto-cover target exe dir).
+- **Phase 67 clean-host Windows install UAT** (carried from v2.11; needs a clean Win11 host).
+- **Enterprise-hardening track:** signed-policy/attestation (SEED-005), silent fleet deploy (SEED-001), egress allowlist (SEED-002), SIEM/EDR (SEED-003), Azure Trusted Signing (cert-gated).
 
-**Target features:**
+<details>
+<summary>Shipped v2.12 Milestone scope (complete 2026-06-16) — AI Agent Abstraction</summary>
+
+**Goal:** Generalize nono's Windows confinement beyond Claude Code into an engine-agnostic model — confine *any* AI agent engine (Aider, GitHub Copilot CLI, Cursor, custom Python/LangChain) with the same OS-enforced isolation, replacing the Claude-specific PreToolUse hook. (SEED-004.) **Shipped: 12/12 requirements, audit PASSED.**
+
+**Target features (all delivered):**
 - **Engine-agnostic launcher** — productionize the validated daemon-as-launcher (spike 003): generalize the confined `nono run` path to mediate non-Claude engines, honoring the exe/interpreter-coverage contract, absolute grants, and user-owned workspace (R-B3).
 - **Persistent multi-tenant daemon** — a long-running local service that adopts/launches multiple agents, marks each (`AI_AGENT` job/SID), and serves per-agent capability requests over one persistent multi-client pipe (generalizes the supervisor IPC). *(riskiest — former spike 004)*
 - **Engine abstraction boundary + `nono-py` binding** — define what every engine must expose for nono to mediate it, and prove it by confining a real Python/LangChain agent through the binding with no Claude hook. *(former spike 005)*
@@ -37,6 +51,8 @@ v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed
 - **Signed-policy / decentralized attestation** (SEED-005 / review R-T1) — X-Large; a milestone of its own.
 - **Silent/headless enterprise deployment** (SEED-001), **network egress allowlisting** (SEED-002), **SIEM/EDR telemetry** (SEED-003).
 - **Real publicly-trusted code signing** (Azure Trusted Signing) — cert-gated.
+
+</details>
 
 <details>
 <summary>Previously v2.11 Milestone scope (complete 2026-06-11)</summary>

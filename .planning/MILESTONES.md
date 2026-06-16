@@ -1,5 +1,27 @@
 # Milestones
 
+## v2.12 AI Agent Abstraction (Shipped: 2026-06-16)
+
+**Phases completed:** 5 phases (71, 72, 73, 74, 75), 28 plans (incl. 5 gap-closure: 74-07, 74-08, 75-06, 75-07, 75-08).
+
+**Tag:** `v2.12` (milestone marker, not a `v*.*.*` release tag — no release.yml trigger, no crate publish). Shipped on branch `fix/win-confinement-rb4-ra1` (merge to main separately).
+
+**Delivered:** Generalized nono's Windows confinement beyond Claude Code into an **engine-neutral** model — any AI agent engine confined through one `nono run`/daemon launch path — plus a persistent multi-tenant daemon, an unforgeable AI_AGENT identity, and supplementary per-agent controls. A composition milestone over three existing subsystems (broker-arm launch, the SDDL capability pipe, the `nono-wfp-service` shape) + one net-new marker. User-mode only (ADR-65 No-go on kernel driver). **12/12 requirements satisfied; milestone audit PASSED** (caught + closed a MARK-01 verification gap before archive).
+
+**Key accomplishments:**
+
+- **Phase 71 — Engine-Agnostic Launch Productionization (ENG-01/02/03)** — promoted the spike-003 confined path to a first-class engine-neutral `nono run` path: `windows_interpreters` profile field + per-engine profiles (aider, langchain-python), fail-secure exe/interpreter coverage gate (`validate_launch_paths`), R-B3 `path_has_write_owner` pre-launch gate, `--workspace` absolute-grant + child-CWD, nested-job hardening. VERIFICATION passed + live Win11 Aider end-to-end UAT.
+- **Phase 72 — nono-py Binding + In-Process-Exec Proof (ABI-01/02)** — `confined_run` (spawn-confined) + born-confined `confine` through the `nono-py` binding with no Claude hook; nono pin 0.57→0.62; E1-E5 engine-abstraction contract (`proj/DESIGN-engine-abstraction.md`). Binding in sibling repo `../nono-py`. Win11 pytest UAT PASS.
+- **Phase 73 — AI_AGENT Marker (MARK-01)** — unforgeable identity bound to the per-run AppContainer package SID via `nono::AgentRegistry` + `nono classify` verb (structural/non-authoritative cross-process by design; authoritative path is Phase 74+ daemon); job-ACL hardening (breakaway denied, SD denies Low-IL). Verification gate closed 2026-06-16 (host-gated `sc4_classify_*` integration tests pass: real child → AiAgent, spoof → NotAnAgent).
+- **Phase 74 — Persistent Multi-Tenant Daemon (DMON-01/02/03)** *(marquee/riskiest)* — `nono-agentd` 2nd `[[bin]]` USER-service: concurrent confined agents (fresh AppContainer+job each, deterministic reap to baseline), tenant-isolated control pipe (Low-IL-denying SDDL + `ImpersonateNamedPipeClient` + per-tenant SID), least-privilege USER split from the elevated WFP service, privilege-model ADR. The terminal UAT caught the marquee gap (control plane unwired) → gap-closure 74-07/74-08. Human UAT PASS (SC1-SC5) on Win11 26200.
+- **Phase 75 — Supplementary Controls + Secondary Engines (SUPP-01/02/03)** — operator `nono agent demote` (post-hoc IL-drop + WFP-cut, not reap); per-agent WFP egress (add@launch/remove@reap); `copilot-cli` profile; `nono-ts` `confinedRun`/`confine` parity (nono pin 0.33→0.62). Live Win11 UAT (SC1/SC2-D-05/SC4/SC5 PASS). **SC3 re-scope:** Copilot confine-only (Node-ESM `realpathSync lstat('C:\')` denied under AppContainer — 75-08 spike, fix = one-time-admin drive-ACL + nono ancestor-RA, documented as future); **claude-code is the end-to-end Engine-2**. Abstraction proven: engines Aider + claude-code; bindings nono-py + nono-ts.
+
+**Audit:** `/gsd:audit-milestone` run before close (`.planning/v2.12-MILESTONE-AUDIT.md`, PASSED) — it caught MARK-01 as code-complete-but-unverified (no VERIFICATION.md, VALIDATION draft, SC4 tests never run); the gap was closed inline (73-VERIFICATION.md written, SC1-SC5 verified) before archiving.
+
+**Known deferred items at close (carry-forwards):** Copilot CLI end-to-end (Node-ESM/AppContainer drive-root `lstat` fix); A1 empirical per-agent WFP isolation (no network-scoped profile); cross-process authoritative `nono classify` (daemon Classify verb); nono-ts `confinedRun` arm-default ergonomics; Phase 67 clean-host Windows install UAT (from v2.11). Repo stays PUBLIC pending Microsoft minifilter-altitude approval.
+
+---
+
 ## v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity (Shipped: 2026-06-11)
 
 **Phases completed:** 4 phases (63, 64, 65, 66), 13 plans.
