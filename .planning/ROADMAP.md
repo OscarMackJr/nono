@@ -32,7 +32,7 @@ granularity: standard
 - [x] **Phase 72: nono-py Binding + In-Process-Exec Proof** — A Python/LangChain agent is confined through the `nono-py` binding with NO Claude hook — both `confined_run` (spawn-confined) and `confine` (self-confine at startup) — and the engine-abstraction contract is documented as a stable boundary.
 - [x] **Phase 73: AI_AGENT Marker** — Each confined agent carries an unforgeable `AI_AGENT` identity bound to its daemon-minted token SID (named job objects, if used, are kill-group/enumeration only — never authorization).
 - [x] **Phase 74: Persistent Multi-Tenant Daemon** — A least-privilege persistent daemon launches/confines multiple concurrent agents over one tenant-isolated capability pipe (server-side `ImpersonateNamedPipeClient` + per-tenant SID), fresh token+job per agent, deterministically reaped, split from the elevated WFP service. *(riskiest — former spike 004)*
-- [ ] **Phase 75: Supplementary Controls + Secondary Engines** — An operator can demote a running agent (post-hoc IL-drop, demote-only); outbound egress is WFP-scoped per agent; and the abstraction is proven across ≥2 engines (Copilot CLI) and ≥2 bindings (`nono-ts` parity with `nono-py`).
+- [x] **Phase 75: Supplementary Controls + Secondary Engines** — An operator can demote a running agent (post-hoc IL-drop, demote-only); outbound egress is WFP-scoped per agent; and the abstraction is proven across ≥2 engines (Aider + claude-code end-to-end; Copilot confine-only per 75-08 re-scope) and ≥2 bindings (`nono-ts` parity with `nono-py`).
 
 ## Phase Details
 
@@ -186,7 +186,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
 | 74. Persistent Multi-Tenant Daemon | 8/8 | Complete   | 2026-06-15 |
-| 75. Supplementary Controls + Secondary Engines | 5/7 | In Progress|  |
+| 75. Supplementary Controls + Secondary Engines | 8/8 | Complete    | 2026-06-16 |
 
 ## Dependency Graph
 
