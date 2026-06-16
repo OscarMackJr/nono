@@ -79,8 +79,8 @@ use std::sync::{Arc, Mutex};
 // ---------------------------------------------------------------------------
 static SERIAL: Mutex<()> = Mutex::new(());
 
-use nono::{derive_app_container_sid, package_sid_to_string};
 use nono::AppContainerProfile;
+use nono::{derive_app_container_sid, package_sid_to_string};
 
 use windows_sys::Win32::Foundation::{CloseHandle, FreeLibrary, BOOL, HANDLE, HMODULE};
 use windows_sys::Win32::Security::{
@@ -128,7 +128,12 @@ fn get_process_handle_count() -> u32 {
         // process that is always valid; &mut count is a valid out-pointer.
         GetProcessHandleCount(GetCurrentProcess(), &mut count)
     };
-    assert_ne!(ok, 0, "GetProcessHandleCount failed: {}", std::io::Error::last_os_error());
+    assert_ne!(
+        ok,
+        0,
+        "GetProcessHandleCount failed: {}",
+        std::io::Error::last_os_error()
+    );
     count
 }
 
@@ -176,7 +181,7 @@ fn snapshot_handle_types_for_current_pid() -> HandleTypeMap {
     use std::os::raw::c_void;
 
     type NtQuerySystemInformationFn = unsafe extern "system" fn(
-        u32,      // SystemInformationClass
+        u32, // SystemInformationClass
         *mut c_void,
         u32,
         *mut u32,
@@ -194,20 +199,21 @@ fn snapshot_handle_types_for_current_pid() -> HandleTypeMap {
         windows_sys::Win32::System::LibraryLoader::LoadLibraryA(ntdll_name.as_ptr())
     };
     if ntdll.is_null() {
-        eprintln!("[spike74][characterize] LoadLibraryA(ntdll) failed — skipping handle-type breakdown");
+        eprintln!(
+            "[spike74][characterize] LoadLibraryA(ntdll) failed — skipping handle-type breakdown"
+        );
         return HandleTypeMap::new();
     }
     let nt_query_fn_name = "NtQuerySystemInformation\0";
     let fn_ptr = unsafe {
         // SAFETY: ntdll is a valid module handle; fn name is nul-terminated ASCII.
-        windows_sys::Win32::System::LibraryLoader::GetProcAddress(
-            ntdll,
-            nt_query_fn_name.as_ptr(),
-        )
+        windows_sys::Win32::System::LibraryLoader::GetProcAddress(ntdll, nt_query_fn_name.as_ptr())
     };
     let Some(fn_ptr) = fn_ptr else {
         unsafe { FreeLibrary(ntdll) };
-        eprintln!("[spike74][characterize] GetProcAddress(NtQuerySystemInformation) failed — skipping");
+        eprintln!(
+            "[spike74][characterize] GetProcAddress(NtQuerySystemInformation) failed — skipping"
+        );
         return HandleTypeMap::new();
     };
     let nt_query: NtQuerySystemInformationFn = unsafe {
@@ -240,7 +246,9 @@ fn snapshot_handle_types_for_current_pid() -> HandleTypeMap {
         if s == 0xC000_0004u32 as i32 {
             retry += 1;
             if retry > 8 {
-                eprintln!("[spike74][characterize] NtQuerySystemInformation: too many retries — skipping");
+                eprintln!(
+                    "[spike74][characterize] NtQuerySystemInformation: too many retries — skipping"
+                );
                 unsafe { FreeLibrary(ntdll) };
                 return HandleTypeMap::new();
             }
@@ -287,7 +295,11 @@ fn snapshot_handle_types_for_current_pid() -> HandleTypeMap {
     //
     // NOTE: On 32-bit, entries_start would be 4 (no alignment gap), but this
     // test only runs on 64-bit Windows hosts.
-    let entries_start: usize = if cfg!(target_pointer_width = "64") { 8 } else { 4 };
+    let entries_start: usize = if cfg!(target_pointer_width = "64") {
+        8
+    } else {
+        4
+    };
     // Sanity check: count * stride must fit in the buffer.
     if count.saturating_mul(entry_stride) > buf.len().saturating_sub(entries_start) {
         eprintln!(
@@ -333,13 +345,8 @@ fn snapshot_handle_types_for_current_pid() -> HandleTypeMap {
 fn query_object_type_name(handle: HANDLE) -> Option<String> {
     use std::os::raw::c_void;
 
-    type NtQueryObjectFn = unsafe extern "system" fn(
-        HANDLE,
-        u32,
-        *mut c_void,
-        u32,
-        *mut u32,
-    ) -> i32;
+    type NtQueryObjectFn =
+        unsafe extern "system" fn(HANDLE, u32, *mut c_void, u32, *mut u32) -> i32;
 
     // ObjectTypeInformation = 2
     const OBJECT_TYPE_INFORMATION_CLASS: u32 = 2;
@@ -409,20 +416,34 @@ fn query_object_type_name(handle: HANDLE) -> Option<String> {
 
     // Read the Buffer absolute pointer from the UNICODE_STRING.
     // On x64: offset 8, 8 bytes little-endian. On x86: offset 4, 4 bytes.
-    let (buf_ptr_offset, ptr_size) = if cfg!(target_pointer_width = "64") { (8usize, 8usize) } else { (4usize, 4usize) };
+    let (buf_ptr_offset, ptr_size) = if cfg!(target_pointer_width = "64") {
+        (8usize, 8usize)
+    } else {
+        (4usize, 4usize)
+    };
     if buf.len() < buf_ptr_offset + ptr_size {
         return None;
     }
     // Read the absolute virtual-address pointer value from the buffer.
     let abs_ptr: usize = if ptr_size == 8 {
-        let bytes = [buf[buf_ptr_offset], buf[buf_ptr_offset+1],
-                     buf[buf_ptr_offset+2], buf[buf_ptr_offset+3],
-                     buf[buf_ptr_offset+4], buf[buf_ptr_offset+5],
-                     buf[buf_ptr_offset+6], buf[buf_ptr_offset+7]];
+        let bytes = [
+            buf[buf_ptr_offset],
+            buf[buf_ptr_offset + 1],
+            buf[buf_ptr_offset + 2],
+            buf[buf_ptr_offset + 3],
+            buf[buf_ptr_offset + 4],
+            buf[buf_ptr_offset + 5],
+            buf[buf_ptr_offset + 6],
+            buf[buf_ptr_offset + 7],
+        ];
         usize::from_le_bytes(bytes)
     } else {
-        let bytes = [buf[buf_ptr_offset], buf[buf_ptr_offset+1],
-                     buf[buf_ptr_offset+2], buf[buf_ptr_offset+3]];
+        let bytes = [
+            buf[buf_ptr_offset],
+            buf[buf_ptr_offset + 1],
+            buf[buf_ptr_offset + 2],
+            buf[buf_ptr_offset + 3],
+        ];
         u32::from_le_bytes(bytes) as usize
     };
     // The base address of our output buffer in process memory.
@@ -454,8 +475,14 @@ fn print_handle_type_delta(before: &HandleTypeMap, after: &HandleTypeMap, label:
 
     eprintln!("[spike74][characterize] {label}:");
     for idx in &indices {
-        let (b_name, b_count) = before.get(idx).map(|(n, c)| (n.as_str(), *c)).unwrap_or(("", 0));
-        let (a_name, a_count) = after.get(idx).map(|(n, c)| (n.as_str(), *c)).unwrap_or(("", 0));
+        let (b_name, b_count) = before
+            .get(idx)
+            .map(|(n, c)| (n.as_str(), *c))
+            .unwrap_or(("", 0));
+        let (a_name, a_count) = after
+            .get(idx)
+            .map(|(n, c)| (n.as_str(), *c))
+            .unwrap_or(("", 0));
         let name = if !a_name.is_empty() { a_name } else { b_name };
         let delta = a_count as i64 - b_count as i64;
         if delta != 0 {
@@ -531,9 +558,7 @@ fn fresh_token_isolation_agents_have_distinct_package_sids() {
         sids.len()
     );
 
-    eprintln!(
-        "[spike74][sids] PASS: {AGENT_COUNT} profiles produced {AGENT_COUNT} distinct SIDs"
-    );
+    eprintln!("[spike74][sids] PASS: {AGENT_COUNT} profiles produced {AGENT_COUNT} distinct SIDs");
 }
 
 // ---------------------------------------------------------------------------
@@ -777,8 +802,9 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
 
         // Simulate one agent's profile lifetime:
         // 1. Create profile (analogous to daemon's CreateAppContainerProfile call)
-        let profile = nono::create_app_container_profile(&name)
-            .unwrap_or_else(|e| panic!("create_app_container_profile({name:?}) failed at cycle {i}: {e}"));
+        let profile = nono::create_app_container_profile(&name).unwrap_or_else(|e| {
+            panic!("create_app_container_profile({name:?}) failed at cycle {i}: {e}")
+        });
 
         // 2. Derive the SID (analogous to the per-tenant key mint)
         let owned_sid = derive_app_container_sid(&name)
@@ -859,14 +885,9 @@ fn n_agents_over_time_returns_to_baseline_handle_count() {
             // Soft diagnostic: warn if any security-critical handle types are growing
             // in the steady-state window. These types must NOT leak per-cycle.
             // The hard assertion below catches the total; this names the culprit.
-            const SUSPECT_TYPES: &[&str] = &[
-                "Token", "File", "Job", "Section",
-                "ALPC Port", "Key",
-            ];
+            const SUSPECT_TYPES: &[&str] = &["Token", "File", "Job", "Section", "ALPC Port", "Key"];
             for (delta, _idx, name) in &steady_deltas {
-                if *delta > 0
-                    && SUSPECT_TYPES.iter().any(|s| name.eq_ignore_ascii_case(s))
-                {
+                if *delta > 0 && SUSPECT_TYPES.iter().any(|s| name.eq_ignore_ascii_case(s)) {
                     eprintln!(
                         "[spike74][characterize] WARN: suspect per-cycle growth of \
                          security-critical handle type '{name}': +{delta} over \
@@ -993,7 +1014,7 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
     let server_thread = std::thread::spawn(move || {
         nono::SupervisorSocket::bind_low_integrity_with_session_and_package_sid(
             &rendezvous_for_server,
-            None,                      // session_sid: None (daemon pipe doesn't use WRITE_RESTRICTED arm)
+            None, // session_sid: None (daemon pipe doesn't use WRITE_RESTRICTED arm)
             Some(&pkg_sid_for_server), // package_sid: tenant A only
         )
     });
@@ -1043,7 +1064,10 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
     //         This mirrors the `spawn_appcontainer_child` helper in launch.rs tests.
     // -----------------------------------------------------------------------
     let tenant_b_pi = spawn_appcontainer_child_for_test(tenant_b_sid_owned.as_psid());
-    eprintln!("[spike74][denial] spawned AppContainer B child pid={}", tenant_b_pi.dwProcessId);
+    eprintln!(
+        "[spike74][denial] spawned AppContainer B child pid={}",
+        tenant_b_pi.dwProcessId
+    );
 
     // -----------------------------------------------------------------------
     // Step 5: Open the child's process token and duplicate it to an impersonation token.
@@ -1052,11 +1076,7 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
     // Open the child process with TOKEN query rights.
     let child_process_handle = unsafe {
         // SAFETY: dwProcessId is a valid PID from CreateProcessW.
-        OpenProcess(
-            PROCESS_QUERY_INFORMATION,
-            0,
-            tenant_b_pi.dwProcessId,
-        )
+        OpenProcess(PROCESS_QUERY_INFORMATION, 0, tenant_b_pi.dwProcessId)
     };
     assert!(
         !child_process_handle.is_null(),
@@ -1068,11 +1088,16 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
     let mut primary_token: HANDLE = std::ptr::null_mut();
     let ok = unsafe {
         // SAFETY: child_process_handle is valid from OpenProcess above.
-        OpenProcessToken(child_process_handle, TOKEN_QUERY | TOKEN_DUPLICATE, &mut primary_token)
+        OpenProcessToken(
+            child_process_handle,
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            &mut primary_token,
+        )
     };
     unsafe { CloseHandle(child_process_handle) };
     assert_ne!(
-        ok, 0,
+        ok,
+        0,
         "OpenProcessToken on AppContainer B child failed: {}",
         std::io::Error::last_os_error()
     );
@@ -1092,7 +1117,8 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
     };
     unsafe { CloseHandle(primary_token) };
     assert_ne!(
-        ok, 0,
+        ok,
+        0,
         "DuplicateTokenEx for AppContainer B impersonation token failed: {}",
         std::io::Error::last_os_error()
     );
@@ -1140,13 +1166,15 @@ fn daemon_cross_tenant_denial_tenant_b_cannot_connect_to_tenant_a_pipe_instance(
     // Step 7: Assert outcomes.
     // -----------------------------------------------------------------------
     assert_ne!(
-        revert_ok, 0,
+        revert_ok,
+        0,
         "RevertToSelf must succeed after impersonation: {}",
         std::io::Error::last_os_error()
     );
 
     assert_ne!(
-        impersonate_ok, 0,
+        impersonate_ok,
+        0,
         "ImpersonateLoggedOnUser with AppContainer B token failed: {}. \
          This means SeImpersonatePrivilege may be absent (A1 assumption check).",
         std::io::Error::last_os_error()
@@ -1223,8 +1251,9 @@ fn daemon_concurrent_agents() {
             let name = unique_profile_name("concurrent", i);
 
             // Mint the AppContainer profile for this concurrent "agent".
-            let profile = nono::create_app_container_profile(&name)
-                .unwrap_or_else(|e| panic!("[thread {i}] create_app_container_profile failed: {e}"));
+            let profile = nono::create_app_container_profile(&name).unwrap_or_else(|e| {
+                panic!("[thread {i}] create_app_container_profile failed: {e}")
+            });
 
             // Derive the package SID.
             let owned_sid = derive_app_container_sid(&name)
@@ -1270,7 +1299,9 @@ fn daemon_concurrent_agents() {
                 .expect("[thread {i}] server thread panicked")
                 .unwrap_or_else(|e| panic!("[thread {i}] server bind failed: {e}"));
 
-            eprintln!("[spike74][concurrent][thread {i}] pipe round-trip COMPLETE for sid={pkg_sid}");
+            eprintln!(
+                "[spike74][concurrent][thread {i}] pipe round-trip COMPLETE for sid={pkg_sid}"
+            );
 
             // Record result for cross-thread assertion.
             let mut guard = results.lock().expect("results mutex poisoned");
@@ -1285,7 +1316,9 @@ fn daemon_concurrent_agents() {
 
     // Wait for all concurrent agent threads to complete.
     for (i, handle) in thread_handles.into_iter().enumerate() {
-        handle.join().unwrap_or_else(|_| panic!("[thread {i}] concurrent agent thread panicked"));
+        handle
+            .join()
+            .unwrap_or_else(|_| panic!("[thread {i}] concurrent agent thread panicked"));
     }
 
     // -----------------------------------------------------------------------
@@ -1342,7 +1375,7 @@ fn spawn_appcontainer_child_for_test(
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
         UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
-        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTUPINFOEXW,
+        PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTUPINFOEXW,
         STARTUPINFOW,
     };
 

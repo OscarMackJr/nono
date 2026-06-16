@@ -104,10 +104,7 @@ mod windows_impl {
         // tenant's SID at pipe instance creation time — the auth gate is
         // post-connect via ImpersonateNamedPipeClient + registry check.
         let sddl = nono::supervisor::build_capability_pipe_sddl(None, None)?;
-        let sddl_wide: Vec<u16> = sddl
-            .encode_utf16()
-            .chain(std::iter::once(0u16))
-            .collect();
+        let sddl_wide: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0u16)).collect();
 
         let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
         let ok = unsafe {
@@ -187,10 +184,7 @@ mod windows_impl {
     /// Each accepted client runs in its own `tokio::spawn` task. A slow or
     /// malicious tenant cannot block the accept loop or starve other tenants
     /// (proven by `daemon_concurrent_agents` in the Wave 0 spike harness).
-    pub(crate) async fn run_accept_loop(
-        daemon_state: Arc<DaemonState>,
-        shutdown: Arc<Notify>,
-    ) {
+    pub(crate) async fn run_accept_loop(daemon_state: Arc<DaemonState>, shutdown: Arc<Notify>) {
         // Create a persistent shutdown future we can poll repeatedly via
         // `tokio::pin!`. A `notify_one` permit stored by the notifier is
         // consumed on the first `.notified()` poll that returns Ready — using
@@ -221,9 +215,7 @@ mod windows_impl {
             // above. We transfer ownership to NamedPipeServer; the raw handle
             // must NOT be closed separately after this call.
             let server = match unsafe {
-                tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(
-                    handle as *mut _,
-                )
+                tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(handle as *mut _)
             } {
                 Ok(s) => s,
                 Err(e) => {

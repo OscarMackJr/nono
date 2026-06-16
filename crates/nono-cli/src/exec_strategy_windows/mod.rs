@@ -1132,8 +1132,7 @@ mod interpreter_resolve_tests {
     fn shebang_read_returns_none_when_no_shebang() {
         let dir = tempfile::tempdir().expect("tempdir");
         let exe = dir.path().join("notadistlib.exe");
-        std::fs::write(&exe, b"MZ\x90\x00regular PE binary, no shebang")
-            .expect("write fixture");
+        std::fs::write(&exe, b"MZ\x90\x00regular PE binary, no shebang").expect("write fixture");
 
         assert_eq!(
             read_distlib_shebang(&exe),

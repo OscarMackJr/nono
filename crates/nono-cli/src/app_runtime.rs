@@ -64,8 +64,7 @@ fn dispatch_command(
             // authoritative AI_AGENT verdict. The verb relies on the structural
             // pre-filter; the registry is threaded to keep the sound predicate in
             // the call path for the Phase 74 daemon to consume.
-            let registry =
-                std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
+            let registry = std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
             classify_runtime::run_classify(args, registry)
         }),
         // Phase 74 D-05: daemon lifecycle and agent management verbs.

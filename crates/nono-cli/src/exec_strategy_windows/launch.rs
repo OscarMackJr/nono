@@ -2892,8 +2892,8 @@ mod job_hardening_tests {
     /// breakaway via a `LimitFlags` OR assignment.
     #[test]
     fn job_never_has_breakaway_ok() {
-        let containment =
-            create_process_containment(None, None).expect("create_process_containment must succeed");
+        let containment = create_process_containment(None, None)
+            .expect("create_process_containment must succeed");
         let info = read_extended(containment.job);
         assert_eq!(
             info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_BREAKAWAY_OK,
@@ -3335,9 +3335,8 @@ mod broker_dispatch_tests {
         use windows_sys::Win32::Security::SECURITY_CAPABILITIES;
         use windows_sys::Win32::System::Threading::{
             DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-            UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT,
-            LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
-            STARTUPINFOEXW,
+            UpdateProcThreadAttribute, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTUPINFOEXW,
         };
 
         // Probe the required attribute-list size for 1 slot, then initialize.
@@ -4217,8 +4216,7 @@ mod assign_failure_tests {
             job: INVALID_HANDLE_VALUE,
         };
         // Use a similarly invalid process handle; Win32 validates the job first.
-        let result =
-            apply_process_handle_to_containment(&bad_containment, INVALID_HANDLE_VALUE);
+        let result = apply_process_handle_to_containment(&bad_containment, INVALID_HANDLE_VALUE);
         assert!(
             result.is_err(),
             "apply_process_handle_to_containment must return Err on an invalid job handle \

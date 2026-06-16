@@ -215,10 +215,7 @@ mod windows_impl {
     ///
     /// Each accepted operator client runs in its own `tokio::spawn` task
     /// (T-74-07-04: one slow client cannot block others).
-    pub(crate) async fn run_control_loop(
-        daemon_state: Arc<DaemonState>,
-        shutdown: Arc<Notify>,
-    ) {
+    pub(crate) async fn run_control_loop(daemon_state: Arc<DaemonState>, shutdown: Arc<Notify>) {
         // Create a persistent shutdown future to poll across iterations.
         // A `notify_one` permit stored by the notifier is consumed on the first
         // `.notified()` poll that returns Ready — reusing the SAME future ensures
@@ -246,9 +243,7 @@ mod windows_impl {
             // We transfer ownership to NamedPipeServer; the raw handle must NOT be
             // closed separately after this call.
             let server = match unsafe {
-                tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(
-                    handle as *mut _,
-                )
+                tokio::net::windows::named_pipe::NamedPipeServer::from_raw_handle(handle as *mut _)
             } {
                 Ok(s) => s,
                 Err(e) => {
@@ -298,9 +293,7 @@ mod windows_impl {
             let state = Arc::clone(&daemon_state);
             let shutdown_for_conn = Arc::clone(&shutdown);
             tokio::spawn(async move {
-                if let Err(e) =
-                    handle_control_connection(server, state, shutdown_for_conn).await
-                {
+                if let Err(e) = handle_control_connection(server, state, shutdown_for_conn).await {
                     tracing::warn!(
                         error = %e,
                         "run_control_loop: handle_control_connection returned error"
@@ -315,10 +308,7 @@ mod windows_impl {
     #[serde(tag = "action", rename_all = "lowercase")]
     enum ControlRequest {
         /// `{"action":"launch","profile":"<name>","cmd":["exe","arg1",...]}`
-        Launch {
-            profile: String,
-            cmd: Vec<String>,
-        },
+        Launch { profile: String, cmd: Vec<String> },
         /// `{"action":"list"}`
         List,
         /// `{"action":"shutdown"}` — same-user-only graceful stop (dev-layout).
@@ -330,9 +320,7 @@ mod windows_impl {
         ///
         /// After a successful IL-drop, the agent's per-agent WFP filter is also
         /// removed (D-03 WFP-cut) to prevent leaving egress open after IL-drop.
-        Demote {
-            tenant_id: String,
-        },
+        Demote { tenant_id: String },
     }
 
     /// Handle a single connected operator pipe client.
@@ -372,7 +360,9 @@ mod windows_impl {
                     || e.kind() == std::io::ErrorKind::BrokenPipe
                     || e.kind() == std::io::ErrorKind::ConnectionReset =>
             {
-                tracing::debug!("handle_control_connection: client disconnected before sending request");
+                tracing::debug!(
+                    "handle_control_connection: client disconnected before sending request"
+                );
                 return Ok(());
             }
             Err(e) => {
@@ -415,11 +405,9 @@ mod windows_impl {
                     error = %e,
                     "handle_control_connection: failed to parse ControlRequest; closing"
                 );
-                let _ = write_framed_response(
-                    &mut server,
-                    &format!("error: malformed request: {e}"),
-                )
-                .await;
+                let _ =
+                    write_framed_response(&mut server, &format!("error: malformed request: {e}"))
+                        .await;
                 return Ok(());
             }
         };
@@ -427,9 +415,10 @@ mod windows_impl {
         // ── Dispatch ───────────────────────────────────────────────────────────
 
         let response = match request {
-            ControlRequest::Launch { profile: profile_name, cmd } => {
-                handle_launch(&state, &profile_name, cmd).await
-            }
+            ControlRequest::Launch {
+                profile: profile_name,
+                cmd,
+            } => handle_launch(&state, &profile_name, cmd).await,
             ControlRequest::List => handle_list(&state),
             // Shutdown: same-user-only graceful stop (dev-layout).
             // The SDDL already enforces that only Medium+ IL (interactive user)
@@ -540,24 +529,27 @@ mod windows_impl {
                 // Look up the minted package SID + pid for the response.
                 let (package_sid, pid) = {
                     let tenants = state.tenants.lock().unwrap_or_else(|p| p.into_inner());
-                    tenants.get(&tenant_id).map(|t| {
-                        let sid = t.package_sid.clone();
-                        // pid: access raw handle to get PID (Windows-only).
-                        #[cfg(target_os = "windows")]
-                        let pid_val: u32 = {
-                            use std::os::windows::io::AsRawHandle;
-                            let raw = t.process_handle.as_raw_handle();
-                            // SAFETY: raw is a valid process handle owned by AgentTenant.
-                            unsafe {
-                                windows_sys::Win32::System::Threading::GetProcessId(
-                                    raw as windows_sys::Win32::Foundation::HANDLE,
-                                )
-                            }
-                        };
-                        #[cfg(not(target_os = "windows"))]
-                        let pid_val: u32 = 0;
-                        (sid, pid_val)
-                    }).unwrap_or_else(|| (String::from("(unknown — already reaped)"), 0))
+                    tenants
+                        .get(&tenant_id)
+                        .map(|t| {
+                            let sid = t.package_sid.clone();
+                            // pid: access raw handle to get PID (Windows-only).
+                            #[cfg(target_os = "windows")]
+                            let pid_val: u32 = {
+                                use std::os::windows::io::AsRawHandle;
+                                let raw = t.process_handle.as_raw_handle();
+                                // SAFETY: raw is a valid process handle owned by AgentTenant.
+                                unsafe {
+                                    windows_sys::Win32::System::Threading::GetProcessId(
+                                        raw as windows_sys::Win32::Foundation::HANDLE,
+                                    )
+                                }
+                            };
+                            #[cfg(not(target_os = "windows"))]
+                            let pid_val: u32 = 0;
+                            (sid, pid_val)
+                        })
+                        .unwrap_or_else(|| (String::from("(unknown — already reaped)"), 0))
                 };
 
                 tracing::info!(
@@ -867,7 +859,9 @@ mod windows_impl {
             SetTokenInformation(
                 token,
                 TokenIntegrityLevel,
-                std::ptr::addr_of!(low_label).cast::<std::ffi::c_void>().cast_mut(),
+                std::ptr::addr_of!(low_label)
+                    .cast::<std::ffi::c_void>()
+                    .cast_mut(),
                 total_size,
             )
         };
@@ -941,9 +935,18 @@ mod tests {
             "error: tenant_id '{id}' not found — run `nono agent list` for current tenant IDs",
             id = "nonexistent-tenant-id"
         );
-        assert!(msg.contains("error:"), "demote error message must start with 'error:'");
-        assert!(msg.contains("not found"), "demote error message must contain 'not found'");
-        assert!(msg.contains(sentinel), "demote error message must contain the tenant_id");
+        assert!(
+            msg.contains("error:"),
+            "demote error message must start with 'error:'"
+        );
+        assert!(
+            msg.contains("not found"),
+            "demote error message must contain 'not found'"
+        );
+        assert!(
+            msg.contains(sentinel),
+            "demote error message must contain the tenant_id"
+        );
     }
 
     /// SC: demote_does_not_reap_tenant_from_map (Windows)
@@ -964,7 +967,15 @@ mod tests {
         let make_handle = || -> OwnedHandle {
             let mut raw = std::ptr::null_mut();
             let ok: BOOL = unsafe {
-                DuplicateHandle(current, current, current, &mut raw, 0, 0, DUPLICATE_SAME_ACCESS)
+                DuplicateHandle(
+                    current,
+                    current,
+                    current,
+                    &mut raw,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
             };
             assert_ne!(ok, 0, "DuplicateHandle must succeed");
             unsafe { OwnedHandle::from_raw_handle(raw) }
@@ -988,12 +999,18 @@ mod tests {
         // Calling handle_demote on an UNKNOWN tenant exercises the early-return
         // path (no Win32 calls). The known tenant must remain in the map.
         let result = super::windows_impl::handle_demote_testable(&state, "no-such-tenant");
-        assert!(result.contains("error:"), "unknown tenant must return error");
+        assert!(
+            result.contains("error:"),
+            "unknown tenant must return error"
+        );
         assert!(result.contains("not found"), "error must say 'not found'");
 
         // The known tenant must still be in the map (demote never reaps).
         let count = state.tenants.lock().unwrap().len();
-        assert_eq!(count, 1, "handle_demote must not remove tenants from the map");
+        assert_eq!(
+            count, 1,
+            "handle_demote must not remove tenants from the map"
+        );
     }
 
     /// SC: demote_returns_err_for_unknown_tenant (Windows path)
@@ -1098,7 +1115,15 @@ mod tests {
         let make_handle = || -> OwnedHandle {
             let mut raw = std::ptr::null_mut();
             let ok: BOOL = unsafe {
-                DuplicateHandle(current, current, current, &mut raw, 0, 0, DUPLICATE_SAME_ACCESS)
+                DuplicateHandle(
+                    current,
+                    current,
+                    current,
+                    &mut raw,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
             };
             assert_ne!(ok, 0, "DuplicateHandle must succeed");
             unsafe { OwnedHandle::from_raw_handle(raw) }
@@ -1147,6 +1172,9 @@ mod tests {
         let before = state.tenants.lock().unwrap().len();
         let _result = super::windows_impl::handle_list_testable(&state);
         let after = state.tenants.lock().unwrap().len();
-        assert_eq!(before, after, "handle_list must not mutate the tenant map (SC4)");
+        assert_eq!(
+            before, after,
+            "handle_list must not mutate the tenant map (SC4)"
+        );
     }
 }

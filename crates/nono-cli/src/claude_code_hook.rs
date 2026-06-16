@@ -1129,7 +1129,8 @@ mod tests {
         assert_no_dotnet_method_calls(&payload, "Write");
         assert_no_utf8_string_encoding(&payload, "Write");
         assert!(
-            payload.contains("[byte[]]@(") && payload.contains("Set-Content")
+            payload.contains("[byte[]]@(")
+                && payload.contains("Set-Content")
                 && payload.contains("-Encoding Byte"),
             "Write payload must use the byte-array + Set-Content -Encoding Byte vehicle: {payload}"
         );
@@ -1172,7 +1173,9 @@ mod tests {
             "Edit payload must read/write the file as bytes (`-Encoding Byte`): {payload}"
         );
         assert!(
-            payload.contains("Set-Content -LiteralPath 'C:\\proj\\main.rs' -Value $src -Encoding Byte"),
+            payload.contains(
+                "Set-Content -LiteralPath 'C:\\proj\\main.rs' -Value $src -Encoding Byte"
+            ),
             "Edit payload must write $src with Set-Content -Encoding Byte: {payload}"
         );
         // The old/new strings must be embedded as their exact UTF-8 byte literals,
@@ -1224,7 +1227,8 @@ mod tests {
             "MultiEdit must read as bytes: {payload}"
         );
         assert!(
-            payload.contains("Set-Content -LiteralPath 'C:\\proj\\lib.rs' -Value $src -Encoding Byte"),
+            payload
+                .contains("Set-Content -LiteralPath 'C:\\proj\\lib.rs' -Value $src -Encoding Byte"),
             "MultiEdit must write $src as bytes: {payload}"
         );
         // One byte-replace block per edit, each writing back into $src so the next

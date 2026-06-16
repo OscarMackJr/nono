@@ -59,7 +59,6 @@ pub struct ExecuteOptions {
     pub allow_unmanaged_identical_write_files: bool,
 }
 
-
 // ---------------------------------------------------------------------------
 // YamlMergeDirective — the yaml_merge directive struct
 // ---------------------------------------------------------------------------

@@ -52,7 +52,10 @@ enum Outcome {
 /// Fail-secure: any error reading the target process resolves to a
 /// "not an agent" verdict and `Ok(())`; the only `Err` paths are genuine
 /// internal failures (mutex poison, JSON serialization).
-pub(crate) fn run_classify(args: ClassifyArgs, registry: Arc<Mutex<nono::AgentRegistry>>) -> Result<()> {
+pub(crate) fn run_classify(
+    args: ClassifyArgs,
+    registry: Arc<Mutex<nono::AgentRegistry>>,
+) -> Result<()> {
     let pid = args.pid;
 
     // Structural pre-filter input: the AppContainer package SID (if any).

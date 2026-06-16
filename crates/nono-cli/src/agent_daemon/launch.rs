@@ -56,8 +56,8 @@ mod windows_impl {
     use super::super::reap::AgentTenant;
     use super::super::DaemonState;
     use nono::NonoError;
-    use std::path::PathBuf;
     use std::os::windows::io::FromRawHandle;
+    use std::path::PathBuf;
     use std::sync::Arc;
 
     use windows_sys::Win32::Foundation::{
@@ -67,19 +67,19 @@ mod windows_impl {
         Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW, PSECURITY_DESCRIPTOR,
         PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
     };
+    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
         SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
-    use windows_sys::Win32::Storage::FileSystem::SearchPathW;
     use windows_sys::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
-        InitializeProcThreadAttributeList, ResumeThread, TerminateProcess, UpdateProcThreadAttribute,
-        WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-        EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST,
-        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, STARTUPINFOEXW,
-        STARTUPINFOW,
+        InitializeProcThreadAttributeList, ResumeThread, TerminateProcess,
+        UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
+        CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
+        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTUPINFOEXW, STARTUPINFOW,
     };
 
     // SDDL_REVISION_1 is not exported from windows-sys 0.59 as a constant.
@@ -388,9 +388,7 @@ mod windows_impl {
             ))
         })?;
         let package_sid = nono::package_sid_to_string(&owned_sid).map_err(|e| {
-            NonoError::SandboxInit(format!(
-                "launch_agent: package_sid_to_string failed: {e}"
-            ))
+            NonoError::SandboxInit(format!("launch_agent: package_sid_to_string failed: {e}"))
         })?;
 
         tracing::info!(
@@ -491,13 +489,11 @@ mod windows_impl {
         // Wrap raw handles in std::os::windows::io::OwnedHandle for RAII.
         // SAFETY: `job_raw_owned` is a valid Job Object handle; we disarmed the
         // guard above — we are the sole owner.
-        let job_owned = unsafe {
-            std::os::windows::io::OwnedHandle::from_raw_handle(job_raw_owned)
-        };
+        let job_owned =
+            unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(job_raw_owned) };
         // SAFETY: `process_handle_raw` is a valid process handle from CreateProcessW.
-        let process_owned = unsafe {
-            std::os::windows::io::OwnedHandle::from_raw_handle(process_handle_raw)
-        };
+        let process_owned =
+            unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(process_handle_raw) };
 
         // Forget the profile — AppContainer cleanup deferred to AgentTenant::Drop.
         // Dropping the profile here would call DeleteAppContainerProfile too early.
@@ -516,9 +512,7 @@ mod windows_impl {
 
         {
             let mut tenants = daemon_state.tenants.lock().map_err(|_| {
-                NonoError::SandboxInit(
-                    "launch_agent: DaemonState::tenants mutex poisoned".into(),
-                )
+                NonoError::SandboxInit("launch_agent: DaemonState::tenants mutex poisoned".into())
             })?;
             tenants.insert(tenant_id.clone(), tenant);
         }
@@ -644,9 +638,7 @@ mod windows_impl {
         let name_u16: Vec<u16> = name.encode_utf16().chain(std::iter::once(0u16)).collect();
 
         // Build the security descriptor SDDL with per-agent deny ACE.
-        let sddl = format!(
-            "D:P(A;;0x1F001F;;;OW)(D;;0x1F001F;;;LW)(D;;0x1F001F;;;{package_sid})"
-        );
+        let sddl = format!("D:P(A;;0x1F001F;;;OW)(D;;0x1F001F;;;LW)(D;;0x1F001F;;;{package_sid})");
         let wide_sddl: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0u16)).collect();
 
         let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
@@ -808,11 +800,7 @@ mod windows_impl {
     /// Remove state for a failed agent launch. If `AgentTenant` was already
     /// inserted, removing it drops the struct → closes job_handle →
     /// `KILL_ON_JOB_CLOSE` terminates the process group.
-    fn cleanup_failed_agent(
-        daemon_state: &Arc<DaemonState>,
-        tenant_id: &str,
-        package_sid: &str,
-    ) {
+    fn cleanup_failed_agent(daemon_state: &Arc<DaemonState>, tenant_id: &str, package_sid: &str) {
         // Registry remove FIRST (locking order).
         if let Ok(mut registry) = daemon_state.agent_registry.lock() {
             registry.remove(package_sid);
@@ -866,12 +854,12 @@ mod windows_impl {
         // pointer is permitted when we do not need the filename offset.
         let needed = unsafe {
             SearchPathW(
-                std::ptr::null(),      // lpPath: null → use standard search path
-                exe_wide.as_ptr(),     // lpFileName: the bare name (e.g. "notepad.exe")
-                ext_wide.as_ptr(),     // lpExtension: append ".exe" if no extension
-                0,                     // nBufferLength: 0 for probe
-                std::ptr::null_mut(),  // lpBuffer: null for probe
-                std::ptr::null_mut(),  // lpFilePart: not needed
+                std::ptr::null(),     // lpPath: null → use standard search path
+                exe_wide.as_ptr(),    // lpFileName: the bare name (e.g. "notepad.exe")
+                ext_wide.as_ptr(),    // lpExtension: append ".exe" if no extension
+                0,                    // nBufferLength: 0 for probe
+                std::ptr::null_mut(), // lpBuffer: null for probe
+                std::ptr::null_mut(), // lpFilePart: not needed
             )
         };
 
@@ -1034,9 +1022,9 @@ mod windows_impl {
             CreateProcessW(
                 app_name_wide.as_ptr(),
                 cmd_line.as_mut_ptr(),
-                std::ptr::null(),     // lpProcessAttributes
-                std::ptr::null(),     // lpThreadAttributes
-                0,                    // bInheritHandles = FALSE
+                std::ptr::null(), // lpProcessAttributes
+                std::ptr::null(), // lpThreadAttributes
+                0,                // bInheritHandles = FALSE
                 CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
                 std::ptr::null_mut(), // lpEnvironment (inherit)
                 std::ptr::null(),     // lpCurrentDirectory (inherit)
@@ -1091,9 +1079,7 @@ mod windows_impl {
     fn generate_tenant_id() -> nono::Result<String> {
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).map_err(|e| {
-            NonoError::SandboxInit(format!(
-                "generate_tenant_id: getrandom::fill failed: {e}"
-            ))
+            NonoError::SandboxInit(format!("generate_tenant_id: getrandom::fill failed: {e}"))
         })?;
         Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
     }
@@ -1258,13 +1244,7 @@ mod tests {
 
             // All current built-in profiles have network.block = false →
             // wfp_filter_add is NOT called → no WFP gate in current tests.
-            let profiles_to_check = [
-                "default",
-                "aider",
-                "langchain-python",
-                "node-dev",
-                "claude",
-            ];
+            let profiles_to_check = ["default", "aider", "langchain-python", "node-dev", "claude"];
             for profile in profiles_to_check {
                 let result = profile_needs_network_scoping_testable(profile);
                 // All should be false for current policy (no network.block = true yet).
@@ -1300,7 +1280,15 @@ mod tests {
         let make_handle = || -> OwnedHandle {
             let mut raw = std::ptr::null_mut();
             let ok: BOOL = unsafe {
-                DuplicateHandle(current, current, current, &mut raw, 0, 0, DUPLICATE_SAME_ACCESS)
+                DuplicateHandle(
+                    current,
+                    current,
+                    current,
+                    &mut raw,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
             };
             assert_ne!(ok, 0, "DuplicateHandle must succeed");
             // SAFETY: raw is a valid duplicated process handle.
@@ -1334,7 +1322,10 @@ mod tests {
         let tenants = state.tenants.lock().unwrap();
         assert_eq!(tenants.len(), 1, "tenants must have one entry after launch");
         let t = tenants.get(&tenant_id).unwrap();
-        assert_eq!(t.package_sid, package_sid, "AgentTenant.package_sid must match");
+        assert_eq!(
+            t.package_sid, package_sid,
+            "AgentTenant.package_sid must match"
+        );
     }
 
     /// SC: launch_agent_fresh_profile_per_agent
@@ -1353,7 +1344,10 @@ mod tests {
                 id.chars().all(|c| c.is_ascii_hexdigit()),
                 "tenant_id must be lowercase hex"
             );
-            assert!(ids.insert(id), "each tenant_id must be unique (fresh per agent)");
+            assert!(
+                ids.insert(id),
+                "each tenant_id must be unique (fresh per agent)"
+            );
         }
     }
 
@@ -1374,7 +1368,15 @@ mod tests {
         let make_handle = || -> OwnedHandle {
             let mut raw = std::ptr::null_mut();
             let ok: BOOL = unsafe {
-                DuplicateHandle(current, current, current, &mut raw, 0, 0, DUPLICATE_SAME_ACCESS)
+                DuplicateHandle(
+                    current,
+                    current,
+                    current,
+                    &mut raw,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
             };
             assert_ne!(ok, 0, "DuplicateHandle must succeed");
             // SAFETY: raw is a valid duplicated process handle.
@@ -1399,10 +1401,18 @@ mod tests {
                 job_handle: make_handle(),
                 process_handle: make_handle(),
             };
-            state.tenants.lock().unwrap().insert(tenant_id.clone(), tenant);
+            state
+                .tenants
+                .lock()
+                .unwrap()
+                .insert(tenant_id.clone(), tenant);
         }
 
-        assert_eq!(state.tenants.lock().unwrap().len(), 1, "one tenant before reap");
+        assert_eq!(
+            state.tenants.lock().unwrap().len(),
+            1,
+            "one tenant before reap"
+        );
 
         // Simulate reap task (locking order: registry → tenants).
         {

@@ -244,16 +244,16 @@ fn daemon_start_raw_spawn(agentd_exe: &std::path::Path) -> Result<()> {
         //   lpEnvironment, lpCurrentDirectory) are null → use safe defaults.
         // - `si.cb` is correctly set; `&si` and `&mut pi` are valid output params.
         CreateProcessW(
-            app_wide.as_ptr(),              // lpApplicationName
-            cmd_wide.as_mut_ptr(),          // lpCommandLine (mutable, may be modified)
-            std::ptr::null(),               // lpProcessAttributes
-            std::ptr::null(),               // lpThreadAttributes
-            0,                              // bInheritHandles = FALSE
+            app_wide.as_ptr(),     // lpApplicationName
+            cmd_wide.as_mut_ptr(), // lpCommandLine (mutable, may be modified)
+            std::ptr::null(),      // lpProcessAttributes
+            std::ptr::null(),      // lpThreadAttributes
+            0,                     // bInheritHandles = FALSE
             DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
-            std::ptr::null_mut(),           // lpEnvironment (inherit from parent)
-            std::ptr::null(),               // lpCurrentDirectory (inherit from parent)
-            &si,                            // lpStartupInfo
-            &mut pi,                        // lpProcessInformation (output)
+            std::ptr::null_mut(), // lpEnvironment (inherit from parent)
+            std::ptr::null(),     // lpCurrentDirectory (inherit from parent)
+            &si,                  // lpStartupInfo
+            &mut pi,              // lpProcessInformation (output)
         )
     };
 
@@ -314,8 +314,7 @@ fn daemon_stop() -> Result<()> {
             })?;
 
         let sc_stdout = String::from_utf8_lossy(&sc_query.stdout);
-        let scm_running =
-            sc_stdout.contains("RUNNING") && !sc_stdout.contains("does not exist");
+        let scm_running = sc_stdout.contains("RUNNING") && !sc_stdout.contains("does not exist");
 
         if scm_running {
             // SCM service is running — stop via `sc stop`.
@@ -714,15 +713,12 @@ fn windows_sc_command(
 ) -> Result<()> {
     use std::process::Command;
 
-    let output = Command::new("sc")
-        .args(sc_args)
-        .output()
-        .map_err(|e| {
-            NonoError::SandboxInit(format!(
-                "{verb}: failed to run `sc {args}`: {e}",
-                args = sc_args.join(" ")
-            ))
-        })?;
+    let output = Command::new("sc").args(sc_args).output().map_err(|e| {
+        NonoError::SandboxInit(format!(
+            "{verb}: failed to run `sc {args}`: {e}",
+            args = sc_args.join(" ")
+        ))
+    })?;
 
     if output.status.success() {
         println!("{success_msg}");
@@ -762,9 +758,7 @@ fn windows_sc_command(
 /// to distinguish "daemon not running" from other errors.
 #[cfg(target_os = "windows")]
 fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, ReadFile, WriteFile, OPEN_EXISTING,
     };
@@ -834,9 +828,8 @@ fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
 
     // Send: [4-byte LE length][JSON payload].
     let payload_bytes = json_payload.as_bytes();
-    let payload_len: u32 = u32::try_from(payload_bytes.len()).map_err(|_| {
-        NonoError::SandboxInit("nono agent: request payload too large".into())
-    })?;
+    let payload_len: u32 = u32::try_from(payload_bytes.len())
+        .map_err(|_| NonoError::SandboxInit("nono agent: request payload too large".into()))?;
     let len_prefix = payload_len.to_le_bytes();
 
     let mut bytes_written: u32 = 0;
@@ -931,9 +924,7 @@ fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
 fn is_pipe_not_found(err: &nono::NonoError) -> bool {
     let msg = err.to_string();
     // GLE=2: ERROR_FILE_NOT_FOUND (pipe does not exist — daemon not running)
-    msg.contains("GLE=2")
-        || msg.contains("pipe not available")
-        || msg.contains("not available")
+    msg.contains("GLE=2") || msg.contains("pipe not available") || msg.contains("not available")
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

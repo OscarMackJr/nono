@@ -3435,8 +3435,7 @@ mod tests {
             access_mask: 0,
         };
         let msg = SupervisorMessage::Request(req);
-        let json =
-            serde_json::to_string(&msg).expect("SupervisorMessage must serialize to JSON");
+        let json = serde_json::to_string(&msg).expect("SupervisorMessage must serialize to JSON");
 
         // Primary SC5 invariant: no tenant identity field on the wire.
         assert!(
@@ -3532,8 +3531,7 @@ mod tests {
             }
         }
         assert_eq!(
-            ok_after,
-            0,
+            ok_after, 0,
             "OpenThreadToken(bOpenAsSelf=FALSE) must FAIL — thread must not be \
              impersonating after ImpersonationGuard drop. If this assertion fails, \
              ImpersonationGuard::drop did not call RevertToSelf."
@@ -3590,12 +3588,10 @@ mod tests {
             }
         }
         assert_eq!(
-            ok,
-            0,
+            ok, 0,
             "OpenThreadToken(bOpenAsSelf=FALSE) must FAIL after authenticate_pipe_client \
              returns Err — no impersonation must remain active. If this fails, the \
              thread security context was leaked."
         );
     }
 }
-

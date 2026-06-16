@@ -487,10 +487,12 @@ pub(crate) fn prepare_sandbox_with_context(
     // writable grant (T-71-09). The grant is expressed with the canonicalized
     // absolute path (footgun #1: component-wise, never string starts_with).
     if let Some(ref ws) = args.workspace {
-        let ws_canonical = ws.canonicalize().map_err(|e| NonoError::PathCanonicalization {
-            path: ws.clone(),
-            source: e,
-        })?;
+        let ws_canonical = ws
+            .canonicalize()
+            .map_err(|e| NonoError::PathCanonicalization {
+                path: ws.clone(),
+                source: e,
+            })?;
         if !caps.path_covered_with_access(&ws_canonical, AccessMode::ReadWrite) {
             info!(
                 "Auto-granting workspace read+write access (--workspace): {}",

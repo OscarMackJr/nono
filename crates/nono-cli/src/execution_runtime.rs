@@ -497,8 +497,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     // Question 3 RESOLVED). The insert uses `.clone()` so `windows_package_sid`
     // remains available for the `ExecConfig.package_sid` move below.
     #[cfg(target_os = "windows")]
-    let agent_registry =
-        std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
+    let agent_registry = std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
     #[cfg(target_os = "windows")]
     {
         agent_registry

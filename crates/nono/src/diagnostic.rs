@@ -830,10 +830,7 @@ impl<'a> DiagnosticFormatter<'a> {
     /// This corresponds to the `diagnostics.suppress_system_services` profile
     /// field introduced by cc21229f (Plan 70-01 C3).
     #[must_use]
-    pub fn with_suppressed_system_service_operations(
-        mut self,
-        ops: &'a [String],
-    ) -> Self {
+    pub fn with_suppressed_system_service_operations(mut self, ops: &'a [String]) -> Self {
         self.suppressed_system_service_operations = ops;
         self
     }

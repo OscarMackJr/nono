@@ -89,7 +89,10 @@ pub(crate) struct AgentTenant {
     /// `#[expect(dead_code)]` because clippy's dead_code analysis does not
     /// consider implicit destruction (Drop) as a "read" of the field.
     #[cfg(target_os = "windows")]
-    #[expect(dead_code, reason = "closed via OwnedHandle::drop in AgentTenant::drop")]
+    #[expect(
+        dead_code,
+        reason = "closed via OwnedHandle::drop in AgentTenant::drop"
+    )]
     pub job_handle: std::os::windows::io::OwnedHandle,
 
     /// Process handle for the agent's root process.

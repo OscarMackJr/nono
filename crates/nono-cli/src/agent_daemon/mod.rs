@@ -20,13 +20,13 @@
 //! `Arc` wrapper (not `DaemonState` itself) to share state across
 //! `tokio::spawn` boundaries.
 
-pub(crate) mod reap;
 /// Implemented in Plan 74-04 (Wave 2).
 pub(crate) mod accept_loop;
-/// Implemented in Plan 74-04 (Wave 2).
-pub(crate) mod launch;
 /// Daemon-side operator control-pipe server (Plan 74-07 Wave 5).
 pub(crate) mod control_loop;
+/// Implemented in Plan 74-04 (Wave 2).
+pub(crate) mod launch;
+pub(crate) mod reap;
 
 // ─── WFP wire-protocol types (Plan 75-01, SUPP-02) ───────────────────────────
 //

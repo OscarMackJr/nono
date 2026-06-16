@@ -202,10 +202,7 @@ mod tests {
             "aider profile must include python_runtime group"
         );
         assert!(
-            profile
-                .security
-                .groups
-                .contains(&"git_config".to_string()),
+            profile.security.groups.contains(&"git_config".to_string()),
             "aider profile must include git_config group"
         );
         assert!(
