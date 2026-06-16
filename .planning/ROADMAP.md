@@ -136,11 +136,14 @@ Plans:
 - [x] 75-02-PLAN.md — SUPP-01: ControlRequest::Demote + handle_demote (IL-drop + WFP-cut) + agent_demote CLI verb (SUPP-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 75-05-PLAN.md — Live Win11 UAT: SC1-SC5 gates + A1/A2/A4 assumption confirmations (SUPP-01, SUPP-02, SUPP-03)
+- [x] 75-05-PLAN.md — Live Win11 UAT: SC1/SC2(D-05)/SC4/SC5 PASS; SC3 PARTIAL→75-08; A2/A4 recorded, A1 deferred (SUPP-01, SUPP-02, SUPP-03)
 
 **Wave 4 (gap-closure — runs after Wave 3 UAT findings)**
 - [x] 75-06-PLAN.md — GAP-75-A: daemon_start type-50 user-own-template detection + raw-spawn fallback (SUPP-01, SUPP-02, SUPP-03)
 - [x] 75-07-PLAN.md — GAP-75-B: build real CapabilitySet from profile in handle_launch; apply package-SID DACL grants before ResumeThread; store guards in AgentTenant for revocation on reap (SUPP-01, SUPP-02, SUPP-03)
+
+**Wave 5 (gap-closure — from Wave 3 SC3 finding)**
+- [ ] 75-08-PLAN.md — GAP-75-C: Node-ESM engines run confined (Copilot) — minimal drive-root attr grant / Node resolver mitigation + symlinked-exe coverage + copilot-cli node interpreter (SUPP-03)
 
 <details>
 <summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>

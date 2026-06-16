@@ -1,9 +1,9 @@
 ---
 phase: 75-supplementary-controls-secondary-engines
 doc: human-uat-script
-status: BLOCKED — gaps_found (live run 2026-06-15)
+status: PARTIAL — SC1/SC2/SC4/SC5 PASS; SC3 deferred to gap-closure 75-08 (re-run 2026-06-16)
 created: 2026-06-15
-updated: 2026-06-15
+updated: 2026-06-16
 wave: 3
 plan: "05"
 requirements: [SUPP-01, SUPP-02, SUPP-03]
@@ -36,6 +36,46 @@ SC1/SC3/SC5 are **blocked-on-coverage**, not failed-on-Phase-75-logic. Route to 
 - **75-06** → GAP-75-A (daemon-start user-service fix) **and** GAP-75-B (build real caps from the profile + apply package-SID DACL grants in `launch_agent`, revoke on reap — reuse `dacl_guard`). GAP-75-B is the priority; it unblocks all behavioral gates.
 - Validate the coverage fix against **claude.exe** (self-contained native binary, already proven confined via `nono run`) so any residual failure isolates cleanly to the daemon path.
 - Once 75-06 lands, re-run SC1 → SC3 → SC5 with the corrected commands.
+
+---
+
+## ✅ Live UAT Re-Run 2026-06-16 — after gap-closures 75-06 / 75-07 (FINAL VERDICTS)
+
+Host: Win11 Enterprise build 26200. Binaries: dev-layout `target\release\nono.exe` + `nono-agentd.exe` (v0.62.2). Both daemon defects from the 2026-06-15 run are FIXED and live-verified this session (75-06 GAP-75-A daemon-start; 75-07 GAP-75-B capability-less launch). SC1/SC3/SC5 were then re-run.
+
+| SC | Requirement | Verdict | Evidence (2026-06-16) |
+|----|-------------|---------|------------------------|
+| **SC4** | Daemon privilege split | ✅ **PASS** | `sc qc nono-agentd` → `TYPE 50 USER_OWN_PROCESS TEMPLATE`, empty start-name. `nono daemon start` printed the 75-06 type-50 guard message (`[template] … starting via raw spawn`) and reached RUNNING (pid 11484) — GAP-75-A fix confirmed live. |
+| **SC1** | Demote does not reap | ✅ **PASS** | Long-running confined agent (`claude-code` + `cmd /c "for /l %i in () do @rem"`, pid 19612) stayed resident. `nono agent demote <tid>` → `IL-drop to Low succeeded; WFP filter removed (best-effort). Agent NOT reaped.` Subsequent `agent list` still showed the agent. |
+| **SC2** | Per-agent WFP (D-05 + A1) | 🟡 **PASS (D-05) / A1 DEFERRED** | `nono-wfp-service` STATE 4 RUNNING; non-network-scoped launch succeeded with the service present (D-05 wired). A1 empirical two-agent isolation DEFERRED — no network-scoped test profile exists (plan permits deferral; all current profiles have `network.block:false`). |
+| **SC3** | Copilot CLI confined end-to-end | 🟡 **PARTIAL → gap-closure 75-08** | Confinement ENFORCED: write-outside-workspace denied (`Test-Path` False); fail-secure launch-coverage gate working. copilot.exe runs confined under AppContainer (broker spawned child). **BLOCKED on completion**: Copilot is Node-backed (A4 = YES) and Node's ESM `realpathSync` does `lstat('C:\')` which AppContainer denies (`EPERM`), so the engine doesn't finish. Not a Phase-75 logic bug — a Node-under-AppContainer drive-root-attribute gap. Deferred to **75-08**. |
+| **SC5** | nono-ts confinedRun | ✅ **PASS** | After fixing the nono-ts Windows binding load (commit `2bac4e2`: win32-x64 napi target + loader branch + `confinedRun`/`confine` exports), `confinedRun('node.exe', …)` via a `windows_low_il_broker` profile confined Node on Win11: write OUTSIDE workspace denied (exit 1, file not created), write INSIDE `%USERPROFILE%\nono-ts-ws` allowed (exit 0, `ok.txt` created). |
+
+### Abstraction proof
+
+| Dimension | Engine/Binding | Status |
+|-----------|----------------|--------|
+| Engine 1 | Aider (Ph71 SC1) | ✅ CONFIRMED |
+| Engine 2 | Copilot CLI | 🟡 confines but doesn't complete (75-08); **claude-code (native PE) confines cleanly** in 75-07 UAT as the strong Engine-2 datapoint |
+| Binding 1 | nono-py (Ph72) | ✅ CONFIRMED |
+| Binding 2 | nono-ts (SC5) | ✅ CONFIRMED (this run) |
+
+### Assumption records (filled 2026-06-16)
+
+- **A1** — FWPM_CONDITION_ALE_USER_ID + AppContainer SID empirical: **NOT TESTED** (no network-scoped profile). Gap-closure NOT triggered (deferred, acceptable).
+- **A2** — copilot.exe install path: `C:\Users\OMack\AppData\Local\Microsoft\WinGet\Links\copilot.exe` → **SymbolicLink** to `C:\Users\OMack\AppData\Local\Microsoft\WinGet\Packages\GitHub.Copilot_Microsoft.Winget.Source_8wekyb3d8bbwe\copilot.exe`. Coverage implication: the engine-exe parent must follow the symlink to the package dir (the `nono run` coverage gate already resolves the real path; the profile/daemon caps must cover it — see 75-08).
+- **A4** — node.exe grandchild: **YES** — Copilot CLI is a Node ESM app. Implication for 75-08: copilot-cli profile likely needs `windows_interpreters: ["node.exe"]` AND the Node-ESM drive-root `lstat` fix.
+
+### Findings routed to follow-up
+
+1. **GAP-75-C (→ plan 75-08, PRIORITY):** Node-ESM engines (Copilot, any node-backed CLI) fail under AppContainer because Node's `realpathSync` `lstat('C:\')` is denied. Needs a narrow drive-root attribute grant for the package SID (or a Node resolver mitigation) + copilot-cli profile coverage for the WinGet package dir + `windows_interpreters: ["node.exe"]`. Investigation/spike before code.
+2. **nono-ts ergonomics (non-blocking follow-up):** `confinedRun(profile=undefined)` routes through the WriteRestricted token arm, under which Node/CLR engines die `0xC0000142` (STATUS_DLL_INIT_FAILED). The binding should default to (or require) the Low-IL broker arm on Windows for real engines; `confinedRun` should also auto-cover the target exe's own directory (like the daemon's `build_daemon_capability_set`). SC5 PASSED with an explicit `windows_low_il_broker` profile + node-dir in the allow list.
+
+### Overall verdict
+
+🟡 **PARTIAL** — SC1, SC2 (D-05), SC4, SC5 PASS; SC3 confinement proven but engine-completion deferred to gap-closure **75-08**. SUPP-01 and SUPP-02 fully satisfied; SUPP-03 satisfied for nono-ts (binding-2) and partially for Copilot (engine-2 confines; completion in 75-08).
+
+---
 
 **The sections below are the original scaffold (kept for reference); apply the CLI corrections above when re-running.**
 
