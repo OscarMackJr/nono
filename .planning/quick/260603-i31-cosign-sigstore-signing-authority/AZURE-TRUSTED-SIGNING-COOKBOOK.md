@@ -117,6 +117,27 @@ az role assignment create \
   --scope "$ACCOUNT_ID"
 ```
 
+### ⚠ API permissions: NONE — it's RBAC, not API permissions (common trap)
+
+Do **not** add anything on the app registration's **API permissions** blade. Trusted Signing
+authorization is an Azure **RBAC data action** (`Microsoft.CodeSigning/.../sign`) granted by the
+`az role assignment create` above — it is **not** an OAuth/Graph "API permission". Specifically:
+
+- **App registration → API permissions:** leave empty. The default `User.Read` (Microsoft Graph)
+  that Azure auto-adds is unnecessary for a signing-only service principal; leave or remove it,
+  no effect either way. **No admin consent** is needed.
+- **What the app actually carries** is: (1) the **federated credential** above (who the app is —
+  not an API permission), and (2) the **`Trusted Signing Certificate Profile Signer`** RBAC role
+  on the account (what it may do). That role alone is sufficient for CI signing.
+- `Trusted Signing Identity Verifier` is a *different* built-in role for managing identity
+  **validation**, not signing — skip it for CI.
+- **Your own** rights to *make* the role assignment: you need **Owner** or **User Access
+  Administrator** / **Role Based Access Control Administrator** on the account scope (this is
+  about the admin running setup, not the app).
+
+Mental model: *federated credential* (identity) + *RBAC role* (authorization). No API
+permissions in the loop.
+
 ---
 
 ## 4. GitHub repo configuration

@@ -11,27 +11,42 @@ Signing runs only in CI for tag or release builds. Local developer builds are ne
 This is intentional: the signing secrets are CI-only and the workflow is designed to fail
 closed on any signing or verification error (D-10, D-13).
 
-## Required GitHub Actions secrets
+## CI signing: Azure Trusted Signing (keyless)
 
-Both secrets must be set as repository secrets before the release workflow can produce signed artifacts.
+> **D-02 remediation (quick-task `260603-i31`).** CI Authenticode signing migrated from a
+> self-signed/base64-PFX cert to **Azure Trusted Signing** — a Microsoft-managed, publicly
+> trusted, **keyless** signing service. There is **no PFX and no private key in CI**; the
+> runner authenticates to Azure via GitHub OIDC and the signing key lives in Microsoft's HSM.
+> Full one-time setup (Azure account, certificate profile, OIDC identity, RBAC) is in the
+> cookbook: `.planning/quick/260603-i31-cosign-sigstore-signing-authority/AZURE-TRUSTED-SIGNING-COOKBOOK.md`.
 
-| Secret | Description | Source |
-|--------|-------------|--------|
-| `WINDOWS_SIGNING_CERT` | Base64-encoded PFX certificate (certificate + private key) | Export your code-signing cert to PFX, then run: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))` |
-| `WINDOWS_SIGNING_CERT_PASSWORD` | Password protecting the PFX file | Set when exporting the PFX |
+The release workflow needs these **repository secrets** (only Azure identity IDs — no key material):
 
-Set these at `Settings -> Secrets and variables -> Actions -> New repository secret` in the GitHub repository.
+| Secret | Description |
+|--------|-------------|
+| `AZURE_CLIENT_ID` | App registration (service principal) client ID, federated to GitHub OIDC |
+| `AZURE_TENANT_ID` | Entra tenant ID |
+| `AZURE_SUBSCRIPTION_ID` | Subscription holding the Trusted Signing account |
 
-If either secret is missing, the release workflow fails immediately before signing with:
+…and these **repository variables** (non-secret):
 
-```text
-WINDOWS_SIGNING_CERT and WINDOWS_SIGNING_CERT_PASSWORD must be set.
-Set these repository secrets before releasing Windows artifacts.
-See docs/cli/development/windows-signing-guide.mdx.
-```
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `TRUSTED_SIGNING_ENDPOINT` | Region endpoint of the Trusted Signing account | `https://eus.codesigning.azure.net` |
+| `TRUSTED_SIGNING_ACCOUNT` | Trusted Signing account name | `nono-trusted-signing` |
+| `TRUSTED_SIGNING_PROFILE` | Public Trust certificate profile name | `nono-public` |
 
-No artifacts are uploaded. The workflow does not silently skip signing and produce unsigned artifacts.
-This is intentional: unsigned Windows artifacts are not releasable (D-13).
+The service principal must hold the **"Trusted Signing Certificate Profile Signer"** role on the
+account. Set secrets/variables at `Settings -> Secrets and variables -> Actions`.
+
+If the OIDC credentials or Trusted Signing account are absent/misconfigured, the `azure/login`
+step (or the signing step) fails and **no unsigned artifact is uploaded** — fail-closed is
+preserved (D-13). Unsigned Windows artifacts are never releasable.
+
+> **Legacy (no longer used by `release.yml`):** the previous CI path used base64-PFX repository
+> secrets `WINDOWS_SIGNING_CERT` / `WINDOWS_SIGNING_CERT_PASSWORD` consumed by
+> `scripts/sign-windows-artifacts.ps1`. Those are retained only for the **local POC signing**
+> flow below; the CI workflow no longer references them.
 
 ## What gets signed
 
@@ -47,7 +62,14 @@ The `.zip` artifact (`nono-vX.Y.Z-x86_64-pc-windows-msvc.zip`) contains the alre
 
 ## Signing implementation
 
-Signing is performed by `scripts/sign-windows-artifacts.ps1`. The script:
+> **CI signs via Azure Trusted Signing** (the `azure/trusted-signing-action` steps in
+> `release.yml`), not the PFX script below. The `signtool` + base64-PFX flow described in this
+> section is now the **local POC signing** primitive (`scripts/sign-windows-artifacts.ps1`,
+> invoked by `sign-poc-local.ps1`); it is no longer the CI path. `release.yml` keeps the same
+> signing **order** (sign binaries → package MSI → sign MSI wrappers → verify) and the same
+> Authenticode / MSI-payload / zip verify gates, which are signing-primitive-agnostic.
+
+Local POC signing is performed by `scripts/sign-windows-artifacts.ps1`. The script:
 
 1. Decodes `WINDOWS_SIGNING_CERT` from base64 to a temporary PFX file.
 2. Imports the certificate into `Cert:\CurrentUser\My` for the duration of the job.
@@ -63,9 +85,11 @@ The script uses RFC 3161 timestamping via `/tr` and `/td sha256`. This is the cu
 Microsoft-recommended mode for SHA-256 signed binaries. The DigiCert endpoint
 (`http://timestamp.digicert.com`) supports RFC 3161 when addressed via `/tr`.
 
-D-12 (locked): DigiCert timestamping, SHA-256 only.
-D-14 (locked): `signtool.exe` is the only signing primitive. No custom PKCS#7 logic or
-alternative tooling is permitted.
+D-12 (locked, **local POC path**): DigiCert timestamping, SHA-256 only. (CI Trusted Signing uses
+the Microsoft RFC 3161 endpoint `http://timestamp.acs.microsoft.com`, SHA-256.)
+D-14 (locked, **local POC path**): `signtool.exe` is the only signing primitive for this script.
+No custom PKCS#7 logic or alternative tooling is permitted. (CI signs via the
+`azure/trusted-signing-action`, which wraps `signtool` + the Trusted Signing dlib.)
 
 ## Verifying signatures
 
@@ -237,26 +261,43 @@ self-trust-anchor exists, and the gate passes.
 > with `git checkout -- dist/windows/nono-machine.wxs dist/windows/nono-user.wxs` if you do
 > not want that churn.
 
-## Production signing path (CA-ready)
+## Production signing path — Azure Trusted Signing (current)
 
-The fork is wired for a production commercial CA swap that requires only a secrets change,
-no code change. To upgrade from the POC self-signed cert to a commercial code-signing
-cert (e.g. DigiCert, Sectigo, or Azure Trusted Signing):
+`release.yml` signs with **Azure Trusted Signing** (keyless, Microsoft-trusted root). This is
+the production path; it does **not** use a PFX or the `WINDOWS_SIGNING_CERT` secret. To make CI
+produce signed releases:
 
-1. Obtain a code-signing certificate from a CA enrolled in the Microsoft Trusted Root
-   Program (or configure Azure Trusted Signing with a verified publisher account).
-2. Export the certificate as a PFX file (certificate + private key, password-protected).
-3. Base64-encode the PFX: run
-   `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))`
-4. Update the `WINDOWS_SIGNING_CERT` repository secret with the new base64 value.
-5. Update `WINDOWS_SIGNING_CERT_PASSWORD` with the new PFX password.
-6. No code changes are required. The release workflow (`release.yml`) reads these two
-   secrets and passes them directly to `scripts/sign-windows-artifacts.ps1` — the signing
-   path is identical whether the cert is self-signed or CA-issued.
-7. For Azure Trusted Signing: consult the Azure Trusted Signing documentation for the
-   `signtool.exe`-compatible dlib invocation; the `sign-windows-artifacts.ps1` script may
-   need a small extension to pass the `-dlib` and `-dmdf` flags instead of `/sha1`.
-   Document that extension here when it is implemented.
+1. Create + identity-validate an **Azure Trusted Signing account** and a **Public Trust**
+   certificate profile. **Validate eligibility first** — Public Trust requires Microsoft
+   identity validation (legal-entity / individual verification).
+2. Create an Entra app registration, federate it to GitHub OIDC, and grant it the
+   **"Trusted Signing Certificate Profile Signer"** role on the account.
+3. Set the repository secrets `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID`
+   and the repository variables `TRUSTED_SIGNING_ENDPOINT` / `TRUSTED_SIGNING_ACCOUNT` /
+   `TRUSTED_SIGNING_PROFILE` (see [CI signing](#ci-signing-azure-trusted-signing-keyless) above).
+4. No further code change is required — `release.yml`'s `azure/login` + `azure/trusted-signing-action`
+   steps consume them. The signing order and all verify gates are unchanged.
+
+Full step-by-step (Azure CLI commands, RBAC, OIDC federation, the exact `release.yml` wiring,
+cost, and the WFP kernel-driver EV/attestation caveat) is in the cookbook:
+`.planning/quick/260603-i31-cosign-sigstore-signing-authority/AZURE-TRUSTED-SIGNING-COOKBOOK.md`.
+
+### Alternative: commercial PFX cert (OV/EV from a CA)
+
+If you would rather use a purchased code-signing certificate (e.g. DigiCert, Sectigo) instead of
+Trusted Signing, revert the two `release.yml` signing steps to the PFX flow
+(`scripts/sign-windows-artifacts.ps1 -CertBase64 … -CertPassword …`) and set:
+
+1. Obtain a code-signing cert from a CA in the Microsoft Trusted Root Program; export as a
+   password-protected PFX (certificate + private key).
+2. Base64-encode it: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx"))`.
+3. Set `WINDOWS_SIGNING_CERT` (base64) and `WINDOWS_SIGNING_CERT_PASSWORD` repository secrets.
+
+The PFX signing primitive (`signtool /sha1 <thumbprint>`) is identical whether the cert is
+self-signed or CA-issued; only the trust chain differs. Note an OV cert still warms up SmartScreen
+reputation gradually; an EV cert (or Trusted Signing) avoids the warm-up. Kernel drivers
+(`nono-wfp-driver.sys`) require the separate EV + Microsoft Partner Center attestation/WHQL flow
+regardless of which user-mode path you choose.
 
 ## Fresh CI cert: generation, encoding, and trust redistribution
 
