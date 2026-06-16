@@ -30,7 +30,7 @@
 
 ### Supplementary Controls & Reach (SUPP)
 
-- [ ] **SUPP-01**: An operator can **demote a running/misbehaving agent** on the fly (post-hoc token IL-drop) as a supplementary control, with the leak/soundness limits documented (explicitly not a standalone boundary).
+- [x] **SUPP-01**: An operator can **demote a running/misbehaving agent** on the fly (post-hoc token IL-drop) as a supplementary control, with the leak/soundness limits documented (explicitly not a standalone boundary).
 - [x] **SUPP-02**: Outbound network egress is **scoped per confined agent** (WFP keyed to the agent's identity) so each agent's network policy is enforced independently.
 - [x] **SUPP-03**: A second non-Claude engine ships as a profile (**GitHub Copilot CLI**) and the **`nono-ts` (Node) binding reaches parity** with `nono-py` (confined-run + self-confine) — proving the abstraction across ≥2 engines and ≥2 bindings.
 
@@ -61,7 +61,7 @@ Every v1 requirement maps to exactly one phase. Coverage: **12/12 mapped, no orp
 | DMON-01 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
 | DMON-02 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
 | DMON-03 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
-| SUPP-01 | Phase 75 — Supplementary Controls + Secondary Engines | Pending |
+| SUPP-01 | Phase 75 — Supplementary Controls + Secondary Engines | Complete |
 | SUPP-02 | Phase 75 — Supplementary Controls + Secondary Engines | Complete |
 | SUPP-03 | Phase 75 — Supplementary Controls + Secondary Engines | Complete |
 

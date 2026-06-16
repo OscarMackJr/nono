@@ -133,7 +133,7 @@ Plans:
 - [x] 75-04-PLAN.md — SUPP-03b: nono-ts confinedRun/confine parity + nono pin bump 0.33.0 → 0.62 + cross-target clippy (SUPP-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 75-02-PLAN.md — SUPP-01: ControlRequest::Demote + handle_demote (IL-drop + WFP-cut) + agent_demote CLI verb (SUPP-01)
+- [x] 75-02-PLAN.md — SUPP-01: ControlRequest::Demote + handle_demote (IL-drop + WFP-cut) + agent_demote CLI verb (SUPP-01)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 75-05-PLAN.md — Live Win11 UAT: SC1-SC5 gates + A1/A2/A4 assumption confirmations (SUPP-01, SUPP-02, SUPP-03)
@@ -179,7 +179,7 @@ v2.12 active (Phases 71-75). Build order is dependency-driven: **71 (foundation)
 | 72. nono-py Binding + In-Process-Exec Proof | 4/4 | Complete    | 2026-06-14 |
 | 73. AI_AGENT Marker | 3/3 | Complete   | 2026-06-14 |
 | 74. Persistent Multi-Tenant Daemon | 8/8 | Complete   | 2026-06-15 |
-| 75. Supplementary Controls + Secondary Engines | 3/5 | In Progress|  |
+| 75. Supplementary Controls + Secondary Engines | 4/5 | In Progress|  |
 
 ## Dependency Graph
 
