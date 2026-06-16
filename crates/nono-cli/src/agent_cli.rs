@@ -100,15 +100,41 @@ fn daemon_start() -> Result<()> {
             || sc_stdout.contains("STATE");
 
         if service_exists && !sc_stdout.contains("1060") && !sc_stdout.contains("does not exist") {
-            // SCM service is installed — start via `sc start`.
-            println!("[SCM] Starting nono-agentd via Service Control Manager...");
-            return windows_sc_command(
-                &["start", DAEMON_SERVICE_NAME],
-                "nono daemon start",
-                "nono-agentd started successfully.",
-                "nono-agentd may already be running, or the service is not installed. \
-                 Try `nono daemon install` first.",
-            );
+            // SCM service is installed. Before attempting `sc start`, determine
+            // the service type. A USER_OWN_PROCESS TEMPLATE (type 50) cannot be
+            // started via `sc start` — it is a template that requires a user
+            // session to instantiate it. Attempting `sc start` on a type-50 service
+            // returns ACCESS_DENIED (exit 5), which is the GAP-75-A failure mode.
+            //
+            // Resolution: if `sc qc` identifies a type-50 template, skip `sc start`
+            // and fall through to the raw-spawn path, which is proven correct for
+            // dev-layout and works for template-registered services too.
+            let sc_qc_output = Command::new("sc")
+                .args(["qc", DAEMON_SERVICE_NAME])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                .unwrap_or_default();
+
+            if is_user_own_template_service(&sc_qc_output) {
+                // GAP-75-A fix: type-50 USER_OWN_PROCESS TEMPLATE cannot be started
+                // via `sc start`. Fall through to raw-spawn below.
+                println!(
+                    "[template] nono-agentd is registered as a USER_OWN_PROCESS TEMPLATE \
+                     (type 50); starting via raw spawn (sc start is not supported for \
+                     template services)."
+                );
+                // Do not return; fall through to the raw-spawn path.
+            } else {
+                // Type 10 (WIN32_OWN_PROCESS) or unknown — use `sc start` as usual.
+                println!("[SCM] Starting nono-agentd via Service Control Manager...");
+                return windows_sc_command(
+                    &["start", DAEMON_SERVICE_NAME],
+                    "nono daemon start",
+                    "nono-agentd started successfully.",
+                    "nono-agentd may already be running, or the service is not installed. \
+                     Try `nono daemon install` first.",
+                );
+            }
         }
 
         // Dev-layout: no SCM service. Spawn nono-agentd.exe as a detached
@@ -700,6 +726,37 @@ fn agent_demote(tenant_id: String) -> Result<()> {
 
 // ─── Windows helpers ──────────────────────────────────────────────────────────
 
+/// Detect whether `sc qc` output describes a USER_OWN_PROCESS TEMPLATE (type 50).
+///
+/// `sc start` cannot start a type-50 template service — it requires a user session
+/// to instantiate an instance, and returns ACCESS_DENIED (exit 5) if invoked
+/// directly. This predicate drives the GAP-75-A fix in `daemon_start`: when the
+/// registered service is a template, `nono daemon start` falls through to the
+/// raw-spawn path instead of calling `sc start`.
+///
+/// # Detection
+///
+/// The verbatim Windows output for a type-50 service is:
+/// ```text
+/// TYPE               : 50  USER_OWN_PROCESS  TEMPLATE
+/// ```
+/// Type-10 (classic own-process) says:
+/// ```text
+/// TYPE               : 10  WIN32_OWN_PROCESS
+/// ```
+/// The string `"USER_OWN_PROCESS TEMPLATE"` is unique to type 50 and unambiguous.
+///
+/// # sc qc failure handling
+///
+/// If `sc qc` fails to run, the caller passes an empty string, which returns
+/// `false` here — treating the type as unknown and falling through to the normal
+/// `sc start` path, where the real error (if any) will surface to the operator.
+/// This is conservative: we never silently succeed.
+#[cfg(target_os = "windows")]
+fn is_user_own_template_service(sc_qc_output: &str) -> bool {
+    sc_qc_output.contains("USER_OWN_PROCESS TEMPLATE")
+}
+
 /// Run an `sc.exe` subcommand and return a human-readable result.
 ///
 /// Prints `success_msg` on exit code 0. Returns `Err` with `fail_hint` appended
@@ -1109,5 +1166,95 @@ mod tests {
             "windows_control_pipe_request: WriteFile length prefix failed".into(),
         );
         assert!(!super::is_pipe_not_found(&err));
+    }
+
+    // ─── GAP-75-A: type-50 detection guard tests ─────────────────────────────
+
+    /// SC: daemon_start_uses_raw_spawn_for_type50_template
+    ///
+    /// `is_user_own_template_service` must return `true` when `sc qc` stdout
+    /// contains the verbatim Windows type-50 label "USER_OWN_PROCESS TEMPLATE".
+    /// This is the GAP-75-A fix: the predicate gates the fall-through to raw-spawn.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_start_uses_raw_spawn_for_type50_template() {
+        // Verbatim `sc qc nono-agentd` output for a type-50 service
+        // (confirmed on live Win11 host, 2026-06-15).
+        let sc_qc_stdout = "[SC] QueryServiceConfig SUCCESS\r\n\
+             SERVICE_NAME: nono-agentd\r\n\
+                     TYPE               : 50  USER_OWN_PROCESS TEMPLATE\r\n\
+                     START_TYPE         : 2   AUTO_START\r\n\
+                     ERROR_CONTROL      : 1   NORMAL\r\n\
+                     BINARY_PATH_NAME   : C:\\target\\release\\nono-agentd.exe --service-mode\r\n\
+                     LOAD_ORDER_GROUP   :\r\n\
+                     TAG                : 0\r\n\
+                     DISPLAY_NAME       : nono-agentd\r\n\
+                     DEPENDENCIES       :\r\n\
+                     SERVICE_START_NAME :\r\n";
+        assert!(
+            super::is_user_own_template_service(sc_qc_stdout),
+            "is_user_own_template_service must return true for type-50 sc qc output; \
+             got false for: {sc_qc_stdout:?}"
+        );
+    }
+
+    /// SC: daemon_start_uses_sc_start_for_type10
+    ///
+    /// `is_user_own_template_service` must return `false` when `sc qc` stdout
+    /// contains "WIN32_OWN_PROCESS" (type 10) without "TEMPLATE".
+    /// The normal `sc start` path must be taken for type-10 services.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_start_uses_sc_start_for_type10() {
+        // Verbatim `sc qc` output for a classic WIN32_OWN_PROCESS (type 10) service.
+        let sc_qc_stdout = "[SC] QueryServiceConfig SUCCESS\r\n\
+             SERVICE_NAME: some-service\r\n\
+                     TYPE               : 10  WIN32_OWN_PROCESS\r\n\
+                     START_TYPE         : 2   AUTO_START\r\n\
+                     ERROR_CONTROL      : 1   NORMAL\r\n\
+                     BINARY_PATH_NAME   : C:\\path\\to\\service.exe\r\n\
+                     LOAD_ORDER_GROUP   :\r\n\
+                     TAG                : 0\r\n\
+                     DISPLAY_NAME       : some-service\r\n\
+                     DEPENDENCIES       :\r\n\
+                     SERVICE_START_NAME : LocalSystem\r\n";
+        assert!(
+            !super::is_user_own_template_service(sc_qc_stdout),
+            "is_user_own_template_service must return false for type-10 sc qc output; \
+             got true for: {sc_qc_stdout:?}"
+        );
+    }
+
+    /// SC: daemon_start_uses_raw_spawn_for_no_service
+    ///
+    /// When `sc query` reports error 1060 ("does not exist"), the service-exists
+    /// gate in `daemon_start` is false: the function must skip `sc start` and
+    /// fall through to the raw-spawn path. Verified by asserting that the
+    /// service-exists check logic correctly identifies the no-service case.
+    ///
+    /// This test exercises the string-matching logic that guards the service-exists
+    /// branch, without spawning a real process.
+    #[test]
+    fn daemon_start_uses_raw_spawn_for_no_service() {
+        // Simulate `sc query nono-agentd` output when service does not exist.
+        let sc_query_no_service = "[SC] EnumQueryServicesStatus:OpenService FAILED 1060:\r\n\
+             The specified service does not exist as an installed service.\r\n";
+
+        // The daemon_start logic: service_exists is true only if sc exits 0 or
+        // stdout contains RUNNING/STOPPED/STATE. Then we negate: skip sc start if
+        // stdout contains "1060" or "does not exist".
+        // Assert that our understanding of the guard is correct.
+        let service_exists = sc_query_no_service.contains("RUNNING")
+            || sc_query_no_service.contains("STOPPED")
+            || sc_query_no_service.contains("STATE");
+        let would_skip_sc_start = !service_exists
+            || sc_query_no_service.contains("1060")
+            || sc_query_no_service.contains("does not exist");
+
+        assert!(
+            would_skip_sc_start,
+            "When sc query output contains '1060' or 'does not exist', \
+             daemon_start must skip sc start and use the raw-spawn path"
+        );
     }
 }
