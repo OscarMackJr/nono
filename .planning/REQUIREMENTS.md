@@ -20,7 +20,7 @@
 
 ### AI_AGENT Marker (MARK)
 
-- [ ] **MARK-01**: Each confined agent carries an **unforgeable `AI_AGENT` identity** bound to its daemon-minted token SID; a non-agent process cannot claim the identity and a confined agent cannot shed it. (Named job objects, if used, are for kill-group/enumeration/resource-caps only — never for authorization.)
+- [x] **MARK-01**: Each confined agent carries an **unforgeable `AI_AGENT` identity** bound to its daemon-minted token SID; a non-agent process cannot claim the identity and a confined agent cannot shed it. (Named job objects, if used, are for kill-group/enumeration/resource-caps only — never for authorization.)
 
 ### Multi-Tenant Daemon (DMON)
 
@@ -57,7 +57,7 @@ Every v1 requirement maps to exactly one phase. Coverage: **12/12 mapped, no orp
 | ENG-03 | Phase 71 — Engine-Agnostic Launch Productionization | Complete |
 | ABI-01 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Complete |
 | ABI-02 | Phase 72 — nono-py Binding + In-Process-Exec Proof | Complete |
-| MARK-01 | Phase 73 — AI_AGENT Marker | Pending |
+| MARK-01 | Phase 73 — AI_AGENT Marker | Complete |
 | DMON-01 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
 | DMON-02 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |
 | DMON-03 | Phase 74 — Persistent Multi-Tenant Daemon | Complete |

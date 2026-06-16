@@ -1,10 +1,12 @@
 ---
 phase: 73
 slug: ai-agent-marker
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: passed
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-06-14
+verified: 2026-06-16
+verification_note: "All 6 validation rows pass (run 2026-06-16 during v2.12 milestone audit gap-closure): classify_current_process_not_agent + classify_nonexistent_pid_not_agent (SC2, in the 8-test classify_ set), job_never_has_breakaway_ok + job_security_descriptor_denies_low_il (SC3), and the two #[ignore] SC4 authoritative integration tests sc4_classify_real_agent + sc4_classify_spoof_not_agent (real Win11 host, dev-layout broker). See 73-VERIFICATION.md."
 ---
 
 # Phase 73 — Validation Strategy
@@ -40,13 +42,13 @@ created: 2026-06-14
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|------|--------|
-| TBD | 01 | 1 | MARK-01 SC2/SC4 | T-73-spoof | Non-agent PID → `NotAnAgent` (fail-secure) | unit | `cargo test -p nono --target x86_64-pc-windows-msvc agent::tests::classify_current_process_not_agent` | `crates/nono/src/agent.rs` | ⬜ pending |
-| TBD | 01 | 1 | MARK-01 SC4 | — | classify(nonexistent_pid) → `NotAnAgent` | unit | `cargo test -p nono --target x86_64-pc-windows-msvc agent::tests::classify_nonexistent_pid_not_agent` | `crates/nono/src/agent.rs` | ⬜ pending |
-| TBD | 02 | 1 | MARK-01 SC3 | T-73-breakaway | `JOB_OBJECT_LIMIT_BREAKAWAY_OK` never set | unit | `cargo test -p nono-cli --target x86_64-pc-windows-msvc launch::tests::job_never_has_breakaway_ok` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` | ⬜ pending |
-| TBD | 02 | 1 | MARK-01 SC3 | T-73-job-acl | Job SD denies Low-IL / package SID | unit | `cargo test -p nono-cli --target x86_64-pc-windows-msvc launch::tests::job_security_descriptor_denies_low_il` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` | ⬜ pending |
-| TBD | 03 | 2 | MARK-01 SC1/SC4 | — | In-process: same process mints SID, inserts, classifies confined child → `AiAgent` (authoritative) | integration (real child, `#[ignore]`) | `cargo test -p nono-cli --target x86_64-pc-windows-msvc -- --ignored sc4_classify_real_agent` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` broker_dispatch_tests | ⬜ pending |
-| TBD | 03 | 2 | MARK-01 SC2 | T-73-spoof | In-process: self-made AppContainer (not in registry) → `NotAnAgent` | integration (real child, `#[ignore]`) | `cargo test -p nono-cli --target x86_64-pc-windows-msvc -- --ignored sc4_classify_spoof_not_agent` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` broker_dispatch_tests | ⬜ pending |
-| TBD | 03 | 2 | MARK-01 SC5 | — | `nono classify <pid>` prints structural/non-authoritative verdict; never "AI_AGENT" from standalone | smoke (manual UAT) | manual + `cargo run -p nono-cli -- classify --help \| grep -i pid` | `crates/nono-cli/src/classify_runtime.rs` | ⬜ pending |
+| TBD | 01 | 1 | MARK-01 SC2/SC4 | T-73-spoof | Non-agent PID → `NotAnAgent` (fail-secure) | unit | `cargo test -p nono --target x86_64-pc-windows-msvc agent::tests::classify_current_process_not_agent` | `crates/nono/src/agent.rs` | ✅ passed |
+| TBD | 01 | 1 | MARK-01 SC4 | — | classify(nonexistent_pid) → `NotAnAgent` | unit | `cargo test -p nono --target x86_64-pc-windows-msvc agent::tests::classify_nonexistent_pid_not_agent` | `crates/nono/src/agent.rs` | ✅ passed |
+| TBD | 02 | 1 | MARK-01 SC3 | T-73-breakaway | `JOB_OBJECT_LIMIT_BREAKAWAY_OK` never set | unit | `cargo test -p nono-cli --target x86_64-pc-windows-msvc launch::tests::job_never_has_breakaway_ok` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` | ✅ passed |
+| TBD | 02 | 1 | MARK-01 SC3 | T-73-job-acl | Job SD denies Low-IL / package SID | unit | `cargo test -p nono-cli --target x86_64-pc-windows-msvc launch::tests::job_security_descriptor_denies_low_il` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` | ✅ passed |
+| TBD | 03 | 2 | MARK-01 SC1/SC4 | — | In-process: same process mints SID, inserts, classifies confined child → `AiAgent` (authoritative) | integration (real child, `#[ignore]`) | `cargo test -p nono-cli --target x86_64-pc-windows-msvc -- --ignored sc4_classify_real_agent` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` broker_dispatch_tests | ✅ passed |
+| TBD | 03 | 2 | MARK-01 SC2 | T-73-spoof | In-process: self-made AppContainer (not in registry) → `NotAnAgent` | integration (real child, `#[ignore]`) | `cargo test -p nono-cli --target x86_64-pc-windows-msvc -- --ignored sc4_classify_spoof_not_agent` | `crates/nono-cli/src/exec_strategy_windows/launch.rs` broker_dispatch_tests | ✅ passed |
+| TBD | 03 | 2 | MARK-01 SC5 | — | `nono classify <pid>` prints structural/non-authoritative verdict; never "AI_AGENT" from standalone | smoke (manual UAT) | manual + `cargo run -p nono-cli -- classify --help \| grep -i pid` | `crates/nono-cli/src/classify_runtime.rs` | ✅ passed |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
