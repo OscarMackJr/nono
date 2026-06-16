@@ -301,8 +301,6 @@ pub struct ExecConfig<'a> {
     pub protected_paths: &'a [std::path::PathBuf],
     /// Base profile name to derive a saved user patch from after run-time denials.
     pub profile_save_base: Option<&'a str>,
-    /// Denied paths that should not be offered in the save-profile prompt.
-    pub ignored_denial_paths: &'a [std::path::PathBuf],
     /// Non-filesystem sandbox operations suppressed from diagnostic footers.
     pub suppressed_system_service_operations: &'a [String],
     /// Optional startup timeout for known interactive CLIs that were launched
