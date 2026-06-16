@@ -349,7 +349,15 @@ mod windows_impl {
         args: Vec<String>,
         caps: nono::CapabilitySet,
         engine_profile: String,
+        // workspace is used by step 6.6 (DaemonDaclGuard — Plan 75-07-T2).
+        // The parameter is wired here so handle_launch can pass the per-tenant
+        // workspace directory without a second signature change in Task 2.
+        workspace: PathBuf,
     ) -> nono::Result<String> {
+        // workspace will be consumed by DaemonDaclGuard::apply at step 6.6 (Plan 75-07-T2).
+        // Acknowledge until then to silence the unused-variable warning.
+        let _workspace_pending_dacl = &workspace;
+
         // Step 1: Generate a unique tenant_id and AppContainer profile name.
         let tenant_id = generate_tenant_id()?;
         let profile_name = format!("nono.session.{}", &tenant_id[..16]);

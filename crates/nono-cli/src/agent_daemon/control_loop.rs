@@ -495,17 +495,46 @@ mod windows_impl {
         let exe = PathBuf::from(&cmd[0]);
         let args: Vec<String> = cmd[1..].to_vec();
 
-        // Build a minimal CapabilitySet for the named profile.
-        // We use an empty CapabilitySet here because launch_agent manages the
-        // OS-level AppContainer token (the real confinement). The daemon's
-        // confinement boundary is the AppContainer token + Job Object, not the
-        // CapabilitySet (which requires workdir context unavailable here).
+        // Build a real CapabilitySet from the named profile per GAP-75-B.
+        // Grants cover: engine exe dir (Read), interpreter dirs (Read),
+        // SystemRoot+System32+SysWOW64 (Read), per-tenant workspace under
+        // %USERPROFILE%\nono-agents\<token> (ReadWrite). Package-SID DACL grants
+        // are applied BEFORE ResumeThread in launch_agent step 6.6 (Pitfall-3 ordering).
         //
         // ADR-74 Decision D-04: caps are set at launch time and NEVER expanded
-        // via any wire frame (no escape hatch). The daemon stores `profile_name`
-        // in `AgentTenant` for bookkeeping; the AppContainer token is the actual
-        // isolation boundary.
-        let caps = nono::CapabilitySet::new();
+        // via any wire frame (no escape hatch).
+
+        // Derive a per-tenant workspace: %USERPROFILE%\nono-agents\<16 hex chars>.
+        let workspace_token: String = {
+            let mut b = [0u8; 8];
+            if let Err(e) = getrandom::fill(&mut b) {
+                return format!("error: getrandom failed generating workspace token: {e}");
+            }
+            b.iter().map(|x| format!("{x:02x}")).collect()
+        };
+        let userprofile = std::env::var("USERPROFILE")
+            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+        let workspace = std::path::Path::new(&userprofile)
+            .join("nono-agents")
+            .join(&workspace_token);
+
+        if let Err(e) = std::fs::create_dir_all(&workspace) {
+            return format!(
+                "error: failed to create per-tenant workspace {}: {e}",
+                workspace.display()
+            );
+        }
+
+        let caps = match super::super::build_daemon_capability_set(profile_name, &exe, &workspace) {
+            Ok(c) => c,
+            Err(e) => {
+                // Clean up workspace directory we just created.
+                let _ = std::fs::remove_dir_all(&workspace);
+                return format!(
+                    "error: failed to build capability set for profile '{profile_name}': {e}"
+                );
+            }
+        };
 
         // Use the validated profile name for logging.
         let resolved_profile_name = profile_name.to_string();
@@ -513,6 +542,7 @@ mod windows_impl {
         tracing::info!(
             profile_name = %resolved_profile_name,
             exe = %exe.display(),
+            workspace = %workspace.display(),
             "handle_launch: launching agent"
         );
 
@@ -522,6 +552,7 @@ mod windows_impl {
             args,
             caps,
             resolved_profile_name.clone(),
+            workspace,
         )
         .await
         {

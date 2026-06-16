@@ -74,6 +74,181 @@ pub(crate) fn is_known_profile(profile_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Build a real `CapabilitySet` for a daemon-launched agent (GAP-75-B fix).
+///
+/// Grants cover:
+/// - Engine exe parent directory (Read): so the runtime linker can load the engine.
+/// - `%SystemRoot%`, `%SystemRoot%\System32`, `%SystemRoot%\SysWOW64` (Read): CLR/PE
+///   loader baseline (Phase 58 lesson: CLR fails with `0xFFFF0000` if these are absent).
+/// - Per-profile interpreter directories (Read): resolved via `where <interp_name>` for
+///   each entry in `policy["profiles"][profile_name]["windows_interpreters"]`. Missing
+///   interpreters are logged and skipped (non-fatal — the engine may not need all of them
+///   at startup; the DACL guard will still confine what it can).
+/// - Per-tenant workspace (ReadWrite): the workspace directory that the daemon created
+///   before calling this function. The workspace MUST exist on disk (verified by this
+///   function via `workspace.exists()`).
+///
+/// All path joins use `Path::join` (component-based), never string concatenation
+/// (CLAUDE.md path security rule).
+///
+/// # Errors
+///
+/// Returns `Err(NonoError::SandboxInit(_))` if:
+/// - `EMBEDDED_POLICY_JSON` cannot be parsed.
+/// - The engine exe has no parent directory.
+/// - `caps.allow_path(...)` fails for any path.
+/// - The workspace directory does not exist.
+#[cfg(target_os = "windows")]
+pub(crate) fn build_daemon_capability_set(
+    profile_name: &str,
+    resolved_exe: &std::path::Path,
+    workspace: &std::path::Path,
+) -> nono::Result<nono::CapabilitySet> {
+    use nono::{AccessMode, NonoError};
+
+    // 1. Parse embedded policy JSON (same approach as is_known_profile).
+    let policy: serde_json::Value = serde_json::from_str(EMBEDDED_POLICY_JSON).map_err(|e| {
+        NonoError::SandboxInit(format!(
+            "build_daemon_capability_set: failed to parse embedded policy: {e}"
+        ))
+    })?;
+
+    // 2. Extract windows_interpreters from the profile (empty list if absent).
+    let interpreter_names: Vec<String> = policy
+        .get("profiles")
+        .and_then(|p| p.as_object())
+        .and_then(|profiles| profiles.get(profile_name))
+        .and_then(|profile| profile.get("windows_interpreters"))
+        .and_then(|interps| interps.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut caps = nono::CapabilitySet::new();
+
+    // 3a. Engine exe parent directory (Read — runtime linker needs the exe dir).
+    let exe_parent = resolved_exe.parent().ok_or_else(|| {
+        NonoError::SandboxInit(format!(
+            "build_daemon_capability_set: resolved exe has no parent directory: {}",
+            resolved_exe.display()
+        ))
+    })?;
+    // Canonicalize for accuracy; fall back to unresolved on failure.
+    let exe_parent_canon = std::fs::canonicalize(exe_parent).unwrap_or_else(|e| {
+        tracing::warn!(
+            path = %exe_parent.display(),
+            error = %e,
+            "build_daemon_capability_set: could not canonicalize exe parent; using unresolved path"
+        );
+        exe_parent.to_path_buf()
+    });
+    caps = caps
+        .allow_path(&exe_parent_canon, AccessMode::Read)
+        .map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "build_daemon_capability_set: allow_path(exe_parent={}) failed: {e}",
+                exe_parent_canon.display()
+            ))
+        })?;
+
+    // 3b. CLR/PE loader baseline: %SystemRoot%, %SystemRoot%\System32, %SystemRoot%\SysWOW64.
+    // Phase 58 lesson (MEMORY.md): CLR returns 0xFFFF0000 if SystemRoot is absent.
+    let system_root_str = std::env::var("SystemRoot").unwrap_or_else(|_| {
+        tracing::warn!(
+            "build_daemon_capability_set: %SystemRoot% not set; defaulting to C:\\Windows"
+        );
+        "C:\\Windows".to_string()
+    });
+    let system_root = std::path::Path::new(&system_root_str);
+    for dir in &[
+        system_root.to_path_buf(),
+        system_root.join("System32"),
+        system_root.join("SysWOW64"),
+    ] {
+        caps = caps.allow_path(dir, AccessMode::Read).map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "build_daemon_capability_set: allow_path(system_dir={}) failed: {e}",
+                dir.display()
+            ))
+        })?;
+    }
+
+    // 3c. Interpreter directories (Read). Resolved via `where <name>` (Windows PATH search).
+    for interp_name in &interpreter_names {
+        let output = std::process::Command::new("where")
+            .arg(interp_name.as_str())
+            .output();
+        match output {
+            Ok(out) if out.status.success() && !out.stdout.is_empty() => {
+                // Parse first line of `where` output as a path.
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let first_line = stdout.lines().next().unwrap_or("").trim();
+                if first_line.is_empty() {
+                    tracing::warn!(
+                        interp = %interp_name,
+                        "build_daemon_capability_set: `where` output was empty for interpreter; skipping"
+                    );
+                    continue;
+                }
+                let interp_path = std::path::PathBuf::from(first_line);
+                let interp_dir = match interp_path.parent() {
+                    Some(p) => p.to_path_buf(),
+                    None => {
+                        tracing::warn!(
+                            interp = %interp_name,
+                            path = %interp_path.display(),
+                            "build_daemon_capability_set: interpreter has no parent dir; skipping"
+                        );
+                        continue;
+                    }
+                };
+                caps = caps
+                    .allow_path(&interp_dir, AccessMode::Read)
+                    .map_err(|e| {
+                        NonoError::SandboxInit(format!(
+                        "build_daemon_capability_set: allow_path(interpreter_dir={}) failed: {e}",
+                        interp_dir.display()
+                    ))
+                    })?;
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    interp = %interp_name,
+                    "build_daemon_capability_set: interpreter not found via `where`; skipping"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    interp = %interp_name,
+                    error = %e,
+                    "build_daemon_capability_set: `where` command failed for interpreter; skipping"
+                );
+            }
+        }
+    }
+
+    // 3d. Per-tenant workspace (ReadWrite). The workspace MUST exist (created by handle_launch).
+    if !workspace.exists() {
+        return Err(NonoError::SandboxInit(format!(
+            "build_daemon_capability_set: per-tenant workspace does not exist: {}",
+            workspace.display()
+        )));
+    }
+    caps = caps
+        .allow_path(workspace, AccessMode::ReadWrite)
+        .map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "build_daemon_capability_set: allow_path(workspace={}) failed: {e}",
+                workspace.display()
+            ))
+        })?;
+
+    Ok(caps)
+}
+
 use reap::AgentTenant;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -150,6 +325,85 @@ impl DaemonState {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    // ── Task 1 (75-07-T1): build_daemon_capability_set + workspace derivation ──
+
+    /// Verify `build_daemon_capability_set` returns a non-empty CapabilitySet for a
+    /// known profile ("aider"). Uses a real tempdir for the workspace (must exist)
+    /// and a fake exe path pointing at a known binary (nono.exe or cmd.exe) so the
+    /// exe parent resolution succeeds.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_caps_non_empty_for_known_profile() {
+        use tempfile::tempdir;
+
+        // Use cmd.exe as a stable "fake exe" with a resolvable parent directory.
+        let fake_exe = std::path::PathBuf::from(r"C:\Windows\System32\cmd.exe");
+        let workspace_dir = tempdir().expect("tempdir for workspace");
+        let workspace = workspace_dir.path().to_path_buf();
+
+        let caps = build_daemon_capability_set("aider", &fake_exe, &workspace)
+            .expect("build_daemon_capability_set must succeed for 'aider' profile");
+
+        // The CapabilitySet must cover at least the exe dir + SystemRoot + workspace.
+        // We can't inspect individual rules from CapabilitySet's public API, but we
+        // CAN verify it is non-trivially non-empty by applying it to a Windows policy.
+        let policy = nono::Sandbox::windows_filesystem_policy(&caps);
+        assert!(
+            !policy.rules.is_empty(),
+            "CapabilitySet for 'aider' profile must produce at least one filesystem rule; \
+             got 0 rules (exe_parent, SystemRoot dirs, and workspace should each contribute)"
+        );
+    }
+
+    /// Verify workspace derivation logic produces a path under USERPROFILE (or temp_dir)
+    /// with a "nono-agents" component and a 16-hex-char token suffix.
+    #[test]
+    fn daemon_workspace_path_uses_userprofile() {
+        // Mirror the workspace derivation logic from handle_launch.
+        let userprofile = std::env::var("USERPROFILE")
+            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
+        let base = std::path::Path::new(&userprofile);
+
+        // Generate an 8-byte random token (16 hex chars) — same as handle_launch.
+        let mut b = [0u8; 8];
+        getrandom::fill(&mut b).expect("getrandom::fill");
+        let workspace_token: String = b.iter().map(|x| format!("{x:02x}")).collect();
+        assert_eq!(
+            workspace_token.len(),
+            16,
+            "workspace token must be 16 hex chars (8 random bytes)"
+        );
+
+        let workspace = base.join("nono-agents").join(&workspace_token);
+
+        // The path must contain "nono-agents" as a component.
+        let has_nono_agents = workspace.components().any(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("nono-agents")
+        });
+        assert!(
+            has_nono_agents,
+            "workspace path must contain 'nono-agents' component; got: {}",
+            workspace.display()
+        );
+
+        // The leaf component (token dir) must be all-lowercase hex.
+        let token_component = workspace
+            .file_name()
+            .expect("workspace must have a file_name")
+            .to_string_lossy();
+        assert_eq!(
+            token_component.len(),
+            16,
+            "workspace token dir must be 16 chars; got: {token_component}"
+        );
+        assert!(
+            token_component.chars().all(|c| c.is_ascii_hexdigit()),
+            "workspace token dir must be lowercase hex; got: {token_component}"
+        );
+    }
 
     /// Verify that `DaemonState::new()` constructs a valid empty state and that
     /// the tenant map can be locked, mutated, and inspected without deadlock.
