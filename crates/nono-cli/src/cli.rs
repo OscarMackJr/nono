@@ -3210,6 +3210,23 @@ pub enum AgentCommands {
     Launch(AgentLaunchArgs),
     /// List running confined agents (tenant IDs and package SIDs)
     List,
+    /// Apply a post-hoc IL-drop (supplementary incident-response lever) to a running agent.
+    ///
+    /// SUPP-01: demote is a further IL-drop + WFP-cut on an already-born-confined
+    /// agent. It is NOT a standalone confinement boundary. Leak limits apply:
+    ///
+    /// 1. Handles opened before the IL-drop continue at Medium IL (open-time check;
+    ///    not re-evaluated on drop).
+    /// 2. Already-started child processes are NOT retroactively affected.
+    /// 3. The IL-drop may crash the agent (legitimate handles may be severed).
+    /// 4. Outbound network is severed concurrently via the SUPP-02 WFP filter (D-03).
+    /// 5. Demote is one-way — there is no API to raise IL back to Medium from outside.
+    ///
+    /// Use `nono agent list` to find tenant IDs. The agent is NOT reaped after demote.
+    Demote {
+        /// Tenant ID from `nono agent list` (32-char hex string)
+        tenant_id: String,
+    },
 }
 
 /// Arguments for `nono agent launch`.

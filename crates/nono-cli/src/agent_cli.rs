@@ -557,6 +557,8 @@ pub(crate) fn run_agent(args: AgentArgs) -> Result<()> {
     match args.command {
         AgentCommands::Launch(launch_args) => agent_launch(launch_args),
         AgentCommands::List => agent_list(),
+        // SUPP-01: post-hoc IL-drop incident-response lever.
+        AgentCommands::Demote { tenant_id } => agent_demote(tenant_id),
     }
 }
 
@@ -641,6 +643,58 @@ fn agent_list() -> Result<()> {
     {
         Err(NonoError::SandboxInit(
             "nono agent list is Windows-only (requires nono-agentd)".into(),
+        ))
+    }
+}
+
+/// `nono agent demote <tenant_id>` — apply a post-hoc IL-drop to a running agent.
+///
+/// Sends a `{"action":"demote","tenant_id":"<id>"}` request to the daemon control
+/// pipe. The daemon drops the agent's token integrity level to Low and severs the
+/// per-agent WFP filter (D-03 WFP-cut, SUPP-01).
+///
+/// # Leak limits (SUPP-01 soundness boundary)
+///
+/// Demote is an incident-response lever, NOT a standalone confinement boundary:
+/// 1. Handles opened before the IL-drop continue at Medium IL.
+/// 2. Already-started child processes are NOT retroactively affected.
+/// 3. The IL-drop may crash the agent (legitimate handles may be severed).
+/// 4. Outbound network is severed concurrently via the SUPP-02 WFP filter (D-03).
+/// 5. Demote is one-way — no API to raise IL back to Medium from outside.
+///
+/// The agent is NOT reaped after demote. Use `nono agent list` for tenant IDs.
+///
+/// On non-Windows: returns `Err` with a diagnostic.
+fn agent_demote(tenant_id: String) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let payload = serde_json::json!({
+            "action": "demote",
+            "tenant_id": tenant_id,
+        });
+        let payload_str = serde_json::to_string(&payload).map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "nono agent demote: failed to serialize request payload: {e}"
+            ))
+        })?;
+
+        match windows_control_pipe_request(&payload_str) {
+            Ok(response) => {
+                println!("{}", response.trim());
+                Ok(())
+            }
+            Err(e) if is_pipe_not_found(&e) => Err(NonoError::SandboxInit(
+                "nono-agentd is not running. Use `nono daemon start` first.".into(),
+            )),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = tenant_id;
+        Err(NonoError::SandboxInit(
+            "nono agent demote is Windows-only (requires nono-agentd)".into(),
         ))
     }
 }
@@ -973,6 +1027,49 @@ mod tests {
         else {
             panic!("expected Commands::Agent(AgentCommands::List)");
         };
+    }
+
+    /// SC: agent_demote_parses
+    ///
+    /// `nono agent demote <tenant_id>` must parse to
+    /// `Commands::Agent(AgentArgs { command: AgentCommands::Demote { tenant_id } })`.
+    #[test]
+    fn agent_demote_parses() {
+        let cli = Cli::parse_from([
+            "nono",
+            "agent",
+            "demote",
+            "abcdef1234567890abcdef1234567890",
+        ]);
+        let Commands::Agent(AgentArgs {
+            command: AgentCommands::Demote { ref tenant_id },
+        }) = cli.command
+        else {
+            panic!("expected Commands::Agent(AgentCommands::Demote(...))");
+        };
+        assert_eq!(
+            tenant_id, "abcdef1234567890abcdef1234567890",
+            "tenant_id must match the CLI argument"
+        );
+    }
+
+    /// SC: agent_demote_non_windows_returns_err
+    ///
+    /// On non-Windows, `agent_demote` must return `Err` containing "Windows-only".
+    /// On Windows this test is skipped (covered by the live integration path).
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn agent_demote_non_windows_returns_err() {
+        let result = super::agent_demote("some-tenant-id".to_string());
+        assert!(
+            result.is_err(),
+            "agent_demote must return Err on non-Windows"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Windows-only"),
+            "Error must mention 'Windows-only'; got: {err_msg}"
+        );
     }
 
     /// SC: no_agent_query_verb_exists (D-05 fence)
