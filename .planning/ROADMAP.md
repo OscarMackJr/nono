@@ -140,7 +140,7 @@ Plans:
 
 **Wave 4 (gap-closure — runs after Wave 3 UAT findings)**
 - [x] 75-06-PLAN.md — GAP-75-A: daemon_start type-50 user-own-template detection + raw-spawn fallback (SUPP-01, SUPP-02, SUPP-03)
-- [ ] 75-07-PLAN.md — GAP-75-B: build real CapabilitySet from profile in handle_launch; apply package-SID DACL grants before ResumeThread; store guards in AgentTenant for revocation on reap (SUPP-01, SUPP-02, SUPP-03)
+- [x] 75-07-PLAN.md — GAP-75-B: build real CapabilitySet from profile in handle_launch; apply package-SID DACL grants before ResumeThread; store guards in AgentTenant for revocation on reap (SUPP-01, SUPP-02, SUPP-03)
 
 <details>
 <summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>
