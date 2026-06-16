@@ -6,7 +6,7 @@
 //!
 //! The structured, policy-free denial records live in the core
 //! `nono::diagnostic` module; everything here is CLI/product UX: footer
-//! rendering, CLI flag suggestions, `nono why`/`nono learn` guidance, policy
+//! rendering, CLI flag suggestions, `nono why`/`nono run` guidance, policy
 //! explanations, and stderr heuristics.
 //!
 //! # Design Principles
@@ -3195,7 +3195,7 @@ mod tests {
         assert!(output.contains("Sandbox denial:"));
         assert!(output.contains(&format!("Try: --read-file {}", denied.display())));
         assert!(output.contains("No path denials were observed during this session."));
-        assert!(output.contains("Discover paths: nono learn -- <your command>"));
+        assert!(output.contains("Add permissions: nono run --allow <path> -- <your command>"));
         assert!(!output.contains("Sandbox policy:"));
     }
 
@@ -3226,7 +3226,7 @@ mod tests {
         ));
         assert!(output.contains("Sandbox denial:"));
         assert!(output.contains(&denied.display().to_string()));
-        assert!(output.contains("Discover paths: nono learn -- <your command>"));
+        assert!(output.contains("Add permissions: nono run --allow <path> -- <your command>"));
     }
 
     #[test]
@@ -3282,7 +3282,7 @@ mod tests {
         assert!(output.contains("Application error:"));
         assert!(output.contains("EEXIST: file already exists"));
         assert!(output.contains("To grant additional access, re-run with:"));
-        assert!(output.contains("Discover paths: nono learn -- <your command>"));
+        assert!(output.contains("Add permissions: nono run --allow <path> -- <your command>"));
     }
 
     #[test]
