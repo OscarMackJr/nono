@@ -46,7 +46,7 @@ granularity: standard
   3. The launcher fails SECURE with an actionable message when an engine's executable/interpreter path is not covered by the launch policy — never silent partial confinement (core nono coverage-gate invariant).
   4. The launcher fails SECURE with a clear R-B3 diagnostic when the granted workspace is not owned by the session user (admin-owned dir → no `WRITE_DAC` → confined write would fail opaquely) — the diagnostic names the ownership problem, not a generic deny.
   5. Per-engine fit is documented (launch-and-confine vs hook vs Cursor-WSL-only), and the job-assignment path is hardened against nested-job collisions: spawn suspended, assign to the agent job BEFORE any code runs, fail-secure (terminate) on assign failure, no UI limits on the job.
-**Plans**: 5 plans
+**Plans**: 7 plans
 - [x] 71-01-PLAN.md — windows_interpreters profile field + aider/langchain-python engine profiles (ENG-03)
 - [x] 71-02-PLAN.md — SC5 named foreign-job (GLE-5) diagnostic + fail-secure assign negative test (P6)
 - [x] 71-03-PLAN.md — library fail-secure primitives: interpreter coverage gate + path_has_write_owner helper (ENG-02)
@@ -125,7 +125,7 @@ Plans:
   3. GitHub Copilot CLI ships as a second non-Claude engine profile (a second `node.exe` engine), confined through the same engine-neutral launch path proven in Phase 71.
   4. The `nono-ts` (Node) binding reaches parity with `nono-py`: both `confinedRun` (spawn-confined) and `confine` (self-confine) exist, with the internal `nono` pin bumped `0.33.0` → `0.62.x` (napi 2 kept — no napi 3 migration).
   5. The abstraction is demonstrably proven across ≥2 engines (Aider + Copilot CLI) and ≥2 bindings (`nono-py` + `nono-ts`) — closing the "engine is a variable" claim in code.
-**Plans**: 5 plans
+**Plans**: 7 plans
 Plans:
 **Wave 1**
 - [x] 75-01-PLAN.md — SUPP-02: per-agent WFP filter add at launch / remove at reap + D-05 fail-secure gate (SUPP-02)
@@ -137,6 +137,10 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 75-05-PLAN.md — Live Win11 UAT: SC1-SC5 gates + A1/A2/A4 assumption confirmations (SUPP-01, SUPP-02, SUPP-03)
+
+**Wave 4 (gap-closure — runs after Wave 3 UAT findings)**
+- [ ] 75-06-PLAN.md — GAP-75-A: daemon_start type-50 user-own-template detection + raw-spawn fallback (SUPP-01, SUPP-02, SUPP-03)
+- [ ] 75-07-PLAN.md — GAP-75-B: build real CapabilitySet from profile in handle_launch; apply package-SID DACL grants before ResumeThread; store guards in AgentTenant for revocation on reap (SUPP-01, SUPP-02, SUPP-03)
 
 <details>
 <summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>
