@@ -119,11 +119,12 @@ pub(crate) struct PreparedSandbox {
 
 fn finalize_prepared_sandbox(
     prepared: PreparedSandbox,
+    blocked_grants: &[(PathBuf, Option<String>)],
     args: &SandboxArgs,
     silent: bool,
 ) -> Result<PreparedSandbox> {
     output::print_skipped_requested_paths(&collect_missing_cli_requested_paths(args), silent);
-    output::print_capabilities(&prepared.caps, args.verbose, silent);
+    output::print_capabilities(&prepared.caps, blocked_grants, args.verbose, silent);
 
     if let Some(ref profile_name) = args.profile {
         crate::pack_update_hint::show_pack_update_hints(profile_name, silent);
@@ -359,6 +360,7 @@ pub(crate) fn prepare_sandbox_with_context(
                 // hooks configured.
                 session_hooks: profile::SessionHooks::default(),
             },
+            &[],
             args,
             silent,
         );
@@ -456,6 +458,9 @@ pub(crate) fn prepare_sandbox_with_context(
     // re-run validate_deny_overlaps after CWD/pack grants are added below,
     // because Landlock cannot enforce a deny that lives under a later allow.
     let prepared_deny_paths = prepared.deny_paths;
+    // User grants silently blocked by deny groups (macOS); folded into the
+    // capability summary instead of emitting one warning per path.
+    let blocked_grants = prepared.blocked_grants;
 
     // PROF-01 (Phase 22): apply raw Seatbelt rules from the profile (macOS only).
     // On Linux/Windows the field deserializes but is intentionally ignored —
@@ -651,6 +656,7 @@ pub(crate) fn prepare_sandbox_with_context(
             // PreparedSandbox. Follows the allowed_env_vars pattern above.
             session_hooks: profile_session_hooks,
         },
+        &blocked_grants,
         args,
         silent,
     )
