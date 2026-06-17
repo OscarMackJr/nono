@@ -2,15 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: active
-last_updated: "2026-06-17"
-last_activity: 2026-06-17
+status: planning
+last_updated: "2026-06-17T02:48:12.783Z"
+last_activity: 2026-06-17 — Milestone v2.13 roadmap created (6 phases, 10/10 requirements mapped)
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 0
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -42,6 +41,7 @@ Last activity: 2026-06-17 — Milestone v2.13 roadmap created (6 phases, 10/10 r
 | 81 | Milestone Close Aggregator — collect all verdicts into one unattended close signal | DARK-02 | 4 | ⬜ Not started | Win11 (after all prior gates run) | `verify-dark.ps1` (no flags) |
 
 **Dependencies:**
+
 - **76 FIRST** (harness foundation — Phases 77, 79, 80 depend on it for their scripted gates).
 - **77** depends on Phase 76. Copilot end-to-end uses the harness for its gate script.
 - **78** is independent of 77/79/80 — depends only on Phase 74 daemon (already shipped). Can run in parallel with 77/79/80.
@@ -102,6 +102,7 @@ Last activity: 2026-06-17 — Milestone v2.13 roadmap created (6 phases, 10/10 r
 ### v2.12 carry-forwards (resolved in v2.13)
 
 All four are now tracked as v2.13 phases:
+
 - Copilot CLI end-to-end → Phase 77 (CPLT-01/02/03)
 - A1 empirical WFP isolation → Phase 79 (WFP-01)
 - Cross-process authoritative classify → Phase 78 (CLAS-01/02)
@@ -120,7 +121,7 @@ Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65
 
 ## Session Continuity
 
-**Last session:** 2026-06-17
+**Last session:** 2026-06-17T02:48:12.772Z
 
 **v2.13 roadmap created (2026-06-17):** 6 phases (76-81), 10/10 requirements mapped. ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order: 76 (foundation) → 77/78/79/80 (78 is independent of harness; 77/79/80 depend on 76) → 81 (aggregator, last). Dark Factory mandate: every host-gated item has an unattended scripted gate as its verification mechanism.
 
