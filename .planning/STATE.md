@@ -21,10 +21,16 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 77 COMPLETE — next: Phase 78 (Cross-Process Classification)
+**Current Focus:** Phase 78 (Cross-Process Classification) — PLANNED, ready to execute
 
 ## Current Position
 
+Phase: 78 (cross-process-classification) — PLANNED (2 plans, plan-checker PASS). NEXT: `/gsd:execute-phase 78`
+- 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`.
+- 78-02 (wave 2, autonomous:false — blocking host checkpoint): `nono classify` daemon-first routing + structural fallback (`windows_control_pipe_request`→pub(crate)); non-optional SC1/SC2 integration test (real confined agent, gated `NONO_DAEMON_INTEGRATION_TESTS=1`) + live-daemon host-verify checkpoint.
+- Design (CONTEXT D1-D6): reuse Medium-IL control pipe (SC3 free), authoritative via shared registry, verdict-only response (SC4), daemon-first+fallback (operator decision), unattended gate = cargo test (NOT a verify-dark.ps1 gate — ROADMAP/STATE exemption). Daemon code map: `agent_daemon/control_loop.rs` (ControlRequest 309, dispatch 417, `mod windows_impl` cfg(windows) @54), `mod.rs` DaemonState.agent_registry @306, `nono/src/agent.rs` AgentRegistry::classify @143.
+
+---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
 Plan: 77-01 ✅ 77-02 ✅ 77-03 ✅ 77-04 ✅ (4/4); gsd-verifier PASS 6/6 must-haves
 Status: CPLT-01/02/03 delivered + verified. CPLT-01 workspace-ancestor RA gap (found in 77-03 host proof) CLOSED in 77-04 — verified live by failure-mode advance (the `lstat 'C:\Users\OMack'` EPERM is gone; confined copilot runs past module resolution). CPLT-03 host-PASS recorded as a clearly-reasoned SKIP_HOST_UNAVAILABLE (D-07): GitHub org policy disables Copilot CLI on the test account — operator-accepted disposition.
