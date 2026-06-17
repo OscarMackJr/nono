@@ -34,7 +34,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Self-Verifying Harness (Dark Factory)
 
-- [ ] **DARK-01**: Each host-gated verification (Copilot end-to-end, WFP isolation, clean-host install) ships as a single-invocation unattended script emitting a machine-readable pass/fail verdict — replacing interactive human UAT.
+- [x] **DARK-01**: Each host-gated verification (Copilot end-to-end, WFP isolation, clean-host install) ships as a single-invocation unattended script emitting a machine-readable pass/fail verdict — replacing interactive human UAT.
 - [ ] **DARK-02**: A milestone-close aggregator collects the per-item verdicts so v2.13 completion is evaluable from harness output alone (no human interpretation step).
 
 ## v2 Requirements
@@ -75,7 +75,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WFP-01 | Phase 79 | Pending |
 | TSRG-01 | Phase 79 | Pending |
 | INST-01 | Phase 80 | Pending |
-| DARK-01 | Phase 76 | Pending |
+| DARK-01 | Phase 76 | Complete |
 | DARK-02 | Phase 81 | Pending |
 
 **Coverage:**
