@@ -3794,8 +3794,13 @@ mod tests {
         caps.add_fs(FsCapability::new_dir(dir.path(), AccessMode::ReadWrite).expect("dir cap"));
         let policy = compile_filesystem_policy(&caps);
 
-        let err = validate_launch_paths(&policy, &program, dir.path(), &[interpreter.clone()])
-            .expect_err("uncovered interpreter must be refused");
+        let err = validate_launch_paths(
+            &policy,
+            &program,
+            dir.path(),
+            std::slice::from_ref(&interpreter),
+        )
+        .expect_err("uncovered interpreter must be refused");
 
         let msg = err.to_string();
         // D-07: message must name the interpreter path

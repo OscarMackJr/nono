@@ -409,7 +409,7 @@ fn query_object_type_name(handle: HANDLE) -> Option<String> {
         return None;
     }
     let length = u16::from_le_bytes([buf[0], buf[1]]) as usize;
-    if length == 0 || length % 2 != 0 {
+    if length == 0 || (length & 1) != 0 {
         return None;
     }
     let char_count = length / 2;
@@ -1243,9 +1243,9 @@ fn daemon_concurrent_agents() {
 
     let mut thread_handles = Vec::new();
 
-    for i in 0..AGENT_COUNT {
+    for (i, dir) in dirs.iter().enumerate() {
         let results = Arc::clone(&results);
-        let rendezvous_dir = dirs[i].path().to_path_buf();
+        let rendezvous_dir = dir.path().to_path_buf();
 
         let handle = std::thread::spawn(move || {
             let name = unique_profile_name("concurrent", i);

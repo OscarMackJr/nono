@@ -3560,7 +3560,9 @@ mod tests {
             result.is_err(),
             "authenticate_pipe_client must return Err for an invalid pipe handle"
         );
-        let err_msg = result.unwrap_err().to_string();
+        let err_msg = result
+            .expect_err("authenticate_pipe_client must reject an invalid pipe handle")
+            .to_string();
         // The function's null/invalid-handle guard fires BEFORE
         // ImpersonateNamedPipeClient, so the error names the guard condition.
         assert!(

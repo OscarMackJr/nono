@@ -1159,7 +1159,7 @@ mod tests {
 
     #[test]
     fn prepare_profile_save_from_patch_preserves_registry_ref_as_extends() {
-        let _env_lock = ENV_LOCK.lock().expect("env lock");
+        let _env_lock = lock_env();
         let temp_home = TempDir::new().expect("temp home");
         let temp_config = TempDir::new().expect("temp config");
         let _env = EnvVarGuard::set_all(&[
@@ -1195,7 +1195,7 @@ mod tests {
 
     #[test]
     fn prepare_profile_save_from_patch_preserves_versioned_registry_ref() {
-        let _env_lock = ENV_LOCK.lock().expect("env lock");
+        let _env_lock = lock_env();
         let temp_home = TempDir::new().expect("temp home");
         let temp_config = TempDir::new().expect("temp config");
         let _env = EnvVarGuard::set_all(&[
@@ -1225,7 +1225,7 @@ mod tests {
 
     #[test]
     fn prepare_profile_save_from_patch_still_avoids_self_reference() {
-        let _env_lock = ENV_LOCK.lock().expect("env lock");
+        let _env_lock = lock_env();
         let temp_home = TempDir::new().expect("temp home");
         let temp_config = TempDir::new().expect("temp config");
         let _env = EnvVarGuard::set_all(&[
