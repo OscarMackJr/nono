@@ -1485,6 +1485,31 @@ const PACKAGE_SID_READ_MASK: u32 = {
     FILE_GENERIC_READ
 };
 
+/// Read-attributes-only access-rights mask granted to the per-run package SID
+/// by [`grant_sid_read_attributes_on_path`] on each ancestor directory of the
+/// confined target's resolution chain.
+///
+/// `FILE_READ_ATTRIBUTES` (0x80) is the MINIMAL grant for Node-ESM
+/// `realpathSync`/`lstat` ancestor walks under AppContainer (CPLT-01): it
+/// allows reading metadata (name, size, timestamps) on a directory object
+/// WITHOUT granting read-data (`FILE_READ_DATA` = 0x01), extended-attributes
+/// (`FILE_READ_EA` = 0x08), or any synchronization or control rights.
+///
+/// The mask is deliberately NARROWER than [`PACKAGE_SID_READ_MASK`]
+/// (`FILE_GENERIC_READ` = 0x00120089) and [`PACKAGE_SID_TRAVERSE_MASK`]
+/// (0x21). The Node-ESM `lstat` call requires only `FILE_READ_ATTRIBUTES` on
+/// each path-chain ancestor — not the ability to read or list directory
+/// contents. Per D-09 of Phase 77, the admin grant on system ancestors (`C:\`,
+/// `C:\Users`) uses the well-known `ALL APPLICATION PACKAGES` SID
+/// (`S-1-15-2-1`), while the runtime grant on user-owned ancestors uses the
+/// per-run package SID.
+///
+/// `FILE_READ_ATTRIBUTES` = 0x00000080.
+const PACKAGE_SID_READ_ATTRS_MASK: u32 = {
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+    FILE_READ_ATTRIBUTES
+};
+
 /// Traverse-only access-rights mask granted to the per-run package SID by
 /// [`grant_sid_traverse_on_path`] on a cwd ANCESTOR directory.
 ///
@@ -1861,6 +1886,63 @@ pub fn grant_sid_read_on_path(path: &Path, sid: &str) -> Result<()> {
     // NO_INHERITANCE: a single-file rendezvous read grant must NOT propagate
     // to any children (the file has no children; defensive belt-and-suspenders).
     edit_dacl_for_sid(path, sid, PACKAGE_SID_READ_MASK, SET_ACCESS, NO_INHERITANCE)
+}
+
+/// Adds an allow-ACE to the DACL of `path` granting the SDDL SID string `sid`
+/// `FILE_READ_ATTRIBUTES`-only rights ([`PACKAGE_SID_READ_ATTRS_MASK`] = 0x80),
+/// PRESERVING the existing DACL (including inherited ACEs).
+///
+/// This is the **minimal** ancestor grant for Node-ESM `realpathSync`/`lstat`
+/// ancestor walks under AppContainer confinement (CPLT-01, Phase 77). The
+/// Node.js runtime calls `lstat` on every path-chain ancestor to resolve
+/// `realpathSync` during module loading; each ancestor's metadata query
+/// requires `FILE_READ_ATTRIBUTES` on the directory object. AppContainer
+/// children run as the per-run package SID (`S-1-15-2-*`), a DISTINCT
+/// principal that has NO inherent access to the user-profile directory chain.
+///
+/// # Mask: FILE_READ_ATTRIBUTES = 0x80 (D-09)
+///
+/// The mask is exactly `FILE_READ_ATTRIBUTES` (0x80) — attribute-read only.
+/// This is NARROWER than [`PACKAGE_SID_READ_MASK`] (`FILE_GENERIC_READ` =
+/// 0x00120089) and intentionally does NOT include:
+/// - `FILE_READ_DATA` (0x01) — cannot read or enumerate directory contents.
+/// - `FILE_READ_EA` (0x08) — cannot read extended attributes.
+/// - `READ_CONTROL` (0x20000) — cannot read the security descriptor.
+/// - `FILE_TRAVERSE` (0x20) — traverse is a separate grant via
+///   [`grant_sid_traverse_on_path`].
+///
+/// Always pass `NO_INHERITANCE` — this grant is scoped to the specific
+/// directory object and must NOT propagate to descendants.
+///
+/// # Caller responsibility
+///
+/// The caller is expected to provide an [`AppliedAncestorReadAttributesGuard`]
+/// (in `crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs`) that walks
+/// the user-owned ancestors of the confined target's resolution chain, grants
+/// this RA on each, and reverts every grant on Drop. System ancestors (`C:\`,
+/// `C:\Users`) are NOT grantable at runtime (no WRITE_DAC without elevation)
+/// — those are covered by the one-time-admin `nono setup --grant-ancestors`
+/// command (CPLT-02) which targets the well-known `ALL APPLICATION PACKAGES`
+/// SID (`S-1-15-2-1`).
+///
+/// There is NO separate revoke function: the existing [`revoke_sid_on_path`]
+/// is mask-agnostic trustee-match removal and handles revocation correctly.
+///
+/// # Errors
+///
+/// Returns [`NonoError::DaclApplyFailed`] if the SID string cannot be parsed,
+/// the current DACL cannot be read, the ACE cannot be merged, or the merged
+/// DACL cannot be written back (fail-closed at every step). The `hint` field
+/// on the error names the likely Win32 cause (e.g., `WRITE_DAC` required).
+#[cfg(target_os = "windows")]
+pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::SET_ACCESS;
+    use windows_sys::Win32::Security::NO_INHERITANCE;
+
+    // NO_INHERITANCE: the RA grant is scoped to this specific directory
+    // object and must NOT propagate to descendants. An ancestor RA grant
+    // must never silently widen the access surface on child objects.
+    edit_dacl_for_sid(path, sid, PACKAGE_SID_READ_ATTRS_MASK, SET_ACCESS, NO_INHERITANCE)
 }
 
 /// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting
@@ -5184,6 +5266,82 @@ mod dacl_grant_tests {
 
         let err =
             grant_sid_read_on_path(&file, "not-a-sid").expect_err("malformed SID must fail closed");
+        assert!(
+            matches!(err, NonoError::DaclApplyFailed { .. }),
+            "malformed SID must yield DaclApplyFailed; got {err:?}"
+        );
+    }
+
+    // ── grant_sid_read_attributes_on_path tests (CPLT-01) ──────────────────
+
+    /// `grant_sid_read_attributes_on_path` adds the package-SID ACE to a
+    /// tempdir's DACL and `revoke_sid_on_path` removes it (round-trip).
+    /// The mask is FILE_READ_ATTRIBUTES (0x80) — attribute-read only (D-09).
+    #[test]
+    fn grant_read_attributes_then_revoke_sid_round_trips_on_tempdir() {
+        use super::grant_sid_read_attributes_on_path;
+
+        // A package-SID-shaped (S-1-15-2-*) test SID — distinct from
+        // TEST_PACKAGE_SID above to prevent any cross-test state leak.
+        const TEST_RA_SID: &str = "S-1-15-2-100-200-300-400-500-600-700";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "test precondition: package SID must not pre-exist in the DACL"
+        );
+
+        grant_sid_read_attributes_on_path(path, TEST_RA_SID).expect("grant read-attributes");
+        assert!(
+            dacl_contains_sid(path, TEST_RA_SID),
+            "after grant, the DACL must contain the package SID's RA allow-ACE"
+        );
+
+        revoke_sid_on_path(path, TEST_RA_SID).expect("revoke");
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "after revoke, the package SID's ACE must be absent from the DACL"
+        );
+    }
+
+    /// `revoke_sid_on_path` after `grant_sid_read_attributes_on_path` leaves the
+    /// original DACL intact (no pre-existing ACEs were removed).
+    #[test]
+    fn grant_read_attributes_revoke_preserves_original_dacl() {
+        use super::grant_sid_read_attributes_on_path;
+
+        const TEST_RA_SID: &str = "S-1-15-2-111-222-333-444-555-666-777";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        // Capture the pre-grant state: the test SID is absent.
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "precondition: SID absent before grant"
+        );
+
+        grant_sid_read_attributes_on_path(path, TEST_RA_SID).expect("grant");
+        revoke_sid_on_path(path, TEST_RA_SID).expect("revoke");
+
+        // After round-trip: SID is gone again.
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "round-trip must leave the SID absent from the DACL"
+        );
+    }
+
+    /// A malformed SID string fails the RA grant closed with `DaclApplyFailed`
+    /// (never a silent no-op), mirroring `grant_read_invalid_sid_fails_closed`.
+    #[test]
+    fn grant_read_attributes_invalid_sid_fails_closed() {
+        use super::grant_sid_read_attributes_on_path;
+
+        let dir = tempdir().expect("tempdir");
+        let err = grant_sid_read_attributes_on_path(dir.path(), "not-a-sid")
+            .expect_err("malformed SID must fail closed");
         assert!(
             matches!(err, NonoError::DaclApplyFailed { .. }),
             "malformed SID must yield DaclApplyFailed; got {err:?}"

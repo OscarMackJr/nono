@@ -904,7 +904,7 @@
       "meta": {
         "name": "copilot-cli",
         "version": "1.0.0",
-        "description": "GitHub Copilot CLI (copilot.exe native PE engine — v1.0.62+). Native PE: no windows_interpreters needed. If SC3 UAT shows copilot.exe spawning node.exe as a grandchild, add windows_interpreters: [node.exe] at that point.",
+        "description": "Standalone @github/copilot Node CLI (invoked as `copilot`, NOT `gh copilot`). Node-ESM entry point — requires node.exe interpreter coverage (D-01/D-02, Phase 77). The v2.12 Phase 75 native-PE assumption (D-06) is superseded: the standalone copilot CLI is a Node process, not a native PE, and needs FILE_READ_ATTRIBUTES ancestor grants for realpathSync/lstat to succeed under AppContainer (CPLT-01).",
         "author": "nono-project"
       },
       "security": {
@@ -914,7 +914,8 @@
       "filesystem": {},
       "network": { "block": false },
       "workdir": { "access": "readwrite" },
-      "windows_low_il_broker": true
+      "windows_low_il_broker": true,
+      "windows_interpreters": ["node.exe"]
     },
     "langchain-python": {
       "extends": "default",

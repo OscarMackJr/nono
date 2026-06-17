@@ -42,8 +42,8 @@
 use std::path::{Path, PathBuf};
 
 use nono::{
-    grant_sid_traverse_on_path, grant_sid_write_on_path, path_is_owned_by_current_user,
-    revoke_sid_on_path, AccessMode, Result, WindowsFilesystemPolicy,
+    grant_sid_read_attributes_on_path, grant_sid_traverse_on_path, grant_sid_write_on_path,
+    path_is_owned_by_current_user, revoke_sid_on_path, AccessMode, Result, WindowsFilesystemPolicy,
 };
 
 /// Per-rule state recorded at snapshot time.
@@ -301,6 +301,149 @@ impl AppliedAncestorTraverseGuard {
 }
 
 impl Drop for AppliedAncestorTraverseGuard {
+    fn drop(&mut self) {
+        self.revert_all();
+    }
+}
+
+/// RAII guard that grants the per-run PACKAGE SID `FILE_READ_ATTRIBUTES` (RA)
+/// on the USER-OWNED ancestor directories of the **confined target's resolution
+/// chain**, and revokes them on Drop.
+///
+/// # Why this exists (Plan 77-01, CPLT-01)
+///
+/// On the AppContainer arm the confined child runs as the per-run package SID
+/// (`S-1-15-2-*`) — a DIFFERENT principal than the user. The Node-ESM runtime
+/// (`realpathSync`/`lstat`) walks EVERY ancestor of a module path to resolve
+/// canonical paths at startup. Each ancestor directory requires at least
+/// `FILE_READ_ATTRIBUTES` on the queried directory object. Because the package
+/// SID has no inherent access to the user-profile directory chain, every
+/// ancestor `lstat` fails with `STATUS_ACCESS_DENIED`.
+///
+/// This guard walks the ancestors of the confined **target binary** (the walk
+/// target fed by `config.resolved_program` — NOT the cwd) from the immediate
+/// parent upward and grants the package SID `FILE_READ_ATTRIBUTES`-only on
+/// each USER-OWNED ancestor. It STOPS at the first non-owned ancestor (`C:\Users`,
+/// `C:\` — owned by SYSTEM/TrustedInstaller, no `WRITE_DAC`). Reaching the
+/// resolution chain through those system ancestors requires the one-time-admin
+/// `nono setup --grant-ancestors` command (CPLT-02), which grants the
+/// well-known `ALL APPLICATION PACKAGES` SID (`S-1-15-2-1`) on `C:\` and
+/// `C:\Users` non-destructively.
+///
+/// # Relationship to AppliedAncestorTraverseGuard
+///
+/// - **`AppliedAncestorTraverseGuard`** walks the **cwd** ancestors and grants
+///   `FILE_TRAVERSE | FILE_LIST_DIRECTORY` (0x21) so the AppContainer child can
+///   SET its current directory to a profile-deep cwd.
+/// - **`AppliedAncestorReadAttributesGuard`** (this guard) walks the **target
+///   binary** ancestors and grants `FILE_READ_ATTRIBUTES` (0x80) so Node-ESM
+///   `realpathSync`/`lstat` succeeds on the module resolution chain.
+///
+/// The two guards are kept separate because:
+/// - The walk targets differ (cwd vs target binary path).
+/// - The required right differs (TRAVERSE vs READ_ATTRIBUTES).
+/// - The error surfaces differ — merge would require complex per-ancestor
+///   multi-right tracking with no robustness benefit.
+///
+/// # Best-effort + fail-closed
+///
+/// - Non-owned ancestor (`Ok(false)`): STOP the walk (the D-04 split — proves
+///   the runtime guard structurally cannot touch `C:\Users`/`C:\`). Not an error.
+/// - Ownership-check error (`Err`): fail-closed — revert what was applied and
+///   propagate (ownership errors are NEVER swallowed).
+/// - Grant error on an owned ancestor: fail-closed — revert + propagate.
+///
+/// Always uses `NO_INHERITANCE` (the RA grant is scoped to the specific
+/// directory object; it must NOT propagate to descendants).
+#[derive(Debug)]
+pub(crate) struct AppliedAncestorReadAttributesGuard {
+    /// The owned ancestor directories we granted FILE_READ_ATTRIBUTES on
+    /// (revoke on Drop).
+    applied: Vec<PathBuf>,
+    /// The package SID stored so Drop can `revoke_sid_on_path` each entry.
+    package_sid: String,
+}
+
+impl AppliedAncestorReadAttributesGuard {
+    /// Grant the package SID `FILE_READ_ATTRIBUTES` on every USER-OWNED ancestor
+    /// of `walk_target` (the confined binary's resolution chain), from the
+    /// immediate parent upward, stopping at the first non-owned ancestor.
+    ///
+    /// The walk target must be the resolved path to the confined target binary
+    /// (`config.resolved_program`), NOT the cwd. Walking the binary's path is
+    /// the load-bearing fix for Node-ESM `realpathSync`/`lstat` ancestor denial
+    /// (CPLT-01).
+    ///
+    /// Fail-closed: returns `Err` (after reverting already-applied grants) on any
+    /// ownership-check error or grant failure on an owned ancestor.
+    pub(crate) fn snapshot_and_apply(walk_target: &Path, package_sid: &str) -> Result<Self> {
+        let mut guard = Self {
+            applied: Vec::new(),
+            package_sid: package_sid.to_string(),
+        };
+
+        // Walk ancestors from the immediate parent upward. `Path::ancestors`
+        // yields `walk_target` first (the target binary itself), so skip the
+        // leaf (index 0). The RA grant is on ancestor DIRECTORIES, not on the
+        // binary file itself.
+        for ancestor in walk_target.ancestors().skip(1) {
+            match path_is_owned_by_current_user(ancestor) {
+                Ok(true) => {
+                    if let Err(err) = grant_sid_read_attributes_on_path(ancestor, package_sid) {
+                        tracing::warn!(
+                            ancestor = %ancestor.display(),
+                            "ancestor-RA guard: grant failed; reverting entries already applied"
+                        );
+                        guard.revert_all();
+                        return Err(err);
+                    }
+                    guard.applied.push(ancestor.to_path_buf());
+                }
+                Ok(false) => {
+                    // First non-owned ancestor (e.g. C:\Users, C:\). Cannot edit
+                    // its DACL (no WRITE_DAC); every ancestor ABOVE it is also
+                    // non-owned. STOP — the one-time-admin CPLT-02 grant covers
+                    // these system ancestors. This is the D-04 structural split:
+                    // the runtime guard provably never touches C:\Users or C:\.
+                    tracing::debug!(
+                        ancestor = %ancestor.display(),
+                        "ancestor-RA guard: ancestor not owned by current user; stopping the \
+                         walk (CPLT-02 admin grant covers system ancestors from here up)"
+                    );
+                    break;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        ancestor = %ancestor.display(),
+                        error = %err,
+                        "ancestor-RA guard: ownership check failed; reverting entries already applied"
+                    );
+                    guard.revert_all();
+                    return Err(err);
+                }
+            }
+        }
+
+        Ok(guard)
+    }
+
+    /// Best-effort revert of every applied grant, LIFO. Drop-safe: errors are
+    /// logged, never panic. Mirrors `AppliedAncestorTraverseGuard::revert_all`.
+    fn revert_all(&mut self) {
+        while let Some(path) = self.applied.pop() {
+            if let Err(err) = revoke_sid_on_path(&path, &self.package_sid) {
+                tracing::warn!(
+                    ancestor = %path.display(),
+                    error = %err,
+                    "ancestor-RA guard: revoke failed; the package SID may remain on this \
+                     ancestor's DACL"
+                );
+            }
+        }
+    }
+}
+
+impl Drop for AppliedAncestorReadAttributesGuard {
     fn drop(&mut self) {
         self.revert_all();
     }
@@ -581,6 +724,79 @@ mod tests {
         assert!(
             !guard.applied.iter().any(|p| p.as_path() == root),
             "the drive root ({}) must never be granted (non-owned)",
+            root.display()
+        );
+        drop(guard);
+    }
+
+    // ── AppliedAncestorReadAttributesGuard tests (CPLT-01) ──────────────────
+    //
+    // A distinct SID to avoid cross-test DACL state leak with the traverse
+    // guard tests above.
+    const TEST_RA_PACKAGE_SID: &str = "S-1-15-2-200-300-400-500-600-700-800";
+
+    /// CPLT-01: the ancestor-RA guard grants FILE_READ_ATTRIBUTES on the
+    /// USER-OWNED ancestors of the walk target (the confined binary's resolution
+    /// chain), and reverts every grant on Drop. Mirrors
+    /// `ancestor_traverse_grants_owned_ancestors_and_reverts_on_drop`.
+    #[test]
+    fn ancestor_read_attributes_grants_owned_ancestors_and_reverts_on_drop() {
+        let dir = tempdir().expect("tempdir");
+        // A nested target so there is at least one owned ancestor: <temp>/<rand>/leaf
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+        let parent = dir.path().to_path_buf();
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist on the parent DACL"
+        );
+
+        {
+            let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
+                &leaf,
+                TEST_RA_PACKAGE_SID,
+            )
+            .expect("apply ancestor read-attributes");
+            // The tempdir parent is user-owned, so it must have received an RA grant.
+            assert!(
+                guard.applied.iter().any(|p| p == &parent),
+                "the user-owned tempdir parent must be granted RA; applied = {:?}",
+                guard.applied
+            );
+            assert!(
+                dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+                "during the guard lifetime the package SID's RA ACE must be on the parent DACL"
+            );
+        } // guard drops → revert all
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "after guard drop, the package SID's ancestor RA ACE must be revoked"
+        );
+    }
+
+    /// CPLT-01 / D-04 structural split: the walk STOPS at the first non-owned
+    /// ancestor (e.g. `C:\Users`, `C:\`). The drive root must never appear in
+    /// `applied`, proving the runtime guard cannot grant system ancestors.
+    #[test]
+    fn ancestor_read_attributes_stops_at_non_owned_ancestor() {
+        let dir = tempdir().expect("tempdir");
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+
+        let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
+            &leaf,
+            TEST_RA_PACKAGE_SID,
+        )
+        .expect("apply ancestor read-attributes");
+
+        // The drive root (C:\ or equivalent) is owned by SYSTEM/TrustedInstaller,
+        // never the current user — it must NOT appear in the applied set (D-04).
+        let root = leaf.ancestors().last().expect("a root ancestor exists");
+        assert!(
+            !guard.applied.iter().any(|p| p.as_path() == root),
+            "the drive root ({}) must never be granted (non-owned); D-04 structural split",
             root.display()
         );
         drop(guard);
