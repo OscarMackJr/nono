@@ -21,32 +21,29 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 77 — copilot-cli-end-to-end-confinement
+**Current Focus:** Phase 77 COMPLETE — next: Phase 78 (Cross-Process Classification)
 
 ## Current Position
 
-Phase: 77 (copilot-cli-end-to-end-confinement) — GAP-CLOSURE PLAN READY
-Plan: 77-01 ✅ + 77-02 ✅ complete; 77-03 deliverables ✅ (gate + doc) but host-proof FAIL; 77-04 PLANNED (gap closure, plan-checker PASS)
-Status: 77-04 ready to execute — extends CPLT-01 RA guard to the workspace chain; then re-run copilot-e2e gate for the real PASS
-Last activity: 2026-06-17 -- Phase 77 gap-closure plan 77-04 created + verified (plan-checker PASS)
-NEXT: /gsd:execute-phase 77 --wave 4  (or /gsd:execute-phase 77 — only 77-04 is incomplete)
+Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
+Plan: 77-01 ✅ 77-02 ✅ 77-03 ✅ 77-04 ✅ (4/4); gsd-verifier PASS 6/6 must-haves
+Status: CPLT-01/02/03 delivered + verified. CPLT-01 workspace-ancestor RA gap (found in 77-03 host proof) CLOSED in 77-04 — verified live by failure-mode advance (the `lstat 'C:\Users\OMack'` EPERM is gone; confined copilot runs past module resolution). CPLT-03 host-PASS recorded as a clearly-reasoned SKIP_HOST_UNAVAILABLE (D-07): GitHub org policy disables Copilot CLI on the test account — operator-accepted disposition.
+Last activity: 2026-06-17 -- Phase 77 complete; 77-04 gap closure verified, gsd-verifier passed
+NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
-**Gap-closure target (operator-selected route):** 77-01's `AppliedAncestorReadAttributesGuard`
-(`crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` + wired in `mod.rs`) walks only the
-target binary's ancestor chain, not the `--workspace` chain. The WinGet copilot self-extracts its
-Node package under the workspace (`…\.nono-runtime\…\AC\copilot\pkg\…`), so `realpathSync` `lstat`
-denies on `C:\Users\<user>` (the workspace's user-owned parent, which gets *traverse* 0x21 but not
-*read-attributes* 0x80). FIX: extend the runtime guard to also grant RA on the workspace's
-user-owned ancestor chain; rebuild; re-run `verify-dark.ps1 --gate copilot-e2e` for a real PASS.
-CPLT-02 admin grant (C:\, C:\Users) is verified working + idempotent. The gate's critical
-false-PASS bug was found + fixed live (commit `78f1101f`). See `77-03-SUMMARY.md`.
+**Phase 77 close notes (durable):**
+- CPLT-01 RA guard now walks BOTH the binary chain AND the `--workspace` chain (`snapshot_and_apply_targets`, dedup, per-chain D-04 stop) — `dacl_guard.rs` + wired in `mod.rs`.
+- CPLT-02 `nono setup --grant-ancestors` (ALL APPLICATION PACKAGES `S-1-15-2-1`, RA-only on `C:\`+`C:\Users`) verified working + idempotent on live Win11; the grant is durable (persists on the host).
+- The gate `scripts/gates/copilot-e2e.ps1` was hardened live: killed a critical false-PASS (PASSed on nono "Profile not found"), added WinGet exe + node-interpreter coverage resolution, `--workspace` + R-B3 `/setowner` ownership, `--allow-all-tools` (Copilot's `-p` alone hangs), and org-policy → SKIP detection.
+- **Literal green `copilot-e2e` PASS requires a GitHub account/host where Copilot CLI is org-enabled** (carry-forward — not a nono defect; the gate emits PASS there, SKIP on org-restricted).
+- On Win11 dev host the gate must run with the fresh release build on PATH (`target\release` prepended) — the installed `C:\Program Files\nono\nono.exe` was a stale v0.57.5 without the copilot-cli profile.
 
 ### v2.13 Phase Summary (active)
 
 | Phase | Goal | Requirements | SC | Status | Host gate | Unattended gate |
 |-------|------|--------------|----|--------|-----------|-----------------|
 | 76 | Self-Verifying Harness Foundation — build the scripted-gate framework; all host-gated phases depend on it | DARK-01 | 5 | ⬜ Not started | Real Win11 host | `verify-dark.ps1 --gate harness-self-check` |
-| 77 | Copilot CLI End-to-End Confinement — fix Node-ESM ancestor RA + one-time-admin setup + scripted proof | CPLT-01, CPLT-02, CPLT-03 | 4 | ⬜ Not started | Win11 + Copilot CLI + admin | `verify-dark.ps1 --gate copilot-e2e` |
+| 77 | Copilot CLI End-to-End Confinement — fix Node-ESM ancestor RA + one-time-admin setup + scripted proof | CPLT-01, CPLT-02, CPLT-03 | 4 | ✅ Complete (verified; CPLT-03 host-PASS = reasoned SKIP, org-policy) | Win11 + Copilot CLI + admin | `verify-dark.ps1 --gate copilot-e2e` |
 | 78 | Cross-Process Classification — daemon Classify verb + caller-gating + tenant safety | CLAS-01, CLAS-02 | 4 | ⬜ Not started | Win11 + nono-agentd running | `cargo test --bin nono-agentd -- classify` |
 | 79 | WFP Egress Isolation + nono-ts Ergonomics — empirical two-agent WFP test + confinedRun defaults | WFP-01, TSRG-01 | 4 | ⬜ Not started | Win11 + Node/napi | `verify-dark.ps1 --gate wfp-egress-isolation` |
 | 80 | Clean-Host Install UAT — MSI installs clean on fresh Win11 host via scripted gate | INST-01 | 4 | ⬜ Not started | Clean Win11 host (no prior nono) | `verify-dark.ps1 --gate clean-host-install` |

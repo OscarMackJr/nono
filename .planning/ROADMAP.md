@@ -32,7 +32,7 @@ granularity: standard
 ### v2.13 Carry-Forward Closeout (Dark Factory) — Active
 
 - [x] **Phase 76: Self-Verifying Harness Foundation** - Build the shared scripted-gate framework (single-invocation unattended scripts emitting machine-readable pass/fail) that all host-gated phases depend on.
-- [ ] **Phase 77: Copilot CLI End-to-End Confinement** - Fix Node-ESM/AppContainer ancestor `FILE_READ_ATTRIBUTES` + one-time-admin system-ancestor RA grant + scripted end-to-end proof.
+- [x] **Phase 77: Copilot CLI End-to-End Confinement** - Fix Node-ESM/AppContainer ancestor `FILE_READ_ATTRIBUTES` + one-time-admin system-ancestor RA grant + scripted end-to-end proof.
 - [ ] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
 - [ ] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
 - [ ] **Phase 80: Clean-Host Install UAT** - Verify the machine MSI installs and runs on a fresh Win11 host with no manual steps via the unattended clean-host harness.
@@ -115,7 +115,8 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 **Plans**: 3 plans
 - [x] 77-01-PLAN.md — CPLT-01: runtime ancestor-RA grant (grant_sid_read_attributes_on_path + AppliedAncestorReadAttributesGuard) wired onto the AppContainer launch arm + node.exe interpreter coverage in the copilot-cli profile
 - [x] 77-02-PLAN.md — CPLT-02: generic idempotent one-time-admin nono setup --grant-ancestors --profile <p> granting the well-known ALL APPLICATION PACKAGES SID RA on the system ancestors
-- [ ] 77-03-PLAN.md — CPLT-03: scripts/gates/copilot-e2e.ps1 unattended dark-factory gate + permanent-grant docs + host-gated end-to-end proof
+- [x] 77-03-PLAN.md — CPLT-03: scripts/gates/copilot-e2e.ps1 unattended dark-factory gate + permanent-grant docs + host-gated end-to-end proof
+- [x] 77-04-PLAN.md — CPLT-01 gap closure: extend ancestor-RA guard to the --workspace chain (multi-target, dedup) — closes the realpathSync lstat 'C:\Users\<user>' EPERM found in the 77-03 host proof
 **Host gate**: Real Win11 host + GitHub Copilot CLI installed + one-time-admin step runnable.
 **Unattended gate**: `scripts/verify-dark.ps1 --gate copilot-e2e` — replaces the interactive SC3 UAT from v2.12 Phase 75.
 
@@ -176,7 +177,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
-| 77. Copilot CLI End-to-End Confinement | 2/3 | In Progress|  |
+| 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
 | 78. Cross-Process Classification | 0/? | Not started | - |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
