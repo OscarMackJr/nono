@@ -304,9 +304,9 @@ mod windows_impl {
     }
 
     /// Parsed operator request (from the wire JSON frame).
-    #[derive(serde::Deserialize)]
+    #[derive(serde::Deserialize, Debug)]
     #[serde(tag = "action", rename_all = "lowercase")]
-    enum ControlRequest {
+    pub(crate) enum ControlRequest {
         /// `{"action":"launch","profile":"<name>","cmd":["exe","arg1",...]}`
         Launch { profile: String, cmd: Vec<String> },
         /// `{"action":"list"}`
@@ -321,6 +321,16 @@ mod windows_impl {
         /// After a successful IL-drop, the agent's per-agent WFP filter is also
         /// removed (D-03 WFP-cut) to prevent leaving egress open after IL-drop.
         Demote { tenant_id: String },
+        /// `{"action":"classify","pid":<u32>}` — cross-process authoritative classification.
+        ///
+        /// CLAS-01/CLAS-02: queries the daemon's live `agent_registry` to determine whether
+        /// the given PID is a daemon-launched confined agent. Response is verdict-only:
+        /// "AiAgent" or "NotAnAgent". The matched agent's package SID is NEVER included
+        /// in the response (SC4 — no cross-tenant SID disclosure).
+        ///
+        /// SC3 (Low-IL denied) is free: the existing `CONTROL_PIPE_SDDL` Medium-IL SACL
+        /// (`ML;;NW;;;ME`) bars Low-IL/AppContainer callers at the kernel.
+        Classify { pid: u32 },
     }
 
     /// Handle a single connected operator pipe client.
@@ -420,6 +430,11 @@ mod windows_impl {
                 cmd,
             } => handle_launch(&state, &profile_name, cmd).await,
             ControlRequest::List => handle_list(&state),
+            // CLAS-01/CLAS-02: authoritative cross-process classification.
+            // Response is verdict-only ("AiAgent" / "NotAnAgent") — no SID (SC4).
+            // SC3 (Low-IL denied) is structural: the SDDL bars Low-IL callers at
+            // the kernel before this arm is ever reached.
+            ControlRequest::Classify { pid } => handle_classify(&state, pid),
             // Shutdown: same-user-only graceful stop (dev-layout).
             // The SDDL already enforces that only Medium+ IL (interactive user)
             // can reach this pipe, so this is operator-only (T-74-07-01).
@@ -797,6 +812,83 @@ mod windows_impl {
     #[cfg(test)]
     pub(crate) fn handle_demote_testable(state: &Arc<DaemonState>, tenant_id: &str) -> String {
         handle_demote(state, tenant_id)
+    }
+
+    /// Map an [`nono::AgentClassification`] to the wire verdict string.
+    ///
+    /// # SC4 — No cross-tenant SID disclosure
+    ///
+    /// This is a **pure** function: it takes an already-resolved classification
+    /// and returns ONLY the verdict name. The `AiAgent` arm destructures
+    /// `package_sid` with `_` (discard) — the SID never reaches the return value.
+    ///
+    /// This purity makes the AiAgent/SC4 invariants **deterministically testable**
+    /// in a unit test without a real AppContainer process: tests call this function
+    /// directly, bypassing [`nono::AgentRegistry::classify`]'s OS call.
+    ///
+    /// # Returns
+    ///
+    /// - `"AiAgent"` — the PID was classified as a daemon-launched confined agent.
+    /// - `"NotAnAgent"` — the PID is not in the daemon's agent registry.
+    fn classify_response_string(classification: &nono::AgentClassification) -> String {
+        match classification {
+            // SC4: the `..` wildcard discards ALL struct fields — no SID field
+            // name appears in this arm, and no SID data reaches the return value.
+            nono::AgentClassification::AiAgent { .. } => "AiAgent".to_string(),
+            nono::AgentClassification::NotAnAgent => "NotAnAgent".to_string(),
+        }
+    }
+
+    /// Dispatch a `classify` request.
+    ///
+    /// Acquires the `agent_registry` lock first (D2 lock order: `agent_registry`
+    /// before `tenants`, `mod.rs:262`), calls [`nono::AgentRegistry::classify`],
+    /// then maps the result to a verdict string via [`classify_response_string`].
+    ///
+    /// # SC4 — No cross-tenant SID disclosure
+    ///
+    /// The response is verdict-only: "AiAgent" or "NotAnAgent". The `package_sid`
+    /// field of the `AiAgent` variant is consumed internally and NEVER reaches the
+    /// caller through any code path (enforced by `classify_response_string`).
+    ///
+    /// # SC3 — Low-IL caller denied (structural)
+    ///
+    /// The `CONTROL_PIPE_SDDL` Medium-IL SACL (`ML;;NW;;;ME`) bars Low-IL /
+    /// AppContainer callers at the kernel. This function is never reached by a
+    /// confined agent.
+    fn handle_classify(state: &Arc<DaemonState>, pid: u32) -> String {
+        // Lock order: agent_registry first (D2 / mod.rs:262).
+        let registry = state
+            .agent_registry
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let verdict = registry.classify(pid);
+        // Drop the registry lock before formatting the response.
+        drop(registry);
+        classify_response_string(&verdict)
+    }
+
+    /// Test-accessible wrapper for `handle_classify`.
+    ///
+    /// Exposed for unit tests that verify the classify handler path
+    /// (specifically the registry-miss / NotAnAgent path) without a live daemon.
+    /// The `handle_classify_testable` shim mirrors the existing idiom for
+    /// `handle_list_testable` and `handle_demote_testable`.
+    #[cfg(test)]
+    pub(crate) fn handle_classify_testable(state: &Arc<DaemonState>, pid: u32) -> String {
+        handle_classify(state, pid)
+    }
+
+    /// Test-accessible wrapper for `classify_response_string`.
+    ///
+    /// Exposed for unit tests so the pure SC4 assertion (`classify_response_aiagent_omits_package_sid`)
+    /// can call the formatter directly without going through the full `handle_classify` path
+    /// (which requires an OS call to `read_process_appcontainer_sid`).
+    #[cfg(test)]
+    pub(crate) fn classify_response_string_testable(
+        classification: &nono::AgentClassification,
+    ) -> String {
+        classify_response_string(classification)
     }
 
     /// Apply a post-hoc token integrity-level drop to a running process.
@@ -1222,6 +1314,94 @@ mod tests {
         assert_eq!(
             before, after,
             "handle_list must not mutate the tenant map (SC4)"
+        );
+    }
+
+    // ── Classify verb tests (CLAS-01 / CLAS-02 / SC4) ────────────────────────────
+
+    /// SC4 (load-bearing): `classify_response_string` for `AiAgent` returns
+    /// the verdict "AiAgent" and contains NEITHER the package SID value NOR
+    /// the string "sid" in any capitalisation.
+    ///
+    /// This test calls the PURE function via `classify_response_string_testable` —
+    /// no OS call, no registry, no real AppContainer process needed. That is what
+    /// makes the SC4 assertion deterministically reachable as a unit test.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn classify_response_aiagent_omits_package_sid() {
+        let classification = nono::AgentClassification::AiAgent {
+            package_sid: "S-1-15-2-1-2-3-4-5".to_string(),
+        };
+        let result =
+            super::windows_impl::classify_response_string_testable(&classification);
+        assert_eq!(
+            result, "AiAgent",
+            "AiAgent classification must return exactly \"AiAgent\"; got: {result}"
+        );
+        assert!(
+            !result.contains("S-1-15-2"),
+            "SC4: response must NOT contain the package SID value; got: {result}"
+        );
+        assert!(
+            !result.to_lowercase().contains("sid"),
+            "SC4: response must NOT contain 'sid' in any case; got: {result}"
+        );
+    }
+
+    /// SC: `classify_response_string` for `NotAnAgent` returns "NotAnAgent".
+    ///
+    /// Calls the pure function via `classify_response_string_testable` (no OS call needed).
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn classify_response_notanagent() {
+        let classification = nono::AgentClassification::NotAnAgent;
+        let result =
+            super::windows_impl::classify_response_string_testable(&classification);
+        assert_eq!(
+            result, "NotAnAgent",
+            "NotAnAgent classification must return exactly \"NotAnAgent\"; got: {result}"
+        );
+    }
+
+    /// SC: `{"action":"classify","pid":1234}` deserialises into
+    /// `ControlRequest::Classify { pid: 1234 }`.
+    ///
+    /// Verifies the serde `#[serde(tag="action", rename_all="lowercase")]`
+    /// wiring for the new Classify variant.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn classify_request_deserializes() {
+        use super::windows_impl::ControlRequest;
+        let json = r#"{"action":"classify","pid":1234}"#;
+        let req: ControlRequest = serde_json::from_str(json).unwrap();
+        match req {
+            ControlRequest::Classify { pid } => {
+                assert_eq!(pid, 1234u32, "deserialized pid must be 1234");
+            }
+            other => panic!(
+                "expected ControlRequest::Classify, got a different variant: {other:?}",
+                other = format!("{other:?}")
+            ),
+        }
+    }
+
+    /// SC2 (honest registry-miss test): calling `handle_classify_testable` with
+    /// the test process's own PID (which is NOT an AppContainer process) must
+    /// return "NotAnAgent".
+    ///
+    /// This test proves the non-AppContainer path through the full handler
+    /// (registry lock → classify OS call → classify_response_string).
+    /// It does NOT claim to prove the AiAgent path — that is covered by
+    /// `classify_response_aiagent_omits_package_sid` above.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn classify_non_appcontainer_pid_returns_not_an_agent() {
+        let state = empty_state();
+        let own_pid = std::process::id();
+        let result = super::windows_impl::handle_classify_testable(&state, own_pid);
+        assert_eq!(
+            result, "NotAnAgent",
+            "A non-AppContainer test PID must classify as NotAnAgent; got: {result}"
         );
     }
 }
