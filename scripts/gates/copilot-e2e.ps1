@@ -43,8 +43,14 @@
 $script:CopilotPrompt = 'list the files in the current directory'
 
 # The non-interactive one-shot flag for @github/copilot. `-p` / `--prompt` is the
-# researched programmatic form; confirm on-host per OQ-3 if Copilot's CLI differs.
+# programmatic form. NOTE (OQ-3, settled on-host): `-p` alone is NOT fully
+# non-interactive — Copilot still prompts for tool-permission confirmation and will
+# hang the unattended harness. `--allow-all-tools` is documented as "required for
+# non-interactive mode" (copilot --help). This governs Copilot's OWN permission
+# prompts only; it does NOT affect nono's OS-level confinement, which still gates
+# every file/network access regardless.
 $script:CopilotOneShotFlag = '-p'
+$script:CopilotNonInteractiveFlag = '--allow-all-tools'
 
 # Hard timeout so an interactive REPL (or a hung confined child) cannot stall the
 # unattended harness (Pitfall 4 / threat T-77-03c).
@@ -122,6 +128,30 @@ function Test-Precondition {
         if ($LASTEXITCODE -ne 0) {
             return 'GitHub CLI not authenticated (run: gh auth login) — Copilot requires GitHub auth'
         }
+    }
+
+    # Copilot CLI org-policy access probe (D-07). A GitHub org can DENY Copilot CLI
+    # access ("Access denied by policy settings"). That is a host/account precondition
+    # gap — NOT a confinement failure — so it must SKIP, not FAIL. Detect it cheaply
+    # UNCONFINED up front: when denied, the confined run would otherwise hang on the
+    # policy-error path and be misread as a confinement-timeout FAIL. A provisioned host
+    # with Copilot CLI enabled returns a normal answer here and proceeds to Invoke-Gate.
+    $probeJob = Start-Job {
+        & copilot --allow-all-tools -p 'reply with the single word ok' 2>&1 | Out-String
+    }
+    $probeOut = ''
+    if (Wait-Job $probeJob -Timeout 75) {
+        $probeOut = (Receive-Job $probeJob) -join "`n"
+    }
+    else {
+        Stop-Job $probeJob
+    }
+    Remove-Job $probeJob -Force -ErrorAction SilentlyContinue
+    if ($probeOut -match '(?i)Access denied by policy' -or `
+        $probeOut -match '(?i)policy setting' -or `
+        $probeOut -match '(?i)organization has restricted' -or `
+        $probeOut -match '(?i)does not include this feature') {
+        return 'GitHub Copilot CLI access denied by org policy — not a confinement failure (D-07); enable Copilot CLI for the account to obtain a real PASS'
     }
 
     return $null
@@ -219,7 +249,8 @@ function Invoke-Gate {
     # --- Build the confined one-shot invocation (the CPLT-03 key-link) ---
     #   nono run --profile copilot-cli --workspace <ws> [--allow <exe/interp dirs>] -- copilot -p "<prompt>"
     $nonoArgs = @('run', '--profile', 'copilot-cli', '--workspace', $workspace) + $allowArgs + `
-                @('--', 'copilot', $script:CopilotOneShotFlag, $script:CopilotPrompt)
+                @('--', 'copilot', $script:CopilotNonInteractiveFlag,
+                  $script:CopilotOneShotFlag, $script:CopilotPrompt)
 
     $timedOut = $false
     $exitCode = $null
@@ -340,11 +371,14 @@ function Invoke-Gate {
     if ($output -match '(?i)not (logged|signed) in' -or `
         $output -match '(?i)please (sign|log) in' -or `
         $output -match '(?i)authentication (failed|required)' -or `
-        $output -match '(?i)unauthorized') {
+        $output -match '(?i)unauthorized' -or `
+        $output -match '(?i)Access denied by policy' -or `
+        $output -match '(?i)organization has restricted' -or `
+        $output -match '(?i)does not include this feature') {
         return [ordered]@{
             gate      = 'copilot-e2e'
             verdict   = 'SKIP_HOST_UNAVAILABLE'
-            reason    = 'Copilot reported an authentication gap — not a confinement failure (D-07)'
+            reason    = 'Copilot reported an auth/org-policy access gap — not a confinement failure (D-07)'
             detail    = $detail
             timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
         }
