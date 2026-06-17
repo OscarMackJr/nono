@@ -748,7 +748,7 @@
         "set_vars": {
           "type": "object",
           "additionalProperties": { "type": "string" },
-          "description": "Static environment variables injected after environment filtering and before credential injection. PATH and NONO_* are reserved. Values support variable expansion ($HOME, $WORKDIR, $TMPDIR, $XDG_*, $NONO_PACKAGES)."
+          "description": "Static environment variables injected after environment filtering and before credential injection. PATH and NONO_* are reserved. Values support variable expansion ($HOME, $WORKDIR, $TMPDIR, $XDG_*, $NONO_CONFIG, $NONO_PACKAGES)."
         }
       }
     },

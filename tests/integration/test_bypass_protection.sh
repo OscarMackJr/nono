@@ -171,9 +171,9 @@ echo ""
 echo "--- Profile Inheritance ---"
 
 if [[ -d "$DOCKER_DIR" ]]; then
-    # Child profile inherits override_deny from parent via user profiles directory.
-    # The extends field resolves by name from ~/.config/nono/profiles/.
-    USER_PROFILES_DIR="$HOME/.config/nono/profiles"
+    # Child profile inherits bypass_protection from parent via user profiles directory.
+    # The extends field resolves by name from $XDG_CONFIG_HOME/nono/profiles/.
+    USER_PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nono/profiles"
     CREATED_USER_PROFILES=0
     if [[ ! -d "$USER_PROFILES_DIR" ]]; then
         mkdir -p "$USER_PROFILES_DIR"
