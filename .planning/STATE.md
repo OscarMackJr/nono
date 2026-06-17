@@ -25,10 +25,20 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 77 (copilot-cli-end-to-end-confinement) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 77
-Last activity: 2026-06-17 -- Phase 77 execution started
+Phase: 77 (copilot-cli-end-to-end-confinement) — BLOCKED ON GAP CLOSURE
+Plan: 77-01 ✅ + 77-02 ✅ complete; 77-03 deliverables ✅ (gate + doc) but host-proof FAIL
+Status: CPLT-01 workspace-ancestor RA gap found on live Win11 proof → gap-closure plan needed
+Last activity: 2026-06-17 -- Phase 77 executed; 77-03 host proof surfaced CPLT-01 gap (routed to gap closure)
+
+**Gap-closure target (operator-selected route):** 77-01's `AppliedAncestorReadAttributesGuard`
+(`crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` + wired in `mod.rs`) walks only the
+target binary's ancestor chain, not the `--workspace` chain. The WinGet copilot self-extracts its
+Node package under the workspace (`…\.nono-runtime\…\AC\copilot\pkg\…`), so `realpathSync` `lstat`
+denies on `C:\Users\<user>` (the workspace's user-owned parent, which gets *traverse* 0x21 but not
+*read-attributes* 0x80). FIX: extend the runtime guard to also grant RA on the workspace's
+user-owned ancestor chain; rebuild; re-run `verify-dark.ps1 --gate copilot-e2e` for a real PASS.
+CPLT-02 admin grant (C:\, C:\Users) is verified working + idempotent. The gate's critical
+false-PASS bug was found + fixed live (commit `78f1101f`). See `77-03-SUMMARY.md`.
 
 ### v2.13 Phase Summary (active)
 
