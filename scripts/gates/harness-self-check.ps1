@@ -93,30 +93,30 @@ function Invoke-Gate {
                  -Message  'Assertion (b) failed: round-tripped verdict field mismatch'
 
     # --- Assertion (c): persistence file round-trip ---
-    # Resolve repo root: scripts/gates/ -> scripts/ -> repo root (same chain as the runner:
-    # Split-Path -Parent $PSScriptRoot gives scripts/; Parent of that gives repo root).
-    # $PSScriptRoot here is scripts/gates/ because this file lives there.
-    $gatesDir   = $PSScriptRoot                          # scripts/gates/
-    $scriptsDir = Split-Path -Parent $gatesDir           # scripts/
-    $repoRoot   = Split-Path -Parent $scriptsDir         # <repo root>
-    $verdictDir  = Join-Path $repoRoot '.nono-runtime\verdicts'
-    $verdictFile = Join-Path $verdictDir 'harness-self-check.json'
+    # WR-04 / IN-01: prove the write+read-back round-trip against a TEMP file rather than
+    # the canonical .nono-runtime/verdicts/<gate>.json path. The runner (Persist-Verdict)
+    # is the single owner of the canonical verdict file; duplicating that write here created
+    # two independent path-resolution chains that could silently diverge. Using a temp file
+    # keeps this assertion's intent (Set-Content/Get-Content round-trip works) without owning
+    # the real verdict path.
+    $tempFile = New-TemporaryFile
+    try {
+        # Write the JSON to the temp file and read it back.
+        Set-Content -Path $tempFile.FullName -Value $json -Encoding UTF8 -NoNewline
+        Assert-True -Condition (Test-Path -LiteralPath $tempFile.FullName) `
+                    -Message   'Assertion (c) failed: round-trip temp file not found'
 
-    # Create the verdict dir if absent (matches runner's own New-Item call in Persist-Verdict).
-    New-Item -ItemType Directory -Force -Path $verdictDir | Out-Null
-
-    # Write the JSON to the persistence file and read it back.
-    Set-Content -Path $verdictFile -Value $json -Encoding UTF8 -NoNewline
-    Assert-True -Condition (Test-Path -LiteralPath $verdictFile) `
-                -Message   'Assertion (c) failed: persisted verdict file not found'
-
-    $persisted = Get-Content -Path $verdictFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    Assert-Equal -Actual   $persisted.gate `
-                 -Expected 'harness-self-check' `
-                 -Message  'Assertion (c) failed: persisted gate field mismatch'
-    Assert-Equal -Actual   $persisted.verdict `
-                 -Expected 'PASS' `
-                 -Message  'Assertion (c) failed: persisted verdict field mismatch'
+        $persisted = Get-Content -Path $tempFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        Assert-Equal -Actual   $persisted.gate `
+                     -Expected 'harness-self-check' `
+                     -Message  'Assertion (c) failed: round-tripped gate field mismatch'
+        Assert-Equal -Actual   $persisted.verdict `
+                     -Expected 'PASS' `
+                     -Message  'Assertion (c) failed: round-tripped verdict field mismatch'
+    }
+    finally {
+        Remove-Item -LiteralPath $tempFile.FullName -Force -ErrorAction SilentlyContinue
+    }
 
     # All assertions passed — return the candidate verdict.
     # The runner stamps gate + timestamp after receiving this object (Invoke-SingleGate lines
