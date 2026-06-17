@@ -33,7 +33,7 @@ granularity: standard
 
 - [x] **Phase 76: Self-Verifying Harness Foundation** - Build the shared scripted-gate framework (single-invocation unattended scripts emitting machine-readable pass/fail) that all host-gated phases depend on.
 - [x] **Phase 77: Copilot CLI End-to-End Confinement** - Fix Node-ESM/AppContainer ancestor `FILE_READ_ATTRIBUTES` + one-time-admin system-ancestor RA grant + scripted end-to-end proof.
-- [ ] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
+- [x] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
 - [ ] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
 - [ ] **Phase 80: Clean-Host Install UAT** - Verify the machine MSI installs and runs on a fresh Win11 host with no manual steps via the unattended clean-host harness.
 - [ ] **Phase 81: Milestone Close Aggregator** - Collect all per-phase verdict artifacts into a single aggregator so v2.13 completion is evaluable from harness output alone.
@@ -132,7 +132,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 **Plans**: 2 plans
 Plans:
 - [x] 78-01-PLAN.md — Daemon-side Classify verb: ControlRequest::Classify variant + handle_classify + unit tests (unattended gate)
-- [ ] 78-02-PLAN.md — Client routing: daemon-first classify + structural fallback + integration test + human-verify checkpoint
+- [x] 78-02-PLAN.md — Client routing: daemon-first classify + structural fallback + integration test + human-verify checkpoint
 **Host gate**: Real Win11 host with `nono-agentd` running (daemon from Phase 74 — already proven on Win11 26200).
 **Unattended gate**: `cargo test --bin nono-agentd -- classify` exercises the cross-process path as a scripted gate; no interactive prompts required.
 
@@ -181,7 +181,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
-| 78. Cross-Process Classification | 1/2 | In Progress|  |
+| 78. Cross-Process Classification | 2/2 | Complete   | 2026-06-17 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |

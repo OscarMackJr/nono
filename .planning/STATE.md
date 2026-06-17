@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: executing
-last_updated: "2026-06-17T22:05:28.751Z"
+status: verifying
+last_updated: "2026-06-17T23:11:50.338Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 6
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -25,16 +25,18 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 78 (cross-process-classification) — EXECUTING
+Phase: 78 (cross-process-classification) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
 
-- 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`.
-- 78-02 (wave 2, autonomous:false — blocking host checkpoint): `nono classify` daemon-first routing + structural fallback (`windows_control_pipe_request`→pub(crate)); non-optional SC1/SC2 integration test (real confined agent, gated `NONO_DAEMON_INTEGRATION_TESTS=1`) + live-daemon host-verify checkpoint.
-- Design (CONTEXT D1-D6): reuse Medium-IL control pipe (SC3 free), authoritative via shared registry, verdict-only response (SC4), daemon-first+fallback (operator decision), unattended gate = cargo test (NOT a verify-dark.ps1 gate — ROADMAP/STATE exemption). Daemon code map: `agent_daemon/control_loop.rs` (ControlRequest 309, dispatch 417, `mod windows_impl` cfg(windows) @54), `mod.rs` DaemonState.agent_registry @306, `nono/src/agent.rs` AgentRegistry::classify @143.
+- 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`. **COMPLETE** (`aaafe4ff`).
+- 78-02 (wave 2): `classify_daemon_request` + daemon-first `app_runtime.rs` dispatch + structural fallback; `windows_control_pipe_request`/`is_pipe_not_found` promoted to `pub(crate)`; SC1/SC2/SC4 integration test (gated `NONO_DAEMON_INTEGRATION_TESTS=1`); live-daemon host PASS on Win11 26200. **COMPLETE** (`0f8cdeb7`, `ad284903`).
+- CLAS-01/CLAS-02 both satisfied. SC1 (AiAgent cross-process, NON-optional) + SC2 + SC3 (VERIFIED_BY_SDDL) + SC4 (no SID) all PASS.
+- Key decision: integration test helper re-implements pipe framing (Rust pub(crate) not visible to integration test binaries); daemon-absent uses "daemon-absent" sentinel string for fallback routing.
+- Cross-target clippy: PARTIAL — cfg(windows)-only new code; deferred to CI per CLAUDE.md rule.
 
 ---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
 Plan: 2 of 2
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-17
 NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
@@ -52,7 +54,7 @@ NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independ
 |-------|------|--------------|----|--------|-----------|-----------------|
 | 76 | Self-Verifying Harness Foundation — build the scripted-gate framework; all host-gated phases depend on it | DARK-01 | 5 | ⬜ Not started | Real Win11 host | `verify-dark.ps1 --gate harness-self-check` |
 | 77 | Copilot CLI End-to-End Confinement — fix Node-ESM ancestor RA + one-time-admin setup + scripted proof | CPLT-01, CPLT-02, CPLT-03 | 4 | ✅ Complete (verified; CPLT-03 host-PASS = reasoned SKIP, org-policy) | Win11 + Copilot CLI + admin | `verify-dark.ps1 --gate copilot-e2e` |
-| 78 | Cross-Process Classification — daemon Classify verb + caller-gating + tenant safety | CLAS-01, CLAS-02 | 4 | ⬜ Not started | Win11 + nono-agentd running | `cargo test --bin nono-agentd -- classify` |
+| 78 | Cross-Process Classification — daemon Classify verb + caller-gating + tenant safety | CLAS-01, CLAS-02 | 4 | ✅ Complete (SC1/SC2/SC3/SC4 PASS, Win11 26200 host-verified 2026-06-17) | Win11 + nono-agentd running | `cargo test --bin nono-agentd -- classify` |
 | 79 | WFP Egress Isolation + nono-ts Ergonomics — empirical two-agent WFP test + confinedRun defaults | WFP-01, TSRG-01 | 4 | ⬜ Not started | Win11 + Node/napi | `verify-dark.ps1 --gate wfp-egress-isolation` |
 | 80 | Clean-Host Install UAT — MSI installs clean on fresh Win11 host via scripted gate | INST-01 | 4 | ⬜ Not started | Clean Win11 host (no prior nono) | `verify-dark.ps1 --gate clean-host-install` |
 | 81 | Milestone Close Aggregator — collect all verdicts into one unattended close signal | DARK-02 | 4 | ⬜ Not started | Win11 (after all prior gates run) | `verify-dark.ps1` (no flags) |
@@ -138,7 +140,7 @@ Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65
 
 ## Session Continuity
 
-**Last session:** 2026-06-17T22:05:28.738Z
+**Last session:** 2026-06-17T23:11:50.324Z
 
 **v2.13 roadmap created (2026-06-17):** 6 phases (76-81), 10/10 requirements mapped. ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order: 76 (foundation) → 77/78/79/80 (78 is independent of harness; 77/79/80 depend on 76) → 81 (aggregator, last). Dark Factory mandate: every host-gated item has an unattended scripted gate as its verification mechanism.
 
