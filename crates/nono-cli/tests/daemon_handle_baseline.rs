@@ -1470,3 +1470,318 @@ fn spawn_appcontainer_child_for_test(
     );
     pi
 }
+
+// ---------------------------------------------------------------------------
+// Test 5: classify_pid_returns_verdict_from_daemon (SC1 / SC2 / SC4 — Phase 78)
+// ---------------------------------------------------------------------------
+
+/// Control pipe name — must match `DAEMON_CONTROL_PIPE_NAME` in agent_cli.rs.
+const NONO_AGENTD_CONTROL_PIPE: &str = r"\\.\pipe\nono-agentd-control";
+
+/// Send a JSON frame to the daemon's control pipe and return the response string.
+///
+/// Framing: `[4-byte LE length][JSON payload bytes]` (send) /
+///          `[4-byte LE length][response bytes]` (receive).
+/// Mirrors `windows_control_pipe_request` in `agent_cli.rs` (which is `pub(crate)`
+/// and therefore not reachable from integration tests — this local helper replicates
+/// the identical framing logic for the test binary).
+///
+/// Returns `Err(String)` with a diagnostic on any pipe / I/O failure.
+fn daemon_control_pipe_request(json_payload: &str) -> Result<String, String> {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, ReadFile, WriteFile, OPEN_EXISTING,
+    };
+    use windows_sys::Win32::System::Pipes::WaitNamedPipeW;
+
+    const TIMEOUT_MS: u32 = 5_000;
+    const MAX_RESPONSE: usize = 64 * 1024;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+
+    let pipe_wide: Vec<u16> = NONO_AGENTD_CONTROL_PIPE
+        .encode_utf16()
+        .chain(std::iter::once(0u16))
+        .collect();
+
+    // SAFETY: pipe_wide is a valid null-terminated UTF-16 string.
+    let handle = unsafe {
+        CreateFileW(
+            pipe_wide.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        let gle = unsafe { GetLastError() };
+        return Err(format!(
+            "daemon_control_pipe_request: failed to open control pipe (GLE={gle}): \
+             is nono-agentd running?"
+        ));
+    }
+
+    // RAII handle guard.
+    struct Guard(windows_sys::Win32::Foundation::HANDLE);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            if !self.0.is_null() && self.0 != INVALID_HANDLE_VALUE {
+                // SAFETY: self.0 is a valid HANDLE from CreateFileW.
+                unsafe { CloseHandle(self.0) };
+            }
+        }
+    }
+    let _guard = Guard(handle);
+
+    // SAFETY: pipe_wide is a valid null-terminated UTF-16 string.
+    let wait_ok = unsafe { WaitNamedPipeW(pipe_wide.as_ptr(), TIMEOUT_MS) };
+    if wait_ok == 0 {
+        let gle = unsafe { GetLastError() };
+        return Err(format!(
+            "daemon_control_pipe_request: timed out waiting for pipe (GLE={gle}, {TIMEOUT_MS}ms)"
+        ));
+    }
+
+    // Send: [4-byte LE length][payload].
+    let payload_bytes = json_payload.as_bytes();
+    let payload_len = u32::try_from(payload_bytes.len())
+        .map_err(|_| "daemon_control_pipe_request: payload too large".to_string())?;
+    let len_prefix = payload_len.to_le_bytes();
+
+    let mut bytes_written: u32 = 0;
+    // SAFETY: handle is a valid open pipe; len_prefix is 4 bytes.
+    let ok = unsafe {
+        WriteFile(handle, len_prefix.as_ptr(), 4, &mut bytes_written, std::ptr::null_mut())
+    };
+    if ok == 0 || bytes_written != 4 {
+        return Err("daemon_control_pipe_request: WriteFile length prefix failed".into());
+    }
+    // SAFETY: handle is valid; payload_bytes is a valid slice.
+    let ok = unsafe {
+        WriteFile(
+            handle,
+            payload_bytes.as_ptr(),
+            payload_len,
+            &mut bytes_written,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || bytes_written != payload_len {
+        return Err("daemon_control_pipe_request: WriteFile payload failed".into());
+    }
+
+    // Receive: [4-byte LE length][response].
+    let mut len_buf = [0u8; 4];
+    let mut bytes_read: u32 = 0;
+    // SAFETY: handle is valid; len_buf is 4-byte mutable buffer.
+    let ok = unsafe {
+        ReadFile(handle, len_buf.as_mut_ptr(), 4, &mut bytes_read, std::ptr::null_mut())
+    };
+    if ok == 0 || bytes_read != 4 {
+        return Err("daemon_control_pipe_request: ReadFile response length failed".into());
+    }
+
+    let resp_len = u32::from_le_bytes(len_buf) as usize;
+    if resp_len > MAX_RESPONSE {
+        return Err(format!(
+            "daemon_control_pipe_request: response length {resp_len} exceeds max {MAX_RESPONSE}"
+        ));
+    }
+
+    let mut resp_buf = vec![0u8; resp_len];
+    let mut bytes_read2: u32 = 0;
+    // SAFETY: handle is valid; resp_buf is a valid mutable slice.
+    let ok = unsafe {
+        ReadFile(
+            handle,
+            resp_buf.as_mut_ptr(),
+            resp_len as u32,
+            &mut bytes_read2,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || bytes_read2 != resp_len as u32 {
+        return Err("daemon_control_pipe_request: ReadFile response payload failed".into());
+    }
+
+    String::from_utf8(resp_buf)
+        .map_err(|e| format!("daemon_control_pipe_request: response not valid UTF-8: {e}"))
+}
+
+/// **SC1 / SC2 / SC4 — Cross-process classify from live daemon (Phase 78 CLAS-01/02).**
+///
+/// Requires `NONO_DAEMON_INTEGRATION_TESTS=1` and a running `nono-agentd`.
+///
+/// SC1 (non-optional): launches a real confined agent via the daemon's Launch verb,
+/// obtains its PID from the response, then calls the Classify verb and asserts the
+/// response is exactly "AiAgent". A "NotAnAgent" or any other response is a FAIL,
+/// not a skip.
+///
+/// SC2: classifies the test process's own PID (which is NOT a daemon-launched
+/// AppContainer agent) and asserts "NotAnAgent".
+///
+/// SC4: neither classify response contains "package_sid" or "S-1-15-2-".
+#[test]
+fn classify_pid_returns_verdict_from_daemon() {
+    require_integration!();
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+
+    // -----------------------------------------------------------------------
+    // Step 1: Launch a real confined agent via the daemon's Launch verb.
+    //         Profile "default" is always available in policy.json.
+    //         cmd.exe /c timeout 30 keeps the agent alive long enough to classify it.
+    // -----------------------------------------------------------------------
+    let launch_payload = serde_json::json!({
+        "action": "launch",
+        "profile": "default",
+        "cmd": ["cmd.exe", "/c", "timeout", "30"],
+    })
+    .to_string();
+
+    let launch_response = daemon_control_pipe_request(&launch_payload)
+        .expect("daemon_control_pipe_request for launch failed — is nono-agentd running?");
+
+    eprintln!("[classify-test] launch response: {launch_response}");
+
+    // Parse pid from response: "Launched agent:\n  tenant_id=...\n  ...\n  pid=<N>"
+    let agent_pid: u32 = {
+        let pid_line = launch_response
+            .lines()
+            .find(|l| l.trim_start().starts_with("pid="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "classify-test: launch response did not contain a 'pid=' line.\n\
+                     Response was: {launch_response}"
+                )
+            });
+        pid_line
+            .trim()
+            .strip_prefix("pid=")
+            .unwrap_or("")
+            .parse()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "classify-test: could not parse pid from launch response line: {pid_line}"
+                )
+            })
+    };
+
+    assert_ne!(
+        agent_pid,
+        0,
+        "classify-test: agent PID must be non-zero; launch response: {launch_response}"
+    );
+    eprintln!("[classify-test] SC1 agent_pid={agent_pid}");
+
+    // -----------------------------------------------------------------------
+    // Step 2 (SC1): Classify the launched agent's PID.
+    //               Response MUST be "AiAgent" — this is NON-optional.
+    // -----------------------------------------------------------------------
+    let classify_agent_payload = serde_json::json!({
+        "action": "classify",
+        "pid": agent_pid,
+    })
+    .to_string();
+
+    let agent_classify_response = daemon_control_pipe_request(&classify_agent_payload)
+        .expect("daemon_control_pipe_request for classify (agent pid) failed");
+
+    eprintln!(
+        "[classify-test] SC1 classify response for agent pid={agent_pid}: {agent_classify_response}"
+    );
+
+    // SC4 check: no SID in the AiAgent response.
+    assert!(
+        !agent_classify_response.contains("package_sid"),
+        "SC4 FAIL: AiAgent classify response contains 'package_sid': {agent_classify_response}"
+    );
+    assert!(
+        !agent_classify_response.contains("S-1-15-2-"),
+        "SC4 FAIL: AiAgent classify response contains a SID string: {agent_classify_response}"
+    );
+
+    // SC1: must be "AiAgent" — not a skip if wrong, it's a FAIL.
+    assert_eq!(
+        agent_classify_response.trim(),
+        "AiAgent",
+        "SC1 FAIL: expected 'AiAgent' for daemon-launched confined agent (pid={agent_pid}), \
+         got '{}'.\n\
+         This is a load-bearing CLAS-01 regression: the daemon's shared registry \
+         must recognise its own launched agents.",
+        agent_classify_response.trim()
+    );
+
+    eprintln!("[classify-test] SC1 PASS: AiAgent for pid={agent_pid}");
+
+    // -----------------------------------------------------------------------
+    // Step 3 (SC2): Classify the test process's own PID — NOT a daemon-launched
+    //               AppContainer agent, so the response must be "NotAnAgent".
+    // -----------------------------------------------------------------------
+    let own_pid = std::process::id();
+    let classify_self_payload = serde_json::json!({
+        "action": "classify",
+        "pid": own_pid,
+    })
+    .to_string();
+
+    let self_classify_response = daemon_control_pipe_request(&classify_self_payload)
+        .expect("daemon_control_pipe_request for classify (self pid) failed");
+
+    eprintln!(
+        "[classify-test] SC2 classify response for self pid={own_pid}: {self_classify_response}"
+    );
+
+    // SC4 check: no SID in the NotAnAgent response.
+    assert!(
+        !self_classify_response.contains("package_sid"),
+        "SC4 FAIL: NotAnAgent classify response contains 'package_sid': {self_classify_response}"
+    );
+    assert!(
+        !self_classify_response.contains("S-1-15-2-"),
+        "SC4 FAIL: NotAnAgent classify response contains a SID string: {self_classify_response}"
+    );
+
+    // SC2: must be "NotAnAgent".
+    assert_eq!(
+        self_classify_response.trim(),
+        "NotAnAgent",
+        "SC2 FAIL: expected 'NotAnAgent' for test process own PID (pid={own_pid}), got '{}'.",
+        self_classify_response.trim()
+    );
+
+    eprintln!("[classify-test] SC2 PASS: NotAnAgent for own pid={own_pid}");
+    eprintln!("[classify-test] SC4 PASS: no SID in either classify response");
+    eprintln!("[classify-test] ALL assertions PASS (SC1/SC2/SC4)");
+
+    // -----------------------------------------------------------------------
+    // Step 4: Parse tenant_id from the launch response and send a demote
+    //         request to leave the daemon in a clean state.
+    //         Demote is best-effort — test passes even if demote fails
+    //         (the agent will exit naturally after `timeout 30` elapses).
+    // -----------------------------------------------------------------------
+    let tenant_id = launch_response
+        .lines()
+        .find(|l| l.trim_start().starts_with("tenant_id="))
+        .and_then(|l| l.trim().strip_prefix("tenant_id="))
+        .unwrap_or("")
+        .to_string();
+
+    if !tenant_id.is_empty() {
+        let demote_payload = serde_json::json!({
+            "action": "demote",
+            "tenant_id": tenant_id,
+        })
+        .to_string();
+        match daemon_control_pipe_request(&demote_payload) {
+            Ok(resp) => eprintln!("[classify-test] cleanup demote response: {resp}"),
+            Err(e) => eprintln!("[classify-test] cleanup demote failed (non-fatal): {e}"),
+        }
+    } else {
+        eprintln!("[classify-test] cleanup: could not parse tenant_id — agent will exit after timeout 30");
+    }
+}
