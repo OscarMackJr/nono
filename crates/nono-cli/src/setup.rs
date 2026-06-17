@@ -1462,6 +1462,165 @@ mod tests {
 }
 
 #[cfg(all(test, target_os = "windows"))]
+#[allow(clippy::unwrap_used)]
+mod grant_ancestors_tests {
+    use super::*;
+    use std::os::windows::ffi::OsStrExt;
+    use tempfile::tempdir;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, PSID,
+    };
+
+    /// Count the number of ACEs in `path`'s DACL that match `sid`.
+    /// Returns 0 if the SID is absent, N if it appears N times (idempotency probe).
+    fn count_dacl_aces_for_sid(path: &std::path::Path, sid: &str) -> usize {
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut want_sid: PSID = std::ptr::null_mut();
+        // SAFETY: valid nul-terminated UTF-16 SID string + valid out-pointer.
+        let ok = unsafe { ConvertStringSidToSidW(wide_sid.as_ptr(), &mut want_sid) };
+        assert!(ok != 0 && !want_sid.is_null(), "parse SID");
+
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+        let status = unsafe {
+            GetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(status, 0, "GetNamedSecurityInfoW(DACL) must succeed");
+
+        let mut count = 0usize;
+        if !dacl.is_null() {
+            // SAFETY: `dacl` points into the SD we own until LocalFree below.
+            let ace_count = unsafe { (*dacl).AceCount };
+            for index in 0..ace_count {
+                let mut ace = std::ptr::null_mut();
+                // SAFETY: `dacl` is valid; `ace` is a valid out-pointer.
+                let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+                if got == 0 || ace.is_null() {
+                    continue;
+                }
+                // SAFETY: allow/deny ACEs share the SidStart layout; we read
+                // the embedded SID at that offset.
+                let ace_sid = unsafe {
+                    (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID
+                };
+                // SAFETY: both SIDs are valid for the duration of the call.
+                if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
+                    count += 1;
+                }
+            }
+        }
+
+        // SAFETY: both allocations came from Win32 and must be LocalFree'd.
+        unsafe {
+            if !want_sid.is_null() {
+                let _ = LocalFree(want_sid as _);
+            }
+            if !sd.is_null() {
+                let _ = LocalFree(sd as _);
+            }
+        }
+        count
+    }
+
+    /// CPLT-02: Running the grant twice leaves exactly one ACE for the well-known SID
+    /// per ancestor. Idempotency is enforced by the GetAce/EqualSid absence check.
+    #[test]
+    fn grant_ancestors_idempotent() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        // Pre-condition: SID must not be present before any grant.
+        assert_eq!(
+            count_dacl_aces_for_sid(path, ALL_APPLICATION_PACKAGES_SID),
+            0,
+            "test precondition: SID must not pre-exist on the DACL"
+        );
+
+        // First apply — should add exactly one ACE.
+        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID).expect("first grant must succeed");
+        assert_eq!(
+            count_dacl_aces_for_sid(path, ALL_APPLICATION_PACKAGES_SID),
+            1,
+            "after first grant: exactly one ACE for the well-known SID"
+        );
+
+        // Second apply — idempotent: must NOT stack a duplicate ACE.
+        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID).expect("second grant (idempotent) must succeed");
+        assert_eq!(
+            count_dacl_aces_for_sid(path, ALL_APPLICATION_PACKAGES_SID),
+            1,
+            "after second grant: still exactly one ACE (idempotent — no duplicate stacked)"
+        );
+
+        // Cleanup: revoke so the tempdir DACL is not left dirty.
+        let _ = nono::revoke_sid_on_path(path, ALL_APPLICATION_PACKAGES_SID);
+    }
+
+    /// CPLT-02 / D-09 non-destructive: A pre-existing ACE on the path is unchanged
+    /// after the grant. The grant must NEVER remove or alter existing ACEs.
+    #[test]
+    fn grant_ancestors_non_destructive() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        // Use a distinct synthetic SID that we can add as a pre-existing entry.
+        // This SID is NOT the well-known ALL APPLICATION PACKAGES SID, ensuring
+        // we are testing that the grant does not clobber unrelated entries.
+        const PRE_EXISTING_SID: &str = "S-1-15-2-77-88-99-100";
+
+        // Add a pre-existing ACE using the library's grant primitive.
+        nono::grant_sid_read_attributes_on_path(path, PRE_EXISTING_SID)
+            .expect("pre-existing grant must succeed");
+        assert_eq!(
+            count_dacl_aces_for_sid(path, PRE_EXISTING_SID),
+            1,
+            "pre-existing SID must be present before the well-known grant"
+        );
+
+        // Now apply the well-known SID grant.
+        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID).expect("grant must succeed");
+
+        // The pre-existing ACE must still be present (non-destructive).
+        assert_eq!(
+            count_dacl_aces_for_sid(path, PRE_EXISTING_SID),
+            1,
+            "pre-existing SID ACE must be unchanged after the well-known SID grant (D-09)"
+        );
+        // And the well-known SID must also be present.
+        assert_eq!(
+            count_dacl_aces_for_sid(path, ALL_APPLICATION_PACKAGES_SID),
+            1,
+            "well-known SID must be granted once"
+        );
+
+        // Cleanup.
+        let _ = nono::revoke_sid_on_path(path, PRE_EXISTING_SID);
+        let _ = nono::revoke_sid_on_path(path, ALL_APPLICATION_PACKAGES_SID);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
 mod windows_check_only_tests {
     use super::*;
 
