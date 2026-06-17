@@ -246,12 +246,14 @@ mod tests {
         );
     }
 
-    /// SUPP-03a (Phase 75 Plan 03): copilot-cli profile is present in policy.json
-    /// with the native-PE shape (windows_low_il_broker: true, no windows_interpreters).
+    /// CPLT-01 / D-01 / D-02 (Phase 77 Plan 01): copilot-cli profile is present in
+    /// policy.json with the standalone Node CLI shape (windows_low_il_broker: true,
+    /// windows_interpreters: ["node.exe"]).
     ///
-    /// D-06 finding: copilot.exe is a native PE, NOT a node.exe-wrapped npm script.
-    /// Therefore windows_interpreters must be absent (empty vec), unlike aider/langchain-python
-    /// which need python.exe coverage.
+    /// The v2.12 Phase 75 D-06 native-PE assumption is superseded: the confinement
+    /// target is the standalone @github/copilot Node CLI (invoked as `copilot`), which
+    /// is a Node-ESM entry point, not a native PE. This profile must declare node.exe
+    /// interpreter coverage so the executable-coverage gate (R-B3) allows launch.
     #[test]
     fn copilot_cli_profile_present() {
         let profile = get_builtin("copilot-cli").expect("copilot-cli profile not found");
@@ -261,7 +263,7 @@ mod tests {
         );
         assert!(
             profile.windows_low_il_broker,
-            "copilot-cli profile must set windows_low_il_broker: true (native PE engine)"
+            "copilot-cli profile must set windows_low_il_broker: true (Node CLI engine)"
         );
         assert_eq!(
             profile.workdir.access,
@@ -275,25 +277,26 @@ mod tests {
         );
         assert!(
             !profile.network.block,
-            "copilot-cli: network must not be blocked (copilot.exe needs GitHub API)"
+            "copilot-cli: network must not be blocked (standalone copilot CLI needs GitHub API)"
         );
     }
 
-    /// SUPP-03a (Phase 75 Plan 03): copilot-cli profile must NOT have windows_interpreters
-    /// set (or must have an empty list), confirming the native-PE shape.
+    /// CPLT-01 / D-02 (Phase 77 Plan 01): copilot-cli profile must declare
+    /// `windows_interpreters: ["node.exe"]`, confirming the standalone Node CLI shape.
     ///
-    /// This test distinguishes copilot-cli from aider/langchain-python (which need
-    /// python.exe coverage) and confirms D-06: copilot.exe does not run through a
-    /// node.exe wrapper at the primary entry point. If SC3 UAT reveals node.exe as
-    /// a grandchild, windows_interpreters: ["node.exe"] would be added and this test updated.
+    /// The confinement target is the standalone @github/copilot Node CLI (NOT the
+    /// native-PE `gh copilot` extension). Phase 77 supersedes the D-06 finding: the
+    /// standalone `copilot` binary is a Node-ESM process and requires node.exe
+    /// interpreter coverage for the executable-coverage gate (R-B3) to allow launch.
+    /// This matches the aider/langchain-python shape (python.exe), applied to Node.
     #[test]
-    fn copilot_cli_profile_is_native_pe() {
+    fn copilot_cli_profile_declares_node_interpreter() {
         let profile = get_builtin("copilot-cli").expect("copilot-cli profile not found");
-        assert!(
-            profile.windows_interpreters.is_empty(),
-            "copilot-cli profile must NOT have windows_interpreters (native PE, not a node/python \
-             wrapper); got: {:?}. If SC3 UAT shows node.exe grandchild spawns, add \
-             windows_interpreters: [\"node.exe\"] at that point.",
+        assert_eq!(
+            profile.windows_interpreters,
+            vec!["node.exe".to_string()],
+            "copilot-cli profile must declare node.exe interpreter coverage (D-01/D-02, Phase 77); \
+             got: {:?}",
             profile.windows_interpreters
         );
     }
