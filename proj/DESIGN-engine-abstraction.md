@@ -241,6 +241,36 @@ broker arm.
 causes the CLR to fail with exit code `-65536` (`0xFFFF0000`). Always re-add these baseline
 variables when building the child env from scratch.
 
+**Node-ESM ancestor read-attributes grant (Phase 77, CPLT-01/02 — D-09):** Node engines such as
+the standalone `@github/copilot` CLI call `realpathSync`/`lstat` on *every* ancestor directory of
+each module path during ESM resolution, up to the drive root. Each ancestor `lstat` requires
+`FILE_READ_ATTRIBUTES` (0x80) on that directory object. Under AppContainer the engine runs as a
+per-run package SID (`S-1-15-2-*`) — a distinct principal with no inherent access to the
+user-profile directory chain — so an unprepared confined launch crashes with a Node
+module-resolution failure (the v2.12 Phase 75 SC3 failure mode).
+
+The fix is a **two-part ancestor read-attributes (RA) chain**, split by who owns the directory
+(the **D-04 ownership split**):
+
+- **Runtime grant (CPLT-01), user-owned ancestors.** At launch the broker walks the confined
+  target's resolution chain and grants the per-run package SID `FILE_READ_ATTRIBUTES`-only on each
+  **user-owned** ancestor, reverting every grant on process exit (`AppliedAncestorReadAttributesGuard`).
+  This covers everything from the workspace up to the first non-user-owned ancestor.
+- **One-time-admin grant (CPLT-02), system ancestors.** A non-elevated process cannot edit the DACL
+  of system roots (`C:\`, `C:\Users`). `nono setup --grant-ancestors --profile <p>`, run **once in an
+  elevated session**, adds a **permanent, non-destructive** allow-ACE granting the well-known
+  `ALL APPLICATION PACKAGES` SID (`S-1-15-2-1`) `FILE_READ_ATTRIBUTES` on `C:\` and `C:\Users`.
+
+This admin grant is deliberately constrained: it is **one-time-admin** and **idempotent** (re-running
+adds no duplicate ACE and errors on nothing); **attribute-read only** (`FILE_READ_ATTRIBUTES`, never
+`FILE_GENERIC_READ` — it cannot read or enumerate directory contents); scoped to the **well-known
+`ALL APPLICATION PACKAGES` SID only** (never a per-run SID); adds **exactly one allow-ACE per
+ancestor** while **altering or removing no existing ACE and no deny-ACE** (**non-destructive**); and
+**persists after uninstall** (it is OS-registered filesystem state, not nono-managed). There is **no
+`--revoke` counterpart in this phase** (D-09) — the grant is intended to be a durable host
+prerequisite for confining Node engines, and is harmless to leave in place (attribute-read on two
+directories grants no content access).
+
 ### Linux (Landlock)
 
 `Sandbox::apply()` on the current process applies Landlock restrictions in-process — no re-exec is
