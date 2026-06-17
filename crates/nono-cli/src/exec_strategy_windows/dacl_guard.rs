@@ -801,4 +801,93 @@ mod tests {
         );
         drop(guard);
     }
+
+    /// CPLT-01 / 77-04 gap closure: walking MULTIPLE targets that share a
+    /// user-owned ancestor grants that ancestor EXACTLY ONCE (recorded once in
+    /// `applied`) and reverts it exactly once on Drop — no double-grant, no
+    /// double-revoke. Two sibling leaves under one owned tempdir parent.
+    #[test]
+    fn ancestor_read_attributes_dedups_shared_ancestor_across_targets() {
+        let dir = tempdir().expect("tempdir");
+        let parent = dir.path().to_path_buf();
+        let leaf_a = dir.path().join("a");
+        let leaf_b = dir.path().join("b");
+        std::fs::create_dir(&leaf_a).expect("create a");
+        std::fs::create_dir(&leaf_b).expect("create b");
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist on the shared parent DACL"
+        );
+
+        {
+            let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets(
+                &[&leaf_a, &leaf_b],
+                TEST_RA_PACKAGE_SID,
+            )
+            .expect("apply multi-target ancestor read-attributes");
+
+            // The shared owned parent must appear EXACTLY ONCE in `applied`.
+            let count = guard
+                .applied
+                .iter()
+                .filter(|p| p.as_path() == parent)
+                .count();
+            assert_eq!(
+                count, 1,
+                "shared ancestor must be granted exactly once across targets; applied = {:?}",
+                guard.applied
+            );
+            assert!(
+                dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+                "during the guard lifetime the package SID's RA ACE must be on the shared parent DACL"
+            );
+        } // guard drops → revert all (single revoke for the shared ancestor)
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "after guard drop, the shared ancestor's RA ACE must be revoked (no residual)"
+        );
+    }
+
+    /// CPLT-01 / 77-04 gap closure: multi-target walk grants the user-owned
+    /// ancestors of EACH distinct target chain, and the D-04 stop is preserved
+    /// across both (the drive root is never granted).
+    #[test]
+    fn ancestor_read_attributes_multi_target_covers_each_chain_and_stops_at_root() {
+        let dir_a = tempdir().expect("tempdir a");
+        let dir_b = tempdir().expect("tempdir b");
+        let leaf_a = dir_a.path().join("leaf");
+        let leaf_b = dir_b.path().join("leaf");
+        std::fs::create_dir(&leaf_a).expect("create leaf a");
+        std::fs::create_dir(&leaf_b).expect("create leaf b");
+        let parent_a = dir_a.path().to_path_buf();
+        let parent_b = dir_b.path().to_path_buf();
+
+        let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets(
+            &[&leaf_a, &leaf_b],
+            TEST_RA_PACKAGE_SID,
+        )
+        .expect("apply multi-target ancestor read-attributes");
+
+        // Each target's distinct user-owned immediate parent must be granted.
+        assert!(
+            guard.applied.iter().any(|p| p == &parent_a),
+            "target A's owned parent must be granted; applied = {:?}",
+            guard.applied
+        );
+        assert!(
+            guard.applied.iter().any(|p| p == &parent_b),
+            "target B's owned parent must be granted; applied = {:?}",
+            guard.applied
+        );
+        // D-04 stop preserved across both chains: the drive root is never granted.
+        let root = leaf_a.ancestors().last().expect("a root ancestor exists");
+        assert!(
+            !guard.applied.iter().any(|p| p.as_path() == root),
+            "the drive root ({}) must never be granted across any chain (D-04)",
+            root.display()
+        );
+        drop(guard);
+    }
 }
