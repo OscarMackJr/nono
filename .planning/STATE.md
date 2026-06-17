@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.12
-milestone_name: AI Agent Abstraction
-status: milestone_complete
-last_updated: "2026-06-16T12:31:56.361Z"
-last_activity: 2026-06-16
+milestone: v2.13
+milestone_name: Carry-Forward Closeout (Dark Factory)
+status: planning
+last_updated: "2026-06-17T01:17:54.130Z"
+last_activity: 2026-06-17
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 27
-  completed_plans: 25
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v2.12 AI Agent Abstraction
@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68
 
 ## Current Position
 
-Phase: 75
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-16
+Phase: Not started (defining requirements)
+Plan: —
+Status: Defining requirements
+Last activity: 2026-06-17 — Milestone v2.13 started
 
 ### v2.12 Phase Summary (active)
 
