@@ -88,22 +88,29 @@ function Test-Precondition {
     # nono itself is NOT a host precondition — its absence is a harness/env error, not a
     # host-unavailable SKIP. That is asserted (throw -> exit 4) inside Invoke-Gate.
 
-    # Network reachability probe (cheap; SKIP if offline — D-07).
+    # Network reachability probe (SKIP if offline — D-07). A raw TCP-443 connect is the
+    # reliable reachability signal: it is fast on a connected host and does not depend on an
+    # HTTP status (api.github.com returns 403 to an unauthenticated HEAD anyway, which proves
+    # only reachability, not auth). The connect timeout is generous (10s) because a slow TLS
+    # path on a marginally-connected host must not be misread as offline (OQ-3, settled on-host).
     $online = $false
+    $tcp = $null
     try {
-        $req = [System.Net.WebRequest]::Create('https://api.github.com')
-        $req.Method = 'HEAD'
-        $req.Timeout = 5000
-        $resp = $req.GetResponse()
-        $online = $true
-        $resp.Close()
+        $tcp = [System.Net.Sockets.TcpClient]::new()
+        $iar = $tcp.BeginConnect('api.github.com', 443, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(10000, $false) -and $tcp.Connected) {
+            $online = $true
+            $tcp.EndConnect($iar)
+        }
     }
     catch {
-        # A 401/403 still proves reachability (we got an HTTP response, not a transport error).
-        if ($_.Exception.Response) { $online = $true }
+        $online = $false
+    }
+    finally {
+        if ($tcp) { $tcp.Close() }
     }
     if (-not $online) {
-        return 'GitHub network unreachable (api.github.com) — Copilot auth/usage requires network'
+        return 'GitHub network unreachable (api.github.com:443) — Copilot auth/usage requires network'
     }
 
     # Auth probe (best-effort; SKIP if clearly not authenticated — D-07). The exact
@@ -135,51 +142,125 @@ function Invoke-Gate {
     Assert-True -Condition ($null -ne $nono) `
                 -Message   'harness-internal: nono is not on PATH (build/install nono before running this gate)'
 
-    # --- Shim coverage (77-RESEARCH Pitfall 2 / OQ-3) ---
-    # On Windows the `copilot` command is a %APPDATA%\npm shim that loads the package entry
-    # under %APPDATA%\npm\node_modules. The copilot-cli profile covers node.exe (CPLT-01),
-    # but the shim dir + package dir may also need launch coverage. Add them as --allow paths
-    # when present so the confined launch is not refused at the executable-coverage gate.
+    # --- Executable / shim coverage (77-RESEARCH Pitfall 2 / OQ-3, settled on-host) ---
+    # The `copilot` launch target varies by install method: an npm global install is a
+    # %APPDATA%\npm shim loading %APPDATA%\npm\node_modules; a WinGet install is a native
+    # launcher under %LOCALAPPDATA%\Microsoft\WinGet\Packages\GitHub.Copilot_*. nono's
+    # fail-secure executable-coverage gate (R-B3) refuses to launch any path the filesystem
+    # policy does not cover. Resolve the ACTUAL copilot command and cover its directory so the
+    # launch is not refused — this is install-method-agnostic (the plan's "resolve the package
+    # entry" guidance). The copilot-cli profile already covers the node.exe interpreter (CPLT-01).
     $allowArgs = @()
+    $copilotCmd = Get-Command copilot -ErrorAction SilentlyContinue
+    if ($copilotCmd -and $copilotCmd.Source) {
+        # Collect the command source dir AND, if it is a symlink/shim (e.g. the WinGet
+        # `...\WinGet\Links\copilot.exe` that points at the real binary under
+        # `...\WinGet\Packages\GitHub.Copilot_*`), the FINAL resolved target's dir. nono
+        # canonicalizes the launch target and the exe-coverage gate checks the RESOLVED path,
+        # so the package dir — not just the shim dir — must be covered.
+        $coverDirs = [System.Collections.Generic.List[string]]::new()
+        $coverDirs.Add((Split-Path -Parent $copilotCmd.Source))
+        try {
+            $item = Get-Item -LiteralPath $copilotCmd.Source -ErrorAction Stop
+            $target = $item.ResolveLinkTarget($true)   # follows symlink chains; $null if not a link
+            if ($target -and $target.FullName) {
+                $coverDirs.Add((Split-Path -Parent $target.FullName))
+            }
+        }
+        catch { }
+        foreach ($d in ($coverDirs | Select-Object -Unique)) {
+            if ($d -and (Test-Path -LiteralPath $d)) {
+                $allowArgs += @('--allow', $d)
+            }
+        }
+    }
+    # Cover the Node interpreter's directory. The copilot-cli profile declares
+    # `windows_interpreters: ["node.exe"]` by NAME, but nono's fail-secure interpreter gate
+    # additionally requires the filesystem policy to cover the directory the interpreter lives
+    # in (it refuses to launch a partially-confined engine where the wrapper would spawn an
+    # uncovered interpreter). The WinGet copilot.exe launcher spawns the system node at
+    # `C:\Program Files\nodejs\node.exe`; resolve node and cover its dir.
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    if ($nodeCmd -and $nodeCmd.Source) {
+        $nodeDir = Split-Path -Parent $nodeCmd.Source
+        if ($nodeDir -and (Test-Path -LiteralPath $nodeDir)) {
+            $allowArgs += @('--allow', $nodeDir)
+        }
+    }
+
+    # Also cover the npm global dir when present (covers the npm-install shape; harmless otherwise).
     $npmDir = if ($env:APPDATA) { Join-Path $env:APPDATA 'npm' } else { $null }
     if ($npmDir -and (Test-Path -LiteralPath $npmDir)) {
         $allowArgs += @('--allow', $npmDir)
     }
 
+    # --- Dedicated covered workspace (cwd-coverage / AppContainer execution-dir gate) ---
+    # nono refuses a live run whose execution directory is outside the supported allowlist.
+    # `--workspace <DIR>` sets the confined child's CWD AND the writable grant (single source
+    # of truth). Use a stable dir under %USERPROFILE% (drive-root workspaces fail the
+    # AppContainer label/grant; the user profile is the proven location).
+    $workspace = Join-Path $env:USERPROFILE 'nono-copilot-e2e-gate'
+    if (-not (Test-Path -LiteralPath $workspace)) {
+        New-Item -ItemType Directory -Path $workspace -Force | Out-Null
+    }
+    # R-B3: nono applies a mandatory integrity label (NO_WRITE_UP) to the workspace, which
+    # requires the current user to OWN the workspace AND hold WRITE_OWNER (0x80000) on it.
+    # WRITE_OWNER is NOT implicit for an owner, and a dir created from an ELEVATED session is
+    # owned by BUILTIN\Administrators (not the user) — both break R-B3. Set the current user as
+    # the explicit owner (via SID) and grant Full Control (includes WRITE_OWNER). On a normal
+    # non-elevated session the user already owns dirs it creates, so /setowner is a harmless
+    # no-op; this keeps the gate robust whether or not it is run elevated.
+    $mySid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    & icacls $workspace /setowner "*$mySid" /Q 2>&1 | Out-Null
+    & icacls $workspace /grant "*$($mySid):(OI)(CI)F" /Q 2>&1 | Out-Null
+    Set-Content -Path (Join-Path $workspace 'README.txt') `
+                -Value 'nono copilot-e2e gate workspace' -Encoding UTF8 -ErrorAction SilentlyContinue
+
     # --- Build the confined one-shot invocation (the CPLT-03 key-link) ---
-    #   nono run --profile copilot-cli [--allow <npm shim dir>] -- copilot -p "<prompt>"
-    $nonoArgs = @('run', '--profile', 'copilot-cli') + $allowArgs + `
+    #   nono run --profile copilot-cli --workspace <ws> [--allow <exe/interp dirs>] -- copilot -p "<prompt>"
+    $nonoArgs = @('run', '--profile', 'copilot-cli', '--workspace', $workspace) + $allowArgs + `
                 @('--', 'copilot', $script:CopilotOneShotFlag, $script:CopilotPrompt)
 
-    $stdoutFile = New-TemporaryFile
-    $stderrFile = New-TemporaryFile
     $timedOut = $false
     $exitCode = $null
     $output = ''
 
+    # Use ProcessStartInfo.ArgumentList — each element is escaped individually, so paths
+    # with spaces (e.g. "C:\Program Files\nodejs") are passed as ONE argument. (Start-Process
+    # -ArgumentList with an array does naive space-joining and would split such paths.)
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $nono.Source
+    foreach ($a in $nonoArgs) { [void]$psi.ArgumentList.Add([string]$a) }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = [System.Diagnostics.Process]::new()
+    $proc.StartInfo = $psi
     try {
-        $proc = Start-Process -FilePath $nono.Source `
-                              -ArgumentList $nonoArgs `
-                              -NoNewWindow -PassThru `
-                              -RedirectStandardOutput $stdoutFile.FullName `
-                              -RedirectStandardError  $stderrFile.FullName
+        [void]$proc.Start()
+        # Drain both streams concurrently (async) so a full pipe buffer cannot deadlock.
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
 
         if (-not $proc.WaitForExit($script:GateTimeoutSeconds * 1000)) {
             $timedOut = $true
             try { $proc.Kill($true) } catch { }
-            try { $proc.WaitForExit(5000) | Out-Null } catch { }
+            try { [void]$proc.WaitForExit(5000) } catch { }
         }
         else {
             $exitCode = $proc.ExitCode
         }
 
-        $out = (Get-Content -LiteralPath $stdoutFile.FullName -Raw -ErrorAction SilentlyContinue)
-        $err = (Get-Content -LiteralPath $stderrFile.FullName -Raw -ErrorAction SilentlyContinue)
+        $out = ''
+        $err = ''
+        try { $out = $outTask.GetAwaiter().GetResult() } catch { }
+        try { $err = $errTask.GetAwaiter().GetResult() } catch { }
         $output = (@($out, $err) -join "`n").Trim()
     }
     finally {
-        Remove-Item -LiteralPath $stdoutFile.FullName -Force -ErrorAction SilentlyContinue
-        Remove-Item -LiteralPath $stderrFile.FullName -Force -ErrorAction SilentlyContinue
+        $proc.Dispose()
     }
 
     $detail = [ordered]@{
@@ -203,14 +284,20 @@ function Invoke-Gate {
         }
     }
 
-    # (2) CONFINEMENT FAIL — Node module-resolution crash (the v2.12 SC3 failure mode).
+    # (2) CONFINEMENT FAIL — Node module-resolution crash (the v2.12 SC3 / CPLT failure mode).
+    #     Includes the signature ancestor-RA denial: realpathSync/lstat on an ancestor (often
+    #     the drive root `C:\`) returns EPERM because FILE_READ_ATTRIBUTES is not granted on it
+    #     — exactly what the CPLT-01 runtime guard + CPLT-02 one-time-admin grant exist to fix.
     if ($output -match 'Cannot find module' -or `
         $output -match 'ERR_MODULE_NOT_FOUND' -or `
-        $output -match 'ENOENT.*node_modules') {
+        $output -match 'ENOENT.*node_modules' -or `
+        $output -match "(?i)EPERM.*lstat" -or `
+        $output -match '(?i)realpathSync' -or `
+        $output -match '(?i)Failed to load package index') {
         return [ordered]@{
             gate      = 'copilot-e2e'
             verdict   = 'FAIL'
-            reason    = 'Node module-resolution crash under confinement (realpathSync/lstat ancestor walk denied)'
+            reason    = 'Node module-resolution crash under confinement (realpathSync/lstat ancestor walk denied — run the CPLT-02 one-time-admin grant: nono setup --grant-ancestors --profile copilot-cli)'
             detail    = $detail
             timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
         }
@@ -227,8 +314,29 @@ function Invoke-Gate {
         }
     }
 
-    # (4) SKIP — auth gap that slipped past Test-Precondition. Only reachable when NO
-    #     confinement violation was detected above, so a real denial is never masked (D-07).
+    # (4) FAIL — nono itself could not launch the confined Copilot run (the run never
+    #     happened): a missing/uninstalled `copilot-cli` profile (stale or unbuilt nono),
+    #     an executable-coverage refusal, or any nono-level usage/config error. This is the
+    #     anti-false-PASS guard (threat T-77-03): a nono diagnostic is NOT a Copilot
+    #     suggestion and MUST NOT be reported as a PASS. The provisioned-host contract
+    #     requires `make build` so the freshly-built nono embeds the copilot-cli profile.
+    if ($output -match '(?i)profile not found' -or `
+        $output -match '(?i)not covered' -or `
+        $output -match '(?i)executable .*(not covered|coverage)' -or `
+        $output -match '(?i)^nono: .*error' -or `
+        $output -match '(?i)\berror:\s') {
+        return [ordered]@{
+            gate      = 'copilot-e2e'
+            verdict   = 'FAIL'
+            reason    = 'nono could not launch the confined Copilot run (profile/coverage/config error) — confined run did not occur; build+install nono so the copilot-cli profile is embedded'
+            detail    = $detail
+            timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+        }
+    }
+
+    # (5) SKIP — auth gap that slipped past Test-Precondition. Only reachable when NO
+    #     confinement violation and NO nono-launch error was detected above, so a real
+    #     denial or launch failure is never masked as a SKIP (D-07 / T-77-03b).
     if ($output -match '(?i)not (logged|signed) in' -or `
         $output -match '(?i)please (sign|log) in' -or `
         $output -match '(?i)authentication (failed|required)' -or `
@@ -242,7 +350,20 @@ function Invoke-Gate {
         }
     }
 
-    # (5) FAIL — preconditions were met and no denial occurred, but Copilot produced no
+    # (6) FAIL — the confined wrapper exited non-zero (the one-shot did not complete
+    #     cleanly) even though no specific marker above matched. Surfaced rather than
+    #     masked: a clean PASS requires a zero exit.
+    if ($null -ne $exitCode -and $exitCode -ne 0) {
+        return [ordered]@{
+            gate      = 'copilot-e2e'
+            verdict   = 'FAIL'
+            reason    = "confined Copilot run exited non-zero (exit $exitCode) — one-shot task did not complete cleanly"
+            detail    = $detail
+            timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+        }
+    }
+
+    # (7) FAIL — preconditions were met and no denial occurred, but Copilot produced no
     #     output: the confined task did not complete (no real suggestion was printed).
     if ([string]::IsNullOrWhiteSpace($output)) {
         return [ordered]@{
@@ -254,12 +375,13 @@ function Invoke-Gate {
         }
     }
 
-    # (6) PASS — a real, non-empty confined Copilot suggestion with zero STATUS_ACCESS_DENIED
-    #     and zero Node module-resolution crash (CPLT-03 / D-08).
+    # (8) PASS — nono launched the confined run, the wrapper exited 0, and a real, non-empty
+    #     Copilot suggestion was printed with zero STATUS_ACCESS_DENIED and zero Node
+    #     module-resolution crash (CPLT-03 / D-08).
     return [ordered]@{
         gate      = 'copilot-e2e'
         verdict   = 'PASS'
-        reason    = 'confined Copilot one-shot completed end-to-end: non-empty suggestion, no STATUS_ACCESS_DENIED, no module-resolution crash'
+        reason    = 'confined Copilot one-shot completed end-to-end: clean exit, non-empty suggestion, no STATUS_ACCESS_DENIED, no module-resolution crash'
         detail    = $detail
         timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
     }
