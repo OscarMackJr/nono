@@ -6,6 +6,121 @@ use std::path::Path;
 #[cfg(target_os = "windows")]
 use std::path::PathBuf;
 
+/// The well-known `ALL APPLICATION PACKAGES` group SID (`S-1-15-2-1`).
+///
+/// Every AppContainer token is a member of this group. Granting this SID
+/// `FILE_READ_ATTRIBUTES` on `C:\` and `C:\Users` covers any future confined
+/// engine run without re-granting per-run package SIDs (D-05 RESOLUTION / D-06).
+/// This is the durable admin grant constant — never derive it from a per-run SID.
+#[cfg(target_os = "windows")]
+const ALL_APPLICATION_PACKAGES_SID: &str = "S-1-15-2-1";
+
+/// Grant the well-known ALL APPLICATION PACKAGES SID `FILE_READ_ATTRIBUTES` on
+/// a single path, with an idempotency check (GetAce/EqualSid absence check).
+///
+/// If an ACE for the SID is already present on `path`'s DACL the function is a
+/// no-op (does NOT stack a duplicate ACE — D-09 non-destructive). If absent,
+/// calls `nono::grant_sid_read_attributes_on_path` to add the ACE via the
+/// fail-closed `edit_dacl_for_sid` core.
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if `SetNamedSecurityInfoW` fails (e.g.
+/// access-denied when not elevated — fail-closed).
+#[cfg(target_os = "windows")]
+fn grant_ancestors_for_path(path: &Path, sid: &str) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
+    };
+    use windows_sys::Win32::Security::{
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
+        PSECURITY_DESCRIPTOR, PSID,
+    };
+
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
+
+    let mut want_sid: PSID = std::ptr::null_mut();
+    // SAFETY: valid nul-terminated UTF-16 SID string + valid out-pointer.
+    let ok = unsafe { ConvertStringSidToSidW(wide_sid.as_ptr(), &mut want_sid) };
+    if ok == 0 || want_sid.is_null() {
+        return Err(NonoError::Setup(format!(
+            "grant_ancestors_for_path: failed to parse SID string '{sid}'"
+        )));
+    }
+
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+    // SAFETY: valid path buffer + valid out-pointers; SD freed below.
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide_path.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+
+    let already_present = if status == 0 && !dacl.is_null() {
+        // SAFETY: `dacl` points into the SD we own until LocalFree below.
+        let ace_count = unsafe { (*dacl).AceCount };
+        let mut found = false;
+        for index in 0..ace_count {
+            let mut ace = std::ptr::null_mut();
+            // SAFETY: `dacl` is valid; `ace` is a valid out-pointer.
+            let got = unsafe { GetAce(dacl, u32::from(index), &mut ace) };
+            if got == 0 || ace.is_null() {
+                continue;
+            }
+            // SAFETY: allow/deny ACEs share the SidStart layout.
+            let ace_sid = unsafe {
+                (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID
+            };
+            // SAFETY: both SIDs are valid for the duration of the call.
+            if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
+                found = true;
+                break;
+            }
+        }
+        found
+    } else {
+        false
+    };
+
+    // SAFETY: both allocations came from Win32 and must be LocalFree'd.
+    unsafe {
+        if !want_sid.is_null() {
+            let _ = LocalFree(want_sid as _);
+        }
+        if !sd.is_null() {
+            let _ = LocalFree(sd as _);
+        }
+    }
+
+    if already_present {
+        // Idempotent no-op: the SID is already on this path's DACL.
+        tracing::debug!(
+            path = %path.display(),
+            sid,
+            "grant_ancestors_for_path: SID already present on DACL — skipping (idempotent)"
+        );
+        return Ok(());
+    }
+
+    // SID is absent — add it now.
+    nono::grant_sid_read_attributes_on_path(path, sid)
+}
+
 #[cfg(target_os = "macos")]
 use nix::libc;
 
@@ -23,6 +138,14 @@ pub struct SetupRunner {
     start_wfp_driver: bool,
     #[cfg(target_os = "windows")]
     uninstall_wfp: bool,
+    /// Grant the well-known ALL APPLICATION PACKAGES SID FILE_READ_ATTRIBUTES on
+    /// the system ancestors (C:\, C:\Users). One-time, requires admin. CPLT-02.
+    #[cfg(target_os = "windows")]
+    grant_ancestors: bool,
+    /// Profile name passed with --grant-ancestors (validated, logged, but does
+    /// NOT affect the grantee — the durable grantee is always the well-known SID).
+    #[cfg(target_os = "windows")]
+    profile: Option<String>,
     refresh_trust_root: bool,
     from_file: Option<std::path::PathBuf>,
     generate_profiles: bool,
@@ -45,6 +168,10 @@ impl SetupRunner {
             start_wfp_driver: args.start_wfp_driver,
             #[cfg(target_os = "windows")]
             uninstall_wfp: args.uninstall_wfp,
+            #[cfg(target_os = "windows")]
+            grant_ancestors: args.grant_ancestors,
+            #[cfg(target_os = "windows")]
+            profile: args.profile.clone(),
             refresh_trust_root: args.refresh_trust_root,
             from_file: args.from_file.clone(),
             generate_profiles: args.profiles,
@@ -58,6 +185,12 @@ impl SetupRunner {
             // Removal is the inverse of setup; short-circuit the normal
             // step-numbered setup flow and just stop + delete the WFP services.
             return self.uninstall_windows_wfp();
+        }
+
+        #[cfg(target_os = "windows")]
+        if !self.check_only && self.grant_ancestors {
+            // One-time-admin grant — short-circuit the normal setup flow.
+            return self.grant_ancestors_for_profile();
         }
 
         // Installation verification
@@ -240,6 +373,89 @@ impl SetupRunner {
         println!("  * WFP removal: {}", report.status_label);
         println!("  * {}", report.details);
         println!();
+        Ok(())
+    }
+
+    /// Grant the well-known `ALL APPLICATION PACKAGES` SID (`S-1-15-2-1`)
+    /// `FILE_READ_ATTRIBUTES` on the system ancestors `C:\` and `C:\Users`.
+    ///
+    /// These are the two ancestors the runtime guard (CPLT-01) structurally
+    /// cannot ACL — it stops at the first non-owned ancestor (`Ok(false) => break`).
+    /// This one-time-admin grant covers BOTH ancestors for every future confined
+    /// engine run (D-05 RESOLUTION / D-06 engine-agnostic).
+    ///
+    /// # Security properties (CPLT-02 / D-09)
+    ///
+    /// - **Admin-gated:** fails closed with a clear elevation error when not elevated.
+    /// - **Idempotent:** the per-ancestor `grant_ancestors_for_path` helper checks
+    ///   existing ACEs via GetAce/EqualSid before calling `grant_sid_read_attributes_on_path`.
+    ///   Running the command twice leaves exactly one ACE per ancestor.
+    /// - **Non-destructive:** `edit_dacl_for_sid` (the underlying core) uses
+    ///   `SetEntriesInAclW` MERGE mode — never removes or alters existing ACEs.
+    ///   The idempotency guard ensures no duplicate ACE is stacked.
+    /// - **Minimal grantee:** the hardcoded well-known SID `S-1-15-2-1` covers
+    ///   every AppContainer token. Never derived from a per-run package SID.
+    /// - **Minimal grant:** FILE_READ_ATTRIBUTES only (0x80 — attribute-read, not
+    ///   FILE_GENERIC_READ which includes content-read). From the CPLT-01 primitive.
+    #[cfg(target_os = "windows")]
+    fn grant_ancestors_for_profile(&self) -> Result<()> {
+        if !crate::exec_strategy::is_admin_process() {
+            return Err(NonoError::Setup(
+                "Granting system-ancestor read attributes requires an elevated administrator \
+                 session. Please run this command from an 'Administrator' terminal."
+                    .to_string(),
+            ));
+        }
+
+        // Validate the profile name if provided (V5: non-empty string).
+        // The profile name is logged for operator traceability but does NOT affect
+        // the grantee — the durable grantee is always the well-known SID (D-05).
+        if let Some(ref profile_name) = self.profile {
+            if profile_name.trim().is_empty() {
+                return Err(NonoError::Setup(
+                    "--profile must be a non-empty profile name (e.g. --profile copilot-cli)"
+                        .to_string(),
+                ));
+            }
+            println!(
+                "Granting system-ancestor read attributes for profile '{profile_name}' ..."
+            );
+        } else {
+            println!("Granting system-ancestor read attributes ...");
+        }
+        println!("  * Grantee SID: {ALL_APPLICATION_PACKAGES_SID} (ALL APPLICATION PACKAGES)");
+        println!("  * Grant right: FILE_READ_ATTRIBUTES (0x80) — attribute-read only (D-09)");
+
+        // The two system ancestors the runtime guard provably cannot ACL (D-04 split).
+        let ancestors = [
+            std::path::Path::new("C:\\"),
+            std::path::Path::new("C:\\Users"),
+        ];
+
+        for ancestor in &ancestors {
+            grant_ancestors_for_path(ancestor, ALL_APPLICATION_PACKAGES_SID).map_err(|e| {
+                NonoError::Setup(format!(
+                    "Failed to grant {ALL_APPLICATION_PACKAGES_SID} FILE_READ_ATTRIBUTES on \
+                     {} — ensure this is run from an elevated administrator session: {e}",
+                    ancestor.display()
+                ))
+            })?;
+            println!(
+                "  * {} — FILE_READ_ATTRIBUTES granted (idempotent)",
+                ancestor.display()
+            );
+        }
+
+        println!();
+        println!(
+            "System-ancestor grant complete. This grant is durable (survives reboots) and \
+             non-destructive (existing DACL entries are unchanged)."
+        );
+        println!(
+            "Run 'nono run --profile {} -- <engine>' to verify confined Node/Copilot engine \
+             launch.",
+            self.profile.as_deref().unwrap_or("<profile>")
+        );
         Ok(())
     }
 
@@ -1414,6 +1630,10 @@ mod tests {
             start_wfp_driver: false,
             #[cfg(target_os = "windows")]
             uninstall_wfp: false,
+            #[cfg(target_os = "windows")]
+            grant_ancestors: false,
+            #[cfg(target_os = "windows")]
+            profile: None,
             refresh_trust_root: false,
             from_file: None,
             generate_profiles: true,

@@ -1515,6 +1515,26 @@ const PACKAGE_SID_TRAVERSE_MASK: u32 = {
     FILE_TRAVERSE | FILE_LIST_DIRECTORY
 };
 
+/// Attribute-read-only mask granted to the per-run package SID (or the
+/// well-known `ALL APPLICATION PACKAGES` SID) by
+/// [`grant_sid_read_attributes_on_path`] on an ANCESTOR directory.
+///
+/// `FILE_READ_ATTRIBUTES` (0x80) is the minimal right needed for Node-ESM
+/// `realpathSync`/`lstat` to succeed on a directory object — it lets the
+/// caller query `stat(2)`-equivalent metadata (size, timestamps, attributes)
+/// WITHOUT reading the directory's contents (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`)
+/// or reading extended attributes (`FILE_READ_EA`).
+///
+/// This is DELIBERATELY narrower than [`PACKAGE_SID_READ_MASK`] (`FILE_GENERIC_READ`
+/// = 0x00120089) and [`PACKAGE_SID_TRAVERSE_MASK`] (0x21). It is the minimal
+/// grant for the `realpathSync`/`lstat` path (D-09 non-destructive rule).
+///
+/// `FILE_READ_ATTRIBUTES` = 0x00000080.
+const PACKAGE_SID_READ_ATTRS_MASK: u32 = {
+    use windows_sys::Win32::Storage::FileSystem::FILE_READ_ATTRIBUTES;
+    FILE_READ_ATTRIBUTES
+};
+
 /// RAII wrapper around an ACL allocated by `SetEntriesInAclW`. The new ACL is
 /// heap-allocated by the OS and must be released with `LocalFree`.
 struct OwnedAcl(*mut ACL);
@@ -1861,6 +1881,41 @@ pub fn grant_sid_read_on_path(path: &Path, sid: &str) -> Result<()> {
     // NO_INHERITANCE: a single-file rendezvous read grant must NOT propagate
     // to any children (the file has no children; defensive belt-and-suspenders).
     edit_dacl_for_sid(path, sid, PACKAGE_SID_READ_MASK, SET_ACCESS, NO_INHERITANCE)
+}
+
+/// Grants the SDDL SID string `sid` `FILE_READ_ATTRIBUTES`-ONLY rights
+/// ([`PACKAGE_SID_READ_ATTRS_MASK`] = 0x80) on `path` via `SetEntriesInAclW`
+/// MERGE mode (non-destructive — existing ACEs are preserved).
+///
+/// `FILE_READ_ATTRIBUTES` (0x80) is the minimal right for Node-ESM
+/// `realpathSync`/`lstat` to succeed on ancestor directories. It allows
+/// querying metadata (size, timestamps, attributes) WITHOUT reading directory
+/// contents (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`) or extended attributes
+/// (`FILE_READ_EA`). This is DELIBERATELY narrower than
+/// [`grant_sid_read_on_path`] which grants `FILE_GENERIC_READ` (D-09).
+///
+/// ## When to use
+///
+/// - Per-run package-SID ancestor-RA grant (CPLT-01 runtime guard): used by
+///   `AppliedAncestorReadAttributesGuard` on USER-OWNED ancestors of the
+///   confined target binary's resolution chain.
+/// - One-time-admin grant (CPLT-02 admin setup step): used by
+///   `nono setup --grant-ancestors` to grant the well-known
+///   `ALL APPLICATION PACKAGES` SID (`S-1-15-2-1`) on `C:\` and `C:\Users`.
+///
+/// # Errors
+///
+/// Returns `NonoError::DaclApplyFailed` if the SID string cannot be parsed, the
+/// current DACL cannot be read, the ACE cannot be merged, or the merged DACL
+/// cannot be written back (fail-closed at every step).
+#[cfg(target_os = "windows")]
+pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
+    use windows_sys::Win32::Security::Authorization::SET_ACCESS;
+    use windows_sys::Win32::Security::NO_INHERITANCE;
+
+    // NO_INHERITANCE: the RA grant is scoped to the specific directory object;
+    // it must NOT propagate to descendants.
+    edit_dacl_for_sid(path, sid, PACKAGE_SID_READ_ATTRS_MASK, SET_ACCESS, NO_INHERITANCE)
 }
 
 /// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting
