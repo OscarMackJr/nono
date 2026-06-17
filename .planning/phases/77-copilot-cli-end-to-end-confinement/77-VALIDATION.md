@@ -1,8 +1,8 @@
 ---
 phase: 77
 slug: copilot-cli-end-to-end-confinement
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-17
 ---
@@ -38,12 +38,17 @@ created: 2026-06-17
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| {N}-01-01 | 01 | 1 | CPLT-01 | T-77-01 / — | ancestor-RA grant covers only user-ownable ancestors; stops at first non-owned (fail-secure) | unit | `cargo test -p nono-cli` | ❌ W0 | ⬜ pending |
-| {N}-02-01 | 02 | — | CPLT-02 | T-77-02 / — | idempotent + non-destructive (adds one allow-ACE, alters/removes no existing or deny ACE) | unit | `cargo test -p nono-cli` | ❌ W0 | ⬜ pending |
-| {N}-03-01 | 03 | — | CPLT-03 | T-77-03 / — | gate discriminates confinement FAIL from Copilot/auth/network SKIP_HOST_UNAVAILABLE | manual+script | `scripts/verify-dark.ps1 --gate copilot-e2e` | ❌ W0 | ⬜ pending |
+| 77-01-01 | 01 | 1 | CPLT-01 | T-77-01 / — | RA grant mask is exactly FILE_READ_ATTRIBUTES (0x80), no broader bits; bad-SID fails closed | unit (tdd) | `cargo test -p nono windows::tests::grant_read_attributes` | ❌ W0 | ⬜ pending |
+| 77-01-02 | 01 | 1 | CPLT-01 | T-77-01b / T-77-01c | guard grants RA on owned ancestors, stops at first non-owned (`Ok(false)=>break`), reverts on Drop/Err | unit (tdd) | `cargo test -p nono-cli dacl_guard::tests::ancestor_read_attributes` | ❌ W0 | ⬜ pending |
+| 77-01-03 | 01 | 1 | CPLT-01 | T-77-01d | copilot-cli profile declares `node.exe` coverage; stale native-PE test inverted | unit | `cargo test -p nono-cli profile::builtin::tests::copilot_cli` | ❌ W0 | ⬜ pending |
+| 77-02-01 | 02 | 2 | CPLT-02 | T-77-02 / — | `--grant-ancestors --profile <p>` is generic (not Copilot-specific), `requires=grant_ancestors` | unit | `cargo test -p nono-cli` (cli arg-parse) | ❌ W0 | ⬜ pending |
+| 77-02-02 | 02 | 2 | CPLT-02 | T-77-02 / — | grantee = `S-1-15-2-1`; admin-gated; idempotent (GetAce check) + non-destructive (no existing/deny ACE altered) | unit (tdd) | `cargo test -p nono-cli` (setup grant-ancestors) | ❌ W0 | ⬜ pending |
+| 77-03-01 | 03 | 3 | CPLT-03 | T-77-03 / — | gate discriminates confinement FAIL from Copilot/auth/network SKIP_HOST_UNAVAILABLE; no `exit`, locked verdict shape | script | `pwsh -File scripts/gates/copilot-e2e.ps1` contract-load + `verify-dark.ps1 --gate copilot-e2e` | ❌ W0 | ⬜ pending |
+| 77-03-02 | 03 | 3 | CPLT-03 | — | permanent non-destructive admin grant documented (D-09) | doc | grep DESIGN-engine-abstraction.md for grant doc section | ❌ W0 | ⬜ pending |
+| 77-03-03 | 03 | 3 | CPLT-03 | T-77-03 | [BLOCKING] real authenticated `copilot` suggestion under AppContainer: zero STATUS_ACCESS_DENIED, zero Node module-resolution crash | manual (host-gated checkpoint) | `scripts/verify-dark.ps1 --gate copilot-e2e` (elevated Win11 + Copilot authed) | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
-*Planner refines this map with concrete task IDs and per-task commands.*
+*Note: a `SKIP_HOST_UNAVAILABLE` verdict on 77-03-03 does NOT close CPLT-03 SC1/SC4 — a real PASS on a provisioned host is required to fully close the requirement (verify-work gate condition, per plan-checker warning #2).*
 
 ---
 
@@ -68,11 +73,11 @@ created: 2026-06-17
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (77-03-03 is the host-gated checkpoint; all `auto` tasks carry scoped `<automated>` commands)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (new test files identified for CPLT-01/02; new gate file for CPLT-03)
+- [x] No watch-mode flags
+- [x] Feedback latency < 120s (scoped `cargo test -p <crate> <module>` commands)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-17
