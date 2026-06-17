@@ -43,30 +43,87 @@ function Build-Verdict {
     }
 }
 
-function Emit-Verdict {
-    param($VerdictObj)
-    # -Depth 6 (NOT default 2!) so nested objects in detail don't serialize as
-    # "System.Object[]". -Compress matches bash printf no-pretty-print.
-    # [Console]::Out.Write + explicit LF to avoid PowerShell CRLF on Windows.
-    # Source: scripts/check-upstream-drift.ps1:237-242
-    $json = ($VerdictObj | ConvertTo-Json -Depth 6 -Compress)
-    [Console]::Out.Write($json + "`n")
-    return $json
-}
+# NOTE: emit (ConvertTo-Json -Depth 6 -Compress + [Console]::Out.Write($json + "`n"))
+# is now inlined at each call site so the emit happens AFTER Persist-Verdict succeeds
+# (WR-04: the persisted file-of-record must exist before the stdout line the consumer
+# reads). The -Depth 6 / -Compress / [Console]::Out.Write idiom is preserved verbatim;
+# Source: scripts/check-upstream-drift.ps1:237-242.
 
 function Persist-Verdict {
     param(
         [string]$GateName,
         [string]$Json
     )
-    # Resolve repo root one level above $PSScriptRoot (scripts/).
-    # Source: scripts/validate-windows-msi-contract.ps1:44
-    $repoRoot   = Split-Path -Parent $PSScriptRoot
-    $verdictDir = Join-Path $repoRoot ".nono-runtime\verdicts"
-    # Source: scripts/windows-test-harness.ps1:12
-    New-Item -ItemType Directory -Force -Path $verdictDir | Out-Null
-    $verdictFile = Join-Path $verdictDir "$GateName.json"
-    Set-Content -Path $verdictFile -Value $Json -Encoding UTF8 -NoNewline
+    # WR-04: Persistence must run BEFORE the verdict is emitted to stdout, and a
+    # write failure must be classified as a harness-internal error by the caller —
+    # never a bare terminating error mid-exit-mapping. This function therefore
+    # CATCHES its own failure and returns $false (caller maps that to exit 4),
+    # rather than letting $ErrorActionPreference="Stop" abort the script after
+    # emit but before the verdict->exit mapping.
+    # Returns $true on success, $false on failure.
+    try {
+        # Resolve repo root one level above $PSScriptRoot (scripts/).
+        # Source: scripts/validate-windows-msi-contract.ps1:44
+        $repoRoot   = Split-Path -Parent $PSScriptRoot
+        $verdictDir = Join-Path $repoRoot ".nono-runtime\verdicts"
+        # Source: scripts/windows-test-harness.ps1:12
+        New-Item -ItemType Directory -Force -Path $verdictDir | Out-Null
+        $verdictFile = Join-Path $verdictDir "$GateName.json"
+        Set-Content -Path $verdictFile -Value $Json -Encoding UTF8 -NoNewline
+        return $true
+    }
+    catch {
+        [Console]::Error.WriteLine("[verify-dark] harness-internal error: failed to persist verdict for '$GateName': $_")
+        return $false
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Verdict normalization + classification (shared by single-gate AND all-run)
+# ---------------------------------------------------------------------------
+# IN-02 / CR-01 / CR-02 / WR-01: a single helper owns the verdict->classification
+# contract so the two dispatch paths cannot drift. It (a) normalizes a stray-array
+# return (WR-01: any uncaptured pipeline output in Invoke-Gate appends to the return,
+# producing an Object[]), (b) type-checks that the result is a dictionary, and
+# (c) validates the verdict string against the known set.
+#
+# Returns one of: 'PASS' | 'FAIL' | 'SKIP_HOST_UNAVAILABLE' | 'HARNESS_ERROR'.
+# 'HARNESS_ERROR' covers null, wrong-type, and unknown/garbage verdict values — the
+# caller maps it to a reserved exit (4), NEVER to FAIL (2) and NEVER to a silent PASS (0).
+
+function Normalize-VerdictObject {
+    param(
+        $VerdictObj,
+        [string]$GateName
+    )
+    # WR-01: collapse a stray-array return to its last element (the returned dict),
+    # then require a dictionary. Anything else is a harness-internal error ($null).
+    if ($VerdictObj -is [array]) {
+        $VerdictObj = $VerdictObj[-1]
+    }
+    if ($null -eq $VerdictObj -or -not ($VerdictObj -is [System.Collections.IDictionary])) {
+        [Console]::Error.WriteLine("[verify-dark] harness-internal error: Invoke-Gate did not return a single verdict object for '$GateName'")
+        return $null
+    }
+    return $VerdictObj
+}
+
+function Resolve-VerdictClass {
+    param(
+        $VerdictObj,
+        [string]$GateName
+    )
+    # CR-02: validate against the known set; unknown/garbage/empty -> HARNESS_ERROR.
+    $verdictStr = $VerdictObj['verdict']
+    switch ($verdictStr) {
+        'PASS'                  { return 'PASS' }
+        'FAIL'                  { return 'FAIL' }
+        'SKIP_HOST_UNAVAILABLE' { return 'SKIP_HOST_UNAVAILABLE' }
+        default {
+            [Console]::Error.WriteLine("[verify-dark] harness-internal error: unexpected verdict value '$verdictStr' from gate '$GateName'")
+            return 'HARNESS_ERROR'
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -90,6 +147,15 @@ foreach ($f in $gateFiles) {
 # ---------------------------------------------------------------------------
 # Determine run mode
 # ---------------------------------------------------------------------------
+
+# WR-03: -Gate and -All are mutually exclusive. Silently ignoring -All when -Gate
+# is also supplied is a correctness hazard for a verdict harness whose output drives
+# automated gating (the operator may believe all gates ran). Fail as a harness-internal
+# error, never a FAIL/PASS verdict.
+if ($Gate -and $All) {
+    [Console]::Error.WriteLine("[verify-dark] harness-internal error: -Gate and -All are mutually exclusive")
+    exit 1
+}
 
 # Treat "no -Gate and no -All" the same as -All (Phase 81 formalizes --all rollup;
 # per-gate dispatch loop is the reusable primitive).
@@ -115,7 +181,16 @@ function Invoke-SingleGate {
     . $gateFile
 
     # --- Precondition check FIRST (D-06) ---
-    $preconditionReason = Test-Precondition
+    # WR-02: a thrown Test-Precondition is a harness-internal error (exit 4), never a
+    # FAIL/PASS verdict. With $ErrorActionPreference="Stop" an uncaught throw here would
+    # otherwise terminate the script with exit 1 and no diagnostic verdict.
+    try {
+        $preconditionReason = Test-Precondition
+    }
+    catch {
+        [Console]::Error.WriteLine("[verify-dark] harness-internal error: Test-Precondition threw for '$GateName': $_")
+        exit 4
+    }
 
     if ($null -ne $preconditionReason -and $preconditionReason -ne '') {
         # Host unavailable — emit SKIP_HOST_UNAVAILABLE and exit 3 (D-02, D-06).
@@ -124,8 +199,13 @@ function Invoke-SingleGate {
                                     -Verdict  'SKIP_HOST_UNAVAILABLE' `
                                     -Reason   $preconditionReason `
                                     -Detail   @{}
-        $json = Emit-Verdict -VerdictObj $verdictObj
-        Persist-Verdict -GateName $GateName -Json $json
+        # WR-04: persist BEFORE emit so the file-of-record exists before the consumer
+        # sees the stdout line; a persist failure is a harness-internal error (exit 4).
+        $json = ($verdictObj | ConvertTo-Json -Depth 6 -Compress)
+        if (-not (Persist-Verdict -GateName $GateName -Json $json)) {
+            exit 4
+        }
+        [Console]::Out.Write($json + "`n")
         exit 3
     }
 
@@ -140,8 +220,9 @@ function Invoke-SingleGate {
         exit 4
     }
 
+    # WR-01: normalize a stray-array return and require a dictionary (shared helper).
+    $verdictObj = Normalize-VerdictObject -VerdictObj $verdictObj -GateName $GateName
     if ($null -eq $verdictObj) {
-        [Console]::Error.WriteLine("[verify-dark] harness-internal error: Invoke-Gate returned null for '$GateName'")
         exit 4
     }
 
@@ -150,21 +231,21 @@ function Invoke-SingleGate {
     $verdictObj['gate']      = $GateName
     $verdictObj['timestamp'] = Get-IsoTimestamp
 
-    # Emit once (D-01) and persist (D-08).
-    $json = Emit-Verdict -VerdictObj $verdictObj
-    Persist-Verdict -GateName $GateName -Json $json
+    # Exit mapping (D-02) via shared classifier: PASS=0, FAIL=2, SKIP=3, else=4.
+    $verdictClass = Resolve-VerdictClass -VerdictObj $verdictObj -GateName $GateName
 
-    # Exit mapping (D-02): PASS=0, FAIL=2, SKIP=3, harness-internal=1/4+
-    $verdictStr = $verdictObj['verdict']
-    if ($verdictStr -eq 'PASS') {
-        exit 0
-    } elseif ($verdictStr -eq 'FAIL') {
-        exit 2
-    } elseif ($verdictStr -eq 'SKIP_HOST_UNAVAILABLE') {
-        exit 3
-    } else {
-        [Console]::Error.WriteLine("[verify-dark] harness-internal error: unexpected verdict value '$verdictStr' from gate '$GateName'")
+    # WR-04: persist BEFORE emit; a persist failure is a harness-internal error (exit 4).
+    $json = ($verdictObj | ConvertTo-Json -Depth 6 -Compress)
+    if (-not (Persist-Verdict -GateName $GateName -Json $json)) {
         exit 4
+    }
+    [Console]::Out.Write($json + "`n")
+
+    switch ($verdictClass) {
+        'PASS'                  { exit 0 }
+        'FAIL'                  { exit 2 }
+        'SKIP_HOST_UNAVAILABLE' { exit 3 }
+        default                 { exit 4 }   # HARNESS_ERROR (diagnostic already printed)
     }
 }
 
@@ -184,21 +265,42 @@ if ($Gate) {
         exit 1
     }
 
-    $anyFail = $false
+    # CR-01: track harness-internal errors SEPARATELY from gate FAILs. A thrown
+    # Invoke-Gate / Test-Precondition, a null/array/non-dict return, or an unknown
+    # verdict value is a harness-internal error and MUST map to a reserved exit (4),
+    # NEVER to exit 2 (FAIL) and NEVER contribute to a silent exit 0 (PASS).
+    $anyFail      = $false
+    $harnessError = $false
     foreach ($gateName in ($discoveredGates.Keys | Sort-Object)) {
         # Re-source for each gate run in all-mode to avoid function-name collisions
         # between gates (each dot-source overwrites Test-Precondition/Invoke-Gate).
         $gateFile = $discoveredGates[$gateName]
         . $gateFile
 
-        $preconditionReason = Test-Precondition
+        # WR-02: a thrown Test-Precondition skips THIS gate as a harness-internal error
+        # and continues the sweep — it must NOT abort the entire all-run loop and drop
+        # coverage of every subsequent gate.
+        try {
+            $preconditionReason = Test-Precondition
+        }
+        catch {
+            [Console]::Error.WriteLine("[verify-dark] harness-internal error: Test-Precondition threw for '$gateName': $_")
+            $harnessError = $true
+            continue
+        }
+
         if ($null -ne $preconditionReason -and $preconditionReason -ne '') {
             $verdictObj = Build-Verdict -GateName $gateName `
                                         -Verdict  'SKIP_HOST_UNAVAILABLE' `
                                         -Reason   $preconditionReason `
                                         -Detail   @{}
-            $json = Emit-Verdict -VerdictObj $verdictObj
-            Persist-Verdict -GateName $gateName -Json $json
+            # WR-04: persist before emit; a persist failure is a harness-internal error.
+            $json = ($verdictObj | ConvertTo-Json -Depth 6 -Compress)
+            if (-not (Persist-Verdict -GateName $gateName -Json $json)) {
+                $harnessError = $true
+                continue
+            }
+            [Console]::Out.Write($json + "`n")
             continue
         }
 
@@ -207,29 +309,45 @@ if ($Gate) {
         }
         catch {
             [Console]::Error.WriteLine("[verify-dark] harness-internal error: Invoke-Gate threw for '$gateName': $_")
-            $anyFail = $true
+            $harnessError = $true
             continue
         }
 
+        # WR-01: normalize a stray-array return and require a dictionary.
+        $verdictObj = Normalize-VerdictObject -VerdictObj $verdictObj -GateName $gateName
         if ($null -eq $verdictObj) {
-            [Console]::Error.WriteLine("[verify-dark] harness-internal error: Invoke-Gate returned null for '$gateName'")
-            $anyFail = $true
+            $harnessError = $true
             continue
         }
 
         $verdictObj['gate']      = $gateName
         $verdictObj['timestamp'] = Get-IsoTimestamp
-        $json = Emit-Verdict -VerdictObj $verdictObj
-        Persist-Verdict -GateName $gateName -Json $json
 
-        if ($verdictObj['verdict'] -eq 'FAIL') {
-            $anyFail = $true
+        # CR-02: validate the verdict against the known set via the shared classifier;
+        # an unknown/garbage value is a harness-internal error, NOT a silent non-FAIL PASS.
+        $verdictClass = Resolve-VerdictClass -VerdictObj $verdictObj -GateName $gateName
+
+        # WR-04: persist before emit; a persist failure is a harness-internal error.
+        $json = ($verdictObj | ConvertTo-Json -Depth 6 -Compress)
+        if (-not (Persist-Verdict -GateName $gateName -Json $json)) {
+            $harnessError = $true
+            continue
+        }
+        [Console]::Out.Write($json + "`n")
+
+        switch ($verdictClass) {
+            'FAIL'          { $anyFail = $true }
+            'HARNESS_ERROR' { $harnessError = $true }
+            # 'PASS' / 'SKIP_HOST_UNAVAILABLE' contribute nothing to the failure state.
         }
     }
 
-    # Minimal all-run exit: 0 if no FAILs, 2 if any FAIL.
-    # Phase 81 replaces this with the {gates:[...],overall}/PASS_WITH_SKIPS rollup (D-03).
-    if ($anyFail) {
+    # Minimal all-run exit (Phase 81 owns the {gates:[...],overall}/PASS_WITH_SKIPS
+    # rollup — D-03). Precedence: harness-internal error (4) > gate FAIL (2) > PASS (0).
+    # CR-01/CR-02: a harness-internal error NEVER reads as FAIL or as a silent PASS.
+    if ($harnessError) {
+        exit 4
+    } elseif ($anyFail) {
         exit 2
     } else {
         exit 0
