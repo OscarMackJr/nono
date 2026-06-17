@@ -97,7 +97,9 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   3. The `--gate <name>` selector exercises one gate in isolation without running the full suite, enabling per-phase development and CI partial-run scenarios.
   4. Running the harness on a host that lacks a required precondition (e.g., daemon not running, Copilot CLI not installed) emits `SKIP_HOST_UNAVAILABLE` rather than crashing or producing ambiguous output.
   5. The harness self-check gate (`--gate harness-self-check`) exits 0 with a `PASS` verdict on any Win11 host, confirming the framework itself is functional before any feature gates run.
-**Plans**: TBD
+**Plans**: 2 plans
+- [ ] 76-01-PLAN.md — Runner `scripts/verify-dark.ps1` (gate auto-discovery, precondition dispatch, D-01 verdict emit, D-02 exit mapping, `.nono-runtime/verdicts/` persistence) + `.nono-runtime/` gitignore rule
+- [ ] 76-02-PLAN.md — `scripts/gates/harness-self-check.ps1` (Test-Precondition/Invoke-Gate contract reference) + end-to-end proof of the 5 ROADMAP success criteria
 **Host gate**: Real Win11 host (the harness must execute without operator prompts to be validated).
 **Unattended gate**: `scripts/verify-dark.ps1 --gate harness-self-check` — exits 0 with JSON `PASS` verdict; this IS the gate for Phase 76.
 
@@ -170,7 +172,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 76. Self-Verifying Harness Foundation | 0/? | Not started | - |
+| 76. Self-Verifying Harness Foundation | 0/2 | Not started | - |
 | 77. Copilot CLI End-to-End Confinement | 0/? | Not started | - |
 | 78. Cross-Process Classification | 0/? | Not started | - |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
