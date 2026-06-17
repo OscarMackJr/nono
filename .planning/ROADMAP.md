@@ -108,11 +108,14 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 **Depends on**: Phase 76 (scripted gate for CPLT-03)
 **Requirements**: CPLT-01, CPLT-02, CPLT-03
 **Success Criteria** (what must be TRUE):
-  1. `nono run --profile copilot-cli -- gh copilot suggest "list files"` completes and prints a suggestion without any `STATUS_ACCESS_DENIED` error or Node module-resolution crash under AppContainer.
+  1. `nono run --profile copilot-cli -- copilot <one-shot> "list files"` completes and prints a suggestion without any `STATUS_ACCESS_DENIED` error or Node module-resolution crash under AppContainer (standalone `@github/copilot` Node CLI per D-01/D-03; `gh copilot` form superseded).
   2. nono grants `FILE_READ_ATTRIBUTES` on every ancestor in the confined target's package SID path (up to drive root) at launch time, so Node-ESM `realpathSync`/`lstat` ancestor-chain walking succeeds under AppContainer.
-  3. An idempotent `nono setup --copilot-ancestors` step (or equivalent CLI command) grants the package-SID RA on `C:\` and `C:\Users` — one-time-admin, documented as non-destructive (does not alter DACL deny entries or remove existing ACEs) — and is safe to run repeatedly.
+  3. An idempotent generic `nono setup --grant-ancestors --profile <p>` step (D-06) grants the well-known `ALL APPLICATION PACKAGES` SID `S-1-15-2-1` RA (D-05 resolution) on the system ancestors (drive root and Users dir) — one-time-admin, documented as non-destructive (does not alter DACL deny entries or remove existing ACEs) — and is safe to run repeatedly.
   4. The Copilot end-to-end gate (`scripts/verify-dark.ps1 --gate copilot-e2e`) emits `PASS` on a host where the one-time-admin step has been run, with no operator interaction beyond that single invocation.
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 77-01-PLAN.md — CPLT-01: runtime ancestor-RA grant (grant_sid_read_attributes_on_path + AppliedAncestorReadAttributesGuard) wired onto the AppContainer launch arm + node.exe interpreter coverage in the copilot-cli profile
+- [ ] 77-02-PLAN.md — CPLT-02: generic idempotent one-time-admin nono setup --grant-ancestors --profile <p> granting the well-known ALL APPLICATION PACKAGES SID RA on the system ancestors
+- [ ] 77-03-PLAN.md — CPLT-03: scripts/gates/copilot-e2e.ps1 unattended dark-factory gate + permanent-grant docs + host-gated end-to-end proof
 **Host gate**: Real Win11 host + GitHub Copilot CLI installed + one-time-admin step runnable.
 **Unattended gate**: `scripts/verify-dark.ps1 --gate copilot-e2e` — replaces the interactive SC3 UAT from v2.12 Phase 75.
 
@@ -173,7 +176,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
-| 77. Copilot CLI End-to-End Confinement | 0/? | Not started | - |
+| 77. Copilot CLI End-to-End Confinement | 0/3 | Planned | - |
 | 78. Cross-Process Classification | 0/? | Not started | - |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
