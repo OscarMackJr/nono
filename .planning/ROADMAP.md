@@ -31,7 +31,7 @@ granularity: standard
 
 ### v2.13 Carry-Forward Closeout (Dark Factory) — Active
 
-- [ ] **Phase 76: Self-Verifying Harness Foundation** - Build the shared scripted-gate framework (single-invocation unattended scripts emitting machine-readable pass/fail) that all host-gated phases depend on.
+- [x] **Phase 76: Self-Verifying Harness Foundation** - Build the shared scripted-gate framework (single-invocation unattended scripts emitting machine-readable pass/fail) that all host-gated phases depend on.
 - [ ] **Phase 77: Copilot CLI End-to-End Confinement** - Fix Node-ESM/AppContainer ancestor `FILE_READ_ATTRIBUTES` + one-time-admin system-ancestor RA grant + scripted end-to-end proof.
 - [ ] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
 - [ ] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
@@ -172,7 +172,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 76. Self-Verifying Harness Foundation | 2/2 | Complete   | 2026-06-17 |
+| 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
 | 77. Copilot CLI End-to-End Confinement | 0/? | Not started | - |
 | 78. Cross-Process Classification | 0/? | Not started | - |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |

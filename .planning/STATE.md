@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: verifying
+status: ready_to_plan
 last_updated: "2026-06-17T11:32:17.825Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 6
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 2
   completed_plans: 2
-  percent: 100
+  percent: 33
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -25,9 +25,9 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 76 (self-verifying-harness-foundation) — EXECUTING
-Plan: 2 of 2
-Status: Phase complete — ready for verification
+Phase: 77
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-06-17
 
 ### v2.13 Phase Summary (active)
