@@ -25,10 +25,11 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 77 (copilot-cli-end-to-end-confinement) — BLOCKED ON GAP CLOSURE
-Plan: 77-01 ✅ + 77-02 ✅ complete; 77-03 deliverables ✅ (gate + doc) but host-proof FAIL
-Status: CPLT-01 workspace-ancestor RA gap found on live Win11 proof → gap-closure plan needed
-Last activity: 2026-06-17 -- Phase 77 executed; 77-03 host proof surfaced CPLT-01 gap (routed to gap closure)
+Phase: 77 (copilot-cli-end-to-end-confinement) — GAP-CLOSURE PLAN READY
+Plan: 77-01 ✅ + 77-02 ✅ complete; 77-03 deliverables ✅ (gate + doc) but host-proof FAIL; 77-04 PLANNED (gap closure, plan-checker PASS)
+Status: 77-04 ready to execute — extends CPLT-01 RA guard to the workspace chain; then re-run copilot-e2e gate for the real PASS
+Last activity: 2026-06-17 -- Phase 77 gap-closure plan 77-04 created + verified (plan-checker PASS)
+NEXT: /gsd:execute-phase 77 --wave 4  (or /gsd:execute-phase 77 — only 77-04 is incomplete)
 
 **Gap-closure target (operator-selected route):** 77-01's `AppliedAncestorReadAttributesGuard`
 (`crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` + wired in `mod.rs`) walks only the
