@@ -67,22 +67,22 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CPLT-01 | TBD | Pending |
-| CPLT-02 | TBD | Pending |
-| CPLT-03 | TBD | Pending |
-| CLAS-01 | TBD | Pending |
-| CLAS-02 | TBD | Pending |
-| WFP-01 | TBD | Pending |
-| TSRG-01 | TBD | Pending |
-| INST-01 | TBD | Pending |
-| DARK-01 | TBD | Pending |
-| DARK-02 | TBD | Pending |
+| CPLT-01 | Phase 77 | Pending |
+| CPLT-02 | Phase 77 | Pending |
+| CPLT-03 | Phase 77 | Pending |
+| CLAS-01 | Phase 78 | Pending |
+| CLAS-02 | Phase 78 | Pending |
+| WFP-01 | Phase 79 | Pending |
+| TSRG-01 | Phase 79 | Pending |
+| INST-01 | Phase 80 | Pending |
+| DARK-01 | Phase 76 | Pending |
+| DARK-02 | Phase 81 | Pending |
 
 **Coverage:**
 - v1 requirements: 10 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 10 ⚠️ (filled by roadmapper)
+- Mapped to phases: 10 (roadmap complete)
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-06-16*
-*Last updated: 2026-06-16 after initial definition (milestone v2.13)*
+*Last updated: 2026-06-17 — traceability filled by roadmapper (all 10 requirements mapped to Phases 76-81)*
