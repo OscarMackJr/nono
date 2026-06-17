@@ -585,4 +585,77 @@ mod tests {
         );
         drop(guard);
     }
+
+    // ── AppliedAncestorReadAttributesGuard tests (CPLT-01) ──────────────────
+    //
+    // A distinct SID to avoid cross-test DACL state leak with the traverse
+    // guard tests above.
+    const TEST_RA_PACKAGE_SID: &str = "S-1-15-2-200-300-400-500-600-700-800";
+
+    /// CPLT-01: the ancestor-RA guard grants FILE_READ_ATTRIBUTES on the
+    /// USER-OWNED ancestors of the walk target (the confined binary's resolution
+    /// chain), and reverts every grant on Drop. Mirrors
+    /// `ancestor_traverse_grants_owned_ancestors_and_reverts_on_drop`.
+    #[test]
+    fn ancestor_read_attributes_grants_owned_ancestors_and_reverts_on_drop() {
+        let dir = tempdir().expect("tempdir");
+        // A nested target so there is at least one owned ancestor: <temp>/<rand>/leaf
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+        let parent = dir.path().to_path_buf();
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "test precondition: package SID must not pre-exist on the parent DACL"
+        );
+
+        {
+            let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
+                &leaf,
+                TEST_RA_PACKAGE_SID,
+            )
+            .expect("apply ancestor read-attributes");
+            // The tempdir parent is user-owned, so it must have received an RA grant.
+            assert!(
+                guard.applied.iter().any(|p| p == &parent),
+                "the user-owned tempdir parent must be granted RA; applied = {:?}",
+                guard.applied
+            );
+            assert!(
+                dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+                "during the guard lifetime the package SID's RA ACE must be on the parent DACL"
+            );
+        } // guard drops → revert all
+
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "after guard drop, the package SID's ancestor RA ACE must be revoked"
+        );
+    }
+
+    /// CPLT-01 / D-04 structural split: the walk STOPS at the first non-owned
+    /// ancestor (e.g. `C:\Users`, `C:\`). The drive root must never appear in
+    /// `applied`, proving the runtime guard cannot grant system ancestors.
+    #[test]
+    fn ancestor_read_attributes_stops_at_non_owned_ancestor() {
+        let dir = tempdir().expect("tempdir");
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+
+        let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
+            &leaf,
+            TEST_RA_PACKAGE_SID,
+        )
+        .expect("apply ancestor read-attributes");
+
+        // The drive root (C:\ or equivalent) is owned by SYSTEM/TrustedInstaller,
+        // never the current user — it must NOT appear in the applied set (D-04).
+        let root = leaf.ancestors().last().expect("a root ancestor exists");
+        assert!(
+            !guard.applied.iter().any(|p| p.as_path() == root),
+            "the drive root ({}) must never be granted (non-owned); D-04 structural split",
+            root.display()
+        );
+        drop(guard);
+    }
 }
