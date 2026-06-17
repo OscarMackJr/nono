@@ -452,20 +452,28 @@ fn prepare_live_windows_launch(
         })
         .transpose()?;
 
-    // Plan 77-01 (CPLT-01): on the AppContainer arm (config.package_sid is Some),
-    // also grant the package SID FILE_READ_ATTRIBUTES (0x80) on the USER-OWNED
-    // ancestors of the confined target binary's resolution chain. This is the
-    // load-bearing fix for Node-ESM realpathSync/lstat ancestor walks that fail with
-    // STATUS_ACCESS_DENIED under AppContainer (the `copilot` standalone Node CLI case,
-    // Phase 77 D-01). Walk target = config.resolved_program (the target binary, NOT the
-    // cwd). Stops at the first non-owned ancestor (D-04 structural split: C:\, C:\Users
-    // covered by CPLT-02 admin grant). Fail-closed; reverted on Drop.
+    // Plan 77-01 (CPLT-01) + Plan 77-04 (gap closure): on the AppContainer arm
+    // (config.package_sid is Some), grant the package SID FILE_READ_ATTRIBUTES (0x80)
+    // on the USER-OWNED ancestors of TWO chains:
+    //   1. config.resolved_program — the confined target binary's resolution chain
+    //      (engines that resolve modules next to their executable).
+    //   2. config.current_dir — the --workspace (child CWD) chain. Node engines such
+    //      as the WinGet `@github/copilot` CLI SELF-EXTRACT their package under the
+    //      workspace (<ws>\.nono-runtime\…\AC\…), so realpathSync/lstat walks the
+    //      WORKSPACE's ancestors and needs RA on C:\Users\<user> — which the binary
+    //      chain may not reach when a non-owned dir (e.g. a WinGet package dir) sits
+    //      mid-chain (the 77-03 host-proof FAIL: lstat 'C:\Users\<user>' EPERM).
+    // This is the load-bearing fix for Node-ESM realpathSync/lstat ancestor walks that
+    // fail with STATUS_ACCESS_DENIED under AppContainer. Each chain stops at the first
+    // non-owned ancestor (D-04 structural split: C:\, C:\Users covered by the CPLT-02
+    // admin grant). Shared ancestors are granted once (dedup). Fail-closed; reverted on
+    // Drop.
     let applied_ancestor_read_attrs = config
         .package_sid
         .as_deref()
         .map(|sid| {
-            dacl_guard::AppliedAncestorReadAttributesGuard::snapshot_and_apply(
-                config.resolved_program,
+            dacl_guard::AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets(
+                &[config.resolved_program, config.current_dir],
                 sid,
             )
         })
