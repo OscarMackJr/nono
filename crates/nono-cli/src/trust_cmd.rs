@@ -18,7 +18,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 /// Keystore service name for signing keys (private key material)
-const TRUST_SERVICE: &str = "nono-trust";
+pub(crate) const TRUST_SERVICE: &str = "nono-trust";
 
 /// Keystore service name for public keys (verification-only, no private key material)
 const TRUST_PUB_SERVICE: &str = "nono-trust-pub";

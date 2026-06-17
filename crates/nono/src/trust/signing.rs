@@ -183,6 +183,14 @@ pub fn generate_signing_key() -> Result<KeyPair> {
 /// Compute the key ID (SHA-256 of DER-encoded SPKI public key) as a hex string.
 ///
 /// This is the canonical identifier used to reference keys in trust policies
+/// and bundle `publicKey.hint` fields. Takes a raw DER-encoded public key.
+pub fn public_key_id_hex(public_key_der: &[u8]) -> String {
+    sha256(public_key_der).to_hex()
+}
+
+/// Compute the key ID (SHA-256 of DER-encoded SPKI public key) as a hex string.
+///
+/// This is the canonical identifier used to reference keys in trust policies
 /// and bundle `publicKey.hint` fields.
 ///
 /// # Errors
@@ -195,8 +203,72 @@ pub fn key_id_hex(key_pair: &KeyPair) -> Result<String> {
             path: String::new(),
             reason: format!("failed to export public key: {e}"),
         })?;
-    let hash = sha256(spki.as_bytes());
-    Ok(hash.to_hex())
+    Ok(public_key_id_hex(spki.as_bytes()))
+}
+
+/// Shared signing engine: serializes the statement to JSON, computes PAE,
+/// signs with ECDSA P-256, and constructs a Sigstore bundle v0.3.
+///
+/// # Errors
+///
+/// Returns `NonoError::TrustSigning` on any failure (serialization, signing, bundle construction).
+pub fn sign_statement_bundle(
+    statement: &dsse::InTotoStatement,
+    key_pair: &KeyPair,
+) -> Result<String> {
+    use sigstore_verify::types::dsse::pae;
+
+    // Serialize the statement to JSON (this becomes the DSSE payload)
+    let statement_json = serde_json::to_string(statement).map_err(|e| NonoError::TrustSigning {
+        path: String::new(),
+        reason: format!("failed to serialize statement: {e}"),
+    })?;
+
+    // Build the sigstore-types PayloadBytes
+    let payload = PayloadBytes::from_bytes(statement_json.as_bytes());
+
+    // Compute PAE over the raw payload bytes
+    let pae_bytes = pae(dsse::IN_TOTO_PAYLOAD_TYPE, payload.as_bytes());
+
+    // Sign the PAE
+    let signature = key_pair
+        .sign(&pae_bytes)
+        .map_err(|e| NonoError::TrustSigning {
+            path: String::new(),
+            reason: format!("ECDSA signing failed: {e}"),
+        })?;
+
+    // Construct the DSSE envelope (sigstore-types format)
+    let envelope = SigstoreDsseEnvelope::new(
+        dsse::IN_TOTO_PAYLOAD_TYPE.to_string(),
+        payload,
+        vec![DsseSignature {
+            sig: signature,
+            keyid: KeyId::default(),
+        }],
+    );
+
+    // Build the key hint from the public key hash
+    let hint = key_id_hex(key_pair)?;
+
+    // Construct the Sigstore bundle (keyed — no tlog_entries).
+    let bundle = Bundle {
+        media_type: MediaType::Bundle0_3.as_str().to_string(),
+        verification_material: VerificationMaterial {
+            content: VerificationMaterialContent::PublicKey { hint },
+            tlog_entries: Vec::new(),
+            timestamp_verification_data: Default::default(),
+        },
+        content: SignatureContent::DsseEnvelope(envelope),
+    };
+
+    // Serialize to pretty JSON
+    bundle
+        .to_json_pretty()
+        .map_err(|e| NonoError::TrustSigning {
+            path: String::new(),
+            reason: format!("failed to serialize bundle: {e}"),
+        })
 }
 
 // ---------------------------------------------------------------------------

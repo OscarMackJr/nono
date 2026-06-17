@@ -1,4 +1,4 @@
-use crate::audit_attestation::{sign_session_attestation, AuditSigner};
+use crate::audit_attestation::{write_audit_attestation, AuditSigner};
 use crate::audit_integrity::AuditRecorder;
 use crate::launch_runtime::{rollback_base_exclusions, RollbackLaunchOptions};
 use crate::{config, output, rollback_preflight, rollback_session, rollback_ui};
@@ -604,21 +604,6 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
         (0, None)
     };
 
-    // Upstream 6ecade2e (AUD-02): sign the integrity summary if a signer
-    // was prepared. Bundle is written to `<session_dir>/audit-attestation.bundle`
-    // BEFORE the SessionMetadata write so the metadata's
-    // `audit_attestation` field can record the resulting summary.
-    let audit_attestation_summary =
-        match (audit_signer, audit_integrity_summary.as_ref(), audit_state) {
-            (Some(signer), Some(summary), Some(state)) => Some(sign_session_attestation(
-                signer,
-                &state.session_dir,
-                &state.session_id,
-                summary,
-            )?),
-            _ => None,
-        };
-
     // Scrub command argv before persisting to session metadata (upstream 6472011).
     let scrubbed_command = nono::scrub_argv_with_policy(command, redaction_policy);
     let mut audit_saved = false;
@@ -627,7 +612,7 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
         let (final_manifest, changes) = manager.create_incremental(&baseline)?;
         let merkle_roots = vec![baseline.merkle_root, final_manifest.merkle_root];
 
-        let meta = nono::undo::SessionMetadata {
+        let mut meta = nono::undo::SessionMetadata {
             session_id: audit_state
                 .map(|state| state.session_id.clone())
                 .unwrap_or_default(),
@@ -642,9 +627,15 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
             network_events: std::mem::take(&mut network_events),
             audit_event_count,
             audit_integrity: audit_integrity_summary.clone(),
-            audit_attestation: audit_attestation_summary.clone(),
+            audit_attestation: None,
             rollback_status: RollbackStatus::Available,
         };
+        // Upstream 6ecade2e (AUD-02): sign after metadata is built so the
+        // bundle covers the full session context via write_audit_attestation.
+        if let (Some(signer), Some(state)) = (audit_signer, audit_state) {
+            meta.audit_attestation =
+                Some(write_audit_attestation(&state.session_dir, &meta, signer, redaction_policy)?);
+        }
         manager.save_session_metadata(&meta)?;
         audit_saved = true;
 
@@ -684,7 +675,7 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
                 }
                 None => (Vec::new(), audit_tracked_paths),
             };
-            let meta = nono::undo::SessionMetadata {
+            let mut meta = nono::undo::SessionMetadata {
                 session_id: audit_state.session_id.clone(),
                 started: started.to_string(),
                 ended: Some(ended.to_string()),
@@ -697,9 +688,18 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
                 network_events,
                 audit_event_count,
                 audit_integrity: audit_integrity_summary,
-                audit_attestation: audit_attestation_summary,
+                audit_attestation: None,
                 rollback_status,
             };
+            // Upstream 6ecade2e (AUD-02): sign after metadata is built.
+            if let Some(signer) = audit_signer {
+                meta.audit_attestation = Some(write_audit_attestation(
+                    &audit_state.session_dir,
+                    &meta,
+                    signer,
+                    redaction_policy,
+                )?);
+            }
             nono::undo::SnapshotManager::write_session_metadata(&audit_state.session_dir, &meta)?;
         }
     }
