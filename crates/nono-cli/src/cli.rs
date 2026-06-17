@@ -752,7 +752,7 @@ pub enum Commands {
 ")]
     Why(Box<WhyArgs>),
 
-    /// Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+    /// Classify a PID's AI_AGENT marker (authoritative via daemon, structural fallback)
     #[command(help_template = "\
 {about}
 
@@ -762,15 +762,14 @@ pub enum Commands {
 {all-args}
 {after-help}")]
     #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
-  nono classify 1234                           # Structural check of PID 1234
+  nono classify 1234                           # Classify PID 1234
   nono classify 1234 --json                    # JSON output for tooling
 
 \x1b[1mNOTE\x1b[0m
-  This check is STRUCTURAL ONLY and NON-AUTHORITATIVE. A standalone `nono
-  classify` runs in a separate process with an empty AgentRegistry, so it can
-  never emit an authoritative AI_AGENT claim — it only reports whether the PID
-  has an AppContainer token and is in a job object. Registry-backed
-  authoritative classification is the Phase 74 daemon.
+  When `nono-agentd` is running, classification is authoritative
+  (registry-backed, daemon verdict). Falls back to structural
+  (non-authoritative) when the daemon is absent. Use `--json` for
+  machine-readable output.
 ")]
     Classify(ClassifyArgs),
 
