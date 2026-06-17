@@ -2620,6 +2620,16 @@ pub struct SetupArgs {
     )]
     pub from_file: Option<PathBuf>,
 
+    /// Grant the well-known ALL APPLICATION PACKAGES SID FILE_READ_ATTRIBUTES on the
+    /// system ancestors (C:\, C:\Users) a confined engine cannot ACL at runtime.
+    /// One-time, requires admin, idempotent, non-destructive (D-09). Windows only.
+    #[arg(long, help_heading = "OPTIONS")]
+    pub grant_ancestors: bool,
+
+    /// Profile whose ancestor coverage to grant (used with --grant-ancestors).
+    #[arg(long, value_name = "PROFILE", help_heading = "OPTIONS", requires = "grant_ancestors")]
+    pub profile: Option<String>,
+
     /// Generate example user profiles in ~/.config/nono/profiles/
     #[arg(long, help_heading = "OPTIONS")]
     pub profiles: bool,
@@ -5435,5 +5445,61 @@ mod profile_resolver_args_tests {
             "nono pull MUST reject --no-auto-pull per D-09"
         );
         drop(guard);
+    }
+
+    /// CPLT-02: `nono setup --grant-ancestors --profile copilot-cli` parses
+    /// correctly with `grant_ancestors == true` and `profile == Some("copilot-cli")`.
+    /// D-06: the flag must be generic (not Copilot-specific); the test uses
+    /// "copilot-cli" as an example profile value, not an embedded assumption.
+    #[test]
+    fn setup_grant_ancestors_with_profile_parses() {
+        let cli = Cli::parse_from([
+            "nono",
+            "setup",
+            "--grant-ancestors",
+            "--profile",
+            "copilot-cli",
+        ]);
+        match cli.command {
+            Commands::Setup(args) => {
+                assert!(
+                    args.grant_ancestors,
+                    "--grant-ancestors must parse as true when passed"
+                );
+                assert_eq!(
+                    args.profile,
+                    Some("copilot-cli".to_string()),
+                    "--profile must capture the profile name when passed with --grant-ancestors"
+                );
+            }
+            _ => panic!("Expected Setup command"),
+        }
+    }
+
+    /// CPLT-02: `--profile` without `--grant-ancestors` must be rejected by clap
+    /// (the `requires = "grant_ancestors"` constraint).
+    #[test]
+    fn setup_profile_without_grant_ancestors_is_rejected() {
+        let result = Cli::try_parse_from(["nono", "setup", "--profile", "copilot-cli"]);
+        assert!(
+            result.is_err(),
+            "--profile without --grant-ancestors must be a parse error (requires = grant_ancestors)"
+        );
+    }
+
+    /// CPLT-02: `--grant-ancestors` without `--profile` is allowed (profile is optional).
+    #[test]
+    fn setup_grant_ancestors_without_profile_is_valid() {
+        let cli = Cli::parse_from(["nono", "setup", "--grant-ancestors"]);
+        match cli.command {
+            Commands::Setup(args) => {
+                assert!(args.grant_ancestors, "--grant-ancestors must parse as true");
+                assert_eq!(
+                    args.profile, None,
+                    "profile must be None when not supplied"
+                );
+            }
+            _ => panic!("Expected Setup command"),
+        }
     }
 }
