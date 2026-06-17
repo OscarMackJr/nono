@@ -366,60 +366,94 @@ pub(crate) struct AppliedAncestorReadAttributesGuard {
 
 impl AppliedAncestorReadAttributesGuard {
     /// Grant the package SID `FILE_READ_ATTRIBUTES` on every USER-OWNED ancestor
-    /// of `walk_target` (the confined binary's resolution chain), from the
-    /// immediate parent upward, stopping at the first non-owned ancestor.
-    ///
-    /// The walk target must be the resolved path to the confined target binary
-    /// (`config.resolved_program`), NOT the cwd. Walking the binary's path is
-    /// the load-bearing fix for Node-ESM `realpathSync`/`lstat` ancestor denial
-    /// (CPLT-01).
+    /// of `walk_target`, from the immediate parent upward, stopping at the first
+    /// non-owned ancestor. Thin wrapper over [`Self::snapshot_and_apply_targets`]
+    /// for the single-walk-target callers.
     ///
     /// Fail-closed: returns `Err` (after reverting already-applied grants) on any
     /// ownership-check error or grant failure on an owned ancestor.
     pub(crate) fn snapshot_and_apply(walk_target: &Path, package_sid: &str) -> Result<Self> {
+        Self::snapshot_and_apply_targets(&[walk_target], package_sid)
+    }
+
+    /// Grant the package SID `FILE_READ_ATTRIBUTES` on every USER-OWNED ancestor
+    /// of EACH `walk_target`, from each target's immediate parent upward,
+    /// stopping at the first non-owned ancestor PER CHAIN. Ancestors shared
+    /// across targets (e.g. `C:\Users\<user>`) are granted EXACTLY ONCE and
+    /// recorded once, so Drop reverts each exactly once (no double-grant, no
+    /// double-revoke).
+    ///
+    /// Two walk targets are needed in the AppContainer arm (CPLT-01 / 77-04):
+    /// 1. `config.resolved_program` — the confined target binary's resolution
+    ///    chain (covers engines that resolve modules next to their executable).
+    /// 2. `config.current_dir` — the `--workspace` (child CWD) chain. Node
+    ///    engines such as the WinGet `@github/copilot` CLI **self-extract their
+    ///    package under the workspace** (`<ws>\.nono-runtime\…\AC\…`), so
+    ///    `realpathSync`/`lstat` walks the WORKSPACE's ancestor chain and needs
+    ///    RA up to (but not including) the first non-owned ancestor — i.e. on
+    ///    `C:\Users\<user>`, which the binary chain may not reach when a
+    ///    non-owned dir (e.g. a WinGet-installed package dir) sits mid-chain.
+    ///
+    /// The per-chain stop preserves the D-04 structural split: the runtime guard
+    /// provably never touches `C:\Users` or `C:\` (those are CPLT-02 admin-grant
+    /// territory). Fail-closed: returns `Err` (after reverting already-applied
+    /// grants) on any ownership-check error or grant failure on an owned ancestor.
+    pub(crate) fn snapshot_and_apply_targets(
+        walk_targets: &[&Path],
+        package_sid: &str,
+    ) -> Result<Self> {
         let mut guard = Self {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
         };
 
-        // Walk ancestors from the immediate parent upward. `Path::ancestors`
-        // yields `walk_target` first (the target binary itself), so skip the
-        // leaf (index 0). The RA grant is on ancestor DIRECTORIES, not on the
-        // binary file itself.
-        for ancestor in walk_target.ancestors().skip(1) {
-            match path_is_owned_by_current_user(ancestor) {
-                Ok(true) => {
-                    if let Err(err) = grant_sid_read_attributes_on_path(ancestor, package_sid) {
+        for walk_target in walk_targets {
+            // Walk ancestors from the immediate parent upward. `Path::ancestors`
+            // yields `walk_target` first (the leaf itself), so skip index 0. The
+            // RA grant is on ancestor DIRECTORIES, not on the leaf.
+            for ancestor in walk_target.ancestors().skip(1) {
+                // Dedup across walk targets: a shared ancestor already granted by
+                // a prior target must not be re-granted/re-recorded. Skip the
+                // grant but keep walking up — higher ancestors are shared too and
+                // were already processed (granted or stopped) by the prior walk.
+                if guard.applied.iter().any(|p| p.as_path() == ancestor) {
+                    continue;
+                }
+                match path_is_owned_by_current_user(ancestor) {
+                    Ok(true) => {
+                        if let Err(err) = grant_sid_read_attributes_on_path(ancestor, package_sid) {
+                            tracing::warn!(
+                                ancestor = %ancestor.display(),
+                                "ancestor-RA guard: grant failed; reverting entries already applied"
+                            );
+                            guard.revert_all();
+                            return Err(err);
+                        }
+                        guard.applied.push(ancestor.to_path_buf());
+                    }
+                    Ok(false) => {
+                        // First non-owned ancestor on THIS chain (e.g. C:\Users,
+                        // C:\). Cannot edit its DACL (no WRITE_DAC); every ancestor
+                        // ABOVE it is also non-owned. STOP this chain — the
+                        // one-time-admin CPLT-02 grant covers these system
+                        // ancestors. D-04 structural split: the runtime guard
+                        // provably never touches C:\Users or C:\.
+                        tracing::debug!(
+                            ancestor = %ancestor.display(),
+                            "ancestor-RA guard: ancestor not owned by current user; stopping this \
+                             chain (CPLT-02 admin grant covers system ancestors from here up)"
+                        );
+                        break;
+                    }
+                    Err(err) => {
                         tracing::warn!(
                             ancestor = %ancestor.display(),
-                            "ancestor-RA guard: grant failed; reverting entries already applied"
+                            error = %err,
+                            "ancestor-RA guard: ownership check failed; reverting entries already applied"
                         );
                         guard.revert_all();
                         return Err(err);
                     }
-                    guard.applied.push(ancestor.to_path_buf());
-                }
-                Ok(false) => {
-                    // First non-owned ancestor (e.g. C:\Users, C:\). Cannot edit
-                    // its DACL (no WRITE_DAC); every ancestor ABOVE it is also
-                    // non-owned. STOP — the one-time-admin CPLT-02 grant covers
-                    // these system ancestors. This is the D-04 structural split:
-                    // the runtime guard provably never touches C:\Users or C:\.
-                    tracing::debug!(
-                        ancestor = %ancestor.display(),
-                        "ancestor-RA guard: ancestor not owned by current user; stopping the \
-                         walk (CPLT-02 admin grant covers system ancestors from here up)"
-                    );
-                    break;
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        ancestor = %ancestor.display(),
-                        error = %err,
-                        "ancestor-RA guard: ownership check failed; reverting entries already applied"
-                    );
-                    guard.revert_all();
-                    return Err(err);
                 }
             }
         }
@@ -461,6 +495,36 @@ mod tests {
     // `S-1-5-117-...` output. Pre-exists in NO real ACE, so REVOKE removes
     // only what the guard added.
     const TEST_SESSION_SID: &str = "S-1-5-117-5-6-7-8";
+
+    /// Make `path` owned by the CURRENT user so the ancestor-RA / ancestor-traverse
+    /// ownership gate (`path_is_owned_by_current_user`) returns `Ok(true)` for it
+    /// deterministically. In an ELEVATED session, freshly-created tempdirs are owned
+    /// by `BUILTIN\Administrators` (not the user), which would make the ownership
+    /// check return `false`, stop the walk immediately, and leave `applied` empty —
+    /// a session-elevation artifact, not a logic failure. Taking ownership keeps
+    /// these ownership-dependent tests green whether or not the suite runs elevated.
+    fn take_ownership_for_current_user(path: &Path) {
+        // `whoami` prints `domain\user`, which icacls /setowner accepts.
+        let who = std::process::Command::new("whoami")
+            .output()
+            .expect("run whoami");
+        let user = String::from_utf8_lossy(&who.stdout).trim().to_string();
+        assert!(!user.is_empty(), "whoami returned an empty user");
+        let out = std::process::Command::new("icacls")
+            .arg(path)
+            .arg("/setowner")
+            .arg(&user)
+            .arg("/Q")
+            .output()
+            .expect("run icacls /setowner");
+        assert!(
+            out.status.success(),
+            "icacls /setowner {} -> {} failed: {}",
+            path.display(),
+            user,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 
     /// Returns true iff `path`'s DACL contains an ACE for `sid`.
     fn dacl_contains_sid(path: &Path, sid: &str) -> bool {
@@ -746,6 +810,8 @@ mod tests {
         let leaf = dir.path().join("leaf");
         std::fs::create_dir(&leaf).expect("create leaf");
         let parent = dir.path().to_path_buf();
+        // Ensure the parent is owned by the current user (elevation-robust).
+        take_ownership_for_current_user(&parent);
 
         assert!(
             !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
@@ -814,6 +880,8 @@ mod tests {
         let leaf_b = dir.path().join("b");
         std::fs::create_dir(&leaf_a).expect("create a");
         std::fs::create_dir(&leaf_b).expect("create b");
+        // Ensure the shared parent is owned by the current user (elevation-robust).
+        take_ownership_for_current_user(&parent);
 
         assert!(
             !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
@@ -863,6 +931,9 @@ mod tests {
         std::fs::create_dir(&leaf_b).expect("create leaf b");
         let parent_a = dir_a.path().to_path_buf();
         let parent_b = dir_b.path().to_path_buf();
+        // Ensure both distinct parents are owned by the current user (elevation-robust).
+        take_ownership_for_current_user(&parent_a);
+        take_ownership_for_current_user(&parent_b);
 
         let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets(
             &[&leaf_a, &leaf_b],
