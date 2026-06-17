@@ -5189,4 +5189,80 @@ mod dacl_grant_tests {
             "malformed SID must yield DaclApplyFailed; got {err:?}"
         );
     }
+
+    // ── grant_sid_read_attributes_on_path tests (CPLT-01) ──────────────────
+
+    /// `grant_sid_read_attributes_on_path` adds the package-SID ACE to a
+    /// tempdir's DACL and `revoke_sid_on_path` removes it (round-trip).
+    /// The mask is FILE_READ_ATTRIBUTES (0x80) — attribute-read only (D-09).
+    #[test]
+    fn grant_read_attributes_then_revoke_sid_round_trips_on_tempdir() {
+        use super::grant_sid_read_attributes_on_path;
+
+        // A package-SID-shaped (S-1-15-2-*) test SID — distinct from
+        // TEST_PACKAGE_SID above to prevent any cross-test state leak.
+        const TEST_RA_SID: &str = "S-1-15-2-100-200-300-400-500-600-700";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "test precondition: package SID must not pre-exist in the DACL"
+        );
+
+        grant_sid_read_attributes_on_path(path, TEST_RA_SID).expect("grant read-attributes");
+        assert!(
+            dacl_contains_sid(path, TEST_RA_SID),
+            "after grant, the DACL must contain the package SID's RA allow-ACE"
+        );
+
+        revoke_sid_on_path(path, TEST_RA_SID).expect("revoke");
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "after revoke, the package SID's ACE must be absent from the DACL"
+        );
+    }
+
+    /// `revoke_sid_on_path` after `grant_sid_read_attributes_on_path` leaves the
+    /// original DACL intact (no pre-existing ACEs were removed).
+    #[test]
+    fn grant_read_attributes_revoke_preserves_original_dacl() {
+        use super::grant_sid_read_attributes_on_path;
+
+        const TEST_RA_SID: &str = "S-1-15-2-111-222-333-444-555-666-777";
+
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path();
+
+        // Capture the pre-grant state: the test SID is absent.
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "precondition: SID absent before grant"
+        );
+
+        grant_sid_read_attributes_on_path(path, TEST_RA_SID).expect("grant");
+        revoke_sid_on_path(path, TEST_RA_SID).expect("revoke");
+
+        // After round-trip: SID is gone again.
+        assert!(
+            !dacl_contains_sid(path, TEST_RA_SID),
+            "round-trip must leave the SID absent from the DACL"
+        );
+    }
+
+    /// A malformed SID string fails the RA grant closed with `DaclApplyFailed`
+    /// (never a silent no-op), mirroring `grant_read_invalid_sid_fails_closed`.
+    #[test]
+    fn grant_read_attributes_invalid_sid_fails_closed() {
+        use super::grant_sid_read_attributes_on_path;
+
+        let dir = tempdir().expect("tempdir");
+        let err = grant_sid_read_attributes_on_path(dir.path(), "not-a-sid")
+            .expect_err("malformed SID must fail closed");
+        assert!(
+            matches!(err, NonoError::DaclApplyFailed { .. }),
+            "malformed SID must yield DaclApplyFailed; got {err:?}"
+        );
+    }
 }
