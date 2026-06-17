@@ -131,7 +131,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   4. A tenant cannot learn the classification of another tenant's agent: the `Classify` response for a PID the caller did not launch contains no cross-tenant SID disclosure.
 **Plans**: 2 plans
 Plans:
-- [ ] 78-01-PLAN.md — Daemon-side Classify verb: ControlRequest::Classify variant + handle_classify + unit tests (unattended gate)
+- [x] 78-01-PLAN.md — Daemon-side Classify verb: ControlRequest::Classify variant + handle_classify + unit tests (unattended gate)
 - [ ] 78-02-PLAN.md — Client routing: daemon-first classify + structural fallback + integration test + human-verify checkpoint
 **Host gate**: Real Win11 host with `nono-agentd` running (daemon from Phase 74 — already proven on Win11 26200).
 **Unattended gate**: `cargo test --bin nono-agentd -- classify` exercises the cross-process path as a scripted gate; no interactive prompts required.
@@ -181,7 +181,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
-| 78. Cross-Process Classification | 0/2 | Not started | - |
+| 78. Cross-Process Classification | 1/2 | In Progress|  |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |

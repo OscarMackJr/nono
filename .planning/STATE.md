@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
 status: executing
-last_updated: "2026-06-17T13:23:44.116Z"
-last_activity: 2026-06-17 -- Phase 77 execution started
+last_updated: "2026-06-17T22:05:28.751Z"
+last_activity: 2026-06-17
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 2
-  percent: 40
+  completed_phases: 2
+  total_plans: 8
+  completed_plans: 7
+  percent: 88
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -21,23 +21,25 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 78 (Cross-Process Classification) — PLANNED, ready to execute
+**Current Focus:** Phase 78 — cross-process-classification
 
 ## Current Position
 
-Phase: 78 (cross-process-classification) — PLANNED (2 plans, plan-checker PASS). NEXT: `/gsd:execute-phase 78`
+Phase: 78 (cross-process-classification) — EXECUTING
+
 - 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`.
 - 78-02 (wave 2, autonomous:false — blocking host checkpoint): `nono classify` daemon-first routing + structural fallback (`windows_control_pipe_request`→pub(crate)); non-optional SC1/SC2 integration test (real confined agent, gated `NONO_DAEMON_INTEGRATION_TESTS=1`) + live-daemon host-verify checkpoint.
 - Design (CONTEXT D1-D6): reuse Medium-IL control pipe (SC3 free), authoritative via shared registry, verdict-only response (SC4), daemon-first+fallback (operator decision), unattended gate = cargo test (NOT a verify-dark.ps1 gate — ROADMAP/STATE exemption). Daemon code map: `agent_daemon/control_loop.rs` (ControlRequest 309, dispatch 417, `mod windows_impl` cfg(windows) @54), `mod.rs` DaemonState.agent_registry @306, `nono/src/agent.rs` AgentRegistry::classify @143.
 
 ---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
-Plan: 77-01 ✅ 77-02 ✅ 77-03 ✅ 77-04 ✅ (4/4); gsd-verifier PASS 6/6 must-haves
-Status: CPLT-01/02/03 delivered + verified. CPLT-01 workspace-ancestor RA gap (found in 77-03 host proof) CLOSED in 77-04 — verified live by failure-mode advance (the `lstat 'C:\Users\OMack'` EPERM is gone; confined copilot runs past module resolution). CPLT-03 host-PASS recorded as a clearly-reasoned SKIP_HOST_UNAVAILABLE (D-07): GitHub org policy disables Copilot CLI on the test account — operator-accepted disposition.
-Last activity: 2026-06-17 -- Phase 77 complete; 77-04 gap closure verified, gsd-verifier passed
+Plan: 2 of 2
+Status: Ready to execute
+Last activity: 2026-06-17
 NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
 **Phase 77 close notes (durable):**
+
 - CPLT-01 RA guard now walks BOTH the binary chain AND the `--workspace` chain (`snapshot_and_apply_targets`, dedup, per-chain D-04 stop) — `dacl_guard.rs` + wired in `mod.rs`.
 - CPLT-02 `nono setup --grant-ancestors` (ALL APPLICATION PACKAGES `S-1-15-2-1`, RA-only on `C:\`+`C:\Users`) verified working + idempotent on live Win11; the grant is durable (persists on the host).
 - The gate `scripts/gates/copilot-e2e.ps1` was hardened live: killed a critical false-PASS (PASSed on nono "Profile not found"), added WinGet exe + node-interpreter coverage resolution, `--workspace` + R-B3 `/setowner` ownership, `--allow-all-tools` (Copilot's `-p` alone hangs), and org-policy → SKIP detection.
@@ -136,7 +138,7 @@ Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65
 
 ## Session Continuity
 
-**Last session:** 2026-06-17T12:07:16.734Z
+**Last session:** 2026-06-17T22:05:28.738Z
 
 **v2.13 roadmap created (2026-06-17):** 6 phases (76-81), 10/10 requirements mapped. ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order: 76 (foundation) → 77/78/79/80 (78 is independent of harness; 77/79/80 depend on 76) → 81 (aggregator, last). Dark Factory mandate: every host-gated item has an unattended scripted gate as its verification mechanism.
 

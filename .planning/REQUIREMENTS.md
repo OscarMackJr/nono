@@ -17,8 +17,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Cross-Process Classification
 
-- [ ] **CLAS-01**: An operator can authoritatively classify any running PID as `AI_AGENT` (or not) via `nono classify <pid>`, answered cross-process by the daemon control-pipe `Classify` verb.
-- [ ] **CLAS-02**: The `Classify` verb is caller-gated and tenant-safe — same least-privilege/SDDL posture as the existing control pipe, with no cross-tenant disclosure.
+- [x] **CLAS-01**: An operator can authoritatively classify any running PID as `AI_AGENT` (or not) via `nono classify <pid>`, answered cross-process by the daemon control-pipe `Classify` verb.
+- [x] **CLAS-02**: The `Classify` verb is caller-gated and tenant-safe — same least-privilege/SDDL posture as the existing control pipe, with no cross-tenant disclosure.
 
 ### WFP Egress Isolation Proof
 
@@ -70,8 +70,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CPLT-01 | Phase 77 | Pending |
 | CPLT-02 | Phase 77 | Pending |
 | CPLT-03 | Phase 77 | Pending |
-| CLAS-01 | Phase 78 | Pending |
-| CLAS-02 | Phase 78 | Pending |
+| CLAS-01 | Phase 78 | Complete |
+| CLAS-02 | Phase 78 | Complete |
 | WFP-01 | Phase 79 | Pending |
 | TSRG-01 | Phase 79 | Pending |
 | INST-01 | Phase 80 | Pending |
