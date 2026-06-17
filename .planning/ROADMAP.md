@@ -114,7 +114,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   4. The Copilot end-to-end gate (`scripts/verify-dark.ps1 --gate copilot-e2e`) emits `PASS` on a host where the one-time-admin step has been run, with no operator interaction beyond that single invocation.
 **Plans**: 3 plans
 - [x] 77-01-PLAN.md — CPLT-01: runtime ancestor-RA grant (grant_sid_read_attributes_on_path + AppliedAncestorReadAttributesGuard) wired onto the AppContainer launch arm + node.exe interpreter coverage in the copilot-cli profile
-- [ ] 77-02-PLAN.md — CPLT-02: generic idempotent one-time-admin nono setup --grant-ancestors --profile <p> granting the well-known ALL APPLICATION PACKAGES SID RA on the system ancestors
+- [x] 77-02-PLAN.md — CPLT-02: generic idempotent one-time-admin nono setup --grant-ancestors --profile <p> granting the well-known ALL APPLICATION PACKAGES SID RA on the system ancestors
 - [ ] 77-03-PLAN.md — CPLT-03: scripts/gates/copilot-e2e.ps1 unattended dark-factory gate + permanent-grant docs + host-gated end-to-end proof
 **Host gate**: Real Win11 host + GitHub Copilot CLI installed + one-time-admin step runnable.
 **Unattended gate**: `scripts/verify-dark.ps1 --gate copilot-e2e` — replaces the interactive SC3 UAT from v2.12 Phase 75.
@@ -176,7 +176,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
-| 77. Copilot CLI End-to-End Confinement | 1/3 | In Progress|  |
+| 77. Copilot CLI End-to-End Confinement | 2/3 | In Progress|  |
 | 78. Cross-Process Classification | 0/? | Not started | - |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
