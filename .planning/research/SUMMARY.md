@@ -1,180 +1,225 @@
-# Project Research Summary
+﻿# Project Research Summary
 
-**Project:** nono v2.12 "AI Agent Abstraction" (SEED-004)
-**Domain:** Engine-agnostic AI-agent confinement on Windows -- productionized launch-and-confine + binding-exposed confined-run API + AI_AGENT process marking + persistent multi-tenant capability daemon
-**Researched:** 2026-06-13
-**Confidence:** HIGH (every primitive is grounded in current in-tree code; spike 003 VALIDATED supplies the launch primitive; the only genuinely unproven part -- multi-agent token/job reuse -- is isolated and flagged)
+**Project:** nono v3.0 -- Enterprise Hardening I (Deploy - Control - Compliance)
+**Domain:** Enterprise-fleet hardening of a shipping Rust/Windows security product -- silent MSI deploy, machine-policy-driven egress control (HKLM), SIEM/EDR-forwardable structured telemetry
+**Researched:** 2026-06-18
+**Confidence:** HIGH -- all four researchers grounded findings in current in-tree source code, official Microsoft Learn docs, and verified crates.io/docs.rs data
+
+---
 
 ## Executive Summary
 
-This is a **composition milestone, not a green-field one.** Three existing subsystems already implement nearly everything the four new components need: the launch-and-confine primitive (exec_strategy_windows/launch.rs -> broker arm -> Sandbox::apply, proven engine-neutral by spike 003 for cmd/powershell/python), the capability IPC (socket_windows.rs -- SDDL-scoped named pipes, PIPE_UNLIMITED_INSTANCES, per-SID DACL ACEs, framed JSON, re-accept), and the long-running user-mode service shape (nono-wfp-service.rs -- SCM dispatch, Event Log, control pipe, MSI registration, non-Windows stub). The work is **composition plus a thin amount of net-new Win32** (named job objects for the marker; multi-client accept-loop generalization), plus a binding API surface -- *not* new framework adoption. The single biggest "what NOT to do" is the kernel driver: out of scope by milestone definition AND by ADR-65 (No-go). User-mode only.
+nono v3.0 adds three enterprise-hardening layers -- deployment (SEED-001), egress control (SEED-002), and compliance telemetry (SEED-003) -- on top of the existing, shipping AppContainer + WFP + nono-proxy confinement stack. The domain is well-understood: these are standard Windows enterprise security product patterns (GPO ADMX, HKLM policy, Windows Event Log + ETW, WEF forwarding), and all four research threads converge on the same load-bearing insight: HKLM\SOFTWARE\Policies\nono is the shared spine. It must be built first because egress control and telemetry configuration both read from it. Build it wrong and everything downstream either fails open or produces false security guarantees.
 
-The recommended approach is **launch-and-confine as the center of gravity**, not generalizing the Claude PreToolUse hook. nono confines at the OS process boundary; if nono *parents* the engine process, then the engine in-process file writes, in-process Python exec(), and subprocess shells are ALL confined transitively. This is the killer argument over per-tool hooking (which costs a spawn per call, requires every engine to expose a rewrite-capable pre-hook, and cannot confine in-process ops). Every target engine except Windows-native Cursor (which is WSL-only -- an engine limitation, not nono's) fits launch-and-confine cleanly. The abstraction boundary is captured in a small, concrete contract (E1-E5) that every engine must satisfy.
+The recommended technical approach is deliberately lean: four new crates (winreg 0.56, tracing-etw 0.2.3, eventlog 0.4.0, hmac 0.13.0) plus one windows-sys 0.59 feature addition (Win32_System_Registry). No version bumps, no new workspace members, no MSIX migration. The WiX MSI stays exactly as-is -- MSIX cannot package the LocalSystem WFP service and would require abandoning the existing signed-MSI CI pipeline for zero functional gain. The telemetry layer hooks into nono-cli as a tracing::Layer (a new telemetry/ module), not into the library DiagnosticFormatter -- preserving the library-vs-CLI boundary that is a core design invariant of this codebase.
 
-The key risk is the **persistent multi-tenant daemon** (the former spike 004 -- the riskiest, unspiked component). Its load-bearing security properties are all things an ephemeral per-invocation supervisor never had to get right: cross-tenant pipe isolation, an unforgeable agent marker, a least-privilege daemon that is NOT merged into the elevated WFP service, and correct token/job handle lifetime in a process that lives for days. These pitfalls must become **phase success criteria with negative tests** (e.g. "tenant B is denied tenant A's grants," "100-agent launch/exit returns handle count to baseline"). The roadmap must build single-engine launch FIRST, then binding || marker, and only attempt the daemon once that foundation is a gated, working code path.
+The two load-bearing security invariants the roadmapper must enforce phase-by-phase are: (1) **fail-secure on HKLM read failure** -- a registry error must abort, never fall back to permissive defaults; and (2) **single deserialized struct, two consumers** -- proxy and WFP must read the egress allowlist from one MachineEgressPolicy struct, never from independent registry reads. Violating either invariant ships a false security claim. The tamper-evident telemetry claim is honestly scoped to Windows Event Forwarding (external SIEM copy, not a local crypto chain) -- cryptographic-local anchoring belongs to SEED-005 ZT-Infra, not this milestone.
+
+---
 
 ## Key Findings
 
 ### Recommended Stack
 
-Almost nothing new needs to be added. Every NEW dependency already lives in-tree at a pinned version; the deltas are *features* on existing crates, the marker's named-job Win32 calls, and bumping stale internal nono pins in the bindings. Deliberate non-bumps: stay on windows-sys 0.59 (not 0.61.x -- gratuitous cross-target-drift churn), stay on napi 2 (not 3 -- a breaking migration that would balloon scope), and avoid any new wire protocol (the framed JSON SupervisorMessage is proven, bounded, replay-guarded). See [STACK.md](STACK.md).
+The stack delta is minimal. The workspace already carries windows-sys 0.59, tracing/tracing-subscriber, serde/serde_json, and sha2 -- all reused without change. The net-new additions are four crates, all Windows-gated except hmac.
+
+winreg 0.56 is the correct choice for HKLM reads over raw windows-sys FFI: it wraps RegQueryValueExW two-call size-then-data pattern into typed safe Rust (get_value::<u32>(), get_value::<String>()), and its windows-sys >= 0.59, <= 0.61 dep range resolves to the existing workspace pin with no second copy. The Win32_System_Registry feature must be added to the existing windows-sys feature list (currently absent from line 149 of nono-cli/Cargo.toml) to cover the one raw call needed for RegNotifyChangeKeyValue (live-reload, optional for v3.0). The existing platform.rs reg.exe-subprocess approach is acceptable for OS-version detection but unacceptable for hot-path policy reads -- winreg replaces it on the policy path only.
+
+tracing-etw 0.2.3 (ETW/TraceLogging, the SIEM real-time bus path) and eventlog 0.4.0 (Windows Event Log, the Event Viewer/Get-WinEvent path) serve different consumers and both are needed: ETW reaches SIEM collectors directly via real-time session subscription; eventlog reaches local IT admins through the familiar Application log channel. tracing-etw is a tracing-subscriber::Layer -- it drops into the existing init_tracing() chain. eventlog bridges via tracing_log::LogTracer (already a transitive dep). hmac 0.13.0 + the existing sha2 0.11 workspace dep provide per-session HMAC chain capability without adding a new crypto family.
 
 **Core technologies:**
-- windows-sys **0.59** (keep pin; add features only) -- Raw Win32 for named job objects, multi-client pipes, SID/token query. Every needed API (Win32_System_JobObjects, _Pipes, _Security_Isolation) is present; bumping buys nothing and adds drift risk.
-- windows-service **0.7** (in-tree) -- SCM-hosted long-running service. The daemon is a *second instance* of the pattern nono-wfp-service already ships and signs in the MSI.
-- nono lib **0.62.2** + broker arm (windows_low_il_broker:true) -- the validated confining primitive; the launcher uses it unchanged.
-- tokio 1.x (net/io-util/sync) -- async multi-client accept loop for the daemon (sync per-thread is fine for a small known N; tokio for unbounded tenants).
-- pyo3 **0.28** / napi **2** (keep) -- expose confined_run/confinedRun on the existing binding surfaces; bump only the internal nono pin (0.57.0 / 0.33.0 -> 0.62.x).
-
-**Net-new Win32 (no new crate):** CreateJobObjectW with a *name*, OpenJobObjectW, IsProcessInJob/QueryInformationJobObject for the AI_AGENT marker.
+- winreg 0.56 -- safe HKLM policy reads -- eliminates unsafe RegQueryValueExW buffer management; resolves to workspace windows-sys 0.59
+- tracing-etw 0.2.3 -- tracing::Layer for ETW/TraceLogging -- SIEM real-time bus (Splunk UF, Azure Monitor, WEF); no mc.exe manifest needed
+- eventlog 0.4.0 -- log-compat Event Log emitter -- Event Viewer / Get-WinEvent for local IT triage; registered at MSI install via WiX util:EventSource
+- hmac 0.13.0 + existing sha2 -- per-session HMAC chain -- tamper-evidence scoped to within-session; cross-session requires SEED-005
+- windows-sys 0.59 feature Win32_System_Registry -- additive only -- enables RegNotifyChangeKeyValue for optional live-reload; no version bump
+- WiX MSI (stay, no change) -- packaging -- MSIX hard-blocked by LocalSystem WFP service + kernel driver requirement
 
 ### Expected Features
 
-The abstraction boundary contract (E1-E5) is the spine of the milestone. E1-E4 are the **launch-and-confine** contract (already validated); **E5 (a pre-execution interception point) is the new contract** for engines nono cannot parent, and the part with real per-engine variance. See [FEATURES.md](FEATURES.md).
+The four researchers agree on a clean MVP / v3.x / v3.1+ split.
 
-**The abstraction boundary contract (E1-E5):**
-- **E1** -- Engine executable + interpreter path(s) (python.exe/node.exe); launch profile supplies --allow, fail-secure refuse if uncovered.
-- **E2** -- An ownable launch command (argv + env); nono must be the parent, else fall back to E5/adopt.
-- **E3** -- Intended writable workspace as an ABSOLUTE path (engines do NOT inherit launcher CWD -- PowerShell resolved a relative write to C:\).
-- **E4** -- A network identity (AppContainer package SID, broker no-PTY arm) for per-agent WFP scoping.
-- **E5** *(hook-camp only)* -- A pre-execution interception point, used ONLY when nono cannot be the parent (Claude PreToolUse built; Copilot JSON-RPC; Cursor permission gate).
+**Must have (table stakes for v3.0):**
+- Silent MSI install (/qn /norestart, correct exit codes 0/3010, ALLUSERS=1, machine-wide PATH) -- SCCM/Intune deploy dies without this
+- Machine-wide HKLM\SOFTWARE\Policies\nono reader with fail-secure parse -- the spine for all other features
+- Deny-by-default egress: HKLM key presence activates ProxyFilter::new_strict + WFP; machine policy overrides per-user profile
+- Single MachineEgressPolicy struct consumed by both nono-proxy and WFP service (no independent reads)
+- AI-provider presets (*.anthropic.com, *.openai.com, api.github.com) as named built-in groups
+- GPO ADMX template (nono.admx + nono.adml) -- the delivery mechanism for HKLM policy in GPO/Intune shops
+- Structured security events via eventlog (Application log, named EventData fields, EventIDs 10001-10005) + tracing-etw (ETW SIEM path) -- both registered at MSI install via util:EventSource
+- Event emission wired from three existing callsites: exec-strategy post-exit (nono_security::path_deny), nono-proxy/audit.rs::log_denied() (nono_security::network_deny), hooks.rs fail-closed path (nono_security::hook_fail_closed)
+- Auto-provisioned user scratch space at first-run in user context (not from MSI SYSTEM context)
+- Silent root-cert install via MSI CertificateRef for both LocalMachine\Root and CurrentUser\Root
+- nono health JSON verdict command (WFP service state, machine policy state, scratch space state) -- required for SCCM compliance scripts
 
-**Must have (table stakes):**
-- Generic launch-and-confine productionized -- the headline promise; de-spike the validated 003 path.
-- Per-engine launch profiles (Aider + LangChain-Python, both python.exe) carrying E1+E3.
-- Fail-secure exe/interpreter coverage gate per engine -- core nono invariant.
-- Workspace-ownership/relabel handling + clear R-B3 diagnostic (admin-owned dir -> no WRITE_DAC -> confined write fails secure but opaque).
-- Per-engine fit documentation (launch-and-confine vs hook vs Cursor-WSL-only).
+**Should have (v3.x after validation):**
+- Syslog emission (RFC 5424) via telemetry/syslog.rs -- non-WEF shops; same SecurityEvent schema
+- nono verify-egress subcommand -- fleet-scale gate confirms deny-by-default is in effect at both layers
+- Intune OMA-URI / CSP mapping -- MDM shops that do not run GPMC
+- Tamper-evident HMAC chain layered on event emission (hmac + sha2)
+- MSI UpgradeCode + MajorUpgrade for clean v3.1 upgrade path
 
-**Should have (competitive):**
-- nono-py engine binding -- proves "engine is a variable" in code on a real LangChain agent with NO Claude hook; directly addresses the in-process-exec() case. The formal abstraction proof.
-- Persistent multi-tenant daemon -- the marquee v2.12 capability (run several confined agents at once, zero per-launch startup); riskiest, former spike 004.
-- Uniform WFP per-agent network enforcement -- Docker-grade egress control without Docker, works for in-process network calls too.
-
-**Defer (v2+):**
-- Post-hoc demote control -- supplementary IR lever only, never the boundary (leaky/unsound as primary).
-- Native Windows Cursor -- engine-blocked (CLI is Linux/macOS-only).
-- Cross-platform parity of the abstraction (Landlock/Seatbelt) -- lower priority for a Windows milestone.
+**Defer (v3.1+):**
+- Correlation token (proxy deny <-> WFP deny <-> Event Log correlation) -- high wiring complexity; phase after telemetry is stable
+- Policy-change live reload via RegNotifyChangeKeyValue -- snapshot-at-launch is the v3.0 model; live-reload needs ADR before implementation
+- nono audit security-log verify <session-id> -- depends on tamper-evident chain shipping first
+- SEED-005 ZT-Infra immutable ledger -- its own milestone; the local HMAC chain is explicitly out of scope for v3.0
 
 ### Architecture Approach
 
-Four new components map cleanly onto the three existing subsystems. The architecturally distinct path is the **in-process-exec() case (LangChain)**: there is no child boundary to wrap per tool call, so the binding must expose BOTH confined_run(exe, args, ...) (Shape A -- spawn a confined child, identical to spike 003) AND an in-process confine(caps) startup call (Shape B -- apply the sandbox to SELF before any risky work). Shape B is sound only if applied at process startup before any privileged handle is opened. See [ARCHITECTURE.md](ARCHITECTURE.md).
+The architecture is three concentric layers sharing one data source. A new crates/nono-cli/src/config/machine.rs module reads HKLM\SOFTWARE\Policies\nono once at startup, produces a MachinePolicy struct, and fails secure on any parse error. This struct feeds two paths: (1) the egress control path, where MachinePolicy.egress_allowlist is injected into ProxyConfig construction in nono-cli and into the daemon CapabilitySet builder for WFP -- neither nono-proxy nor nono-wfp-service reads the registry independently; and (2) the telemetry path, where a new crates/nono-cli/src/telemetry/ module implements a SecurityEventLayer (tracing::Layer) that is registered in init_tracing() and routes nono_security::* tracing events to the Windows Event Log and ETW sinks. The library (crates/nono/) is untouched -- no policy, no telemetry, no registry reads. All additions land in nono-cli.
 
 **Major components:**
-1. **Engine-agnostic launch path** (MODIFIED) -- generalize the broker arm to parent any covered engine; add per-engine profiles + the AI_AGENT named-job/SID.
-2. **AI_AGENT marker** (NEW Win32 + reuse) -- per-agent *named* job object (kill-group + descendant capture + enumeration) PLUS a per-agent identity SID (the authorization signal).
-3. **nono agentd persistent multi-tenant daemon** (NEW binary) -- modeled byte-for-byte on nono-wfp-service.rs; launches/adopts many agents, owns one persistent multi-client pipe, tracks per-tenant state.
-4. **Multi-tenant capability pipe** (MODIFIED socket_windows.rs) -- one persistent name, N concurrent tenants, each scoped to its own SID via per-tenant SDDL.
-5. **nono-py / nono-ts confined_run + confine** (NEW API on existing bindings).
+1. config/machine.rs (NEW) -- MachinePolicy struct + winreg-backed HKLM reader; fail-secure on ReadError; NotConfigured falls through to per-user profile normally
+2. telemetry/ module (NEW, 4 files) -- SecurityEventLayer (tracing::Layer), SecurityEvent schema (hashed paths, no raw PII), windows.rs emitter (cfg(windows)), syslog.rs emitter (cfg(unix))
+3. scripts/build-windows-msi.ps1 (MODIFIED) -- add util:EventSource registration, HKLM\SOFTWARE\Policies\nono sentinel key, scratch-root ProgramData\nono\, machine-wide PATH Environment element, WiX CertificateRef
+4. ProxyConfig construction site in nono-cli (MODIFIED) -- inject machine_policy.egress_allowlist so proxy reads from the same source as WFP
+5. nono-agentd capability-set builder (MODIFIED) -- inject allowlist into per-agent NetworkCapability for WFP enforcement
+6. Three existing emit callsites (MODIFIED) -- exec-strategy post-exit, nono-proxy/audit.rs, hooks.rs
 
 ### Critical Pitfalls
 
-The pitfalls below are NEW with a persistent multi-tenant daemon -- the per-invocation traps (post-hoc IL-drop demote-only, R-B3 user-owned workspace, exe-coverage gate, absolute grants, broker dev-layout/signing) carry forward unchanged. Each of these MUST become a phase success criterion with a negative test. See [PITFALLS.md](PITFALLS.md).
+1. **Fail-OPEN on HKLM read failure** -- unwrap_or_default() or a fallback to per-user profile on registry error silently makes the machine appear policy-governed while running with no network restriction. Fix: model the result as PolicyReadResult::Enforced | NotConfigured | ReadError; only ReadError is fatal; add a dark-factory gate that injects a permission-denied key and asserts non-zero exit.
 
-1. **Cross-tenant capability theft (load-bearing daemon security property)** -- One shared DACL admitting "any Low-IL same-session process" admits every tenant to every pipe instance. Avoid by authorizing against a kernel-vouched identity: server-side ImpersonateNamedPipeClient + GetTokenInformation (read session/package SID, job membership) + per-tenant SDDL pipe instances. Treat any agent_id in the wire frame as an untrusted routing hint only. Gate the phase on a "tenant B denied tenant A's grants" test.
-2. **AI_AGENT marker forge/shed** -- A named job is openable by name (a rendezvous, not a secret); env-var/argv markers are trivially forgeable; an agent can break away from the job. The marker must be an **unforgeable token SID established by the daemon at spawn-time**, NOT the job name. Use the named job for kill-group/enumeration; use the token SID for authorization. Deny breakaway; ACL the job daemon-only. Adopted (not launched) agents are best-effort/demote-only.
-3. **In-process-exec() engine cannot be confined post-hoc** -- There is structurally nothing to wrap for LangChain PythonREPLTool exec(). The daemon must be the PARENT of the interpreter (parent-or-self-confine); where it cannot, the binding answer is sandbox-self at startup. Never "confine LangChain" by finding a running python.exe and dropping its IL.
-4. **Daemon attack surface / privilege** -- A persistent always-on launcher that runs as SYSTEM (like nono-wfp-service) gives an escaped agent a pivot to ALL tenants + the host. **Least-privilege split:** run the launcher at USER privilege; keep WFP filter manipulation in the SEPARATE elevated nono-wfp-service behind its narrow control pipe. Write the privilege model down as an ADR before coding the service host. The pipe is query-only -- never expands a running agent capabilities (no escape hatch).
-5. **Token & job-object handle lifetime** -- A daemon living for days leaks handles, and reusing one token/job across agents collapses tenant isolation (B inherits A restricting SID + workspace relabel; WFP scope blurs). **One fresh confining token + one fresh job per agent**; tie every per-agent resource to a single owning struct with a Drop that closes all of them; reap exited agents deterministically (wait on job completion/process handle). Verify with a 100-agent launch/exit handle-count-returns-to-baseline test.
-6. **Nested-job collisions / silent confinement loss** -- A daemon launching arbitrary engines routinely meets already-jobbed processes; AssignProcessToJobObject then fails or only nests, and the failure is often silent. Spawn suspended, assign to the AI_AGENT job BEFORE any code runs, fail-secure (terminate) on assign failure; no UI limits on the job.
+2. **Proxy and WFP allowlist drift from independent HKLM reads** -- wiring only proxy to HKLM and leaving WFP on its old per-user path ships false security: WFP continues to allow everything the user configured. Fix: deserialize HKLM once into MachineEgressPolicy; pass the same struct to both enforcement layers; the dark-factory gate must verify both layers reflect the HKLM list, not just one.
+
+3. **Wildcard suffix matching via string ends_with** -- host.ends_with(.anthropic.com) matches anything.anthropic.com.evil.com. Fix: DNS component comparison (split on ., compare right-to-left); this is the exact pattern that produced WR-01 in Phase 56 (is_loopback_domain DNS-component fix) and must be applied to the machine-policy allowlist integration.
+
+4. **SYSTEM-context MSI provisioning writes scratch space to SYSTEM %LOCALAPPDATA%** -- SCCM/Intune runs MSI as SYSTEM; %LOCALAPPDATA% resolves to C:\Windows\system32\config\systemprofile\...; every user R-B3 ownership guard fails. Fix: provision scratch space at first-run from the user own process; MSI creates only machine-global C:\ProgramData\nono\.
+
+5. **Tamper-evident telemetry without external anchor** -- a local HMAC key stored in HKLM\SOFTWARE\nono\ can be deleted and re-signed by a local admin, defeating the claim. Fix: v3.0 tamper-evidence = Windows Event Forwarding to SIEM (external copy out of local attacker reach); local HMAC chain is a v3.x addition after SEED-005 ZT-Infra defines the key-storage model. Write the ADR first.
+
+6. **Event Log custom channel silent-drop without manifest registration** -- RegisterEventSourceW returns NULL if wevtutil im was never run; the code continues silently and no events are emitted. Fix for v3.0: use the existing Application log source pattern (no manifest needed, already proven in nono-wfp-service.rs); defer custom structured manifest + channel to a future SIEM-schema hardening phase; treat RegisterEventSourceW returning NULL as NonoError::TelemetryUnavailable logged to stderr.
+
+---
 
 ## Implications for Roadmap
 
-The dependency-ordered build sequence is the most important output of this research. **Single-engine launch productionization comes FIRST**; everything else sits on top of it. The quality gate ("single-launch before the multi-tenant daemon, and the in-process-exec case addressed") is structurally enforced by this ordering.
+Four researchers reached explicit consensus on a three-phase build order. The dependency is strict: machine-policy spine must be complete before either egress control or telemetry can be wired. Egress control and telemetry can be built in parallel once the spine is done.
 
-### Phase A: Engine-agnostic launch path (productionize spike 003)
-**Rationale:** The whole milestone is "make nono run -- <engine> Just Work per engine." The daemon, binding, and marker all sit on top of the productionized launch path -- nothing can precede it.
-**Delivers:** The validated 003 path promoted to a first-class (de-spiked) code path; per-engine profiles for Aider + LangChain-Python (both python.exe); fail-secure per-engine exe/interpreter coverage; workspace-ownership/relabel handling + R-B3 diagnostic; per-engine fit docs.
-**Addresses:** Generic launch-and-confine; engine launch profiles; fail-secure coverage gate; R-B3 handling; per-engine fit docs (all table-stakes from FEATURES.md).
-**Avoids:** Pitfall 6 (nested-job collisions -- spawn-suspended-then-assign, fail-secure on assign failure, no UI limits).
-**Gate:** A non-Claude engine (Aider) confined end-to-end on a real Win11 host.
+### Phase 82: Silent MSI + Fleet Deployment Infrastructure
 
-### Phase B: nono-py binding + in-process-exec() proof
-**Rationale:** Depends only on Phase A launch semantics; independent of the daemon -- can run in PARALLEL with Phase C. Proves the abstraction in-library and directly addresses the in-process-exec case.
-**Delivers:** Internal nono pin bump (0.57.0 -> 0.62.x); confined_run(exe, args, allow, profile) (Shape A); confine(caps) in-process self-confinement entrypoint (Shape B); a real Python/LangChain agent confined with NO Claude hook.
-**Uses:** pyo3 0.28 (kept), nono 0.62.x (STACK.md).
-**Implements:** The nono-py confined_run + confine component; the in-process-exec() data-flow path (ARCHITECTURE.md Shape A/B).
-**Avoids:** Pitfall 3 (in-process engine confinement -- the binding MUST demonstrate sandbox-self at startup, not just external launch).
-**Gate:** LangChain PythonREPLTool exec() write outside workspace denied; inside allowed.
+**Rationale:** Deployment is the physical prerequisite for everything else. Without a machine-wide MSI that runs correctly under SYSTEM, there is no HKLM\SOFTWARE\Policies\nono key to read, no Event Log source to write to, no service to start, and no scratch space to provision. This phase has the most invisible failure modes -- SYSTEM-context PATH/scratch pitfalls, root-cert TLS trust-path matrix -- and must be dark-factory verified before Phase 83 builds on top of it.
 
-### Phase C: AI_AGENT marker
-**Rationale:** Depends only on Phase A; independent of Phase B (parallel-capable). The daemon prerequisite.
-**Delivers:** Named job object (CreateJobObjectW(name) + OpenJobObjectW); per-agent identity SID (session SID + AppContainer package SID); IsProcessInJob/QueryInformationJobObject identification/enumeration.
-**Uses:** windows-sys 0.59 Win32_System_JobObjects features (STACK.md).
-**Implements:** The AI_AGENT marker component (ARCHITECTURE.md Pattern 1).
-**Avoids:** Pitfall 2 (marker forge/shed -- marker is an unforgeable spawn-time token SID, NOT a named job; deny breakaway; ACL the job daemon-only).
-**Gate:** Launch marks; an arbitrary PID is correctly classified as AI_AGENT or not; a non-daemon-spawned process cannot acquire the marker.
+**Delivers:** Silent msiexec /qn /norestart (exit 0 / 3010); machine-wide PATH; HKLM\SOFTWARE\Policies\nono sentinel key; C:\ProgramData\nono\ machine-global root; util:EventSource registration for Application log; WiX CertificateRef for both cert stores; nono health JSON verdict command.
 
-### Phase D: Persistent multi-tenant daemon (riskiest; former spike 004)
-**Rationale:** Depends on A + C. The daemon is launch-and-confine (A) + marker (C) + multi-client pipe + the genuinely unspiked token/job reuse risk (isolated inside this phase). Cannot start until A is a gated, working code path -- this is the quality gate.
-**Delivers:** nono agentd binary modeled on nono-wfp-service.rs (SCM, Event Log, control pipe, non-Windows stub, MSI reg, non-fatal start); multi-client capability pipe (PIPE_UNLIMITED_INSTANCES + per-tenant SDDL, tenant table keyed on session_id); per-agent capability/policy resolution; token/job reuse across agents; LaunchAgent/AdoptAgent verbs.
-**Uses:** windows-service 0.7, tokio named-pipe server, the framed JSON SupervisorMessage (extend with tenant id ONLY if session_id proves insufficient).
-**Implements:** The daemon + multi-tenant pipe components (ARCHITECTURE.md Patterns 2 & 3).
-**Avoids:** Pitfall 1 (cross-tenant theft -- server-side ImpersonateNamedPipeClient + per-tenant SID); Pitfall 4 (privilege -- least-privilege USER-level launcher split from the elevated WFP service, ADR first); Pitfall 5 (lifetime -- fresh token+job per agent, deterministic reap).
-**Gate:** Two concurrent confined agents, each served independently over one pipe, each scoped to its own SID; cross-tenant request rejected; 100-agent launch/exit returns handle count to baseline.
+**Addresses:** SEED-001 table stakes (silent install, SYSTEM-context safety, non-interactive service start, correct exit codes, Intune Win32 detection rule, nono setup --provision-fleet verb).
 
-### Phase E: Supplementary controls + secondary engines (optional)
-**Rationale:** Demote is supplementary (must follow a proven launch-time default); WFP per-agent and second-engine/second-binding profiles are low-cost adds once the shape is proven.
-**Delivers:** Post-hoc demote control as a daemon "demote tenant" verb (framed explicitly as demote-only); uniform WFP per-agent egress via the existing elevated nono-wfp-service (E4 SID per tenant); Copilot CLI profile (second node engine); nono-ts confinedRun parity (bump internal nono pin 0.33.0 -> 0.62.x).
-**Avoids:** the "detect-and-confine as primary model" anti-feature (demote stays an IR lever, never the boundary).
+**Avoids:** Pitfall 4 (SYSTEM-context scratch space), Pitfall 5 (non-atomic service install + health verdict), Pitfall 13 (root-cert TLS trust path matrix across PowerShell/Node/rustls).
+
+**Dark-factory gate:** verify-dark.ps1 --gate DEPLOY-01 -- silent install under New-LocalUser SYSTEM context; workspace path owned by user not SYSTEM; nono health exits non-zero on degraded service; TLS through proxy verified from three client types.
+
+**Research flag:** Standard WiX + MSI patterns, well-documented. Skip deep research-phase. Use existing build-windows-msi.ps1 as base.
+
+---
+
+### Phase 83: Machine Policy Spine + Egress Reconciliation
+
+**Rationale:** The HKLM policy reader is the single shared dependency for egress control AND telemetry channel configuration. It must land as one atomic phase that wires BOTH nono-proxy and nono-wfp-service to the same MachineEgressPolicy struct. Splitting proxy and WFP across separate phases produces the allowlist-drift false-security state that is the highest-severity pitfall in the codebase.
+
+**Delivers:** crates/nono-cli/src/config/machine.rs with MachinePolicy struct and winreg-backed reader; fail-secure PolicyReadResult enum; ProxyConfig construction site updated to inject egress_allowlist; nono-agentd capability-set builder updated for WFP; AI-provider built-in group (*.anthropic.com etc.) in network-policy.json; GPO ADMX template (nono.admx + nono.adml); nono diagnose-egress <hostname> subcommand.
+
+**Addresses:** SEED-002 table stakes (machine-policy-managed allowlist, deny-by-default posture, wildcard subdomain syntax, machine policy precedence over per-user profile, WFP + proxy from same source, AI-provider presets).
+
+**Avoids:** Pitfall 1 (fail-OPEN on HKLM read failure), Pitfall 2 (proxy/WFP drift), Pitfall 3 (wildcard suffix matching footgun), Pitfall 6 (env-var propagation lag), Pitfall 7 (WOW6432Node redirection -- KEY_WOW64_64KEY required), Pitfall 8 (default-deny blocks AI provider), Pitfall 9 (TOCTOU policy reload widening -- snapshot-at-launch model).
+
+**Stack additions this phase:** winreg = 0.56 in [target.cfg(target_os = windows).dependencies] of nono-cli/Cargo.toml; Win32_System_Registry added to windows-sys feature list.
+
+**Dark-factory gate:** verify-dark.ps1 --gate EGRESS-01 -- inject HKLM allowlist, launch agent, assert proxy rejects out-of-list domain AND WFP blocks unlisted SID; inject permission-denied key, assert non-zero exit; inject WOW6432Node key, assert NOT read; mid-session policy push, assert running session unaffected.
+
+**Research flag:** Standard winreg + Group Policy ADMX patterns are well-documented; the KEY_WOW64_64KEY detail and the PolicyReadResult fail-secure enum design need careful implementation review but no additional research-phase.
+
+---
+
+### Phase 84: SIEM/EDR Telemetry (SEED-003)
+
+**Rationale:** Telemetry is structurally independent from egress control once the machine policy spine is done (it reads MachinePolicy.telemetry_channel for the channel name). It can proceed in parallel with Phase 83 if the MachinePolicy struct API is agreed first, or sequentially after Phase 83 completes. The critical design decision -- Application log source (no manifest, proven in nono-wfp-service.rs) vs custom channel (manifest + wevtutil im in MSI) -- must be made in an ADR before implementation begins. The recommended v3.0 path is Application log source, deferring custom manifest to a future phase.
+
+**Delivers:** crates/nono-cli/src/telemetry/ module (4 files: mod.rs, event.rs, windows.rs, syslog.rs); SecurityEventLayer registered in init_tracing(); SecurityEvent schema with hashed paths and named EventData fields (no raw PII); EventIDs 10001-10005; three emit callsites wired (nono_security::path_deny, nono_security::network_deny, nono_security::hook_fail_closed); ADR recording tamper-evidence scope (external SIEM forwarding, not local crypto chain).
+
+**Addresses:** SEED-003 table stakes (structured events, named EventData fields, defined EventID space, WEF-compatible channel, events wired from DiagnosticFormatter deny path).
+
+**Avoids:** Pitfall 10 (Event Log manifest not registered -- use Application source for v3.0), Pitfall 11 (full paths/PII in SIEM events -- SecurityEvent uses hashed path + category), Pitfall 12 (false tamper-evident claim -- ADR + external-SIEM-forwarding model explicitly documented).
+
+**Stack additions this phase:** tracing-etw = 0.2 and eventlog = 0.4 in [target.cfg(target_os = windows).dependencies] of nono-cli/Cargo.toml; hmac = 0.13 in [dependencies] (cross-platform, for optional HMAC chain extension in v3.x).
+
+**Dark-factory gate:** verify-dark.ps1 --gate TELEMETRY-01 -- clean-host MSI install (no prior wevtutil im); trigger sandbox denial; assert Event Log entry appears in Application log under nono source with correct EventID and named fields; assert NO raw file path in event body; assert ETW provider emits via logman.
+
+**Research flag:** The tracing-etw TraceLogging API and eventlog log-bridge are both well-documented. The SecurityEvent schema design (what to hash, what to categorize, PII policy) warrants a short design review within the phase, not a separate research-phase.
+
+---
 
 ### Phase Ordering Rationale
 
-- **A before everything** -- the daemon, binding, and marker all consume the productionized launch path; it is the foundation.
-- **B || C** -- both depend only on A and are independent of each other, so they can run in parallel. B (binding) is the in-library abstraction proof + the in-process-exec answer; C (marker) is the daemon prerequisite.
-- **D after A + C** -- the daemon = launch-and-confine + marker + multi-client pipe + the unspiked token/job-reuse risk. The quality gate is satisfied structurally: D cannot start until A is gated and C exists. The unproven part (D4, token/job reuse) is isolated and is where a spike-inside-the-phase belongs.
-- **E last** -- demote must follow a proven launch-time default; the rest are low-cost adds.
-- **Pitfall coverage by ordering** -- Pitfall 6 lands in A; Pitfall 3 in B; Pitfall 2 in C; Pitfalls 1, 4, 5 (the daemon load-bearing security properties) all land in D as success criteria.
+- **Phase 82 first** because the MSI provisions the HKLM sentinel key, registers the Event Log source, and establishes the ProgramData/nono/ machine-global root -- all physical prerequisites for Phases 83 and 84 to test against.
+- **Phase 83 before Phase 84** because MachinePolicy.telemetry_channel is read in the SecurityEventLayer initialization, and the fail-secure contract tests in Phase 83 establish the registry-reader pattern that Phase 84 reuses.
+- **Phase 83 and Phase 84 are candidates for parallel execution** by two engineers if the MachinePolicy struct API is locked at the start of Phase 83 and Phase 84 works against a stub implementation.
+- **Never split proxy and WFP egress wiring across phases** (Pitfall 2): both must be wired in Phase 83 or the dark-factory gate must explicitly block Phase 83 from passing until both layers verify.
+- **The Dark Factory pattern** (unattended verify-dark.ps1 --gate verdicts) must accompany each phase as a first-class deliverable, not an afterthought. Each theme has a distinct gate: DEPLOY-01, EGRESS-01, TELEMETRY-01.
 
 ### Research Flags
 
-Phases likely needing deeper research during planning (/gsd:plan-phase --research-phase <N>):
-- **Phase D (multi-tenant daemon):** The token/job *reuse across agents* is the explicitly UNSPIKED part of spike 003/004 -- the highest-risk unknown in the milestone. Server-side client authentication (ImpersonateNamedPipeClient is not yet present in socket_windows.rs), the least-privilege/privilege-model ADR, and nested-job adopt-mode semantics all warrant a spike-inside-the-phase.
-- **Phase B (in-process self-confine, Shape B):** Sandbox-self via Sandbox::apply on the *current* process at startup is a usage pattern not yet exercised by the bindings; the soundness boundary (must precede any privileged handle open) needs validation.
+Phases needing deeper research during planning:
+- **Phase 83 (HKLM spine + egress):** The KEY_WOW64_64KEY WOW6432Node behavior, the PolicyReadResult enum fail-secure contract, and the exact merge semantics between machine policy and per-user profile (especially the lock_egress flag design) warrant a sub-spike or design doc within the phase before implementation. The wildcard suffix matching audit of all filter.rs call sites needs a dedicated checklist.
+- **Phase 84 (telemetry):** The SecurityEvent schema PII policy (what constitutes a path category, what the default TelemetryDetailLevel is) and the ADR on tamper-evidence scope must be written as the first deliverable of the phase before any wiring begins.
 
 Phases with standard patterns (skip research-phase):
-- **Phase A:** spike 003 VALIDATED; the path is proven for cmd/powershell/python. De-spiking + profiles are well-understood; only the R-B3/coverage diagnostics are new work.
-- **Phase C:** Named-job Win32 semantics are documented (Microsoft Learn) and the unnamed-job lifecycle already exists in exec_strategy_windows/; the delta is small (add a name + OpenJobObjectW/IsProcessInJob).
-- **Phase E:** demote (spike 002), WFP (Phase 62), and node-engine profiles (Claude) are all proven shapes.
+- **Phase 82 (MSI):** WiX Environment, CertificateRef, util:EventSource, and ServiceInstall patterns are all well-established. The in-tree build-windows-msi.ps1 and Phase 53/61 signed-MSI history provide sufficient context. No research-phase needed.
+
+---
 
 ## Confidence Assessment
 
 | Area | Confidence | Notes |
 |------|------------|-------|
-| Stack | HIGH | Every NEW dependency already lives in-tree at a pinned version; deltas verified against crates.io. Net-new Win32 is feature-additions on windows-sys 0.59, not a new crate. |
-| Features | HIGH | Engine launch models verified against vendor docs + DeepWiki; confinement primitive proven by spike 003 (cmd/powershell/python confined identically). E5 per-engine variance is the one MEDIUM-ish edge (vendor hook surfaces churn). |
-| Architecture | HIGH | Every integration point grounded in current in-tree code (socket_windows.rs, launch.rs, nono-wfp-service.rs); spike 003 supplies the launch primitive. |
-| Pitfalls | HIGH | Grounded in the in-tree code, banked spike 001-003 findings, project memory, and verified Win32 job-object semantics. The daemon pitfalls are the load-bearing ones and are well-characterized. |
+| Stack | HIGH | All four crates verified against docs.rs; version compatibility matrix confirmed via Cargo.toml dep-range inspection; MSIX anti-feature confirmed via Microsoft Learn official docs |
+| Features | HIGH | Grounded in SEED-001/002/003 seeds + in-tree ProxyFilter, DiagnosticFormatter, AuditRecorder; enterprise deployment patterns from official Microsoft Learn and Intune docs |
+| Architecture | HIGH | Every integration point mapped to current in-tree files (config/user.rs, policy.rs, nono-proxy/config.rs, nono-proxy/audit.rs, diagnostic.rs); no greenfield components |
+| Pitfalls | HIGH | 13 pitfalls grounded in in-tree code (nono-wfp-service.rs, network_policy.rs, diagnostic.rs), project memory (v2.12 Phase 56 WR-01, Phase 60 R-B3), and Phase 53/61 signed-MSI history |
 
 **Overall confidence:** HIGH
 
 ### Gaps to Address
 
-- **Token/job reuse across many agents (Phase D, former spike 004):** The single genuinely unproven part of the milestone. Handle during planning by scoping a spike INSIDE Phase D (or a dedicated pre-D spike) gated on: fresh-token-per-agent isolation, deterministic reap (100-agent handle-baseline test), and cross-tenant denial.
-- **Server-side client authentication in the pipe (Phase D):** ImpersonateNamedPipeClient is NOT currently in socket_windows.rs (the code verifies the *server* PID from the client side, the inverse). The accept-path impersonation + per-tenant SID match is net-new and is the load-bearing cross-tenant property -- validate early.
-- **Daemon privilege model (Phase D):** Must be written down as an ADR (least-privilege USER-level launcher vs. the separate elevated WFP service) BEFORE coding the service host, to avoid inheriting the nono-wfp-service SYSTEM posture by default.
-- **In-process sandbox-self soundness (Phase B):** Validate that Sandbox::apply on the current process is sound only when called before any privileged handle is opened; document that the agent must call confine() first.
-- **AppContainer per-agent SID:** Must CreateAppContainerProfile, not derive-only (else CreateProcessW ERROR_FILE_NOT_FOUND); preserve SystemRoot/windir/SystemDrive env baseline (else CLR 0xFFFF0000). Banked, but re-assert per phase.
+- **winreg vs raw windows-sys for RegNotifyChangeKeyValue:** The live-reload call is not wrapped by winreg; the one raw windows-sys call alongside winreg is confirmed acceptable but the exact async integration pattern (tokio task + HANDLE wait) needs a small code sketch before Phase 83 implementation. This is a v3.x concern if live-reload is deferred.
+- **Exact SecurityEvent PII policy:** Which path components are safe to include at TelemetryDetailLevel=1 (category) vs TelemetryDetailLevel=0 (hash-only) is not fully enumerated. This must be a Phase 84 ADR deliverable before the schema is wired.
+- **Intune 32-bit MDM Extension WOW6432Node write path:** Confirmed as a risk (Pitfall 7) but the specific Intune Management Extension version bitness on Windows 10/11 was not directly verified. The KEY_WOW64_64KEY fix is correct regardless; the gap is whether the Intune CSP deployment scripts need RegistryView::Registry64 explicitly. Flag for the Phase 83 ADMX/OMA-URI deliverable.
+- **rustls_native_certs configuration in nono-proxy:** Pitfall 13 identifies that rustls may be initialized with webpki roots rather than the Windows cert store. The exact initialization code path in nono-proxy was not inspected to confirm; this must be a Phase 82 acceptance criterion.
+
+---
 
 ## Sources
 
 ### Primary (HIGH confidence)
-- In-tree code: crates/nono/src/supervisor/socket_windows.rs (SDDL pipe, PIPE_UNLIMITED_INSTANCES, per-SID ACEs, framed JSON, re-accept, server-PID verify, NO server-side ImpersonateNamedPipeClient -- the multi-tenant gap); crates/nono-cli/src/exec_strategy_windows/launch.rs (job lifecycle, KILL_ON_JOB_CLOSE, suspended-spawn + terminate-on-assign-failure); crates/nono-cli/src/bin/nono-wfp-service.rs (windows-service 0.7 service skeleton); crates/nono/Cargo.toml (windows-sys 0.59); ../nono-py/Cargo.toml (pyo3 0.28); ../nono-ts/Cargo.toml (napi 2).
-- Banked spike findings: .claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md (spike 003 VALIDATED; E1-E5 contract; R-B3/R-B4); windows-confinement-model.md (spikes 001 INVALIDATED / 002 PARTIAL -- post-hoc IL-drop leaky/demote-only).
-- Project memory: windows_appcontainer_wfp_validated (AppContainer SID + CreateAppContainerProfile); windows_hook_interpreter_spawn_gotchas (env baseline); feedback_clippy_cross_target (cross-target gate); project_v210_opened (ADR-65 No-go on kernel driver).
-- Milestone scope: .planning/PROJECT.md "Current Milestone: v2.12 AI Agent Abstraction".
+
+- In-tree crates/nono-cli/Cargo.toml line 149 -- existing windows-sys 0.59 feature set; Win32_System_Registry absence confirmed
+- In-tree scripts/build-windows-msi.ps1 -- WiX MSI generation, machine-scope UpgradeCode, ServiceInstall, Vital=no
+- In-tree crates/nono-cli/src/platform.rs -- existing reg.exe subprocess pattern (gap winreg fills)
+- In-tree crates/nono-cli/src/bin/nono-wfp-service.rs -- Application Event Log EVENT_LOG_SOURCE, RegisterEventSourceW/ReportEventW pattern
+- In-tree crates/nono-cli/src/network_policy.rs -- ResolvedNetworkPolicy, build_proxy_config, WR-01 DNS-component fix
+- In-tree crates/nono/src/diagnostic.rs -- DiagnosticFormatter, DenialRecord (library boundary; re-use for SIEM = Pitfall 11)
+- In-tree crates/nono-proxy/src/config.rs, filter.rs, audit.rs -- ProxyConfig, ProxyFilter::new_strict, log_denied()
+- docs.rs/winreg/latest -- v0.56.0; windows-sys >= 0.59, <= 0.61 dep range
+- docs.rs/tracing-etw/latest -- v0.2.3; MSRV 1.80; TraceLogging self-describing events
+- docs.rs/eventlog/latest -- v0.4.0; fixed EventIDs 1-5; 120-byte embedded DLL
+- docs.rs/hmac/0.13.0 -- compatible with digest 0.10 / sha2 0.11
+- learn.microsoft.com -- MSIX services limitations -- MSIX cannot package LocalSystem services or kernel drivers
+- learn.microsoft.com -- Intune Win32 app deployment
+- learn.microsoft.com -- ADMX-backed policies in Intune
+- learn.microsoft.com -- Writing manifest-based ETW events
+- Project memory: windows_mandatory_label_write_owner, windows_msi_wxs_is_generated, windows_appcontainer_wfp_validated, windows_wfp_enforcement_is_service_only
+- Phase history: 53/61 (signed MSI), 56 (allow_domain + WR-01), 60 (R-B3 ownership guard), v2.11 (WFP service non-fatal start), v2.13 (Dark Factory verify-dark.ps1 gate pattern)
+- SEED-001, SEED-002, SEED-003 (.planning/seeds/)
+- CLAUDE.md -- library-vs-CLI boundary, Configuration load failures must be fatal, path-component-comparison footgun
 
 ### Secondary (MEDIUM confidence)
-- GitHub Copilot CLI -- Tool Execution & Permissions (DeepWiki) -- all tool calls through one validation pipeline; shell + extensions as child processes.
-- Aider Documentation / lint-test -- python process, in-place file edits, /run shell.
-- Cursor CLI -- Installation -- ~/.local/bin, Linux/macOS only; WSL on Windows.
-- LangChain Deep Agents / tools overview -- PythonREPLTool in-process exec(), subprocess ShellTool.
-- Microsoft Learn: Job Objects and AssignProcessToJobObject -- named-job semantics, Windows 8+ nested-job rules.
-- crates.io windows-service (0.8.1); docs.rs pyo3 (0.28.3); docs.rs napi (3.8.4, deliberately staying on 2); docs.rs windows-sys (0.61.2, deliberately staying on 0.59).
 
-### Tertiary (LOW confidence)
-- cursor-agent-cli-windows community patch -- evidence the official Cursor CLI is non-native on Windows.
+- Splunk Lantern -- Windows event log for Enterprise Security -- WEF channel forwarding defaults
+- Microsoft TechCommunity -- Windows Events in Sentinel -- Application channel forwarding behavior
+- learn.microsoft.com -- ADMX Intune OMA-URI -- CSP path for ADMX ingestion
+- GitHub anthropics/claude-code issue #51400 -- wildcard FQDN matching as industry expectation
+- turbo.net -- MSIX limitations 2025 -- MSIX service limitations corroborating Microsoft Learn
 
 ---
-*Research completed: 2026-06-13*
+*Research completed: 2026-06-18*
 *Ready for roadmap: yes*
