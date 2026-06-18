@@ -2472,6 +2472,8 @@ version = "0.62.2"
 dependencies = [
  "cbindgen",
  "nono",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

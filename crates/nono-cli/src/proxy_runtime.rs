@@ -265,6 +265,32 @@ pub(crate) fn start_proxy_runtime(
             port, proxy.allow_bind_ports
         );
     }
+
+    // Per-route diagnostic banner. Lifts credential resolution status —
+    // including misses — to the user-visible info level so the silent
+    // "WARN at debug" failure mode (issue #797) becomes immediately
+    // discoverable.
+    let route_rows = handle.route_diagnostics(&proxy_config);
+    if !route_rows.is_empty() {
+        info!("Proxy routes:");
+        for (prefix, summary) in &route_rows {
+            info!("  /{}  {}", prefix, summary);
+        }
+        if handle.intercept_ca_path().is_some() {
+            info!(
+                "TLS interception trust bundle: {}",
+                handle
+                    .intercept_ca_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            );
+        }
+    }
+
+    let proxy_diagnostics = handle.diagnostics();
+    if !proxy_diagnostics.is_empty() {
+        crate::output::print_proxy_diagnostics(proxy_diagnostics);
+    }
     caps.set_network_mode_mut(nono::NetworkMode::ProxyOnly {
         port,
         bind_ports: proxy.allow_bind_ports.clone(),

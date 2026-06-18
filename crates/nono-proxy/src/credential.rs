@@ -10,11 +10,29 @@
 //! credentials. This module handles only credential-specific concerns.
 
 use crate::config::{InjectMode, RouteConfig};
+use crate::diagnostic::ProxyDiagnostic;
 use crate::error::{ProxyError, Result};
 use base64::Engine;
 use std::collections::HashMap;
 use tracing::{debug, warn};
 use zeroize::Zeroizing;
+
+/// Result of loading credentials at proxy startup.
+#[derive(Debug)]
+pub struct CredentialLoadOutcome {
+    /// Loaded store; may omit routes whose credentials were unavailable.
+    pub store: CredentialStore,
+    /// Per-route warnings for missing or unavailable credentials.
+    pub diagnostics: Vec<ProxyDiagnostic>,
+}
+
+impl CredentialLoadOutcome {
+    /// Extract the store, discarding diagnostics.
+    #[must_use]
+    pub fn into_store(self) -> CredentialStore {
+        self.store
+    }
+}
 
 /// A loaded credential ready for injection.
 ///

@@ -168,6 +168,7 @@ pub(crate) struct ExecutionFlags {
     pub(crate) strategy: exec_strategy::ExecStrategy,
     pub(crate) workdir: PathBuf,
     pub(crate) no_diagnostics: bool,
+    pub(crate) diagnostics_json: bool,
     pub(crate) silent: bool,
     pub(crate) capability_elevation: bool,
     /// Phase 41 Plan 09 (REQ-CI-01 SC#4 gap closure, Gap 2): the field is
@@ -221,6 +222,7 @@ impl ExecutionFlags {
             workdir: std::env::current_dir()
                 .map_err(|e| NonoError::SandboxInit(format!("Failed to get cwd: {e}")))?,
             no_diagnostics: false,
+            diagnostics_json: false,
             silent,
             capability_elevation: false,
             interactive_shell: false,
@@ -271,6 +273,7 @@ pub(crate) fn prepare_run_launch_plan(
     };
     let args = run_args.sandbox;
     let no_diagnostics = run_args.no_diagnostics;
+    let diagnostics_json = run_args.diagnostics_json;
     let rollback = run_args.rollback;
     let no_rollback_prompt = run_args.no_rollback_prompt;
     let no_audit = run_args.no_audit;
@@ -356,6 +359,7 @@ pub(crate) fn prepare_run_launch_plan(
             // it takes priority over workdir when both are provided.
             workdir: resolve_requested_workdir(args.workspace.as_ref().or(args.workdir.as_ref())),
             no_diagnostics,
+            diagnostics_json,
             silent,
             capability_elevation: prepared.capability_elevation,
             interactive_shell: false,

@@ -438,6 +438,15 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         cap_file: cap_file.as_deref(),
         current_dir: &current_dir,
         no_diagnostics: flags.no_diagnostics || flags.silent,
+        diagnostics_json: flags.diagnostics_json,
+        proxy_diagnostics: proxy_handle.as_ref().and_then(|handle| {
+            let diagnostics = handle.diagnostics();
+            if diagnostics.is_empty() {
+                None
+            } else {
+                Some(diagnostics)
+            }
+        }),
         threading,
         protected_paths: &trust.protected_paths,
         profile_save_base: flags

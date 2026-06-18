@@ -16,6 +16,9 @@ proj/
 build_notes/
 docs/presentations/
 docs/cli/development/
+.worktrees
+.nono
+diagnostics.json
 
 
 # Library tests

@@ -895,7 +895,6 @@ mod tests {
             path: target,
             access: AccessMode::Read,
             reason: "sensitive_path".to_string(),
-            suggested_flag: None,
         };
 
         let patch = build_run_profile_patch(
@@ -927,13 +926,11 @@ mod tests {
             path: target.clone(),
             access: AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            suggested_flag: Some(format!("--read-file {}", target.display())),
         };
         let write = PolicyExplanation {
             path: target,
             access: AccessMode::Write,
             reason: "insufficient_access".to_string(),
-            suggested_flag: None,
         };
 
         let patch = build_run_profile_patch(
@@ -973,13 +970,11 @@ mod tests {
             path: suppressed_target,
             access: AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            suggested_flag: None,
         };
         let visible_denial = PolicyExplanation {
             path: visible_target,
             access: AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            suggested_flag: None,
         };
 
         let patch = build_run_profile_patch(
@@ -1023,7 +1018,6 @@ mod tests {
             path: nested_target,
             access: AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            suggested_flag: None,
         };
 
         let patch = build_run_profile_patch(
