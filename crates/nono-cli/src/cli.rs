@@ -247,6 +247,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   learn      Trace a command to discover required filesystem paths
   why        Check why a path or network operation would be allowed or denied
   classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+  health     Print a read-only fleet deployment health report (JSON-capable)
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         Inspect the unsupported Windows session-management surface
@@ -548,6 +549,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   learn      [deprecated] Use `nono run` to learn from sandbox denials
   why        Check why a path or network operation would be allowed or denied
   classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+  health     Print a read-only fleet deployment health report (JSON-capable)
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         List running or detached sandbox sessions
@@ -5175,6 +5177,8 @@ mod tests {
         "why",
         // Phase 73 D-04: AI_AGENT structural classification verb.
         "classify",
+        // Phase 82 DEPLOY-06: read-only fleet deployment health diagnostic.
+        "health",
         "ps",
         "stop",
         "detach",
