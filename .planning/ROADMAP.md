@@ -36,7 +36,7 @@ granularity: standard
 - [x] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
 - [x] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
 - [x] **Phase 80: Clean-Host Install UAT** - Verify the machine MSI installs and runs on a fresh Win11 host with no manual steps via the unattended clean-host harness. (Build fix + gate dev-host-verified; live-VM PASS host-gated per D-01, tracked â†’ Phase 81 aggregator.)
-- [ ] **Phase 81: Milestone Close Aggregator** - Collect all per-phase verdict artifacts into a single aggregator so v2.13 completion is evaluable from harness output alone.
+- [x] **Phase 81: Milestone Close Aggregator** - Collect all per-phase verdict artifacts into a single aggregator so v2.13 completion is evaluable from harness output alone. (Aggregator verified 4/4 SCs; live close signal = `pwsh -File scripts/verify-dark.ps1` → `_aggregate.json`. Current overall=FAIL is the Phase-79 wfp gate's stale-nono.exe host condition, not an aggregator defect.)
 
 <details>
 <summary>âœ… v2.12 AI Agent Abstraction (Phases 71-75) â€” SHIPPED 2026-06-16</summary>
@@ -198,7 +198,7 @@ Plans:
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 2/2 | Complete    | 2026-06-18 |
 | 80. Clean-Host Install UAT | 2/2 | Complete    | 2026-06-18 |
-| 81. Milestone Close Aggregator | 1/1 | Complete   | 2026-06-18 |
+| 81. Milestone Close Aggregator | 1/1 | Complete    | 2026-06-18 |
 
 ## References
 
