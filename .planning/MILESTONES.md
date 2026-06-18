@@ -1,5 +1,26 @@
 # Milestones
 
+## v2.13 Carry-Forward Closeout (Dark Factory) (Shipped: 2026-06-18)
+
+**Phases completed:** 6 phases (76, 77, 78, 79, 80, 81), 13 plans, 17 tasks. 93 commits, +14,226/-161 across 80 files (2026-06-16 → 2026-06-18).
+
+**Tag:** `v2.13` (milestone marker, not a `v*.*.*` release tag — no release.yml trigger, no crate publish). Shipped on branch `milestone/v2.13-carryforward-closeout`.
+
+**Delivered:** Closed the v2.12 confinement long-tail under a **Dark Factory** mandate — every historically host-gated verification collapses to a single unattended scripted gate emitting a machine-readable verdict, with one aggregator making milestone completion evaluable from harness output alone. **10/10 requirements satisfied; milestone audit `tech_debt`** (no requirement gaps, 0 wiring defects; status reflects host-execution deferrals only).
+
+**Key accomplishments:**
+
+- **Phase 76 — Self-Verifying Harness Foundation (DARK-01)** — `scripts/verify-dark.ps1` runner: gate auto-discovery, `Test-Precondition`→`Invoke-Gate` contract, typed JSON verdicts (PASS / FAIL / SKIP_HOST_UNAVAILABLE), exit mapping (0/2/3, reserving 1/4+ for harness-internal errors), `.nono-runtime/verdicts/` persistence + the `harness-self-check` reference gate. Code review caught + fixed 2 fail-secure Criticals (false-FAIL on crash, false-PASS on unknown verdict) before close. The framework all host-gated phases build on; all 5 SC verified on Win11.
+- **Phase 77 — Copilot CLI End-to-End Confinement (CPLT-01/02/03)** — runtime ancestor-chain `FILE_READ_ATTRIBUTES` grant (RAII guard over BOTH the binary and `--workspace` chains, dedup) fixing Node-ESM `realpathSync`/`lstat` under AppContainer + idempotent non-destructive one-time-admin `nono setup --grant-ancestors` (ALL APPLICATION PACKAGES `S-1-15-2-1` RA on `C:\` + `C:\Users`) + `copilot-e2e` scripted gate. CPLT-03 literal green PASS is host-gated by GitHub org policy (gate fails-closed to SKIP; override-accepted).
+- **Phase 78 — Cross-Process Classification (CLAS-01/02)** — daemon control-pipe `Classify` verb making `nono classify <pid>` authoritative cross-process, caller-gated (same Low-IL-denying SDDL as the control pipe), tenant-safe (verdict-only, no cross-tenant SID disclosure); daemon-first routing with structural fallback. Live Win11 26200 host PASS (pid→AiAgent); unattended gate `cargo test --bin nono-agentd -- classify`.
+- **Phase 79 — WFP Egress Isolation + nono-ts Ergonomics (WFP-01/TSRG-01)** — per-SID WFP egress isolation structural-proof gate (two confined agents, distinct AppContainer SIDs) + `confinedRun` defaults to the Low-IL broker arm and auto-covers the target exe directory in nono-ts, so `confinedRun({target})` works with no manual profile/coverage flags.
+- **Phase 80 — Clean-Host Install UAT (INST-01)** — MSI build fix (`+crt-static`, Vital=no/ErrorControl=ignore) + the unattended `clean-host-install` gate (dirty-host detection + `msiexec /quiet` orchestration) replacing Phase 67's interactive UAT. Build fix + gate dev-host-verified; live clean-VM PASS operator-gated per D-01.
+- **Phase 81 — Milestone Close Aggregator (DARK-02)** — the no-flag `verify-dark.ps1` invocation rolls every discovered gate verdict into `_aggregate.json` (`{gates:[...], overall}`) with a CI-consumable exit contract (0 for PASS/PASS_WITH_SKIPS, non-zero for FAIL) — the single machine-readable v2.13 close signal. Verified 4/4 SCs.
+
+**Known deferred items at close:** 44 historical open artifacts acknowledged (see STATE.md Deferred Items). Documented tech debt (host-execution deferrals, not code deficiencies): live aggregate close signal reports FAIL on the dev host due to a STALE `C:\Program Files\nono\nono.exe` lacking the `agent` subcommand (fix: prepend fresh `target\release` to PATH + run wfp host setup, re-run for PASS_WITH_SKIPS); CPLT-03 literal green PASS needs a Copilot-CLI-enabled GitHub account; INST-01 live clean-VM PASS needs a fresh Win11 VM + MSI rebuilt after 80-01; DIST-SIGN-01 untrusted-POC-cert broker path not exercised by the clean-host gate. Repo stays PUBLIC pending Microsoft minifilter-altitude approval.
+
+---
+
 ## v2.12 AI Agent Abstraction (Shipped: 2026-06-16)
 
 **Phases completed:** 5 phases (71, 72, 73, 74, 75), 28 plans (incl. 5 gap-closure: 74-07, 74-08, 75-06, 75-07, 75-08).

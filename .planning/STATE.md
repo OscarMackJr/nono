@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: milestone_complete
-last_updated: "2026-06-18T13:31:43.379Z"
-last_activity: 2026-06-18
+status: Awaiting next milestone
+last_updated: "2026-06-18T13:56:49.469Z"
+last_activity: 2026-06-18 — Milestone v2.13 completed and archived
 progress:
   total_phases: 6
-  completed_phases: 7
+  completed_phases: 6
   total_plans: 13
   completed_plans: 13
-  percent: 117
+  percent: 100
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -25,28 +25,10 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 81
-
-- 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`. **COMPLETE** (`aaafe4ff`).
-- 78-02 (wave 2): `classify_daemon_request` + daemon-first `app_runtime.rs` dispatch + structural fallback; `windows_control_pipe_request`/`is_pipe_not_found` promoted to `pub(crate)`; SC1/SC2/SC4 integration test (gated `NONO_DAEMON_INTEGRATION_TESTS=1`); live-daemon host PASS on Win11 26200. **COMPLETE** (`0f8cdeb7`, `ad284903`).
-- CLAS-01/CLAS-02 both satisfied. SC1 (AiAgent cross-process, NON-optional) + SC2 + SC3 (VERIFIED_BY_SDDL) + SC4 (no SID) all PASS.
-- Key decision: integration test helper re-implements pipe framing (Rust pub(crate) not visible to integration test binaries); daemon-absent uses "daemon-absent" sentinel string for fallback routing.
-- Cross-target clippy: PARTIAL — cfg(windows)-only new code; deferred to CI per CLAUDE.md rule.
-
----
-Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-18
-NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
-
-**Phase 77 close notes (durable):**
-
-- CPLT-01 RA guard now walks BOTH the binary chain AND the `--workspace` chain (`snapshot_and_apply_targets`, dedup, per-chain D-04 stop) — `dacl_guard.rs` + wired in `mod.rs`.
-- CPLT-02 `nono setup --grant-ancestors` (ALL APPLICATION PACKAGES `S-1-15-2-1`, RA-only on `C:\`+`C:\Users`) verified working + idempotent on live Win11; the grant is durable (persists on the host).
-- The gate `scripts/gates/copilot-e2e.ps1` was hardened live: killed a critical false-PASS (PASSed on nono "Profile not found"), added WinGet exe + node-interpreter coverage resolution, `--workspace` + R-B3 `/setowner` ownership, `--allow-all-tools` (Copilot's `-p` alone hangs), and org-policy → SKIP detection.
-- **Literal green `copilot-e2e` PASS requires a GitHub account/host where Copilot CLI is org-enabled** (carry-forward — not a nono defect; the gate emits PASS there, SKIP on org-restricted).
-- On Win11 dev host the gate must run with the fresh release build on PATH (`target\release` prepended) — the installed `C:\Program Files\nono\nono.exe` was a stale v0.57.5 without the copilot-cli profile.
+Phase: Milestone v2.13 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-18 — Milestone v2.13 completed and archived
 
 ### v2.13 Phase Summary (active)
 
@@ -118,6 +100,20 @@ NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independ
 
 ## Deferred Items
 
+### Acknowledged at v2.13 close (2026-06-18)
+
+44 open artifacts acknowledged and deferred at milestone close (`gsd-sdk query audit-open`): 35 quick_tasks (mostly pre-v2.5 `missing` slugs), 3 todos, 5 seeds, 1 verification gap. None block v2.13 — the v2.13-specific carry-forwards were resolved into Phases 76-81 (see below).
+
+Documented tech debt accepted at close (host-execution deferrals, not code deficiencies):
+
+| Category | Item | Status |
+|----------|------|--------|
+| aggregator | Live `_aggregate.json` close signal = FAIL on dev host | STALE `C:\Program Files\nono\nono.exe` (no `agent` subcmd) makes the wfp gate FAIL; fix = prepend fresh `target\release` to PATH + wfp host setup, re-run for PASS_WITH_SKIPS. Not an aggregator defect. |
+| CPLT-03 | Copilot CLI literal green PASS | Host-gated — GitHub org policy denies Copilot CLI on this account; gate fails-closed to SKIP. Needs a Copilot-enabled GitHub account. |
+| INST-01 | Clean-host MSI live clean-VM PASS | Operator-gated per D-01 — needs a fresh Win11 VM + MSI rebuilt after 80-01. Gate + build fix dev-host-verified. |
+| DIST-SIGN-01 | Untrusted-POC-cert broker/supervised path | Not exercised by the clean-host gate (install-level only, D-05). Deferred (recorded in 80-02). |
+| process-hygiene | SUMMARY `requirements_completed` frontmatter | Mostly empty arrays; VERIFICATION.md is authoritative. Populate going forward. |
+
 ### v2.12 carry-forwards (resolved in v2.13)
 
 All four are now tracked as v2.13 phases:
@@ -148,9 +144,7 @@ Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65
 
 ## Operator Next Steps
 
-- **NEXT: `/gsd:plan-phase 76`** — Phase 76: Self-Verifying Harness Foundation.
-- Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
-- Current branch is `fix/ci-green-all-targets` (PR #9). Ensure you're on a clean branch for v2.13 work.
+- Start the next milestone with /gsd-new-milestone
 
 ## Quick Tasks Completed
 
