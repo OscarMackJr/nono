@@ -234,8 +234,13 @@ if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
             Type="ownProcess"
             Start="auto"
             Account="LocalSystem"
-            ErrorControl="normal"
-            Arguments="--service-mode" />
+            ErrorControl="ignore"
+            Arguments="--service-mode"
+            Vital="no" />
+            <!-- D-04: Vital (PascalCase, YesNoTypeUnion) on ServiceInstall is the WiX v4
+                 non-fatal service mechanism — a service install/start failure will not roll
+                 back the MSI. ErrorControl ignore is belt-and-suspenders at SCM boot-time only
+                 and has no effect on install-time rollback. -->
         <ServiceControl
             Id="svcCtrlWfpService"
             Name="nono-wfp-service"

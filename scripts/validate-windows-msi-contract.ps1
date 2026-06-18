@@ -213,6 +213,10 @@ if ($serviceBinaryFullPath -ne "") {
         -Message "Machine MSI ServiceControl Remove mismatch"
     Assert-Equal -Actual $machineServiceControl.Wait -Expected "yes" `
         -Message "Machine MSI ServiceControl Wait mismatch"
+    Assert-Equal -Actual $machineServiceInstall.ErrorControl -Expected "ignore" `
+        -Message "Machine MSI ServiceInstall ErrorControl mismatch (must be ignore so SCM start failure is non-fatal per D-04)"
+    Assert-Equal -Actual $machineServiceInstall.Vital -Expected "no" `
+        -Message "Machine MSI ServiceInstall Vital mismatch (must be no so a service start failure does not roll back the install per D-04 — Vital is on ServiceInstall, not ServiceControl)"
 
     # User MSI must contain no service elements (D-02)
     $userServiceInstalls = $userDoc.SelectNodes("//*[local-name()='ServiceInstall']")
