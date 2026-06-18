@@ -88,24 +88,24 @@ Explicitly excluded. Documented to prevent scope creep.
 
 ## Traceability
 
-Which phases cover which requirements. Filled during roadmap creation.
+Which phases cover which requirements.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEPLOY-01 | TBD | Pending |
-| DEPLOY-02 | TBD | Pending |
-| DEPLOY-03 | TBD | Pending |
-| DEPLOY-04 | TBD | Pending |
-| DEPLOY-05 | TBD | Pending |
-| DEPLOY-06 | TBD | Pending |
-| POLICY-01 | TBD | Pending |
-| POLICY-02 | TBD | Pending |
-| POLICY-03 | TBD | Pending |
-| EGRESS-01 | TBD | Pending |
-| EGRESS-02 | TBD | Pending |
-| EGRESS-03 | TBD | Pending |
-| EGRESS-04 | TBD | Pending |
-| TELEM-01 | TBD | Pending |
-| TELEM-02 | TBD | Pending |
-| TELEM-03 | TBD | Pending |
-| TELEM-04 | TBD | Pending |
+| DEPLOY-01 | Phase 82 | Pending |
+| DEPLOY-02 | Phase 82 | Pending |
+| DEPLOY-03 | Phase 82 | Pending |
+| DEPLOY-04 | Phase 83 | Pending |
+| DEPLOY-05 | Phase 82 | Pending |
+| DEPLOY-06 | Phase 82 | Pending |
+| POLICY-01 | Phase 83 | Pending |
+| POLICY-02 | Phase 83 | Pending |
+| POLICY-03 | Phase 83 | Pending |
+| EGRESS-01 | Phase 83 | Pending |
+| EGRESS-02 | Phase 83 | Pending |
+| EGRESS-03 | Phase 83 | Pending |
+| EGRESS-04 | Phase 83 | Pending |
+| TELEM-01 | Phase 84 | Pending |
+| TELEM-02 | Phase 84 | Pending |
+| TELEM-03 | Phase 84 | Pending |
+| TELEM-04 | Phase 84 | Pending |

@@ -3,151 +3,81 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I (Deploy, Control, Compliance)
 status: planning
-last_updated: "2026-06-18T14:25:31.286Z"
+last_updated: "2026-06-18"
 last_activity: 2026-06-18
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
 ---
 
-# Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
+# Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71-75 complete, shipped + archived). Phase numbering continues from Phase 75 (Phases 76-81 — NOT reset to 1).
+See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-81 complete, shipped + archived). Phase numbering continues from Phase 81 (Phases 82-84 — NOT reset to 1).
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 81 — milestone-close-aggregator
+**Current Focus:** Phase 82 — Fleet Deployment Infrastructure (ready to plan)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 82 of 84 (Fleet Deployment Infrastructure)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-18 — Milestone v3.0 started
+Status: Ready to plan
+Last activity: 2026-06-18 — Milestone v3.0 roadmap created; Phase 82 is next
 
-### v2.13 Phase Summary (active)
+Progress: [░░░░░░░░░░] 0%
 
-| Phase | Goal | Requirements | SC | Status | Host gate | Unattended gate |
-|-------|------|--------------|----|--------|-----------|-----------------|
-| 76 | Self-Verifying Harness Foundation — build the scripted-gate framework; all host-gated phases depend on it | DARK-01 | 5 | ⬜ Not started | Real Win11 host | `verify-dark.ps1 --gate harness-self-check` |
-| 77 | Copilot CLI End-to-End Confinement — fix Node-ESM ancestor RA + one-time-admin setup + scripted proof | CPLT-01, CPLT-02, CPLT-03 | 4 | ✅ Complete (verified; CPLT-03 host-PASS = reasoned SKIP, org-policy) | Win11 + Copilot CLI + admin | `verify-dark.ps1 --gate copilot-e2e` |
-| 78 | Cross-Process Classification — daemon Classify verb + caller-gating + tenant safety | CLAS-01, CLAS-02 | 4 | ✅ Complete (SC1/SC2/SC3/SC4 PASS, Win11 26200 host-verified 2026-06-17) | Win11 + nono-agentd running | `cargo test --bin nono-agentd -- classify` |
-| 79 | WFP Egress Isolation + nono-ts Ergonomics — empirical two-agent WFP test + confinedRun defaults | WFP-01, TSRG-01 | 4 | ⬜ Not started | Win11 + Node/napi | `verify-dark.ps1 --gate wfp-egress-isolation` |
-| 80 | Clean-Host Install UAT — MSI installs clean on fresh Win11 host via scripted gate | INST-01 | 4 | ⬜ Not started | Clean Win11 host (no prior nono) | `verify-dark.ps1 --gate clean-host-install` |
-| 81 | Milestone Close Aggregator — collect all verdicts into one unattended close signal | DARK-02 | 4 | ⬜ Not started | Win11 (after all prior gates run) | `verify-dark.ps1` (no flags) |
+## Performance Metrics
 
-**Dependencies:**
+**Velocity:**
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: —
 
-- **76 FIRST** (harness foundation — Phases 77, 79, 80 depend on it for their scripted gates).
-- **77** depends on Phase 76. Copilot end-to-end uses the harness for its gate script.
-- **78** is independent of 77/79/80 — depends only on Phase 74 daemon (already shipped). Can run in parallel with 77/79/80.
-- **79** depends on Phase 76 (WFP gate uses harness); TSRG-01 is independent but natural companion to WFP-01.
-- **80** depends on Phase 76 (clean-host gate uses harness). No dependency on 77/79.
-- **81 LAST** (aggregator — depends on all prior phases having run their gates).
-
-### Host-availability gates (v2.13)
-
-| Phase | Gate | Notes |
-|-------|------|-------|
-| 76 | Real Win11 host | Harness itself must run on Win11 to validate no-prompt behavior. |
-| 77 | Win11 + Copilot CLI + one-time-admin | `gh copilot suggest` must be installed; one-time-admin RA grant runnable. |
-| 78 | Win11 + nono-agentd running | Daemon from Phase 74 must be live; no extra host requirements. |
-| 79 | Win11 + Node/napi-rs build | WFP kernel enforcement + nono-ts napi build both require live Win11. |
-| 80 | Clean Win11 host | No prior nono install, no VC++ redist — the definition of the gate. |
-| 81 | Win11 (same host) | Aggregator runs after per-phase gates have deposited verdict artifacts. |
-
-## Key Decisions
-
-### v2.13 decisions
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| Phase 76 (DARK-01 harness) is the foundation phase — precedes all other phases | all | Every host-gated item (Copilot, WFP, clean-host) depends on the harness for its scripted gate. Building the framework first lets Phases 77/79/80 write gates against a stable contract rather than each reinventing a one-off script. |
-| DARK-01 and DARK-02 are split into their own phases (76 and 81) | 76, 81 | DARK-01 is infrastructure that other phases consume; coupling it to a feature phase would make that phase's gate depend on half-built infrastructure. DARK-02 (aggregator) is definitionally last and a poor co-traveler with any feature work. |
-| CLAS-01/02 (Phase 78) is NOT harness-gated | 78 | Cross-process classification is verifiable via `cargo test --bin nono-agentd` without an interactive harness. The daemon test binary (established in Phase 74) is the unattended gate. |
-| WFP-01 and TSRG-01 are in the same phase (79) | 79 | Both are supplementary/tooling items with no hard dependency between them; both require a Win11 host with napi/node; shipping them together keeps the phase count at a manageable 6 for 10 requirements and avoids a single-requirement phase for either. |
-| Phase 80 (clean-host) has no dependency on Phases 77/79 | 80 | A clean-host install gate depends only on the MSI (already built in Phase 67) and the harness (Phase 76). Copilot confinement and nono-ts ergonomics are irrelevant to whether the MSI installs clean on a fresh host. |
-| DARK-02 aggregator is Phase 81 (last) | 81 | The aggregator collects verdicts from all prior phases; it cannot be correct until all gates have been defined and run. |
-
-### Key Decisions (carried from v2.12 — still load-bearing)
-
-- **Dark Factory mandate:** every historically host-gated item ships a scripted unattended gate that emits a machine-readable verdict. Interactive human UAT is NOT a valid verification mechanism for v2.13.
-- **Composition over green-field:** no new wire protocol, no new frameworks; Phase 74 daemon + Phase 62 WFP + Phase 75 nono-ts napi-2 shapes are all proven. Deltas are a Classify verb, RA ancestor grant, napi ergonomics, and a PowerShell harness.
-- **Cross-target clippy (Linux + macOS) is a MUST** per CLAUDE.md for any cfg-gated Unix code touched; Windows dev host cannot compile cfg(unix); CI is the load-bearing signal. Phase 77 (ancestor RA grant) and Phase 78 (Classify verb) touch Windows-only code — verify CI stays green.
-- **Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude (verify no `build_notes/`/`.gsd/` staged before any push).
+*Updated after each plan completion*
 
 ## Accumulated Context
 
-### Codebase facts carried into v2.13 (do not re-derive)
+### Decisions (v3.0)
 
-- Daemon `nono-agentd` already serves `\\.\pipe\nono-agentd-control` with Low-IL-denying SDDL (Phase 74). CLAS adds a `Classify` verb to that existing `control_loop.rs`.
-- AppContainer/Low-IL broker arm (`windows_low_il_broker:true`), WFP kernel enforcement (Phase 62), and AI_AGENT marker (Phase 73, daemon-minted AppContainer SID) are all shipped and proven.
-- nono-ts win32 napi loader + cfg(windows) exports must be regenerated on Windows (napi-rs 2 kept; pyo3 0.28 kept; windows-sys 0.59 kept — no dep bumps planned).
-- Per-agent WFP add@launch/remove@reap is already in Phase 75 code (`SUPP-02`); WFP-01 needs a network-scoped test profile + empirical isolation test, not a new WFP integration.
-- The Node-ESM `realpathSync lstat('C:\')` root cause is documented in spike 75-08: `FILE_READ_ATTRIBUTES` is denied for every ancestor up to drive root; fix = nono grants ancestor-chain RA at launch + one-time-admin `C:\`/`C:\Users` ACL grant (package-SID, non-destructive).
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| Build order is deployment → policy spine → telemetry | 82→83→84 | MSI provisions the HKLM sentinel key and Event Log source that Phases 83 and 84 test against. Policy spine must exist before egress or telemetry can read from it. |
+| Proxy and WFP wired to HKLM in one atomic phase (83) | 83 | Splitting proxy and WFP wiring across phases creates the allowlist-drift false-security state (Pitfall 2). Both layers read from the same MachineEgressPolicy struct in the same phase. |
+| Stay WiX MSI; MSIX out of scope | 82 | MSIX cannot package the LocalSystem nono-wfp-service or kernel driver. WiX MSI CI pipeline is already proven (Phases 53/61). |
+| Scratch space provisioned at first-run, not MSI time | 82/83 | MSI runs as SYSTEM; %LOCALAPPDATA% resolves to SYSTEM profile path, making every user R-B3 ownership guard fail (Pitfall 4). MSI creates only C:\ProgramData\nono\; user scratch is created at first run in user context. |
+| Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
+| Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
+| Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
 
-### Pitfall guards carried into v2.13
+### Pending Todos
 
-- **AppContainer per-agent SID:** `CreateAppContainerProfile`, NOT derive-only (else `CreateProcessW` `ERROR_FILE_NOT_FOUND`). (memory `windows_appcontainer_wfp_validated`)
-- **Env baseline for CLR/PowerShell children:** preserve `SystemRoot`/`windir`/`SystemDrive` (else CLR `0xFFFF0000`). (memory `windows_hook_interpreter_spawn_gotchas`)
-- **Cap-pipe DACL handshake:** Low-IL/AppContainer rendezvous (package-SID READ grant before the blocking `ConnectNamedPipe`). (memory `windows_appcontainer_cap_pipe_reachability`)
-- **`nono classify` in-process vs cross-process:** Phase 73 shipped in-process structural classify (non-authoritative by design). Phase 78's `Classify` verb is the authoritative cross-process path via the daemon pipe. Never conflate the two.
+None yet.
+
+### Blockers/Concerns
+
+- **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
+- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
 
 ## Deferred Items
 
-### Acknowledged at v2.13 close (2026-06-18)
+Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
-44 open artifacts acknowledged and deferred at milestone close (`gsd-sdk query audit-open`): 35 quick_tasks (mostly pre-v2.5 `missing` slugs), 3 todos, 5 seeds, 1 verification gap. None block v2.13 — the v2.13-specific carry-forwards were resolved into Phases 76-81 (see below).
-
-Documented tech debt accepted at close (host-execution deferrals, not code deficiencies):
-
-| Category | Item | Status |
-|----------|------|--------|
-| aggregator | Live `_aggregate.json` close signal = FAIL on dev host | STALE `C:\Program Files\nono\nono.exe` (no `agent` subcmd) makes the wfp gate FAIL; fix = prepend fresh `target\release` to PATH + wfp host setup, re-run for PASS_WITH_SKIPS. Not an aggregator defect. |
-| CPLT-03 | Copilot CLI literal green PASS | Host-gated — GitHub org policy denies Copilot CLI on this account; gate fails-closed to SKIP. Needs a Copilot-enabled GitHub account. |
-| INST-01 | Clean-host MSI live clean-VM PASS | Operator-gated per D-01 — needs a fresh Win11 VM + MSI rebuilt after 80-01. Gate + build fix dev-host-verified. |
-| DIST-SIGN-01 | Untrusted-POC-cert broker/supervised path | Not exercised by the clean-host gate (install-level only, D-05). Deferred (recorded in 80-02). |
-| process-hygiene | SUMMARY `requirements_completed` frontmatter | Mostly empty arrays; VERIFICATION.md is authoritative. Populate going forward. |
-
-### v2.12 carry-forwards (resolved in v2.13)
-
-All four are now tracked as v2.13 phases:
-
-- Copilot CLI end-to-end → Phase 77 (CPLT-01/02/03)
-- A1 empirical WFP isolation → Phase 79 (WFP-01)
-- Cross-process authoritative classify → Phase 78 (CLAS-01/02)
-- nono-ts `confinedRun` ergonomics → Phase 79 (TSRG-01)
-- Phase 67 clean-host install → Phase 80 (INST-01)
-
-### Explicit v2.13 out-of-scope (deferred)
-
-- **UPST9 upstream sync** — deferred to its own later cadence.
-- **Enterprise-hardening horizon** — SEED-001/002/003/005, Azure Trusted Signing — separate enterprise milestone.
-- **WR-02 EDR HUMAN-UAT / Gap 6b production kernel driver** — v3.0 deferrals re-affirmed.
-
-### Historical (acknowledged at prior closes)
-
-Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — mostly pre-v2.5 `missing` quick-task slugs + historical UAT/verification bookkeeping. Carried, none blocking.
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Host-execution | stale `C:\Program Files\nono\nono.exe` (no `agent` subcommand) → aggregate FAIL on dev host; fix: prepend `target\release` to PATH | Open | v2.13 close |
+| Host-execution | CPLT-03 Copilot CLI literal PASS gated by GitHub org policy | Open | v2.13 close |
+| Host-execution | INST-01 live clean-VM PASS (needs fresh Win11 VM + rebuilt MSI post Phase 80) | Open | v2.13 close |
+| Distribution | DIST-SIGN-01 untrusted-POC-cert broker path not exercised by clean-host gate | Open | v2.13 close |
+| Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
 
 ## Session Continuity
 
-**Last session:** 2026-06-18T13:31:43.362Z
-
-**v2.13 roadmap created (2026-06-17):** 6 phases (76-81), 10/10 requirements mapped. ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order: 76 (foundation) → 77/78/79/80 (78 is independent of harness; 77/79/80 depend on 76) → 81 (aggregator, last). Dark Factory mandate: every host-gated item has an unattended scripted gate as its verification mechanism.
-
-**Predecessor context (carried):** v2.12 shipped + archived 2026-06-16 (12/12 reqs, audit PASSED, tag `v2.12`). PR #8 merged to main (`05c489b6`). PR #9 (`fix/ci-green-all-targets`) merged to main (`be0bca05`) — Clippy(ubuntu+macos)+Rustfmt now GREEN on main.
-
-## Operator Next Steps
-
-- Start the next milestone with /gsd-new-milestone
-
-## Quick Tasks Completed
-
-| Date | Slug | Outcome |
-|------|------|---------|
-| 2026-06-15 | zt-infra-e5-poc-runbook | Advisory + docs: zt-infra integration is dormant SEED-005 (P3). Added `proj/POC-zt-infra-e5-local-provisioner.md`. Commits `0f5f3b93`+`1cd0e996`. |
+Last session: 2026-06-18
+Stopped at: Roadmap created; Phase 82 plan not yet started
+Resume file: None
