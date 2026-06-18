@@ -22,11 +22,11 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### WFP Egress Isolation Proof
 
-- [ ] **WFP-01**: Per-agent WFP egress isolation is empirically proven by an automated test — one confined agent's allowed egress succeeds while a second agent (distinct package SID) is denied on the same host.
+- [x] **WFP-01**: Per-agent WFP egress isolation is empirically proven by an automated test — one confined agent's allowed egress succeeds while a second agent (distinct package SID) is denied on the same host.
 
 ### nono-ts Ergonomics
 
-- [ ] **TSRG-01**: `confinedRun` in nono-ts defaults to the Low-IL broker arm and auto-covers the target executable's directory, so a caller gets a working confined run with no manual profile/coverage flags.
+- [x] **TSRG-01**: `confinedRun` in nono-ts defaults to the Low-IL broker arm and auto-covers the target executable's directory, so a caller gets a working confined run with no manual profile/coverage flags.
 
 ### Clean-Host Install UAT
 
@@ -72,8 +72,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CPLT-03 | Phase 77 | Pending |
 | CLAS-01 | Phase 78 | Complete |
 | CLAS-02 | Phase 78 | Complete |
-| WFP-01 | Phase 79 | Pending |
-| TSRG-01 | Phase 79 | Pending |
+| WFP-01 | Phase 79 | Complete |
+| TSRG-01 | Phase 79 | Complete |
 | INST-01 | Phase 80 | Pending |
 | DARK-01 | Phase 76 | Complete |
 | DARK-02 | Phase 81 | Pending |

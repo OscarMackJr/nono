@@ -34,7 +34,7 @@ granularity: standard
 - [x] **Phase 76: Self-Verifying Harness Foundation** - Build the shared scripted-gate framework (single-invocation unattended scripts emitting machine-readable pass/fail) that all host-gated phases depend on.
 - [x] **Phase 77: Copilot CLI End-to-End Confinement** - Fix Node-ESM/AppContainer ancestor `FILE_READ_ATTRIBUTES` + one-time-admin system-ancestor RA grant + scripted end-to-end proof.
 - [x] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
-- [ ] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
+- [x] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
 - [ ] **Phase 80: Clean-Host Install UAT** - Verify the machine MSI installs and runs on a fresh Win11 host with no manual steps via the unattended clean-host harness.
 - [ ] **Phase 81: Milestone Close Aggregator** - Collect all per-phase verdict artifacts into a single aggregator so v2.13 completion is evaluable from harness output alone.
 
@@ -148,10 +148,10 @@ Plans:
 **Plans**: 2 plans
 Plans:
 **Wave 1**
-- [ ] 79-01-PLAN.md — WFP-01: three policy.json profiles + wfp-egress-isolation gate (loopback mock, SKIP_HOST_UNAVAILABLE guard, per-SID isolation proof)
+- [x] 79-01-PLAN.md — WFP-01: three policy.json profiles + wfp-egress-isolation gate (loopback mock, SKIP_HOST_UNAVAILABLE guard, per-SID isolation proof)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 79-02-PLAN.md — TSRG-01: D-03/D-04 wiring in windows_confined_run.rs (default profile injection + exe-dir auto-cover) + napi integration test + npm test wiring
+- [x] 79-02-PLAN.md — TSRG-01: D-03/D-04 wiring in windows_confined_run.rs (default profile injection + exe-dir auto-cover) + napi integration test + npm test wiring
 **Host gate**: Real Win11 host (WFP gate requires live kernel WFP enforcement; nono-ts build requires Node + napi-rs on Windows).
 **Unattended gate**: `scripts/verify-dark.ps1 --gate wfp-egress-isolation` for WFP-01; `npm test` or equivalent napi integration for TSRG-01.
 
@@ -188,7 +188,7 @@ Plans:
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
-| 79. WFP Egress Isolation + nono-ts Ergonomics | 0/2 | Planning    | - |
+| 79. WFP Egress Isolation + nono-ts Ergonomics | 2/2 | Complete    | 2026-06-18 |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |
 
