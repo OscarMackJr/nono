@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: verifying
+status: ready_to_plan
 last_updated: "2026-06-17T23:11:50.338Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
   completed_plans: 8
-  percent: 100
+  percent: 67
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -25,7 +25,7 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 78 (cross-process-classification) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
+Phase: 79
 
 - 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`. **COMPLETE** (`aaafe4ff`).
 - 78-02 (wave 2): `classify_daemon_request` + daemon-first `app_runtime.rs` dispatch + structural fallback; `windows_control_pipe_request`/`is_pipe_not_found` promoted to `pub(crate)`; SC1/SC2/SC4 integration test (gated `NONO_DAEMON_INTEGRATION_TESTS=1`); live-daemon host PASS on Win11 26200. **COMPLETE** (`0f8cdeb7`, `ad284903`).
@@ -35,9 +35,9 @@ Phase: 78 (cross-process-classification) — ✅ COMPLETE + VERIFIED (passed, 20
 
 ---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
-Plan: 2 of 2
-Status: Phase complete — ready for verification
-Last activity: 2026-06-17
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-18
 NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
 **Phase 77 close notes (durable):**

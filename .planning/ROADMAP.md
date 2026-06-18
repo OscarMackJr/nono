@@ -181,7 +181,7 @@ Plans:
 |-------|----------------|--------|-----------|
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
-| 78. Cross-Process Classification | 2/2 | Complete   | 2026-06-17 |
+| 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |
