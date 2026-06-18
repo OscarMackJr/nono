@@ -3,7 +3,7 @@
   <Package
       Name="nono"
       Manufacturer="Luke Hinds and Oscar Mack Jr"
-      Version="0.57.5"
+      Version="9.9.9"
       UpgradeCode="D5948D55-89A4-4F09-AB43-44DBA9D25D1A"
       Scope="perMachine">
     <SummaryInformation
@@ -22,20 +22,24 @@
     <Feature Id="MainFeature" Title="nono" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
+    <!-- Phase 82: cert-import CustomAction (deferred SYSTEM, non-fatal). -->
     <CustomAction
-        Id="CaUninstallWfpServices"
+        Id="CaImportTrustRoot"
         Directory="INSTALLFOLDER"
-        ExeCommand="nono.exe setup --uninstall-wfp"
+        ExeCommand="nono.exe setup --trust-root nono-poc-root.cer"
         Execute="deferred"
         Impersonate="no"
         Return="ignore" />
     <InstallExecuteSequence>
-      <Custom Action="CaUninstallWfpServices" Before="RemoveFiles" Condition="(REMOVE=&quot;ALL&quot;) AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="CaImportTrustRoot" Before="InstallFinalize" Condition="NOT (REMOVE=&quot;ALL&quot;) AND NOT UPGRADINGPRODUCTCODE" />
     </InstallExecuteSequence>  </Package>
 
   <Fragment>
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="nono" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="PROGRAMDATANONO" Name="nono" />
     </StandardDirectory>
   </Fragment>
 
@@ -50,14 +54,14 @@
              to the same dir at runtime. Satisfies D-07 sibling resolution
              (current_exe().parent() finds the broker) for both machine scope
              (Program Files\nono\) and user scope (LocalAppData\Programs\nono\).
-             No scope guard needed â€” broker is required for both MSIs. -->
+             No scope guard needed — broker is required for both MSIs. -->
         <File Id="filNonoShellBrokerExe" Source="C:\Users\OMack\Nono\target\release\nono-shell-broker.exe" KeyPath="yes" />
       </Component>
       <Component Id="cmpReadme" Guid="*">
-        <File Id="filReadme" Source="C:\Users\OMack\Nono\README.md" Name="README.md" KeyPath="yes" />
+        <File Id="filReadme" Source="C:\Users\OMack\Nono\.claude\worktrees\agent-a1dbb1a4aa4ee74aa\README.md" Name="README.md" KeyPath="yes" />
       </Component>
       <Component Id="cmpLicense" Guid="*">
-        <File Id="filLicense" Source="C:\Users\OMack\Nono\LICENSE" Name="LICENSE" KeyPath="yes" />
+        <File Id="filLicense" Source="C:\Users\OMack\Nono\.claude\worktrees\agent-a1dbb1a4aa4ee74aa\LICENSE" Name="LICENSE" KeyPath="yes" />
       </Component>
       <Component Id="cmpPath" Guid="*">
         <RegistryValue
@@ -76,35 +80,66 @@
             System="yes"
             Value="[INSTALLFOLDER]" />
       </Component>
-      <Component Id="cmpWfpServiceExe" Guid="*">
-        <File Id="filWfpServiceExe" Source="C:\Users\OMack\Nono\target\release\nono-wfp-service.exe" KeyPath="yes" />
-        <ServiceInstall
-            Id="svcWfpService"
-            Name="nono-wfp-service"
-            DisplayName="nono WFP Service"
-            Description="nono Windows Filtering Platform backend service"
-            Type="ownProcess"
-            Start="auto"
-            Account="LocalSystem"
-            ErrorControl="normal"
-            Arguments="--service-mode" />
-        <ServiceControl
-            Id="svcCtrlWfpService"
-            Name="nono-wfp-service"
-            Start="install"
-            Stop="both"
-            Remove="uninstall"
-            Wait="yes" />
-      </Component>      <Component Id="cmpWfpDriverSys" Guid="*">
-        <File Id="filWfpDriverSys" Source="C:\Users\OMack\Nono\crates\nono-cli\data\windows\nono-wfp-driver.sys" Name="nono-wfp-driver.sys" KeyPath="yes" />
-      </Component>      <Component Id="cmpEventLogSource" Guid="*">
+      <!-- Phase 82: %PROGRAMDATA%\nono\ root directory.
+           Created by the MSI under SYSTEM; Admins and SYSTEM have write access by default
+           ACL on %PROGRAMDATA%. NEVER create %LOCALAPPDATA% user scratch here (Pitfall 4 /
+           D-08) — user scratch is provisioned at first-run in user context (Plan 02). -->
+      <Component Id="cmpProgramDataNono" Guid="*" Directory="PROGRAMDATANONO">
+        <RegistryValue
+            Root="HKLM"
+            Key="Software\always-further\nono\machine"
+            Name="ProgramDataRoot"
+            Type="string"
+            Value="[PROGRAMDATANONO]"
+            KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: POC root cert staged in DER format (.cer) under INSTALLFOLDER.
+           certutil -addstore (invoked by the cert-import CustomAction below via
+           nono.exe setup --trust-root) accepts DER. T-82-01: both the exe and the
+           cert ship inside the MSI cab, never fetched at runtime. -->
+      <Component Id="cmpPocCertDer" Guid="*">
+        <File Id="filPocCertDer" Source="C:\Users\OMack\Nono\.claude\worktrees\agent-a1dbb1a4aa4ee74aa\dist\windows\nono-poc-signing.cer" Name="nono-poc-root.cer" KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: POC root cert staged in PEM format under %PROGRAMDATA%\nono\.
+           Node.js / NODE_EXTRA_CA_CERTS cannot read a DER .cer file (Pitfall 13 /
+           D-05).  This PEM copy is byte-derived from the same pinned DER root at
+           build time and installs to %PROGRAMDATA%\nono\nono-poc-root.pem.
+           T-82-07: %PROGRAMDATA%\nono\ is Admins-only writable by default ACL. -->
+      <Component Id="cmpPocCertPem" Guid="*" Directory="PROGRAMDATANONO">
+        <File Id="filPocCertPem" Source="C:\Users\OMack\Nono\.claude\worktrees\agent-a1dbb1a4aa4ee74aa\dist\windows\nono-poc-signing.pem" Name="nono-poc-root.pem" KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: HKLM\SOFTWARE\Policies\nono sentinel key.
+           Creates the empty policy spine for the Phase 83 reader and the
+           nono health presence probe.  Only a placeholder InstalledByMsi value
+           is written here; egress policy values are Phase 83's responsibility. -->
+      <Component Id="cmpPolicySentinel" Guid="*">
         <RegistryKey
             Root="HKLM"
-            Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\nono-wfp-service">
+            Key="SOFTWARE\Policies\nono">
+          <RegistryValue
+              Name="InstalledByMsi"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+      <!-- Phase 82: nono CLI Application Event Log source.
+           Registered now alongside the nono-wfp-service source so Phase 84's
+           SecurityEventLayer can write events without an additional install step.
+           Mirrors the cmpEventLogSource pattern (EventMessageFile + TypesSupported=7).
+           Machine-scope only; user MSI must not carry this (T-82-05). -->
+      <Component Id="cmpNonoCliEventLogSource" Guid="*">
+        <RegistryKey
+            Root="HKLM"
+            Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\nono">
           <RegistryValue
               Name="EventMessageFile"
               Type="string"
-              Value="[INSTALLFOLDER]nono-wfp-service.exe"
+              Value="[INSTALLFOLDER]nono.exe"
               KeyPath="yes" />
           <RegistryValue
               Name="TypesSupported"

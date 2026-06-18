@@ -3,7 +3,7 @@
   <Package
       Name="nono"
       Manufacturer="Luke Hinds and Oscar Mack Jr"
-      Version="0.57.5"
+      Version="9.9.9"
       UpgradeCode="5451E72C-E0C4-4BF8-B9EA-0D6A22AA80E4"
       Scope="perUser">
     <SummaryInformation
@@ -35,7 +35,7 @@
   <Fragment>
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <Component Id="cmpNonoExe" Guid="*">
-        <File Id="filNonoExe" Source="C:\Users\OMack\Nono\target\x86_64-pc-windows-msvc\release\nono.exe" KeyPath="yes" />
+        <File Id="filNonoExe" Source="C:\Users\OMack\Nono\target\release\nono.exe" KeyPath="yes" />
       </Component>
       <Component Id="cmpNonoShellBrokerExe" Guid="*">
         <!-- Phase 31 Plan 04: nono-shell-broker.exe lives under INSTALLFOLDER
@@ -44,13 +44,13 @@
              (current_exe().parent() finds the broker) for both machine scope
              (Program Files\nono\) and user scope (LocalAppData\Programs\nono\).
              No scope guard needed — broker is required for both MSIs. -->
-        <File Id="filNonoShellBrokerExe" Source="C:\Users\OMack\Nono\target\x86_64-pc-windows-msvc\release\nono-shell-broker.exe" KeyPath="yes" />
+        <File Id="filNonoShellBrokerExe" Source="C:\Users\OMack\Nono\target\release\nono-shell-broker.exe" KeyPath="yes" />
       </Component>
       <Component Id="cmpReadme" Guid="*">
-        <File Id="filReadme" Source="C:\Users\OMack\Nono\README.md" Name="README.md" KeyPath="yes" />
+        <File Id="filReadme" Source="C:\Users\OMack\Nono\.claude\worktrees\agent-a1dbb1a4aa4ee74aa\README.md" Name="README.md" KeyPath="yes" />
       </Component>
       <Component Id="cmpLicense" Guid="*">
-        <File Id="filLicense" Source="C:\Users\OMack\Nono\LICENSE" Name="LICENSE" KeyPath="yes" />
+        <File Id="filLicense" Source="C:\Users\OMack\Nono\.claude\worktrees\agent-a1dbb1a4aa4ee74aa\LICENSE" Name="LICENSE" KeyPath="yes" />
       </Component>
       <Component Id="cmpPath" Guid="*">
         <RegistryValue
