@@ -1412,6 +1412,69 @@ pub fn load_package_groups(policy: &mut Policy) -> Result<()> {
 }
 
 // ============================================================================
+// EGRESS-04: AI-provider preset token → FQDN expansion (Plan 83-03)
+// ============================================================================
+
+/// Expand a slice of AI-provider preset group TOKENS into a flat list of FQDN
+/// host strings by looking each token up in the embedded `network-policy.json`
+/// groups map.
+///
+/// # Design (D-11 / D-12)
+///
+/// ADMX named toggles write a stable group TOKEN (e.g. `"anthropic"`) into
+/// `HKLM\SOFTWARE\Policies\nono`.  Plan 02 calls this function to turn the
+/// raw `MachineEgressPolicy.preset_tokens` into the proxy / HostFilter
+/// allowlist.  The token→FQDN map lives here (CLI layer) so the core library
+/// stays policy-free (CLAUDE.md § Library vs CLI Boundary).
+///
+/// # Fail-Secure (T-83-token-widen)
+///
+/// An unknown or misspelled token expands to an **empty** host list — it never
+/// silently widens the allowlist to all hosts.  The caller appends the
+/// returned entries to the allowlist built from `MachineEgressPolicy.raw_allowlist()`.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # fn main() -> nono::Result<()> {
+/// let hosts = nono_cli::policy::expand_egress_preset_tokens(&["anthropic".to_string()])?;
+/// // hosts contains "*.anthropic.com"
+/// # Ok(())
+/// # }
+/// ```
+pub fn expand_egress_preset_tokens(tokens: &[String]) -> Result<Vec<String>> {
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let json = crate::config::embedded::embedded_network_policy_json();
+    let network_policy = crate::network_policy::load_network_policy(json)?;
+
+    let mut hosts: Vec<String> = Vec::new();
+    for token in tokens {
+        match network_policy.groups.get(token.as_str()) {
+            Some(group) => {
+                hosts.extend(group.hosts.iter().cloned());
+                // Note: `suffixes` in a preset group would also be valid to include,
+                // but the AI-provider presets use only `hosts` (wildcard form `*.domain`).
+                // Suffixes are intentionally excluded here to keep the allowlist shape
+                // consistent with the HostFilter's wildcard-host vs suffix semantics.
+            }
+            None => {
+                // Unknown token → expand to nothing (T-83-token-widen fail-secure).
+                // No warning emitted here; the caller (Plan 02 wiring) can log if desired.
+            }
+        }
+    }
+
+    // Deduplicate in case multiple tokens share hosts (future-proof).
+    hosts.sort_unstable();
+    hosts.dedup();
+
+    Ok(hosts)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 

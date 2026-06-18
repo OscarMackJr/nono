@@ -107,6 +107,24 @@
         ".bedrock.amazonaws.com",
         ".bedrock-runtime.amazonaws.com"
       ]
+    },
+    "anthropic": {
+      "description": "Anthropic AI provider — wildcard preset for *.anthropic.com (EGRESS-04, D-11)",
+      "hosts": [
+        "*.anthropic.com"
+      ]
+    },
+    "openai": {
+      "description": "OpenAI AI provider — wildcard preset for *.openai.com (EGRESS-04, D-11)",
+      "hosts": [
+        "*.openai.com"
+      ]
+    },
+    "github-api": {
+      "description": "GitHub API endpoint preset (EGRESS-04, D-11)",
+      "hosts": [
+        "api.github.com"
+      ]
     }
   },
   "profiles": {
