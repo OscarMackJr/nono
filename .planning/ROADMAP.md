@@ -167,7 +167,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 **Wave 1**
-- [ ] 80-01-PLAN.md — Build fix: .cargo/config.toml (+crt-static, D-03) + build-windows-msi.ps1 vital=no/ErrorControl=ignore (D-04) + validate-windows-msi-contract.ps1 contract assertions
+- [x] 80-01-PLAN.md — Build fix: .cargo/config.toml (+crt-static, D-03) + build-windows-msi.ps1 vital=no/ErrorControl=ignore (D-04) + validate-windows-msi-contract.ps1 contract assertions
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 80-02-PLAN.md — Unattended gate: scripts/gates/clean-host-install.ps1 (Test-Precondition dirty-host detection + Invoke-Gate msiexec orchestration, D-01..D-07)
@@ -195,7 +195,7 @@ Plans:
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 2/2 | Complete    | 2026-06-18 |
-| 80. Clean-Host Install UAT | 0/2 | Planning complete | - |
+| 80. Clean-Host Install UAT | 1/2 | In Progress|  |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |
 
 ## References

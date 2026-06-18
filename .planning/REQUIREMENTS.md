@@ -30,7 +30,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Clean-Host Install UAT
 
-- [ ] **INST-01**: The machine MSI installs and runs on a clean Win11 host with no manual steps, verified by an unattended clean-host harness.
+- [x] **INST-01**: The machine MSI installs and runs on a clean Win11 host with no manual steps, verified by an unattended clean-host harness.
 
 ### Self-Verifying Harness (Dark Factory)
 
@@ -74,7 +74,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLAS-02 | Phase 78 | Complete |
 | WFP-01 | Phase 79 | Complete |
 | TSRG-01 | Phase 79 | Complete |
-| INST-01 | Phase 80 | Pending |
+| INST-01 | Phase 80 | Complete |
 | DARK-01 | Phase 76 | Complete |
 | DARK-02 | Phase 81 | Pending |
 
