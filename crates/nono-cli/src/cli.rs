@@ -773,6 +773,30 @@ pub enum Commands {
 ")]
     Classify(ClassifyArgs),
 
+    /// Fleet diagnostic: print a machine-readable JSON verdict and return a tri-state exit code
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono health [flags]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono health                                  # Human-readable + JSON verdict
+  nono health --json                           # JSON-only output (for scripts)
+
+\x1b[1mEXIT CODES\x1b[0m
+  0 = healthy (all subsystems OK)
+  1 = degraded (stopped service, missing cert, missing policy, etc.)
+  2 = broken (install incomplete, nono.exe not self-locatable, PATH missing)
+
+\x1b[1mNOTE\x1b[0m
+  Read-only: no state is modified. JSON is always printed to stdout
+  regardless of exit code so SCCM/Intune compliance scripts can parse it.
+")]
+    Health(HealthArgs),
+
     // ── Daemon & agent management ────────────────────────────────────────
     /// Manage the nono-agentd persistent daemon (per-user multi-tenant agent service)
     #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
@@ -3183,6 +3207,18 @@ pub struct ClassifyArgs {
 
     /// Output as JSON
     #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `nono health [--json]` (Phase 82 DEPLOY-06).
+///
+/// A read-only diagnostic that always prints a machine-readable JSON verdict
+/// to stdout and returns a tri-state exit code: 0 (healthy) / 1 (degraded) /
+/// 2 (broken). Intended for SCCM/Intune compliance scripts.
+#[derive(Parser, Debug)]
+pub struct HealthArgs {
+    /// Output JSON only (suppresses the human-readable summary)
+    #[arg(long, help_heading = "OPTIONS")]
     pub json: bool,
 }
 

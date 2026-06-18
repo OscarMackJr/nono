@@ -186,7 +186,9 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Completions(_)
         // Phase 74 D-05: daemon/agent verbs have no verbose flag.
         | Commands::Daemon(_)
-        | Commands::Agent(_) => 0,
+        | Commands::Agent(_)
+        // Phase 82 DEPLOY-06: health has no verbose flag.
+        | Commands::Health(_) => 0,
     }
 }
 
