@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  nono GPO ADML string resources (en-US) — Phase 82 fleet-deployment-infrastructure
+  Supplies every displayName, explainText, and presentation resource referenced by nono.admx.
+  Deploy alongside nono.admx in the en-US subdirectory of the PolicyDefinitions store.
+-->
+<policyDefinitionResources
+    xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    revision="1.0"
+    schemaVersion="1.0">
+
+  <displayName>nono Policy Definitions</displayName>
+  <description>
+    Administrative template for the nono capability-based AI agent sandbox.
+    Targets HKLM\SOFTWARE\Policies\nono (64-bit hive; use KEY_WOW64_64KEY when deploying via script).
+    Policy changes take effect on new nono sessions; running sessions retain the policy in effect at launch.
+  </description>
+
+  <resources>
+    <stringTable>
+
+      <string id="nono_category">nono AI Agent Sandbox</string>
+
+      <string id="allowedsuffixes_name">Outbound Egress: Allowed Domain Suffixes</string>
+      <string id="allowedsuffixes_explain">
+Configures the wildcard FQDN suffix allow-list for outbound egress from confined AI agents.
+
+Each entry is a DNS suffix (with leading dot) that permits all subdomains:
+  .anthropic.com   permits api.anthropic.com, statsig.anthropic.com, etc.
+  .openai.com      permits api.openai.com, etc.
+
+IMPORTANT: Use ONLY suffix entries (with leading dot) in this list.
+Exact-match hostnames must go in the "Allowed Exact Hosts" policy instead.
+Mixing exact hosts and suffix wildcards in one list causes wildcard creep (Pitfall 3).
+
+AI-provider presets (recommended starting set):
+  .anthropic.com              Claude API and supporting services
+  .openai.com                 OpenAI API
+  .githubusercontent.com       GitHub raw content delivery
+
+Matching semantics: DNS-component comparison.
+  .anthropic.com matches api.anthropic.com
+  .anthropic.com does NOT match evilanthopic.com or anthropic.com.evil.com
+
+When this policy is not configured, nono uses the per-user profile allow-list.
+When configured with an empty list, default-deny is in effect for all outbound traffic.
+
+Policy changes apply to new nono sessions. Running sessions retain the policy at launch.
+      </string>
+
+      <string id="allowedhosts_name">Outbound Egress: Allowed Exact Hosts</string>
+      <string id="allowedhosts_explain">
+Configures the exact-match hostname allow-list for outbound egress from confined AI agents.
+
+Each entry is an exact fully-qualified hostname:
+  api.github.com                   GitHub API (for Copilot CLI)
+  models.inference.ai.azure.com    Azure AI Foundry inference endpoint
+
+IMPORTANT: Use ONLY exact hostnames here (no wildcards, no leading dot).
+Wildcard suffix entries must go in the "Allowed Domain Suffixes" policy instead.
+Never enter *.example.com here; such an entry will not match any host.
+
+AI-provider preset examples:
+  api.github.com                   GitHub API
+  models.inference.ai.azure.com    Azure AI Foundry
+
+When both Allowed Domain Suffixes and Allowed Exact Hosts are configured, a destination
+is permitted if it matches ANY entry in EITHER list.
+
+Policy changes apply to new nono sessions. Running sessions retain the policy at launch.
+      </string>
+
+    </stringTable>
+
+    <presentationTable>
+
+      <presentation id="allowedsuffixes">
+        <listBox refId="AllowedSuffixesList">
+          Domain suffixes (with leading dot, e.g. .anthropic.com):
+        </listBox>
+      </presentation>
+
+      <presentation id="allowedhosts">
+        <listBox refId="AllowedHostsList">
+          Exact hostnames (e.g. api.github.com):
+        </listBox>
+      </presentation>
+
+    </presentationTable>
+
+  </resources>
+
+</policyDefinitionResources>

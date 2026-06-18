@@ -95,7 +95,7 @@ Which phases cover which requirements.
 | DEPLOY-01 | Phase 82 | Pending |
 | DEPLOY-02 | Phase 82 | Pending |
 | DEPLOY-03 | Phase 82 | Pending |
-| DEPLOY-04 | Phase 83 | Pending |
+| DEPLOY-04 | Phase 82 (template) / Phase 83 (reader) | Pending |
 | DEPLOY-05 | Phase 82 | Pending |
 | DEPLOY-06 | Phase 82 | Pending |
 | POLICY-01 | Phase 83 | Pending |

@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  nono GPO ADMX template — Phase 82 fleet-deployment-infrastructure
+  ============================================================================
+
+  Policy key (64-bit hive):  HKLM\SOFTWARE\Policies\nono
+  Registry view (CRITICAL):  Always use KEY_WOW64_64KEY / [RegistryView]::Registry64
+                             (Pitfall 7: Intune MDM Extension can be 32-bit; omitting
+                             KEY_WOW64_64KEY causes Intune to write WOW6432Node\Policies\nono
+                             while nono-cli reads the 64-bit hive, silently diverging)
+
+  Intune OMA-URI (ADMXInstall):
+    ./Device/Vendor/MSFT/Policy/ConfigOperations/ADMXInstall/nono/Policy/nono.admx
+  Intune OMA-URI (AllowedSuffixes):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowedSuffixes
+  Intune OMA-URI (AllowedHosts):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowedHosts
+
+  GPO path (classic ADMX deployment):
+    Copy this file to %SystemRoot%\PolicyDefinitions\nono.admx
+    Copy nono.adml to %SystemRoot%\PolicyDefinitions\en-US\nono.adml
+    (or to the central store: \\domain\SYSVOL\domain\Policies\PolicyDefinitions\)
+
+  Deployment note (Pitfall 7):
+    When deploying policies via PowerShell script, always open the registry key
+    with [RegistryView]::Registry64 or pass KEY_WOW64_64KEY (0x0100) to ensure
+    writes land in the 64-bit hive that nono-cli reads. A 32-bit deployment agent
+    without KEY_WOW64_64KEY will redirect writes to SOFTWARE\WOW6432Node\Policies\nono.
+
+  Policy lifecycle:
+    Changes apply to NEW sessions only (read-at-startup / restart-to-apply).
+    Running sessions retain the policy in effect at launch (Pitfall 9 TOCTOU protection).
+    Phase 84 will add Event Log telemetry for policy-read failures.
+
+  Scope: Phase 82 ships the template + sentinel key (InstalledByMsi=1).
+         Phase 83 ships the reader that consumes AllowedSuffixes and AllowedHosts.
+-->
+<policyDefinitions
+    xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    revision="1.0"
+    schemaVersion="1.0">
+
+  <policyNamespaces>
+    <target
+        prefix="nono"
+        namespace="nono.Policies.nono" />
+    <using
+        prefix="windows"
+        namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+
+  <resources minRequiredRevision="1.0" />
+
+  <categories>
+    <category name="nono" displayName="$(string.nono_category)">
+      <parentCategory ref="windows:WindowsComponents" />
+    </category>
+  </categories>
+
+  <policies>
+
+    <!--
+      AllowedSuffixes: wildcard FQDN suffix allow-list (REG_MULTI_SZ).
+
+      Each entry is a DNS suffix that permits all subdomains, e.g.:
+        *.anthropic.com  ->  enter: .anthropic.com
+        *.openai.com     ->  enter: .openai.com
+
+      IMPORTANT (Pitfall 3): Use ONLY suffix entries here (leading dot, e.g. .anthropic.com).
+      Exact-host entries MUST go in AllowedHosts. Mixing them in one list causes
+      operator confusion and wildcard creep.
+
+      AI-provider preset examples (recommended starting set):
+        .anthropic.com        (Claude API, statsig.anthropic.com, etc.)
+        .openai.com           (OpenAI API)
+        .githubusercontent.com (GitHub raw content)
+
+      Matching: Phase 83 reader uses DNS-component comparison (not string suffix).
+      .anthropic.com matches api.anthropic.com but NOT evilanthopic.com or anthropic.com.evil.com.
+
+      When this policy is not configured, nono falls back to the per-user profile allow-list.
+      When configured with an empty list, default-deny is in effect for all outbound traffic.
+    -->
+    <policy
+        name="AllowedSuffixes"
+        class="Machine"
+        displayName="$(string.allowedsuffixes_name)"
+        explainText="$(string.allowedsuffixes_explain)"
+        presentation="$(presentation.allowedsuffixes)"
+        key="SOFTWARE\Policies\nono">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <elements>
+        <list
+            id="AllowedSuffixesList"
+            key="SOFTWARE\Policies\nono\AllowedSuffixes"
+            valueName="nono_suffixes"
+            additive="true" />
+      </elements>
+    </policy>
+
+    <!--
+      AllowedHosts: exact-match hostname allow-list (REG_MULTI_SZ).
+
+      Each entry is an exact hostname, e.g.:
+        api.github.com
+        api.anthropic.com  (when exact match is preferred over wildcard suffix)
+
+      IMPORTANT (Pitfall 3): Use ONLY exact hostnames here.
+      Wildcard suffixes MUST go in AllowedSuffixes. Never put *.example.com here.
+
+      AI-provider preset examples:
+        api.github.com          (GitHub API for Copilot)
+        models.inference.ai.azure.com  (Azure AI Foundry inference)
+
+      When both AllowedSuffixes and AllowedHosts are configured, a host is allowed
+      if it matches ANY entry in EITHER list.
+    -->
+    <policy
+        name="AllowedHosts"
+        class="Machine"
+        displayName="$(string.allowedhosts_name)"
+        explainText="$(string.allowedhosts_explain)"
+        presentation="$(presentation.allowedhosts)"
+        key="SOFTWARE\Policies\nono">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <elements>
+        <list
+            id="AllowedHostsList"
+            key="SOFTWARE\Policies\nono\AllowedHosts"
+            valueName="nono_hosts"
+            additive="true" />
+      </elements>
+    </policy>
+
+  </policies>
+
+</policyDefinitions>
