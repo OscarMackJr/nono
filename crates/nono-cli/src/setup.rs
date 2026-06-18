@@ -35,8 +35,8 @@ fn grant_ancestors_for_path(path: &Path, sid: &str) -> Result<()> {
         ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
-        PSECURITY_DESCRIPTOR, PSID,
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        PSID,
     };
 
     let wide_path: Vec<u16> = path
@@ -83,9 +83,8 @@ fn grant_ancestors_for_path(path: &Path, sid: &str) -> Result<()> {
                 continue;
             }
             // SAFETY: allow/deny ACEs share the SidStart layout.
-            let ace_sid = unsafe {
-                (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID
-            };
+            let ace_sid =
+                unsafe { (&(*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) as *const u32 as PSID };
             // SAFETY: both SIDs are valid for the duration of the call.
             if unsafe { EqualSid(ace_sid, want_sid) } != 0 {
                 found = true;
@@ -146,6 +145,10 @@ pub struct SetupRunner {
     /// NOT affect the grantee — the durable grantee is always the well-known SID).
     #[cfg(target_os = "windows")]
     profile: Option<String>,
+    /// Path to a root certificate to import into machine Root + TrustedPublisher
+    /// stores (D-04 / Phase 82 MSI custom action verb `nono setup --trust-root`).
+    #[cfg(target_os = "windows")]
+    trust_root: Option<PathBuf>,
     refresh_trust_root: bool,
     from_file: Option<std::path::PathBuf>,
     generate_profiles: bool,
@@ -172,6 +175,8 @@ impl SetupRunner {
             grant_ancestors: args.grant_ancestors,
             #[cfg(target_os = "windows")]
             profile: args.profile.clone(),
+            #[cfg(target_os = "windows")]
+            trust_root: args.trust_root.clone(),
             refresh_trust_root: args.refresh_trust_root,
             from_file: args.from_file.clone(),
             generate_profiles: args.profiles,
@@ -191,6 +196,18 @@ impl SetupRunner {
         if !self.check_only && self.grant_ancestors {
             // One-time-admin grant — short-circuit the normal setup flow.
             return self.grant_ancestors_for_profile();
+        }
+
+        // D-04 / Phase 82: MSI deferred CA invokes `nono setup --trust-root <cer>`.
+        // Import the cert into the machine Root + TrustedPublisher stores (single
+        // source of truth for the store list is in cert_trust::import_machine_root).
+        // Non-fatal at the install layer (MSI CA uses Return="ignore"); the typed
+        // error propagates to the CA and is silently ignored there.
+        #[cfg(target_os = "windows")]
+        if !self.check_only {
+            if let Some(ref cert_path) = self.trust_root {
+                return crate::cert_trust::import_machine_root(cert_path);
+            }
         }
 
         // Installation verification
@@ -417,9 +434,7 @@ impl SetupRunner {
                         .to_string(),
                 ));
             }
-            println!(
-                "Granting system-ancestor read attributes for profile '{profile_name}' ..."
-            );
+            println!("Granting system-ancestor read attributes for profile '{profile_name}' ...");
         } else {
             println!("Granting system-ancestor read attributes ...");
         }
@@ -1634,6 +1649,8 @@ mod tests {
             grant_ancestors: false,
             #[cfg(target_os = "windows")]
             profile: None,
+            #[cfg(target_os = "windows")]
+            trust_root: None,
             refresh_trust_root: false,
             from_file: None,
             generate_profiles: true,
@@ -1692,8 +1709,8 @@ mod grant_ancestors_tests {
         ConvertStringSidToSidW, GetNamedSecurityInfoW, SE_FILE_OBJECT,
     };
     use windows_sys::Win32::Security::{
-        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION,
-        PSECURITY_DESCRIPTOR, PSID,
+        EqualSid, GetAce, ACCESS_ALLOWED_ACE, ACL, DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        PSID,
     };
 
     /// Count the number of ACEs in `path`'s DACL that match `sid`.
@@ -1778,7 +1795,8 @@ mod grant_ancestors_tests {
         );
 
         // First apply — should add exactly one ACE.
-        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID).expect("first grant must succeed");
+        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID)
+            .expect("first grant must succeed");
         assert_eq!(
             count_dacl_aces_for_sid(path, ALL_APPLICATION_PACKAGES_SID),
             1,
@@ -1786,7 +1804,8 @@ mod grant_ancestors_tests {
         );
 
         // Second apply — idempotent: must NOT stack a duplicate ACE.
-        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID).expect("second grant (idempotent) must succeed");
+        grant_ancestors_for_path(path, ALL_APPLICATION_PACKAGES_SID)
+            .expect("second grant (idempotent) must succeed");
         assert_eq!(
             count_dacl_aces_for_sid(path, ALL_APPLICATION_PACKAGES_SID),
             1,

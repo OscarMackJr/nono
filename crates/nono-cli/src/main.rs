@@ -94,6 +94,16 @@ mod session_commands;
 #[path = "session_commands_windows.rs"]
 mod session_commands;
 mod setup;
+// D-09 Phase 82: cert-store import logic (machine Root+TrustedPublisher + per-user
+// CurrentUser\Root). The store-name list is the single source of truth here.
+// Cross-target: non-Windows bodies are cfg-stubbed; compiles on Linux + macOS.
+mod cert_trust;
+// D-09 Phase 82: idempotent first-run-in-user-context provisioner
+// (scratch + cert + NODE_EXTRA_CA_CERTS). Windows-only module; the call site
+// in command_runtime is cfg-gated to Windows so this module is never referenced
+// on Linux / macOS.
+#[cfg(target_os = "windows")]
+mod provision_windows;
 #[cfg(not(target_os = "windows"))]
 mod startup_prompt;
 mod startup_runtime;
