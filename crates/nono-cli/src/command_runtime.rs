@@ -149,6 +149,36 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
         return Ok(());
     }
 
+    // D-09 Phase 82: first-run provisioner (scratch + cert + NODE_EXTRA_CA_CERTS).
+    // Non-fatal: errors and degraded sub-steps are recorded for `nono health`;
+    // the run continues regardless.  Not invoked on dry_run (no host mutation).
+    // The call is cfg-gated to Windows — Linux/macOS compile clean without it.
+    #[cfg(target_os = "windows")]
+    {
+        match crate::provision_windows::provision_first_run() {
+            Ok(crate::provision_windows::ProvisionOutcome::AlreadyProvisioned) => {
+                tracing::debug!("provision_windows: already provisioned — skipping");
+            }
+            Ok(crate::provision_windows::ProvisionOutcome::Provisioned(ref status)) => {
+                use crate::provision_windows::StepStatus;
+                let any_degraded = matches!(status.scratch, StepStatus::Degraded(_))
+                    || matches!(status.cert, StepStatus::Degraded(_))
+                    || matches!(status.node_extra_ca_certs, StepStatus::Degraded(_));
+                if any_degraded && !silent {
+                    tracing::warn!(
+                        "provision_windows: one or more provisioning sub-steps degraded; \
+                         run `nono health` for details"
+                    );
+                }
+            }
+            Err(e) => {
+                if !silent {
+                    tracing::warn!(error = %e, "provision_windows: provisioner returned error (non-fatal); continuing run");
+                }
+            }
+        }
+    }
+
     let launch_plan = prepare_run_launch_plan(run_args, program, cmd_args, silent)?;
     execute_sandboxed(launch_plan)
 }

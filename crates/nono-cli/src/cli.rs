@@ -2599,6 +2599,16 @@ pub struct SetupArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub uninstall_wfp: bool,
 
+    /// Import the given root certificate into the machine Root and TrustedPublisher
+    /// stores (Windows only; invoked by the MSI custom action as
+    /// `nono setup --trust-root nono-poc-root.cer`).
+    ///
+    /// This is an MSI-internal verb — not a general user affordance.
+    /// Writing to LocalMachine stores requires elevation; a non-admin invocation
+    /// fails with a typed error (non-fatal at the MSI CA layer via Return="ignore").
+    #[arg(long, value_name = "PATH", help_heading = "OPTIONS")]
+    pub trust_root: Option<std::path::PathBuf>,
+
     /// Refresh the cached Sigstore trusted root from https://tuf-repo-cdn.sigstore.dev (per-user, no admin required)
     #[arg(long, help_heading = "OPTIONS")]
     pub refresh_trust_root: bool,
@@ -2626,7 +2636,12 @@ pub struct SetupArgs {
     pub grant_ancestors: bool,
 
     /// Profile whose ancestor coverage to grant (used with --grant-ancestors).
-    #[arg(long, value_name = "PROFILE", help_heading = "OPTIONS", requires = "grant_ancestors")]
+    #[arg(
+        long,
+        value_name = "PROFILE",
+        help_heading = "OPTIONS",
+        requires = "grant_ancestors"
+    )]
     pub profile: Option<String>,
 
     /// Generate example user profiles in ~/.config/nono/profiles/
@@ -5493,10 +5508,7 @@ mod profile_resolver_args_tests {
         match cli.command {
             Commands::Setup(args) => {
                 assert!(args.grant_ancestors, "--grant-ancestors must parse as true");
-                assert_eq!(
-                    args.profile, None,
-                    "profile must be None when not supplied"
-                );
+                assert_eq!(args.profile, None, "profile must be None when not supplied");
             }
             _ => panic!("Expected Setup command"),
         }
