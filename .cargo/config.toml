@@ -1,0 +1,10 @@
+# Applies to Windows MSVC target ONLY via Cargo target-scoped rustflags (source 3).
+# Does NOT affect Linux or macOS builds.
+# Eliminates vcruntime140.dll dependency (INST-01 / Phase 80 D-03).
+# IMPORTANT: Cargo's four rustflags sources are mutually exclusive — this stanza is
+# SILENTLY DROPPED when the RUSTFLAGS env var is set (e.g. in CI). CI and release.yml
+# use step-level RUSTFLAGS env overrides for correctness; this file covers local builds
+# where RUSTFLAGS is not set.
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
