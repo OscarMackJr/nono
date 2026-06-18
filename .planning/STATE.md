@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.13
-milestone_name: Carry-Forward Closeout (Dark Factory)
-status: Awaiting next milestone
-last_updated: "2026-06-18T13:56:49.469Z"
-last_activity: 2026-06-18 — Milestone v2.13 completed and archived
+milestone: v3.0
+milestone_name: Enterprise Hardening I (Deploy, Control, Compliance)
+status: planning
+last_updated: "2026-06-18T14:25:31.286Z"
+last_activity: 2026-06-18
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 13
-  completed_plans: 13
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v2.13 Carry-Forward Closeout (Dark Factory)
@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: Milestone v2.13 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-18 — Milestone v2.13 completed and archived
+Status: Defining requirements
+Last activity: 2026-06-18 — Milestone v3.0 started
 
 ### v2.13 Phase Summary (active)
 
