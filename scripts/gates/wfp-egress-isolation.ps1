@@ -1,49 +1,61 @@
 # scripts/gates/wfp-egress-isolation.ps1
 #
-# Phase 79 Plan 01 — wfp-egress-isolation gate (WFP-01)
+# Phase 79 Plan 01 - WFP-01 per-SID egress isolation gate (DAEMON-PATH structural proof)
 #
 # CONTRACT (mirrors scripts/gates/harness-self-check.ps1, the reference contract for
-# phases 77-80): this gate exports exactly two functions dot-sourced by
-# scripts/verify-dark.ps1. The gate RETURNS its verdict object — it MUST NOT call exit.
-# Only the runner owns exit-code mapping (PASS=0 / FAIL=2 / SKIP_HOST_UNAVAILABLE=3 /
-# harness-internal error=4) and the persist-before-emit (WR-04). Do NOT duplicate
-# persist/exit logic here.
+# phases 77-81): this gate exports exactly two functions, dot-sourced by
+# scripts/verify-dark.ps1. The gate RETURNS its verdict object - it MUST NOT call exit and
+# MUST NOT call Persist-Verdict. Only the runner owns exit-code mapping (PASS=0 / FAIL=2 /
+# SKIP_HOST_UNAVAILABLE=3 / harness-internal=4) and the persist-before-emit (WR-04).
 #
 #   Test-Precondition -> $null (preconditions met, run Invoke-Gate)
-#                      | "reason string" (SKIP_HOST_UNAVAILABLE — exit 3, Invoke-Gate never runs)
+#                      | "reason string" (SKIP_HOST_UNAVAILABLE - exit 3, Invoke-Gate never runs)
 #   Invoke-Gate       -> [ordered]@{ gate; verdict; reason; detail; timestamp }
 #                        verdict in { 'PASS' | 'FAIL' | 'SKIP_HOST_UNAVAILABLE' }
 #                        a `throw` here = harness-internal error (exit 4), never a silent PASS
 #
 # WHAT THIS PROVES (satisfies WFP-01):
-#   Two concurrent confined agents with distinct AppContainer package SIDs receive independent
-#   WFP enforcement in one unattended run:
-#     Agent A (nono-ts-wfp-test-open, network.block:false)  -> egress SUCCEEDS (exit 0)
-#     Agent B (nono-ts-wfp-test-blocked, network.block:true) -> egress DENIED  (exit non-zero)
+#   Per-SID WFP egress isolation is actually installed in the Windows kernel. Two confined
+#   agents are launched THROUGH the multi-tenant daemon (nono-agentd) - the code path that
+#   installs per-package-SID WFP filters (agent_daemon/launch.rs::wfp_filter_add ->
+#   nono-wfp-service). Each launch returns the agent's AppContainer package SID. The gate then
+#   inspects live kernel WFP state (netsh wfp show filters):
+#     Agent B (nono-ts-wfp-test-blocked, network.block:true)  -> a per-SID FWP_ACTION_BLOCK
+#                                                                  filter conditioned on
+#                                                                  FWPM_CONDITION_ALE_USER_ID =
+#                                                                  B's package SID MUST exist.
+#     Agent A (nono-ts-wfp-test-open, network.block:false)     -> NO nono block filter for A's
+#                                                                  package SID.
+#   PASS proves enforcement is per-SID isolated (B filtered, A not) in one unattended run.
 #
-# SKIP vs FAIL classification:
-#   SKIP_HOST_UNAVAILABLE: nono-wfp-service pipe absent / Connect timeout (T-79-01 precondition)
-#                          nono-wfp-service went down mid-gate (detected via agent B stderr)
-#                          curl.exe not available
-#   FAIL: per-SID WFP filter produced the wrong result (A denied, or B allowed)
-#   throw: harness-internal (nono not on PATH, cannot spawn at all)
+# WHY DAEMON-PATH (not direct `nono run`):
+#   A direct `nono run` confined agent enforces network-block via the zero-capability
+#   AppContainer (the lowbox child is created with SECURITY_CAPABILITIES{ CapabilityCount: 0 },
+#   so it has no network capability at all and cannot egress to ANY target) - NOT via a WFP
+#   filter. Direct-run agents therefore install no WFP filter, and "allowed vs blocked" is
+#   unobservable through an egress probe. Per-SID WFP egress isolation is a daemon (multi-tenant)
+#   feature. See 79-01-SUMMARY.md for the full empirical record (OQ-1 was falsified at runtime).
 #
-# Pitfall guard (79-RESEARCH Pitfall 1 — false PASS):
-#   When nono-wfp-service is absent, nono run --profile nono-ts-wfp-test-blocked exits
-#   non-zero (WFP filter install fails -> process terminated). This looks like a PASS
-#   (agent B denied) but is vacuous. Mitigation: Test-Precondition probes the pipe, and
-#   Invoke-Gate inspects agent B stderr for WFP-unreachable diagnostics -> SKIP.
+# WHY THE BUSY-LOOP KEEP-ALIVE:
+#   A zero-capability AppContainer agent cannot run ping/curl (no network) and self-exits
+#   instantly; the daemon then reaps it and removes the WFP filter before the (slow) `netsh wfp`
+#   dump can observe it. The agent command is a pure CPU busy-loop (`for /L ... do @rem`,
+#   no network/console) so the agent - and thus its per-SID WFP filter - stays alive across the
+#   snapshot window, then exits on its own. The gate uses a baseline delta (new SID vs baseline)
+#   so any pre-existing leaked filters do not affect the verdict.
 
 # ---------------------------------------------------------------------------
 # Gate configuration
 # ---------------------------------------------------------------------------
 
-$script:GateTimeoutSeconds = 60
-$script:AgentProfile_Open    = 'nono-ts-wfp-test-open'
-$script:AgentProfile_Blocked = 'nono-ts-wfp-test-blocked'
+# CPU busy-loop: keeps the confined agent alive ~15-30s with no network/console dependency.
+$script:KeepAliveCmd   = 'for /L %i in (1,1,60000000) do @rem'
+$script:ProfileBlocked = 'nono-ts-wfp-test-blocked'
+$script:ProfileOpen    = 'nono-ts-wfp-test-open'
+$script:WfpDumpPath    = (Join-Path $env:TEMP 'nono-wfp-gate-filters.xml')
 
 # ---------------------------------------------------------------------------
-# Local assertion helper (throw-on-failure per harness-self-check.ps1:42-54).
+# Local assertion helper (throw-on-failure per harness-self-check.ps1).
 # A throw = harness-internal error (exit 4). Use ONLY for "gate cannot run at all".
 # Confinement results are verdict objects, never throws.
 # ---------------------------------------------------------------------------
@@ -60,45 +72,80 @@ function Assert-True {
     if (-not $Condition) { throw $Message }
 }
 
+# Return the set of AppContainer package SIDs (S-1-15-2-*) that currently have a nono
+# FWP_ACTION_BLOCK filter conditioned on FWPM_CONDITION_ALE_USER_ID. Requires admin
+# (netsh wfp show filters). Returns @() if the dump is unavailable or empty.
+function Get-NonoBlockSids {
+    & netsh wfp show filters file=$script:WfpDumpPath 2>&1 | Out-Null
+    if (-not (Test-Path -LiteralPath $script:WfpDumpPath)) { return @() }
+
+    [xml]$doc = Get-Content -LiteralPath $script:WfpDumpPath -Raw
+    $sids = @{}
+    foreach ($f in $doc.wfpdiag.filters.item) {
+        if ($f.displayData.name -notmatch 'nono') { continue }
+        if ($f.action.type -ne 'FWP_ACTION_BLOCK') { continue }
+        $cond = $f.filterCondition.item | Where-Object { $_.fieldKey -eq 'FWPM_CONDITION_ALE_USER_ID' }
+        $sd = $cond.conditionValue.sd
+        if ($sd -match '(S-1-15-2-[\d-]+)') { $sids[$Matches[1]] = $true }
+    }
+    return @($sids.Keys)
+}
+
+# Parse the AppContainer package SID from a `nono agent launch` response
+# (the daemon prints "  sid=S-1-15-2-..."). Returns $null if not present.
+function Get-LaunchSid {
+    param([string]$Text)
+    if ($Text -match 'sid=(S-1-15-2[^\s]+)') { return $Matches[1] }
+    return $null
+}
+
 # ---------------------------------------------------------------------------
 # Gate contract
 # ---------------------------------------------------------------------------
 
 function Test-Precondition {
     # Return $null when all preconditions met; return a reason string -> SKIP_HOST_UNAVAILABLE.
-    # NOTE (per copilot-e2e.ps1 lines 94-95): nono absence is NOT a SKIP — it is a
-    # harness-internal error (throw inside Invoke-Gate). Do not check nono here.
+    # NOTE: nono absence is NOT a SKIP - it is a harness-internal error (Assert-True throw inside
+    # Invoke-Gate). Do not check nono on PATH here.
 
-    # 1. Probe \\.\pipe\nono-wfp-control (2 s timeout).
-    #    Service absent or pipe unavailable -> SKIP_HOST_UNAVAILABLE (T-79-01).
-    $pipe = $null
-    try {
-        $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
-            '.',
-            'nono-wfp-control',
-            [System.IO.Pipes.PipeDirection]::InOut)
-        $pipe.Connect(2000)
-        $pipe.Close()
-    } catch {
-        if ($pipe) { try { $pipe.Dispose() } catch { } }
-        return 'nono-wfp-service is not running (pipe \\.\pipe\nono-wfp-control absent or did not accept in 2 s) — install and start nono-wfp-service then re-run'
-    } finally {
-        if ($pipe) { try { $pipe.Dispose() } catch { } }
+    # 1. Admin required: `netsh wfp show filters` needs elevation.
+    $identity  = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
+    if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        return 'WFP-01 gate requires elevation (netsh wfp show filters needs admin) - re-run from an elevated shell'
     }
 
-    # 2. Verify curl.exe is reachable (agent A and B launch curl.exe).
-    $curlPath = 'C:\Windows\System32\curl.exe'
-    if (-not (Test-Path -LiteralPath $curlPath)) {
-        if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
-            return 'curl.exe not found at C:\Windows\System32\curl.exe or on PATH — required for WFP-01 egress probe'
-        }
+    # 2. nono-wfp-service control pipe (installs the per-SID WFP filters on the daemon path).
+    $svcPipe = $null
+    try {
+        $svcPipe = [System.IO.Pipes.NamedPipeClientStream]::new(
+            '.', 'nono-wfp-control', [System.IO.Pipes.PipeDirection]::InOut)
+        $svcPipe.Connect(2000)
+        $svcPipe.Close()
+    } catch {
+        return 'nono-wfp-service is not running (pipe \\.\pipe\nono-wfp-control absent or did not accept in 2 s) - install and start nono-wfp-service then re-run'
+    } finally {
+        if ($svcPipe) { try { $svcPipe.Dispose() } catch { } }
+    }
+
+    # 3. nono-agentd control pipe (the multi-tenant daemon that launches agents on the WFP path).
+    $daemonPipe = $null
+    try {
+        $daemonPipe = [System.IO.Pipes.NamedPipeClientStream]::new(
+            '.', 'nono-agentd-control', [System.IO.Pipes.PipeDirection]::InOut)
+        $daemonPipe.Connect(2000)
+        $daemonPipe.Close()
+    } catch {
+        return 'nono-agentd is not running (pipe \\.\pipe\nono-agentd-control absent) - start the daemon in the user (non-elevated) context with `nono daemon start` then re-run'
+    } finally {
+        if ($daemonPipe) { try { $daemonPipe.Dispose() } catch { } }
     }
 
     return $null
 }
 
 function Invoke-Gate {
-    # WFP-01 two-agent concurrent egress isolation proof.
+    # WFP-01 daemon-path per-SID isolation proof.
     # NEVER calls exit. NEVER calls Persist-Verdict. Returns exactly one verdict object.
 
     # Native tools write progress to stderr; do not promote to terminating errors.
@@ -108,174 +155,124 @@ function Invoke-Gate {
     $nono = Get-Command nono -ErrorAction SilentlyContinue
     Assert-True -Condition ($null -ne $nono) `
                 -Message   'harness-internal: nono is not on PATH (build/install nono before running this gate)'
+    $nonoExe = $nono.Source
 
-    # --- Spin up a loopback TCP mock server on port 0 (OS-assigned) ---
-    # Accepts AT LEAST 2 connections (Pitfall 2 — 79-RESEARCH.md: single-accept loop
-    # causes the second agent's connection to be refused, not denied by WFP, producing
-    # a false FAIL verdict for agent A or a vacuous PASS for agent B).
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
-    $listener.Start()
-    $port = $listener.LocalEndpoint.Port
+    # Detect the elevated-daemon misconfiguration (workspace ownership fails when the daemon runs
+    # elevated) so it reads as SKIP, not a spurious FAIL.
+    $daemonElevatedSignals = @('workspace not owned by current user', 'DaemonDaclGuard')
+    # Detect the WFP-service-unreachable fail-secure refusal so it reads as SKIP, not FAIL.
+    $wfpDownSignals = @('nono-wfp-service', 'not reachable', 'WFP network scope required', 'rejected the request')
 
-    # Background Task accepts up to 2 connections; each gets a minimal HTTP 200 response.
-    # The mock runs in a .NET Task (not a PS job) so it shares the same process memory
-    # as the gate and can be stopped cleanly when both agents have exited.
-    $listenerTask = [System.Threading.Tasks.Task]::Run([Action]{
-        for ($i = 0; $i -lt 2; $i++) {
-            try {
-                $client = $listener.AcceptTcpClient()
-                $stream = $client.GetStream()
-                $response = [System.Text.Encoding]::ASCII.GetBytes(
-                    "HTTP/1.1 200 OK`r`nContent-Length: 2`r`nConnection: close`r`n`r`nOK")
-                $stream.Write($response, 0, $response.Length)
-                $stream.Flush()
-                $stream.Close()
-                $client.Close()
-            } catch {
-                # Accept or write failed (e.g. listener stopped before second connect) —
-                # swallow so the Task completes cleanly and does not block Wait().
+    $baseline = @(Get-NonoBlockSids)
+
+    # --- Agent B: blocked profile (network.block=true). Daemon MUST install a per-SID WFP filter. ---
+    $respB = & $nonoExe agent launch --profile $script:ProfileBlocked -- cmd /c $script:KeepAliveCmd 2>&1 | Out-String
+    $sidB = Get-LaunchSid $respB
+    if (-not $sidB) {
+        $elevated = $false
+        foreach ($s in $daemonElevatedSignals) { if ($respB -match [regex]::Escape($s)) { $elevated = $true; break } }
+        if ($elevated) {
+            return [ordered]@{
+                gate      = 'wfp-egress-isolation'
+                verdict   = 'SKIP_HOST_UNAVAILABLE'
+                reason    = 'nono-agentd is running elevated (workspace ownership check fails) - restart the daemon in the non-elevated user context, then re-run'
+                detail    = [ordered]@{ blockedProfile = $script:ProfileBlocked; blockedLaunchOutput = $respB.Trim() }
+                timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
             }
         }
-    })
-
-    # --- Launch Agent A and Agent B concurrently via Start-Job ---
-    # Each job launches: nono run --profile <profile> -- curl.exe -s --max-time 5 http://127.0.0.1:<port>/probe
-    # The job returns LASTEXITCODE (int) and collects combined stdout+stderr via 2>&1.
-    $nonoSrc = $nono.Source
-
-    # --- Per-agent covered workspaces (cwd-coverage / execution-dir gate) ---
-    # nono applies a mandatory integrity label (NO_WRITE_UP) to the confined child's CWD,
-    # which requires the current user to OWN the workspace AND hold WRITE_OWNER. Use stable
-    # dirs under %USERPROFILE% (drive-root / non-user-owned dirs fail the label apply, per
-    # memory feedback_windows_mandatory_label_write_owner). Distinct dirs per agent keep the
-    # two concurrent AppContainer package SIDs from racing on the same workspace DACL.
-    # `--workspace <DIR>` (proven pattern, copilot-e2e.ps1:227-251) sets the child CWD AND
-    # the writable grant and satisfies the execution-dir coverage gate.
-    $mySid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-    $wsA = Join-Path $env:USERPROFILE 'nono-wfp-gate-ws-a'
-    $wsB = Join-Path $env:USERPROFILE 'nono-wfp-gate-ws-b'
-    foreach ($w in @($wsA, $wsB)) {
-        if (-not (Test-Path -LiteralPath $w)) { New-Item -ItemType Directory -Path $w -Force | Out-Null }
-        & icacls $w /setowner "*$mySid" /Q 2>&1 | Out-Null
-        & icacls $w /grant "*$($mySid):(OI)(CI)F" /Q 2>&1 | Out-Null
-    }
-
-    $jobA = Start-Job -ScriptBlock {
-        param($nonoPath, $port, $profile, $ws)
-        $out = & $nonoPath run --profile $profile --workspace $ws -- curl.exe -s --max-time 5 "http://127.0.0.1:$port/probe" 2>&1
-        return @{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
-    } -ArgumentList $nonoSrc, $port, $script:AgentProfile_Open, $wsA
-
-    $jobB = Start-Job -ScriptBlock {
-        param($nonoPath, $port, $profile, $ws)
-        $out = & $nonoPath run --profile $profile --workspace $ws -- curl.exe -s --max-time 5 "http://127.0.0.1:$port/probe" 2>&1
-        return @{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
-    } -ArgumentList $nonoSrc, $port, $script:AgentProfile_Blocked, $wsB
-
-    # --- Wait for both jobs ---
-    $null = Wait-Job $jobA, $jobB -Timeout $script:GateTimeoutSeconds
-
-    # Collect results
-    $resultA = Receive-Job $jobA -ErrorAction SilentlyContinue
-    $resultB = Receive-Job $jobB -ErrorAction SilentlyContinue
-    Remove-Job $jobA, $jobB -Force -ErrorAction SilentlyContinue
-
-    # Stop the listener (allow the Task to complete naturally)
-    try { $listener.Stop() } catch { }
-    try { $null = $listenerTask.Wait(5000) } catch { }
-
-    # Unpack exit-codes and combined output
-    $exitA = if ($resultA -and $null -ne $resultA.ExitCode) { [int]$resultA.ExitCode } else { -1 }
-    $exitB = if ($resultB -and $null -ne $resultB.ExitCode) { [int]$resultB.ExitCode } else { -1 }
-    $outA  = if ($resultA -and $resultA.Output) { $resultA.Output } else { '' }
-    $outB  = if ($resultB -and $resultB.Output) { $resultB.Output } else { '' }
-
-    # --- Pitfall 1 guard (79-RESEARCH.md): detect vacuous PASS caused by WFP service down ---
-    # When nono-wfp-service is absent, prepare_network_enforcement fails early and nono exits
-    # non-zero before curl even runs. That looks like "agent B denied" but is vacuous.
-    # Inspect agent B output for WFP-unreachable diagnostic strings and re-classify as SKIP.
-    $wfpDownSignals = @(
-        'WFP network scope required',
-        'nono-wfp-service is not reachable',
-        'not running',
-        'nono-wfp-control',
-        'Failed to connect to WFP service'
-    )
-    $wfpServiceDown = $false
-    foreach ($signal in $wfpDownSignals) {
-        if ($outB -match [regex]::Escape($signal)) {
-            $wfpServiceDown = $true
-            break
-        }
-    }
-    if ($wfpServiceDown) {
-        return [ordered]@{
-            gate      = 'wfp-egress-isolation'
-            verdict   = 'SKIP_HOST_UNAVAILABLE'
-            reason    = 'nono run --profile nono-ts-wfp-test-blocked stderr indicates WFP service unreachable — install/start nono-wfp-service'
-            detail    = [ordered]@{
-                agentAExitCode = $exitA
-                agentBExitCode = $exitB
-                mockPort       = $port
-                agentAProfile  = $script:AgentProfile_Open
-                agentBProfile  = $script:AgentProfile_Blocked
-                agentBStderr   = $outB
+        $wfpDown = $false
+        foreach ($s in $wfpDownSignals) { if ($respB -match [regex]::Escape($s)) { $wfpDown = $true; break } }
+        if ($wfpDown) {
+            return [ordered]@{
+                gate      = 'wfp-egress-isolation'
+                verdict   = 'SKIP_HOST_UNAVAILABLE'
+                reason    = 'daemon refused the blocked-agent launch because nono-wfp-service is unreachable (fail-secure) - start nono-wfp-service then re-run'
+                detail    = [ordered]@{ blockedProfile = $script:ProfileBlocked; blockedLaunchOutput = $respB.Trim() }
+                timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
             }
-            timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
         }
-    }
-
-    # --- Verdict logic ---
-    # PASS: Agent A egress succeeds (exitCode=0) AND Agent B egress is denied (exitCode!=0).
-    # FAIL-A: Agent A egress was denied (exitCode!=0) — profile or WFP state issue.
-    # FAIL-B: Agent B egress succeeded (exitCode=0) — per-SID WFP filter did not fire.
-
-    if ($exitA -eq 0 -and $exitB -ne 0) {
-        return [ordered]@{
-            gate      = 'wfp-egress-isolation'
-            verdict   = 'PASS'
-            reason    = 'agent A egress succeeded (exitCode=0) and agent B egress denied (exitCode!=0) — per-SID WFP isolation confirmed'
-            detail    = [ordered]@{
-                agentAExitCode = $exitA
-                agentBExitCode = $exitB
-                mockPort       = $port
-                agentAProfile  = $script:AgentProfile_Open
-                agentBProfile  = $script:AgentProfile_Blocked
-            }
-            timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
-        }
-    }
-
-    if ($exitA -ne 0) {
         return [ordered]@{
             gate      = 'wfp-egress-isolation'
             verdict   = 'FAIL'
-            reason    = 'agent A egress denied (should be allowed) — check nono-ts-wfp-test-open profile coverage and WFP state'
-            detail    = [ordered]@{
-                agentAExitCode = $exitA
-                agentBExitCode = $exitB
-                mockPort       = $port
-                agentAProfile  = $script:AgentProfile_Open
-                agentBProfile  = $script:AgentProfile_Blocked
-                agentAOutput   = $outA
-            }
+            reason    = 'blocked agent failed to launch through the daemon (no package SID in response)'
+            detail    = [ordered]@{ blockedProfile = $script:ProfileBlocked; blockedLaunchOutput = $respB.Trim() }
             timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
         }
     }
 
-    # exitB -eq 0 (agent B egress succeeded when it should be denied)
+    Start-Sleep -Milliseconds 800
+    $afterB = @(Get-NonoBlockSids)
+    $blockedHasFilter = ($afterB -contains $sidB) -and (-not ($baseline -contains $sidB))
+
+    # --- Agent A: open profile (network.block=false). Daemon MUST install NO WFP filter. ---
+    $respA = & $nonoExe agent launch --profile $script:ProfileOpen -- cmd /c $script:KeepAliveCmd 2>&1 | Out-String
+    $sidA = Get-LaunchSid $respA
+    if (-not $sidA) {
+        $elevatedA = $false
+        foreach ($s in $daemonElevatedSignals) { if ($respA -match [regex]::Escape($s)) { $elevatedA = $true; break } }
+        if ($elevatedA) {
+            return [ordered]@{
+                gate      = 'wfp-egress-isolation'
+                verdict   = 'SKIP_HOST_UNAVAILABLE'
+                reason    = 'nono-agentd is running elevated (workspace ownership check fails) - restart the daemon in the non-elevated user context, then re-run'
+                detail    = [ordered]@{ openProfile = $script:ProfileOpen; openLaunchOutput = $respA.Trim() }
+                timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+            }
+        }
+        return [ordered]@{
+            gate      = 'wfp-egress-isolation'
+            verdict   = 'FAIL'
+            reason    = 'allowed agent failed to launch through the daemon (no package SID in response)'
+            detail    = [ordered]@{ openProfile = $script:ProfileOpen; openLaunchOutput = $respA.Trim() }
+            timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+        }
+    }
+
+    Start-Sleep -Milliseconds 800
+    $afterA = @(Get-NonoBlockSids)
+    $allowedHasFilter = ($afterA -contains $sidA)
+
+    $detail = [ordered]@{
+        blockedProfile        = $script:ProfileBlocked
+        blockedSid            = $sidB
+        blockedHasFilter      = $blockedHasFilter
+        openProfile           = $script:ProfileOpen
+        openSid               = $sidA
+        openHasFilter         = $allowedHasFilter
+        baselineBlockSidCount = $baseline.Count
+        afterBlockedSidCount  = $afterB.Count
+        afterOpenSidCount     = $afterA.Count
+    }
+    $stamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+
+    # --- Verdict logic ---
+    # PASS: blocked agent has a per-SID WFP block filter AND allowed agent has none.
+    if ($blockedHasFilter -and -not $allowedHasFilter) {
+        return [ordered]@{
+            gate      = 'wfp-egress-isolation'
+            verdict   = 'PASS'
+            reason    = 'per-SID WFP egress isolation proven: blocked agent received a per-package-SID WFP block filter; allowed agent received none'
+            detail    = $detail
+            timestamp = $stamp
+        }
+    }
+
+    if (-not $blockedHasFilter) {
+        return [ordered]@{
+            gate      = 'wfp-egress-isolation'
+            verdict   = 'FAIL'
+            reason    = 'blocked agent did NOT receive a per-SID WFP block filter for its package SID (expected one) - check nono-wfp-service WFP installation'
+            detail    = $detail
+            timestamp = $stamp
+        }
+    }
+
+    # blockedHasFilter is true but allowedHasFilter is also true.
     return [ordered]@{
         gate      = 'wfp-egress-isolation'
         verdict   = 'FAIL'
-        reason    = 'agent B egress succeeded (should be WFP-denied) — per-SID WFP filter did not deny B'
-        detail    = [ordered]@{
-            agentAExitCode = $exitA
-            agentBExitCode = $exitB
-            mockPort       = $port
-            agentAProfile  = $script:AgentProfile_Open
-            agentBProfile  = $script:AgentProfile_Blocked
-            agentBOutput   = $outB
-        }
-        timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
+        reason    = 'allowed agent unexpectedly received a per-SID WFP block filter (should have none) - per-SID isolation breach'
+        detail    = $detail
+        timestamp = $stamp
     }
 }
