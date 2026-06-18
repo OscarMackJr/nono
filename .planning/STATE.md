@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
 status: executing
-stopped_at: Phase 83 Plan 01 complete
-last_updated: "2026-06-18T23:07:00.000Z"
-last_activity: 2026-06-18 -- Phase 83 Plan 01 executed (MachineEgressPolicy + PolicyLoadFailed + sc4_dns_component_matrix)
+stopped_at: Completed Phase 83 Plan 03 (83-03-PLAN.md)
+last_updated: "2026-06-18T23:27:05.642Z"
+last_activity: 2026-06-18
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 8
-  completed_plans: 5
-  percent: 63
+  completed_plans: 6
+  percent: 75
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -27,11 +27,11 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 ## Current Position
 
 Phase: 83 (machine-policy-spine-egress-control) — EXECUTING
-Plan: 2 of 4
-Status: Executing Phase 83
-Last activity: 2026-06-18 -- Phase 83 Plan 01 complete
+Plan: 3 of 4
+Status: Ready to execute
+Last activity: 2026-06-18
 
-Progress: [██████░░░░] 63%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -44,6 +44,7 @@ Progress: [██████░░░░] 63%
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 83 | 01 | 7m | 3 | 6 |
+| 83 | 03 | 25m | 2 | 6 |
 
 *Updated after each plan completion*
 
@@ -70,6 +71,8 @@ Progress: [██████░░░░] 63%
 | D-10: winreg 0.56 Windows-only dep (operator-approved) | 83-01 | Single crate approach; io::Error maps cleanly onto D-07 taxonomy; never unconditional dep |
 | D-13 Option A: enumerate N×REG_SZ subkey values (not REG_MULTI_SZ) | 83-01 | Matches shipped Phase-82 ADMX <list> shape; less churn than changing ADMX |
 | D-14: existing HostFilter leading-dot ends_with+len> form retained | 83-01 | Already passes full SC-4 matrix; sc4_dns_component_matrix codifies the contract |
+| D-11: ADMX named toggles write group TOKENS (anthropic/openai/github-api), not literal FQDNs | 83-03 | Token indirection decouples fleet ADMX template from FQDN lists; nono expands at runtime so provider hosts update without re-issuing ADMX |
+| D-12 (corrected): preset token->FQDN map in embedded network-policy.json groups (not policy.json) | 83-03 | network-policy.json carries domain host[] groups (correct schema); policy.json carries only filesystem allow/deny semantics |
 
 ### Pending Todos
 
@@ -94,6 +97,6 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
 ## Session Continuity
 
-Last session: 2026-06-18T23:07:00.000Z
-Stopped at: Completed Phase 83 Plan 01 (83-01-PLAN.md)
-Resume file: .planning/phases/83-machine-policy-spine-egress-control/83-02-PLAN.md
+Last session: 2026-06-18T23:45:00.000Z
+Stopped at: Completed Phase 83 Plan 03 (83-03-PLAN.md)
+Resume file: .planning/phases/83-machine-policy-spine-egress-control/83-04-PLAN.md
