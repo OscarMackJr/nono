@@ -477,22 +477,25 @@ fn test_sc4_dns_component_matrix() {
 | A4 | Per-user `allow_domain` exists as the fall-through source for D-08 override | Pattern 2 | If the per-user allowlist plumbing differs, the "wholesale override" wiring point changes; confirm where the per-user proxy allowlist is currently sourced. |
 | A5 | `winreg` errors expose `raw_os_error()` (they are `std::io::Error`) | Pattern 1 | If a different error type, the D-07 code-mapping changes shape (still achievable). High confidence — winreg returns `io::Result`. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **ADMX list shape vs REG_MULTI_SZ (must lock before planning the reader).**
    - What we know: shipped ADMX uses `<list additive="true">` → N×REG_SZ subkey values. D-13/EGRESS-01 say `REG_MULTI_SZ`.
    - What's unclear: whether to (A) make the reader enumerate the subkey (match shipped ADMX) or (B) change the ADMX to emit REG_MULTI_SZ.
-   - Recommendation: **Option A** — reader enumerates the `<list>` subkey values (least churn; the shipped template already works for fleet push). Update D-13's wording to "list of REG_SZ entries under the AllowedSuffixes/AllowedHosts subkeys" so requirement text matches reality. Flag to discuss-phase.
+   - Recommendation: **Option A** — reader enumerates the `<list>` subkey values (least churn; the shipped template already works for fleet push). Update D-13's wording to "list of REG_SZ entries under the AllowedSuffixes/AllowedHosts subkeys" so requirement text matches reality.
+   - **RESOLVED 2026-06-18 (plan-phase decision): Option A.** D-13 reworded in `83-CONTEXT.md` ("list of REG_SZ entries under the AllowedSuffixes/AllowedHosts subkeys"); Plan 01 implements subkey enumeration; no ADMX rework.
 
 2. **Agent DNS path under loopback-proxy-only (D-02 surface).**
    - What we know: the proxy resolves DNS itself (`ProxyFilter::check_host`); HTTP-CONNECT-aware clients route through it.
    - What's unclear: whether any in-scope engine resolves DNS locally (UDP/53) before connecting — which WFP would block.
    - Recommendation: keep loopback-proxy-only (D-02 default). Document that engines must be proxy-aware (already nono's model). Revisit only if a real engine fails DNS under enforcement.
+   - **RESOLVED: keep loopback-proxy-only (D-02 default).** Engines must be proxy-aware (nono's existing model). Plan 02 wires `proxy-only` + loopback-proxy-port; no separate DNS permit.
 
 3. **Proxy listener port availability at `wfp_filter_add` call site.**
    - What we know: `wfp_filter_add` (launch.rs) currently sends empty `localhost_ports`. The force-through-proxy flip needs the proxy port.
    - What's unclear: whether the daemon already knows its in-process proxy port at that call site (it configures the proxy at startup).
    - Recommendation: thread the proxy port from daemon startup (where `ProxyFilter` is configured) into the per-agent WFP request. Confirm the wiring point during planning.
+   - **RESOLVED: thread the proxy port from daemon startup into the per-agent WFP request.** Plan 02 Task 2 confirms the wiring point and passes `localhost_ports=[proxy_port]`.
 
 ## Sources
 

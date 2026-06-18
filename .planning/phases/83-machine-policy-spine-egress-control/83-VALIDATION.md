@@ -1,8 +1,8 @@
 ---
 phase: 83
 slug: machine-policy-spine-egress-control
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-18
 ---
@@ -36,19 +36,19 @@ created: 2026-06-18
 
 ## Per-Task Verification Map
 
-> Skeleton mapped from success criteria SC-1..SC-5; planner assigns concrete task IDs/waves.
+> Mapped to the finalized plans (83-01..83-04). Task IDs are `{phase}-{plan}-{task}`.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 83-machine-policy | TBD | 1 | POLICY-01 | T-83-absent-fallthrough | Absent key → fall through to per-user; present → override; 64-bit view read | unit | `cargo test -p nono machine_policy` | ❌ W0 | ⬜ pending |
-| 83-fail-secure | TBD | 1 | POLICY-02 | T-83-malformed-failopen | Unreadable/malformed key → `Err(NonoError::PolicyLoadFailed)`, never permissive fall-through | unit | `cargo test -p nono machine_policy::fail_secure` | ❌ W0 | ⬜ pending |
-| 83-single-source | TBD | 2 | POLICY-03, EGRESS-02 | T-83-layer-drift | One startup read → ProxyFilter + WFP permit instructions from the same struct | unit | `cargo test -p nono-cli machine_policy_handoff` | ❌ W0 | ⬜ pending |
-| 83-deny-default | TBD | 2 | EGRESS-01 | T-83-deny-default | Allowlist presence switches `ProxyFilter::new_strict` deny-by-default on | unit | `cargo test -p nono-proxy filter` | ✅ | ⬜ pending |
-| 83-wfp-proxy-only | TBD | 2 | EGRESS-02 | T-83-proxy-bypass | Per-SID WFP permit=loopback-proxy-port only, block all else; permit weight beats block | unit | `cargo test -p nono-cli wfp_proxy_only` | ❌ W0 | ⬜ pending |
-| 83-dns-matrix | TBD | 1 | EGRESS-03 | T-83-dns-component | `api.anthropic.com`✓ vs `anthropic.com`/`evilanthropic.com`/`anthropic.com.evil.com`✗ | unit | `cargo test -p nono net_filter::sc4_dns_component_matrix` | ✅ | ⬜ pending |
-| 83-presets | TBD | 1 | EGRESS-04 | — | policy.json carries `*.anthropic.com`/`*.openai.com`/`api.github.com` groups; token→FQDN expands | unit | `cargo test -p nono-cli policy_egress_groups` | ❌ W0 | ⬜ pending |
-| 83-admx-presets | TBD | 3 | EGRESS-04, POLICY-01 | — | Generated ADMX exposes named preset toggles + AllowedSuffixes/AllowedHosts | script | `pwsh scripts/validate-windows-msi-contract.ps1` | ❌ W0 | ⬜ pending |
-| 83-gate | TBD | 3 | POLICY-02, EGRESS-02 | T-83-malformed-failopen, T-83-proxy-bypass | SC-2 non-zero exit on corrupted key; SC-3 dual-layer deny | script (host-gated) | `pwsh scripts/verify-dark.ps1 --gate egress-policy-deny` | ❌ W0 | ⬜ pending |
+| 83-01-01 | 01 | 1 | POLICY-01, POLICY-02 | — | `winreg` dependency legitimacy verified before add (slopcheck) | checkpoint:human-verify | n/a (blocking-human gate) | n/a | ⬜ pending |
+| 83-01-02 | 01 | 1 | POLICY-01, POLICY-02 | T-83-absent-fallthrough, T-83-malformed-failopen | Absent key (errno 2) → `Ok(None)` fall-through; unreadable/malformed → `Err(PolicyLoadFailed)`; 64-bit view; enumerate N×REG_SZ subkey | unit | `cargo test -p nono machine_policy` | ❌ W0 | ⬜ pending |
+| 83-01-03 | 01 | 1 | EGRESS-03 | T-83-dns-component | `api.anthropic.com`✓ vs `anthropic.com`/`evilanthropic.com`/`anthropic.com.evil.com`✗ | unit | `cargo test -p nono net_filter::sc4_dns_component_matrix` | ✅ | ⬜ pending |
+| 83-02-01 | 02 | 2 | POLICY-03, EGRESS-01 | T-83-layer-drift, T-83-deny-default | One startup HKLM read → `ProxyFilter::new_strict` deny-by-default; per-user ignored when machine policy present | unit | `cargo test -p nono-cli machine_policy_handoff` | ❌ W0 | ⬜ pending |
+| 83-02-02 | 02 | 2 | EGRESS-02 | T-83-proxy-bypass | Per-SID WFP `proxy-only` permit=loopback-proxy-port only, block all else, from the same struct; WFP service never reads HKLM | unit | `cargo test -p nono-cli wfp_proxy_only` | ❌ W0 | ⬜ pending |
+| 83-03-01 | 03 | 1 | EGRESS-04 | — | `network-policy.json` carries `anthropic`/`openai`/`github-api` groups; token→FQDN expands; unknown token → empty (least-priv) | unit | `cargo test -p nono-cli policy_egress_groups` | ❌ W0 | ⬜ pending |
+| 83-03-02 | 03 | 1 | EGRESS-04 | — | ADMX here-string exposes three named preset toggles writing group TOKENS; `<list>` policies unchanged | script (dev-host source assert) | `grep -Eq 'Allow Anthropic\|Allow OpenAI\|Allow GitHub API' scripts/build-windows-msi.ps1` | ❌ W0 | ⬜ pending |
+| 83-04-01 | 04 | 3 | POLICY-02, EGRESS-02 | T-83-malformed-failopen, T-83-proxy-bypass | SC-2 non-zero exit on corrupted key; SC-3 dual-layer deny | script (host-gated) | `pwsh scripts/verify-dark.ps1 --gate egress-policy-deny` | ❌ W0 | ⬜ pending |
+| 83-04-02 | 04 | 3 | POLICY-02, EGRESS-02 | — | Cross-target clippy clean (Unix cfg-gated winreg/WFP code) | lint | `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` (+ darwin) | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -76,11 +76,11 @@ created: 2026-06-18
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (83-01-01 is a blocking-human checkpoint; 83-04-01 is host-gated with the corrupted-key gate)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s (unit tier)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-18 (plan-phase; plans 83-01..83-04 pass plan-checker Dimension 8)
