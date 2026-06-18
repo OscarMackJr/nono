@@ -100,7 +100,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 - [x] **Phase 82: Fleet Deployment Infrastructure** — Silent MSI install, machine-wide PATH, ProgramData root, cert install, health command, Event Log source registration
  (completed 2026-06-18)
-- [ ] **Phase 83: Machine Policy Spine + Egress Control** — HKLM reader (fail-secure), proxy+WFP unified from one source, ADMX template, AI-provider presets, DNS-component wildcard matching
+- [x] **Phase 83: Machine Policy Spine + Egress Control** — HKLM reader (fail-secure), proxy+WFP unified from one source, ADMX template, AI-provider presets, DNS-component wildcard matching (completed 2026-06-18)
 - [ ] **Phase 84: SIEM/EDR Telemetry** — SecurityEventLayer tracing::Layer, structured Event Log events, HMAC tamper-evidence chain, secret redaction, tamper-evidence ADR
 
 ## Phase Details
@@ -136,7 +136,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   - [x] 83-01-PLAN.md — Core lib spine: MachineEgressPolicy type + NonoError::PolicyLoadFailed + winreg fail-secure 64-bit reader + SC-4 DNS-component matrix (POLICY-01/02, EGRESS-03) — 2026-06-18
   - [x] 83-02-PLAN.md — Single-source hand-off: one daemon-startup read -> ProxyFilter deny-by-default + flip wfp_filter_add to force-through-proxy (POLICY-03, EGRESS-01/02)
   - [x] 83-03-PLAN.md — AI-provider presets + ADMX named toggles: egress groups in network-policy.json + token->FQDN expansion + GPO toggle here-strings (EGRESS-04)
-  - [ ] 83-04-PLAN.md — Dark Factory gate egress-policy-deny (SC-2 corrupted-key non-zero exit; SC-3 dual-layer deny) + cross-target clippy verification (POLICY-02, EGRESS-02)
+  - [x] 83-04-PLAN.md — Dark Factory gate egress-policy-deny (SC-2 corrupted-key non-zero exit; SC-3 dual-layer deny) + cross-target clippy verification (POLICY-02, EGRESS-02)
 **UI hint**: no
 
 ### Phase 84: SIEM/EDR Telemetry
@@ -157,7 +157,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
-| 83. Machine Policy Spine + Egress Control | 3/4 | In Progress|  |
+| 83. Machine Policy Spine + Egress Control | 4/4 | Complete   | 2026-06-18 |
 | 84. SIEM/EDR Telemetry | 0/TBD | Not started | - |
 
 ## References
