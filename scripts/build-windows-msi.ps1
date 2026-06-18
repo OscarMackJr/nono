@@ -272,10 +272,8 @@ $machineOnlyComponentsXml = ""
 $certImportCustomActionXml = ""
 if ($Scope -eq "machine") {
     $machineOnlyComponentsXml = @"
-      <!-- Phase 82: %PROGRAMDATA%\nono\ root directory.
-           Created by the MSI under SYSTEM; Admins and SYSTEM have write access by default
-           ACL on %PROGRAMDATA%. NEVER create %LOCALAPPDATA% user scratch here (Pitfall 4 /
-           D-08) — user scratch is provisioned at first-run in user context (Plan 02). -->
+      <!-- Phase 82: ProgramData root. MSI creates C:\ProgramData\nono\ under SYSTEM.
+           NEVER create LocalAppData user scratch here; Pitfall 4 / D-08 apply. -->
       <Component Id="cmpProgramDataNono" Guid="*" Directory="PROGRAMDATANONO">
         <RegistryValue
             Root="HKLM"
@@ -286,27 +284,24 @@ if ($Scope -eq "machine") {
             KeyPath="yes" />
       </Component>
 
-      <!-- Phase 82: POC root cert staged in DER format (.cer) under INSTALLFOLDER.
-           certutil -addstore (invoked by the cert-import CustomAction below via
-           nono.exe setup --trust-root) accepts DER. T-82-01: both the exe and the
-           cert ship inside the MSI cab, never fetched at runtime. -->
+      <!-- Phase 82: POC root cert (DER format) under INSTALLFOLDER.
+           Used by the cert-import CA (nono.exe setup trust-root verb).
+           Both exe and cert ship inside the MSI cab, never fetched at runtime. -->
       <Component Id="cmpPocCertDer" Guid="*">
         <File Id="filPocCertDer" Source="$pocCertDerPath" Name="nono-poc-root.cer" KeyPath="yes" />
       </Component>
 
-      <!-- Phase 82: POC root cert staged in PEM format under %PROGRAMDATA%\nono\.
-           Node.js / NODE_EXTRA_CA_CERTS cannot read a DER .cer file (Pitfall 13 /
-           D-05).  This PEM copy is byte-derived from the same pinned DER root at
-           build time and installs to %PROGRAMDATA%\nono\nono-poc-root.pem.
-           T-82-07: %PROGRAMDATA%\nono\ is Admins-only writable by default ACL. -->
+      <!-- Phase 82: POC root cert (PEM format) under PROGRAMDATANONO.
+           Node NODE_EXTRA_CA_CERTS requires PEM; DER format is not readable by Node.
+           This copy is byte-derived from the pinned DER root at build time.
+           Installed path: %PROGRAMDATA%\nono\nono-poc-root.pem (Pitfall 13 / D-05). -->
       <Component Id="cmpPocCertPem" Guid="*" Directory="PROGRAMDATANONO">
         <File Id="filPocCertPem" Source="$pocCertPemPath" Name="nono-poc-root.pem" KeyPath="yes" />
       </Component>
 
-      <!-- Phase 82: HKLM\SOFTWARE\Policies\nono sentinel key.
-           Creates the empty policy spine for the Phase 83 reader and the
-           nono health presence probe.  Only a placeholder InstalledByMsi value
-           is written here; egress policy values are Phase 83's responsibility. -->
+      <!-- Phase 82: HKLM sentinel key for Phase 83 reader and nono health probe.
+           Only a placeholder InstalledByMsi value is written here.
+           Egress policy values are Phase 83 responsibility. -->
       <Component Id="cmpPolicySentinel" Guid="*">
         <RegistryKey
             Root="HKLM"
@@ -319,11 +314,9 @@ if ($Scope -eq "machine") {
         </RegistryKey>
       </Component>
 
-      <!-- Phase 82: nono CLI Application Event Log source.
-           Registered now alongside the nono-wfp-service source so Phase 84's
-           SecurityEventLayer can write events without an additional install step.
-           Mirrors the cmpEventLogSource pattern (EventMessageFile + TypesSupported=7).
-           Machine-scope only; user MSI must not carry this (T-82-05). -->
+      <!-- Phase 82: nono CLI Application Event Log source (machine-scope only).
+           Registered now to de-risk Phase 84 SecurityEventLayer.
+           Mirrors the cmpEventLogSource pattern (EventMessageFile + TypesSupported=7). -->
       <Component Id="cmpNonoCliEventLogSource" Guid="*">
         <RegistryKey
             Root="HKLM"
@@ -345,15 +338,14 @@ if ($Scope -eq "machine") {
     # Modeled EXACTLY on the existing $wfpUninstallCustomActionXml deferred SYSTEM template
     # (Directory="INSTALLFOLDER", Execute="deferred", Impersonate="no", Return="ignore").
     # Invokes the installed CLI via the relative-exe form (nono.exe setup --trust-root
-    # nono-poc-root.cer) — the DER .cer is resolved relative to INSTALLFOLDER, mirroring
-    # the nono.exe setup --uninstall-wfp pattern.
-    # nono.exe setup --trust-root (authored in Plan 02 Task 1) is the SINGLE source of
-    # truth for the Root+TrustedPublisher store list, eliminating D-04 PowerShell/Rust drift.
+    # nono-poc-root.cer) mirroring the nono.exe setup --uninstall-wfp pattern.
+    # setup --trust-root (authored in Plan 02 Task 1) is the SINGLE source of truth for
+    # the Root+TrustedPublisher store list, eliminating D-04 PowerShell/Rust drift.
     # Return="ignore" makes the import NON-FATAL (D-04; nono health reports degraded).
     # Conditioned on fresh install (NOT REMOVE=ALL / NOT UPGRADINGPRODUCTCODE).
     # T-82-01: exe and cert both ship inside the MSI cab; no runtime path is user-writable.
     $certImportCustomActionXml = @"
-    <!-- Phase 82: cert-import CustomAction (deferred SYSTEM, non-fatal). -->
+    <!-- Phase 82: cert-import CustomAction (deferred SYSTEM, non-fatal, Return=ignore). -->
     <CustomAction
         Id="CaImportTrustRoot"
         Directory="INSTALLFOLDER"
