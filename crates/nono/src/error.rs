@@ -234,6 +234,26 @@ pub enum NonoError {
         hint: String,
     },
 
+    /// Machine-level egress policy could not be read from the Windows registry.
+    ///
+    /// # Fail-secure contract (D-07)
+    ///
+    /// This variant is returned when the `HKLM\SOFTWARE\Policies\nono` key is
+    /// **present but unreadable** (e.g. `ERROR_ACCESS_DENIED`) **or present but
+    /// malformed** (wrong REG_* type, bad UTF-16, unparseable value).
+    ///
+    /// **Absent** is NOT an error — an absent key returns `Ok(None)` (fall-through
+    /// to per-user config).  Only a present-but-broken key aborts here.
+    ///
+    /// Callers MUST propagate this with `?` and MUST NOT silently fall through to
+    /// per-user configuration — that would be a fail-open vulnerability (Pitfall 3,
+    /// CLAUDE.md footgun #2).
+    #[error("Machine policy load failed: {reason}")]
+    PolicyLoadFailed {
+        /// Human-readable description of what failed (OS error, type mismatch, etc.).
+        reason: String,
+    },
+
     /// One or more files could not be restored (e.g. locked on Windows).
     ///
     /// Carries the list of successfully applied changes along with per-file
