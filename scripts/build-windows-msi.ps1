@@ -83,9 +83,17 @@ function Get-ScopeMetadata {
         "machine" {
             return @{
                 PackageScope = "perMachine"
+                # Phase 82 Plan 01: machine scope adds the CommonAppDataFolder hierarchy
+                # alongside ProgramFiles64Folder so the PEM cert and future machine-global
+                # data land at %PROGRAMDATA%\nono\ (Admins/SYSTEM writable, never per-user).
+                # Per Pitfall 4 / D-08 the MSI MUST NOT create %LOCALAPPDATA% user scratch;
+                # that is the first-run provisioner's responsibility in user context (Plan 02).
                 DirectoryXml = @"
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="nono" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="PROGRAMDATANONO" Name="nono" />
     </StandardDirectory>
 "@
                 RegistryRoot = "HKLM"
@@ -218,10 +226,139 @@ $msiPath = Join-Path $outputFullPath $packageName
 #   Remove="uninstall"- SCM deletes the service registry entry on uninstall only.
 #                       During upgrade, the new version's install re-creates the entry.
 #   Wait="yes"        - Each SCM operation is synchronous; MSI sequence waits for completion.
+# Phase 82 Plan 01: resolve the POC cert paths for machine-scope MSI.
+# The DER .cer (certutil/CryptoAPI format) is committed alongside the scripts.
+# The PEM copy (Node-readable for NODE_EXTRA_CA_CERTS) is produced from the DER cert
+# by certutil -encode at build time and committed as nono-poc-signing.pem.
+# Both are referenced as <File> components in the machine-only ComponentGroup.
+$pocCertDerPath = ""
+$pocCertPemPath = ""
+if ($Scope -eq "machine") {
+    $pocCertDerPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.cer"
+    if (-not (Test-Path -LiteralPath $pocCertDerPath)) {
+        throw "POC DER cert not found at '$pocCertDerPath'. Commit dist/windows/nono-poc-signing.cer to the repo."
+    }
+    $pocCertDerPath = (Resolve-Path -LiteralPath $pocCertDerPath).Path
+
+    $pocCertPemPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.pem"
+    if (-not (Test-Path -LiteralPath $pocCertPemPath)) {
+        # Auto-convert DER -> PEM at build time using in-box certutil -encode.
+        # certutil -encode produces a standard base64/PEM file ("-----BEGIN CERTIFICATE-----").
+        # This is idempotent; a committed .pem is preferred so builds are reproducible
+        # without relying on the build machine having certutil on PATH.
+        Write-Host "Converting DER cert to PEM via certutil -encode..."
+        & certutil -encode "$pocCertDerPath" "$pocCertPemPath" | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pocCertPemPath)) {
+            throw "certutil -encode failed to produce '$pocCertPemPath'. Install certutil or commit a pre-generated dist/windows/nono-poc-signing.pem."
+        }
+    }
+    $pocCertPemPath = (Resolve-Path -LiteralPath $pocCertPemPath).Path
+}
+
 $serviceComponentXml = ""
 $driverComponentXml = ""
 $eventLogComponentXml = ""
 $wfpUninstallCustomActionXml = ""
+# Phase 82 Plan 01: machine-only components that are ALWAYS emitted for machine scope,
+# regardless of whether the WFP service binary is supplied.  These provision the
+# machine-global state that Phases 83 and 84 build on:
+#   (a) %PROGRAMDATA%\nono\  root directory
+#   (b) nono-poc-root.cer    DER cert under INSTALLFOLDER (for certutil/CryptoAPI stores)
+#   (c) nono-poc-root.pem    PEM cert under PROGRAMDATANONO (for Node NODE_EXTRA_CA_CERTS)
+#   (d) Sentinel registry key HKLM\SOFTWARE\Policies\nono (forward-looking for Phase 83)
+#   (e) Cert-import CustomAction (nono.exe setup --trust-root, deferred SYSTEM, non-fatal)
+#   (f) nono CLI Event Log source (registered now to de-risk Phase 84)
+$machineOnlyComponentsXml = ""
+$certImportCustomActionXml = ""
+if ($Scope -eq "machine") {
+    $machineOnlyComponentsXml = @"
+      <!-- Phase 82: ProgramData root. MSI creates C:\ProgramData\nono\ under SYSTEM.
+           NEVER create LocalAppData user scratch here; Pitfall 4 / D-08 apply. -->
+      <Component Id="cmpProgramDataNono" Guid="*" Directory="PROGRAMDATANONO">
+        <RegistryValue
+            Root="HKLM"
+            Key="Software\always-further\nono\machine"
+            Name="ProgramDataRoot"
+            Type="string"
+            Value="[PROGRAMDATANONO]"
+            KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: POC root cert (DER format) under INSTALLFOLDER.
+           Used by the cert-import CA (nono.exe setup trust-root verb).
+           Both exe and cert ship inside the MSI cab, never fetched at runtime. -->
+      <Component Id="cmpPocCertDer" Guid="*">
+        <File Id="filPocCertDer" Source="$pocCertDerPath" Name="nono-poc-root.cer" KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: POC root cert (PEM format) under PROGRAMDATANONO.
+           Node NODE_EXTRA_CA_CERTS requires PEM; DER format is not readable by Node.
+           This copy is byte-derived from the pinned DER root at build time.
+           Installed path: %PROGRAMDATA%\nono\nono-poc-root.pem (Pitfall 13 / D-05). -->
+      <Component Id="cmpPocCertPem" Guid="*" Directory="PROGRAMDATANONO">
+        <File Id="filPocCertPem" Source="$pocCertPemPath" Name="nono-poc-root.pem" KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: HKLM sentinel key for Phase 83 reader and nono health probe.
+           Only a placeholder InstalledByMsi value is written here.
+           Egress policy values are Phase 83 responsibility. -->
+      <Component Id="cmpPolicySentinel" Guid="*">
+        <RegistryKey
+            Root="HKLM"
+            Key="SOFTWARE\Policies\nono">
+          <RegistryValue
+              Name="InstalledByMsi"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+      <!-- Phase 82: nono CLI Application Event Log source (machine-scope only).
+           Registered now to de-risk Phase 84 SecurityEventLayer.
+           Mirrors the cmpEventLogSource pattern (EventMessageFile + TypesSupported=7). -->
+      <Component Id="cmpNonoCliEventLogSource" Guid="*">
+        <RegistryKey
+            Root="HKLM"
+            Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\nono">
+          <RegistryValue
+              Name="EventMessageFile"
+              Type="string"
+              Value="[INSTALLFOLDER]nono.exe"
+              KeyPath="yes" />
+          <RegistryValue
+              Name="TypesSupported"
+              Type="integer"
+              Value="7" />
+        </RegistryKey>
+      </Component>
+"@
+
+    # Phase 82 Plan 01: cert-import CustomAction.
+    # Modeled EXACTLY on the existing $wfpUninstallCustomActionXml deferred SYSTEM template
+    # (Directory="INSTALLFOLDER", Execute="deferred", Impersonate="no", Return="ignore").
+    # Invokes the installed CLI via the relative-exe form (nono.exe setup --trust-root
+    # nono-poc-root.cer) mirroring the nono.exe setup --uninstall-wfp pattern.
+    # setup --trust-root (authored in Plan 02 Task 1) is the SINGLE source of truth for
+    # the Root+TrustedPublisher store list, eliminating D-04 PowerShell/Rust drift.
+    # Return="ignore" makes the import NON-FATAL (D-04; nono health reports degraded).
+    # Conditioned on fresh install (NOT REMOVE=ALL / NOT UPGRADINGPRODUCTCODE).
+    # T-82-01: exe and cert both ship inside the MSI cab; no runtime path is user-writable.
+    $certImportCustomActionXml = @"
+    <!-- Phase 82: cert-import CustomAction (deferred SYSTEM, non-fatal, Return=ignore). -->
+    <CustomAction
+        Id="CaImportTrustRoot"
+        Directory="INSTALLFOLDER"
+        ExeCommand="nono.exe setup --trust-root nono-poc-root.cer"
+        Execute="deferred"
+        Impersonate="no"
+        Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="CaImportTrustRoot" Before="InstallFinalize" Condition="NOT (REMOVE=&quot;ALL&quot;) AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+"@
+}
+
 if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
     $serviceComponentXml = @"
       <Component Id="cmpWfpServiceExe" Guid="*">
@@ -358,7 +495,7 @@ $wxsContent = @"
     <Feature Id="MainFeature" Title="nono" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
-$($wfpUninstallCustomActionXml)  </Package>
+$($wfpUninstallCustomActionXml)$($certImportCustomActionXml)  </Package>
 
   <Fragment>
 $($scopeInfo.DirectoryXml)
@@ -401,7 +538,7 @@ $($scopeInfo.DirectoryXml)
             System="$($scopeInfo.SystemPath)"
             Value="[INSTALLFOLDER]" />
       </Component>
-$($serviceComponentXml)$($driverComponentXml)$($eventLogComponentXml)    </ComponentGroup>
+$($machineOnlyComponentsXml)$($serviceComponentXml)$($driverComponentXml)$($eventLogComponentXml)    </ComponentGroup>
   </Fragment>
 </Wix>
 "@
