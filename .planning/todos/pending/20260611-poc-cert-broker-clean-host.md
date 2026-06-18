@@ -4,6 +4,7 @@
 **Severity:** high — the public release's supervised/broker path does not work out-of-the-box
 **Source:** `.planning/phases/66-wr-02-edr-human-uat/66-HUMAN-UAT.md` (findings)
 **Resolves phase:** 67 — Clean-Host Windows Install (v2.11; TRUST-01/TRUST-02 interim trust path only — real publicly-trusted signing is DIST-SIGN-01, deferred to the enterprise milestone)
+**Resolves phase (v3.0):** 82 — Fleet Deployment Infrastructure (DEPLOY-05 silent POC root-cert install so the broker works on a clean fleet host; real publicly-trusted signing remains DIST-SIGN-01, out of scope)
 
 ## Problem
 v0.62.2 is Authenticode-signed with a **self-signed `CN=nono Test Signing` POC cert**. On any
