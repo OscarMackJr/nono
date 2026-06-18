@@ -257,9 +257,9 @@ if ($Gate) {
     # Single-gate run — full verdict emit + exit (function calls exit directly).
     Invoke-SingleGate -GateName $Gate
 } else {
-    # All-run: loop each discovered gate (Phase 81 adds the {gates:[...],overall} rollup).
+    # All-run: loop each discovered gate and emit a {gates:[...],overall} rollup.
     # Per-gate results are persisted to .nono-runtime/verdicts/<gate>.json as each runs.
-    # This loop is intentionally minimal — Phase 81 owns the aggregator/rollup logic (D-03).
+    # Aggregator rollup implemented here (D-03, Phase 81).
     if ($discoveredGates.Count -eq 0) {
         [Console]::Error.WriteLine("[verify-dark] harness-internal error: no gate files found in $gatesDir")
         exit 1
@@ -271,6 +271,8 @@ if ($Gate) {
     # NEVER to exit 2 (FAIL) and NEVER contribute to a silent exit 0 (PASS).
     $anyFail      = $false
     $harnessError = $false
+    $anySkip      = $false
+    $gateResults  = [System.Collections.Generic.List[object]]::new()
     foreach ($gateName in ($discoveredGates.Keys | Sort-Object)) {
         # Re-source for each gate run in all-mode to avoid function-name collisions
         # between gates (each dot-source overwrites Test-Precondition/Invoke-Gate).
@@ -286,6 +288,7 @@ if ($Gate) {
         catch {
             [Console]::Error.WriteLine("[verify-dark] harness-internal error: Test-Precondition threw for '$gateName': $_")
             $harnessError = $true
+            $gateResults.Add([ordered]@{ gate = $gateName; verdict = 'HARNESS_ERROR'; reason = 'Test-Precondition threw — see stderr'; detail = @{}; timestamp = Get-IsoTimestamp }) | Out-Null
             continue
         }
 
@@ -298,9 +301,12 @@ if ($Gate) {
             $json = ($verdictObj | ConvertTo-Json -Depth 6 -Compress)
             if (-not (Persist-Verdict -GateName $gateName -Json $json)) {
                 $harnessError = $true
+                $gateResults.Add([ordered]@{ gate = $gateName; verdict = 'HARNESS_ERROR'; reason = 'verdict persist failed — see stderr'; detail = @{}; timestamp = Get-IsoTimestamp }) | Out-Null
                 continue
             }
             [Console]::Out.Write($json + "`n")
+            $anySkip = $true
+            $gateResults.Add($verdictObj) | Out-Null
             continue
         }
 
@@ -310,6 +316,7 @@ if ($Gate) {
         catch {
             [Console]::Error.WriteLine("[verify-dark] harness-internal error: Invoke-Gate threw for '$gateName': $_")
             $harnessError = $true
+            $gateResults.Add([ordered]@{ gate = $gateName; verdict = 'HARNESS_ERROR'; reason = 'Invoke-Gate threw — see stderr'; detail = @{}; timestamp = Get-IsoTimestamp }) | Out-Null
             continue
         }
 
@@ -317,6 +324,7 @@ if ($Gate) {
         $verdictObj = Normalize-VerdictObject -VerdictObj $verdictObj -GateName $gateName
         if ($null -eq $verdictObj) {
             $harnessError = $true
+            $gateResults.Add([ordered]@{ gate = $gateName; verdict = 'HARNESS_ERROR'; reason = 'Invoke-Gate returned null/non-dict — see stderr'; detail = @{}; timestamp = Get-IsoTimestamp }) | Out-Null
             continue
         }
 
@@ -331,25 +339,48 @@ if ($Gate) {
         $json = ($verdictObj | ConvertTo-Json -Depth 6 -Compress)
         if (-not (Persist-Verdict -GateName $gateName -Json $json)) {
             $harnessError = $true
+            $gateResults.Add([ordered]@{ gate = $gateName; verdict = 'HARNESS_ERROR'; reason = 'verdict persist failed — see stderr'; detail = @{}; timestamp = Get-IsoTimestamp }) | Out-Null
             continue
         }
         [Console]::Out.Write($json + "`n")
+        $gateResults.Add($verdictObj) | Out-Null
 
         switch ($verdictClass) {
-            'FAIL'          { $anyFail = $true }
-            'HARNESS_ERROR' { $harnessError = $true }
-            # 'PASS' / 'SKIP_HOST_UNAVAILABLE' contribute nothing to the failure state.
+            'FAIL'                  { $anyFail = $true }
+            'SKIP_HOST_UNAVAILABLE' { $anySkip = $true }
+            'HARNESS_ERROR'         { $harnessError = $true }
+            # 'PASS' contributes nothing to the failure state.
         }
     }
 
-    # Minimal all-run exit (Phase 81 owns the {gates:[...],overall}/PASS_WITH_SKIPS
-    # rollup — D-03). Precedence: harness-internal error (4) > gate FAIL (2) > PASS (0).
-    # CR-01/CR-02: a harness-internal error NEVER reads as FAIL or as a silent PASS.
-    if ($harnessError) {
-        exit 4
-    } elseif ($anyFail) {
-        exit 2
-    } else {
-        exit 0
+    # --- Aggregator rollup (D-03, Phase 81) ---
+    # Precedence: harness-internal error > FAIL > PASS_WITH_SKIPS > PASS.
+    # CR-01/CR-02: harness-internal error NEVER reads as FAIL or silent PASS.
+    $overallStr = if ($harnessError)    { 'HARNESS_ERROR' }
+                  elseif ($anyFail)     { 'FAIL' }
+                  elseif ($anySkip)     { 'PASS_WITH_SKIPS' }
+                  else                  { 'PASS' }
+
+    $aggObj = [ordered]@{
+        gates     = $gateResults.ToArray()
+        overall   = $overallStr
+        timestamp = Get-IsoTimestamp
     }
+    $aggJson = ($aggObj | ConvertTo-Json -Depth 6 -Compress)
+
+    # WR-04: persist aggregate BEFORE emit; persist failure is a harness-internal error.
+    if (-not (Persist-Verdict -GateName '_aggregate' -Json $aggJson)) {
+        [Console]::Error.WriteLine('[verify-dark] harness-internal error: failed to persist _aggregate.json')
+        $harnessError = $true
+        # Recompute overall after the error is recorded.
+        $overallStr = 'HARNESS_ERROR'
+        $aggObj['overall'] = $overallStr
+        $aggJson = ($aggObj | ConvertTo-Json -Depth 6 -Compress)
+    }
+    [Console]::Out.Write($aggJson + "`n")
+
+    # SC3: exit 0 for PASS and PASS_WITH_SKIPS; exit 2 for FAIL; exit 4 for harness-internal.
+    if ($harnessError) { exit 4 }
+    elseif ($anyFail)  { exit 2 }
+    else               { exit 0 }
 }
