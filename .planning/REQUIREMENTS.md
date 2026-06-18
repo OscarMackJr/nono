@@ -11,9 +11,9 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Copilot End-to-End Confinement
 
-- [ ] **CPLT-01**: nono grants ancestor-chain `FILE_READ_ATTRIBUTES` (RA) up to the drive root for a confined target's package SID, so Node-ESM module resolution (`realpathSync`/`lstat` walking every path ancestor) succeeds under AppContainer instead of being denied.
-- [ ] **CPLT-02**: An idempotent one-time-admin setup step grants the package-SID RA on the system ancestors (`C:\`, `C:\Users`) that nono cannot ACL at runtime — documented and verified non-destructive.
-- [ ] **CPLT-03**: GitHub Copilot CLI completes a real task end-to-end under confinement (no longer confine-only), proven by an unattended scripted gate.
+- [x] **CPLT-01**: nono grants ancestor-chain `FILE_READ_ATTRIBUTES` (RA) up to the drive root for a confined target's package SID, so Node-ESM module resolution (`realpathSync`/`lstat` walking every path ancestor) succeeds under AppContainer instead of being denied.
+- [x] **CPLT-02**: An idempotent one-time-admin setup step grants the package-SID RA on the system ancestors (`C:\`, `C:\Users`) that nono cannot ACL at runtime — documented and verified non-destructive.
+- [x] **CPLT-03**: GitHub Copilot CLI completes a real task end-to-end under confinement (no longer confine-only), proven by an unattended scripted gate. *(Gate delivered + wired; literal green PASS host-gated — GitHub org policy denies Copilot CLI on this account, so the gate fails-closed to SKIP_HOST_UNAVAILABLE. Phase 77 verification accepted via override.)*
 
 ### Cross-Process Classification
 
@@ -67,9 +67,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CPLT-01 | Phase 77 | Pending |
-| CPLT-02 | Phase 77 | Pending |
-| CPLT-03 | Phase 77 | Pending |
+| CPLT-01 | Phase 77 | Complete |
+| CPLT-02 | Phase 77 | Complete |
+| CPLT-03 | Phase 77 | Complete (gate delivered; literal green PASS host-gated by GitHub org policy) |
 | CLAS-01 | Phase 78 | Complete |
 | CLAS-02 | Phase 78 | Complete |
 | WFP-01 | Phase 79 | Complete |
