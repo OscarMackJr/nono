@@ -771,17 +771,19 @@ return [ordered]@{
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does `nono run --profile nono-ts-wfp-test-blocked` (non-daemon path) call `launch_agent` → `wfp_filter_add`?**
    - What we know: `launch_agent` is in `agent_daemon/launch.rs` and is called by the daemon's `handle_launch`. The non-daemon `nono run` path uses `exec_strategy_windows/`.
    - What's unclear: The exec strategy for a `network.block:true` profile on Windows may reach a DIFFERENT WFP activation path than `wfp_filter_add` in `launch_agent`. The gate's value depends on the SAME path being exercised.
    - Recommendation: Before writing the gate, the planner should verify which code path `nono run --profile <block:true>` takes on Windows by tracing `exec_strategy_windows/mod.rs` and its WFP activation call. If it goes through a different path, the gate must use the daemon `launch_agent` path instead (which means `nono-agentd` must be running and the gate sends a `Launch` command to the daemon pipe).
+   - **RESOLVED:** Verified from live code. The non-daemon `nono run --profile <block:true>` path goes `exec_strategy_windows/mod.rs` → `prepare_network_enforcement()` in `network.rs` → `install_wfp_network_backend()` → `WfpRuntimeActivationRequest` over `\.\pipe\nono-wfp-control` (the SAME `nono-wfp-service` pipe as the daemon path, installing per-SID WFP filters). The gate using direct `nono run` is valid; `nono-agentd` does NOT need to be running.
 
 2. **Which mock server shape is simplest for the gate?**
    - What we know: The gate can use PowerShell's `TcpListener` in a background thread or a Rust helper binary.
    - What's unclear: PowerShell background threads for TcpListener are reliable but error-prone (thread lifetime, exception handling). A Rust helper binary is more robust.
    - Recommendation: Start with the PowerShell `TcpListener` in a `[System.Threading.Tasks.Task]::Run` block; if it proves fragile on the live host, consider a minimal Rust helper.
+   - **RESOLVED:** Use PowerShell `[System.Net.Sockets.TcpListener]` in a `[System.Threading.Tasks.Task]::Run` block — simplest, no build dependency. The listener MUST accept at least 2 connections (loop `$i = 0; $i -lt 2`) to avoid the Pitfall 2 false-fail where Agent A gets ECONNREFUSED after Agent B consumes the single accept slot.
 
 ---
 

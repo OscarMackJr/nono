@@ -65,9 +65,11 @@ This phase has two independent deliverables that exercise two distinct test surf
 - [ ] `crates/nono-cli/data/policy.json` — 3 new profiles: `nono-ts-wfp-test-open` (block:false), `nono-ts-wfp-test-blocked` (block:true), `nono-ts-default` (broker-arm default)
 - [ ] `C:\Users\OMack\nono-ts\tests\test_confined_run_default.js` — new napi integration test (TSRG-01 / SC4)
 - [ ] `C:\Users\OMack\nono-ts\package.json` — `"test"` script wired to run the new integration test
-- [ ] **MANDATORY verification spike (research A3 / OQ-1):** confirm `nono run --profile <block:true>` on the non-daemon Windows path actually calls `wfp_filter_add` (same shipped machinery). If it does NOT, the gate must route the two agents through the daemon `launch_agent` path (`nono-agentd` running) instead of direct `nono run`. The gate's validity depends on this.
+- [x] **MANDATORY verification spike (research A3 / OQ-1) — RESOLVED:** confirmed from live code that `nono run --profile <block:true>` on the non-daemon Windows path goes `exec_strategy_windows/mod.rs` → `prepare_network_enforcement()` → `install_wfp_network_backend()` → `WfpRuntimeActivationRequest` over `\\.\pipe\nono-wfp-control` (same `nono-wfp-service` pipe as the daemon path). Direct `nono run` is valid; `nono-agentd` does NOT need to be running. See 79-RESEARCH.md `## Open Questions (RESOLVED)`.
 
 *Existing infrastructure (verify-dark harness, cargo test, npm) covers the rest.*
+
+> **Nyquist gate note (Plan 02 / Task 2):** `nyquist_compliant: true` in this file's frontmatter is set ONLY after Plan 02 Task 3's live-host checkpoint passes (napi build + npm test green on Win11). Plan 02 Task 2's `<automated>MISSING</automated>` is intentional — the test artifacts it creates require a napi rebuild to exercise, which is a Win11-only operation. Task 3 (checkpoint:human-verify) is the verification gate for Task 2's outputs.
 
 ---
 
