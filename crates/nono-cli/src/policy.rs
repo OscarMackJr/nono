@@ -3236,4 +3236,107 @@ mod tests {
             "session_hooks.after must be None when not set in ProfileDef"
         );
     }
+
+    // =========================================================================
+    // EGRESS-04: AI-provider preset groups and token expansion (Plan 83-03)
+    // =========================================================================
+
+    /// EGRESS-04: the embedded network-policy.json must contain the three
+    /// AI-provider preset groups with the expected wildcard-FQDN host entries.
+    #[test]
+    fn policy_egress_groups_present_in_network_policy() {
+        let json = crate::config::embedded::embedded_network_policy_json();
+        let policy =
+            crate::network_policy::load_network_policy(json).expect("network-policy.json must parse");
+
+        // anthropic preset: must contain *.anthropic.com
+        let anthropic = policy
+            .groups
+            .get("anthropic")
+            .expect("network-policy.json must contain 'anthropic' preset group");
+        assert!(
+            anthropic.hosts.iter().any(|h| h == "*.anthropic.com"),
+            "anthropic group must contain '*.anthropic.com'; got: {:?}",
+            anthropic.hosts
+        );
+
+        // openai preset: must contain *.openai.com
+        let openai = policy
+            .groups
+            .get("openai")
+            .expect("network-policy.json must contain 'openai' preset group");
+        assert!(
+            openai.hosts.iter().any(|h| h == "*.openai.com"),
+            "openai group must contain '*.openai.com'; got: {:?}",
+            openai.hosts
+        );
+
+        // github-api preset: must contain api.github.com
+        let github_api = policy
+            .groups
+            .get("github-api")
+            .expect("network-policy.json must contain 'github-api' preset group");
+        assert!(
+            github_api.hosts.iter().any(|h| h == "api.github.com"),
+            "github-api group must contain 'api.github.com'; got: {:?}",
+            github_api.hosts
+        );
+    }
+
+    /// EGRESS-04: token expansion for the three AI-provider preset tokens.
+    #[test]
+    fn policy_egress_groups_expand_anthropic_token() {
+        let hosts = expand_egress_preset_tokens(&["anthropic".to_string()])
+            .expect("expand must not fail for known token");
+        assert!(
+            hosts.iter().any(|h| h == "*.anthropic.com"),
+            "expanding 'anthropic' must return '*.anthropic.com'; got: {hosts:?}"
+        );
+    }
+
+    #[test]
+    fn policy_egress_groups_expand_openai_token() {
+        let hosts = expand_egress_preset_tokens(&["openai".to_string()])
+            .expect("expand must not fail for known token");
+        assert!(
+            hosts.iter().any(|h| h == "*.openai.com"),
+            "expanding 'openai' must return '*.openai.com'; got: {hosts:?}"
+        );
+    }
+
+    #[test]
+    fn policy_egress_groups_expand_github_api_token() {
+        let hosts = expand_egress_preset_tokens(&["github-api".to_string()])
+            .expect("expand must not fail for known token");
+        assert!(
+            hosts.iter().any(|h| h == "api.github.com"),
+            "expanding 'github-api' must return 'api.github.com'; got: {hosts:?}"
+        );
+    }
+
+    /// EGRESS-04 / T-83-token-widen: an unknown token must expand to an empty
+    /// list — never silently widen the allowlist to all hosts.
+    #[test]
+    fn policy_egress_groups_unknown_token_expands_to_empty() {
+        let hosts = expand_egress_preset_tokens(&["nonexistent-preset-xyz".to_string()])
+            .expect("expand must return Ok even for unknown tokens");
+        assert!(
+            hosts.is_empty(),
+            "unknown token must expand to empty list (fail-secure); got: {hosts:?}"
+        );
+    }
+
+    /// EGRESS-04: union of all three preset group hosts covers expected FQDNs.
+    #[test]
+    fn policy_egress_groups_union_hosts() {
+        let hosts = expand_egress_preset_tokens(&[
+            "anthropic".to_string(),
+            "openai".to_string(),
+            "github-api".to_string(),
+        ])
+        .expect("expand must succeed for known tokens");
+        assert!(hosts.iter().any(|h| h == "*.anthropic.com"), "missing *.anthropic.com");
+        assert!(hosts.iter().any(|h| h == "*.openai.com"), "missing *.openai.com");
+        assert!(hosts.iter().any(|h| h == "api.github.com"), "missing api.github.com");
+    }
 }
