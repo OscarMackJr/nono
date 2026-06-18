@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
 status: executing
-stopped_at: Phase 83 context gathered
-last_updated: "2026-06-18T22:48:07.459Z"
-last_activity: 2026-06-18 -- Phase 83 planning complete
+stopped_at: Phase 83 Plan 01 complete
+last_updated: "2026-06-18T23:07:00.000Z"
+last_activity: 2026-06-18 -- Phase 83 Plan 01 executed (MachineEgressPolicy + PolicyLoadFailed + sc4_dns_component_matrix)
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 8
-  completed_plans: 4
-  percent: 50
+  completed_plans: 5
+  percent: 63
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -22,24 +22,28 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 82 — fleet-deployment-infrastructure
+**Current Focus:** Phase 83 — machine-policy-spine-egress-control
 
 ## Current Position
 
-Phase: 82 — COMPLETE
-Plan: 1 of 4
-Status: Ready to execute
-Last activity: 2026-06-18 -- Phase 83 planning complete
+Phase: 83 (machine-policy-spine-egress-control) — EXECUTING
+Plan: 2 of 4
+Status: Executing Phase 83
+Last activity: 2026-06-18 -- Phase 83 Plan 01 complete
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████░░░░] 63%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: —
+- Total plans completed: 5 (4 Phase 82 + 1 Phase 83)
+- Average duration: ~7m (Phase 83 Plan 01)
+- Total execution time: 7m (Phase 83 Plan 01 only)
+
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 83 | 01 | 7m | 3 | 6 |
 
 *Updated after each plan completion*
 
@@ -57,9 +61,19 @@ Progress: [░░░░░░░░░░] 0%
 | Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
 | Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
 
+### Decisions (Phase 83)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-07: absent→Ok(None) / present-but-broken→Err(PolicyLoadFailed) | 83-01 | Fail-secure: once HKLM key exists ANY read/parse error aborts; implemented via raw_os_error()==2 for absent |
+| D-09: KEY_WOW64_64KEY on all registry opens | 83-01 | Forces 64-bit hive view; prevents 32-bit Intune MDM write to WOW6432Node making key appear absent |
+| D-10: winreg 0.56 Windows-only dep (operator-approved) | 83-01 | Single crate approach; io::Error maps cleanly onto D-07 taxonomy; never unconditional dep |
+| D-13 Option A: enumerate N×REG_SZ subkey values (not REG_MULTI_SZ) | 83-01 | Matches shipped Phase-82 ADMX <list> shape; less churn than changing ADMX |
+| D-14: existing HostFilter leading-dot ends_with+len> form retained | 83-01 | Already passes full SC-4 matrix; sc4_dns_component_matrix codifies the contract |
+
 ### Pending Todos
 
-None yet.
+None.
 
 ### Blockers/Concerns
 
@@ -80,6 +94,6 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
 ## Session Continuity
 
-Last session: 2026-06-18T22:08:15.843Z
-Stopped at: Phase 83 context gathered
-Resume file: .planning/phases/83-machine-policy-spine-egress-control/83-CONTEXT.md
+Last session: 2026-06-18T23:07:00.000Z
+Stopped at: Completed Phase 83 Plan 01 (83-01-PLAN.md)
+Resume file: .planning/phases/83-machine-policy-spine-egress-control/83-02-PLAN.md

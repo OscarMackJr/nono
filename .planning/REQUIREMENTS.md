@@ -29,15 +29,15 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Machine Policy Spine (POLICY)
 
-- [ ] **POLICY-01**: nono reads machine policy from `HKLM\SOFTWARE\Policies\nono` at process/daemon startup using the 64-bit view (`KEY_WOW64_64KEY`); when the policy key is present it takes precedence over the per-user profile.
-- [ ] **POLICY-02**: A failure to read a *present* machine-policy key **fails secure** (deny / abort with a typed `NonoError`), never falling open to a less-restrictive state.
+- [x] **POLICY-01**: nono reads machine policy from `HKLM\SOFTWARE\Policies\nono` at process/daemon startup using the 64-bit view (`KEY_WOW64_64KEY`); when the policy key is present it takes precedence over the per-user profile.
+- [x] **POLICY-02**: A failure to read a *present* machine-policy key **fails secure** (deny / abort with a typed `NonoError`), never falling open to a less-restrictive state.
 - [ ] **POLICY-03**: The egress allowlist and telemetry configuration are deserialized from this **single** policy source, so no two enforcement layers can read divergent config (drift is structurally prevented).
 
 ### Egress Control (SEED-002, P1)
 
 - [ ] **EGRESS-01**: An admin can define a deny-by-default outbound egress allowlist in machine policy as wildcard FQDNs (`REG_MULTI_SZ`, e.g. `*.anthropic.com`); only listed domains are reachable and the policy's presence switches enforcement on.
 - [ ] **EGRESS-02**: The machine-policy allowlist is enforced by **both** the `nono-proxy` domain filter and the kernel `nono-wfp-service` path from the same deserialized source, verified at both layers.
-- [ ] **EGRESS-03**: Wildcard FQDN matching uses DNS-component comparison so `*.x.com` matches `api.x.com` but **not** `x.com` or `evilx.com`; any matching ambiguity fails secure (deny).
+- [x] **EGRESS-03**: Wildcard FQDN matching uses DNS-component comparison so `*.x.com` matches `api.x.com` but **not** `x.com` or `evilx.com`; any matching ambiguity fails secure (deny).
 - [ ] **EGRESS-04**: nono ships AI-provider allowlist presets (e.g. `*.anthropic.com`, `*.openai.com`, `api.github.com`) so a default-deny posture does not brick the agent's required provider traffic.
 
 ### Compliance / Telemetry (SEED-003, P2)
@@ -98,12 +98,12 @@ Which phases cover which requirements.
 | DEPLOY-04 | Phase 82 (template) / Phase 83 (reader) | Pending |
 | DEPLOY-05 | Phase 82 | Pending |
 | DEPLOY-06 | Phase 82 | Pending |
-| POLICY-01 | Phase 83 | Pending |
-| POLICY-02 | Phase 83 | Pending |
-| POLICY-03 | Phase 83 | Pending |
-| EGRESS-01 | Phase 83 | Pending |
-| EGRESS-02 | Phase 83 | Pending |
-| EGRESS-03 | Phase 83 | Pending |
+| POLICY-01 | Phase 83 | Complete (83-01) |
+| POLICY-02 | Phase 83 | Complete (83-01) |
+| POLICY-03 | Phase 83 | Pending (83-02) |
+| EGRESS-01 | Phase 83 | Pending (83-02) |
+| EGRESS-02 | Phase 83 | Pending (83-02) |
+| EGRESS-03 | Phase 83 | Complete (83-01) |
 | EGRESS-04 | Phase 83 | Pending |
 | TELEM-01 | Phase 84 | Pending |
 | TELEM-02 | Phase 84 | Pending |
