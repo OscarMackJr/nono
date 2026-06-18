@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: ready_to_plan
-last_updated: "2026-06-18T13:04:20.477Z"
+status: verifying
+last_updated: "2026-06-18T13:31:43.379Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 6
   completed_phases: 6
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 13
+  completed_plans: 13
   percent: 100
 ---
 
@@ -21,11 +21,11 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 81 — milestone-close-aggregator (Phase 80 complete; live-VM PASS host-gated per D-01, tracked → Phase 81)
+**Current Focus:** Phase 81 — milestone-close-aggregator
 
 ## Current Position
 
-Phase: 81
+Phase: 81 (milestone-close-aggregator) — EXECUTING
 
 - 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`. **COMPLETE** (`aaafe4ff`).
 - 78-02 (wave 2): `classify_daemon_request` + daemon-first `app_runtime.rs` dispatch + structural fallback; `windows_control_pipe_request`/`is_pipe_not_found` promoted to `pub(crate)`; SC1/SC2/SC4 integration test (gated `NONO_DAEMON_INTEGRATION_TESTS=1`); live-daemon host PASS on Win11 26200. **COMPLETE** (`0f8cdeb7`, `ad284903`).
@@ -35,8 +35,8 @@ Phase: 81
 
 ---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
-Plan: Not started
-Status: Ready to plan
+Plan: 1 of 1
+Status: Phase complete — ready for verification
 Last activity: 2026-06-18
 NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
@@ -140,7 +140,7 @@ Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65
 
 ## Session Continuity
 
-**Last session:** 2026-06-18T13:04:20.464Z
+**Last session:** 2026-06-18T13:31:43.362Z
 
 **v2.13 roadmap created (2026-06-17):** 6 phases (76-81), 10/10 requirements mapped. ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order: 76 (foundation) → 77/78/79/80 (78 is independent of harness; 77/79/80 depend on 76) → 81 (aggregator, last). Dark Factory mandate: every host-gated item has an unattended scripted gate as its verification mechanism.
 

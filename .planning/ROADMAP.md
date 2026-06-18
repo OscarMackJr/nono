@@ -185,7 +185,7 @@ Plans:
   4. The v2.13 close checklist is evaluable by pointing at the aggregator's output artifact â€” no ad-hoc per-phase SUMMARY.md scanning required.
 **Plans**: 1 plan
 Plans:
-- [ ] 81-01-PLAN.md — Formal all-run aggregator: `$anySkip` tracking + `$gateResults` collection + {gates:[...],overall} rollup + \_aggregate.json persist (DARK-02)
+- [x] 81-01-PLAN.md — Formal all-run aggregator: `$anySkip` tracking + `$gateResults` collection + {gates:[...],overall} rollup + \_aggregate.json persist (DARK-02)
 **Host gate**: Same Win11 host that ran the individual gates (aggregator consumes their stored output).
 **Unattended gate**: `scripts/verify-dark.ps1` (no flags) â€” this IS the aggregator. Its exit code and JSON output are the milestone completion signal.
 
@@ -198,7 +198,7 @@ Plans:
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 2/2 | Complete    | 2026-06-18 |
 | 80. Clean-Host Install UAT | 2/2 | Complete    | 2026-06-18 |
-| 81. Milestone Close Aggregator | 0/1 | Not started | - |
+| 81. Milestone Close Aggregator | 1/1 | Complete   | 2026-06-18 |
 
 ## References
 
