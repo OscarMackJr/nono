@@ -143,17 +143,34 @@ function Invoke-Gate {
     # The job returns LASTEXITCODE (int) and collects combined stdout+stderr via 2>&1.
     $nonoSrc = $nono.Source
 
+    # --- Per-agent covered workspaces (cwd-coverage / execution-dir gate) ---
+    # nono applies a mandatory integrity label (NO_WRITE_UP) to the confined child's CWD,
+    # which requires the current user to OWN the workspace AND hold WRITE_OWNER. Use stable
+    # dirs under %USERPROFILE% (drive-root / non-user-owned dirs fail the label apply, per
+    # memory feedback_windows_mandatory_label_write_owner). Distinct dirs per agent keep the
+    # two concurrent AppContainer package SIDs from racing on the same workspace DACL.
+    # `--workspace <DIR>` (proven pattern, copilot-e2e.ps1:227-251) sets the child CWD AND
+    # the writable grant and satisfies the execution-dir coverage gate.
+    $mySid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    $wsA = Join-Path $env:USERPROFILE 'nono-wfp-gate-ws-a'
+    $wsB = Join-Path $env:USERPROFILE 'nono-wfp-gate-ws-b'
+    foreach ($w in @($wsA, $wsB)) {
+        if (-not (Test-Path -LiteralPath $w)) { New-Item -ItemType Directory -Path $w -Force | Out-Null }
+        & icacls $w /setowner "*$mySid" /Q 2>&1 | Out-Null
+        & icacls $w /grant "*$($mySid):(OI)(CI)F" /Q 2>&1 | Out-Null
+    }
+
     $jobA = Start-Job -ScriptBlock {
-        param($nonoPath, $port, $profile)
-        $out = & $nonoPath run --profile $profile -- curl.exe -s --max-time 5 "http://127.0.0.1:$port/probe" 2>&1
+        param($nonoPath, $port, $profile, $ws)
+        $out = & $nonoPath run --profile $profile --workspace $ws -- curl.exe -s --max-time 5 "http://127.0.0.1:$port/probe" 2>&1
         return @{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
-    } -ArgumentList $nonoSrc, $port, $script:AgentProfile_Open
+    } -ArgumentList $nonoSrc, $port, $script:AgentProfile_Open, $wsA
 
     $jobB = Start-Job -ScriptBlock {
-        param($nonoPath, $port, $profile)
-        $out = & $nonoPath run --profile $profile -- curl.exe -s --max-time 5 "http://127.0.0.1:$port/probe" 2>&1
+        param($nonoPath, $port, $profile, $ws)
+        $out = & $nonoPath run --profile $profile --workspace $ws -- curl.exe -s --max-time 5 "http://127.0.0.1:$port/probe" 2>&1
         return @{ ExitCode = $LASTEXITCODE; Output = ($out -join "`n") }
-    } -ArgumentList $nonoSrc, $port, $script:AgentProfile_Blocked
+    } -ArgumentList $nonoSrc, $port, $script:AgentProfile_Blocked, $wsB
 
     # --- Wait for both jobs ---
     $null = Wait-Job $jobA, $jobB -Timeout $script:GateTimeoutSeconds
