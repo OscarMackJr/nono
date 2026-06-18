@@ -164,7 +164,10 @@ Plans:
   2. `nono-wfp-service` starts successfully or, if it fails transiently, the failure is non-fatal and does not roll back the MSI install — the machine is in a usable state regardless.
   3. The clean-host gate (`scripts/verify-dark.ps1 --gate clean-host-install`) runs on the clean host with no operator prompts and emits a machine-readable verdict.
   4. The gate emits `PASS` on a host that has never had nono installed, confirming the VC++ static-CRT or bundled-redist handling from Phase 67 is correctly packaged in the MSI.
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 80-01-PLAN.md — Build fix: .cargo/config.toml (+crt-static, D-03) + build-windows-msi.ps1 vital=no/ErrorControl=ignore (D-04) + validate-windows-msi-contract.ps1 contract assertions
+- [ ] 80-02-PLAN.md — Unattended gate: scripts/gates/clean-host-install.ps1 (Test-Precondition dirty-host detection + Invoke-Gate msiexec orchestration, D-01..D-07)
 **Host gate**: Clean Win11 host (no prior nono, no VC++ runtime, no pre-trusted cert — this is the definition of the gate).
 **Unattended gate**: `scripts/verify-dark.ps1 --gate clean-host-install` on the clean host — single unattended invocation replaces the Phase 67 interactive UAT.
 
@@ -189,7 +192,7 @@ Plans:
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 2/2 | Complete    | 2026-06-18 |
-| 80. Clean-Host Install UAT | 0/? | Not started | - |
+| 80. Clean-Host Install UAT | 0/2 | Planning complete | - |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |
 
 ## References
