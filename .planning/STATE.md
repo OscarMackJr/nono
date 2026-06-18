@@ -2,8 +2,8 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: executing
-last_updated: "2026-06-18T12:51:28.872Z"
+status: verifying
+last_updated: "2026-06-18T13:04:20.477Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 6
@@ -25,7 +25,7 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 ## Current Position
 
-Phase: 80 (clean-host-install-uat) — EXECUTING
+Phase: 80 (clean-host-install-uat) — ✅ COMPLETE — READY FOR VERIFICATION (2/2 plans; 80-02 human-verify APPROVED 2026-06-18)
 
 - 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`. **COMPLETE** (`aaafe4ff`).
 - 78-02 (wave 2): `classify_daemon_request` + daemon-first `app_runtime.rs` dispatch + structural fallback; `windows_control_pipe_request`/`is_pipe_not_found` promoted to `pub(crate)`; SC1/SC2/SC4 integration test (gated `NONO_DAEMON_INTEGRATION_TESTS=1`); live-daemon host PASS on Win11 26200. **COMPLETE** (`0f8cdeb7`, `ad284903`).
@@ -36,7 +36,7 @@ Phase: 80 (clean-host-install-uat) — EXECUTING
 ---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
 Plan: 2 of 2
-Status: Ready to execute
+Status: ✅ COMPLETE + VERIFIED
 Last activity: 2026-06-18
 NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
@@ -140,7 +140,7 @@ Prior-close audit-open backlogs (v2.12: carry-forwards resolved above; v2.10: 65
 
 ## Session Continuity
 
-**Last session:** 2026-06-18T12:51:28.857Z
+**Last session:** 2026-06-18T13:04:20.464Z
 
 **v2.13 roadmap created (2026-06-17):** 6 phases (76-81), 10/10 requirements mapped. ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order: 76 (foundation) → 77/78/79/80 (78 is independent of harness; 77/79/80 depend on 76) → 81 (aggregator, last). Dark Factory mandate: every host-gated item has an unattended scripted gate as its verification mechanism.
 
