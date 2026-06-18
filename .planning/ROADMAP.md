@@ -117,7 +117,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 **Plans**: 4 plans
   - [x] 82-01-PLAN.md — MSI machine-global provisioning: ProgramData root, HKLM sentinel key, non-fatal cert CA (Root+TrustedPublisher), PATH/service/CRT verify, ADMX template (DEPLOY-01/02/04/05/06)
   - [x] 82-02-PLAN.md — First-run user-context provisioner: user-owned WRITE_OWNER scratch + CurrentUser\Root cert + NODE_EXTRA_CA_CERTS, reusable cert-import logic (DEPLOY-03/05)
-  - [ ] 82-03-PLAN.md — nono health: read-only tri-state JSON verdict (install/WFP/policy/scratch+cert+PATH) (DEPLOY-06)
+  - [x] 82-03-PLAN.md — nono health: read-only tri-state JSON verdict (install/WFP/policy/scratch+cert+PATH) (DEPLOY-06)
   - [ ] 82-04-PLAN.md — deploy-silent-install dark-factory gate: silent install, scratch ownership, degraded-health, three-client TLS (DEPLOY-01/02/03/05/06)
 **UI hint**: no
 
@@ -151,7 +151,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 82. Fleet Deployment Infrastructure | 2/4 | In Progress|  |
+| 82. Fleet Deployment Infrastructure | 3/4 | In Progress|  |
 | 83. Machine Policy Spine + Egress Control | 0/TBD | Not started | - |
 | 84. SIEM/EDR Telemetry | 0/TBD | Not started | - |
 
