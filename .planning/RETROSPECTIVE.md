@@ -257,6 +257,43 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 
 ---
 
+## Milestone: v2.13 — Carry-Forward Closeout (Dark Factory)
+
+**Shipped:** 2026-06-18 | **Phases:** 6 (76-81) | **Plans:** 13 | **Tag:** `v2.13` (milestone marker, no crate release)
+
+### What Was Built
+- **Self-verifying harness foundation (DARK-01)** — `scripts/verify-dark.ps1`: gate auto-discovery, `Test-Precondition`→`Invoke-Gate` contract, typed JSON verdicts (PASS/FAIL/SKIP_HOST_UNAVAILABLE), exit mapping (0/2/3), `.nono-runtime/verdicts/` persistence + a `harness-self-check` reference gate — the contract every host-gated phase writes against.
+- **Milestone-close aggregator (DARK-02)** — the no-flag `verify-dark.ps1` rolls every discovered gate verdict into `_aggregate.json` with a CI-consumable exit contract; v2.13 completion is evaluable from harness output alone.
+- **Copilot CLI end-to-end confinement (CPLT-01/02/03)** — runtime ancestor-chain `FILE_READ_ATTRIBUTES` RAII guard (binary + `--workspace` chains) + idempotent one-time-admin `nono setup --grant-ancestors` + the `copilot-e2e` gate, fixing the Node-ESM/AppContainer drive-root `lstat` limit from v2.12.
+- **Cross-process classification (CLAS-01/02)** — daemon control-pipe `Classify` verb making `nono classify <pid>` authoritative cross-process, caller-gated + tenant-safe; live Win11 26200 PASS.
+- **WFP isolation proof + nono-ts ergonomics (WFP-01/TSRG-01)** — per-SID WFP egress isolation gate + `confinedRun` default Low-IL broker arm and exe-dir auto-cover.
+- **Clean-host install UAT (INST-01)** — MSI build fix (`+crt-static`, Vital=no) + the unattended `clean-host-install` gate replacing the v2.11 Phase 67 interactive UAT.
+
+### What Worked
+- **The terminal gate caught fail-secure regressions before close.** Code review on the Phase 76 all-run path found two Criticals (false-FAIL on a gate crash, false-PASS on an unknown verdict) — exactly the failure modes that would have made the whole "trust the harness verdict" mandate unsafe. Fixing them at the foundation phase protected every gate built on top.
+- **Composition over green-field paid off.** No new wire protocol or framework: the Classify verb rode the existing Phase 74 SDDL control pipe, WFP-01 reused the Phase 75 per-agent add/remove, and the gates were plain PowerShell over the Phase 76 contract. Deltas stayed small and reviewable.
+- **Aggregator auto-discovers gates from `scripts/gates/*.ps1`, never from globbing `verdicts/`.** That single design choice means a stale or stub verdict file can't leak into the rollup — the close signal reflects gates that actually ran.
+
+### What Was Inefficient
+- **The live aggregate close signal is FAIL on the dev host for an environmental reason.** A stale `C:\Program Files\nono\nono.exe` (no `agent` subcommand) on PATH makes the wfp gate FAIL — not an aggregator defect, but it means the headline close artifact isn't green without re-provisioning (fresh `target\release` on PATH + wfp host setup). The Dark Factory mandate makes the *signal* trustworthy, but a green signal still needs a correctly-provisioned host.
+- **SUMMARY `requirements_completed` frontmatter was mostly left empty** (only 76-02/77-01/77-02 populated it), forcing the audit to lean entirely on VERIFICATION.md for coverage cross-referencing — a process-hygiene gap to close going forward.
+- **Two requirements' literal green PASS are structurally host-gated** (CPLT-03 GitHub org policy, INST-01 clean Win11 VM) — the gates correctly fail-closed to SKIP, but the milestone can't show those as literal green without external provisioning.
+
+### Patterns Established
+- **Dark Factory close shape:** every historically host-gated item ships a single-invocation scripted gate emitting a machine-readable verdict, with one aggregator as the milestone-close signal — interactive human UAT demoted to a single unattended run.
+- **Gate contract = `Test-Precondition` (returns null or a SKIP reason) + `Invoke-Gate` (returns a verdict object, never calls `exit`);** the runner owns exit-code mapping. Lets gates compose into the aggregator without each reinventing exit semantics.
+- **SKIP_HOST_UNAVAILABLE as a first-class verdict** distinguishes "host can't run this" from PASS/FAIL, so a host-gated deferral is actionable (no ambiguity about why) rather than a crash or a false negative.
+
+### Key Lessons
+- **"Machine-readable verdict" must include the fail-secure edges.** A harness is only trustworthy if a crashed gate is FAIL (not silently PASS) and an unrecognized verdict is FAIL (not optimistically PASS) — the two Criticals code review caught. Verifying the verifier is the load-bearing step.
+- **Automating verification doesn't eliminate host provisioning.** v2.13 collapsed human *judgment* to one invocation, but a green aggregate still needs the right host (fresh binary on PATH, Copilot-enabled account, clean VM). The Dark Factory win is repeatability + machine-evaluability, not zero ops.
+- **Invoke `verify-dark.ps1` via `-File`/direct, never `pwsh -Command "<bare path>"`** — the bare-command form swallows the gate's exit N → 1, destroying the very exit-code contract the harness exists to provide.
+
+### Cost Observations
+- Not instrumented. 93 commits over ~2 days (2026-06-16 → 06-18). Most wall-clock went to live Win11 host validation (daemon rebuild/restart, WFP host setup) and the gate-hardening loops, not planning/archival mechanics. Audit run before close confirmed 10/10 reqs + WIRED with 0 defects and caught stale CPLT-01/02/03 checkboxes (the recurring SDK roadmap-checkbox drift).
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -269,6 +306,8 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 | v2.2 Windows/macOS Parity Sweep | 3 | 9 | Cherry-pick-per-commit chain with `Upstream-commit:` trailer scaled to ~33k LOC; CONTEXT-STOP triggers as circuit-breaker (22-05 split); D-20 manual-replay fallback when D-02 thresholds breach; twin-script drift inventory tooling; discriminant-only fallback when full extraction is feature-gated |
 | v2.5 Backlog Drain + UPST5 | 4 | 24 | `split` as fourth audit-cluster disposition (DIVERGENCE-LEDGER amendment when cluster isolation falsifies mid-execution); cross-target clippy verification promoted from memory to CLAUDE.md MUST/NEVER enforcement rule; `## Empirical cross-check` subsection in DIVERGENCE-LEDGER; first UPST cycle where `windows-touch:yes` column fires; worktree-mode `human_needed` close-status convention matures across 3 of 4 phases |
 | v2.8 UPST7 + v2.9 Sandbox-the-Tools | 10 | ~38 | Interleaved dual-milestone develop/ship/archive; fork release-tag leapfrog rule (crate version past upstream's highest); release-vs-CI build distinction as triage tool; `gh release list` (not tag-existence) as the "shipped" signal |
+| v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork + explicitly host-gated validation); go/no-go ADR shipped `Proposed`→`Accepted` on human sign-off; macOS CI green as HARD close gate; EDR-proxy as a recorded-caveat stand-in for cloud-EDR |
+| v2.13 Carry-Forward Closeout (Dark Factory) | 6 | 13 | Self-verifying-harness mandate: every host-gated item ships a scripted unattended gate emitting a machine-readable verdict + one aggregator as the close signal; gate contract (`Test-Precondition`/`Invoke-Gate`, runner owns exit mapping); `SKIP_HOST_UNAVAILABLE` as a first-class verdict; verify-the-verifier (fail-secure edges) caught by code review at the foundation phase |
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork/audit/ADR-draft + explicitly host-gated validation); go/no-go ADR ships `Proposed`, human D-06 flip to `Accepted`; macOS CI green as HARD close gate surfaces a real enforcement defect; EDR-proxy (Sysmon+Defender) as MDE stand-in with explicit caveat; per-phase `.continue-here` checkpoints carry state across context exhaustions |
 
 ### Cumulative Quality
