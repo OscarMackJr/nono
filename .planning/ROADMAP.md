@@ -35,7 +35,7 @@ granularity: standard
 - [x] **Phase 77: Copilot CLI End-to-End Confinement** - Fix Node-ESM/AppContainer ancestor `FILE_READ_ATTRIBUTES` + one-time-admin system-ancestor RA grant + scripted end-to-end proof.
 - [x] **Phase 78: Cross-Process Classification** - Add daemon control-pipe `Classify` verb so `nono classify <pid>` is authoritative cross-process, caller-gated, and tenant-safe.
 - [x] **Phase 79: WFP Egress Isolation + nono-ts Ergonomics** - Empirical per-agent WFP isolation test + `confinedRun` default-broker-arm and auto-coverage ergonomics for nono-ts.
-- [ ] **Phase 80: Clean-Host Install UAT** - Verify the machine MSI installs and runs on a fresh Win11 host with no manual steps via the unattended clean-host harness.
+- [x] **Phase 80: Clean-Host Install UAT** - Verify the machine MSI installs and runs on a fresh Win11 host with no manual steps via the unattended clean-host harness. (Build fix + gate dev-host-verified; live-VM PASS host-gated per D-01, tracked → Phase 81 aggregator.)
 - [ ] **Phase 81: Milestone Close Aggregator** - Collect all per-phase verdict artifacts into a single aggregator so v2.13 completion is evaluable from harness output alone.
 
 <details>
@@ -195,7 +195,7 @@ Plans:
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
 | 79. WFP Egress Isolation + nono-ts Ergonomics | 2/2 | Complete    | 2026-06-18 |
-| 80. Clean-Host Install UAT | 2/2 | Complete   | 2026-06-18 |
+| 80. Clean-Host Install UAT | 2/2 | Complete    | 2026-06-18 |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |
 
 ## References

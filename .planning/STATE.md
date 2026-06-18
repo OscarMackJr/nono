@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v2.13
 milestone_name: Carry-Forward Closeout (Dark Factory)
-status: verifying
+status: ready_to_plan
 last_updated: "2026-06-18T13:04:20.477Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 12
   completed_plans: 12
   percent: 100
@@ -21,11 +21,11 @@ See: `.planning/PROJECT.md` (v2.13 milestone started 2026-06-17; v2.12 Phases 71
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
 
-**Current Focus:** Phase 80 — clean-host-install-uat
+**Current Focus:** Phase 81 — milestone-close-aggregator (Phase 80 complete; live-VM PASS host-gated per D-01, tracked → Phase 81)
 
 ## Current Position
 
-Phase: 80 (clean-host-install-uat) — ✅ COMPLETE — READY FOR VERIFICATION (2/2 plans; 80-02 human-verify APPROVED 2026-06-18)
+Phase: 81
 
 - 78-01 (wave 1, autonomous): daemon `ControlRequest::Classify` verb + `handle_classify` against the shared `agent_registry`; pure `classify_response_string` (verdict-only, NO package SID — SC4); unit gate `cargo test --bin nono-agentd -- classify`. **COMPLETE** (`aaafe4ff`).
 - 78-02 (wave 2): `classify_daemon_request` + daemon-first `app_runtime.rs` dispatch + structural fallback; `windows_control_pipe_request`/`is_pipe_not_found` promoted to `pub(crate)`; SC1/SC2/SC4 integration test (gated `NONO_DAEMON_INTEGRATION_TESTS=1`); live-daemon host PASS on Win11 26200. **COMPLETE** (`0f8cdeb7`, `ad284903`).
@@ -35,8 +35,8 @@ Phase: 80 (clean-host-install-uat) — ✅ COMPLETE — READY FOR VERIFICATION (
 
 ---
 Phase: 77 (copilot-cli-end-to-end-confinement) — ✅ COMPLETE + VERIFIED (passed, 2026-06-17)
-Plan: 2 of 2
-Status: ✅ COMPLETE + VERIFIED
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-06-18
 NEXT: /gsd:plan-phase 78  (Cross-Process Classification — CLAS-01/02; independent of 77/79/80, depends on Phase 74 daemon)
 
