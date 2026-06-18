@@ -1,8 +1,8 @@
 ---
 phase: 80
 slug: clean-host-install-uat
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-17
 ---
@@ -50,8 +50,8 @@ created: 2026-06-17
 ## Wave 0 Requirements
 
 - [ ] `scripts/gates/clean-host-install.ps1` — new gate file covering INST-01 (the main Phase 80 deliverable; `Test-Precondition` + `Invoke-Gate`)
-- [ ] New `Assert-Equal` for `vital="no"` (ServiceControl) in `scripts/validate-windows-msi-contract.ps1` — locks the D-04 contract
-- [ ] `.cargo/config.toml` — new file with `[target.x86_64-pc-windows-msvc]` `rustflags = ["-C", "target-feature=+crt-static"]` (D-03)
+- [ ] New `Assert-Equal` for `Vital="no"` on the **ServiceInstall** element (PascalCase — verified against the WiX v4 XSD; `ServiceControl` has no `Vital` attribute) in `scripts/validate-windows-msi-contract.ps1` — locks the D-04 contract
+- [ ] Static-CRT wiring (D-03) across every clean-host-tested build path: `.cargo/config.toml` `[target.x86_64-pc-windows-msvc]` `rustflags = ["-C", "target-feature=+crt-static"]` (covers local + release.yml where no `RUSTFLAGS` env is set) PLUS appended `-C target-feature=+crt-static` in the Windows compile steps of `.github/workflows/ci.yml` and `.github/workflows/release.yml` (where the config-file rustflags would be silently dropped by an active `RUSTFLAGS` env — Cargo's flag sources are mutually exclusive, first-match-wins). Ground-truth proof: `dumpbin /imports nono.exe` shows no `vcruntime140.dll` import.
 
 *Existing infrastructure (verify-dark.ps1 runner, reference gates, MSI contract validator) covers the rest.*
 

@@ -166,7 +166,10 @@ Plans:
   4. The gate emits `PASS` on a host that has never had nono installed, confirming the VC++ static-CRT or bundled-redist handling from Phase 67 is correctly packaged in the MSI.
 **Plans**: 2 plans
 Plans:
+**Wave 1**
 - [ ] 80-01-PLAN.md — Build fix: .cargo/config.toml (+crt-static, D-03) + build-windows-msi.ps1 vital=no/ErrorControl=ignore (D-04) + validate-windows-msi-contract.ps1 contract assertions
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 80-02-PLAN.md — Unattended gate: scripts/gates/clean-host-install.ps1 (Test-Precondition dirty-host detection + Invoke-Gate msiexec orchestration, D-01..D-07)
 **Host gate**: Clean Win11 host (no prior nono, no VC++ runtime, no pre-trusted cert — this is the definition of the gate).
 **Unattended gate**: `scripts/verify-dark.ps1 --gate clean-host-install` on the clean host — single unattended invocation replaces the Phase 67 interactive UAT.
