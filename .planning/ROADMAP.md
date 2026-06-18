@@ -145,7 +145,10 @@ Plans:
   2. The `nono-ts` `confinedRun` function defaults to the Low-IL broker arm (`windows_low_il_broker: true`) without requiring the caller to set any profile flag, so `confinedRun({ target: "node" })` produces a confined child at Low IL out of the box.
   3. `confinedRun` auto-covers the target executable's directory (adds the directory of `target` to the allowed-read paths) so a caller does not need to manually specify coverage for the target binary.
   4. A nono-ts integration test (`confinedRun` with no profile flags on Windows) confirms the default-broker-arm path works end-to-end and passes in the napi build on the Win11 dev host.
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 79-01-PLAN.md — WFP-01: three policy.json profiles + wfp-egress-isolation gate (loopback mock, SKIP_HOST_UNAVAILABLE guard, per-SID isolation proof)
+- [ ] 79-02-PLAN.md — TSRG-01: D-03/D-04 wiring in windows_confined_run.rs (default profile injection + exe-dir auto-cover) + napi integration test + npm test wiring
 **Host gate**: Real Win11 host (WFP gate requires live kernel WFP enforcement; nono-ts build requires Node + napi-rs on Windows).
 **Unattended gate**: `scripts/verify-dark.ps1 --gate wfp-egress-isolation` for WFP-01; `npm test` or equivalent napi integration for TSRG-01.
 
@@ -182,7 +185,7 @@ Plans:
 | 76. Self-Verifying Harness Foundation | 2/2 | Complete    | 2026-06-17 |
 | 77. Copilot CLI End-to-End Confinement | 4/4 | Complete   | 2026-06-17 |
 | 78. Cross-Process Classification | 2/2 | Complete    | 2026-06-18 |
-| 79. WFP Egress Isolation + nono-ts Ergonomics | 0/? | Not started | - |
+| 79. WFP Egress Isolation + nono-ts Ergonomics | 0/2 | Planning    | - |
 | 80. Clean-Host Install UAT | 0/? | Not started | - |
 | 81. Milestone Close Aggregator | 0/? | Not started | - |
 
