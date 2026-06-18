@@ -24,8 +24,8 @@ decisions:
 metrics:
   duration: "25 minutes"
   completed_date: "2026-06-18"
-  tasks_completed: 1
-  tasks_pending_checkpoint: 1
+  tasks_completed: 2
+  tasks_pending_checkpoint: 0
   files_created: 1
   files_modified: 0
 ---
@@ -34,21 +34,16 @@ metrics:
 
 **One-liner:** Dark-factory gate `clean-host-install.ps1` implementing Phase 76 Test-Precondition/Invoke-Gate contract with D-02 dirty-host SKIP detection and four-step PASS criteria (msiexec install + fresh-session nono --version + non-fatal service probe + uninstall cleanup).
 
-## Status: CHECKPOINT PENDING (Task 2 — human-verify)
+## Status: COMPLETE
 
-Task 1 is complete and committed. Task 2 is a `checkpoint:human-verify` gate awaiting operator verification on the dirty dev host (and ultimately on a clean Win11 VM for the live PASS).
+Task 1 is complete and committed. Task 2 (`checkpoint:human-verify`) was APPROVED by the operator on 2026-06-18 — the dirty-host SKIP_HOST_UNAVAILABLE behavior was confirmed. See "Verification Note" below for the exit-code propagation finding surfaced during verification.
 
 ## Tasks Completed
 
 | Task | Name | Commit | Files |
 |------|------|--------|-------|
 | 1 | Create scripts/gates/clean-host-install.ps1 | `2b969737` | scripts/gates/clean-host-install.ps1 (188 lines, created) |
-
-## Tasks Pending
-
-| Task | Type | Status |
-|------|------|--------|
-| 2 | checkpoint:human-verify | Awaiting operator verification |
+| 2 | checkpoint:human-verify (dirty-host SKIP) | APPROVED 2026-06-18 | (verification only — no code change) |
 
 ## What Was Built
 
@@ -155,6 +150,16 @@ grep -n "^\s*exit\b" scripts/gates/clean-host-install.ps1                  # →
 - Stage `dist\windows\nono-machine.msi` on fresh VM
 - Run `pwsh scripts/verify-dark.ps1 -Gate clean-host-install` elevated
 - Expected: exit 0, verdict PASS, detail.versionOutput contains nono version string
+
+## Verification Note — gate invocation idiom (exit-code propagation)
+
+During checkpoint verification the operator initially saw exit 1, not the contracted exit 3. Root cause: a pre-existing PowerShell `-Command "bare-script.ps1"` quirk in the Phase 76 `verify-dark.ps1` runner — `-Command` swallows the script's `exit N` and reports 1. This affects EVERY gate equally (the shipped `wfp-egress-isolation` gate shows the identical 1-vs-correct split); it is NOT a clean-host-install gate defect. Confirmed exit codes:
+
+- `pwsh -File scripts/verify-dark.ps1 -Gate clean-host-install` → exit 3 ✓
+- `pwsh scripts/verify-dark.ps1 -Gate clean-host-install` (direct, harness/Bash idiom) → exit 3 ✓
+- `pwsh -Command "scripts/verify-dark.ps1 -Gate clean-host-install"` → exit 1 ✗ (do not use)
+
+The verdict JSON file-of-record (`.nono-runtime/verdicts/clean-host-install.json`) is correct in all cases. GUIDANCE for Phase 81 aggregator: invoke gates via `-File` or direct script-path execution, NEVER `pwsh -Command "<bare path>"`. The clean-host-install gate is verified correct (exit 3 / SKIP_HOST_UNAVAILABLE on the dirty dev host under the correct invocation).
 
 ## Self-Check: PASSED
 
