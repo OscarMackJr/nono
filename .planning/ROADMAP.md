@@ -114,7 +114,11 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   3. On first `nono run` in a user context, a user-owned scratch workspace is auto-provisioned (not SYSTEM-owned) — the R-B3 user-ownership guard passes without a manual `nono setup` step
   4. The POC root certificate is silently installed into both `LocalMachine\Root` and `CurrentUser\Root` stores; TLS through the nono proxy succeeds from PowerShell (CryptoAPI), Node.js, and nono-cli (rustls/native-certs) with no manual cert import
   5. `verify-dark.ps1 --gate deploy-silent-install` emits a PASS verdict, covering: silent install under SYSTEM context, workspace owned by target user not SYSTEM, degraded-service path produces non-zero `nono health`, and TLS trust paths verified across all three client types
-**Plans**: TBD
+**Plans**: 4 plans
+  - [ ] 82-01-PLAN.md — MSI machine-global provisioning: ProgramData root, HKLM sentinel key, non-fatal cert CA (Root+TrustedPublisher), PATH/service/CRT verify, ADMX template (DEPLOY-01/02/04/05/06)
+  - [ ] 82-02-PLAN.md — First-run user-context provisioner: user-owned WRITE_OWNER scratch + CurrentUser\Root cert + NODE_EXTRA_CA_CERTS, reusable cert-import logic (DEPLOY-03/05)
+  - [ ] 82-03-PLAN.md — nono health: read-only tri-state JSON verdict (install/WFP/policy/scratch+cert+PATH) (DEPLOY-06)
+  - [ ] 82-04-PLAN.md — deploy-silent-install dark-factory gate: silent install, scratch ownership, degraded-health, three-client TLS (DEPLOY-01/02/03/05/06)
 **UI hint**: no
 
 ### Phase 83: Machine Policy Spine + Egress Control
@@ -147,7 +151,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 82. Fleet Deployment Infrastructure | 0/TBD | Not started | - |
+| 82. Fleet Deployment Infrastructure | 0/4 | Planned | - |
 | 83. Machine Policy Spine + Egress Control | 0/TBD | Not started | - |
 | 84. SIEM/EDR Telemetry | 0/TBD | Not started | - |
 
