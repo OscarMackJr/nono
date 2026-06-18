@@ -433,4 +433,42 @@ if (Test-Path -LiteralPath $cargoConfigPath) {
     throw ".cargo/config.toml not found at '$cargoConfigPath'. This file must carry the static-CRT rustflag for the windows-msvc target."
 }
 
+# ─── ADMX source contract assertions (Phase 83 Plan 03 — EGRESS-04 / D-11) ──
+# These assertions verify that the ADMX here-string source in build-windows-msi.ps1
+# contains the three named-toggle preset policies and that the existing AllowedSuffixes
+# / AllowedHosts list policies are still present (Pitfall 1: N×REG_SZ shape retained).
+#
+# The assertions run on dev-host without PowerShell or WiX tooling: they just grep
+# the script source.  The richer generated-ADMX XML validation (parse + node check)
+# runs on a Windows host that can invoke build-windows-msi.ps1 end-to-end.
+$buildScriptPath = Join-Path $PSScriptRoot "build-windows-msi.ps1"
+if (-not (Test-Path -LiteralPath $buildScriptPath)) {
+    throw "ADMX contract check: build-windows-msi.ps1 not found at '$buildScriptPath'."
+}
+$buildScriptContent = Get-Content -LiteralPath $buildScriptPath -Raw
+
+# Named-toggle presence (EGRESS-04 / D-11)
+Assert-True -Condition ($buildScriptContent -match 'Allow Anthropic') `
+    -Message "ADMX source must contain 'Allow Anthropic' named-toggle policy (EGRESS-04 D-11)"
+Assert-True -Condition ($buildScriptContent -match 'Allow OpenAI') `
+    -Message "ADMX source must contain 'Allow OpenAI' named-toggle policy (EGRESS-04 D-11)"
+Assert-True -Condition ($buildScriptContent -match 'Allow GitHub API') `
+    -Message "ADMX source must contain 'Allow GitHub API' named-toggle policy (EGRESS-04 D-11)"
+
+# Token values written by each toggle (D-11: token not literal FQDN)
+Assert-True -Condition ($buildScriptContent -match '"anthropic"') `
+    -Message "ADMX source must contain token value 'anthropic' (not literal FQDN) for the Anthropic toggle (D-11)"
+Assert-True -Condition ($buildScriptContent -match '"openai"') `
+    -Message "ADMX source must contain token value 'openai' for the OpenAI toggle (D-11)"
+Assert-True -Condition ($buildScriptContent -match '"github-api"') `
+    -Message "ADMX source must contain token value 'github-api' for the GitHub API toggle (D-11)"
+
+# Existing list policies still present (Pitfall 1: N×REG_SZ shape must not change)
+Assert-True -Condition ($buildScriptContent -match 'AllowedSuffixes') `
+    -Message "ADMX source must retain the AllowedSuffixes list policy (Pitfall 1 / N*REG_SZ shape)"
+Assert-True -Condition ($buildScriptContent -match 'AllowedHosts') `
+    -Message "ADMX source must retain the AllowedHosts list policy (Pitfall 1 / N*REG_SZ shape)"
+
+Write-Host "ADMX source contract assertions passed (EGRESS-04 named toggles + list policies retained)."
+
 Write-Host "Validated Windows MSI contract for machine and user scopes."

@@ -1442,6 +1442,11 @@ pub fn load_package_groups(policy: &mut Policy) -> Result<()> {
 /// # Ok(())
 /// # }
 /// ```
+// EGRESS-04 (Plan 83-03): this function is called by Plan 83-02 daemon-startup
+// wiring (agent_daemon startup path).  The dead_code lint fires during the
+// transitional window between Plan 03 (definition) and Plan 02 (wiring call).
+// Suppressed here because the function is fully tested in the cfg(test) module.
+#[allow(dead_code)]
 pub fn expand_egress_preset_tokens(tokens: &[String]) -> Result<Vec<String>> {
     if tokens.is_empty() {
         return Ok(Vec::new());
