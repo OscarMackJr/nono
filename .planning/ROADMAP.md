@@ -98,7 +98,8 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 **Milestone Goal:** Make nono deployable and governable across a corporate Windows fleet — silent fleet install via `msiexec /qn`, machine-policy-managed deny-by-default egress from a single `HKLM\SOFTWARE\Policies\nono` spine, and SIEM/EDR-forwardable security telemetry — all under the Dark Factory verification mandate.
 
-- [x] **Phase 82: Fleet Deployment Infrastructure** — Silent MSI install, machine-wide PATH, ProgramData root, cert install, health command, Event Log source registration (completed 2026-06-18)
+- [x] **Phase 82: Fleet Deployment Infrastructure** — Silent MSI install, machine-wide PATH, ProgramData root, cert install, health command, Event Log source registration
+ (completed 2026-06-18)
 - [ ] **Phase 83: Machine Policy Spine + Egress Control** — HKLM reader (fail-secure), proxy+WFP unified from one source, ADMX template, AI-provider presets, DNS-component wildcard matching
 - [ ] **Phase 84: SIEM/EDR Telemetry** — SecurityEventLayer tracing::Layer, structured Event Log events, HMAC tamper-evidence chain, secret redaction, tamper-evidence ADR
 
@@ -131,7 +132,11 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   3. Injecting an HKLM allowlist containing only `*.anthropic.com` causes the nono-proxy to reject a request to an out-of-list domain AND the nono-wfp-service to block the corresponding AppContainer SID from reaching that domain — both layers verified from the same `MachineEgressPolicy` struct, not independent reads
   4. Wildcard FQDN matching uses DNS-component comparison: `api.anthropic.com` matches `*.anthropic.com`, but `anthropic.com` and `evilanthropic.com` and `anthropic.com.evil.com` are all correctly rejected
   5. The shipped GPO ADMX template (`nono.admx` + `nono.adml`) and documented Intune OMA-URI path let an admin push the egress allowlist to `HKLM\SOFTWARE\Policies\nono` with no manual registry editing; AI-provider built-in groups (`*.anthropic.com`, `*.openai.com`, `api.github.com`) are available as named presets
-**Plans**: TBD
+**Plans**: 4 plans
+  - [ ] 83-01-PLAN.md — Core lib spine: MachineEgressPolicy type + NonoError::PolicyLoadFailed + winreg fail-secure 64-bit reader + SC-4 DNS-component matrix (POLICY-01/02, EGRESS-03)
+  - [ ] 83-02-PLAN.md — Single-source hand-off: one daemon-startup read -> ProxyFilter deny-by-default + flip wfp_filter_add to force-through-proxy (POLICY-03, EGRESS-01/02)
+  - [ ] 83-03-PLAN.md — AI-provider presets + ADMX named toggles: egress groups in network-policy.json + token->FQDN expansion + GPO toggle here-strings (EGRESS-04)
+  - [ ] 83-04-PLAN.md — Dark Factory gate egress-policy-deny (SC-2 corrupted-key non-zero exit; SC-3 dual-layer deny) + cross-target clippy verification (POLICY-02, EGRESS-02)
 **UI hint**: no
 
 ### Phase 84: SIEM/EDR Telemetry
@@ -152,7 +157,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
-| 83. Machine Policy Spine + Egress Control | 0/TBD | Not started | - |
+| 83. Machine Policy Spine + Egress Control | 0/4 | Not started | - |
 | 84. SIEM/EDR Telemetry | 0/TBD | Not started | - |
 
 ## References
