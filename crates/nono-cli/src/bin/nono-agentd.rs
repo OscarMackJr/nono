@@ -150,7 +150,32 @@ mod windows_impl {
                 )))
             })?;
 
-        let daemon_state = Arc::new(super::agent_daemon::DaemonState::new());
+        // D-04 SOLE read: resolve machine egress policy exactly once at daemon startup.
+        // Absent key → Ok(None) → no-proxy path (D-07 fall-through).
+        // Present-but-broken key → Err → abort with fail-secure (D-07 Pitfall 3).
+        // D-06 restart-to-apply: this snapshot is held for the daemon lifetime.
+        let (egress_domains, machine_policy_active) =
+            match super::agent_daemon::resolve_machine_egress_policy(&[]) {
+                Ok(result) => result,
+                Err(e) => {
+                    return Err(windows_service::Error::Winapi(std::io::Error::other(
+                        format!("nono-agentd: machine egress policy load failed (fail-secure): {e}"),
+                    )));
+                }
+            };
+
+        let daemon_state = rt.block_on(async {
+            build_daemon_state(machine_policy_active, &egress_domains).await
+        });
+
+        let daemon_state = match daemon_state {
+            Ok(state) => Arc::new(state),
+            Err(e) => {
+                return Err(windows_service::Error::Winapi(std::io::Error::other(
+                    format!("nono-agentd: proxy startup failed (fail-secure): {e}"),
+                )));
+            }
+        };
 
         rt.block_on(async {
             // Wave 5 (Plan 74-07): run both loops concurrently so the daemon
@@ -228,7 +253,29 @@ mod windows_impl {
             // Non-fatal in foreground mode — continue without clean shutdown.
         }
 
-        let daemon_state = Arc::new(super::agent_daemon::DaemonState::new());
+        // D-04 SOLE read: resolve machine egress policy exactly once at daemon startup.
+        let (egress_domains, machine_policy_active) =
+            match super::agent_daemon::resolve_machine_egress_policy(&[]) {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!(
+                        "nono-agentd: machine egress policy load failed (fail-secure): {e}"
+                    );
+                    return ExitCode::from(1);
+                }
+            };
+
+        let daemon_state = rt.block_on(async {
+            build_daemon_state(machine_policy_active, &egress_domains).await
+        });
+
+        let daemon_state = match daemon_state {
+            Ok(state) => Arc::new(state),
+            Err(e) => {
+                eprintln!("nono-agentd: proxy startup failed (fail-secure): {e}");
+                return ExitCode::from(1);
+            }
+        };
 
         rt.block_on(async {
             // Wave 5 (Plan 74-07): run both loops concurrently.
@@ -282,6 +329,68 @@ mod windows_impl {
             return Err(std::io::Error::last_os_error());
         }
         Ok(())
+    }
+
+    /// Build `DaemonState`, starting the in-process proxy when a machine egress
+    /// policy is active (D-04/EGRESS-01 wiring).
+    ///
+    /// When `machine_policy_active` is `false`, no proxy is started and
+    /// `DaemonState::new()` is returned (legacy no-enforcement path, D-07 fall-through).
+    ///
+    /// When `machine_policy_active` is `true`:
+    /// 1. Start `nono_proxy` with `strict_filter = true` + `allowed_hosts = egress_domains`
+    ///    so that deny-by-default is structural (ProxyFilter::new_strict, EGRESS-01).
+    /// 2. Bind on loopback, port 0 — OS assigns an ephemeral port (no hardcoded ports).
+    /// 3. Return `DaemonState::new_with_proxy(port)` so every subsequent
+    ///    `wfp_filter_add` call threads the same port (D-04 no-drift, EGRESS-02).
+    ///
+    /// Fail-secure: any proxy startup error returns `Err` — the caller must NOT
+    /// start the daemon without a working proxy when machine policy is active.
+    async fn build_daemon_state(
+        machine_policy_active: bool,
+        egress_domains: &[String],
+    ) -> Result<super::agent_daemon::DaemonState, String> {
+        if !machine_policy_active {
+            // D-07 fall-through: no machine policy → no proxy → legacy path.
+            tracing::debug!("nono-agentd: no machine egress policy; using legacy DaemonState");
+            return Ok(super::agent_daemon::DaemonState::new());
+        }
+
+        // Machine policy is active (D-04/EGRESS-01).
+        // Start the in-process proxy with strict filtering (deny-by-default).
+        tracing::info!(
+            allowed_hosts = egress_domains.len(),
+            "nono-agentd: machine egress policy active; starting in-process proxy (EGRESS-01)"
+        );
+
+        let config = nono_proxy::config::ProxyConfig {
+            bind_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            bind_port: 0, // OS-assigned ephemeral port
+            allowed_hosts: egress_domains.to_vec(),
+            strict_filter: true, // EGRESS-01: deny-by-default (ProxyFilter::new_strict)
+            routes: vec![],
+            // Remaining fields default to their safe zero values.
+            ..nono_proxy::config::ProxyConfig::default()
+        };
+
+        let handle = nono_proxy::server::start(config)
+            .await
+            .map_err(|e| format!("nono-agentd: in-process proxy failed to start: {e}"))?;
+
+        let proxy_port = handle.port;
+        tracing::info!(
+            proxy_port,
+            "nono-agentd: in-process proxy started on loopback:{proxy_port} (EGRESS-01)"
+        );
+
+        // Leak the handle so the proxy server runs for the daemon lifetime.
+        // The daemon process exits when the SCM sends STOP (service mode) or
+        // on Ctrl-C (foreground mode); proxy resources are reclaimed by the OS.
+        // Using Box::leak is deliberate — there is no shutdown ordering that
+        // would benefit from a Drop impl here (the proxy and daemon exit together).
+        std::mem::forget(handle);
+
+        Ok(super::agent_daemon::DaemonState::new_with_proxy(proxy_port))
     }
 
     pub(super) fn run() -> ExitCode {
