@@ -98,6 +98,10 @@ mod setup;
 // CurrentUser\Root). The store-name list is the single source of truth here.
 // Cross-target: non-Windows bodies are cfg-stubbed; compiles on Linux + macOS.
 mod cert_trust;
+// DEPLOY-06 Phase 82: read-only fleet diagnostic (nono health).
+// Windows probes are cfg-gated; non-Windows stubs return degraded states so
+// the crate builds cross-target without winreg or WFP deps.
+mod health;
 // D-09 Phase 82: idempotent first-run-in-user-context provisioner
 // (scratch + cert + NODE_EXTRA_CA_CERTS). Windows-only module; the call site
 // in command_runtime is cfg-gated to Windows so this module is never referenced

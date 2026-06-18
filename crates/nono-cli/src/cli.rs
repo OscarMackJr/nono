@@ -3186,6 +3186,18 @@ pub struct ClassifyArgs {
     pub json: bool,
 }
 
+/// Arguments for `nono health [--json]` (Phase 82 DEPLOY-06).
+///
+/// A read-only diagnostic that always prints a machine-readable JSON verdict
+/// to stdout and returns a tri-state exit code: 0 (healthy) / 1 (degraded) /
+/// 2 (broken). Intended for SCCM/Intune compliance scripts.
+#[derive(Parser, Debug)]
+pub struct HealthArgs {
+    /// Output JSON only (suppresses the human-readable summary)
+    #[arg(long, help_heading = "OPTIONS")]
+    pub json: bool,
+}
+
 /// Top-level args for `nono daemon <subcommand>`.
 ///
 /// Wraps the nested `DaemonCommands` enum. All subcommands operate on the
