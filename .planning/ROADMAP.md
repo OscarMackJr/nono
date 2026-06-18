@@ -147,7 +147,10 @@ Plans:
   4. A nono-ts integration test (`confinedRun` with no profile flags on Windows) confirms the default-broker-arm path works end-to-end and passes in the napi build on the Win11 dev host.
 **Plans**: 2 plans
 Plans:
+**Wave 1**
 - [ ] 79-01-PLAN.md — WFP-01: three policy.json profiles + wfp-egress-isolation gate (loopback mock, SKIP_HOST_UNAVAILABLE guard, per-SID isolation proof)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 79-02-PLAN.md — TSRG-01: D-03/D-04 wiring in windows_confined_run.rs (default profile injection + exe-dir auto-cover) + napi integration test + npm test wiring
 **Host gate**: Real Win11 host (WFP gate requires live kernel WFP enforcement; nono-ts build requires Node + napi-rs on Windows).
 **Unattended gate**: `scripts/verify-dark.ps1 --gate wfp-egress-isolation` for WFP-01; `npm test` or equivalent napi integration for TSRG-01.
