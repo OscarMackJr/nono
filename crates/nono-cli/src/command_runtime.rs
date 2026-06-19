@@ -92,8 +92,16 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
     }
 
     // Load profile once and reuse for binary resolution and command_args.
+    // Phase 37 D-12: resolve through `resolve_ctx` so `--no-auto-pull` is honored
+    // on the real run path too. Using the context-free `load_profile` here made
+    // this early resolution auto-pull a registry profile regardless of the flag
+    // (the flag was only consulted on the dry-run branch), so a missing pack hit
+    // the network instead of failing closed with the D-11 footer.
     let loaded_profile = match run_args.sandbox.profile.as_ref() {
-        Some(name) => Some((name.clone(), crate::profile::load_profile(name)?)),
+        Some(name) => Some((
+            name.clone(),
+            crate::profile::load_profile_with_context(name, &resolve_ctx)?,
+        )),
         None => None,
     };
 
