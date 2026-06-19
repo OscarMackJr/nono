@@ -823,8 +823,17 @@ mod tests {
             Some("codex")
         );
         // D-04: aider.exe maps to the aider built-in profile (Windows file_name).
+        // Path::file_name() only treats `\` as a separator on Windows; on Unix the
+        // entire backslash string is the file name, so this case is Windows-only.
+        #[cfg(windows)]
         assert_eq!(
             recommended_builtin_profile(Path::new("C:\\Users\\user\\.local\\bin\\aider.exe")),
+            Some("aider")
+        );
+        // Bare `aider.exe` filename has no path separators, so file_name() is
+        // portable — this exercises the `.exe` arm on every platform.
+        assert_eq!(
+            recommended_builtin_profile(Path::new("aider.exe")),
             Some("aider")
         );
         // Unix form (without .exe suffix).
