@@ -29,7 +29,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Library-Boundary Convergence (BND)
 
-- [ ] **BND-01**: The audit/attestation/ledger logic is relocated into the core `nono` crate (`crates/nono/src/audit.rs`) matching upstream, with `nono-cli` reduced to thin wrappers; all existing audit behavior is preserved and tested (recorder lifecycle, merkle/inclusion-proof, ledger append+verify, attestation sign/verify).
+- [x] **BND-01**: The audit/attestation/ledger logic is relocated into the core `nono` crate (`crates/nono/src/audit.rs`) matching upstream, with `nono-cli` reduced to thin wrappers; all existing audit behavior is preserved and tested (recorder lifecycle, merkle/inclusion-proof, ledger append+verify, attestation sign/verify).
 - [ ] **BND-02**: The structured-diagnostics model is adopted into the core `nono` crate (`crates/nono/src/diagnostic/*`, `NonoError::{diagnostic_code, remediation}`) and exposed via FFI (`bindings/c/src/diagnostic.rs`, `NonoDiagnosticCode`, `last_diagnostic_code`/`last_remediation_json`), reconciled with the fork's Windows diagnostic paths and the proxy `ProxyDiagnostic` surface.
 - [ ] **BND-03**: `CLAUDE.md` § Library vs CLI boundary is updated to reflect the new core-crate audit + diagnostics modules, and an ADR records the boundary-convergence decision, rationale, and what stays CLI-side.
 
@@ -84,7 +84,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 |-------------|----------------------|---------|
 | AUDIT-01 | Phase 85 | Complete |
 | AUDIT-02 | Phase 85 | Complete |
-| BND-01 | Phase 86 | Pending |
+| BND-01 | Phase 86 | Complete |
 | BND-02 | Phase 86 | Pending |
 | BND-03 | Phase 86 | Pending |
 | SEC-01 | Phase 87 | Pending |
