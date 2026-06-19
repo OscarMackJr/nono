@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
 status: executing
-stopped_at: Phase 84 Plan 01 complete — D-MSRV recorded for Plan 02
-last_updated: "2026-06-19T03:50:26.810Z"
+stopped_at: Phase 84 Plan 02 complete — dual-emit backend, HMAC chain, init_tracing wiring
+last_updated: "2026-06-19T04:00:11.659Z"
 last_activity: 2026-06-19
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 12
-  completed_plans: 10
-  percent: 83
+  completed_plans: 11
+  percent: 92
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -27,11 +27,11 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 ## Current Position
 
 Phase: 84 (siem-edr-telemetry) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-19
 
-Progress: [████████░░] 83%
+Progress: [█████████░] 92%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [████████░░] 83%
 | Phase 83 P04 | 30m | 2 tasks | 1 files |
 | Phase 84 P01 | 35m | 3 tasks | 9 files |
 | Phase 84 P02 | 65m | 2 tasks | 7 files |
+| Phase 84 P03 | 30m | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -66,6 +67,14 @@ Progress: [████████░░] 83%
 | Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
 | Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
 | Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
+
+### Decisions (Phase 84 Plan 03)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| OPTION B label-violation: EventID 10003 RESERVED-but-unemitted in Phase 84 | 84-03 | IL denials surface as NonoError::LabelApplyFailed (aborting session via ?) or as path-deny DenialRecords at exec_strategy layer; no distinct label_violation event emittable; Plan 84-04 gate excludes EventID 10003 |
+| hook_fail_closed wired at hook script write failure | 84-03 | Script write failure = PreToolUse security hook cannot run = fail-closed; most security-relevant fail-closed site in hooks.rs |
+| D-07 ADR delivered: tamper boundary = WEF; in-session HMAC only | 84-03 | docs/adr/telemetry-tamper-evidence.md records scope honestly: WEF is the real tamper boundary; local admin can clear Application log; SEED-005 deferred for cryptographic-local anchoring |
 
 ### Decisions (Phase 84 Plan 02)
 
@@ -120,6 +129,6 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
 ## Session Continuity
 
-Last session: 2026-06-19T05:30:00.000Z
-Stopped at: Phase 84 Plan 02 complete — dual-emit backend, HMAC chain, init_tracing wiring
-Resume file: .planning/phases/84-siem-edr-telemetry/84-02-SUMMARY.md
+Last session: 2026-06-19T04:00:11.648Z
+Stopped at: Phase 84 Plan 03 complete — denial-source wiring + tamper-evidence ADR (D-07)
+Resume file: .planning/phases/84-siem-edr-telemetry/84-03-SUMMARY.md
