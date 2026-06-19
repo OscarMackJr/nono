@@ -50,8 +50,13 @@ Plans:
   4. `CLAUDE.md` § Library vs CLI boundary is updated to document the new core-crate audit + diagnostics modules, and an ADR records the boundary-convergence decision (rationale + what stays CLI-side).
 **Plans**: 3 plans
 Plans:
+**Wave 1**
 - [ ] 86-01-PLAN.md — Theme A: cherry-pick a5b2a516 → aed35bec → 0b27cfc2 → e9529312 (audit → core, thin CLI wrappers, tests relocated)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 86-02-PLAN.md — Theme B: cherry-pick 4ad8ba92 → f867aba2 → a6aa5995 → 7f319b9e (diagnostics → core + FFI, proxy ProxyDiagnostic, Windows bridge)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 86-03-PLAN.md — BND-03: write ADR-86 + update CLAUDE.md § Library vs CLI Boundary, final make ci gate
 
 ### Phase 87: Security Sync
