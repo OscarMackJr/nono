@@ -1,130 +1,108 @@
 ---
-milestone: v3.0
-milestone_name: Enterprise Hardening I (Deploy, Control, Compliance)
-status: complete
-created: 2026-06-18
-last_updated: 2026-06-19
-granularity: standard
+milestone: v3.1
+milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
+status: planning
+created: 2026-06-19
 ---
 
-# Roadmap — nono
+# Roadmap: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
 
-## Milestones
+## Overview
 
-- ✅ **v1.0 Windows Alpha** — Phases 01-12 (shipped 2026-03-31) — see [`milestones/v1.0-*`](milestones/)
-- ✅ **v2.0 Windows Gap Closure** — Phases 13-18 — see [`milestones/v2.0-ROADMAP.md`](milestones/v2.0-ROADMAP.md)
-- ✅ **v2.1 Resource Limits / Extended IPC / Attach-Streaming** — see [`milestones/v2.1-ROADMAP.md`](milestones/v2.1-ROADMAP.md)
-- ✅ **v2.2 Windows/macOS Parity Sweep** — see [`milestones/v2.2-ROADMAP.md`](milestones/v2.2-ROADMAP.md)
-- ✅ **v2.3 Linux POC Unblock + Deferreds Closure** — see [`milestones/v2.3-ROADMAP.md`](milestones/v2.3-ROADMAP.md)
-- ✅ **v2.4 Complete the Partial Ports + UPST4** — Phases 35, 36, 36.5, 39, 40 (shipped 2026-05-15) — see [`milestones/v2.4-ROADMAP.md`](milestones/v2.4-ROADMAP.md)
-- ✅ **v2.5 Backlog Drain + UPST5** — Phases 37, 41, 42, 43 (shipped 2026-05-20) — see [`milestones/v2.5-ROADMAP.md`](milestones/v2.5-ROADMAP.md)
-- ✅ **v2.6 UPST6 + v2.5 Drain** — Phases 44, 44.1, 45, 46, 47, 48, 49, 50 (shipped 2026-05-25) — see [`milestones/v2.6-ROADMAP.md`](milestones/v2.6-ROADMAP.md)
-- ✅ **v2.7 Windows supervised-run hardening** — Phases 51, 52 (shipped 2026-05-26) — see [`milestones/v2.7-ROADMAP.md`](milestones/v2.7-ROADMAP.md)
-- ✅ **v2.8 UPST7 + v2.7 Drain & Release** — Phases 53-59 (shipped 2026-06-06; tags `v2.8`+`v0.57.5`) — see [`milestones/v2.8-ROADMAP.md`](milestones/v2.8-ROADMAP.md)
-- ✅ **v2.9 Windows Sandbox-the-Tools — Confined Coding Loop** — Phases 60, 61, 62 (published as `v0.62.2` 2026-06-06) — see [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md)
-- ✅ **v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity** — Phases 63-66 (shipped 2026-06-11; tag `v2.10`) — see [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md)
-- ✅ **v2.11 Clean-Host Distribution Cleanup + UPST8** — Phases 67-70 (shipped 2026-06-13) — see [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md)
-- ✅ **v2.12 AI Agent Abstraction** — Phases 71-75 (shipped 2026-06-16; tag `v2.12`) — see [`milestones/v2.12-ROADMAP.md`](milestones/v2.12-ROADMAP.md)
-- ✅ **v2.13 Carry-Forward Closeout (Dark Factory)** — Phases 76-81 (shipped 2026-06-18; tag `v2.13`) — see [`milestones/v2.13-ROADMAP.md`](milestones/v2.13-ROADMAP.md)
-- ✅ **v3.0 Enterprise Hardening I (Deploy · Control · Compliance)** — Phases 82-84 (complete 2026-06-19; tag `v3.0` local) — see [`milestones/v3.0-ROADMAP.md`](milestones/v3.0-ROADMAP.md)
+A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *fully absorb* the upstream `always-further/nono` `v0.62.0..v0.64.0` window — 90 commits / 140 files — converging toward upstream's layout (audit-stack + structured-diagnostics relocated into the core `nono` crate, adopt-upstream) while preserving the fork's Windows security model; then drain v3.0's host-gated UAT debt. The audit (`DIVERGENCE-LEDGER.md`) comes first and gates every cherry-pick disposition. The heavy, highest-risk library-boundary convergence lands next (it touches FFI + diagnostics that downstream sync work depends on), followed by the security fix, the additive feature/dependency wave, and the proxy hardening cluster against the fork-divergent TLS-interception surface. The v3.0 host-gated UAT drain is independent and runs last. Milestone-marker only — no crate publish; a future release leapfrogs the crate version to ≥ `0.65.0`.
 
 ## Phases
 
-<details>
-<summary>✅ v2.13 Carry-Forward Closeout (Dark Factory) (Phases 76-81) — SHIPPED 2026-06-18</summary>
+**Phase Numbering:**
+- Integer phases (85, 86, 87): Planned milestone work — **continued from Phase 84** (v3.0). NOT reset.
+- Decimal phases (86.1, 86.2): Urgent insertions (marked with INSERTED)
 
-- [x] Phase 76: Self-Verifying Harness Foundation (2/2, DARK-01) — 2026-06-17
-- [x] Phase 77: Copilot CLI End-to-End Confinement (4/4, CPLT-01/02/03) — 2026-06-17
-- [x] Phase 78: Cross-Process Classification (2/2, CLAS-01/02) — 2026-06-18
-- [x] Phase 79: WFP Egress Isolation + nono-ts Ergonomics (2/2, WFP-01/TSRG-01) — 2026-06-18
-- [x] Phase 80: Clean-Host Install UAT (2/2, INST-01) — 2026-06-18
-- [x] Phase 81: Milestone Close Aggregator (1/1, DARK-02) — 2026-06-18
+- [ ] **Phase 85: UPST9 Divergence Audit** - Build the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions + ADR risk verdicts
+- [ ] **Phase 86: Library-Boundary Convergence** - Adopt upstream's core-crate audit stack + structured-diagnostics model (lib + FFI + proxy), reconcile Windows paths, update CLAUDE.md + ADR
+- [ ] **Phase 87: Security Sync** - Close the Linux AF_UNIX datagram bypass (#1096) and the procfs-remap dedup leak (#1064)
+- [ ] **Phase 88: Feature + Dependency Cherry-Pick Wave** - Absorb the additive feature cherry-picks + PTY ctrl-z fix + 9 dependency bumps across all 5 crates
+- [ ] **Phase 89: Proxy Hardening Sync** - Absorb the proxy route/403/TLS-CONNECT/reactive-auth/customCredentials cluster against the fork-divergent TLS-interception surface
+- [ ] **Phase 90: v3.0 Host-Gated UAT Drain** - Land daemon-side telemetry emission + the verify-dark.ps1 scripted gates for clean-VM install, dual-layer WFP block, and live SIEM
 
-10/10 requirements satisfied; milestone audit `tech_debt` (no requirement gaps, 0 wiring defects;
-host-execution deferrals only). Dark Factory mandate met: every host-gated item collapses to a
-single unattended `scripts/verify-dark.ps1` gate; the no-flag aggregator (`_aggregate.json`) is the
-machine-readable close signal. Full detail: [`milestones/v2.13-ROADMAP.md`](milestones/v2.13-ROADMAP.md).
+## Phase Details
 
-</details>
+### Phase 85: UPST9 Divergence Audit
+**Goal**: A complete, disposition-resolved DIVERGENCE-LEDGER for upstream `v0.62.0..v0.64.0` that gates every downstream cherry-pick decision.
+**Depends on**: Nothing (first phase of v3.1; follows Phase 84)
+**Requirements**: AUDIT-01, AUDIT-02
+**Success Criteria** (what must be TRUE):
+  1. `DIVERGENCE-LEDGER.md` exists for `v0.62.0..v0.64.0` (Phase 42/47/48 shape) classifying every substantive commit into themed clusters (A–M from SEED-006), each carrying a `will-sync` / `fork-preserve` / `split` / `won't-sync` disposition.
+  2. Upstream was re-fetched at audit-open and the ledger reflects any `v0.65.0` cut landing before then (window extended if so).
+  3. Each cluster disposition carries an ADR-style L/M/H risk verdict across the standard dimensions (security, windows, maintenance, divergence, contributor).
+  4. Cross-cluster re-export dependencies are diff-inspected (actual diffs, not `git --name-only`), structurally closing the `feedback_cluster_isolation_invalid` hazard — with the two HIGH-conflict refactors (themes A & B) explicitly dispositioned `will-sync / adopt-upstream`.
+**Plans**: TBD
 
-<details>
-<summary>✅ v2.12 AI Agent Abstraction (Phases 71-75) — SHIPPED 2026-06-16</summary>
+### Phase 86: Library-Boundary Convergence
+**Goal**: The audit/attestation/ledger stack and the structured-diagnostics model live in the core `nono` crate matching upstream, with the fork's Windows diagnostic paths and FFI reconciled and the policy-free-library invariant re-decided via ADR.
+**Depends on**: Phase 85 (audit dispositions for themes A & B must be resolved first)
+**Requirements**: BND-01, BND-02, BND-03
+**Success Criteria** (what must be TRUE):
+  1. Audit/attestation/ledger logic resides in `crates/nono/src/audit.rs` (matching upstream), `nono-cli` is reduced to thin wrappers, and all existing audit behavior passes its tests (recorder lifecycle, merkle/inclusion-proof, ledger append+verify, attestation sign/verify).
+  2. The structured-diagnostics model exists in `crates/nono/src/diagnostic/*` with `NonoError::{diagnostic_code, remediation}`, and is exposed via FFI (`bindings/c/src/diagnostic.rs`, `NonoDiagnosticCode`, `last_diagnostic_code`/`last_remediation_json`) with `nono-ffi` building clean (exhaustive-match arms covered).
+  3. The new diagnostics surface is reconciled with the fork's Windows diagnostic paths and the proxy `ProxyDiagnostic` surface (no regression in Windows denial output).
+  4. `CLAUDE.md` § Library vs CLI boundary is updated to document the new core-crate audit + diagnostics modules, and an ADR records the boundary-convergence decision (rationale + what stays CLI-side).
+**Plans**: TBD
+**UI hint**: yes
 
-- [x] Phase 71: Engine-Agnostic Launch Productionization (5/5, ENG-01/02/03) — 2026-06-14
-- [x] Phase 72: nono-py Binding + In-Process-Exec Proof (4/4, ABI-01/02) — 2026-06-14
-- [x] Phase 73: AI_AGENT Marker (3/3, MARK-01) — verified 2026-06-16
-- [x] Phase 74: Persistent Multi-Tenant Daemon (8/8, DMON-01/02/03) — 2026-06-15 *(marquee)*
-- [x] Phase 75: Supplementary Controls + Secondary Engines (8/8, SUPP-01/02/03) — 2026-06-16
+### Phase 87: Security Sync
+**Goal**: The two upstream security fixes in the window are absorbed with cross-target clippy clean on the cfg-gated Unix edits.
+**Depends on**: Phase 86 (diagnostics/error surface settled; `capability.rs` touched by both)
+**Requirements**: SEC-01, SEC-02
+**Success Criteria** (what must be TRUE):
+  1. The Linux AF_UNIX datagram bypass is closed — `sendto`/`sendmsg`/`sendmmsg` are trapped by the seccomp filter and gated on a connect grant (upstream #1096), verified by the ported test matrix on Linux CI.
+  2. `deduplicate()` no longer inherits procfs-remap originals (upstream #1064 guard) — `/dev/null` is preserved when deduped with `/dev/stdin`.
+  3. The cfg-gated Unix edits (`crates/nono/src/sandbox/linux.rs`, `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, `crates/nono/src/capability.rs`) clear `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin` (or are marked PARTIAL→deferred-to-CI per the cross-target-verify checklist) — Windows-host `cargo check` is not accepted as a substitute.
+**Plans**: TBD
 
-12/12 requirements satisfied; milestone audit PASSED. Engine-neutral confinement + persistent
-multi-tenant daemon + unforgeable AI_AGENT marker + per-agent WFP/demote + nono-ts parity.
-SC3 re-scope: Copilot confine-only (Node-ESM/AppContainer limit); claude-code is Engine-2.
-Full detail: [`milestones/v2.12-ROADMAP.md`](milestones/v2.12-ROADMAP.md).
+### Phase 88: Feature + Dependency Cherry-Pick Wave
+**Goal**: The additive, low-conflict feature cherry-picks, the PTY ctrl-z fix, and all workspace dependency bumps from the window are absorbed across the 5-crate workspace.
+**Depends on**: Phase 86 (FEAT-02 XDG state touches audit roots; several features ride the reconciled error surface)
+**Requirements**: FEAT-01, FEAT-02, FEAT-03, FEAT-04, FEAT-05, FEAT-06, DEPS-01, DEPS-02
+**Success Criteria** (what must be TRUE):
+  1. `set_vars` static env injection is available (profile + `CapabilitySet`) with env-name validation rejecting `PATH` and the `NONO_` prefix (FEAT-01); keyring access honors `NONO_KEYRING_TIMEOUT_SECS` (default 120s, `0`=none) (FEAT-04); `$PACK_DIR` store-pack session hooks resolve with `source_pack` propagation (FEAT-05).
+  2. Runtime state (audit, sessions, rollback) resolves under XDG state dirs with legacy `~/.nono` fallback + one-time migration, and Windows path resolution is verified against the v3.0 scratch-space provisioner (FEAT-02).
+  3. AWS auth config (`AwsAuthConfig`) is accepted/validated in profiles + proxy route config, mutually exclusive with `credential_key`/`oauth2` (FEAT-03); update-check reports CI provider/environment, profile names are namespace-standardized, and bool CLI flags accept truthy env values (FEAT-06).
+  4. PTY ctrl-z suspend/resume no longer hangs under a PTY (DEPS-01).
+  5. All 9 dependency bumps (x509-parser 0.18.1, hyper 1.10.1, cbindgen 0.29.4, typify 0.7.0, zeroize 1.9.0, time 0.3.49, chrono 0.4.45, ignore 0.4.26, which 8.0.3) are absorbed with internal path-dep version pins synced across all 5 crate `Cargo.toml` files; `make ci` is green on Windows (DEPS-02).
+**Plans**: TBD
 
-</details>
+### Phase 89: Proxy Hardening Sync
+**Goal**: The proxy hardening cluster is absorbed and reconciled against the fork-divergent TLS-interception surface without regressing fork TLS-intercept behavior.
+**Depends on**: Phase 86 (proxy `ProxyDiagnostic` surface) and Phase 88 (AWS auth config / `customCredentials` credential path)
+**Requirements**: PROXY-01, PROXY-02
+**Success Criteria** (what must be TRUE):
+  1. `allow_domain` endpoint routes no longer shadow the credential catch-all (#1132), and denied non-CONNECT requests return `403` plus an audit record (#1077).
+  2. The TLS CONNECT intercept respects `upstream_proxy` (#1048/#1091), reactive proxy auth keeps the connection open on CONNECT (#1151), and the proxy activates when `customCredentials` is set (#1197).
+  3. All of the above are reconciled by diff-inspection against the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`) — proxy tests pass and the fork's TLS-intercept invariants are preserved (no blind cherry-pick).
+**Plans**: TBD
 
-<details>
-<summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>
-
-- [ ] Phase 67: Clean-Host Windows Install (DIST-01/02, TRUST-01/02) — host-gated UAT closed in v2.13 Phase 80
-- [x] Phase 68: macOS Resource-Limit Enforcement Fix (2/2) — completed 2026-06-12
-- [x] Phase 69: UPST8 Audit (1/1) — completed 2026-06-13
-- [x] Phase 70: UPST8 Cherry-pick Sync (3/3) — completed 2026-06-13
-
-Phases 68/69/70 complete; Phase 67 carried to v2.13 Phase 80. Full detail: [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md).
-
-</details>
-
-<details>
-<summary>✅ v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity (Phases 63-66) — SHIPPED 2026-06-11</summary>
-
-- [x] Phase 63: Minifilter Spike Groundwork + macOS DIVERGENCE-LEDGER Audit (3/3) — completed 2026-06-08
-- [x] Phase 64: Minifilter Spike Implementation + macOS P1 Cherry-pick Wave (5/5) — completed 2026-06-09
-- [x] Phase 65: Minifilter ADR + macOS Live Re-validation (4/4) — completed 2026-06-11
-- [x] Phase 66: WR-02 EDR HUMAN-UAT (1/1) — completed 2026-06-11
-
-9/9 reqs satisfied. Full detail: [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md).
-
-</details>
-
-<details>
-<summary>✅ v2.8 / v2.9 (Phases 53-62) — SHIPPED 2026-06-06</summary>
-
-v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Windows Sandbox-the-Tools (Phases 60-62, published `v0.62.2`). Full detail: [`milestones/v2.8-ROADMAP.md`](milestones/v2.8-ROADMAP.md) / [`milestones/v2.9-ROADMAP.md`](milestones/v2.9-ROADMAP.md).
-
-</details>
-
-<details>
-<summary>✅ v3.0 Enterprise Hardening I — Deploy · Control · Compliance (Phases 82-84) — COMPLETE 2026-06-19</summary>
-
-- [x] Phase 82: Fleet Deployment Infrastructure (4/4, DEPLOY-01..06) — 2026-06-18
-- [x] Phase 83: Machine Policy Spine + Egress Control (4/4, POLICY-01..03 / EGRESS-01..04) — 2026-06-19
-- [x] Phase 84: SIEM/EDR Telemetry (4/4, TELEM-01..04) — 2026-06-19
-
-17/17 requirements satisfied structurally; milestone audit `tech_debt` (0 unsatisfied/orphaned;
-5/5 cross-phase integration wires WIRED — the MSI→reader→proxy+WFP→telemetry single spine holds).
-Tech-debt = host-gated live UAT (clean-VM install, dual-layer WFP block, live SIEM gate/opt-out;
-`84-HUMAN-UAT.md`) + daemon-side telemetry emission follow-up. Full detail:
-[`milestones/v3.0-ROADMAP.md`](milestones/v3.0-ROADMAP.md).
-
-</details>
+### Phase 90: v3.0 Host-Gated UAT Drain
+**Goal**: The v3.0 host-gated UAT debt is drained — real daemon-side telemetry emission lands as code, and each host-gated item collapses to a single unattended `verify-dark.ps1` scripted gate with the residual live step explicitly host-gated.
+**Depends on**: Nothing in this milestone (independent of the sync; can run last or in parallel). Builds on shipped v3.0 Phases 82–84.
+**Requirements**: DRAIN-01, DRAIN-02, DRAIN-03, DRAIN-04
+**Success Criteria** (what must be TRUE):
+  1. `nono-agentd` registers the `SecurityEventLayer` so daemon-launched agent denials emit `nono_security::*` events — real wired code with a non-host-gated test (DRAIN-04).
+  2. Clean-VM silent MSI install UAT (v3.0 DEPLOY-01/03/05) is executed on a fresh Win11 host with recorded verdicts, OR collapsed to a single unattended `verify-dark.ps1` gate with the residual live step explicitly host-gated (DRAIN-01).
+  3. Dual-layer (proxy + kernel WFP) live egress-block proof (v3.0 EGRESS-02) is recorded via its scripted gate, with the live-host step operator-gated (DRAIN-02).
+  4. The live SIEM telemetry gate plus admin opt-out / `min_severity` HKLM→emit (v3.0 TELEM-01/04) is verified via the `telemetry-event-emit` gate, with live SIEM ingestion host-gated (DRAIN-03).
+**Plans**: TBD
+**UI hint**: yes
 
 ## Progress
 
+**Execution Order:**
+Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90 (drain) is independent of 85–89 and may run in parallel or last.
+
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
-| 83. Machine Policy Spine + Egress Control | 4/4 | Complete    | 2026-06-19 |
-| 84. SIEM/EDR Telemetry | 4/4 | Complete    | 2026-06-19 |
-
-## References
-
-- `.planning/PROJECT.md` — project context + current milestone scope.
-- `.planning/MILESTONES.md` — shipped milestone history (v1.0 → v2.13).
-- `.planning/REQUIREMENTS.md` — v3.0 requirements (DEPLOY-01..06, POLICY-01..03, EGRESS-01..04, TELEM-01..04).
-- `.planning/research/SUMMARY.md` — four-researcher consensus on stack, pitfalls, and build order.
-- `.planning/research/ARCHITECTURE.md` — integration points (machine.rs, telemetry/, ProxyConfig injection, nono-agentd capability builder).
-- `.planning/research/PITFALLS.md` — 13 pitfalls with per-phase prevention mapping.
-- `.planning/milestones/v2.13-ROADMAP.md` — archived v2.13 roadmap (Phases 76-81) with full phase details + success criteria.
-- `.planning/templates/cross-target-verify-checklist.md` — mandatory Linux+macOS clippy protocol for cfg-gated Unix code.
-- `proj/DESIGN-engine-abstraction.md` — E1-E5 engine-abstraction contract (Phase 72).
+| 85. UPST9 Divergence Audit | 0/TBD | Not started | - |
+| 86. Library-Boundary Convergence | 0/TBD | Not started | - |
+| 87. Security Sync | 0/TBD | Not started | - |
+| 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
+| 89. Proxy Hardening Sync | 0/TBD | Not started | - |
+| 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |

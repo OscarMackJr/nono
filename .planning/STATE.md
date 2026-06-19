@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-06-19T14:10:44.807Z"
 last_activity: 2026-06-19
 progress:
-  total_phases: 0
+  total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,18 +17,20 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-84 complete, shipped + archived; tag `v3.0` local). Phase numbering continues from Phase 84 (Phase 85+ — NOT reset to 1). Scope source: `.planning/seeds/SEED-006-upst9-v0.62-v0.64-sync-window.md`.
+See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-84 complete, shipped + archived; tag `v3.0` local). Phase numbering continues from Phase 84 (Phases 85–90 — NOT reset to 1). Scope source: `.planning/seeds/SEED-006-upst9-v0.62-v0.64-sync-window.md`. Roadmap: `.planning/ROADMAP.md`.
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — kept current with upstream `always-further/nono` without regressing the fork's Windows security model.
 
-**Current Focus:** v3.1 — defining requirements (UPST9 upstream sync v0.62→v0.64 full-absorb + v3.0 host-gated UAT drain; milestone-marker only)
+**Current Focus:** v3.1 — roadmap created (6 phases, 85–90); ready to plan Phase 85 (UPST9 Divergence Audit)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 85 — UPST9 Divergence Audit (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-19 — Milestone v3.1 started
+Status: Roadmap created; awaiting phase planning
+Last activity: 2026-06-19 — ROADMAP.md + REQUIREMENTS.md traceability written (21/21 reqs mapped)
+
+Progress: [______________________________] 0/6 phases
 
 ## Performance Metrics
 
@@ -45,6 +47,17 @@ Last activity: 2026-06-19 — Milestone v3.1 started
 
 ## Accumulated Context
 
+### Decisions (v3.1 roadmap)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| Audit first (Phase 85) gates every cherry-pick | 85 | DIVERGENCE-LEDGER dispositions for themes A–M gate all downstream sync work (Phase 42→43, 47→48 precedent). |
+| Library-boundary convergence is its own phase, sequenced right after the audit | 86 | ~2200 LOC of audit + structured-diagnostics moved into the core `nono` crate, adopt-upstream; highest-risk cluster, touches FFI + Windows diagnostic paths + proxy `ProxyDiagnostic`. SEC/FEAT/PROXY diagnostics-touching work depends on it landing first. |
+| Security fix (SEC-01/02) its own phase, flagged security-priority | 87 | AF_UNIX datagram bypass (#1096) + procfs-remap dedup guard (#1064); cfg-gated Unix edits require cross-target clippy. |
+| FEAT + DEPS folded into one additive cherry-pick wave | 88 | All additive, low-conflict; PTY ctrl-z fix (DEPS-01) + 9 dep bumps (DEPS-02) ride with them; `make ci` is the single gate. |
+| PROXY its own phase, diff-inspect-careful | 89 | PROXY-02 touches the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`); depends on Phase 86 ProxyDiagnostic + Phase 88 AWS/customCredentials. |
+| DRAIN independent (Phase 90), runs last/parallel | 90 | v3.0 host-gated UAT debt; DRAIN-04 (daemon SecurityEventLayer wiring) is real code, others are scripted-gate + operator-gated live UAT. |
+
 ### Decisions (v3.0)
 
 | Decision | Phase | Rationale |
@@ -57,60 +70,16 @@ Last activity: 2026-06-19 — Milestone v3.1 started
 | Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
 | Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
 
-### Decisions (Phase 84 Plan 04)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| Gate auto-discovered by verify-dark.ps1 scripts/gates/*.ps1 scan (D-04); no ValidateSet update | 84-04 | Auto-discovery mechanism confirmed working; telemetry-event-emit.ps1 found without any hardcoded addition |
-| EventID 10003 excluded from gate per Option B carry-forward | 84-04 | LabelViolation is RESERVED-but-unemitted in Phase 84; gate uses range 10001-10005 accepting whichever of the three wired EventIDs appears |
-| Cross-target clippy PARTIAL: C linker absent for Linux+macOS cross targets | 84-04 | Same pre-existing issue as Phase 83; aws-lc-sys/ring require x86_64-linux-gnu-gcc/cc; deferred to live CI |
-
-### Decisions (Phase 84 Plan 03)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| OPTION B label-violation: EventID 10003 RESERVED-but-unemitted in Phase 84 | 84-03 | IL denials surface as NonoError::LabelApplyFailed (aborting session via ?) or as path-deny DenialRecords at exec_strategy layer; no distinct label_violation event emittable; Plan 84-04 gate excludes EventID 10003 |
-| hook_fail_closed wired at hook script write failure | 84-03 | Script write failure = PreToolUse security hook cannot run = fail-closed; most security-relevant fail-closed site in hooks.rs |
-| D-07 ADR delivered: tamper boundary = WEF; in-session HMAC only | 84-03 | docs/adr/telemetry-tamper-evidence.md records scope honestly: WEF is the real tamper boundary; local admin can clear Application log; SEED-005 deferred for cryptographic-local anchoring |
-
-### Decisions (Phase 84 Plan 02)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| D-MSRV executed: MSRV bumped 1.77->1.82 in CLAUDE.md atomically with tracing-etw 0.2.3 dep addition | 84-02 | tracing-etw 0.2.3 requires Rust 1.82; bumped in CLAUDE.md Technology Stack section per D-MSRV pre-approved decision |
-| ETW emit via tracing::warn!(target: nono_security) inside emit_security_event | 84-02 | Simpler than OnceLock approach; the tracing-etw LayerBuilder registered in init_tracing() intercepts the warn! call automatically without per-event provider handle |
-| init_registry() helper with fmt_layer.with_filter(env_filter) pattern | 84-02 | Avoids S-type mismatch when env_filter changes the registry subscriber type; security layer always active regardless of log level |
-| EVENT_ID_* in event.rs (schema) as single source of truth; windows.rs imports via schema_event_id_for | 84-02 | No duplication; tests in both files use the same values; prevents drift between emit and schema |
-
-### Decisions (Phase 84 Plan 01)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| D-MSRV: MSRV bump 1.77→1.82 DEFERRED to Plan 84-02 | 84-01 | tracing-etw 0.2.3 requires Rust 1.82; Plan 01 does not add tracing-etw to Cargo.toml so no MSRV conflict exists yet. Plan 02 edits CLAUDE.md and workspace Cargo.toml atomically when adding the dep. |
-| D-HMAC-PLACEHOLDER: sha2-based advance_chain placeholder in Plan 01 | 84-01 | hmac crate not yet in Cargo.toml (operator checkpoint passed for crates but not yet added); sha2 used as placeholder preserving domain separators; Plan 02 replaces with Hmac<Sha256> |
-| D-CLASSIFY-MULTIPASS: classify_path uses multi-pass component loop | 84-01 | Single-pass ordering was fragile (/var/lib/keystore returned SystemPath because 'lib' appeared before 'keystore'); multi-pass ensures CredentialPath wins regardless of component position |
-| Package legitimacy: hmac 0.13.0 / tracing-etw 0.2.3 / eventlog 0.4.0 APPROVED | 84-01 | Operator-verified all three crates via crates.io API before any Cargo.toml edits (Task 1 checkpoint resolved) |
-
-### Decisions (Phase 83)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| D-07: absent→Ok(None) / present-but-broken→Err(PolicyLoadFailed) | 83-01 | Fail-secure: once HKLM key exists ANY read/parse error aborts; implemented via raw_os_error()==2 for absent |
-| D-09: KEY_WOW64_64KEY on all registry opens | 83-01 | Forces 64-bit hive view; prevents 32-bit Intune MDM write to WOW6432Node making key appear absent |
-| D-10: winreg 0.56 Windows-only dep (operator-approved) | 83-01 | Single crate approach; io::Error maps cleanly onto D-07 taxonomy; never unconditional dep |
-| D-13 Option A: enumerate N×REG_SZ subkey values (not REG_MULTI_SZ) | 83-01 | Matches shipped Phase-82 ADMX <list> shape; less churn than changing ADMX |
-| D-14: existing HostFilter leading-dot ends_with+len> form retained | 83-01 | Already passes full SC-4 matrix; sc4_dns_component_matrix codifies the contract |
-| D-11: ADMX named toggles write group TOKENS (anthropic/openai/github-api), not literal FQDNs | 83-03 | Token indirection decouples fleet ADMX template from FQDN lists; nono expands at runtime so provider hosts update without re-issuing ADMX |
-| D-12 (corrected): preset token->FQDN map in embedded network-policy.json groups (not policy.json) | 83-03 | network-policy.json carries domain host[] groups (correct schema); policy.json carries only filesystem allow/deny semantics |
-
 ### Pending Todos
 
 None.
 
 ### Blockers/Concerns
 
-- **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
+- **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone (esp. Phase 87 SEC-01/02 → `crates/nono/src/sandbox/linux.rs`, `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, `crates/nono/src/capability.rs`) MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
+- **Library-boundary risk (Phase 86)**: adopt-upstream of the core-crate audit + diagnostics refactor is the highest near-term merge risk against fork-divergent surfaces (TLS intercept, FFI); guard the `nono-ffi` exhaustive-match arms (the `--bin nono` gate hides those — use `--workspace --all-targets`).
 - **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
+- **Milestone-marker only**: no crate publish; a future release must leapfrog the crate version to ≥ `0.65.0`.
 
 ### Quick Tasks Completed
 
@@ -131,24 +100,24 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 | Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
 | nono-ffi | E0004 non-exhaustive match (PolicyLoadFailed + TelemetryUnavailable/ConfigInvalid) | RESOLVED `f96aba8a` (84 close) | 84-04 |
 
-Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.planning/v3.0-MILESTONE-AUDIT.md`:
+Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.planning/v3.0-MILESTONE-AUDIT.md`. **The first six rows below are now folded into v3.1 Phase 90 (DRAIN-01..04):**
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Host-execution | DEPLOY-01 clean-VM silent `msiexec /qn` install + exit codes | Open (host-gated) | v3.0 close |
-| Host-execution | DEPLOY-03 live R-B3 user-owned WRITE_OWNER scratch verification | Open (host-gated) | v3.0 close |
-| Host-execution | DEPLOY-05 three-client (CryptoAPI/Node/rustls) TLS-through-proxy round-trip | Open (host-gated) | v3.0 close |
-| Host-execution | EGRESS-02 dual-layer (proxy + kernel WFP) live block proof | Open (host-gated) | v3.0 close |
-| Host-execution | TELEM-01/04 live `telemetry-event-emit` gate PASS + admin opt-out/min_severity HKLM→emit (`84-HUMAN-UAT.md`) | Open (host-gated) | v3.0 close |
-| Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events (integration warning, not a Phase 84 criterion) | Open (follow-up) | v3.0 close |
+| Host-execution | DEPLOY-01 clean-VM silent `msiexec /qn` install + exit codes → v3.1 DRAIN-01 | Open (host-gated) | v3.0 close |
+| Host-execution | DEPLOY-03 live R-B3 user-owned WRITE_OWNER scratch verification → v3.1 DRAIN-01 | Open (host-gated) | v3.0 close |
+| Host-execution | DEPLOY-05 three-client (CryptoAPI/Node/rustls) TLS-through-proxy round-trip → v3.1 DRAIN-01 | Open (host-gated) | v3.0 close |
+| Host-execution | EGRESS-02 dual-layer (proxy + kernel WFP) live block proof → v3.1 DRAIN-02 | Open (host-gated) | v3.0 close |
+| Host-execution | TELEM-01/04 live `telemetry-event-emit` gate PASS + admin opt-out/min_severity HKLM→emit (`84-HUMAN-UAT.md`) → v3.1 DRAIN-03 | Open (host-gated) | v3.0 close |
+| Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events → v3.1 DRAIN-04 (real code) | Open (folded into v3.1) | v3.0 close |
 | Historical | 48 open artifacts at v3.0 close (35 quick_tasks mostly pre-v2.13 strays + 5 seeds + 4 todos + 2 uat_gaps + 2 verification_gaps) — overwhelmingly historical/future-seed | Acknowledged | v3.0 close |
 
 ## Session Continuity
 
-Last session: 2026-06-19 — Milestone v3.1 (UPST9 + v3.0 Drain) started via /gsd-new-milestone
-Stopped at: Milestone setup — PROJECT.md updated, STATE.md switched; defining requirements next
-Resume file: .planning/seeds/SEED-006-upst9-v0.62-v0.64-sync-window.md
+Last session: 2026-06-19 — Milestone v3.1 (UPST9 + v3.0 Drain) roadmap created via /gsd-new-milestone
+Stopped at: ROADMAP.md (6 phases, 85–90) + REQUIREMENTS.md traceability written; 21/21 reqs mapped; ready to plan Phase 85
+Resume file: .planning/ROADMAP.md
 
 ## Operator Next Steps
 
-- Define v3.1 requirements, then create the roadmap (in progress via /gsd-new-milestone)
+- Review the v3.1 roadmap (`.planning/ROADMAP.md`), then run `/gsd:plan-phase 85` to plan the UPST9 Divergence Audit.

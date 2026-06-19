@@ -81,5 +81,25 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 ## Traceability
 
 | Requirement | Phase | Status |
-|-------------|-------|--------|
-| _(filled by roadmap)_ | | |
+|-------------|----------------------|---------|
+| AUDIT-01 | Phase 85 | Pending |
+| AUDIT-02 | Phase 85 | Pending |
+| BND-01 | Phase 86 | Pending |
+| BND-02 | Phase 86 | Pending |
+| BND-03 | Phase 86 | Pending |
+| SEC-01 | Phase 87 | Pending |
+| SEC-02 | Phase 87 | Pending |
+| FEAT-01 | Phase 88 | Pending |
+| FEAT-02 | Phase 88 | Pending |
+| FEAT-03 | Phase 88 | Pending |
+| FEAT-04 | Phase 88 | Pending |
+| FEAT-05 | Phase 88 | Pending |
+| FEAT-06 | Phase 88 | Pending |
+| DEPS-01 | Phase 88 | Pending |
+| DEPS-02 | Phase 88 | Pending |
+| PROXY-01 | Phase 89 | Pending |
+| PROXY-02 | Phase 89 | Pending |
+| DRAIN-01 | Phase 90 | Pending |
+| DRAIN-02 | Phase 90 | Pending |
+| DRAIN-03 | Phase 90 | Pending |
+| DRAIN-04 | Phase 90 | Pending |
