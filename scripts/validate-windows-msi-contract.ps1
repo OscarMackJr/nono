@@ -463,12 +463,40 @@ Assert-True -Condition ($buildScriptContent -match '"openai"') `
 Assert-True -Condition ($buildScriptContent -match '"github-api"') `
     -Message "ADMX source must contain token value 'github-api' for the GitHub API toggle (D-11)"
 
+# WR-01: each named-toggle <policy> must carry a valueName (the registry value the
+# enabledValue/disabledValue write to) plus a matching enabledValue <string>.  Without
+# valueName the Group Policy editor has no registry target and the enable token never
+# lands in HKLM\SOFTWARE\Policies\nono\PresetTokens.  Assert both per token.
+$togglePresets = @(
+    @{ Name = 'AllowAnthropicPreset';  Token = 'anthropic' },
+    @{ Name = 'AllowOpenAIPreset';     Token = 'openai' },
+    @{ Name = 'AllowGitHubAPIPreset';  Token = 'github-api' }
+)
+$quote = [char]34
+foreach ($preset in $togglePresets) {
+    $name  = $preset.Name
+    $token = $preset.Token
+    # Match the policy opening tag for this toggle (across newlines) and require
+    # a valueName attribute carrying the token somewhere inside that opening tag.
+    $policyTagPattern = '(?s)<policy\s+name=' + $quote + [regex]::Escape($name) + $quote + '.*?>'
+    $policyTagMatch = [regex]::Match($buildScriptContent, $policyTagPattern)
+    Assert-True -Condition ($policyTagMatch.Success) `
+        -Message ("ADMX source must contain a policy element named '{0}' (WR-01)" -f $name)
+    $valueNamePattern = 'valueName=' + $quote + [regex]::Escape($token) + $quote
+    Assert-True -Condition ($policyTagMatch.Value -match $valueNamePattern) `
+        -Message ("ADMX toggle policy '{0}' must carry valueName={1}{2}{1} so enabledValue writes the token (WR-01)" -f $name, $quote, $token)
+    # The enabledValue string must carry the same token.
+    $enabledValuePattern = '(?s)<policy\s+name=' + $quote + [regex]::Escape($name) + $quote + '.*?<enabledValue>\s*<string\s+value=' + $quote + [regex]::Escape($token) + $quote
+    Assert-True -Condition ($buildScriptContent -match $enabledValuePattern) `
+        -Message ("ADMX toggle policy '{0}' must have an enabledValue string equal to its token '{1}' (WR-01)" -f $name, $token)
+}
+
 # Existing list policies still present (Pitfall 1: N×REG_SZ shape must not change)
 Assert-True -Condition ($buildScriptContent -match 'AllowedSuffixes') `
     -Message "ADMX source must retain the AllowedSuffixes list policy (Pitfall 1 / N*REG_SZ shape)"
 Assert-True -Condition ($buildScriptContent -match 'AllowedHosts') `
     -Message "ADMX source must retain the AllowedHosts list policy (Pitfall 1 / N*REG_SZ shape)"
 
-Write-Host "ADMX source contract assertions passed (EGRESS-04 named toggles + list policies retained)."
+Write-Host "ADMX source contract assertions passed (EGRESS-04 named toggles + valueName + list policies retained)."
 
 Write-Host "Validated Windows MSI contract for machine and user scopes."

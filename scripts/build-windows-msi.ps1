@@ -700,7 +700,8 @@ $admxContent = @"
         class="Machine"
         displayName="`$(string.allow_anthropic_name)"
         explainText="`$(string.allow_anthropic_explain)"
-        key="SOFTWARE\Policies\nono\PresetTokens">
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="anthropic">
       <parentCategory ref="nono:nono" />
       <supportedOn ref="windows:SUPPORTED_WindowsVista" />
       <enabledValue>
@@ -709,9 +710,6 @@ $admxContent = @"
       <disabledValue>
         <delete />
       </disabledValue>
-      <elements>
-        <text id="AnthropicTokenValue" valueName="anthropic" required="false" />
-      </elements>
     </policy>
 
     <!--
@@ -723,7 +721,8 @@ $admxContent = @"
         class="Machine"
         displayName="`$(string.allow_openai_name)"
         explainText="`$(string.allow_openai_explain)"
-        key="SOFTWARE\Policies\nono\PresetTokens">
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="openai">
       <parentCategory ref="nono:nono" />
       <supportedOn ref="windows:SUPPORTED_WindowsVista" />
       <enabledValue>
@@ -732,9 +731,6 @@ $admxContent = @"
       <disabledValue>
         <delete />
       </disabledValue>
-      <elements>
-        <text id="OpenAITokenValue" valueName="openai" required="false" />
-      </elements>
     </policy>
 
     <!--
@@ -746,7 +742,8 @@ $admxContent = @"
         class="Machine"
         displayName="`$(string.allow_github_api_name)"
         explainText="`$(string.allow_github_api_explain)"
-        key="SOFTWARE\Policies\nono\PresetTokens">
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="github-api">
       <parentCategory ref="nono:nono" />
       <supportedOn ref="windows:SUPPORTED_WindowsVista" />
       <enabledValue>
@@ -755,9 +752,6 @@ $admxContent = @"
       <disabledValue>
         <delete />
       </disabledValue>
-      <elements>
-        <text id="GitHubAPITokenValue" valueName="github-api" required="false" />
-      </elements>
     </policy>
 
   </policies>

@@ -87,8 +87,10 @@
       Matching: Phase 83 reader uses DNS-component comparison (not string suffix).
       .anthropic.com matches api.anthropic.com but NOT evilanthopic.com or anthropic.com.evil.com.
 
-      When this policy is not configured, nono falls back to the per-user profile allow-list.
-      When configured with an empty list, default-deny is in effect for all outbound traffic.
+      When no egress policy is configured (no suffix, host, or preset entries), nono falls
+      back to the per-user profile allow-list. Installing the machine MSI without configuring
+      any of these policies does NOT activate default-deny.
+      Default-deny applies only once at least one egress entry is configured.
     -->
     <policy
         name="AllowedSuffixes"
@@ -149,7 +151,8 @@
         class="Machine"
         displayName="$(string.allow_anthropic_name)"
         explainText="$(string.allow_anthropic_explain)"
-        key="SOFTWARE\Policies\nono\PresetTokens">
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="anthropic">
       <parentCategory ref="nono:nono" />
       <supportedOn ref="windows:SUPPORTED_WindowsVista" />
       <enabledValue>
@@ -158,9 +161,6 @@
       <disabledValue>
         <delete />
       </disabledValue>
-      <elements>
-        <text id="AnthropicTokenValue" valueName="anthropic" required="false" />
-      </elements>
     </policy>
 
     <!--
@@ -172,7 +172,8 @@
         class="Machine"
         displayName="$(string.allow_openai_name)"
         explainText="$(string.allow_openai_explain)"
-        key="SOFTWARE\Policies\nono\PresetTokens">
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="openai">
       <parentCategory ref="nono:nono" />
       <supportedOn ref="windows:SUPPORTED_WindowsVista" />
       <enabledValue>
@@ -181,9 +182,6 @@
       <disabledValue>
         <delete />
       </disabledValue>
-      <elements>
-        <text id="OpenAITokenValue" valueName="openai" required="false" />
-      </elements>
     </policy>
 
     <!--
@@ -195,7 +193,8 @@
         class="Machine"
         displayName="$(string.allow_github_api_name)"
         explainText="$(string.allow_github_api_explain)"
-        key="SOFTWARE\Policies\nono\PresetTokens">
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="github-api">
       <parentCategory ref="nono:nono" />
       <supportedOn ref="windows:SUPPORTED_WindowsVista" />
       <enabledValue>
@@ -204,9 +203,6 @@
       <disabledValue>
         <delete />
       </disabledValue>
-      <elements>
-        <text id="GitHubAPITokenValue" valueName="github-api" required="false" />
-      </elements>
     </policy>
 
   </policies>
