@@ -670,6 +670,7 @@ mod tests {
             allowed_suffixes: vec!["*.corporate.example".to_string()],
             allowed_hosts: vec!["api.internal.corp".to_string()],
             preset_tokens: vec![], // No preset tokens for this test — keeps it standalone.
+            ..Default::default()
         };
 
         // Simulate the wholesale-override resolution logic from resolve_machine_egress_policy.

@@ -124,6 +124,11 @@ mod trust_intercept;
 mod trust_keystore;
 mod trust_refresh;
 mod trust_scan;
+// Phase 84: SIEM/EDR telemetry layer (SecurityEventLayer + SecurityEvent schema
+// + HMAC chain + path hashing + scrub integration).  Cross-platform: the
+// Windows emitters are cfg-gated inside the module; the schema and chain code
+// compile on Linux and macOS.
+pub(crate) mod telemetry;
 mod update_check;
 mod why_runtime;
 #[cfg(target_os = "windows")]
