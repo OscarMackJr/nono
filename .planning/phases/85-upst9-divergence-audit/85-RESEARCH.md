@@ -846,7 +846,10 @@ above are low-risk drafting choices that the executor resolves during ledger pro
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> Each question below carries an embedded recommendation that the Phase 85 plan
+> (85-01) implements directly — no blocking unknowns remain.
 
 1. **`7f319b9e` cluster assignment**
    - What we know: `7f319b9e` (`fix(diagnostic): replace deprecated nono learn with nono run`)
