@@ -79,7 +79,9 @@ pub use keystore::{
     redact_op_uri, store_secret_file, validate_apple_password_uri, validate_destination_env_var,
     validate_env_uri, validate_file_uri, validate_keyring_uri, validate_op_uri, LoadedSecret,
 };
-pub use machine_policy::{read_machine_egress_policy, MachineEgressPolicy};
+pub use machine_policy::{
+    read_machine_egress_policy, MachineEgressPolicy, TelemetryConfig, TelemetrySeverity,
+};
 pub use net_filter::{FilterResult, HostFilter};
 pub use path::try_canonicalize;
 #[cfg(target_os = "windows")]

@@ -342,6 +342,36 @@ pub enum NonoError {
     // I/O errors
     #[error("I/O error: {0}")]
     Io(std::io::Error),
+
+    /// A security-event telemetry sink is unavailable (e.g. `RegisterEventSourceW`
+    /// returned a null handle, or the Application Event Log source is not registered).
+    ///
+    /// # Non-fatal contract (D-03)
+    ///
+    /// This error is surfaced to **stderr** via `warn!()` and does NOT propagate
+    /// to the confinement path.  Telemetry is compliance, not an enforcement
+    /// control — a failed sink must never block a confined run.  Callers MUST NOT
+    /// use `?` to propagate this; use `eprintln!` / `tracing::warn!` and continue.
+    #[error("Telemetry sink unavailable: {reason}")]
+    TelemetryUnavailable {
+        /// Human-readable description of why the sink is unavailable.
+        reason: String,
+    },
+
+    /// A telemetry configuration value read from the Windows registry was
+    /// malformed (wrong type, unparseable, or out of range).
+    ///
+    /// # Non-fatal contract (D-14)
+    ///
+    /// Unlike [`PolicyLoadFailed`] (which aborts the run), this error degrades
+    /// gracefully to [`TelemetryConfig::default()`].  A typo in a telemetry
+    /// REG value must not brick confined runs fleet-wide.  Callers surface this
+    /// via `eprintln!` / `tracing::warn!` and continue with safe defaults.
+    #[error("Telemetry config invalid: {reason}")]
+    TelemetryConfigInvalid {
+        /// Human-readable description of the malformed value.
+        reason: String,
+    },
 }
 
 /// Result type alias for nono operations

@@ -43,6 +43,88 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
+// ── Telemetry configuration types (Phase 84 D-12/D-13/D-14) ──────────────────
+
+/// Minimum severity level for security-event telemetry emission.
+///
+/// Controls which security events are forwarded to the configured channel.
+/// Default is `Warning` (D-13): informational events are suppressed by default
+/// to reduce noise in a fleet deployment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum TelemetrySeverity {
+    /// Emit all security events (PathDeny, NetworkDeny, LabelViolation, …).
+    Debug,
+    /// Emit informational-level and above events.
+    Info,
+    /// Emit warning-level and above events (D-13 default).
+    #[default]
+    Warning,
+    /// Emit only error-level events.
+    Error,
+}
+
+fn default_telemetry_enabled() -> bool {
+    true
+}
+
+fn default_telemetry_channel() -> String {
+    "Application".to_string()
+}
+
+fn default_telemetry_min_severity() -> TelemetrySeverity {
+    TelemetrySeverity::Warning
+}
+
+/// Telemetry sub-section of [`MachineEgressPolicy`] (D-12).
+///
+/// Read from `HKLM\SOFTWARE\Policies\nono\Telemetry\` during the **same
+/// single registry read** Phase 83 performs — no second registry read (D-12).
+///
+/// # Default-ON semantics (D-13)
+///
+/// When the HKLM policy key is absent, all three fields default to the
+/// most-useful value: **enabled → Application log**.  A clean-host MSI install
+/// with no GPO configured must emit telemetry by default; a default-OFF policy
+/// would make the SC-1/SC-5 gate fail on every fresh install.
+///
+/// # Degrade-not-abort (D-14)
+///
+/// Malformed telemetry registry values fall back to this struct's `Default`
+/// and surface a `TelemetryConfigInvalid` warning to stderr.  They do NOT
+/// return `Err` — contrast with `PolicyLoadFailed` for egress (D-07).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetryConfig {
+    /// Whether security-event telemetry is enabled.
+    ///
+    /// Defaults to `true` (D-13 — security telemetry on by default; admins opt out).
+    #[serde(default = "default_telemetry_enabled")]
+    pub enabled: bool,
+
+    /// Windows Event Log channel to write to.
+    ///
+    /// Default is `"Application"` (D-01.2 — the Phase-82-registered Application
+    /// source; no `wevtutil im` required).
+    #[serde(default = "default_telemetry_channel")]
+    pub channel: String,
+
+    /// Minimum severity level to emit.
+    ///
+    /// Default is `Warning` (D-13).
+    #[serde(default = "default_telemetry_min_severity")]
+    pub min_severity: TelemetrySeverity,
+}
+
+impl Default for TelemetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_telemetry_enabled(),
+            channel: default_telemetry_channel(),
+            min_severity: default_telemetry_min_severity(),
+        }
+    }
+}
+
 /// Platform-neutral representation of the machine-level egress policy.
 ///
 /// Populated by [`read_machine_egress_policy`] from `HKLM\SOFTWARE\Policies\nono`.
@@ -80,6 +162,19 @@ pub struct MachineEgressPolicy {
     /// library stays policy-free (CLAUDE.md § Library vs CLI Boundary).
     #[serde(default)]
     pub preset_tokens: Vec<String>,
+
+    /// Telemetry sub-section (Phase 84 D-12).
+    ///
+    /// Populated from `HKLM\SOFTWARE\Policies\nono\Telemetry\` during the same
+    /// single registry read that populates the egress fields.  Defaults to
+    /// [`TelemetryConfig::default()`] (enabled → Application log, Warning level)
+    /// when absent or malformed — see D-13 and D-14.
+    ///
+    /// **INVARIANT:** This field MUST NOT be counted in [`Self::is_unconfigured`].
+    /// A telemetry-only HKLM write must not flip the daemon to strict deny-all
+    /// egress (84-PATTERNS.md invariant 3 / CR-02).
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 }
 
 impl MachineEgressPolicy {
@@ -125,11 +220,18 @@ impl MachineEgressPolicy {
     /// only the MSI `InstalledByMsi` sentinel.  The Windows reader maps this to
     /// `Ok(None)` so a bare machine-MSI install (no GPO) does not flip the
     /// daemon to strict deny-all egress.
+    ///
+    /// **The `telemetry` sub-section is deliberately NOT counted here** (Phase 84
+    /// D-12 / 84-PATTERNS.md invariant 3).  A policy with only telemetry fields
+    /// set must still return `true` so the egress-enforcement gate is not
+    /// accidentally tripped by a telemetry-only GPO write.
     #[must_use]
     pub fn is_unconfigured(&self) -> bool {
         self.allowed_suffixes.is_empty()
             && self.allowed_hosts.is_empty()
             && self.preset_tokens.is_empty()
+        // NOTE: telemetry config MUST NOT be counted here — see Phase 84 D-12 and
+        // 84-PATTERNS.md invariant 3.
     }
 
     /// Normalize a single `AllowedSuffixes` entry to the `*.`-prefixed wildcard
@@ -153,7 +255,7 @@ impl MachineEgressPolicy {
 
 #[cfg(target_os = "windows")]
 mod windows_reader {
-    use super::{MachineEgressPolicy, Result};
+    use super::{MachineEgressPolicy, Result, TelemetryConfig, TelemetrySeverity};
     use crate::NonoError;
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::{RegKey, RegValue};
@@ -213,15 +315,120 @@ mod windows_reader {
         read_list_subkey(parent, name)
     }
 
+    /// Read an optional `REG_DWORD` value from a key.
+    ///
+    /// Returns `None` if the value is absent (sub-key or value not found).
+    /// Returns `Err(reason)` if the value is present but has the wrong type.
+    fn read_optional_dword(key: &RegKey, name: &str) -> std::result::Result<Option<u32>, String> {
+        match key.get_value::<u32, _>(name) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) => Ok(None),
+            Err(e) => Err(format!("read DWORD `{name}`: {e}")),
+        }
+    }
+
+    /// Read an optional `REG_SZ` value from a key.
+    ///
+    /// Returns `None` if the value is absent.
+    /// Returns `Err(reason)` if present but wrong type or invalid UTF-16.
+    fn read_optional_sz(key: &RegKey, name: &str) -> std::result::Result<Option<String>, String> {
+        match key.get_value::<String, _>(name) {
+            Ok(v) => Ok(Some(v)),
+            Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) => Ok(None),
+            Err(e) => Err(format!("read REG_SZ `{name}`: {e}")),
+        }
+    }
+
+    /// Parse the `Telemetry\` sub-section from an already-opened policy key.
+    ///
+    /// Per D-14: malformed telemetry values degrade to `TelemetryConfig::default()` and
+    /// emit a warning to stderr — they do NOT propagate `Err` to the egress-abort path.
+    pub(super) fn parse_telemetry_config(key: &RegKey) -> TelemetryConfig {
+        // Open Telemetry\ sub-key; absent = fine (use defaults, D-13).
+        let telem_key = match key.open_subkey_with_flags("Telemetry", KEY_READ | KEY_WOW64_64KEY) {
+            Ok(k) => k,
+            Err(e) if e.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) => {
+                return TelemetryConfig::default();
+            }
+            Err(e) => {
+                // Present but unreadable — degrade, do not abort (D-14).
+                eprintln!(
+                    "[nono] TelemetryConfigInvalid: cannot open Telemetry sub-key: {e}; \
+                     falling back to defaults"
+                );
+                return TelemetryConfig::default();
+            }
+        };
+
+        let enabled = match read_optional_dword(&telem_key, "TelemetryEnabled") {
+            Ok(Some(v)) => v != 0,
+            Ok(None) => true, // absent → default ON (D-13)
+            Err(e) => {
+                eprintln!(
+                    "[nono] TelemetryConfigInvalid: TelemetryEnabled malformed ({e}); \
+                     defaulting to enabled=true"
+                );
+                true
+            }
+        };
+
+        let channel = match read_optional_sz(&telem_key, "TelemetryChannel") {
+            Ok(Some(v)) if !v.is_empty() => v,
+            Ok(_) => "Application".to_string(), // absent or empty → default
+            Err(e) => {
+                eprintln!(
+                    "[nono] TelemetryConfigInvalid: TelemetryChannel malformed ({e}); \
+                     defaulting to Application"
+                );
+                "Application".to_string()
+            }
+        };
+
+        let min_severity = match read_optional_sz(&telem_key, "TelemetryMinSeverity") {
+            Ok(Some(s)) => match s.to_lowercase().as_str() {
+                "debug" => TelemetrySeverity::Debug,
+                "info" => TelemetrySeverity::Info,
+                "warning" | "warn" => TelemetrySeverity::Warning,
+                "error" => TelemetrySeverity::Error,
+                other => {
+                    eprintln!(
+                        "[nono] TelemetryConfigInvalid: unknown TelemetryMinSeverity \
+                         value {:?}; defaulting to Warning",
+                        other
+                    );
+                    TelemetrySeverity::Warning
+                }
+            },
+            Ok(None) => TelemetrySeverity::Warning, // absent → default
+            Err(e) => {
+                eprintln!(
+                    "[nono] TelemetryConfigInvalid: TelemetryMinSeverity malformed ({e}); \
+                     defaulting to Warning"
+                );
+                TelemetrySeverity::Warning
+            }
+        };
+
+        TelemetryConfig {
+            enabled,
+            channel,
+            min_severity,
+        }
+    }
+
     /// Inner parser: read all sub-keys from an already-opened policy `RegKey`.
     pub(super) fn parse_policy(key: &RegKey) -> std::result::Result<MachineEgressPolicy, String> {
         let allowed_suffixes = read_list_subkey(key, "AllowedSuffixes")?;
         let allowed_hosts = read_list_subkey(key, "AllowedHosts")?;
         let preset_tokens = read_preset_subkey(key, "PresetTokens")?;
+        // D-12: read telemetry sub-section in the same registry open.
+        // D-14: malformed telemetry degrades; only egress errors abort (D-07).
+        let telemetry = parse_telemetry_config(key);
         Ok(MachineEgressPolicy {
             allowed_suffixes,
             allowed_hosts,
             preset_tokens,
+            telemetry,
         })
     }
 
@@ -327,6 +534,107 @@ mod tests {
     use super::*;
     use crate::{NonoError, Result};
 
+    // ── Phase 84 TelemetryConfig / TelemetrySeverity tests ───────────────────
+
+    /// D-13: TelemetryConfig::default() must have enabled=true, channel="Application",
+    /// min_severity=Warning.
+    #[test]
+    fn telemetry_config_default_has_expected_values() {
+        let cfg = TelemetryConfig::default();
+        assert!(cfg.enabled, "D-13: telemetry must default to enabled");
+        assert_eq!(
+            cfg.channel, "Application",
+            "D-13: default channel must be Application"
+        );
+        assert_eq!(
+            cfg.min_severity,
+            TelemetrySeverity::Warning,
+            "D-13: default min_severity must be Warning"
+        );
+    }
+
+    /// Invariant 3 (84-PATTERNS.md / CR-02): MachineEgressPolicy with ONLY telemetry
+    /// fields populated must still return is_unconfigured()=true.
+    #[test]
+    fn is_unconfigured_ignores_telemetry_field() {
+        // A policy that has ONLY the telemetry section set (all egress lists empty).
+        let policy = MachineEgressPolicy {
+            allowed_suffixes: vec![],
+            allowed_hosts: vec![],
+            preset_tokens: vec![],
+            telemetry: TelemetryConfig {
+                enabled: true,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Debug,
+            },
+        };
+        assert!(
+            policy.is_unconfigured(),
+            "is_unconfigured must ignore telemetry (invariant 3 / CR-02); policy: {policy:?}"
+        );
+    }
+
+    /// D-14: TelemetryConfigInvalid variant displays the reason string.
+    #[test]
+    fn telemetry_config_invalid_display_contains_reason() {
+        let err = NonoError::TelemetryConfigInvalid {
+            reason: "bad REG_SZ for TelemetryChannel".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bad REG_SZ for TelemetryChannel"),
+            "TelemetryConfigInvalid display must contain reason; got: {msg}"
+        );
+        assert!(
+            msg.contains("invalid") || msg.contains("Telemetry config"),
+            "Display should mention telemetry config invalid; got: {msg}"
+        );
+    }
+
+    /// D-03: TelemetryUnavailable variant displays the reason string.
+    #[test]
+    fn telemetry_unavailable_display_contains_reason() {
+        let err = NonoError::TelemetryUnavailable {
+            reason: "RegisterEventSourceW returned null".to_string(),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RegisterEventSourceW returned null"),
+            "TelemetryUnavailable display must contain reason; got: {msg}"
+        );
+    }
+
+    /// Phase 84: serde round-trip for the full MachineEgressPolicy including telemetry.
+    #[test]
+    fn policy_serde_round_trip_with_telemetry() {
+        let original = MachineEgressPolicy {
+            allowed_suffixes: vec!["*.anthropic.com".to_string()],
+            allowed_hosts: vec!["api.github.com".to_string()],
+            preset_tokens: vec!["anthropic".to_string()],
+            telemetry: TelemetryConfig {
+                enabled: false,
+                channel: "Security".to_string(),
+                min_severity: TelemetrySeverity::Error,
+            },
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let restored: MachineEgressPolicy = serde_json::from_str(&json).unwrap();
+        assert_eq!(original, restored, "serde round-trip must preserve all fields");
+    }
+
+    /// Phase 84: deserializing a policy JSON with no telemetry section must
+    /// produce TelemetryConfig::default() (via #[serde(default)]).
+    #[test]
+    fn policy_serde_without_telemetry_uses_defaults() {
+        let json = r#"{"allowed_suffixes":[],"allowed_hosts":[],"preset_tokens":[]}"#;
+        let policy: MachineEgressPolicy = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            policy.telemetry,
+            TelemetryConfig::default(),
+            "missing telemetry section must deserialize to default"
+        );
+    }
+
     // ── Platform-neutral serde / type tests ──────────────────────────────────
 
     #[test]
@@ -341,6 +649,7 @@ mod tests {
             allowed_suffixes: vec!["*.anthropic.com".to_string(), "*.openai.com".to_string()],
             allowed_hosts: vec!["api.github.com".to_string()],
             preset_tokens: vec!["anthropic".to_string()],
+            ..Default::default()
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: MachineEgressPolicy = serde_json::from_str(&json).unwrap();
@@ -354,6 +663,7 @@ mod tests {
             allowed_suffixes: vec!["*.anthropic.com".to_string()],
             allowed_hosts: vec!["api.github.com".to_string()],
             preset_tokens: vec![],
+            ..Default::default()
         };
         let list = policy.raw_allowlist();
         assert_eq!(list, vec!["*.anthropic.com", "api.github.com"]);
@@ -372,6 +682,7 @@ mod tests {
             ],
             allowed_hosts: vec!["api.exact.com".to_string()],
             preset_tokens: vec![],
+            ..Default::default()
         };
         let list = policy.raw_allowlist();
         assert_eq!(
@@ -399,6 +710,7 @@ mod tests {
             allowed_suffixes: vec![".anthropic.com".to_string()],
             allowed_hosts: vec![],
             preset_tokens: vec![],
+            ..Default::default()
         };
         let allowlist = policy.raw_allowlist();
         assert_eq!(
