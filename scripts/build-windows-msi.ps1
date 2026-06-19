@@ -808,8 +808,12 @@ Matching semantics: DNS-component comparison.
   .anthropic.com matches api.anthropic.com
   .anthropic.com does NOT match evilanthopic.com or anthropic.com.evil.com
 
-When this policy is not configured, nono uses the per-user profile allow-list.
-When configured with an empty list, default-deny is in effect for all outbound traffic.
+When no egress policy is configured (no suffix, host, or preset entries), nono falls
+through to the per-user profile allow-list. Simply installing the machine MSI without
+configuring any of these policies does NOT activate default-deny.
+Default-deny applies only once at least one egress entry (a suffix, an exact host, or a
+preset toggle) is configured: any destination not matching the configured allow-list is
+then denied.
 Policy changes apply to new nono sessions.
       </string>
 

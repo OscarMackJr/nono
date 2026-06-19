@@ -9,12 +9,22 @@
 //! | Registry state | Return value |
 //! |----------------|-------------|
 //! | Key **absent** (`ERROR_FILE_NOT_FOUND`) | `Ok(None)` — fall through to per-user config |
+//! | Key **present but unconfigured** (only the MSI `InstalledByMsi` sentinel; no egress entries) | `Ok(None)` — not enforcing → fall through to per-user config (CR-02) |
+//! | Key **present WITH ≥1 egress entry** (suffix/host/preset) | `Ok(Some(policy))` — enforcement active |
 //! | Key **present but unreadable** (e.g. `ERROR_ACCESS_DENIED`) | `Err(NonoError::PolicyLoadFailed)` |
 //! | Key **present but malformed** (wrong REG_* type, bad UTF-16) | `Err(NonoError::PolicyLoadFailed)` |
 //!
 //! Once the HKLM key exists, **any** read or parse failure aborts.  It is
 //! never permissible to fall through to per-user configuration when the key
 //! is present but unreadable — that would be a fail-open vulnerability.
+//!
+//! Enforcement is gated on configured *content*, not mere key presence
+//! (CR-02): the machine MSI always creates the key with an `InstalledByMsi`
+//! sentinel value, so a bare install with no GPO configured would otherwise
+//! flip every confined agent to strict deny-all egress.  A present-but-empty
+//! policy (no `AllowedSuffixes`/`AllowedHosts`/`PresetTokens` entries) is
+//! treated as "present but unconfigured = not enforcing" → `Ok(None)`.  A
+//! malformed value is still a hard abort, never a fall-through.
 //!
 //! # Platform Notes
 //!
@@ -106,6 +116,20 @@ impl MachineEgressPolicy {
         out.extend(self.allowed_suffixes.iter().map(|s| Self::normalize_suffix(s)));
         out.extend(self.allowed_hosts.iter().cloned());
         out
+    }
+
+    /// Whether this policy carries no configured egress entries (CR-02).
+    ///
+    /// Returns `true` when `allowed_suffixes`, `allowed_hosts`, and
+    /// `preset_tokens` are all empty — i.e. the `HKLM` key exists but contains
+    /// only the MSI `InstalledByMsi` sentinel.  The Windows reader maps this to
+    /// `Ok(None)` so a bare machine-MSI install (no GPO) does not flip the
+    /// daemon to strict deny-all egress.
+    #[must_use]
+    pub fn is_unconfigured(&self) -> bool {
+        self.allowed_suffixes.is_empty()
+            && self.allowed_hosts.is_empty()
+            && self.preset_tokens.is_empty()
     }
 
     /// Normalize a single `AllowedSuffixes` entry to the `*.`-prefixed wildcard
@@ -204,9 +228,12 @@ mod windows_reader {
     /// Read `HKLM\SOFTWARE\Policies\nono` and deserialize into
     /// [`MachineEgressPolicy`].
     ///
-    /// # Fail-Secure Taxonomy (D-07)
+    /// # Fail-Secure Taxonomy (D-07, CR-02)
     ///
     /// - Key **absent** (`ERROR_FILE_NOT_FOUND=2`) → `Ok(None)`.
+    /// - Key **present but unconfigured** (only the MSI `InstalledByMsi`
+    ///   sentinel; no egress entries) → `Ok(None)` (CR-02).
+    /// - Key **present WITH ≥1 egress entry** → `Ok(Some(policy))`.
     /// - Key **present but unreadable** (any other OS error) →
     ///   `Err(NonoError::PolicyLoadFailed)`.
     /// - Key **present but malformed** (wrong REG_* type, bad UTF-16) →
@@ -214,6 +241,12 @@ mod windows_reader {
     ///
     /// Never use `unwrap_or` / `unwrap_or_default` / `.ok()` on the read path —
     /// every non-absent error propagates as `PolicyLoadFailed` (Pitfall 3).
+    ///
+    /// Enforcement is gated on configured content, not mere key presence: the
+    /// machine MSI unconditionally creates the key with an `InstalledByMsi`
+    /// sentinel value, so a present-but-empty policy must NOT activate strict
+    /// deny-all (CR-02).  A malformed value still aborts — only a cleanly-read
+    /// but empty policy falls through.
     pub fn read_machine_egress_policy_impl() -> Result<Option<MachineEgressPolicy>> {
         const POLICY_PATH: &str = r"SOFTWARE\Policies\nono";
 
@@ -235,6 +268,16 @@ mod windows_reader {
 
         // Any malformed shape (wrong REG_* type, bad UTF-16) → abort (D-07).
         let policy = parse_policy(&key).map_err(|reason| NonoError::PolicyLoadFailed { reason })?;
+
+        // CR-02: gate enforcement on configured content, not mere key presence.
+        // The MSI always creates the key with only an `InstalledByMsi` sentinel
+        // value (no egress sub-keys).  A present-but-unconfigured policy is
+        // "not enforcing" → fall through to per-user config.  This is reached
+        // only after a clean parse, so a malformed value has already aborted.
+        if policy.is_unconfigured() {
+            return Ok(None);
+        }
+
         Ok(Some(policy))
     }
 }
@@ -248,14 +291,19 @@ mod windows_reader {
 /// | Condition | Return |
 /// |-----------|--------|
 /// | Key absent | `Ok(None)` — caller falls through to per-user config |
-/// | Key present, readable, valid | `Ok(Some(policy))` |
+/// | Key present but unconfigured (sentinel only, no egress entries) | `Ok(None)` — not enforcing → per-user fall-through (CR-02) |
+/// | Key present WITH ≥1 egress entry, readable, valid | `Ok(Some(policy))` |
 /// | Key present but unreadable or malformed | `Err(NonoError::PolicyLoadFailed)` |
 ///
 /// # Fail-secure contract
 ///
-/// Once the HKLM key exists, **any** error returns `Err(PolicyLoadFailed)` and
-/// the caller MUST NOT fall through to per-user configuration (D-07).
-/// Use the `?` operator at the call site — never `.ok()` or `unwrap_or`.
+/// Once the HKLM key exists, **any** read or parse error returns
+/// `Err(PolicyLoadFailed)` and the caller MUST NOT fall through to per-user
+/// configuration (D-07).  A *cleanly-read but empty* policy (only the MSI
+/// sentinel value, no configured egress entries) is the one exception: it is
+/// "present but unconfigured = not enforcing" → `Ok(None)` (CR-02).  A
+/// malformed value still aborts.  Use the `?` operator at the call site —
+/// never `.ok()` or `unwrap_or`.
 ///
 /// # Non-Windows
 ///
@@ -522,6 +570,114 @@ mod tests {
 
         // Cleanup.
         hkcu.delete_subkey_all(r"SOFTWARE\nono-test\wrong_type_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    // ── CR-02: enforcement gated on configured content, not key presence ──────
+
+    #[test]
+    fn is_unconfigured_true_for_empty_policy() {
+        assert!(MachineEgressPolicy::default().is_unconfigured());
+    }
+
+    #[test]
+    fn is_unconfigured_false_with_any_entry() {
+        let suffix_only = MachineEgressPolicy {
+            allowed_suffixes: vec![".anthropic.com".to_string()],
+            ..Default::default()
+        };
+        assert!(!suffix_only.is_unconfigured());
+
+        let host_only = MachineEgressPolicy {
+            allowed_hosts: vec!["api.github.com".to_string()],
+            ..Default::default()
+        };
+        assert!(!host_only.is_unconfigured());
+
+        let preset_only = MachineEgressPolicy {
+            preset_tokens: vec!["anthropic".to_string()],
+            ..Default::default()
+        };
+        assert!(!preset_only.is_unconfigured());
+    }
+
+    /// CR-02: a sentinel-only key (created by the MSI, no `AllowedSuffixes`/
+    /// `AllowedHosts`/`PresetTokens` sub-keys) parses to an *unconfigured*
+    /// policy, which the reader maps to `Ok(None)` → per-user fall-through.
+    /// Exercised against an HKCU-seeded key (no HKLM admin needed); this
+    /// mirrors the `is_unconfigured()` gate the Windows reader applies after
+    /// a clean `parse_policy`.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_sentinel_only_key_is_unconfigured() {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        // Create the policy key with ONLY the MSI sentinel value — no sub-keys.
+        let (key, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\sentinel_only_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        key.set_value("InstalledByMsi", &"1".to_string()).unwrap();
+        drop(key);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\sentinel_only_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        let policy = super::windows_reader::parse_policy(&policy_key).unwrap();
+        assert!(
+            policy.is_unconfigured(),
+            "sentinel-only key must parse to an unconfigured policy (→ Ok(None)); got: {policy:?}"
+        );
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\sentinel_only_test")
+            .unwrap();
+        let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
+    }
+
+    /// CR-02 control: a key WITH one `AllowedSuffixes` value parses to a
+    /// *configured* policy (→ `Ok(Some(...))` = enforcement active).
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_configured_key_is_not_unconfigured() {
+        use winreg::enums::{HKEY_CURRENT_USER, KEY_ALL_ACCESS, KEY_WOW64_64KEY};
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (sub, _disp) = hkcu
+            .create_subkey_with_flags(
+                r"SOFTWARE\nono-test\configured_test\AllowedSuffixes",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+        sub.set_value("1", &".anthropic.com".to_string()).unwrap();
+        drop(sub);
+
+        let policy_key = hkcu
+            .open_subkey_with_flags(
+                r"SOFTWARE\nono-test\configured_test",
+                KEY_ALL_ACCESS | KEY_WOW64_64KEY,
+            )
+            .unwrap();
+
+        let policy = super::windows_reader::parse_policy(&policy_key).unwrap();
+        assert!(
+            !policy.is_unconfigured(),
+            "key with an AllowedSuffixes value must be configured (→ Ok(Some)); got: {policy:?}"
+        );
+        assert_eq!(policy.allowed_suffixes, vec![".anthropic.com"]);
+
+        // Cleanup.
+        hkcu.delete_subkey_all(r"SOFTWARE\nono-test\configured_test")
             .unwrap();
         let _ = hkcu.delete_subkey(r"SOFTWARE\nono-test");
     }
