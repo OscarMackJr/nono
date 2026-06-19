@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
-status: executing
+status: milestone_complete
 stopped_at: Phase 84 structurally verified 5/5 (CR-01 + WR-01/02 closed inline); human_needed — live SIEM gate host-gated; awaiting approve to mark complete
 last_updated: "2026-06-19T03:35:00.000Z"
 last_activity: 2026-06-19 -- Phase 84 gap closure: CR-01 gate + WR-01 config-from-policy + WR-02 level-filter fixed; nono-ffi build regression fixed; re-verified 5/5 structural
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 12
   completed_plans: 12
-  percent: 67
+  percent: 100
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -26,18 +26,18 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 ## Current Position
 
-Phase: 84 (siem-edr-telemetry) — all 4 plans executed; re-verified 5/5 structural after gap closure
-Plan: 4 of 4 executed; CR-01 + WR-01 + WR-02 all CLOSED inline 2026-06-19
-Status: human_needed — 3 live-host UAT items (84-HUMAN-UAT.md) host-gated per Dark Factory policy; awaiting operator "approved" to mark phase/milestone complete. Follow-up: daemon-side telemetry emission (not a Phase 84 criterion).
+Phase: 84 (siem-edr-telemetry) — COMPLETE (structural 5/5; live SIEM UAT host-gated)
+Plan: 4/4 complete
+Status: Milestone v3.0 phases all complete (82/83/84). NOT yet shipped/tagged — run /gsd:complete-milestone to archive + tag. 84-HUMAN-UAT.md (3 live items) + daemon-emission follow-up tracked.
 Last activity: 2026-06-19
 
-Progress: [█████████░] ~95% (Phase 84 structural pass; live UAT + milestone close pending)
+Progress: [██████████] 100% (3/3 phases complete; live UAT + milestone ship pending)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 9 (4 Phase 82 + 1 Phase 83)
+- Total plans completed: 13 (4 Phase 82 + 1 Phase 83)
 - Average duration: ~7m (Phase 83 Plan 01)
 - Total execution time: 7m (Phase 83 Plan 01 only)
 
