@@ -22,7 +22,12 @@ findings:
   warning: 5
   info: 3
   total: 10
-status: issues_found
+status: partially_resolved
+resolution:
+  fixed: [CR-01, CR-02, WR-01, IN-02]
+  fixed_commits: [8be03a95, b47ea26f, 56982d72, e8748421]
+  deferred: [WR-02, WR-03, WR-04, WR-05, IN-01, IN-03]
+  deferred_tracked_in: .planning/todos/pending/20260618-phase83-codereview-deferred.md
 ---
 
 # Phase 83: Code Review Report
@@ -30,7 +35,7 @@ status: issues_found
 **Reviewed:** 2026-06-18
 **Depth:** standard
 **Files Reviewed:** 13
-**Status:** issues_found
+**Status:** partially_resolved (CR-01/CR-02/WR-01/IN-02 fixed inline 2026-06-18; WR-02/03/04/05 + IN-01/03 deferred to tracked follow-up)
 
 ## Summary
 
