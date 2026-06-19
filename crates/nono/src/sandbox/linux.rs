@@ -3520,10 +3520,12 @@ mod tests {
         let filter = build_seccomp_proxy_filter(false);
         assert_eq!(filter.len(), 19);
 
-        // Instruction 17 should be ERRNO (bind with has_bind_ports=false)
+        // Instruction 17 is USER_NOTIF regardless of has_bind_ports: bind() always
+        // routes to the supervisor now (the has_bind_ports=false → ERRNO
+        // short-circuit was removed because it unconditionally failed AF_UNIX
+        // bind). The supervisor's decide_network_notification is the sole arbiter.
         assert_eq!(filter[17].code, BPF_RET | BPF_K);
-        let errno_ret = SECCOMP_RET_ERRNO | (libc::EACCES as u32);
-        assert_eq!(filter[17].k, errno_ret);
+        assert_eq!(filter[17].k, SECCOMP_RET_USER_NOTIF);
     }
 
     #[test]
