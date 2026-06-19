@@ -157,7 +157,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
-| 83. Machine Policy Spine + Egress Control | 4/4 | Complete   | 2026-06-18 |
+| 83. Machine Policy Spine + Egress Control | 4/4 | Complete    | 2026-06-19 |
 | 84. SIEM/EDR Telemetry | 0/TBD | Not started | - |
 
 ## References

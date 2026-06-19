@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
-status: verifying
+status: ready_to_plan
 stopped_at: Completed Phase 83 Plan 03 (83-03-PLAN.md)
 last_updated: "2026-06-18T23:55:32.773Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 8
   completed_plans: 8
   percent: 100
@@ -26,10 +26,10 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 ## Current Position
 
-Phase: 83 (machine-policy-spine-egress-control) — EXECUTING
-Plan: 4 of 4
-Status: Phase complete — ready for verification
-Last activity: 2026-06-18
+Phase: 84
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-19
 
 Progress: [██████████] 100%
 
@@ -37,7 +37,7 @@ Progress: [██████████] 100%
 
 **Velocity:**
 
-- Total plans completed: 5 (4 Phase 82 + 1 Phase 83)
+- Total plans completed: 9 (4 Phase 82 + 1 Phase 83)
 - Average duration: ~7m (Phase 83 Plan 01)
 - Total execution time: 7m (Phase 83 Plan 01 only)
 
