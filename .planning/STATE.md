@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
 status: planning
-last_updated: "2026-06-19T14:10:44.807Z"
-last_activity: 2026-06-19
+stopped_at: Phase 85 context gathered
+last_updated: "2026-06-19T15:10:50.959Z"
+last_activity: 2026-06-19 — ROADMAP.md + REQUIREMENTS.md traceability written (21/21 reqs mapped)
 progress:
   total_phases: 6
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 0
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -114,9 +114,9 @@ Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.p
 
 ## Session Continuity
 
-Last session: 2026-06-19 — Milestone v3.1 (UPST9 + v3.0 Drain) roadmap created via /gsd-new-milestone
-Stopped at: ROADMAP.md (6 phases, 85–90) + REQUIREMENTS.md traceability written; 21/21 reqs mapped; ready to plan Phase 85
-Resume file: .planning/ROADMAP.md
+Last session: 2026-06-19T15:10:50.947Z
+Stopped at: Phase 85 context gathered
+Resume file: .planning/phases/85-upst9-divergence-audit/85-CONTEXT.md
 
 ## Operator Next Steps
 
