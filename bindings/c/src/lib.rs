@@ -153,6 +153,19 @@ pub(crate) fn map_error(e: &nono::NonoError) -> types::NonoErrorCode {
         // in `profile init`). The caller already printed a diagnostic; map to
         // ErrInvalidArg so FFI consumers see a structured error code.
         nono::NonoError::Cancelled(_) => NonoErrorCode::ErrInvalidArg,
+        // Phase 83 (machine-policy spine, D-07): fail-secure HKLM policy load/parse
+        // failure. Structurally a configuration-load error → ErrConfigParse,
+        // consistent with the ConfigParse/ConfigRead arms above.
+        nono::NonoError::PolicyLoadFailed { .. } => NonoErrorCode::ErrConfigParse,
+        // Phase 84 (SIEM/EDR telemetry): both telemetry variants are non-fatal
+        // by contract (a failed/invalid compliance sink must never block a
+        // confined run — see crates/nono/src/error.rs). They are mapped here
+        // only to keep this match exhaustive for any FFI boundary that surfaces
+        // them. TelemetryUnavailable is an environmental sink failure → ErrIo;
+        // TelemetryConfigInvalid is a malformed config value → ErrConfigParse,
+        // consistent with the other config-error arms above.
+        nono::NonoError::TelemetryUnavailable { .. } => NonoErrorCode::ErrIo,
+        nono::NonoError::TelemetryConfigInvalid { .. } => NonoErrorCode::ErrConfigParse,
     }
 }
 
