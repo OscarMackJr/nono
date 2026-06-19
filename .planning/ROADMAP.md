@@ -54,7 +54,7 @@ Plans:
 - [x] 86-01-PLAN.md — Theme A: cherry-pick a5b2a516 → aed35bec → 0b27cfc2 → e9529312 (audit → core, thin CLI wrappers, tests relocated)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 86-02-PLAN.md — Theme B: cherry-pick 4ad8ba92 → f867aba2 → a6aa5995 → 7f319b9e (diagnostics → core + FFI, proxy ProxyDiagnostic, Windows bridge)
+- [x] 86-02-PLAN.md — Theme B: cherry-pick 4ad8ba92 → f867aba2 → a6aa5995 → 7f319b9e (diagnostics → core + FFI, proxy ProxyDiagnostic, Windows bridge)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 86-03-PLAN.md — BND-03: write ADR-86 + update CLAUDE.md § Library vs CLI Boundary, final make ci gate
@@ -111,7 +111,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
-| 86. Library-Boundary Convergence | 1/3 | In Progress|  |
+| 86. Library-Boundary Convergence | 2/3 | In Progress|  |
 | 87. Security Sync | 0/TBD | Not started | - |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
