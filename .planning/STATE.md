@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
-status: executing
-stopped_at: Phase 84 Plan 02 complete — dual-emit backend, HMAC chain, init_tracing wiring
-last_updated: "2026-06-19T04:00:11.659Z"
+status: complete
+stopped_at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate shipped (SC-1/SC-3/SC-5)
+last_updated: "2026-06-19T00:10:00.000Z"
 last_activity: 2026-06-19
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 12
-  completed_plans: 11
-  percent: 92
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -22,16 +22,16 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 84 — siem-edr-telemetry
+**Current Focus:** Phase 84 — siem-edr-telemetry (COMPLETE)
 
 ## Current Position
 
-Phase: 84 (siem-edr-telemetry) — EXECUTING
-Plan: 4 of 4
-Status: Ready to execute
+Phase: 84 (siem-edr-telemetry) — COMPLETE (all 4 plans done)
+Plan: 4 of 4 (DONE)
+Status: All plans complete — milestone ready for close
 Last activity: 2026-06-19
 
-Progress: [█████████░] 92%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [█████████░] 92%
 | Phase 84 P01 | 35m | 3 tasks | 9 files |
 | Phase 84 P02 | 65m | 2 tasks | 7 files |
 | Phase 84 P03 | 30m | 2 tasks | 4 files |
+| Phase 84 P04 | 3m | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -67,6 +68,14 @@ Progress: [█████████░] 92%
 | Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
 | Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
 | Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
+
+### Decisions (Phase 84 Plan 04)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| Gate auto-discovered by verify-dark.ps1 scripts/gates/*.ps1 scan (D-04); no ValidateSet update | 84-04 | Auto-discovery mechanism confirmed working; telemetry-event-emit.ps1 found without any hardcoded addition |
+| EventID 10003 excluded from gate per Option B carry-forward | 84-04 | LabelViolation is RESERVED-but-unemitted in Phase 84; gate uses range 10001-10005 accepting whichever of the three wired EventIDs appears |
+| Cross-target clippy PARTIAL: C linker absent for Linux+macOS cross targets | 84-04 | Same pre-existing issue as Phase 83; aws-lc-sys/ring require x86_64-linux-gnu-gcc/cc; deferred to live CI |
 
 ### Decisions (Phase 84 Plan 03)
 
@@ -126,9 +135,10 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 | Host-execution | INST-01 live clean-VM PASS (needs fresh Win11 VM + rebuilt MSI post Phase 80) | Open | v2.13 close |
 | Distribution | DIST-SIGN-01 untrusted-POC-cert broker path not exercised by clean-host gate | Open | v2.13 close |
 | Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
+| nono-ffi | E0004 non-exhaustive match (TelemetryUnavailable + TelemetryConfigInvalid) | Open | 84-04 |
 
 ## Session Continuity
 
-Last session: 2026-06-19T04:00:11.648Z
-Stopped at: Phase 84 Plan 03 complete — denial-source wiring + tamper-evidence ADR (D-07)
-Resume file: .planning/phases/84-siem-edr-telemetry/84-03-SUMMARY.md
+Last session: 2026-06-19T00:10:00.000Z
+Stopped at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
+Resume file: .planning/phases/84-siem-edr-telemetry/84-04-SUMMARY.md

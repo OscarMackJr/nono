@@ -1,9 +1,9 @@
 ---
 milestone: v3.0
 milestone_name: Enterprise Hardening I (Deploy, Control, Compliance)
-status: in_progress
+status: complete
 created: 2026-06-18
-last_updated: 2026-06-18
+last_updated: 2026-06-19
 granularity: standard
 ---
 
@@ -26,7 +26,7 @@ granularity: standard
 - ✅ **v2.11 Clean-Host Distribution Cleanup + UPST8** — Phases 67-70 (shipped 2026-06-13) — see [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md)
 - ✅ **v2.12 AI Agent Abstraction** — Phases 71-75 (shipped 2026-06-16; tag `v2.12`) — see [`milestones/v2.12-ROADMAP.md`](milestones/v2.12-ROADMAP.md)
 - ✅ **v2.13 Carry-Forward Closeout (Dark Factory)** — Phases 76-81 (shipped 2026-06-18; tag `v2.13`) — see [`milestones/v2.13-ROADMAP.md`](milestones/v2.13-ROADMAP.md)
-- 🚧 **v3.0 Enterprise Hardening I (Deploy · Control · Compliance)** — Phases 82-84 (in progress)
+- ✅ **v3.0 Enterprise Hardening I (Deploy · Control · Compliance)** — Phases 82-84 (complete 2026-06-19)
 
 ## Phases
 
@@ -94,14 +94,14 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 </details>
 
-### 🚧 v3.0 Enterprise Hardening I (Deploy · Control · Compliance) (In Progress)
+### ✅ v3.0 Enterprise Hardening I (Deploy · Control · Compliance) (Complete 2026-06-19)
 
 **Milestone Goal:** Make nono deployable and governable across a corporate Windows fleet — silent fleet install via `msiexec /qn`, machine-policy-managed deny-by-default egress from a single `HKLM\SOFTWARE\Policies\nono` spine, and SIEM/EDR-forwardable security telemetry — all under the Dark Factory verification mandate.
 
 - [x] **Phase 82: Fleet Deployment Infrastructure** — Silent MSI install, machine-wide PATH, ProgramData root, cert install, health command, Event Log source registration
  (completed 2026-06-18)
 - [x] **Phase 83: Machine Policy Spine + Egress Control** — HKLM reader (fail-secure), proxy+WFP unified from one source, ADMX template, AI-provider presets, DNS-component wildcard matching (completed 2026-06-18)
-- [ ] **Phase 84: SIEM/EDR Telemetry** — SecurityEventLayer tracing::Layer, structured Event Log events, HMAC tamper-evidence chain, secret redaction, tamper-evidence ADR
+- [x] **Phase 84: SIEM/EDR Telemetry** — SecurityEventLayer tracing::Layer, structured Event Log events, HMAC tamper-evidence chain, secret redaction, tamper-evidence ADR (completed 2026-06-19)
 
 ## Phase Details
 
@@ -153,7 +153,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   - [x] 84-01-PLAN.md — Schema + chain + redaction core: TelemetryConfig extension to MachineEgressPolicy, SecurityEvent schema, HMAC ChainState (sha2 placeholder), PathCategory, D-14 degrade behavior (TELEM-01/02/03/04)
   - [x] 84-02-PLAN.md — Dual-emit backend + init_tracing registration: real RegisterEventSourceW/ReportEventW emitter, Hmac<Sha256> chain replacing sha2 placeholder, dep adds hmac/tracing-etw/eventlog, SecurityEventLayer registered in all three init_tracing arms (TELEM-01/02/04)
   - [x] 84-03-PLAN.md — Denial-source wiring + tamper-evidence ADR: path-deny/network-deny/hook-fail-closed tracing::warn! instrumentation, docs/adr/telemetry-tamper-evidence.md (TELEM-01/02/03)
-  - [ ] 84-04-PLAN.md — Dark Factory gate telemetry-event-emit (SC-1 named fields + SC-3 no-raw-path + SC-5 ETW logman) + cross-target clippy verification (TELEM-01/02/03/04)
+  - [x] 84-04-PLAN.md — Dark Factory gate telemetry-event-emit (SC-1 named fields + SC-3 no-raw-path + SC-5 ETW logman) + cross-target clippy verification (TELEM-01/02/03/04)
 **UI hint**: no
 
 ## Progress
@@ -162,7 +162,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 |-------|----------------|--------|-----------|
 | 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
 | 83. Machine Policy Spine + Egress Control | 4/4 | Complete    | 2026-06-19 |
-| 84. SIEM/EDR Telemetry | 3/4 | In Progress|  |
+| 84. SIEM/EDR Telemetry | 4/4 | Complete   | 2026-06-19 |
 
 ## References
 
