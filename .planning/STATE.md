@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
 status: executing
-stopped_at: Phase 84 context gathered
-last_updated: "2026-06-19T03:13:16.679Z"
+stopped_at: Phase 84 Plan 01 complete — D-MSRV recorded for Plan 02
+last_updated: "2026-06-19T03:50:26.810Z"
 last_activity: 2026-06-19
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -27,11 +27,11 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 ## Current Position
 
 Phase: 84 (siem-edr-telemetry) — EXECUTING
-Plan: 2 of 4
-Status: Plan 01 COMPLETE — ready for Plan 02
-Last activity: 2026-06-19 -- Phase 84 Plan 01 complete (schema + TelemetryConfig + ChainState)
+Plan: 3 of 4
+Status: Ready to execute
+Last activity: 2026-06-19
 
-Progress: [████████░░] 75%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -45,11 +45,13 @@ Progress: [████████░░] 75%
 |-------|------|----------|-------|-------|
 | 83 | 01 | 7m | 3 | 6 |
 | 83 | 03 | 25m | 2 | 6 |
+| 84 | 02 | 65m | 2 | 7 |
 
 *Updated after each plan completion*
 | Phase 83 P02 | 45m | 2 tasks | 3 files |
 | Phase 83 P04 | 30m | 2 tasks | 1 files |
 | Phase 84 P01 | 35m | 3 tasks | 9 files |
+| Phase 84 P02 | 65m | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -64,6 +66,15 @@ Progress: [████████░░] 75%
 | Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
 | Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
 | Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
+
+### Decisions (Phase 84 Plan 02)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-MSRV executed: MSRV bumped 1.77->1.82 in CLAUDE.md atomically with tracing-etw 0.2.3 dep addition | 84-02 | tracing-etw 0.2.3 requires Rust 1.82; bumped in CLAUDE.md Technology Stack section per D-MSRV pre-approved decision |
+| ETW emit via tracing::warn!(target: nono_security) inside emit_security_event | 84-02 | Simpler than OnceLock approach; the tracing-etw LayerBuilder registered in init_tracing() intercepts the warn! call automatically without per-event provider handle |
+| init_registry() helper with fmt_layer.with_filter(env_filter) pattern | 84-02 | Avoids S-type mismatch when env_filter changes the registry subscriber type; security layer always active regardless of log level |
+| EVENT_ID_* in event.rs (schema) as single source of truth; windows.rs imports via schema_event_id_for | 84-02 | No duplication; tests in both files use the same values; prevents drift between emit and schema |
 
 ### Decisions (Phase 84 Plan 01)
 
@@ -109,6 +120,6 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
 ## Session Continuity
 
-Last session: 2026-06-19T03:00:00.000Z
-Stopped at: Phase 84 Plan 01 complete — D-MSRV recorded for Plan 02
-Resume file: .planning/phases/84-siem-edr-telemetry/84-01-SUMMARY.md
+Last session: 2026-06-19T05:30:00.000Z
+Stopped at: Phase 84 Plan 02 complete — dual-emit backend, HMAC chain, init_tracing wiring
+Resume file: .planning/phases/84-siem-edr-telemetry/84-02-SUMMARY.md
