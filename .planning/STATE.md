@@ -1,57 +1,47 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.0
-milestone_name: Enterprise Hardening I
-status: Awaiting next milestone
-stopped_at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
-last_updated: "2026-06-19T12:57:53.472Z"
-last_activity: 2026-06-19 — Milestone v3.0 completed and archived
+milestone: v3.1
+milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
+status: planning
+last_updated: "2026-06-19T14:10:44.807Z"
+last_activity: 2026-06-19
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 12
-  completed_plans: 12
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
+# Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-81 complete, shipped + archived). Phase numbering continues from Phase 81 (Phases 82-84 — NOT reset to 1).
+See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-84 complete, shipped + archived; tag `v3.0` local). Phase numbering continues from Phase 84 (Phase 85+ — NOT reset to 1). Scope source: `.planning/seeds/SEED-006-upst9-v0.62-v0.64-sync-window.md`.
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 84 — siem-edr-telemetry (structurally verified 5/5; human_needed live SIEM UAT host-gated)
+**Current Focus:** v3.1 — defining requirements (UPST9 upstream sync v0.62→v0.64 full-absorb + v3.0 host-gated UAT drain; milestone-marker only)
 
 ## Current Position
 
-Phase: Milestone v3.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-19 — Completed quick task 260619-duw: scoped upstream v0.62..v0.64 delta, planted SEED-006
+Status: Defining requirements
+Last activity: 2026-06-19 — Milestone v3.1 started
 
 ## Performance Metrics
 
-**Velocity:**
+**Velocity:** (v3.1 — reset; populated as phases complete)
 
-- Total plans completed: 13 (4 Phase 82 + 1 Phase 83)
-- Average duration: ~7m (Phase 83 Plan 01)
-- Total execution time: 7m (Phase 83 Plan 01 only)
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: —
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
-| 83 | 01 | 7m | 3 | 6 |
-| 83 | 03 | 25m | 2 | 6 |
-| 84 | 02 | 65m | 2 | 7 |
 
 *Updated after each plan completion*
-| Phase 83 P02 | 45m | 2 tasks | 3 files |
-| Phase 83 P04 | 30m | 2 tasks | 1 files |
-| Phase 84 P01 | 35m | 3 tasks | 9 files |
-| Phase 84 P02 | 65m | 2 tasks | 7 files |
-| Phase 84 P03 | 30m | 2 tasks | 4 files |
-| Phase 84 P04 | 3m | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -155,10 +145,10 @@ Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.p
 
 ## Session Continuity
 
-Last session: 2026-06-19T00:10:00.000Z
-Stopped at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
-Resume file: .planning/phases/84-siem-edr-telemetry/84-04-SUMMARY.md
+Last session: 2026-06-19 — Milestone v3.1 (UPST9 + v3.0 Drain) started via /gsd-new-milestone
+Stopped at: Milestone setup — PROJECT.md updated, STATE.md switched; defining requirements next
+Resume file: .planning/seeds/SEED-006-upst9-v0.62-v0.64-sync-window.md
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Define v3.1 requirements, then create the roadmap (in progress via /gsd-new-milestone)
