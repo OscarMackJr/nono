@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
-status: milestone_complete
-stopped_at: Phase 84 structurally verified 5/5 (CR-01 + WR-01/02 closed inline); human_needed — live SIEM gate host-gated; awaiting approve to mark complete
-last_updated: "2026-06-19T03:35:00.000Z"
-last_activity: 2026-06-19 -- Phase 84 gap closure: CR-01 gate + WR-01 config-from-policy + WR-02 level-filter fixed; nono-ffi build regression fixed; re-verified 5/5 structural
+status: Awaiting next milestone
+stopped_at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
+last_updated: "2026-06-19T12:57:53.472Z"
+last_activity: 2026-06-19 — Milestone v3.0 completed and archived
 progress:
   total_phases: 3
   completed_phases: 3
@@ -26,12 +26,10 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 ## Current Position
 
-Phase: 84 (siem-edr-telemetry) — COMPLETE (structural 5/5; live SIEM UAT host-gated)
-Plan: 4/4 complete
-Status: Milestone v3.0 phases all complete (82/83/84). NOT yet shipped/tagged — run /gsd:complete-milestone to archive + tag. 84-HUMAN-UAT.md (3 live items) + daemon-emission follow-up tracked.
-Last activity: 2026-06-19
-
-Progress: [██████████] 100% (3/3 phases complete; live UAT + milestone ship pending)
+Phase: Milestone v3.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-19 — Milestone v3.0 completed and archived
 
 ## Performance Metrics
 
@@ -135,10 +133,26 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 | Host-execution | INST-01 live clean-VM PASS (needs fresh Win11 VM + rebuilt MSI post Phase 80) | Open | v2.13 close |
 | Distribution | DIST-SIGN-01 untrusted-POC-cert broker path not exercised by clean-host gate | Open | v2.13 close |
 | Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
-| nono-ffi | E0004 non-exhaustive match (TelemetryUnavailable + TelemetryConfigInvalid) | Open | 84-04 |
+| nono-ffi | E0004 non-exhaustive match (PolicyLoadFailed + TelemetryUnavailable/ConfigInvalid) | RESOLVED `f96aba8a` (84 close) | 84-04 |
+
+Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.planning/v3.0-MILESTONE-AUDIT.md`:
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Host-execution | DEPLOY-01 clean-VM silent `msiexec /qn` install + exit codes | Open (host-gated) | v3.0 close |
+| Host-execution | DEPLOY-03 live R-B3 user-owned WRITE_OWNER scratch verification | Open (host-gated) | v3.0 close |
+| Host-execution | DEPLOY-05 three-client (CryptoAPI/Node/rustls) TLS-through-proxy round-trip | Open (host-gated) | v3.0 close |
+| Host-execution | EGRESS-02 dual-layer (proxy + kernel WFP) live block proof | Open (host-gated) | v3.0 close |
+| Host-execution | TELEM-01/04 live `telemetry-event-emit` gate PASS + admin opt-out/min_severity HKLM→emit (`84-HUMAN-UAT.md`) | Open (host-gated) | v3.0 close |
+| Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events (integration warning, not a Phase 84 criterion) | Open (follow-up) | v3.0 close |
+| Historical | 48 open artifacts at v3.0 close (35 quick_tasks mostly pre-v2.13 strays + 5 seeds + 4 todos + 2 uat_gaps + 2 verification_gaps) — overwhelmingly historical/future-seed | Acknowledged | v3.0 close |
 
 ## Session Continuity
 
 Last session: 2026-06-19T00:10:00.000Z
 Stopped at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
 Resume file: .planning/phases/84-siem-edr-telemetry/84-04-SUMMARY.md
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone

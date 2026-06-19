@@ -1,5 +1,26 @@
 # Milestones
 
+## v3.0 Enterprise Hardening I — Deploy · Control · Compliance (Completed: 2026-06-19)
+
+**Phases completed:** 3 phases (82-84), 12 plans, 27 tasks. First milestone of the enterprise arc — make nono deployable and governable across a corporate Windows fleet from one `HKLM\SOFTWARE\Policies\nono` policy spine.
+
+**Key accomplishments:**
+
+- **Phase 82 — Fleet Deployment Infrastructure:** silent `msiexec /qn` install (CRT-static, non-fatal ServiceInstall/cert), machine-wide PATH, ADMX/.adml targeting `SOFTWARE\Policies\nono`, a unified first-run provisioner (user-owned WRITE_OWNER scratch + per-user POC cert import + `NODE_EXTRA_CA_CERTS` persistence, single Rust store-name source of truth), and a tri-state `nono health` JSON diagnostic.
+- **Phase 83 — Machine Policy Spine + Egress Control:** fail-SECURE HKLM reader (`KEY_WOW64_64KEY`; absent→Ok(None), malformed→Err(PolicyLoadFailed), never fall-open); ONE `MachineEgressPolicy` read feeds BOTH nono-proxy AND nono-wfp-service from the same struct (allowlist-drift Pitfall 2 structurally impossible); DNS-component-safe wildcard matching (`*.x.com` ≠ `x.com`/`evilx.com`); AI-provider presets + shipped ADMX named toggles.
+- **Phase 84 — SIEM/EDR Telemetry:** `SecurityEventLayer` tracing::Layer in nono-cli (library/CLI boundary preserved) dual-emits structured security events (EventIDs 10001-10005, named EventData for Splunk/Sentinel) to the Phase-82-registered `nono` Application Event Log source + ETW; in-session HMAC-SHA256 chain (`ChainHead`) with WEF documented as the tamper boundary; secret/path redaction (salted hash + category, never raw); enable/level config read from the same `MachineEgressPolicy.telemetry` sub-section.
+- **Integration spine verified end-to-end:** milestone audit confirmed all 5 cross-phase wires WIRED (MSI→reader→proxy+WFP→telemetry, all agreeing on the `nono` key/source) — 17/17 requirements satisfied structurally.
+
+**Verification = Dark Factory** (carried from v2.13): each phase ships a `verify-dark.ps1` gate; structural verification is the acceptance bar.
+
+**Milestone audit:** `tech_debt` (17/17 reqs, 0 unsatisfied/orphaned; 5/5 integration wires WIRED). The audit reconciled a stale traceability table and confirmed no blockers. Notable in-session catch: the 84-04 executor self-reported PASS while masking two real blockers (CR-01 gate happy-path, WR-01 TELEM-04 config-unwired) — both caught by code-review + verifier and fixed inline + re-verified 5/5; a nono-ffi exhaustive-match build regression (hidden by the `--bin nono` gate) was also fixed.
+
+**Known deferred items at close:** 48 open artifacts acknowledged (see STATE.md Deferred Items) — overwhelmingly historical strays + future seeds. Genuinely-new deferrals: host-gated live UAT (clean-VM MSI install DEPLOY-01, live R-B3 DEPLOY-03, TLS-through-proxy matrix DEPLOY-05, dual-layer WFP block EGRESS-02, live SIEM gate/opt-out TELEM-01/04 — `84-HUMAN-UAT.md`) + the **daemon-side telemetry emission** cross-phase follow-up (`nono-agentd` emits no `nono_security::*` events; out of Phase 84 scope).
+
+**Status:** all v3.0 phases complete. Repo stays PUBLIC pending Microsoft minifilter-altitude approval (no build_notes/.gsd staged). Tag `v3.0` created LOCAL only — push operator-gated.
+
+---
+
 ## v2.13 Carry-Forward Closeout (Dark Factory) (Shipped: 2026-06-18)
 
 **Phases completed:** 6 phases (76, 77, 78, 79, 80, 81), 13 plans, 17 tasks. 93 commits, +14,226/-161 across 80 files (2026-06-16 → 2026-06-18).
