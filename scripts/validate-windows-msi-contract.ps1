@@ -213,6 +213,10 @@ if ($serviceBinaryFullPath -ne "") {
         -Message "Machine MSI ServiceControl Remove mismatch"
     Assert-Equal -Actual $machineServiceControl.Wait -Expected "yes" `
         -Message "Machine MSI ServiceControl Wait mismatch"
+    Assert-Equal -Actual $machineServiceInstall.ErrorControl -Expected "ignore" `
+        -Message "Machine MSI ServiceInstall ErrorControl mismatch (must be ignore so SCM start failure is non-fatal per D-04)"
+    Assert-Equal -Actual $machineServiceInstall.Vital -Expected "no" `
+        -Message "Machine MSI ServiceInstall Vital mismatch (must be no so a service start failure does not roll back the install per D-04 — Vital is on ServiceInstall, not ServiceControl)"
 
     # User MSI must contain no service elements (D-02)
     $userServiceInstalls = $userDoc.SelectNodes("//*[local-name()='ServiceInstall']")
@@ -291,5 +295,208 @@ if ($driverBinaryFullPath -ne "") {
     Assert-True -Condition ($null -eq $userDriverFiles -or $userDriverFiles.Count -eq 0) `
         -Message "User MSI must not contain nono-wfp-driver.sys file element"
 }
+
+# ─── Phase 82 Plan 01: machine-only element assertions ─────────────────────────
+# These assertions are unconditional for machine scope (not gated on WFP service
+# binary) because the ProgramData root, sentinel key, cert files, cert CA, and
+# nono CLI Event Log source are always emitted for all machine-scope MSI builds.
+
+# (a) Cert-import CustomAction: deferred SYSTEM, non-fatal (T-82-01 / D-04)
+$machineCustomActions = $machineDoc.SelectNodes("//*[local-name()='CustomAction']")
+$certImportCa = $null
+foreach ($ca in $machineCustomActions) {
+    if ($null -ne $ca.ExeCommand -and $ca.ExeCommand.Contains("setup --trust-root")) {
+        $certImportCa = $ca
+        break
+    }
+}
+Assert-True -Condition ($null -ne $certImportCa) `
+    -Message "Machine MSI must contain a CustomAction with ExeCommand containing 'setup --trust-root'"
+Assert-Equal -Actual $certImportCa.Execute -Expected "deferred" `
+    -Message "Cert-import CustomAction must be Execute='deferred' (runs as LocalSystem per D-04)"
+Assert-Equal -Actual $certImportCa.Impersonate -Expected "no" `
+    -Message "Cert-import CustomAction must have Impersonate='no' (run as LocalSystem, not as installer user)"
+Assert-Equal -Actual $certImportCa.Return -Expected "ignore" `
+    -Message "Cert-import CustomAction must have Return='ignore' (non-fatal per D-04 — cert failure does not roll back install)"
+
+# (b) HKLM\SOFTWARE\Policies\nono sentinel key
+$machineRegistryKeysAll = $machineDoc.SelectNodes("//*[local-name()='RegistryKey']")
+$sentinelKey = $null
+foreach ($node in $machineRegistryKeysAll) {
+    if ($null -ne $node.Key -and $node.Key -eq "SOFTWARE\Policies\nono") {
+        $sentinelKey = $node
+        break
+    }
+}
+Assert-True -Condition ($null -ne $sentinelKey) `
+    -Message "Machine MSI must create the HKLM\SOFTWARE\Policies\nono sentinel key (Phase 83 reader + nono health probe)"
+
+# (c) ProgramData root directory: machine MSI must target CommonAppDataFolder (never LocalAppDataFolder in machine block)
+Assert-True -Condition $machineDirectoryXml.Contains('CommonAppDataFolder') `
+    -Message "Machine MSI must target CommonAppDataFolder for the %PROGRAMDATA%\nono\ root (Pitfall 4 / D-08)"
+Assert-True -Condition (-not $machineDirectoryXml.Contains('LocalAppDataFolder')) `
+    -Message "Machine MSI must NOT target LocalAppDataFolder (SYSTEM-context install writes to systemprofile, breaking R-B3; Pitfall 4)"
+
+# (d) PEM File component (Blocker-1 guard): machine MSI must stage both DER .cer and PEM .pem cert files.
+#     Node's NODE_EXTRA_CA_CERTS cannot read a DER .cer file (Pitfall 13).
+$machineFiles = $machineDoc.SelectNodes("//*[local-name()='File']")
+$pemFile = $null
+$cerFile = $null
+foreach ($f in $machineFiles) {
+    if ($null -ne $f.Name) {
+        if ($f.Name -like "*.pem") { $pemFile = $f }
+        if ($f.Name -eq "nono-poc-root.cer") { $cerFile = $f }
+    }
+}
+Assert-True -Condition ($null -ne $pemFile) `
+    -Message "Machine MSI must contain a PEM File component (*.pem) for Node NODE_EXTRA_CA_CERTS trust (Pitfall 13 / D-05)"
+Assert-True -Condition ($null -ne $cerFile) `
+    -Message "Machine MSI must contain a DER .cer File component for certutil -addstore imports (Pitfall 13)"
+
+# (e) nono CLI Event Log source: machine MSI must register EventLog\Application\nono
+$nonoCliEventLogKey = $null
+foreach ($node in $machineRegistryKeysAll) {
+    if ($null -ne $node.Key -and $node.Key -eq "SYSTEM\CurrentControlSet\Services\EventLog\Application\nono") {
+        $nonoCliEventLogKey = $node
+        break
+    }
+}
+Assert-True -Condition ($null -ne $nonoCliEventLogKey) `
+    -Message "Machine MSI must register the nono CLI Application Event Log source (EventLog\Application\nono) for Phase 84"
+$nonoCliEventMsgFile = $nonoCliEventLogKey.SelectSingleNode(
+    "*[local-name()='RegistryValue' and @Name='EventMessageFile']"
+)
+Assert-True -Condition ($null -ne $nonoCliEventMsgFile) `
+    -Message "nono CLI Event Log source must include EventMessageFile registry value"
+
+# (f) User MSI must NOT contain any of the machine-only elements
+$userXml = $userDoc.OuterXml
+
+$userCertCas = $userDoc.SelectNodes("//*[local-name()='CustomAction']")
+$userCertCa = $null
+foreach ($ca in $userCertCas) {
+    if ($null -ne $ca.ExeCommand -and $ca.ExeCommand.Contains("setup --trust-root")) {
+        $userCertCa = $ca
+        break
+    }
+}
+Assert-True -Condition ($null -eq $userCertCa) `
+    -Message "User MSI must NOT contain a 'setup --trust-root' CustomAction (machine-only element)"
+
+$userRegistryKeysAll = $userDoc.SelectNodes("//*[local-name()='RegistryKey']")
+$userSentinelKey = $null
+foreach ($node in $userRegistryKeysAll) {
+    if ($null -ne $node.Key -and $node.Key -eq "SOFTWARE\Policies\nono") {
+        $userSentinelKey = $node
+        break
+    }
+}
+Assert-True -Condition ($null -eq $userSentinelKey) `
+    -Message "User MSI must NOT contain the SOFTWARE\Policies\nono sentinel key (machine-only)"
+
+Assert-True -Condition (-not $userXml.Contains('CommonAppDataFolder')) `
+    -Message "User MSI must NOT contain CommonAppDataFolder (machine-only ProgramData component)"
+
+$userFiles = $userDoc.SelectNodes("//*[local-name()='File']")
+$userPemFile = $null
+foreach ($f in $userFiles) {
+    if ($null -ne $f.Name -and $f.Name -like "*.pem") { $userPemFile = $f; break }
+}
+Assert-True -Condition ($null -eq $userPemFile) `
+    -Message "User MSI must NOT contain a PEM cert File component (machine-only element)"
+
+$userNonoCliEventLogKey = $null
+foreach ($node in $userRegistryKeysAll) {
+    if ($null -ne $node.Key -and $node.Key -eq "SYSTEM\CurrentControlSet\Services\EventLog\Application\nono") {
+        $userNonoCliEventLogKey = $node
+        break
+    }
+}
+Assert-True -Condition ($null -eq $userNonoCliEventLogKey) `
+    -Message "User MSI must NOT register the nono CLI Event Log source (machine-only)"
+
+# ─── Static-CRT flag assertion (.cargo/config.toml) ──────────────────────────
+# Phase 82 Plan 01 D-01/D-02: verify the target-feature=+crt-static flag is in
+# .cargo/config.toml under [target.x86_64-pc-windows-msvc]. The flag eliminates
+# the vcruntime140.dll dependency and the 0xC0000135 clean-host 1603 rollback.
+# NOTE: This stanza is silently dropped when the RUSTFLAGS env var is set (e.g.
+# in CI with step-level RUSTFLAGS= override). CI/RUSTFLAGS-override caveat is
+# documented in .cargo/config.toml. This assertion verifies the in-file flag only.
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$cargoConfigPath = Join-Path $repoRoot ".cargo\config.toml"
+if (Test-Path -LiteralPath $cargoConfigPath) {
+    $cargoConfigContent = Get-Content -LiteralPath $cargoConfigPath -Raw
+    Assert-True -Condition ($cargoConfigContent -match 'crt-static') `
+        -Message ".cargo/config.toml must contain target-feature=+crt-static for the windows-msvc target (D-01/D-02 root-cause fix for 0xC0000135 clean-host 1603 rollback)"
+    Write-Host "Static-CRT flag verified present in .cargo/config.toml"
+} else {
+    throw ".cargo/config.toml not found at '$cargoConfigPath'. This file must carry the static-CRT rustflag for the windows-msvc target."
+}
+
+# ─── ADMX source contract assertions (Phase 83 Plan 03 — EGRESS-04 / D-11) ──
+# These assertions verify that the ADMX here-string source in build-windows-msi.ps1
+# contains the three named-toggle preset policies and that the existing AllowedSuffixes
+# / AllowedHosts list policies are still present (Pitfall 1: N×REG_SZ shape retained).
+#
+# The assertions run on dev-host without PowerShell or WiX tooling: they just grep
+# the script source.  The richer generated-ADMX XML validation (parse + node check)
+# runs on a Windows host that can invoke build-windows-msi.ps1 end-to-end.
+$buildScriptPath = Join-Path $PSScriptRoot "build-windows-msi.ps1"
+if (-not (Test-Path -LiteralPath $buildScriptPath)) {
+    throw "ADMX contract check: build-windows-msi.ps1 not found at '$buildScriptPath'."
+}
+$buildScriptContent = Get-Content -LiteralPath $buildScriptPath -Raw
+
+# Named-toggle presence (EGRESS-04 / D-11)
+Assert-True -Condition ($buildScriptContent -match 'Allow Anthropic') `
+    -Message "ADMX source must contain 'Allow Anthropic' named-toggle policy (EGRESS-04 D-11)"
+Assert-True -Condition ($buildScriptContent -match 'Allow OpenAI') `
+    -Message "ADMX source must contain 'Allow OpenAI' named-toggle policy (EGRESS-04 D-11)"
+Assert-True -Condition ($buildScriptContent -match 'Allow GitHub API') `
+    -Message "ADMX source must contain 'Allow GitHub API' named-toggle policy (EGRESS-04 D-11)"
+
+# Token values written by each toggle (D-11: token not literal FQDN)
+Assert-True -Condition ($buildScriptContent -match '"anthropic"') `
+    -Message "ADMX source must contain token value 'anthropic' (not literal FQDN) for the Anthropic toggle (D-11)"
+Assert-True -Condition ($buildScriptContent -match '"openai"') `
+    -Message "ADMX source must contain token value 'openai' for the OpenAI toggle (D-11)"
+Assert-True -Condition ($buildScriptContent -match '"github-api"') `
+    -Message "ADMX source must contain token value 'github-api' for the GitHub API toggle (D-11)"
+
+# WR-01: each named-toggle <policy> must carry a valueName (the registry value the
+# enabledValue/disabledValue write to) plus a matching enabledValue <string>.  Without
+# valueName the Group Policy editor has no registry target and the enable token never
+# lands in HKLM\SOFTWARE\Policies\nono\PresetTokens.  Assert both per token.
+$togglePresets = @(
+    @{ Name = 'AllowAnthropicPreset';  Token = 'anthropic' },
+    @{ Name = 'AllowOpenAIPreset';     Token = 'openai' },
+    @{ Name = 'AllowGitHubAPIPreset';  Token = 'github-api' }
+)
+$quote = [char]34
+foreach ($preset in $togglePresets) {
+    $name  = $preset.Name
+    $token = $preset.Token
+    # Match the policy opening tag for this toggle (across newlines) and require
+    # a valueName attribute carrying the token somewhere inside that opening tag.
+    $policyTagPattern = '(?s)<policy\s+name=' + $quote + [regex]::Escape($name) + $quote + '.*?>'
+    $policyTagMatch = [regex]::Match($buildScriptContent, $policyTagPattern)
+    Assert-True -Condition ($policyTagMatch.Success) `
+        -Message ("ADMX source must contain a policy element named '{0}' (WR-01)" -f $name)
+    $valueNamePattern = 'valueName=' + $quote + [regex]::Escape($token) + $quote
+    Assert-True -Condition ($policyTagMatch.Value -match $valueNamePattern) `
+        -Message ("ADMX toggle policy '{0}' must carry valueName={1}{2}{1} so enabledValue writes the token (WR-01)" -f $name, $quote, $token)
+    # The enabledValue string must carry the same token.
+    $enabledValuePattern = '(?s)<policy\s+name=' + $quote + [regex]::Escape($name) + $quote + '.*?<enabledValue>\s*<string\s+value=' + $quote + [regex]::Escape($token) + $quote
+    Assert-True -Condition ($buildScriptContent -match $enabledValuePattern) `
+        -Message ("ADMX toggle policy '{0}' must have an enabledValue string equal to its token '{1}' (WR-01)" -f $name, $token)
+}
+
+# Existing list policies still present (Pitfall 1: N×REG_SZ shape must not change)
+Assert-True -Condition ($buildScriptContent -match 'AllowedSuffixes') `
+    -Message "ADMX source must retain the AllowedSuffixes list policy (Pitfall 1 / N*REG_SZ shape)"
+Assert-True -Condition ($buildScriptContent -match 'AllowedHosts') `
+    -Message "ADMX source must retain the AllowedHosts list policy (Pitfall 1 / N*REG_SZ shape)"
+
+Write-Host "ADMX source contract assertions passed (EGRESS-04 named toggles + valueName + list policies retained)."
 
 Write-Host "Validated Windows MSI contract for machine and user scopes."

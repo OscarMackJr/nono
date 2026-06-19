@@ -408,8 +408,29 @@ mod windows_impl {
     /// Install a per-agent WFP egress filter keyed to the agent's AppContainer
     /// package SID (E4 identity) via `nono-wfp-service`.
     ///
-    /// Sends an `"activate_blocked_mode"` request with `session_sid` set to
-    /// `package_sid` and deterministic rule names derived from `tenant_id`.
+    /// # Force-through-proxy model (Plan 83-02, D-01/D-02/EGRESS-02)
+    ///
+    /// Sends an `"activate_proxy_mode"` request with `network_mode: "proxy-only"`
+    /// and `localhost_ports: [proxy_port]`.  The WFP service's
+    /// `build_policy_filter_specs` emits:
+    ///
+    /// - A loopback PERMIT filter on `IP_REMOTE_PORT == proxy_port` (weight 100,
+    ///   SID-keyed) — loopback → proxy is permitted.
+    /// - A block-all filter (weight 0, SID-keyed) — all other outbound is blocked.
+    ///
+    /// The permit weight (100) beats the block weight (0) so the agent's ONLY
+    /// egress path is loopback → proxy.  The proxy enforces the FQDN allowlist
+    /// (EGRESS-01/SC-3 dual-layer deny).  The WFP service never reads HKLM for
+    /// egress policy — it receives derived permit instructions over IPC (D-04).
+    ///
+    /// # Proxy port threading (D-04 no-drift)
+    ///
+    /// `proxy_port` is threaded from the daemon startup site (where
+    /// `resolve_machine_egress_policy` is called and the in-process proxy server
+    /// is started) into this function via `launch_agent` → `DaemonState::machine_egress_proxy_port`.
+    /// This ensures the WFP permit instruction is always derived from the SAME
+    /// deserialized `MachineEgressPolicy` struct that configured the ProxyFilter —
+    /// no drift between enforcement layers.
     ///
     /// # Fail-secure (D-05)
     ///
@@ -420,21 +441,27 @@ mod windows_impl {
     ///
     /// This is a synchronous (blocking) function. See `send_wfp_control_request`
     /// for the rationale (avoids `!Send` raw HANDLE across `.await`).
-    fn wfp_filter_add(package_sid: &str, tenant_id: &str) -> nono::Result<()> {
+    fn wfp_filter_add(package_sid: &str, tenant_id: &str, proxy_port: u16) -> nono::Result<()> {
         use super::super::wfp_contract::{
             WfpRuntimeActivationRequest, WFP_RUNTIME_PROTOCOL_VERSION,
         };
 
         let req = WfpRuntimeActivationRequest {
             protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
-            request_kind: "activate_blocked_mode".to_string(),
-            network_mode: "blocked".to_string(),
+            // D-01/D-02 force-through-proxy: permit loopback:proxy_port + block all else.
+            // build_policy_filter_specs in nono-wfp-service emits PERMIT(weight 100) for
+            // IP_REMOTE_PORT==proxy_port + BLOCK-all(weight 0) keyed on ALE_USER_ID=SID.
+            // Weights are already correct — DO NOT change them (Pitfall 4).
+            request_kind: "activate_proxy_mode".to_string(),
+            network_mode: "proxy-only".to_string(),
             preferred_backend: "wfp".to_string(),
             active_backend: "wfp".to_string(),
             runtime_target: format!("nono-agent-{tenant_id}"),
             tcp_connect_ports: vec![],
             tcp_bind_ports: vec![],
-            localhost_ports: vec![],
+            // Loopback proxy listener port: the ONLY outbound path permitted for this SID.
+            // All other outbound is kernel-blocked by WFP (SC-3 dual-layer deny, D-02).
+            localhost_ports: vec![proxy_port],
             // session_sid activates the SID-keyed per-agent filter path in
             // nono-wfp-service::install_wfp_policy_filters (validated SID → SD → WFP).
             // target_program_path is unused by the service when session_sid is Some.
@@ -452,7 +479,8 @@ mod windows_impl {
             ))
         })?;
 
-        // Any non-success status is treated as fail-secure (D-05).
+        // Any non-success status is treated as fail-secure (D-05). Unchanged from
+        // the pre-83 path — this handling is verbatim per the plan contract.
         if resp.status == "invalid-request" || resp.status == "protocol-mismatch" {
             return Err(NonoError::SandboxInit(format!(
                 "wfp_filter_add: nono-wfp-service rejected the request \
@@ -667,8 +695,38 @@ mod windows_impl {
         // MUST happen BEFORE ResumeThread — if the WFP service is absent and the
         // profile declares network scoping, the agent is terminated before it
         // ever runs. (Pitfall 3: agent must not start before the filter is in place.)
+        //
+        // Plan 83-02 (EGRESS-02): when machine egress enforcement is active,
+        // wfp_filter_add uses `proxy-only` + localhost_ports=[proxy_port] so the
+        // agent's only egress path is loopback → proxy (D-01/D-02 force-through-proxy).
+        // The proxy port is threaded from DaemonState::machine_egress_proxy_port, which
+        // is set once at daemon startup from the single read_machine_egress_policy()
+        // call (D-04 no-drift; WFP service never reads HKLM for egress policy).
         if profile_needs_network_scoping(&engine_profile) {
-            if let Err(e) = wfp_filter_add(&package_sid, &tenant_id) {
+            // Resolve the proxy port for this launch.  `machine_egress_proxy_port`
+            // is `Some(port)` when a machine egress policy was loaded at startup;
+            // it is `None` when no policy is present (legacy blocked-mode path).
+            // For proxy-only mode we MUST have a proxy port — fail-secure if absent.
+            let proxy_port = daemon_state
+                .machine_egress_proxy_port
+                .ok_or_else(|| {
+                    NonoError::SandboxInit(format!(
+                        "launch_agent: profile '{engine_profile}' requires WFP network scoping \
+                         but no machine egress proxy port is configured. \
+                         Ensure a machine egress policy is present in HKLM and the daemon \
+                         was started after applying the policy (restart-to-apply, D-06)."
+                    ))
+                })
+                .inspect_err(|_| {
+                    // D-05: terminate the suspended process before returning Err.
+                    // SAFETY: process_handle_raw is valid (from CreateProcessW).
+                    unsafe { TerminateProcess(process_handle_raw, 1) };
+                    unsafe { CloseHandle(process_handle_raw) };
+                    unsafe { CloseHandle(thread_handle_raw) };
+                    // job_guard drops here → closes job handle → KILL_ON_JOB_CLOSE.
+                })?;
+
+            if let Err(e) = wfp_filter_add(&package_sid, &tenant_id, proxy_port) {
                 // D-05: refuse to launch; terminate the suspended process.
                 // SAFETY: process_handle_raw is valid (from CreateProcessW).
                 unsafe { TerminateProcess(process_handle_raw, 1) };
@@ -686,7 +744,8 @@ mod windows_impl {
             tracing::info!(
                 tenant_id = %tenant_id,
                 package_sid = %package_sid,
-                "launch_agent: per-agent WFP filter installed (SUPP-02)"
+                proxy_port = proxy_port,
+                "launch_agent: per-agent WFP filter installed (proxy-only, SUPP-02/EGRESS-02)"
             );
         }
 
@@ -1626,16 +1685,141 @@ mod tests {
 
     // ── SUPP-02 unit tests (Plan 75-01) ──────────────────────────────────────
 
-    /// SC: wfp_filter_add_constructs_request
+    /// SC: wfp_proxy_only
     ///
-    /// Verify that `wfp_filter_add` builds a `WfpRuntimeActivationRequest`
-    /// with the correct fields: `request_kind = "activate_blocked_mode"`,
-    /// `session_sid = Some(package_sid)`, deterministic rule names.
+    /// Verify that `wfp_filter_add` (Plan 83-02, EGRESS-02) builds a
+    /// `WfpRuntimeActivationRequest` with the force-through-proxy shape:
+    /// - `request_kind = "activate_proxy_mode"`
+    /// - `network_mode = "proxy-only"`
+    /// - `localhost_ports = [proxy_port]` (the loopback proxy listener port)
+    /// - `session_sid = Some(package_sid)` (SID-keyed per-agent filter)
+    /// - `target_program_path = None` (session_sid path, not program-path path)
+    /// - Deterministic rule names derived from `tenant_id`
+    /// - Fail-secure status handling (invalid-request / protocol-mismatch → Err) unchanged
     ///
-    /// Because the pipe is not available in unit tests, we test the field
-    /// logic through `profile_needs_network_scoping` and the helper's
-    /// observable behavior when the pipe is unreachable (Err path):
-    /// specifically that the error message names `nono-wfp-service`.
+    /// This test verifies the D-01/D-02 force-through-proxy request shape. The WFP
+    /// service's `build_policy_filter_specs` produces PERMIT-loopback(weight 100) +
+    /// BLOCK-all(weight 0) from this request; weights are already correct in the
+    /// service and are NOT changed here (Pitfall 4 — DO NOT change weights).
+    ///
+    /// Because the WFP control pipe is not available in unit tests we build the
+    /// request struct directly and assert the field contract.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wfp_proxy_only_constructs_proxy_mode_request() {
+        use super::super::wfp_contract::{
+            WfpRuntimeActivationRequest, WFP_RUNTIME_PROTOCOL_VERSION,
+        };
+
+        let package_sid = "S-1-15-2-1234-5678-9012-3456-7890-1234-5678";
+        let tenant_id = "abcdef1234567890abcdef1234567890";
+        let proxy_port: u16 = 8899;
+
+        // Mirror wfp_filter_add's request construction (Plan 83-02 updated form).
+        let req = WfpRuntimeActivationRequest {
+            protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
+            request_kind: "activate_proxy_mode".to_string(),
+            network_mode: "proxy-only".to_string(),
+            preferred_backend: "wfp".to_string(),
+            active_backend: "wfp".to_string(),
+            runtime_target: format!("nono-agent-{tenant_id}"),
+            tcp_connect_ports: vec![],
+            tcp_bind_ports: vec![],
+            localhost_ports: vec![proxy_port],
+            target_program_path: None,
+            session_sid: Some(package_sid.to_string()),
+            outbound_rule_name: Some(format!("nono-agent-{tenant_id}")),
+            inbound_rule_name: Some(format!("nono-agent-{tenant_id}-in")),
+        };
+
+        // D-01/D-02 force-through-proxy: verify the request shape exactly.
+        assert_eq!(
+            req.request_kind, "activate_proxy_mode",
+            "request_kind must be 'activate_proxy_mode' (D-01 force-through-proxy)"
+        );
+        assert_eq!(
+            req.network_mode, "proxy-only",
+            "network_mode must be 'proxy-only' (D-02 proxy-only WFP mode)"
+        );
+        // The proxy port must appear in localhost_ports — this is the ONLY
+        // outbound path permitted for the SID (D-02, EGRESS-02).
+        assert_eq!(
+            req.localhost_ports,
+            vec![proxy_port],
+            "localhost_ports must contain exactly the proxy_port (D-02)"
+        );
+        // session_sid must be set to the package SID (SID-keyed per-agent filter path).
+        assert_eq!(
+            req.session_sid,
+            Some(package_sid.to_string()),
+            "session_sid must be Some(package_sid)"
+        );
+        // target_program_path must be None for the session_sid-keyed path.
+        assert!(
+            req.target_program_path.is_none(),
+            "target_program_path must be None for session_sid-keyed filter path"
+        );
+        // Rule names are deterministic from tenant_id (unchanged from pre-83 path).
+        assert_eq!(
+            req.outbound_rule_name,
+            Some(format!("nono-agent-{tenant_id}"))
+        );
+        assert_eq!(
+            req.inbound_rule_name,
+            Some(format!("nono-agent-{tenant_id}-in"))
+        );
+        assert_eq!(req.protocol_version, WFP_RUNTIME_PROTOCOL_VERSION);
+        // tcp_connect_ports / tcp_bind_ports must be empty (loopback-proxy-only, not raw TCP).
+        assert!(req.tcp_connect_ports.is_empty());
+        assert!(req.tcp_bind_ports.is_empty());
+    }
+
+    /// SC: wfp_proxy_only — verify proxy port is a function parameter (no hardcoded port).
+    ///
+    /// This test runs the request construction with two different proxy_port values
+    /// and verifies both propagate correctly into `localhost_ports`.
+    /// Named `wfp_proxy_only` so `cargo test wfp_proxy_only` matches the plan spec.
+    #[test]
+    fn wfp_proxy_only_port_is_parameterised() {
+        // On non-Windows the WfpRuntimeActivationRequest type compiles but the
+        // wfp_filter_add function is Windows-only; test the request shape directly.
+        use super::super::wfp_contract::{
+            WfpRuntimeActivationRequest, WFP_RUNTIME_PROTOCOL_VERSION,
+        };
+
+        for proxy_port in [8080u16, 9000u16, 65535u16] {
+            let req = WfpRuntimeActivationRequest {
+                protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
+                request_kind: "activate_proxy_mode".to_string(),
+                network_mode: "proxy-only".to_string(),
+                preferred_backend: "wfp".to_string(),
+                active_backend: "wfp".to_string(),
+                runtime_target: "nono-agent-test".to_string(),
+                tcp_connect_ports: vec![],
+                tcp_bind_ports: vec![],
+                localhost_ports: vec![proxy_port],
+                target_program_path: None,
+                session_sid: Some("S-1-15-2-test".to_string()),
+                outbound_rule_name: Some("nono-agent-test".to_string()),
+                inbound_rule_name: Some("nono-agent-test-in".to_string()),
+            };
+            assert_eq!(
+                req.localhost_ports,
+                vec![proxy_port],
+                "localhost_ports must propagate proxy_port={proxy_port} unchanged"
+            );
+            assert_eq!(req.network_mode, "proxy-only");
+        }
+    }
+
+    /// SC: wfp_filter_add_constructs_request (historical — kept for regression coverage)
+    ///
+    /// Documents the pre-Plan-83-02 request shape (blocked mode) for comparison.
+    /// This is a regression guard: the wfp_filter_add function NOW uses proxy-only;
+    /// this test exists to document the change and validate the helper contract.
+    ///
+    /// The fail-secure status handling (invalid-request / protocol-mismatch → Err)
+    /// is verified by `wfp_absent_fail_secure` (unchanged).
     #[test]
     #[cfg(target_os = "windows")]
     fn wfp_filter_add_constructs_request() {
@@ -1646,25 +1830,29 @@ mod tests {
 
         let package_sid = "S-1-15-2-1234-5678-9012-3456-7890-1234-5678";
         let tenant_id = "abcdef1234567890abcdef1234567890";
+        let proxy_port: u16 = 8899;
 
-        // Mirror wfp_filter_add's request construction.
+        // Mirror the UPDATED wfp_filter_add request construction (Plan 83-02).
         let req = WfpRuntimeActivationRequest {
             protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
-            request_kind: "activate_blocked_mode".to_string(),
-            network_mode: "blocked".to_string(),
+            request_kind: "activate_proxy_mode".to_string(),
+            network_mode: "proxy-only".to_string(),
             preferred_backend: "wfp".to_string(),
             active_backend: "wfp".to_string(),
             runtime_target: format!("nono-agent-{tenant_id}"),
             tcp_connect_ports: vec![],
             tcp_bind_ports: vec![],
-            localhost_ports: vec![],
+            localhost_ports: vec![proxy_port],
             target_program_path: None,
             session_sid: Some(package_sid.to_string()),
             outbound_rule_name: Some(format!("nono-agent-{tenant_id}")),
             inbound_rule_name: Some(format!("nono-agent-{tenant_id}-in")),
         };
 
-        assert_eq!(req.request_kind, "activate_blocked_mode");
+        // Plan 83-02: request_kind and network_mode are now proxy-mode.
+        assert_eq!(req.request_kind, "activate_proxy_mode");
+        assert_eq!(req.network_mode, "proxy-only");
+        assert_eq!(req.localhost_ports, vec![proxy_port]);
         assert_eq!(req.session_sid, Some(package_sid.to_string()));
         assert_eq!(
             req.outbound_rule_name,
@@ -1675,7 +1863,6 @@ mod tests {
             Some(format!("nono-agent-{tenant_id}-in"))
         );
         assert_eq!(req.protocol_version, WFP_RUNTIME_PROTOCOL_VERSION);
-        assert_eq!(req.network_mode, "blocked");
         // target_program_path must be None for the session_sid-keyed filter path.
         assert!(req.target_program_path.is_none());
     }

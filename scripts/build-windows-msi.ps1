@@ -83,9 +83,17 @@ function Get-ScopeMetadata {
         "machine" {
             return @{
                 PackageScope = "perMachine"
+                # Phase 82 Plan 01: machine scope adds the CommonAppDataFolder hierarchy
+                # alongside ProgramFiles64Folder so the PEM cert and future machine-global
+                # data land at %PROGRAMDATA%\nono\ (Admins/SYSTEM writable, never per-user).
+                # Per Pitfall 4 / D-08 the MSI MUST NOT create %LOCALAPPDATA% user scratch;
+                # that is the first-run provisioner's responsibility in user context (Plan 02).
                 DirectoryXml = @"
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="nono" />
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="PROGRAMDATANONO" Name="nono" />
     </StandardDirectory>
 "@
                 RegistryRoot = "HKLM"
@@ -218,10 +226,139 @@ $msiPath = Join-Path $outputFullPath $packageName
 #   Remove="uninstall"- SCM deletes the service registry entry on uninstall only.
 #                       During upgrade, the new version's install re-creates the entry.
 #   Wait="yes"        - Each SCM operation is synchronous; MSI sequence waits for completion.
+# Phase 82 Plan 01: resolve the POC cert paths for machine-scope MSI.
+# The DER .cer (certutil/CryptoAPI format) is committed alongside the scripts.
+# The PEM copy (Node-readable for NODE_EXTRA_CA_CERTS) is produced from the DER cert
+# by certutil -encode at build time and committed as nono-poc-signing.pem.
+# Both are referenced as <File> components in the machine-only ComponentGroup.
+$pocCertDerPath = ""
+$pocCertPemPath = ""
+if ($Scope -eq "machine") {
+    $pocCertDerPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.cer"
+    if (-not (Test-Path -LiteralPath $pocCertDerPath)) {
+        throw "POC DER cert not found at '$pocCertDerPath'. Commit dist/windows/nono-poc-signing.cer to the repo."
+    }
+    $pocCertDerPath = (Resolve-Path -LiteralPath $pocCertDerPath).Path
+
+    $pocCertPemPath = Join-Path $repoRoot "dist\windows\nono-poc-signing.pem"
+    if (-not (Test-Path -LiteralPath $pocCertPemPath)) {
+        # Auto-convert DER -> PEM at build time using in-box certutil -encode.
+        # certutil -encode produces a standard base64/PEM file ("-----BEGIN CERTIFICATE-----").
+        # This is idempotent; a committed .pem is preferred so builds are reproducible
+        # without relying on the build machine having certutil on PATH.
+        Write-Host "Converting DER cert to PEM via certutil -encode..."
+        & certutil -encode "$pocCertDerPath" "$pocCertPemPath" | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $pocCertPemPath)) {
+            throw "certutil -encode failed to produce '$pocCertPemPath'. Install certutil or commit a pre-generated dist/windows/nono-poc-signing.pem."
+        }
+    }
+    $pocCertPemPath = (Resolve-Path -LiteralPath $pocCertPemPath).Path
+}
+
 $serviceComponentXml = ""
 $driverComponentXml = ""
 $eventLogComponentXml = ""
 $wfpUninstallCustomActionXml = ""
+# Phase 82 Plan 01: machine-only components that are ALWAYS emitted for machine scope,
+# regardless of whether the WFP service binary is supplied.  These provision the
+# machine-global state that Phases 83 and 84 build on:
+#   (a) %PROGRAMDATA%\nono\  root directory
+#   (b) nono-poc-root.cer    DER cert under INSTALLFOLDER (for certutil/CryptoAPI stores)
+#   (c) nono-poc-root.pem    PEM cert under PROGRAMDATANONO (for Node NODE_EXTRA_CA_CERTS)
+#   (d) Sentinel registry key HKLM\SOFTWARE\Policies\nono (forward-looking for Phase 83)
+#   (e) Cert-import CustomAction (nono.exe setup --trust-root, deferred SYSTEM, non-fatal)
+#   (f) nono CLI Event Log source (registered now to de-risk Phase 84)
+$machineOnlyComponentsXml = ""
+$certImportCustomActionXml = ""
+if ($Scope -eq "machine") {
+    $machineOnlyComponentsXml = @"
+      <!-- Phase 82: ProgramData root. MSI creates C:\ProgramData\nono\ under SYSTEM.
+           NEVER create LocalAppData user scratch here; Pitfall 4 / D-08 apply. -->
+      <Component Id="cmpProgramDataNono" Guid="*" Directory="PROGRAMDATANONO">
+        <RegistryValue
+            Root="HKLM"
+            Key="Software\always-further\nono\machine"
+            Name="ProgramDataRoot"
+            Type="string"
+            Value="[PROGRAMDATANONO]"
+            KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: POC root cert (DER format) under INSTALLFOLDER.
+           Used by the cert-import CA (nono.exe setup trust-root verb).
+           Both exe and cert ship inside the MSI cab, never fetched at runtime. -->
+      <Component Id="cmpPocCertDer" Guid="*">
+        <File Id="filPocCertDer" Source="$pocCertDerPath" Name="nono-poc-root.cer" KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: POC root cert (PEM format) under PROGRAMDATANONO.
+           Node NODE_EXTRA_CA_CERTS requires PEM; DER format is not readable by Node.
+           This copy is byte-derived from the pinned DER root at build time.
+           Installed path: %PROGRAMDATA%\nono\nono-poc-root.pem (Pitfall 13 / D-05). -->
+      <Component Id="cmpPocCertPem" Guid="*" Directory="PROGRAMDATANONO">
+        <File Id="filPocCertPem" Source="$pocCertPemPath" Name="nono-poc-root.pem" KeyPath="yes" />
+      </Component>
+
+      <!-- Phase 82: HKLM sentinel key for Phase 83 reader and nono health probe.
+           Only a placeholder InstalledByMsi value is written here.
+           Egress policy values are Phase 83 responsibility. -->
+      <Component Id="cmpPolicySentinel" Guid="*">
+        <RegistryKey
+            Root="HKLM"
+            Key="SOFTWARE\Policies\nono">
+          <RegistryValue
+              Name="InstalledByMsi"
+              Type="integer"
+              Value="1"
+              KeyPath="yes" />
+        </RegistryKey>
+      </Component>
+
+      <!-- Phase 82: nono CLI Application Event Log source (machine-scope only).
+           Registered now to de-risk Phase 84 SecurityEventLayer.
+           Mirrors the cmpEventLogSource pattern (EventMessageFile + TypesSupported=7). -->
+      <Component Id="cmpNonoCliEventLogSource" Guid="*">
+        <RegistryKey
+            Root="HKLM"
+            Key="SYSTEM\CurrentControlSet\Services\EventLog\Application\nono">
+          <RegistryValue
+              Name="EventMessageFile"
+              Type="string"
+              Value="[INSTALLFOLDER]nono.exe"
+              KeyPath="yes" />
+          <RegistryValue
+              Name="TypesSupported"
+              Type="integer"
+              Value="7" />
+        </RegistryKey>
+      </Component>
+"@
+
+    # Phase 82 Plan 01: cert-import CustomAction.
+    # Modeled EXACTLY on the existing $wfpUninstallCustomActionXml deferred SYSTEM template
+    # (Directory="INSTALLFOLDER", Execute="deferred", Impersonate="no", Return="ignore").
+    # Invokes the installed CLI via the relative-exe form (nono.exe setup --trust-root
+    # nono-poc-root.cer) mirroring the nono.exe setup --uninstall-wfp pattern.
+    # setup --trust-root (authored in Plan 02 Task 1) is the SINGLE source of truth for
+    # the Root+TrustedPublisher store list, eliminating D-04 PowerShell/Rust drift.
+    # Return="ignore" makes the import NON-FATAL (D-04; nono health reports degraded).
+    # Conditioned on fresh install (NOT REMOVE=ALL / NOT UPGRADINGPRODUCTCODE).
+    # T-82-01: exe and cert both ship inside the MSI cab; no runtime path is user-writable.
+    $certImportCustomActionXml = @"
+    <!-- Phase 82: cert-import CustomAction (deferred SYSTEM, non-fatal, Return=ignore). -->
+    <CustomAction
+        Id="CaImportTrustRoot"
+        Directory="INSTALLFOLDER"
+        ExeCommand="nono.exe setup --trust-root nono-poc-root.cer"
+        Execute="deferred"
+        Impersonate="no"
+        Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="CaImportTrustRoot" Before="InstallFinalize" Condition="NOT (REMOVE=&quot;ALL&quot;) AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+"@
+}
+
 if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
     $serviceComponentXml = @"
       <Component Id="cmpWfpServiceExe" Guid="*">
@@ -234,8 +371,13 @@ if ($Scope -eq "machine" -and $serviceBinaryFullPath -ne "") {
             Type="ownProcess"
             Start="auto"
             Account="LocalSystem"
-            ErrorControl="normal"
-            Arguments="--service-mode" />
+            ErrorControl="ignore"
+            Arguments="--service-mode"
+            Vital="no" />
+            <!-- D-04: Vital (PascalCase, YesNoTypeUnion) on ServiceInstall is the WiX v4
+                 non-fatal service mechanism — a service install/start failure will not roll
+                 back the MSI. ErrorControl ignore is belt-and-suspenders at SCM boot-time only
+                 and has no effect on install-time rollback. -->
         <ServiceControl
             Id="svcCtrlWfpService"
             Name="nono-wfp-service"
@@ -353,7 +495,7 @@ $wxsContent = @"
     <Feature Id="MainFeature" Title="nono" Level="1">
       <ComponentGroupRef Id="ProductComponents" />
     </Feature>
-$($wfpUninstallCustomActionXml)  </Package>
+$($wfpUninstallCustomActionXml)$($certImportCustomActionXml)  </Package>
 
   <Fragment>
 $($scopeInfo.DirectoryXml)
@@ -396,12 +538,365 @@ $($scopeInfo.DirectoryXml)
             System="$($scopeInfo.SystemPath)"
             Value="[INSTALLFOLDER]" />
       </Component>
-$($serviceComponentXml)$($driverComponentXml)$($eventLogComponentXml)    </ComponentGroup>
+$($machineOnlyComponentsXml)$($serviceComponentXml)$($driverComponentXml)$($eventLogComponentXml)    </ComponentGroup>
   </Fragment>
 </Wix>
 "@
 
 Write-Utf8NoBomCompat -Path $wxsPath -Value $wxsContent
+
+# ============================================================================
+# ADMX / ADML generation (Phase 83 Plan 03 — EGRESS-04 / D-11)
+# ============================================================================
+# The nono.admx and nono.adml files are GENERATED from the here-strings below
+# on every build run.  NEVER edit dist/windows/nono.admx or nono.adml directly —
+# changes will be overwritten the next time build-windows-msi.ps1 runs.
+#
+# Named-toggle policies (D-11):
+#   Each toggle writes a stable group TOKEN into HKLM\SOFTWARE\Policies\nono\PresetTokens
+#   as a REG_SZ value.  The token (e.g. "anthropic") is expanded to FQDNs by the nono
+#   CLI layer (policy.rs::expand_egress_preset_tokens) — the ADMX never embeds literal
+#   FQDNs so provider host lists can change in nono without re-issuing the ADMX fleet-wide.
+#
+# Pitfall 1 (REG_SZ shape):  The <list> policies (AllowedSuffixes/AllowedHosts) materialize
+#   as N×REG_SZ named values under a sub-key, NOT as a single REG_MULTI_SZ value.
+#   The nono reader (machine_policy.rs) enumerates sub-key values (D-13 Option A).
+#   Do NOT convert <list> elements to REG_MULTI_SZ — this would silently break the reader.
+#
+# The ADMX is emitted ONLY for machine-scope builds (GPO policies are machine-scoped);
+# user-scope builds skip ADMX emission.
+
+$admxAdmlOutputDir = $outputFullPath  # same dir as the WiX output (dist/windows)
+$admxPath = Join-Path $admxAdmlOutputDir "nono.admx"
+$admlPath = Join-Path $admxAdmlOutputDir "nono.adml"
+
+$admxContent = @"
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  nono GPO ADMX template — Phase 82 + Phase 83 (EGRESS-04 / D-11)
+  ============================================================================
+
+  GENERATED by scripts/build-windows-msi.ps1 — DO NOT EDIT THIS FILE DIRECTLY.
+  Source of truth is the here-string in build-windows-msi.ps1.
+
+  Policy key (64-bit hive):  HKLM\SOFTWARE\Policies\nono
+  Registry view (CRITICAL):  Always use KEY_WOW64_64KEY / [RegistryView]::Registry64
+                             (Pitfall 7: Intune MDM Extension can be 32-bit; omitting
+                             KEY_WOW64_64KEY causes Intune to write WOW6432Node\Policies\nono
+                             while nono-cli reads the 64-bit hive, silently diverging)
+
+  Intune OMA-URI (ADMXInstall):
+    ./Device/Vendor/MSFT/Policy/ConfigOperations/ADMXInstall/nono/Policy/nono.admx
+  Intune OMA-URI (AllowedSuffixes):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowedSuffixes
+  Intune OMA-URI (AllowedHosts):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowedHosts
+  Intune OMA-URI (Allow Anthropic toggle):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowAnthropicPreset
+  Intune OMA-URI (Allow OpenAI toggle):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowOpenAIPreset
+  Intune OMA-URI (Allow GitHub API toggle):
+    ./Device/Vendor/MSFT/Policy/Config/nono~Policy~nono/AllowGitHubAPIPreset
+
+  GPO path (classic ADMX deployment):
+    Copy this file to %SystemRoot%\PolicyDefinitions\nono.admx
+    Copy nono.adml to %SystemRoot%\PolicyDefinitions\en-US\nono.adml
+    (or to the central store: \\domain\SYSVOL\domain\Policies\PolicyDefinitions\)
+
+  Named-toggle preset policies (D-11):
+    Each toggle writes a stable GROUP TOKEN (e.g. "anthropic") into the
+    HKLM\SOFTWARE\Policies\nono\PresetTokens sub-key as a REG_SZ value.
+    nono expands these tokens to FQDNs at runtime using its embedded group map —
+    so provider FQDN lists can be updated in nono without re-issuing the ADMX.
+    Enabling a toggle => nono allows egress to that provider's endpoints.
+    Disabling a toggle => the token is NOT written (default deny for that provider).
+
+  Policy lifecycle:
+    Changes apply to NEW sessions only (read-at-startup / restart-to-apply).
+    Running sessions retain the policy in effect at launch (TOCTOU protection).
+-->
+<policyDefinitions
+    xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    revision="1.1"
+    schemaVersion="1.0">
+
+  <policyNamespaces>
+    <target
+        prefix="nono"
+        namespace="nono.Policies.nono" />
+    <using
+        prefix="windows"
+        namespace="Microsoft.Policies.Windows" />
+  </policyNamespaces>
+
+  <resources minRequiredRevision="1.0" />
+
+  <categories>
+    <category name="nono" displayName="`$(string.nono_category)">
+      <parentCategory ref="windows:WindowsComponents" />
+    </category>
+  </categories>
+
+  <policies>
+
+    <!--
+      AllowedSuffixes: wildcard FQDN suffix allow-list (N x REG_SZ via <list>).
+
+      Pitfall 1: <list> materializes as N named REG_SZ values under a sub-key,
+      NOT as a single REG_MULTI_SZ.  The nono reader enumerates sub-key values (D-13).
+      Do NOT convert this to REG_MULTI_SZ — it will silently break the reader.
+    -->
+    <policy
+        name="AllowedSuffixes"
+        class="Machine"
+        displayName="`$(string.allowedsuffixes_name)"
+        explainText="`$(string.allowedsuffixes_explain)"
+        presentation="`$(presentation.allowedsuffixes)"
+        key="SOFTWARE\Policies\nono">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <elements>
+        <list
+            id="AllowedSuffixesList"
+            key="SOFTWARE\Policies\nono\AllowedSuffixes"
+            valueName="nono_suffixes"
+            additive="true" />
+      </elements>
+    </policy>
+
+    <!--
+      AllowedHosts: exact-match hostname allow-list (N x REG_SZ via <list>).
+      Same REG_SZ enumeration shape as AllowedSuffixes (Pitfall 1).
+    -->
+    <policy
+        name="AllowedHosts"
+        class="Machine"
+        displayName="`$(string.allowedhosts_name)"
+        explainText="`$(string.allowedhosts_explain)"
+        presentation="`$(presentation.allowedhosts)"
+        key="SOFTWARE\Policies\nono">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <elements>
+        <list
+            id="AllowedHostsList"
+            key="SOFTWARE\Policies\nono\AllowedHosts"
+            valueName="nono_hosts"
+            additive="true" />
+      </elements>
+    </policy>
+
+    <!--
+      Allow Anthropic (named toggle — D-11).
+      Enabling this toggle writes the stable group TOKEN "anthropic" into
+      HKLM\SOFTWARE\Policies\nono\PresetTokens as a REG_SZ value.
+      nono expands the "anthropic" token to *.anthropic.com at runtime.
+      Disabling removes the value (no token, no Anthropic egress).
+    -->
+    <policy
+        name="AllowAnthropicPreset"
+        class="Machine"
+        displayName="`$(string.allow_anthropic_name)"
+        explainText="`$(string.allow_anthropic_explain)"
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="anthropic">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <enabledValue>
+        <string value="anthropic" />
+      </enabledValue>
+      <disabledValue>
+        <delete />
+      </disabledValue>
+    </policy>
+
+    <!--
+      Allow OpenAI (named toggle — D-11).
+      Enabling writes TOKEN "openai"; nono expands to *.openai.com.
+    -->
+    <policy
+        name="AllowOpenAIPreset"
+        class="Machine"
+        displayName="`$(string.allow_openai_name)"
+        explainText="`$(string.allow_openai_explain)"
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="openai">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <enabledValue>
+        <string value="openai" />
+      </enabledValue>
+      <disabledValue>
+        <delete />
+      </disabledValue>
+    </policy>
+
+    <!--
+      Allow GitHub API (named toggle — D-11).
+      Enabling writes TOKEN "github-api"; nono expands to api.github.com.
+    -->
+    <policy
+        name="AllowGitHubAPIPreset"
+        class="Machine"
+        displayName="`$(string.allow_github_api_name)"
+        explainText="`$(string.allow_github_api_explain)"
+        key="SOFTWARE\Policies\nono\PresetTokens"
+        valueName="github-api">
+      <parentCategory ref="nono:nono" />
+      <supportedOn ref="windows:SUPPORTED_WindowsVista" />
+      <enabledValue>
+        <string value="github-api" />
+      </enabledValue>
+      <disabledValue>
+        <delete />
+      </disabledValue>
+    </policy>
+
+  </policies>
+
+</policyDefinitions>
+"@
+
+$admlContent = @"
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  nono GPO ADML string resources (en-US) — Phase 82 + Phase 83 (EGRESS-04 / D-11)
+  GENERATED by scripts/build-windows-msi.ps1 — DO NOT EDIT THIS FILE DIRECTLY.
+  Source of truth is the here-string in build-windows-msi.ps1.
+  Deploy alongside nono.admx in the en-US subdirectory of the PolicyDefinitions store.
+-->
+<policyDefinitionResources
+    xmlns="http://schemas.microsoft.com/GroupPolicy/2006/07/PolicyDefinitions"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    revision="1.1"
+    schemaVersion="1.0">
+
+  <displayName>nono Policy Definitions</displayName>
+  <description>
+    Administrative template for the nono capability-based AI agent sandbox.
+    Targets HKLM\SOFTWARE\Policies\nono (64-bit hive; use KEY_WOW64_64KEY when deploying via script).
+    Policy changes take effect on new nono sessions; running sessions retain the policy at launch.
+  </description>
+
+  <resources>
+    <stringTable>
+
+      <string id="nono_category">nono AI Agent Sandbox</string>
+
+      <string id="allowedsuffixes_name">Outbound Egress: Allowed Domain Suffixes</string>
+      <string id="allowedsuffixes_explain">
+Configures the wildcard FQDN suffix allow-list for outbound egress from confined AI agents.
+
+Each entry is a DNS suffix (with leading dot) that permits all subdomains:
+  .anthropic.com   permits api.anthropic.com, statsig.anthropic.com, etc.
+  .openai.com      permits api.openai.com, etc.
+
+IMPORTANT: Use ONLY suffix entries (with leading dot) in this list.
+Exact-match hostnames must go in the Allowed Exact Hosts policy instead.
+Mixing exact hosts and suffix wildcards in one list causes wildcard creep.
+
+Matching semantics: DNS-component comparison.
+  .anthropic.com matches api.anthropic.com
+  .anthropic.com does NOT match evilanthopic.com or anthropic.com.evil.com
+
+When no egress policy is configured (no suffix, host, or preset entries), nono falls
+through to the per-user profile allow-list. Simply installing the machine MSI without
+configuring any of these policies does NOT activate default-deny.
+Default-deny applies only once at least one egress entry (a suffix, an exact host, or a
+preset toggle) is configured: any destination not matching the configured allow-list is
+then denied.
+Policy changes apply to new nono sessions.
+      </string>
+
+      <string id="allowedhosts_name">Outbound Egress: Allowed Exact Hosts</string>
+      <string id="allowedhosts_explain">
+Configures the exact-match hostname allow-list for outbound egress from confined AI agents.
+
+Each entry is an exact fully-qualified hostname:
+  api.github.com                   GitHub API (for Copilot CLI)
+  models.inference.ai.azure.com    Azure AI Foundry inference endpoint
+
+IMPORTANT: Use ONLY exact hostnames here (no wildcards, no leading dot).
+Wildcard suffix entries must go in the Allowed Domain Suffixes policy instead.
+
+When both policies are configured, a destination is permitted if it matches ANY entry in EITHER list.
+Policy changes apply to new nono sessions.
+      </string>
+
+      <!-- Phase 83 EGRESS-04 D-11: named-toggle preset string resources -->
+
+      <string id="allow_anthropic_name">Allow Anthropic AI Provider</string>
+      <string id="allow_anthropic_explain">
+Allow outbound egress to Anthropic AI provider endpoints.
+
+When enabled: nono allows egress to *.anthropic.com (api.anthropic.com and all subdomains).
+When disabled: Anthropic endpoints are subject to the default-deny machine policy.
+
+Implementation (D-11): enabling this toggle writes the stable group TOKEN "anthropic" into
+HKLM\SOFTWARE\Policies\nono\PresetTokens. nono expands this token to its FQDN list at
+runtime using its embedded group map — so provider host lists can be updated in nono
+without re-issuing the ADMX template fleet-wide.
+
+Note: This policy has no effect unless machine egress policy is active (AllowedSuffixes,
+AllowedHosts, or another preset toggle is also configured).
+Policy changes apply to new nono sessions.
+      </string>
+
+      <string id="allow_openai_name">Allow OpenAI AI Provider</string>
+      <string id="allow_openai_explain">
+Allow outbound egress to OpenAI AI provider endpoints.
+
+When enabled: nono allows egress to *.openai.com (api.openai.com and all subdomains).
+When disabled: OpenAI endpoints are subject to the default-deny machine policy.
+
+Implementation (D-11): enabling this toggle writes the stable group TOKEN "openai" into
+HKLM\SOFTWARE\Policies\nono\PresetTokens. nono expands this token to its FQDN list at runtime.
+Policy changes apply to new nono sessions.
+      </string>
+
+      <string id="allow_github_api_name">Allow GitHub API</string>
+      <string id="allow_github_api_explain">
+Allow outbound egress to the GitHub API endpoint (api.github.com).
+
+When enabled: nono allows egress to api.github.com exactly (for GitHub Copilot CLI and similar).
+When disabled: GitHub API is subject to the default-deny machine policy.
+
+Implementation (D-11): enabling this toggle writes the stable group TOKEN "github-api" into
+HKLM\SOFTWARE\Policies\nono\PresetTokens. nono expands this token to api.github.com at runtime.
+Policy changes apply to new nono sessions.
+      </string>
+
+    </stringTable>
+
+    <presentationTable>
+
+      <presentation id="allowedsuffixes">
+        <listBox refId="AllowedSuffixesList">
+          Domain suffixes (with leading dot, e.g. .anthropic.com):
+        </listBox>
+      </presentation>
+
+      <presentation id="allowedhosts">
+        <listBox refId="AllowedHostsList">
+          Exact hostnames (e.g. api.github.com):
+        </listBox>
+      </presentation>
+
+    </presentationTable>
+
+  </resources>
+
+</policyDefinitionResources>
+"@
+
+# Emit the ADMX and ADML files.
+# These are generated artifacts; the source of truth is the here-strings above.
+Write-Utf8NoBomCompat -Path $admxPath -Value $admxContent
+Write-Utf8NoBomCompat -Path $admlPath -Value $admlContent
+Write-Host "Generated ADMX/ADML: $admxPath, $admlPath"
 
 if ($EmitOnly) {
     Write-Host "Wrote WiX source to $wxsPath"

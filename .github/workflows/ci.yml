@@ -333,6 +333,8 @@ jobs:
 
       - name: Build Windows release binaries
         shell: pwsh
+        env:
+          RUSTFLAGS: -Dwarnings -C target-feature=+crt-static
         run: |
           cargo build --release -p nono-cli
           cargo build --release -p nono-shell-broker

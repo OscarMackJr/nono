@@ -1,309 +1,429 @@
 # Architecture Research
 
-**Domain:** Engine-agnostic AI-agent confinement on Windows — persistent multi-tenant daemon + `AI_AGENT` process marking + engine-agnostic launch path + binding-exposed confined-run API (nono v2.12 "AI Agent Abstraction")
-**Researched:** 2026-06-13
-**Confidence:** HIGH (every integration point grounded in current in-tree code; spike 003 VALIDATED supplies the launch primitive)
+**Domain:** Enterprise Hardening integration into an existing Rust/Windows 5-crate workspace — HKLM machine policy spine, unified egress, and structured security-event telemetry (nono v3.0)
+**Researched:** 2026-06-18
+**Confidence:** HIGH — every integration point grounded in current in-tree source code (config/user.rs, policy.rs, nono-proxy/config.rs, nono-proxy/audit.rs, diagnostic.rs); no greenfield components.
 
-## Executive Framing
+---
 
-This milestone is **composition over invention**. Three existing subsystems already implement nearly everything the four new components need:
+## Core Constraint
 
-1. **The launch-and-confine primitive** (`exec_strategy_windows/launch.rs` → `select_windows_token_arm` → `BrokerLaunch`/`BrokerLaunchNoPty` → `nono-shell-broker`) already confines arbitrary executables (cmd/powershell/python proven identically, spike 003). The engine is already a variable — the Claude-specificity lives only in the PreToolUse hook.
-2. **The capability IPC** (`crates/nono/src/supervisor/socket_windows.rs`) already implements SDDL-scoped named pipes with `PIPE_UNLIMITED_INSTANCES`, per-session/per-package SID DACL ACEs, framed JSON `SupervisorMessage`, bounded reads, and disconnect/re-accept.
-3. **The long-running user-mode service shape** (`crates/nono-cli/src/bin/nono-wfp-service.rs`) already implements SCM dispatch, Event Log, a control pipe, MSI registration, and a non-Windows stub `main` — the exact daemon skeleton.
+The three themes (Deployment, Control, Compliance) are NOT independent silos. They share one data source: `HKLM\SOFTWARE\Policies\nono`. The machine policy layer is the shared prerequisite for the other two. Build it first or the egress and telemetry features have nowhere to read from.
 
-The four new components map cleanly onto these three: the **daemon** generalizes the service shape + the IPC accept-loop to many tenants; the **`AI_AGENT` marker** adds a *named* job object (the one piece of genuinely net-new Win32) plus a per-agent SID; the **engine-agnostic launch path** generalizes the broker arm + adds per-engine launch profiles; the **binding API** (`nono-py`) exposes the same launch path with one twist — the in-process-`exec()` case (LangChain) where confinement must be applied **from inside** the agent process at startup, since there is no child boundary to wrap.
+---
 
-## Standard Architecture
-
-### System Overview
+## System Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│  CALLER SURFACE                                                            │
-│  ┌────────────┐  ┌──────────────┐  ┌───────────────────────────────────┐  │
-│  │ nono run   │  │ nono-py /    │  │ nono agentd (NEW daemon)          │  │
-│  │ (single    │  │ nono-ts      │  │  client: CLI subcommand / binding │  │
-│  │  launch)   │  │ confined_run │  │  talks to daemon control pipe     │  │
-│  └─────┬──────┘  └──────┬───────┘  └───────────────┬───────────────────┘  │
-├────────┼─────────────────┼─────────────────────────┼──────────────────────┤
-│        │      ENGINE-AGNOSTIC LAUNCH PATH (MODIFIED) │                      │
-│        │   ┌──────────────────────────────────────────────────────────┐   │
-│        └──▶│ exec_strategy_windows/launch.rs                           │◀──┘
-│           │   select_windows_token_arm → BrokerLaunch[NoPty]           │   │
-│           │   + per-engine launch profile (E1 exe/interp, E3 workspace)│   │
-│           │   + AI_AGENT named-job + per-agent SID (NEW)               │   │
-│           └───────────────┬──────────────────────────────────────────┘   │
-├───────────────────────────┼────────────────────────────────────────────────┤
-│   CONFINEMENT PRIMITIVE    │  (UNCHANGED — nono lib + broker)               │
-│   ┌────────────────────────▼─────────┐   ┌─────────────────────────────┐   │
-│   │ nono-shell-broker (Medium IL)    │   │ nono lib: Sandbox::apply    │   │
-│   │  builds Low-IL primary token /   │──▶│  CapabilitySet, NO_WRITE_UP │   │
-│   │  AppContainer; CreateProcess child│   │  WFP package/AppID scope    │   │
-│   └────────────────┬─────────────────┘   └─────────────────────────────┘   │
-│                    │ (confined engine process: cmd/python/node/aider…)      │
-├────────────────────┼────────────────────────────────────────────────────────┤
-│  MULTI-TENANT IPC   │  (MODIFIED: socket_windows.rs generalized N tenants)  │
-│   ┌─────────────────▼────────────────────────────────────────────────────┐ │
-│   │ Capability pipe: \\.\pipe\nono-agentd-<rendezvous>                    │ │
-│   │   PIPE_UNLIMITED_INSTANCES · per-tenant SDDL (session+package SID)    │ │
-│   │   framed JSON SupervisorMessage (keyed on session_id) · replay gate    │ │
-│   └──────────────────────────────────────────────────────────────────────┘ │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  ENFORCEMENT (UNCHANGED): Low-IL mandatory label · WFP (nono-wfp-service)     │
-└──────────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────── POLICY SPINE ─────────────────────────┐
+  │  HKLM\SOFTWARE\Policies\nono  (pushable via GPO / Intune) │
+  │  new: crates/nono-cli/src/config/machine.rs               │
+  │                                                            │
+  │  egress_allowlist: ["*.anthropic.com", "corp.internal"]   │
+  │  telemetry_channel: "Application"                          │
+  │  scratch_root: "C:\\ProgramData\\nono\\workspaces"         │
+  └────────────────────────────┬───────────────────────────────┘
+                               │ read at startup (fail-secure)
+           ┌────────────────────┼─────────────────────────────┐
+           │                   │                              │
+           ▼                   ▼                              ▼
+  ┌─────────────────┐  ┌─────────────────────┐  ┌────────────────────┐
+  │  Deployment     │  │  Egress Control      │  │  Telemetry         │
+  │  (SEED-001)     │  │  (SEED-002)          │  │  (SEED-003)        │
+  │                 │  │                      │  │                    │
+  │  MSI silent     │  │  nono-proxy:         │  │  new: crates/      │
+  │  install flags  │  │  ProxyConfig gets    │  │  nono-cli/src/     │
+  │  Scratch-space  │  │  allowed_hosts from  │  │  telemetry/        │
+  │  provisioner    │  │  machine policy      │  │  mod.rs            │
+  │  GPO ADMX       │  │                      │  │                    │
+  │  Intune CSP     │  │  nono-wfp-service:   │  │  hooks into        │
+  └─────────────────┘  │  WFP per-SID filter  │  │  DiagnosticFormatter
+                       │  reads same list     │  │  tracing Layer     │
+                       └─────────────────────┘  │  → Windows Event Log
+                                                 │  → Syslog          │
+                                                 └────────────────────┘
 ```
 
-### Component Responsibilities
+---
 
-| Component | Responsibility | New / Modified / Unchanged | Built From |
-|-----------|----------------|----------------------------|------------|
-| **`nono agentd` (persistent multi-tenant daemon)** | Long-running user-mode host that launches/adopts multiple agents, owns one persistent multi-client capability pipe, tracks per-tenant state (job handle, SID, profile), serves capability requests | **NEW binary** | `nono-wfp-service.rs` service skeleton (SCM dispatch, Event Log, control pipe, non-Windows stub, MSI reg) |
-| **Engine launch profiles** | Carry per-engine E1 (exe+interpreter coverage) and E3 (absolute writable workspace) facts so `nono run -- <engine>` Just Works | **NEW data** (`policy.json` / profile entries) | existing `claude-code` profile shape (`target_binary`, `windows_low_il_broker`) |
-| **`AI_AGENT` marker** | Per-agent **named** job object (`nono-ai-agent-<id>`) + per-agent identity SID; kill-group + descendant capture + enumerable identity | **NEW Win32** (named-job create/open) + reuse | `exec_strategy_windows/` job lifecycle (unnamed today); add `OpenJobObjectW`, `IsProcessInJob` |
-| **Per-agent capability/policy resolution** | Map a pipe request's tenant correlator → that agent's CapabilitySet/profile → approve/deny | **NEW logic** in daemon | existing policy resolver (`policy.rs`) + `CapabilityRequest` |
-| **Engine-agnostic launch path** | Generalize the broker arm to parent any covered engine; honor exe-coverage gate + absolute grants + user-owned workspace | **MODIFIED** | `select_windows_token_arm` / `BrokerLaunch[NoPty]` (already engine-neutral) |
-| **Multi-tenant capability pipe** | One persistent pipe name, N concurrent tenants, each scoped to its own SID via SDDL | **MODIFIED** | `socket_windows.rs` (`bind_*_with_session_and_package_sid`, `PIPE_UNLIMITED_INSTANCES`, re-accept) |
-| **`nono-py` / `nono-ts` `confined_run`** | Binding-exposed confined launch; **plus** in-process self-confinement entrypoint for the no-child-boundary case | **NEW API** on existing bindings | `../nono-py` (PyO3 0.28), `../nono-ts` (napi 2); bump stale internal `nono` pin to 0.62 |
-| **nono lib / broker / WFP service** | Confinement primitive, token construction, kernel network enforcement | **UNCHANGED** | as-is |
+## Feature 1: Machine Policy Layer
 
-## The Abstraction Boundary Contract
+### Where It Lives
 
-Every engine must expose the following for nono to mediate it. E1–E4 are the **launch-and-confine** contract (validated by spike 003); E5 is the fallback for engines nono cannot parent.
+New file: `crates/nono-cli/src/config/machine.rs`
 
-| # | Exposed thing | How nono consumes it | Owner |
-|---|---------------|----------------------|-------|
-| **E1** | Engine **executable + interpreter path(s)** | Launch profile supplies `--allow <exe-dir>` for `python.exe`/`node.exe`/engine binary; fail-secure refuse if uncovered | Launch profile |
-| **E2** | An **ownable launch command** (argv + env) | Daemon/CLI is the parent; if a third party owns the spawn, fall back to E5 or adopt | Launch path |
-| **E3** | Intended **writable workspace as an ABSOLUTE path** | Granted + relabeled Low-writable; engines do NOT inherit launcher CWD | Launch profile + caller |
-| **E4** | A **network identity** (AppContainer package SID, broker no-PTY arm) | Per-agent WFP scoping; daemon assigns one SID per tenant | Marker / launch path |
-| **E5** | *(hook-camp only)* A **pre-execution interception point** | Only when nono cannot be the parent (IDE-embedded engine, already-running process). Claude PreToolUse (built); Copilot JSON-RPC hooks; Cursor permission gate | Engine vendor |
+Added to `config/mod.rs` as `pub mod machine;`.
 
-**Contract invariants (banked, non-negotiable):**
-- The exe/interpreter-coverage gate is fail-secure: an uncovered binary is refused, never silently degraded.
-- All grants are absolute paths — never assume CWD inheritance (PowerShell resolved a relative write to `C:\`).
-- The workspace must be **user-owned** — an elevated/admin-owned dir defeats the DACL/label grant (no `WRITE_DAC`, R-B3).
-- Confinement ≥ the per-invocation `nono run` model: `NO_WRITE_UP` + deny-network-unless-granted.
+This is the only new Rust module in the crate. Everything else is modified existing files.
 
-## Data Flow
+### What It Does
 
-### Single-launch flow (table-stakes; productionize spike 003)
-
-```
-nono run --profile aider --allow <python-dir> -- python -m aider <abs-workspace>
-    ↓
-[exe-coverage gate]  cover python.exe + aider script? ── no ──▶ fail-secure refuse
-    ↓ yes
-select_windows_token_arm(is_detached=F, has_pty, has_session_sid=T,
-                         caps_demand_low_il, prefers_low_il_broker=T)
-    ↓  →  BrokerLaunch (PTY) | BrokerLaunchNoPty (no PTY)
-nono-shell-broker (Medium IL) → Low-IL primary token / AppContainer
-    ↓  CreateProcess(engine.exe)  [+ relabel workspace Low-writable]
-confined engine process  ── in-process file write / exec() / subprocess shell ──▶
-    all OS-enforced (Low-IL label + WFP), inherited by descendants
-```
-
-### Multi-tenant daemon flow (agent launch → mark → confine → capability requests)
-
-```
-client → nono agentd control pipe:  LaunchAgent{ profile, exe, args, workspace }
-    ↓
-daemon allocates tenant_id (synthetic session SID); 
-        CreateJobObjectW("nono-ai-agent-<tenant_id>")                    ← MARK
-        derive per-agent SID (session SID + AppContainer pkg SID)
-    ↓
-daemon → engine-agnostic launch path (same broker arm as single-launch)
-    ↓   AssignProcessToJobObject(job, child)                            ← MARK
-confined engine process spawned, scoped to tenant's session+package SID
-    ↓
-engine SDK / hook → CONNECT to \\.\pipe\nono-agentd-<rendezvous>        ← multi-client
-    ↓   (SDDL admits only this tenant's SID to its pipe instance)
-SupervisorMessage::Request(CapabilityRequest{ ..., session_id=tenant })  [framed JSON]
-    ↓
-daemon: session_id → per-agent CapabilitySet/profile → policy resolve → decide
-    ↓
-SupervisorResponse::Decision{ request_id, ApprovalDecision::Approved(ResourceGrant) }
-    ↓   (handle brokered via DuplicateHandle into the tenant process, as today)
-... pipe stays open; daemon serves the next tenant's request concurrently ...
-[demote]  misbehaving tenant → post-hoc IL-drop (supplementary) or TerminateJobObject
-```
-
-### In-process-exec() case (LangChain — no child-process boundary)
-
-This is the architecturally distinct path and the reason the binding exists. LangChain's `PythonREPLTool` runs `exec()` **inside** the already-running python process; `ShellTool` spawns a subprocess. There is no child the daemon can wrap *per tool call*.
-
-Two viable shapes, both sound:
-
-```
-SHAPE A — external launch (preferred default, identical to spike 003):
-  nono parents the python entrypoint.  The whole interpreter is sandboxed.
-  → in-process exec() is confined because the PROCESS is confined.
-  → subprocess ShellTool children inherit the Low-IL token + job.
-  No new mechanism; the binding is just a convenience wrapper over nono run.
-
-SHAPE B — self-confinement from inside (nono-py, the abstraction proof):
-  The agent process calls nono.confine(caps) at startup, BEFORE risky work.
-  → applies the sandbox to SELF (Sandbox::apply on the current process).
-  → all later in-process exec()/file I/O is OS-enforced.
-  Caveat (banked from spike 002): self-applied confinement is sound ONLY if
-  applied before any privileged handle is opened — i.e. at process startup,
-  not mid-run. Mid-run self-demote is the leaky post-hoc IL-drop (demote-only).
-```
-
-**Roadmap consequence:** the binding must expose **both** `confined_run(exe, args, …)` (Shape A, spawns a confined child) **and** an in-process `confine(caps)` startup call (Shape B). Shape B is what proves "engine is a variable" for the in-process case — LangChain has no child boundary, so external launch (A) confines it transitively, and self-confine (B) confines it intrinsically. Document that B must be the first thing the agent does.
-
-## Architectural Patterns
-
-### Pattern 1: Named job object as the `AI_AGENT` marker (not a token SID alone)
-
-**What:** One named kernel job per tenant (`CreateJobObjectW(attrs, "nono-ai-agent-<id>")`), reopened across daemon calls via `OpenJobObjectW`, queried via `IsProcessInJob`/`QueryInformationJobObject`.
-**When to use:** Whenever the daemon launches or adopts an agent.
-**Trade-offs:** Job objects are kernel-tracked, capture descendants, double as the kill-group (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, already wired) and resource-cap, and survive across calls. A SID alone gives identity but not containment or teardown. **Use a per-agent SID *in addition*** (for WFP + per-tenant pipe DACL scoping), not instead.
+Reads `HKLM\SOFTWARE\Policies\nono` on Windows via `windows-sys` (already a workspace dep). On non-Windows it returns `Ok(None)` so the codebase compiles cross-platform. Fails secure: a registry read error is fatal (abort), not a fallback to permissive defaults.
 
 ```rust
-// NEW: name the job (today it is unnamed in exec_strategy_windows/)
-let job = unsafe { CreateJobObjectW(std::ptr::null(), wide("nono-ai-agent-<id>").as_ptr()) };
-// reopen later from the daemon to inspect/terminate a tenant:
-let job = unsafe { OpenJobObjectW(JOB_OBJECT_ALL_ACCESS, FALSE, wide(name).as_ptr()) };
-let mut in_job: BOOL = 0;
-unsafe { IsProcessInJob(proc_handle, job, &mut in_job) }; // "is this PID a marked AI_AGENT?"
+// crates/nono-cli/src/config/machine.rs — sketch, not final code
+#[derive(Debug, Default)]
+pub struct MachinePolicy {
+    pub egress_allowlist: Option<Vec<String>>,   // REG_MULTI_SZ
+    pub telemetry_channel: Option<String>,        // REG_SZ
+    pub scratch_root: Option<PathBuf>,            // REG_SZ
+    pub strict_egress: Option<bool>,              // REG_DWORD 0/1
+}
+
+pub fn load_machine_policy() -> Result<Option<MachinePolicy>>
 ```
 
-### Pattern 2: Multi-client capability pipe via per-tenant SDDL scoping
+### Precedence / Merge Rule
 
-**What:** One persistent pipe name created with `PIPE_UNLIMITED_INSTANCES`; each new client connection is a fresh instance whose SDDL admits **only that tenant's** session+package SID.
-**When to use:** The daemon's capability channel.
-**Trade-offs:** Reuses the proven `socket_windows.rs` machinery — `CAPABILITY_PIPE_SDDL` base + the per-session/per-package SID ACE appends, the object-specific `CAPABILITY_PIPE_RESTRICTING_SID_MASK = 0x0012019F` mask (NOT a `G*` generic mnemonic — see the second-DACL-pass analysis in that file), framed JSON, 64 KiB cap, bounded read timeout, replay/token gate. The single change is moving from `1` instance + one session SID to N instances + a tenant→SID map.
+The merge order is: machine policy > per-user profile > built-in defaults.
 
-```text
-// MODIFIED: CapabilityRequest already carries session_id; reuse it AS the tenant
-// correlator (one synthetic session SID per agent). The daemon keys its tenant
-// table on session_id — NO enum/wire change is forced. Add a dedicated tenant_id
-// field ONLY if session_id proves insufficient.
-```
+The existing precedence stack at startup is:
+1. CLI flags (highest)
+2. Per-user profile (`~/.config/nono/config.toml` loaded via `config/user.rs`)
+3. Embedded `policy.json` defaults (via `policy.rs` group resolver)
 
-### Pattern 3: Daemon-as-second-service-instance (reuse the WFP-service skeleton)
+Machine policy inserts between CLI flags and the per-user profile. The user can still override with explicit CLI flags (principle: machine policy sets the floor, not a ceiling on per-run use). For security-relevant settings like `egress_allowlist`, machine policy MAY be configured to reject user relaxations (a `lock_egress: true` flag in the registry).
 
-**What:** `nono agentd` is a second `windows-service 0.7` host modeled byte-for-byte on `nono-wfp-service.rs`: `define_windows_service!`, `service_dispatcher`, `service_control_handler`, Event Log source, control pipe, `--service-mode`, and the `#[cfg(not(target_os="windows"))]` stub `main`.
-**When to use:** Building the daemon binary.
-**Trade-offs:** Maximum reuse of audited, MSI-installed, signed service plumbing. The daemon does **not** need elevation for launch/confine (the Low-IL broker runs as the user); it only coordinates with the *separate* elevated `nono-wfp-service` for network enforcement over its existing `\\.\pipe\nono-wfp-control`. Keep the v2.11 non-fatal-service-start posture so a daemon hiccup doesn't roll back the MSI.
-
-## Anti-Patterns
-
-### Anti-Pattern 1: A new wire protocol or new IPC transport for the daemon
-**What people do:** Invent protobuf/bincode or a second pipe design for "the multi-tenant case."
-**Why it's wrong:** The framed JSON `SupervisorMessage`/`SupervisorResponse` is already bounded (64 KiB), replay-guarded, timeout-bounded, re-accept-capable, and serde-derived. A new format is unjustified security risk in the critical path.
-**Do this instead:** Reuse the existing frame; key the daemon's tenant table on the existing `session_id` (one synthetic session SID per agent). Only add a `tenant_id` field if `session_id` proves insufficient.
-
-### Anti-Pattern 2: Post-hoc "detect-and-confine any running AI_AGENT" as the primary model
-**What people do:** Enumerate processes, drop their IL after the fact.
-**Why it's wrong:** Leaky/unsound — handles/sections/threads opened before the drop survive at higher IL (banked spike 002).
-**Do this instead:** Launch-time confinement (broker arm) is the boundary. Post-hoc IL-drop ships ONLY as a supplementary "demote a misbehaving/escaped agent" incident-response lever, never as the wall.
-
-### Anti-Pattern 3: Generalizing the Claude PreToolUse hook to wrap every tool call
-**What people do:** Spawn a fresh `nono run` per tool call for all engines (the Claude path's shape).
-**Why it's wrong:** Per-call spawn cost × N; requires every engine to expose a rewrite-capable pre-hook (most don't); does **not** confine in-process ops (LangChain `exec()`, Aider in-process writes). It was a workaround for not owning the Claude spawn.
-**Do this instead:** Own the *engine* spawn once (launch-and-confine). Keep per-tool hooking (E5) only for engines nono cannot parent.
-
-### Anti-Pattern 4: Bumping `windows-sys`/`napi`/`pyo3` "to be current" inside this milestone
-**What people do:** Couple a `windows-sys 0.59→0.61` or `napi 2→3` bump to feature work.
-**Why it's wrong:** Cross-target-drift hazard (two cfg-gated compile errors already reached release tags — `feedback_clippy_cross_target`); napi 3 is a breaking surface. No needed API is missing from the current pins.
-**Do this instead:** Stay on pinned versions; add *features* to `windows-sys 0.59`, not versions. Bump only the **internal `nono` pin** in the bindings (0.57.0/0.33.0 → 0.62.x) to expose the new API.
-
-## Integration Points
-
-### Internal Boundaries
-
-| Boundary | Communication | New/Modified | Notes |
-|----------|---------------|--------------|-------|
-| `nono agentd` ↔ launch path | direct fn call (in-process, same binary or `nono-cli` lib) | NEW caller of MODIFIED path | daemon invokes the same `BrokerLaunch[NoPty]` arm `nono run` uses |
-| launch path ↔ `nono-shell-broker` | broker command line + handle list (Phase 31 contract) | UNCHANGED | engine-neutral already; just supply per-engine exe/args |
-| launch path ↔ `nono` lib | `Sandbox::apply(CapabilitySet)` | UNCHANGED | confinement primitive |
-| `nono agentd` ↔ marker | named job create/open/query | NEW Win32 in `exec_strategy_windows/` | `CreateJobObjectW`(named), `OpenJobObjectW`, `IsProcessInJob` |
-| confined engine ↔ daemon | multi-client named pipe, framed JSON | MODIFIED `socket_windows.rs` | `PIPE_UNLIMITED_INSTANCES` + per-tenant SDDL (both already exist) |
-| `nono agentd` ↔ `nono-wfp-service` | existing WFP control pipe (`\\.\pipe\nono-wfp-control`) | UNCHANGED | daemon requests per-agent egress via the existing elevated service |
-| `nono-py`/`nono-ts` ↔ launch path | `confined_run` FFI → same launch path; `confine()` → `Sandbox::apply(self)` | NEW API | bump internal `nono` pin to 0.62.x |
-| daemon binary ↔ MSI / SCM | `windows-service 0.7` dispatch + MSI registration | NEW (mirrors WFP service) | reuse v2.11 non-fatal-start posture |
-
-### Cross-Target Discipline (MANDATORY — CLAUDE.md)
-
-Daemon + marker code is `#[cfg(target_os = "windows")]`. Provide a non-Windows stub `main` exactly like `nono-wfp-service.rs` so workspace `cargo check` stays green on Unix, and run cross-target clippy (`x86_64-unknown-linux-gnu` + `x86_64-apple-darwin`). Two cfg-gated compile errors already reached release tags this fork — this is a hard gate.
-
-## Dependency-Ordered Build Sequence
-
-The quality gate requires single-launch before the multi-tenant daemon, and the in-process-exec case addressed. This order respects all feature dependencies from FEATURES.md.
+The merge is performed in `crates/nono-cli/src/main.rs` (or its `app_runtime` dispatcher) immediately after argument parsing, before profile loading:
 
 ```
-PHASE A — Engine-agnostic launch path (productionize spike 003)        [P1, foundation]
-  A1. Promote the validated 003 path to a first-class code path (de-spike).
-  A2. Per-engine launch profiles: aider + langchain-python (both python.exe)
-      carrying E1 (exe+interpreter coverage) + E3 (absolute workspace).
-  A3. Fail-secure exe/interpreter coverage gate per engine (exists; assert per profile).
-  A4. Workspace-ownership/relabel handling + clear R-B3 diagnostic.
-  A5. Per-engine fit docs (launch-and-confine vs hook vs Cursor-WSL-only).
-  ── Gate: a non-Claude engine (aider) confined end-to-end on a real Win11 host.
-
-PHASE B — nono-py binding + in-process-exec proof                      [P2, parallel-capable with C]
-  B1. Bump internal nono pin 0.57.0 → 0.62.x in ../nono-py.
-  B2. confined_run(exe, args, allow, profile) — Shape A (spawn confined child).
-  B3. confine(caps) in-process self-confinement entrypoint — Shape B (LangChain exec()).
-  B4. Prove: confine a real Python/LangChain agent with NO Claude hook.
-  ── Gate: LangChain PythonREPLTool exec() write outside workspace denied; inside allowed.
-  (Depends on A's launch semantics; independent of the daemon.)
-
-PHASE C — AI_AGENT marker                                              [P2, prerequisite for D]
-  C1. Named job object: CreateJobObjectW(name) + OpenJobObjectW in exec_strategy_windows/.
-  C2. Per-agent identity SID (session SID + AppContainer package SID) allocation.
-  C3. IsProcessInJob / QueryInformationJobObject: identify/enumerate a marked agent.
-  ── Gate: launch marks; an arbitrary PID is correctly classified as AI_AGENT or not.
-
-PHASE D — Persistent multi-tenant daemon (riskiest; former spike 004) [P2/P3, depends A+C]
-  D1. nono agentd binary modeled on nono-wfp-service.rs (SCM, Event Log, control pipe,
-      non-Windows stub, MSI reg, non-fatal start).
-  D2. Multi-client capability pipe: generalize socket_windows.rs to PIPE_UNLIMITED_INSTANCES
-      + per-tenant SDDL; key tenant table on session_id (no wire change).
-  D3. Per-agent capability/policy resolution: session_id → CapabilitySet/profile → decide.
-  D4. Token/job REUSE across many agents (the unproven part — spike inside this phase).
-  D5. LaunchAgent / AdoptAgent control verbs over the daemon control pipe.
-  ── Gate: two concurrent confined agents, each served independently over one pipe,
-           each scoped to its own SID; cross-tenant request rejected.
-
-PHASE E — Supplementary controls + secondary engines                  [P2/P3, optional]
-  E1. Post-hoc demote control (spike 002 IL-drop) wired as a daemon "demote tenant" verb.
-      Framed explicitly as demote-only, never the boundary.
-  E2. Uniform WFP per-agent egress via the existing nono-wfp-service (E4 SID per tenant).
-  E3. Copilot CLI profile (second node engine; low marginal cost after A).
-  E4. nono-ts confinedRun parity (bump internal nono pin 0.33.0 → 0.62.x).
+1. parse CLI args
+2. load_machine_policy()     <-- NEW, fail-secure
+3. load_user_config()        <-- existing
+4. load_embedded_policy()    <-- existing
+5. resolve capabilities      <-- existing policy.rs
 ```
 
-**Ordering rationale:**
-- **A before everything** — the whole milestone is "make `nono run -- <engine>` Just Work per engine"; the daemon, binding, and marker all sit on top of the productionized launch path.
-- **B and C are independent of each other** and both depend only on A — they can run in parallel. B (binding) proves the abstraction in-library and directly addresses the in-process-exec case; C (marker) is the daemon's prerequisite.
-- **D after A + C** — the daemon is launch-and-confine (A) + a marker (C) + a multi-client pipe + token/job reuse. The quality gate ("single-launch before multi-tenant daemon") is satisfied: D cannot start until A is a gated, working code path. D4 (token/job reuse across agents) is the genuinely unspiked risk and is isolated inside D.
-- **E last** — demote is supplementary (must follow a proven launch-time default); WFP per-agent and the second-engine/second-binding profiles are low-cost adds once the shape is proven.
+### Fail-Secure Invariants
+
+- If the registry key exists but a value is malformed, abort with `NonoError::ConfigParse`. Never silently use empty/permissive defaults for security values.
+- If the registry key does not exist at all, return `Ok(None)` — machine is not centrally managed, fall through to per-user config normally.
+- Configuration load failures must be fatal (CLAUDE.md § Permission Scope: "Configuration load failures must be fatal").
+
+### New vs Modified: Feature 1
+
+| Component | Status | Change |
+|-----------|--------|--------|
+| `crates/nono-cli/src/config/machine.rs` | NEW | Registry reader, `MachinePolicy` struct |
+| `crates/nono-cli/src/config/mod.rs` | MODIFIED | `pub mod machine;` + re-export |
+| `crates/nono-cli/src/main.rs` (or `app_runtime.rs`) | MODIFIED | Call `load_machine_policy()` at startup |
+| `crates/nono-cli/Cargo.toml` | MODIFIED | No new deps — `windows-sys` already present |
+| `scripts/build-windows-msi.ps1` | MODIFIED | Add silent-install flags (`/quiet /norestart`) + scratch-space provisioner custom action |
+| `crates/nono-cli/data/policy.json` | NOT MODIFIED | Machine policy is a separate layer, not a policy group |
+
+---
+
+## Feature 2: Unified Egress Control
+
+### The Two Enforcers
+
+nono currently has two orthogonal egress enforcement mechanisms:
+
+| Enforcer | Layer | Mechanism | What It Controls |
+|----------|-------|-----------|-----------------|
+| `nono-proxy` | User-space L7 | HTTP CONNECT intercept + domain filter | Domain + method + path; handles credential injection; runs only when proxy is active |
+| `nono-wfp-service` | Kernel (WFP) | `FwpmFilterAdd0` per-SID filter | Raw TCP/UDP by AppContainer SID; enforces for ALL processes with that SID regardless of proxy |
+
+These are NOT duplicates. They are defense-in-depth layers with different granularities. The enterprise story is: WFP provides the hard kernel-enforced boundary (agent cannot bypass even if it ignores the proxy), while nono-proxy provides L7 method/path filtering and credential injection on top.
+
+### The Problem With Duplicating the Allowlist
+
+Today `nono-proxy`'s `ProxyConfig.allowed_hosts` is populated from the per-user profile JSON. The WFP service has its own separate allowlist fed by the daemon's `capability_set`. If machine policy adds a third copy, the system has three allowlists to keep in sync, with no single source of truth.
+
+### Solution: One Allowlist, Two Consumers
+
+Machine policy owns the allowlist (`HKLM\...\EgressAllowlist` REG_MULTI_SZ). Both enforcers read from it at startup through the machine policy layer. Neither gets its own copy of the list.
+
+```
+HKLM\...\EgressAllowlist
+    │
+    ▼
+MachinePolicy.egress_allowlist: Vec<String>
+    │                           │
+    ▼                           ▼
+ProxyConfig.allowed_hosts   WFP allowlist passed to
+(via nono-proxy filter.rs)  nono-wfp-service at daemon launch
+```
+
+### Integration Point: nono-proxy
+
+`ProxyConfig` is built in `nono-cli` (not inside `nono-proxy` itself — the proxy is a library whose config is constructed by the caller). The call site that constructs `ProxyConfig` is in `nono-cli`'s execution strategy / supervisor setup code.
+
+**Modified file:** wherever `ProxyConfig { allowed_hosts: ..., strict_filter: ..., }` is constructed in `crates/nono-cli/src/`. This is a read-at-construction-time injection, not a runtime reload. The machine policy list replaces or augments `allowed_hosts`.
+
+If `MachinePolicy.strict_egress == true`, set `ProxyConfig.strict_filter = true` so an empty list is deny-all rather than allow-all (the `ProxyConfig.strict_filter` field already exists in `nono-proxy/src/config.rs`).
+
+**No changes to `nono-proxy/src/`** — the proxy already has the data model needed. The caller just supplies different values.
+
+### Integration Point: nono-wfp-service
+
+The WFP service receives its per-agent rules from the daemon via the control pipe. The daemon's `launch_agent` path builds the `CapabilitySet` (which encodes the network capability). Machine policy allowlist entries translate into `NetworkCapability` entries in the capability set before the daemon passes them to the WFP service.
+
+**Modified file:** the daemon's capability-set builder (in `nono-agentd`), where it constructs the network capability for a new agent. The machine policy allowlist is merged in here before the `CapabilitySet` is sent to the WFP service.
+
+### Reconciliation Summary
+
+There is no new "enterprise egress story" that replaces the existing ones. The architecture is:
+
+1. Machine policy is the allowlist source.
+2. `nono-cli` reads machine policy at startup and injects it into `ProxyConfig`.
+3. `nono-agentd` reads machine policy at daemon startup and injects it into the `CapabilitySet` it builds for each agent.
+4. WFP enforces the kernel boundary; proxy enforces the L7 boundary. Both use the same domain list from the same source.
+
+### New vs Modified: Feature 2
+
+| Component | Status | Change |
+|-----------|--------|--------|
+| `crates/nono-proxy/src/config.rs` | NOT MODIFIED | `ProxyConfig` already has `allowed_hosts` + `strict_filter` |
+| `crates/nono-proxy/src/filter.rs` | NOT MODIFIED | `ProxyFilter` already accepts `allowed_hosts` slice |
+| `crates/nono-cli/src/` (ProxyConfig construction site) | MODIFIED | Inject `machine_policy.egress_allowlist` into `ProxyConfig` at construction |
+| `nono-agentd` (capability set builder) | MODIFIED | Inject machine policy allowlist into per-agent `CapabilitySet` for WFP |
+| `crates/nono-cli/src/config/machine.rs` | NEW (Feature 1 deliverable) | Provides `MachinePolicy.egress_allowlist` |
+
+---
+
+## Feature 3: Structured Security-Event Telemetry
+
+### Event Sources (What to Capture)
+
+Four deny/violation event types need to become structured security signals:
+
+1. **Path deny** — when `DiagnosticFormatter` records a `DenialRecord` (path + access mode + reason)
+2. **Network deny** — when `nono-proxy/audit.rs::log_denied()` fires (already emits `tracing::info!` with structured fields)
+3. **Label violation** — when the Windows mandatory-label (Low-IL) enforcement blocks an operation (currently goes to stderr as an error exit)
+4. **Hook fail-closed** — when `hooks.rs` / session hooks trigger a fail-closed response (Phase 58 hooks path)
+
+### Where to Hook
+
+The cleanest integration point is a `tracing::Layer` that listens on a specific target prefix (`nono_security::*`) and forwards structured events to the OS sink. This approach:
+- Requires no changes to the library (`crates/nono/`) — stays within CLI
+- Reuses the existing `tracing` initialization in `crates/nono-cli/src/cli_bootstrap.rs` (`init_tracing()`)
+- Lets existing callsites emit `tracing::warn!(target: "nono_security::path_deny", ...)` without importing a new crate
+- Is testable in isolation (replace the subscriber in tests)
+
+The alternative of wrapping `DiagnosticFormatter` directly is worse: `DiagnosticFormatter` is in the library, which must stay policy-free. Adding event emission to it would violate the library-vs-CLI boundary.
+
+### New Module: `crates/nono-cli/src/telemetry/`
+
+```
+crates/nono-cli/src/telemetry/
+├── mod.rs          # SecurityEventLayer (tracing::Layer impl), SecurityEvent enum
+├── event.rs        # SecurityEvent schema: event_type, severity, session_id,
+│                   # agent_pid, path/host/method, timestamp_unix_ms, nonce
+├── windows.rs      # Windows Event Log emitter (cfg(target_os = "windows"))
+│                   # uses windows-sys ReportEventW (evntprov.h alternative)
+└── syslog.rs       # Syslog emitter (cfg(unix)) via RFC 5424 UDP/TCP
+                    # (can use the `syslog` crate or roll minimal UDP)
+```
+
+This is a new module in `nono-cli`, not a new crate. The CLAUDE.md boundary rule is clear: policy, UX, and output live in the CLI. Telemetry emission is output, and it depends on machine policy config (channel names), so it belongs in `nono-cli`.
+
+A separate crate would be premature — the emitter has no consumers other than `nono-cli` and `nono-agentd`, and the tracing Layer approach lets both binaries register it at their respective init paths.
+
+### How Existing Emit Points Are Wired
+
+**Path deny — DiagnosticFormatter path:**
+`DiagnosticFormatter::format_footer()` is called in `nono-cli` after child exit. The CLI already has the `DenialRecord` slice at that point. The telemetry wiring goes in the CLI caller (the exec strategy's post-exit handler), not inside `DiagnosticFormatter` itself:
+
+```
+// In nono-cli exec strategy post-exit handler (MODIFIED):
+for denial in &denials {
+    tracing::warn!(
+        target: "nono_security::path_deny",
+        path = %denial.path.display(),
+        access = %denial.access,
+        reason = ?denial.reason,
+        session_id = session_id,
+    );
+}
+```
+
+The `SecurityEventLayer` picks this up and routes it to Event Log / Syslog.
+
+**Network deny — nono-proxy audit.rs:**
+`audit::log_denied()` already emits `tracing::info!(target: "nono_proxy::audit", decision = "deny", ...)`. Two options:
+- Add a second `tracing::warn!(target: "nono_security::network_deny", ...)` call in `log_denied()` — clean, but adds a second emit.
+- Have `SecurityEventLayer` filter on `nono_proxy::audit` events where `decision == "deny"` — avoids touching proxy source.
+
+Preferred: option 1 (explicit dual-emit in `log_denied`), because it keeps the security event schema independent of the proxy audit schema and avoids stringly-typed field scraping.
+
+**Hook fail-closed:**
+`crates/nono-cli/src/hooks.rs` — add a `tracing::warn!(target: "nono_security::hook_fail_closed", ...)` call at the fail-closed code path. This is the most targeted change.
+
+### Windows Event Log Specifics
+
+Custom Application log channel: `nono-security` (or `nono/Security`). Registered via registry key at MSI install time (part of the deployment work in Feature 1). Uses `windows-sys::Win32::System::EventLog::ReportEventW` or the modern ETW path via `evntprov`. The `DWORD` event IDs map to event types (1000=path_deny, 1001=network_deny, 1002=label_violation, 1003=hook_fail_closed).
+
+The MSI custom action (or a `nono setup --register-event-source` sub-command) registers the source. Failing to register is non-fatal for the sandbox; telemetry emission silently no-ops if the source is not registered (this is the one place where a silent fallback is acceptable — losing a telemetry event is not a security failure).
+
+### Tamper Evidence
+
+The SEED-003 "tamper-proof" claim maps to two lightweight mechanisms (SEED-005 ZT ledger is out of scope):
+1. Append-only channel: Windows Event Log Application channel is append-only by OS design; events cannot be deleted by non-admin processes.
+2. Per-event sequence counter: include an incrementing `sequence_id` in each event. Gaps in the sequence visible to the SIEM indicate dropped events.
+
+A cryptographic event chain (hash-chained events) is SEED-005 territory — defer it.
+
+### New vs Modified: Feature 3
+
+| Component | Status | Change |
+|-----------|--------|--------|
+| `crates/nono-cli/src/telemetry/mod.rs` | NEW | `SecurityEventLayer`, `SecurityEvent` schema |
+| `crates/nono-cli/src/telemetry/event.rs` | NEW | Event enum + schema types |
+| `crates/nono-cli/src/telemetry/windows.rs` | NEW | `cfg(windows)` Event Log emitter |
+| `crates/nono-cli/src/telemetry/syslog.rs` | NEW | `cfg(unix)` Syslog emitter |
+| `crates/nono-cli/src/cli_bootstrap.rs` | MODIFIED | Register `SecurityEventLayer` with the `tracing` subscriber at `init_tracing()` |
+| `crates/nono-cli/src/` (exec strategy post-exit) | MODIFIED | Emit `nono_security::path_deny` events per denial |
+| `crates/nono-proxy/src/audit.rs` | MODIFIED | Add dual-emit `nono_security::network_deny` in `log_denied()` |
+| `crates/nono-cli/src/hooks.rs` | MODIFIED | Emit `nono_security::hook_fail_closed` at fail-closed path |
+| `crates/nono/src/diagnostic.rs` | NOT MODIFIED | Library stays policy-free; emit happens in CLI caller |
+| `scripts/build-windows-msi.ps1` | MODIFIED | Register Event Log source at install time |
+
+---
+
+## Data Flow: Policy to Enforcement
+
+```
+Startup:
+  load_machine_policy()
+       │
+       ├─► egress_allowlist ─────────────────────────┐
+       │                                              │
+       │   ProxyConfig construction (nono-cli)        │    CapabilitySet construction (nono-agentd)
+       │        │                                     │              │
+       │        ▼                                     │              ▼
+       │   ProxyFilter::new_strict(allowlist)         │    NetworkCapability { allowed_domains }
+       │        │                                     │              │
+       │        ▼                                     │              ▼
+       │   nono-proxy: filter each CONNECT req        │    nono-wfp-service: FwpmFilterAdd0 per-SID
+       │
+       ├─► telemetry_channel ──► SecurityEventLayer init ──► Event Log / Syslog
+       │
+       └─► scratch_root ──► scratch-space provisioner (setup.rs / MSI custom action)
+
+Runtime deny events:
+  exec_strategy post-exit handler
+       │
+       ├─ DenialRecord[] ──► tracing::warn!(target: "nono_security::path_deny", ...)
+       │                          │
+       │                     SecurityEventLayer ──► Event Log (1000)
+       │
+  nono-proxy audit::log_denied()
+       │
+       ├─ deny event ──► tracing::warn!(target: "nono_security::network_deny", ...)
+       │                      │
+       │                 SecurityEventLayer ──► Event Log (1001)
+       │
+  hooks.rs fail-closed path
+       │
+       └─ hook failure ──► tracing::warn!(target: "nono_security::hook_fail_closed", ...)
+                                │
+                           SecurityEventLayer ──► Event Log (1003)
+```
+
+---
+
+## Component Boundaries
+
+| Component | Owns | Does NOT own |
+|-----------|------|-------------|
+| `crates/nono/` (library) | Sandbox primitives, `CapabilitySet`, `DiagnosticFormatter`, `DenialRecord` types | Policy, telemetry emission, machine registry reads |
+| `crates/nono-cli/src/config/machine.rs` | HKLM read, `MachinePolicy` struct, fail-secure parse | Egress enforcement, event emission |
+| `crates/nono-cli/src/telemetry/` | `SecurityEventLayer`, schema, OS emitters | Policy loading, sandbox enforcement |
+| `crates/nono-proxy/` | Domain filter, credential injection, `ProxyConfig` data model | Building `ProxyConfig` from policy (CLI does that) |
+| `nono-agentd` | Per-agent capability set construction, WFP handoff | Machine policy parsing (reads via machine.rs API) |
+
+The library-vs-CLI boundary from CLAUDE.md is preserved throughout: the library gets new types at most (if `DenialRecord` needs a new field), never policy logic or platform-specific emission.
+
+---
+
+## Build Order (Dependency-Respecting)
+
+The machine policy layer is the shared prerequisite. Neither egress injection nor telemetry configuration can proceed without it.
+
+**Phase A — Policy Spine (blocks everything else)**
+1. `crates/nono-cli/src/config/machine.rs` — `MachinePolicy` struct + HKLM reader
+2. Wire `load_machine_policy()` into startup in `main.rs`
+3. `scripts/build-windows-msi.ps1` — silent install flags + scratch provisioner custom action + Event Log source registration
+
+**Phase B — Egress Control (requires A)**
+4. Inject `MachinePolicy.egress_allowlist` into `ProxyConfig` at construction site in nono-cli
+5. Inject allowlist into `nono-agentd` capability-set builder for WFP
+6. Dark-factory gate: `verify-dark.ps1` gate confirms proxy rejects out-of-allowlist domain + WFP blocks unlisted SID
+
+**Phase C — Telemetry (requires A; independent from B)**
+7. `crates/nono-cli/src/telemetry/` module (schema, Layer, Windows emitter, Syslog emitter)
+8. Register `SecurityEventLayer` in `init_tracing()` using `MachinePolicy.telemetry_channel`
+9. Emit `nono_security::*` events at the three callsites (exec-strategy, audit.rs, hooks.rs)
+10. Dark-factory gate: `verify-dark.ps1` gate confirms Event Log entry appears after a sandbox denial
+
+B and C can proceed in parallel once A is complete.
+
+---
+
+## Anti-Patterns to Avoid
+
+### Anti-Pattern: Three Separate Allowlists
+
+**What people do:** add a machine-policy allowlist field to `MachinePolicy`, add another field to `ProxyConfig`, and pass a third copy to the WFP service — each sourced independently from the registry.
+
+**Why it's wrong:** when IT updates the GPO, only one of the three lists updates. The other two retain stale entries. The security boundary becomes whatever the strictest stale list happens to be, which is not the policy the IT admin intended.
+
+**Do this instead:** `MachinePolicy.egress_allowlist` is the single source. `ProxyConfig.allowed_hosts` is constructed from it. The WFP capability set is constructed from it. No copy-paste.
+
+### Anti-Pattern: Emit Telemetry From the Library
+
+**What people do:** add a `telemetry_emitter: Option<Box<dyn Fn(SecurityEvent)>>` callback to `DiagnosticFormatter` so denials can be emitted inline.
+
+**Why it's wrong:** the library is a pure sandbox primitive with no security policy (CLAUDE.md design decision #4). Adding an emission callback leaks policy concerns into the library, makes the library non-embeddable without a telemetry context, and breaks the clean fuzz/test surface.
+
+**Do this instead:** the CLI caller already has the `DenialRecord` slice after child exit. Emit from there. The `DenialRecord` type is already a clean data struct with no behavior.
+
+### Anti-Pattern: New Crate for Telemetry
+
+**What people do:** create `crates/nono-telemetry/` as a new workspace member to share telemetry logic between `nono-cli` and `nono-agentd`.
+
+**Why it's wrong:** the only consumers are `nono-cli` and `nono-agentd`. Both already depend on `nono-cli` indirectly via the shared type ecosystem. A new crate adds a Cargo.toml, CI build target, and version pin for marginal benefit. The `tracing::Layer` approach achieves the sharing goal — both binaries register the same layer type at their respective `init_tracing()` calls.
+
+**Do this instead:** put the `SecurityEventLayer` and schema in `nono-cli/src/telemetry/` and re-export it for `nono-agentd` to use via a path dep if needed. Promote to a crate only if a third consumer appears.
+
+### Anti-Pattern: Silent Fallback on Machine Policy Parse Error
+
+**What people do:** `machine_policy.unwrap_or_default()` so a corrupted registry value silently returns empty/permissive policy.
+
+**Why it's wrong:** an empty `egress_allowlist` with `strict_filter = false` means `ProxyFilter::allow_all()` — the opposite of the intended deny-by-default posture.
+
+**Do this instead:** a malformed registry value is a fatal error. The operator must fix the GPO. CLAUDE.md § Permission Scope: "Configuration load failures must be fatal."
+
+---
 
 ## Scaling Considerations
 
-| Scale | Architecture |
-|-------|--------------|
-| 1 agent | `nono run` single-launch (Phase A). No daemon needed. |
-| 2–handful concurrent | Daemon with sync per-tenant threads generalizing `socket_windows.rs` (`PeekNamedPipe` deadline-poll), or tokio per-connection tasks. Reuses proven code. |
-| Many concurrent | `tokio::net::windows::named_pipe` `ServerOptions` + `PIPE_UNLIMITED_INSTANCES`, one task per connection (mirrors `nono-wfp-service`'s tokio loop). Per-connection tasks scale without thread blowup. |
+This is a single-machine tool deployed fleet-wide. The scaling concern is the number of machines the GPO applies to, not concurrent users on one machine.
 
-**First bottleneck:** capability-pipe accept-loop concurrency — addressed by the tokio-per-connection model when tenant count is unbounded; the sync-per-thread model is fine for a known small N and maximizes reuse of audited code.
+| Scale | Architecture Adjustment |
+|-------|------------------------|
+| 1–100 machines | HKLM registry via GPO is sufficient; no central server needed |
+| 100–10K machines | Add ADMX template for Group Policy; Intune CSP for cloud-managed fleets; no architectural change |
+| 10K+ machines | SEED-005 ZT-Infra signed policy overrides (separate milestone); the registry spine remains but gets supplemented by a policy distribution service |
+
+The Windows Event Log → Windows Event Forwarding (WEF) → SIEM pipeline handles scale on the telemetry side without any code changes — that is the OS-native fan-out.
+
+---
 
 ## Sources
 
-- In-tree (HIGH, authoritative current code):
-  - `crates/nono/src/supervisor/socket_windows.rs` — SDDL-scoped pipe, `PIPE_UNLIMITED_INSTANCES`, `CAPABILITY_PIPE_RESTRICTING_SID_MASK 0x0012019F`, framed JSON, re-accept, per-session/package SID ACEs.
-  - `crates/nono/src/supervisor/types.rs` — `SupervisorMessage`/`SupervisorResponse`/`CapabilityRequest`(`session_id`)/`ResourceGrant`(`ApprovalDecision::Approved` inline).
-  - `crates/nono-cli/src/exec_strategy_windows/launch.rs` — `select_windows_token_arm`, `WindowsTokenArm::BrokerLaunch`/`BrokerLaunchNoPty`, job-object lifecycle.
-  - `crates/nono-cli/src/bin/nono-wfp-service.rs` — `windows-service 0.7` SCM dispatch, Event Log, control pipe (`\\.\pipe\nono-wfp-control`), non-Windows stub `main`, MSI registration.
-- Spike blueprint (HIGH): `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` (spike 003 VALIDATED; E1–E5 contract; R-B3 ownership trap).
-- Sibling research (HIGH): `.planning/research/STACK.md`, `.planning/research/FEATURES.md` (per-engine fit table; in-process-exec analysis; abstraction-boundary contract).
-- Milestone scope (HIGH): `.planning/PROJECT.md` "Current Milestone: v2.12 AI Agent Abstraction".
-- Project memory (HIGH): `windows_appcontainer_wfp_validated` (AppContainer SID + `CreateAppContainerProfile`), `windows_hook_interpreter_spawn_gotchas` (env baseline), `feedback_clippy_cross_target` (cross-target gate), `project_v210_opened` (ADR-65 No-go on kernel driver).
+- Current in-tree: `crates/nono-cli/src/config/user.rs` — `UserConfig` struct (precedence model)
+- Current in-tree: `crates/nono-cli/src/config/mod.rs` — startup config load sequence
+- Current in-tree: `crates/nono-cli/src/policy.rs` — `Policy`, `Group` (embedded policy.json schema)
+- Current in-tree: `crates/nono-proxy/src/config.rs` — `ProxyConfig`, `strict_filter`, `allowed_hosts`
+- Current in-tree: `crates/nono-proxy/src/filter.rs` — `ProxyFilter::new_strict()`
+- Current in-tree: `crates/nono-proxy/src/audit.rs` — `log_denied()`, `NetworkAuditEvent`, tracing targets
+- Current in-tree: `crates/nono/src/diagnostic.rs` — `DiagnosticFormatter`, `DenialRecord` (library boundary)
+- CLAUDE.md § Library vs CLI Boundary, § Key Design Decisions #4
+- SEED-001, SEED-002, SEED-003 (`.planning/seeds/`)
+- PROJECT.md `## Current Milestone: v3.0` (egress reconciliation, policy spine decisions)
 
 ---
-*Architecture research for: engine-agnostic AI-agent confinement on Windows (nono v2.12)*
-*Researched: 2026-06-13*
+*Architecture research for: nono v3.0 Enterprise Hardening I (Deploy · Control · Compliance)*
+*Researched: 2026-06-18*

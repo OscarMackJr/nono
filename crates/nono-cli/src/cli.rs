@@ -247,6 +247,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   learn      Trace a command to discover required filesystem paths
   why        Check why a path or network operation would be allowed or denied
   classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+  health     Print a read-only fleet deployment health report (JSON-capable)
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         Inspect the unsupported Windows session-management surface
@@ -548,6 +549,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   learn      [deprecated] Use `nono run` to learn from sandbox denials
   why        Check why a path or network operation would be allowed or denied
   classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+  health     Print a read-only fleet deployment health report (JSON-capable)
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         List running or detached sandbox sessions
@@ -752,7 +754,7 @@ pub enum Commands {
 ")]
     Why(Box<WhyArgs>),
 
-    /// Classify a PID's AI_AGENT marker (structural, NON-authoritative)
+    /// Classify a PID's AI_AGENT marker (authoritative via daemon, structural fallback)
     #[command(help_template = "\
 {about}
 
@@ -762,17 +764,40 @@ pub enum Commands {
 {all-args}
 {after-help}")]
     #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
-  nono classify 1234                           # Structural check of PID 1234
+  nono classify 1234                           # Classify PID 1234
   nono classify 1234 --json                    # JSON output for tooling
 
 \x1b[1mNOTE\x1b[0m
-  This check is STRUCTURAL ONLY and NON-AUTHORITATIVE. A standalone `nono
-  classify` runs in a separate process with an empty AgentRegistry, so it can
-  never emit an authoritative AI_AGENT claim — it only reports whether the PID
-  has an AppContainer token and is in a job object. Registry-backed
-  authoritative classification is the Phase 74 daemon.
+  When `nono-agentd` is running, classification is authoritative
+  (registry-backed, daemon verdict). Falls back to structural
+  (non-authoritative) when the daemon is absent. Use `--json` for
+  machine-readable output.
 ")]
     Classify(ClassifyArgs),
+
+    /// Fleet diagnostic: print a machine-readable JSON verdict and return a tri-state exit code
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono health [flags]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono health                                  # Human-readable + JSON verdict
+  nono health --json                           # JSON-only output (for scripts)
+
+\x1b[1mEXIT CODES\x1b[0m
+  0 = healthy (all subsystems OK)
+  1 = degraded (stopped service, missing cert, missing policy, etc.)
+  2 = broken (install incomplete, nono.exe not self-locatable, PATH missing)
+
+\x1b[1mNOTE\x1b[0m
+  Read-only: no state is modified. JSON is always printed to stdout
+  regardless of exit code so SCCM/Intune compliance scripts can parse it.
+")]
+    Health(HealthArgs),
 
     // ── Daemon & agent management ────────────────────────────────────────
     /// Manage the nono-agentd persistent daemon (per-user multi-tenant agent service)
@@ -2600,6 +2625,16 @@ pub struct SetupArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub uninstall_wfp: bool,
 
+    /// Import the given root certificate into the machine Root and TrustedPublisher
+    /// stores (Windows only; invoked by the MSI custom action as
+    /// `nono setup --trust-root nono-poc-root.cer`).
+    ///
+    /// This is an MSI-internal verb — not a general user affordance.
+    /// Writing to LocalMachine stores requires elevation; a non-admin invocation
+    /// fails with a typed error (non-fatal at the MSI CA layer via Return="ignore").
+    #[arg(long, value_name = "PATH", help_heading = "OPTIONS")]
+    pub trust_root: Option<std::path::PathBuf>,
+
     /// Refresh the cached Sigstore trusted root from https://tuf-repo-cdn.sigstore.dev (per-user, no admin required)
     #[arg(long, help_heading = "OPTIONS")]
     pub refresh_trust_root: bool,
@@ -2619,6 +2654,21 @@ pub struct SetupArgs {
         conflicts_with = "refresh_trust_root"
     )]
     pub from_file: Option<PathBuf>,
+
+    /// Grant the well-known ALL APPLICATION PACKAGES SID FILE_READ_ATTRIBUTES on the
+    /// system ancestors (C:\, C:\Users) a confined engine cannot ACL at runtime.
+    /// One-time, requires admin, idempotent, non-destructive (D-09). Windows only.
+    #[arg(long, help_heading = "OPTIONS")]
+    pub grant_ancestors: bool,
+
+    /// Profile whose ancestor coverage to grant (used with --grant-ancestors).
+    #[arg(
+        long,
+        value_name = "PROFILE",
+        help_heading = "OPTIONS",
+        requires = "grant_ancestors"
+    )]
+    pub profile: Option<String>,
 
     /// Generate example user profiles in ~/.config/nono/profiles/
     #[arg(long, help_heading = "OPTIONS")]
@@ -3159,6 +3209,18 @@ pub struct ClassifyArgs {
 
     /// Output as JSON
     #[arg(long)]
+    pub json: bool,
+}
+
+/// Arguments for `nono health [--json]` (Phase 82 DEPLOY-06).
+///
+/// A read-only diagnostic that always prints a machine-readable JSON verdict
+/// to stdout and returns a tri-state exit code: 0 (healthy) / 1 (degraded) /
+/// 2 (broken). Intended for SCCM/Intune compliance scripts.
+#[derive(Parser, Debug)]
+pub struct HealthArgs {
+    /// Output JSON only (suppresses the human-readable summary)
+    #[arg(long, help_heading = "OPTIONS")]
     pub json: bool,
 }
 
@@ -5115,6 +5177,8 @@ mod tests {
         "why",
         // Phase 73 D-04: AI_AGENT structural classification verb.
         "classify",
+        // Phase 82 DEPLOY-06: read-only fleet deployment health diagnostic.
+        "health",
         "ps",
         "stop",
         "detach",
@@ -5435,5 +5499,58 @@ mod profile_resolver_args_tests {
             "nono pull MUST reject --no-auto-pull per D-09"
         );
         drop(guard);
+    }
+
+    /// CPLT-02: `nono setup --grant-ancestors --profile copilot-cli` parses
+    /// correctly with `grant_ancestors == true` and `profile == Some("copilot-cli")`.
+    /// D-06: the flag must be generic (not Copilot-specific); the test uses
+    /// "copilot-cli" as an example profile value, not an embedded assumption.
+    #[test]
+    fn setup_grant_ancestors_with_profile_parses() {
+        let cli = Cli::parse_from([
+            "nono",
+            "setup",
+            "--grant-ancestors",
+            "--profile",
+            "copilot-cli",
+        ]);
+        match cli.command {
+            Commands::Setup(args) => {
+                assert!(
+                    args.grant_ancestors,
+                    "--grant-ancestors must parse as true when passed"
+                );
+                assert_eq!(
+                    args.profile,
+                    Some("copilot-cli".to_string()),
+                    "--profile must capture the profile name when passed with --grant-ancestors"
+                );
+            }
+            _ => panic!("Expected Setup command"),
+        }
+    }
+
+    /// CPLT-02: `--profile` without `--grant-ancestors` must be rejected by clap
+    /// (the `requires = "grant_ancestors"` constraint).
+    #[test]
+    fn setup_profile_without_grant_ancestors_is_rejected() {
+        let result = Cli::try_parse_from(["nono", "setup", "--profile", "copilot-cli"]);
+        assert!(
+            result.is_err(),
+            "--profile without --grant-ancestors must be a parse error (requires = grant_ancestors)"
+        );
+    }
+
+    /// CPLT-02: `--grant-ancestors` without `--profile` is allowed (profile is optional).
+    #[test]
+    fn setup_grant_ancestors_without_profile_is_valid() {
+        let cli = Cli::parse_from(["nono", "setup", "--grant-ancestors"]);
+        match cli.command {
+            Commands::Setup(args) => {
+                assert!(args.grant_ancestors, "--grant-ancestors must parse as true");
+                assert_eq!(args.profile, None, "profile must be None when not supplied");
+            }
+            _ => panic!("Expected Setup command"),
+        }
     }
 }

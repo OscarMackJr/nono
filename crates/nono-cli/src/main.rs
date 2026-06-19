@@ -94,6 +94,20 @@ mod session_commands;
 #[path = "session_commands_windows.rs"]
 mod session_commands;
 mod setup;
+// D-09 Phase 82: cert-store import logic (machine Root+TrustedPublisher + per-user
+// CurrentUser\Root). The store-name list is the single source of truth here.
+// Cross-target: non-Windows bodies are cfg-stubbed; compiles on Linux + macOS.
+mod cert_trust;
+// DEPLOY-06 Phase 82: read-only fleet diagnostic (nono health).
+// Windows probes are cfg-gated; non-Windows stubs return degraded states so
+// the crate builds cross-target without winreg or WFP deps.
+mod health;
+// D-09 Phase 82: idempotent first-run-in-user-context provisioner
+// (scratch + cert + NODE_EXTRA_CA_CERTS). Windows-only module; the call site
+// in command_runtime is cfg-gated to Windows so this module is never referenced
+// on Linux / macOS.
+#[cfg(target_os = "windows")]
+mod provision_windows;
 #[cfg(not(target_os = "windows"))]
 mod startup_prompt;
 mod startup_runtime;
@@ -110,6 +124,11 @@ mod trust_intercept;
 mod trust_keystore;
 mod trust_refresh;
 mod trust_scan;
+// Phase 84: SIEM/EDR telemetry layer (SecurityEventLayer + SecurityEvent schema
+// + HMAC chain + path hashing + scrub integration).  Cross-platform: the
+// Windows emitters are cfg-gated inside the module; the schema and chain code
+// compile on Linux and macOS.
+pub(crate) mod telemetry;
 mod update_check;
 mod why_runtime;
 #[cfg(target_os = "windows")]
@@ -138,7 +157,23 @@ fn main() {
     let legacy_network_warnings = collect_legacy_network_warnings();
     normalize_legacy_flag_env_vars();
     let cli = Cli::parse();
-    init_tracing(&cli);
+    // TELEM-04 / WR-01: read the HKLM machine-policy telemetry config and thread
+    // it into the security-event layer so an admin's `TelemetryEnabled=0` opt-out,
+    // `min_severity`, and channel are actually honored. The registry IS available
+    // at this point (Cli is parsed); the prior `None` left the layer permanently
+    // on the default-ON config, making the policy decorative.
+    //
+    // Telemetry is non-fatal (D-14): a malformed/absent policy degrades to
+    // `TelemetryConfig::default()` (D-13 default-ON) — we never abort a run for a
+    // telemetry read. Egress-policy validity is enforced separately on the daemon
+    // path (D-07), so swallowing the egress error here does not weaken egress
+    // enforcement.
+    let telemetry_config = match nono::read_machine_egress_policy() {
+        Ok(Some(policy)) => Some(policy.telemetry),
+        Ok(None) => None,
+        Err(_) => None,
+    };
+    init_tracing(&cli, telemetry_config);
     init_theme(&cli);
     print_legacy_network_warnings(&legacy_network_warnings, cli.silent);
 

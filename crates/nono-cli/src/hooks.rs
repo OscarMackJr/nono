@@ -109,6 +109,19 @@ fn install_claude_code_hook(
     if needs_install {
         tracing::info!("Installing hook script: {}", script_path.display());
         fs::write(&script_path, script_content).map_err(|e| {
+            // Telemetry: hook fail-closed — security hook cannot be installed.
+            // A hook that cannot be written means the PreToolUse security
+            // control will not run for agent tool calls (fail-closed signal).
+            // SecurityEventLayer routes nono_security::hook_fail_closed to
+            // dual-emit (Application-log + ETW). No file paths or error
+            // detail strings in the event fields (D-10; scrubbing happens
+            // inside SecurityEventLayer).
+            tracing::warn!(
+                target: "nono_security::hook_fail_closed",
+                hook_name = "preToolUse",
+                agent_pid = std::process::id(),
+                "hook fail-closed"
+            );
             NonoError::HookInstall(format!(
                 "Failed to write hook script {}: {}",
                 script_path.display(),

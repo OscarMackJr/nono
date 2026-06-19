@@ -1,175 +1,158 @@
 ---
 gsd_state_version: 1.0
-milestone: v2.12
-milestone_name: AI Agent Abstraction
-status: milestone_complete
-last_updated: "2026-06-16T12:31:56.361Z"
-last_activity: 2026-06-16
+milestone: v3.0
+milestone_name: Enterprise Hardening I
+status: Awaiting next milestone
+stopped_at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
+last_updated: "2026-06-19T12:57:53.472Z"
+last_activity: 2026-06-19 — Milestone v3.0 completed and archived
 progress:
-  total_phases: 5
-  completed_phases: 5
-  total_plans: 27
-  completed_plans: 25
+  total_phases: 3
+  completed_phases: 3
+  total_plans: 12
+  completed_plans: 12
   percent: 100
 ---
 
-# Project State: nono — v2.12 AI Agent Abstraction
+# Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v2.12 milestone started 2026-06-13; v2.11 Phases 68/69/70 complete, Phase 67 host-gated carry-forward). Phase numbering continues from Phase 70 (Phases 71-75 — NOT reset to 1).
+See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-81 complete, shipped + archived). Phase numbering continues from Phase 81 (Phases 82-84 — NOT reset to 1).
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must apply to *any* AI agent engine, not just Claude Code.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 75 — supplementary-controls-secondary-engines
+**Current Focus:** Phase 84 — siem-edr-telemetry (structurally verified 5/5; human_needed live SIEM UAT host-gated)
 
 ## Current Position
 
-Phase: 75
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-16
+Phase: Milestone v3.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-19 — Milestone v3.0 completed and archived
 
-### v2.12 Phase Summary (active)
+## Performance Metrics
 
-| Phase | Goal | Requirements | SC | Status | Host gate |
-|-------|------|--------------|----|--------|-----------|
-| 71 | Engine-Agnostic Launch Productionization — parent-and-confine any covered engine (Aider + LangChain-Python) through one engine-neutral path; de-spike the validated 003 path; fail-secure coverage + R-B3 diagnostic | ENG-01, ENG-02, ENG-03 | 5 | ⬜ Not started | Real Win11 host (Aider end-to-end) |
-| 72 | nono-py Binding + In-Process-Exec Proof — confine a real LangChain agent with NO Claude hook via `confined_run` (Shape A) + `confine` (Shape B); document the E1-E5 contract | ABI-01, ABI-02 | 5 | ✅ Complete (2026-06-14) | Win11 host w/ Python; nono-py build |
-| 73 | AI_AGENT Marker — unforgeable spawn-time token SID (not a named job); deny breakaway; daemon-only job ACL; classify arbitrary PID | MARK-01 | 5 | 🔶 Code-complete (UAT pending) | Win11 host |
-| 74 | Persistent Multi-Tenant Daemon (RISKIEST — former spike 004) — least-priv USER daemon, multi-client tenant-isolated pipe, fresh token+job per agent, deterministic reap | DMON-01, DMON-02, DMON-03 | 5 | 🔵 In-progress (Plan 01 at checkpoint) | Win11 host; **research-flag 74** |
-| 75 | Supplementary Controls + Secondary Engines — demote (demote-only), per-agent WFP egress, Copilot CLI profile, nono-ts parity | SUPP-01, SUPP-02, SUPP-03 | 5 | ⬜ Not started | Win11 host; node/nono-ts build |
+**Velocity:**
 
-**Dependencies:** **71 FIRST** (foundation — everything sits on top). **72 ∥ 73** (parallel — both depend only on 71). **74** depends on 71 (working single-launch path — HARD GATE) + 73 (marker). **75** depends on 74 (demote/WFP are daemon-keyed) + 72 (nono-ts mirrors nono-py). The daemon (74) MUST NOT precede a solid single-launch path — that ordering IS the quality gate.
+- Total plans completed: 13 (4 Phase 82 + 1 Phase 83)
+- Average duration: ~7m (Phase 83 Plan 01)
+- Total execution time: 7m (Phase 83 Plan 01 only)
 
-### Research / spike flags (v2.12)
+| Phase | Plan | Duration | Tasks | Files |
+|-------|------|----------|-------|-------|
+| 83 | 01 | 7m | 3 | 6 |
+| 83 | 03 | 25m | 2 | 6 |
+| 84 | 02 | 65m | 2 | 7 |
 
-| Phase | Flag | Notes |
-|-------|------|-------|
-| 74 | `/gsd:plan-phase 74 --research-phase 74` | Two unspiked/net-new mechanisms: (a) **token/job reuse-vs-fresh across many tenants** — the explicitly UNSPIKED part of spike 003/004, the milestone's highest-risk unknown; scope a spike INSIDE the phase gated on fresh-token isolation + deterministic reap + cross-tenant denial. (b) whether server-side **`ImpersonateNamedPipeClient`** (NOT in `socket_windows.rs` today — it verifies the *server* PID from the client side) composes with the existing Low-IL/AppContainer cap-pipe SDDL DACL handshake. Privilege-model ADR written BEFORE coding the service host. |
-| 72 | (optional, in-phase validation) | Shape B (`Sandbox::apply` on the CURRENT process at startup) is a usage pattern the bindings have not exercised; soundness boundary = must precede any privileged handle open. |
-| 71, 73, 75 | skip `--research-phase` | Standard patterns: spike 003 VALIDATED (71); named-job Win32 documented + unnamed-job lifecycle already in `exec_strategy_windows/` (73); demote (spike 002) + WFP (Phase 62) + node-engine profiles (Claude) all proven shapes (75). |
-
-### Host-availability gates (v2.12)
-
-| Phase | Gate | Notes |
-|-------|------|-------|
-| 71 | Real Win11 host | Aider confined end-to-end; the broker-arm launch (`windows_low_il_broker:true`) only works from a real host. Re-assert: AppContainer SID needs `CreateAppContainerProfile` (not derive-only → `ERROR_FILE_NOT_FOUND`); preserve `SystemRoot`/`windir`/`SystemDrive` env baseline (else CLR `0xFFFF0000`). |
-| 72 | Win11 host + Python; nono-py build | LangChain `PythonREPLTool` exec() write-deny test; internal nono pin bump 0.57.0 → 0.62.x. |
-| 74 | Win11 host | 2 concurrent agents over one pipe; cross-tenant-denial negative test; 100-agent launch/exit handle-baseline test. |
-| 75 | Win11 host + node; nono-ts build | Copilot CLI profile (node engine); nono-ts pin bump 0.33.0 → 0.62.x (napi 2 kept). |
-
-<details>
-<summary>v2.11 Phase Summary (Phases 67-70; 68/69/70 complete, 67 host-gated — archived at `milestones/v2.11-ROADMAP.md`)</summary>
-
-| Phase | Goal | Requirements | Status |
-|-------|------|--------------|--------|
-| 67 | Clean-Host Windows Install (MSI VC++ handled, service-start non-fatal, interim broker-trust helper) | DIST-01, DIST-02, TRUST-01, TRUST-02 | ⬜ Host-gated UAT pending (clean Win11) |
-| 68 | macOS Resource-Limit Enforcement Fix (`--timeout` + `--max-processes` fire on real macOS) | RESL-MAC-01, RESL-MAC-02 | ✅ Complete 2026-06-12 |
-| 69 | UPST8 Audit (DIVERGENCE-LEDGER `v0.60.0..v0.62.0` non-macOS) | UPST8-01 | ✅ Complete 2026-06-13 |
-| 70 | UPST8 Cherry-pick Sync (5 will-sync commits absorbed) | UPST8-02 | ✅ Complete 2026-06-13 |
-
-</details>
-
-## Key Decisions
-
-### v2.12 decisions
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| Phase order is dependency-driven A→(B∥C)→D→E (= 71→(72∥73)→74→75) | all | Research SUMMARY § Implications: launch productionization is the foundation everything consumes; daemon is launch+marker+pipe+unspiked-reuse-risk and cannot start until 71 is a gated working path + 73 exists. Quality gate enforced structurally. |
-| ENG-01/02/03 all in Phase 71 (one engine-agnostic launch phase) | 71 | They form one coherent capability (the productionized launch-and-confine path + profiles + fail-secure gates); splitting them would create partial-feature boundaries. |
-| Daemon (74) is the riskiest piece and is research-flagged | 74 | Token/job reuse across tenants is the one genuinely unspiked mechanism (former spike 004); `ImpersonateNamedPipeClient` is net-new to `socket_windows.rs`. Spike-inside-the-phase. |
-| Demote (SUPP-01) is demote-only, NOT a standalone boundary | 75 | Spike 002 PARTIAL: post-hoc IL-drop is leaky; it stays an IR lever layered on a proven launch-time default — never the "detect-and-confine-as-primary" anti-feature. |
-| AI_AGENT marker = unforgeable token SID, NOT a named job | 73 | Pitfall 2: a named job is openable by name (rendezvous, not secret); env/argv markers are forgeable. Named job is kill-group/enumeration/resource-caps only; the token SID is the authorization signal. |
-| Least-privilege USER daemon SPLIT from the elevated WFP service; privilege-model ADR FIRST | 74 | Pitfall 4: a SYSTEM-level always-on launcher gives an escaped agent a pivot to all tenants + the host. ADR written before the service host is coded. |
-| Composition over green-field: no new wire protocol, windows-sys 0.59 / pyo3 0.28 / napi 2 kept | all | Research STACK.md: every new dep already lives in-tree pinned; deltas are features + net-new Win32 (named job objects). Deliberate non-bumps avoid gratuitous cross-target-drift churn and a napi-3 scope balloon. |
-| A2: TokenAppContainerSid = 31i32 in windows-sys 0.59 (not 56 as noted in RESEARCH.md) | 74 Plan 01 | Confirmed from windows-sys-0.59.0/src/Windows/Win32/Security/mod.rs at compile time. |
-| A6: broker trust gate checks nono.exe CALLER path + Authenticode; broker binary must match | 74 Plan 01 | Code read of launch.rs is_dev_build_layout() + verify_broker_authenticode(); daemon binary (nono-agentd.exe) needs same trust-gate treatment as nono.exe in production. |
-| authenticate_pipe_client is pub unsafe fn (not pub(crate)) — daemon accept loop in nono-cli calls it cross-crate | 74 Plan 02 | `pub(crate)` cannot be re-exported from a `pub mod`; the daemon binary in nono-cli requires `pub` for cross-crate access. `unsafe fn` is semantically correct for a raw-HANDLE parameter API per clippy `not_unsafe_ptr_arg_deref`. |
-| ImpersonationGuard RAII guarantees RevertToSelf on ALL exit paths (including panic) | 74 Plan 02 | STRIDE T-74-02-01 (EoP) mitigation: Drop calls RevertToSelf unconditionally; even when not impersonating (safe no-op). Full end-to-end test in daemon_handle_baseline.rs (nono-cli); unit test verifies RAII mechanism without requiring SeImpersonatePrivilege. |
-
-<details>
-<summary>v2.11 decisions (archived)</summary>
-
-See `.planning/milestones/v2.11-ROADMAP.md`. Key: DIST+TRUST kept together in Phase 67; real Azure Trusted Signing OUT OF SCOPE (cert-gated → enterprise milestone); macOS resl fix is a real supervisor/setrlimit bug fix (D-01 baseline+N RLIMIT_NPROC, D-04 setpgid); UPST8 scoped to non-macOS slice, D-70-01 extended range to v0.62.0.
-
-</details>
-
-### Key Decisions (carried from v1.0 — still load-bearing for v2.12)
-
-- **Supervisor-Broker Pattern:** the only way to manage elevated tasks (WFP) while keeping a user-level CLI; the daemon (74) reuses this split.
-- **WFP as Primary Network Backend:** kernel-level enforcement; SUPP-02 per-agent egress keys on it via the elevated `nono-wfp-service`.
-- **Named Job Objects:** agent lifecycle (atomic stop/list) — but for v2.12 the marker's authorization signal is the token SID, NOT the job name (see v2.12 decisions).
-- **SID-Based Filtering:** child processes inherit network restrictions; per-tenant SID is the v2.12 isolation primitive.
-- **Restricted Tokens / Low-IL broker arm (`windows_low_il_broker:true`):** the validated confining primitive the launcher uses unchanged.
+*Updated after each plan completion*
+| Phase 83 P02 | 45m | 2 tasks | 3 files |
+| Phase 83 P04 | 30m | 2 tasks | 1 files |
+| Phase 84 P01 | 35m | 3 tasks | 9 files |
+| Phase 84 P02 | 65m | 2 tasks | 7 files |
+| Phase 84 P03 | 30m | 2 tasks | 4 files |
+| Phase 84 P04 | 3m | 2 tasks | 1 files |
 
 ## Accumulated Context
 
-### Constraints active this milestone
+### Decisions (v3.0)
 
-- **User-mode only — no kernel driver / minifilter / `PsSetCreateProcessNotifyRoutine`** (ADR-65 No-go). Composition over existing subsystems.
-- **Isolation ≥ the per-invocation `nono run` model** — `NO_WRITE_UP` write-deny + deny-network-unless-granted must be preserved by every new path (launcher, daemon, binding).
-- **Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude — verify no `build_notes/`/`.gsd/` staged before any `git push` (the "go-private" commit `74a47742` was cancelled 2026-06-11).
-- **Cross-target clippy (Linux + macOS) is a MUST** per CLAUDE.md for any cfg-gated Unix code touched; Windows dev host can't cross-compile (ring/aws-lc-sys C-toolchain) → CI is the load-bearing signal. (The binding work in 72/75 is mostly Windows-surfaced, but scan any `cfg`-gated changes.)
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| Build order is deployment → policy spine → telemetry | 82→83→84 | MSI provisions the HKLM sentinel key and Event Log source that Phases 83 and 84 test against. Policy spine must exist before egress or telemetry can read from it. |
+| Proxy and WFP wired to HKLM in one atomic phase (83) | 83 | Splitting proxy and WFP wiring across phases creates the allowlist-drift false-security state (Pitfall 2). Both layers read from the same MachineEgressPolicy struct in the same phase. |
+| Stay WiX MSI; MSIX out of scope | 82 | MSIX cannot package the LocalSystem nono-wfp-service or kernel driver. WiX MSI CI pipeline is already proven (Phases 53/61). |
+| Scratch space provisioned at first-run, not MSI time | 82/83 | MSI runs as SYSTEM; %LOCALAPPDATA% resolves to SYSTEM profile path, making every user R-B3 ownership guard fail (Pitfall 4). MSI creates only C:\ProgramData\nono\; user scratch is created at first run in user context. |
+| Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
+| Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
+| Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
 
-### Pitfall guards carried into v2.12 (per research PITFALLS.md)
+### Decisions (Phase 84 Plan 04)
 
-The per-invocation pitfalls carry forward UNCHANGED (post-hoc IL-drop demote-only, R-B3 user-owned workspace, exe-coverage gate, absolute grants, broker dev-layout/signing). Each NEW pitfall is owned by exactly one phase as a success-criterion-with-negative-test:
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| Gate auto-discovered by verify-dark.ps1 scripts/gates/*.ps1 scan (D-04); no ValidateSet update | 84-04 | Auto-discovery mechanism confirmed working; telemetry-event-emit.ps1 found without any hardcoded addition |
+| EventID 10003 excluded from gate per Option B carry-forward | 84-04 | LabelViolation is RESERVED-but-unemitted in Phase 84; gate uses range 10001-10005 accepting whichever of the three wired EventIDs appears |
+| Cross-target clippy PARTIAL: C linker absent for Linux+macOS cross targets | 84-04 | Same pre-existing issue as Phase 83; aws-lc-sys/ring require x86_64-linux-gnu-gcc/cc; deferred to live CI |
 
-| Pitfall | Owner | Bake-in |
-|---------|-------|---------|
-| P6 nested-job collisions / silent confinement loss | 71 | spawn suspended, assign before any code runs, fail-secure on assign failure, no UI limits |
-| R-B3 user-owned workspace + exe-coverage fail-secure | 71 | fail-secure coverage gate + R-B3 ownership diagnostic |
-| P3 in-process-exec() cannot be confined post-hoc | 72 | `confine()` self-confine at startup before any privileged handle |
-| P2 AI_AGENT marker forge/shed | 73 | unforgeable token SID (not a named job); deny breakaway; daemon-only job ACL |
-| P1 cross-tenant capability theft (load-bearing) | 74 | server-side `ImpersonateNamedPipeClient` + per-tenant SID; cross-tenant-denial negative test |
-| P4 daemon attack surface / privilege | 74 | least-priv USER daemon split from elevated WFP service; privilege-model ADR first |
-| P5 token & job-object handle lifetime | 74 | fresh token+job per agent; deterministic reap; 100-agent handle-baseline test |
-| "detect-and-confine as primary model" anti-feature | 75 | demote stays an IR lever, never the boundary |
+### Decisions (Phase 84 Plan 03)
 
-### Re-assert per phase (banked AppContainer/CLR gotchas)
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| OPTION B label-violation: EventID 10003 RESERVED-but-unemitted in Phase 84 | 84-03 | IL denials surface as NonoError::LabelApplyFailed (aborting session via ?) or as path-deny DenialRecords at exec_strategy layer; no distinct label_violation event emittable; Plan 84-04 gate excludes EventID 10003 |
+| hook_fail_closed wired at hook script write failure | 84-03 | Script write failure = PreToolUse security hook cannot run = fail-closed; most security-relevant fail-closed site in hooks.rs |
+| D-07 ADR delivered: tamper boundary = WEF; in-session HMAC only | 84-03 | docs/adr/telemetry-tamper-evidence.md records scope honestly: WEF is the real tamper boundary; local admin can clear Application log; SEED-005 deferred for cryptographic-local anchoring |
 
-- **AppContainer per-agent SID:** `CreateAppContainerProfile`, NOT derive-only (else `CreateProcessW` `ERROR_FILE_NOT_FOUND`). (memory `windows_appcontainer_wfp_validated`)
-- **Env baseline for CLR/PowerShell children:** preserve `SystemRoot`/`windir`/`SystemDrive` (else CLR `0xFFFF0000`). (memory `windows_hook_interpreter_spawn_gotchas`)
-- **Cap-pipe DACL handshake:** the Low-IL/AppContainer rendezvous (package-SID READ grant before the blocking `ConnectNamedPipe`; child learns the pipe via `NONO_SUPERVISOR_PIPE`). (memory `windows_appcontainer_cap_pipe_reachability`)
+### Decisions (Phase 84 Plan 02)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-MSRV executed: MSRV bumped 1.77->1.82 in CLAUDE.md atomically with tracing-etw 0.2.3 dep addition | 84-02 | tracing-etw 0.2.3 requires Rust 1.82; bumped in CLAUDE.md Technology Stack section per D-MSRV pre-approved decision |
+| ETW emit via tracing::warn!(target: nono_security) inside emit_security_event | 84-02 | Simpler than OnceLock approach; the tracing-etw LayerBuilder registered in init_tracing() intercepts the warn! call automatically without per-event provider handle |
+| init_registry() helper with fmt_layer.with_filter(env_filter) pattern | 84-02 | Avoids S-type mismatch when env_filter changes the registry subscriber type; security layer always active regardless of log level |
+| EVENT_ID_* in event.rs (schema) as single source of truth; windows.rs imports via schema_event_id_for | 84-02 | No duplication; tests in both files use the same values; prevents drift between emit and schema |
+
+### Decisions (Phase 84 Plan 01)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-MSRV: MSRV bump 1.77→1.82 DEFERRED to Plan 84-02 | 84-01 | tracing-etw 0.2.3 requires Rust 1.82; Plan 01 does not add tracing-etw to Cargo.toml so no MSRV conflict exists yet. Plan 02 edits CLAUDE.md and workspace Cargo.toml atomically when adding the dep. |
+| D-HMAC-PLACEHOLDER: sha2-based advance_chain placeholder in Plan 01 | 84-01 | hmac crate not yet in Cargo.toml (operator checkpoint passed for crates but not yet added); sha2 used as placeholder preserving domain separators; Plan 02 replaces with Hmac<Sha256> |
+| D-CLASSIFY-MULTIPASS: classify_path uses multi-pass component loop | 84-01 | Single-pass ordering was fragile (/var/lib/keystore returned SystemPath because 'lib' appeared before 'keystore'); multi-pass ensures CredentialPath wins regardless of component position |
+| Package legitimacy: hmac 0.13.0 / tracing-etw 0.2.3 / eventlog 0.4.0 APPROVED | 84-01 | Operator-verified all three crates via crates.io API before any Cargo.toml edits (Task 1 checkpoint resolved) |
+
+### Decisions (Phase 83)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-07: absent→Ok(None) / present-but-broken→Err(PolicyLoadFailed) | 83-01 | Fail-secure: once HKLM key exists ANY read/parse error aborts; implemented via raw_os_error()==2 for absent |
+| D-09: KEY_WOW64_64KEY on all registry opens | 83-01 | Forces 64-bit hive view; prevents 32-bit Intune MDM write to WOW6432Node making key appear absent |
+| D-10: winreg 0.56 Windows-only dep (operator-approved) | 83-01 | Single crate approach; io::Error maps cleanly onto D-07 taxonomy; never unconditional dep |
+| D-13 Option A: enumerate N×REG_SZ subkey values (not REG_MULTI_SZ) | 83-01 | Matches shipped Phase-82 ADMX <list> shape; less churn than changing ADMX |
+| D-14: existing HostFilter leading-dot ends_with+len> form retained | 83-01 | Already passes full SC-4 matrix; sc4_dns_component_matrix codifies the contract |
+| D-11: ADMX named toggles write group TOKENS (anthropic/openai/github-api), not literal FQDNs | 83-03 | Token indirection decouples fleet ADMX template from FQDN lists; nono expands at runtime so provider hosts update without re-issuing ADMX |
+| D-12 (corrected): preset token->FQDN map in embedded network-policy.json groups (not policy.json) | 83-03 | network-policy.json carries domain host[] groups (correct schema); policy.json carries only filesystem allow/deny semantics |
+
+### Pending Todos
+
+None.
+
+### Blockers/Concerns
+
+- **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
+- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
 
 ## Deferred Items
 
-### v2.11 carry-forward (open)
+Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
-- **Phase 67 clean-host Windows install** (DIST-01/02, TRUST-01/02) — host-gated UAT pending a clean Win11 host (no VC++, no pre-trusted cert); production-signed MSI, not dev-layout. Independent of v2.12 work; can be exercised when a clean host is available.
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Host-execution | stale `C:\Program Files\nono\nono.exe` (no `agent` subcommand) → aggregate FAIL on dev host; fix: prepend `target\release` to PATH | Open | v2.13 close |
+| Host-execution | CPLT-03 Copilot CLI literal PASS gated by GitHub org policy | Open | v2.13 close |
+| Host-execution | INST-01 live clean-VM PASS (needs fresh Win11 VM + rebuilt MSI post Phase 80) | Open | v2.13 close |
+| Distribution | DIST-SIGN-01 untrusted-POC-cert broker path not exercised by clean-host gate | Open | v2.13 close |
+| Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
+| nono-ffi | E0004 non-exhaustive match (PolicyLoadFailed + TelemetryUnavailable/ConfigInvalid) | RESOLVED `f96aba8a` (84 close) | 84-04 |
 
-### v2 (deferred from v2.12 scope — not yet milestone-scoped)
+Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.planning/v3.0-MILESTONE-AUDIT.md`:
 
-- **Signed-policy / decentralized attestation** (SEED-005 / R-T1) — X-Large; its own milestone.
-- **Sound adoption of an already-running agent** nono did not launch — blocked by the post-hoc-IL-drop leak (spike 002); needs a different mechanism.
-- **Cursor native-Windows confinement** — Cursor's agent CLI is Linux/macOS/WSL-only (engine limitation, not nono's).
-
-### Historical (acknowledged at prior closes — see git history / MILESTONES.md)
-
-Prior-close audit-open backlogs (v2.10: 65 items; v2.9/v2.8: 55; v2.7: 45) — mostly pre-v2.5 `missing` quick-task slugs + historical UAT/verification bookkeeping. Carried, none blocking. Detail in MILESTONES.md per-milestone close notes.
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Host-execution | DEPLOY-01 clean-VM silent `msiexec /qn` install + exit codes | Open (host-gated) | v3.0 close |
+| Host-execution | DEPLOY-03 live R-B3 user-owned WRITE_OWNER scratch verification | Open (host-gated) | v3.0 close |
+| Host-execution | DEPLOY-05 three-client (CryptoAPI/Node/rustls) TLS-through-proxy round-trip | Open (host-gated) | v3.0 close |
+| Host-execution | EGRESS-02 dual-layer (proxy + kernel WFP) live block proof | Open (host-gated) | v3.0 close |
+| Host-execution | TELEM-01/04 live `telemetry-event-emit` gate PASS + admin opt-out/min_severity HKLM→emit (`84-HUMAN-UAT.md`) | Open (host-gated) | v3.0 close |
+| Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events (integration warning, not a Phase 84 criterion) | Open (follow-up) | v3.0 close |
+| Historical | 48 open artifacts at v3.0 close (35 quick_tasks mostly pre-v2.13 strays + 5 seeds + 4 todos + 2 uat_gaps + 2 verification_gaps) — overwhelmingly historical/future-seed | Acknowledged | v3.0 close |
 
 ## Session Continuity
 
-**Last session:** 2026-06-16T12:31:56.348Z
-
-**Phase 74 Plan 01 executed (2026-06-15):** Wave 0 — ADR + spike harness. `proj/ADR-74-privilege-model.md` committed first (SC4 ordering gate; 369a7c45). `crates/nono-cli/tests/daemon_handle_baseline.rs` committed with 4 test functions (d9788fa0). Harness compiles cleanly on Windows host. AWAITING human checkpoint "approved + spike green" before Wave 1. A2 answered: `TokenAppContainerSid = 31i32` in windows-sys 0.59. A6 answered: trust gate checks CALLER (nono.exe) not broker. A1 pending spike run.
-
-**v2.12 roadmap complete (2026-06-13):** Phases 71-75 defined, 12/12 reqs mapped (100% coverage, no orphans, no duplicates). ROADMAP.md + REQUIREMENTS.md traceability + STATE.md updated. Build order is dependency-driven: 71 (foundation) → (72 ∥ 73 parallel) → 74 (riskiest daemon; hard-gated behind working 71 + 73; research-flagged) → 75 (supplementary). Composition milestone over broker-arm launch + `socket_windows.rs` cap pipe + `nono-wfp-service` shape; user-mode only (ADR-65 No-go); isolation ≥ `nono run`.
-
-**Predecessor context (carried):** v2.11 Phases 68/69/70 complete (macOS resl fix shipped; UPST8 audited + synced to v0.62.0). Phase 67 (clean-host Win install) host-gated, carries forward. v2.10 shipped tag `v2.10` 2026-06-11; ADR-65 Accepted (No-go/Conditional-go on the kernel driver — the constraint anchoring v2.12's user-mode-only rule). Repo STAYS PUBLIC.
-
-## Quick Tasks Completed
-
-| Date | Slug | Outcome |
-|------|------|---------|
-| 2026-06-15 | zt-infra-e5-poc-runbook | Advisory + docs: zt-infra integration is dormant SEED-005 (P3), NOT on the Phase 73/75 path — wait. Added `proj/POC-zt-infra-e5-local-provisioner.md` (AWS-free E5 composition runbook via the zt-infra local provisioner) + a concrete SEED-005 pointer. Docs/POC only; no source changes. Commits `0f5f3b93`+`1cd0e996`. |
+Last session: 2026-06-19T00:10:00.000Z
+Stopped at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
+Resume file: .planning/phases/84-siem-edr-telemetry/84-04-SUMMARY.md
 
 ## Operator Next Steps
 
-- **Phase 74 COMPLETE + human UAT PASS (2026-06-15, close `dc68720c`).** 8/8 plans incl. 2 gap-closure (74-07 control plane, 74-08 operator UX); SC1–SC5 all green on real Win11. (Supersedes the prior "await spike green" note — the full phase shipped.)
-- **Phase 73 (AI_AGENT Marker) is ALREADY COMPLETE** (3/3, 2026-06-14 — its top ROADMAP checkbox was just flipped; it was a stale-box gotcha, not pending work). Phases 71/72/73/74 all done.
-- **NEXT (and only remaining v2.12 phase): Phase 75** (supplementary controls + secondary engines — SUPP-01 demote / SUPP-02 per-agent WFP egress / SUPP-03 2nd engine + nono-ts parity). Carries the Phase-74 carry-forwards: SCM user-service install/start hardening, `launch_agent`↔`create_process_containment` dedup, `terminal_approval` interactive-console hang. `/gsd:plan-phase 75` → `/gsd:execute-phase 75`.
-- zt-infra: leave un-installed; if a POC is wanted later, use the local provisioner per `proj/POC-zt-infra-e5-local-provisioner.md` (its own future milestone, SEED-005).
-- Before any push: confirm no `build_notes/`/`.gsd/` staged — repo stays PUBLIC pending Microsoft minifilter-altitude approval.
+- Start the next milestone with /gsd-new-milestone

@@ -1,168 +1,365 @@
 # Pitfalls Research
 
-**Domain:** Persistent, multi-tenant, user-mode Windows agent-confinement daemon — launch-and-confine of arbitrary AI engines + a long-running multi-client capability pipe + `AI_AGENT` process marking (nono v2.12 "AI Agent Abstraction")
-**Researched:** 2026-06-13
-**Confidence:** HIGH (grounded in the in-tree `socket_windows.rs` / `exec_strategy_windows/launch.rs` code, the banked spike 001-003 findings, project memory, and verified Win32 job-object semantics)
+**Domain:** Enterprise hardening of a Windows security product — silent MSI fleet deploy, machine-policy HKLM egress allowlist, and SIEM/EDR telemetry (nono v3.0)
+**Researched:** 2026-06-18
+**Confidence:** HIGH (grounded in in-tree `nono-wfp-service.rs`, `network_policy.rs`, `diagnostic.rs`, Phase 53/61/62 signed-MSI history, Phase 56 `allow_domain`, project memory `windows_mandatory_label_write_owner`, `windows_appcontainer_wfp_validated`, `windows_wfp_enforcement_is_service_only`, `windows_msi_wxs_is_generated`, SEED-001/002/003 seeds, and verified Win32/WFP/Event-Log semantics)
 
-> Scope note: this file covers ONLY the pitfalls that are *new with a persistent multi-tenant daemon*. The per-invocation traps already banked in the milestone context (post-hoc IL-drop is demote-only; user-owned workspace R-B3; exe/interpreter coverage gate; absolute grants; CLM on the hook path; broker dev-layout/signing R-B4; LangChain in-process `exec()`) are NOT re-derived here — they carry forward unchanged and are referenced where a daemon amplifies them.
+> Scope note: this file covers pitfalls that are NEW with the v3.0 enterprise features — silent-install/GPO, HKLM policy spine, egress reconciliation, and telemetry. The per-invocation confinement traps banked in prior milestones carry forward unchanged. Cross-references to known codebase landmines are made explicit where the v3.0 work amplifies them.
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Multi-tenant capability pipe with no server-side client authentication (cross-tenant capability theft)
+### Pitfall 1: Fail-OPEN on HKLM policy read failure (security hole disguised as robustness)
 
 **What goes wrong:**
-The daemon serves N agents over one persistent multi-instance pipe (`PIPE_UNLIMITED_INSTANCES`). Agent A connects to a pipe instance and is served Agent B's capability grants — or escalates its own — because the daemon never proves *which tenant* is on the connection. The current single-tenant code (`socket_windows.rs`) verifies the **server** PID from the client side (`verify_connected_server_pid` / `GetNamedPipeServerProcessId`, line ~1840) but does the inverse — the **server authenticating the client** — only implicitly via the SDDL DACL. A single shared DACL that admits "any Low-IL same-session process" admits *every* tenant to *every* instance.
+The machine policy reader (`HKLM\SOFTWARE\Policies\nono`) returns an error — key absent on a pre-provisioned host, ACL mismatch, registry-service hiccup, or WOW6432Node redirection confusing the reader. The code catches the error and falls back to an empty allow-list or the per-user profile. The agent runs with a permissive user-configured allowlist (or no network restriction at all) while the operator believes machine policy is enforced. From a fleet CISO's perspective this is a silent security regression: every new deploy default-denies nothing while the IT team waits for GPO replication.
 
 **Why it happens:**
-The single-tenant supervisor pipe never needed to distinguish callers — there was one child. Generalizing to N tenants, the obvious move is "reuse the proven pipe, bump instance count to unlimited," which silently drops the one-child assumption that made the DACL sufficient. `CreateNamedPipeW` instances under one name are indistinguishable at the DACL level unless each instance is built with a *distinct* per-tenant security descriptor.
+The instinct is "policy absent = not yet configured = don't break the user's workflow." That instinct is correct for feature configuration (e.g., update-check URLs) but catastrophically wrong for a security boundary. The HKLM key is the deny-by-default egress allowlist spine — absence means the enterprise policy has not been applied to this machine, which is a reason to restrict MORE aggressively, not less. Developers who grew up writing user-facing software treat config-read errors as "use defaults"; security products must treat them as "fail closed."
 
 **How to avoid:**
-- Bind the connection to a tenant identity the kernel vouches for, not a self-reported id in the JSON frame. On the server side call `ImpersonateNamedPipeClient` + `GetTokenInformation` to read the connected client's token (session SID / AppContainer package SID / job membership), then `RevertToSelf`. Match that against the tenant the grant belongs to *before* answering any capability request.
-- Prefer **per-tenant pipe instances with per-tenant SDDL**: derive a distinct security descriptor per agent embedding that agent's session/package SID (the machinery already exists — `bind_low_integrity_with_session_and_package_sid`, per-SID DACL ACEs). One name, but each accepted instance carries only its own tenant's SID in the DACL.
-- Treat any `agent_id` field in the wire frame as *untrusted routing hint only* — authorize against the impersonated token, never the field.
-- Use `GetNamedPipeClientProcessId` and confirm the PID is inside that tenant's `AI_AGENT` job (`IsProcessInJob`).
+- Codify the policy-read failure contract in Rust as an enum: `PolicyReadResult::Enforced(AllowList)`, `PolicyReadResult::NotConfigured`, `PolicyReadResult::ReadError(NonoError)`. Only `NotConfigured` falls back to per-user profile; `ReadError` must be fatal (deny-all or abort launch).
+- At the call site: `match read_machine_policy() { ReadError(e) => return Err(NonoError::PolicyLoadFailed(e)), NotConfigured => load_user_profile(), Enforced(list) => use list }`.
+- Add a dark-factory gate: run the policy reader against a deliberately permission-denied registry key and assert the process exits non-zero with a `PolicyLoadFailed` error — not a permissive launch.
+- CLAUDE.md already mandates: "Configuration load failures must be fatal. If security lists fail to load, abort." Apply that rule explicitly to the registry reader.
 
 **Warning signs:**
-- The accept loop reuses one `CAPABILITY_PIPE_SDDL` constant for all tenants.
-- Capability lookups key off a field parsed from the request body.
-- No `ImpersonateNamedPipeClient` call anywhere in the daemon accept path.
-- A test that connects as "tenant B" and successfully reads tenant A's grants is missing.
+- `RegQueryValueExW` return value is checked with `if err != ERROR_SUCCESS { return Ok(Default::default()) }` rather than `if err != ERROR_SUCCESS { return Err(...) }`.
+- `unwrap_or_default()` anywhere in the registry-read path.
+- A test that intentionally corrupts the policy key and asserts that nono still launches with some allow-list.
+- No test for the `ReadError` → abort path.
 
 **Phase to address:**
-Persistent multi-tenant daemon phase (the IPC generalization). This is the load-bearing security property of the whole daemon — gate the phase on a cross-tenant-denial test.
+Phase 83 (machine-policy HKLM reader). Make the fail-secure contract the first acceptance criterion, verified by a dark-factory gate that injects an unreadable key.
 
 ---
 
-### Pitfall 2: `AI_AGENT` marker spoofing — a non-agent claims the marker, or an agent sheds it
+### Pitfall 2: proxy allowlist and WFP allowlist drifting out of sync (false sense of security)
 
 **What goes wrong:**
-The marker (named job object + SID) is used to decide "this process is a confined agent." Two failure directions:
-- **Forge:** a non-agent process opens the well-known named job via `OpenJobObjectW("nono-ai-agent-<id>")` and `AssignProcessToJobObject`s itself in (or names its own job with the expected pattern) so it is *treated as* a marked agent and granted capabilities over the pipe.
-- **Shed:** a confined agent escapes the marker so the daemon stops applying policy — e.g. it spawns a descendant that breaks out of the job (a child created with `CREATE_BREAKAWAY_FROM_JOB` when the job permits breakaway), or it relies on the marker being a mutable, self-reported attribute (env var, argv).
+The existing `nono-proxy` (Layer 7) and `nono-wfp-service` (kernel Layer 3/4) are separately configured. When v3.0 adds the HKLM policy spine, both layers must read from it. The pitfall is wiring only one layer to the new HKLM source while leaving the other on its old per-user profile path. The visible symptom is that one policy is enforced but the other is not: an agent blocked at the proxy can still open a raw TCP socket that bypasses the proxy entirely (WFP would have blocked it, but WFP was never updated); or conversely, WFP blocks the socket but the proxy's allow-list was never consulted for methods/paths. The worst case: both layers are wired to HKLM but through independent deserialization — an admin makes one registry change that the proxy reads correctly but WFP interprets as "allow all" due to a missing key or a version mismatch.
 
 **Why it happens:**
-A named job object is, by design, **openable by name** by any same-session process with the right access — the name is a rendezvous, not a secret. If marking == "is in a job whose name matches a pattern," the pattern is guessable and the job is openable. Env-var / argv markers are trivially forgeable. The "shed" direction happens because job membership is escapable unless breakaway is explicitly denied and the marker is set *at spawn under the daemon's control*, not adopted post-hoc.
+The proxy and WFP service were built at different milestones (Phases 56 and 62) with separate configuration paths. When a cross-cutting policy source is added, the natural instinct is "update the proxy first, WFP is harder, do it later." Later never arrives before the feature ships, and the partial wiring is invisible until a penetration test.
 
 **How to avoid:**
-- The marker must be **established by the daemon at spawn-time** (launch-and-confine), bound to the confining token, not a label a process can self-apply. The authoritative identity is the **restricting/session SID and AppContainer package SID baked into the token** the daemon created — those cannot be forged by a same-user process (it cannot mint another principal's token).
-- Do not name jobs with a guessable scheme as the *trust* signal. Use the named job for *kill-group / enumeration / resource caps*; use the token SID for *authorization*. (STACK.md already says: "Use a SID *in addition* (for WFP/pipe DACL scoping), not instead.")
-- Deny breakaway: do NOT set `JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK` / `..._BREAKAWAY_OK` on the `AI_AGENT` job (the existing launch sets `KILL_ON_JOB_CLOSE | DIE_ON_UNHANDLED_EXCEPTION` — confirm breakaway is not also enabled).
-- ACL the job object so only the daemon (SYSTEM/owner) gets `JOB_OBJECT_ALL_ACCESS`; agents get no `OpenJobObjectW` rights to their own or others' jobs.
-- For *adopted* (not launched) agents, treat the marker as **best-effort/untrusted** — adoption-after-spawn cannot achieve launch-time soundness (post-hoc IL-drop is demote-only). Never grant capabilities purely on "found a process in an AI_AGENT-named job."
+- Define a single `MachineEgressPolicy` struct that both `nono-proxy` and `nono-wfp-service` consume. Deserialize once from HKLM at startup; pass the same struct to both enforcement layers. Never let each layer parse independently.
+- In the dark-factory gate for egress (SEED-002): establish a test that injects a corpus of domain entries into the HKLM key, launches an agent, and asserts BOTH layers reflect the policy — proxy filter (`/proxy-allowed-hosts` debug endpoint or log line) AND WFP filter-state proof (see `verify-dark.ps1 --gate WFP-01` pattern from v2.13). A pass on one layer only is not a pass.
+- Treat the proxy as L7 defense-in-depth, not the sole boundary. WFP is the structural kernel enforcement; the proxy adds method/path filtering. Documented in the risk model so no one believes "proxy-only" ships the feature.
+- Version-stamp the policy schema in the registry key (`HKLM\SOFTWARE\Policies\nono\PolicyVersion = DWORD`). If WFP service starts and reads a version higher than it understands, it must fail-safe (block-all or refuse to install filters) rather than silently use a stale allow-list.
 
 **Warning signs:**
-- Authorization decisions read the job name or an env var.
-- The job object's DACL allows the agent's own SID `OpenJobObjectW`.
-- No test that a process *outside* the daemon's spawn path can/can't acquire the marker.
-- Breakaway flags are set "to make subprocess management easier."
+- `nono-proxy` and `nono-wfp-service` have separate `load_config()` functions that each open `HKLM\SOFTWARE\Policies\nono` independently.
+- The SEED-002 dark-factory gate tests proxy-side blocking but does not assert WFP filter state.
+- A changelog entry says "proxy now reads machine policy" with no corresponding WFP entry.
+- `network_policy.rs`'s `ResolvedNetworkPolicy` struct has no path to the WFP service's filter-install routine.
 
 **Phase to address:**
-Per-agent `AI_AGENT` marker phase (inside the daemon work). Pair the marker with the launch-and-confine phase so the marker is always a spawn-time property.
+Phase 83 (machine-policy spine) must include a single `MachineEgressPolicy` reader used by BOTH layers. The dark-factory gate must verify both. Do not split this across two phases without a failing integration test that enforces consistency.
 
 ---
 
-### Pitfall 3: Trying to launch-and-confine an in-process-`exec()` engine that is already running (structural impossibility)
+### Pitfall 3: Wildcard matching footgun — proxy suffix matching and WFP bypass via unlisted subdomain
 
 **What goes wrong:**
-For LangChain's `PythonREPLTool` (and any in-process `exec()` tool), the risky operation runs **inside the engine process** — there is no child process to wrap. The sound model (FEATURES.md) is that nono **parents the python interpreter itself**, so the whole interpreter is sandboxed and the in-process `exec()` is confined transitively. The pitfall is the daemon trying to "confine the tool call" of an engine *it did not launch* — there is structurally nothing to confine: the daemon can only post-hoc IL-drop the running interpreter, which is leaky/unsound (handles opened before the drop survive; no restricting SID retrofit; network uncovered; per `windows-confinement-model.md`).
+The existing `network_policy.rs` suffix list (e.g., `.anthropic.com`) is converted to a `*.anthropic.com` wildcard for the proxy filter via `build_proxy_config`. The proxy correctly blocks `evil.com`. However, the matching code uses a string suffix comparison, not a DNS component comparison. An attacker-controlled domain `anthropic.com.evil.com` could in theory match a naively-written `endswith(".anthropic.com")` check. More practically: a corporate allow-list entry for `.corp.internal` added via GPO ADMX accidentally allows `anything.corp.internal` including `exfil.corp.internal` — the wildcard is far broader than intended.
+
+The WFP side has the complementary problem: WFP filters must specify exact remote IP ranges (v3) or remote FQDNs (v4+, limited). A suffix wildcard in the HKLM allow-list cannot be directly expressed as a WFP ALE condition; the implementation might resolve the wildcard to a snapshot of IP addresses at policy-load time, which goes stale as CDN IPs rotate. An agent can then reach a newly-rotated `api.anthropic.com` IP that is no longer in the WFP filter.
 
 **Why it happens:**
-The Claude PreToolUse mental model ("intercept each tool call → `nono run`") is sticky. It works because Claude's *shell* tool spawns a child. It does **not** generalize to in-process `exec()` — there is no spawn to intercept. Teams reach for the daemon's "adopt a running agent" path, hit post-hoc IL-drop, and ship an unsound boundary believing it equivalent to launch-time.
+The proxy wildcard matching bug is well-understood in the codebase (CLAUDE.md: "String `starts_with()` on paths is a vulnerability"; `network_policy.rs` already uses proper `starts_with('.')` guards for the loopback case). But the same discipline must be applied to the suffix matching in the proxy filter layer itself — not just nono's config parsing. The WFP IP-snapshot problem is inherent to mixing a DNS-name policy with an IP-layer enforcement mechanism and is easy to underestimate.
 
 **How to avoid:**
-- The daemon must be the **parent** of the interpreter for in-process engines. Confinement is applied to `python.exe` at spawn, before any `exec()` runs. Confined-because-the-whole-process-is-sandboxed is the only sound story.
-- Where the daemon cannot be the parent (engine already running, IDE-embedded), be explicit that this is **demote-only** incident response, not confinement — and the `nono-py` binding's answer is to apply confinement **from inside the process at startup** (the binding's `confined_run` / in-process sandbox-self), before the agent does any work.
-- Document the hard limit: an engine that does in-process risky ops and is launched by a third party cannot be soundly confined by an external daemon. This is a contract on E2 ("a launch command nono can own").
+- For proxy suffix matching: use DNS component comparison, not string suffix. A function `matches_suffix(host: &str, suffix: &str) -> bool` should split both on `.` and compare components from right to left, never use `host.ends_with(suffix)` directly. This already partially exists in the codebase; audit every site that calls into the proxy `filter.rs` matching logic after HKLM integration.
+- For WFP and CDN-rotated IPs: the correct architecture is to rely on the proxy layer for FQDN-level enforcement (the proxy can verify the SNI/Host header) and use WFP only to enforce "only traffic through the nono proxy port is allowed" rather than enumerating every remote IP. This is the AppContainer + proxy architecture that SEED-002 implies is already in place from Phase 62 — preserve it; do not try to enumerate AI-provider IPs in WFP directly.
+- Ensure the machine-policy schema documents which entries are exact-host vs suffix, and that GPO ADMX template only allows suffix entries in the `AllowedSuffixes` multi-string key, not the `AllowedHosts` exact-match key. Mixing them in one flat list invites operator mistakes.
 
 **Warning signs:**
-- A code path that "confines LangChain" by finding a running `python.exe` and dropping its IL.
-- The `nono-py` binding offering only an external-launch API and no in-process sandbox-self entry point.
-- Tests that prove confinement only via a subprocess `ShellTool`, never via `PythonREPLTool` `exec()`.
+- `host.ends_with(&format!(".{}", suffix))` without first stripping a leading `.` from `suffix`.
+- A test showing `anthropic.com.evil.com` is blocked is missing.
+- WFP filter-install code resolves `*.anthropic.com` to a list of IPs via `GetAddrInfoW` and hard-codes them into `FwpmFilterAdd0` conditions.
+- GPO ADMX template uses a single `REG_MULTI_SZ` for both exact hosts and wildcard suffixes.
 
 **Phase to address:**
-Engine abstraction boundary + `nono-py` binding phase. The binding must demonstrate in-process confinement (sandbox-self at startup), not just external launch.
+Phase 83 (HKLM policy reader + egress reconciliation). The suffix-matching review is a pull-request gate item — all callers of `filter.rs` suffix matching must use component comparison before the HKLM-backed allow-list ships.
 
 ---
 
-### Pitfall 4: Persistent-daemon attack surface — a privileged, always-on target that an escaped agent can pivot through
+### Pitfall 4: Silent MSI per-user vs per-machine context confusion — WRITE_OWNER scratch-space and service install
 
 **What goes wrong:**
-The per-invocation `nono run` model is ephemeral: the supervisor exists only for one child and dies with it. A persistent daemon is a long-lived process with elevated reach (it launches confined processes, manipulates tokens, owns job objects, talks to the elevated `nono-wfp-service`, holds open handles to every tenant). If the daemon runs as SYSTEM/admin, an agent that escapes confinement (or a malicious capability request) can pivot through the daemon to **all tenants** and to **the host** — a far worse blast radius than escaping one ephemeral supervisor. The daemon is now persistent state that survives between agents, so a compromise persists too.
+A silent push via SCCM/Intune runs the MSI in the SYSTEM context (per-machine install, `MSIINSTALLPERUSER=""` or `ALLUSERS=1`). The nono MSI's custom action that provisions the WRITE_OWNER scratch space (`%LOCALAPPDATA%\nono\workspaces\`) resolves `%LOCALAPPDATA%` as `C:\Windows\system32\config\systemprofile\AppData\Local` — the SYSTEM account's local app data, not the target user's. The result: scratch workspaces are provisioned for SYSTEM and every subsequent `nono run` for a real user fails the R-B3 user-ownership guard (the directory is SYSTEM-owned, not user-owned), producing a cryptic access-denied that looks like a sandbox bug.
 
 **Why it happens:**
-The existing in-tree service pattern (`nono-wfp-service`) runs as **LocalSystem** because WFP filter installation requires it. Cloning that pattern for the agent daemon ("it's just a second instance of a service we already ship") inherits SYSTEM privilege the *launcher* role does not need. The daemon conflates two roles: the unprivileged launcher/IPC role and the privileged network-enforcement role.
+`%LOCALAPPDATA%` is a per-user environment variable that resolves differently under SYSTEM than under the install-target user. WiX MSI custom actions that resolve env vars during the install do so in the SYSTEM token context for per-machine installs. The Phase 60 scratch-space provisioner (`grant_sid_write_on_path`, `AppliedDaclGrantsGuard`) was designed and tested under a user-context launch, not a SYSTEM-context MSI custom action.
 
 **How to avoid:**
-- **Least-privilege split.** Run the agent-launcher daemon at the *user's* privilege (it launches same-user confined children; it does not need SYSTEM). Keep WFP filter manipulation in the existing separate elevated `nono-wfp-service` behind its own narrow control-pipe protocol. Do not merge the launcher into the elevated service.
-- Harden the daemon's own control surface like the capability pipe: bounded (64 KiB) length-prefixed frames (already the pattern), strict deserialization, reject oversized/malformed, per-client authorization (Pitfall 1).
-- The daemon must never expand a running agent's capabilities (no escape hatch — core nono invariant). Capability *grants* are decided at launch; the pipe answers queries, it does not widen the sandbox.
-- Isolate tenants from each other in the daemon's own memory/state: a compromised request handler for tenant A must not be able to read tenant B's grants, handles, or tokens. Avoid one global handle table indexed by client-supplied id.
-- Treat every capability request as hostile input — it may originate from a prompt-injected agent.
+- Provision scratch space at first-run (when the user actually launches nono), not at MSI install time. The MSI should only create `C:\ProgramData\nono\` (machine-global, SYSTEM/Admins-writeable) and `C:\Program Files\nono\` (binaries). User-specific scratch space (`%LOCALAPPDATA%\nono\workspaces\`) must be created by nono itself on first use, in the user's security context. This eliminates the SYSTEM-context resolution problem entirely.
+- If the MSI must pre-provision for "zero-touch first run" experience: use a deferred custom action running as the logged-in user (WiX `Impersonate="yes"` on the custom action) rather than in the SYSTEM context.
+- The machine MSI should install a Group Policy object or registry entry at `HKLM\SOFTWARE\nono\ScratchRoot` pointing to `%ProgramData%\nono\workspaces\<USERNAME>` as a pattern, with a note that nono-cli expands `<USERNAME>` at runtime in the user's token. Never let the MSI expand per-user paths under SYSTEM.
+- Dark-factory gate: run the MSI install with `msiexec /i ... /quiet ALLUSERS=1` under a non-admin test account and verify the workspace path is owned by the test account, not SYSTEM.
+- Cross-references to known landmines: `feedback_windows_mandatory_label_write_owner` (WRITE_OWNER not implicit for Owner; drive-root user dirs fail), Phase 60 `AppliedDaclGrantsGuard`.
 
 **Warning signs:**
-- The daemon binary registered as a `start=auto` SYSTEM SCM service like `nono-wfp-service`.
-- The launcher and WFP-control responsibilities in one process.
-- Any code path that, on request, calls a "grant more access to PID N" function.
-- Shared mutable global state keyed by an untrusted tenant id.
+- MSI custom action creates `%LOCALAPPDATA%\nono\workspaces\` without `Impersonate="yes"`.
+- The provisioner is called from within a `<CustomAction>` that runs `Execute="deferred"` without explicitly setting `Impersonate="yes"`.
+- First-run on a machine-installed nono shows the workspace path is `C:\Windows\system32\config\systemprofile\...`.
+- Tests only cover the case where the provisioner is called from the user's own process, never from a SYSTEM-context script.
 
 **Phase to address:**
-Persistent multi-tenant daemon phase — specifically the daemon-hosting/privilege-model sub-task. Write the privilege model down (ADR) before coding the service host.
+Phase 82 (silent MSI install flags). The scratch-space provisioner must be re-evaluated against the SYSTEM-context install path before the machine-install gate ships.
 
 ---
 
-### Pitfall 5: Token & job-object handle lifetime in a long-running process (leaks, reuse, orphans)
+### Pitfall 5: Service install in MSI is non-atomic — rollback leaves the service half-registered
 
 **What goes wrong:**
-The per-invocation model leaks nothing of consequence — the process dies and the kernel reclaims everything. A daemon that lives for days accumulates:
-- **Handle leaks:** every launched agent allocates a job handle, a token, pipe instances, process/thread handles. The existing `Drop` impls (`launch.rs` `CloseHandle(self.job)` etc.) assume a short-lived owner. If the daemon stores per-agent state in a map and an agent exits without the entry being cleaned, handles leak until the daemon exhausts the desktop heap / handle table.
-- **Token reuse across agents:** reusing one confining token (or job) for multiple agents collapses tenant isolation — agent B inherits agent A's restricting SID / workspace relabel, so B can write A's workspace, and WFP scoping (per-package-SID) blurs.
-- **Orphaned jobs:** `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` is set (`launch.rs:222`) and the daemon holds the only job handle, so the job's processes die when the daemon closes the handle — good for teardown but a footgun if the daemon restarts/crashes (all agents die) or if a handle is closed early. Conversely, if the daemon drops a job-handle reference but the agent is still running and no one holds `KILL_ON_JOB_CLOSE`, the job becomes an unreferenced orphan with no kill-group.
+The WiX MSI uses the built-in `ServiceInstall` and `ServiceControl` elements to register and start `nono-wfp-service`. If the service start fails (e.g., the WFP driver is blocked by a corporate policy, or the service binary is not yet signed and fails a code-integrity check), Windows MSI rolls back the installation but leaves artifacts:
+- The service registration in SCM may or may not be cleaned up (depends on MSI rollback sequencing).
+- The `HKLM\SYSTEM\CurrentControlSet\Services\nono-wfp-service` registry key may persist.
+- A partial machine MSI install with no user-visible error is reported as "success" on some MDM platforms because `msiexec` exits 0 if the rollback itself succeeds.
+
+The v2.11 milestone explicitly made service start non-fatal for this reason (`nono-wfp-service` start is non-fatal so a service hiccup doesn't roll back the product). But the v3.0 machine-policy spine depends on the service being reliably present — if the service is half-registered, machine-policy egress enforcement is silently absent.
 
 **Why it happens:**
-Lifetime correctness that is *automatic* for an ephemeral process becomes *manual bookkeeping* in a daemon. The proven code was written for one child; reuse "to avoid re-allocating tokens" is a tempting micro-optimization that destroys isolation.
+MSI rollback is a best-effort mechanism; it reverses registered actions in reverse order but custom error states (SCM partial-register) are not well-tested. "Non-fatal service start" is the right call for end-user UX but creates a grey area for enterprise fleet where the IT desk needs a hard binary: "installed and enforcing" or "not installed." The nuance is invisible to SCCM/Intune compliance checks.
 
 **How to avoid:**
-- **One fresh confining token + one fresh job per agent.** Never reuse a token or job across tenants. Mint per-agent (the SID nonce machinery — `getrandom` `create_nonce_hex` / `generate_session_sid` — already exists for this).
-- Tie every per-agent resource (token, job, pipe instances, process handles) to a single owning struct with a `Drop` that closes all of them, and remove it from the registry on agent exit. Reap exited agents promptly: wait on the job's completion port / process handle and clean up deterministically, not lazily.
-- Decide the crash-teardown policy deliberately: `KILL_ON_JOB_CLOSE` means a daemon crash kills all agents (fail-secure, arguably correct). If you want agents to survive a daemon restart, you need a different ownership model (re-`OpenJobObjectW` on restart) — but then you must re-establish trust on adoption (Pitfall 2).
-- Audit for handle growth: the daemon should expose/log a live count of open jobs/tokens/pipe instances; a monotonically rising count under steady tenant churn is a leak.
+- Separate service-install from service-start in the WiX sequences. The service should always be registered (the binary is already in `Program Files`); start failure is a deferred error that `nono setup` checks and surfaces via Event Log.
+- Ship a `nono health` command that emits a machine-readable JSON verdict: `{"wfp_service": "running|stopped|not_installed", "machine_policy": "enforced|not_configured|read_error", "scratch_space": "ok|error"}`. This is what SCCM/Intune compliance scripts call, not `sc query`.
+- The dark-factory gate for the MSI must simulate a service-start failure and assert: (a) `msiexec` exits non-zero or emits an Event Log entry; (b) `nono health` reports the degraded state; (c) nono-cli refuses to launch a confined agent when `wfp_service` is `not_installed` (fail-secure, deny egress).
+- Do not rely on MSI `ServiceControl/@Wait` semantics for compliance evidence — they are unreliable under SCM.
+- Cross-reference: `windows_msi_wxs_is_generated` (the `.wxs` is regenerated from `build-windows-msi.ps1`; edit the script, not the `.wxs`).
 
 **Warning signs:**
-- A "token pool" or "reuse the job if the workspace matches" optimization.
-- Per-agent state stored in a map with no removal-on-exit path.
-- Handle count rising over hours of use with stable concurrent-agent count.
-- No integration test that launches→exits 100 agents and asserts handle count returns to baseline.
+- The WiX `ServiceControl` element has `Wait="yes"` and the install sequence continues regardless of start outcome.
+- `msiexec /quiet` exits 0 on a machine where `sc query nono-wfp-service` returns `FAILED`.
+- No `nono health` verb exists.
+- SCCM compliance script just checks `(Get-Service nono-wfp-service).Status -eq "Running"` without testing nono-cli's own assessment.
 
 **Phase to address:**
-Persistent multi-tenant daemon phase (token/job *reuse* across agents was the explicitly unspiked part of spike 003/004). Make per-agent fresh-token + deterministic-reap a success criterion.
+Phase 82 (silent MSI). The `nono health` verdict command is a phase deliverable, not a nice-to-have. The dark-factory gate must verify the degraded-service path.
 
 ---
 
-### Pitfall 6: Nested-job collisions and silent confinement loss (Windows 8+ job hierarchy semantics)
+### Pitfall 6: Machine-wide env-var propagation lag — new PATH or NONO_ env vars not visible until re-logon
 
 **What goes wrong:**
-On Windows 8+ a process can belong to a *hierarchy* of nested jobs, but with hard constraints: `AssignProcessToJobObject` on an already-jobbed process succeeds only if the target job is empty or in the existing hierarchy, **and the target job has no UI limits and no conflicting limits**. Two daemon-specific failures:
-- The agent engine (e.g. a `node`/`python` launched from a parent that *already* placed it in a job — common under some shells, terminals, or CI runners) is already in a job; the daemon's `AssignProcessToJobObject` into the `AI_AGENT` job fails or only nests, and resource/kill semantics don't behave as the daemon assumes.
-- The daemon nests its `AI_AGENT` job under an outer job whose limits silently override or conflict, so the confinement/resource caps the daemon thinks it set don't actually apply.
+The MSI registers nono in the system PATH (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment\Path`) and sets machine-wide env vars like `NONO_POLICY_PATH`. These changes are broadcast to running processes via `WM_SETTINGCHANGE`. However:
+- Sessions already logged in at install time will not see the new PATH until they log out and back in (or open a new process tree). On a machine where an engineer keeps a terminal open all day, nono is installed by SCCM but `nono run` gives "command not found" for hours.
+- The `WM_SETTINGCHANGE` broadcast is delivered only to windows (message-loop processes). Console-only tools (cmd.exe, PowerShell without a window, CI agents) never receive it.
+- If `NONO_POLICY_PATH` is set machine-wide to point at the HKLM policy file path, but the user's process was spawned before the machine env-var was set, nono reads an old/absent policy path and silently uses defaults — the fail-OPEN risk from Pitfall 1 via a different mechanism.
 
 **Why it happens:**
-The single-`nono run` path controlled the full spawn and rarely hit pre-existing jobs. A daemon launching arbitrary engines from arbitrary contexts (and adopting running ones) routinely meets already-jobbed processes. The Win32 nested-job rules are subtle and the failure is often silent (limits don't apply) rather than a hard error.
+Windows env-var propagation semantics are widely misunderstood. Developers test the install on a fresh shell opened after the install and it works; they never test the "install while sessions are open" case, which is the common fleet scenario.
 
 **How to avoid:**
-- Spawn the engine **suspended and assign it to the `AI_AGENT` job before it runs any code** (the launch path already creates suspended; `launch.rs:2005` terminates on assign failure — keep that fail-secure stance). This guarantees the job is established first.
-- On `AssignProcessToJobObject` failure, **fail secure** — terminate the suspended process, never let an unconfined agent run (the existing `terminate_suspended_process` on assign failure is the correct pattern; ensure the daemon path keeps it).
-- Detect pre-existing job membership (`IsProcessInJob` against the default/NULL job) for adopt-mode; if the process is already in a foreign job with conflicting limits, refuse to claim it as confined.
-- Do not set UI limits on the `AI_AGENT` job (UI limits block nesting).
+- Do not rely on env-var PATH for the machine-policy path at runtime. Machine policy should ALWAYS be read from a fixed, well-known registry key (`HKLM\SOFTWARE\Policies\nono`) regardless of env vars. The registry is always current; env vars are snapshotted at process start.
+- The HKLM policy reader must call `RegOpenKeyExW` at every policy-evaluation point (or on a short TTL cache), never read an env-var path that was captured at startup.
+- Document the post-install re-logon requirement in the SCCM deployment note; add a check in `nono health` that warns if the current process's PATH does not include the nono install dir (detects the "installed but old session" case).
+- If machine env-vars are used (e.g., `NONO_POLICY_OVERRIDE` for escape-hatch testing), they are advisory only and must not affect the security path. The security path reads from the registry directly.
 
 **Warning signs:**
-- `AssignProcessToJobObject` return value ignored or only logged.
-- Resource caps (`JOB_OBJECT_LIMIT_JOB_MEMORY`, active-process limit — already wired in `launch.rs`) not actually observed in testing.
-- Launching engines from terminals/CI without testing the already-jobbed case.
+- `std::env::var("NONO_POLICY_PATH")` in the policy-loading code path.
+- Policy is loaded once at startup and cached for the process lifetime without a TTL.
+- The MSI's install test runs in a fresh shell opened after install (never validates the already-open-session case).
+- A test sets an env var to simulate machine policy rather than writing to a temporary registry key.
 
 **Phase to address:**
-Generic launch-and-confine (productionize) phase, hardened in the daemon phase for the adopt path.
+Phase 83 (machine-policy HKLM reader). The reader must be registry-direct, not env-var-mediated.
+
+---
+
+### Pitfall 7: WOW6432Node registry redirection silently reads wrong policy
+
+**What goes wrong:**
+On 64-bit Windows, a 32-bit process reads `HKLM\SOFTWARE\Policies\nono` as `HKLM\SOFTWARE\WOW6432Node\Policies\nono` unless the key open uses `KEY_WOW64_64KEY`. nono-cli is always 64-bit, so it reads the 64-bit hive. BUT the Group Policy client writes to `HKLM\SOFTWARE\Policies\nono` (the 64-bit hive), while some Intune MDM service agents (e.g., the Intune Management Extension, which can be 32-bit) write to `HKLM\SOFTWARE\WOW6432Node\Policies\nono` via redirected writes. If the writing agent and the reading agent read from different hives, the policy appears absent to nono (fail-OPEN per Pitfall 1), or the hives diverge (stale policy in one, current in the other).
+
+**Why it happens:**
+WOW6432Node redirection is automatic and silent for 32-bit processes on 64-bit Windows; developers on 64-bit dev hosts never observe it because their test processes are 64-bit. The problem surfaces only when the Intune or SCCM delivery agent happens to be 32-bit.
+
+**How to avoid:**
+- Always open the machine-policy key with `RegOpenKeyExW(..., KEY_READ | KEY_WOW64_64KEY)` to explicitly request the 64-bit hive regardless of nono-cli's own bitness.
+- Document in the ADMX template and Intune CSP OMA-URI that the policy path is the 64-bit hive; the deployment package must deploy-via-64-bit-capable mechanism (PowerShell `[Microsoft.Win32.RegistryView]::Registry64` when setting keys via script).
+- Dark-factory gate: write a test that explicitly creates the key under `HKLM\SOFTWARE\WOW6432Node\Policies\nono` and verifies nono does NOT read it (i.e., the 64-bit path is authoritative). This catches the "accidentally reads WOW hive" regression.
+
+**Warning signs:**
+- `RegOpenKeyExW` calls without `KEY_WOW64_64KEY`.
+- Policy integration test uses a PowerShell script without `[Registry]::LocalMachine.OpenSubKey(..., [RegistryView]::Registry64)`.
+- No WOW64 redirection coverage in tests.
+
+**Phase to address:**
+Phase 83 (machine-policy HKLM reader). One-liner fix, but must be explicitly tested.
+
+---
+
+### Pitfall 8: Default-deny that accidentally blocks the AI provider and bricks the agent
+
+**What goes wrong:**
+The machine-policy allow-list is configured with corporate domains and `api.anthropic.com`. The GPO template ships the list without entries for Anthropic's CDN, OAuth endpoints, or the streaming endpoint (`api2.anthropic.com`, `*.anthropic.com` for streamed completions). An agent that runs an LLM call sees a WFP/proxy block on the streaming connection. The agent silently fails (no error dialog, the stream just hangs then times out), and the user reports "nono broke Claude." Because default-deny is correct, this is an operator-configuration problem, but nono's diagnostics do not attribute the failure to the policy block — the error is just a timeout in the AI SDK.
+
+**Why it happens:**
+The AI provider's outbound requirements are not static: Anthropic uses multiple subdomains and CDN prefixes that change over maintenance windows. Corporate IT uses the documented `api.anthropic.com` entry but misses the streaming-origin variant. The deny happens silently at the kernel (WFP BLOCK) and the AI SDK retries until timeout without surfacing a clear reason.
+
+**How to avoid:**
+- Ship a vetted `anthropic-claude-code` group entry in the embedded `network-policy.json` (already present from Phase 56) that includes ALL required subdomains for Claude Code operation (`api.anthropic.com`, `statsig.anthropic.com`, `sentry.io` subset, etc.). The HKLM policy schema should support a `"use_builtin_group": ["claude-code"]` key that references the vetted embedded list, so enterprise admins can say "allow Claude Code traffic" without enumerating IPs.
+- The `DiagnosticFormatter` must surface WFP and proxy blocks when the AI provider endpoint is blocked. Currently it formats path-deny explanations; extend it to format network-deny explanations with the blocked host name and the matching policy rule (or "not in allowlist").
+- Provide a `nono diagnose-egress <hostname>` subcommand that tests whether a given host passes the machine-policy + proxy filter without launching a full agent session.
+- The machine-policy schema's `AllowedHosts` must validate that entries are syntactically valid hostnames/wildcards at policy-load time, not at enforcement time. An ADMX-pushed value of `api .anthropic.com` (space included) silently denies and is impossible to debug without the validator.
+
+**Warning signs:**
+- The only diagnostic for a blocked network connection is a timeout in the AI SDK with no nono-attributed error.
+- The embedded `claude-code` network profile in `network-policy.json` does not include all outbound endpoints required by Claude Code.
+- No `nono diagnose-egress` or equivalent.
+- An IT admin can push an empty `AllowedHosts` list via GPO and nono accepts it without warning (silently blocks everything).
+
+**Phase to address:**
+Phase 83 (egress reconciliation). The AI-provider group entries in `network-policy.json` must be reviewed and a `nono diagnose-egress` or dry-run mode must be a deliverable.
+
+---
+
+### Pitfall 9: TOCTOU on machine-policy reload — allow-list widens mid-session
+
+**What goes wrong:**
+The machine-policy reader caches the allow-list in memory for the lifetime of a supervised session (typically minutes to hours for a long agentic run). An admin pushes a new HKLM policy — typically a widening (adds a new corporate SaaS domain) — while the agent is running. The running session is still using the old (more restrictive) allow-list; the new request gets blocked; the operator assumes nono is broken because the policy was updated. Conversely, if nono refreshes the policy mid-session, a malicious insider could push a widened policy that permits exfiltration targets just before a compromised agent makes the request.
+
+**Why it happens:**
+Caching vs. live-reload is a classic tradeoff. Security products almost always prefer caching (the session's security context is fixed at launch); operational products prefer live-reload. Enterprise customers will ask for live-reload because their IT teams push policy changes during business hours without wanting to bounce sessions.
+
+**How to avoid:**
+- Fix: the allow-list is fixed at session start (launch-time snapshot). The "no escape hatch" principle (nono core invariant) applies to the network layer: you cannot widen the allowed scope of a running session. Narrowing mid-session is acceptable (add a policy-change watcher that can only REMOVE entries from the running cache, never add them).
+- Document this explicitly in the GPO ADMX template tooltip: "Policy changes apply to new sessions. Running sessions retain the policy in effect at launch."
+- If live-reload is demanded: it must be widen-only through an explicit operator command (`nono update-policy`), not automatic — and even then the design needs ADR treatment.
+- The dark-factory gate should test: push a widened policy mid-session; assert the running session still uses the old (more restrictive) list; assert a newly launched session picks up the new list.
+
+**Warning signs:**
+- The allow-list is stored in an `Arc<RwLock<AllowList>>` that is written by a `tokio::fs::watch` on the registry.
+- Policy reload is triggered by `WM_SETTINGCHANGE` delivery (which an unprivileged process can forge via `SendMessage`).
+- No test for "policy changed while session running."
+
+**Phase to address:**
+Phase 83 (HKLM policy reader). Codify the snapshot-at-launch model in the ADR. The widen-only-narrow mid-session rule is a security invariant.
+
+---
+
+### Pitfall 10: Event Log custom-channel registration requires admin and manifest deployment
+
+**What goes wrong:**
+Creating a custom Event Log channel (e.g., `nono/Security`) requires:
+1. A `.man` event manifest compiled to a `.mc` file.
+2. `wevtutil im nono.man` run as admin during installation to register the provider GUID and channel in `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Publishers\<GUID>`.
+3. The compiled `.dll` resource file (or the nono binary itself if resources are embedded) on a stable path.
+
+If step 2 is skipped (manifest not installed) or the resource DLL path changes (e.g., nono is moved from `C:\Program Files\nono\` after install), Event Log writes fail. The failure mode is: `RegisterEventSourceW` returns NULL, `ReportEventW` is never called, and the security event is silently dropped. From the CISO's perspective, the telemetry pipeline appears to work (no error) but emits nothing.
+
+**Why it happens:**
+The MSI's custom action that runs `wevtutil im` requires elevation and runs in the SYSTEM context — it must succeed during the install, not later. Developers test `ReportEventW` from a dev machine where they ran `wevtutil im` manually; the automated CI/MDM install never does this, so the registration is absent in production.
+
+The nono-wfp-service already uses the Application Event Log (`EVENT_LOG_SOURCE: &str = SERVICE_NAME`) and writes `ReportEventW` for sweep operations — this is the existing pattern, but it relies on Windows auto-registering the Application log source at first write (which works for the generic Application log but NOT for a custom channel with structured schema).
+
+**How to avoid:**
+- Use the existing **Application event log source** pattern (`RegisterEventSourceW(SERVICE_NAME)`) for v3.0 rather than a custom channel. This works without a manifest and is already proven in `nono-wfp-service.rs`. Add nono-specific event IDs to the existing source. Defer custom channel + structured manifest to a future "SIEM schema hardening" milestone.
+- If a custom channel IS needed: the manifest compilation (`mc.exe`), resource compilation (`rc.exe`), and `wevtutil im` must all be wired into the WiX MSI's install sequence via `CustomAction`/`ExePackage`, and `wevtutil um` must be in the uninstall sequence. The manifest path must be pinned to the `Program Files` install root; use `[INSTALLDIR]` in the manifest XML, not a hard-coded path.
+- Dark-factory gate: run the MSI on a clean machine (no prior `wevtutil im`), emit a security event via `nono run`, and assert the event appears in Event Viewer under the expected log/source. A missing event is a test failure.
+- The emission code must treat `RegisterEventSourceW` returning NULL as a `NonoError::TelemetryUnavailable` (logged to stderr), NOT silently ignored. Silent drop of security events is not acceptable.
+
+**Warning signs:**
+- `RegisterEventSourceW` return value is not checked.
+- The MSI has no `wevtutil im` or `EventManifest` component.
+- Security events are tested only on the dev machine where `wevtutil im` was run manually.
+- `ReportEventW` fails silently (returns false) and the code continues without logging the failure.
+
+**Phase to address:**
+Phase 84 (SIEM/EDR telemetry — SEED-003). Use the Application log source approach for v3.0; defer custom manifest to a later hardening phase.
+
+---
+
+### Pitfall 11: Telemetry events leaking secrets and file paths into the Windows Event Log
+
+**What goes wrong:**
+The `DiagnosticFormatter` generates human-readable denial messages that include the full path of the denied file (e.g., `C:\Users\alice\Projects\secret-project\src\main.rs denied write access`). When this is emitted to the Windows Event Log — which is forwarded to Splunk/Sentinel via Windows Event Forwarding — every denied-access event includes:
+- The full path of the corporate codebase being protected.
+- Possibly credential-adjacent paths (e.g., `C:\Users\alice\.ssh\id_rsa` denied read — this path is now in the SIEM and tells an attacker what to target).
+- In the network-deny case, the request URL may include query parameters containing tokens or session IDs if the AI SDK embeds them in the URL.
+
+The "tamper-evident" claim for the telemetry is then undermined: the SIEM becomes itself a target for correlation-attack reconnaissance.
+
+**Why it happens:**
+The `DiagnosticFormatter` was designed for a human engineer reading stderr, where full paths are helpful for debugging. Re-using it verbatim for SIEM emission treats a debugging tool as a structured security signal. The distinction between "debug detail" and "security event schema" is not enforced at the API boundary.
+
+**How to avoid:**
+- Define a separate `SecurityEvent` struct that is distinct from `DiagnosticOutput`. The `SecurityEvent` carries:
+  - An opaque path hash (`sha256(canonical_path)[0..8]`) rather than the full path — sufficient for correlation, safe for SIEM forwarding.
+  - A path category tag (`workspace_file`, `system_path`, `user_profile`, `temp`) rather than the raw path.
+  - For network denials: the hostname only (no URL path, no query string).
+- The `DiagnosticFormatter` continues to emit full paths to stderr (for debugging). `SecurityEvent` is the SIEM-safe schema. These are two separate emission paths; they share the `DenialReason` enum but diverge on detail level.
+- Mark any `SecurityEvent` field that could be PII-adjacent (full path, full URL) as `#[zeroize]` or `#[sensitive]` with a note that it MUST NOT be placed in the Event Log payload.
+- The ADMX template should include a `TelemetryDetailLevel = DWORD` key: `0 = hashed`, `1 = category`, `2 = full-path` (requires explicit admin consent + elevated audit-log permissions). Default must be `0`.
+- Review the nono-wfp-service's existing `ReportEventW` calls for the sweep events — they currently log object GUIDs and error codes, which is safe. Ensure the new denied-action events follow the same pattern.
+
+**Warning signs:**
+- `SecurityEvent` is a type alias for `DiagnosticOutput`.
+- A network-deny event includes the full request URL in the Event Log message string.
+- The Event Log emission code calls `diagnostic_formatter.format_human_readable()` and passes the result as the Event Log message.
+- No `TelemetryDetailLevel` configuration; all emitted events include full paths.
+- Tests emit events and assert on substrings of full paths (which confirms the path is in the event).
+
+**Phase to address:**
+Phase 84 (SIEM/EDR telemetry). The `SecurityEvent` schema is a phase deliverable. Define it before wiring to the emission backend.
+
+---
+
+### Pitfall 12: "Tamper-evident" telemetry claims that are not — append-only with no cryptographic anchor
+
+**What goes wrong:**
+SEED-003 specifies "tamper-evident append-only event chain." The common implementation mistake is to add an incrementing sequence number and a per-record HMAC signed with a key stored in `HKLM\SOFTWARE\nono\TelemetryKey`. An attacker with local admin (the threat model for a compromised agent that escaped confinement to admin-level) can delete or overwrite `HKLM\SOFTWARE\nono\TelemetryKey`, re-sign any sequence of events with a new key, and the "tamper-evident" chain no longer detects the gap.
+
+A more subtle version: events are written to the Windows Event Log (which is append-only at the OS level) and the "tamper evidence" claim is that Event Log is protected by Windows ACLs. This is true for the Security log (SYSTEM-only write, `SeSecurityPrivilege` to clear) but NOT for the Application log (any process running as the event's registered source can write to it, and an admin can clear the Application log with zero audit trail).
+
+**Why it happens:**
+"Tamper-evident" is an easy claim to make and a hard property to actually provide in user-space. The shortcut is to protect the log with the same ACLs that protect the OS — which is fine for the Windows Security log but is a weaker claim for Application log or file-based logs. SEED-003 correctly cross-references SEED-005 (ZT-Infra signed policy overrides) as the immutable-audit angle; the pitfall is shipping a v3.0 "tamper-evident" claim without the ZT-Infra backing.
+
+**How to avoid:**
+- Do NOT claim full tamper-evidence in v3.0. Claim: "structured security events emitted to Windows Event Log; forwarding to SIEM provides external copy beyond local attacker's reach."
+- The actual tamper-evidence story is: events are written to the Application log + forwarded via Windows Event Forwarding (WEF) to a SIEM collector. The SIEM's copy is out-of-reach for a locally-compromised host. Document this architecture in the SEED-003 deliverable explicitly: tamper-evidence = remote forwarding, not local crypto chain.
+- If a local crypto chain is required: the HMAC key must be stored in a hardware-backed TPM PCR-sealed secret or in a remote key-management service, not in a registry key a local admin can delete. Defer this to the SEED-005 ZT-Infra milestone (it is scope-appropriate there).
+- The ADR for Phase 84 should explicitly record: "Local HMAC chain rejected — attacker with local admin can forge. External SIEM forwarding is the tamper boundary."
+
+**Warning signs:**
+- `TelemetryHmacKey` is stored in `HKLM\SOFTWARE\nono\`.
+- The "tamper-evident" claim in the user documentation is not qualified with "via external SIEM forwarding."
+- The tamper-detection test does not simulate an admin deleting the HMAC key and verify the chain is broken.
+- SEED-005 features (signed policy, remote attestation) are implemented inside Phase 84 instead of in their own milestone.
+
+**Phase to address:**
+Phase 84 (SIEM/EDR telemetry). Write the ADR first; be explicit about the tamper-evidence scope. Reference SEED-005 as the future work.
+
+---
+
+### Pitfall 13: Silent root-cert install via GPO modifying the wrong store — proxy TLS interception fails fleet-wide
+
+**What goes wrong:**
+The nono proxy intercepts HTTPS traffic (for domain filtering and credential injection) using a machine-local CA. For enterprise fleet deploy, this CA cert must be in the user's `Trusted Root Certification Authorities` store so the AI SDK's TLS stack accepts the proxy's re-issued certificates. The GPO/Intune deployment pushes the cert to `HKLM\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates\` (the machine root store). However, .NET-based tools and Electron apps (like Claude Code) use the `CurrentUser\Root` store first, falling back to `LocalMachine\Root`. The cert installed in `LocalMachine\Root` is visible to Win32 `CertVerifyCertificateChainPolicy` calls but may NOT be visible to LibreSSL/OpenSSL-bundled runtimes (common in Rust binaries) that do not consult the Windows cert store at all unless explicitly configured.
+
+**Why it happens:**
+Windows has five root cert stores (CurrentUser\Root, LocalMachine\Root, LocalMachine\AuthRoot, service stores, and others). "Install via GPO" lands in `LocalMachine\Root`. Rust binaries using `rustls` or `native-tls` with `webpki` roots do not consult the Windows cert store by default — they use the compiled-in root set. Claude Code (Electron+Node) uses Node's `tls` module which DOES consult the Windows cert store. The matrix is: some clients pick it up, some don't, with no visible error — just TLS handshake failure appearing as a network-deny.
+
+**How to avoid:**
+- Map the TLS trust paths for every client process that will go through the nono proxy: `nono-proxy` itself (Rust/rustls), Claude Code (Electron/Node), the AI SDK (check if it ships its own cert bundle). Document which stores each client uses.
+- For nono-proxy: ensure `rustls` is configured with `rustls_native_certs` (which reads the Windows cert store) rather than the default `webpki` roots. This is a single configuration change but must be verified.
+- For the machine-CA cert: install to BOTH `LocalMachine\Root` (for Win32/CryptoAPI clients) AND `CurrentUser\Root` for the installing user. The WiX `CertificateRef` element handles this.
+- GPO/Intune cert deployment: use the "Computer Configuration > Policies > Windows Settings > Security Settings > Public Key Policies > Trusted Root Certification Authorities" GPO path, which lands in `LocalMachine\Root` and is replicated by Group Policy to all machine stores.
+- Dark-factory gate: after MSI install with the CA cert, open a TLS connection to a known endpoint through the proxy from (a) a PowerShell script (uses CryptoAPI), (b) a Node.js script (uses Windows cert store via Node), and (c) from within nono-cli itself. All three must succeed without TLS errors.
+
+**Warning signs:**
+- `rustls` is initialized with `RootCertStore::empty()` + `load_native_certs()` missing.
+- The CA cert is installed only via `certutil -addstore Root` (adds to LocalMachine\Root only).
+- TLS tests pass in dev environments (where the engineer's machine already has the cert in CurrentUser\Root from manual testing) but fail on fleet deploy.
+- No test for the Rust/rustls trust path independently from the Node/CryptoAPI path.
+
+**Phase to address:**
+Phase 82 (silent MSI) — the cert install must be part of the MSI's `CertificateRef` component, and the trust paths for all client types verified in the dark-factory gate.
 
 ---
 
@@ -170,101 +367,110 @@ Generic launch-and-confine (productionize) phase, hardened in the daemon phase f
 
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Reuse one capability-pipe SDDL for all tenants | Less code; reuse proven constant | Cross-tenant capability theft (Pitfall 1) | Never for multi-tenant |
-| Reuse one confining token/job across agents | Avoid per-agent token mint cost | Tenant isolation collapse; WFP scope blur (Pitfall 5) | Never |
-| Run the daemon as LocalSystem like `nono-wfp-service` | Mirror the in-tree service pattern; one binary | Huge blast radius on escape (Pitfall 4) | Only the WFP-control role; never the launcher role |
-| Mark agents with an env var / argv flag | Trivial to set/read | Forgeable marker (Pitfall 2) | Never as a trust signal; OK as a *hint* alongside token SID |
-| Lazy cleanup of exited-agent state | Simpler accept loop | Handle leak over days (Pitfall 5) | Never in a long-running daemon |
-| Post-hoc IL-drop to "confine" an adopted agent | Confine things you didn't launch | Unsound boundary (handles survive, no restricting SID, no network) | Only as a demote/IR lever, explicitly labeled |
-| Self-reported `agent_id` in the wire frame for authz | Simple routing | Spoofable tenant identity (Pitfall 1) | As routing hint only, never for authorization |
+| Fall back to per-user profile on HKLM read error | Doesn't break developer setups | Fail-OPEN: machine policy appears enforced but isn't (Pitfall 1) | Never for the egress allowlist |
+| Use `std::env::var("NONO_POLICY_PATH")` for machine policy path | Easy to test in CI | Env var snapshotted at process start; stale after machine env-var update (Pitfall 6) | Never for security config; OK for override in test-only code with explicit comment |
+| Wire only proxy to HKLM; do WFP later | Faster first pass | Proxy/WFP allowlist drift; false sense of security (Pitfall 2) | Never; must be a single atomic phase |
+| Re-use `DiagnosticFormatter` output verbatim for SIEM events | Zero new code | Full paths and URLs in SIEM; PII leakage (Pitfall 11) | Never |
+| Store HMAC telemetry key in HKLM | Simple to implement | Local admin can delete and re-sign; tamper-evidence claim is false (Pitfall 12) | Never; use external SIEM forwarding instead |
+| Provision scratch space from the MSI SYSTEM context | No first-run provisioning code needed | Workspace owned by SYSTEM not user; R-B3 guard fails fleet-wide (Pitfall 4) | Never; provision at first-run in user context |
+| Use Application log source without `wevtutil im` manifest | Works on dev host | Silent event-drop in production if registration was never run (Pitfall 10) | OK only if using the generic Application source (no manifest needed); NOT OK for custom channels |
+| Single flat `REG_MULTI_SZ` for hosts and wildcard suffixes | Simple registry schema | Operator can't distinguish exact vs suffix entries; wildcard creep (Pitfall 3) | Never; use separate keys for hosts and suffixes |
 
 ## Integration Gotchas
 
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| Multi-instance named pipe (`PIPE_UNLIMITED_INSTANCES`) | Assume DACL alone isolates tenants | `ImpersonateNamedPipeClient` + per-tenant SID match before serving; per-tenant SDDL |
-| `nono-wfp-service` (elevated) | Merge launcher into the elevated service | Keep launcher at user privilege; call the WFP service over its existing narrow control pipe |
-| AppContainer per-agent SID | `DeriveAppContainerSidFromAppContainerName` only | Must also `CreateAppContainerProfile` (memory `windows_appcontainer_wfp_validated`; derive-only → `CreateProcessW ERROR_FILE_NOT_FOUND`) |
-| Spawning under the broker arm | Run from `Program Files` install | Needs dev-layout or signed `nono.exe` (R-B4 broker trust gate) |
-| Engine launched from a parent that pre-jobs it | Assume `AssignProcessToJobObject` always works | Spawn suspended, assign first, fail-secure on assign failure; handle nested-job rules (Pitfall 6) |
-| `env_clear()` before spawning CLR/PowerShell engines | Strip all env for hygiene | Preserve `SystemRoot`/`windir`/`SystemDrive` baseline (memory `windows_hook_interpreter_spawn_gotchas`; else CLR `0xFFFF0000`) |
+| HKLM registry reader | `RegOpenKeyExW` without `KEY_WOW64_64KEY` | Always pass `KEY_READ \| KEY_WOW64_64KEY` to read the 64-bit hive (Pitfall 7) |
+| WFP + nono-proxy allowlist | Each layer parses HKLM independently | Deserialize once into `MachineEgressPolicy`; pass to both layers (Pitfall 2) |
+| MSI custom action for scratch space | Resolve `%LOCALAPPDATA%` in SYSTEM context | Create scratch space at first-run from user context; MSI creates only machine-global `ProgramData\nono\` (Pitfall 4) |
+| Event Log custom channel | Skip `wevtutil im` manifest registration | Use existing Application source pattern for v3.0; defer custom manifest (Pitfall 10) |
+| Root CA cert install | `certutil -addstore Root` only | WiX `CertificateRef` for both `LocalMachine\Root` and `CurrentUser\Root`; verify `rustls_native_certs` in nono-proxy (Pitfall 13) |
+| GPO ADMX + Intune MDM | Intune MDM Extension (32-bit) writes to WOW6432Node | All readers must use `KEY_WOW64_64KEY`; deployment scripts use `[RegistryView]::Registry64` (Pitfall 7) |
+| Policy reload | `Arc<RwLock<AllowList>>` updated by file watcher | Snapshot policy at session start; no mid-session widening (Pitfall 9) |
+| `DiagnosticFormatter` → SIEM | Pass `format_human_readable()` output as Event Log message | Define separate `SecurityEvent` struct with hashed paths; `DiagnosticFormatter` = stderr only (Pitfall 11) |
 
 ## Performance Traps
 
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| One thread per tenant (sync `PeekNamedPipe` poll) generalized to N | Thread-count blowup; scheduler thrash | Use `tokio::net::windows::named_pipe` task-per-connection for the daemon (STACK.md) | Tens+ of concurrent agents |
-| Handle table growth from un-reaped agents | Daemon `OpenProcess`/`CreateFile` start failing after hours | Deterministic per-agent `Drop` + reap on exit (Pitfall 5) | Long uptime under churn |
-| Unbounded capability-request queue per client | Memory growth; one chatty agent starves others | Bounded per-tenant frames (64 KiB cap exists) + per-tenant fairness/timeout | A misbehaving/looping agent |
-| Re-deriving AppContainer profile per request | Latency spike per launch | Derive+register once per agent, cache the SID | Many short-lived launches |
+| Per-request `RegOpenKeyExW` + full policy deserialization | Latency spike on every network connection attempt | Cache the policy at session start; re-read only on explicit policy-change notification | Any workload with > ~100 network requests/session |
+| WFP filter bulk-install on every session start | Startup latency; WFP filter-churn; potential race with existing filters | Install WFP filters once in the service at policy-load time; individual session start just verifies the filter is active | Fleet with frequent short sessions (e.g. CI agents) |
+| Event Log writes on every denied action | High-frequency agents generate thousands of events/min; Event Log fills; forwarding backlog | Deduplicate repeated deny events with a time-window bucket; emit a "N events suppressed" aggregate | Agents with tight retry loops hitting a blocked host |
 
 ## Security Mistakes
 
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| Authorize capability requests by client-supplied id | Cross-tenant capability theft | Authorize by impersonated client token / job membership (Pitfall 1) |
-| Named job is the trust signal | Marker forgery by any same-session process opening the job by name | Trust the token SID, not the job name; ACL the job to daemon-only (Pitfall 2) |
-| Daemon runs as SYSTEM | Escaped agent pivots to all tenants + host | Least-privilege launcher; isolate WFP-control in its own elevated service (Pitfall 4) |
-| Job allows breakaway | Agent child escapes confinement/marker | Do not set breakaway flags; verify children stay in-job |
-| Post-hoc IL-drop treated as confinement | Leaky boundary: pre-drop handles survive, no restricting SID, network uncovered | Launch-time confinement only; IL-drop = demote-only |
-| Capability pipe answers "expand access" requests | Defeats the no-escape-hatch invariant | Grants fixed at launch; pipe is query-only |
-| Trusting an adopted (not launched) process as confined | Adoption can't achieve launch-time soundness | Adopt = best-effort demote; never grant on adoption alone |
-
-## UX Pitfalls
-
-| Pitfall | User Impact | Better Approach |
-|---------|-------------|-----------------|
-| Silent confined-write failure (admin-owned workspace) | "Why didn't my agent write the file?" — fails secure but opaque | Clear diagnostic naming R-B3 + `takeown`/non-elevated-create guidance |
-| Engine refused for uncovered exe/interpreter with a cryptic error | User can't tell which binary to `--allow` | Diagnostic naming the exact uncovered exe/interpreter path |
-| Relative-path grant silently resolves to `C:\` and is denied | Confusing deny on a path the user "did grant" | Reject/normalize relative grants; require absolute (banked contract) |
-| Daemon crash kills all agents (KILL_ON_JOB_CLOSE) with no warning | All running agents vanish | Document the teardown policy; surface daemon health; consider supervised restart |
-| Cursor-on-Windows appears supported then fails | User wastes time; thinks nono is broken | Per-engine fit doc: Cursor CLI is WSL-only (FEATURES.md) |
+| `unwrap_or_default()` on HKLM registry read | Fail-OPEN: machine policy appears enforced but isn't | `ReadError` must be fatal; fail-secure return (Pitfall 1) |
+| HMAC telemetry key in local registry | Attacker with local admin forges event chain; "tamper-evident" claim is false | External SIEM forwarding is the tamper boundary; local crypto deferred to SEED-005 (Pitfall 12) |
+| Full path and URL in Event Log security event | PII/reconnaissance in SIEM forwarding; leaked corporate codepath structure | `SecurityEvent` schema with hashed path + category only; configurable detail level (Pitfall 11) |
+| String suffix matching `host.ends_with(".corp")` | `evil.corp.com` bypasses the rule with `notcorp.com` crafted hostname | DNS component comparison; use `Path::starts_with` analogy for domain components (Pitfall 3) |
+| Mid-session policy widening via registry watcher | Malicious insider pushes wider policy mid-session for exfiltration window | Snapshot-at-launch; narrowing only mid-session (Pitfall 9) |
+| Service-start failure silently treated as success | Fleet machine not enforcing WFP egress; appears healthy to MDM | `nono health` verdict command; fail-secure on WFP service absent (Pitfall 5) |
+| Per-machine MSI custom action writes to SYSTEM `%LOCALAPPDATA%` | Scratch space owned by SYSTEM; every user's R-B3 guard fails | First-run provisioner in user context; MSI writes only to `ProgramData` (Pitfall 4) |
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **Multi-tenant pipe:** Often missing *server-side* client authentication — verify a "connect as tenant B, read tenant A's grants" test fails closed.
-- [ ] **AI_AGENT marker:** Often missing forge/shed resistance — verify a non-daemon-spawned process cannot acquire the marker and a child cannot break away from the job.
-- [ ] **Per-agent isolation:** Often missing fresh-token-per-agent — verify two concurrent agents cannot write each other's relabeled workspace and have distinct WFP package SIDs.
-- [ ] **Handle lifetime:** Often missing reap-on-exit — verify launch+exit of 100 agents returns handle/job count to baseline.
-- [ ] **Daemon privilege:** Often missing least-privilege split — verify the launcher daemon is NOT SYSTEM and the WFP role is separate.
-- [ ] **In-process engine:** Often missing the sandbox-self path — verify LangChain `PythonREPLTool` `exec()` (not just `ShellTool`) is confined via the binding.
-- [ ] **Assign-to-job failure:** Often missing fail-secure — verify a process that can't be assigned to its `AI_AGENT` job is terminated, never run unconfined.
-- [ ] **Adopt mode:** Often mislabeled as confinement — verify adoption is documented/coded as demote-only, not a capability grant.
+- [ ] **HKLM policy reader:** Often missing the `ReadError` → abort path — verify a permission-denied key causes a non-zero exit, not a permissive launch.
+- [ ] **Egress reconciliation:** Often wires only proxy, not WFP — verify both layers reflect the same HKLM-sourced allow-list via the dark-factory gate.
+- [ ] **Wildcard suffix matching:** Often uses string `ends_with` — verify `anthropic.com.evil.com` is correctly rejected as NOT matching `.anthropic.com`.
+- [ ] **Scratch space provisioner:** Often tested only in user context — verify the per-machine MSI install (ALLUSERS=1) creates workspace paths owned by the target user, not SYSTEM.
+- [ ] **WOW64 registry reads:** Often missing `KEY_WOW64_64KEY` — verify nono reads the 64-bit hive even when tested from a 32-bit host script.
+- [ ] **Event Log manifest registration:** Often only works on dev host where `wevtutil im` was run manually — verify a clean-host MSI install emits detectable events without prior manual setup.
+- [ ] **Security event schema:** Often re-uses `DiagnosticFormatter` output — verify the Event Log event body does NOT contain a full file path or URL.
+- [ ] **TOCTOU policy reload:** Often missing the mid-session widening test — verify a policy pushed while a session is running does not widen the running session's allow-list.
+- [ ] **Service health verdict:** Often missing `nono health` command — verify the command emits a machine-readable JSON verdict and exits non-zero if WFP service is absent.
+- [ ] **Root cert trust paths:** Often tested only for one client type — verify TLS through nono-proxy works from PowerShell (CryptoAPI), Node.js, AND from nono-cli (rustls/native-certs).
 
 ## Recovery Strategies
 
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Cross-tenant capability theft shipped | HIGH | Add server-side impersonation/token-match; rev the wire protocol; revoke trust in client-supplied id; audit any grants served |
-| Token/job reuse across agents | MEDIUM | Refactor to per-agent fresh token+job; add isolation test; no data migration needed |
-| Daemon shipped as SYSTEM | MEDIUM | Re-register launcher at user privilege; move WFP calls behind the existing elevated service; re-test |
-| Marker forgeable | MEDIUM | Switch authz to token SID; ACL the job daemon-only; add forge test |
-| Handle leak in production | LOW-MEDIUM | Add per-agent owning struct + reap-on-exit; restart daemon to reclaim; add growth assertion test |
-| "Confined" an in-process engine post-hoc | HIGH | Re-architect to parent the interpreter (or in-process sandbox-self via binding); relabel adoption as demote-only |
+| Fail-OPEN on HKLM read shipped to fleet | HIGH | Emergency GPO push + registry key creation; hotfix nono-cli to treat read error as fatal; re-deploy MSI |
+| Proxy/WFP allowlist drift discovered post-deploy | HIGH | Audit WFP filter-state on fleet machines; push corrected policy; hotfix WFP reader to use shared struct |
+| Scratch space owned by SYSTEM, R-B3 failing fleet-wide | MEDIUM | Run `nono setup --fix-scratch` (new command) in user context via SCCM run-as-user job; hotfix MSI custom action |
+| Event Log events silent-dropped (no manifest registered) | MEDIUM | Push manifest registration as a SCCM/Intune remediation script; hotfix the emission code to treat RegisterEventSource NULL as an error |
+| Full paths in SIEM events discovered in audit | MEDIUM | Redact/purge affected SIEM events (coordination with SIEM admin); deploy patched nono with `SecurityEvent` schema; configure `TelemetryDetailLevel=0` via GPO |
+| Fake tamper-evidence claim in docs/compliance | LOW (docs) / HIGH (compliance audit) | Amend documentation to clarify external-SIEM-forwarding model; remove local crypto chain claims; expedite SEED-005 milestone |
+| AI provider blocked by default-deny on first deploy | LOW-MEDIUM | `nono diagnose-egress api.anthropic.com`; GPO add the missing host group; session restart |
 
 ## Pitfall-to-Phase Mapping
 
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| 1. Cross-tenant capability theft | Persistent multi-tenant daemon (IPC) | Negative test: tenant B denied tenant A's grants; impersonation in accept path |
-| 2. AI_AGENT marker forge/shed | Daemon — marker sub-task | Negative tests: non-spawned process can't get marker; child can't break away; job ACL'd daemon-only |
-| 3. In-process-exec engine confinement | Engine abstraction + `nono-py` binding | LangChain `PythonREPLTool` `exec()` confined via sandbox-self at startup |
-| 4. Daemon attack surface / privilege | Daemon — service-host/privilege model (ADR) | Launcher runs non-SYSTEM; WFP role separate; bounded/authorized control surface |
-| 5. Token/job lifetime, reuse, orphans | Daemon — token/job reuse (was unspiked) | Fresh token+job per agent; 100-agent reap returns to baseline handle count |
-| 6. Nested-job collisions / silent loss | Generic launch-and-confine (productionize) + daemon adopt path | Already-jobbed engine handled; assign-failure fails secure; resource caps observed |
+| 1. Fail-OPEN on HKLM read failure | Phase 83 (HKLM policy reader) | Dark-factory gate: permission-denied key → non-zero exit |
+| 2. Proxy/WFP allowlist drift | Phase 83 (egress reconciliation) | Dark-factory gate: both layers reflect HKLM list |
+| 3. Wildcard suffix matching footgun | Phase 83 (HKLM reader + proxy integration) | Unit test: `anthropic.com.evil.com` rejected |
+| 4. MSI per-machine SYSTEM scratch-space | Phase 82 (silent MSI) | Dark-factory gate: `ALLUSERS=1` install → workspace owned by user |
+| 5. Non-atomic service install / health verdict | Phase 82 (silent MSI) | Dark-factory gate: service-start failure → `nono health` reports degraded |
+| 6. Env-var propagation lag | Phase 83 (HKLM reader) | Code review: no `std::env::var` in security policy path |
+| 7. WOW6432Node registry redirection | Phase 83 (HKLM reader) | Unit test: 32-bit-simulated write to WOW hive → NOT read by nono |
+| 8. Default-deny blocks AI provider | Phase 83 (egress + diagnostics) | `nono diagnose-egress api.anthropic.com` passes; diagnostic on block includes hostname |
+| 9. TOCTOU policy reload widening | Phase 83 (HKLM reader) | Dark-factory gate: mid-session policy push → running session unaffected |
+| 10. Event Log manifest not registered | Phase 84 (SIEM/EDR telemetry) | Dark-factory gate: clean-host install → detectable event emitted |
+| 11. Secrets/paths in telemetry events | Phase 84 (SIEM/EDR telemetry) | Unit test: `SecurityEvent` serialized body contains no raw path strings |
+| 12. False "tamper-evident" claim | Phase 84 (SIEM/EDR telemetry) | ADR records external-SIEM-forwarding model; no local crypto chain in v3.0 |
+| 13. Root-cert TLS trust path | Phase 82 (silent MSI) | Dark-factory gate: TLS through proxy passes for PowerShell + Node + nono-cli |
 
 ## Sources
 
 - In-tree code (HIGH — authoritative, current):
-  - `crates/nono/src/supervisor/socket_windows.rs` — SDDL pipe scoping, per-session/package SID ACEs, `PIPE_UNLIMITED_INSTANCES`, `verify_connected_server_pid` (server-PID verify, line ~1840), 64 KiB framing, no server-side `ImpersonateNamedPipeClient` (the multi-tenant gap).
-  - `crates/nono-cli/src/exec_strategy_windows/launch.rs` — job-object lifecycle: `CreateJobObjectW`, `AssignProcessToJobObject`, `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | DIE_ON_UNHANDLED_EXCEPTION` (line ~222), suspended-spawn + `terminate_suspended_process` on assign failure (line ~2005), resource-cap flags.
-- Banked spike findings (HIGH):
-  - `.claude/skills/spike-findings-nono/references/windows-confinement-model.md` (spikes 001 INVALIDATED / 002 PARTIAL — post-hoc IL-drop leaky).
-  - `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` (spike 003 VALIDATED; exe-coverage, absolute grants, R-B3, R-B4; the unspiked multi-tenant marker/token-reuse parts).
-- Sibling research (HIGH): `.planning/research/STACK.md`, `FEATURES.md`, `ARCHITECTURE.md` (v2.12).
-- Project memory (HIGH): `windows_appcontainer_wfp_validated`, `windows_hook_interpreter_spawn_gotchas`, `feedback_windows_supervised_needs_real_console`, `windows_appcontainer_cap_pipe_reachability`.
-- Verified Win32 semantics (MEDIUM-HIGH): [AssignProcessToJobObject (jobapi2.h)](https://learn.microsoft.com/en-us/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject) — Windows 8+ nested-job rules (already-jobbed process: target must be empty/in-hierarchy, no UI limits); [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects); [Why is my process in a Job if I didn't put it there?](https://learn.microsoft.com/en-us/archive/blogs/alejacma/why-is-my-process-in-a-job-if-i-didnt-put-it-there).
+  - `crates/nono-cli/src/bin/nono-wfp-service.rs` — Application Event Log source pattern (`EVENT_LOG_SOURCE = SERVICE_NAME`), `RegisterEventSourceW` and `ReportEventW` usage, WFP control pipe SDDL `PIPE_SDDL`.
+  - `crates/nono-cli/src/network_policy.rs` — `ResolvedNetworkPolicy`, `build_proxy_config`, `expand_proxy_allow`, suffix wildcard → `*.` conversion, `partition_allow_domain`, `is_loopback_domain` DNS-component fix (WR-01 precedent).
+  - `crates/nono/src/diagnostic.rs` — `DiagnosticFormatter`, `DenialReason` enum (existing denial path; the re-use risk for SIEM emission is identified here).
+- Project memory (HIGH):
+  - `windows_mandatory_label_write_owner` — WRITE_OWNER not implicit; drive-root user dirs fail; `%USERPROFILE%` works; paired with `path_is_owned_by_current_user` + `GetEffectiveRightsFromAclW`.
+  - `windows_msi_wxs_is_generated` — `.wxs` is generated from `build-windows-msi.ps1`; always edit the script.
+  - `windows_appcontainer_wfp_validated` — per-run AppContainer + WFP kernel-blockable; must `CreateAppContainerProfile` (derive-only → ERROR_FILE_NOT_FOUND).
+  - `windows_wfp_enforcement_is_service_only` — WFP = service-path only; `nono agent launch` → `wfp_filter_add`; not direct `nono run`; WFP-01 dark gate = structural filter-state proof.
+- Phase history (HIGH):
+  - Phase 53/61 — signed machine+user MSI pipeline; `release.yml` signing-order fix.
+  - Phase 56 — fine-grained `allow_domain`; WR-01 `is_loopback_domain` DNS-component bug fix (string prefix hazard directly analogous to Pitfall 3).
+  - Phase 60 — `grant_sid_write_on_path` / `AppliedDaclGrantsGuard` / R-B3 user-ownership guard.
+  - v2.11 — `nono-wfp-service` start made non-fatal (Pitfall 5 background).
+- SEED documents (HIGH): SEED-001, SEED-002, SEED-003.
+- CLAUDE.md security principles (HIGH): "Configuration load failures must be fatal. If security lists fail to load, abort." + path string comparison footgun + `unwrap_or_default()` footgun.
 
 ---
-*Pitfalls research for: persistent multi-tenant Windows agent-confinement daemon (nono v2.12)*
-*Researched: 2026-06-13*
+*Pitfalls research for: nono v3.0 Enterprise Hardening I (Windows fleet deploy, machine-policy egress, SIEM telemetry)*
+*Researched: 2026-06-18*

@@ -726,6 +726,81 @@ fn agent_demote(tenant_id: String) -> Result<()> {
     }
 }
 
+/// Ask the running `nono-agentd` daemon to classify a PID via the control pipe.
+///
+/// Sends `{"action":"classify","pid":<pid>}` to the Medium-IL-only control pipe
+/// and returns the daemon's authoritative verdict. When `json_output` is true,
+/// emits a JSON object with `pid`, `verdict`, and `authoritative: true`. When
+/// false, emits a human-readable line.
+///
+/// # Daemon-absent sentinel
+///
+/// When the daemon is not running (`is_pipe_not_found` returns true), the error
+/// message contains "daemon-absent". The caller (`app_runtime.rs`) detects this
+/// sentinel to route to the structural fallback (`classify_runtime::run_classify`).
+///
+/// # Security
+///
+/// Neither the JSON path nor the human path includes a `package_sid` field or
+/// any SID string (SC4 — no cross-tenant disclosure in the response).
+///
+/// On non-Windows: returns `Err` with a diagnostic.
+pub(crate) fn classify_daemon_request(pid: u32, json_output: bool) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let payload = serde_json::json!({
+            "action": "classify",
+            "pid": pid,
+        });
+        let payload_str = serde_json::to_string(&payload).map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "nono classify: failed to serialize request payload: {e}"
+            ))
+        })?;
+
+        match windows_control_pipe_request(&payload_str) {
+            Ok(response) => {
+                let verdict_raw = response.trim();
+                // Map daemon string → structured verdict.
+                // SC4: no SID field in either output path.
+                let verdict_key = match verdict_raw {
+                    "AiAgent" => "ai_agent",
+                    _ => "not_an_agent",
+                };
+                if json_output {
+                    let value = serde_json::json!({
+                        "pid": pid as u64,
+                        "verdict": verdict_key,
+                        "authoritative": true,
+                    });
+                    let rendered = serde_json::to_string_pretty(&value).map_err(|e| {
+                        NonoError::ConfigParse(format!("JSON serialization failed: {e}"))
+                    })?;
+                    println!("{rendered}");
+                } else {
+                    match verdict_raw {
+                        "AiAgent" => println!("PID {pid}: AiAgent (authoritative)"),
+                        _ => println!("PID {pid}: NotAnAgent (authoritative)"),
+                    }
+                }
+                Ok(())
+            }
+            Err(e) if is_pipe_not_found(&e) => Err(NonoError::SandboxInit(
+                "daemon-absent: use structural fallback".into(),
+            )),
+            Err(e) => Err(e),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (pid, json_output);
+        Err(NonoError::SandboxInit(
+            "nono classify daemon path is Windows-only".into(),
+        ))
+    }
+}
+
 // ─── Windows helpers ──────────────────────────────────────────────────────────
 
 /// Detect whether `sc qc` output describes a USER_OWN_PROCESS TEMPLATE (type 50).
@@ -816,7 +891,7 @@ fn windows_sc_command(
 /// times out, or any I/O error occurs. Callers should use `is_pipe_not_found`
 /// to distinguish "daemon not running" from other errors.
 #[cfg(target_os = "windows")]
-fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
+pub(crate) fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, ReadFile, WriteFile, OPEN_EXISTING,
@@ -980,8 +1055,7 @@ fn windows_control_pipe_request(json_payload: &str) -> Result<String> {
 ///
 /// Distinguishes "daemon not running" from other I/O errors so callers can
 /// provide a targeted user message instead of a raw error.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn is_pipe_not_found(err: &nono::NonoError) -> bool {
+pub(crate) fn is_pipe_not_found(err: &nono::NonoError) -> bool {
     let msg = err.to_string();
     // GLE=2: ERROR_FILE_NOT_FOUND (pipe does not exist — daemon not running)
     msg.contains("GLE=2") || msg.contains("pipe not available") || msg.contains("not available")

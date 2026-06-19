@@ -316,6 +316,16 @@ struct PreparedWindowsLaunch {
     // but BEFORE _network_enforcement so reverse-of-declaration drop order revokes
     // the ancestor grants together with the leaf grants and before network teardown.
     _applied_ancestor_traverse: Option<dacl_guard::AppliedAncestorTraverseGuard>,
+    // Plan 77-01 (CPLT-01): grants the per-run package SID FILE_READ_ATTRIBUTES
+    // (0x80) on the USER-OWNED ancestors of the confined TARGET BINARY's resolution
+    // chain, so Node-ESM realpathSync/lstat ancestor walks succeed under AppContainer
+    // instead of failing with STATUS_ACCESS_DENIED. `None` when no package SID is
+    // set (non-AppContainer arm). Walk target is `config.resolved_program` (the
+    // confined binary), NOT the cwd — this is the load-bearing distinction from the
+    // traverse guard above. Declared AFTER _applied_ancestor_traverse but BEFORE
+    // _network_enforcement so reverse-of-declaration drop order keeps all ancestor
+    // grants in the same lifetime group, all reverted before network teardown.
+    _applied_ancestor_read_attrs: Option<dacl_guard::AppliedAncestorReadAttributesGuard>,
     _network_enforcement: Option<NetworkEnforcementGuard>,
     launch_program: PathBuf,
 }
@@ -442,6 +452,33 @@ fn prepare_live_windows_launch(
         })
         .transpose()?;
 
+    // Plan 77-01 (CPLT-01) + Plan 77-04 (gap closure): on the AppContainer arm
+    // (config.package_sid is Some), grant the package SID FILE_READ_ATTRIBUTES (0x80)
+    // on the USER-OWNED ancestors of TWO chains:
+    //   1. config.resolved_program — the confined target binary's resolution chain
+    //      (engines that resolve modules next to their executable).
+    //   2. config.current_dir — the --workspace (child CWD) chain. Node engines such
+    //      as the WinGet `@github/copilot` CLI SELF-EXTRACT their package under the
+    //      workspace (<ws>\.nono-runtime\…\AC\…), so realpathSync/lstat walks the
+    //      WORKSPACE's ancestors and needs RA on C:\Users\<user> — which the binary
+    //      chain may not reach when a non-owned dir (e.g. a WinGet package dir) sits
+    //      mid-chain (the 77-03 host-proof FAIL: lstat 'C:\Users\<user>' EPERM).
+    // This is the load-bearing fix for Node-ESM realpathSync/lstat ancestor walks that
+    // fail with STATUS_ACCESS_DENIED under AppContainer. Each chain stops at the first
+    // non-owned ancestor (D-04 structural split: C:\, C:\Users covered by the CPLT-02
+    // admin grant). Shared ancestors are granted once (dedup). Fail-closed; reverted on
+    // Drop.
+    let applied_ancestor_read_attrs = config
+        .package_sid
+        .as_deref()
+        .map(|sid| {
+            dacl_guard::AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets(
+                &[config.resolved_program, config.current_dir],
+                sid,
+            )
+        })
+        .transpose()?;
+
     let network_enforcement = prepare_network_enforcement(config, session_id)?;
     let launch_program = network_enforcement
         .as_ref()
@@ -453,6 +490,7 @@ fn prepare_live_windows_launch(
         _applied_labels: applied_labels,
         _applied_dacls: applied_dacls,
         _applied_ancestor_traverse: applied_ancestor_traverse,
+        _applied_ancestor_read_attrs: applied_ancestor_read_attrs,
         _network_enforcement: network_enforcement,
         launch_program,
     })

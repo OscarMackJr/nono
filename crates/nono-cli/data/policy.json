@@ -904,7 +904,7 @@
       "meta": {
         "name": "copilot-cli",
         "version": "1.0.0",
-        "description": "GitHub Copilot CLI (copilot.exe native PE engine — v1.0.62+). Native PE: no windows_interpreters needed. If SC3 UAT shows copilot.exe spawning node.exe as a grandchild, add windows_interpreters: [node.exe] at that point.",
+        "description": "Standalone @github/copilot Node CLI (invoked as `copilot`, NOT `gh copilot`). Node-ESM entry point — requires node.exe interpreter coverage (D-01/D-02, Phase 77). The v2.12 Phase 75 native-PE assumption (D-06) is superseded: the standalone copilot CLI is a Node process, not a native PE, and needs FILE_READ_ATTRIBUTES ancestor grants for realpathSync/lstat to succeed under AppContainer (CPLT-01).",
         "author": "nono-project"
       },
       "security": {
@@ -914,7 +914,8 @@
       "filesystem": {},
       "network": { "block": false },
       "workdir": { "access": "readwrite" },
-      "windows_low_il_broker": true
+      "windows_low_il_broker": true,
+      "windows_interpreters": ["node.exe"]
     },
     "langchain-python": {
       "extends": "default",
@@ -933,6 +934,60 @@
       "workdir": { "access": "readwrite" },
       "windows_low_il_broker": true,
       "windows_interpreters": ["python.exe"]
+    },
+    "nono-ts-wfp-test-open": {
+      "extends": "default",
+      "meta": {
+        "name": "nono-ts-wfp-test-open",
+        "version": "1.0.0",
+        "description": "WFP-01 gate: non-blocked agent (allowed egress). Used by wfp-egress-isolation.ps1 to verify that Agent A egress succeeds under per-SID WFP enforcement.",
+        "author": "nono-project"
+      },
+      "security": {
+        "groups": [],
+        "signal_mode": "isolated"
+      },
+      "filesystem": { "allow": ["C:\\Windows\\System32"] },
+      "network": { "block": false },
+      "workdir": { "access": "none" },
+      "windows_low_il_broker": true,
+      "interactive": false
+    },
+    "nono-ts-wfp-test-blocked": {
+      "extends": "default",
+      "meta": {
+        "name": "nono-ts-wfp-test-blocked",
+        "version": "1.0.0",
+        "description": "WFP-01 gate: network-blocked agent (denied egress). Used by wfp-egress-isolation.ps1 to verify that Agent B egress is WFP-denied under per-SID WFP enforcement.",
+        "author": "nono-project"
+      },
+      "security": {
+        "groups": [],
+        "signal_mode": "isolated"
+      },
+      "filesystem": { "allow": ["C:\\Windows\\System32"] },
+      "network": { "block": true },
+      "workdir": { "access": "none" },
+      "windows_low_il_broker": true,
+      "interactive": false
+    },
+    "nono-ts-default": {
+      "extends": "default",
+      "meta": {
+        "name": "nono-ts-default",
+        "version": "1.0.0",
+        "description": "Default profile for nono-ts confinedRun callers that specify no profile. Provides Low-IL broker arm confinement without engine-specific paths.",
+        "author": "nono-project"
+      },
+      "security": {
+        "groups": [],
+        "signal_mode": "isolated"
+      },
+      "filesystem": {},
+      "network": { "block": false },
+      "workdir": { "access": "readwrite" },
+      "windows_low_il_broker": true,
+      "interactive": false
     },
     "python-dev": {
       "extends": "default",

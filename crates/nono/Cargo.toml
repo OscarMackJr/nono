@@ -61,6 +61,10 @@ keyring = { version = "3", features = ["apple-native"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_SystemServices", "Win32_System_Threading", "Wdk_System_SystemServices", "Win32_System_SystemInformation"] }
+# D-10: winreg is the Windows-only registry reader for machine egress policy.
+# Operator-approved 2026-06-18: crates.io = gentoo90/winreg-rs @ 0.56.x, MIT, 179M+ downloads.
+# NEVER move this to the unconditional [dependencies] table — non-Windows targets must not pull it (Pitfall 5).
+winreg = "0.56"
 keyring = { version = "3", features = ["windows-native"], optional = true }
 
 [build-dependencies]

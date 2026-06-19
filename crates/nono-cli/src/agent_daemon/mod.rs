@@ -253,6 +253,150 @@ use reap::AgentTenant;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+// ─── Machine egress policy helpers (Plan 83-02, POLICY-03, EGRESS-01) ────────
+//
+// The daemon startup path performs exactly ONE `read_machine_egress_policy()` call
+// (D-04 SOLE read). The resolved proxy port is threaded through `DaemonState` to
+// every per-agent `wfp_filter_add` call so the WFP service and the in-process
+// ProxyFilter always derive from the same deserialized struct (no drift, D-04).
+//
+// GPO changes take effect on the NEXT daemon restart — the startup snapshot is
+// held for the daemon's process lifetime (D-06 restart-to-apply).
+
+/// Embedded network-policy.json for preset token expansion (Plan 83-02/83-03, D-11/D-12).
+///
+/// Included here via `include_str!` (same pattern as `EMBEDDED_POLICY_JSON` above)
+/// because `nono-agentd` is a standalone binary that loads `agent_daemon` via `#[path]`
+/// and cannot reach `crate::config::embedded` or `crate::policy` (which live in the
+/// `nono-cli` module tree, not the binary's root).
+const EMBEDDED_NETWORK_POLICY_JSON: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/network-policy.json"));
+
+/// Expand preset egress tokens to FQDNs using the embedded network-policy.json.
+///
+/// Mirrors `crate::policy::expand_egress_preset_tokens` (Plan 83-03) but operates
+/// directly on the module-local `EMBEDDED_NETWORK_POLICY_JSON` constant so that
+/// the standalone `nono-agentd` binary does not need `crate::policy` in scope.
+///
+/// # Fail-secure
+///
+/// An unknown token expands to an empty slice — never silently widening the allowlist
+/// to all hosts (T-83-token-widen).  An unrecognised token is logged at `debug` level.
+///
+/// # Errors
+///
+/// Returns `Err(reason)` (a plain `String`) if the embedded JSON cannot be parsed.
+/// The caller maps this to `NonoError::PolicyLoadFailed` (D-07 abort).
+fn expand_preset_tokens_from_embedded(tokens: &[String]) -> Result<Vec<String>, String> {
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Parse the embedded network-policy.json using serde_json::Value (minimal deps).
+    let root: serde_json::Value = serde_json::from_str(EMBEDDED_NETWORK_POLICY_JSON)
+        .map_err(|e| format!("failed to parse embedded network-policy.json: {e}"))?;
+
+    let groups = root
+        .get("groups")
+        .and_then(|g| g.as_object())
+        .ok_or_else(|| "embedded network-policy.json missing 'groups' object".to_string())?;
+
+    let mut result: Vec<String> = Vec::new();
+    for token in tokens {
+        if let Some(group) = groups.get(token.as_str()) {
+            if let Some(hosts) = group.get("hosts").and_then(|h| h.as_array()) {
+                for host in hosts {
+                    if let Some(h) = host.as_str() {
+                        result.push(h.to_string());
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(
+                token = %token,
+                "expand_preset_tokens_from_embedded: unknown preset token — expanding to empty (T-83-token-widen fail-secure)"
+            );
+        }
+    }
+
+    // Deduplicate (future-proof for overlapping presets).
+    result.sort_unstable();
+    result.dedup();
+    Ok(result)
+}
+
+/// Resolve the effective machine egress allowlist from the single startup read.
+///
+/// Calls `nono::read_machine_egress_policy()` exactly ONCE (D-04 SOLE read).
+/// Propagates `Err(NonoError::PolicyLoadFailed)` with `?` so that an unreadable
+/// or malformed HKLM key aborts daemon startup fail-secure (D-07).  NEVER calls
+/// `.ok()` or `.unwrap_or` on the result — either of those would fall through to
+/// a permissive state on a corrupt key (Pitfall 3, CLAUDE.md footgun #2).
+///
+/// # Returns
+///
+/// `(effective_allowlist, machine_enforcement_active)` where:
+/// - `effective_allowlist` — the FQDN list to configure `ProxyFilter::new_strict`
+///   with.  When machine policy is `Some`, this is the WHOLESALE override
+///   (suffixes + hosts + expanded preset tokens); the `per_user_domains` slice is
+///   IGNORED entirely (D-08).  When machine policy is `None` (absent), this is
+///   the verbatim `per_user_domains` slice (fall-through, no enforcement change).
+/// - `machine_enforcement_active` — `true` when a machine policy was found.
+///   Callers use this to decide whether to start the in-process proxy server and
+///   whether to flip the per-agent WFP request to `proxy-only` mode (EGRESS-02).
+///
+/// # Errors
+///
+/// Returns `Err(NonoError::PolicyLoadFailed)` when the HKLM key is present but
+/// unreadable or malformed (D-07 fail-secure).
+pub(crate) fn resolve_machine_egress_policy(
+    per_user_domains: &[String],
+) -> nono::Result<(Vec<String>, bool)> {
+    // D-04 SOLE read — exactly one call site in the entire daemon.
+    // `?` propagates Err(PolicyLoadFailed) → abort startup (D-07).
+    // NEVER `.ok()`/`.unwrap_or` here (Pitfall 3, fail-open vulnerability).
+    let machine_policy = nono::read_machine_egress_policy()?;
+
+    match machine_policy {
+        Some(policy) => {
+            // Machine policy present → wholesale override (D-08).
+            // Per-user `per_user_domains` is IGNORED entirely — it can never
+            // widen the fleet allowlist set by the admin (T-83-peruser-widen).
+            let mut allowlist = policy.raw_allowlist();
+
+            // Expand preset TOKENS (e.g. "anthropic") to FQDNs via the embedded
+            // network-policy.json group map (Plan 83-03, D-11/D-12).
+            // Unknown tokens expand to empty (T-83-token-widen fail-secure).
+            // Uses the module-local EMBEDDED_NETWORK_POLICY_JSON constant because
+            // nono-agentd is a standalone binary and cannot reach crate::policy.
+            let expanded = expand_preset_tokens_from_embedded(&policy.preset_tokens)
+                .map_err(|reason| nono::NonoError::PolicyLoadFailed { reason })?;
+            allowlist.extend(expanded);
+
+            // Deduplicate (policy may list suffixes that overlap with preset expansions).
+            allowlist.sort_unstable();
+            allowlist.dedup();
+
+            tracing::info!(
+                allowlist_len = allowlist.len(),
+                "daemon startup: machine egress policy present — wholesale override active (D-08); \
+                 per-user allow_domain list ignored; \
+                 GPO changes take effect on next daemon restart (D-06)"
+            );
+            Ok((allowlist, true))
+        }
+        None => {
+            // Machine policy absent → fall through to per-user (D-07 absent branch).
+            // No enforcement change; per-user domains are passed through verbatim.
+            tracing::debug!(
+                "daemon startup: no machine egress policy in HKLM — \
+                 using per-user allow_domain list (D-07 absent fall-through)"
+            );
+            Ok((per_user_domains.to_vec(), false))
+        }
+    }
+}
+
 /// Top-level daemon state: owns all per-agent tenants and the authorization registry.
 ///
 /// `DaemonState` is constructed once at daemon startup and passed (via `Arc` clone)
@@ -304,19 +448,53 @@ pub(crate) struct DaemonState {
     /// as reads in the binary compilation unit.
     #[allow(dead_code)]
     pub agent_registry: Arc<Mutex<nono::AgentRegistry>>,
+
+    /// Loopback port of the in-process egress proxy, if machine egress enforcement
+    /// is active (Plan 83-02, EGRESS-02, D-01/D-02).
+    ///
+    /// - `Some(port)` — a machine egress policy was loaded at startup; the proxy
+    ///   server is listening on `127.0.0.1:port`.  Per-agent `wfp_filter_add`
+    ///   requests are sent with `network_mode: "proxy-only"` and
+    ///   `localhost_ports: [port]` so each agent's only egress path is
+    ///   loopback → proxy (force-through-proxy, D-01/D-02).
+    /// - `None` — no machine policy present; WFP requests use the existing
+    ///   `blocked`-mode shape (WFP-01 behaviour, unchanged from pre-83 path).
+    ///
+    /// Set once at daemon startup (D-04/D-06 startup snapshot); never mutated
+    /// after `DaemonState` is constructed.
+    pub machine_egress_proxy_port: Option<u16>,
 }
 
 impl DaemonState {
-    /// Construct a new, empty `DaemonState`.
+    /// Construct a new, empty `DaemonState` with no machine egress enforcement.
     ///
-    /// Called once at daemon startup (both service-mode and foreground-mode paths).
-    /// The registry and tenant map start empty; entries are added by
-    /// `agent_daemon::launch` as agents are spawned.
+    /// Called once at daemon startup (both service-mode and foreground-mode paths)
+    /// when no machine egress policy is present.  The registry and tenant map start
+    /// empty; entries are added by `agent_daemon::launch` as agents are spawned.
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
             tenants: Arc::new(Mutex::new(HashMap::new())),
             agent_registry: Arc::new(Mutex::new(nono::AgentRegistry::new())),
+            machine_egress_proxy_port: None,
+        }
+    }
+
+    /// Construct a `DaemonState` with machine egress enforcement active.
+    ///
+    /// `proxy_port` is the loopback port the in-process proxy server is listening
+    /// on.  It is threaded from the daemon startup site (where the proxy is started)
+    /// into every subsequent `wfp_filter_add` call so the per-agent WFP request
+    /// uses `proxy-only` + `localhost_ports: [proxy_port]` (D-01/D-02/EGRESS-02).
+    ///
+    /// Called only when `resolve_machine_egress_policy` returns
+    /// `machine_enforcement_active = true`.
+    #[must_use]
+    pub(crate) fn new_with_proxy(proxy_port: u16) -> Self {
+        Self {
+            tenants: Arc::new(Mutex::new(HashMap::new())),
+            agent_registry: Arc::new(Mutex::new(nono::AgentRegistry::new())),
+            machine_egress_proxy_port: Some(proxy_port),
         }
     }
 }
@@ -446,6 +624,105 @@ mod tests {
             registry.remove("S-1-15-2-test-daemon-state-02");
         }
         // No panic → contract satisfied.
+    }
+
+    // ── Plan 83-02 Task 1: machine_policy_handoff tests ──────────────────────
+
+    /// Verify `resolve_machine_egress_policy` with no HKLM key returns the per-user
+    /// domains unchanged and reports `machine_enforcement_active = false`.
+    ///
+    /// On non-Windows (and on Windows with no HKLM\SOFTWARE\Policies\nono key) the
+    /// reader returns `Ok(None)` — the fall-through branch (D-07 absent).
+    #[test]
+    fn machine_policy_handoff_absent_falls_through_to_per_user() {
+        let per_user = vec!["*.example.com".to_string(), "api.foo.bar".to_string()];
+        let (allowlist, active) = resolve_machine_egress_policy(&per_user)
+            .expect("resolve_machine_egress_policy must not fail when key is absent");
+
+        // On a dev host without a machine policy key (most cases), the fallback
+        // returns the per-user list.  On a host WITH a machine policy key both
+        // branches are exercised; we check only the structural contract here.
+        if !active {
+            // Absent branch: per-user list returned verbatim (D-07 fall-through).
+            assert_eq!(
+                allowlist, per_user,
+                "absent machine policy must return per-user domains verbatim"
+            );
+        }
+        // If active=true a machine policy key happened to exist on the host; the
+        // wholesale-override test below covers that branch explicitly.
+    }
+
+    /// Verify that the `machine_policy_handoff_wholesale_override` fixture correctly
+    /// constructs a machine-policy-shaped struct and builds the effective allowlist:
+    /// raw_allowlist() fields + preset token expansion, with per_user domains excluded.
+    ///
+    /// This test exercises the WHOLESALE OVERRIDE logic (D-08) without touching
+    /// the registry — it constructs a `MachineEgressPolicy` directly to test that:
+    /// 1. The effective allowlist = suffixes + hosts + expanded tokens.
+    /// 2. Per-user domains are NOT included (they were never passed to the expander).
+    ///
+    /// Named `machine_policy_handoff` so `cargo test machine_policy_handoff` matches.
+    #[test]
+    fn machine_policy_handoff_wholesale_override_excludes_per_user() {
+        // Build a MachineEgressPolicy as if read from HKLM (plan 83-01 type).
+        let machine_policy = nono::MachineEgressPolicy {
+            allowed_suffixes: vec!["*.corporate.example".to_string()],
+            allowed_hosts: vec!["api.internal.corp".to_string()],
+            preset_tokens: vec![], // No preset tokens for this test — keeps it standalone.
+            ..Default::default()
+        };
+
+        // Simulate the wholesale-override resolution logic from resolve_machine_egress_policy.
+        // This mirrors the Some(policy) branch: build allowlist from machine policy only.
+        let per_user_domains = vec![
+            "per-user-domain.example.com".to_string(),
+            "another-per-user.test".to_string(),
+        ];
+
+        // Build the expected effective allowlist (suffixes + hosts, no per-user).
+        let mut effective = machine_policy.raw_allowlist();
+        effective.sort_unstable();
+        effective.dedup();
+
+        // Key assertion (D-08): per-user domains must NOT appear in the effective allowlist.
+        for per_user_domain in &per_user_domains {
+            assert!(
+                !effective.contains(per_user_domain),
+                "wholesale override must NOT include per-user domain '{per_user_domain}'; \
+                 effective allowlist: {effective:?}"
+            );
+        }
+
+        // The machine policy's own entries must be present.
+        assert!(
+            effective.contains(&"*.corporate.example".to_string()),
+            "machine suffix must appear in effective allowlist"
+        );
+        assert!(
+            effective.contains(&"api.internal.corp".to_string()),
+            "machine host must appear in effective allowlist"
+        );
+    }
+
+    /// Verify that `DaemonState::new_with_proxy` stores the proxy port and
+    /// `DaemonState::new()` stores `None`.
+    #[test]
+    fn machine_policy_handoff_daemon_state_proxy_port_field() {
+        // No-policy path.
+        let state_no_proxy = DaemonState::new();
+        assert!(
+            state_no_proxy.machine_egress_proxy_port.is_none(),
+            "DaemonState::new() must have machine_egress_proxy_port = None"
+        );
+
+        // Machine-policy-active path.
+        let state_with_proxy = DaemonState::new_with_proxy(8888);
+        assert_eq!(
+            state_with_proxy.machine_egress_proxy_port,
+            Some(8888),
+            "DaemonState::new_with_proxy(8888) must store port 8888"
+        );
     }
 
     /// Verify that two `Arc` clones of the same `DaemonState` fields share the

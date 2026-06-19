@@ -50,6 +50,7 @@ pub mod capability;
 pub mod diagnostic;
 pub mod error;
 pub mod keystore;
+pub mod machine_policy;
 pub mod manifest;
 pub mod manifest_convert;
 pub mod net_filter;
@@ -78,12 +79,16 @@ pub use keystore::{
     redact_op_uri, store_secret_file, validate_apple_password_uri, validate_destination_env_var,
     validate_env_uri, validate_file_uri, validate_keyring_uri, validate_op_uri, LoadedSecret,
 };
+pub use machine_policy::{
+    read_machine_egress_policy, MachineEgressPolicy, TelemetryConfig, TelemetrySeverity,
+};
 pub use net_filter::{FilterResult, HostFilter};
 pub use path::try_canonicalize;
 #[cfg(target_os = "windows")]
 pub use sandbox::windows::{
     apply_low_il_label_to_token, create_app_container_profile, create_low_integrity_primary_token,
-    derive_app_container_sid, grant_sid_read_on_path, grant_sid_traverse_on_path,
+    derive_app_container_sid, grant_sid_read_attributes_on_path, grant_sid_read_on_path,
+    grant_sid_traverse_on_path,
     grant_sid_write_on_path, label_mask_for_access_mode, low_integrity_label_and_mask,
     package_sid_to_string, path_has_write_owner, path_is_owned_by_current_user, revoke_sid_on_path,
     try_set_mandatory_label, AppContainerProfile, OwnedAppContainerSid, OwnedHandle,

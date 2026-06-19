@@ -3,6 +3,8 @@ use crate::audit_commands;
 use crate::classify_runtime;
 use crate::claude_code_hook;
 use crate::cli::{Cli, Commands, RunArgs, SessionCommands, SetupArgs};
+use crate::health;
+use crate::health::HealthVerdict;
 use crate::command_runtime::{run_sandbox, run_shell, run_wrap};
 use crate::completions::run_completions;
 use crate::deprecated_policy;
@@ -58,15 +60,29 @@ fn dispatch_command(
             run_command_with_banner_and_update(update_handle, silent, || run_wrap(*args, silent))
         }
         Commands::Why(args) => run_command_with_update(update_handle, silent, || run_why(*args)),
-        Commands::Classify(args) => run_command_with_update(update_handle, silent, || {
-            // Phase 73 D-04: standalone classify runs in its own process, so its
-            // AgentRegistry is created fresh and empty here — it can never emit an
-            // authoritative AI_AGENT verdict. The verb relies on the structural
-            // pre-filter; the registry is threaded to keep the sound predicate in
-            // the call path for the Phase 74 daemon to consume.
-            let registry = std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
-            classify_runtime::run_classify(args, registry)
-        }),
+        Commands::Classify(args) => {
+            run_command_with_update(update_handle, silent, || run_classify(args))
+        }
+        // Phase 82 DEPLOY-06: fleet diagnostic.
+        // run_health prints JSON to stdout (always, D-06) and returns the tri-state
+        // HealthVerdict. The verdict is mapped to process::exit here — NOT inside
+        // run_health itself (which keeps the Result-returning convention intact).
+        // exit(0) healthy / exit(1) degraded / exit(2) broken.
+        Commands::Health(args) => {
+            run_command_with_update(update_handle, silent, || {
+                let verdict = health::run_health(&args)?;
+                let code = match verdict {
+                    HealthVerdict::Healthy => 0i32,
+                    HealthVerdict::Degraded => 1,
+                    HealthVerdict::Broken => 2,
+                };
+                // Only exit non-zero here; exit(0) is the normal Ok(()) return path.
+                if code != 0 {
+                    std::process::exit(code);
+                }
+                Ok(())
+            })
+        }
         // Phase 74 D-05: daemon lifecycle and agent management verbs.
         // Thin clients over nono-agentd; daemon verbs drive the per-user SCM
         // service; agent verbs are fail-secure when the daemon is not running.
@@ -200,4 +216,28 @@ fn run_or_detach(args: RunArgs, silent: bool, internal_supervisor: bool) -> Resu
 fn run_setup(args: SetupArgs) -> Result<()> {
     let runner = setup::SetupRunner::new(&args);
     runner.run()
+}
+
+/// Phase 78 D-04: daemon-first classify routing.
+///
+/// On Windows, attempts the daemon control pipe for an authoritative verdict.
+/// On daemon-absent (`is_pipe_not_found`), falls back to the Phase 73 structural
+/// path (non-authoritative, with NOTE_* disclaimers). On any other error, propagates it.
+/// On non-Windows, always uses the structural path.
+fn run_classify(args: crate::cli::ClassifyArgs) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::agent_cli::{classify_daemon_request, is_pipe_not_found};
+        match classify_daemon_request(args.pid, args.json) {
+            Ok(()) => return Ok(()),
+            Err(e) if is_pipe_not_found(&e) || e.to_string().contains("daemon-absent") => {
+                // Daemon not running — fall through to structural path below.
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    // Structural (non-authoritative) fallback — always used on non-Windows,
+    // and on Windows when the daemon is absent.
+    let registry = std::sync::Arc::new(std::sync::Mutex::new(nono::AgentRegistry::new()));
+    classify_runtime::run_classify(args, registry)
 }

@@ -214,13 +214,13 @@ nono is a capability-based sandboxing system for running untrusted AI agents wit
 ## Technology Stack
 
 ## Languages
-- Rust 1.77 (Edition 2021) - Core library, CLI, and proxy implementation.
+- Rust 1.82 (Edition 2021) - Core library, CLI, and proxy implementation.
 - Shell (Bash/Sh) - Integration tests and build scripts (`scripts/test-linux.sh`, `tests/run_integration_tests.sh`).
 - PowerShell - Windows-specific build and test automation (`scripts/build-windows-msi.ps1`, `tests/windows-test-harness.ps1`).
 - C - FFI bindings for the core library (`bindings/c/src/lib.rs`).
 ## Runtime
 - Native binary (compiled for Linux, macOS, Windows).
-- Minimum Rust version: 1.77 (bumped in Phase 04 plan 02 to support safer Windows service/WFP handle bindings via windows-sys 0.59).
+- Minimum Rust version: 1.82 (bumped in Phase 84 plan 02 to satisfy tracing-etw 0.2.3 MSRV requirement; previously 1.77 from Phase 04 plan 02).
 - Cargo - Rust's package manager.
 - Lockfile: `Cargo.lock` present.
 ## Frameworks

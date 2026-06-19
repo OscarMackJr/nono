@@ -3,7 +3,8 @@
 **Captured:** 2026-06-11 (Phase 66 WR-02 EDR UAT, clean-host install)
 **Severity:** medium — public release fails to install on a clean Windows host
 **Source:** `.planning/phases/66-wr-02-edr-human-uat/66-HUMAN-UAT.md` (findings)
-**Resolves phase:** 67 — Clean-Host Windows Install (v2.11; DIST-01/DIST-02)
+**Resolves phase:** 80 — Clean-Host Install UAT (v2.13; INST-01) — origin Phase 67 (v2.11; DIST-01/DIST-02), UAT carried forward
+**Resolves phase (v3.0):** 82 — Fleet Deployment Infrastructure (DEPLOY-01 silent install / correct exit codes; DEPLOY-06 non-fatal atomic service install)
 
 ## Problem
 On a clean Windows 11 host (no VC++ runtime), the v0.62.2 **machine** MSI fails `1603`:

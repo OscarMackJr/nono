@@ -475,4 +475,46 @@ mod tests {
         let result = filter.check_host("example.com", &public_ip());
         assert!(matches!(result, FilterResult::Allow));
     }
+
+    /// EGRESS-03 named contract: four-case DNS-component reject matrix.
+    ///
+    /// Codifies D-14: the leading-dot `ends_with` + `len >` form is component-safe.
+    ///
+    /// Allowlist: `["*.anthropic.com"]`
+    ///
+    /// | Host | Expected | Reason |
+    /// |------|----------|--------|
+    /// | `api.anthropic.com` | Allow | Subdomain match |
+    /// | `anthropic.com` | Deny | Bare domain — wildcard must not match parent |
+    /// | `evilanthropic.com` | Deny | No leading-dot boundary match |
+    /// | `anthropic.com.evil.com` | Deny | Suffix-injection rejected |
+    #[test]
+    fn sc4_dns_component_matrix() {
+        let f = HostFilter::new_strict(&["*.anthropic.com".to_string()]);
+        let ip = public_ip();
+
+        // Case 1: legitimate subdomain — must be allowed
+        assert!(
+            f.check_host("api.anthropic.com", &ip).is_allowed(),
+            "api.anthropic.com must be allowed by *.anthropic.com"
+        );
+
+        // Case 2: bare domain — wildcard MUST NOT match parent
+        assert!(
+            !f.check_host("anthropic.com", &ip).is_allowed(),
+            "anthropic.com must NOT be allowed by *.anthropic.com (bare domain)"
+        );
+
+        // Case 3: no leading-dot boundary — evilanthropic.com must be rejected
+        assert!(
+            !f.check_host("evilanthropic.com", &ip).is_allowed(),
+            "evilanthropic.com must NOT be allowed (no leading-dot boundary)"
+        );
+
+        // Case 4: suffix-injection — anthropic.com.evil.com must be rejected
+        assert!(
+            !f.check_host("anthropic.com.evil.com", &ip).is_allowed(),
+            "anthropic.com.evil.com must NOT be allowed (suffix injection rejected)"
+        );
+    }
 }

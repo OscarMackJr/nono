@@ -1,10 +1,9 @@
 ---
-milestone: v2.12
-milestone_name: AI Agent Abstraction
-status: shipped
-created: 2026-06-13
-shipped: 2026-06-16
-last_updated: 2026-06-16
+milestone: v3.0
+milestone_name: Enterprise Hardening I (Deploy, Control, Compliance)
+status: complete
+created: 2026-06-18
+last_updated: 2026-06-19
 granularity: standard
 ---
 
@@ -26,10 +25,27 @@ granularity: standard
 - ✅ **v2.10 Kernel-Driver Spike + EDR UAT + macOS Upstream Parity** — Phases 63-66 (shipped 2026-06-11; tag `v2.10`) — see [`milestones/v2.10-ROADMAP.md`](milestones/v2.10-ROADMAP.md)
 - ✅ **v2.11 Clean-Host Distribution Cleanup + UPST8** — Phases 67-70 (shipped 2026-06-13) — see [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md)
 - ✅ **v2.12 AI Agent Abstraction** — Phases 71-75 (shipped 2026-06-16; tag `v2.12`) — see [`milestones/v2.12-ROADMAP.md`](milestones/v2.12-ROADMAP.md)
+- ✅ **v2.13 Carry-Forward Closeout (Dark Factory)** — Phases 76-81 (shipped 2026-06-18; tag `v2.13`) — see [`milestones/v2.13-ROADMAP.md`](milestones/v2.13-ROADMAP.md)
+- ✅ **v3.0 Enterprise Hardening I (Deploy · Control · Compliance)** — Phases 82-84 (complete 2026-06-19; tag `v3.0` local) — see [`milestones/v3.0-ROADMAP.md`](milestones/v3.0-ROADMAP.md)
 
 ## Phases
 
-_No active milestone. Run `/gsd:new-milestone` to define the next one._
+<details>
+<summary>✅ v2.13 Carry-Forward Closeout (Dark Factory) (Phases 76-81) — SHIPPED 2026-06-18</summary>
+
+- [x] Phase 76: Self-Verifying Harness Foundation (2/2, DARK-01) — 2026-06-17
+- [x] Phase 77: Copilot CLI End-to-End Confinement (4/4, CPLT-01/02/03) — 2026-06-17
+- [x] Phase 78: Cross-Process Classification (2/2, CLAS-01/02) — 2026-06-18
+- [x] Phase 79: WFP Egress Isolation + nono-ts Ergonomics (2/2, WFP-01/TSRG-01) — 2026-06-18
+- [x] Phase 80: Clean-Host Install UAT (2/2, INST-01) — 2026-06-18
+- [x] Phase 81: Milestone Close Aggregator (1/1, DARK-02) — 2026-06-18
+
+10/10 requirements satisfied; milestone audit `tech_debt` (no requirement gaps, 0 wiring defects;
+host-execution deferrals only). Dark Factory mandate met: every host-gated item collapses to a
+single unattended `scripts/verify-dark.ps1` gate; the no-flag aggregator (`_aggregate.json`) is the
+machine-readable close signal. Full detail: [`milestones/v2.13-ROADMAP.md`](milestones/v2.13-ROADMAP.md).
+
+</details>
 
 <details>
 <summary>✅ v2.12 AI Agent Abstraction (Phases 71-75) — SHIPPED 2026-06-16</summary>
@@ -50,12 +66,12 @@ Full detail: [`milestones/v2.12-ROADMAP.md`](milestones/v2.12-ROADMAP.md).
 <details>
 <summary>✅ v2.11 Clean-Host Distribution Cleanup + UPST8 (Phases 67-70) — SHIPPED 2026-06-13</summary>
 
-- [ ] Phase 67: Clean-Host Windows Install (DIST-01/02, TRUST-01/02) — host-gated UAT pending (clean Win11 host)
+- [ ] Phase 67: Clean-Host Windows Install (DIST-01/02, TRUST-01/02) — host-gated UAT closed in v2.13 Phase 80
 - [x] Phase 68: macOS Resource-Limit Enforcement Fix (2/2) — completed 2026-06-12
 - [x] Phase 69: UPST8 Audit (1/1) — completed 2026-06-13
 - [x] Phase 70: UPST8 Cherry-pick Sync (3/3) — completed 2026-06-13
 
-Phases 68/69/70 complete; Phase 67 carries forward host-gated. Full detail: [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md).
+Phases 68/69/70 complete; Phase 67 carried to v2.13 Phase 80. Full detail: [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md).
 
 </details>
 
@@ -78,30 +94,37 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 
 </details>
 
-## Next
+<details>
+<summary>✅ v3.0 Enterprise Hardening I — Deploy · Control · Compliance (Phases 82-84) — COMPLETE 2026-06-19</summary>
 
-**v2.12 is shipped + archived.** No active milestone.
+- [x] Phase 82: Fleet Deployment Infrastructure (4/4, DEPLOY-01..06) — 2026-06-18
+- [x] Phase 83: Machine Policy Spine + Egress Control (4/4, POLICY-01..03 / EGRESS-01..04) — 2026-06-19
+- [x] Phase 84: SIEM/EDR Telemetry (4/4, TELEM-01..04) — 2026-06-19
 
-- `/gsd:new-milestone` — define the next milestone (questioning → research → requirements → roadmap). A fresh `.planning/REQUIREMENTS.md` is created there (the v2.12 one is archived at `milestones/v2.12-REQUIREMENTS.md`).
+17/17 requirements satisfied structurally; milestone audit `tech_debt` (0 unsatisfied/orphaned;
+5/5 cross-phase integration wires WIRED — the MSI→reader→proxy+WFP→telemetry single spine holds).
+Tech-debt = host-gated live UAT (clean-VM install, dual-layer WFP block, live SIEM gate/opt-out;
+`84-HUMAN-UAT.md`) + daemon-side telemetry emission follow-up. Full detail:
+[`milestones/v3.0-ROADMAP.md`](milestones/v3.0-ROADMAP.md).
 
-**Open carry-forwards** (candidates for the next milestone, from the v2.12 audit):
-- Copilot CLI end-to-end confinement — Node-ESM/AppContainer drive-root `lstat` fix (one-time-admin `C:\`+`C:\Users` `RA` grant + nono ancestor `FILE_READ_ATTRIBUTES`); documented in `75-08`.
-- A1 empirical per-agent WFP isolation (needs a network-scoped test profile).
-- Cross-process authoritative `nono classify` (daemon control-pipe Classify verb).
-- nono-ts `confinedRun` ergonomics (default Low-IL broker arm + auto-cover target exe dir).
-- Phase 67 clean-host Windows install UAT (carried from v2.11; needs a clean Win11 host).
-- Enterprise-hardening track: signed-policy/attestation (SEED-005), silent fleet deploy (SEED-001), egress allowlist (SEED-002), SIEM/EDR (SEED-003), Azure Trusted Signing.
+</details>
 
-**Branch note:** v2.12 shipped on `fix/win-confinement-rb4-ra1` (tagged `v2.12`); merge to `main` separately.
+## Progress
 
-**Repo MUST stay PUBLIC** until Microsoft approves the minifilter altitude (verify no `build_notes/`/`.gsd/` staged before any push).
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
+| 83. Machine Policy Spine + Egress Control | 4/4 | Complete    | 2026-06-19 |
+| 84. SIEM/EDR Telemetry | 4/4 | Complete    | 2026-06-19 |
 
 ## References
 
-- `.planning/PROJECT.md` — project context + current state.
-- `.planning/MILESTONES.md` — shipped milestone history (v1.0 → v2.12).
-- `.planning/milestones/v2.12-ROADMAP.md` — archived v2.12 roadmap (Phases 71-75).
-- `.planning/milestones/v2.12-REQUIREMENTS.md` — archived v2.12 requirements (12/12 satisfied).
-- `.planning/v2.12-MILESTONE-AUDIT.md` — v2.12 milestone audit (PASSED).
+- `.planning/PROJECT.md` — project context + current milestone scope.
+- `.planning/MILESTONES.md` — shipped milestone history (v1.0 → v2.13).
+- `.planning/REQUIREMENTS.md` — v3.0 requirements (DEPLOY-01..06, POLICY-01..03, EGRESS-01..04, TELEM-01..04).
+- `.planning/research/SUMMARY.md` — four-researcher consensus on stack, pitfalls, and build order.
+- `.planning/research/ARCHITECTURE.md` — integration points (machine.rs, telemetry/, ProxyConfig injection, nono-agentd capability builder).
+- `.planning/research/PITFALLS.md` — 13 pitfalls with per-phase prevention mapping.
+- `.planning/milestones/v2.13-ROADMAP.md` — archived v2.13 roadmap (Phases 76-81) with full phase details + success criteria.
 - `.planning/templates/cross-target-verify-checklist.md` — mandatory Linux+macOS clippy protocol for cfg-gated Unix code.
 - `proj/DESIGN-engine-abstraction.md` — E1-E5 engine-abstraction contract (Phase 72).
