@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
-status: executing
+status: ready_to_plan
 stopped_at: Phase 85 context gathered
-last_updated: "2026-06-19T15:37:06.390Z"
-last_activity: 2026-06-19 -- Phase 85 planning complete
+last_updated: "2026-06-19T15:48:20.375Z"
+last_activity: 2026-06-19 -- Phase 85 execution started
 progress:
   total_phases: 6
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 1
   completed_plans: 0
-  percent: 0
+  percent: 17
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -22,14 +22,14 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — kept current with upstream `always-further/nono` without regressing the fork's Windows security model.
 
-**Current Focus:** v3.1 — roadmap created (6 phases, 85–90); ready to plan Phase 85 (UPST9 Divergence Audit)
+**Current Focus:** Phase 85 — UPST9 Divergence Audit
 
 ## Current Position
 
-Phase: 85 — UPST9 Divergence Audit (not started)
-Plan: —
-Status: Ready to execute
-Last activity: 2026-06-19 -- Phase 85 planning complete
+Phase: 86
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-19
 
 Progress: [______________________________] 0/6 phases
 
@@ -37,7 +37,7 @@ Progress: [______________________________] 0/6 phases
 
 **Velocity:** (v3.1 — reset; populated as phases complete)
 
-- Total plans completed: 0
+- Total plans completed: 1
 - Average duration: —
 - Total execution time: —
 

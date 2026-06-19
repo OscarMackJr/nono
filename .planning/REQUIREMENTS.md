@@ -24,8 +24,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### UPST9 Divergence Audit (AUDIT)
 
-- [ ] **AUDIT-01**: A `DIVERGENCE-LEDGER.md` exists for upstream `v0.62.0..v0.64.0` (Phase 42/47/48 shape) classifying every substantive commit into themed clusters, each with a `will-sync` / `fork-preserve` / `split` / `won't-sync` disposition; re-fetched at audit-open to capture any `v0.65.0`.
-- [ ] **AUDIT-02**: Each cluster disposition carries an ADR-style L/M/H risk verdict, and cross-cluster re-export dependencies are diff-inspected (not `--name-only`), structurally closing the `feedback_cluster_isolation_invalid` hazard.
+- [x] **AUDIT-01**: A `DIVERGENCE-LEDGER.md` exists for upstream `v0.62.0..v0.64.0` (Phase 42/47/48 shape) classifying every substantive commit into themed clusters, each with a `will-sync` / `fork-preserve` / `split` / `won't-sync` disposition; re-fetched at audit-open to capture any `v0.65.0`.
+- [x] **AUDIT-02**: Each cluster disposition carries an ADR-style L/M/H risk verdict, and cross-cluster re-export dependencies are diff-inspected (not `--name-only`), structurally closing the `feedback_cluster_isolation_invalid` hazard.
 
 ### Library-Boundary Convergence (BND)
 
@@ -82,8 +82,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 | Requirement | Phase | Status |
 |-------------|----------------------|---------|
-| AUDIT-01 | Phase 85 | Pending |
-| AUDIT-02 | Phase 85 | Pending |
+| AUDIT-01 | Phase 85 | Complete |
+| AUDIT-02 | Phase 85 | Complete |
 | BND-01 | Phase 86 | Pending |
 | BND-02 | Phase 86 | Pending |
 | BND-03 | Phase 86 | Pending |

@@ -17,7 +17,7 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
 - Integer phases (85, 86, 87): Planned milestone work — **continued from Phase 84** (v3.0). NOT reset.
 - Decimal phases (86.1, 86.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 85: UPST9 Divergence Audit** - Build the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions + ADR risk verdicts
+- [x] **Phase 85: UPST9 Divergence Audit** - Build the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions + ADR risk verdicts (completed 2026-06-19)
 - [ ] **Phase 86: Library-Boundary Convergence** - Adopt upstream's core-crate audit stack + structured-diagnostics model (lib + FFI + proxy), reconcile Windows paths, update CLAUDE.md + ADR
 - [ ] **Phase 87: Security Sync** - Close the Linux AF_UNIX datagram bypass (#1096) and the procfs-remap dedup leak (#1064)
 - [ ] **Phase 88: Feature + Dependency Cherry-Pick Wave** - Absorb the additive feature cherry-picks + PTY ctrl-z fix + 9 dependency bumps across all 5 crates
@@ -37,7 +37,7 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
   4. Cross-cluster re-export dependencies are diff-inspected (actual diffs, not `git --name-only`), structurally closing the `feedback_cluster_isolation_invalid` hazard — with the two HIGH-conflict refactors (themes A & B) explicitly dispositioned `will-sync / adopt-upstream`.
 **Plans**: 1 plan
 Plans:
-- [ ] 85-01-PLAN.md — Enumerate commits (clusters A–M), actual-diff re-export inspection (A/B/F), ADR review, empirical cross-check, produce 85-DIVERGENCE-LEDGER.md
+- [x] 85-01-PLAN.md — Enumerate commits (clusters A–M), actual-diff re-export inspection (A/B/F), ADR review, empirical cross-check, produce 85-DIVERGENCE-LEDGER.md
 
 ### Phase 86: Library-Boundary Convergence
 **Goal**: The audit/attestation/ledger stack and the structured-diagnostics model live in the core `nono` crate matching upstream, with the fork's Windows diagnostic paths and FFI reconciled and the policy-free-library invariant re-decided via ADR.
@@ -102,7 +102,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 85. UPST9 Divergence Audit | 0/1 | Not started | - |
+| 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
 | 86. Library-Boundary Convergence | 0/TBD | Not started | - |
 | 87. Security Sync | 0/TBD | Not started | - |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
