@@ -79,6 +79,23 @@ impl MachineEgressPolicy {
     /// obtain the full FQDN set (Plan 03).  The returned list is suitable for
     /// passing directly to [`nono::HostFilter`] as the base entries once the
     /// CLI layer has appended the expanded preset FQDNs.
+    ///
+    /// # Suffix normalization (CR-01)
+    ///
+    /// The ADMX template instructs admins to enter `AllowedSuffixes` with a
+    /// leading dot and no `*` (e.g. `.anthropic.com`).  [`crate::HostFilter`]
+    /// only buckets entries that start with `*` as wildcard suffixes — a bare
+    /// `.anthropic.com` would otherwise be treated as an *exact* host and match
+    /// nothing.  To honor the ADMX-documented format and keep the EGRESS-03
+    /// contract intact, `allowed_suffixes` entries are normalized here to the
+    /// `*.`-prefixed wildcard form `HostFilter` understands:
+    ///
+    /// - `*.x.com`  → kept as-is
+    /// - `.x.com`   → `*.x.com`
+    /// - bare `x.com` → `*.x.com` (treated as a suffix per ADMX intent for this list)
+    ///
+    /// `allowed_hosts` (exact) entries are left untouched.  Suffixes precede
+    /// hosts in the returned list.
     #[must_use]
     pub fn raw_allowlist(&self) -> Vec<String> {
         let mut out = Vec::with_capacity(
@@ -86,9 +103,25 @@ impl MachineEgressPolicy {
                 .len()
                 .saturating_add(self.allowed_hosts.len()),
         );
-        out.extend(self.allowed_suffixes.iter().cloned());
+        out.extend(self.allowed_suffixes.iter().map(|s| Self::normalize_suffix(s)));
         out.extend(self.allowed_hosts.iter().cloned());
         out
+    }
+
+    /// Normalize a single `AllowedSuffixes` entry to the `*.`-prefixed wildcard
+    /// form that [`crate::HostFilter`] buckets as a suffix (CR-01).
+    ///
+    /// - `*.x.com`  → `*.x.com` (unchanged)
+    /// - `.x.com`   → `*.x.com`
+    /// - bare `x.com` → `*.x.com`
+    fn normalize_suffix(s: &str) -> String {
+        if s.starts_with("*.") {
+            s.to_string()
+        } else if let Some(rest) = s.strip_prefix('.') {
+            format!("*.{rest}")
+        } else {
+            format!("*.{s}")
+        }
     }
 }
 
@@ -269,12 +302,86 @@ mod tests {
     #[test]
     fn raw_allowlist_concatenates_suffixes_then_hosts() {
         let policy = MachineEgressPolicy {
+            // Already in `*.`-prefixed wildcard form — must pass through unchanged.
             allowed_suffixes: vec!["*.anthropic.com".to_string()],
             allowed_hosts: vec!["api.github.com".to_string()],
             preset_tokens: vec![],
         };
         let list = policy.raw_allowlist();
         assert_eq!(list, vec!["*.anthropic.com", "api.github.com"]);
+    }
+
+    /// CR-01: `AllowedSuffixes` entries are normalized to the `*.`-prefixed
+    /// wildcard form that `HostFilter` buckets as a suffix, regardless of the
+    /// ADMX-documented leading-dot or bare-domain input shape.
+    #[test]
+    fn raw_allowlist_normalizes_suffix_shapes() {
+        let policy = MachineEgressPolicy {
+            allowed_suffixes: vec![
+                "*.anthropic.com".to_string(), // wildcard → unchanged
+                ".openai.com".to_string(),     // leading-dot → *.openai.com
+                "github.com".to_string(),      // bare → *.github.com
+            ],
+            allowed_hosts: vec!["api.exact.com".to_string()],
+            preset_tokens: vec![],
+        };
+        let list = policy.raw_allowlist();
+        assert_eq!(
+            list,
+            vec![
+                "*.anthropic.com",
+                "*.openai.com",
+                "*.github.com",
+                "api.exact.com",
+            ]
+        );
+    }
+
+    /// CR-01 contract lock: a leading-dot `.anthropic.com` suffix (the
+    /// ADMX-documented `AllowedSuffixes` shape) must flow through
+    /// `raw_allowlist()` → `HostFilter::new_strict` and match subdomains
+    /// component-safely, mirroring `net_filter::sc4_dns_component_matrix`.
+    #[test]
+    fn cr01_leading_dot_suffix_matches_via_hostfilter() {
+        use crate::net_filter::HostFilter;
+        use std::net::{IpAddr, Ipv4Addr};
+
+        let policy = MachineEgressPolicy {
+            // Leading-dot form exactly as the ADMX instructs admins to enter.
+            allowed_suffixes: vec![".anthropic.com".to_string()],
+            allowed_hosts: vec![],
+            preset_tokens: vec![],
+        };
+        let allowlist = policy.raw_allowlist();
+        assert_eq!(
+            allowlist,
+            vec!["*.anthropic.com"],
+            "leading-dot suffix must normalize to *.anthropic.com"
+        );
+
+        let filter = HostFilter::new_strict(&allowlist);
+        let ip = vec![IpAddr::V4(Ipv4Addr::new(104, 18, 7, 96))];
+
+        // Subdomain — must be allowed.
+        assert!(
+            filter.check_host("api.anthropic.com", &ip).is_allowed(),
+            "api.anthropic.com must be allowed by a .anthropic.com suffix"
+        );
+        // Bare domain — wildcard must not match parent.
+        assert!(
+            !filter.check_host("anthropic.com", &ip).is_allowed(),
+            "anthropic.com (bare) must NOT be allowed"
+        );
+        // No leading-dot boundary — must be rejected.
+        assert!(
+            !filter.check_host("evilanthropic.com", &ip).is_allowed(),
+            "evilanthropic.com must NOT be allowed (no boundary)"
+        );
+        // Suffix-injection — must be rejected.
+        assert!(
+            !filter.check_host("anthropic.com.evil.com", &ip).is_allowed(),
+            "anthropic.com.evil.com must NOT be allowed (suffix injection)"
+        );
     }
 
     #[test]
