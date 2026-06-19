@@ -1,11 +1,14 @@
 use crate::cli::{Cli, Commands};
+use crate::telemetry::SecurityEventLayer;
 use crate::{config, theme};
+use nono::TelemetryConfig;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing_subscriber::fmt::writer::MakeWriter;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::writer::MakeWriter;
 
 pub(crate) fn normalize_legacy_flag_env_vars() {
     copy_legacy_env_var("NONO_NET_BLOCK", "NONO_BLOCK_NET");
@@ -84,16 +87,63 @@ pub(crate) fn init_theme(cli: &Cli) {
     theme::init(cli.theme.as_deref(), config_theme.as_deref());
 }
 
-pub(crate) fn init_tracing(cli: &Cli) {
+/// Initialize the global tracing subscriber.
+///
+/// # Arguments
+///
+/// - `cli` — parsed CLI arguments (controls verbosity, log-file path, silent mode).
+/// - `telemetry_config` — optional telemetry configuration read from the HKLM
+///   `MachineEgressPolicy` (Phase 83).  `None` uses [`TelemetryConfig::default()`]
+///   which is default-ON per D-13.
+///
+/// # SecurityEventLayer registration (TELEM-04 SC-4)
+///
+/// A [`SecurityEventLayer`] is constructed from `telemetry_config` (or the
+/// default) and registered in all three subscriber arms (file-log, file-fallback,
+/// stderr).  On Windows, a `tracing-etw` layer is also added so that the
+/// `tracing::warn!(target: "nono_security", …)` calls in
+/// [`crate::telemetry::windows::emit_security_event`] are forwarded to the
+/// registered ETW provider "nono".
+pub(crate) fn init_tracing(cli: &Cli, telemetry_config: Option<TelemetryConfig>) {
+    // ── Build the SecurityEventLayer (all platforms) ──────────────────────────
+    //
+    // Generate a per-session ID (16 hex chars from a random u64).
+    // `rand` is an unconditional dep in Cargo.toml.
+    let session_id = {
+        use rand::RngExt as _;
+        let mut rng = rand::rng();
+        let mut buf = [0u8; 8];
+        rng.fill(&mut buf[..]);
+        buf.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    };
+
+    let config = telemetry_config.unwrap_or_default();
+    let security_layer = SecurityEventLayer::new(config, session_id);
+
+    // Delegate to the platform-specific initialization that adds the ETW layer
+    // (Windows) or skips it (non-Windows).  The separate helper avoids having
+    // tracing-etw's complex generic types flow through all three match arms.
+    init_tracing_with_security(cli, security_layer);
+}
+
+/// Inner tracing initialization — registers SecurityEventLayer in all three
+/// subscriber arms (file-log, file-fallback, stderr).
+///
+/// On Windows, a `tracing-etw` LayerBuilder layer for the "nono" ETW provider
+/// is registered so that the `tracing::warn!(target: "nono_security", ...)` calls
+/// in [`crate::telemetry::windows::emit_security_event`] forward to ETW (D-01.1).
+/// If ETW layer construction fails, we continue without it (D-03 non-fatal).
+fn init_tracing_with_security(cli: &Cli, security_layer: SecurityEventLayer) {
+    let env_filter = tracing_filter(cli);
+
     match cli.log_file.as_deref() {
         Some(path) => match SharedFileMakeWriter::new(path) {
             Ok(writer) => {
-                tracing_subscriber::fmt()
-                    .with_env_filter(tracing_filter(cli))
+                let fmt_layer = tracing_subscriber::fmt::layer()
                     .with_target(false)
                     .with_ansi(false)
-                    .with_writer(writer)
-                    .init();
+                    .with_writer(writer);
+                init_registry(env_filter, fmt_layer, security_layer);
             }
             Err(err) => {
                 eprintln!(
@@ -101,22 +151,71 @@ pub(crate) fn init_tracing(cli: &Cli) {
                     path.display(),
                     err
                 );
-                tracing_subscriber::fmt()
-                    .with_env_filter(tracing_filter(cli))
+                let fmt_layer = tracing_subscriber::fmt::layer()
                     .with_target(false)
-                    .with_writer(std::io::stderr)
-                    .init();
+                    .with_writer(std::io::stderr);
+                init_registry(env_filter, fmt_layer, security_layer);
             }
         },
         None => {
-            tracing_subscriber::fmt()
-                .with_env_filter(tracing_filter(cli))
+            let fmt_layer = tracing_subscriber::fmt::layer()
                 .with_target(false)
-                .with_writer(std::io::stderr)
-                .init();
+                .with_writer(std::io::stderr);
+            init_registry(env_filter, fmt_layer, security_layer);
         }
     }
 }
+
+/// Compose the tracing registry with the format layer and security layer,
+/// then call `.init()`.
+///
+/// On Windows this function also adds the tracing-etw layer (D-01.1).
+///
+/// The env_filter is applied as a per-layer filter on the fmt_layer via
+/// `.with_filter(env_filter)` so that the SecurityEventLayer always receives
+/// its events regardless of the verbosity setting (security events should
+/// always pass through even when the log level is "off").
+fn init_registry<W>(
+    env_filter: EnvFilter,
+    fmt_layer: tracing_subscriber::fmt::Layer<
+        tracing_subscriber::Registry,
+        tracing_subscriber::fmt::format::DefaultFields,
+        tracing_subscriber::fmt::format::Format,
+        W,
+    >,
+    security_layer: SecurityEventLayer,
+) where
+    W: for<'writer> tracing_subscriber::fmt::MakeWriter<'writer> + Send + Sync + 'static,
+{
+    // Scope the fmt_layer to the env_filter so it only emits at the configured
+    // verbosity.  SecurityEventLayer is unfiltered (always active).
+    let filtered_fmt = fmt_layer.with_filter(env_filter);
+
+    #[cfg(not(target_os = "windows"))]
+    tracing_subscriber::registry()
+        .with(filtered_fmt)
+        .with(security_layer)
+        .init();
+
+    #[cfg(target_os = "windows")]
+    {
+        // Build the ETW layer for the "nono" provider (D-01.1).
+        // If build() fails, continue without ETW (D-03 non-fatal).
+        let base = tracing_subscriber::registry()
+            .with(filtered_fmt)
+            .with(security_layer);
+
+        // The ETW layer type is fully determined here by `base`'s concrete type.
+        match tracing_etw::LayerBuilder::new("nono").build() {
+            Ok(etw_layer) => base.with(etw_layer).init(),
+            Err(e) => {
+                eprintln!("nono: telemetry: ETW layer init failed ({e}); ETW emit disabled");
+                base.init();
+            }
+        }
+    }
+}
+
 
 #[allow(clippy::disallowed_methods)] // Single-threaded at process startup, before any threads.
 fn copy_legacy_env_var(old: &str, new: &str) {

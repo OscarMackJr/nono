@@ -157,7 +157,12 @@ fn main() {
     let legacy_network_warnings = collect_legacy_network_warnings();
     normalize_legacy_flag_env_vars();
     let cli = Cli::parse();
-    init_tracing(&cli);
+    // Pass None for telemetry_config — MachineEgressPolicy is read later in
+    // app_runtime (it requires the HKLM registry key, which is Windows-only and
+    // not available at this early init point).  SecurityEventLayer uses the
+    // TelemetryConfig::default() (enabled=true, channel="Application",
+    // min_severity=Warning) per D-13 (default-ON).
+    init_tracing(&cli, None);
     init_theme(&cli);
     print_legacy_network_warnings(&legacy_network_warnings, cli.silent);
 

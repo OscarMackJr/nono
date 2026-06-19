@@ -1,10 +1,6 @@
+// The dead_code allow from Plan 01 is intentionally removed here:
+// SecurityEventLayer is now registered in init_tracing() (Plan 02).
 //! SIEM/EDR telemetry layer for nono (Phase 84).
-//!
-// Plan 01 is schema-only — SecurityEventLayer is constructed and tested but
-// not yet registered in init_tracing() (that wiring is Plan 02 Task 1).
-// The dead_code allows are intentional and tracked: remove when Plan 02
-// calls SecurityEventLayer::new() from cli_bootstrap::init_tracing.
-#![allow(dead_code)]
 //!
 //! This module implements [`SecurityEventLayer`], a [`tracing_subscriber::Layer`]
 //! that intercepts `tracing` events on the `nono_security::*` target and emits
@@ -23,7 +19,7 @@
 //!   └─ advance_chain() ── HMAC-SHA256 chain (D-05)
 //!   └─ scrub_value()   ── redact free-text (D-10)
 //!   └─ path_hash_for() ── hash path (D-08)
-//!   └─ windows::emit_security_event() ── ETW + Application Log (stub, Plan 02)
+//!   └─ windows::emit_security_event() ── ETW + Application Log (Plan 02)
 //! ```
 //!
 //! # Domain separator independence (D-06)
@@ -32,14 +28,6 @@
 //! to keep the telemetry HMAC chain independent from the unkeyed SHA-256
 //! audit ledger.  The separators below must NEVER be changed to match the
 //! `nono.audit.*` prefix.
-//!
-//! # HMAC placeholder (Plan 01)
-//!
-//! The `hmac` crate (0.13.0, RustCrypto) is the intended HMAC engine but is
-//! not yet added to `Cargo.toml` — that happens in Plan 02 after the operator
-//! checkpoint (Task 1 approved, D-MSRV recorded for Plan 02).  This plan
-//! implements `advance_chain` with a `sha2`-based placeholder that **will be
-//! replaced** in Plan 02.  The placeholder is marked with a TODO comment below.
 
 pub mod event;
 pub mod syslog;
@@ -47,14 +35,17 @@ pub mod windows;
 
 pub use event::{SecurityEvent, SecurityEventType, classify_path, path_hash_for};
 
+use hmac::{Hmac, Mac};
 use nono::TelemetryConfig;
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
 use zeroize::{Zeroize, Zeroizing};
+
+type HmacSha256 = Hmac<Sha256>;
 
 // ── Domain separator constants (D-06) ────────────────────────────────────────
 
@@ -100,40 +91,52 @@ impl Drop for ChainState {
 
 // ── advance_chain ─────────────────────────────────────────────────────────────
 
-/// Advance the HMAC chain by appending a new event.
+/// Advance the per-session HMAC-SHA256 chain by appending a new event (D-05/D-06).
 ///
-/// **Plan 01 placeholder:** Uses `sha2::Sha256` as a stand-in for
-/// `Hmac<Sha256>` because the `hmac` crate is not yet in `Cargo.toml`
-/// (added in Plan 02 after the operator checkpoint).  The construction below
-/// preserves the domain-separator discipline and key-mixing intent of D-05/D-06.
-///
-/// # TODO(84-02)
-///
-/// Replace this sha2-placeholder with `Hmac<Sha256>` after operator checkpoint:
-/// ```ignore
-/// use hmac::{Hmac, Mac};
-/// type HmacSha256 = Hmac<Sha256>;
-/// let mut mac = HmacSha256::new_from_slice(&chain.key)
-///     .expect("HMAC accepts any key length");
-/// mac.update(TELEMETRY_CHAIN_DOMAIN);
-/// mac.update(&chain.head);
-/// mac.update(TELEMETRY_EVENT_DOMAIN);
-/// mac.update(event_bytes);
-/// chain.head = mac.finalize().into_bytes().into();
+/// The new chain head is:
+/// ```text
+/// HMAC-SHA256(session_key,
+///     TELEMETRY_CHAIN_DOMAIN || prev_head || TELEMETRY_EVENT_DOMAIN || event_bytes)
 /// ```
+///
+/// The domain separators ensure the telemetry chain is independent from
+/// `audit_integrity.rs` (D-06) and from any chain that does not use both
+/// domain-prefix constants.
+///
+/// # Error handling (D-14 / `clippy::unwrap_used` prohibition)
+///
+/// `new_from_slice` returns `InvalidLength` only when the key is empty, which
+/// cannot happen because `ChainState.key` is always a 32-byte array filled by
+/// `OsRng`.  However, we use a `match`-based fallback to a zeroed key (D-14
+/// degrade-not-abort) rather than `.expect()` or `.unwrap()`, which are
+/// forbidden in production code by CLAUDE.md § Unwrap Policy.
 pub(crate) fn advance_chain(chain: &mut ChainState, event_bytes: &[u8]) {
-    // TODO(84-02): replace sha2-placeholder with Hmac<Sha256> after operator checkpoint.
-    // sha2 placeholder: SHA-256(key || TELEMETRY_CHAIN_DOMAIN || prev_head ||
-    //                          TELEMETRY_EVENT_DOMAIN || event_bytes)
-    // This maintains domain separation and key mixing; just not keyed-MAC-secure
-    // until the hmac crate is available.
-    let mut hasher = Sha256::new();
-    hasher.update(chain.key.as_ref());
-    hasher.update(TELEMETRY_CHAIN_DOMAIN);
-    hasher.update(chain.head);
-    hasher.update(TELEMETRY_EVENT_DOMAIN);
-    hasher.update(event_bytes);
-    let result = hasher.finalize();
+    use hmac::KeyInit as _;
+    let mut mac = match HmacSha256::new_from_slice(chain.key.as_ref()) {
+        Ok(m) => m,
+        Err(e) => {
+            // InvalidLength only if key is empty — structurally impossible for
+            // our 32-byte OsRng key, but we handle it gracefully per D-14.
+            eprintln!(
+                "nono: telemetry: HMAC key length error ({e}), degrading to zeroed key"
+            );
+            // SAFETY: a 32-byte all-zero slice always satisfies HMAC-SHA256's
+            // key constraint (any non-empty key is valid).
+            match HmacSha256::new_from_slice(&[0u8; 32]) {
+                Ok(m) => m,
+                Err(_) => {
+                    // 32-byte zeroed slice cannot fail — this branch is unreachable
+                    // but we must handle it without panic.
+                    return;
+                }
+            }
+        }
+    };
+    mac.update(TELEMETRY_CHAIN_DOMAIN);
+    mac.update(&chain.head);
+    mac.update(TELEMETRY_EVENT_DOMAIN);
+    mac.update(event_bytes);
+    let result = mac.finalize().into_bytes();
     chain.head.copy_from_slice(&result);
     chain.sequence = chain.sequence.saturating_add(1);
 }
@@ -295,7 +298,7 @@ impl<S: Subscriber> Layer<S> for SecurityEventLayer {
             timestamp_unix_ms,
         };
 
-        // Emit to Windows sinks (stub in Plan 01; real emitter added in Plan 02).
+        // Emit to Windows Application log + ETW (dual-emit, D-01).
         windows::emit_security_event(&security_event);
     }
 }
@@ -508,9 +511,7 @@ mod tests {
     ///   The expected head is the 32-byte HMAC output.
     #[test]
     fn advance_chain_uses_hmac_not_sha2_placeholder() {
-        use hmac::{Hmac, Mac};
-        use sha2::Sha256;
-        type HmacSha256 = Hmac<Sha256>;
+        use hmac::KeyInit as _;
 
         // Compute the expected HMAC-SHA256 output independently.
         let key = [0x42u8; 32];

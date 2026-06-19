@@ -1,10 +1,5 @@
 //! Security event schema for SIEM/EDR telemetry (Phase 84).
 //!
-// Plan 01 is schema-only; all public items are used in test code but not yet
-// wired from the binary path (wiring happens in Plans 02-04).  The `dead_code`
-// allow is intentional and tracked: remove when Plan 02 wires SecurityEventLayer.
-#![allow(dead_code)]
-//!
 //! Defines the [`SecurityEvent`] struct and supporting types used by
 //! [`super::SecurityEventLayer`] to emit structured security events to Windows
 //! telemetry sinks (ETW + Application Event Log) and, in a future cycle, to
