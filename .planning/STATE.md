@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
-status: complete
-stopped_at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate shipped (SC-1/SC-3/SC-5)
-last_updated: "2026-06-19T00:10:00.000Z"
-last_activity: 2026-06-19
+status: executing
+stopped_at: Phase 84 verification gaps_found — CR-01 (gate happy-path) + WR-01 (TELEM-04 config unwired); gap closure pending
+last_updated: "2026-06-19T03:00:00.000Z"
+last_activity: 2026-06-19 -- Phase 84 executed; code-review + verifier confirmed 2 blockers; nono-ffi build regression fixed
 progress:
   total_phases: 3
-  completed_phases: 3
+  completed_phases: 2
   total_plans: 12
   completed_plans: 12
-  percent: 100
+  percent: 67
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -22,16 +22,16 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 84 — siem-edr-telemetry (COMPLETE)
+**Current Focus:** Phase 84 — siem-edr-telemetry (plans done, VERIFICATION gaps_found — gap closure pending)
 
 ## Current Position
 
-Phase: 84 (siem-edr-telemetry) — COMPLETE (all 4 plans done)
-Plan: 4 of 4 (DONE)
-Status: All plans complete — milestone ready for close
+Phase: 84 (siem-edr-telemetry) — all 4 plans executed; verification gaps_found
+Plan: 4 of 4 executed; 2 blockers open (CR-01 gate, WR-01 TELEM-04 config)
+Status: Gap closure required before phase/milestone complete (see 84-VERIFICATION.md, 84-REVIEW.md)
 Last activity: 2026-06-19
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 67% (2/3 phases verified)
 
 ## Performance Metrics
 
