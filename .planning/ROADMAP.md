@@ -48,8 +48,11 @@ Plans:
   2. The structured-diagnostics model exists in `crates/nono/src/diagnostic/*` with `NonoError::{diagnostic_code, remediation}`, and is exposed via FFI (`bindings/c/src/diagnostic.rs`, `NonoDiagnosticCode`, `last_diagnostic_code`/`last_remediation_json`) with `nono-ffi` building clean (exhaustive-match arms covered).
   3. The new diagnostics surface is reconciled with the fork's Windows diagnostic paths and the proxy `ProxyDiagnostic` surface (no regression in Windows denial output).
   4. `CLAUDE.md` § Library vs CLI boundary is updated to document the new core-crate audit + diagnostics modules, and an ADR records the boundary-convergence decision (rationale + what stays CLI-side).
-**Plans**: TBD
-**UI hint**: yes
+**Plans**: 3 plans
+Plans:
+- [ ] 86-01-PLAN.md — Theme A: cherry-pick a5b2a516 → aed35bec → 0b27cfc2 → e9529312 (audit → core, thin CLI wrappers, tests relocated)
+- [ ] 86-02-PLAN.md — Theme B: cherry-pick 4ad8ba92 → f867aba2 → a6aa5995 → 7f319b9e (diagnostics → core + FFI, proxy ProxyDiagnostic, Windows bridge)
+- [ ] 86-03-PLAN.md — BND-03: write ADR-86 + update CLAUDE.md § Library vs CLI Boundary, final make ci gate
 
 ### Phase 87: Security Sync
 **Goal**: The two upstream security fixes in the window are absorbed with cross-target clippy clean on the cfg-gated Unix edits.
@@ -103,7 +106,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
-| 86. Library-Boundary Convergence | 0/TBD | Not started | - |
+| 86. Library-Boundary Convergence | 0/3 | Not started | - |
 | 87. Security Sync | 0/TBD | Not started | - |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
