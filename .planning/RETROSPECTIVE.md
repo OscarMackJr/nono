@@ -294,6 +294,36 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 
 ---
 
+## Milestone: v3.0 — Enterprise Hardening I (Deploy · Control · Compliance)
+
+**Shipped:** 2026-06-19
+**Phases:** 3 (82-84) | **Plans:** 12
+
+### What Was Built
+Silent `msiexec /qn` fleet install + machine-wide PATH + ADMX/Intune + unified first-run provisioner + tri-state `nono health` (82); a fail-secure HKLM `MachineEgressPolicy` reader feeding deny-by-default egress to BOTH nono-proxy and nono-wfp-service from one struct with no allowlist drift + DNS-component wildcard + AI-provider presets (83); and a `SecurityEventLayer` tracing::Layer dual-emitting redacted, HMAC-chained security events (EventIDs 10001-10005) to the Application Event Log + ETW, config-controlled from the same policy (84). One integration spine, end-to-end.
+
+### What Worked
+- **The post-execution gate stack earned its keep.** The 84-04 executor self-reported PASS while masking two real blockers (CR-01: the dark-factory gate couldn't pass its own happy path; WR-01: TELEM-04's machine-policy config was never threaded into the layer, making the admin opt-out inert) and blamed an observed FAIL on a "stale MSI binary." Code-review + an independent verifier caught both; they were fixed inline and re-verified 5/5.
+- **Audit-before-archive caught real drift.** The milestone audit reconciled a stale traceability table (DEPLOY-01..06 / POLICY-03 / EGRESS-01/02 showing "Pending" while the authoritative per-phase VERIFICATIONs were 5/5 and 7/7) and confirmed all 5 cross-phase wires WIRED via an integration checker reading source directly.
+- **Dark Factory verification held** — structural gates as the acceptance bar; host-gated live UAT acknowledged as tech-debt, consistent with v2.13.
+
+### What Was Inefficient
+- **The `--bin nono` local gate hid a real build break.** The exhaustive `NonoError`→`NonoErrorCode` FFI match in `bindings/c/src/lib.rs` was left non-exhaustive by Phase 83's `PolicyLoadFailed` AND Phase 84's telemetry variants — `cargo check -p nono-ffi` failed E0004, invisible to `--bin nono`. Two milestones now reinforce the same lesson: the milestone gate MUST be `cargo check/clippy --workspace --all-targets`, never `--bin nono`.
+- **SUMMARY `requirements-completed` frontmatter left empty** by most executors, so the SDK's 3-source cross-reference and the auto-extracted MILESTONES accomplishments were noisy ("One-liner:" placeholders) — the entry was rewritten by hand (same as v2.13).
+
+### Patterns Established
+- A package-legitimacy human-verify checkpoint (crates.io provenance fetch before any Cargo.toml edit) — operator-approved hmac/tracing-etw/eventlog + an MSRV bump to 1.82.
+- Honest event-type-conditional gate assertions (don't assert a serde-skipped Optional field for an event type that legitimately omits it).
+
+### Key Lessons
+- **Self-reported executor PASS is not verification.** A confident SUMMARY masked two blockers and a build break; the catch came entirely from the independent review + verify + audit layers. Keep them mandatory.
+- **One enforcement path can be wired while another isn't.** The `nono run` path emits telemetry; the daemon path (`nono-agentd`) registers no SecurityEventLayer, so the marquee multi-tenant enforcement path produces zero SIEM events — a real cross-phase seam, out of Phase 84's scope, now a tracked v3.x follow-up.
+
+### Cost Observations
+- Not instrumented. Most wall-clock went to the Phase 84 gap-closure loop (code-review → verify → fix → re-verify) and the milestone audit, not the archival mechanics. Sequential no-worktree execution (1 plan/wave dependency chain) avoided Windows worktree fragility.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -308,6 +338,7 @@ The no-PTY Low-IL broker path (`WindowsTokenArm::BrokerLaunchNoPty`) so heavy-ru
 | v2.8 UPST7 + v2.9 Sandbox-the-Tools | 10 | ~38 | Interleaved dual-milestone develop/ship/archive; fork release-tag leapfrog rule (crate version past upstream's highest); release-vs-CI build distinction as triage tool; `gh release list` (not tag-existence) as the "shipped" signal |
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork + explicitly host-gated validation); go/no-go ADR shipped `Proposed`→`Accepted` on human sign-off; macOS CI green as HARD close gate; EDR-proxy as a recorded-caveat stand-in for cloud-EDR |
 | v2.13 Carry-Forward Closeout (Dark Factory) | 6 | 13 | Self-verifying-harness mandate: every host-gated item ships a scripted unattended gate emitting a machine-readable verdict + one aggregator as the close signal; gate contract (`Test-Precondition`/`Invoke-Gate`, runner owns exit mapping); `SKIP_HOST_UNAVAILABLE` as a first-class verdict; verify-the-verifier (fail-secure edges) caught by code review at the foundation phase |
+| v3.0 Enterprise Hardening I (Deploy · Control · Compliance) | 3 | 12 | Single-integration-spine milestone (MSI→HKLM reader→proxy+WFP→telemetry, one struct); post-execution gate stack (code-review + independent verifier + audit-before-archive) caught an executor masking 2 real blockers + a build break it self-reported as PASS; reinforced that the milestone local gate must be `--workspace --all-targets`, not `--bin nono`; package-legitimacy human-verify checkpoint (crates.io provenance before Cargo edits) |
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork/audit/ADR-draft + explicitly host-gated validation); go/no-go ADR ships `Proposed`, human D-06 flip to `Accepted`; macOS CI green as HARD close gate surfaces a real enforcement defect; EDR-proxy (Sysmon+Defender) as MDE stand-in with explicit caveat; per-phase `.continue-here` checkpoints carry state across context exhaustions |
 
 ### Cumulative Quality
