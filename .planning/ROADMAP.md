@@ -35,7 +35,9 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
   2. Upstream was re-fetched at audit-open and the ledger reflects any `v0.65.0` cut landing before then (window extended if so).
   3. Each cluster disposition carries an ADR-style L/M/H risk verdict across the standard dimensions (security, windows, maintenance, divergence, contributor).
   4. Cross-cluster re-export dependencies are diff-inspected (actual diffs, not `git --name-only`), structurally closing the `feedback_cluster_isolation_invalid` hazard — with the two HIGH-conflict refactors (themes A & B) explicitly dispositioned `will-sync / adopt-upstream`.
-**Plans**: TBD
+**Plans**: 1 plan
+Plans:
+- [ ] 85-01-PLAN.md — Enumerate commits (clusters A–M), actual-diff re-export inspection (A/B/F), ADR review, empirical cross-check, produce 85-DIVERGENCE-LEDGER.md
 
 ### Phase 86: Library-Boundary Convergence
 **Goal**: The audit/attestation/ledger stack and the structured-diagnostics model live in the core `nono` crate matching upstream, with the fork's Windows diagnostic paths and FFI reconciled and the policy-free-library invariant re-decided via ADR.
@@ -100,7 +102,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 85. UPST9 Divergence Audit | 0/TBD | Not started | - |
+| 85. UPST9 Divergence Audit | 0/1 | Not started | - |
 | 86. Library-Boundary Convergence | 0/TBD | Not started | - |
 | 87. Security Sync | 0/TBD | Not started | - |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
