@@ -159,14 +159,15 @@ mod windows_impl {
                 Ok(result) => result,
                 Err(e) => {
                     return Err(windows_service::Error::Winapi(std::io::Error::other(
-                        format!("nono-agentd: machine egress policy load failed (fail-secure): {e}"),
+                        format!(
+                            "nono-agentd: machine egress policy load failed (fail-secure): {e}"
+                        ),
                     )));
                 }
             };
 
-        let daemon_state = rt.block_on(async {
-            build_daemon_state(machine_policy_active, &egress_domains).await
-        });
+        let daemon_state =
+            rt.block_on(async { build_daemon_state(machine_policy_active, &egress_domains).await });
 
         let daemon_state = match daemon_state {
             Ok(state) => Arc::new(state),
@@ -258,16 +259,13 @@ mod windows_impl {
             match super::agent_daemon::resolve_machine_egress_policy(&[]) {
                 Ok(result) => result,
                 Err(e) => {
-                    eprintln!(
-                        "nono-agentd: machine egress policy load failed (fail-secure): {e}"
-                    );
+                    eprintln!("nono-agentd: machine egress policy load failed (fail-secure): {e}");
                     return ExitCode::from(1);
                 }
             };
 
-        let daemon_state = rt.block_on(async {
-            build_daemon_state(machine_policy_active, &egress_domains).await
-        });
+        let daemon_state =
+            rt.block_on(async { build_daemon_state(machine_policy_active, &egress_domains).await });
 
         let daemon_state = match daemon_state {
             Ok(state) => Arc::new(state),

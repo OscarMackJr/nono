@@ -1488,9 +1488,7 @@ const NONO_AGENTD_CONTROL_PIPE: &str = r"\\.\pipe\nono-agentd-control";
 ///
 /// Returns `Err(String)` with a diagnostic on any pipe / I/O failure.
 fn daemon_control_pipe_request(json_payload: &str) -> Result<String, String> {
-    use windows_sys::Win32::Foundation::{
-        CloseHandle, GetLastError, INVALID_HANDLE_VALUE,
-    };
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
     use windows_sys::Win32::Storage::FileSystem::{
         CreateFileW, ReadFile, WriteFile, OPEN_EXISTING,
     };
@@ -1556,7 +1554,13 @@ fn daemon_control_pipe_request(json_payload: &str) -> Result<String, String> {
     let mut bytes_written: u32 = 0;
     // SAFETY: handle is a valid open pipe; len_prefix is 4 bytes.
     let ok = unsafe {
-        WriteFile(handle, len_prefix.as_ptr(), 4, &mut bytes_written, std::ptr::null_mut())
+        WriteFile(
+            handle,
+            len_prefix.as_ptr(),
+            4,
+            &mut bytes_written,
+            std::ptr::null_mut(),
+        )
     };
     if ok == 0 || bytes_written != 4 {
         return Err("daemon_control_pipe_request: WriteFile length prefix failed".into());
@@ -1580,7 +1584,13 @@ fn daemon_control_pipe_request(json_payload: &str) -> Result<String, String> {
     let mut bytes_read: u32 = 0;
     // SAFETY: handle is valid; len_buf is 4-byte mutable buffer.
     let ok = unsafe {
-        ReadFile(handle, len_buf.as_mut_ptr(), 4, &mut bytes_read, std::ptr::null_mut())
+        ReadFile(
+            handle,
+            len_buf.as_mut_ptr(),
+            4,
+            &mut bytes_read,
+            std::ptr::null_mut(),
+        )
     };
     if ok == 0 || bytes_read != 4 {
         return Err("daemon_control_pipe_request: ReadFile response length failed".into());
@@ -1665,15 +1675,12 @@ fn classify_pid_returns_verdict_from_daemon() {
             .unwrap_or("")
             .parse()
             .unwrap_or_else(|_| {
-                panic!(
-                    "classify-test: could not parse pid from launch response line: {pid_line}"
-                )
+                panic!("classify-test: could not parse pid from launch response line: {pid_line}")
             })
     };
 
     assert_ne!(
-        agent_pid,
-        0,
+        agent_pid, 0,
         "classify-test: agent PID must be non-zero; launch response: {launch_response}"
     );
     eprintln!("[classify-test] SC1 agent_pid={agent_pid}");
@@ -1782,6 +1789,8 @@ fn classify_pid_returns_verdict_from_daemon() {
             Err(e) => eprintln!("[classify-test] cleanup demote failed (non-fatal): {e}"),
         }
     } else {
-        eprintln!("[classify-test] cleanup: could not parse tenant_id — agent will exit after timeout 30");
+        eprintln!(
+            "[classify-test] cleanup: could not parse tenant_id — agent will exit after timeout 30"
+        );
     }
 }

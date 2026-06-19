@@ -33,7 +33,7 @@ pub mod event;
 pub mod syslog;
 pub mod windows;
 
-pub use event::{SecurityEvent, SecurityEventType, classify_path, path_hash_for};
+pub use event::{classify_path, path_hash_for, SecurityEvent, SecurityEventType};
 
 use hmac::{Hmac, Mac};
 use nono::TelemetryConfig;
@@ -117,9 +117,7 @@ pub(crate) fn advance_chain(chain: &mut ChainState, event_bytes: &[u8]) {
         Err(e) => {
             // InvalidLength only if key is empty — structurally impossible for
             // our 32-byte OsRng key, but we handle it gracefully per D-14.
-            eprintln!(
-                "nono: telemetry: HMAC key length error ({e}), degrading to zeroed key"
-            );
+            eprintln!("nono: telemetry: HMAC key length error ({e}), degrading to zeroed key");
             // SAFETY: a 32-byte all-zero slice always satisfies HMAC-SHA256's
             // key constraint (any non-empty key is valid).
             match HmacSha256::new_from_slice(&[0u8; 32]) {
@@ -371,13 +369,11 @@ mod tests {
         const AUDIT_EVENT_DOMAIN: &[u8] = b"nono.audit.event.alpha\n";
         const AUDIT_CHAIN_DOMAIN: &[u8] = b"nono.audit.chain.alpha\n";
         assert_ne!(
-            TELEMETRY_EVENT_DOMAIN,
-            AUDIT_EVENT_DOMAIN,
+            TELEMETRY_EVENT_DOMAIN, AUDIT_EVENT_DOMAIN,
             "telemetry EVENT domain must differ from audit EVENT domain (D-06)"
         );
         assert_ne!(
-            TELEMETRY_CHAIN_DOMAIN,
-            AUDIT_CHAIN_DOMAIN,
+            TELEMETRY_CHAIN_DOMAIN, AUDIT_CHAIN_DOMAIN,
             "telemetry CHAIN domain must differ from audit CHAIN domain (D-06)"
         );
     }
@@ -409,7 +405,10 @@ mod tests {
         let event_sev = severity_for(&SecurityEventType::PathDeny); // Warning
         assert!(event_sev >= TelemetrySeverity::Debug, "emits at Debug min");
         assert!(event_sev >= TelemetrySeverity::Info, "emits at Info min");
-        assert!(event_sev >= TelemetrySeverity::Warning, "emits at Warning min (default)");
+        assert!(
+            event_sev >= TelemetrySeverity::Warning,
+            "emits at Warning min (default)"
+        );
         assert!(
             event_sev < TelemetrySeverity::Error,
             "Warning event is suppressed when min_severity=Error"
@@ -419,8 +418,7 @@ mod tests {
     #[test]
     fn telemetry_event_domain_value() {
         assert_eq!(
-            TELEMETRY_EVENT_DOMAIN,
-            b"nono.telemetry.event.alpha\n",
+            TELEMETRY_EVENT_DOMAIN, b"nono.telemetry.event.alpha\n",
             "TELEMETRY_EVENT_DOMAIN must match the locked value"
         );
     }
@@ -444,14 +442,12 @@ mod tests {
         );
         // Salt must be non-zero.
         assert_ne!(
-            inner.session_salt,
-            [0u8; 32],
+            inner.session_salt, [0u8; 32],
             "session salt must be non-zero (OsRng-seeded)"
         );
         // Genesis head is all-zero.
         assert_eq!(
-            inner.chain.head,
-            [0u8; 32],
+            inner.chain.head, [0u8; 32],
             "genesis chain head must be [0u8;32]"
         );
         assert_eq!(inner.chain.sequence, 0, "genesis sequence must be 0");

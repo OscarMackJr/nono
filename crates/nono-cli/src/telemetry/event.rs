@@ -324,7 +324,10 @@ mod tests {
         let path = std::path::Path::new(r"C:\projects\nono\secret.txt");
         let h1 = path_hash_for(&salt, path);
         let h2 = path_hash_for(&salt, path);
-        assert_eq!(h1, h2, "path_hash_for must be deterministic for same inputs");
+        assert_eq!(
+            h1, h2,
+            "path_hash_for must be deterministic for same inputs"
+        );
     }
 
     #[test]

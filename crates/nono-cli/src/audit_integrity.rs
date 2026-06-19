@@ -1,18 +1,18 @@
-pub(crate) use nono::audit::{AuditRecorder, RejectStage, verify_audit_log};
+pub(crate) use nono::audit::{verify_audit_log, AuditRecorder, RejectStage};
 // AUDIT_EVENTS_FILENAME is used by audit_commands and exec_strategy_windows (non-test callers).
 pub(crate) use nono::audit::AUDIT_EVENTS_FILENAME;
 
 #[cfg(test)]
-pub(crate) use nono::audit::{AUDIT_HASH_ALGORITHM, AuditEventRecord};
+pub(crate) use nono::audit::{AuditEventRecord, AUDIT_HASH_ALGORITHM};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use nono::AccessMode;
-    use nono::supervisor::{ApprovalDecision, AuditEntry, CapabilityRequest, UrlOpenRequest};
     use nono::supervisor::types::HandleKind;
+    use nono::supervisor::{ApprovalDecision, AuditEntry, CapabilityRequest, UrlOpenRequest};
     use nono::undo::{NetworkAuditDecision, NetworkAuditEvent, NetworkAuditMode};
+    use nono::AccessMode;
     use std::path::PathBuf;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -204,9 +204,8 @@ mod tests {
             Ok(_) => panic!("alpha verification should reject records missing event_json"),
             Err(err) => err,
         };
-        assert!(
-            err.to_string()
-                .contains("missing canonical event_json bytes")
-        );
+        assert!(err
+            .to_string()
+            .contains("missing canonical event_json bytes"));
     }
 }

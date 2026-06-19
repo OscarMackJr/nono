@@ -213,7 +213,11 @@ impl MachineEgressPolicy {
                 .len()
                 .saturating_add(self.allowed_hosts.len()),
         );
-        out.extend(self.allowed_suffixes.iter().map(|s| Self::normalize_suffix(s)));
+        out.extend(
+            self.allowed_suffixes
+                .iter()
+                .map(|s| Self::normalize_suffix(s)),
+        );
         out.extend(self.allowed_hosts.iter().cloned());
         out
     }
@@ -635,7 +639,10 @@ mod tests {
         };
         let json = serde_json::to_string(&original).unwrap();
         let restored: MachineEgressPolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(original, restored, "serde round-trip must preserve all fields");
+        assert_eq!(
+            original, restored,
+            "serde round-trip must preserve all fields"
+        );
     }
 
     /// Phase 84: deserializing a policy JSON with no telemetry section must
@@ -755,7 +762,9 @@ mod tests {
         );
         // Suffix-injection — must be rejected.
         assert!(
-            !filter.check_host("anthropic.com.evil.com", &ip).is_allowed(),
+            !filter
+                .check_host("anthropic.com.evil.com", &ip)
+                .is_allowed(),
             "anthropic.com.evil.com must NOT be allowed (suffix injection)"
         );
     }
@@ -827,8 +836,12 @@ mod tests {
             .unwrap();
 
         // Write two REG_SZ values (the way ADMX <list> materializes them).
-        test_key.set_value("1", &"*.anthropic.com".to_string()).unwrap();
-        test_key.set_value("2", &"*.openai.com".to_string()).unwrap();
+        test_key
+            .set_value("1", &"*.anthropic.com".to_string())
+            .unwrap();
+        test_key
+            .set_value("2", &"*.openai.com".to_string())
+            .unwrap();
         drop(test_key);
 
         // Open the parent and call read_list_subkey.

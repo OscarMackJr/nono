@@ -819,11 +819,9 @@ mod tests {
         );
 
         {
-            let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
-                &leaf,
-                TEST_RA_PACKAGE_SID,
-            )
-            .expect("apply ancestor read-attributes");
+            let guard =
+                AppliedAncestorReadAttributesGuard::snapshot_and_apply(&leaf, TEST_RA_PACKAGE_SID)
+                    .expect("apply ancestor read-attributes");
             // The tempdir parent is user-owned, so it must have received an RA grant.
             assert!(
                 guard.applied.iter().any(|p| p == &parent),
@@ -851,11 +849,9 @@ mod tests {
         let leaf = dir.path().join("leaf");
         std::fs::create_dir(&leaf).expect("create leaf");
 
-        let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
-            &leaf,
-            TEST_RA_PACKAGE_SID,
-        )
-        .expect("apply ancestor read-attributes");
+        let guard =
+            AppliedAncestorReadAttributesGuard::snapshot_and_apply(&leaf, TEST_RA_PACKAGE_SID)
+                .expect("apply ancestor read-attributes");
 
         // The drive root (C:\ or equivalent) is owned by SYSTEM/TrustedInstaller,
         // never the current user — it must NOT appear in the applied set (D-04).

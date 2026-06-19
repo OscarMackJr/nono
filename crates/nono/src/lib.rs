@@ -89,10 +89,10 @@ pub use path::try_canonicalize;
 pub use sandbox::windows::{
     apply_low_il_label_to_token, create_app_container_profile, create_low_integrity_primary_token,
     derive_app_container_sid, grant_sid_read_attributes_on_path, grant_sid_read_on_path,
-    grant_sid_traverse_on_path,
-    grant_sid_write_on_path, label_mask_for_access_mode, low_integrity_label_and_mask,
-    package_sid_to_string, path_has_write_owner, path_is_owned_by_current_user, revoke_sid_on_path,
-    try_set_mandatory_label, AppContainerProfile, OwnedAppContainerSid, OwnedHandle,
+    grant_sid_traverse_on_path, grant_sid_write_on_path, label_mask_for_access_mode,
+    low_integrity_label_and_mask, package_sid_to_string, path_has_write_owner,
+    path_is_owned_by_current_user, revoke_sid_on_path, try_set_mandatory_label,
+    AppContainerProfile, OwnedAppContainerSid, OwnedHandle,
 };
 // AgentRegistry and AgentClassification are available on all platforms
 // (classify returns NotAnAgent on non-Windows; insert works everywhere).

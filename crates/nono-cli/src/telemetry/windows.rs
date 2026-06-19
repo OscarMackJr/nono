@@ -219,8 +219,7 @@ mod tests {
     #[test]
     fn event_log_source_is_nono() {
         assert_eq!(
-            EVENT_LOG_SOURCE,
-            "nono",
+            EVENT_LOG_SOURCE, "nono",
             "EVENT_LOG_SOURCE must be the Phase-82-registered source"
         );
     }

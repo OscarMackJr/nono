@@ -1332,8 +1332,7 @@ mod tests {
         let classification = nono::AgentClassification::AiAgent {
             package_sid: "S-1-15-2-1-2-3-4-5".to_string(),
         };
-        let result =
-            super::windows_impl::classify_response_string_testable(&classification);
+        let result = super::windows_impl::classify_response_string_testable(&classification);
         assert_eq!(
             result, "AiAgent",
             "AiAgent classification must return exactly \"AiAgent\"; got: {result}"
@@ -1355,8 +1354,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn classify_response_notanagent() {
         let classification = nono::AgentClassification::NotAnAgent;
-        let result =
-            super::windows_impl::classify_response_string_testable(&classification);
+        let result = super::windows_impl::classify_response_string_testable(&classification);
         assert_eq!(
             result, "NotAnAgent",
             "NotAnAgent classification must return exactly \"NotAnAgent\"; got: {result}"

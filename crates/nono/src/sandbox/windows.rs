@@ -1942,7 +1942,13 @@ pub fn grant_sid_read_attributes_on_path(path: &Path, sid: &str) -> Result<()> {
     // NO_INHERITANCE: the RA grant is scoped to this specific directory
     // object and must NOT propagate to descendants. An ancestor RA grant
     // must never silently widen the access surface on child objects.
-    edit_dacl_for_sid(path, sid, PACKAGE_SID_READ_ATTRS_MASK, SET_ACCESS, NO_INHERITANCE)
+    edit_dacl_for_sid(
+        path,
+        sid,
+        PACKAGE_SID_READ_ATTRS_MASK,
+        SET_ACCESS,
+        NO_INHERITANCE,
+    )
 }
 
 /// Removes the SDDL SID string `sid`'s ACEs from the DACL of `path`, reverting

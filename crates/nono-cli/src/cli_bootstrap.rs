@@ -6,9 +6,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::writer::MakeWriter;
 
 pub(crate) fn normalize_legacy_flag_env_vars() {
     copy_legacy_env_var("NONO_NET_BLOCK", "NONO_BLOCK_NET");
@@ -215,7 +215,6 @@ fn init_registry<W>(
         }
     }
 }
-
 
 #[allow(clippy::disallowed_methods)] // Single-threaded at process startup, before any threads.
 fn copy_legacy_env_var(old: &str, new: &str) {

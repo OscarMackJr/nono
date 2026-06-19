@@ -3321,8 +3321,8 @@ mod tests {
     #[test]
     fn policy_egress_groups_present_in_network_policy() {
         let json = crate::config::embedded::embedded_network_policy_json();
-        let policy =
-            crate::network_policy::load_network_policy(json).expect("network-policy.json must parse");
+        let policy = crate::network_policy::load_network_policy(json)
+            .expect("network-policy.json must parse");
 
         // anthropic preset: must contain *.anthropic.com
         let anthropic = policy
@@ -3410,8 +3410,17 @@ mod tests {
             "github-api".to_string(),
         ])
         .expect("expand must succeed for known tokens");
-        assert!(hosts.iter().any(|h| h == "*.anthropic.com"), "missing *.anthropic.com");
-        assert!(hosts.iter().any(|h| h == "*.openai.com"), "missing *.openai.com");
-        assert!(hosts.iter().any(|h| h == "api.github.com"), "missing api.github.com");
+        assert!(
+            hosts.iter().any(|h| h == "*.anthropic.com"),
+            "missing *.anthropic.com"
+        );
+        assert!(
+            hosts.iter().any(|h| h == "*.openai.com"),
+            "missing *.openai.com"
+        );
+        assert!(
+            hosts.iter().any(|h| h == "api.github.com"),
+            "missing api.github.com"
+        );
     }
 }
