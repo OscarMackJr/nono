@@ -126,7 +126,7 @@ None.
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 260619-duw | Scope upstream v0.62..v0.64 delta and plant SEED-006 | 2026-06-19 | _pending_ | [260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla](./quick/260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla/) |
+| 260619-duw | Scope upstream v0.62..v0.64 delta and plant SEED-006 | 2026-06-19 | f3f792dd | [260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla](./quick/260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla/) |
 
 ## Deferred Items
 
