@@ -92,17 +92,17 @@ Which phases cover which requirements.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DEPLOY-01 | Phase 82 | Pending |
-| DEPLOY-02 | Phase 82 | Pending |
-| DEPLOY-03 | Phase 82 | Pending |
-| DEPLOY-04 | Phase 82 (template) / Phase 83 (reader) | Pending |
-| DEPLOY-05 | Phase 82 | Pending |
-| DEPLOY-06 | Phase 82 | Pending |
+| DEPLOY-01 | Phase 82 | Partial — structural; clean-VM install host-gated (82-VERIFICATION) |
+| DEPLOY-02 | Phase 82 | Complete (82-01) |
+| DEPLOY-03 | Phase 82 | Partial — structural; live R-B3 host-gated (82-VERIFICATION) |
+| DEPLOY-04 | Phase 82 (template) / Phase 83 (reader) | Complete |
+| DEPLOY-05 | Phase 82 | Partial — structural; TLS-through-proxy matrix host-gated (82-VERIFICATION) |
+| DEPLOY-06 | Phase 82 | Complete (82-03/04) |
 | POLICY-01 | Phase 83 | Complete (83-01) |
 | POLICY-02 | Phase 83 | Complete (83-01) |
-| POLICY-03 | Phase 83 | Pending (83-02) |
-| EGRESS-01 | Phase 83 | Pending (83-02) |
-| EGRESS-02 | Phase 83 | Pending (83-02) |
+| POLICY-03 | Phase 83 | Complete (83-02) |
+| EGRESS-01 | Phase 83 | Complete (83-02) |
+| EGRESS-02 | Phase 83 | Complete (83-02; dual-layer live proof host-gated) |
 | EGRESS-03 | Phase 83 | Complete (83-01) |
 | EGRESS-04 | Phase 83 | Complete |
 | TELEM-01 | Phase 84 | Complete (structural; live gate host-gated) |
