@@ -12,6 +12,6 @@ mod formatter;
 
 #[cfg(not(target_os = "windows"))]
 pub use formatter::{
-    CommandContext, DiagnosticFormatter, DiagnosticMode, ErrorObservation, PolicyExplanation,
-    analyze_error_output,
+    analyze_error_output, CommandContext, DiagnosticFormatter, DiagnosticMode, ErrorObservation,
+    PolicyExplanation,
 };

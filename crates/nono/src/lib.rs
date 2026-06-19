@@ -70,10 +70,10 @@ pub use capability::{
     ProcessInfoMode, SignalMode, SocketScope, UnixSocketCapability, UnixSocketMode, UnixSocketOp,
 };
 pub use diagnostic::{
-    DenialReason, DenialRecord, IpcDenialRecord, NonoDiagnostic, NonoDiagnosticCode,
-    NonoDiagnosticDetail, NonoDiagnosticSeverity, NonoRemediation, SandboxViolation,
-    SessionDiagnosticReport, SessionObservationInput, StderrObservationKind, dedupe_denials,
-    filesystem_denials_from_violations, follow_up_diagnostics,
+    dedupe_denials, filesystem_denials_from_violations, follow_up_diagnostics, DenialReason,
+    DenialRecord, IpcDenialRecord, NonoDiagnostic, NonoDiagnosticCode, NonoDiagnosticDetail,
+    NonoDiagnosticSeverity, NonoRemediation, SandboxViolation, SessionDiagnosticReport,
+    SessionObservationInput, StderrObservationKind,
 };
 pub use error::{NonoError, Result, CGROUP_V2_HINT};
 pub use keystore::{

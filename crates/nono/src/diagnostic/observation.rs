@@ -190,10 +190,8 @@ mod tests {
             ..SessionObservationInput::default()
         };
         let diagnostics = input.into_diagnostics();
-        assert!(
-            diagnostics
-                .iter()
-                .any(|d| d.code == NonoDiagnosticCode::SandboxDeniedNetwork)
-        );
+        assert!(diagnostics
+            .iter()
+            .any(|d| d.code == NonoDiagnosticCode::SandboxDeniedNetwork));
     }
 }

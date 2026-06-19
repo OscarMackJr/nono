@@ -74,10 +74,7 @@ impl ProxyHandle {
     /// Returns `(prefix, summary)` pairs. This is a simplified implementation
     /// that omits OAuth2/TLS intercept fields not present in this fork.
     #[must_use]
-    pub fn route_diagnostics(
-        &self,
-        config: &crate::config::ProxyConfig,
-    ) -> Vec<(String, String)> {
+    pub fn route_diagnostics(&self, config: &crate::config::ProxyConfig) -> Vec<(String, String)> {
         let mut rows = Vec::with_capacity(config.routes.len());
         for route in &config.routes {
             let prefix = route.prefix.trim_matches('/').to_string();

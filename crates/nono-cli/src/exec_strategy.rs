@@ -4040,24 +4040,18 @@ mod tests {
             2,
             "expected path diagnostics for logged denial and filesystem violation"
         );
-        assert!(
-            report
-                .diagnostics
-                .iter()
-                .any(|d| d.code == nono::NonoDiagnosticCode::SandboxDeniedUnixSocket)
-        );
-        assert!(
-            report
-                .denials
-                .iter()
-                .any(|d| d.path == Path::new("/tmp/secret.txt"))
-        );
-        assert!(
-            report
-                .denials
-                .iter()
-                .any(|d| d.path == Path::new("/etc/hosts"))
-        );
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == nono::NonoDiagnosticCode::SandboxDeniedUnixSocket));
+        assert!(report
+            .denials
+            .iter()
+            .any(|d| d.path == Path::new("/tmp/secret.txt")));
+        assert!(report
+            .denials
+            .iter()
+            .any(|d| d.path == Path::new("/etc/hosts")));
     }
 
     #[test]

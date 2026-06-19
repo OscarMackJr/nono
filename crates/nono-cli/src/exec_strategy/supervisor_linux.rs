@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::trust_intercept::TrustInterceptor;
-use nono::{AccessMode, NonoRemediation, UnixSocketCapability, UnixSocketOp, try_canonicalize};
+use nono::{try_canonicalize, AccessMode, NonoRemediation, UnixSocketCapability, UnixSocketOp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitialCapability {

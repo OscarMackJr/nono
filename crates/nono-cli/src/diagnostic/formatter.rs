@@ -18,15 +18,15 @@
 //! - **Actionable**: Provides specific flags to grant additional access
 //! - **Mode-aware**: Different guidance for supervised vs standard mode
 
-use nono::SessionDiagnosticReport;
 use nono::diagnostic::{
-    DenialReason, DenialRecord, IpcDenialRecord, NonoDiagnostic, NonoDiagnosticCode,
-    NonoDiagnosticDetail, NonoRemediation, SandboxViolation, dedupe_denials,
-    diagnostic_application_failure, diagnostic_likely_sandbox_path, diagnostic_missing_path,
-    diagnostic_network_blocked, diagnostic_protected_file_write,
-    filesystem_denials_from_violations, follow_up_diagnostics,
+    dedupe_denials, diagnostic_application_failure, diagnostic_likely_sandbox_path,
+    diagnostic_missing_path, diagnostic_network_blocked, diagnostic_protected_file_write,
+    filesystem_denials_from_violations, follow_up_diagnostics, DenialReason, DenialRecord,
+    IpcDenialRecord, NonoDiagnostic, NonoDiagnosticCode, NonoDiagnosticDetail, NonoRemediation,
+    SandboxViolation,
 };
 use nono::try_canonicalize;
+use nono::SessionDiagnosticReport;
 use nono::{AccessMode, CapabilitySet, CapabilitySource};
 use std::path::{Path, PathBuf};
 
@@ -3250,9 +3250,7 @@ mod tests {
         );
         assert!(output.contains(&missing.display().to_string()));
         assert!(output.contains("To grant additional access, re-run with:"));
-        assert!(
-            output.contains("Query policy: nono why --path <path> --op <read|write|readwrite>")
-        );
+        assert!(output.contains("Query policy: nono why --path <path> --op <read|write|readwrite>"));
     }
 
     #[test]

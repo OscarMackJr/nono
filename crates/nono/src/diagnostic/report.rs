@@ -2,9 +2,9 @@
 
 use crate::capability::AccessMode;
 use crate::diagnostic::{
-    DenialReason, DenialRecord, IpcDenialRecord, NonoDiagnostic, NonoDiagnosticCode,
-    NonoDiagnosticDetail, NonoDiagnosticSeverity, NonoRemediation, SandboxViolation,
-    seatbelt_operation_to_access,
+    seatbelt_operation_to_access, DenialReason, DenialRecord, IpcDenialRecord, NonoDiagnostic,
+    NonoDiagnosticCode, NonoDiagnosticDetail, NonoDiagnosticSeverity, NonoRemediation,
+    SandboxViolation,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -199,7 +199,11 @@ fn stricter_reason(a: DenialReason, b: DenialReason) -> DenialReason {
             DenialReason::BackendError => 1,
         }
     }
-    if rank(&a) >= rank(&b) { a } else { b }
+    if rank(&a) >= rank(&b) {
+        a
+    } else {
+        b
+    }
 }
 
 #[must_use]
