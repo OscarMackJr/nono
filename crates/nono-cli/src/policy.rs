@@ -1442,10 +1442,17 @@ pub fn load_package_groups(policy: &mut Policy) -> Result<()> {
 /// # Ok(())
 /// # }
 /// ```
-// EGRESS-04 (Plan 83-03): this function is called by Plan 83-02 daemon-startup
-// wiring (agent_daemon startup path).  The dead_code lint fires during the
-// transitional window between Plan 03 (definition) and Plan 02 (wiring call).
-// Suppressed here because the function is fully tested in the cfg(test) module.
+// EGRESS-04 (Plan 83-03): this is the CLI-layer preset-token expander, intended
+// for any `crate::policy`-reachable caller (e.g. future `nono run` / profile
+// resolution wiring).  The daemon startup path (Plan 83-02) does NOT call this
+// function: `nono-agentd` is a standalone binary that cannot reach
+// `crate::policy`, so it uses its own embedded-JSON expander
+// `agent_daemon::expand_preset_tokens_from_embedded` over the same
+// `network-policy.json`.  This function is therefore currently uncalled outside
+// tests; the `dead_code` lint is suppressed because it is the CLI-layer
+// counterpart and is fully exercised by the cfg(test) module.
+// (Collapsing the two expanders to a single shared implementation is tracked
+// separately as WR-02 — do not change the dedup/inclusion rules here.)
 #[allow(dead_code)]
 pub fn expand_egress_preset_tokens(tokens: &[String]) -> Result<Vec<String>> {
     if tokens.is_empty() {
