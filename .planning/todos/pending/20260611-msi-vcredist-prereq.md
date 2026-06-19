@@ -5,6 +5,7 @@
 **Source:** `.planning/phases/66-wr-02-edr-human-uat/66-HUMAN-UAT.md` (findings)
 **Resolves phase:** 80 — Clean-Host Install UAT (v2.13; INST-01) — origin Phase 67 (v2.11; DIST-01/DIST-02), UAT carried forward
 **Resolves phase (v3.0):** 82 — Fleet Deployment Infrastructure (DEPLOY-01 silent install / correct exit codes; DEPLOY-06 non-fatal atomic service install)
+**Resolves phase (v3.1):** 90 — v3.0 Host-Gated UAT Drain (DRAIN-01 clean-VM silent MSI install on a fresh Win11 host)
 
 ## Problem
 On a clean Windows 11 host (no VC++ runtime), the v0.62.2 **machine** MSI fails `1603`:
