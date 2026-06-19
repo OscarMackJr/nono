@@ -1777,6 +1777,29 @@ pub fn execute_supervised(
                 crate::output::print_diagnostic_footer(&footer);
             }
 
+            // Telemetry: emit a security event for each denied path so
+            // SecurityEventLayer routes them to dual-emit (Application-log +
+            // ETW). The `path` field carries the display string to the Layer,
+            // which hashes it via path_hash_for before constructing
+            // SecurityEvent — the raw path NEVER reaches ReportEventW (D-08).
+            // IL denials (STATUS_ACCESS_DENIED from mandatory-label policy)
+            // surface as path-deny DenialRecords on the current Windows backend
+            // and are captured here; no distinct label_violation event is
+            // emitted because the exec_strategy layer cannot distinguish an
+            // IL-sourced denial from an ordinary path deny at this point.
+            // EventID 10003 LabelViolation is therefore RESERVED-but-unemitted
+            // in Phase 84 (see 84-03-SUMMARY.md §Label-Violation). Plan 84-04
+            // must NOT assert EventID 10003 in its gate.
+            for denial in &denials {
+                tracing::warn!(
+                    target: "nono_security::path_deny",
+                    path = %denial.path.display(),
+                    access = %denial.access,
+                    agent_pid = std::process::id(),
+                    "path deny"
+                );
+            }
+
             if should_offer_profile_save(
                 config.no_diagnostics,
                 exit_code,

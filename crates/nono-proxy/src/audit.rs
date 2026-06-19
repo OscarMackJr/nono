@@ -191,6 +191,23 @@ pub fn log_denied(
         "proxy request denied"
     );
 
+    // Telemetry: additive dual-emit alongside the existing info! call
+    // (invariant 5 — never replace, only add). SecurityEventLayer routes
+    // nono_security::* events to dual-emit (Application-log + ETW).
+    // Host stays cleartext (D-10 exception: host is what the analyst needs
+    // per SC-1). Full URLs, paths, and query params are NOT emitted here.
+    // The `reason` string is NOT forwarded to avoid leaking sensitive detail;
+    // scrubbing happens inside SecurityEventLayer if reason is passed as a
+    // field. `ctx.route_id` provides session correlation without exposing
+    // URL path components.
+    tracing::warn!(
+        target: "nono_security::network_deny",
+        host = host,
+        port = port,
+        agent_pid = std::process::id(),
+        "network deny"
+    );
+
     push_event(
         audit_log,
         NetworkAuditEvent {
