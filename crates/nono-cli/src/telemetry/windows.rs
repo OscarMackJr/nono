@@ -31,3 +31,61 @@ pub fn emit_security_event(_event: &super::event::SecurityEvent) {
 /// Non-Windows stub: no-op.
 #[cfg(not(target_os = "windows"))]
 pub fn emit_security_event(_event: &super::event::SecurityEvent) {}
+
+// ── Tests (RED phase — Plan 84-02) ────────────────────────────────────────────
+//
+// These tests verify the REAL Plan-02 behavior:
+//   1. EVENT_LOG_SOURCE constant = "nono" (does not exist in the stub → RED)
+//   2. All five EVENT_ID_* constants are present and correctly mapped.
+//   3. emit_security_event is non-fatal (no panic) on any platform.
+//
+// The tests will FAIL (compile error) until the Plan-02 implementation adds
+// the constants and the real emit function.
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::telemetry::event::{SecurityEvent, SecurityEventType};
+
+    /// Verify EVENT_LOG_SOURCE is "nono" (the Phase-82-registered Application source).
+    #[test]
+    fn event_log_source_is_nono() {
+        assert_eq!(
+            EVENT_LOG_SOURCE,
+            "nono",
+            "EVENT_LOG_SOURCE must be the Phase-82-registered source"
+        );
+    }
+
+    /// Verify all five EventID constants match the ROADMAP-locked values.
+    #[test]
+    fn event_id_constants_are_correct() {
+        assert_eq!(EVENT_ID_PATH_DENY, 10001);
+        assert_eq!(EVENT_ID_NETWORK_DENY, 10002);
+        assert_eq!(EVENT_ID_LABEL_VIOLATION, 10003);
+        assert_eq!(EVENT_ID_HOOK_FAIL_CLOSED, 10004);
+        assert_eq!(EVENT_ID_TELEMETRY_DEGRADED, 10005);
+    }
+
+    /// Verify emit_security_event does not panic on any platform.
+    ///
+    /// On non-Windows the stub is a no-op; on Windows the real impl falls back
+    /// to stderr if the source is not registered.  Either way: no panic.
+    #[test]
+    fn emit_security_event_is_non_fatal() {
+        let event = SecurityEvent {
+            event_type: SecurityEventType::PathDeny,
+            agent_pid: 0,
+            path_hash: None,
+            path_category: None,
+            host: None,
+            session_id: "test-session".to_string(),
+            chain_head: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
+            timestamp_unix_ms: 0,
+        };
+        // Must not panic.
+        emit_security_event(&event);
+    }
+}

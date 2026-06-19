@@ -483,4 +483,57 @@ mod tests {
         drop(chain);
         // After drop, memory is zeroed (Zeroizing<T> guarantee — we trust the crate).
     }
+
+    // ── RED-phase tests (Plan 84-02) ─────────────────────────────────────────────
+    //
+    // These tests exercise the REAL Plan-02 advance_chain behavior.
+    // The sha2 placeholder produces a different output from the real Hmac<Sha256>
+    // implementation for the same input.  The test below pins the HMAC-SHA256
+    // output for a known key/head/event triple so it FAILS on the sha2 placeholder
+    // and PASSES only after the real implementation is in place.
+
+    /// Verify advance_chain produces the correct HMAC-SHA256 result for a known
+    /// key, genesis head, and event bytes.
+    ///
+    /// This test pins the EXPECTED output of the real `Hmac<Sha256>` computation
+    /// using TELEMETRY_CHAIN_DOMAIN + TELEMETRY_EVENT_DOMAIN domain separators.
+    /// It fails with the sha2 placeholder (which computes SHA-256 without a keyed
+    /// MAC) and passes only after the Plan-02 replacement.
+    ///
+    /// Expected value computed via:
+    ///   key = [0x42u8; 32]
+    ///   input fed to HMAC-SHA256 in order:
+    ///     TELEMETRY_CHAIN_DOMAIN || prev_head([0u8;32]) ||
+    ///     TELEMETRY_EVENT_DOMAIN || b"test-event"
+    ///   The expected head is the 32-byte HMAC output.
+    #[test]
+    fn advance_chain_uses_hmac_not_sha2_placeholder() {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
+        type HmacSha256 = Hmac<Sha256>;
+
+        // Compute the expected HMAC-SHA256 output independently.
+        let key = [0x42u8; 32];
+        let prev_head = [0u8; 32];
+        let event_bytes = b"test-event";
+        let mut mac = HmacSha256::new_from_slice(&key).unwrap();
+        mac.update(TELEMETRY_CHAIN_DOMAIN);
+        mac.update(&prev_head);
+        mac.update(TELEMETRY_EVENT_DOMAIN);
+        mac.update(event_bytes);
+        let expected: [u8; 32] = mac.finalize().into_bytes().into();
+
+        // advance_chain must produce the same result.
+        let mut chain = ChainState {
+            key: Zeroizing::new(key),
+            head: prev_head,
+            sequence: 0,
+        };
+        advance_chain(&mut chain, event_bytes);
+        assert_eq!(
+            chain.head, expected,
+            "advance_chain must use Hmac<Sha256> (TELEMETRY_CHAIN_DOMAIN || prev_head || \
+             TELEMETRY_EVENT_DOMAIN || event_bytes); sha2 placeholder produces a different value"
+        );
+    }
 }
