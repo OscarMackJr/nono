@@ -50,7 +50,12 @@ use crate::Result;
 /// Controls which security events are forwarded to the configured channel.
 /// Default is `Warning` (D-13): informational events are suppressed by default
 /// to reduce noise in a fleet deployment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+///
+/// Severity ordering is `Debug < Info < Warning < Error`, derived from variant
+/// declaration order via `PartialOrd`/`Ord`. The telemetry layer compares an
+/// event's severity against `min_severity` with this ordering (WR-02 / TELEM-04
+/// level filtering): an event emits only when `event_severity >= min_severity`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "PascalCase")]
 pub enum TelemetrySeverity {
     /// Emit all security events (PathDeny, NetworkDeny, LabelViolation, …).
@@ -551,6 +556,17 @@ mod tests {
             TelemetrySeverity::Warning,
             "D-13: default min_severity must be Warning"
         );
+    }
+
+    /// WR-02 / TELEM-04: TelemetrySeverity must order Debug < Info < Warning < Error
+    /// so the telemetry layer can compare an event's severity against min_severity.
+    #[test]
+    fn telemetry_severity_orders_debug_to_error() {
+        assert!(TelemetrySeverity::Debug < TelemetrySeverity::Info);
+        assert!(TelemetrySeverity::Info < TelemetrySeverity::Warning);
+        assert!(TelemetrySeverity::Warning < TelemetrySeverity::Error);
+        // Default (Warning) must be >= itself and emit at the default threshold.
+        assert!(TelemetrySeverity::Warning >= TelemetrySeverity::default());
     }
 
     /// Invariant 3 (84-PATTERNS.md / CR-02): MachineEgressPolicy with ONLY telemetry

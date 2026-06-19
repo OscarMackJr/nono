@@ -19,8 +19,11 @@
 #     Seeds a fresh path-deny event by running a nono confinement command that
 #     hits a denied path. Queries the Windows Application Event Log under the
 #     'nono' source for EventID in {10001..10005} in the last 5 minutes. Parses
-#     the event body as JSON and asserts all six named fields are present:
-#     EventType, AgentPid, PathHash, Host, SessionId, ChainHead.
+#     the event body as JSON and asserts the named fields required for the event's
+#     type. Universal: EventType, AgentPid, SessionId, ChainHead. Conditional (serde
+#     skip_serializing_if): PathHash for path-deny (10001), Host for network-deny
+#     (10002). The gate triggers a path-deny, so it asserts the universal set +
+#     PathHash (NOT Host, which is legitimately absent for path-deny) — CR-01 fix.
 #     NOTE: EventID 10003 (LabelViolation) is RESERVED-but-unemitted in Phase 84
 #     (Option B decision from 84-03-SUMMARY). Only 10001/10002/10004/10005 are
 #     emittable by the three wired sources. The gate asserts Id -ge 10001 -and
@@ -63,8 +66,13 @@ $script:EventIdNetworkDeny  = 10002
 $script:EventIdHookFail     = 10004
 $script:EventIdTelemetryDeg = 10005
 $script:TelemetryGateName   = 'telemetry-event-emit'
-# SC-1 JSON fields that must appear in the event body (D-11 named EventData minimum):
-$script:RequiredJsonFields  = @('EventType', 'AgentPid', 'PathHash', 'Host', 'SessionId', 'ChainHead')
+# SC-1 JSON fields that must appear in the event body (D-11 named EventData minimum).
+# Universal fields are present on EVERY SecurityEvent. PathHash and Host are
+# event-type-CONDITIONAL: SecurityEvent uses serde `skip_serializing_if = Option::is_none`,
+# so a path-deny event (10001) carries PathHash but NOT Host, and a network-deny event
+# (10002) carries Host but NOT PathHash. Asserting all six unconditionally made the gate
+# FAIL its own happy path (the gate triggers a path-deny, which has no Host field) — CR-01.
+$script:RequiredJsonFieldsUniversal = @('EventType', 'AgentPid', 'SessionId', 'ChainHead')
 # SC-3 raw path patterns (must NOT appear in event body):
 $script:RawPathPatternUser  = 'C:\\Users\\'
 # Broader Windows path pattern: drive-letter colon backslash, at least one component of 4+ chars
@@ -241,20 +249,32 @@ function Invoke-Gate {
         }
     }
 
-    # Assert all six SC-1 named fields are present.
-    foreach ($field in $script:RequiredJsonFields) {
+    # Build the event-type-conditional required-field set (CR-01 fix).
+    # Universal fields are always present; PathHash is required only for a path-deny
+    # event (10001) and Host only for a network-deny event (10002), because the
+    # SecurityEvent schema omits the inapplicable Option field via skip_serializing_if.
+    $requiredFields = @($script:RequiredJsonFieldsUniversal)
+    if ($eventId -eq $script:EventIdPathDeny) {
+        $requiredFields += 'PathHash'
+    } elseif ($eventId -eq $script:EventIdNetworkDeny) {
+        $requiredFields += 'Host'
+    }
+
+    # Assert the conditional SC-1 named fields are present.
+    foreach ($field in $requiredFields) {
         $fieldValue = $null
         try { $fieldValue = $parsed.$field } catch { $fieldValue = $null }
         if ($null -eq $fieldValue) {
             return [ordered]@{
                 gate      = $script:TelemetryGateName
                 verdict   = 'FAIL'
-                reason    = "SC-1 FAILED: required field '$field' is missing from event body (EventID $eventId) — SecurityEvent schema must include EventType, AgentPid, PathHash, Host, SessionId, ChainHead"
+                reason    = "SC-1 FAILED: required field '$field' is missing from event body (EventID $eventId) — expected fields for this event type: $($requiredFields -join ', ')"
                 detail    = [ordered]@{
                     assertion      = 'SC-1'
                     step           = 'field-check'
                     missingField   = $field
                     eventId        = $eventId
+                    requiredFields = $requiredFields -join ', '
                     bodyExcerpt    = ($body.Substring(0, [Math]::Min(200, $body.Length)))
                     parsedFields   = ($parsed | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name) -join ', '
                 }
@@ -358,14 +378,14 @@ function Invoke-Gate {
     return [ordered]@{
         gate      = $script:TelemetryGateName
         verdict   = 'PASS'
-        reason    = "SC-1 proven: Application log contains nono security event (EventID $eventId) with all six named JSON fields (EventType, AgentPid, PathHash, Host, SessionId, ChainHead). SC-3 proven: event body contains no raw Windows path strings (PathHash is a hex hash). SC-5 proven: ETW provider 'nono' detectable via logman."
+        reason    = "SC-1 proven: Application log contains nono security event (EventID $eventId) with all required named JSON fields for its type ($($requiredFields -join ', ')). SC-3 proven: event body contains no raw Windows path strings (PathHash is a hex hash). SC-5 proven: ETW provider 'nono' detectable via logman."
         detail    = [ordered]@{
             assertion           = 'SC-1 + SC-3 + SC-5'
             sc1Pass             = $sc1Pass
             sc1EventId          = $eventId
             sc1EventCount       = $eventCount
             sc1BodyExcerpt      = $bodyExcerpt
-            sc1FieldsVerified   = $script:RequiredJsonFields -join ', '
+            sc1FieldsVerified   = $requiredFields -join ', '
             sc3Pass             = $sc3Pass
             sc3RawUserPath      = $rawUserPathFound
             sc3RawBroadPath     = $rawBroadPathFound

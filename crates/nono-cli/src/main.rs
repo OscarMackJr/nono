@@ -157,12 +157,23 @@ fn main() {
     let legacy_network_warnings = collect_legacy_network_warnings();
     normalize_legacy_flag_env_vars();
     let cli = Cli::parse();
-    // Pass None for telemetry_config — MachineEgressPolicy is read later in
-    // app_runtime (it requires the HKLM registry key, which is Windows-only and
-    // not available at this early init point).  SecurityEventLayer uses the
-    // TelemetryConfig::default() (enabled=true, channel="Application",
-    // min_severity=Warning) per D-13 (default-ON).
-    init_tracing(&cli, None);
+    // TELEM-04 / WR-01: read the HKLM machine-policy telemetry config and thread
+    // it into the security-event layer so an admin's `TelemetryEnabled=0` opt-out,
+    // `min_severity`, and channel are actually honored. The registry IS available
+    // at this point (Cli is parsed); the prior `None` left the layer permanently
+    // on the default-ON config, making the policy decorative.
+    //
+    // Telemetry is non-fatal (D-14): a malformed/absent policy degrades to
+    // `TelemetryConfig::default()` (D-13 default-ON) — we never abort a run for a
+    // telemetry read. Egress-policy validity is enforced separately on the daemon
+    // path (D-07), so swallowing the egress error here does not weaken egress
+    // enforcement.
+    let telemetry_config = match nono::read_machine_egress_policy() {
+        Ok(Some(policy)) => Some(policy.telemetry),
+        Ok(None) => None,
+        Err(_) => None,
+    };
+    init_tracing(&cli, telemetry_config);
     init_theme(&cli);
     print_legacy_network_warnings(&legacy_network_warnings, cli.silent);
 

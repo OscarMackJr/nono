@@ -147,6 +147,23 @@ pub(crate) fn chain_head_hex(head: &[u8; 32]) -> String {
     head.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Map a [`SecurityEventType`] to its telemetry severity (WR-02 / TELEM-04).
+///
+/// All current denial events are `Warning`-level. This is the single point to
+/// raise an event's severity to `Error` should a future event type warrant it.
+/// The layer suppresses any event whose severity is below the policy's
+/// `min_severity` (see `on_event`).
+fn severity_for(t: &SecurityEventType) -> nono::TelemetrySeverity {
+    use nono::TelemetrySeverity;
+    match t {
+        SecurityEventType::PathDeny
+        | SecurityEventType::NetworkDeny
+        | SecurityEventType::LabelViolation
+        | SecurityEventType::HookFailClosed
+        | SecurityEventType::TelemetryDegraded => TelemetrySeverity::Warning,
+    }
+}
+
 // ── SecurityEventLayerInner ───────────────────────────────────────────────────
 
 struct SecurityEventLayerInner {
@@ -244,6 +261,13 @@ impl<S: Subscriber> Layer<S> for SecurityEventLayer {
             t if t.ends_with("telemetry_degraded") => SecurityEventType::TelemetryDegraded,
             _ => return, // Unknown sub-target — skip.
         };
+
+        // WR-02 / TELEM-04 level filtering: emit only when the event's severity
+        // meets the policy's min_severity threshold (Debug < Info < Warning < Error).
+        // Checked inside the same lock as `enabled` to avoid a config TOCTOU.
+        if severity_for(&event_type) < inner.config.min_severity {
+            return;
+        }
 
         // Extract structured fields via a field visitor.
         let mut visitor = SecurityEventVisitor::default();
@@ -355,6 +379,40 @@ mod tests {
             TELEMETRY_CHAIN_DOMAIN,
             AUDIT_CHAIN_DOMAIN,
             "telemetry CHAIN domain must differ from audit CHAIN domain (D-06)"
+        );
+    }
+
+    // ── Severity filtering (WR-02 / TELEM-04) ─────────────────────────────────
+
+    #[test]
+    fn severity_for_all_denial_types_is_warning() {
+        for t in [
+            SecurityEventType::PathDeny,
+            SecurityEventType::NetworkDeny,
+            SecurityEventType::LabelViolation,
+            SecurityEventType::HookFailClosed,
+            SecurityEventType::TelemetryDegraded,
+        ] {
+            assert_eq!(
+                severity_for(&t),
+                TelemetrySeverity::Warning,
+                "denial event {t:?} must be Warning severity"
+            );
+        }
+    }
+
+    #[test]
+    fn min_severity_filter_predicate_matches_policy_threshold() {
+        // The on_event guard is `severity_for(event) < min_severity → suppress`.
+        // Warning-level events emit at Debug/Info/Warning thresholds and are
+        // suppressed only at the Error threshold.
+        let event_sev = severity_for(&SecurityEventType::PathDeny); // Warning
+        assert!(event_sev >= TelemetrySeverity::Debug, "emits at Debug min");
+        assert!(event_sev >= TelemetrySeverity::Info, "emits at Info min");
+        assert!(event_sev >= TelemetrySeverity::Warning, "emits at Warning min (default)");
+        assert!(
+            event_sev < TelemetrySeverity::Error,
+            "Warning event is suppressed when min_severity=Error"
         );
     }
 
