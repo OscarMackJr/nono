@@ -29,7 +29,7 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 Phase: Milestone v3.0 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-06-19 — Milestone v3.0 completed and archived
+Last activity: 2026-06-19 — Completed quick task 260619-duw: scoped upstream v0.62..v0.64 delta, planted SEED-006
 
 ## Performance Metrics
 
@@ -121,6 +121,12 @@ None.
 
 - **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
 - **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260619-duw | Scope upstream v0.62..v0.64 delta and plant SEED-006 | 2026-06-19 | _pending_ | [260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla](./quick/260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla/) |
 
 ## Deferred Items
 
