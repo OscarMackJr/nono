@@ -42,10 +42,10 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Compliance / Telemetry (SEED-003, P2)
 
-- [ ] **TELEM-01**: Blocked/denied actions (path-deny, network-deny, label-violation, hook fail-closed) are emitted as structured security events to a custom **Application-tier Windows Event Log** channel with distinct EventIDs and named `EventData` fields that Splunk (`XmlWinEventLog`) and Microsoft Sentinel parse as columns.
-- [ ] **TELEM-02**: Security events carry an in-session **HMAC-SHA256** chain (`ChainHead` exposed as a named field) for tamper-evidence; the tamper boundary is documented as Windows Event Forwarding, with cross-session/cryptographic-local anchoring explicitly deferred to SEED-005 (ADR recorded).
-- [ ] **TELEM-03**: Telemetry emission redacts secrets, tokens, and sensitive payload content from event fields — a blocked-action event never leaks credentials or full secret values into the log.
-- [ ] **TELEM-04**: The emitter is implemented in `nono-cli` as a `tracing::Layer` (not in the `nono` library's `DiagnosticFormatter`), preserving the library/CLI boundary; its enable/channel/level config is read from machine policy.
+- [x] **TELEM-01**: Blocked/denied actions (path-deny, network-deny, label-violation, hook fail-closed) are emitted as structured security events to a custom **Application-tier Windows Event Log** channel with distinct EventIDs and named `EventData` fields that Splunk (`XmlWinEventLog`) and Microsoft Sentinel parse as columns.
+- [x] **TELEM-02**: Security events carry an in-session **HMAC-SHA256** chain (`ChainHead` exposed as a named field) for tamper-evidence; the tamper boundary is documented as Windows Event Forwarding, with cross-session/cryptographic-local anchoring explicitly deferred to SEED-005 (ADR recorded).
+- [x] **TELEM-03**: Telemetry emission redacts secrets, tokens, and sensitive payload content from event fields — a blocked-action event never leaks credentials or full secret values into the log.
+- [x] **TELEM-04**: The emitter is implemented in `nono-cli` as a `tracing::Layer` (not in the `nono` library's `DiagnosticFormatter`), preserving the library/CLI boundary; its enable/channel/level config is read from machine policy.
 
 ---
 
@@ -105,7 +105,7 @@ Which phases cover which requirements.
 | EGRESS-02 | Phase 83 | Pending (83-02) |
 | EGRESS-03 | Phase 83 | Complete (83-01) |
 | EGRESS-04 | Phase 83 | Complete |
-| TELEM-01 | Phase 84 | Pending |
-| TELEM-02 | Phase 84 | Pending |
-| TELEM-03 | Phase 84 | Pending |
-| TELEM-04 | Phase 84 | Pending |
+| TELEM-01 | Phase 84 | Complete |
+| TELEM-02 | Phase 84 | Complete |
+| TELEM-03 | Phase 84 | Complete |
+| TELEM-04 | Phase 84 | Complete |

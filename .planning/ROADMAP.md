@@ -150,7 +150,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
   4. The emitter is implemented as a `tracing::Layer` in `nono-cli/src/telemetry/` (not in the `nono` library's `DiagnosticFormatter`), registered in `init_tracing()`, and reads its channel/level config from the machine policy struct
   5. `verify-dark.ps1 --gate telemetry-event-emit` emits a PASS verdict, covering: clean-host event appearance in Application log with correct EventID and named fields, absence of raw path strings in the event body, and ETW provider emission detectable via `logman`
 **Plans**: 4 plans
-  - [ ] 84-01-PLAN.md — Schema + chain + redaction core: TelemetryConfig extension to MachineEgressPolicy, SecurityEvent schema, HMAC ChainState (sha2 placeholder), PathCategory, D-14 degrade behavior (TELEM-01/02/03/04)
+  - [x] 84-01-PLAN.md — Schema + chain + redaction core: TelemetryConfig extension to MachineEgressPolicy, SecurityEvent schema, HMAC ChainState (sha2 placeholder), PathCategory, D-14 degrade behavior (TELEM-01/02/03/04)
   - [ ] 84-02-PLAN.md — Dual-emit backend + init_tracing registration: real RegisterEventSourceW/ReportEventW emitter, Hmac<Sha256> chain replacing sha2 placeholder, dep adds hmac/tracing-etw/eventlog, SecurityEventLayer registered in all three init_tracing arms (TELEM-01/02/04)
   - [ ] 84-03-PLAN.md — Denial-source wiring + tamper-evidence ADR: path-deny/network-deny/hook-fail-closed tracing::warn! instrumentation, docs/adr/telemetry-tamper-evidence.md (TELEM-01/02/03)
   - [ ] 84-04-PLAN.md — Dark Factory gate telemetry-event-emit (SC-1 named fields + SC-3 no-raw-path + SC-5 ETW logman) + cross-target clippy verification (TELEM-01/02/03/04)
@@ -162,7 +162,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 |-------|----------------|--------|-----------|
 | 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
 | 83. Machine Policy Spine + Egress Control | 4/4 | Complete    | 2026-06-19 |
-| 84. SIEM/EDR Telemetry | 0/4 | Not started | - |
+| 84. SIEM/EDR Telemetry | 1/4 | In Progress|  |
 
 ## References
 

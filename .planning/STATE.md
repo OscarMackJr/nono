@@ -4,14 +4,14 @@ milestone: v3.0
 milestone_name: Enterprise Hardening I
 status: executing
 stopped_at: Phase 84 context gathered
-last_updated: "2026-06-19T02:30:16.856Z"
-last_activity: 2026-06-19 -- Phase 84 planning complete
+last_updated: "2026-06-19T03:13:16.679Z"
+last_activity: 2026-06-19
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 12
-  completed_plans: 8
-  percent: 67
+  completed_plans: 9
+  percent: 75
 ---
 
 # Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
@@ -22,16 +22,16 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 83 — machine-policy-spine-egress-control
+**Current Focus:** Phase 84 — siem-edr-telemetry
 
 ## Current Position
 
-Phase: 84
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-19 -- Phase 84 planning complete
+Phase: 84 (siem-edr-telemetry) — EXECUTING
+Plan: 2 of 4
+Status: Plan 01 COMPLETE — ready for Plan 02
+Last activity: 2026-06-19 -- Phase 84 Plan 01 complete (schema + TelemetryConfig + ChainState)
 
-Progress: [██████████] 100%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [██████████] 100%
 *Updated after each plan completion*
 | Phase 83 P02 | 45m | 2 tasks | 3 files |
 | Phase 83 P04 | 30m | 2 tasks | 1 files |
+| Phase 84 P01 | 35m | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -63,6 +64,15 @@ Progress: [██████████] 100%
 | Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
 | Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
 | Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
+
+### Decisions (Phase 84 Plan 01)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-MSRV: MSRV bump 1.77→1.82 DEFERRED to Plan 84-02 | 84-01 | tracing-etw 0.2.3 requires Rust 1.82; Plan 01 does not add tracing-etw to Cargo.toml so no MSRV conflict exists yet. Plan 02 edits CLAUDE.md and workspace Cargo.toml atomically when adding the dep. |
+| D-HMAC-PLACEHOLDER: sha2-based advance_chain placeholder in Plan 01 | 84-01 | hmac crate not yet in Cargo.toml (operator checkpoint passed for crates but not yet added); sha2 used as placeholder preserving domain separators; Plan 02 replaces with Hmac<Sha256> |
+| D-CLASSIFY-MULTIPASS: classify_path uses multi-pass component loop | 84-01 | Single-pass ordering was fragile (/var/lib/keystore returned SystemPath because 'lib' appeared before 'keystore'); multi-pass ensures CredentialPath wins regardless of component position |
+| Package legitimacy: hmac 0.13.0 / tracing-etw 0.2.3 / eventlog 0.4.0 APPROVED | 84-01 | Operator-verified all three crates via crates.io API before any Cargo.toml edits (Task 1 checkpoint resolved) |
 
 ### Decisions (Phase 83)
 
@@ -99,6 +109,6 @@ Items acknowledged and carried forward from v2.13 close (2026-06-18):
 
 ## Session Continuity
 
-Last session: 2026-06-19T01:43:04.393Z
-Stopped at: Phase 84 context gathered
-Resume file: .planning/phases/84-siem-edr-telemetry/84-CONTEXT.md
+Last session: 2026-06-19T03:00:00.000Z
+Stopped at: Phase 84 Plan 01 complete — D-MSRV recorded for Plan 02
+Resume file: .planning/phases/84-siem-edr-telemetry/84-01-SUMMARY.md
