@@ -42,10 +42,10 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Compliance / Telemetry (SEED-003, P2)
 
-- [~] **TELEM-01** (PARTIAL — gap_found 2026-06-19): Blocked/denied actions (path-deny, network-deny, label-violation, hook fail-closed) are emitted as structured security events to a custom **Application-tier Windows Event Log** channel with distinct EventIDs and named `EventData` fields that Splunk (`XmlWinEventLog`) and Microsoft Sentinel parse as columns. Emission implemented and sound, but the SC-5 dark-factory gate (`telemetry-event-emit.ps1`) structurally fails its own happy path (CR-01: asserts `Host` on path-deny events where `host` is serde-skipped). Gate must be fixed before TELEM-01 is provably satisfied.
+- [x] **TELEM-01** (SATISFIED structural; live gate host-gated): Blocked/denied actions (path-deny, network-deny, label-violation, hook fail-closed) are emitted as structured security events to a custom **Application-tier Windows Event Log** channel with distinct EventIDs and named `EventData` fields that Splunk (`XmlWinEventLog`) and Microsoft Sentinel parse as columns. CR-01 closed 2026-06-19 (gate field assertions now event-type-conditional; gate can structurally PASS). Live gate PASS on a provisioned host is host-gated Dark Factory tech-debt (84-HUMAN-UAT.md item 1).
 - [x] **TELEM-02**: Security events carry an in-session **HMAC-SHA256** chain (`ChainHead` exposed as a named field) for tamper-evidence; the tamper boundary is documented as Windows Event Forwarding, with cross-session/cryptographic-local anchoring explicitly deferred to SEED-005 (ADR recorded).
 - [x] **TELEM-03**: Telemetry emission redacts secrets, tokens, and sensitive payload content from event fields — a blocked-action event never leaks credentials or full secret values into the log.
-- [~] **TELEM-04** (PARTIAL — gap_found 2026-06-19): The emitter is implemented in `nono-cli` as a `tracing::Layer` (not in the `nono` library's `DiagnosticFormatter`), preserving the library/CLI boundary; its enable/channel/level config is read from machine policy. Layer placement is correct, but the machine-policy `TelemetryConfig` is NEVER threaded into the layer (WR-01: `init_tracing(&cli, None)` hardcoded; layer permanently holds `TelemetryConfig::default()` enabled=true). Admin `TelemetryEnabled=0` opt-out, `min_severity`, and `channel` are all inert; daemon path has zero telemetry wiring. Config-from-policy must be wired before TELEM-04 is satisfied.
+- [x] **TELEM-04** (SATISFIED structural; live opt-out host-gated): The emitter is implemented in `nono-cli` as a `tracing::Layer` (not in the `nono` library's `DiagnosticFormatter`), preserving the library/CLI boundary; its enable/channel/level config is read from machine policy. WR-01 closed 2026-06-19: `main.rs` reads `read_machine_egress_policy()` and threads `policy.telemetry` into `init_tracing`, so admin `TelemetryEnabled=0` opt-out is live. WR-02 closed: `TelemetrySeverity: Ord` + `severity_for()`/`min_severity` guard make level filtering functional. Channel is fixed to `Application` in v3.0 by milestone decision (no wevtutil manifest). Live HKLM-to-emit opt-out proof is host-gated (84-HUMAN-UAT.md items 2-3). Follow-up: daemon (`nono-agentd`) does not yet emit `nono_security::*` events — distinct future emission domain, not a Phase 84 success criterion.
 
 ---
 
@@ -105,7 +105,7 @@ Which phases cover which requirements.
 | EGRESS-02 | Phase 83 | Pending (83-02) |
 | EGRESS-03 | Phase 83 | Complete (83-01) |
 | EGRESS-04 | Phase 83 | Complete |
-| TELEM-01 | Phase 84 | Partial — gap (CR-01 gate) |
+| TELEM-01 | Phase 84 | Complete (structural; live gate host-gated) |
 | TELEM-02 | Phase 84 | Complete |
 | TELEM-03 | Phase 84 | Complete |
-| TELEM-04 | Phase 84 | Partial — gap (WR-01 config unwired) |
+| TELEM-04 | Phase 84 | Complete (structural; live opt-out host-gated) |

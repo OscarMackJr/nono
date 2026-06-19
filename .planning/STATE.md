@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v3.0
 milestone_name: Enterprise Hardening I
 status: executing
-stopped_at: Phase 84 verification gaps_found — CR-01 (gate happy-path) + WR-01 (TELEM-04 config unwired); gap closure pending
-last_updated: "2026-06-19T03:00:00.000Z"
-last_activity: 2026-06-19 -- Phase 84 executed; code-review + verifier confirmed 2 blockers; nono-ffi build regression fixed
+stopped_at: Phase 84 structurally verified 5/5 (CR-01 + WR-01/02 closed inline); human_needed — live SIEM gate host-gated; awaiting approve to mark complete
+last_updated: "2026-06-19T03:35:00.000Z"
+last_activity: 2026-06-19 -- Phase 84 gap closure: CR-01 gate + WR-01 config-from-policy + WR-02 level-filter fixed; nono-ffi build regression fixed; re-verified 5/5 structural
 progress:
   total_phases: 3
   completed_phases: 2
@@ -22,16 +22,16 @@ See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
 
-**Current Focus:** Phase 84 — siem-edr-telemetry (plans done, VERIFICATION gaps_found — gap closure pending)
+**Current Focus:** Phase 84 — siem-edr-telemetry (structurally verified 5/5; human_needed live SIEM UAT host-gated)
 
 ## Current Position
 
-Phase: 84 (siem-edr-telemetry) — all 4 plans executed; verification gaps_found
-Plan: 4 of 4 executed; 2 blockers open (CR-01 gate, WR-01 TELEM-04 config)
-Status: Gap closure required before phase/milestone complete (see 84-VERIFICATION.md, 84-REVIEW.md)
+Phase: 84 (siem-edr-telemetry) — all 4 plans executed; re-verified 5/5 structural after gap closure
+Plan: 4 of 4 executed; CR-01 + WR-01 + WR-02 all CLOSED inline 2026-06-19
+Status: human_needed — 3 live-host UAT items (84-HUMAN-UAT.md) host-gated per Dark Factory policy; awaiting operator "approved" to mark phase/milestone complete. Follow-up: daemon-side telemetry emission (not a Phase 84 criterion).
 Last activity: 2026-06-19
 
-Progress: [███████░░░] 67% (2/3 phases verified)
+Progress: [█████████░] ~95% (Phase 84 structural pass; live UAT + milestone close pending)
 
 ## Performance Metrics
 

@@ -26,7 +26,7 @@ granularity: standard
 - ✅ **v2.11 Clean-Host Distribution Cleanup + UPST8** — Phases 67-70 (shipped 2026-06-13) — see [`milestones/v2.11-ROADMAP.md`](milestones/v2.11-ROADMAP.md)
 - ✅ **v2.12 AI Agent Abstraction** — Phases 71-75 (shipped 2026-06-16; tag `v2.12`) — see [`milestones/v2.12-ROADMAP.md`](milestones/v2.12-ROADMAP.md)
 - ✅ **v2.13 Carry-Forward Closeout (Dark Factory)** — Phases 76-81 (shipped 2026-06-18; tag `v2.13`) — see [`milestones/v2.13-ROADMAP.md`](milestones/v2.13-ROADMAP.md)
-- 🔲 **v3.0 Enterprise Hardening I (Deploy · Control · Compliance)** — Phases 82-84 (82-83 complete; Phase 84 verification gaps_found 2026-06-19 — CR-01 gate happy-path + WR-01 TELEM-04 config unwired; see 84-VERIFICATION.md)
+- 🔲 **v3.0 Enterprise Hardening I (Deploy · Control · Compliance)** — Phases 82-84 (82-83 complete; Phase 84 structurally verified 5/5 2026-06-19 after CR-01 + WR-01/02 gap closure — human_needed: live SIEM gate runs host-gated per Dark Factory policy, see 84-HUMAN-UAT.md)
 
 ## Phases
 
@@ -101,7 +101,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 - [x] **Phase 82: Fleet Deployment Infrastructure** — Silent MSI install, machine-wide PATH, ProgramData root, cert install, health command, Event Log source registration
  (completed 2026-06-18)
 - [x] **Phase 83: Machine Policy Spine + Egress Control** — HKLM reader (fail-secure), proxy+WFP unified from one source, ADMX template, AI-provider presets, DNS-component wildcard matching (completed 2026-06-18)
-- [ ] **Phase 84: SIEM/EDR Telemetry** — SecurityEventLayer tracing::Layer, structured Event Log events, HMAC tamper-evidence chain, secret redaction, tamper-evidence ADR. ⚠ Verification gaps_found 2026-06-19: CR-01 (gate fails own happy-path) + WR-01 (TELEM-04 machine-policy config never threaded into layer) + daemon path unwired. TELEM-02/03 satisfied; TELEM-01/04 partial. Gap closure pending.
+- [ ] **Phase 84: SIEM/EDR Telemetry** — SecurityEventLayer tracing::Layer, structured Event Log events, HMAC tamper-evidence chain, secret redaction, tamper-evidence ADR. Structurally verified 5/5 2026-06-19 (CR-01 gate + WR-01 config-from-policy + WR-02 level-filtering all closed inline; nono-ffi build regression fixed). TELEM-01..04 satisfied (structural). human_needed: live SIEM gate / opt-out runs are host-gated (84-HUMAN-UAT.md). Follow-up: daemon-side telemetry emission (not a Phase 84 criterion).
 
 ## Phase Details
 
@@ -162,7 +162,7 @@ v2.8 UPST7 + v2.7 Drain & Release (Phases 53-59, tags `v2.8`+`v0.57.5`); v2.9 Wi
 |-------|----------------|--------|-----------|
 | 82. Fleet Deployment Infrastructure | 4/4 | Complete   | 2026-06-18 |
 | 83. Machine Policy Spine + Egress Control | 4/4 | Complete    | 2026-06-19 |
-| 84. SIEM/EDR Telemetry | 4/4 | Gaps found | 2026-06-19 |
+| 84. SIEM/EDR Telemetry | 4/4 | Verified (struct) — human UAT | 2026-06-19 |
 
 ## References
 
