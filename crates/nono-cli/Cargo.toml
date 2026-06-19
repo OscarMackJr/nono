@@ -52,6 +52,10 @@ colored = "3"
 similar = "2"
 rand = "0.10"
 which = "8"
+# Phase 84 D-05/D-06: HMAC-SHA256 for per-session tamper-evidence chain.
+# Cross-platform — the chain lives entirely in nono-cli/src/telemetry/.
+# Operator-approved 2026-06-19 (RustCrypto/MACs @ 0.13.0, crates.io).
+hmac = "0.13"
 toml = "1.0"
 dirs = "6"
 walkdir = "2"
@@ -151,6 +155,13 @@ keyring = { version = "3", features = ["windows-native"], optional = true }
 ferrisetw = "1.2"
 subtle = "2"
 getrandom = { workspace = true }
+# Phase 84 D-01.1: ETW TraceLogging layer for SIEM/EDR dual-emit.
+# Operator-approved 2026-06-19 (Microsoft/ETW-Rust @ 0.2.3, MSRV 1.82, crates.io).
+# D-MSRV: MSRV bumped 1.77→1.82 atomically with this dependency (STATE.md decision).
+tracing-etw = "0.2"
+# Phase 84 D-01.2: Windows Application Event Log writer (RegisterEventSourceW pattern).
+# Operator-approved 2026-06-19 (locryus/eventlog @ 0.4.0, MIT/Apache-2.0, crates.io).
+eventlog = "0.4"
 
 [build-dependencies]
 toml = "1.0"
