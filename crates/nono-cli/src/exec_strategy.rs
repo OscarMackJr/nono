@@ -430,6 +430,68 @@ const fn linux_child_requires_dumpable(capability_elevation: bool, network_notif
     capability_elevation || network_notify
 }
 
+/// What send-family (sendto/sendmsg/sendmmsg) seccomp filter the child should install.
+///
+/// Used by [`af_unix_send_filter_action`] to centralize the gate logic used by
+/// both the child's fork arm (installs the filter, optionally sends a notify fd)
+/// and the parent's fork arm (decides whether to recv a notify fd). Both sides
+/// MUST evaluate the same predicate from the same `config` to avoid deadlocking
+/// on `recv_fd` / `send_fd` mismatches.
+///
+/// # Invariant
+///
+/// When `has_unix_grants` is true, `action` is `UserNotify` — the USER_NOTIF
+/// AF_UNIX filter is installed and a notify fd is exchanged between child and parent.
+/// When `has_unix_grants` is false and `is_pathname` is true, `action` is
+/// `StaticEperm` — a static EPERM filter for send-family syscalls is installed,
+/// and NO notify fd is exchanged. In `Off` mode (neither proxy nor pathname),
+/// `action` is `NoFilter` — no filter is installed and no notify fd is exchanged.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfUnixSendFilterAction {
+    /// Install nothing. Default supervised mode with no AF_UNIX mediation.
+    NoFilter,
+    /// Install static EPERM filter for send-family syscalls (no notify fd).
+    /// Applies when pathname mediation is active but no unix-socket grants exist.
+    StaticEperm,
+    /// Install USER_NOTIF filter (proxy or pathname+grants); exchange notify fd.
+    UserNotify,
+}
+
+/// Compute the send-family seccomp filter action for a given supervisor config.
+///
+/// This is the single source of truth for the three-way gate used by BOTH the
+/// child (filter install) and the parent (recv_fd coordination). Keeping it as
+/// a pure function makes the logic unit-testable and prevents child/parent skew.
+///
+/// # Semantics
+///
+/// - `proxy_fallback=true` → always `UserNotify` (proxy handles send-family via USER_NOTIF)
+/// - `is_pathname=true, has_grants=true` → `UserNotify` (AF_UNIX USER_NOTIF with grants)
+/// - `is_pathname=true, has_grants=false` → `StaticEperm` (no grants: static deny, no fd)
+/// - `is_pathname=false` (Off mode) → `None` (no filter, default networking intact)
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn af_unix_send_filter_action(
+    proxy_fallback: bool,
+    mediation: crate::profile::LinuxAfUnixMediation,
+    has_unix_grants: bool,
+) -> AfUnixSendFilterAction {
+    if proxy_fallback {
+        return AfUnixSendFilterAction::UserNotify;
+    }
+    if mediation.is_pathname() {
+        if has_unix_grants {
+            AfUnixSendFilterAction::UserNotify
+        } else {
+            AfUnixSendFilterAction::StaticEperm
+        }
+    } else {
+        // Off mode: no AF_UNIX mediation requested. Install nothing.
+        AfUnixSendFilterAction::NoFilter
+    }
+}
+
 /// Execute a command using the Direct strategy (exec, nono disappears).
 ///
 /// This is the original behavior: apply sandbox, then exec into the command.
@@ -1217,14 +1279,25 @@ pub fn execute_supervised(
                     }
                 }
 
+                // Determine the send-family seccomp filter action using the
+                // centralized helper. Both child and parent MUST use the same
+                // predicate (af_unix_send_filter_action) with the same config
+                // so the notify-fd send/recv are always in sync.
+                let has_unix_grants = !config.unix_socket_allowlist.is_empty();
+                let send_filter_action = af_unix_send_filter_action(
+                    config.seccomp_proxy_fallback,
+                    config.af_unix_mediation,
+                    has_unix_grants,
+                );
+
                 // If the parent determined that network seccomp-notify is
                 // needed, install exactly one connect/bind notify filter and
                 // send its fd to the parent. Proxy fallback uses the stricter
-                // proxy filter; V4+ AF_UNIX mediation uses an AF_UNIX-only
-                // policy filter that lets non-AF_UNIX traffic continue to the
-                // existing Landlock/network policy.
+                // proxy filter; V4+ AF_UNIX mediation with grants uses an
+                // AF_UNIX-only policy filter that lets non-AF_UNIX traffic
+                // continue to the existing Landlock/network policy.
                 let install_network_notify =
-                    config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname();
+                    send_filter_action == AfUnixSendFilterAction::UserNotify;
                 if install_network_notify && nono::sandbox::is_wsl2() {
                     let msg = b"nono: WSL2 detected, skipping seccomp proxy filter (proxy network filtering unavailable)\n";
                     unsafe {
@@ -1287,20 +1360,33 @@ pub fn execute_supervised(
                 }
 
                 // D-01 no-grant path: install a static EPERM filter for send-family
-                // syscalls when AF_UNIX pathname mediation is configured but there are
-                // no explicit pathname grants (is_pathname() is false). This closes the
-                // SOCK_DGRAM bypass where a child holding an existing AF_UNIX socket fd
-                // could call sendto() → SECCOMP_RET_ALLOW before sandbox lock-down.
-                if !config.seccomp_proxy_fallback && !config.af_unix_mediation.is_pathname() {
-                    // No grant path: install static EPERM filter for send-family syscalls.
-                    // Only install when NOT using proxy fallback (proxy filter handles sendto
-                    // via USER_NOTIF already) and NOT in pathname mode (pathname mode uses the
-                    // grant-present USER_NOTIF filter installed above).
-                    // We install this best-effort — if it fails, log but don't abort.
-                    // The seccomp filter is defense-in-depth here; Landlock still applies.
+                // syscalls only when ALL of:
+                //   1. AF_UNIX pathname mediation is active (is_pathname() = true), AND
+                //   2. No unix-socket grants are present (unix_socket_allowlist is empty).
+                // This closes the SOCK_DGRAM bypass where a child holding an existing
+                // AF_UNIX socket fd could call sendto() → SECCOMP_RET_ALLOW before
+                // sandbox lock-down.
+                //
+                // IMPORTANT: This must NOT install in the default Off mode. In Off mode
+                // the child has no AF_UNIX mediation and the filter would blanket-EPERM
+                // all datagram sends (UDP/DNS/QUIC) even under NetworkMode::AllowAll —
+                // that was the CR-01 regression.
+                //
+                // WR-02 accepted limitation: if install fails, the child writes a
+                // warning to stderr and continues without the filter. On this code path
+                // AF_UNIX pathname mediation was explicitly requested, so failing open
+                // leaves the SOCK_DGRAM bypass open. Landlock V4 does NOT backstop
+                // AF_UNIX sends — this is a real residual risk documented here and in
+                // the Phase 87 verification report. Failing closed (_exit(126)) was
+                // considered but rejected: a kernel that supports pathname mediation
+                // (Landlock V4) but not prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER) is
+                // exceedingly rare; treating it as fatal would break legitimate
+                // deployments. Operators on kernels without seccomp-BPF must understand
+                // this limitation.
+                if send_filter_action == AfUnixSendFilterAction::StaticEperm {
                     if let Err(_e) = nono::sandbox::install_seccomp_af_unix_nogrant_filter() {
                         const MSG_NOGRANT: &[u8] =
-                            b"nono: AF_UNIX no-grant seccomp filter not available\n";
+                            b"nono: AF_UNIX no-grant seccomp filter not available (WR-02: bypass residual risk on this kernel)\n";
                         // SAFETY: write is async-signal-safe.
                         unsafe {
                             libc::write(
@@ -1493,11 +1579,21 @@ pub fn execute_supervised(
             };
 
             // On Linux: if the parent determined seccomp proxy fallback is needed,
-            // receive the proxy notify fd from the child. Only attempt recv when
-            // we know the child will send it (both sides use the same flag).
+            // receive the proxy notify fd from the child. MUST use the same
+            // af_unix_send_filter_action predicate as the child to avoid deadlock:
+            // the child sends a fd only when action == UserNotify, so the parent
+            // must recv only when action == UserNotify. Using a different predicate
+            // here would cause the parent to block on recv_fd() waiting for a fd
+            // the child never sends.
             #[cfg(target_os = "linux")]
-            let proxy_notify_fd: Option<OwnedFd> =
-                if config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname() {
+            let proxy_notify_fd: Option<OwnedFd> = {
+                let has_unix_grants_parent = !config.unix_socket_allowlist.is_empty();
+                let parent_send_action = af_unix_send_filter_action(
+                    config.seccomp_proxy_fallback,
+                    config.af_unix_mediation,
+                    has_unix_grants_parent,
+                );
+                if parent_send_action == AfUnixSendFilterAction::UserNotify {
                     if let Some(ref sup_sock) = supervisor_sock {
                         match sup_sock.recv_fd() {
                             Ok(fd) => {
@@ -1514,7 +1610,8 @@ pub fn execute_supervised(
                     }
                 } else {
                     None
-                };
+                }
+            };
 
             // Set up signal forwarding.
             setup_signal_forwarding(child, pty_proxy.as_ref().map(|p| p.poll_fds().0));
@@ -5143,5 +5240,154 @@ mod tests {
         assert!(dir.exists(), "shim dir should exist before drop");
         drop(shim);
         assert!(!dir.exists(), "shim dir should be removed on drop");
+    }
+
+    // ── CR-01 regression guard: af_unix_send_filter_action gate logic ───────
+    //
+    // These tests assert the gate logic for the send-family seccomp filter
+    // selection. They do NOT require Linux kernel execution — they test the
+    // pure decision function used by both child and parent. Regression
+    // prevention for the CR-01 over-blocking bug where `!is_pathname()` was
+    // used instead of `is_pathname() && !has_grants`, causing the static-EPERM
+    // filter to install in the default Off mode and break UDP/DNS in supervised
+    // runs.
+    #[cfg(target_os = "linux")]
+    mod af_unix_send_filter_action_tests {
+        use super::super::{af_unix_send_filter_action, AfUnixSendFilterAction};
+        use crate::profile::LinuxAfUnixMediation;
+
+        // CR-01 regression guard: Off mode must NEVER install a filter.
+        // This is the exact scenario that was broken: default supervised runs
+        // (no proxy, no pathname mediation) were installing the static-EPERM
+        // filter and blocking all UDP sends.
+        #[test]
+        fn off_mode_no_proxy_no_grants_installs_nothing() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Off, false),
+                AfUnixSendFilterAction::NoFilter,
+                "Off mode with no grants must install nothing (CR-01 regression guard)"
+            );
+        }
+
+        // Off mode with grants present should also install nothing.
+        // Grants are ignored when mediation is Off — Off means "no AF_UNIX filter".
+        #[test]
+        fn off_mode_no_proxy_with_grants_installs_nothing() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Off, true),
+                AfUnixSendFilterAction::NoFilter,
+                "Off mode with grants must still install nothing"
+            );
+        }
+
+        // Pathname mode with grants → USER_NOTIF filter (notify fd exchanged).
+        #[test]
+        fn pathname_mode_with_grants_installs_user_notif() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Pathname, true),
+                AfUnixSendFilterAction::UserNotify,
+                "Pathname + grants must use USER_NOTIF filter"
+            );
+        }
+
+        // Pathname mode with no grants → static EPERM filter (no notify fd).
+        // This is the D-01 no-grant path: closes the SOCK_DGRAM bypass.
+        #[test]
+        fn pathname_mode_no_grants_installs_static_eperm() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Pathname, false),
+                AfUnixSendFilterAction::StaticEperm,
+                "Pathname + no grants must use static-EPERM filter (no notify fd)"
+            );
+        }
+
+        // Proxy fallback → always USER_NOTIF, regardless of mediation or grants.
+        #[test]
+        fn proxy_fallback_always_user_notif() {
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Off, false),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Off, no grants)"
+            );
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Pathname, false),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Pathname, no grants)"
+            );
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Pathname, true),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Pathname, with grants)"
+            );
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Off, true),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Off, with grants)"
+            );
+        }
+
+        // Exhaustive table-driven coverage: all (proxy, mediation, grants) triples.
+        // Ensures no unintended action for any combination.
+        #[test]
+        fn exhaustive_gate_table() {
+            let cases: &[(bool, LinuxAfUnixMediation, bool, AfUnixSendFilterAction)] = &[
+                // (proxy_fallback, mediation, has_grants, expected)
+                (
+                    false,
+                    LinuxAfUnixMediation::Off,
+                    false,
+                    AfUnixSendFilterAction::NoFilter,
+                ),
+                (
+                    false,
+                    LinuxAfUnixMediation::Off,
+                    true,
+                    AfUnixSendFilterAction::NoFilter,
+                ),
+                (
+                    false,
+                    LinuxAfUnixMediation::Pathname,
+                    false,
+                    AfUnixSendFilterAction::StaticEperm,
+                ),
+                (
+                    false,
+                    LinuxAfUnixMediation::Pathname,
+                    true,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Off,
+                    false,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Off,
+                    true,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Pathname,
+                    false,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Pathname,
+                    true,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+            ];
+            for (proxy, med, grants, expected) in cases {
+                assert_eq!(
+                    af_unix_send_filter_action(*proxy, *med, *grants),
+                    *expected,
+                    "gate mismatch: proxy={proxy} mediation={med:?} has_grants={grants}"
+                );
+            }
+        }
     }
 }

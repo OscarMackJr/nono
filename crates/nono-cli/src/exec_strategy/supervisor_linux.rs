@@ -995,6 +995,25 @@ pub(super) fn handle_network_notification(
     }
 
     // All sockaddrs allowed.
+    //
+    // WR-01 accepted limitation (TOCTOU on msg_name/msg_namelen): this
+    // CONTINUE response lets the kernel re-execute the syscall, which re-reads
+    // the destination address from child memory. A multi-threaded sandboxed
+    // child could swap the sockaddr pointer between our read and the kernel's
+    // re-read, defeating the pathname allowlist for the actual send. This window
+    // exists because SECCOMP_USER_NOTIF_FLAG_CONTINUE cannot pin child memory.
+    // It is accepted for the same reason as the connect/bind paths: the single-
+    // threaded agent model makes concurrent memory mutation extremely unlikely in
+    // practice; the alternative (emulating sendto without CONTINUE) would require
+    // a privileged kernel bypass not available at this ABI level. See also the
+    // doc warning in `read_msghdr_dest` and Phase 87 REVIEW WR-01.
+    //
+    // WR-03 accepted limitation (sendmmsg all-or-nothing): sendmmsg mediation is
+    // all-or-nothing — we ALLOW or DENY the entire batch. On ALLOW via CONTINUE
+    // the kernel sends all messages; there is no mechanism to allow message[0..k]
+    // and deny message[k]. This is an inherent constraint of USER_NOTIF CONTINUE:
+    // the kernel cannot be told "send N of M messages". Callers should not assume
+    // per-message enforcement for sendmmsg. See Phase 87 REVIEW WR-03.
     if let Err(e) = continue_notif(notify_fd, notif.id) {
         debug!("continue_notif failed for network notification: {}", e);
         // Must respond to avoid leaving the child blocked. Propagate if

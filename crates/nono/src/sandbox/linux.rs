@@ -2670,20 +2670,46 @@ pub fn read_notif_sockaddr(pid: u32, addr_ptr: u64, addrlen: u64) -> Result<Sock
 /// Returns `None` if `msg_name` is NULL (no destination address, meaning
 /// the socket is already connected and the send does not specify a target).
 ///
+/// # Architecture portability
+///
+/// Field offsets and sizes are derived at compile time from the `libc::msghdr`
+/// layout via `core::mem::offset_of!` and `core::mem::size_of`, so the read
+/// is correct on x86_64, aarch64, riscv64, and 32-bit LP32 targets.
+/// This is the WR-04 fix: the original code hard-coded `MSGHDR_MIN_READ = 12`
+/// (valid only on LP64 platforms) rather than deriving from the struct.
+///
 /// # Errors
 ///
 /// Returns an error if reading `/proc/PID/mem` fails, or if the `msghdr`
 /// layout is too short to contain the `msg_name` and `msg_namelen` fields.
-#[must_use = "Result must be checked — None means connected socket (fast-path allow)"]
+#[must_use = "Result must be checked — None means msg_name was NULL (connected socket)"]
 pub fn read_msghdr_dest(pid: u32, msghdr_ptr: u64) -> Result<Option<(u64, u64)>> {
     use std::io::Read;
 
-    // struct msghdr (x86_64 Linux):
-    //   void         *msg_name;      // offset 0,  8 bytes
-    //   socklen_t     msg_namelen;   // offset 8,  4 bytes
+    // Derive field layout from libc::msghdr at compile time (WR-04: arch-portable).
+    //   msg_name:    *mut c_void — pointer-sized, at offset_of!(libc::msghdr, msg_name)
+    //   msg_namelen: socklen_t  — u32, at offset_of!(libc::msghdr, msg_namelen)
     //
-    // We only need the first 12 bytes.
-    const MSGHDR_MIN_READ: usize = 12;
+    // On LP64 (x86_64, aarch64): msg_name @ 0 (8 bytes), msg_namelen @ 8 (4 bytes) → 12.
+    // On ILP32 (32-bit Linux):  msg_name @ 0 (4 bytes), msg_namelen @ 4 (4 bytes) → 8.
+    // Using offset_of! / size_of ensures correctness on both, replacing the
+    // original hard-coded MSGHDR_MIN_READ = 12 that was only valid on LP64.
+    const MSG_NAME_OFFSET: usize = core::mem::offset_of!(libc::msghdr, msg_name);
+    const MSG_NAME_LEN_OFFSET: usize = core::mem::offset_of!(libc::msghdr, msg_namelen);
+    // size_of::<usize>() == pointer size on all Rust targets.
+    const PTR_SIZE: usize = core::mem::size_of::<usize>();
+    // We must read enough bytes to cover msg_namelen (u32 = 4 bytes) after its offset.
+    const MSGHDR_MIN_READ: usize = MSG_NAME_LEN_OFFSET + 4;
+
+    // Compile-time sanity assertions.
+    const _: () = assert!(
+        MSG_NAME_OFFSET < MSG_NAME_LEN_OFFSET,
+        "msg_name must precede msg_namelen"
+    );
+    const _: () = assert!(
+        MSG_NAME_OFFSET + PTR_SIZE <= MSG_NAME_LEN_OFFSET,
+        "msg_name must not overlap msg_namelen"
+    );
 
     let mem_path = format!("/proc/{}/mem", pid);
     let mut file = std::fs::File::open(&mem_path)
@@ -2697,16 +2723,32 @@ pub fn read_msghdr_dest(pid: u32, msghdr_ptr: u64) -> Result<Option<(u64, u64)>>
         NonoError::SandboxInit(format!("Failed to read msghdr from {}: {}", mem_path, e))
     })?;
 
-    // msg_name is a pointer (8 bytes, native endian on Linux)
-    let msg_name = u64::from_ne_bytes([
-        buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
-    ]);
-    // msg_namelen is socklen_t (4 bytes, native endian), cast to u64 for read_notif_sockaddr
-    let msg_namelen = u32::from_ne_bytes([buf[8], buf[9], buf[10], buf[11]]) as u64;
+    // msg_name: read pointer-sized value at MSG_NAME_OFFSET (native endian).
+    // Copy the pointer bytes into a zero-padded u64 buffer (handles both
+    // LP64/8-byte and ILP32/4-byte pointer sizes correctly).
+    let mut name_buf = [0u8; 8];
+    name_buf[..PTR_SIZE].copy_from_slice(&buf[MSG_NAME_OFFSET..MSG_NAME_OFFSET + PTR_SIZE]);
+    let msg_name = u64::from_ne_bytes(name_buf);
+
+    // msg_namelen: socklen_t is always u32 (4 bytes, native endian).
+    let namelen_bytes: [u8; 4] = buf[MSG_NAME_LEN_OFFSET..MSG_NAME_LEN_OFFSET + 4]
+        .try_into()
+        .map_err(|_| {
+            NonoError::SandboxInit(
+                "failed to extract msg_namelen bytes from msghdr buf".to_string(),
+            )
+        })?;
+    let msg_namelen = u32::from_ne_bytes(namelen_bytes) as u64;
 
     if msg_name == 0 {
         // No destination address: the socket is connected, sendmsg just
         // sends data to the already-connected peer. No mediation needed.
+        //
+        // WR-01 accepted limitation: on CONTINUE the kernel re-reads the
+        // destination from child memory; a multi-threaded child could swap
+        // msg_name after we read it (TOCTOU). This window is inherited from
+        // the upstream design and is documented at the call site in
+        // supervisor_linux.rs. See Phase 87 REVIEW WR-01.
         return Ok(None);
     }
 
@@ -2726,7 +2768,7 @@ pub fn read_msghdr_dest(pid: u32, msghdr_ptr: u64) -> Result<Option<(u64, u64)>>
 ///
 /// Returns an error if `vlen` is unreasonably large, if pointer arithmetic
 /// overflows, or if any message header cannot be read.
-#[must_use = "Result must be checked — empty Vec or all-None means connected-socket fast-path"]
+#[must_use = "Result must be checked — empty Vec or all-None means all msg_name fields were NULL"]
 pub fn read_mmsghdr_dests(pid: u32, msgvec_ptr: u64, vlen: u64) -> Result<Vec<Option<(u64, u64)>>> {
     const MAX_MMSGHDRS: u64 = 1024;
 
