@@ -3647,7 +3647,6 @@ pub fn expand_vars(path: &str, workdir: &Path) -> Result<PathBuf> {
         expanded = expanded.replace("$NONO_PACKAGES", &packages_dir.to_string_lossy());
     }
 
-
     Ok(PathBuf::from(expanded))
 }
 
@@ -3978,6 +3977,8 @@ mod tests {
         );
     }
 
+    // XDG tests use Unix-style paths and are not meaningful on Windows.
+    #[cfg(unix)]
     #[test]
     fn test_expand_vars_xdg_config_home() {
         let _guard = match crate::test_env::ENV_LOCK.lock() {
@@ -3998,6 +3999,8 @@ mod tests {
         assert_eq!(expanded, PathBuf::from("/home/user/.config/nono/profiles"));
     }
 
+    // Test uses Unix HOME path; on Windows APPDATA is used for config resolution.
+    #[cfg(unix)]
     #[test]
     fn test_expand_vars_nono_config() {
         let _guard = match crate::test_env::ENV_LOCK.lock() {

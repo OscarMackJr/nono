@@ -4,12 +4,14 @@
 //! `~/.local/state/nono/`). Until v1.0.0, reads also fall back to legacy
 //! `~/.nono/{audit,sessions,rollbacks}/` trees with a one-time deprecation warning.
 
-use nono::{NonoError, Result, try_canonicalize};
+use nono::{try_canonicalize, NonoError, Result};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 const LEGACY_HOME_SUBDIR: &str = ".nono";
 const LEGACY_REMOVE_BY: &str = "v1.0.0";
+// PARTIAL→CI: used in non-Windows code paths and tests; suppressed on Windows host.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 const AUDIT_LEDGER_FILENAME: &str = "ledger.ndjson";
 
 thread_local! {
@@ -23,6 +25,10 @@ thread_local! {
 /// When `$XDG_STATE_HOME` is unset, nono uses `$HOME/.local/state` on every platform
 /// (same convention as `gh`, Claude Code, and profile `$XDG_STATE_HOME` expansion),
 /// not macOS `~/Library/Application Support`.
+///
+/// PARTIAL→CI: only compiled on non-Windows targets; dead-code suppressed on the
+/// Windows host build. CI exercises this path on Linux and macOS runners.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 fn resolve_xdg_state_base() -> Result<PathBuf> {
     if let Ok(raw) = std::env::var("XDG_STATE_HOME") {
         let path = PathBuf::from(&raw);
@@ -48,17 +54,14 @@ fn resolve_xdg_state_base() -> Result<PathBuf> {
 pub fn user_state_dir() -> Result<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        let local_app_data = std::env::var("LOCALAPPDATA").map_err(|_| {
-            NonoError::Setup(
-                "state_paths: %LOCALAPPDATA% is not set".to_string(),
-            )
-        })?;
+        let local_app_data = std::env::var("LOCALAPPDATA")
+            .map_err(|_| NonoError::Setup("state_paths: %LOCALAPPDATA% is not set".to_string()))?;
         if local_app_data.trim().is_empty() {
             return Err(NonoError::Setup(
                 "state_paths: %LOCALAPPDATA% is empty".to_string(),
             ));
         }
-        return Ok(PathBuf::from(local_app_data).join("nono"));
+        Ok(PathBuf::from(local_app_data).join("nono"))
     }
     #[cfg(not(target_os = "windows"))]
     Ok(resolve_xdg_state_base()?.join("nono"))
@@ -257,6 +260,10 @@ impl LegacyRootSet {
 /// Copy a legacy audit ledger into the canonical root on first write, if needed.
 ///
 /// Caller must hold the audit ledger lock before calling this function.
+///
+/// PARTIAL→CI: called from `audit_ledger.rs` which is Unix-primary. Suppressed
+/// on Windows host; CI verifies on Linux/macOS runners.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub fn maybe_migrate_legacy_audit_ledger() -> Result<()> {
     let primary = audit_root()?;
     let legacy = legacy_audit_root()?;
@@ -314,7 +321,7 @@ pub fn maybe_migrate_legacy_audit_ledger() -> Result<()> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::test_env::{ENV_LOCK, EnvVarGuard};
+    use crate::test_env::{EnvVarGuard, ENV_LOCK};
     use std::fs;
 
     fn isolated_env(base: &Path) -> (EnvVarGuard, PathBuf) {
@@ -328,6 +335,7 @@ mod tests {
         (guard, home)
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn default_state_base_uses_local_state_without_xdg_env() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -342,6 +350,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn canonical_paths_use_xdg_state_home() {
         let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -383,11 +392,9 @@ mod tests {
         let roots = protected_state_roots().unwrap();
         assert_eq!(roots.len(), 2);
         assert!(roots.iter().any(|p| p.ends_with(".nono")));
-        assert!(
-            roots
-                .iter()
-                .any(|p| p.ends_with("nono") && !p.ends_with(".nono"))
-        );
+        assert!(roots
+            .iter()
+            .any(|p| p.ends_with("nono") && !p.ends_with(".nono")));
         let _ = home;
     }
 
@@ -429,12 +436,10 @@ mod tests {
 
         let migrated = audit_root().unwrap().join(AUDIT_LEDGER_FILENAME);
         assert!(migrated.exists());
-        assert!(
-            !audit_root()
-                .unwrap()
-                .join(format!("{AUDIT_LEDGER_FILENAME}.tmp"))
-                .exists()
-        );
+        assert!(!audit_root()
+            .unwrap()
+            .join(format!("{AUDIT_LEDGER_FILENAME}.tmp"))
+            .exists());
         let content = fs::read_to_string(&migrated).unwrap();
         assert_eq!(content, "{\"sequence\":0}\n");
         let _ = home;

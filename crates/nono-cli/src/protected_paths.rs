@@ -20,9 +20,14 @@ impl ProtectedRoots {
     /// Protects both the legacy `~/.nono` tree and the canonical `$XDG_STATE_HOME/nono`
     /// runtime state directory (audit, sessions, rollbacks).
     pub fn from_defaults() -> Result<Self> {
-        Ok(Self {
-            roots: crate::state_paths::protected_state_roots()?,
-        })
+        // Apply resolve_path (Windows verbatim-prefix normalization) to ensure
+        // protected roots are in the same form as validated request paths.
+        // state_paths::protected_state_roots() uses try_canonicalize which may
+        // return \\?\ prefixed paths on Windows; resolve_path strips that prefix
+        // for consistent component-wise comparison (D-01 Plan 88-02).
+        let raw_roots = crate::state_paths::protected_state_roots()?;
+        let roots = raw_roots.iter().map(|r| resolve_path(r)).collect();
+        Ok(Self { roots })
     }
 
     /// Return a slice of protected root paths.
@@ -250,13 +255,15 @@ fn path_starts_with(path: &Path, prefix: &Path) -> bool {
     path.starts_with(prefix)
 }
 
+// Used in Windows cfg(test) — dead_code lint does not count test-only callers.
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
     path_starts_with(left, right) && path_starts_with(right, left)
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
     left == right
 }

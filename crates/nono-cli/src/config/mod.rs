@@ -301,21 +301,15 @@ mod tests {
             Err(p) => p.into_inner(),
         };
 
-        assert!(
-            check_sensitive_path("~/.ssh")
-                .expect("should not fail")
-                .is_some()
-        );
-        assert!(
-            check_sensitive_path("~/.aws")
-                .expect("should not fail")
-                .is_some()
-        );
-        assert!(
-            check_sensitive_path("~/.bashrc")
-                .expect("should not fail")
-                .is_some()
-        );
+        assert!(check_sensitive_path("~/.ssh")
+            .expect("should not fail")
+            .is_some());
+        assert!(check_sensitive_path("~/.aws")
+            .expect("should not fail")
+            .is_some());
+        assert!(check_sensitive_path("~/.bashrc")
+            .expect("should not fail")
+            .is_some());
         // /tmp is a system path, not sensitive
         assert!(check_sensitive_path("/tmp")
             .expect("should not fail")
@@ -326,6 +320,8 @@ mod tests {
             .is_none());
     }
 
+    // XDG fallback uses $HOME/.config/nono on Unix; Windows uses APPDATA.
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_user_config_dir_uses_xdg_fallback() {
         let _guard = match crate::test_env::ENV_LOCK.lock() {
@@ -459,12 +455,15 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn user_state_dir_honors_nono_test_home() {
+    fn user_state_dir_uses_localappdata_on_windows() {
         let _guard = test_env_lock().lock().expect("env lock");
-        let abs = r"C:\nono-test-state-override";
-        let _env = EnvVarGuard::set_all(&[("NONO_TEST_HOME", abs)]);
-
-        let state = user_state_dir().expect("override should produce Some on Windows");
-        assert_eq!(state, PathBuf::from(r"C:\nono-test-state-override\.nono"));
+        // D-01: user_state_dir() delegates to state_paths::user_state_dir()
+        // which uses %LOCALAPPDATA%\nono on Windows. Verify delegation.
+        let _env = EnvVarGuard::set_all(&[("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")]);
+        let state = user_state_dir().expect("LOCALAPPDATA should resolve");
+        assert_eq!(
+            state,
+            PathBuf::from(r"C:\Users\tester\AppData\Local").join("nono")
+        );
     }
 }

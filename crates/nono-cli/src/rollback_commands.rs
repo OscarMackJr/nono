@@ -10,7 +10,7 @@ use crate::command_display::{format_command_line, truncate_chars};
 use crate::config::user::load_user_config;
 use crate::rollback_base_exclusions;
 use crate::rollback_session::{
-    SessionInfo, discover_sessions, format_bytes, load_session, remove_session,
+    discover_sessions, format_bytes, load_session, remove_session, SessionInfo,
 };
 use crate::state_paths;
 use crate::theme;

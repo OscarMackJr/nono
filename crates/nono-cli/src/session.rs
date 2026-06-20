@@ -1420,45 +1420,44 @@ mod tests {
     // callsite) AND the negative contract (the .map_err deviation preserves
     // the legacy ConfigParse message and does NOT leak EnvVarValidation).
 
+    // D-01 (Plan 88-02): sessions_dir() now delegates to state_paths::sessions_dir()
+    // which uses XDG_STATE_HOME/nono/sessions (Unix) or %LOCALAPPDATA%\nono\sessions
+    // (Windows). The NONO_TEST_HOME seam is no longer on this path; the test is
+    // updated to test the new LOCALAPPDATA-backed behavior on Windows.
+    #[cfg(target_os = "windows")]
     #[test]
-    fn sessions_dir_returns_path_under_nono_test_home() {
+    fn sessions_dir_uses_localappdata_on_windows() {
         let _env_lock = crate::test_env::lock_env();
-        #[cfg(target_os = "windows")]
-        let abs = r"C:\nono-test-sessions-dir-nyquist";
-        #[cfg(not(target_os = "windows"))]
-        let abs = "/tmp/nono-test-sessions-dir-nyquist";
-        let _env = crate::test_env::EnvVarGuard::set_all(&[("NONO_TEST_HOME", abs)]);
+        let _env = crate::test_env::EnvVarGuard::set_all(&[(
+            "LOCALAPPDATA",
+            r"C:\Users\tester\AppData\Local",
+        )]);
 
-        let dir = super::sessions_dir().expect("sessions_dir with override");
-        let expected = PathBuf::from(abs).join(".nono").join("sessions");
+        let dir = super::sessions_dir().expect("sessions_dir with LOCALAPPDATA");
+        let expected = PathBuf::from(r"C:\Users\tester\AppData\Local")
+            .join("nono")
+            .join("sessions");
         assert_eq!(dir, expected);
     }
 
+    // D-01 (Plan 88-02): on Unix, sessions_dir() uses XDG_STATE_HOME.
+    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn sessions_dir_maps_envvar_validation_to_config_parse() {
+    fn sessions_dir_uses_xdg_state_home() {
         let _env_lock = crate::test_env::lock_env();
-        // Relative path triggers EnvVarValidation in nono_home_dir(); the
-        // sessions_dir() .map_err deviation must rewrite that into a
-        // ConfigParse with the exact legacy message string.
-        let _env = crate::test_env::EnvVarGuard::set_all(&[("NONO_TEST_HOME", "relative/path")]);
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let state_home = tmp.path().join("state");
+        std::fs::create_dir_all(&state_home).expect("mkdir");
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).expect("mkdir home");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("XDG_STATE_HOME", state_home.to_str().expect("str")),
+            ("HOME", home.to_str().expect("str")),
+        ]);
 
-        let err =
-            super::sessions_dir().expect_err("relative override must fail closed via ConfigParse");
-        match err {
-            NonoError::ConfigParse(msg) => {
-                assert_eq!(
-                    msg, "Cannot determine home directory for session registry",
-                    "deviation must preserve the legacy ConfigParse message verbatim"
-                );
-            }
-            NonoError::EnvVarValidation { .. } => {
-                panic!(
-                    "sessions_dir() must map EnvVarValidation to ConfigParse \
-                     (Plan 02 Edit 1.8 deviation contract); got EnvVarValidation directly"
-                );
-            }
-            other => panic!("expected ConfigParse with legacy message, got: {other:?}"),
-        }
+        let dir = super::sessions_dir().expect("sessions_dir with XDG_STATE_HOME");
+        let expected = state_home.join("nono").join("sessions");
+        assert_eq!(dir, expected);
     }
 }
 

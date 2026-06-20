@@ -353,7 +353,7 @@ fn calculate_dir_size(dir: &Path) -> u64 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::test_env::{ENV_LOCK, EnvVarGuard};
+    use crate::test_env::{EnvVarGuard, ENV_LOCK};
     #[cfg(not(target_os = "windows"))]
     use nono::undo::RollbackStatus;
 

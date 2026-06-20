@@ -263,7 +263,7 @@ pub fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env::{ENV_LOCK, EnvVarGuard};
+    use crate::test_env::{EnvVarGuard, ENV_LOCK};
 
     #[test]
     fn validate_session_id_rejects_traversal() {
