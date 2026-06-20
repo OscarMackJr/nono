@@ -85,6 +85,9 @@ cargo clippy is NOT a substitute.
 | 88-04 | 1f4fd335 (4179ce03) | exec_strategy.rs | nix:: PTY functions (cfg-gated module) |
 | 88-04 | 1f4fd335 (4179ce03) | pty_proxy.rs | Unix-only module |
 | 88-05 | 76e1e40d (e54cf9cb) | hook_runtime.rs | #[cfg(unix)] pre_exec block + env_clear removal |
+| 88-06 | 147c3c9b (WR-01) | bindings/c/src/fs_capability.rs | bindings/c/src/ flagged for cross-target clippy (CLAUDE.md) |
+| 88-06 | 147c3c9b (WR-01) | bindings/c/src/capability_set.rs | bindings/c/src/ flagged for cross-target clippy (CLAUDE.md) |
+| 88-06 | 147c3c9b (WR-01) | bindings/c/src/diagnostic.rs | bindings/c/src/ flagged for cross-target clippy (CLAUDE.md) |
 
 Status: PARTIAL→CI — Decisive verification pending GH Actions Linux + macOS CI lanes.
 

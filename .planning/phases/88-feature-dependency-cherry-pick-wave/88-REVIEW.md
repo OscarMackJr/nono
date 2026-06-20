@@ -63,6 +63,13 @@ several touch the security contract surface and should be fixed.
 
 ### WR-01: CR-01 invariant incomplete — string-returning FFI getters can leave stale error state
 
+> **RESOLVED 2026-06-20 (commit `147c3c9b`):** `clear_last_call_state()` added as the first
+> statement of all four getters (`nono_capability_set_fs_original`, `_fs_resolved`,
+> `_fs_source_group_name`, `nono_capability_set_summary`). New regression test
+> `string_getter_clears_stale_diagnostic_state` in `bindings/c/src/diagnostic.rs`. `cargo
+> build -p nono-ffi` + `cargo test -p nono-ffi` (49 passed) green on Windows host. Cross-target
+> clippy for `bindings/c/src/` deferred PARTIAL→CI (see 88-PARTIAL-CI.md).
+
 **File:** `bindings/c/src/fs_capability.rs:34-46, 57-69, 167-182`; `bindings/c/src/capability_set.rs:427-435`
 **Issue:** `lib.rs:84` documents that `clear_last_call_state()` is "Called at the
 entry of every `pub unsafe extern "C"` function that can set any thread-local."
