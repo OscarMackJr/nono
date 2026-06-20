@@ -88,7 +88,25 @@ Plans:
   3. AWS auth config (`AwsAuthConfig`) is accepted/validated in profiles + proxy route config, mutually exclusive with `credential_key`/`oauth2` (FEAT-03); update-check reports CI provider/environment, profile names are namespace-standardized, and bool CLI flags accept truthy env values (FEAT-06).
   4. PTY ctrl-z suspend/resume no longer hangs under a PTY (DEPS-01).
   5. All 9 dependency bumps (x509-parser 0.18.1, hyper 1.10.1, cbindgen 0.29.4, typify 0.7.0, zeroize 1.9.0, time 0.3.49, chrono 0.4.45, ignore 0.4.26, which 8.0.3) are absorbed with internal path-dep version pins synced across all 5 crate `Cargo.toml` files; `make ci` is green on Windows (DEPS-02).
-**Plans**: TBD
+**Plans**: 6 plans
+Plans:
+**Wave 1**
+- [ ] 88-01-PLAN.md — FEAT-01 set_vars env injection + FEAT-04 keyring timeout (d48aeb7b, c6b13345)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 88-02-PLAN.md — FEAT-02 XDG state dirs + D-01/D-02/D-03 fork reconciliation (e8293b36, 8e0d94f9)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 88-03-PLAN.md — FEAT-03 AWS auth partial + fork 501 stub + FEAT-05 $PACK_DIR (5bb098cd partial, 7d274cf7)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+- [ ] 88-04-PLAN.md — DEPS-01 PTY ctrl-z + FEAT-06a CI provider + FEAT-06b profile namespace + D-07/D-08 aliases (4179ce03, cc11b389, 6d88638e)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+- [ ] 88-05-PLAN.md — FEAT-06c truthy env flags + Cluster M misc + e54cf9cb env_clear Unix-only (42e5bf73, a0bba5eb, ee7a3bda, 7e076d2d, 9800f307, e54cf9cb)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+- [ ] 88-06-PLAN.md — CR-01 FFI clear-on-entry fork fix + DEPS-02 dep bumps + D-06 gate + PARTIAL→CI closeout
 
 ### Phase 89: Proxy Hardening Sync
 **Goal**: The proxy hardening cluster is absorbed and reconciled against the fork-divergent TLS-interception surface without regressing fork TLS-intercept behavior.
@@ -122,6 +140,6 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
 | 86. Library-Boundary Convergence | 3/3 | Complete    | 2026-06-20 |
 | 87. Security Sync | 3/3 | Complete | 2026-06-20 |
-| 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
+| 88. Feature + Dependency Cherry-Pick Wave | 0/6 | Not started | - |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
 | 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |
