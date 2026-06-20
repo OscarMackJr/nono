@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
-status: verifying
+status: ready_to_plan
 stopped_at: Phase 88 Plan 01 complete (commits 89ba09cf, 614cf1c7, 6829004a)
 last_updated: "2026-06-20T17:22:39.709Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 6
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 13
   completed_plans: 13
-  percent: 100
+  percent: 83
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -26,9 +26,9 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 ## Current Position
 
-Phase: 88 (feature-dependency-wave) — EXECUTING
-Plan: 6 of 06 (Plan 88-01 complete)
-Status: Phase complete — ready for verification
+Phase: 89
+Plan: Not started
+Status: Ready to plan
 Last activity: 2026-06-20
 
 Progress: [██████████] 100%
@@ -37,7 +37,7 @@ Progress: [██████████] 100%
 
 **Velocity:** (v3.1 — reset; populated as phases complete)
 
-- Total plans completed: 4
+- Total plans completed: 10
 - Average duration: —
 - Total execution time: —
 
