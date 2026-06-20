@@ -119,9 +119,9 @@ Plans:
 **Plans**: 4 plans
 Plans:
 **Wave 1** *(parallel — disjoint files)*
-- [ ] 89-01-PLAN.md — D-07 customCredentials activation fix (#1197) + D-07 regression tests + D-01 external_proxy mapping test (proxy_runtime.rs)
-- [ ] 89-02-PLAN.md — D-02 CONNECT keep-open equivalence test (#1151) + D-09 403+audit equivalence test (#1077) (connect.rs, reverse.rs)
-- [ ] 89-03-PLAN.md — D-10 allow_domain shadow-disproof test (#1132) (route.rs)
+- [x] 89-01-PLAN.md — D-07 customCredentials activation fix (#1197) + D-07 regression tests + D-01 external_proxy mapping test (proxy_runtime.rs)
+- [x] 89-02-PLAN.md — D-02 CONNECT keep-open equivalence test (#1151) + D-09 403+audit equivalence test (#1077) (connect.rs, reverse.rs)
+- [x] 89-03-PLAN.md — D-10 allow_domain shadow-disproof test (#1132) (route.rs)
 
 **Wave 2** *(blocked on Wave 1 — records what the tests found)*
 - [ ] 89-04-PLAN.md — D-11 Phase-85 ledger reconciliation addendum (equivalence + won't-sync #1192/#1199 + D-07 fork-divergence)
@@ -149,5 +149,5 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | 86. Library-Boundary Convergence | 3/3 | Complete    | 2026-06-20 |
 | 87. Security Sync | 3/3 | Complete | 2026-06-20 |
 | 88. Feature + Dependency Cherry-Pick Wave | 6/6 | Complete    | 2026-06-20 |
-| 89. Proxy Hardening Sync | 0/TBD | Not started | - |
+| 89. Proxy Hardening Sync | 3/4 | In Progress|  |
 | 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |
