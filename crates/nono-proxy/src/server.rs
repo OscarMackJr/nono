@@ -687,6 +687,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -730,6 +731,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -782,6 +784,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -840,6 +843,7 @@ mod tests {
                     endpoint_rules: vec![],
                     tls_ca: None,
                     oauth2: None,
+                    aws_auth: None,
                 },
                 crate::config::RouteConfig {
                     prefix: "github".to_string(),
@@ -855,6 +859,7 @@ mod tests {
                     endpoint_rules: vec![],
                     tls_ca: None,
                     oauth2: None,
+                    aws_auth: None,
                 },
             ],
             ..Default::default()
@@ -915,6 +920,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -946,6 +952,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -998,6 +1005,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -1036,6 +1044,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };

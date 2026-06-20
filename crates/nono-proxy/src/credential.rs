@@ -128,6 +128,10 @@ pub struct CredentialStore {
     /// `HashMap`; this guarantees the f77e0e3 "absolute match" case
     /// without runtime checks.
     credentials: HashMap<String, LoadedCredential>,
+    /// Map from route prefix to AWS SigV4 route (placeholder until full
+    /// SigV4 signing is implemented; value is () because no runtime state
+    /// is needed yet).
+    aws_routes: HashMap<String, ()>,
 }
 
 impl CredentialStore {
@@ -143,6 +147,7 @@ impl CredentialStore {
     /// as warnings and the route is skipped.
     pub fn load(routes: &[RouteConfig]) -> Result<Self> {
         let mut credentials = HashMap::new();
+        let mut aws_routes = HashMap::new();
 
         for route in routes {
             // Normalize prefix: strip leading/trailing slashes so it matches
@@ -211,10 +216,20 @@ impl CredentialStore {
                     },
                 );
                 continue;
+            } else if route.aws_auth.is_some() {
+                // AWS SigV4 path — no credentials to load yet. Register the
+                // prefix so get_aws() returns true and the proxy can return
+                // 501 Not Implemented. The () value is a placeholder; the
+                // real AwsRoute struct will replace it when SigV4 signing is
+                // implemented.
+                aws_routes.insert(normalized_prefix.clone(), ());
             }
         }
 
-        Ok(Self { credentials })
+        Ok(Self {
+            credentials,
+            aws_routes,
+        })
     }
 
     /// Create an empty credential store (no credential injection).
@@ -222,6 +237,7 @@ impl CredentialStore {
     pub fn empty() -> Self {
         Self {
             credentials: HashMap::new(),
+            aws_routes: HashMap::new(),
         }
     }
 
@@ -243,22 +259,36 @@ impl CredentialStore {
         self.credentials.get(prefix)
     }
 
-    /// Check if any credentials are loaded.
+    /// Returns `Some(())` if an AWS SigV4 route is configured for the given
+    /// prefix, `None` otherwise. The `Option<&()>` return mirrors `get_oauth2`
+    /// so call sites can use `.is_some()` uniformly. The value will become
+    /// `Option<&AwsRoute>` when SigV4 signing is implemented.
+    #[must_use]
+    pub fn get_aws(&self, prefix: &str) -> Option<&()> {
+        self.aws_routes.get(prefix)
+    }
+
+    /// Check if any credentials (static or AWS) are loaded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.credentials.is_empty()
+        self.credentials.is_empty() && self.aws_routes.is_empty()
     }
 
-    /// Number of loaded credentials.
+    /// Number of loaded credentials (static + AWS).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.credentials.len()
+        self.credentials.len() + self.aws_routes.len()
     }
 
-    /// Returns the set of route prefixes that have loaded credentials.
+    /// Returns the set of route prefixes that have loaded credentials
+    /// (static keystore and AWS routes).
     #[must_use]
     pub fn loaded_prefixes(&self) -> std::collections::HashSet<String> {
-        self.credentials.keys().cloned().collect()
+        self.credentials
+            .keys()
+            .chain(self.aws_routes.keys())
+            .cloned()
+            .collect()
     }
 }
 
@@ -411,6 +441,7 @@ mod tests {
             endpoint_rules: vec![],
             tls_ca: None,
             oauth2: None,
+            aws_auth: None,
         }];
         let store = CredentialStore::load(&routes);
         assert!(store.is_ok());
@@ -470,6 +501,7 @@ mod tests {
             endpoint_rules: vec![],
             tls_ca: None,
             oauth2: None,
+            aws_auth: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
         let store = CredentialStore::load(&routes).expect("credential load");
@@ -497,6 +529,7 @@ mod tests {
             endpoint_rules: vec![],
             tls_ca: None,
             oauth2: None,
+            aws_auth: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
         let store = CredentialStore::load(&routes).expect("credential load");

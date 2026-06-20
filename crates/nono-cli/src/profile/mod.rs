@@ -1018,6 +1018,14 @@ pub struct CustomCredentialDef {
     /// ambiguity.
     #[serde(default)]
     pub tls_ca: Option<String>,
+
+    /// Optional AWS SigV4 signing configuration.
+    ///
+    /// When present, the proxy will sign outbound requests with AWS SigV4
+    /// credentials resolved from the configured profile (or the default
+    /// credential chain). Mutually exclusive with `credential_key` and `auth`.
+    #[serde(default)]
+    pub aws_auth: Option<nono_proxy::config::AwsAuthConfig>,
 }
 
 fn default_inject_header() -> String {
@@ -1114,6 +1122,15 @@ fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
 ///   - `query_param`: query_param_name required, valid query param name
 ///   - `basic_auth`: no additional required fields
 fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<()> {
+    // Mutual exclusion: aws_auth is incompatible with credential_key and auth.
+    if cred.aws_auth.is_some() && (cred.credential_key.is_some() || cred.auth.is_some()) {
+        return Err(NonoError::ProfileParse(format!(
+            "custom credential '{}' has 'aws_auth' set together with 'credential_key' or 'auth'; \
+             aws_auth is mutually exclusive with both — remove the other auth field",
+            name
+        )));
+    }
+
     // PROF-03 (Phase 22): Mutual exclusion of credential_key and auth.
     if cred.credential_key.is_some() && cred.auth.is_some() {
         return Err(NonoError::ProfileParse(format!(
@@ -1123,10 +1140,10 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
         )));
     }
 
-    // PROF-03 (Phase 22): At least one of credential_key or auth must be set.
-    if cred.credential_key.is_none() && cred.auth.is_none() {
+    // At least one of credential_key, auth, or aws_auth must be set.
+    if cred.credential_key.is_none() && cred.auth.is_none() && cred.aws_auth.is_none() {
         return Err(NonoError::ProfileParse(format!(
-            "custom credential '{}' must have either 'credential_key' or 'auth' set",
+            "custom credential '{}' must have either 'credential_key', 'auth', or 'aws_auth' set",
             name
         )));
     }
@@ -1136,6 +1153,11 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
     // "Fail Secure" / threat T-22-01-02.
     if let Some(ref auth) = cred.auth {
         validate_oauth2_auth(name, auth)?;
+    }
+
+    // Validate aws_auth if present.
+    if let Some(ref aws) = cred.aws_auth {
+        validate_aws_auth(name, aws)?;
     }
 
     // Validate credential_key only when set (Optional from PROF-03 onward).
@@ -1245,6 +1267,52 @@ fn validate_oauth2_auth(name: &str, auth: &OAuth2Config) -> Result<()> {
              Prefer keyring://, env://, file://, or op:// URIs to avoid committing secrets to disk.",
             name
         );
+    }
+
+    Ok(())
+}
+
+/// Validate AWS SigV4 signing configuration subfields.
+///
+/// - `profile`: non-empty, no whitespace (whitespace breaks the AWS INI config
+///   parser). Mixed case is allowed — profile names are case-sensitive.
+/// - `region` / `service`: non-empty, lowercase, no whitespace. The SigV4
+///   credential scope requires lowercase region and service codes.
+fn validate_aws_auth(name: &str, aws: &nono_proxy::config::AwsAuthConfig) -> Result<()> {
+    if let Some(ref profile) = aws.profile {
+        if profile.is_empty() || profile.contains(char::is_whitespace) {
+            return Err(NonoError::ProfileParse(format!(
+                "aws_auth.profile for custom credential '{}' must be a non-empty string \
+                 with no whitespace; omit the field to use the default credential chain",
+                name
+            )));
+        }
+    }
+
+    if let Some(ref region) = aws.region {
+        if region.is_empty()
+            || region.contains(char::is_whitespace)
+            || region.chars().any(|c| c.is_uppercase())
+        {
+            return Err(NonoError::ProfileParse(format!(
+                "aws_auth.region for custom credential '{}' must be a non-empty, \
+                 lowercase string with no whitespace (e.g., \"us-east-1\")",
+                name
+            )));
+        }
+    }
+
+    if let Some(ref service) = aws.service {
+        if service.is_empty()
+            || service.contains(char::is_whitespace)
+            || service.chars().any(|c| c.is_uppercase())
+        {
+            return Err(NonoError::ProfileParse(format!(
+                "aws_auth.service for custom credential '{}' must be a non-empty, \
+                 lowercase string with no whitespace (e.g., \"bedrock\", \"s3\")",
+                name
+            )));
+        }
     }
 
     Ok(())
@@ -4659,6 +4727,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         }
     }
 
@@ -4836,6 +4905,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("telegram", &cred).is_ok());
     }
@@ -4855,6 +4925,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("telegram", &cred);
         let err = result.expect_err("missing path_pattern should be rejected");
@@ -4876,6 +4947,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("telegram", &cred);
         let err = result.expect_err("pattern without {} should be rejected");
@@ -4897,6 +4969,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("telegram", &cred).is_ok());
     }
@@ -4916,6 +4989,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("telegram", &cred);
         let err = result.expect_err("replacement without {} should be rejected");
@@ -4937,6 +5011,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("google_maps", &cred).is_ok());
     }
@@ -4956,6 +5031,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("google_maps", &cred);
         let err = result.expect_err("missing query_param_name should be rejected");
@@ -4977,6 +5053,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("google_maps", &cred);
         let err = result.expect_err("empty query_param_name should be rejected");
@@ -4998,6 +5075,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         // BasicAuth mode doesn't require additional fields
         // Credential value is expected to be "username:password" format
@@ -5390,6 +5468,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -5409,6 +5488,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -5546,6 +5626,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -5565,6 +5646,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -6835,6 +6917,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: Some("EXAMPLE_API_KEY".to_string()),
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(
             validate_custom_credential("example", &cred).is_ok(),
@@ -6857,6 +6940,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: None,
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         let err = result.expect_err("file:// URI without env_var should be rejected");
@@ -6882,6 +6966,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: Some("EXAMPLE_API_KEY".to_string()),
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         let err = result.expect_err("file:// URI with relative path should be rejected");
@@ -6907,6 +6992,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: Some("EXAMPLE_API_KEY".to_string()),
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         assert!(
@@ -6964,6 +7050,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: None,
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("example", &cred).is_ok());
     }
@@ -6983,6 +7070,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: None,
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         assert!(result.is_err(), "env://LD_PRELOAD should be rejected");
@@ -7539,6 +7627,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let err = validate_custom_credential("v", &cred).expect_err("mutual exclusion");
         assert!(err.to_string().contains("mutually exclusive"));
@@ -7559,6 +7648,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let err = validate_custom_credential("v", &cred)
             .expect_err("must require credential_key or auth");

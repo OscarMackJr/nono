@@ -117,6 +117,7 @@ pub async fn handle_reverse_proxy(
 
     // Look up credential for service (optional — not all routes inject credentials)
     let cred = ctx.credential_store.get(&service);
+    let aws_route = ctx.credential_store.get_aws(&service);
 
     // Authenticate the request. Every reverse proxy request must prove
     // possession of the session token, regardless of whether a credential
@@ -177,6 +178,16 @@ pub async fn handle_reverse_proxy(
             send_error(stream, 407, "Proxy Authentication Required").await?;
             return Ok(());
         }
+    }
+
+    // AWS SigV4 signing is not yet implemented. Return 501 so the caller
+    // knows the route exists but is not functional. This branch will be
+    // replaced with real SigV4 signing in a follow-up. (D-15 fork adaptation:
+    // upstream's 501 is in tls_intercept/handle.rs which the fork does not
+    // have; this is the equivalent guard on the non-TLS proxy path.)
+    if aws_route.is_some() {
+        send_error(stream, 501, "Not Implemented").await?;
+        return Ok(());
     }
 
     // Transform the path based on injection mode (url_path and query_param modes).

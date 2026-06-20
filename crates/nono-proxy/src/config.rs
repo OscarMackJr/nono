@@ -168,6 +168,13 @@ pub struct RouteConfig {
     /// Plan 22-01 lands the type definition + serde wiring only.
     #[serde(default)]
     pub oauth2: Option<OAuth2Config>,
+
+    /// Optional AWS SigV4 signing configuration.
+    ///
+    /// When present, the proxy will sign outbound requests with AWS SigV4
+    /// credentials. Mutually exclusive with `credential_key` and `oauth2`.
+    #[serde(default)]
+    pub aws_auth: Option<AwsAuthConfig>,
 }
 
 /// An HTTP method+path access rule for reverse proxy endpoint filtering.
@@ -383,6 +390,36 @@ impl std::fmt::Debug for OAuth2Config {
             .field("scope", &self.scope)
             .finish()
     }
+}
+
+/// AWS SigV4 signing configuration for a credential route.
+///
+/// When present on a route, the proxy will sign outbound requests using AWS
+/// SigV4. All fields are optional: an empty `aws_auth: {}` block is valid and
+/// uses the default credential chain with region and service auto-detected from
+/// the upstream URL.
+///
+/// Mutually exclusive with `credential_key` and `oauth2`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AwsAuthConfig {
+    /// AWS profile name to use for credentials.
+    /// If omitted, the default credential chain is used.
+    /// Must be non-empty with no whitespace if provided.
+    #[serde(default)]
+    pub profile: Option<String>,
+
+    /// Explicit SigV4 signing region (e.g., `"us-east-1"`).
+    /// If omitted, auto-detected from the upstream URL.
+    /// Must be non-empty and lowercase if provided.
+    #[serde(default)]
+    pub region: Option<String>,
+
+    /// Explicit SigV4 service name (e.g., `"bedrock"`, `"s3"`, `"execute-api"`).
+    /// If omitted, auto-detected from the upstream URL.
+    /// Must be non-empty and lowercase if provided.
+    #[serde(default)]
+    pub service: Option<String>,
 }
 
 #[cfg(test)]
@@ -854,5 +891,97 @@ mod tests {
                 "omitted format: Authorization header name is matched case-insensitively for Bearer default"
             );
         }
+    }
+
+    // ========================================================================
+    // AwsAuthConfig tests
+    // ========================================================================
+
+    #[test]
+    fn test_aws_auth_config_minimal_deserializes() {
+        let json = r#"{}"#;
+        let aws: AwsAuthConfig = serde_json::from_str(json).unwrap();
+        assert!(aws.profile.is_none());
+        assert!(aws.region.is_none());
+        assert!(aws.service.is_none());
+    }
+
+    #[test]
+    fn test_aws_auth_config_all_fields_roundtrip() {
+        let original = AwsAuthConfig {
+            profile: Some("my-aws-profile".to_string()),
+            region: Some("us-east-1".to_string()),
+            service: Some("bedrock".to_string()),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: AwsAuthConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.profile.as_deref(), Some("my-aws-profile"));
+        assert_eq!(deserialized.region.as_deref(), Some("us-east-1"));
+        assert_eq!(deserialized.service.as_deref(), Some("bedrock"));
+    }
+
+    #[test]
+    fn test_aws_auth_field_absent_is_none() {
+        let json = r#"{"prefix": "bedrock", "upstream": "https://bedrock-runtime.us-east-1.amazonaws.com"}"#;
+        let route: RouteConfig = serde_json::from_str(json).unwrap();
+        assert!(route.aws_auth.is_none());
+    }
+
+    #[test]
+    fn test_aws_auth_config_unknown_field_rejected() {
+        let json = r#"{"profile": "foo", "unknown_field": "bar"}"#;
+        let result: std::result::Result<AwsAuthConfig, _> = serde_json::from_str(json);
+        assert!(
+            result.is_err(),
+            "unknown fields must be rejected by deny_unknown_fields"
+        );
+    }
+
+    #[test]
+    fn test_route_config_with_aws_auth_deserializes() {
+        let json = r#"{
+            "prefix": "bedrock",
+            "upstream": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "aws_auth": {
+                "profile": "my-aws-profile"
+            }
+        }"#;
+        let route: RouteConfig = serde_json::from_str(json).unwrap();
+        let aws = route.aws_auth.unwrap();
+        assert_eq!(aws.profile.as_deref(), Some("my-aws-profile"));
+        assert!(aws.region.is_none());
+        assert!(aws.service.is_none());
+    }
+
+    #[test]
+    fn test_route_config_with_full_aws_auth_deserializes() {
+        let json = r#"{
+            "prefix": "bedrock",
+            "upstream": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "aws_auth": {
+                "profile": "my-aws-profile",
+                "region": "us-west-2",
+                "service": "bedrock"
+            }
+        }"#;
+        let route: RouteConfig = serde_json::from_str(json).unwrap();
+        let aws = route.aws_auth.unwrap();
+        assert_eq!(aws.profile.as_deref(), Some("my-aws-profile"));
+        assert_eq!(aws.region.as_deref(), Some("us-west-2"));
+        assert_eq!(aws.service.as_deref(), Some("bedrock"));
+    }
+
+    #[test]
+    fn test_aws_auth_empty_object_sets_all_none() {
+        let json = r#"{
+            "prefix": "bedrock",
+            "upstream": "https://bedrock-runtime.us-east-1.amazonaws.com",
+            "aws_auth": {}
+        }"#;
+        let route: RouteConfig = serde_json::from_str(json).unwrap();
+        let aws = route.aws_auth.unwrap();
+        assert!(aws.profile.is_none());
+        assert!(aws.region.is_none());
+        assert!(aws.service.is_none());
     }
 }
