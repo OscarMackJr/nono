@@ -712,22 +712,19 @@ The CLAUDE.md MUST/NEVER rule: any commit touching `#[cfg(target_os = "linux")]`
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **`startup_runtime.rs` presence in fork**
+1. **`startup_runtime.rs` presence in fork** — RESOLVED
    - What we know: `a0bba5eb` touches `startup_runtime.rs` (4+/0- lines)
-   - What's unclear: Whether this file exists in the fork (not listed in CLAUDE.md architecture)
-   - Recommendation: `ls crates/nono-cli/src/startup_runtime.rs` before applying `a0bba5eb`; if absent, that hunk is a won't-apply (safe to skip, the feature degrades gracefully to the prior display)
+   - Resolution: file EXISTS in the fork (`crates/nono-cli/src/startup_runtime.rs`); `a0bba5eb` applies cleanly. Handled in Plan 88-05 `<interfaces>`.
 
-2. **`undo/snapshot.rs` rollback-path delegation**
+2. **`undo/snapshot.rs` rollback-path delegation** — RESOLVED
    - What we know: `rollback_runtime.rs` comment line 223-224 references the path divergence
-   - What's unclear: Whether `undo/snapshot.rs` calls `rollback_session::rollback_root()` or constructs paths directly
-   - Recommendation: `grep -n "rollback\|nono_home" crates/nono/src/undo/snapshot.rs` before coding FEAT-02
+   - Resolution: `undo/snapshot.rs` does NOT call `nono_home_dir()` directly — it receives paths from callers (`rollback_session.rs`). No extra FEAT-02 callsite migration in the library crate. Handled in Plan 88-02 `<interfaces>`.
 
-3. **AWS auth 501 on non-TLS proxy path**
+3. **AWS auth 501 on non-TLS proxy path** — RESOLVED
    - What we know: upstream 501 is in `tls_intercept/handle.rs` (won't-apply); shared hunks don't include a 501 for non-TLS
-   - What's unclear: Whether the fork's non-TLS `server.rs` flow will pass the request without auth (security gap) or error with a different code
-   - Recommendation: The planner MUST add a task to wire a 501 response in the fork's non-TLS server path when `aws_route.is_some()`, and add a proxy test
+   - Resolution: fork needs a NET-NEW 501 short-circuit in `reverse.rs::handle_reverse_proxy()` when the AWS route/credential is present. Delivered by Plan 88-03 Task 1 with a proxy test.
 
 ---
 
