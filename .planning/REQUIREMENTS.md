@@ -87,8 +87,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 | BND-01 | Phase 86 | Complete |
 | BND-02 | Phase 86 | Complete |
 | BND-03 | Phase 86 | Complete |
-| SEC-01 | Phase 87 | Pending |
-| SEC-02 | Phase 87 | Pending |
+| SEC-01 | Phase 87 | PARTIAL→CI (shipped; GH Actions Linux lane decisive) |
+| SEC-02 | Phase 87 | PARTIAL→CI (shipped; GH Actions Linux lane decisive) |
 | FEAT-01 | Phase 88 | Pending |
 | FEAT-02 | Phase 88 | Pending |
 | FEAT-03 | Phase 88 | Pending |
