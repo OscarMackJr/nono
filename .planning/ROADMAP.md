@@ -18,7 +18,7 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
 - Decimal phases (86.1, 86.2): Urgent insertions (marked with INSERTED)
 
 - [x] **Phase 85: UPST9 Divergence Audit** - Build the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions + ADR risk verdicts (completed 2026-06-19)
-- [ ] **Phase 86: Library-Boundary Convergence** - Adopt upstream's core-crate audit stack + structured-diagnostics model (lib + FFI + proxy), reconcile Windows paths, update CLAUDE.md + ADR
+- [x] **Phase 86: Library-Boundary Convergence** - Adopt upstream's core-crate audit stack + structured-diagnostics model (lib + FFI + proxy), reconcile Windows paths, update CLAUDE.md + ADR (completed 2026-06-20)
 - [ ] **Phase 87: Security Sync** - Close the Linux AF_UNIX datagram bypass (#1096) and the procfs-remap dedup leak (#1064)
 - [ ] **Phase 88: Feature + Dependency Cherry-Pick Wave** - Absorb the additive feature cherry-picks + PTY ctrl-z fix + 9 dependency bumps across all 5 crates
 - [ ] **Phase 89: Proxy Hardening Sync** - Absorb the proxy route/403/TLS-CONNECT/reactive-auth/customCredentials cluster against the fork-divergent TLS-interception surface
@@ -57,7 +57,7 @@ Plans:
 - [x] 86-02-PLAN.md — Theme B: cherry-pick 4ad8ba92 → f867aba2 → a6aa5995 → 7f319b9e (diagnostics → core + FFI, proxy ProxyDiagnostic, Windows bridge)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 86-03-PLAN.md — BND-03: write ADR-86 + update CLAUDE.md § Library vs CLI Boundary, final make ci gate
+- [x] 86-03-PLAN.md — BND-03: write ADR-86 + update CLAUDE.md § Library vs CLI Boundary, final make ci gate
 
 ### Phase 87: Security Sync
 **Goal**: The two upstream security fixes in the window are absorbed with cross-target clippy clean on the cfg-gated Unix edits.
@@ -111,7 +111,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
-| 86. Library-Boundary Convergence | 2/3 | In Progress|  |
+| 86. Library-Boundary Convergence | 3/3 | Complete   | 2026-06-20 |
 | 87. Security Sync | 0/TBD | Not started | - |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
