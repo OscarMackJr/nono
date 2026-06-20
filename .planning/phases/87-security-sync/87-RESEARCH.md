@@ -523,17 +523,19 @@ Ok(AuditVerificationResult {
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Where exactly does the no-grant static-deny (D-01 no-unix-socket-grant path) get installed?**
-   - What we know: `build_seccomp_af_unix_filter` is the grant-present filter. The no-grant path must deny `sendto`/`sendmsg`/`sendmmsg` without routing to USER_NOTIF.
-   - What's unclear: Whether a new `build_seccomp_af_unix_nodeny_filter` is needed, or whether the existing `BlockAll` seccomp filter (which denies all non-AF_UNIX sockets) already covers the no-grant datagram case because the filter already blocks `sendto` to non-AF_UNIX destinations. For the AF_UNIX-only no-grant case, `sendto` to a Unix path currently falls through to ALLOW in the block-network filter (which exempts AF_UNIX socket creation). A dedicated no-grant AF_UNIX datagram deny may be needed.
-   - Recommendation: Read `apply_with_abi`'s install logic for `install_seccomp_af_unix_filter` to trace the exact condition; then add the datagram trap to the grant-present filter (straightforward) and document whether the no-grant case needs additional filter logic.
+1. **Where exactly does the no-grant static-deny (D-01 no-unix-socket-grant path) get installed?** (RESOLVED)
 
-2. **Does the fork have `LinuxNetworkNotifyMode::AfUnixOnly` that needs updating?**
-   - What we know: `decide_network_notification` in `supervisor_linux.rs` was referenced with an `AfUnixOnly` mode branch in the test helpers (`make_af_unix_only_config`).
-   - What's unclear: Whether the fork has this mode and whether it affects the `SYS_SENDTO`/`SYS_SENDMSG`/`SYS_SENDMMSG` dispatch arms.
-   - Recommendation: Grep `supervisor_linux.rs` for `LinuxNetworkNotifyMode` and add appropriate arms for the new syscall numbers if needed.
+   **Resolution:** `build_seccomp_block_network_filter` (BlockAll) does NOT cover this case. It traps only `SYS_SOCKET`, `SYS_SOCKETPAIR`, and `SYS_IO_URING_SETUP` — not `sendto`/`sendmsg`/`sendmmsg`. In `exec_strategy.rs` (lines ~1226-1248), `install_seccomp_af_unix_filter()` is called only when `config.af_unix_mediation.is_pathname()` is true (grant-present path). In the no-grant case, `install_network_notify` evaluates to false and no filter is installed for send-family syscalls — they fall through to `SECCOMP_RET_ALLOW`. The bypass is confirmed open.
+
+   **Fix (implemented in Plan 87-01 Task 0):** Add `build_seccomp_af_unix_nogrant_filter()` — a new 6-instruction filter that bakes a static `SECCOMP_RET_ERRNO(EPERM)` for `SYS_SENDTO`/`SYS_SENDMSG`/`SYS_SENDMMSG` (ld + 3 JEQ + ALLOW + EPERM). Install it via `install_seccomp_af_unix_nogrant_filter()` (returns `Result<()>`, no notify fd) from `exec_strategy.rs` when mediation is active but no pathname grants exist. This is the D-01 no-grant static-EPERM path: fail-secure, deterministic, no USER_NOTIF involvement.
+
+   **Acceptance criterion:** Code inspection of `exec_strategy.rs` confirms the install condition; the install function is a peer of `install_seccomp_block_network()`. Runtime proof requires Linux.
+
+2. **Does the fork have `LinuxNetworkNotifyMode::AfUnixOnly` that needs updating?** (RESOLVED)
+
+   **Resolution:** `LinuxNetworkNotifyMode::AfUnixOnly` exists in the fork at `supervisor_linux.rs` line 610. The existing guard in `decide_network_notification` (lines ~608-617) checks for `AfUnixOnly` AFTER the AF_UNIX pathname routing block — meaning once `unix_socket_op_for_syscall` returns `Some(UnixSocketOp::Send)` for the new `SYS_SENDTO|SENDMSG|SENDMMSG` syscalls, those calls automatically flow through the existing `AfUnixOnly` guard logic without additional code changes. Task 3 Step 7 in Plan 87-01 confirms this by reading the guard and adding a commit message note. No additional dispatch arms required.
 
 ---
 
