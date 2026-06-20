@@ -46,6 +46,12 @@ Forward-compat note: `wiring.rs` `$NONO_CONFIG`/`$NONO_PACKAGES` variable expans
 | 1f4fd335 (4179ce03) | crates/nono-cli/src/exec_strategy.rs | New `signal_pty_foreground_group()` and `handle_pty_suspension()` functions reference `nix::unistd::tcgetpgrp`, `Signal::SIGTSTP/SIGSTOP/SIGWINCH`, `WaitStatus`, `WaitPidFlag` — all `nix::` symbols. Module is gated `#[cfg(not(target_os = "windows"))]` at module level in main.rs so functions are only compiled on Unix; file has many `#[cfg(target_os = "linux")]`/`#[cfg(target_os = "macos")]` blocks triggering CLAUDE.md MUST/NEVER cross-target rule | GH Actions Linux/macOS CI clippy lanes |
 | 1f4fd335 (4179ce03) | crates/nono-cli/src/pty_proxy.rs | Unix-only module (`#[cfg(not(target_os = "windows"))]` gate in main.rs); additions (`in_alt_screen()`, `leave_screen_for_suspension()`, `reenter_screen_for_resume()`, `take_suspension_request()`, `shutdown_attach_listener()`) are Unix-path by module-level gating; `nix::sys::termios` references only verified on Linux/macOS CI | GH Actions Linux/macOS CI clippy lanes |
 
+## Plan 88-05 Deferrals
+
+| Commit | File | Reason | CI Gate |
+|--------|------|--------|---------|
+| 76e1e40 (e54cf9cb) | crates/nono-cli/src/hook_runtime.rs | File contains `#[cfg(unix)]` pre_exec block (execute_before_hook, execute_after_hook); env_clear removal is within `build_hook_command()` which is called from the Unix exec path; Windows-host clippy cannot verify `#[cfg(unix)]` arms or validate the path the env is now inherited (not cleared). hook_runtime_windows.rs retains env_clear() + CLR baseline per D-14. | GH Actions Linux/macOS CI clippy lanes |
+
 ## Status
 
 PARTIAL — pending GH Actions confirmation on the head SHA.
@@ -54,4 +60,4 @@ Cross-target clippy gate SKIPPED on Windows dev host due to missing toolchain
 (x86\_64-unknown-linux-gnu, x86\_64-apple-darwin). The live GH Actions Linux
 Clippy and macOS Clippy lanes on the head SHA are the decisive signals per
 .planning/templates/cross-target-verify-checklist.md. REQs FEAT-01, FEAT-02, FEAT-04,
-FEAT-03, FEAT-05, and DEPS-01 marked PARTIAL pending CI confirmation.
+FEAT-03, FEAT-05, FEAT-06c, and DEPS-01 marked PARTIAL pending CI confirmation.
