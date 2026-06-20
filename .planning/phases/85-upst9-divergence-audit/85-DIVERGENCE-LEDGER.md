@@ -853,3 +853,58 @@ calls without a corresponding upstream fix for the same stale-state class.
 
 The regression test `diagnostic_code_is_cleared_between_calls` in
 `bindings/c/src/diagnostic.rs` (Phase 88) guards against unintentional reversion.
+
+---
+
+## Phase 89 Cluster F Reconciliation Addendum
+
+**Added:** 2026-06-20 (Phase 89 execution — Cluster F proxy hardening reconciliation)
+
+Phase 89 reconciled the `split`-disposition Cluster F by behavioral test, not by applying
+upstream code. Every finding below is recorded so a future sync window expects the divergence
+and never blind-cherry-picks the `tls_intercept/` / `RouteSelection` / `TlsInterceptIntent` hunks.
+
+### Equivalence findings (no fork change — fork already delivers the intent, guarded by a test)
+
+| Commit (issue) | Intent | Fork delivers via | Equivalence test |
+|----------------|--------|-------------------|------------------|
+| `a5d623fd` (#1077, D-09) | 403 + audit Deny on denied non-CONNECT | `reverse.rs:96-115` endpoint default-deny → `log_denied(EndpointPolicy)` + 403 | `denied_endpoint_returns_403_and_audit` |
+| `b5f8db5c` (#1048/#1091, D-01) | respect `upstream_proxy` for the outbound hop | `server.rs:534-561` `external_proxy` honoring + `proxy_runtime` `upstream_proxy → external_proxy` mapping | `build_proxy_config_maps_upstream_proxy_to_external_proxy` |
+| `7c9abd3b` (#1151, D-02) | keep CONNECT open for reactive/late auth | `connect.rs:46-48` lenient undici-compat auth (missing `Proxy-Authorization` logs at debug, continues) | `connect_keeps_open_on_missing_proxy_auth` |
+| `b0b2c743` (#1132, D-10) | `allow_domain` must not shadow a credential catch-all | exact-prefix `RouteStore` (`HashMap<String, LoadedRoute>`) + disjoint `_ep_{domain}` key namespace (no host-keyed selection, no catch-all) | `allow_domain_endpoint_route_does_not_shadow_credential_route` |
+
+All four equivalence cherry-picks were SKIPPED. None of the tests reproduced a gap — the shadow
+class (#1132) is **structurally absent** on the fork's exact-prefix model.
+
+### Won't-sync findings (architecture divergence — no fork change, ever)
+
+| Commit (issue) | Reason | Classification |
+|----------------|--------|----------------|
+| `76b7b695` (#1192, D-05) | `forward_inner_request` lives entirely inside the absent `tls_intercept/` module | won't-apply |
+| `bd4b6b7f` (#1199, D-04) | intent/activation refactor + `TlsInterceptIntent` the fork cannot back; conflicts with the fork's `EffectiveProxySettings` model | won't-sync (arch divergence) |
+
+### Deliberate fork-divergence landed
+
+| Field | Value |
+|-------|-------|
+| File | `crates/nono-cli/src/proxy_runtime.rs` |
+| Fork lines | activation predicate in `prepare_proxy_launch_options` — WARN branch (~95), ACTIVE branch (~116) |
+| Upstream reference commit | `724bb207` (#1197) |
+| Upstream behavior | #1197: proxy did not start when only `customCredentials` was configured (activation predicate omitted it), leaving injected credentials unprotected |
+| Fork behavior after Phase 89 | activation predicate includes `!prepared.custom_credentials.is_empty()` in BOTH the ACTIVE branch (starts the proxy) and the WARN branch (warn-and-ignore under `--block-net`, still `active=false`) |
+| Reason | Fail-secure gap: a `customCredentials`-only config must start the proxy so credentials are injected via the proxy rather than left exposed |
+| Classification | Behavioral fix (intent ported; upstream's intent/activation refactor + `TlsInterceptIntent` NOT ported) |
+| Commit | `0c08e5d2` |
+
+**Future sync note:** When upstream `724bb207`, `b0b2c743`, `bd4b6b7f`, `76b7b695`, `7c9abd3b`,
+`a5d623fd`, or `b5f8db5c` (or any commit touching `route.rs`, the CLI proxy activation predicate,
+the proxy intent types, or `tls_intercept/`) reappears during a sync window, expect conflicts.
+The fork's exact-prefix `RouteStore` + `_ep_{domain}` key namespace and the `EffectiveProxySettings`
+model are the deliberate divergence — preserve them. Do NOT import `RouteSelection` or
+`TlsInterceptIntent`. The guard tests
+`proxy_activates_with_custom_credentials_only`, `block_net_overrides_custom_credentials_activation`,
+`build_proxy_config_maps_upstream_proxy_to_external_proxy` (`crates/nono-cli/src/proxy_runtime.rs`),
+`connect_keeps_open_on_missing_proxy_auth` (`crates/nono-proxy/src/connect.rs`),
+`denied_endpoint_returns_403_and_audit` (`crates/nono-proxy/src/reverse.rs`), and
+`allow_domain_endpoint_route_does_not_shadow_credential_route` (`crates/nono-proxy/src/route.rs`)
+guard against unintentional reversion of the Cluster F equivalence findings.
