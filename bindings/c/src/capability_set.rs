@@ -65,6 +65,7 @@ pub unsafe extern "C" fn nono_capability_set_allow_path(
     path: *const c_char,
     mode: u32,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -112,6 +113,7 @@ pub unsafe extern "C" fn nono_capability_set_allow_file(
     path: *const c_char,
     mode: u32,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -156,6 +158,7 @@ pub unsafe extern "C" fn nono_capability_set_set_network_blocked(
     caps: *mut NonoCapabilitySet,
     blocked: bool,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -179,6 +182,7 @@ pub unsafe extern "C" fn nono_capability_set_set_network_mode(
     caps: *mut NonoCapabilitySet,
     mode: u32,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -224,6 +228,7 @@ pub unsafe extern "C" fn nono_capability_set_set_proxy_port(
     caps: *mut NonoCapabilitySet,
     port: u16,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -267,6 +272,7 @@ pub unsafe extern "C" fn nono_capability_set_allow_command(
     caps: *mut NonoCapabilitySet,
     cmd: *const c_char,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -296,6 +302,7 @@ pub unsafe extern "C" fn nono_capability_set_block_command(
     caps: *mut NonoCapabilitySet,
     cmd: *const c_char,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -329,6 +336,7 @@ pub unsafe extern "C" fn nono_capability_set_add_platform_rule(
     caps: *mut NonoCapabilitySet,
     rule: *const c_char,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;

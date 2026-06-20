@@ -40,6 +40,7 @@ pub unsafe extern "C" fn nono_session_diagnostic_report_to_json(
     ipc_denials_json: *const c_char,
     violations_json: *const c_char,
 ) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     let denials = match parse_denials(denials_json) {
         Ok(v) => v,
         Err(e) => {
@@ -93,6 +94,7 @@ pub unsafe extern "C" fn nono_merge_diagnostic_report_json(
     session_json: *const c_char,
     proxy_diagnostics_json: *const c_char,
 ) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if session_json.is_null() {
         set_last_error("session_json is null");
         return std::ptr::null_mut();
@@ -199,6 +201,43 @@ mod tests {
             .to_str()
             .expect("utf8");
         assert!(err.contains("session_json is null"));
+    }
+
+    /// CR-01 regression test: LAST_DIAGNOSTIC_CODE must be reset at the entry of
+    /// every FFI function, not just those that go through map_error().
+    ///
+    /// Scenario: a prior map_error() call sets LAST_DIAGNOSTIC_CODE to a non-Other
+    /// code. The next call to nono_merge_diagnostic_report_json(null, null) must
+    /// reset the code to Other (via clear_last_call_state() at entry), not leave
+    /// the stale code from the prior call visible to the C caller.
+    #[test]
+    fn diagnostic_code_is_cleared_between_calls() {
+        // Arrange: populate LAST_DIAGNOSTIC_CODE to a non-Other value via map_error.
+        // CwdPromptRequired maps to NonoDiagnosticCode::CwdAccessRequired (non-Other).
+        let stale_err = nono::NonoError::CwdPromptRequired;
+        crate::map_error(&stale_err);
+        // Sanity: confirm LAST_DIAGNOSTIC_CODE is now CwdAccessRequired.
+        assert_ne!(
+            nono_last_diagnostic_code(),
+            NonoDiagnosticCode::Other,
+            "setup: expected non-Other diagnostic code after map_error"
+        );
+
+        // Act: call the set_last_error-only path in nono_merge_diagnostic_report_json.
+        // null session_json triggers set_last_error("session_json is null") without
+        // going through map_error — previously leaving LAST_DIAGNOSTIC_CODE stale.
+        let json_ptr = unsafe {
+            nono_merge_diagnostic_report_json(std::ptr::null(), std::ptr::null())
+        };
+        assert!(json_ptr.is_null());
+
+        // Assert: diagnostic code must be Other (reset at entry by clear_last_call_state),
+        // NOT the stale CwdAccessRequired from the prior call.
+        assert_eq!(
+            nono_last_diagnostic_code(),
+            NonoDiagnosticCode::Other,
+            "CR-01: nono_merge_diagnostic_report_json must reset LAST_DIAGNOSTIC_CODE at entry"
+        );
     }
 
     #[test]

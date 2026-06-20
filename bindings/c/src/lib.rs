@@ -79,6 +79,19 @@ pub(crate) fn last_remediation_json() -> Option<String> {
     LAST_REMEDIATION_JSON.with(|cell| cell.borrow().clone())
 }
 
+/// Clear all thread-local call state (error, diagnostic code, remediation JSON).
+///
+/// Called at the entry of every `pub unsafe extern "C"` function that can
+/// set any thread-local. This prevents stale diagnostic codes or remediation
+/// JSON from a prior call on the same thread from leaking into the caller's
+/// error-inspection after a new call (CR-01 — deliberate fork-divergence,
+/// recorded in 85-DIVERGENCE-LEDGER.md Phase 88 CR-01 addendum).
+pub(crate) fn clear_last_call_state() {
+    LAST_ERROR.with(|c| *c.borrow_mut() = None);
+    LAST_DIAGNOSTIC_CODE.with(|c| *c.borrow_mut() = None);
+    LAST_REMEDIATION_JSON.with(|c| *c.borrow_mut() = None);
+}
+
 /// Map a `NonoError` to an error code and store the message.
 ///
 /// Every `NonoError` variant is matched explicitly so the compiler will flag
