@@ -116,7 +116,15 @@ Plans:
   1. `allow_domain` endpoint routes no longer shadow the credential catch-all (#1132), and denied non-CONNECT requests return `403` plus an audit record (#1077).
   2. The TLS CONNECT intercept respects `upstream_proxy` (#1048/#1091), reactive proxy auth keeps the connection open on CONNECT (#1151), and the proxy activates when `customCredentials` is set (#1197).
   3. All of the above are reconciled by diff-inspection against the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`) — proxy tests pass and the fork's TLS-intercept invariants are preserved (no blind cherry-pick).
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+**Wave 1** *(parallel — disjoint files)*
+- [ ] 89-01-PLAN.md — D-07 customCredentials activation fix (#1197) + D-07 regression tests + D-01 external_proxy mapping test (proxy_runtime.rs)
+- [ ] 89-02-PLAN.md — D-02 CONNECT keep-open equivalence test (#1151) + D-09 403+audit equivalence test (#1077) (connect.rs, reverse.rs)
+- [ ] 89-03-PLAN.md — D-10 allow_domain shadow-disproof test (#1132) (route.rs)
+
+**Wave 2** *(blocked on Wave 1 — records what the tests found)*
+- [ ] 89-04-PLAN.md — D-11 Phase-85 ledger reconciliation addendum (equivalence + won't-sync #1192/#1199 + D-07 fork-divergence)
 
 ### Phase 90: v3.0 Host-Gated UAT Drain
 **Goal**: The v3.0 host-gated UAT debt is drained — real daemon-side telemetry emission lands as code, and each host-gated item collapses to a single unattended `verify-dark.ps1` scripted gate with the residual live step explicitly host-gated.
