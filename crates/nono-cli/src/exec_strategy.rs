@@ -1286,6 +1286,32 @@ pub fn execute_supervised(
                     }
                 }
 
+                // D-01 no-grant path: install a static EPERM filter for send-family
+                // syscalls when AF_UNIX pathname mediation is configured but there are
+                // no explicit pathname grants (is_pathname() is false). This closes the
+                // SOCK_DGRAM bypass where a child holding an existing AF_UNIX socket fd
+                // could call sendto() → SECCOMP_RET_ALLOW before sandbox lock-down.
+                if !config.seccomp_proxy_fallback && !config.af_unix_mediation.is_pathname() {
+                    // No grant path: install static EPERM filter for send-family syscalls.
+                    // Only install when NOT using proxy fallback (proxy filter handles sendto
+                    // via USER_NOTIF already) and NOT in pathname mode (pathname mode uses the
+                    // grant-present USER_NOTIF filter installed above).
+                    // We install this best-effort — if it fails, log but don't abort.
+                    // The seccomp filter is defense-in-depth here; Landlock still applies.
+                    if let Err(_e) = nono::sandbox::install_seccomp_af_unix_nogrant_filter() {
+                        const MSG_NOGRANT: &[u8] =
+                            b"nono: AF_UNIX no-grant seccomp filter not available\n";
+                        // SAFETY: write is async-signal-safe.
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_NOGRANT.as_ptr().cast::<libc::c_void>(),
+                                MSG_NOGRANT.len(),
+                            );
+                        }
+                    }
+                }
+
                 if !linux_child_requires_dumpable(
                     config.capability_elevation,
                     config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname(),
