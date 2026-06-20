@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::package::PackageRef;
+
 // ============================================================================
 // Phase 56-01 Plan 01: AllowDomainEntry enum (ported from upstream 0ced085)
 // ============================================================================
@@ -1865,6 +1867,14 @@ pub struct SessionHook {
     /// duration. If absent, no timeout is enforced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+
+    /// Internal state to track which pack (from a registry) the session hook originated
+    /// If set, the value is namespace/pack
+    /// If absent, the key was set by a local (non-registry based) pack
+    /// This needs to be tracked per-hook, because a profile extending another profile can override
+    /// a key. The originating source pack is used to track provenance and $PACK_DIR substitution
+    #[serde(skip)]
+    pub(crate) source_pack: Option<PackageRef>,
 }
 
 /// Session lifecycle hooks for a profile.
@@ -2623,7 +2633,11 @@ pub fn load_profile_with_context(name_or_path: &str, ctx: &ResolveContext) -> Re
             "Loading pack-store profile from: {}",
             profile_path.display()
         );
-        let mut profile = finalize_profile(load_from_file(&profile_path)?)?;
+        let mut profile = load_from_file(&profile_path)?;
+        resolve_store_pack_session_hooks(&mut profile, &pack_key)?;
+        let mut profile = finalize_profile(profile)?;
+        // Inject the source pack ref so it's always present in the
+        // verification list, even if the profile JSON doesn't declare it.
         if !profile.packs.contains(&pack_key) {
             profile.packs.push(pack_key);
         }
@@ -2658,6 +2672,33 @@ pub(crate) fn is_registry_ref(s: &str) -> bool {
 /// rather than a simple profile name or registry reference.
 pub(crate) fn is_file_path_ref(s: &str) -> bool {
     !is_registry_ref(s) && (s.contains('/') || s.ends_with(".json") || s.ends_with(".jsonc"))
+}
+
+/// Stamp store provenance onto a profile's session hooks, and expand $PACK_DIR vars
+///
+/// This function adds provenance data for the session_hooks, so that as any profiles are extended,
+/// the origination of the session hook can be traced back to the registry pack that added it.
+/// Additionally, if the hook path starts with `$PACK_DIR`, the prefix is replaced with the full
+/// path to the pack's install directory.
+fn resolve_store_pack_session_hooks(profile: &mut Profile, pack_key: &str) -> Result<()> {
+    let pack_ref = crate::package::parse_package_ref(pack_key)?;
+    let install_dir = crate::package::package_install_dir(&pack_ref.namespace, &pack_ref.name)?;
+
+    for hook in [
+        &mut profile.session_hooks.before,
+        &mut profile.session_hooks.after,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if hook.source_pack.is_none() {
+            hook.source_pack = Some(pack_ref.clone());
+            if let Ok(rest) = hook.script.strip_prefix("$PACK_DIR") {
+                hook.script = install_dir.join(rest);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Load a profile from a registry pack honoring the supplied resolver
@@ -2732,7 +2773,9 @@ fn load_registry_profile_with_context(name_or_path: &str, ctx: &ResolveContext) 
                 .join(format!("{install_name}.json"));
             if profile_path.exists() {
                 tracing::info!("Loading registry profile from: {}", profile_path.display());
-                return finalize_profile(load_from_file(&profile_path)?);
+                let mut profile = load_from_file(&profile_path)?;
+                resolve_store_pack_session_hooks(&mut profile, &package_ref.key())?;
+                return finalize_profile(profile);
             }
         }
     }
@@ -3117,8 +3160,9 @@ fn load_base_profile_raw(
     // doesn't declare its own pack.
     if let Some((profile_path, pack_key)) = find_pack_store_profile(name) {
         let mut base = parse_profile_file(&profile_path)?;
+        resolve_store_pack_session_hooks(&mut base, &pack_key)?;
         if !base.packs.contains(&pack_key) {
-            base.packs.push(pack_key);
+            base.packs.push(pack_key.clone());
         }
         return Ok(ResolvedBase::Global(base));
     }
@@ -8476,10 +8520,12 @@ mod session_hooks_tests {
                 before: Some(SessionHook {
                     script: std::path::PathBuf::from("/base/pre.sh"),
                     timeout_secs: None,
+                    source_pack: None,
                 }),
                 after: Some(SessionHook {
                     script: std::path::PathBuf::from("/base/post.sh"),
                     timeout_secs: Some(60),
+                    source_pack: None,
                 }),
             },
             ..Default::default()
@@ -8489,6 +8535,7 @@ mod session_hooks_tests {
                 before: Some(SessionHook {
                     script: std::path::PathBuf::from("/child/pre.sh"),
                     timeout_secs: None,
+                    source_pack: None,
                 }),
                 after: None, // child does not set after → inherits from base
             },
@@ -8521,6 +8568,7 @@ mod session_hooks_tests {
                 before: Some(SessionHook {
                     script: std::path::PathBuf::from("/base/pre.sh"),
                     timeout_secs: Some(10),
+                    source_pack: None,
                 }),
                 after: None,
             },

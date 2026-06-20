@@ -87,7 +87,24 @@ fn install_profile_hooks(profile_name: Option<&str>, profile: &profile::Profile,
 /// 2. Verify artifact SHA-256 digests against the lockfile
 /// 3. Re-verify Sigstore bundles from the stored `.nono-trust.bundle` file
 ///    and check signer identity against the lockfile pin.
-fn verify_profile_packs(packs: &[String]) -> crate::Result<()> {
+fn verify_profile_packs(packs: &[String], profile: &profile::Profile) -> crate::Result<()> {
+    if let Some(hook) = [&profile.session_hooks.before, &profile.session_hooks.after]
+        .into_iter()
+        .flatten()
+        .find(|hook| {
+            hook.source_pack
+                .as_ref()
+                .is_some_and(|sp| !packs.contains(&sp.key()))
+        })
+    {
+        // This indicates an internal logic error where the Profile was parsed, but the source_pack
+        // the session hook references is not present in packs to check
+        return Err(nono::NonoError::PackageInstall(format!(
+            "session_hook {} unexpectedly is not part of the packs to verify",
+            hook.script.display()
+        )));
+    }
+
     if packs.is_empty() {
         return Ok(());
     }
@@ -155,6 +172,41 @@ fn verify_profile_packs(packs: &[String]) -> crate::Result<()> {
                      Found:    {}\n\
                      Reinstall with: nono pull {} --force",
                     pack_ref, artifact_name, locked_artifact.sha256, hash, pack_ref
+                )));
+            }
+        }
+
+        // Verify that session hook scripts attributed to this pack are declared
+        // artifacts in the lockfile. A hook script that exists on disk but is
+        // not in the lockfile artifacts was never attested by Sigstore — reject it.
+        for script_path in [&profile.session_hooks.before, &profile.session_hooks.after]
+            .into_iter()
+            .flatten()
+            .filter(|hook| {
+                hook.source_pack
+                    .as_ref()
+                    .is_some_and(|sp| sp.key() == *pack_ref)
+            })
+            .map(|hook| hook.script.as_path())
+        {
+            let relative_path = script_path
+                .strip_prefix(&install_dir)
+                .map_err(|_| {
+                    nono::NonoError::PackageInstall(format!(
+                        "session_hook with path {} is not within the pack",
+                        script_path.display()
+                    ))
+                })?
+                .to_str()
+                .ok_or_else(|| {
+                    nono::NonoError::PackageInstall(
+                        "Invalid script_path characters".to_string(),
+                    )
+                })?;
+            if !locked_pkg.artifacts.contains_key(relative_path) {
+                return Err(nono::NonoError::PackageInstall(format!(
+                    "session_hook with path {} is not a declared artifact in the pack lockfile",
+                    script_path.display()
                 )));
             }
         }
@@ -542,7 +594,7 @@ pub(crate) fn prepare_profile_with_context(
                 packs_to_verify.push(key);
             }
         }
-        verify_profile_packs(&packs_to_verify)?;
+        verify_profile_packs(&packs_to_verify, &profile)?;
         if !packs_to_verify.is_empty() && !silent {
             eprintln!("  Verified {} pack(s)", packs_to_verify.len());
         }
@@ -979,7 +1031,7 @@ mod tests {
     fn verify_profile_packs_requires_lockfile_entry_for_installed_pack() {
         let result = with_config_env(|config_dir| {
             create_pack_dir(config_dir, "acme", "widget");
-            super::verify_profile_packs(&["acme/widget".to_string()])
+            super::verify_profile_packs(&["acme/widget".to_string()], &Profile::default())
         });
 
         let err = result.expect_err("installed pack without lockfile entry must fail verification");
@@ -1000,7 +1052,7 @@ mod tests {
                 .expect("failed to write package artifact");
             write_lockfile_with_artifact("acme/widget", "package.json", artifact_bytes);
 
-            super::verify_profile_packs(&["acme/widget".to_string()])
+            super::verify_profile_packs(&["acme/widget".to_string()], &Profile::default())
         });
 
         let err = result.expect_err("locked pack without trust bundle must fail verification");

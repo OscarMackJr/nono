@@ -569,6 +569,7 @@ mod tests {
         let hook = profile::SessionHook {
             script,
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         let result = execute_before_hook(&hook, "test-fail-closed", Path::new("/tmp"));
@@ -592,6 +593,7 @@ mod tests {
         let hook = profile::SessionHook {
             script,
             timeout_secs: Some(1),
+            source_pack: None,
         };
 
         let start = std::time::Instant::now();
@@ -619,6 +621,7 @@ mod tests {
         let hook = profile::SessionHook {
             script,
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         let result = execute_after_hook(&hook, "test-after-fail-closed", Path::new("/tmp"), 0);
@@ -645,6 +648,7 @@ mod tests {
         let hook = profile::SessionHook {
             script: script.clone(),
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         let result = execute_before_hook(&hook, "test-basic", Path::new("/tmp")).unwrap();

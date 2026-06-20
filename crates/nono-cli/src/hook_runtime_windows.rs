@@ -1100,6 +1100,7 @@ mod tests {
         let hook = profile::SessionHook {
             script: script_path.clone(),
             timeout_secs: Some(30),
+            source_pack: None,
         };
 
         let workdir = script_dir.path();
@@ -1184,6 +1185,7 @@ mod tests {
         let hook = profile::SessionHook {
             script: script_path.clone(),
             timeout_secs: Some(30), // timeout configured — this is the CR-02 scenario
+            source_pack: None,
         };
 
         let workdir = script_dir.path();

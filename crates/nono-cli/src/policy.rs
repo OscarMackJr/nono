@@ -3282,6 +3282,7 @@ mod tests {
                 before: Some(profile::SessionHook {
                     script: std::path::PathBuf::from("/usr/local/bin/pre.sh"),
                     timeout_secs: Some(30),
+                    source_pack: None,
                 }),
                 after: None,
             },
