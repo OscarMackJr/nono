@@ -30,6 +30,15 @@ signals per the PARTIAL disposition protocol.
 
 Forward-compat note: `wiring.rs` `$NONO_CONFIG`/`$NONO_PACKAGES` variable expansion exists in upstream 8e0d94f9 but references `WiringContext`/`expand_vars` types not yet present in this fork. The upstream tests for this expansion are not included in this cherry-pick. They will be absorbed when the wiring refactor is synced in a future phase.
 
+## Plan 88-03 Deferrals
+
+| Commit | File | Reason | CI Gate |
+|--------|------|--------|---------|
+| 5eab6d46 | crates/nono-cli/src/profile/mod.rs | `validate_aws_auth()` uses `#[cfg_attr]`-compatible code but profile/mod.rs has `#[cfg(unix)]` test blocks; aws_auth field test coverage verified on Windows host, Unix-only tests deferred | GH Actions Linux/macOS CI clippy lanes |
+| c0ea3af7 | crates/nono-cli/src/hook_runtime.rs | File contains `#[cfg(unix)]` blocks (execute_before_hook, execute_after_hook); source_pack: None additions are test-only but the file triggers MUST/NEVER cross-target rule | GH Actions Linux/macOS CI clippy lanes |
+| c0ea3af7 | crates/nono-cli/src/profile/mod.rs | resolve_store_pack_session_hooks() and call sites are conditional on pack-store subsystem (Unix-primary); function body is std-only Rust but the file's existing cfg-gated tests trigger MUST/NEVER rule | GH Actions Linux/macOS CI clippy lanes |
+| c0ea3af7 | crates/nono-cli/src/profile_runtime.rs | verify_profile_packs() session-hook containment check uses strip_prefix on paths; path handling is std-only but verify_profile_packs test coverage is incomplete on Windows (path separator differences) | GH Actions Linux/macOS CI clippy lanes |
+
 ## Status
 
 PARTIAL — pending GH Actions confirmation on the head SHA.
@@ -37,5 +46,5 @@ PARTIAL — pending GH Actions confirmation on the head SHA.
 Cross-target clippy gate SKIPPED on Windows dev host due to missing toolchain
 (x86\_64-unknown-linux-gnu, x86\_64-apple-darwin). The live GH Actions Linux
 Clippy and macOS Clippy lanes on the head SHA are the decisive signals per
-.planning/templates/cross-target-verify-checklist.md. REQs FEAT-01, FEAT-02, and FEAT-04
-marked PARTIAL pending CI confirmation.
+.planning/templates/cross-target-verify-checklist.md. REQs FEAT-01, FEAT-02, FEAT-04,
+FEAT-03, and FEAT-05 marked PARTIAL pending CI confirmation.

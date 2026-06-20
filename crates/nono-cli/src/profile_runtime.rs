@@ -199,9 +199,7 @@ fn verify_profile_packs(packs: &[String], profile: &profile::Profile) -> crate::
                 })?
                 .to_str()
                 .ok_or_else(|| {
-                    nono::NonoError::PackageInstall(
-                        "Invalid script_path characters".to_string(),
-                    )
+                    nono::NonoError::PackageInstall("Invalid script_path characters".to_string())
                 })?;
             if !locked_pkg.artifacts.contains_key(relative_path) {
                 return Err(nono::NonoError::PackageInstall(format!(
