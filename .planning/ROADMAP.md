@@ -19,7 +19,7 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
 
 - [x] **Phase 85: UPST9 Divergence Audit** - Build the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions + ADR risk verdicts (completed 2026-06-19)
 - [x] **Phase 86: Library-Boundary Convergence** - Adopt upstream's core-crate audit stack + structured-diagnostics model (lib + FFI + proxy), reconcile Windows paths, update CLAUDE.md + ADR (completed 2026-06-20)
-- [ ] **Phase 87: Security Sync** - Close the Linux AF_UNIX datagram bypass (#1096) and the procfs-remap dedup leak (#1064)
+- [x] **Phase 87: Security Sync** - Close the Linux AF_UNIX datagram bypass (#1096) and the procfs-remap dedup leak (#1064) (completed 2026-06-20)
 - [ ] **Phase 88: Feature + Dependency Cherry-Pick Wave** - Absorb the additive feature cherry-picks + PTY ctrl-z fix + 9 dependency bumps across all 5 crates
 - [ ] **Phase 89: Proxy Hardening Sync** - Absorb the proxy route/403/TLS-CONNECT/reactive-auth/customCredentials cluster against the fork-divergent TLS-interception surface
 - [ ] **Phase 90: v3.0 Host-Gated UAT Drain** - Land daemon-side telemetry emission + the verify-dark.ps1 scripted gates for clean-VM install, dual-layer WFP block, and live SIEM
@@ -76,7 +76,7 @@ Plans:
 - [x] 87-02-PLAN.md — SEC-02 procfs-remap dedup guard (cherry-pick 6b3eb013) + CR-02 audit-integrity fix + ADR + divergence ledger addendum
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 87-03-PLAN.md — Cross-target clippy verification + PARTIAL→CI deferral record + ROADMAP/STATE update
+- [x] 87-03-PLAN.md — Cross-target clippy verification + PARTIAL→CI deferral record + ROADMAP/STATE update
 
 ### Phase 88: Feature + Dependency Cherry-Pick Wave
 **Goal**: The additive, low-conflict feature cherry-picks, the PTY ctrl-z fix, and all workspace dependency bumps from the window are absorbed across the 5-crate workspace.
@@ -121,7 +121,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 |-------|----------------|--------|-----------|
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
 | 86. Library-Boundary Convergence | 3/3 | Complete    | 2026-06-20 |
-| 87. Security Sync | 2/3 | In Progress|  |
+| 87. Security Sync | 3/3 | Complete | 2026-06-20 |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
 | 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |

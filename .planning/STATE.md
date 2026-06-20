@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
 status: executing
-stopped_at: Phase 87 context gathered
-last_updated: "2026-06-20T02:56:45.218Z"
-last_activity: 2026-06-20 -- Phase 87 execution started
+stopped_at: Phase 87 complete — PARTIAL→CI pending GH Actions
+last_updated: "2026-06-20T12:00:00.000Z"
+last_activity: 2026-06-20 -- Phase 87 complete (3/3 plans)
 progress:
   total_phases: 6
   completed_phases: 2
@@ -22,14 +22,14 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — kept current with upstream `always-further/nono` without regressing the fork's Windows security model.
 
-**Current Focus:** Phase 87 — security-sync
+**Current Focus:** Phase 88 — feature-dependency-wave
 
 ## Current Position
 
-Phase: 87 (security-sync) — EXECUTING
-Plan: 1 of 3
-Status: Executing Phase 87
-Last activity: 2026-06-20 -- Phase 87 execution started
+Phase: 88 (feature-dependency-wave) — NEXT
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-06-20 -- Phase 87 complete (3/3 plans)
 
 Progress: [██████████] 100%
 
@@ -123,4 +123,5 @@ Resume file: .planning/phases/87-security-sync/87-CONTEXT.md
 
 ## Operator Next Steps
 
-- Review the v3.1 roadmap (`.planning/ROADMAP.md`), then run `/gsd:plan-phase 85` to plan the UPST9 Divergence Audit.
+- Phase 87 complete (PARTIAL→CI pending GH Actions). Run `/gsd:plan-phase 88` to plan the Feature + Dependency Cherry-Pick Wave.
+- Monitor GH Actions CI on branch `milestone/v2.13-carryforward-closeout` for SEC-01/SEC-02 decisive gates (Linux clippy + Linux test lanes).
