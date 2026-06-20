@@ -67,7 +67,16 @@ Plans:
   1. The Linux AF_UNIX datagram bypass is closed — `sendto`/`sendmsg`/`sendmmsg` are trapped by the seccomp filter and gated on a connect grant (upstream #1096), verified by the ported test matrix on Linux CI.
   2. `deduplicate()` no longer inherits procfs-remap originals (upstream #1064 guard) — `/dev/null` is preserved when deduped with `/dev/stdin`.
   3. The cfg-gated Unix edits (`crates/nono/src/sandbox/linux.rs`, `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, `crates/nono/src/capability.rs`) clear `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin` (or are marked PARTIAL→deferred-to-CI per the cross-target-verify checklist) — Windows-host `cargo check` is not accepted as a substitute.
-**Plans**: TBD
+**Plans**: 3 plans
+Plans:
+**Wave 1**
+- [ ] 87-01-PLAN.md — SEC-01: AF_UNIX datagram bypass close (cherry-pick e2086877 — BPF filter expansion, SYS_SEND* consts, send-family supervisor dispatch)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+- [ ] 87-02-PLAN.md — SEC-02 procfs-remap dedup guard (cherry-pick 6b3eb013) + CR-02 audit-integrity fix + ADR + divergence ledger addendum
+
+**Wave 3** *(blocked on Wave 2 completion)*
+- [ ] 87-03-PLAN.md — Cross-target clippy verification + PARTIAL→CI deferral record + ROADMAP/STATE update
 
 ### Phase 88: Feature + Dependency Cherry-Pick Wave
 **Goal**: The additive, low-conflict feature cherry-picks, the PTY ctrl-z fix, and all workspace dependency bumps from the window are absorbed across the 5-crate workspace.
@@ -112,7 +121,7 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 |-------|----------------|--------|-----------|
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
 | 86. Library-Boundary Convergence | 3/3 | Complete    | 2026-06-20 |
-| 87. Security Sync | 0/TBD | Not started | - |
+| 87. Security Sync | 0/3 | In progress | - |
 | 88. Feature + Dependency Cherry-Pick Wave | 0/TBD | Not started | - |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
 | 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |
