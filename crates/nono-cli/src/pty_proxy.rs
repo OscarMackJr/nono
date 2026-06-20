@@ -415,7 +415,6 @@ impl PtyProxy {
         let _ = std::fs::remove_file(&self.attach_path);
     }
 
-
     /// Accept an attach connection.
     ///
     /// Returns true if a client was attached.
