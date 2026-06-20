@@ -826,3 +826,30 @@ auditors must preserve the fork's expression. Do not revert to `records_verified
 
 The regression test `verify_empty_log_with_no_stored_metadata_is_not_valid` in
 `crates/nono/src/audit.rs` (Phase 87) guards against unintentional reversion.
+
+---
+
+## Phase 88 CR-01 Addendum
+
+**Added:** 2026-06-20 (Phase 88 execution — CR-01 FFI stale-diagnostic-state fix)
+
+| Field | Value |
+|-------|-------|
+| Files | `bindings/c/src/diagnostic.rs` + `bindings/c/src/lib.rs` (and all other `bindings/c/src/` FFI entry points) |
+| Fork lines | `nono_session_diagnostic_report_to_json()` entry (~line 43), `nono_merge_diagnostic_report_json()` entry (~line 97), plus 14 other `pub unsafe extern "C"` entry points across `capability_set.rs`, `fs_capability.rs`, `sandbox.rs`, `state.rs`, `query.rs` |
+| Upstream reference commit | `a6aa9995` (absorbed in Phase 86 boundary convergence; CR-01 extends the pattern) |
+| Upstream behavior | Upstream added the diagnostic module at `a6aa9995`; the stale-code pattern in `set_last_error`-only paths was not addressed at that commit |
+| Fork behavior after Phase 88 | `clear_last_call_state()` called at every `pub unsafe extern "C"` fn entry — resets `LAST_ERROR`, `LAST_DIAGNOSTIC_CODE`, and `LAST_REMEDIATION_JSON` atomically before any operation that could set a thread-local |
+| Reason | 86-REVIEW.md CR-01 finding: `nono_session_diagnostic_report_to_json` and `nono_merge_diagnostic_report_json` called `set_last_error()` without first resetting `LAST_DIAGNOSTIC_CODE`, leaving C callers with stale diagnostic codes from a prior FFI call on the same thread |
+| Classification | Deliberate fork-divergence — correctness hardening |
+| Commit | `db0f221d` |
+
+**Future sync note:** When any upstream commit touches the `bindings/c/src/` entry-point bodies
+(particularly `nono_session_diagnostic_report_to_json` and `nono_merge_diagnostic_report_json`),
+the `crate::clear_last_call_state();` call at entry MUST be preserved. Any upstream commit
+removing or reordering these entry-point clears must be evaluated carefully — the stale-code
+correctness invariant is the fork's deliberate addition. Do not remove `clear_last_call_state()`
+calls without a corresponding upstream fix for the same stale-state class.
+
+The regression test `diagnostic_code_is_cleared_between_calls` in
+`bindings/c/src/diagnostic.rs` (Phase 88) guards against unintentional reversion.
