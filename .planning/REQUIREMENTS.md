@@ -55,7 +55,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 ### PTY + Dependency Sync (DEPS)
 
 - [x] **DEPS-01**: PTY ctrl-z suspend/resume no longer hangs when running under a PTY (upstream #1135).
-- [ ] **DEPS-02**: Workspace dependency bumps from the window are absorbed across all 5 crates with internal path-dep version pins synced (`project_workspace_crates`): x509-parser 0.18.1, hyper 1.10.1, cbindgen 0.29.4, typify 0.7.0, zeroize 1.9.0, time 0.3.49, chrono 0.4.45, ignore 0.4.26, which 8.0.3.
+- [x] **DEPS-02**: Workspace dependency bumps from the window are absorbed across all 5 crates with internal path-dep version pins synced (`project_workspace_crates`): x509-parser 0.18.1, hyper 1.10.1, cbindgen 0.29.4, typify 0.7.0, zeroize 1.9.0, time 0.3.49, chrono 0.4.45, ignore 0.4.26, which 8.0.3.
 
 ### v3.0 Host-Gated UAT Drain (DRAIN)
 
@@ -96,7 +96,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 | FEAT-05 | Phase 88 | Complete |
 | FEAT-06 | Phase 88 | Complete |
 | DEPS-01 | Phase 88 | Complete |
-| DEPS-02 | Phase 88 | Pending |
+| DEPS-02 | Phase 88 | Complete |
 | PROXY-01 | Phase 89 | Pending |
 | PROXY-02 | Phase 89 | Pending |
 | DRAIN-01 | Phase 90 | Pending |
