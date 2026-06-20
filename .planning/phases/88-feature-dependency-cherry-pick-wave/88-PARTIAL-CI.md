@@ -52,12 +52,40 @@ Forward-compat note: `wiring.rs` `$NONO_CONFIG`/`$NONO_PACKAGES` variable expans
 |--------|------|--------|---------|
 | 76e1e40 (e54cf9cb) | crates/nono-cli/src/hook_runtime.rs | File contains `#[cfg(unix)]` pre_exec block (execute_before_hook, execute_after_hook); env_clear removal is within `build_hook_command()` which is called from the Unix exec path; Windows-host clippy cannot verify `#[cfg(unix)]` arms or validate the path the env is now inherited (not cleared). hook_runtime_windows.rs retains env_clear() + CLR baseline per D-14. | GH Actions Linux/macOS CI clippy lanes |
 
-## Status
+## Plan 88-06 Deferrals
 
-PARTIAL — pending GH Actions confirmation on the head SHA.
+Plan 88-06 (CR-01 FFI fix + DEPS-02) introduces NO new cfg-gated Unix code.
+The `bindings/c/src/` files modified by CR-01 contain no `#[cfg(unix)]` or
+`#[cfg(target_os = "linux")]`/`#[cfg(target_os = "macos")]` blocks; the
+`clear_last_call_state()` helper and its call sites are platform-agnostic.
+DEPS-02 changes only Cargo.toml and Cargo.lock — no source code.
 
-Cross-target clippy gate SKIPPED on Windows dev host due to missing toolchain
-(x86\_64-unknown-linux-gnu, x86\_64-apple-darwin). The live GH Actions Linux
-Clippy and macOS Clippy lanes on the head SHA are the decisive signals per
-.planning/templates/cross-target-verify-checklist.md. REQs FEAT-01, FEAT-02, FEAT-04,
-FEAT-03, FEAT-05, FEAT-06c, and DEPS-01 marked PARTIAL pending CI confirmation.
+**No new PARTIAL→CI deferrals for Plan 88-06.**
+
+## Summary of PARTIAL→CI Deferrals for Phase 88
+
+All items below require GH Actions Linux/macOS CI lanes to achieve a PASS verdict.
+Per CLAUDE.md §"Cross-target clippy verification" MUST/NEVER rule, Windows-host
+cargo clippy is NOT a substitute.
+
+| Plan | Commit | File | Deferred Verification |
+|------|--------|------|----------------------|
+| 88-01 | 89ba09cf (d48aeb7b) | exec_strategy.rs | cfg-gated Linux/macOS blocks in file |
+| 88-01 | 89ba09cf (d48aeb7b) | exec_strategy/env_sanitization.rs | directory triggers MUST/NEVER rule |
+| 88-02 | 0a09ff41 (e8293b36) | state_paths.rs | #[cfg(target_os="windows")] + not-windows arm (D-02) |
+| 88-02 | 0a09ff41 (e8293b36) | audit_session.rs | #[cfg(unix)] perms block |
+| 88-02 | 0a09ff41 (e8293b36) | protected_paths.rs | platform-specific #[cfg] blocks |
+| 88-02 | 74c5ac23 (8e0d94f9) | profile/mod.rs | #[cfg(unix)] XDG config expansion tests |
+| 88-02 | de553185 | session.rs | #[cfg(not(target_os="windows"))] XDG session dir test |
+| 88-02 | de553185 | config/mod.rs | #[cfg(not(target_os="windows"))] XDG config dir fallback test |
+| 88-03 | 5eab6d46 | profile/mod.rs | #[cfg(unix)] test blocks |
+| 88-03 | c0ea3af7 | hook_runtime.rs | #[cfg(unix)] blocks |
+| 88-03 | c0ea3af7 | profile/mod.rs | resolve_store_pack_session_hooks() cfg-gated |
+| 88-03 | c0ea3af7 | profile_runtime.rs | path separator differences on Windows |
+| 88-04 | 1f4fd335 (4179ce03) | exec_strategy.rs | nix:: PTY functions (cfg-gated module) |
+| 88-04 | 1f4fd335 (4179ce03) | pty_proxy.rs | Unix-only module |
+| 88-05 | 76e1e40d (e54cf9cb) | hook_runtime.rs | #[cfg(unix)] pre_exec block + env_clear removal |
+
+Status: PARTIAL→CI — Decisive verification pending GH Actions Linux + macOS CI lanes.
+
+Windows-host definitive gate (Plans 88-01 through 88-06): `cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used` PASS + `cargo fmt --all -- --check` PASS + cargo test pre-existing failure baseline unchanged.
