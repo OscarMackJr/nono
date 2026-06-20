@@ -427,6 +427,7 @@ pub unsafe extern "C" fn nono_capability_set_is_network_blocked(
 pub unsafe extern "C" fn nono_capability_set_summary(
     caps: *const NonoCapabilitySet,
 ) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         return std::ptr::null_mut();
     }

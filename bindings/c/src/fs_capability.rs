@@ -35,6 +35,7 @@ pub unsafe extern "C" fn nono_capability_set_fs_original(
     caps: *const NonoCapabilitySet,
     index: usize,
 ) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         return std::ptr::null_mut();
     }
@@ -58,6 +59,7 @@ pub unsafe extern "C" fn nono_capability_set_fs_resolved(
     caps: *const NonoCapabilitySet,
     index: usize,
 ) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         return std::ptr::null_mut();
     }
@@ -168,6 +170,7 @@ pub unsafe extern "C" fn nono_capability_set_fs_source_group_name(
     caps: *const NonoCapabilitySet,
     index: usize,
 ) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         return std::ptr::null_mut();
     }

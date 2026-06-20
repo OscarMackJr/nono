@@ -239,6 +239,41 @@ mod tests {
         );
     }
 
+    /// WR-01 regression test (CR-01 follow-up): string-returning FFI getters that
+    /// call rust_string_to_c() were missed by the original CR-01 sweep and did not
+    /// reset thread-local diagnostic state at entry. This proves one such getter
+    /// (nono_capability_set_summary) now clears prior stale error state.
+    ///
+    /// Scenario: a prior map_error() sets LAST_DIAGNOSTIC_CODE to a non-Other code.
+    /// Calling nono_capability_set_summary(null) returns NULL without going through
+    /// map_error — previously leaving the stale code visible to the C caller. With
+    /// the WR-01 fix, clear_last_call_state() at entry resets it to Other.
+    #[test]
+    fn string_getter_clears_stale_diagnostic_state() {
+        // Arrange: populate LAST_DIAGNOSTIC_CODE to a non-Other value via map_error.
+        let stale_err = nono::NonoError::CwdPromptRequired;
+        crate::map_error(&stale_err);
+        assert_ne!(
+            nono_last_diagnostic_code(),
+            NonoDiagnosticCode::Other,
+            "setup: expected non-Other diagnostic code after map_error"
+        );
+
+        // Act: call a string-returning getter that does NOT go through map_error.
+        // SAFETY: deliberately passing NULL (NULL-safe getter).
+        let summary_ptr =
+            unsafe { crate::nono_capability_set_summary(std::ptr::null()) };
+        assert!(summary_ptr.is_null());
+
+        // Assert: diagnostic code reset to Other at entry by clear_last_call_state,
+        // NOT the stale CwdAccessRequired from the prior call.
+        assert_eq!(
+            nono_last_diagnostic_code(),
+            NonoDiagnosticCode::Other,
+            "WR-01: nono_capability_set_summary must reset LAST_DIAGNOSTIC_CODE at entry"
+        );
+    }
+
     #[test]
     fn merge_diagnostic_report_json_wraps_proxy_array() {
         let session = std::ffi::CString::new(
