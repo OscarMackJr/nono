@@ -91,7 +91,7 @@ Plans:
 **Plans**: 6 plans
 Plans:
 **Wave 1**
-- [ ] 88-01-PLAN.md — FEAT-01 set_vars env injection + FEAT-04 keyring timeout (d48aeb7b, c6b13345)
+- [x] 88-01-PLAN.md — FEAT-01 set_vars env injection + FEAT-04 keyring timeout (d48aeb7b, c6b13345)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 88-02-PLAN.md — FEAT-02 XDG state dirs + D-01/D-02/D-03 fork reconciliation (e8293b36, 8e0d94f9)
@@ -140,6 +140,6 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | 85. UPST9 Divergence Audit | 1/1 | Complete    | 2026-06-19 |
 | 86. Library-Boundary Convergence | 3/3 | Complete    | 2026-06-20 |
 | 87. Security Sync | 3/3 | Complete | 2026-06-20 |
-| 88. Feature + Dependency Cherry-Pick Wave | 0/6 | Not started | - |
+| 88. Feature + Dependency Cherry-Pick Wave | 1/6 | Executing | 2026-06-20 |
 | 89. Proxy Hardening Sync | 0/TBD | Not started | - |
 | 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |
