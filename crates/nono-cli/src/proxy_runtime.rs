@@ -473,6 +473,28 @@ mod tests {
         );
     }
 
+    /// D-01 equivalence: build_proxy_config_from_flags maps upstream_proxy to
+    /// ProxyConfig.external_proxy (#1048/#1091). Fork uses the field name `external_proxy`
+    /// where upstream uses `upstream_proxy`; the mapping is already present at
+    /// build_proxy_config_from_flags lines 222-228. This test documents equivalence and
+    /// confirms the cherry-pick of #1048/#1091 is unnecessary (verify-present).
+    #[test]
+    fn build_proxy_config_maps_upstream_proxy_to_external_proxy() {
+        let proxy = crate::launch_runtime::ProxyLaunchOptions {
+            active: true,
+            upstream_proxy: Some("http://corp:3128".into()),
+            ..crate::launch_runtime::ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
+        let ext = config
+            .external_proxy
+            .expect("external_proxy must be Some when upstream_proxy is set");
+        assert_eq!(
+            ext.address, "http://corp:3128",
+            "upstream_proxy must map to external_proxy.address (#1048/#1091 / D-01)"
+        );
+    }
+
     /// D-07 regression: proxy activates when only customCredentials is configured (#1197).
     /// CapabilitySet::new() defaults to NetworkMode::Open (not Blocked/ProxyOnly) so only
     /// the custom_credentials disjunct can trigger active=true here.
