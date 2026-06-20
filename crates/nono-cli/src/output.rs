@@ -1035,7 +1035,7 @@ mod tests {
         dry_run_command_line, format_unix_socket_mode_badge, normalize_terminal_line_endings,
         print_blocked_grants, print_capabilities, print_profile_hint, render_diagnostic_footer,
     };
-    use nono::UnixSocketMode;
+    use nono::{CapabilitySet, UnixSocketMode};
     use std::ffi::{OsStr, OsString};
     use tempfile::tempdir;
 
