@@ -4,8 +4,8 @@ milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
 status: executing
 stopped_at: Phase 87 context gathered
-last_updated: "2026-06-20T02:22:10.277Z"
-last_activity: 2026-06-20 -- Phase 87 planning complete
+last_updated: "2026-06-20T02:56:45.218Z"
+last_activity: 2026-06-20 -- Phase 87 execution started
 progress:
   total_phases: 6
   completed_phases: 2
@@ -22,14 +22,14 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — kept current with upstream `always-further/nono` without regressing the fork's Windows security model.
 
-**Current Focus:** Phase 86 — library-boundary-convergence
+**Current Focus:** Phase 87 — security-sync
 
 ## Current Position
 
-Phase: 87
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-20 -- Phase 87 planning complete
+Phase: 87 (security-sync) — EXECUTING
+Plan: 1 of 3
+Status: Executing Phase 87
+Last activity: 2026-06-20 -- Phase 87 execution started
 
 Progress: [██████████] 100%
 
