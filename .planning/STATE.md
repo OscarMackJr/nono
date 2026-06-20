@@ -4,14 +4,14 @@ milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
 status: executing
 stopped_at: Phase 88 Plan 01 complete (commits 89ba09cf, 614cf1c7, 6829004a)
-last_updated: "2026-06-20T16:26:13.219Z"
+last_updated: "2026-06-20T16:50:18.707Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 6
   completed_phases: 3
   total_plans: 13
-  completed_plans: 10
-  percent: 77
+  completed_plans: 11
+  percent: 85
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -27,11 +27,11 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 ## Current Position
 
 Phase: 88 (feature-dependency-wave) — EXECUTING
-Plan: 4 of 06 (Plan 88-01 complete)
+Plan: 5 of 06 (Plan 88-01 complete)
 Status: Ready to execute
 Last activity: 2026-06-20
 
-Progress: [████████░░] 77%
+Progress: [█████████░] 85%
 
 ## Performance Metrics
 
@@ -49,6 +49,7 @@ Progress: [████████░░] 77%
 | Phase 86 P03 | 30 | 2 tasks | 2 files |
 | Phase 88 P01 | 180 | 3 tasks | 17 files |
 | Phase 88 P03 | 3h30m | 3 tasks | 13 files |
+| Phase 88 P04 | 90 | 4 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -60,6 +61,9 @@ Progress: [████████░░] 77%
 | Library-boundary convergence is its own phase, sequenced right after the audit | 86 | ~2200 LOC of audit + structured-diagnostics moved into the core `nono` crate, adopt-upstream; highest-risk cluster, touches FFI + Windows diagnostic paths + proxy `ProxyDiagnostic`. SEC/FEAT/PROXY diagnostics-touching work depends on it landing first. |
 | Security fix (SEC-01/02) its own phase, flagged security-priority | 87 | AF_UNIX datagram bypass (#1096) + procfs-remap dedup guard (#1064); cfg-gated Unix edits require cross-target clippy. |
 | FEAT + DEPS folded into one additive cherry-pick wave | 88 | All additive, low-conflict; PTY ctrl-z fix (DEPS-01) + 9 dep bumps (DEPS-02) ride with them; `make ci` is the single gate. |
+| D-07: always-further/claude -> claude-code alias in policy.json profile_aliases; bare claude-code remains canonical | 88-04 | Backward compat: bare name still resolves; namespace form is the public-facing name per FEAT-06b rename. |
+| D-08: fork-only profiles (swival, nono-ts-*) namespaced via aliases; one-hop resolution only | 88-04 | Prevents alias chaining (T-88-14 mitigation); profile_aliases map is static build-time embedded. |
+| DEPS-01 exec_strategy.rs module-level cfg gate sufficient for nix:: symbols; no per-function guards needed | 88-04 | main.rs line 34 gates entire exec_strategy module; PARTIAL->CI deferred to GH Actions Linux/macOS lanes. |
 | PROXY its own phase, diff-inspect-careful | 89 | PROXY-02 touches the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`); depends on Phase 86 ProxyDiagnostic + Phase 88 AWS/customCredentials. |
 | DRAIN independent (Phase 90), runs last/parallel | 90 | v3.0 host-gated UAT debt; DRAIN-04 (daemon SecurityEventLayer wiring) is real code, others are scripted-gate + operator-gated live UAT. |
 
@@ -119,7 +123,7 @@ Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.p
 
 ## Session Continuity
 
-Last session: 2026-06-20T16:26:13.208Z
+Last session: 2026-06-20T16:50:18.688Z
 Stopped at: Phase 88 Plan 01 complete (commits 89ba09cf, 614cf1c7, 6829004a)
 Resume file: None
 

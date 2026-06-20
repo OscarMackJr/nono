@@ -45,7 +45,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **FEAT-03**: AWS auth config (`AwsAuthConfig`) is accepted and validated in profiles + proxy route config, mutually exclusive with `credential_key` / `oauth2` (upstream #1166).
 - [x] **FEAT-04**: Keyring access honors `NONO_KEYRING_TIMEOUT_SECS` (default 120s, `0` = no timeout) (upstream #977).
 - [x] **FEAT-05**: `$PACK_DIR` store-pack session hooks resolve with `source_pack` propagation (upstream #1073).
-- [ ] **FEAT-06**: update-check reports CI provider/environment discovery (upstream #1113), profile names are standardized to the namespace, and bool CLI flags accept truthy env values (upstream #1136).
+- [x] **FEAT-06**: update-check reports CI provider/environment discovery (upstream #1113), profile names are standardized to the namespace, and bool CLI flags accept truthy env values (upstream #1136).
 
 ### Proxy Sync (PROXY)
 
@@ -54,7 +54,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### PTY + Dependency Sync (DEPS)
 
-- [ ] **DEPS-01**: PTY ctrl-z suspend/resume no longer hangs when running under a PTY (upstream #1135).
+- [x] **DEPS-01**: PTY ctrl-z suspend/resume no longer hangs when running under a PTY (upstream #1135).
 - [ ] **DEPS-02**: Workspace dependency bumps from the window are absorbed across all 5 crates with internal path-dep version pins synced (`project_workspace_crates`): x509-parser 0.18.1, hyper 1.10.1, cbindgen 0.29.4, typify 0.7.0, zeroize 1.9.0, time 0.3.49, chrono 0.4.45, ignore 0.4.26, which 8.0.3.
 
 ### v3.0 Host-Gated UAT Drain (DRAIN)
@@ -94,8 +94,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 | FEAT-03 | Phase 88 | Complete |
 | FEAT-04 | Phase 88 | PARTIAL→CI (shipped 614cf1c7; no cfg gates; full verify in CI) |
 | FEAT-05 | Phase 88 | Complete |
-| FEAT-06 | Phase 88 | Pending |
-| DEPS-01 | Phase 88 | Pending |
+| FEAT-06 | Phase 88 | Complete |
+| DEPS-01 | Phase 88 | Complete |
 | DEPS-02 | Phase 88 | Pending |
 | PROXY-01 | Phase 89 | Pending |
 | PROXY-02 | Phase 89 | Pending |
