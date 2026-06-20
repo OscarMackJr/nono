@@ -149,7 +149,9 @@ pub struct AuditVerificationResult {
     pub stored_merkle_root: Option<ContentHash>,
     /// Whether the stored event count matches the recomputed count.
     pub event_count_matches: bool,
-    /// True when all record-level checks passed.
+    /// True when at least one record was processed and all record-level checks
+    /// passed. False for an empty log, which means no integrity claim was made.
+    /// (Fork divergence from upstream — see ADR-87-cr02-audit-bypass.md.)
     pub records_verified: bool,
     /// Fork extension: whether stored chain head matches recomputed chain head.
     /// True if no stored chain head was provided (vacuously true — nothing to mismatch).
@@ -162,6 +164,10 @@ pub struct AuditVerificationResult {
 impl AuditVerificationResult {
     /// Returns true when all integrity checks passed: record-level verification,
     /// event count, chain head, and Merkle root all match.
+    ///
+    /// Returns false for an empty log with `stored: None` (no verification was
+    /// performed, so `records_verified` is false). This is intentional:
+    /// callers must not mistake "nothing checked" for "everything passed."
     #[must_use]
     pub fn is_valid(&self) -> bool {
         self.records_verified
@@ -1403,7 +1409,10 @@ pub fn verify_audit_log(
         stored_chain_head,
         stored_merkle_root,
         event_count_matches,
-        records_verified: true,
+        // Fork-hardening (CR-02): set records_verified to false when no records were
+        // processed. Upstream hardcodes true (e9529312). Deliberate divergence;
+        // see proj/ADR-87-cr02-audit-bypass.md and 85-DIVERGENCE-LEDGER.md.
+        records_verified: event_count > 0,
         chain_head_matches,
         merkle_root_matches,
     })
@@ -1419,6 +1428,24 @@ mod tests {
     use crate::AccessMode;
     use std::io::BufReader;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn verify_empty_log_with_no_stored_metadata_is_not_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write an empty audit events file (no records).
+        let events_path = dir.path().join(AUDIT_EVENTS_FILENAME);
+        std::fs::write(&events_path, "").unwrap();
+        let result = verify_audit_log(dir.path(), None).unwrap();
+        assert_eq!(result.event_count, 0);
+        assert!(
+            !result.records_verified,
+            "empty log must have records_verified = false (CR-02)"
+        );
+        assert!(
+            !result.is_valid(),
+            "is_valid() must return false when no records were verified"
+        );
+    }
 
     #[test]
     fn recorder_produces_integrity_summary() {

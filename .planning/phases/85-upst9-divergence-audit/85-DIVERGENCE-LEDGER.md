@@ -801,3 +801,28 @@ individual commits.
 **Completeness verification:** 35 substantive + 55 noise = 90 total. Matches
 `git log --oneline 52809dda..01537570 | wc -l` = 90. Every commit in the window is accounted
 for in exactly one of: cluster per-commit tables (35) or this noise section (55).
+
+---
+
+## Phase 87 CR-02 Addendum
+
+**Added:** 2026-06-20 (Phase 87 execution — CR-02 fork hardening)
+
+| Field | Value |
+|-------|-------|
+| File | `crates/nono/src/audit.rs` |
+| Line (fork) | ~1413 (`records_verified` in `verify_audit_log` return struct) |
+| Upstream reference commit | `e9529312` |
+| Upstream behavior | `records_verified: true` — hardcoded regardless of `event_count` |
+| Fork behavior after Phase 87 | `records_verified: event_count > 0` |
+| Reason | Audit-integrity bypass: an empty log with `stored: None` returned `is_valid() = true`, falsely signalling "all integrity checks passed" when no records were verified |
+| Classification | Deliberate fork-divergence — security hardening |
+| ADR | `proj/ADR-87-cr02-audit-bypass.md` |
+
+**Future sync note:** When upstream `e9529312` (or any commit that touches this return block)
+reappears during a sync window, the line `records_verified: true` WILL conflict with the fork's
+`records_verified: event_count > 0`. This conflict is **expected and intentional**. Sync
+auditors must preserve the fork's expression. Do not revert to `records_verified: true`.
+
+The regression test `verify_empty_log_with_no_stored_metadata_is_not_valid` in
+`crates/nono/src/audit.rs` (Phase 87) guards against unintentional reversion.
