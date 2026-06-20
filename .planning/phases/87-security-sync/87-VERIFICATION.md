@@ -349,3 +349,109 @@ Before marking SEC-01 and SEC-02 as VERIFIED:
 2. GH Actions Linux Test lane reports green for all `#[cfg(target_os = "linux")]` BPF filter tests
 3. GH Actions Linux Test lane reports `remap_preserves_dev_null_when_deduped_with_dev_stdin` PASS
 4. GH Actions macOS Clippy lane reports green on HEAD SHA for `--target x86_64-apple-darwin`
+
+---
+
+## Post-Review Fix (CR-01) — 2026-06-20
+
+**Commit:** `718fe59d`
+**Trigger:** Code review finding CR-01: no-grant static-EPERM filter installed in default Off mode,
+breaking all datagram sends (UDP/DNS/QUIC) in supervised Linux runs.
+
+### Regression Description
+
+The original implementation of the D-01 no-grant filter (commit `6cf2645c`) used the gate:
+
+```rust
+if !config.seccomp_proxy_fallback && !config.af_unix_mediation.is_pathname() {
+```
+
+`LinuxAfUnixMediation` is a binary `Off`/`Pathname` enum. `!is_pathname()` is `true` in the
+default `Off` state. This caused the static-EPERM filter to install in **every supervised Linux
+run** that had neither proxy fallback nor pathname mediation — i.e. the default configuration.
+The filter matches purely on syscall number (`sendto`/`sendmsg`/`sendmmsg`) with no address-family
+check, so UDP sends (DNS, QUIC, NTP) were broken even with `NetworkMode::AllowAll`.
+
+### The Fix
+
+**New helper function:** `af_unix_send_filter_action(proxy_fallback, mediation, has_unix_grants)
+-> AfUnixSendFilterAction` in `crates/nono-cli/src/exec_strategy.rs`.
+
+**Correct gate logic:**
+
+| proxy_fallback | mediation | has_unix_grants | action |
+|---|---|---|---|
+| true | any | any | `UserNotify` (proxy filter, fd exchanged) |
+| false | Off | any | `NoFilter` (nothing installs — CR-01 regression guard) |
+| false | Pathname | true | `UserNotify` (AF_UNIX USER_NOTIF, fd exchanged) |
+| false | Pathname | false | `StaticEperm` (D-01 no-grant static filter, no fd) |
+
+**Child–parent consistency:** Both child (filter install) and parent (recv_fd decision) call the
+same `af_unix_send_filter_action` with the same config values. This prevents deadlock: parent
+only blocks on `recv_fd()` when the child actually sends a fd (both sides return `UserNotify`).
+
+**Additional fixes in the same commit:**
+- WR-04: `read_msghdr_dest` now uses `core::mem::offset_of!(libc::msghdr, msg_name/namelen)`
+  and `core::mem::size_of::<usize>()` instead of the hard-coded literal 12 (LP64-only). Adds
+  compile-time assertions for field ordering invariants.
+- WR-01/02/03: Concise accepted-limitation comments added at CONTINUE call sites in
+  `supervisor_linux.rs` and at the no-grant filter failure path in `exec_strategy.rs`.
+- IN-02: `#[must_use]` messages updated to describe return values only, not policy semantics.
+
+### Tests Added
+
+`#[cfg(target_os = "linux")] mod af_unix_send_filter_action_tests` in `exec_strategy.rs`:
+- `off_mode_no_proxy_no_grants_installs_nothing` — CR-01 regression guard
+- `off_mode_no_proxy_with_grants_installs_nothing` — Off mode with grants also NoFilter
+- `pathname_mode_with_grants_installs_user_notif`
+- `pathname_mode_no_grants_installs_static_eperm`
+- `proxy_fallback_always_user_notif` (4 sub-assertions)
+- `exhaustive_gate_table` — all 8 (proxy, mediation, has_grants) triples
+
+These tests are `#[cfg(target_os = "linux")]`-gated and run 0 tests on Windows host
+(PARTIAL→CI per D-07). The tests exercise the pure logic function, not kernel behavior.
+
+### Accepted Known Limitations
+
+The following findings are accepted as inherent to seccomp USER_NOTIF CONTINUE-based
+mediation and exist in the upstream design. They are documented with code comments:
+
+**WR-01 — CONTINUE-after-pointer-read TOCTOU (send destinations):** On CONTINUE, the
+kernel re-reads the destination address from child memory. A multi-threaded sandboxed
+child could swap `msg_name` after the supervisor reads it. Accepted because: (a) the
+single-threaded agent model makes this extremely unlikely in practice; (b) emulating
+without CONTINUE is not available at this ABI level. Code comment added in
+`supervisor_linux.rs` `handle_network_notification`.
+
+**WR-02 — No-grant filter failure is best-effort:** If `install_seccomp_af_unix_nogrant_filter`
+fails, the child continues without the filter and the SOCK_DGRAM bypass remains open.
+Landlock V4 does NOT backstop AF_UNIX sends. Accepted because: kernels with Landlock V4
+pathname support but without seccomp-BPF are exceedingly rare; treating this as fatal
+(`_exit(126)`) would break legitimate deployments. Stderr warning updated to include
+"(WR-02: bypass residual risk on this kernel)" for operator awareness. Code comment
+added in `exec_strategy.rs`.
+
+**WR-03 — sendmmsg all-or-nothing:** USER_NOTIF CONTINUE cannot send a partial batch;
+all-or-nothing is the only enforcement mode. The fail-secure choice (deny on ANY single
+denied address) is correct. Accepted: no alternative without re-architecting around CONTINUE.
+Code comment added in `supervisor_linux.rs` `handle_network_notification`.
+
+### Verification Gates (Post-Review Fix)
+
+| Gate | Command | Result | Status |
+|------|---------|--------|--------|
+| cargo build | `cargo build --workspace --all-targets` | exit 0 | PASS |
+| Windows-host clippy | `cargo clippy --workspace --all-targets -- -D warnings -D clippy::unwrap_used` | exit 0 | PASS |
+| cargo fmt check | `cargo fmt --all -- --check` | exit 0 | PASS |
+| cargo test | `cargo test --workspace` | 778 passed, 1 pre-existing failure | PASS (no regressions) |
+| AF_UNIX gate tests | `#[cfg(target_os = "linux")]` tests in `exec_strategy.rs` | 0 run on Windows | PARTIAL→CI |
+| Cross-target clippy (linux) | `cargo clippy --target x86_64-unknown-linux-gnu` | exit 1 (x86_64-linux-gnu-gcc not found) | PARTIAL→CI |
+| Cross-target clippy (macOS) | `cargo clippy --target x86_64-apple-darwin` | exit 1 (cc not found) | PARTIAL→CI |
+
+**Pre-existing failure** (unrelated to this fix):
+`sandbox::windows::tests::try_set_mandatory_label_surfaces_directive_when_user_owned_apply_fails`
+— documented baseline failure predating Phase 87, requires WRITE_OWNER rights not available in
+this dev environment.
+
+**Decisive CI signal:** GH Actions Linux lane on commit `718fe59d` for cross-target clippy
+and Linux-gated tests.

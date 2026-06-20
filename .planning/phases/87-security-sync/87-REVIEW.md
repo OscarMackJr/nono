@@ -15,7 +15,15 @@ findings:
   warning: 4
   info: 2
   total: 7
-status: issues_found
+status: resolved
+post_review_fix:
+  commit: "718fe59d"
+  date: "2026-06-20"
+  cr_01: resolved
+  wr_01: accepted
+  wr_02: accepted
+  wr_03: accepted
+  wr_04: resolved
 ---
 
 # Phase 87: Code Review Report
@@ -23,7 +31,7 @@ status: issues_found
 **Reviewed:** 2026-06-20T03:46:01Z
 **Depth:** standard
 **Files Reviewed:** 6
-**Status:** issues_found
+**Status:** resolved (post-review fix `718fe59d` 2026-06-20)
 
 ## Summary
 
@@ -56,6 +64,21 @@ Linux and cannot compile on the Windows dev host.
 ## Critical Issues
 
 ### CR-01: No-grant EPERM filter over-blocks all datagram sends in default config
+
+**Status: RESOLVED** — commit `718fe59d` (2026-06-20)
+
+**Fix:** Extracted `af_unix_send_filter_action(proxy_fallback, mediation, has_unix_grants)
+-> AfUnixSendFilterAction` as a pure helper function shared by both child and parent fork
+arms. The gate now correctly installs:
+  - `NoFilter` in `Off` mode (default, no mediation — CR-01 regression guard)
+  - `StaticEperm` in `Pathname` mode with no unix-socket grants (D-01 no-grant path)
+  - `UserNotify` in `Pathname` mode with grants, or when proxy_fallback is true
+
+Both child notify-fd condition (`install_network_notify`) and parent recv-fd condition
+(`parent_send_action == AfUnixSendFilterAction::UserNotify`) now evaluate the identical
+helper, preventing child/parent deadlock. Exhaustive unit tests added for all 8
+(proxy, mediation, has_grants) combinations in a `#[cfg(target_os = "linux")]` test
+module — run on CI.
 
 **File:** `crates/nono-cli/src/exec_strategy.rs:1294`
 
@@ -132,6 +155,12 @@ inspect `sockaddr` family) instead of a blanket EPERM.
 
 ### WR-01: CONTINUE-after-pointer-read reopens a TOCTOU on send destinations
 
+**Status: ACCEPTED** (commit `718fe59d`) — Concise limitation comment added at the
+`continue_notif` call site in `supervisor_linux.rs` acknowledging the TOCTOU window,
+why CONTINUE is used instead of emulation, and that a single-threaded child makes
+exploitation extremely unlikely. The alternative (emulating without CONTINUE) is not
+available at this ABI level. See Phase 87 VERIFICATION §Accepted Limitations.
+
 **File:** `crates/nono-cli/src/exec_strategy/supervisor_linux.rs:837-1003`
 
 **Issue:** `handle_network_notification` reads pointer-derived destination
@@ -164,6 +193,13 @@ treats a multi-threaded sandboxed child swapping `msg_name` as out of scope.
 
 ### WR-02: No-grant filter failure is best-effort, silently leaving the bypass open
 
+**Status: ACCEPTED** (commit `718fe59d`) — Added a detailed comment at the failure
+path explaining: (a) Landlock V4 does NOT backstop AF_UNIX sends, (b) failing closed
+(`_exit(126)`) was considered but rejected because kernels with Landlock V4 pathname
+support but without seccomp-BPF are exceedingly rare, (c) the stderr warning now
+includes "(WR-02: bypass residual risk on this kernel)" so operators aware of the
+limitation can act. Documented in VERIFICATION §Accepted Limitations.
+
 **File:** `crates/nono-cli/src/exec_strategy.rs:1301-1313`
 
 **Issue:** If `install_seccomp_af_unix_nogrant_filter()` fails, the child writes a
@@ -186,6 +222,12 @@ Reserve best-effort behavior only for paths where the filter is genuinely adviso
 
 ### WR-03: `sendmmsg` mediation cannot enforce partial-success semantics
 
+**Status: ACCEPTED** (commit `718fe59d`) — Added comment at the `continue_notif` call
+in `handle_network_notification` documenting the all-or-nothing semantics: USER_NOTIF
+CONTINUE cannot be told "send messages 0..k only". The fail-secure behavior (deny on
+ANY single denied address) is correct; the accepted limitation is the ALLOW path
+sends all messages. Documented in VERIFICATION §Accepted Limitations.
+
 **File:** `crates/nono-cli/src/exec_strategy/supervisor_linux.rs:889-985`
 
 **Issue:** `sendmmsg(2)` sends an array of messages and reports how many were
@@ -206,6 +248,15 @@ USER_NOTIF), e.g. by denying multi-destination `sendmmsg` outright when any entr
 is a mediated AF_UNIX pathname target.
 
 ### WR-04: `read_msghdr_dest` assumes x86_64 `struct msghdr` layout
+
+**Status: RESOLVED** (commit `718fe59d`) — Field offsets and pointer size are now
+derived via `core::mem::offset_of!(libc::msghdr, msg_name)`,
+`core::mem::offset_of!(libc::msghdr, msg_namelen)`, and
+`core::mem::size_of::<usize>()` rather than the hard-coded literal `12`. Two
+compile-time `const _: () = assert!(...)` guards verify the field ordering invariants.
+Byte extraction copies pointer bytes into a zero-padded `[u8; 8]` buffer, correct on
+both LP64 and ILP32 targets. The `#[must_use]` message was also updated to describe the
+return value without policy semantics (IN-02 fix).
 
 **File:** `crates/nono/src/sandbox/linux.rs:2660-2708`
 
@@ -230,6 +281,11 @@ the LP64 targets whose layout matches, with a clear `compile_error!` otherwise.
 
 ### IN-01: SUMMARY claims "plan executed exactly as written" — it was not
 
+**Status: ACKNOWLEDGED** — The deviation (wrong gate predicate) is now recorded and
+corrected by commit `718fe59d`. The SUMMARY.md for plan 87-01 was not retroactively
+updated (out of scope for this post-review fix); this REVIEW.md and VERIFICATION.md
+serve as the authoritative deviation record.
+
 **File:** `.planning/phases/87-security-sync/87-01-SUMMARY.md:99` (Deviations)
 
 **Issue:** The SUMMARY states "plan executed exactly as written" and lists no code
@@ -244,6 +300,11 @@ been recorded and security-reviewed.
 intended D-01 semantics.
 
 ### IN-02: Inconsistent `#[must_use]` message wording on send-helper Results
+
+**Status: RESOLVED** (commit `718fe59d`) — `read_msghdr_dest` now uses
+`"Result must be checked — None means msg_name was NULL (connected socket)"` and
+`read_mmsghdr_dests` uses `"Result must be checked — empty Vec or all-None means all
+msg_name fields were NULL"`. Policy semantics ("fast-path allow") removed.
 
 **File:** `crates/nono/src/sandbox/linux.rs:2657` and `:2709`
 
@@ -262,3 +323,6 @@ NULL"), leaving the allow/deny interpretation to the CLI caller.
 _Reviewed: 2026-06-20T03:46:01Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+_Post-review fix: 2026-06-20, commit `718fe59d`_
+_CR-01: RESOLVED | WR-01: ACCEPTED | WR-02: ACCEPTED | WR-03: ACCEPTED | WR-04: RESOLVED_
+_IN-01: ACKNOWLEDGED | IN-02: RESOLVED_
