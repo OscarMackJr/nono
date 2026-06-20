@@ -39,6 +39,13 @@ Forward-compat note: `wiring.rs` `$NONO_CONFIG`/`$NONO_PACKAGES` variable expans
 | c0ea3af7 | crates/nono-cli/src/profile/mod.rs | resolve_store_pack_session_hooks() and call sites are conditional on pack-store subsystem (Unix-primary); function body is std-only Rust but the file's existing cfg-gated tests trigger MUST/NEVER rule | GH Actions Linux/macOS CI clippy lanes |
 | c0ea3af7 | crates/nono-cli/src/profile_runtime.rs | verify_profile_packs() session-hook containment check uses strip_prefix on paths; path handling is std-only but verify_profile_packs test coverage is incomplete on Windows (path separator differences) | GH Actions Linux/macOS CI clippy lanes |
 
+## Plan 88-04 Deferrals
+
+| Commit | File | Reason | CI Gate |
+|--------|------|--------|---------|
+| 1f4fd335 (4179ce03) | crates/nono-cli/src/exec_strategy.rs | New `signal_pty_foreground_group()` and `handle_pty_suspension()` functions reference `nix::unistd::tcgetpgrp`, `Signal::SIGTSTP/SIGSTOP/SIGWINCH`, `WaitStatus`, `WaitPidFlag` — all `nix::` symbols. Module is gated `#[cfg(not(target_os = "windows"))]` at module level in main.rs so functions are only compiled on Unix; file has many `#[cfg(target_os = "linux")]`/`#[cfg(target_os = "macos")]` blocks triggering CLAUDE.md MUST/NEVER cross-target rule | GH Actions Linux/macOS CI clippy lanes |
+| 1f4fd335 (4179ce03) | crates/nono-cli/src/pty_proxy.rs | Unix-only module (`#[cfg(not(target_os = "windows"))]` gate in main.rs); additions (`in_alt_screen()`, `leave_screen_for_suspension()`, `reenter_screen_for_resume()`, `take_suspension_request()`, `shutdown_attach_listener()`) are Unix-path by module-level gating; `nix::sys::termios` references only verified on Linux/macOS CI | GH Actions Linux/macOS CI clippy lanes |
+
 ## Status
 
 PARTIAL — pending GH Actions confirmation on the head SHA.
@@ -47,4 +54,4 @@ Cross-target clippy gate SKIPPED on Windows dev host due to missing toolchain
 (x86\_64-unknown-linux-gnu, x86\_64-apple-darwin). The live GH Actions Linux
 Clippy and macOS Clippy lanes on the head SHA are the decisive signals per
 .planning/templates/cross-target-verify-checklist.md. REQs FEAT-01, FEAT-02, FEAT-04,
-FEAT-03, and FEAT-05 marked PARTIAL pending CI confirmation.
+FEAT-03, FEAT-05, and DEPS-01 marked PARTIAL pending CI confirmation.
