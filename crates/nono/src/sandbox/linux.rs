@@ -3833,8 +3833,7 @@ mod tests {
         // sole gate for both AF_UNIX pathname bind and TCP bind-port decisions.
         assert_eq!(filter[20].code, BPF_RET | BPF_K);
         assert_eq!(
-            filter[20].k,
-            SECCOMP_RET_USER_NOTIF,
+            filter[20].k, SECCOMP_RET_USER_NOTIF,
             "bind must route to USER_NOTIF regardless of has_bind_ports so \
              the supervisor can permit AF_UNIX pathname bind"
         );
@@ -3867,7 +3866,11 @@ mod tests {
         let eperm_ret = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
 
         // Must be exactly 6 instructions: ld + 3 JEQ + ALLOW + EPERM
-        assert_eq!(filter.len(), 6, "no-grant filter must have exactly 6 instructions");
+        assert_eq!(
+            filter.len(),
+            6,
+            "no-grant filter must have exactly 6 instructions"
+        );
 
         // 0: ld [nr]
         assert_eq!(filter[0].code, BPF_LD | BPF_W | BPF_ABS);
@@ -3875,21 +3878,33 @@ mod tests {
 
         // 1: jeq SYS_SENDTO -> 5 (jt = 3)
         assert_eq!(filter[1].k, SYS_SENDTO as u32);
-        assert_eq!(filter[1].jt, 3, "SYS_SENDTO jt must target EPERM instruction");
+        assert_eq!(
+            filter[1].jt, 3,
+            "SYS_SENDTO jt must target EPERM instruction"
+        );
 
         // 2: jeq SYS_SENDMSG -> 5 (jt = 2)
         assert_eq!(filter[2].k, SYS_SENDMSG as u32);
-        assert_eq!(filter[2].jt, 2, "SYS_SENDMSG jt must target EPERM instruction");
+        assert_eq!(
+            filter[2].jt, 2,
+            "SYS_SENDMSG jt must target EPERM instruction"
+        );
 
         // 3: jeq SYS_SENDMMSG -> 5 (jt = 1)
         assert_eq!(filter[3].k, SYS_SENDMMSG as u32);
-        assert_eq!(filter[3].jt, 1, "SYS_SENDMMSG jt must target EPERM instruction");
+        assert_eq!(
+            filter[3].jt, 1,
+            "SYS_SENDMMSG jt must target EPERM instruction"
+        );
 
         // 4: ret ALLOW (non-send-family syscalls fall through)
         assert_eq!(filter[4].k, SECCOMP_RET_ALLOW);
 
         // 5: ret SECCOMP_RET_ERRNO(EPERM)
-        assert_eq!(filter[5].k, eperm_ret, "no-grant filter must return EPERM for send-family");
+        assert_eq!(
+            filter[5].k, eperm_ret,
+            "no-grant filter must return EPERM for send-family"
+        );
     }
 
     #[test]

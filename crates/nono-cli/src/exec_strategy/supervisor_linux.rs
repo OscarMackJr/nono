@@ -578,7 +578,7 @@ pub(super) fn decide_network_notification(
     config: &SupervisorConfig<'_>,
 ) -> NetworkDecision {
     use nono::sandbox::{
-        SYS_BIND, SYS_CONNECT, SYS_SENDMMSG, SYS_SENDMSG, SYS_SENDTO, UnixSocketKind,
+        UnixSocketKind, SYS_BIND, SYS_CONNECT, SYS_SENDMMSG, SYS_SENDMSG, SYS_SENDTO,
     };
 
     // AF_UNIX: allow only filesystem-backed (pathname) sockets that match an
@@ -823,9 +823,9 @@ pub(super) fn handle_network_notification(
     ipc_denials: &mut Vec<nono::diagnostic::IpcDenialRecord>,
 ) -> nono::error::Result<()> {
     use nono::sandbox::{
-        SYS_BIND, SYS_CONNECT, SYS_SENDMMSG, SYS_SENDMSG, SYS_SENDTO, continue_notif, deny_notif,
-        notif_id_valid, read_mmsghdr_dests, read_msghdr_dest, read_notif_sockaddr, recv_notif,
-        respond_notif_errno,
+        continue_notif, deny_notif, notif_id_valid, read_mmsghdr_dests, read_msghdr_dest,
+        read_notif_sockaddr, recv_notif, respond_notif_errno, SYS_BIND, SYS_CONNECT, SYS_SENDMMSG,
+        SYS_SENDMSG, SYS_SENDTO,
     };
 
     let notif = recv_notif(notify_fd)?;
@@ -920,18 +920,18 @@ pub(super) fn handle_network_notification(
         }
         SYS_SENDMMSG => {
             // args[1] = mmsghdr*, args[2] = vlen
-            let dests =
-                match read_mmsghdr_dests(notif.pid, notif.data.args[1], notif.data.args[2]) {
-                    Ok(dests) => dests,
-                    Err(e) => {
-                        debug!(
-                            "Failed to read sendmmsg message vector from seccomp notification: {}",
-                            e
-                        );
-                        let _ = deny_notif(notify_fd, notif.id);
-                        return Ok(());
-                    }
-                };
+            let dests = match read_mmsghdr_dests(notif.pid, notif.data.args[1], notif.data.args[2])
+            {
+                Ok(dests) => dests,
+                Err(e) => {
+                    debug!(
+                        "Failed to read sendmmsg message vector from seccomp notification: {}",
+                        e
+                    );
+                    let _ = deny_notif(notify_fd, notif.id);
+                    return Ok(());
+                }
+            };
 
             let mut addr_list = Vec::new();
             for (idx, dest) in dests.into_iter().enumerate() {
@@ -1798,7 +1798,8 @@ mod tests {
             let backend = DenyAllBackend;
             let dir = tempfile::tempdir().expect("tempdir");
             let path = socket_path(&dir, "dgram.sock");
-            let _listener = std::os::unix::net::UnixListener::bind(&path).expect("bind unix listener");
+            let _listener =
+                std::os::unix::net::UnixListener::bind(&path).expect("bind unix listener");
             let allowlist = vec![
                 UnixSocketCapability::new_file(&path, UnixSocketMode::Connect)
                     .expect("socket grant"),
