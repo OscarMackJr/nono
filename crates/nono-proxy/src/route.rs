@@ -565,4 +565,118 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     // test_build_tls_connector_empty_client_key_pem,
     // test_route_store_loads_mtls_route.
     // Deferred to a future plan.
+
+    /// D-10 / #1132 allow_domain shadow-disproof:
+    ///
+    /// Upstream #1132 describes a bug intrinsic to upstream's host-ordering route selection
+    /// abstraction, where an allow_domain endpoint route matching the same upstream HOST as
+    /// a credential catch-all could win and shadow it.
+    ///
+    /// The fork has no host-keyed selection and no catch-all. It dispatches by EXACT
+    /// path-prefix key, and allow_domain endpoint routes get a DISJOINT key namespace
+    /// (`_ep_{domain}`) vs credential routes (the service name, e.g. "openai").
+    ///
+    /// This test proves the shadow class is structurally absent: two routes sharing the
+    /// same upstream host but different prefix keys occupy disjoint HashMap slots.
+    /// Neither lookup returns the other. The upstream host-ordered selection abstraction
+    /// is not imported (D-10 lock).
+    #[test]
+    fn allow_domain_endpoint_route_does_not_shadow_credential_route() {
+        // (a) Credential route — key "openai", upstream api.openai.com
+        let credential_route = RouteConfig {
+            prefix: "openai".to_string(),
+            upstream: "https://api.openai.com".to_string(),
+            credential_key: Some("openai".to_string()),
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: Some("Bearer {}".to_string()),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+        };
+
+        // (b) allow_domain endpoint route — key "_ep_api.openai.com", SAME upstream host
+        //     (this is the upstream shadow trigger: same host, different prefix namespace)
+        let endpoint_route = RouteConfig {
+            prefix: "_ep_api.openai.com".to_string(),
+            upstream: "https://api.openai.com".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![EndpointRule {
+                method: "GET".to_string(),
+                path: "/v1/models".to_string(),
+            }],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+        };
+
+        let routes = vec![credential_route, endpoint_route];
+        let store = RouteStore::load(&routes).unwrap();
+
+        // Both routes are present under their respective disjoint keys.
+        assert_eq!(store.len(), 2);
+        assert!(
+            store.get("openai").is_some(),
+            "credential route must be accessible by its own key"
+        );
+        assert!(
+            store.get("_ep_api.openai.com").is_some(),
+            "endpoint route must be accessible by its own key"
+        );
+
+        // The credential route is NOT accessible via the endpoint key, and vice versa.
+        // Same upstream host does NOT collapse them into one slot.
+        let cred = store.get("openai").unwrap();
+        let ep = store.get("_ep_api.openai.com").unwrap();
+
+        // Credential route has no endpoint rules → is_allowed returns true for everything
+        // (open-access credential route, not shadowed by the endpoint route's rules).
+        assert!(
+            cred.endpoint_rules.is_allowed("DELETE", "/v1/models"),
+            "credential route must allow all methods (no endpoint rules, not shadowed)"
+        );
+        assert!(
+            cred.endpoint_rules.is_allowed("POST", "/v1/chat/completions"),
+            "credential route must allow all paths (no endpoint rules, not shadowed)"
+        );
+
+        // Endpoint route has its own rules → restricts to GET /v1/models only.
+        assert!(
+            ep.endpoint_rules.is_allowed("GET", "/v1/models"),
+            "endpoint route must enforce its own endpoint rules"
+        );
+        assert!(
+            !ep.endpoint_rules.is_allowed("DELETE", "/v1/models"),
+            "endpoint route must deny methods not in its rules"
+        );
+
+        // Both routes resolve to the same upstream — this is the shadow-trigger condition.
+        // Dispatch is by prefix key, NOT by upstream host, so they remain distinct.
+        assert_eq!(cred.upstream, "https://api.openai.com");
+        assert_eq!(ep.upstream, "https://api.openai.com");
+        assert_eq!(
+            cred.upstream_host_port.as_deref(),
+            Some("api.openai.com:443")
+        );
+        assert_eq!(
+            ep.upstream_host_port.as_deref(),
+            Some("api.openai.com:443")
+        );
+
+        // is_route_upstream reports true for the shared upstream host (expected — both
+        // routes point there), but this does not imply any shadowing in route dispatch.
+        assert!(store.is_route_upstream("api.openai.com:443"));
+    }
 }
