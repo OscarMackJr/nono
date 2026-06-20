@@ -42,9 +42,9 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 - [x] **FEAT-01**: `set_vars` static env injection is available (profile + `CapabilitySet`), with env-name validation that rejects `PATH` and the `NONO_` prefix (upstream #1134).
 - [x] **FEAT-02**: Runtime state (audit, sessions, rollback) resolves under XDG state dirs with legacy `~/.nono` fallback + one-time migration (upstream #1152 / #1179); Windows path resolution verified against the v3.0 scratch-space provisioner.
-- [ ] **FEAT-03**: AWS auth config (`AwsAuthConfig`) is accepted and validated in profiles + proxy route config, mutually exclusive with `credential_key` / `oauth2` (upstream #1166).
+- [x] **FEAT-03**: AWS auth config (`AwsAuthConfig`) is accepted and validated in profiles + proxy route config, mutually exclusive with `credential_key` / `oauth2` (upstream #1166).
 - [x] **FEAT-04**: Keyring access honors `NONO_KEYRING_TIMEOUT_SECS` (default 120s, `0` = no timeout) (upstream #977).
-- [ ] **FEAT-05**: `$PACK_DIR` store-pack session hooks resolve with `source_pack` propagation (upstream #1073).
+- [x] **FEAT-05**: `$PACK_DIR` store-pack session hooks resolve with `source_pack` propagation (upstream #1073).
 - [ ] **FEAT-06**: update-check reports CI provider/environment discovery (upstream #1113), profile names are standardized to the namespace, and bool CLI flags accept truthy env values (upstream #1136).
 
 ### Proxy Sync (PROXY)
@@ -91,9 +91,9 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 | SEC-02 | Phase 87 | PARTIAL→CI (shipped; GH Actions Linux lane decisive) |
 | FEAT-01 | Phase 88 | PARTIAL→CI (shipped 89ba09cf; GH Actions exec_strategy.rs cross-target decisive) |
 | FEAT-02 | Phase 88 | Complete |
-| FEAT-03 | Phase 88 | Pending |
+| FEAT-03 | Phase 88 | Complete |
 | FEAT-04 | Phase 88 | PARTIAL→CI (shipped 614cf1c7; no cfg gates; full verify in CI) |
-| FEAT-05 | Phase 88 | Pending |
+| FEAT-05 | Phase 88 | Complete |
 | FEAT-06 | Phase 88 | Pending |
 | DEPS-01 | Phase 88 | Pending |
 | DEPS-02 | Phase 88 | Pending |
