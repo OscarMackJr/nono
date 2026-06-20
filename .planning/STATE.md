@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
-status: ready_to_plan
-stopped_at: Phase 86 context gathered
-last_updated: "2026-06-20T00:03:36.405Z"
+status: planning
+stopped_at: Phase 87 context gathered
+last_updated: "2026-06-20T00:57:22.446Z"
 last_activity: 2026-06-20
 progress:
   total_phases: 6
-  completed_phases: 3
+  completed_phases: 2
   total_plans: 4
   completed_plans: 4
-  percent: 50
+  percent: 100
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -117,9 +117,9 @@ Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.p
 
 ## Session Continuity
 
-Last session: 2026-06-20T00:03:36.392Z
-Stopped at: Phase 86 context gathered
-Resume file: None
+Last session: 2026-06-20T00:57:22.419Z
+Stopped at: Phase 87 context gathered
+Resume file: .planning/phases/87-security-sync/87-CONTEXT.md
 
 ## Operator Next Steps
 
