@@ -226,9 +226,8 @@ mod tests {
         // Act: call the set_last_error-only path in nono_merge_diagnostic_report_json.
         // null session_json triggers set_last_error("session_json is null") without
         // going through map_error — previously leaving LAST_DIAGNOSTIC_CODE stale.
-        let json_ptr = unsafe {
-            nono_merge_diagnostic_report_json(std::ptr::null(), std::ptr::null())
-        };
+        let json_ptr =
+            unsafe { nono_merge_diagnostic_report_json(std::ptr::null(), std::ptr::null()) };
         assert!(json_ptr.is_null());
 
         // Assert: diagnostic code must be Other (reset at entry by clear_last_call_state),
