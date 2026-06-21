@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
-status: planning
+status: executing
 stopped_at: Phase 91 context gathered
-last_updated: "2026-06-21T20:43:34.859Z"
-last_activity: 2026-06-21 — Roadmap created; 28 v1 requirements mapped across 3 phases
+last_updated: "2026-06-21T21:18:48.406Z"
+last_activity: 2026-06-21 -- Phase 91 planning complete
 progress:
   total_phases: 3
   completed_phases: 0
-  total_plans: 0
+  total_plans: 3
   completed_plans: 0
   percent: 0
 ---
@@ -28,8 +28,8 @@ See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90
 
 Phase: 91 of 93 — Signed Override Format + Verification Core
 Plan: — (not yet planned)
-Status: Ready to plan
-Last activity: 2026-06-21 — Roadmap created; 28 v1 requirements mapped across 3 phases
+Status: Ready to execute
+Last activity: 2026-06-21 -- Phase 91 planning complete
 
 Progress: [░░░░░░░░░░] 0%
 
