@@ -381,17 +381,20 @@ previous_hash (64 lc hex), current_hash (stripped), kms_signature{algorithm,key_
 | A4 | The production pubkey env-var name and the operator-config TTL-downward mechanism are Phase 93 concerns; Phase 91 only accepts a pubkey param + a hard-coded cap. | VFY-03/VFY-05 | Low — consistent with phase boundary; flag if the planner wants the env read here. |
 | A5 | `der` 0.7 (in nono) is reachable from nono-py, OR a hand-rolled DER `r,s` parse is acceptable for low-S. | Stack / Pattern 3 | Low — both verified viable; pick at plan time. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **OQ-1 (BLOCKING the serde model): What is the exact override-token wire shape?**
+   - **RESOLVED: D-05/D-06 (operator-confirmed, supersede the open question).**
    - What we know: ZT-Infra's `POST /actions` returns a signed CAF **AuditRecord** (`actor/action/resource/decision/reason/timestamp/previous_hash` + `kms_signature`). There is **no** override-token schema anywhere in ZT-Infra (grepped `provisioner/`, `policies/`, `docs/` for `jti`/`not_before`/`expires_at`/`scope`/`override` — only AuditRecord + registry entries exist; `override` appears only in `package.json`).
    - What's unclear: How OVR-01's fields (scope, not_before, expires_at, jti, repo_context, signer identity) are carried. Most likely they are encoded into the AuditRecord's `resource`/`action`/`reason` (e.g., `resource` = a JSON or path-list, `action` = `nono.override.grant`), OR the override is a nono-defined envelope `{ audit_record: <signed CAF record>, ...nono fields }` where only the inner record is signature-covered (which would violate OVR-02 for the nono fields).
    - Recommendation: **Confirm with the ZT-Infra operator / SEED-005 author before locking the serde struct.** Fail-secure interim: define the token so EVERY OVR-01 field lives inside the canonicalized (signature-covered) object (satisfies OVR-02), and reject any field outside it. Flag this as the one decision that, if wrong, breaks signature verification end-to-end.
 
 2. **OQ-2 (non-blocking): vectors.json sourcing — snapshot copy vs. live-repo read?**
+   - **RESOLVED: D-01 snapshot vectors.json into nono-py test tree.**
    - Recommendation: snapshot copy into `nono-py/tests/fixtures/vectors.json` with a source-commit comment; add a Phase-92 verify-dark gate to re-diff. (See Project Structure.)
 
 3. **OQ-3 (non-blocking): one custom exception with `kind` as an attribute vs. as `args[0]`?**
+   - **RESOLVED: D-04 / plan 03 (kind via `create_exception!` args[0]).**
    - D-04 wants a machine-readable `kind`. Simplest PyO3-idiomatic form: `NonoOverrideError.new_err((kind_str, message))` so `e.args[0]` is the stable kind. A `.kind` attribute requires a `#[pyclass]` exception subclass (heavier). Recommend `args[0]` unless Phase 92 prefers an attribute.
 
 ## Environment Availability
