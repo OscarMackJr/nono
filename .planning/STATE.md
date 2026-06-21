@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
-status: milestone_complete
+status: Awaiting next milestone
 stopped_at: Phase 90 context gathered
-last_updated: "2026-06-21T02:41:33.325Z"
-last_activity: 2026-06-21
+last_updated: "2026-06-21T14:15:24.005Z"
+last_activity: 2026-06-21 — Milestone v3.1 completed and archived
 progress:
   total_phases: 6
   completed_phases: 6
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
   percent: 100
 ---
 
@@ -26,12 +26,10 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 ## Current Position
 
-Phase: 90
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-21
-
-Progress: [██████████] 95%
+Phase: Milestone v3.1 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-21 — Milestone v3.1 completed and archived
 
 ## Performance Metrics
 
@@ -123,6 +121,19 @@ Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.p
 | Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events → v3.1 DRAIN-04 (real code) | Open (folded into v3.1) | v3.0 close |
 | Historical | 48 open artifacts at v3.0 close (35 quick_tasks mostly pre-v2.13 strays + 5 seeds + 4 todos + 2 uat_gaps + 2 verification_gaps) — overwhelmingly historical/future-seed | Acknowledged | v3.0 close |
 
+Items acknowledged and deferred at **v3.1 milestone close (2026-06-21)** — see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`. The v3.0 DRAIN rows above are now **CLOSED by Phase 90** (DRAIN-04 shipped as real daemon telemetry code; DRAIN-01/02/03 collapsed to scripted `verify-dark.ps1` gates with explicit operator-gated host-gated residuals):
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| PARTIAL→CI | SEC-01 AF_UNIX datagram seccomp trap (Phase 87, `6cf2645c`+`718fe59d`) — Unix-cfg-gated, GH Actions Linux lane decisive; never flip to VERIFIED on Windows host | Open (CI-decisive) | v3.1 close |
+| PARTIAL→CI | SEC-02 procfs-remap dedup guard (Phase 87, `abeb2493`) — Unix-cfg-gated, GH Actions Linux lane decisive | Open (CI-decisive) | v3.1 close |
+| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) — host lacks cross C compiler (ring/aws-lc-sys -sys build fails); GH Actions Linux/macOS clippy lanes decisive | Open (CI-decisive) | v3.1 close |
+| Host-gated | DRAIN-01 live clean-VM silent MSI install (fresh Win11 VM + staged v3.0 MSI) — scripted gates SKIP_HOST_UNAVAILABLE on dev host | Open (host-gated, by design) | v3.1 close |
+| Host-gated | DRAIN-02 live dual-layer WFP egress block (admin + nono-wfp-service + running daemon, ideally 2nd host) — scripted gates SKIP | Open (host-gated, by design) | v3.1 close |
+| Host-gated | DRAIN-03 live SIEM telemetry emit + admin opt-out/min_severity HKLM→emit (telemetry-capable v3.0 build; PATH binary is pre-telemetry v0.57.5; only daemon+WFP path emits) — gate FAIL is environmental, not a defect | Open (host-gated, by design) | v3.1 close |
+| Out-of-scope red | 2 env-sensitive DACL-guard tests (`daemon_dacl_guard_*` in Phase 74 `agent_daemon/launch.rs`) fail at real-ACL `.apply()` on this host; green at exec time; not a v3.1 regression (see `90-VALIDATION.md`) | Open (env-specific) | v3.1 close |
+| Historical | 48 open artifacts at v3.1 close (36 quick_tasks all pre-v3.1 historical strays Feb–Jun 2026 + 6 dormant seeds incl. consumed SEED-006 + 4 empty todos + 2 by-design host-gated uat_gaps) — overwhelmingly historical/future-seed, none v3.1 blockers | Acknowledged | v3.1 close |
+
 ## Session Continuity
 
 Last session: 2026-06-21T02:41:33.296Z
@@ -131,5 +142,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Phase 88 Plan 01 complete (FEAT-01 set_vars + FEAT-04 keyring timeout committed with -x provenance + DCO). Run `/gsd:execute-phase 88` (plan 02) for the next wave.
-- Monitor GH Actions CI on branch `milestone/v2.13-carryforward-closeout` for SEC-01/SEC-02 (Phase 87) + FEAT-01 exec_strategy.rs PARTIAL→CI decisive gates (Linux/macOS clippy lanes).
+- Start the next milestone with /gsd-new-milestone

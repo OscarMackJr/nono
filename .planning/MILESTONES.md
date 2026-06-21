@@ -1,5 +1,28 @@
 # Milestones
 
+## v3.1 UPST9 Upstream Sync + v3.0 Drain (Shipped: 2026-06-21)
+
+**Phases completed:** 6 phases (85-90), 19 plans, 18 tasks. Drain-then-sync upstream milestone: audit and fully absorb the `always-further/nono` `v0.62.0..v0.64.0` window (90 commits / 140 files) while preserving the fork's Windows security model, then drain v3.0's host-gated UAT debt. Milestone-marker only — no crate publish; a future release leapfrogs the crate version to ≥ `0.65.0`.
+
+**Delivered:** Fork brought current with upstream v0.62→v0.64, converging toward upstream's layout (audit stack + structured diagnostics relocated into the core `nono` crate) without regressing Windows security; v3.0 host-gated UAT debt drained to real daemon-telemetry code plus explicit operator-gated residuals.
+
+**Key accomplishments:**
+
+- **Phase 85 — UPST9 Divergence Audit:** Built the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions (themes A–M) + ADR risk verdicts gating every downstream cherry-pick.
+- **Phase 86 — Library-Boundary Convergence:** Adopted upstream's audit stack + structured-diagnostics *into* the core `nono` crate (~2200 LOC, adopt-upstream) — a deliberate change to the policy-free-library boundary (ADR-86), the highest-merge-risk cluster (FFI + Windows diagnostic paths + proxy `ProxyDiagnostic`). Fixed a Rust 2021 let-chain incompatibility in audit.rs.
+- **Phase 87 — Security Sync:** Shipped the AF_UNIX datagram seccomp trap closing bypass #1096 (SEC-01, incl. CR-01 no-grant-EPERM-filter regression fix) + procfs-remap dedup guard (SEC-02), with CR-02 audit-bypass fork-hardening. Unix-cfg-gated → PARTIAL→CI.
+- **Phase 88 — Feature + Dependency Cherry-Pick Wave:** `set_vars` static env injection, `NONO_KEYRING_TIMEOUT_SECS`, XDG state dirs (state_paths.rs single source of truth), AWS auth config, `$PACK_DIR` session hooks, CI-env detection + truthy-bool flags + profile namespace aliasing, PTY ctrl-z fix, 9-dependency bump (typify 0.7), and the deliberate-fork-divergence FFI clear-on-entry fix (+ WR-01 string-getter follow-up).
+- **Phase 89 — Proxy Hardening Sync:** Proxy activation-gate fix (#1197 — starts on `customCredentials` alone) + external_proxy equivalence test against the fork-divergent TLS-interception surface, with regression coverage.
+- **Phase 90 — v3.0 Host-Gated UAT Drain:** Wired `SecurityEventLayer` into `nono-agentd` so daemon-launched agent denials emit `nono_security::*` events advancing the HMAC chain — real code with a non-host-gated test (DRAIN-04, 69 tests); collapsed DRAIN-01/02/03 to scripted `verify-dark.ps1` gates with explicit operator-gated host-gated residuals.
+
+**Audit:** `tech_debt` — 21/21 requirements shipped & WIRED, 0 critical blockers. Partials are PARTIAL→CI (SEC-01/02 Unix-cfg, cross-target clippy) and by-design host-gated (DRAIN-01/02/03 live-host UAT).
+
+**Known deferred items at close:** 48 open artifacts acknowledged (36 historical quick-tasks Feb–Jun 2026 + 6 dormant seeds incl. consumed SEED-006 + 4 empty todos + 2 by-design host-gated uat_gaps) — none v3.1 blockers; see STATE.md Deferred Items.
+
+**Git:** range `v3.0`(520b65f4) → `3b11843d` · 146 commits · 321 files (+32,395/−23,895) · 2026-06-19 → 2026-06-21 (3 days). Tag `v3.1` created **local-only** (repo stays public pending minifilter-altitude approval; push operator-gated).
+
+---
+
 ## v3.0 Enterprise Hardening I — Deploy · Control · Compliance (Completed: 2026-06-19)
 
 **Phases completed:** 3 phases (82-84), 12 plans, 27 tasks. First milestone of the enterprise arc — make nono deployable and governable across a corporate Windows fleet from one `HKLM\SOFTWARE\Policies\nono` policy spine.
