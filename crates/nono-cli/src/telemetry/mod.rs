@@ -199,6 +199,15 @@ impl SecurityEventLayer {
     /// reached `on_event` and advanced the chain (DRAIN-04).
     ///
     /// Returns `0` if the internal mutex is poisoned (fail-silent, never panics).
+    ///
+    /// # Test accessor
+    ///
+    /// This method is intentionally `#[cfg(test)]` — it exists solely to expose
+    /// chain state to inline integration tests.  It is not called in production
+    /// code paths.  This avoids a `dead_code` lint (CLAUDE.md: avoid
+    /// `#[allow(dead_code)]`) while keeping the accessor available to all
+    /// `#[cfg(test)]` modules in the same crate compilation unit.
+    #[cfg(test)]
     pub(crate) fn chain_sequence(&self) -> u64 {
         match self.inner.lock() {
             Ok(guard) => guard.chain.sequence,
@@ -466,6 +475,22 @@ mod tests {
             "genesis chain head must be [0u8;32]"
         );
         assert_eq!(inner.chain.sequence, 0, "genesis sequence must be 0");
+    }
+
+    // ── chain_sequence accessor (DRAIN-04 D-01) ───────────────────────────────
+
+    #[test]
+    fn chain_sequence_genesis_is_zero() {
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig::default(),
+            "test-chain-seq".to_string(),
+        );
+        // Genesis sequence via the pub(crate) accessor (DRAIN-04 D-01 test hook).
+        assert_eq!(
+            layer.chain_sequence(),
+            0,
+            "chain_sequence() must return 0 at genesis (no events emitted)"
+        );
     }
 
     // ── advance_chain ─────────────────────────────────────────────────────────

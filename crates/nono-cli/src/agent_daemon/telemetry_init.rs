@@ -105,7 +105,8 @@ mod tests {
     use nono::TelemetrySeverity;
     use std::sync::{Arc, Mutex};
     use tracing::Subscriber;
-    use tracing_subscriber::{layer::Context, prelude::*, Layer};
+    use tracing_subscriber::layer::Context;
+    use tracing_subscriber::Layer;
 
     // ── Test-bridge layer (D-01 / A2 workaround) ─────────────────────────────
     //
