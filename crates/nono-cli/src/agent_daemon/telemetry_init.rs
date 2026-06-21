@@ -23,6 +23,23 @@ use crate::telemetry::SecurityEventLayer;
 use nono::TelemetryConfig;
 use tracing_subscriber::prelude::*;
 
+/// Surface a `try_init()` failure instead of silently discarding it (WR-01).
+///
+/// A failed registration leaves the [`SecurityEventLayer`] uninstalled, so the
+/// daemon's security events would be silently dropped — a fail-open
+/// observability gap that contradicts this codebase's fail-secure posture.
+/// This logs the failure to stderr; it deliberately does NOT abort — the daemon
+/// must keep running even if telemetry could not be wired (degrade-not-die),
+/// but the operator gets a loud signal that telemetry is dark.
+fn report_try_init<E: std::fmt::Display>(result: Result<(), E>) {
+    if let Err(e) = result {
+        eprintln!(
+            "nono-agentd: telemetry: SecurityEventLayer registration FAILED ({e}); \
+             security events will NOT be forwarded (fail-open observability gap)"
+        );
+    }
+}
+
 /// Initialize the daemon's tracing subscriber with a [`SecurityEventLayer`] (D-02).
 ///
 /// Must be called once at daemon startup in **both** `run_service` and
@@ -56,9 +73,11 @@ pub(crate) fn init_daemon_telemetry(config: TelemetryConfig, session_id: String)
     #[cfg(not(target_os = "windows"))]
     {
         // Non-Windows: registry + security_layer only (no ETW).
-        let _ = tracing_subscriber::registry()
-            .with(security_layer)
-            .try_init();
+        report_try_init(
+            tracing_subscriber::registry()
+                .with(security_layer)
+                .try_init(),
+        );
     }
 
     #[cfg(target_os = "windows")]
@@ -69,14 +88,14 @@ pub(crate) fn init_daemon_telemetry(config: TelemetryConfig, session_id: String)
         // If ETW layer construction fails, continue without it — never abort.
         match tracing_etw::LayerBuilder::new("nono").build() {
             Ok(etw) => {
-                let _ = base.with(etw).try_init();
+                report_try_init(base.with(etw).try_init());
             }
             Err(e) => {
                 eprintln!(
                     "nono-agentd: telemetry: ETW layer init failed ({e}); \
                      continuing without ETW (D-03 non-fatal)"
                 );
-                let _ = base.try_init();
+                report_try_init(base.try_init());
             }
         }
     }
