@@ -3,8 +3,9 @@ gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
 status: planning
-last_updated: "2026-06-21"
-last_activity: 2026-06-21
+stopped_at: Phase 91 context gathered
+last_updated: "2026-06-21T20:43:34.859Z"
+last_activity: 2026-06-21 — Roadmap created; 28 v1 requirements mapped across 3 phases
 progress:
   total_phases: 3
   completed_phases: 0
@@ -85,6 +86,6 @@ Items acknowledged and deferred at v3.1 close (2026-06-21) — see `.planning/mi
 
 ## Session Continuity
 
-Last session: 2026-06-21
-Stopped at: Roadmap created for v3.2 (3 phases, 28/28 requirements mapped)
-Resume file: None
+Last session: 2026-06-21T20:43:34.845Z
+Stopped at: Phase 91 context gathered
+Resume file: .planning/phases/91-signed-override-format-verification-core/91-CONTEXT.md
