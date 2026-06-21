@@ -154,4 +154,4 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | 87. Security Sync | 3/3 | Complete | 2026-06-20 |
 | 88. Feature + Dependency Cherry-Pick Wave | 6/6 | Complete    | 2026-06-20 |
 | 89. Proxy Hardening Sync | 4/4 | Complete    | 2026-06-21 |
-| 90. v3.0 Host-Gated UAT Drain | 2/2 | Complete   | 2026-06-21 |
+| 90. v3.0 Host-Gated UAT Drain | 2/2 | Complete    | 2026-06-21 |

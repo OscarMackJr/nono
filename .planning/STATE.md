@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.1
 milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
-status: executing
+status: milestone_complete
 stopped_at: Phase 90 context gathered
 last_updated: "2026-06-21T02:41:33.325Z"
 last_activity: 2026-06-21
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 19
   completed_plans: 18
-  percent: 95
+  percent: 100
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -26,9 +26,9 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 ## Current Position
 
-Phase: 90 (v3-0-host-gated-uat-drain) — EXECUTING
-Plan: 2 of 2
-Status: Ready to execute
+Phase: 90
+Plan: Not started
+Status: Milestone complete
 Last activity: 2026-06-21
 
 Progress: [██████████] 95%
@@ -37,7 +37,7 @@ Progress: [██████████] 95%
 
 **Velocity:** (v3.1 — reset; populated as phases complete)
 
-- Total plans completed: 14
+- Total plans completed: 16
 - Average duration: —
 - Total execution time: —
 
