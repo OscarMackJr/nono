@@ -21,7 +21,8 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
 - [x] **Phase 86: Library-Boundary Convergence** - Adopt upstream's core-crate audit stack + structured-diagnostics model (lib + FFI + proxy), reconcile Windows paths, update CLAUDE.md + ADR (completed 2026-06-20)
 - [x] **Phase 87: Security Sync** - Close the Linux AF_UNIX datagram bypass (#1096) and the procfs-remap dedup leak (#1064) (completed 2026-06-20)
 - [x] **Phase 88: Feature + Dependency Cherry-Pick Wave** - Absorb the additive feature cherry-picks + PTY ctrl-z fix + 9 dependency bumps across all 5 crates (completed 2026-06-20)
-- [x] **Phase 89: Proxy Hardening Sync** - Absorb the proxy route/403/TLS-CONNECT/reactive-auth/customCredentials cluster against the fork-divergent TLS-interception surface (completed 2026-06-20)
+- [x] **Phase 89: Proxy Hardening Sync** - Absorb the proxy route/403/TLS-CONNECT/reactive-auth/customCredentials cluster against the fork-divergent TLS-interception surface
+ (completed 2026-06-20)
 - [ ] **Phase 90: v3.0 Host-Gated UAT Drain** - Land daemon-side telemetry emission + the verify-dark.ps1 scripted gates for clean-VM install, dual-layer WFP block, and live SIEM
 
 ## Phase Details
@@ -135,7 +136,10 @@ Plans:
   2. Clean-VM silent MSI install UAT (v3.0 DEPLOY-01/03/05) is executed on a fresh Win11 host with recorded verdicts, OR collapsed to a single unattended `verify-dark.ps1` gate with the residual live step explicitly host-gated (DRAIN-01).
   3. Dual-layer (proxy + kernel WFP) live egress-block proof (v3.0 EGRESS-02) is recorded via its scripted gate, with the live-host step operator-gated (DRAIN-02).
   4. The live SIEM telemetry gate plus admin opt-out / `min_severity` HKLM→emit (v3.0 TELEM-01/04) is verified via the `telemetry-event-emit` gate, with live SIEM ingestion host-gated (DRAIN-03).
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 90-01-PLAN.md — DRAIN-04 daemon SecurityEventLayer wiring + non-host-gated chain-advance test (Stream A, real code)
+- [ ] 90-02-PLAN.md — DRAIN-01/02/03 verify-dark.ps1 scripted-gate closeout + 90-HUMAN-UAT.md verdict record (Stream B)
 **UI hint**: yes
 
 ## Progress
