@@ -23,7 +23,7 @@ A drain-then-sync upstream-sync milestone (mirrors v2.5/v2.6/v2.8). Audit and *f
 - [x] **Phase 88: Feature + Dependency Cherry-Pick Wave** - Absorb the additive feature cherry-picks + PTY ctrl-z fix + 9 dependency bumps across all 5 crates (completed 2026-06-20)
 - [x] **Phase 89: Proxy Hardening Sync** - Absorb the proxy route/403/TLS-CONNECT/reactive-auth/customCredentials cluster against the fork-divergent TLS-interception surface
  (completed 2026-06-20)
-- [ ] **Phase 90: v3.0 Host-Gated UAT Drain** - Land daemon-side telemetry emission + the verify-dark.ps1 scripted gates for clean-VM install, dual-layer WFP block, and live SIEM
+- [x] **Phase 90: v3.0 Host-Gated UAT Drain** - Land daemon-side telemetry emission + the verify-dark.ps1 scripted gates for clean-VM install, dual-layer WFP block, and live SIEM (completed 2026-06-21)
 
 ## Phase Details
 
@@ -139,7 +139,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 90-01-PLAN.md — DRAIN-04 daemon SecurityEventLayer wiring + non-host-gated chain-advance test (Stream A, real code)
-- [ ] 90-02-PLAN.md — DRAIN-01/02/03 verify-dark.ps1 scripted-gate closeout + 90-HUMAN-UAT.md verdict record (Stream B)
+- [x] 90-02-PLAN.md — DRAIN-01/02/03 verify-dark.ps1 scripted-gate closeout + 90-HUMAN-UAT.md verdict record (Stream B)
 **UI hint**: yes
 
 ## Progress
@@ -154,4 +154,4 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | 87. Security Sync | 3/3 | Complete | 2026-06-20 |
 | 88. Feature + Dependency Cherry-Pick Wave | 6/6 | Complete    | 2026-06-20 |
 | 89. Proxy Hardening Sync | 4/4 | Complete    | 2026-06-21 |
-| 90. v3.0 Host-Gated UAT Drain | 1/2 | In Progress|  |
+| 90. v3.0 Host-Gated UAT Drain | 2/2 | Complete   | 2026-06-21 |
