@@ -62,7 +62,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [ ] **DRAIN-01**: Clean-VM silent MSI install UAT (v3.0 DEPLOY-01/03/05) is executed on a fresh Win11 host with recorded verdicts, OR collapsed to a single unattended `verify-dark.ps1` gate with the residual live step explicitly host-gated.
 - [ ] **DRAIN-02**: Dual-layer (proxy + kernel WFP) live egress-block proof (v3.0 EGRESS-02) is recorded via its scripted gate; the live-host step is operator-gated.
 - [ ] **DRAIN-03**: Live SIEM telemetry gate plus admin opt-out / `min_severity` HKLM→emit (v3.0 TELEM-01/04) is verified via the `telemetry-event-emit` gate; live SIEM ingestion remains host-gated.
-- [ ] **DRAIN-04**: Daemon-side telemetry emission is wired — `nono-agentd` registers the `SecurityEventLayer` so daemon-launched agent denials emit `nono_security::*` events (real code, not host-gated).
+- [x] **DRAIN-04**: Daemon-side telemetry emission is wired — `nono-agentd` registers the `SecurityEventLayer` so daemon-launched agent denials emit `nono_security::*` events (real code, not host-gated).
 
 ---
 
@@ -102,4 +102,4 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 | DRAIN-01 | Phase 90 | Pending |
 | DRAIN-02 | Phase 90 | Pending |
 | DRAIN-03 | Phase 90 | Pending |
-| DRAIN-04 | Phase 90 | Pending |
+| DRAIN-04 | Phase 90 | Complete |

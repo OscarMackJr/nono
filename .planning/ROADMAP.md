@@ -138,7 +138,7 @@ Plans:
   4. The live SIEM telemetry gate plus admin opt-out / `min_severity` HKLM→emit (v3.0 TELEM-01/04) is verified via the `telemetry-event-emit` gate, with live SIEM ingestion host-gated (DRAIN-03).
 **Plans**: 2 plans
 Plans:
-- [ ] 90-01-PLAN.md — DRAIN-04 daemon SecurityEventLayer wiring + non-host-gated chain-advance test (Stream A, real code)
+- [x] 90-01-PLAN.md — DRAIN-04 daemon SecurityEventLayer wiring + non-host-gated chain-advance test (Stream A, real code)
 - [ ] 90-02-PLAN.md — DRAIN-01/02/03 verify-dark.ps1 scripted-gate closeout + 90-HUMAN-UAT.md verdict record (Stream B)
 **UI hint**: yes
 
@@ -154,4 +154,4 @@ Phases execute in numeric order: 85 → 86 → 87 → 88 → 89 → 90. Phase 90
 | 87. Security Sync | 3/3 | Complete | 2026-06-20 |
 | 88. Feature + Dependency Cherry-Pick Wave | 6/6 | Complete    | 2026-06-20 |
 | 89. Proxy Hardening Sync | 4/4 | Complete    | 2026-06-21 |
-| 90. v3.0 Host-Gated UAT Drain | 0/TBD | Not started | - |
+| 90. v3.0 Host-Gated UAT Drain | 1/2 | In Progress|  |
