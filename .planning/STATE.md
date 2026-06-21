@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.1
-milestone_name: UPST9 Upstream Sync (v0.62-v0.64) + v3.0 Drain
-status: Awaiting next milestone
-stopped_at: Phase 90 context gathered
-last_updated: "2026-06-21T14:15:24.005Z"
-last_activity: 2026-06-21 — Milestone v3.1 completed and archived
+milestone: v3.2
+milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
+status: planning
+last_updated: "2026-06-21T15:37:48.526Z"
+last_activity: 2026-06-21
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 19
-  completed_plans: 19
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
@@ -26,10 +25,10 @@ See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-8
 
 ## Current Position
 
-Phase: Milestone v3.1 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-21 — Milestone v3.1 completed and archived
+Status: Defining requirements
+Last activity: 2026-06-21 — Milestone v3.2 started
 
 ## Performance Metrics
 
