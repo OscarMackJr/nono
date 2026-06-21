@@ -191,6 +191,21 @@ pub struct SecurityEventLayer {
 }
 
 impl SecurityEventLayer {
+    /// Return the current HMAC chain sequence number.
+    ///
+    /// The genesis value is `0`.  Each call to [`advance_chain`] increments this
+    /// by one (saturating).  Used by the D-01 non-host-gated integration test to
+    /// assert that an in-process `nono_security::network_deny` event actually
+    /// reached `on_event` and advanced the chain (DRAIN-04).
+    ///
+    /// Returns `0` if the internal mutex is poisoned (fail-silent, never panics).
+    pub(crate) fn chain_sequence(&self) -> u64 {
+        match self.inner.lock() {
+            Ok(guard) => guard.chain.sequence,
+            Err(_) => 0, // Mutex poisoned — return genesis value, never panic
+        }
+    }
+
     /// Construct a new `SecurityEventLayer` with a freshly generated ephemeral
     /// key and session salt.
     ///

@@ -42,6 +42,14 @@ fn main() {
 #[path = "../agent_daemon/mod.rs"]
 mod agent_daemon;
 
+// Make the telemetry module reachable from the daemon binary via #[path]-include,
+// mirroring the agent_daemon include pattern above. The daemon binary has no lib
+// target, so telemetry (normally part of the `nono` binary via main.rs) must be
+// explicitly included here (DRAIN-04 D-02 / Pitfall 2).
+#[cfg(target_os = "windows")]
+#[path = "../telemetry/mod.rs"]
+mod telemetry;
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::ffi::OsString;
