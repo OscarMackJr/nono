@@ -1,429 +1,466 @@
-# Architecture Research
+# Architecture Research: Signed Policy Overrides (ZT-Infra Attestation)
 
-**Domain:** Enterprise Hardening integration into an existing Rust/Windows 5-crate workspace — HKLM machine policy spine, unified egress, and structured security-event telemetry (nono v3.0)
-**Researched:** 2026-06-18
-**Confidence:** HIGH — every integration point grounded in current in-tree source code (config/user.rs, policy.rs, nono-proxy/config.rs, nono-proxy/audit.rs, diagnostic.rs); no greenfield components.
+**Domain:** Runtime capability mutation via signed external policy decisions
+**Researched:** 2026-06-21
+**Confidence:** HIGH — all components are existing, readable source code; no speculative claims
 
 ---
 
-## Core Constraint
+## The Core Architectural Constraint: Library-Is-Policy-Free
 
-The three themes (Deployment, Control, Compliance) are NOT independent silos. They share one data source: `HKLM\SOFTWARE\Policies\nono`. The machine policy layer is the shared prerequisite for the other two. Build it first or the egress and telemetry features have nowhere to read from.
+The single most important architectural decision this milestone must honor is the one already
+encoded in CLAUDE.md's Library vs CLI Boundary table:
+
+> "The library applies ONLY what clients explicitly add to `CapabilitySet` — audit and diagnostics
+> modules are observability primitives, not security policy."
+
+This invariant has a direct consequence for signed-override placement:
+
+- **`crates/nono` (core library):** MAY supply `CapabilitySet` builder mutations and a new
+  `AuditEventPayload` variant. It must NOT embed HTTP clients, ZT-Infra URLs, signature
+  verification policy, or token-format definitions. Adding "verify against ZT-Infra" to the
+  core library would make the library opinionated about which external authority is trusted — a
+  policy decision, not a primitive.
+- **`crates/nono-cli`:** The existing group/deny resolver (`policy.rs`) is where all current
+  policy lives. CLI-side is the natural home for an optional operator CLI verb (e.g. `nono
+  override apply <token>`). But the CLI is not the enforcement surface for this milestone — the
+  milestone's explicit decision is that enforcement lives in `nono-py`.
+- **`nono-py` binding (enforcement surface):** This is where the signed-override verification
+  and the HTTP round-trip to ZT-Infra `POST /actions` live. The milestone explicitly designates
+  `nono-py` as the enforcement surface, consistent with the existing E5 pre-exec interception
+  slot in `DESIGN-engine-abstraction.md` §"Forward-Compat: zt-infra.org Integration". The
+  binding is already the integration point for `confined_run`/`confine`; adding override
+  verification here keeps the Rust core policy-free and concentrates the external-authority
+  dependency in the binding.
+
+**Placement verdict:**
+
+| Layer | Role in v3.2 |
+|-------|-------------|
+| `crates/nono` (lib) | New `AuditEventPayload::PolicyOverrideApplied` variant; `CapabilitySet` builder unchanged — still a pure primitive; `trust/` module's existing `verify_keyed_signature` reused for ECDSA token verification |
+| `crates/nono-cli` | Optional new `nono override` verb for operator UX; does NOT add verification to the run path — that would conflate CLI policy with binding enforcement |
+| `nono-py` | New `override.rs` module; mutated `confined_run`/`confine` signatures; owns the HTTP round-trip, token parsing, signature verification, expiry/scope checks, scoped `CapabilitySet` mutation, and audit event emission |
+| ZT-Infra v2 (external) | `POST /actions` decision + hash-chained KMS-signed audit record; DAAL ledger anchor (optional, not a required gate) |
 
 ---
 
 ## System Overview
 
 ```
-  ┌──────────────────── POLICY SPINE ─────────────────────────┐
-  │  HKLM\SOFTWARE\Policies\nono  (pushable via GPO / Intune) │
-  │  new: crates/nono-cli/src/config/machine.rs               │
-  │                                                            │
-  │  egress_allowlist: ["*.anthropic.com", "corp.internal"]   │
-  │  telemetry_channel: "Application"                          │
-  │  scratch_root: "C:\\ProgramData\\nono\\workspaces"         │
-  └────────────────────────────┬───────────────────────────────┘
-                               │ read at startup (fail-secure)
-           ┌────────────────────┼─────────────────────────────┐
-           │                   │                              │
-           ▼                   ▼                              ▼
-  ┌─────────────────┐  ┌─────────────────────┐  ┌────────────────────┐
-  │  Deployment     │  │  Egress Control      │  │  Telemetry         │
-  │  (SEED-001)     │  │  (SEED-002)          │  │  (SEED-003)        │
-  │                 │  │                      │  │                    │
-  │  MSI silent     │  │  nono-proxy:         │  │  new: crates/      │
-  │  install flags  │  │  ProxyConfig gets    │  │  nono-cli/src/     │
-  │  Scratch-space  │  │  allowed_hosts from  │  │  telemetry/        │
-  │  provisioner    │  │  machine policy      │  │  mod.rs            │
-  │  GPO ADMX       │  │                      │  │                    │
-  │  Intune CSP     │  │  nono-wfp-service:   │  │  hooks into        │
-  └─────────────────┘  │  WFP per-SID filter  │  │  DiagnosticFormatter
-                       │  reads same list     │  │  tracing Layer     │
-                       └─────────────────────┘  │  → Windows Event Log
-                                                 │  → Syslog          │
-                                                 └────────────────────┘
-```
-
----
-
-## Feature 1: Machine Policy Layer
-
-### Where It Lives
-
-New file: `crates/nono-cli/src/config/machine.rs`
-
-Added to `config/mod.rs` as `pub mod machine;`.
-
-This is the only new Rust module in the crate. Everything else is modified existing files.
-
-### What It Does
-
-Reads `HKLM\SOFTWARE\Policies\nono` on Windows via `windows-sys` (already a workspace dep). On non-Windows it returns `Ok(None)` so the codebase compiles cross-platform. Fails secure: a registry read error is fatal (abort), not a fallback to permissive defaults.
-
-```rust
-// crates/nono-cli/src/config/machine.rs — sketch, not final code
-#[derive(Debug, Default)]
-pub struct MachinePolicy {
-    pub egress_allowlist: Option<Vec<String>>,   // REG_MULTI_SZ
-    pub telemetry_channel: Option<String>,        // REG_SZ
-    pub scratch_root: Option<PathBuf>,            // REG_SZ
-    pub strict_egress: Option<bool>,              // REG_DWORD 0/1
-}
-
-pub fn load_machine_policy() -> Result<Option<MachinePolicy>>
-```
-
-### Precedence / Merge Rule
-
-The merge order is: machine policy > per-user profile > built-in defaults.
-
-The existing precedence stack at startup is:
-1. CLI flags (highest)
-2. Per-user profile (`~/.config/nono/config.toml` loaded via `config/user.rs`)
-3. Embedded `policy.json` defaults (via `policy.rs` group resolver)
-
-Machine policy inserts between CLI flags and the per-user profile. The user can still override with explicit CLI flags (principle: machine policy sets the floor, not a ceiling on per-run use). For security-relevant settings like `egress_allowlist`, machine policy MAY be configured to reject user relaxations (a `lock_egress: true` flag in the registry).
-
-The merge is performed in `crates/nono-cli/src/main.rs` (or its `app_runtime` dispatcher) immediately after argument parsing, before profile loading:
-
-```
-1. parse CLI args
-2. load_machine_policy()     <-- NEW, fail-secure
-3. load_user_config()        <-- existing
-4. load_embedded_policy()    <-- existing
-5. resolve capabilities      <-- existing policy.rs
-```
-
-### Fail-Secure Invariants
-
-- If the registry key exists but a value is malformed, abort with `NonoError::ConfigParse`. Never silently use empty/permissive defaults for security values.
-- If the registry key does not exist at all, return `Ok(None)` — machine is not centrally managed, fall through to per-user config normally.
-- Configuration load failures must be fatal (CLAUDE.md § Permission Scope: "Configuration load failures must be fatal").
-
-### New vs Modified: Feature 1
-
-| Component | Status | Change |
-|-----------|--------|--------|
-| `crates/nono-cli/src/config/machine.rs` | NEW | Registry reader, `MachinePolicy` struct |
-| `crates/nono-cli/src/config/mod.rs` | MODIFIED | `pub mod machine;` + re-export |
-| `crates/nono-cli/src/main.rs` (or `app_runtime.rs`) | MODIFIED | Call `load_machine_policy()` at startup |
-| `crates/nono-cli/Cargo.toml` | MODIFIED | No new deps — `windows-sys` already present |
-| `scripts/build-windows-msi.ps1` | MODIFIED | Add silent-install flags (`/quiet /norestart`) + scratch-space provisioner custom action |
-| `crates/nono-cli/data/policy.json` | NOT MODIFIED | Machine policy is a separate layer, not a policy group |
-
----
-
-## Feature 2: Unified Egress Control
-
-### The Two Enforcers
-
-nono currently has two orthogonal egress enforcement mechanisms:
-
-| Enforcer | Layer | Mechanism | What It Controls |
-|----------|-------|-----------|-----------------|
-| `nono-proxy` | User-space L7 | HTTP CONNECT intercept + domain filter | Domain + method + path; handles credential injection; runs only when proxy is active |
-| `nono-wfp-service` | Kernel (WFP) | `FwpmFilterAdd0` per-SID filter | Raw TCP/UDP by AppContainer SID; enforces for ALL processes with that SID regardless of proxy |
-
-These are NOT duplicates. They are defense-in-depth layers with different granularities. The enterprise story is: WFP provides the hard kernel-enforced boundary (agent cannot bypass even if it ignores the proxy), while nono-proxy provides L7 method/path filtering and credential injection on top.
-
-### The Problem With Duplicating the Allowlist
-
-Today `nono-proxy`'s `ProxyConfig.allowed_hosts` is populated from the per-user profile JSON. The WFP service has its own separate allowlist fed by the daemon's `capability_set`. If machine policy adds a third copy, the system has three allowlists to keep in sync, with no single source of truth.
-
-### Solution: One Allowlist, Two Consumers
-
-Machine policy owns the allowlist (`HKLM\...\EgressAllowlist` REG_MULTI_SZ). Both enforcers read from it at startup through the machine policy layer. Neither gets its own copy of the list.
-
-```
-HKLM\...\EgressAllowlist
-    │
-    ▼
-MachinePolicy.egress_allowlist: Vec<String>
-    │                           │
-    ▼                           ▼
-ProxyConfig.allowed_hosts   WFP allowlist passed to
-(via nono-proxy filter.rs)  nono-wfp-service at daemon launch
-```
-
-### Integration Point: nono-proxy
-
-`ProxyConfig` is built in `nono-cli` (not inside `nono-proxy` itself — the proxy is a library whose config is constructed by the caller). The call site that constructs `ProxyConfig` is in `nono-cli`'s execution strategy / supervisor setup code.
-
-**Modified file:** wherever `ProxyConfig { allowed_hosts: ..., strict_filter: ..., }` is constructed in `crates/nono-cli/src/`. This is a read-at-construction-time injection, not a runtime reload. The machine policy list replaces or augments `allowed_hosts`.
-
-If `MachinePolicy.strict_egress == true`, set `ProxyConfig.strict_filter = true` so an empty list is deny-all rather than allow-all (the `ProxyConfig.strict_filter` field already exists in `nono-proxy/src/config.rs`).
-
-**No changes to `nono-proxy/src/`** — the proxy already has the data model needed. The caller just supplies different values.
-
-### Integration Point: nono-wfp-service
-
-The WFP service receives its per-agent rules from the daemon via the control pipe. The daemon's `launch_agent` path builds the `CapabilitySet` (which encodes the network capability). Machine policy allowlist entries translate into `NetworkCapability` entries in the capability set before the daemon passes them to the WFP service.
-
-**Modified file:** the daemon's capability-set builder (in `nono-agentd`), where it constructs the network capability for a new agent. The machine policy allowlist is merged in here before the `CapabilitySet` is sent to the WFP service.
-
-### Reconciliation Summary
-
-There is no new "enterprise egress story" that replaces the existing ones. The architecture is:
-
-1. Machine policy is the allowlist source.
-2. `nono-cli` reads machine policy at startup and injects it into `ProxyConfig`.
-3. `nono-agentd` reads machine policy at daemon startup and injects it into the `CapabilitySet` it builds for each agent.
-4. WFP enforces the kernel boundary; proxy enforces the L7 boundary. Both use the same domain list from the same source.
-
-### New vs Modified: Feature 2
-
-| Component | Status | Change |
-|-----------|--------|--------|
-| `crates/nono-proxy/src/config.rs` | NOT MODIFIED | `ProxyConfig` already has `allowed_hosts` + `strict_filter` |
-| `crates/nono-proxy/src/filter.rs` | NOT MODIFIED | `ProxyFilter` already accepts `allowed_hosts` slice |
-| `crates/nono-cli/src/` (ProxyConfig construction site) | MODIFIED | Inject `machine_policy.egress_allowlist` into `ProxyConfig` at construction |
-| `nono-agentd` (capability set builder) | MODIFIED | Inject machine policy allowlist into per-agent `CapabilitySet` for WFP |
-| `crates/nono-cli/src/config/machine.rs` | NEW (Feature 1 deliverable) | Provides `MachinePolicy.egress_allowlist` |
-
----
-
-## Feature 3: Structured Security-Event Telemetry
-
-### Event Sources (What to Capture)
-
-Four deny/violation event types need to become structured security signals:
-
-1. **Path deny** — when `DiagnosticFormatter` records a `DenialRecord` (path + access mode + reason)
-2. **Network deny** — when `nono-proxy/audit.rs::log_denied()` fires (already emits `tracing::info!` with structured fields)
-3. **Label violation** — when the Windows mandatory-label (Low-IL) enforcement blocks an operation (currently goes to stderr as an error exit)
-4. **Hook fail-closed** — when `hooks.rs` / session hooks trigger a fail-closed response (Phase 58 hooks path)
-
-### Where to Hook
-
-The cleanest integration point is a `tracing::Layer` that listens on a specific target prefix (`nono_security::*`) and forwards structured events to the OS sink. This approach:
-- Requires no changes to the library (`crates/nono/`) — stays within CLI
-- Reuses the existing `tracing` initialization in `crates/nono-cli/src/cli_bootstrap.rs` (`init_tracing()`)
-- Lets existing callsites emit `tracing::warn!(target: "nono_security::path_deny", ...)` without importing a new crate
-- Is testable in isolation (replace the subscriber in tests)
-
-The alternative of wrapping `DiagnosticFormatter` directly is worse: `DiagnosticFormatter` is in the library, which must stay policy-free. Adding event emission to it would violate the library-vs-CLI boundary.
-
-### New Module: `crates/nono-cli/src/telemetry/`
-
-```
-crates/nono-cli/src/telemetry/
-├── mod.rs          # SecurityEventLayer (tracing::Layer impl), SecurityEvent enum
-├── event.rs        # SecurityEvent schema: event_type, severity, session_id,
-│                   # agent_pid, path/host/method, timestamp_unix_ms, nonce
-├── windows.rs      # Windows Event Log emitter (cfg(target_os = "windows"))
-│                   # uses windows-sys ReportEventW (evntprov.h alternative)
-└── syslog.rs       # Syslog emitter (cfg(unix)) via RFC 5424 UDP/TCP
-                    # (can use the `syslog` crate or roll minimal UDP)
-```
-
-This is a new module in `nono-cli`, not a new crate. The CLAUDE.md boundary rule is clear: policy, UX, and output live in the CLI. Telemetry emission is output, and it depends on machine policy config (channel names), so it belongs in `nono-cli`.
-
-A separate crate would be premature — the emitter has no consumers other than `nono-cli` and `nono-agentd`, and the tracing Layer approach lets both binaries register it at their respective init paths.
-
-### How Existing Emit Points Are Wired
-
-**Path deny — DiagnosticFormatter path:**
-`DiagnosticFormatter::format_footer()` is called in `nono-cli` after child exit. The CLI already has the `DenialRecord` slice at that point. The telemetry wiring goes in the CLI caller (the exec strategy's post-exit handler), not inside `DiagnosticFormatter` itself:
-
-```
-// In nono-cli exec strategy post-exit handler (MODIFIED):
-for denial in &denials {
-    tracing::warn!(
-        target: "nono_security::path_deny",
-        path = %denial.path.display(),
-        access = %denial.access,
-        reason = ?denial.reason,
-        session_id = session_id,
-    );
-}
-```
-
-The `SecurityEventLayer` picks this up and routes it to Event Log / Syslog.
-
-**Network deny — nono-proxy audit.rs:**
-`audit::log_denied()` already emits `tracing::info!(target: "nono_proxy::audit", decision = "deny", ...)`. Two options:
-- Add a second `tracing::warn!(target: "nono_security::network_deny", ...)` call in `log_denied()` — clean, but adds a second emit.
-- Have `SecurityEventLayer` filter on `nono_proxy::audit` events where `decision == "deny"` — avoids touching proxy source.
-
-Preferred: option 1 (explicit dual-emit in `log_denied`), because it keeps the security event schema independent of the proxy audit schema and avoids stringly-typed field scraping.
-
-**Hook fail-closed:**
-`crates/nono-cli/src/hooks.rs` — add a `tracing::warn!(target: "nono_security::hook_fail_closed", ...)` call at the fail-closed code path. This is the most targeted change.
-
-### Windows Event Log Specifics
-
-Custom Application log channel: `nono-security` (or `nono/Security`). Registered via registry key at MSI install time (part of the deployment work in Feature 1). Uses `windows-sys::Win32::System::EventLog::ReportEventW` or the modern ETW path via `evntprov`. The `DWORD` event IDs map to event types (1000=path_deny, 1001=network_deny, 1002=label_violation, 1003=hook_fail_closed).
-
-The MSI custom action (or a `nono setup --register-event-source` sub-command) registers the source. Failing to register is non-fatal for the sandbox; telemetry emission silently no-ops if the source is not registered (this is the one place where a silent fallback is acceptable — losing a telemetry event is not a security failure).
-
-### Tamper Evidence
-
-The SEED-003 "tamper-proof" claim maps to two lightweight mechanisms (SEED-005 ZT ledger is out of scope):
-1. Append-only channel: Windows Event Log Application channel is append-only by OS design; events cannot be deleted by non-admin processes.
-2. Per-event sequence counter: include an incrementing `sequence_id` in each event. Gaps in the sequence visible to the SIEM indicate dropped events.
-
-A cryptographic event chain (hash-chained events) is SEED-005 territory — defer it.
-
-### New vs Modified: Feature 3
-
-| Component | Status | Change |
-|-----------|--------|--------|
-| `crates/nono-cli/src/telemetry/mod.rs` | NEW | `SecurityEventLayer`, `SecurityEvent` schema |
-| `crates/nono-cli/src/telemetry/event.rs` | NEW | Event enum + schema types |
-| `crates/nono-cli/src/telemetry/windows.rs` | NEW | `cfg(windows)` Event Log emitter |
-| `crates/nono-cli/src/telemetry/syslog.rs` | NEW | `cfg(unix)` Syslog emitter |
-| `crates/nono-cli/src/cli_bootstrap.rs` | MODIFIED | Register `SecurityEventLayer` with the `tracing` subscriber at `init_tracing()` |
-| `crates/nono-cli/src/` (exec strategy post-exit) | MODIFIED | Emit `nono_security::path_deny` events per denial |
-| `crates/nono-proxy/src/audit.rs` | MODIFIED | Add dual-emit `nono_security::network_deny` in `log_denied()` |
-| `crates/nono-cli/src/hooks.rs` | MODIFIED | Emit `nono_security::hook_fail_closed` at fail-closed path |
-| `crates/nono/src/diagnostic.rs` | NOT MODIFIED | Library stays policy-free; emit happens in CLI caller |
-| `scripts/build-windows-msi.ps1` | MODIFIED | Register Event Log source at install time |
-
----
-
-## Data Flow: Policy to Enforcement
-
-```
-Startup:
-  load_machine_policy()
-       │
-       ├─► egress_allowlist ─────────────────────────┐
-       │                                              │
-       │   ProxyConfig construction (nono-cli)        │    CapabilitySet construction (nono-agentd)
-       │        │                                     │              │
-       │        ▼                                     │              ▼
-       │   ProxyFilter::new_strict(allowlist)         │    NetworkCapability { allowed_domains }
-       │        │                                     │              │
-       │        ▼                                     │              ▼
-       │   nono-proxy: filter each CONNECT req        │    nono-wfp-service: FwpmFilterAdd0 per-SID
-       │
-       ├─► telemetry_channel ──► SecurityEventLayer init ──► Event Log / Syslog
-       │
-       └─► scratch_root ──► scratch-space provisioner (setup.rs / MSI custom action)
-
-Runtime deny events:
-  exec_strategy post-exit handler
-       │
-       ├─ DenialRecord[] ──► tracing::warn!(target: "nono_security::path_deny", ...)
-       │                          │
-       │                     SecurityEventLayer ──► Event Log (1000)
-       │
-  nono-proxy audit::log_denied()
-       │
-       ├─ deny event ──► tracing::warn!(target: "nono_security::network_deny", ...)
-       │                      │
-       │                 SecurityEventLayer ──► Event Log (1001)
-       │
-  hooks.rs fail-closed path
-       │
-       └─ hook failure ──► tracing::warn!(target: "nono_security::hook_fail_closed", ...)
-                                │
-                           SecurityEventLayer ──► Event Log (1003)
+  Developer workflow (out-of-band — happens before the confined_run call)
+  ────────────────────────────────────────────────────────────────────────
+  Developer hits a nono block
+       |
+       v
+  Operator/EM uses ZT-Infra v2 control plane (AWS Tailscale/SSM or local provisioner)
+       |  POST /actions  {"actor":"dev","action":"nono.fs.override",
+       |                  "resource":"git://github.com/org/repo","scope":{...},"expiry":"..."}
+       |
+       v
+  ZT-Infra ActionAuditor.record():
+      previous_hash <- last chain entry (or ZERO_HASH)
+      current_hash = SHA-256(stableJson({actor,action,resource,decision,reason,timestamp,previous_hash}))
+      kms_signature = KMS.SignCommand(ECDSA_SHA_256, current_hash)  // normalizeEcdsaDerLowS applied
+      append to audit-chain.jsonl + CloudWatch + optional DAAL anchor (Base Sepolia)
+       |
+       v
+  Operator delivers signed override token to developer (email / secrets manager / file):
+  {
+    "actor": "dev@example.com",
+    "action": "nono.fs.override",
+    "decision": "allow",
+    "scope": {"paths":["/var/cache/pip"],"mode":"READ_WRITE"},
+    "expiry": "2026-06-22T00:00:00Z",
+    "repo_context": "git://github.com/org/repo@abc123",
+    "audit": {
+      "previous_hash": "0000...000",
+      "current_hash": "a1b2...",
+      "kms_signature": {"algorithm":"ECDSA_SHA_256","key_id":"arn:...","signature":"<b64>"}
+    }
+  }
+
+  Runtime execution path (in-band — inside confined_run / confine)
+  ─────────────────────────────────────────────────────────────────
+
+  nono_py.confined_run(exe, args, allow, profile, override_token=token_json)
+       |
+       +--[1] No token? --> proceed as today (no mutation, no new behavior)
+       |
+       +--[2] Token present? --> verify_override(token_json, kms_pubkey_config)
+       |       a. Parse token JSON, validate required fields present
+       |       b. Check expiry: token.expiry > utcnow()
+       |          FAIL-CLOSED: expired -> raise PyRuntimeError, nothing runs
+       |       c. Check repo_context binding (git URL + commit hash match)
+       |          FAIL-CLOSED: mismatch -> raise PyRuntimeError, nothing runs
+       |       d. Recompute current_hash = SHA-256(stableJson(unsigned_fields))
+       |          Verify ECDSA_SHA_256(kms_signature.signature, current_hash, pinned_kms_pubkey)
+       |          via nono::trust::signing::verify_keyed_signature
+       |          FAIL-CLOSED: invalid sig -> raise PyRuntimeError, nothing runs
+       |       e. (Optional) Live ZT-Infra check: POST /actions to confirm not revoked
+       |          FAIL-CLOSED: deny or timeout -> raise PyRuntimeError, nothing runs
+       |       f. Return OverrideGrant{paths, mode, expiry, zt_audit_hash}
+       |
+       +--[3] Scoped CapabilitySet mutation (Rust side, before spawn):
+       |       base_caps = build from (allow, profile) as today
+       |       for path in grant.paths:
+       |           append --allow <path> to nono.exe run invocation
+       |       (network expansion via allow_domain deferred -- nono-proxy is the right surface)
+       |       OS confinement still applies to the expanded set -- no bypass
+       |
+       +--[4] Emit override event into nono audit HMAC chain (before spawn, fail-soft):
+       |       AuditEventPayload::PolicyOverrideApplied {
+       |           actor,
+       |           scope (paths, mode, expiry),
+       |           zt_audit_hash: token.audit.current_hash  // <-- bi-directional link
+       |           kms_key_id
+       |       }
+       |       SecurityEventLayer -> EventID 10006 (NONO_POLICY_OVERRIDE_APPLIED)
+       |       -> Windows Event Log (Application channel) + ETW -> Splunk/Sentinel
+       |
+       +--[5] Execute under OS confinement:
+               nono.exe run --profile <profile> --allow <paths>... --allow <grant.paths>... -- <exe> <args>
+               Low-IL + AppContainer + Job + WFP apply regardless of grant
+               An allow NEVER bypasses the OS layer -- nono is the sandbox underneath
+
+  Forensic cross-reference (bi-directional):
+  ────────────────────────────────────────────
+  nono chain -> ZT-Infra:  zt_audit_hash in PolicyOverrideApplied points to the ZT-Infra
+                            audit-chain.jsonl / CloudWatch entry that authorized the override
+  ZT-Infra -> nono chain:  correlation_id in the POST /actions request can carry the nono
+                            session's HMAC chain head (optional; the server.js correlation_id
+                            field is already supported)
 ```
 
 ---
 
 ## Component Boundaries
 
-| Component | Owns | Does NOT own |
-|-----------|------|-------------|
-| `crates/nono/` (library) | Sandbox primitives, `CapabilitySet`, `DiagnosticFormatter`, `DenialRecord` types | Policy, telemetry emission, machine registry reads |
-| `crates/nono-cli/src/config/machine.rs` | HKLM read, `MachinePolicy` struct, fail-secure parse | Egress enforcement, event emission |
-| `crates/nono-cli/src/telemetry/` | `SecurityEventLayer`, schema, OS emitters | Policy loading, sandbox enforcement |
-| `crates/nono-proxy/` | Domain filter, credential injection, `ProxyConfig` data model | Building `ProxyConfig` from policy (CLI does that) |
-| `nono-agentd` | Per-agent capability set construction, WFP handoff | Machine policy parsing (reads via machine.rs API) |
-
-The library-vs-CLI boundary from CLAUDE.md is preserved throughout: the library gets new types at most (if `DenialRecord` needs a new field), never policy logic or platform-specific emission.
+| Component | Responsibility | Communicates With | Status |
+|-----------|---------------|-------------------|--------|
+| `nono-py/src/override.rs` (NEW) | Token parse, expiry/scope/sig verify, optional live ZT check, `OverrideGrant` type | ZT-Infra `POST /actions` (HTTP blocking); `crates/nono::trust::signing::verify_keyed_signature` | New file |
+| `nono-py/src/windows_confined_run.rs` (MODIFIED) | Accept `override_token: Option<String>`; call `verify_override`; add grant paths via `append_caps_allow_flags`; emit audit event before spawn | `override.rs` (same crate); `nono.exe run` subprocess | Modified |
+| `nono-py/src/sandboxed_exec.rs` (MODIFIED) | Same override wiring for Unix `sandboxed_exec` | `override.rs` | Modified |
+| `nono-py/src/lib.rs` (MODIFIED) | Register new `override.rs` module and expose `OverrideGrant` as `#[pyclass]` | PyO3 module registry | Modified |
+| `crates/nono/src/audit.rs` (MODIFIED) | New `AuditEventPayload::PolicyOverrideApplied` variant with `zt_audit_hash` field | `SecurityEventLayer` in nono-cli via `tracing` | Modified |
+| nono-cli `SecurityEventLayer` (MODIFIED) | Emit EventID 10006 for `PolicyOverrideApplied`; follow existing EventID 10001-10005 pattern | Windows Event Log + ETW | Modified |
+| `crates/nono/src/trust/signing.rs` (REUSED AS-IS) | `verify_keyed_signature` for raw ECDSA P-256 verification | Called from `override.rs` | Existing, unchanged |
+| ZT-Infra `POST /actions` (EXTERNAL) | Policy decision + hash-chained KMS-signed audit record | Called by `override.rs` over HTTP | External, unchanged |
 
 ---
 
-## Build Order (Dependency-Respecting)
+## Data Flow
 
-The machine policy layer is the shared prerequisite. Neither egress injection nor telemetry configuration can proceed without it.
+### Override Token Format
 
-**Phase A — Policy Spine (blocks everything else)**
-1. `crates/nono-cli/src/config/machine.rs` — `MachinePolicy` struct + HKLM reader
-2. Wire `load_machine_policy()` into startup in `main.rs`
-3. `scripts/build-windows-msi.ps1` — silent install flags + scratch provisioner custom action + Event Log source registration
+The token is a JSON envelope delivered out-of-band. It is the ZT-Infra `POST /actions`
+response augmented with scope and expiry fields added by the operator or a thin helper
+script. It is NOT a Sigstore bundle (those are for file attestation). The `audit.current_hash`
+field is the bi-directional linkage key.
 
-**Phase B — Egress Control (requires A)**
-4. Inject `MachinePolicy.egress_allowlist` into `ProxyConfig` at construction site in nono-cli
-5. Inject allowlist into `nono-agentd` capability-set builder for WFP
-6. Dark-factory gate: `verify-dark.ps1` gate confirms proxy rejects out-of-allowlist domain + WFP blocks unlisted SID
+The `unsigned_fields` used for hash computation match the `stableJson` fields in ZT-Infra's
+`ActionAuditor.record()` implementation exactly:
+`{actor, action, resource, decision, reason, timestamp, previous_hash}`.
+The `scope`, `expiry`, and `repo_context` fields are additional metadata NOT in the original
+unsigned payload — they must be validated against the signed `action`/`resource` fields, not
+treated as independently authenticated.
 
-**Phase C — Telemetry (requires A; independent from B)**
-7. `crates/nono-cli/src/telemetry/` module (schema, Layer, Windows emitter, Syslog emitter)
-8. Register `SecurityEventLayer` in `init_tracing()` using `MachinePolicy.telemetry_channel`
-9. Emit `nono_security::*` events at the three callsites (exec-strategy, audit.rs, hooks.rs)
-10. Dark-factory gate: `verify-dark.ps1` gate confirms Event Log entry appears after a sandbox denial
+This creates one design choice to resolve in the planning phase: either (a) the operator
+embeds scope/expiry directly into the ZT-Infra `resource` or `action` field (making them part
+of the signed payload) or (b) scope/expiry are out-of-band metadata validated separately.
+Option (a) is more tamper-evident and should be the recommendation to the planner.
 
-B and C can proceed in parallel once A is complete.
+### Signature Verification Path
+
+```
+nono-py/src/override.rs::verify_override(token_json, kms_pubkey_config)
+  |
+  +-> serde_json::from_str(token_json) -> OverrideToken
+  +-> check token.expiry > Utc::now()      [fail-closed]
+  +-> check token.repo_context             [fail-closed]
+  +-> recompute current_hash = SHA-256(stableJson(unsigned_fields))
+  +-> nono::trust::signing::verify_keyed_signature(
+          message: current_hash_bytes,
+          signature: base64_decode(token.audit.kms_signature.signature),
+          public_key: kms_pubkey_config.der_bytes
+      )
+      [fail-closed: any Err -> raise PyRuntimeError]
+  +-> (optional) HTTP POST /actions to ZT-Infra for live revocation check
+      [fail-closed: deny or timeout -> raise PyRuntimeError]
+  +-> Ok(OverrideGrant { paths, mode, expiry, zt_audit_hash })
+```
+
+The `verify_keyed_signature` function in `crates/nono/src/trust/signing.rs` already handles
+ECDSA P-256 verification. The KMS output uses the same P-256 curve and DER encoding. The
+`normalizeEcdsaDerLowS` normalization applied by ZT-Infra's `audit.js` ensures low-S form,
+which is the form `verify_keyed_signature` expects. This reuse is verified by reading the
+actual source of both components.
+
+To expose `verify_keyed_signature` to `override.rs` (same Rust workspace via path dep):
+`nono-py` already depends on `nono` (it uses `nono::CapabilitySet`, `nono::Sandbox`, etc.).
+The call from `override.rs` to `nono::trust::signing::verify_keyed_signature` is a plain
+Rust function call — no PyO3 boundary needed for the internal path.
+
+### CapabilitySet Mutation
+
+No new Rust primitive is needed. The existing `append_caps_allow_flags` function in
+`windows_confined_run.rs` already converts a list of paths into `--allow` flags on the
+`nono.exe run` command. The override grant paths are appended to the same command:
+
+```rust
+// Existing code path (unchanged):
+build_nono_run_args(&mut cmd, profile.as_deref(), allow.as_deref(), cwd.as_deref());
+// New: override grant paths appended via the same mechanism
+if let Some(ref grant) = override_grant {
+    for path in &grant.paths {
+        cmd.arg("--allow").arg(path);
+    }
+}
+```
+
+The `CapabilitySet` builder in `crates/nono` is not mutated at the Rust library level —
+the mutation happens entirely at the `nono.exe run` invocation level, staying inside
+`nono-py` where policy belongs.
+
+### Audit Chain + SecurityEventLayer Bi-Directional Linkage
+
+The new `AuditEventPayload::PolicyOverrideApplied` variant follows the exact same pattern
+as the existing fork extension `RejectStage` (which also adds fields not present in upstream):
+
+```rust
+// In crates/nono/src/audit.rs, added to the existing AuditEventPayload enum:
+/// A signed policy override was verified and applied to the runtime CapabilitySet.
+PolicyOverrideApplied {
+    /// Actor identity from the override token.
+    actor: String,
+    /// Canonical granted paths.
+    paths: Vec<String>,
+    /// Access mode granted ("read", "write", or "read+write").
+    mode: String,
+    /// ISO-8601 expiry from the token.
+    expiry: String,
+    /// The ZT-Infra audit chain hash that authorized this override.
+    /// Cross-reference: look up in ZT-Infra CloudWatch / audit-chain.jsonl
+    /// to find the original authorization record.
+    zt_audit_hash: String,
+    /// AWS KMS key ID used for signing (for key rotation auditing).
+    kms_key_id: String,
+},
+```
+
+This event is appended to the nono HMAC chain via `AuditRecorder` before the confined
+process is spawned. The `chain_hash` field of the resulting `AuditEventRecord` commits to
+all prior events in the session, making the override tamper-evident within the session log.
+
+The SecurityEventLayer in nono-cli handles the new variant identically to existing ones:
+emit to `NONO_POLICY_OVERRIDE_APPLIED` (EventID 10006) with named EventData fields matching
+the struct. This follows the v3.0 pattern for EventIDs 10001-10005.
+
+---
+
+## PyO3 Python/Rust Split
+
+| Concern | Language | Location | Rationale |
+|---------|----------|----------|-----------|
+| HTTP round-trip to ZT-Infra | Rust (`ureq` or `reqwest` blocking) | `nono-py/src/override.rs` | Keep in Rust; avoids Python HTTP dep; runs under `py.detach()` GIL release |
+| Token JSON parsing | Rust (`serde_json`) | `nono-py/src/override.rs` | Type safety; avoid Python-side field confusion |
+| Expiry check (UTC) | Rust (`chrono`) | `nono-py/src/override.rs` | Avoid Python/Rust clock drift; `chrono` already in workspace |
+| Repo context binding check | Rust | `nono-py/src/override.rs` | String-exact comparison of canonical git URL |
+| ECDSA sig verification | Rust (`nono::trust::signing`) | `nono-py/src/override.rs` → direct crate call | Crypto stays in audited Rust; no PyO3 boundary for the internal call |
+| `OverrideGrant` type | Rust `#[pyclass]` | `nono-py/src/override.rs` | Python-consumable typed result |
+| `verify_override` | Rust `#[pyfunction]` | `nono-py/src/override.rs` | Optionally exposed to Python for testing; always called from Rust in the hot path |
+| CapabilitySet mutation | Rust (inside `confined_run`) | `windows_confined_run.rs` / `sandboxed_exec.rs` | `append_caps_allow_flags` + manual `--allow` args; no new API |
+| Audit event emission | Rust | `crates/nono/src/audit.rs` + nono-cli `SecurityEventLayer` | Follows existing AuditRecorder pattern |
+| `confined_run` / `confine` signature | Rust `#[pyfunction]` | `windows_confined_run.rs` | Add `override_token: Option<String>` parameter |
+
+GIL handling: the existing `py.detach(|| do_spawn_and_wait(...))` block in `confined_run`
+must wrap both the `verify_override` call and the spawn+wait. The structure:
+
+```rust
+py.detach(|| {
+    let grant = override_token.as_deref()
+        .map(|tok| verify_override(tok, &kms_pubkey_config))
+        .transpose()?;
+    do_spawn_and_wait(build_cmd(nono_path, allow, profile, grant.as_ref()), timeout_secs)
+})
+```
+
+---
+
+## Fail-Closed Points
+
+| Failure | Behavior | Where enforced |
+|---------|----------|---------------|
+| Token missing required field | `Err -> PyRuntimeError` before spawn | `override.rs` |
+| Token expired | `Err -> PyRuntimeError` before spawn | `override.rs` |
+| Repo context mismatch | `Err -> PyRuntimeError` before spawn | `override.rs` |
+| Signature verification failure | `Err -> PyRuntimeError` before spawn | `override.rs` via `nono::trust` |
+| ZT-Infra live check returns deny | `Err -> PyRuntimeError` before spawn | `override.rs` |
+| ZT-Infra HTTP call times out | `Err -> PyRuntimeError` before spawn — never degrade | `override.rs` |
+| KMS pubkey not configured but token present | `Err -> PyRuntimeError` before spawn | `override.rs` config validation |
+| Audit event append failure | Warn, DO NOT block execution (observability, not a security gate) | `crates/nono/src/audit.rs` |
+| SecurityEventLayer emit failure | Warn, DO NOT block execution | nono-cli |
+
+The final two entries follow the existing behavior of `AuditRecorder`: audit is observability.
+The OS confinement (Low-IL + AppContainer + Job) is applied by `nono.exe run` regardless.
+
+---
+
+## New vs. Modified Components
+
+### New Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Override verifier | `nono-py/src/override.rs` | Parse token, verify ECDSA sig via `nono::trust`, check expiry/scope/repo-context, optional live ZT check, produce `OverrideGrant #[pyclass]` |
+| KMS pubkey config | env var `NONO_ZT_KMS_PUBKEY` (DER base64) or config file | Pin the KMS public key used to verify tokens; fail-closed if absent when a token is presented |
+| `PolicyOverrideApplied` audit variant | `crates/nono/src/audit.rs` | New `AuditEventPayload` variant; carries `zt_audit_hash` for bi-directional linkage; follows fork-extension pattern |
+| EventID 10006 | nono-cli `SecurityEventLayer` | New EventID constant + match arm for `PolicyOverrideApplied`; mirrors existing 10001-10005 pattern |
+
+### Modified Components
+
+| Component | File | Change |
+|-----------|------|--------|
+| `confined_run` | `nono-py/src/windows_confined_run.rs` | Add `override_token: Option<String>` parameter; call `verify_override`; add grant paths via `--allow` flags; emit audit event inside `py.detach` block |
+| `confine` | `nono-py/src/windows_confined_run.rs` | Same override wiring |
+| `sandboxed_exec` | `nono-py/src/sandboxed_exec.rs` | Same override wiring for Unix path |
+| Module registration | `nono-py/src/lib.rs` | `mod override; m.add_class::<override::OverrideGrant>()?;` |
+| `AuditEventPayload` | `crates/nono/src/audit.rs` | New variant (non-breaking: tagged enum, `#[serde(tag="type")]`, existing variants unchanged) |
+| SecurityEventLayer match | nono-cli `main.rs` | New arm for `AuditEventPayload::PolicyOverrideApplied` → EventID 10006 |
+
+### Unchanged Components
+
+| Component | Reason |
+|-----------|--------|
+| `crates/nono/src/capability.rs` | `CapabilitySet` builder already sufficient; no new API needed |
+| `crates/nono-cli/src/policy.rs` | Group/deny resolver unchanged; overrides are additive, not a policy group |
+| `crates/nono/src/trust/signing.rs` | Reused as-is via direct crate call from `override.rs` |
+| `crates/nono/src/sandbox/` | OS confinement layer completely unchanged |
+| ZT-Infra v2 codebase | External dependency; nono consumes existing `POST /actions` API unchanged |
+
+---
+
+## Suggested Build Order
+
+Dependency order: verify infrastructure before integration, integration before emission,
+emission before verification closure.
+
+**Wave 1 — Token verifier (no AWS, no spawn)**
+
+Build `nono-py/src/override.rs`:
+- `OverrideToken` (serde), `OverrideGrant` (`#[pyclass]`), `verify_override` function
+- Expiry check, repo context check, ECDSA sig verify via `nono::trust::signing`
+- Unit tests using `generate_signing_key` + `sign_bytes` from `trust/signing.rs` (no AWS, no KMS)
+- Test fail-closed paths: expired, bad sig, wrong repo, missing fields
+- Test that `override_token = None` produces identical behavior to today
+
+Wave 1 is fully self-contained on any dev host. No AWS, no local provisioner needed.
+
+**Wave 2 — CapabilitySet mutation wiring**
+
+Wire `override_token: Option<String>` into `confined_run`, `confine`, and `sandboxed_exec`:
+- Call `verify_override` when token present; fail-closed on any error
+- Add grant paths as `--allow` flags via existing `append_caps_allow_flags` or inline `cmd.arg`
+- Integration test: a token granting `/tmp/override-dir` produces a `nono.exe run` invocation
+  that includes `--allow /tmp/override-dir` and the path is accessible inside the confined process
+- Verify no-token path is byte-for-byte identical to pre-v3.2 (regression gate)
+
+**Wave 3 — Audit + SecurityEventLayer wiring**
+
+Add `AuditEventPayload::PolicyOverrideApplied` and EventID 10006:
+- Unit test: new variant serializes to expected JSON; chain hash advances correctly
+- Unit test: existing variants' serialization is unchanged (regression)
+- `SecurityEventLayer` arm emits EventID 10006 with correct EventData field names
+- Cross-target clippy: `audit.rs` is cfg-unconditional; Windows and Linux clippy both cover it.
+  The SecurityEventLayer match is in nono-cli which may have `cfg(windows)` guards on the ETW
+  emitter — verify no `unreachable_patterns` warning on Linux CI
+
+**Wave 4 — Live ZT-Infra integration (host-gated)**
+
+Add the optional live-check `POST /actions` call inside `verify_override` controlled by
+`NONO_ZT_ACTIONS_URL` (unset = offline-only; set = live check enabled):
+- Local provisioner (`cd provisioner && npm install && npm start`) fully testable on dev host
+- AWS KMS path is host-gated; scripted `verify-dark.ps1` gate per Dark Factory mandate
+- DAAL ledger linkage (`token.audit.daal`) recorded in `PolicyOverrideApplied` as an
+  informational field; not a required verification gate in v3.2
 
 ---
 
 ## Anti-Patterns to Avoid
 
-### Anti-Pattern: Three Separate Allowlists
+### Anti-Pattern 1: Verify inside `crates/nono` (core library)
 
-**What people do:** add a machine-policy allowlist field to `MachinePolicy`, add another field to `ProxyConfig`, and pass a third copy to the WFP service — each sourced independently from the registry.
+Adding a `CapabilitySet::apply_override(token, kms_pubkey)` method or similar to the library
+makes it opinionated about the external authority format and key pinning policy. Every downstream
+client embedding the library would be forced into the ZT-Infra model. The CLAUDE.md boundary
+table is explicit on this. Keep `crates/nono` to the `AuditEventPayload` variant (observability
+primitive) and the existing `trust/signing` ECDSA primitive. Everything ZT-Infra-specific goes
+in `nono-py`.
 
-**Why it's wrong:** when IT updates the GPO, only one of the three lists updates. The other two retain stale entries. The security boundary becomes whatever the strictest stale list happens to be, which is not the policy the IT admin intended.
+### Anti-Pattern 2: Using `decision: "allow"` as the sole gate
 
-**Do this instead:** `MachinePolicy.egress_allowlist` is the single source. `ProxyConfig.allowed_hosts` is constructed from it. The WFP capability set is constructed from it. No copy-paste.
+The `decision` field is unauthenticated JSON text. An attacker can craft `{"decision":"allow"}`
+with any fields. The signature over `current_hash` — which commits to the `decision` field via
+`stableJson` — is the only authenticating gate. Verification order in `verify_override` must be:
+parse → verify signature → then inspect semantic fields (scope, expiry, decision).
 
-### Anti-Pattern: Emit Telemetry From the Library
+### Anti-Pattern 3: Expanding beyond the signed scope
 
-**What people do:** add a `telemetry_emitter: Option<Box<dyn Fn(SecurityEvent)>>` callback to `DiagnosticFormatter` so denials can be emitted inline.
+The override grants exactly the paths listed in `scope.paths` at `scope.mode`. Any expansion
+(adding parent directories, upgrading READ to READ_WRITE) violates the signed grant. Apply
+`grant.paths` exactly; fail-closed if the scoped paths are insufficient for the task. The
+developer should request a broader token from the operator.
 
-**Why it's wrong:** the library is a pure sandbox primitive with no security policy (CLAUDE.md design decision #4). Adding an emission callback leaks policy concerns into the library, makes the library non-embeddable without a telemetry context, and breaks the clean fuzz/test surface.
+### Anti-Pattern 4: Silent fallback on token verification failure
 
-**Do this instead:** the CLI caller already has the `DenialRecord` slice after child exit. Emit from there. The `DenialRecord` type is already a clean data struct with no behavior.
+`confined_run(..., override_token=bad_token)` must raise `PyRuntimeError` and spawn nothing.
+Never silently fall back to the base profile: the caller does not know whether the override
+was applied, making audit logs unreliable.
 
-### Anti-Pattern: New Crate for Telemetry
+### Anti-Pattern 5: Token carries its own verification key
 
-**What people do:** create `crates/nono-telemetry/` as a new workspace member to share telemetry logic between `nono-cli` and `nono-agentd`.
-
-**Why it's wrong:** the only consumers are `nono-cli` and `nono-agentd`. Both already depend on `nono-cli` indirectly via the shared type ecosystem. A new crate adds a Cargo.toml, CI build target, and version pin for marginal benefit. The `tracing::Layer` approach achieves the sharing goal — both binaries register the same layer type at their respective `init_tracing()` calls.
-
-**Do this instead:** put the `SecurityEventLayer` and schema in `nono-cli/src/telemetry/` and re-export it for `nono-agentd` to use via a path dep if needed. Promote to a crate only if a third consumer appears.
-
-### Anti-Pattern: Silent Fallback on Machine Policy Parse Error
-
-**What people do:** `machine_policy.unwrap_or_default()` so a corrupted registry value silently returns empty/permissive policy.
-
-**Why it's wrong:** an empty `egress_allowlist` with `strict_filter = false` means `ProxyFilter::allow_all()` — the opposite of the intended deny-by-default posture.
-
-**Do this instead:** a malformed registry value is a fatal error. The operator must fix the GPO. CLAUDE.md § Permission Scope: "Configuration load failures must be fatal."
+If the token's JSON includes the public key used to verify it, an attacker provides both the
+data and the verification key. The KMS public key must be pinned in the deployment configuration
+(`NONO_ZT_KMS_PUBKEY` env var or operator-controlled config), not inside the token.
 
 ---
 
-## Scaling Considerations
+## Integration Points
 
-This is a single-machine tool deployed fleet-wide. The scaling concern is the number of machines the GPO applies to, not concurrent users on one machine.
+### External Services
 
-| Scale | Architecture Adjustment |
-|-------|------------------------|
-| 1–100 machines | HKLM registry via GPO is sufficient; no central server needed |
-| 100–10K machines | Add ADMX template for Group Policy; Intune CSP for cloud-managed fleets; no architectural change |
-| 10K+ machines | SEED-005 ZT-Infra signed policy overrides (separate milestone); the registry spine remains but gets supplemented by a policy distribution service |
+| Service | Integration Pattern | Notes |
+|---------|---------------------|-------|
+| ZT-Infra `POST /actions` (local or AWS) | Blocking HTTPS POST from `override.rs`; timeout enforced; response parsed for `decision` + `audit` | URL via `NONO_ZT_ACTIONS_URL`; unset = offline token-only mode |
+| AWS KMS | NOT called directly by nono; KMS is called by ZT-Infra; nono only verifies the KMS-produced signature using a pinned public key | Avoids AWS SDK as a nono-py dependency |
+| ZT-Infra DAAL ledger | `token.audit.daal` recorded in the nono audit event as informational; not verified by nono in v3.2 | Full DAAL reconciliation is a future enhancement |
 
-The Windows Event Log → Windows Event Forwarding (WEF) → SIEM pipeline handles scale on the telemetry side without any code changes — that is the OS-native fan-out.
+### Internal Boundaries
+
+| Boundary | Communication | Notes |
+|----------|---------------|-------|
+| `nono-py/override.rs` -> `crates/nono/trust/signing.rs` | Direct Rust crate call (`nono-py` already depends on `nono`); no PyO3 boundary | `verify_keyed_signature(message, sig, pubkey)` -> `Result<(), NonoError>` |
+| `windows_confined_run.rs` -> `override.rs` | Direct Rust call (same crate); `verify_override` returns `Result<OverrideGrant, PyErr>` | Both in `nono-py`; no subprocess or IPC |
+| `crates/nono/audit.rs` -> nono-cli `SecurityEventLayer` | Existing `tracing` event mechanism; new EventID 10006 arm in the `AuditEventPayload` match | Follows exact same pattern as EventIDs 10001-10005 from v3.0 |
+| `confined_run` (nono-py) -> `nono.exe run` (nono-cli) | Unchanged subprocess spawn; override just adds more `--allow` flags | No new IPC; existing `build_nono_run_args` + `--allow` pattern reused |
 
 ---
 
 ## Sources
 
-- Current in-tree: `crates/nono-cli/src/config/user.rs` — `UserConfig` struct (precedence model)
-- Current in-tree: `crates/nono-cli/src/config/mod.rs` — startup config load sequence
-- Current in-tree: `crates/nono-cli/src/policy.rs` — `Policy`, `Group` (embedded policy.json schema)
-- Current in-tree: `crates/nono-proxy/src/config.rs` — `ProxyConfig`, `strict_filter`, `allowed_hosts`
-- Current in-tree: `crates/nono-proxy/src/filter.rs` — `ProxyFilter::new_strict()`
-- Current in-tree: `crates/nono-proxy/src/audit.rs` — `log_denied()`, `NetworkAuditEvent`, tracing targets
-- Current in-tree: `crates/nono/src/diagnostic.rs` — `DiagnosticFormatter`, `DenialRecord` (library boundary)
-- CLAUDE.md § Library vs CLI Boundary, § Key Design Decisions #4
-- SEED-001, SEED-002, SEED-003 (`.planning/seeds/`)
-- PROJECT.md `## Current Milestone: v3.0` (egress reconciliation, policy spine decisions)
+- `CLAUDE.md` §"Library vs CLI Boundary" (confirmed current; post-ADR-86)
+- `proj/DESIGN-engine-abstraction.md` §"E5" + §"Forward-Compat: zt-infra.org Integration"
+- `proj/POC-zt-infra-e5-local-provisioner.md` — E5 composition proof and `POST /actions` data shape
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\audit.js` — `ActionAuditor.record()`; KMS signing; `normalizeEcdsaDerLowS`; hash-chain structure
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\server.js` — `POST /actions` request/response shape; `correlation_id` field
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\policy.js` — policy evaluation; default-deny shape
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ARCHITECTURE.md` — layer boundaries; ZT-Infra/nono composition model
+- `crates/nono/src/audit.rs` — `AuditEventPayload` enum; `AuditEventRecord` chain; fork extension pattern (`RejectStage`)
+- `crates/nono/src/trust/mod.rs` + `trust/signing.rs` — `verify_keyed_signature`, `verify_bundle_keyed`
+- `nono-py/src/windows_confined_run.rs` — `confined_run`, `confine`, `append_caps_allow_flags`, `build_nono_run_args`, `py.detach` GIL pattern
+- `nono-py/src/lib.rs` — PyO3 module registration pattern; `mod` declarations
+- `.planning/seeds/SEED-005-zt-infra-policy-override-attestation.md` — scope, breadcrumbs, design intent
+- `.planning/PROJECT.md` §"Current Milestone: v3.2" — enforcement surface decision, fail-closed requirement, AWS-depth requirement
 
 ---
-*Architecture research for: nono v3.0 Enterprise Hardening I (Deploy · Control · Compliance)*
-*Researched: 2026-06-18*
+*Architecture research for: Signed Policy Overrides (ZT-Infra Attestation) — v3.2*
+*Researched: 2026-06-21*

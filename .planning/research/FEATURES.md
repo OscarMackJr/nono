@@ -1,227 +1,251 @@
 # Feature Research
 
-**Domain:** Enterprise-fleet hardening for an AI-agent sandbox (nono v3.0 Windows) — Deployment, Egress Control, Compliance telemetry
-**Researched:** 2026-06-18
-**Confidence:** HIGH for deployment/egress (well-established GPO/Intune/WFP conventions); MEDIUM for telemetry schema specifics (custom ETW provider conventions are documented but SIEM field normalization varies by product)
+**Domain:** Signed policy-exception management for a capability-based OS sandbox (break-glass / signed override system)
+**Researched:** 2026-06-21
+**Confidence:** HIGH — grounded in the existing nono codebase, the ZT-Infra v2 source, and established patterns from PAM/AWS SCP/RBAC exception workflows; no WebSearch inference required
 
 ---
 
-## Framing: What "enterprise-ready" actually requires
+## Scope Reminder
 
-This milestone adds three orthogonal hardening layers ON TOP of the existing nono primitives. The right framing is:
+This file covers ONLY the NEW signed-override feature set added in v3.2.
+The following are already built and must NOT be re-researched or re-planned:
 
-- **Deployment (SEED-001):** IT can push nono to 500 machines without touching any of them manually.
-- **Control (SEED-002):** Security can enforce a deny-by-default egress policy from HKLM — no user can loosen it.
-- **Compliance (SEED-003):** CISO can see every blocked action as a structured security event in their SIEM, not a lost stderr line.
-
-Everything below is evaluated as *net-new work* only. The existing WFP/proxy/MSI/DiagnosticFormatter surfaces are the integration points, not features to rebuild.
+- nono OS confinement (`confined_run`/`confine` in nono-py, CapabilitySet, Landlock/Seatbelt/AppContainer)
+- Group/deny policy resolver (`crates/nono-cli/src/policy.rs`)
+- `sigstore-rs` attestation primitives (`crates/nono/src/trust/bundle.rs`)
+- SecurityEventLayer HMAC-chained telemetry (EventIDs 10001-10005, tracing::Layer, agent daemon wiring)
+- ZT-Infra v2 `POST /actions` allow/deny decision contract + hash-chained KMS-signed audit + DAAL ledger
 
 ---
 
-## Theme 1: Deployment (SEED-001)
+## Feature Landscape
 
-### Table Stakes — Deployment
+### Category A: Exception Token Format
 
-Features enterprise IT admins assume work before they'll evaluate the product.
+The signed token is the load-bearing artifact. Everything else (verification, runtime mutation, revocation, audit) hangs off what the token contains. Get the format wrong and every downstream feature is broken.
 
-| Feature | Why Expected | Complexity | Existing nono Hook |
-|---------|--------------|------------|-------------------|
-| **Silent/unattended MSI install** (`msiexec /i nono-machine.msi /qn /norestart`) | Every enterprise deployment tool (SCCM/MECM, Intune Win32 app, GPO software dist) requires zero UI. The `/qn` flag is the universal silent install contract — if it pops a dialog it's dead on arrival. Logged with `/L*v`. | LOW | Existing WiX machine MSI already built (Phase 53/61). Net-new: verify `/qn /norestart` exits 0 or 3010, no dialog shown. |
-| **Correct MSI exit codes** (0 = success, 3010 = success-reboot-required, 1603 = fatal) | SCCM/Intune mark the deployment as failed if the installer exits with anything else. Missing or wrong exit codes mean the tool reports 100% failure rate and the admin gives up. | LOW | Need to verify WiX `ErrorCondition` → correct MSI return mapping. |
-| **SYSTEM-context install** (`ALLUSERS=1`, writes to `%ProgramFiles%`, not `%APPDATA%`) | Intune Win32 apps run as SYSTEM by default. If the installer writes to user profile paths it fails silently under SYSTEM. Machine MSI already targets `Program Files` — needs a test under SYSTEM. | LOW | Machine MSI already per-machine. Need dark-gate test: install under `New-LocalUser` → SYSTEM run. |
-| **Machine-wide service registration** (`nono-wfp-service` and `nono-agentd` as `SERVICE_AUTO_START` or on-demand, startable without an interactive session) | A service that only works when someone is logged in is not a machine-wide service. Admins expect `sc start` to work from a remote session. | LOW | Services exist. Need to verify they start under SCM without a logged-in user (non-interactive). |
-| **Machine-wide `PATH` registration** (nono binary visible to all users without manual profile edit) | A tool in `%ProgramFiles%` that isn't on `PATH` requires a manual user step on every machine. The MSI MUST add `%ProgramFiles%\nono` to the SYSTEM PATH during install. | LOW | Absent from current MSI — net-new WiX `Environment` element. |
-| **Intune Win32 app detection rule** (registry key or file presence at install path for Intune compliance checks) | Intune requires a detection rule to know the app is already installed. Without it, every compliance cycle re-deploys. Standard: check `HKLM\SOFTWARE\nono` version key OR `%ProgramFiles%\nono\nono.exe` exists. | LOW | Net-new registry write in MSI. |
-| **Silent root-certificate install** (broker signing cert trusted on all machines without manual click-through) | The broker requires a trusted Authenticode cert. An enterprise MSI MUST silently import it to `Cert:\LocalMachine\Root` — the same mechanism Intune's Trusted Certificate Profile uses (`.cer` in Base-64 X.509 pushed to Computer Store – Root). | MEDIUM | `nono setup --trust-broker` is interactive. Net-new: silent import via MSI `CustomAction` using `certutil -addstore -f ROOT`. |
-| **Auto-provisioned user scratch space** with `WRITE_OWNER` inheritance (eliminates manual profile-owned-CWD setup per user) | Admins cannot run `takeown` on each user's machine. The service or first-run provisioner must create `%LOCALAPPDATA%\nono\workspaces\<user>` with the correct DACL + WRITE_OWNER. | MEDIUM | Phase 60 `grant_sid_write_on_path`/`AppliedDaclGrantsGuard` exists. Net-new: provisioner called at login or by daemon on first agent launch. |
+#### Table Stakes
 
-### Differentiators — Deployment
+| Feature | Why Expected | Complexity | Existing Dependency | Notes |
+|---------|--------------|------------|---------------------|-------|
+| Signer identity field | Auditors must know who authorized the override — "manager approval" is the non-self-service invariant | LOW | sigstore-rs identity certificates; ZT-Infra `actor` field | Use the existing sigstore certificate-identity model (`CertificateInfo`); do not roll a custom signer-identity scheme |
+| Scope field: allowed paths and/or network domains | The override must expand exactly the blocked resource, nothing more | MEDIUM | `CapabilitySet` / `FsCapability` / `AccessMode` | Scope entries must be path-canonicalized at token-creation time, not at verification time — prevents TOCTOU scope-creep |
+| Expiry timestamp (absolute UTC, not relative duration) | Without expiry, a granted exception becomes a permanent backdoor | LOW | — | Absolute UTC avoids clock-skew ambiguity across hosts; must be checked at verification time against the host clock with a max-skew tolerance |
+| Repo-context binding | Same token must not apply to a different repository — prevents lateral movement via token sharing | MEDIUM | — | Bind to canonical repo root path (or a stable repo identifier such as git remote URL + HEAD commit hash). Verification checks the current working context against the binding |
+| Override ID (UUID or random 128-bit) | Required for revocation lookup and audit correlation; also replay-prevention anchor | LOW | — | Generate at issuance time; include in every audit event |
+| Token format: signed JSON envelope | Operator-readable, loggable, compatible with existing NDJSON audit infrastructure | MEDIUM | `AuditRecorder` NDJSON; sigstore DSSE envelope shape | Use sigstore DSSE (Dead Simple Signing Envelope) or a stripped version of it; reuse the existing `trust::bundle` signing surface |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **GPO ADMX template** (`nono.admx` + `nono.adml`) for pushing machine policy from Group Policy Management Console | Admins at GPO-managed shops (large enterprise, government) expect to configure security tools through GPEDIT/GPMC like they configure Edge, Office, Chrome. An ADMX drops nono into the existing toolchain with no custom scripts. Policy writes to `HKLM\SOFTWARE\Policies\nono` under Computer Configuration. | MEDIUM | No ADMX template exists. Net-new XML authoring. Pairs with SEED-002 policy spine. |
-| **Intune OMA-URI / CSP mapping** for the same `HKLM\SOFTWARE\Policies\nono` keys | MDM-managed shops use Intune settings catalog or custom OMA-URI (`./Device/Vendor/MSFT/Policy/Config/<scope>/<setting>`). ADMX-backed policies can be ingested via `Policy/ConfigOperations/ADMXInstall`. Intune-only shops don't run GPMC — they need this second path. | MEDIUM | Requires publishing the ADMX to Intune or authoring direct OMA-URI settings. Pairs with ADMX. |
-| **`nono setup --provision-fleet` CLI verb** (non-interactive, idempotent service config + scratch space + trust anchor from a single admin command) | Enables scripted provisioning in environments that don't use GPO/Intune (startup scripts, Ansible, golden image baking). One idempotent command replaces the current manual 5-step checklist. | MEDIUM | New CLI verb; wraps existing `nono setup` interactive path; must be safe to run repeated times. |
-| **MSI upgrade path** (version detect + in-place upgrade without uninstall/reinstall) | SCCM/Intune upgrade deployments fail if the MSI requires an uninstall step first. A versioned `UpgradeCode` in the WiX template plus a `MajorUpgrade` action gives admins clean upgrades. | LOW | WiX supports this with two XML elements; existing MSI needs `UpgradeCode` GUID + `MajorUpgrade` element. |
+#### Differentiators
 
-### Anti-Features — Deployment
+| Feature | Value Proposition | Complexity | Existing Dependency | Notes |
+|---------|-------------------|------------|---------------------|-------|
+| Single-use vs reusable flag in token | Allow approvers to issue one-shot emergency tokens vs. limited-window reusable tokens for CI pipelines | MEDIUM | Override ID for replay tracking | A single-use token is consumed on first verified use; a reusable token is valid until expiry. Single-use requires a local consumed-token store (append-only) |
+| Reason/justification field | Forces approver to write a human-readable rationale; becomes audit evidence | LOW | — | Free-text string, stored in the audit event. Not machine-enforced but logged permanently |
+| Agent-identity binding | Bind the token to a specific AppContainer/agent SID so only the approved agent can use it, not any process on the host | HIGH | `nono-agentd` daemon; AppContainer SID per-agent | Requires the daemon to expose the agent's SID at token-verification time; significant implementation lift |
+
+#### Anti-Features
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| **MSIX packaging** instead of MSI | MSIX is the "modern" Windows packaging format and has Intune-native support. | MSIX's virtualized registry/filesystem layer conflicts with nono's kernel-level WFP service registration and SYSTEM PATH writes — services can't be registered from within an MSIX app container boundary without MSIX service extensions (requires signed Store submission or enterprise sideload infra). MSI + Win32 Intune app is the correct path for security tools with kernel services. | Stick with WiX MSI + Intune Win32 app deployment (.intunewin wrapper). MSIX defer to a packaging milestone if ever justified. |
-| **Per-user install as the default** | Seems simpler; no elevation required. | A per-user install means no machine-wide PATH, no shared `nono-wfp-service`, and each user gets a different binary version. WFP requires SYSTEM-level service registration (elevated). The current machine MSI is correct — don't regress. | Machine MSI (`ALLUSERS=1`) with per-user scratch-space provisioning at first run. |
-| **Reboot required for all installs** | Some tools require a reboot to register services. | A mandatory reboot during a fleet rollout is a fleet disruption event. The WFP service can be started post-install without a reboot if the MSI `CustomAction` calls `sc start` after WiX `ServiceInstall`. | Target exit code 3010 (reboot optional, not forced). Non-mandatory reboot is table stakes. |
+| Self-service token issuance | Developers want fast unblocking without waiting for approval | Defeats the non-self-service invariant entirely; the point of the system is that the developer CANNOT unblock themselves | Non-self-service approval workflow; make the approval request frictionless (email/Slack link) rather than removing the human approver |
+| Open-ended scope ("allow everything") | Operators want a quick override for an unknown blocklist | A wildcard scope is indistinguishable from disabling the sandbox; it destroys least-privilege | Force scope to enumerate specific paths/domains; reject token if scope is empty or contains `*` without explicit admin escalation level |
+| Long-lived tokens (30+ day expiry) | Reduces re-approval burden | Long-lived tokens accumulate; forgotten tokens persist as standing backdoors | Maximum expiry cap enforced at verification (suggested: 8 hours for developer override, 24 hours for CI); issuers must request renewal |
+| Token sharing across repos | One approval covers multiple projects | Allows a token issued for repo A to apply confinement expansion in repo B | Repo-context binding is mandatory and verified before any expansion is applied |
 
 ---
 
-## Theme 2: Egress Control (SEED-002)
+### Category B: Override Verification
 
-### Table Stakes — Egress Control
+The verification pipeline is the trust enforcement point. It runs inside the `nono-py` binding at the moment `confined_run` or `confine` is about to apply the CapabilitySet. A failed verification must be indistinguishable from "no override present" from the sandbox's perspective — no partial expansion.
 
-| Feature | Why Expected | Complexity | Existing nono Hook |
-|---------|--------------|------------|-------------------|
-| **Machine-policy-managed allowlist** sourced from `HKLM\SOFTWARE\Policies\nono\EgressAllowlist` (REG_MULTI_SZ) | Security architects expect *machine policy to be immutable by the user*. If the allowlist lives only in a per-user JSON profile, a user can add `*.evil.com` and disable the control. HKLM policy must win over per-user profile, just as HKLM Group Policy wins over HKCU in all Windows security tools. | MEDIUM | No HKLM policy reader exists. Net-new registry reader in the proxy/WFP startup path. |
-| **Deny-by-default posture** when the machine policy key is present (empty `EgressAllowlist` = total deny) | Enterprise expectation: presence of the machine policy key opts the machine into deny-by-default egress. Absence = "not yet governed" (current permissive behavior preserved). This matches how Windows SRP/AppLocker work — the policy key's presence switches the enforcement mode. | LOW | `ProxyFilter::new_strict([])` already exists. Needs a mode gate triggered by the HKLM key's presence. |
-| **Wildcard subdomain syntax** (`*.anthropic.com`, `*.corp.example.com`) | Every enterprise egress tool (Zscaler, Netskope, Cloudflare One) supports wildcard FQDN matching. Admin expectation: `*.anthropic.com` allows `api.anthropic.com` and `claude.ai` without enumerating every subdomain. Exact-host-only matching is a non-starter for AI providers. | LOW | `HostFilter` exists. Check whether current wildcard logic covers `*.x.com` vs `x.com` subdomains — ensure exact-root match is NOT included by `*.x.com` (security: `*.evil.com` should not match `evil.com`). |
-| **Machine policy takes precedence over per-user profile** | An enterprise admin who sets a machine policy must know users cannot override it. The read order must be: HKLM policy → user profile (additive) → runtime flags. A user's `allow_domain` additions in their JSON profile must not be honored if HKLM is in deny-by-default mode. | MEDIUM | Per-user profile reader (`policy.rs`) is the only current path. Net-new: merge logic that ignores user-profile `allow_domain` entries when HKLM policy key is present (fail-secure). |
-| **AI-provider presets** (built-in allowlist entries for `*.anthropic.com`, `*.openai.com`, `api.github.com`, `models.github.com`) | Admins don't know Claude's CDN hostnames. A named preset (e.g. `allow_preset = "ai-providers"` in the policy) that expands to the known AI provider FQDN set removes the per-hostname research burden and prevents misconfiguration. Anthropic, OpenAI, and GitHub Copilot are the three the market expects. | LOW | A static preset map in the WFP/proxy startup code. Needs a maintenance process to update as providers add CDN domains. |
-| **`nono-wfp-service` + `nono-proxy` reading from the same policy source** | Today proxy reads per-user profile; WFP reads WFP filter rules set at daemon-launch time. An admin who sets a machine policy must get enforcement at both layers simultaneously, without wiring them separately. The single source is HKLM. | MEDIUM | Two separate readers today. Net-new: policy-spine adapter that both consumers call at startup and that both refresh on policy change (or restart). |
+#### Table Stakes
 
-### Differentiators — Egress Control
+| Feature | Why Expected | Complexity | Existing Dependency | Notes |
+|---------|--------------|------------|---------------------|-------|
+| Cryptographic signature check | The signature is the fundamental trust anchor — an unverified token is just a JSON file | MEDIUM | `sigstore_verify::verify_with_key` / `sigstore_verify::verify`; `trust::bundle` wrappers | Reuse existing `verify_with_key` from `crates/nono/src/trust/bundle.rs`; do not write a custom ECDSA verifier |
+| ZT-Infra `POST /actions` lookup | The token's override ID is verified against the ZT-Infra control plane to confirm it was legitimately issued and not revoked | HIGH | ZT-Infra v2 `POST /actions`; `ActionAuditor` hash-chained KMS-signed audit | This is the non-self-service enforcement point: even if the cryptographic signature is valid, the token is rejected unless the ZT-Infra control plane confirms the override ID as `allow` and not revoked |
+| Expiry check | Expired tokens must be rejected even if the signature is valid | LOW | Host clock; override token `expires_at` field | Check `now() > expires_at`; add a clock-skew tolerance of at most 30 seconds; never accept a token with no expiry field |
+| Scope-vs-request match | The override scope must be a superset of the expansion being requested for the current invocation; out-of-scope = fail-closed | MEDIUM | `CapabilitySet` path comparison; `Path::starts_with()` (never string `starts_with`) | Scope matching uses `Path::starts_with()` component comparison — this is a SECURITY-CRITICAL path; string operations are a vulnerability (see CLAUDE.md §Common Footguns) |
+| Repo-context match | The token's repo binding must match the current invocation's repo root | MEDIUM | Git working directory detection (already used in nono-cli profiles) | Mismatch = fail-closed; log the mismatch to the SecurityEventLayer HMAC chain |
+| Fail-closed on any verification error | Any error — network timeout, malformed token, AWS KMS unavailable, clock unavailable — must result in no expansion | LOW | nono's `Fail Secure` principle (CLAUDE.md) | The fallback when ZT-Infra is unreachable is DENY. Live verification is required; offline use is not supported for overrides |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Policy-change live reload** (service detects HKLM key change via `RegNotifyChangeKeyValue` and reloads allowlist without restart) | Admins pushing a policy update to 500 machines don't want to restart services manually. Live reload means the updated allowlist takes effect within seconds via GPO propagation, matching how security tools like Windows Firewall policy updates work. | HIGH | `RegNotifyChangeKeyValue` in an async loop in `nono-wfp-service` + `nono-proxy`. Carefully handle mid-reload state: existing connections must be killed or allowed to drain (fail-secure default: kill). |
-| **`nono verify-egress` subcommand** (machine-level gate: tests that deny-by-default is actually in effect, confirms AI-provider hosts resolve through the proxy, confirms WFP blocks an off-allowlist host) | An auditor or IT admin who just pushed the policy needs to confirm it's working without reading source code. This is the fleet-scale equivalent of `nono setup --check-only` for the network layer. Outputs a verdict per enforcement layer. | MEDIUM | New CLI verb; internally calls `ProxyFilter::check_host` + a WFP filter query. Pairs well with the Dark Factory `verify-dark.ps1` gate pattern. |
-| **`nono-proxy` + WFP deny-event correlation** (when a connection is blocked, link the proxy-level deny reason to the WFP filter rule that blocked it) | Separate proxy-deny logs and WFP filter events make incident investigation slow. Correlation lets the SIEM show "denied by policy `EgressAllowlist`: `*.internal.corp.com` not matched" as a single event instead of two disconnected log lines. | HIGH | Needs a shared event ID / correlation token emitted at both layers. Pairs with SEED-003 telemetry. |
-| **Corporate HTTPS proxy chaining** (`NONO_UPSTREAM_PROXY` or HKLM policy key for environments where all egress traverses Zscaler/Netskope) | Enterprises running a mandatory corporate proxy must be able to chain nono-proxy → corporate proxy, or the allowlist has no value (traffic bypasses nono entirely). | MEDIUM | `--upstream-proxy` flag exists in nono-proxy. Net-new: honor an HKLM policy key so the proxy chain is set fleet-wide without per-user config. |
+#### Differentiators
 
-### Anti-Features — Egress Control
+| Feature | Value Proposition | Complexity | Existing Dependency | Notes |
+|---------|-------------------|------------|---------------------|-------|
+| DAAL ledger cross-check | After signature + ZT-Infra check, also verify the override-event hash exists on the DAAL on-chain record | HIGH | ZT-Infra DAAL/DAS; `DAALog.sol`; Alchemy receipt verification | Provides additional tamper-evidence for high-sensitivity overrides; adds latency. Recommended: make this async or optional — local audit + ZT-Infra check is the synchronous gate; DAAL cross-check is post-hoc evidence |
+| Replay prevention (single-use token consumed-record check) | A stolen single-use token cannot be replayed even within the expiry window | MEDIUM | Append-only local consumed-token store (NDJSON file in the session state dir) | Check the consumed-token store before applying any single-use token; append the override ID on first successful use; second use = fail-closed + audit event |
+| Revocation list polling | Operators can revoke a token before expiry by adding its ID to a revocation list that nono polls | HIGH | ZT-Infra control plane or local file; cache with TTL | Polling interval must be short enough to matter (suggested: 60 seconds). The simpler path: treat ZT-Infra `POST /actions` lookup as the revocation check — if the override ID comes back `deny` or `not_found`, treat as revoked |
+
+#### Anti-Features
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| **IP-address allowlisting instead of FQDN** | "We know the AI provider IPs, just allowlist them." | AI provider CDNs have dynamic IP pools that change frequently. IP-based allowlists break silently and require constant maintenance. All enterprise-grade egress tools (Zscaler, Cloudflare One, Netskope) moved to FQDN/wildcard matching for exactly this reason. | FQDN + wildcard matching is the correct primitive. IP-based blocking as a belt-and-suspenders for known malicious IP ranges is acceptable but NOT as the primary allowlist mechanism. |
-| **User-configurable machine policy** (surfacing HKLM keys as user-editable settings in a GUI or per-user JSON) | "Make it easy for users to add domains." | If users can write to the machine policy, the machine policy provides no security guarantee. HKLM keys are ACL'd to SYSTEM/Administrators; user write access defeats the entire threat model. | Per-user `allow_domain` in the user profile is the user's additive channel — ONLY when the machine policy is not in strict mode. |
-| **Proxy-only enforcement without WFP** | "The proxy is easier to configure." | `nono-proxy` is a user-mode process that an agent can bypass by creating a direct TCP socket (CONNECT_TUNNEL, raw socket). WFP kernel enforcement is the layer that makes bypass structurally impossible. Both layers together are the enterprise claim. Either alone is defense-in-depth but not the full story. | Ship both layers wired to the same HKLM policy spine. Document that proxy = application-layer visibility + credential injection; WFP = kernel enforcement. |
+| Offline / cached verification | Avoids latency and network dependency | Cached `allow` decisions can persist after revocation; defeats the purpose of revocation | Require live ZT-Infra check; if ZT-Infra is unavailable, fail-closed |
+| Best-effort verification ("try to verify, continue anyway") | Prevents developer blocking when the control plane is down | Silently degrades to no security; the "security on best-effort" footgun | Hard fail-closed on ZT-Infra unavailability; document this in the error message so developers know to escalate to the control plane operator |
+| Self-signed token accepted without ZT-Infra lookup | Allows offline use cases | Removes the non-self-service invariant; a developer can sign their own token with their own key | Require both: valid signature AND ZT-Infra `allow` decision for the override ID |
 
 ---
 
-## Theme 3: Compliance / Telemetry (SEED-003)
+### Category C: Runtime CapabilitySet Mutation
 
-### Table Stakes — Compliance
+When verification passes, the CapabilitySet for the current invocation is temporarily expanded to include the override's scope. This is the execution surface — it must be scoped, temporary, and leave no residual expansion after the session ends.
 
-| Feature | Why Expected | Complexity | Existing nono Hook |
-|---------|--------------|------------|-------------------|
-| **Structured security events in Windows Event Log** (custom Application channel, e.g. `nono/Security`, with an ETW provider GUID, registered manifest `.man` + resource DLL) | Every Windows SIEM agent (Splunk UF, Azure Monitor Agent, MMA, WEF subscription) forwards from Windows Event Log channels. A tool that writes only to stderr is invisible to the SIEM estate. Custom Application channel (not Security channel — that requires SeAuditPrivilege and is reserved for the OS) is the correct tier for application-level security events. | HIGH | No Event Log channel exists. Net-new: author `nono.man` ETW manifest, compile with `mc.exe`, embed resource DLL, register on install via MSI `CustomAction`. |
-| **Structured event schema with named `EventData` fields** (not free-text messages) | Splunk's `XmlWinEventLog` input and Sentinel's Windows Event Log connector parse `<Data Name="...">` fields as structured columns. A free-text message string requires regex extraction in every SIEM deployment; named fields are parsed automatically. Schema must include at minimum: `EventId`, `TimeCreated`, `Computer` (hostname), `ProcessId`, `SessionId`, `UserId` (SID), `EventType` (path_deny / network_deny / label_violation / hook_fail_closed), `Resource` (path or host), `PolicySource` (group name or HKLM key), `Outcome` (denied / allowed). | MEDIUM | `DiagnosticFormatter` has `DenialRecord` + `PolicyExplanation` structs with most of these fields. Net-new: map to named `EventData` elements in the ETW write call. |
-| **Defined EventID space** (distinct IDs for each event type; range reserved in the manifest) | SIEM alert rules reference specific EventIDs. If all events use the same ID, every alert fires on every event type. The standard is: one EventID per event class. Proposed: `10001` = path deny, `10002` = network deny, `10003` = integrity violation (hook fail-closed), `10004` = label violation, `10005` = policy reload. Range `10000–10099` reserved for nono Security events. | LOW | Design-time decision; zero implementation cost if done before manifest authoring. |
-| **Defined severity levels** (EventLog `Level`: 1=Critical, 2=Error, 3=Warning, 4=Info) | SIEM alert triage uses severity levels. Path denials during normal agent operation = Warning. Network deny for an off-allowlist host = Error (active exfiltration attempt blocked). Hook fail-closed (policy enforcement failure) = Critical. Info = normal operation events (agent started, policy loaded). | LOW | Design-time; mapped at ETW write call. |
-| **WEF-compatible channel configuration** (proper channel type = `Operational`, max size, retention policy in manifest) | Windows Event Forwarding subscriptions pull from `Operational` channels, not `Debug` or `Analytic` (the latter require explicit subscription configuration). The manifest must declare `channel type="Operational"` for WEF to forward automatically via standard subscriptions. | LOW | Manifest design choice; zero runtime cost. |
-| **Events wired from existing `DiagnosticFormatter` deny path** | The deny decision already happens; it must also emit a structured event. The wiring point is the supervisor's post-execution diagnostic path (`format_footer` / `format_supervised_footer`) and the real-time denial recording path (`with_denials`). Net-new: an `emit_security_event()` call at each `DenialRecord` capture site. | MEDIUM | `DiagnosticFormatter` is the source-of-truth for denials. Proxy filter denials and WFP denials need separate wiring points. |
-| **Syslog emission** (RFC 5424 structured-data format, UDP/TCP to a configurable endpoint) | Not every shop runs Windows-native WEF. Linux-majority shops, cloud-native SIEMs, and shops running Splunk HEC or a syslog aggregator need RFC 5424 structured syslog. The structured-data block (`[nono@12345 type="path_deny" resource="C:\secret" policy="ssh"]`) maps directly to the same event schema. | MEDIUM | No syslog emitter exists. Net-new: a `syslog` crate integration in the supervisor binary, configured via HKLM policy key `SyslogEndpoint` (host:port) or per-user profile. |
+#### Table Stakes
 
-### Differentiators — Compliance
+| Feature | Why Expected | Complexity | Existing Dependency | Notes |
+|---------|--------------|------------|---------------------|-------|
+| CapabilitySet expansion scoped to the current invocation | The override must only apply to the `confined_run`/`confine` call it was presented to — not globally, not persistently | MEDIUM | `CapabilitySet` builder in `crates/nono/src/capability.rs`; `nono-py` `confined_run`/`confine` API | Add a `with_override(token)` method that merges the override scope into the CapabilitySet for the duration of the call. The expanded CapabilitySet is a local variable, not a mutation of shared state |
+| Override does not bypass OS confinement | A verified override expands what the OS sandbox is told to allow — it does not remove the sandbox | LOW (conceptual; already in the architecture) | nono OS sandbox (Landlock/Seatbelt/AppContainer) | From `POC-zt-infra-e5-local-provisioner.md`: "an `allow` never bypasses nono's confinement" — the override widens what is in the CapabilitySet that is enforced at the OS layer |
+| Override scope is additive, not replacing | The expanded CapabilitySet includes the baseline profile/group-resolved capabilities PLUS the override scope — override cannot remove existing denies | LOW | `policy.rs` `never_grant` semantics | Override additions go through the same canonicalization and source-tracking as user-provided capabilities; they cannot silence `deny` rules or `never_grant` entries in the policy |
+| `CapabilitySource::Override` variant for override entries | Capabilities added by an override must be identifiable in audit and diagnostics | LOW | `CapabilitySource` enum in `capability.rs` (currently User/Profile/Group/System) | Add a new variant: `CapabilitySource::Override { id: String, signer: String, expires_at: DateTime<Utc> }`. Used by DiagnosticFormatter and the SecurityEventLayer event |
+| No residual state after invocation | The expanded CapabilitySet lives only for the duration of `confined_run`; subsequent calls start from the baseline profile | LOW | `confined_run` call is already stateless with respect to capabilities | Enforce by design: the expansion is local to the `confined_run`/`confine` call stack; no global static or shared mutable state is written |
 
-| Feature | Value Proposition | Complexity | Notes |
-|---------|-------------------|------------|-------|
-| **Tamper-evident event chain** (each Event Log event includes a SHA-256 HMAC over `prev_hash ‖ event_content`, with a per-session chain key derived from the session ID) | A sophisticated attacker who gains admin rights can clear the Event Log (`wevtutil cl`). An HMAC chain means the SIEM can detect a gap (missing prev_hash sequence) or log tampering even after the fact. This is the lightweight SEED-003 tamper-evidence — not an immutable ledger (that's SEED-005 ZT-Infra), but enough for "tamper-evident append-only chain" as the v3.0 claim. | HIGH | Extends the existing `AuditRecorder` hash-chain pattern (v2.2 AUD-01: per-event leaf hash + chain head + Merkle root). New: same pattern applied to Event Log event payloads. Chain-head included as a named `EventData` field `ChainHead` in every emitted event. |
-| **`nono audit security-log verify <session-id>`** (recompute chain over all events for a session and report any gap or hash mismatch) | An auditor can confirm the event chain is intact for a specific session. This is the SIEM-facing companion to `nono audit verify` (AUD-02) for the structured event stream. | MEDIUM | Reads events from the custom channel by EventRecordID range (session scope), recomputes chain. |
-| **Sentinel / Splunk pre-built query templates** (KQL workbook for Sentinel; SPL search for Splunk, targeting the custom channel by `Channel` and EventIDs) | Admins don't write SIEM queries from scratch. A shipped KQL workbook or Splunk saved search that tiles "blocked path denials last 24h", "top 10 agents by network-deny count", and "policy reload events" gives immediate time-to-value. | LOW | Shipped as `docs/siem/` — a KQL file + SPL file referencing the `nono/Security` channel and EventID range 10000–10099. |
-| **Correlation token** linking proxy deny → WFP deny → Event Log entry (single `CorrelationId` UUID per agent request that shows up in all three places) | For a blocked exfiltration attempt, today an admin sees three unrelated log entries. A shared `CorrelationId` (set at the supervisor level, passed to proxy and WFP event emission) lets a single SIEM join produce the full story: "Agent X tried to reach evil.com, proxy denied it, WFP filter also dropped the packet, event emitted." | HIGH | Requires correlation ID threading from the agent's network request down through both enforcement layers. Major wiring work; consider deferring to v3.1 if scope is tight. |
+#### Differentiators
 
-### Anti-Features — Compliance
+| Feature | Value Proposition | Complexity | Existing Dependency | Notes |
+|---------|-------------------|------------|---------------------|-------|
+| Expiry-aware session watchdog | If a `confined_run` session outlives the override token's expiry, the session is terminated or the override is rescinded mid-session | HIGH | `exec_strategy.rs` Monitor/Supervised strategy; session lifecycle | Requires the supervisor to track override expiry and send SIGTERM (or Windows job termination) when the token expires. Recommended as v1.x, not v1 |
+| Dry-run mode that shows which capabilities the override would add | Developers can preview what an override would actually expand before presenting it | LOW | Existing `--dry-run` output in `crates/nono-cli/src/output.rs` | `--dry-run` with an override token prints the delta: baseline CapabilitySet vs. override-expanded CapabilitySet, labeled with the override ID |
+
+#### Anti-Features
 
 | Feature | Why Requested | Why Problematic | Alternative |
 |---------|---------------|-----------------|-------------|
-| **Writing to the Windows Security channel** (`Security` log, EventIDs 4xxx) | Sounds authoritative — the Security channel is what SIEMs monitor most closely. | Writing to the Security channel requires the `SeAuditPrivilege`, which is granted only to LSASS and a few OS components. A user-mode application trying to write there will either be silently dropped or require elevation that defeats the principle of least privilege. Custom Application channel + WEF forwarding is the correct mechanism. | Custom `nono/Security` channel (Application tier) + WEF subscription that forwards to the SIEM's Security index. |
-| **Storing raw policy content in events** (emit the full ADMX policy dump or full allowlist in every event) | "More context = easier investigation." | Bloats every event. A 500-entry allowlist repeated in 10,000 events/day = significant SIEM ingest cost. Field-name references (e.g. `PolicySource = "EgressAllowlist[*.anthropic.com]"`) give traceability without bloat. | Reference the triggering policy entry by name/key, not its full value. |
-| **Real-time SIEM push via API** (have nono call Splunk HEC or Sentinel API directly) | "Skip the forwarding agent." | Requires credentials stored on the machine, a direct outbound connection to the SIEM endpoint (which conflicts with the deny-by-default egress policy), and per-SIEM integration maintenance. WEF → SIEM agent is the correct architecture: one integration maintained by the SIEM vendor, not N maintained by nono. | Emit structured events to the Windows Event Log; let the existing SIEM agent (Splunk UF, AMA) forward them. That's the contract enterprises have with Windows applications. |
-| **Verbose Info-level events for every allowed operation** | "Log everything so we can audit compliance retroactively." | High-cardinality Info events (every allowed file read, every allowed network connection) flood the SIEM, increase ingest costs, and trigger noise fatigue. SIEM teams invariably suppress verbose info events within weeks. | Log denied/blocked events and policy-change events. Allowed operations are the success path — they don't need telemetry unless the session is in an explicit audit mode. |
+| Persistent override mode (override applies to all future sessions until expiry) | Reduces re-presenting the token on every invocation | Widens the attack window; a stolen token or compromised developer machine can be exploited for the entire override window without per-invocation verification | Require the token to be presented (and verified live) on each `confined_run` call; the verification is fast once the control plane HTTP connection is established |
+| Override can remove deny rules | Operators want to temporarily silence a deny rule for a specific path | A deny-rule removal is semantically equivalent to a policy relaxation for the entire profile, not an exception for one invocation | Only additive expansions are supported; if a deny rule is wrong, update the profile or create a new profile group — do not use the override mechanism to suppress deny rules |
+
+---
+
+### Category D: Tamper-Evident Audit Linkage
+
+Every override event must be a first-class entry in the existing SecurityEventLayer HMAC chain. Overrides that are not audited are invisible to SIEM/compliance tooling and undermine the non-self-service invariant.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Existing Dependency | Notes |
+|---------|--------------|------------|---------------------|-------|
+| Override-presented event in SecurityEventLayer | The moment an override token is presented (before verification), emit an event to the HMAC chain | LOW | `SecurityEventLayer` (`crates/nono-cli/src/telemetry`); EventID namespace 10001-10005 | Assign new EventIDs (10006+ or extend existing) for: OVERRIDE_PRESENTED, OVERRIDE_VERIFIED, OVERRIDE_REJECTED, OVERRIDE_EXPIRED, OVERRIDE_REVOKED. Include override ID, signer identity, scope summary, expiry in the event data |
+| Override-verified event in HMAC chain | A verified+applied override advances the HMAC chain with the override details — creates a non-repudiable record that the expansion occurred | LOW | Same as above | The event data must include: override ID, signer, scope (redacted paths/domains), session ID, timestamp, CapabilitySet delta description |
+| Override-rejected event in HMAC chain | A rejected override (invalid sig, expired, out-of-scope, ZT-Infra deny) must be audited even though no expansion occurred | LOW | Same as above | A failed override attempt is a potential security probe; it must appear in the audit chain with the rejection reason |
+| ZT-Infra audit-record cross-reference | The local HMAC event includes the ZT-Infra `current_hash` from the `POST /actions` response, creating a bi-directional link between nono's audit chain and ZT-Infra's audit chain | MEDIUM | ZT-Infra `audit.current_hash` in the `POST /actions` response; `ActionAuditor` KMS-signed hash | This is the "tamper-evident link to SEED-003" from the SEED-005 breadcrumbs. The nono audit event embeds the ZT-Infra hash; the ZT-Infra audit record references the agent/action. Either can be used to reconstruct the other |
+| Windows Event Log emission for override events | Override events are forwarded to the Windows Application Event Log alongside path-deny and network-deny events | LOW | Existing SecurityEventLayer dual-emit to Application Event Log + ETW (v3.0) | No new infrastructure needed; the SecurityEventLayer already emits to Event Log. New EventIDs for override events must be documented in the ADMX template |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Existing Dependency | Notes |
+|---------|-------------------|------------|---------------------|-------|
+| DAAL async anchoring of override events | The override event hash (not the token contents) is anchored on-chain via ZT-Infra DAAL, making it tamper-detectable by a third party | MEDIUM | ZT-Infra DAAL/`attestAction` sidecar; DAALog.sol | Only the hash is anchored — not paths, signer identity, or payloads (privacy constraint from `docs/ENTERPRISE_READINESS.md` and `docs/DAAL.md`). Anchoring is async and does not block the override verification path |
+| Audit report: overrides active/used in session | Operators can query which overrides were applied in a session for compliance reporting | MEDIUM | `AuditRecorder` NDJSON; session summary | Add an `overrides_applied` array to the `AuditIntegritySummary` or equivalent session-close record |
+
+#### Anti-Features
+
+| Feature | Why Requested | Why Problematic | Alternative |
+|---------|---------------|-----------------|-------------|
+| Silent override (no audit event for "routine" approved overrides) | Reduce audit noise for frequently-used overrides | A routine override is still an exception; silence makes SIEM correlation impossible and removes the non-repudiability guarantee | Every override, no matter how routine, emits an audit event. Use EventID filtering at the SIEM layer if needed, not at emission |
+
+---
+
+### Category E: Revocation
+
+An override that can never be revoked before expiry is a standing risk once issued. Revocation must be first-class — not an afterthought.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Existing Dependency | Notes |
+|---------|--------------|------------|---------------------|-------|
+| Revocation via ZT-Infra `POST /actions` returning deny for an override ID | The simplest revocation model: operator marks the override ID as revoked in ZT-Infra policy; the next `POST /actions` check returns `deny`; nono fails closed | LOW (integration) / MEDIUM (ZT-Infra policy change) | ZT-Infra control plane; `policies/actions.json` structure | ZT-Infra already supports explicit `deny` entries in its policy JSON. Adding an override ID to the deny list is sufficient revocation. No new nono-side mechanism needed |
+| Revocation audited in HMAC chain | When an override is rejected due to ZT-Infra returning `deny` for a previously-valid override ID, emit an OVERRIDE_REVOKED audit event | LOW | SecurityEventLayer | Differentiate OVERRIDE_REVOKED (was valid, now revoked) from OVERRIDE_REJECTED (never valid) in the EventID schema |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Existing Dependency | Notes |
+|---------|-------------------|------------|---------------------|-------|
+| Immediate revocation broadcast (operator pushes a signal that nono polls) | Short time-to-revocation for in-flight overrides | HIGH | Requires a push/notification channel or short-interval polling from nono to ZT-Infra | Not required for v1; the ZT-Infra check on each `confined_run` call provides per-invocation revocation checking. An in-session revocation watchdog (see Category C) covers the mid-session case |
+
+---
+
+### Category F: Exception Request Flow (Non-Self-Service)
+
+The request flow is the human-process layer that feeds into the cryptographic layer. It is out of scope for nono itself to enforce approval, but nono must provide the CLI affordances that make the non-self-service workflow possible.
+
+#### Table Stakes
+
+| Feature | Why Expected | Complexity | Existing Dependency | Notes |
+|---------|--------------|------------|---------------------|-------|
+| `nono override request` CLI command | Developer-facing entry point: outputs a structured exception request for submission to an approver | MEDIUM | `crates/nono-cli/src/cli.rs`; `clap`; DiagnosticFormatter denial output | The command reads the most recent denial from the audit log (or takes CLI args), generates a structured JSON request, and prints it + optionally writes it to a file the developer can send to their manager |
+| Denial context in the request | The exception request includes the exact path or domain that was denied, the profile that blocked it, and the suggested minimum scope | MEDIUM | `DiagnosticFormatter` + `AuditEventPayload::CapabilityDecision` | The DiagnosticFormatter already surfaces flag suggestions for denials; the request generator re-uses this to propose a minimal override scope |
+| `nono override apply <token-file>` CLI command | Developer-facing command to verify a received token before use | LOW | `crates/nono-cli/src/cli.rs`; override verification logic | Outputs: VALID (with expiry, scope, signer), EXPIRED, INVALID (with reason). Does not execute anything — pure verification. The nono-py `confined_run` path accepts the token as a parameter |
+
+#### Differentiators
+
+| Feature | Value Proposition | Complexity | Existing Dependency | Notes |
+|---------|-------------------|------------|---------------------|-------|
+| Machine-readable denial to override request conversion | Automates the request generation from a captured audit event | MEDIUM | `AuditRecorder` NDJSON; `AuditEventPayload` | Reads the most recent `CapabilityDecision` denial event and emits a pre-populated override request JSON. Reduces human error in describing the scope |
 
 ---
 
 ## Feature Dependencies
 
 ```
-DEPLOYMENT
-  Silent MSI (/qn)
-      └──requires──> ALLUSERS=1 machine install
-      └──requires──> Correct exit codes (0, 3010, 1603)
-      └──enables──> SYSTEM-context install (Intune)
+[Exception Token Format (A)]
+    required-by --> [Override Verification (B)]
+    required-by --> [Runtime CapabilitySet Mutation (C)]
+    required-by --> [Tamper-Evident Audit Linkage (D)]
+    required-by --> [Revocation (E)]
 
-  Machine-wide service
-      └──requires──> Silent MSI (service registered at install)
-      └──requires──> Non-interactive SCM start (no logged-in user)
+[Override Verification (B)]
+    required-by --> [Runtime CapabilitySet Mutation (C)]
+    gate-for --> [Audit Linkage (D)]  (rejection events require attempted verification)
 
-  ADMX template / OMA-URI
-      └──requires──> HKLM policy spine (HKLM\SOFTWARE\Policies\nono)
-      └──enables──> Egress policy push via GPO/Intune
-      └──enables──> Syslog endpoint config push via GPO/Intune
+[Runtime CapabilitySet Mutation (C)]
+    feeds --> [Audit Linkage (D)]  (override-applied event includes CapabilitySet delta)
 
-  Auto-provisioned scratch space
-      └──requires──> Machine-wide service (provisioner runs at service start or login)
-      └──requires──> grant_sid_write_on_path (Phase 60, exists)
+[Exception Request Flow (F)]
+    requires --> [Token Format (A)]  (request output must match what approver-side tooling signs)
+    enables --> [Override Verification (B)]  (the token produced by approval is fed back in)
 
-CONTROL (SEED-002)
-  HKLM policy reader
-      └──requires──> HKLM policy spine (Deployment prerequisite)
-      └──enables──> Machine-policy allowlist enforcement
-      └──enables──> AI-provider presets
-
-  Machine policy precedence over user profile
-      └──requires──> HKLM policy reader
-      └──requires──> Per-user policy.rs reader (exists)
-      └──conflicts──> user-configurable machine policy (anti-feature)
-
-  WFP + proxy reading from same HKLM source
-      └──requires──> HKLM policy reader
-      └──requires──> nono-wfp-service (exists)
-      └──requires──> nono-proxy ProxyFilter::new_strict (exists)
-
-COMPLIANCE (SEED-003)
-  ETW manifest + custom channel
-      └──requires──> MSI CustomAction for manifest registration (mc.exe / wevtutil im)
-      └──requires──> Deployment (Silent MSI) — channel registered at install time
-
-  Structured event emission
-      └──requires──> ETW manifest (defines EventIDs and named fields)
-      └──requires──> DiagnosticFormatter DenialRecord → EventData field mapping
-      └──requires──> Proxy filter deny hook (net-new wiring point)
-      └──requires──> WFP deny hook (net-new wiring point)
-
-  Tamper-evident chain
-      └──requires──> Structured event emission
-      └──requires──> AuditRecorder hash-chain pattern (AUD-01, exists)
-      └──enhances──> SEED-005 ZT-Infra ledger (future milestone)
-
-  Syslog emission
-      └──requires──> Structured event schema (same fields as EventLog path)
-      └──requires──> HKLM SyslogEndpoint policy key (Deployment prerequisite)
-
-  Correlation token
-      └──requires──> Structured event emission
-      └──requires──> Proxy deny hook
-      └──requires──> WFP deny hook
-      └──HIGH complexity — consider deferring to v3.1
+[Revocation (E)]
+    requires --> [Override Verification (B)]  (revocation is checked as part of verification)
+    feeds --> [Audit Linkage (D)]  (OVERRIDE_REVOKED events)
 ```
 
 ### Dependency Notes
 
-- **HKLM policy spine is the shared prerequisite for Control and Compliance.** The ADMX template, the egress policy reader, and the Syslog endpoint config all read from `HKLM\SOFTWARE\Policies\nono`. Build the registry reader once, make it available to all three consumers.
-- **The ETW manifest registration must happen at MSI install time.** The `mc.exe`-compiled `.man` + resource DLL must be present and registered (`wevtutil im`) before any event emission attempt, or the `ReportEvent` / ETW `EventWrite` call silently fails. This makes the ETW manifest a hard dependency of the MSI.
-- **Deployment is the foundation for both Control and Compliance.** Without a machine-wide install, there is no HKLM spine to read and no Event Log channel to write to.
-- **The tamper-evident chain extends AUD-01 (shipped), not a greenfield design.** The hash-chain pattern is already proven in the `AuditRecorder`. The net-new part is applying it to Event Log events and exposing `ChainHead` as a named `EventData` field.
-- **Correlation token is the highest-complexity item in SEED-003.** It requires threading a UUID from the agent request context into both the proxy and WFP deny paths. Consider phasing: emit without correlation first, add correlation in v3.1.
+- **Token format (A) must be finalized before any other category.** Every other feature depends on what fields the token carries. A post-hoc format change breaks verification, audit, and revocation simultaneously.
+- **Verification (B) must be atomic.** Partial verification success — e.g., valid signature but no ZT-Infra check — must be treated as full failure. The security contract is AND(signature valid, ZT-Infra allow, not expired, scope matches, repo matches), not OR.
+- **Runtime mutation (C) must be invocation-scoped.** The expanded CapabilitySet is a local value passed into `confined_run`/`confine`, not a mutation of any shared state. This is structurally enforced by the nono-py API shape.
+- **Audit linkage (D) must be non-optional.** The SecurityEventLayer emit must happen regardless of whether the override is verified or rejected. An exception that leaves no trace is not an exception system — it is a bypass.
 
 ---
 
 ## MVP Definition
 
-### Launch With (v3.0)
+### Launch With (v1 — all required for the milestone to be meaningful)
 
-- [ ] **Silent MSI install** (`/qn /norestart`, correct exit codes, ALLUSERS=1, machine-wide PATH) — SEED-001 table stakes, unblocks all fleet deployment.
-- [ ] **HKLM policy reader** (`HKLM\SOFTWARE\Policies\nono`, REG_MULTI_SZ `EgressAllowlist`, binary policy presence = strict mode) — the shared spine for SEED-002 and SEED-003.
-- [ ] **Machine-policy-managed deny-by-default egress** (HKLM → `ProxyFilter::new_strict` + WFP; machine policy overrides user profile; AI-provider presets) — SEED-002 primary claim.
-- [ ] **Custom ETW provider + Application channel registration** (`nono/Security` channel, manifest, named `EventData` fields, EventIDs 10001–10005) — SEED-003 prerequisite for all SIEM integration.
-- [ ] **Structured event emission from DiagnosticFormatter denial path** (path deny, network deny, hook fail-closed → named EventData → Windows Event Log) — SEED-003 minimum viable.
-- [ ] **ADMX template** (`nono.admx` + `nono.adml`, pushes `EgressAllowlist` to HKLM via GPMC) — SEED-001 differentiator + SEED-002 deployment mechanism.
-- [ ] **Auto-provisioned scratch space** (WRITE_OWNER, user-owned DACL, provisioner in service/daemon) — eliminates the last manual setup step.
-- [ ] **Silent root-cert install via MSI** (silently trusts the broker cert at install, no click-through) — closes the last clean-host friction.
+- [ ] **Token format (A: table stakes)** — Signer identity, scope (paths/domains), expiry, repo-context binding, override ID, signed JSON envelope. This is the contract everything else is built on.
+- [ ] **Cryptographic signature verification (B: table stakes)** — `verify_with_key` / `verify` reuse from `trust::bundle`; no custom ECDSA.
+- [ ] **ZT-Infra `POST /actions` live lookup (B: table stakes)** — Non-self-service enforcement; fail-closed on unavailability.
+- [ ] **Expiry + scope + repo-context match checks (B: table stakes)** — All three checked on every call; any mismatch = fail-closed.
+- [ ] **Additive CapabilitySet expansion for the invocation (C: table stakes)** — `CapabilitySource::Override` variant; no global mutation; no deny-rule removal.
+- [ ] **Override events in SecurityEventLayer HMAC chain (D: table stakes)** — OVERRIDE_PRESENTED / OVERRIDE_VERIFIED / OVERRIDE_REJECTED; ZT-Infra `current_hash` cross-reference embedded.
+- [ ] **Revocation via ZT-Infra `POST /actions` deny (E: table stakes)** — No new infrastructure; OVERRIDE_REVOKED event emitted.
+- [ ] **`nono override request` and `nono override apply` CLI commands (F: table stakes)** — Developer-facing entry/exit points.
 
-### Add After Validation (v3.x)
+### Add After Validation (v1.x)
 
-- [ ] **Syslog emission** — trigger: Event Log emission working; add RFC 5424 path for non-WEF shops.
-- [ ] **`nono verify-egress` subcommand** — trigger: HKLM policy and WFP both wired; add the fleet verification gate.
-- [ ] **Intune OMA-URI / CSP mapping** — trigger: ADMX template stable; add the MDM path as a second delivery mechanism.
-- [ ] **Tamper-evident HMAC chain for Event Log** — trigger: basic event emission working; layer on chain verification.
-- [ ] **MSI upgrade path** (`UpgradeCode` + `MajorUpgrade`) — trigger: v3.0 MSI stable; add for v3.1 upgrade deployment.
+- [ ] **Single-use token replay prevention** — Consumed-token NDJSON store; second use = fail-closed.
+- [ ] **Expiry-aware session watchdog** — Terminates a supervised run if the override token expires mid-session.
+- [ ] **DAAL async anchoring of override event hashes** — Post-hoc tamper evidence; does not block authorization path.
+- [ ] **`--dry-run` override preview** — Shows CapabilitySet delta before executing.
 
-### Future Consideration (v3.1+)
+### Future Consideration (v2+)
 
-- [ ] **Correlation token** (proxy deny ↔ WFP deny ↔ Event Log correlation) — high complexity, major wiring; phase after basic telemetry is stable.
-- [ ] **Policy-change live reload** (`RegNotifyChangeKeyValue`) — defer until policy reload semantics are well-understood (especially mid-session kill vs drain behavior).
-- [ ] **`nono audit security-log verify`** — defer until tamper-evident chain ships.
-- [ ] **SEED-005 ZT-Infra immutable ledger** — its own standalone milestone; depends on SEED-003 audit pipeline.
+- [ ] **Agent-identity (AppContainer SID) binding** — Tokens bound to a specific daemon-launched agent; requires daemon-side SID lookup at verification time.
+- [ ] **Immediate revocation broadcast / push polling** — Short time-to-revocation for in-flight overrides.
+- [ ] **Machine-readable denial to override request auto-conversion** — Reads audit log to pre-populate the request.
+- [ ] **Audit report: overrides-applied-in-session summary** — Session-close record includes override IDs used.
 
 ---
 
@@ -229,72 +253,111 @@ COMPLIANCE (SEED-003)
 
 | Feature | User Value | Implementation Cost | Priority |
 |---------|------------|---------------------|----------|
-| Silent MSI `/qn` + correct exit codes | HIGH | LOW | P1 |
-| Machine-wide PATH registration in MSI | HIGH | LOW | P1 |
-| HKLM policy reader (registry) | HIGH | LOW | P1 |
-| Machine-policy deny-by-default egress | HIGH | MEDIUM | P1 |
-| WFP + proxy from same HKLM source | HIGH | MEDIUM | P1 |
-| ETW manifest + channel registration | HIGH | HIGH | P1 |
-| Structured event emission (path deny, net deny) | HIGH | MEDIUM | P1 |
-| ADMX template (GPMC push) | HIGH | MEDIUM | P1 |
-| Auto-provisioned scratch space | HIGH | MEDIUM | P1 |
-| Silent root-cert install via MSI | HIGH | MEDIUM | P1 |
-| AI-provider presets | MEDIUM | LOW | P1 |
-| SYSTEM-context install verification | MEDIUM | LOW | P1 |
-| Syslog emission | MEDIUM | MEDIUM | P2 |
-| `nono verify-egress` gate | MEDIUM | MEDIUM | P2 |
-| Intune OMA-URI/CSP mapping | MEDIUM | MEDIUM | P2 |
-| Tamper-evident HMAC chain | MEDIUM | HIGH | P2 |
-| MSI upgrade path | MEDIUM | LOW | P2 |
-| Policy-change live reload | LOW | HIGH | P3 |
-| `nono audit security-log verify` | LOW | MEDIUM | P3 |
-| Correlation token | LOW | HIGH | P3 |
-
-**Priority key:** P1 = must have for v3.0 · P2 = should add in v3.x · P3 = future consideration
+| Token format (A: table stakes) | HIGH | MEDIUM | P1 |
+| Signature verification via sigstore-rs (B) | HIGH | LOW (reuse existing) | P1 |
+| ZT-Infra live lookup (B) | HIGH | HIGH (AWS/host-gated integration) | P1 |
+| Expiry/scope/repo-context checks (B) | HIGH | MEDIUM | P1 |
+| CapabilitySet additive expansion (C) | HIGH | MEDIUM | P1 |
+| `CapabilitySource::Override` variant (C) | MEDIUM | LOW | P1 |
+| SecurityEventLayer HMAC events for overrides (D) | HIGH | LOW (reuse existing layer) | P1 |
+| ZT-Infra hash cross-reference in audit event (D) | MEDIUM | LOW | P1 |
+| Revocation via ZT-Infra deny (E) | HIGH | LOW (reuse verification path) | P1 |
+| `nono override request` CLI command (F) | MEDIUM | MEDIUM | P1 |
+| `nono override apply` CLI command (F) | MEDIUM | LOW | P1 |
+| Single-use replay prevention (B differentiator) | HIGH | MEDIUM | P2 |
+| Expiry-aware session watchdog (C differentiator) | MEDIUM | HIGH | P2 |
+| DAAL async anchoring (D differentiator) | MEDIUM | HIGH (AWS/DAAL gated) | P2 |
+| Dry-run override preview (C differentiator) | LOW | LOW | P2 |
+| Agent-SID binding (A differentiator) | MEDIUM | HIGH | P3 |
+| Revocation broadcast / push polling (E differentiator) | MEDIUM | HIGH | P3 |
 
 ---
 
-## Comparable Product Feature Analysis
+## Exception Lifecycle: Full Behavioral Specification
 
-| Approach | Standard enterprise security tool (e.g., CrowdStrike Falcon sensor, Sysmon) | Ad-hoc script-based AI agent controls | nono v3.0 |
-|----------|-----------------------------------------------------------------------------|---------------------------------------|-----------|
-| Silent MSI with SYSTEM-safe install | Yes (table stakes) | No | **Yes** (P1) |
-| ADMX / GPO / Intune push | Yes (table stakes) | No | **Yes** (P1, net-new) |
-| Machine-policy overrides user profile | Yes (table stakes) | No | **Yes** (P1, net-new) |
-| Structured Windows Event Log events (named fields, EventID space) | Yes (table stakes) | No | **Yes** (P1, net-new) |
-| WEF-forwardable events | Yes | No | **Yes** (P1, design choice) |
-| Kernel-enforced network deny (WFP) | Varies | No | **Yes** (existing, wired to policy) |
-| Tamper-evident event chain | Varies (some tools) | No | **P2** (HMAC over existing hash-chain) |
-| Live policy reload | Varies | No | **P3** |
+### 1. Request Phase
 
-nono's edge in the enterprise context: uniquely combines OS-enforced agent confinement (AppContainer + WFP) with a unified HKLM policy spine that drives both the network enforcement layer and the compliance telemetry layer from a single registry source pushable via standard GPO/Intune tooling. No other tool in this space enforces at the kernel level while also emitting structured SIEM-ready events from the same policy decision.
+Developer hits a nono block. `nono override request` (or manual inspection of the audit log) produces a structured JSON request containing: the denied path/domain, the profile that blocked it, the suggested minimum scope, the repo root, and a proposed expiry window. Developer sends this to an approver (engineering manager or security team).
+
+### 2. Approval Phase (outside nono — ZT-Infra operator side)
+
+Approver reviews the request. If approved, the approver uses ZT-Infra policy operator tooling to:
+- Add a policy entry to ZT-Infra's `POST /actions` that allows a specific override ID action for the agent/actor
+- Issue a signed override token: a JSON document containing signer identity, scope, expiry, repo-context binding, and override ID, signed with the approver's KMS key (AWS KMS P-256 — same `ECC_NIST_P256` key type used by the CAF federation model in `docs/ONBOARDING.md`)
+- The issuance event is recorded in ZT-Infra's hash-chained KMS-signed audit log
+
+### 3. Delivery Phase
+
+The signed token file is delivered to the developer out-of-band (email, Slack, secrets manager). The developer verifies it locally with `nono override apply <token-file>` before use. This step does not consume a single-use token; it only validates.
+
+### 4. Verification Phase (on every `confined_run` / `confine` call)
+
+The nono-py binding (or nono-cli) runs the full AND-gate:
+
+1. Parse token JSON and check: override ID present, expiry field present
+2. `verify_with_key` — cryptographic signature check using the approver's public key
+3. Expiry check: `now() > expires_at` → REJECTED (OVERRIDE_EXPIRED event)
+4. Repo-context check: token binding matches current invocation repo root → REJECTED on mismatch
+5. Scope check: requested CapabilitySet additions are a subset of the token scope → REJECTED on out-of-scope (use `Path::starts_with()`, never string `starts_with`)
+6. ZT-Infra `POST /actions` live lookup with the override ID as the action → REJECTED if `deny`, `not_found`, or network error (fail-closed)
+7. (v1.x) Single-use check: override ID not in the consumed-token NDJSON store → REJECTED if replay
+
+All steps must pass (AND gate). Any step failure → fail-closed, audit event emitted, no CapabilitySet expansion.
+
+### 5. Expansion Phase
+
+On full verification pass:
+- Add the token's scope to the CapabilitySet as `CapabilitySource::Override { id, signer, expires_at }` entries
+- The expanded CapabilitySet is passed to `confined_run`/`confine` for the current invocation only
+- OVERRIDE_VERIFIED audit event emitted with ZT-Infra `current_hash` cross-reference
+
+### 6. Execution Phase
+
+The sandboxed process runs under the expanded CapabilitySet. The OS sandbox (Landlock/Seatbelt/AppContainer) enforces the expanded allowlist — nothing outside the expanded CapabilitySet is possible structurally. An `allow` from ZT-Infra does not bypass the OS sandbox; it widens what the OS sandbox is told to allow.
+
+### 7. Audit Phase
+
+The SecurityEventLayer HMAC chain records the override event (both verified and rejected). The chain advances. The event includes the ZT-Infra `current_hash`, creating a bi-directional audit link. Windows Event Log and ETW emit the event via the existing dual-emit path. DAAL async anchoring (v1.x) submits only the event hash — not paths, signer identity, or payloads.
+
+### 8. Revocation Phase
+
+At any point while a token has not yet expired, the approver can revoke by:
+- Adding the override ID to ZT-Infra's `deny` list in the policy
+- The next `POST /actions` lookup returns `deny` → the override is rejected even if the cryptographic signature is still valid
+- OVERRIDE_REVOKED audit event is emitted
+
+### Out-of-scope override behaviors (all fail-closed)
+
+- Token with no expiry field → REJECTED
+- Token with expiry > maximum cap (8 hours for developer, 24 hours for CI — configurable) → REJECTED
+- Token with wildcard scope (no explicit path/domain) → REJECTED
+- Token repo-context does not match current repo → REJECTED
+- Token scope covers a path, but the specific sub-path requested is not covered → REJECTED (scope-creep prevention: verification matches the exact requested path against the token scope list using `Path::starts_with()`)
+- ZT-Infra returns HTTP error (500, timeout, DNS failure) → REJECTED (fail-closed)
+- Cryptographic signature valid, ZT-Infra `allow`, but token has already been consumed (single-use replay) → REJECTED
 
 ---
 
 ## Sources
 
-- Milestone scope: `.planning/PROJECT.md` "Current Milestone: v3.0 Enterprise Hardening I" — HIGH
-- SEED files: `.planning/seeds/SEED-001/002/003-*.md` — HIGH
-- [msiexec /qn silent install enterprise patterns — AdvancedInstaller](https://www.advancedinstaller.com/silent-install-exe-msi-applications.html) — HIGH
-- [Intune Win32 app deployment — Microsoft Learn](https://learn.microsoft.com/en-us/intune/app-management/deployment/add-win32) — HIGH (official)
-- [Policy CSP — Microsoft Learn](https://learn.microsoft.com/en-us/windows/client-management/mdm/policy-configuration-service-provider) — HIGH (official)
-- [ADMX-backed policies in Intune — Microsoft Learn](https://learn.microsoft.com/en-us/intune/intune-service/configuration/administrative-templates-windows) — HIGH (official)
-- [Understanding ADMX policies — Microsoft Learn](https://learn.microsoft.com/en-us/windows/client-management/understanding-admx-backed-policies) — HIGH (official)
-- [Implementing Registry-based Policy — Microsoft Learn](https://learn.microsoft.com/en-us/previous-versions/windows/desktop/policy/implementing-registry-based-policy) — HIGH (official)
-- [Writing Manifest-based ETW Events — Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/etw/writing-manifest-based-events) — HIGH (official)
-- [Writing an Instrumentation Manifest — Microsoft Learn](https://learn.microsoft.com/en-us/windows/win32/wes/writing-an-instrumentation-manifest) — HIGH (official)
-- [Custom Windows Event Forwarding Logs — Microsoft Learn](https://learn.microsoft.com/en-us/archive/blogs/russellt/creating-custom-windows-event-forwarding-logs) — HIGH (official)
-- [Configuring Windows event logs for Enterprise Security use — Splunk Lantern](https://lantern.splunk.com/Security/Product_Tips/Enterprise_Security/Configuring_Windows_event_logs_for_Enterprise_Security_use) — HIGH
-- [Windows Events collection in Sentinel — Microsoft TechCommunity](https://techcommunity.microsoft.com/blog/fasttrackforazureblog/windows-events-how-to-collect-them-in-sentinel-and-which-way-is-preferred-to-det/3997342) — MEDIUM
-- [Egress Gateway Allowlisting — JumpCloud](https://jumpcloud.com/it-index/what-is-egress-gateway-allowlisting) — MEDIUM
-- [Control which domains your AI agents can access — AWS ML Blog](https://aws.amazon.com/blogs/machine-learning/control-which-domains-your-ai-agents-can-access/) — MEDIUM
-- [Claude Code allow network egress wildcard matching inconsistency — GitHub Issue #51400](https://github.com/anthropics/claude-code/issues/51400) — MEDIUM (confirms wildcard FQDN is the industry expectation)
-- [Set event log security via Group Policy — Microsoft Learn](https://learn.microsoft.com/en-us/troubleshoot/windows-server/group-policy/set-event-log-security-locally-or-via-group-policy) — HIGH (official)
-- [Palantir Windows Event Forwarding reference — GitHub](https://github.com/palantir/windows-event-forwarding/blob/master/windows-event-channels/README.md) — MEDIUM
-- Internal: `crates/nono-proxy/src/filter.rs` (ProxyFilter, HostFilter, `new_strict` method) — HIGH (codebase)
-- Internal: `crates/nono/src/diagnostic.rs` (DiagnosticFormatter, DenialRecord, PolicyExplanation structs) — HIGH (codebase)
-- Internal: AUD-01 hash-chain pattern (v2.2 Phase 22, `AuditRecorder` in `crates/nono/src/undo/`) — HIGH (codebase)
+- `crates/nono/src/capability.rs` — CapabilitySet builder, CapabilitySource enum, AccessMode, FsCapability (HIGH confidence — source code)
+- `crates/nono-cli/src/policy.rs` — Group resolver, `never_grant` semantics, the policy layer that override additions must not circumvent (HIGH confidence — source code)
+- `crates/nono/src/audit.rs` — AuditRecorder, NDJSON event format, HMAC chain, sigstore attestation (HIGH confidence — source code)
+- `crates/nono/src/trust/bundle.rs` — sigstore-rs `verify_with_key`, DSSE envelope, CertificateInfo (HIGH confidence — source code)
+- `crates/nono-cli/src/agent_daemon/telemetry_init.rs` — SecurityEventLayer wiring, HMAC chain advancement, SpyLayer (HIGH confidence — source code)
+- `proj/POC-zt-infra-e5-local-provisioner.md` — E5 composition contract: ZT-Infra decides, nono enforces underneath; fail-closed semantics; `guarded_run` pattern (HIGH confidence — source doc)
+- `.planning/seeds/SEED-005-zt-infra-policy-override-attestation.md` — Scope definition, breadcrumbs to sigstore-rs + policy.rs + CapabilitySet (HIGH confidence — source doc)
+- `.planning/PROJECT.md` — v3.2 milestone goal: non-self-service, ZT-Infra integration, SecurityEventLayer linkage (HIGH confidence — source doc)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\policies\actions.json` — defaultDecision: deny, allow/deny list structure showing per-action override model (HIGH confidence — source file)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ARCHITECTURE.md` — Layer model: ZT-Infra as policy decision, nono as execution containment (HIGH confidence — source doc)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\DAAL.md` — DAAL async anchoring, non-blocking sidecar model, data boundary (no prompts/payloads on-chain) (HIGH confidence — source doc)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ENTERPRISE_READINESS.md` — Failure behavior table, fail-closed on policy engine unavailability (HIGH confidence — source doc)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\PROJECT_SCOPE.md` — ZT-Infra narrowest claim; nono as flagship local execution containment pairing (HIGH confidence — source doc)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ONBOARDING.md` — AWS KMS P-256 signing key model; `min_confirmations` finality policy (HIGH confidence — source doc)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\README.md` — Local provisioner, KMS signing, hash-chained audit, DAAL (HIGH confidence — source doc)
+- CLAUDE.md §Security Considerations — Path handling with `Path::starts_with()`, fail-secure principle, path security (HIGH confidence — project rules)
 
 ---
-*Feature research for: enterprise fleet deployment, egress control, and compliance telemetry (nono v3.0 Windows)*
-*Researched: 2026-06-18*
+
+*Feature research for: signed policy-exception (break-glass / signed override) system for nono v3.2*
+*Researched: 2026-06-21*
