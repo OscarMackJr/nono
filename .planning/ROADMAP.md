@@ -36,7 +36,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 **Milestone Goal:** Replace the "just disable the sandbox" temptation with cryptographically-signed, ledger-logged policy exceptions. A developer who hits a false-positive block obtains an authorized, scoped, expiring signed override that the `nono-py` binding verifies against the ZT-Infra v2 AWS control plane (KMS-signed audit + DAAL ledger) and applies as a temporary, auditable, revocable expansion of the runtime ruleset — non-self-service. Milestone-marker only (no crate publish). Enforcement surface: `nono-py` binding. Rust core stays policy-free.
 
-- [ ] **Phase 91: Signed Override Format + Verification Core** - Define the ZT-Infra CAF v0.1 token schema and build the fully offline, fail-closed ECDSA verifier
+- [x] **Phase 91: Signed Override Format + Verification Core** - Define the ZT-Infra CAF v0.1 token schema and build the fully offline, fail-closed ECDSA verifier (completed 2026-06-21)
 - [ ] **Phase 92: Runtime CapabilitySet Mutation + Audit Wiring** - Wire the verifier into `confined_run`/`confine`, fuse additive mutation with mandatory SecurityEventLayer audit emission in one atomic phase
 - [ ] **Phase 93: Live ZT-Infra Integration + Revocation + Request Flow** - Add the live `POST /actions` AND gate, KMS pubkey pin + key-ARN allowlist, AWS credential stripping, DAAL anchoring, CLI affordances, and Dark Factory scripted gates
 
@@ -55,7 +55,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Plans**: 3 plans (3 waves)
 - [x] 91-01-PLAN.md — Canonical-form foundation: `override.rs` scaffold (keyword-collision resolved), strict `OverrideToken` serde model, `canonical_bytes()`/`canonical_sha256()` proven against the 9 ZT vectors (SC1; OVR-01/02/03)
 - [x] 91-02-PLAN.md — Offline `verify_override()` pipeline: algorithm pin, ARN allowlist, explicit low-S, `verify_prehashed` over the digest, expiry/skew/TTL cap, in-process jti replay → immutable `OverrideGrant` (SC2/SC3; VFY-02..06)
-- [ ] 91-03-PLAN.md — PyO3 boundary: frozen `OverrideGrant` pyclass, first-in-repo `NonoOverrideError` custom exception, module registration, `#[must_use]` check (SC4/SC5; VFY-07)
+- [x] 91-03-PLAN.md — PyO3 boundary: frozen `OverrideGrant` pyclass, first-in-repo `NonoOverrideError` custom exception, module registration, `#[must_use]` check (SC4/SC5; VFY-07)
 
 ### Phase 92: Runtime CapabilitySet Mutation + Audit Wiring
 **Goal**: A verified override additively expands the `CapabilitySet` for exactly one `confined_run`/`confine` invocation and every such expansion emits an `AuditEventPayload::PolicyOverrideApplied` event into the `SecurityEventLayer` HMAC chain before the child spawns — an override that cannot emit its audit record is blocked, not silently applied
@@ -93,6 +93,6 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 88. Feature + Dependency Cherry-Pick Wave | v3.1 | 6/6 | Complete | 2026-06-20 |
 | 89. Proxy Hardening Sync | v3.1 | 4/4 | Complete | 2026-06-21 |
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
-| 91. Signed Override Format + Verification Core | v3.2 | 2/3 | In Progress|  |
+| 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete   | 2026-06-21 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 0/TBD | Not started | - |
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/TBD | Not started | - |
