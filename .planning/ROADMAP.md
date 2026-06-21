@@ -53,7 +53,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   4. `NonoOverrideError` (not a generic `RuntimeError` or `None`) is raised at the PyO3 boundary for every `Err` variant from the Rust side
   5. The `#[must_use]` attribute on the verification `Result` triggers a compile warning if the caller ignores the return value
 **Plans**: 3 plans (3 waves)
-- [ ] 91-01-PLAN.md — Canonical-form foundation: `override.rs` scaffold (keyword-collision resolved), strict `OverrideToken` serde model, `canonical_bytes()`/`canonical_sha256()` proven against the 9 ZT vectors (SC1; OVR-01/02/03)
+- [x] 91-01-PLAN.md — Canonical-form foundation: `override.rs` scaffold (keyword-collision resolved), strict `OverrideToken` serde model, `canonical_bytes()`/`canonical_sha256()` proven against the 9 ZT vectors (SC1; OVR-01/02/03)
 - [ ] 91-02-PLAN.md — Offline `verify_override()` pipeline: algorithm pin, ARN allowlist, explicit low-S, `verify_prehashed` over the digest, expiry/skew/TTL cap, in-process jti replay → immutable `OverrideGrant` (SC2/SC3; VFY-02..06)
 - [ ] 91-03-PLAN.md — PyO3 boundary: frozen `OverrideGrant` pyclass, first-in-repo `NonoOverrideError` custom exception, module registration, `#[must_use]` check (SC4/SC5; VFY-07)
 
@@ -93,6 +93,6 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 88. Feature + Dependency Cherry-Pick Wave | v3.1 | 6/6 | Complete | 2026-06-20 |
 | 89. Proxy Hardening Sync | v3.1 | 4/4 | Complete | 2026-06-21 |
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
-| 91. Signed Override Format + Verification Core | v3.2 | 0/3 | Not started | - |
+| 91. Signed Override Format + Verification Core | v3.2 | 1/3 | In Progress|  |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 0/TBD | Not started | - |
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/TBD | Not started | - |
