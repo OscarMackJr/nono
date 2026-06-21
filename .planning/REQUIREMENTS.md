@@ -49,8 +49,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Proxy Sync (PROXY)
 
-- [ ] **PROXY-01**: `allow_domain` endpoint routes no longer shadow the credential catch-all (upstream #1132), and denied non-CONNECT requests return `403` + an audit record (upstream #1077).
-- [ ] **PROXY-02**: The TLS CONNECT intercept respects `upstream_proxy` (upstream #1048 / #1091), reactive proxy auth keeps the connection open on CONNECT (upstream #1151), and the proxy activates when `customCredentials` is set (upstream #1197) — all reconciled against the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`).
+- [x] **PROXY-01**: `allow_domain` endpoint routes no longer shadow the credential catch-all (upstream #1132), and denied non-CONNECT requests return `403` + an audit record (upstream #1077).
+- [x] **PROXY-02**: The TLS CONNECT intercept respects `upstream_proxy` (upstream #1048 / #1091), reactive proxy auth keeps the connection open on CONNECT (upstream #1151), and the proxy activates when `customCredentials` is set (upstream #1197) — all reconciled against the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`).
 
 ### PTY + Dependency Sync (DEPS)
 
@@ -97,8 +97,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 | FEAT-06 | Phase 88 | Complete |
 | DEPS-01 | Phase 88 | Complete |
 | DEPS-02 | Phase 88 | Complete |
-| PROXY-01 | Phase 89 | Pending |
-| PROXY-02 | Phase 89 | Pending |
+| PROXY-01 | Phase 89 | Complete |
+| PROXY-02 | Phase 89 | Complete |
 | DRAIN-01 | Phase 90 | Pending |
 | DRAIN-02 | Phase 90 | Pending |
 | DRAIN-03 | Phase 90 | Pending |
