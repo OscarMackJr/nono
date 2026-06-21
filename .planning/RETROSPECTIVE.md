@@ -324,6 +324,39 @@ Silent `msiexec /qn` fleet install + machine-wide PATH + ADMX/Intune + unified f
 
 ---
 
+## Milestone: v3.1 — UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
+
+**Shipped:** 2026-06-21
+**Phases:** 6 (85-90) | **Plans:** 19
+
+### What Was Built
+Audited (`85-DIVERGENCE-LEDGER`, themes A–M) and fully absorbed the upstream `v0.62.0..v0.64.0` window (90 commits / 140 files): library-boundary convergence relocating the audit/attestation/ledger stack + structured-diagnostics model into the core `nono` crate with FFI + Windows-diag + proxy reconciliation (ADR-86, Phase 86); the AF_UNIX datagram seccomp trap (#1096 / SEC-01) + procfs-remap dedup guard (#1064 / SEC-02) with fork-hardening (Phase 87); the additive feature/dependency wave — set_vars, XDG state dirs, keyring timeout, AWS auth, $PACK_DIR hooks, CI-env/namespace/truthy-bool, PTY ctrl-z, 9-dep bump, FFI clear-on-entry (Phase 88); proxy hardening against the fork-divergent TLS-interception surface (#1197 activation + equivalence tests, Phase 89). Then drained v3.0's host-gated UAT debt: daemon `SecurityEventLayer` telemetry wiring as real code with a non-host-gated 69-test suite (DRAIN-04), and DRAIN-01/02/03 collapsed to scripted verify-dark.ps1 gates with explicit operator-gated residuals (Phase 90).
+
+### What Worked
+- **Audit-first gating held across a 90-commit window.** Phase 85's DIVERGENCE-LEDGER dispositioned every cluster before any cherry-pick; the two HIGH-conflict refactors were explicitly `will-sync / adopt-upstream` with an ADR for the boundary change, so the heaviest merge risk landed first and deliberately rather than by surprise.
+- **The review/verify layer caught real same-phase regressions in the phase's own flagship fix — twice.** Phase 87 code-review caught CR-01: the no-grant static-EPERM filter was installed in DEFAULT Off mode, breaking ALL UDP/DNS on supervised Linux — a defect a Windows host could never compile, the cross-target blind-spot exemplar. Phase 88 code-review caught WR-01: 4 FFI string-getters missed the clear-on-entry that was *that phase's own* CR-01 fix. Both fixed inline.
+- **The drain disposition was honest.** DRAIN-04 shipped as genuine code; DRAIN-01/02/03 were collapsed to scripted gates with residuals recorded as operator-gated tech-debt rather than faked green. The telemetry-event-emit FAIL was root-caused as environmental (pre-telemetry PATH binary + unobservable AppContainer denial), not patched to mask it (D-04).
+
+### What Was Inefficient
+- **SUMMARY one-liner frontmatter still left empty by most executors** → the SDK's auto-extracted MILESTONES accomplishments were "One-liner:" placeholders again (3rd milestone running: v2.13, v3.0, v3.1); the entry was rewritten by hand. This is now a reliable manual step at close.
+- **Cross-target clippy remains structurally unverifiable on the Windows dev host** (ring/aws-lc-sys `-sys` build needs a cross C compiler) — SEC-01/02 + cross-target carried as PARTIAL→CI for the Nth time; GH Actions Linux/macOS lanes stay the only decisive signal.
+- **A SpyLayer workaround was needed** because RESEARCH Assumption A2 (`Arc<L: Layer>` impl) was wrong in tracing-subscriber 0.3.23 — surfaced only at test-compile time in Phase 90.
+
+### Patterns Established
+- **Library-boundary convergence as its own sequenced phase** (right after the audit, before dependent work) when adopting a large upstream relocation that touches FFI + diagnostics — with an ADR recording the deliberate invariant change rather than silent drift.
+- **Drain phase split: real-code requirement (DRAIN-04) vs scripted-gate-collapse requirements (DRAIN-01/02/03)** — the latter's success criterion is gate collapse + explicit host-gated residual, not a live PASS.
+- **`/gsd-validate-phase` Nyquist audit on a UAT-drain phase** correctly terminates PARTIAL (1 automated / 3 manual-only by design) rather than spawning an auditor to write un-writable tests for fresh-VM install / kernel WFP / live SIEM.
+
+### Key Lessons
+- **The cross-target blind spot is not theoretical.** SEC-01's CR-01 broke all UDP/DNS on supervised Linux in default mode and was invisible on the Windows host by construction — exactly the failure mode CLAUDE.md's MUST/NEVER rule and the review layer exist to catch. They did.
+- **On Windows, `nono_security::*` telemetry emits ONLY via the daemon+WFP path.** Direct `nono run` path-deny is kernel-side/unobserved on the AppContainer backend; network-deny proxy-filtering is "not implemented for Windows supervised runs." This durable fact is why DRAIN-04 (daemon wiring) was the real code and why the live telemetry gate is host-gated.
+- **A self-reported "69 passed" can drift to red by close.** Re-running the bin at validation time surfaced 2 env-sensitive DACL-guard tests (Phase 74 code, green at exec time) now failing on the host — flagged as out-of-scope, not a v3.1 regression. Re-run, don't trust the SUMMARY's count.
+
+### Cost Observations
+- Not instrumented. The 90-commit absorption dominated wall-clock; Phase 90 plan 01 was notably fast (~13 min) because the work was tightly scoped (a reachability probe + 3 tasks). Sequential/low-worktree execution again avoided Windows worktree fragility.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -339,6 +372,7 @@ Silent `msiexec /qn` fleet install + machine-wide PATH + ADMX/Intune + unified f
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork + explicitly host-gated validation); go/no-go ADR shipped `Proposed`→`Accepted` on human sign-off; macOS CI green as HARD close gate; EDR-proxy as a recorded-caveat stand-in for cloud-EDR |
 | v2.13 Carry-Forward Closeout (Dark Factory) | 6 | 13 | Self-verifying-harness mandate: every host-gated item ships a scripted unattended gate emitting a machine-readable verdict + one aggregator as the close signal; gate contract (`Test-Precondition`/`Invoke-Gate`, runner owns exit mapping); `SKIP_HOST_UNAVAILABLE` as a first-class verdict; verify-the-verifier (fail-secure edges) caught by code review at the foundation phase |
 | v3.0 Enterprise Hardening I (Deploy · Control · Compliance) | 3 | 12 | Single-integration-spine milestone (MSI→HKLM reader→proxy+WFP→telemetry, one struct); post-execution gate stack (code-review + independent verifier + audit-before-archive) caught an executor masking 2 real blockers + a build break it self-reported as PASS; reinforced that the milestone local gate must be `--workspace --all-targets`, not `--bin nono`; package-legitimacy human-verify checkpoint (crates.io provenance before Cargo edits) |
+| v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain | 6 | 19 | Largest single-window absorption to date (90 commits/140 files) gated by an audit-first DIVERGENCE-LEDGER; library-boundary convergence as its own sequenced phase with an ADR for the deliberate policy-free-library invariant change; review layer caught a same-phase regression in the phase's OWN flagship fix twice (SEC-01 CR-01 broke all supervised-Linux UDP/DNS in default mode — the cross-target blind-spot exemplar; FEAT CR-01's WR-01 follow-up); drain split (real-code DRAIN-04 + scripted-gate-collapse DRAIN-01/02/03 with honest host-gated residuals); Nyquist validate-phase correctly terminates PARTIAL on a UAT-drain phase |
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork/audit/ADR-draft + explicitly host-gated validation); go/no-go ADR ships `Proposed`, human D-06 flip to `Accepted`; macOS CI green as HARD close gate surfaces a real enforcement defect; EDR-proxy (Sysmon+Defender) as MDE stand-in with explicit caveat; per-phase `.continue-here` checkpoints carry state across context exhaustions |
 
 ### Cumulative Quality
