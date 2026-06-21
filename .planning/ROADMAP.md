@@ -1,7 +1,7 @@
 ---
-milestone: none
-milestone_name: Awaiting next milestone
-status: between_milestones
+milestone: v3.2
+milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
+status: in_progress
 updated: 2026-06-21
 ---
 
@@ -9,6 +9,7 @@ updated: 2026-06-21
 
 ## Milestones
 
+- 🚧 **v3.2 Signed Policy Overrides (ZT-Infra Attestation)** — Phases 91-93 (in progress)
 - ✅ **v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain** — Phases 85-90 (shipped 2026-06-21) — [archive](milestones/v3.1-ROADMAP.md)
 - ✅ **v3.0 Enterprise Hardening I — Deploy · Control · Compliance** — Phases 82-84 (shipped 2026-06-19) — [archive](milestones/v3.0-ROADMAP.md)
 - ✅ **v2.13 Carry-Forward Closeout (Dark Factory)** — Phases 76-81 (shipped 2026-06-18) — [archive](milestones/v2.13-ROADMAP.md)
@@ -31,11 +32,55 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 </details>
 
-### 📋 Next milestone (not yet planned)
+### 🚧 v3.2 Signed Policy Overrides (ZT-Infra Attestation) — Active
 
-Run `/gsd:new-milestone` to scope the next milestone (questioning → research → requirements → roadmap). Phase numbering continues from **Phase 90** (do NOT reset to 1).
+**Milestone Goal:** Replace the "just disable the sandbox" temptation with cryptographically-signed, ledger-logged policy exceptions. A developer who hits a false-positive block obtains an authorized, scoped, expiring signed override that the `nono-py` binding verifies against the ZT-Infra v2 AWS control plane (KMS-signed audit + DAAL ledger) and applies as a temporary, auditable, revocable expansion of the runtime ruleset — non-self-service. Milestone-marker only (no crate publish). Enforcement surface: `nono-py` binding. Rust core stays policy-free.
+
+- [ ] **Phase 91: Signed Override Format + Verification Core** - Define the ZT-Infra CAF v0.1 token schema and build the fully offline, fail-closed ECDSA verifier
+- [ ] **Phase 92: Runtime CapabilitySet Mutation + Audit Wiring** - Wire the verifier into `confined_run`/`confine`, fuse additive mutation with mandatory SecurityEventLayer audit emission in one atomic phase
+- [ ] **Phase 93: Live ZT-Infra Integration + Revocation + Request Flow** - Add the live `POST /actions` AND gate, KMS pubkey pin + key-ARN allowlist, AWS credential stripping, DAAL anchoring, CLI affordances, and Dark Factory scripted gates
+
+## Phase Details
+
+### Phase 91: Signed Override Format + Verification Core
+**Goal**: A fully offline, fail-closed verifier for ZT-Infra CAF v0.1 override tokens exists in `nono-py/src/override.rs` — every parse error, signature failure, expiry violation, scope escape, jti replay, and algorithm mismatch maps to a raised `NonoOverrideError`, never to a silent grant
+**Depends on**: Phase 90 (SecurityEventLayer EventID 10001-10005 schema shipped; `nono::trust::signing::verify_keyed_signature` ECDSA P-256 primitive available)
+**Requirements**: OVR-01, OVR-02, OVR-03, VFY-02, VFY-03, VFY-04, VFY-05, VFY-06, VFY-07
+**Success Criteria** (what must be TRUE):
+  1. `canonical_bytes()` applied to ZT-Infra test-vector inputs produces SHA-256 digests that match the reference output in `test-vectors/canonical-form/vectors.json` — the cross-language canonicalization is verified before signature verification is wired
+  2. `verify_override()` with a valid token, correct KMS pubkey DER, and an allowlisted key ARN returns `Ok(OverrideGrant)`; every failure mode — bad signature, expired, `not_before` in future, missing required field, `algorithm:"none"`, `algorithm` other than `"ECDSA_SHA_256"`, high-S signature, key ARN not in allowlist — returns `Err` (not `Ok` with a deny flag, not `None`)
+  3. A consumed `jti` is rejected on a second `verify_override()` call in the same process; the same token cannot be replayed even before its `expires_at`
+  4. `NonoOverrideError` (not a generic `RuntimeError` or `None`) is raised at the PyO3 boundary for every `Err` variant from the Rust side
+  5. The `#[must_use]` attribute on the verification `Result` triggers a compile warning if the caller ignores the return value
+**Plans**: TBD
+
+### Phase 92: Runtime CapabilitySet Mutation + Audit Wiring
+**Goal**: A verified override additively expands the `CapabilitySet` for exactly one `confined_run`/`confine` invocation and every such expansion emits an `AuditEventPayload::PolicyOverrideApplied` event into the `SecurityEventLayer` HMAC chain before the child spawns — an override that cannot emit its audit record is blocked, not silently applied
+**Depends on**: Phase 91
+**Requirements**: MUT-01, MUT-02, MUT-03, MUT-04, MUT-05, AUD-01, AUD-02, AUD-03, AUD-04, VFY-01, DF-01
+**Success Criteria** (what must be TRUE):
+  1. `confined_run(override_token=<valid>)` appends exactly the grant paths as `--allow` flags to the `nono.exe run` invocation; the OS confinement layer (AppContainer + WFP / Landlock / Seatbelt) still applies to the expanded set — the sandbox is never bypassed or conditionally applied
+  2. `confined_run(override_token=None)` produces byte-for-byte identical `nono.exe run` invocations to pre-v3.2 behavior, proven by a regression test
+  3. A grant for `/tmp/project` does not cover `/tmp/project-evil` or a path containing `..`; path-component comparison (`Path::starts_with` / `Path.is_relative_to`) is used, never string `starts_with`
+  4. After a verified override applies, the HMAC chain contains exactly one new `AuditEventPayload::PolicyOverrideApplied` entry with the correct `zt_audit_hash` and `kms_key_id` fields, and the chain hash has advanced — the bi-directional tamper-evident link to the ZT-Infra audit chain is present
+  5. `verify-dark.ps1 --gate OVERRIDE-01` emits a machine-readable `PASS` verdict against the offline verify path and the full set of fail-closed cases (bad sig, expired, out-of-scope, replay, `algorithm:"none"`)
+**Plans**: TBD
+
+### Phase 93: Live ZT-Infra Integration + Revocation + Request Flow
+**Goal**: The complete two-key AND gate is operational — a signed token is accepted only when both the KMS signature verifies offline AND a live ZT-Infra `POST /actions` lookup returns `allow`; revoked tokens are rejected on the next live check; AWS credentials never reach the sandboxed child environment; a developer can request and apply overrides via CLI
+**Depends on**: Phase 92
+**Requirements**: ZTL-01, ZTL-02, ZTL-03, ZTL-04, ZTL-05, CLI-01, CLI-02, DF-02
+**Success Criteria** (what must be TRUE):
+  1. With `NONO_ZT_ACTIONS_URL` set, `verify_override()` makes a `POST /actions` call; a `deny` response or a timeout exceeding 2 seconds blocks the invocation with `NonoOverrideError` — the live gate is fail-closed, not fail-open
+  2. An override id added to the ZT-Infra deny-list is rejected on the next `verify_override()` call without any new revocation infrastructure in nono (the live check is the revocation enforcement point)
+  3. After `confined_run()` with a verified override, the child process environment contains no `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or other `AWS_*` variables — credential isolation is verified by a test inspecting the child's environment
+  4. `nono override request` surfaces the denial context (paths, domains, repo) from `DiagnosticFormatter`; `nono override apply <token-path>` runs the full fail-closed verification before any expansion
+  5. `verify-dark.ps1 --gate OVERRIDE-02` (live paths) emits `SKIP_HOST_UNAVAILABLE` when AWS/ZT-Infra is absent, consistent with the Dark Factory mandate; DAAL anchoring is recorded asynchronously and does not block the spawn path
+**Plans**: TBD
 
 ## Progress
+
+**Execution Order:** 91 → 92 → 93
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -45,3 +90,6 @@ Run `/gsd:new-milestone` to scope the next milestone (questioning → research �
 | 88. Feature + Dependency Cherry-Pick Wave | v3.1 | 6/6 | Complete | 2026-06-20 |
 | 89. Proxy Hardening Sync | v3.1 | 4/4 | Complete | 2026-06-21 |
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
+| 91. Signed Override Format + Verification Core | v3.2 | 0/TBD | Not started | - |
+| 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 0/TBD | Not started | - |
+| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/TBD | Not started | - |

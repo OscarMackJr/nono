@@ -85,44 +85,44 @@ Explicit exclusions (anti-features from research + structural impossibilities). 
 
 ## Traceability
 
-Populated during roadmap creation (phase numbers continue from Phase 90 → Phase 91+).
+Populated by roadmap creation 2026-06-21. Phase numbering continues from Phase 90 → Phases 91-93.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OVR-01 | — | Pending |
-| OVR-02 | — | Pending |
-| OVR-03 | — | Pending |
-| VFY-01 | — | Pending |
-| VFY-02 | — | Pending |
-| VFY-03 | — | Pending |
-| VFY-04 | — | Pending |
-| VFY-05 | — | Pending |
-| VFY-06 | — | Pending |
-| VFY-07 | — | Pending |
-| MUT-01 | — | Pending |
-| MUT-02 | — | Pending |
-| MUT-03 | — | Pending |
-| MUT-04 | — | Pending |
-| MUT-05 | — | Pending |
-| AUD-01 | — | Pending |
-| AUD-02 | — | Pending |
-| AUD-03 | — | Pending |
-| AUD-04 | — | Pending |
-| ZTL-01 | — | Pending |
-| ZTL-02 | — | Pending |
-| ZTL-03 | — | Pending |
-| ZTL-04 | — | Pending |
-| ZTL-05 | — | Pending |
-| CLI-01 | — | Pending |
-| CLI-02 | — | Pending |
-| DF-01 | — | Pending |
-| DF-02 | — | Pending |
+| OVR-01 | Phase 91 | Pending |
+| OVR-02 | Phase 91 | Pending |
+| OVR-03 | Phase 91 | Pending |
+| VFY-01 | Phase 92 | Pending |
+| VFY-02 | Phase 91 | Pending |
+| VFY-03 | Phase 91 | Pending |
+| VFY-04 | Phase 91 | Pending |
+| VFY-05 | Phase 91 | Pending |
+| VFY-06 | Phase 91 | Pending |
+| VFY-07 | Phase 91 | Pending |
+| MUT-01 | Phase 92 | Pending |
+| MUT-02 | Phase 92 | Pending |
+| MUT-03 | Phase 92 | Pending |
+| MUT-04 | Phase 92 | Pending |
+| MUT-05 | Phase 92 | Pending |
+| AUD-01 | Phase 92 | Pending |
+| AUD-02 | Phase 92 | Pending |
+| AUD-03 | Phase 92 | Pending |
+| AUD-04 | Phase 92 | Pending |
+| ZTL-01 | Phase 93 | Pending |
+| ZTL-02 | Phase 93 | Pending |
+| ZTL-03 | Phase 93 | Pending |
+| ZTL-04 | Phase 93 | Pending |
+| ZTL-05 | Phase 93 | Pending |
+| CLI-01 | Phase 93 | Pending |
+| CLI-02 | Phase 93 | Pending |
+| DF-01 | Phase 92 | Pending |
+| DF-02 | Phase 93 | Pending |
 
 **Coverage:**
 - v1 requirements: 28 total
-- Mapped to phases: 0 (roadmap pending)
-- Unmapped: 28 ⚠️ (filled by roadmapper)
+- Mapped to phases: 28 (roadmap complete)
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-06-21*
-*Last updated: 2026-06-21 after initial definition*
+*Last updated: 2026-06-21 — traceability table populated by roadmap creation*

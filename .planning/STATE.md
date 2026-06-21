@@ -3,38 +3,40 @@ gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
 status: planning
-last_updated: "2026-06-21T15:37:48.526Z"
+last_updated: "2026-06-21"
 last_activity: 2026-06-21
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
 ---
 
-# Project State: nono — v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
+# Project State: nono — v3.2 Signed Policy Overrides (ZT-Infra Attestation)
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.1 milestone started 2026-06-19; v3.0 Phases 82-84 complete, shipped + archived; tag `v3.0` local). Phase numbering continues from Phase 84 (Phases 85–90 — NOT reset to 1). Scope source: `.planning/seeds/SEED-006-upst9-v0.62-v0.64-sync-window.md`. Roadmap: `.planning/ROADMAP.md`.
+See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90 complete + archived; tag `v3.1` local). Phase numbering continues from Phase 90 (Phases 91-93 — NOT reset). Scope source: `.planning/seeds/SEED-005-zt-infra-policy-override-attestation.md`. Roadmap: `.planning/ROADMAP.md`.
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — kept current with upstream `always-further/nono` without regressing the fork's Windows security model.
+**Core Value:** A false-positive nono block must be resolvable by a cryptographically-signed, ledgered, non-self-service exception — never by disabling the sandbox.
 
-**Current Focus:** Phase 90 — v3-0-host-gated-uat-drain
+**Current Focus:** Phase 91 — Signed Override Format + Verification Core (ready to plan)
 
 ## Current Position
 
-Phase: Not started (defining requirements)
-Plan: —
-Status: Defining requirements
-Last activity: 2026-06-21 — Milestone v3.2 started
+Phase: 91 of 93 — Signed Override Format + Verification Core
+Plan: — (not yet planned)
+Status: Ready to plan
+Last activity: 2026-06-21 — Roadmap created; 28 v1 requirements mapped across 3 phases
+
+Progress: [░░░░░░░░░░] 0%
 
 ## Performance Metrics
 
-**Velocity:** (v3.1 — reset; populated as phases complete)
+**Velocity:** (v3.2 — reset; populated as phases complete)
 
-- Total plans completed: 16
+- Total plans completed: 0
 - Average duration: —
 - Total execution time: —
 
@@ -42,41 +44,18 @@ Last activity: 2026-06-21 — Milestone v3.2 started
 |-------|------|----------|-------|-------|
 
 *Updated after each plan completion*
-| Phase 86 P02 | 120 | 4 tasks | 25 files |
-| Phase 86 P03 | 30 | 2 tasks | 2 files |
-| Phase 88 P01 | 180 | 3 tasks | 17 files |
-| Phase 88 P03 | 3h30m | 3 tasks | 13 files |
-| Phase 88 P04 | 90 | 4 tasks | 11 files |
-| Phase 88 P05 | 90 | 4 tasks | 11 files |
-| Phase 90 P01 | 13m | 3 tasks | 4 files |
 
 ## Accumulated Context
 
-### Decisions (v3.1 roadmap)
+### Decisions (v3.2 roadmap)
 
 | Decision | Phase | Rationale |
 |----------|-------|-----------|
-| Audit first (Phase 85) gates every cherry-pick | 85 | DIVERGENCE-LEDGER dispositions for themes A–M gate all downstream sync work (Phase 42→43, 47→48 precedent). |
-| Library-boundary convergence is its own phase, sequenced right after the audit | 86 | ~2200 LOC of audit + structured-diagnostics moved into the core `nono` crate, adopt-upstream; highest-risk cluster, touches FFI + Windows diagnostic paths + proxy `ProxyDiagnostic`. SEC/FEAT/PROXY diagnostics-touching work depends on it landing first. |
-| Security fix (SEC-01/02) its own phase, flagged security-priority | 87 | AF_UNIX datagram bypass (#1096) + procfs-remap dedup guard (#1064); cfg-gated Unix edits require cross-target clippy. |
-| FEAT + DEPS folded into one additive cherry-pick wave | 88 | All additive, low-conflict; PTY ctrl-z fix (DEPS-01) + 9 dep bumps (DEPS-02) ride with them; `make ci` is the single gate. |
-| D-07: always-further/claude -> claude-code alias in policy.json profile_aliases; bare claude-code remains canonical | 88-04 | Backward compat: bare name still resolves; namespace form is the public-facing name per FEAT-06b rename. |
-| D-08: fork-only profiles (swival, nono-ts-*) namespaced via aliases; one-hop resolution only | 88-04 | Prevents alias chaining (T-88-14 mitigation); profile_aliases map is static build-time embedded. |
-| DEPS-01 exec_strategy.rs module-level cfg gate sufficient for nix:: symbols; no per-function guards needed | 88-04 | main.rs line 34 gates entire exec_strategy module; PARTIAL->CI deferred to GH Actions Linux/macOS lanes. |
-| PROXY its own phase, diff-inspect-careful | 89 | PROXY-02 touches the fork-divergent TLS-interception surface (Phase 34 C11 `fork-preserve`); depends on Phase 86 ProxyDiagnostic + Phase 88 AWS/customCredentials. |
-| DRAIN independent (Phase 90), runs last/parallel | 90 | v3.0 host-gated UAT debt; DRAIN-04 (daemon SecurityEventLayer wiring) is real code, others are scripted-gate + operator-gated live UAT. |
-
-### Decisions (v3.0)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| Build order is deployment → policy spine → telemetry | 82→83→84 | MSI provisions the HKLM sentinel key and Event Log source that Phases 83 and 84 test against. Policy spine must exist before egress or telemetry can read from it. |
-| Proxy and WFP wired to HKLM in one atomic phase (83) | 83 | Splitting proxy and WFP wiring across phases creates the allowlist-drift false-security state (Pitfall 2). Both layers read from the same MachineEgressPolicy struct in the same phase. |
-| Stay WiX MSI; MSIX out of scope | 82 | MSIX cannot package the LocalSystem nono-wfp-service or kernel driver. WiX MSI CI pipeline is already proven (Phases 53/61). |
-| Scratch space provisioned at first-run, not MSI time | 82/83 | MSI runs as SYSTEM; %LOCALAPPDATA% resolves to SYSTEM profile path, making every user R-B3 ownership guard fail (Pitfall 4). MSI creates only C:\ProgramData\nono\; user scratch is created at first run in user context. |
-| Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
-| Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
-| Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
+| 3 phases (not 4) — jti in Phase 91+92, DAAL in Phase 93 | all | jti single-use escalated to v1 (VFY-06); DAAL async/non-blocking (ZTL-05) fits the live-integration phase; all 28 reqs cover in 91/92/93 with no orphans. Research's optional Phase 94 hardening is not needed because jti is already v1 scope. |
+| Mutation + audit fused into Phase 92 (never split) | 92 | An override that applies without emitting a SecurityEventLayer event is silent privilege escalation (AUD-04). Splitting creates a shippable-but-silent window. Both land in Phase 92 atomically. |
+| DF-01 offline gate attaches to Phase 92, DF-02 live gate to Phase 93 | 92/93 | Dark Factory gates verify the phase whose behavior they gate: offline verify path is exercisable at Phase 92 close; live AWS/KMS path is exercisable only at Phase 93 close. |
+| All override logic in nono-py; core gets only AuditEventPayload variant | all | CLAUDE.md library boundary (policy-free core). VFY-01 two-key AND gate, ZTL-01 live decision, CLI-01/02 UX — all nono-py or nono-cli. Core: `PolicyOverrideApplied` variant + reuse of `trust/signing::verify_keyed_signature`. |
+| Python urllib.request for POST /actions (not ureq in Rust) | 93 | Research SUMMARY Tension-2 resolved: stdlib, zero new deps, easily mockable. Re-evaluate ureq only if mTLS fragility appears — explicit checkpoint at Phase 93 plan time. |
 
 ### Pending Todos
 
@@ -84,61 +63,28 @@ None.
 
 ### Blockers/Concerns
 
-- **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone (esp. Phase 87 SEC-01/02 → `crates/nono/src/sandbox/linux.rs`, `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, `crates/nono/src/capability.rs`) MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
-- **Library-boundary risk (Phase 86)**: adopt-upstream of the core-crate audit + diagnostics refactor is the highest near-term merge risk against fork-divergent surfaces (TLS intercept, FFI); guard the `nono-ffi` exhaustive-match arms (the `--bin nono` gate hides those — use `--workspace --all-targets`).
+- **Cross-target clippy**: Phase 92 adds `AuditEventPayload::PolicyOverrideApplied` to `crates/nono/src/audit.rs` (cfg-unconditional) + a new arm in the `SecurityEventLayer` match in nono-cli (may have `cfg(windows)` guards). Both Windows AND Linux clippy must pass (CLAUDE.md MUST/NEVER rule). Note this milestone is overwhelmingly nono-py + additive core-crate work — cross-target is lower risk than v3.1's Unix security patches, but the `SecurityEventLayer` match arm must not produce `unreachable_patterns` on Linux CI.
 - **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
 - **Milestone-marker only**: no crate publish; a future release must leapfrog the crate version to ≥ `0.65.0`.
-
-### Quick Tasks Completed
-
-| # | Description | Date | Commit | Directory |
-|---|-------------|------|--------|-----------|
-| 260619-duw | Scope upstream v0.62..v0.64 delta and plant SEED-006 | 2026-06-19 | f3f792dd | [260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla](./quick/260619-duw-scope-upstream-v0-62-v0-64-delta-and-pla/) |
+- **ZT-Infra local provisioner required at Phase 93**: `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2` — `npm install && npm start` in the provisioner directory. Confirm availability before Phase 93 planning.
 
 ## Deferred Items
 
-Items acknowledged and carried forward from v2.13 close (2026-06-18):
+Items acknowledged and deferred at v3.1 close (2026-06-21) — see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Host-execution | stale `C:\Program Files\nono\nono.exe` (no `agent` subcommand) → aggregate FAIL on dev host; fix: prepend `target\release` to PATH | Open | v2.13 close |
-| Host-execution | CPLT-03 Copilot CLI literal PASS gated by GitHub org policy | Open | v2.13 close |
-| Host-execution | INST-01 live clean-VM PASS (needs fresh Win11 VM + rebuilt MSI post Phase 80) | Open | v2.13 close |
-| Distribution | DIST-SIGN-01 untrusted-POC-cert broker path not exercised by clean-host gate | Open | v2.13 close |
-| Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
-| nono-ffi | E0004 non-exhaustive match (PolicyLoadFailed + TelemetryUnavailable/ConfigInvalid) | RESOLVED `f96aba8a` (84 close) | 84-04 |
-
-Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.planning/v3.0-MILESTONE-AUDIT.md`. **The first six rows below are now folded into v3.1 Phase 90 (DRAIN-01..04):**
-
-| Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
-| Host-execution | DEPLOY-01 clean-VM silent `msiexec /qn` install + exit codes → v3.1 DRAIN-01 | Open (host-gated) | v3.0 close |
-| Host-execution | DEPLOY-03 live R-B3 user-owned WRITE_OWNER scratch verification → v3.1 DRAIN-01 | Open (host-gated) | v3.0 close |
-| Host-execution | DEPLOY-05 three-client (CryptoAPI/Node/rustls) TLS-through-proxy round-trip → v3.1 DRAIN-01 | Open (host-gated) | v3.0 close |
-| Host-execution | EGRESS-02 dual-layer (proxy + kernel WFP) live block proof → v3.1 DRAIN-02 | Open (host-gated) | v3.0 close |
-| Host-execution | TELEM-01/04 live `telemetry-event-emit` gate PASS + admin opt-out/min_severity HKLM→emit (`84-HUMAN-UAT.md`) → v3.1 DRAIN-03 | Open (host-gated) | v3.0 close |
-| Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events → v3.1 DRAIN-04 (real code) | Open (folded into v3.1) | v3.0 close |
-| Historical | 48 open artifacts at v3.0 close (35 quick_tasks mostly pre-v2.13 strays + 5 seeds + 4 todos + 2 uat_gaps + 2 verification_gaps) — overwhelmingly historical/future-seed | Acknowledged | v3.0 close |
-
-Items acknowledged and deferred at **v3.1 milestone close (2026-06-21)** — see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`. The v3.0 DRAIN rows above are now **CLOSED by Phase 90** (DRAIN-04 shipped as real daemon telemetry code; DRAIN-01/02/03 collapsed to scripted `verify-dark.ps1` gates with explicit operator-gated host-gated residuals):
-
-| Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
-| PARTIAL→CI | SEC-01 AF_UNIX datagram seccomp trap (Phase 87, `6cf2645c`+`718fe59d`) — Unix-cfg-gated, GH Actions Linux lane decisive; never flip to VERIFIED on Windows host | Open (CI-decisive) | v3.1 close |
-| PARTIAL→CI | SEC-02 procfs-remap dedup guard (Phase 87, `abeb2493`) — Unix-cfg-gated, GH Actions Linux lane decisive | Open (CI-decisive) | v3.1 close |
-| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) — host lacks cross C compiler (ring/aws-lc-sys -sys build fails); GH Actions Linux/macOS clippy lanes decisive | Open (CI-decisive) | v3.1 close |
-| Host-gated | DRAIN-01 live clean-VM silent MSI install (fresh Win11 VM + staged v3.0 MSI) — scripted gates SKIP_HOST_UNAVAILABLE on dev host | Open (host-gated, by design) | v3.1 close |
-| Host-gated | DRAIN-02 live dual-layer WFP egress block (admin + nono-wfp-service + running daemon, ideally 2nd host) — scripted gates SKIP | Open (host-gated, by design) | v3.1 close |
-| Host-gated | DRAIN-03 live SIEM telemetry emit + admin opt-out/min_severity HKLM→emit (telemetry-capable v3.0 build; PATH binary is pre-telemetry v0.57.5; only daemon+WFP path emits) — gate FAIL is environmental, not a defect | Open (host-gated, by design) | v3.1 close |
-| Out-of-scope red | 2 env-sensitive DACL-guard tests (`daemon_dacl_guard_*` in Phase 74 `agent_daemon/launch.rs`) fail at real-ACL `.apply()` on this host; green at exec time; not a v3.1 regression (see `90-VALIDATION.md`) | Open (env-specific) | v3.1 close |
-| Historical | 48 open artifacts at v3.1 close (36 quick_tasks all pre-v3.1 historical strays Feb–Jun 2026 + 6 dormant seeds incl. consumed SEED-006 + 4 empty todos + 2 by-design host-gated uat_gaps) — overwhelmingly historical/future-seed, none v3.1 blockers | Acknowledged | v3.1 close |
+| PARTIAL→CI | SEC-01 AF_UNIX seccomp trap (Phase 87) — Unix-cfg-gated, GH Actions decisive | Open (CI-decisive) | v3.1 close |
+| PARTIAL→CI | SEC-02 procfs-remap dedup guard (Phase 87) — Unix-cfg-gated | Open (CI-decisive) | v3.1 close |
+| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) — host lacks cross C compiler | Open (CI-decisive) | v3.1 close |
+| Host-gated | DRAIN-01 live clean-VM silent MSI install — SKIP_HOST_UNAVAILABLE by design | Open (host-gated) | v3.1 close |
+| Host-gated | DRAIN-02 live dual-layer WFP egress block — SKIP by design | Open (host-gated) | v3.1 close |
+| Host-gated | DRAIN-03 live SIEM telemetry emit + admin opt-out — gate FAIL is environmental | Open (host-gated) | v3.1 close |
+| Out-of-scope | 2 env-sensitive DACL-guard tests (Phase 74 code) fail at real-ACL on this host | Open (env-specific) | v3.1 close |
+| Historical | 48 open artifacts (historical quick-tasks + dormant seeds + todos) | Acknowledged | v3.1 close |
 
 ## Session Continuity
 
-Last session: 2026-06-21T02:41:33.296Z
-Stopped at: Phase 90 context gathered
+Last session: 2026-06-21
+Stopped at: Roadmap created for v3.2 (3 phases, 28/28 requirements mapped)
 Resume file: None
-
-## Operator Next Steps
-
-- Start the next milestone with /gsd-new-milestone
