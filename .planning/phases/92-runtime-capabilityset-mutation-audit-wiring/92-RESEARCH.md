@@ -712,22 +712,18 @@ print("PASS")
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **How to reach the `SecurityEventLayer` instance from `execute_sandboxed`.**
-   - What we know: `SecurityEventLayer` is registered as a `tracing_subscriber::Layer` at `init_tracing()` time. The `on_event` dispatch works because tracing globally routes all events through registered layers. But `emit_override_event` requires a direct method call on the layer instance.
-   - What's unclear: Whether there is a registry lookup (e.g., `tracing_subscriber::registry::LookupSpan`) that returns the layer instance, or whether the layer instance must be stored somewhere accessible (e.g., a global `Arc<SecurityEventLayer>` or `OnceLock`).
-   - Recommendation: Store the `SecurityEventLayer` in a `OnceLock<Arc<SecurityEventLayer>>` (or similar) set at `init_tracing()` time. This is the same pattern used for the telemetry config lookup. Alternatively, add a dedicated `nono_security::policy_override_applied` tracing target and extend `on_event` (Option A from the architecture section). The planner must choose; both are viable. [ASSUMED — exact mechanism depends on init_tracing() architecture]
+   - **RESOLVED:** `OnceLock<Arc<SecurityEventLayer>>` stored in `telemetry/mod.rs` as `SECURITY_LAYER`, populated by `init_tracing` in `cli_bootstrap.rs` after `SecurityEventLayer::new(...)`. Plan 92-03 Task 2 implements this. `execute_sandboxed` calls `SECURITY_LAYER.get().emit_override_event(...)` — no tracing-registry lookup required.
+   - Original recommendation: [ASSUMED — exact mechanism depends on init_tracing() architecture]
 
 2. **`--override-audit` base64 payload size on the Windows CLI arg limit.**
-   - What we know: Windows command line limit is ~32767 characters. The metadata struct (`zt_audit_hash` 64 chars, `kms_key_id` ~90 chars ARN, `jti` ~36 chars UUID, paths up to ~10 entries × ~200 chars each) is well under 2000 characters after base64 encoding.
-   - What's unclear: Nothing — this is not a real risk at the projected payload sizes.
-   - Recommendation: No action needed; document the theoretical limit in comments. [VERIFIED: current metadata fits comfortably; not a constraint]
+   - **RESOLVED:** Not a constraint at projected payload sizes. The full metadata struct is well under 2000 characters after base64 encoding; Windows CLI limit is ~32767 characters. No code change required — document the theoretical limit in a comment only.
+   - Original finding: [VERIFIED: current metadata fits comfortably; not a constraint]
 
 3. **Where the `OverrideAuditMeta` struct lives** (nono-cli side).
-   - What we know: It is deserialized from the `--override-audit` base64-JSON flag value in `sandbox_prepare.rs` or `cli.rs`.
-   - Recommendation: Define in `cli.rs` near `SandboxArgs` for co-location with the flag definition. Or in a new `override_audit.rs` module. Planner's choice.
-
+   - **RESOLVED:** Defined in `cli.rs` near `SandboxArgs`, as specified in Plan 92-03 Task 1. The struct is `pub(crate)` and imported as `crate::cli::OverrideAuditMeta` in `launch_runtime.rs`. The flag definition and the struct that deserializes it are co-located for context.
 ---
 
 ## Environment Availability
