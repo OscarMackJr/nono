@@ -15,13 +15,18 @@
 //!
 //! # EventID map (SC-1, locked in ROADMAP)
 //!
-//! | EventID | Variant              |
-//! |---------|----------------------|
-//! | 10001   | `PathDeny`           |
-//! | 10002   | `NetworkDeny`        |
-//! | 10003   | `LabelViolation`     |
-//! | 10004   | `HookFailClosed`     |
-//! | 10005   | `TelemetryDegraded`  |
+//! | EventID | Variant                      |
+//! |---------|------------------------------|
+//! | 10001   | `PathDeny`                   |
+//! | 10002   | `NetworkDeny`                |
+//! | 10003   | `LabelViolation`             |
+//! | 10004   | `HookFailClosed`             |
+//! | 10005   | `TelemetryDegraded`          |
+//! | 10006   | `PolicyOverridePresented`    |
+//! | 10007   | `PolicyOverrideVerified`     |
+//! | 10008   | `PolicyOverrideRejected`     |
+//! | 10009   | `PolicyOverrideExpired`      |
+//! | 10010   | `PolicyOverrideRevoked`      |
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -39,6 +44,16 @@ pub const EVENT_ID_LABEL_VIOLATION: u32 = 10003;
 pub const EVENT_ID_HOOK_FAIL_CLOSED: u32 = 10004;
 /// EventID for a telemetry-degraded self-describing event (D-14).
 pub const EVENT_ID_TELEMETRY_DEGRADED: u32 = 10005;
+/// EventID for a policy-override token presented (lifecycle start).
+pub const EVENT_ID_POLICY_OVERRIDE_PRESENTED: u32 = 10006;
+/// EventID for a policy-override token verified and applied.
+pub const EVENT_ID_POLICY_OVERRIDE_VERIFIED: u32 = 10007;
+/// EventID for a policy-override token rejected (any `OverrideErrorKind`).
+pub const EVENT_ID_POLICY_OVERRIDE_REJECTED: u32 = 10008;
+/// EventID for a policy-override token rejected because it was expired.
+pub const EVENT_ID_POLICY_OVERRIDE_EXPIRED: u32 = 10009;
+/// EventID for a policy-override token rejected due to replay (jti already consumed).
+pub const EVENT_ID_POLICY_OVERRIDE_REVOKED: u32 = 10010;
 
 // ── SecurityEventType ─────────────────────────────────────────────────────────
 
@@ -61,6 +76,17 @@ pub enum SecurityEventType {
     /// Telemetry sub-system degraded to defaults (D-14 self-describing event,
     /// EventID 10005).
     TelemetryDegraded,
+    // ── Phase 92: policy-override lifecycle events (EventIDs 10006–10010) ─────
+    /// Signed override token presented for verification (EventID 10006).
+    PolicyOverridePresented,
+    /// Signed override token verified and applied (EventID 10007).
+    PolicyOverrideVerified,
+    /// Signed override token rejected (EventID 10008 — maps from OverrideErrorKind).
+    PolicyOverrideRejected,
+    /// Signed override token rejected as expired (EventID 10009).
+    PolicyOverrideExpired,
+    /// Signed override token rejected as already-consumed/revoked (EventID 10010).
+    PolicyOverrideRevoked,
 }
 
 /// Return the Windows Application Event Log EventID for a [`SecurityEventType`].
@@ -75,6 +101,12 @@ pub fn event_id_for(t: &SecurityEventType) -> u32 {
         SecurityEventType::LabelViolation => EVENT_ID_LABEL_VIOLATION,
         SecurityEventType::HookFailClosed => EVENT_ID_HOOK_FAIL_CLOSED,
         SecurityEventType::TelemetryDegraded => EVENT_ID_TELEMETRY_DEGRADED,
+        // Phase 92 additions:
+        SecurityEventType::PolicyOverridePresented => EVENT_ID_POLICY_OVERRIDE_PRESENTED,
+        SecurityEventType::PolicyOverrideVerified => EVENT_ID_POLICY_OVERRIDE_VERIFIED,
+        SecurityEventType::PolicyOverrideRejected => EVENT_ID_POLICY_OVERRIDE_REJECTED,
+        SecurityEventType::PolicyOverrideExpired => EVENT_ID_POLICY_OVERRIDE_EXPIRED,
+        SecurityEventType::PolicyOverrideRevoked => EVENT_ID_POLICY_OVERRIDE_REVOKED,
     }
 }
 
@@ -257,6 +289,47 @@ mod tests {
         assert_eq!(event_id_for(&SecurityEventType::LabelViolation), 10003);
         assert_eq!(event_id_for(&SecurityEventType::HookFailClosed), 10004);
         assert_eq!(event_id_for(&SecurityEventType::TelemetryDegraded), 10005);
+    }
+
+    // ── Phase 92: override EventID mapping (AUD-03) ───────────────────────────
+
+    #[test]
+    fn override_event_ids_are_10006_through_10010() {
+        assert_eq!(
+            event_id_for(&SecurityEventType::PolicyOverridePresented),
+            10006
+        );
+        assert_eq!(
+            event_id_for(&SecurityEventType::PolicyOverrideVerified),
+            10007
+        );
+        assert_eq!(
+            event_id_for(&SecurityEventType::PolicyOverrideRejected),
+            10008
+        );
+        assert_eq!(
+            event_id_for(&SecurityEventType::PolicyOverrideExpired),
+            10009
+        );
+        assert_eq!(
+            event_id_for(&SecurityEventType::PolicyOverrideRevoked),
+            10010
+        );
+    }
+
+    #[test]
+    fn override_event_type_serde_roundtrip() {
+        let t = SecurityEventType::PolicyOverrideVerified;
+        let json = serde_json::to_string(&t).unwrap();
+        assert!(
+            json.contains("policy_override_verified"),
+            "serde rename_all=snake_case must produce policy_override_verified; got: {json}"
+        );
+        let restored: SecurityEventType = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            t, restored,
+            "round-trip must recover PolicyOverrideVerified"
+        );
     }
 
     // ── classify_path ─────────────────────────────────────────────────────────

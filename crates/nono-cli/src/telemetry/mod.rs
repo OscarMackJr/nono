@@ -159,6 +159,12 @@ fn severity_for(t: &SecurityEventType) -> nono::TelemetrySeverity {
         | SecurityEventType::LabelViolation
         | SecurityEventType::HookFailClosed
         | SecurityEventType::TelemetryDegraded => TelemetrySeverity::Warning,
+        // Phase 92: override lifecycle events are Warning-level (authorization events).
+        SecurityEventType::PolicyOverridePresented
+        | SecurityEventType::PolicyOverrideVerified
+        | SecurityEventType::PolicyOverrideRejected
+        | SecurityEventType::PolicyOverrideExpired
+        | SecurityEventType::PolicyOverrideRevoked => TelemetrySeverity::Warning,
     }
 }
 
@@ -417,6 +423,23 @@ mod tests {
                 severity_for(&t),
                 TelemetrySeverity::Warning,
                 "denial event {t:?} must be Warning severity"
+            );
+        }
+    }
+
+    #[test]
+    fn severity_for_override_lifecycle_events_is_warning() {
+        for t in [
+            SecurityEventType::PolicyOverridePresented,
+            SecurityEventType::PolicyOverrideVerified,
+            SecurityEventType::PolicyOverrideRejected,
+            SecurityEventType::PolicyOverrideExpired,
+            SecurityEventType::PolicyOverrideRevoked,
+        ] {
+            assert_eq!(
+                severity_for(&t),
+                TelemetrySeverity::Warning,
+                "override lifecycle event {t:?} must be Warning severity"
             );
         }
     }
