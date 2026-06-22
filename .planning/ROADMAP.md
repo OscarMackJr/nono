@@ -89,7 +89,19 @@ Plans:
   3. After `confined_run()` with a verified override, the child process environment contains no `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or other `AWS_*` variables — credential isolation is verified by a test inspecting the child's environment
   4. `nono override request` surfaces the denial context (paths, domains, repo) from `DiagnosticFormatter`; `nono override apply <token-path>` runs the full fail-closed verification before any expansion
   5. `verify-dark.ps1 --gate OVERRIDE-02` (live paths) emits `SKIP_HOST_UNAVAILABLE` when AWS/ZT-Infra is absent, consistent with the Dark Factory mandate; DAAL anchoring is recorded asynchronously and does not block the spawn path
-**Plans**: TBD
+**Plans**: 6 plans (3 waves)
+Plans:
+**Wave 1** *(parallel — disjoint file ownership)*
+- [ ] 93-01-PLAN.md — nono-py trust foundation: HKLM `Override\` reader (winreg, D-05/D-06), LiveRevoked/LiveUnavailable kinds (D-02), per-key_id VerificationKey cache closing VFY-03a `[BLOCKING-93]` (nono-py repo)
+- [ ] 93-02-PLAN.md — nono-cli AWS_* env strip (ZTL-04) + `override audit-emit` subcommand for the live-reject HMAC emission (OQ-1 a; 10008/10010) (Nono repo)
+
+**Wave 2** *(blocked on Wave 1)*
+- [ ] 93-03-PLAN.md — `nono override request` CLI: denial bundle from DiagnosticFormatter (CLI-01); adds Request to the override group (Nono repo)
+- [ ] 93-04-PLAN.md — Python live arm `_live.py`: fail-closed POST /actions AND-gate (ZTL-01/02/03/05), Python pre-step closing VFY-01 clause b (OQ-2) (nono-py repo)
+
+**Wave 3** *(blocked on Wave 2)*
+- [ ] 93-05-PLAN.md — `nono-override-apply` console-script: one-shot offline+live verify-then-run (CLI-02, OQ-5) (nono-py repo)
+- [ ] 93-06-PLAN.md — DF-02 gate `scripts/gates/override-02.ps1`: live allow+revoke proof, SKIP_HOST_UNAVAILABLE when provisioner absent (Nono repo)
 
 ## Progress
 
@@ -105,4 +117,4 @@ Plans:
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete    | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete    | 2026-06-22 |
-| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/TBD | Not started | - |
+| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/6 | Planned | - |
