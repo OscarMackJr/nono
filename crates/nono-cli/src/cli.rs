@@ -1625,6 +1625,28 @@ pub struct ProfileResolverArgs {
     pub no_auto_pull: bool,
 }
 
+/// Trusted override audit metadata passed via `--override-audit`.
+///
+/// Deserialized from base64url-no-pad-encoded JSON. All fields are read from
+/// the already-verified `OverrideGrant` in nono-py (D-06: never re-parsed
+/// from the raw token; closes the TOCTOU verify→apply gap).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OverrideAuditMeta {
+    /// ZT-Infra audit chain hash (bi-directional link, AUD-02). `None` if the token
+    /// predates ZT-Infra audit chain integration (CAF v0.1 allows `Option<String>`).
+    #[serde(default)]
+    pub(crate) zt_audit_hash: Option<String>,
+    /// KMS key ARN used to sign the override token (from `OverrideGrant.signer`).
+    pub(crate) kms_key_id: String,
+    /// JWT ID — single-use nonce (from `OverrideGrant.jti`).
+    pub(crate) jti: String,
+    /// Paths granted by this override, already sanitized in nono-py (D-05).
+    pub(crate) granted_paths: Vec<String>,
+    /// RFC3339 expiry timestamp (from `OverrideGrant.expires_at`).
+    pub(crate) expires_at: String,
+}
+
 #[derive(Parser, Debug, Clone, Default)]
 pub struct SandboxArgs {
     // ── Filesystem ───────────────────────────────────────────────────────
@@ -1995,6 +2017,19 @@ pub struct SandboxArgs {
     /// Show what would be sandboxed without executing
     #[arg(long, help_heading = "OPTIONS")]
     pub dry_run: bool,
+
+    /// Signed override audit metadata (base64url-no-pad-encoded JSON).
+    ///
+    /// Present only when nono-py has verified a signed policy override and is
+    /// passing trusted audit metadata for the SecurityEventLayer HMAC chain.
+    /// nono-cli treats `--allow` paths supplied in this session as override-granted
+    /// if and only if this flag is also present (AUD-04 bilateral gate, D-02).
+    ///
+    /// INTERNAL — not intended for direct user invocation.
+    /// Value: base64url-no-pad of `{"zt_audit_hash":…,"kms_key_id":…,"jti":…,
+    ///        "granted_paths":[…],"expires_at":…}`.
+    #[arg(long, value_name = "META", hide = true, help_heading = "OPTIONS")]
+    pub override_audit: Option<String>,
 }
 
 impl SandboxArgs {
@@ -2353,6 +2388,8 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             verbose: args.verbose,
             dangerous_force_wfp_ready: false,
             dry_run: args.dry_run,
+            // WrapSandboxArgs does not expose --override-audit (internal flag).
+            override_audit: None,
         }
     }
 }
@@ -5635,5 +5672,46 @@ mod profile_resolver_args_tests {
             }
             _ => panic!("Expected Setup command"),
         }
+    }
+
+    // ── OverrideAuditMeta deserialization (Phase 92 Plan 03 Task 1) ──────────
+
+    /// Valid JSON with all required fields deserializes to OverrideAuditMeta.
+    #[test]
+    fn override_audit_meta_deserializes_valid_json() {
+        let json = r#"{"zt_audit_hash":"abc","kms_key_id":"arn:test","jti":"uuid","granted_paths":["/tmp/x"],"expires_at":"2026-01-01T00:00:00Z"}"#;
+        let meta: crate::cli::OverrideAuditMeta =
+            serde_json::from_str(json).expect("valid JSON must deserialize");
+        assert_eq!(meta.zt_audit_hash, Some("abc".to_string()));
+        assert_eq!(meta.kms_key_id, "arn:test");
+        assert_eq!(meta.jti, "uuid");
+        assert_eq!(meta.granted_paths, vec!["/tmp/x".to_string()]);
+        assert_eq!(meta.expires_at, "2026-01-01T00:00:00Z");
+    }
+
+    /// serde(deny_unknown_fields) rejects JSON with extra fields.
+    ///
+    /// This prevents forged metadata injection where an attacker adds extra
+    /// fields to the base64-JSON payload hoping nono-cli will process them.
+    #[test]
+    fn override_audit_meta_rejects_unknown_fields() {
+        let json = r#"{"zt_audit_hash":"abc","kms_key_id":"arn:test","jti":"uuid","granted_paths":["/tmp/x"],"expires_at":"2026-01-01T00:00:00Z","unexpected_field":"evil"}"#;
+        let result = serde_json::from_str::<crate::cli::OverrideAuditMeta>(json);
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject JSON with extra fields"
+        );
+    }
+
+    /// `zt_audit_hash: null` is allowed (tokens predating ZT-Infra audit chain).
+    #[test]
+    fn override_audit_meta_allows_null_zt_audit_hash() {
+        let json = r#"{"kms_key_id":"arn:test","jti":"uuid","granted_paths":[],"expires_at":"2026-01-01T00:00:00Z"}"#;
+        let meta: crate::cli::OverrideAuditMeta =
+            serde_json::from_str(json).expect("absent zt_audit_hash must be allowed (serde default)");
+        assert_eq!(
+            meta.zt_audit_hash, None,
+            "zt_audit_hash must default to None when absent"
+        );
     }
 }

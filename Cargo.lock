@@ -2406,6 +2406,7 @@ version = "0.62.2"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "clap",

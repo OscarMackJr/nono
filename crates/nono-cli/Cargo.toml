@@ -121,6 +121,10 @@ ureq = { version = "3", features = ["platform-verifier"] }
 semver = "1"
 regress = "0.11"
 
+# Phase 92 Plan 03: base64url-no-pad decode for --override-audit metadata.
+# Already in Cargo.lock (0.22.1 via transitive dep); promoted to direct dep.
+base64 = "0.22"
+
 zeroize.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

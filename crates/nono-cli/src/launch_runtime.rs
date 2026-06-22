@@ -215,6 +215,16 @@ pub(crate) struct ExecutionFlags {
     /// `hook_runtime_windows.rs` on Windows) but the field is cross-platform so
     /// profiles round-trip cleanly on all platforms.
     pub(crate) session_hooks: crate::profile::SessionHooks,
+    /// Phase 92 Plan 03: decoded override audit metadata from `--override-audit`.
+    ///
+    /// `Some` when nono-py has verified a signed policy override and passed
+    /// trusted audit metadata via the `--override-audit <base64url-json>` flag.
+    /// `None` for all standard invocations (MUT-05: byte-for-byte unchanged path).
+    ///
+    /// Decoded from base64url-no-pad JSON in `prepare_run_launch_plan`;
+    /// consumed by `execute_sandboxed`'s AUD-04 pre-spawn gate to commit
+    /// a `PolicyOverrideApplied` event to the HMAC chain before any spawn.
+    pub(crate) override_audit: Option<crate::cli::OverrideAuditMeta>,
 }
 
 impl ExecutionFlags {
@@ -251,6 +261,8 @@ impl ExecutionFlags {
             startup_timeout_secs: None,
             // Phase 58: default to no session hooks.
             session_hooks: crate::profile::SessionHooks::default(),
+            // Phase 92: no override audit by default (MUT-05: standard path unchanged).
+            override_audit: None,
         })
     }
 }
@@ -405,6 +417,27 @@ pub(crate) fn prepare_run_launch_plan(
             // Phase 58: wire session_hooks from PreparedSandbox into
             // ExecutionFlags. Source: upstream daa55c8 launch_runtime.rs.
             session_hooks: prepared.session_hooks,
+            // Phase 92: decode --override-audit base64url-JSON into OverrideAuditMeta.
+            // DECODE-ONCE: the raw string from SandboxArgs is decoded here so that
+            // execute_sandboxed always receives Option<OverrideAuditMeta> (the typed
+            // struct), never Option<String>. Decoding errors abort before spawn.
+            override_audit: args
+                .override_audit
+                .as_deref()
+                .map(|b64| {
+                    use base64::Engine as _;
+                    let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(b64.as_bytes())
+                        .map_err(|e| {
+                            NonoError::SandboxInit(format!(
+                                "override-audit: base64 decode failed: {e}"
+                            ))
+                        })?;
+                    serde_json::from_slice::<crate::cli::OverrideAuditMeta>(&json).map_err(|e| {
+                        NonoError::SandboxInit(format!("override-audit: JSON parse failed: {e}"))
+                    })
+                })
+                .transpose()?,
         },
     })
 }
