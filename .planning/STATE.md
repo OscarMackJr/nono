@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
-status: executing
-stopped_at: Phase 92 context gathered
-last_updated: "2026-06-22T02:41:42.797Z"
-last_activity: 2026-06-22 -- Phase 92 planning complete
+status: ready_to_plan
+stopped_at: Phase 92 executed + verified (PASS-WITH-PARTIALS)
+last_updated: "2026-06-22T00:00:00.000Z"
+last_activity: 2026-06-22 -- Phase 92 executed (4/4 plans) + verified; next is plan Phase 93
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 7
-  completed_plans: 3
-  percent: 43
+  completed_plans: 7
+  percent: 67
 ---
 
 # Project State: nono — v3.2 Signed Policy Overrides (ZT-Infra Attestation)
@@ -22,14 +22,14 @@ See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90
 
 **Core Value:** A false-positive nono block must be resolvable by a cryptographically-signed, ledgered, non-self-service exception — never by disabling the sandbox.
 
-**Current Focus:** Phase 91 — signed-override-format-verification-core
+**Current Focus:** Phase 93 — live-zt-infra-integration (next: plan-phase). Phases 91 + 92 complete.
 
 ## Current Position
 
-Phase: 92
+Phase: 93
 Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-22 -- Phase 92 planning complete
+Status: Ready to plan
+Last activity: 2026-06-22
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -37,7 +37,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:** (v3.2 — reset; populated as phases complete)
 
-- Total plans completed: 3
+- Total plans completed: 7
 - Average duration: —
 - Total execution time: —
 
@@ -87,5 +87,5 @@ Items acknowledged and deferred at v3.1 close (2026-06-21) — see `.planning/mi
 ## Session Continuity
 
 Last session: 2026-06-22T01:52:58.315Z
-Stopped at: Phase 92 context gathered
-Resume file: .planning/phases/92-runtime-capabilityset-mutation-audit-wiring/92-CONTEXT.md
+Stopped at: Phase 92 executed (4/4 plans) + verified PASS-WITH-PARTIALS; next is /gsd-plan-phase 93
+Resume file: .planning/phases/92-runtime-capabilityset-mutation-audit-wiring/92-VERIFICATION.md

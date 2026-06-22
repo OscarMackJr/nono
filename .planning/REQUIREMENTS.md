@@ -11,34 +11,34 @@
 
 ### Override Token Format (OVR)
 
-- [ ] **OVR-01**: A signed override token carries signer identity, scope (absolute filesystem paths + network domains), `not_before`, `expires_at`, a repo-context binding, and a unique `jti`.
-- [ ] **OVR-02**: Scope and expiry are embedded **inside** the ZT-Infra KMS-signed payload (covered by the signature), not carried as unsigned wrapper metadata.
-- [ ] **OVR-03**: The token uses the ZT-Infra CAF v0.1 canonical form; canonical bytes are **re-derived from the parsed structure** (sorted keys, signature/hash fields stripped), validated against ZT-Infra `test-vectors/canonical-form/vectors.json`.
+- [x] **OVR-01**: A signed override token carries signer identity, scope (absolute filesystem paths + network domains), `not_before`, `expires_at`, a repo-context binding, and a unique `jti`.
+- [x] **OVR-02**: Scope and expiry are embedded **inside** the ZT-Infra KMS-signed payload (covered by the signature), not carried as unsigned wrapper metadata.
+- [x] **OVR-03**: The token uses the ZT-Infra CAF v0.1 canonical form; canonical bytes are **re-derived from the parsed structure** (sorted keys, signature/hash fields stripped), validated against ZT-Infra `test-vectors/canonical-form/vectors.json`.
 
 ### Verification (VFY)
 
-- [ ] **VFY-01**: An override is accepted only when **both** the KMS signature verifies **and** a live ZT-Infra `POST /actions` lookup returns `allow` for the override `jti`/id (two-key AND gate; either alone is insufficient).
-- [ ] **VFY-02**: Signature verification reuses the existing ECDSA P-256 primitive (`nono::trust::signing::verify_keyed_signature`); it pins `ECDSA_SHA_256`, enforces low-S, and explicitly rejects `algorithm:"none"` and any non-pinned algorithm.
-- [ ] **VFY-03**: The KMS public key is sourced from embedded machine policy / env (DER+base64), cached per `key_id`; nono carries **no in-process AWS SDK** and **no AWS credentials**.
-- [ ] **VFY-04**: The signer `key_id` is checked against a machine-policy allowlist of approved signing-key ARNs — cryptographic validity alone does not authorize.
-- [ ] **VFY-05**: `expires_at`/`not_before` are enforced with a 2-minute clock-skew tolerance; maximum TTL is hard-capped in code (8h developer / 24h CI) and operator-configurable downward.
-- [ ] **VFY-06**: Each token `jti` is single-use — a consumed-`jti` store rejects replay of an already-applied override.
-- [ ] **VFY-07**: Verification is **fail-closed**: every failure (bad signature, parse error, ZT-Infra unavailable/timeout, expired, out-of-scope, replay, key not allowlisted) yields no expansion and runs nothing. The verify API returns `Result` (`#[must_use]`); the PyO3 boundary raises `NonoOverrideError` — never a falsy return.
+- [~] **VFY-01**: An override is accepted only when **both** the KMS signature verifies **and** a live ZT-Infra `POST /actions` lookup returns `allow` for the override `jti`/id (two-key AND gate; either alone is insufficient). _(PARTIAL [BLOCKING-93] — fail-closed seam present in `confined_run`/`confine`; live `POST /actions` AND-gate deferred to Phase 93 per locked decision D-03.)_
+- [x] **VFY-02**: Signature verification reuses the existing ECDSA P-256 primitive (`nono::trust::signing::verify_keyed_signature`); it pins `ECDSA_SHA_256`, enforces low-S, and explicitly rejects `algorithm:"none"` and any non-pinned algorithm.
+- [x] **VFY-03**: The KMS public key is sourced from embedded machine policy / env (DER+base64), cached per `key_id`; nono carries **no in-process AWS SDK** and **no AWS credentials**.
+- [x] **VFY-04**: The signer `key_id` is checked against a machine-policy allowlist of approved signing-key ARNs — cryptographic validity alone does not authorize.
+- [x] **VFY-05**: `expires_at`/`not_before` are enforced with a 2-minute clock-skew tolerance; maximum TTL is hard-capped in code (8h developer / 24h CI) and operator-configurable downward.
+- [x] **VFY-06**: Each token `jti` is single-use — a consumed-`jti` store rejects replay of an already-applied override.
+- [x] **VFY-07**: Verification is **fail-closed**: every failure (bad signature, parse error, ZT-Infra unavailable/timeout, expired, out-of-scope, replay, key not allowlisted) yields no expansion and runs nothing. The verify API returns `Result` (`#[must_use]`); the PyO3 boundary raises `NonoOverrideError` — never a falsy return.
 
 ### Runtime Ruleset Mutation (MUT)
 
-- [ ] **MUT-01**: A verified override **additively** expands the `CapabilitySet` for the specific repo context, scoped to only the granted paths/domains.
-- [ ] **MUT-02**: An override is **invocation-scoped** — it does not persist across `confined_run`/`confine` calls and does not mutate shared/global state.
-- [ ] **MUT-03**: An override cannot remove or weaken an existing deny rule and cannot bypass the OS confinement layer (Landlock / Seatbelt / AppContainer + WFP remain enforced underneath).
-- [ ] **MUT-04**: Granted paths/domains are matched by **path-component / DNS-component comparison** (never string `starts_with`); out-of-scope targets stay denied.
-- [ ] **MUT-05**: The no-override code path is **byte-for-byte identical** to pre-v3.2 behavior (regression-proven).
+- [x] **MUT-01**: A verified override **additively** expands the `CapabilitySet` for the specific repo context, scoped to only the granted paths/domains.
+- [x] **MUT-02**: An override is **invocation-scoped** — it does not persist across `confined_run`/`confine` calls and does not mutate shared/global state.
+- [x] **MUT-03**: An override cannot remove or weaken an existing deny rule and cannot bypass the OS confinement layer (Landlock / Seatbelt / AppContainer + WFP remain enforced underneath). _(code-verified; OS-confinement-active behavioral proof is host-gated UAT — daemon+WFP path.)_
+- [x] **MUT-04**: Granted paths/domains are matched by **path-component / DNS-component comparison** (never string `starts_with`); out-of-scope targets stay denied.
+- [x] **MUT-05**: The no-override code path is **byte-for-byte identical** to pre-v3.2 behavior (regression-proven).
 
 ### Audit Linkage (AUD)
 
-- [ ] **AUD-01**: Every override lifecycle event (presented, verified, rejected, expired, revoked) emits a security event into the v3.0/v3.1 `SecurityEventLayer` HMAC chain.
-- [ ] **AUD-02**: Override events embed the ZT-Infra `audit.current_hash`, creating a bi-directional tamper-evident link between the nono and ZT-Infra audit chains.
-- [ ] **AUD-03**: Override events use a dedicated EventID range (10006–10010: PRESENTED / VERIFIED / REJECTED / EXPIRED / REVOKED) with redaction (no raw secrets; paths per the existing redaction policy).
-- [ ] **AUD-04**: An override that applies without a successfully-emitted audit event is treated as a failure — no silent privilege escalation.
+- [x] **AUD-01**: Every override lifecycle event (presented, verified, rejected, expired, revoked) emits a security event into the v3.0/v3.1 `SecurityEventLayer` HMAC chain.
+- [x] **AUD-02**: Override events embed the ZT-Infra `audit.current_hash`, creating a bi-directional tamper-evident link between the nono and ZT-Infra audit chains.
+- [x] **AUD-03**: Override events use a dedicated EventID range (10006–10010: PRESENTED / VERIFIED / REJECTED / EXPIRED / REVOKED) with redaction (no raw secrets; paths per the existing redaction policy).
+- [x] **AUD-04**: An override that applies without a successfully-emitted audit event is treated as a failure — no silent privilege escalation.
 
 ### Live ZT-Infra Integration + Revocation (ZTL)
 
@@ -55,7 +55,7 @@
 
 ### Verification / Dark Factory (DF)
 
-- [ ] **DF-01**: An unattended `verify-dark.ps1 --gate OVERRIDE-01` gate exercises the offline verify path + the fail-closed cases (bad sig, expired, out-of-scope, replay, `algorithm:"none"`) against the ZT-Infra local provisioner / test vectors, emitting a machine-readable verdict.
+- [x] **DF-01**: An unattended `verify-dark.ps1 --gate OVERRIDE-01` gate exercises the offline verify path + the fail-closed cases (bad sig, expired, out-of-scope, replay, `algorithm:"none"`) against the ZT-Infra local provisioner / test vectors, emitting a machine-readable verdict.
 - [ ] **DF-02**: Live AWS/KMS + DAAL-anchoring paths are exercised by scripted gates that emit `SKIP_HOST_UNAVAILABLE` when AWS/host is absent (acknowledged host-gated tech-debt, consistent with prior milestones).
 
 ## v2 / Future Requirements
@@ -89,25 +89,25 @@ Populated by roadmap creation 2026-06-21. Phase numbering continues from Phase 9
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| OVR-01 | Phase 91 | Pending |
-| OVR-02 | Phase 91 | Pending |
-| OVR-03 | Phase 91 | Pending |
-| VFY-01 | Phase 92 | Pending |
-| VFY-02 | Phase 91 | Pending |
-| VFY-03 | Phase 91 | Pending |
-| VFY-04 | Phase 91 | Pending |
-| VFY-05 | Phase 91 | Pending |
-| VFY-06 | Phase 91 | Pending |
-| VFY-07 | Phase 91 | Pending |
-| MUT-01 | Phase 92 | Pending |
-| MUT-02 | Phase 92 | Pending |
-| MUT-03 | Phase 92 | Pending |
-| MUT-04 | Phase 92 | Pending |
-| MUT-05 | Phase 92 | Pending |
-| AUD-01 | Phase 92 | Pending |
-| AUD-02 | Phase 92 | Pending |
-| AUD-03 | Phase 92 | Pending |
-| AUD-04 | Phase 92 | Pending |
+| OVR-01 | Phase 91 | Complete |
+| OVR-02 | Phase 91 | Complete |
+| OVR-03 | Phase 91 | Complete |
+| VFY-01 | Phase 92 | Partial [BLOCKING-93] |
+| VFY-02 | Phase 91 | Complete |
+| VFY-03 | Phase 91 | Complete |
+| VFY-04 | Phase 91 | Complete |
+| VFY-05 | Phase 91 | Complete |
+| VFY-06 | Phase 91 | Complete |
+| VFY-07 | Phase 91 | Complete |
+| MUT-01 | Phase 92 | Complete |
+| MUT-02 | Phase 92 | Complete |
+| MUT-03 | Phase 92 | Complete |
+| MUT-04 | Phase 92 | Complete |
+| MUT-05 | Phase 92 | Complete |
+| AUD-01 | Phase 92 | Complete |
+| AUD-02 | Phase 92 | Complete |
+| AUD-03 | Phase 92 | Complete |
+| AUD-04 | Phase 92 | Complete |
 | ZTL-01 | Phase 93 | Pending |
 | ZTL-02 | Phase 93 | Pending |
 | ZTL-03 | Phase 93 | Pending |
@@ -115,7 +115,7 @@ Populated by roadmap creation 2026-06-21. Phase numbering continues from Phase 9
 | ZTL-05 | Phase 93 | Pending |
 | CLI-01 | Phase 93 | Pending |
 | CLI-02 | Phase 93 | Pending |
-| DF-01 | Phase 92 | Pending |
+| DF-01 | Phase 92 | Complete |
 | DF-02 | Phase 93 | Pending |
 
 **Coverage:**
@@ -125,4 +125,4 @@ Populated by roadmap creation 2026-06-21. Phase numbering continues from Phase 9
 
 ---
 *Requirements defined: 2026-06-21*
-*Last updated: 2026-06-21 — traceability table populated by roadmap creation*
+*Last updated: 2026-06-22 — Phase 91 (OVR/VFY-02..07) + Phase 92 (MUT-01..05, AUD-01..04, DF-01 Complete; VFY-01 Partial [BLOCKING-93]) statuses recorded*

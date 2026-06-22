@@ -37,7 +37,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Milestone Goal:** Replace the "just disable the sandbox" temptation with cryptographically-signed, ledger-logged policy exceptions. A developer who hits a false-positive block obtains an authorized, scoped, expiring signed override that the `nono-py` binding verifies against the ZT-Infra v2 AWS control plane (KMS-signed audit + DAAL ledger) and applies as a temporary, auditable, revocable expansion of the runtime ruleset — non-self-service. Milestone-marker only (no crate publish). Enforcement surface: `nono-py` binding. Rust core stays policy-free.
 
 - [x] **Phase 91: Signed Override Format + Verification Core** - Define the ZT-Infra CAF v0.1 token schema and build the fully offline, fail-closed ECDSA verifier (completed 2026-06-21)
-- [ ] **Phase 92: Runtime CapabilitySet Mutation + Audit Wiring** - Wire the verifier into `confined_run`/`confine`, fuse additive mutation with mandatory SecurityEventLayer audit emission in one atomic phase
+- [x] **Phase 92: Runtime CapabilitySet Mutation + Audit Wiring** - Wire the verifier into `confined_run`/`confine`, fuse additive mutation with mandatory SecurityEventLayer audit emission in one atomic phase (completed 2026-06-22)
 - [ ] **Phase 93: Live ZT-Infra Integration + Revocation + Request Flow** - Add the live `POST /actions` AND gate, KMS pubkey pin + key-ARN allowlist, AWS credential stripping, DAAL anchoring, CLI affordances, and Dark Factory scripted gates
 
 ## Phase Details
@@ -70,14 +70,14 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Plans**: 4 plans (3 waves)
 Plans:
 **Wave 1**
-- [ ] 92-01-PLAN.md — Core data types: `PolicyOverrideApplied` in `audit.rs`; EventIDs 10006–10010 + `SecurityEventType` variants in `telemetry/event.rs` (Wave 1; Nono repo)
-- [ ] 92-02-PLAN.md — nono-py wiring: `zt_audit_hash` field+getter on `OverrideGrant`; `append_override_args`/`sanitize_override_path`; extended `confined_run`/`confine` signatures (Wave 1; nono-py repo)
+- [x] 92-01-PLAN.md — Core data types: `PolicyOverrideApplied` in `audit.rs`; EventIDs 10006–10010 + `SecurityEventType` variants in `telemetry/event.rs` (Wave 1; Nono repo)
+- [x] 92-02-PLAN.md — nono-py wiring: `zt_audit_hash` field+getter on `OverrideGrant`; `append_override_args`/`sanitize_override_path`; extended `confined_run`/`confine` signatures (Wave 1; nono-py repo)
 
 **Wave 2** *(blocked on Wave 1 completion)*
-- [ ] 92-03-PLAN.md — nono-cli bilateral gate: `--override-audit` flag + `OverrideAuditMeta`; `SECURITY_LAYER` OnceLock; `emit_override_event` method; AUD-04 pre-spawn gate in `execute_sandboxed` (Wave 2; Nono repo)
+- [x] 92-03-PLAN.md — nono-cli bilateral gate: `--override-audit` flag + `OverrideAuditMeta`; `SECURITY_LAYER` OnceLock; `emit_override_event` method; AUD-04 pre-spawn gate in `execute_sandboxed` (Wave 2; Nono repo)
 
 **Wave 3** *(blocked on Wave 2 completion)*
-- [ ] 92-04-PLAN.md — Verification: `scripts/gates/override-01.ps1` DF-01 gate + pytest `test_override_wiring.py` (Wave 3; both repos)
+- [x] 92-04-PLAN.md — Verification: `scripts/gates/override-01.ps1` DF-01 gate + pytest `test_override_wiring.py` (Wave 3; both repos)
 
 ### Phase 93: Live ZT-Infra Integration + Revocation + Request Flow
 **Goal**: The complete two-key AND gate is operational — a signed token is accepted only when both the KMS signature verifies offline AND a live ZT-Infra `POST /actions` lookup returns `allow`; revoked tokens are rejected on the next live check; AWS credentials never reach the sandboxed child environment; a developer can request and apply overrides via CLI
@@ -104,5 +104,5 @@ Plans:
 | 89. Proxy Hardening Sync | v3.1 | 4/4 | Complete | 2026-06-21 |
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete    | 2026-06-22 |
-| 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 0/4 | Not started | - |
+| 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete    | 2026-06-22 |
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/TBD | Not started | - |
