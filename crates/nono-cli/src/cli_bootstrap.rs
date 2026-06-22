@@ -120,6 +120,12 @@ pub(crate) fn init_tracing(cli: &Cli, telemetry_config: Option<TelemetryConfig>)
     let config = telemetry_config.unwrap_or_default();
     let security_layer = SecurityEventLayer::new(config, session_id);
 
+    // Phase 92 Plan 03 (OQ-1 resolution): expose the layer for direct access
+    // from execute_sandboxed (AUD-04 gate). SecurityEventLayer::clone() shares
+    // the same Arc<Mutex<...>> inner, so both clones advance the same chain.
+    // OnceLock::set silently fails if already set (double-init guard).
+    let _ = crate::telemetry::SECURITY_LAYER.set(security_layer.clone());
+
     // Delegate to the platform-specific initialization that adds the ETW layer
     // (Windows) or skips it (non-Windows).  The separate helper avoids having
     // tracing-etw's complex generic types flow through all three match arms.

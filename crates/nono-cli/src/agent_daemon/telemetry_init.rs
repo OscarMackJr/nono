@@ -70,6 +70,10 @@ pub(crate) fn init_daemon_telemetry(config: TelemetryConfig, session_id: String)
 
     let security_layer = SecurityEventLayer::new(config, session_id);
 
+    // Phase 92 Plan 03 (OQ-1 resolution): expose the layer for AUD-04 gate access.
+    // OnceLock::set silently fails if already set (double-init guard, same as INIT above).
+    let _ = crate::telemetry::SECURITY_LAYER.set(security_layer.clone());
+
     #[cfg(not(target_os = "windows"))]
     {
         // Non-Windows: registry + security_layer only (no ETW).
