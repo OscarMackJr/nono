@@ -69,9 +69,14 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   5. `verify-dark.ps1 --gate OVERRIDE-01` emits a machine-readable `PASS` verdict against the offline verify path and the full set of fail-closed cases (bad sig, expired, out-of-scope, replay, `algorithm:"none"`)
 **Plans**: 4 plans (3 waves)
 Plans:
+**Wave 1**
 - [ ] 92-01-PLAN.md — Core data types: `PolicyOverrideApplied` in `audit.rs`; EventIDs 10006–10010 + `SecurityEventType` variants in `telemetry/event.rs` (Wave 1; Nono repo)
 - [ ] 92-02-PLAN.md — nono-py wiring: `zt_audit_hash` field+getter on `OverrideGrant`; `append_override_args`/`sanitize_override_path`; extended `confined_run`/`confine` signatures (Wave 1; nono-py repo)
+
+**Wave 2** *(blocked on Wave 1 completion)*
 - [ ] 92-03-PLAN.md — nono-cli bilateral gate: `--override-audit` flag + `OverrideAuditMeta`; `SECURITY_LAYER` OnceLock; `emit_override_event` method; AUD-04 pre-spawn gate in `execute_sandboxed` (Wave 2; Nono repo)
+
+**Wave 3** *(blocked on Wave 2 completion)*
 - [ ] 92-04-PLAN.md — Verification: `scripts/gates/override-01.ps1` DF-01 gate + pytest `test_override_wiring.py` (Wave 3; both repos)
 
 ### Phase 93: Live ZT-Infra Integration + Revocation + Request Flow
