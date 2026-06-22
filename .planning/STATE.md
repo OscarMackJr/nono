@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
-status: ready_to_plan
-stopped_at: Phase 92 executed + verified (PASS-WITH-PARTIALS)
-last_updated: "2026-06-22T00:00:00.000Z"
-last_activity: 2026-06-22 -- Phase 92 executed (4/4 plans) + verified; next is plan Phase 93
+status: planning
+stopped_at: Phase 93 context gathered
+last_updated: "2026-06-22T22:09:06.416Z"
+last_activity: 2026-06-22
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 7
   completed_plans: 7
-  percent: 67
+  percent: 100
 ---
 
 # Project State: nono — v3.2 Signed Policy Overrides (ZT-Infra Attestation)
@@ -86,6 +86,6 @@ Items acknowledged and deferred at v3.1 close (2026-06-21) — see `.planning/mi
 
 ## Session Continuity
 
-Last session: 2026-06-22T01:52:58.315Z
-Stopped at: Phase 92 executed (4/4 plans) + verified PASS-WITH-PARTIALS; next is /gsd-plan-phase 93
-Resume file: .planning/phases/92-runtime-capabilityset-mutation-audit-wiring/92-VERIFICATION.md
+Last session: 2026-06-22T22:09:06.387Z
+Stopped at: Phase 93 context gathered
+Resume file: .planning/phases/93-live-zt-infra-integration-revocation-request-flow/93-CONTEXT.md
