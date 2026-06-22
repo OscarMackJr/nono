@@ -46,7 +46,7 @@ created: 2026-06-22
 | 93-01-T2 | 01 | 1 | ZTL-01 (trust sourcing) | T-93-01-01/02/04 | HKLM trust read fail-secure; absent -> deny; non-Win stub fail-closed | build+clippy (Rust) | `cargo build -p nono-py && cargo clippy -p nono-py -- -D warnings -D clippy::unwrap_used` | ❌ W0 | ⬜ pending |
 | 93-01-T3 | 01 | 1 | VFY-01 (VFY-03a seam) | T-93-01-01 | unknown key_id -> Err(KeyNotAllowlisted); per-key_id cache | unit (Rust) | `cargo test -p nono-py --lib override::` | ❌ W0 | ⬜ pending |
 | 93-02-T1 | 02 | 1 | ZTL-04 | T-93-02-01 | child env has no AWS_*; SystemRoot/windir baseline intact | unit (Rust) | `cargo test -p nono-cli --lib exec_strategy::env_sanitization` | ❌ W0 | ⬜ pending |
-| 93-02-T2 | 02 | 1 | ZTL-02/ZTL-03/AUD-01 | T-93-02-02/03/04 | reject/revoke -> 10008/10010 HMAC emit; chain advance; fail-closed | unit (Rust) | `cargo test -p nono-cli --lib override_audit_emit` | ❌ W0 | ⬜ pending |
+| 93-02-T2 | 02 | 1 | ZTL-02/ZTL-03 (OQ-1) | T-93-02-02/03/04 | reject/revoke -> 10008/10010 HMAC emit; chain advance; fail-closed | unit (Rust) | `cargo test -p nono-cli --lib override_audit_emit` | ❌ W0 | ⬜ pending |
 | 93-03-T1 | 03 | 2 | CLI-01 | T-93-03-01/03 | request bundle {scope,repo_context,reason,nonce}; fresh nonce | unit (Rust) | `cargo test -p nono-cli --lib override_request` | ❌ W0 | ⬜ pending |
 | 93-03-T2 | 03 | 2 | CLI-01 | T-93-03-02 | override group = request + audit-emit (not apply); builds | build (Rust) | `cargo build -p nono-cli --bin nono` | n/a | ⬜ pending |
 | 93-04-T1 | 04 | 2 | ZTL-01/02/03/05 | T-93-04-01/03/05 | fail-closed mapping; no flush_daal; env-proxy off; body shape | unit (pytest, mocked urllib) | `python -m pytest tests/test_live_arm.py -x` | ❌ W0 | ⬜ pending |
