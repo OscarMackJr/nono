@@ -108,6 +108,26 @@ pub enum AuditEventPayload {
         /// Network audit event emitted by the proxy or sandbox supervisor.
         event: NetworkAuditEvent,
     },
+    /// A signed policy override was verified and applied to this invocation.
+    ///
+    /// Emitted by nono-cli SecurityEventLayer before the sandboxed child spawns
+    /// (AUD-01 / AUD-04). Fields use the same redaction contract as other variants:
+    /// paths appear as salted hashes (AUD-03), not raw strings.
+    PolicyOverrideApplied {
+        /// JWT ID of the applied override token (single-use nonce).
+        jti: String,
+        /// Signing key identity (KMS key ARN) — redaction-safe (not raw DER).
+        kms_key_id: String,
+        /// ZT-Infra audit chain hash at time of override issuance (bi-directional link, AUD-02).
+        /// `None` when the override token predates ZT-Infra audit chain integration.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zt_audit_hash: Option<String>,
+        /// Paths granted by this override, path-hashed per existing redaction policy (AUD-03).
+        /// Uses `path_hash_for(session_salt, path)` from `telemetry/event.rs`. Never raw paths.
+        granted_path_hashes: Vec<String>,
+        /// ISO-8601 expiry timestamp.
+        expires_at: String,
+    },
 }
 
 /// One line of `audit-events.ndjson`.
@@ -1841,6 +1861,75 @@ mod tests {
             .verification_error
             .as_deref()
             .is_some_and(|err| err.contains("event_count")));
+    }
+
+    // ── PolicyOverrideApplied variant (Phase 92 AUD-01/AUD-03) ──────────────────
+
+    #[test]
+    fn policy_override_applied_serializes_with_type_tag() {
+        let payload = AuditEventPayload::PolicyOverrideApplied {
+            jti: "test-jti".to_string(),
+            kms_key_id: "arn:aws:kms:test".to_string(),
+            zt_audit_hash: Some("abc123".to_string()),
+            granted_path_hashes: vec!["hash1".to_string()],
+            expires_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(
+            json.contains("\"type\":\"policy_override_applied\""),
+            "serialized JSON must contain type tag; got: {json}"
+        );
+        assert!(
+            json.contains("\"jti\":\"test-jti\""),
+            "jti field missing; got: {json}"
+        );
+        assert!(
+            json.contains("\"kms_key_id\":\"arn:aws:kms:test\""),
+            "kms_key_id field missing; got: {json}"
+        );
+        assert!(
+            json.contains("\"zt_audit_hash\":\"abc123\""),
+            "zt_audit_hash field missing when Some; got: {json}"
+        );
+        assert!(
+            json.contains("\"expires_at\":\"2026-01-01T00:00:00Z\""),
+            "expires_at field missing; got: {json}"
+        );
+    }
+
+    #[test]
+    fn policy_override_applied_zt_audit_hash_absent_when_none() {
+        let payload = AuditEventPayload::PolicyOverrideApplied {
+            jti: "test-jti".to_string(),
+            kms_key_id: "arn:aws:kms:test".to_string(),
+            zt_audit_hash: None,
+            granted_path_hashes: vec!["hash1".to_string()],
+            expires_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(
+            !json.contains("zt_audit_hash"),
+            "zt_audit_hash key must be absent from JSON when None (skip_serializing_if); got: {json}"
+        );
+    }
+
+    #[test]
+    fn policy_override_applied_round_trips() {
+        let original = AuditEventPayload::PolicyOverrideApplied {
+            jti: "test-jti".to_string(),
+            kms_key_id: "arn:aws:kms:test".to_string(),
+            zt_audit_hash: Some("abc123".to_string()),
+            granted_path_hashes: vec!["hash1".to_string(), "hash2".to_string()],
+            expires_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        let deserialized: AuditEventPayload = serde_json::from_str(&json).unwrap();
+        // Verify round-trip by re-serializing the deserialized value.
+        let json2 = serde_json::to_string(&deserialized).unwrap();
+        assert_eq!(
+            json, json2,
+            "round-trip serialization must produce identical JSON"
+        );
     }
 
     /// Golden vectors shared with the Python port in
