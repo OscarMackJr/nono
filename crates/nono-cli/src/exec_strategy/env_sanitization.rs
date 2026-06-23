@@ -17,6 +17,13 @@ pub(crate) fn is_dangerous_env_var(key: &str) -> bool {
     // Linker injection
     key.starts_with("LD_")
         || key.starts_with("DYLD_")
+        // AWS credential injection (ZTL-04): strip the entire AWS_* namespace so no
+        // AWS credential or config var reaches the sandboxed child process.
+        // cfg-UNCONDITIONAL — AWS creds are dangerous on every platform.
+        // NOTE: `key.starts_with("AWS_")` is a string-prefix on an env-var NAME,
+        // not a path — matches the LD_/DYLD_ precedent; NOT the CLAUDE.md
+        // path-starts_with footgun (which concerns filesystem path components).
+        || key.starts_with("AWS_")
         // Shell injection
         || key == "BASH_ENV"
         || key == "ENV"
@@ -278,6 +285,57 @@ mod tests {
         // On Windows, PATH is dangerous (executable resolution hijacking via D-09 eq_ignore_ascii_case).
         #[cfg(not(target_os = "windows"))]
         assert!(!is_dangerous_env_var("PATH"));
+    }
+
+    // ============================================================================
+    // AWS credential blocklist (ZTL-04) — security-critical regression tests
+    //
+    // AWS_* credentials in the parent env MUST NEVER reach a sandboxed child
+    // process. The strip is cfg-UNCONDITIONAL (not Windows-only) because AWS
+    // credentials are dangerous on every platform. If a future refactor removes
+    // the clause, these tests will catch it.
+    // ============================================================================
+
+    #[test]
+    fn test_blocks_aws_access_key_id() {
+        assert!(is_dangerous_env_var("AWS_ACCESS_KEY_ID"));
+    }
+
+    #[test]
+    fn test_blocks_aws_secret_access_key() {
+        assert!(is_dangerous_env_var("AWS_SECRET_ACCESS_KEY"));
+    }
+
+    #[test]
+    fn test_blocks_aws_session_token() {
+        assert!(is_dangerous_env_var("AWS_SESSION_TOKEN"));
+    }
+
+    #[test]
+    fn test_blocks_aws_region() {
+        // Even non-secret AWS vars are stripped: the entire AWS_ namespace is
+        // dangerous because it configures the AWS SDK endpoint + credential
+        // resolution for the child process.
+        assert!(is_dangerous_env_var("AWS_REGION"));
+    }
+
+    #[test]
+    fn test_blocks_aws_prefix_arbitrary_suffix() {
+        // The prefix check covers all current and future AWS_* vars.
+        assert!(is_dangerous_env_var("AWS_DEFAULT_REGION"));
+        assert!(is_dangerous_env_var("AWS_PROFILE"));
+        assert!(is_dangerous_env_var("AWS_ROLE_ARN"));
+        assert!(is_dangerous_env_var("AWS_WEB_IDENTITY_TOKEN_FILE"));
+        assert!(is_dangerous_env_var("AWS_"));
+    }
+
+    #[test]
+    fn test_allows_non_aws_unrelated_var() {
+        // Vars that start with letters similar to AWS but are not AWS_* must
+        // remain allowed (unrelated to the AWS_ strip).
+        assert!(!is_dangerous_env_var("HOME"));
+        assert!(!is_dangerous_env_var("USER"));
+        assert!(!is_dangerous_env_var("LANG"));
     }
 
     // ============================================================================
