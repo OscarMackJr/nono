@@ -38,7 +38,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 - [x] **Phase 91: Signed Override Format + Verification Core** - Define the ZT-Infra CAF v0.1 token schema and build the fully offline, fail-closed ECDSA verifier (completed 2026-06-21)
 - [x] **Phase 92: Runtime CapabilitySet Mutation + Audit Wiring** - Wire the verifier into `confined_run`/`confine`, fuse additive mutation with mandatory SecurityEventLayer audit emission in one atomic phase (completed 2026-06-22)
-- [ ] **Phase 93: Live ZT-Infra Integration + Revocation + Request Flow** - Add the live `POST /actions` AND gate, KMS pubkey pin + key-ARN allowlist, AWS credential stripping, DAAL anchoring, CLI affordances, and Dark Factory scripted gates
+- [x] **Phase 93: Live ZT-Infra Integration + Revocation + Request Flow** - Add the live `POST /actions` AND gate, KMS pubkey pin + key-ARN allowlist, AWS credential stripping, DAAL anchoring, CLI affordances, and Dark Factory scripted gates (completed 2026-06-23)
 
 ## Phase Details
 
@@ -100,8 +100,8 @@ Plans:
 - [x] 93-04-PLAN.md — Python live arm `_live.py`: fail-closed POST /actions AND-gate (ZTL-01/02/03/05), Python pre-step closing VFY-01 clause b (OQ-2) (nono-py repo)
 
 **Wave 3** *(blocked on Wave 2)*
-- [ ] 93-05-PLAN.md — `nono-override-apply` console-script: one-shot offline+live verify-then-run (CLI-02, OQ-5) (nono-py repo)
-- [ ] 93-06-PLAN.md — DF-02 gate `scripts/gates/override-02.ps1`: live allow+revoke proof, SKIP_HOST_UNAVAILABLE when provisioner absent (Nono repo)
+- [x] 93-05-PLAN.md — `nono-override-apply` console-script: one-shot offline+live verify-then-run (CLI-02, OQ-5) (nono-py repo)
+- [x] 93-06-PLAN.md — DF-02 gate `scripts/gates/override-02.ps1`: live allow+revoke proof, SKIP_HOST_UNAVAILABLE when provisioner absent (Nono repo)
 
 ## Progress
 
@@ -117,4 +117,4 @@ Plans:
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete    | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete    | 2026-06-22 |
-| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 4/6 | In Progress|  |
+| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete   | 2026-06-23 |
