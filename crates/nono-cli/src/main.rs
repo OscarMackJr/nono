@@ -64,6 +64,10 @@ mod output;
 // Provides the reject-branch EventID 10008/10010 path that runs BEFORE nono.exe spawns
 // the sandboxed child (nono-py fails closed and calls this subcommand to land the denial event).
 mod override_audit_emit;
+// Phase 93 Plan 03: `nono override request` — denial context bundle for the out-of-nono
+// approver/KMS-signing pipeline (CLI-01).  Performs NO crypto and NO live check (D-07);
+// only gathers scope paths/domains/repo_context/reason and emits a JSON bundle + nonce.
+mod override_request;
 mod pack_update_hint;
 mod package;
 mod package_cmd;
