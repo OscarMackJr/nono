@@ -4,8 +4,8 @@ milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
 status: executing
 stopped_at: Phase 93 context gathered
-last_updated: "2026-06-22T23:49:02.682Z"
-last_activity: 2026-06-22 -- Phase 93 planning complete
+last_updated: "2026-06-23T00:03:25.101Z"
+last_activity: 2026-06-23 -- Phase 93 execution started
 progress:
   total_phases: 3
   completed_phases: 2
@@ -22,14 +22,14 @@ See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90
 
 **Core Value:** A false-positive nono block must be resolvable by a cryptographically-signed, ledgered, non-self-service exception — never by disabling the sandbox.
 
-**Current Focus:** Phase 93 — live-zt-infra-integration (next: plan-phase). Phases 91 + 92 complete.
+**Current Focus:** Phase 93 — live-zt-infra-integration-revocation-request-flow
 
 ## Current Position
 
-Phase: 93
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-22 -- Phase 93 planning complete
+Phase: 93 (live-zt-infra-integration-revocation-request-flow) — EXECUTING
+Plan: 1 of 6
+Status: Executing Phase 93
+Last activity: 2026-06-23 -- Phase 93 execution started
 
 Progress: [░░░░░░░░░░] 0%
 

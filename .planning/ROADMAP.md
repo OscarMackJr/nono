@@ -92,8 +92,8 @@ Plans:
 **Plans**: 6 plans (3 waves)
 Plans:
 **Wave 1** *(parallel — disjoint file ownership)*
-- [ ] 93-01-PLAN.md — nono-py trust foundation: HKLM `Override\` reader (winreg, D-05/D-06), LiveRevoked/LiveUnavailable kinds (D-02), per-key_id VerificationKey cache closing VFY-03a `[BLOCKING-93]` (nono-py repo)
-- [ ] 93-02-PLAN.md — nono-cli AWS_* env strip (ZTL-04) + `override audit-emit` subcommand for the live-reject HMAC emission (OQ-1 a; 10008/10010) (Nono repo)
+- [x] 93-01-PLAN.md — nono-py trust foundation: HKLM `Override\` reader (winreg, D-05/D-06), LiveRevoked/LiveUnavailable kinds (D-02), per-key_id VerificationKey cache closing VFY-03a `[BLOCKING-93]` (nono-py repo)
+- [x] 93-02-PLAN.md — nono-cli AWS_* env strip (ZTL-04) + `override audit-emit` subcommand for the live-reject HMAC emission (OQ-1 a; 10008/10010) (Nono repo)
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 93-03-PLAN.md — `nono override request` CLI: denial bundle from DiagnosticFormatter (CLI-01); adds Request to the override group (Nono repo)
@@ -117,4 +117,4 @@ Plans:
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete    | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete    | 2026-06-22 |
-| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 0/6 | Planned | - |
+| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 2/6 | In Progress|  |
