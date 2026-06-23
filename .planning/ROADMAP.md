@@ -96,8 +96,8 @@ Plans:
 - [x] 93-02-PLAN.md — nono-cli AWS_* env strip (ZTL-04) + `override audit-emit` subcommand for the live-reject HMAC emission (OQ-1 a; 10008/10010) (Nono repo)
 
 **Wave 2** *(blocked on Wave 1)*
-- [ ] 93-03-PLAN.md — `nono override request` CLI: denial bundle from DiagnosticFormatter (CLI-01); adds Request to the override group (Nono repo)
-- [ ] 93-04-PLAN.md — Python live arm `_live.py`: fail-closed POST /actions AND-gate (ZTL-01/02/03/05), Python pre-step closing VFY-01 clause b (OQ-2) (nono-py repo)
+- [x] 93-03-PLAN.md — `nono override request` CLI: denial bundle from DiagnosticFormatter (CLI-01); adds Request to the override group (Nono repo)
+- [x] 93-04-PLAN.md — Python live arm `_live.py`: fail-closed POST /actions AND-gate (ZTL-01/02/03/05), Python pre-step closing VFY-01 clause b (OQ-2) (nono-py repo)
 
 **Wave 3** *(blocked on Wave 2)*
 - [ ] 93-05-PLAN.md — `nono-override-apply` console-script: one-shot offline+live verify-then-run (CLI-02, OQ-5) (nono-py repo)
@@ -117,4 +117,4 @@ Plans:
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete    | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete    | 2026-06-22 |
-| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 2/6 | In Progress|  |
+| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 4/6 | In Progress|  |
