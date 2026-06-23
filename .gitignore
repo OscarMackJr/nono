@@ -4,6 +4,7 @@ dist/windows/*.msi
 dist/windows/*.wixpdb
 
 /target
+crates/*/target/
 .vscode/
 .idea/
 .DS_Store
