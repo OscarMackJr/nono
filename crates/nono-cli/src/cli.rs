@@ -1225,7 +1225,7 @@ pub enum Commands {
 {after-help}")]
     #[command(after_help = "\x1b[1mCOMMANDS\x1b[0m
   audit-emit   Emit a rejection/revocation event into the HMAC audit chain
-  request      [Phase 93 Plan 03] Surface denial context as a JSON override-request bundle
+  request      Surface denial context as a JSON override-request bundle
 
 \x1b[1mNOTES\x1b[0m
   `nono override apply` is delivered by the nono-py package (D-07) — it runs the
@@ -1235,6 +1235,7 @@ pub enum Commands {
 \x1b[1mEXAMPLES\x1b[0m
   nono override audit-emit <base64-meta> --kind rejected
   nono override audit-emit <base64-meta> --kind revoked
+  nono override request --reason path_not_granted --scope-path /home/user/.aws
 ")]
     Override(OverrideArgs),
 }
@@ -1256,6 +1257,16 @@ pub(crate) struct OverrideArgs {
 /// Plan 02 (Wave 1) owns this skeleton.  Plan 03 (Wave 2) adds the `Request`
 /// variant onto the already-merged skeleton — it must NOT re-introduce `OverrideArgs`
 /// or `OverrideCommands` (file-ownership note in 93-02-PLAN.md).
+///
+/// # Deliberate asymmetry — no `Apply` variant (D-07)
+///
+/// `nono override apply` is **NOT** a nono.exe subcommand.  The full
+/// offline+live verification pipeline lives in nono-py (`nono-override-apply`
+/// console script), which already has access to the PyO3 ECDSA verifier,
+/// the live POST /actions check, and `confined_run`.  There is no
+/// nono.exe→nono-py shell-back (D-07 forbids it).  A plan-checker or
+/// help-coverage tool that flags a missing `Apply` arm should be informed
+/// of this design decision rather than triggering the addition of a stub.
 #[derive(Subcommand, Debug)]
 pub(crate) enum OverrideCommands {
     /// Emit a PolicyOverrideRejected (10008) or PolicyOverrideRevoked (10010) event
@@ -1281,6 +1292,37 @@ pub(crate) enum OverrideCommands {
   nono override audit-emit <base64-meta> --kind revoked
 ")]
     AuditEmit(OverrideAuditEmitArgs),
+
+    /// Surface denial context as a structured JSON override-request bundle (CLI-01).
+    ///
+    /// Gathers scope paths/domains, `repo_context`, and the denial reason from the
+    /// diagnostic context and emits:
+    ///
+    /// 1. A JSON bundle `{ scope, repo_context, reason, nonce }` for submission to
+    ///    the out-of-nono approver/KMS-signing pipeline.
+    /// 2. A human-readable summary to stdout.
+    ///
+    /// Per D-07/D-08 this command performs NO crypto and NO live check.  The
+    /// `apply` step (full offline+live verify) is delivered by the `nono-override-apply`
+    /// console script in nono-py.
+    #[command(name = "request")]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono override request --reason <REASON> [OPTIONS]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mNOTES\x1b[0m
+  This command does NOT grant any capability.  It only packages the denial context
+  into a signed-request bundle for the approver pipeline (D-07 / D-08).
+
+\x1b[1mEXAMPLES\x1b[0m
+  nono override request --reason path_not_granted --scope-path /home/user/.aws
+  nono override request --reason sensitive_path --scope-domain api.internal.example.com --repo-context github.com/org/proj
+")]
+    Request(OverrideRequestArgs),
 }
 
 /// Arguments for `nono override audit-emit`.
@@ -1298,6 +1340,47 @@ pub(crate) struct OverrideAuditEmitArgs {
     /// `decision: deny`.
     #[arg(long, value_name = "KIND")]
     pub kind: crate::override_audit_emit::OverrideKind,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+/// Arguments for `nono override request` (CLI-01, Phase 93 Plan 03).
+///
+/// Gathers denial context and emits a JSON request bundle for the out-of-nono
+/// approver/KMS-signing pipeline.  No crypto, no live check (D-07).
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub(crate) struct OverrideRequestArgs {
+    /// Denial reason string (e.g. "sensitive_path", "insufficient_access", "path_not_granted").
+    ///
+    /// Describes why the sandbox denied the operation — used as the `reason` field in the
+    /// request bundle so the approver understands the class of exception needed.
+    #[arg(long, value_name = "REASON", help_heading = "OPTIONS")]
+    pub reason: String,
+
+    /// Filesystem path(s) in the scope of the denial (may be repeated).
+    ///
+    /// Each path that was denied or needs to be granted.  Multiple paths may be
+    /// provided by repeating the flag: `--scope-path /tmp/a --scope-path /tmp/b`.
+    /// Uses component-level path comparison internally (not string prefix — CLAUDE.md footgun §4).
+    #[arg(long, value_name = "PATH", help_heading = "OPTIONS")]
+    pub scope_paths: Vec<String>,
+
+    /// Domain(s) in the scope of the denial (may be repeated).
+    ///
+    /// Each domain that was blocked by the network policy.  Repeat the flag for
+    /// multiple domains: `--scope-domain api.example.com --scope-domain cdn.example.com`.
+    #[arg(long, value_name = "DOMAIN", help_heading = "OPTIONS")]
+    pub scope_domains: Vec<String>,
+
+    /// Repository context (e.g. "github.com/org/repo") for the approver's traceability.
+    ///
+    /// Identifies the repository in which the sandboxed operation was attempted.
+    /// Carried as the `repo_context` field in the bundle; optional.
+    #[arg(long, value_name = "REPO", help_heading = "OPTIONS")]
+    pub repo_context: Option<String>,
 
     /// Print help
     #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]

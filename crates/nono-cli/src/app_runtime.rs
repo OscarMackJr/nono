@@ -182,11 +182,16 @@ fn dispatch_command(
         Commands::ClaudeCodeHook => claude_code_hook::run(),
         Commands::Completions(args) => run_completions(args),
         // Phase 93 Plan 02: `nono override audit-emit` — live-reject HMAC chain emission (OQ-1).
-        // Plan 03 (Wave 2) will add `nono override request` dispatch here.
+        // Phase 93 Plan 03: `nono override request` — denial context bundle for approver pipeline (CLI-01).
         Commands::Override(args) => match args.command {
             OverrideCommands::AuditEmit(emit_args) => {
                 run_command_with_update(update_handle, silent, || {
                     crate::app_runtime::run_override_audit_emit(emit_args)
+                })
+            }
+            OverrideCommands::Request(req_args) => {
+                run_command_with_update(update_handle, silent, || {
+                    crate::override_request::run_override_request(req_args)
                 })
             }
         },
