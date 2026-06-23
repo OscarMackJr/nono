@@ -2,7 +2,7 @@ use crate::agent_cli;
 use crate::audit_commands;
 use crate::classify_runtime;
 use crate::claude_code_hook;
-use crate::cli::{Cli, Commands, RunArgs, SessionCommands, SetupArgs};
+use crate::cli::{Cli, Commands, OverrideCommands, RunArgs, SessionCommands, SetupArgs};
 use crate::command_runtime::{run_sandbox, run_shell, run_wrap};
 use crate::completions::run_completions;
 use crate::deprecated_policy;
@@ -181,7 +181,42 @@ fn dispatch_command(
         Commands::PackUpdateHintHelper(args) => crate::pack_update_hint::run_refresh_helper(args),
         Commands::ClaudeCodeHook => claude_code_hook::run(),
         Commands::Completions(args) => run_completions(args),
+        // Phase 93 Plan 02: `nono override audit-emit` — live-reject HMAC chain emission (OQ-1).
+        // Plan 03 (Wave 2) will add `nono override request` dispatch here.
+        Commands::Override(args) => match args.command {
+            OverrideCommands::AuditEmit(emit_args) => {
+                run_command_with_update(update_handle, silent, || {
+                    crate::app_runtime::run_override_audit_emit(emit_args)
+                })
+            }
+        },
     }
+}
+
+/// Decode base64url meta and emit the rejection event into the HMAC chain.
+///
+/// Decodes `OverrideAuditEmitArgs.meta` (base64url-no-pad JSON → `OverrideAuditMeta`)
+/// then calls `override_audit_emit::emit_override_audit_event`.  Any decode or emit
+/// failure returns `Err` → process exits non-zero (AUD-04 fail-closed).
+fn run_override_audit_emit(args: crate::cli::OverrideAuditEmitArgs) -> Result<()> {
+    use base64::Engine as _;
+    use nono::NonoError;
+
+    let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(args.meta.as_bytes())
+        .map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "override audit-emit: base64 decode failed: {e}"
+            ))
+        })?;
+    let meta =
+        serde_json::from_slice::<crate::cli::OverrideAuditMeta>(&json).map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "override audit-emit: JSON parse failed: {e}"
+            ))
+        })?;
+
+    crate::override_audit_emit::emit_override_audit_event(&meta, args.kind)
 }
 
 fn run_command_with_update<T>(

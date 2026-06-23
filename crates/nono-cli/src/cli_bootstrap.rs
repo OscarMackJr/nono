@@ -292,7 +292,9 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Daemon(_)
         | Commands::Agent(_)
         // Phase 82 DEPLOY-06: health has no verbose flag.
-        | Commands::Health(_) => 0,
+        | Commands::Health(_)
+        // Phase 93 Plan 02: override audit-emit has no verbose flag.
+        | Commands::Override(_) => 0,
     }
 }
 

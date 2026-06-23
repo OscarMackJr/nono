@@ -60,6 +60,10 @@ mod open_url_runtime;
 #[path = "open_url_runtime_windows.rs"]
 mod open_url_runtime;
 mod output;
+// Phase 93 Plan 02: live-reject HMAC chain emission for `nono override audit-emit` (OQ-1 option a).
+// Provides the reject-branch EventID 10008/10010 path that runs BEFORE nono.exe spawns
+// the sandboxed child (nono-py fails closed and calls this subcommand to land the denial event).
+mod override_audit_emit;
 mod pack_update_hint;
 mod package;
 mod package_cmd;

@@ -1206,6 +1206,102 @@ pub enum Commands {
     /// Internal: handle Claude Code hook JSON on stdin
     #[command(name = "claude-code-hook", hide = true)]
     ClaudeCodeHook,
+
+    // ── Policy override lifecycle (Phase 93) ────────────────────────────
+    // NOTE: `nono override apply` is NOT a nono.exe verb — it lives in nono-py
+    // (D-07) where the full offline+live verify orchestration already runs.
+    // Only `nono override audit-emit` (OQ-1) and `nono override request`
+    // (Plan 03) live here.  The asymmetry is intentional and must not be
+    // "fixed" by adding an apply verb to this enum.
+    /// Manage policy override tokens (lifecycle, audit, and request operations)
+    #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono override <command>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mCOMMANDS\x1b[0m
+  audit-emit   Emit a rejection/revocation event into the HMAC audit chain
+  request      [Phase 93 Plan 03] Surface denial context as a JSON override-request bundle
+
+\x1b[1mNOTES\x1b[0m
+  `nono override apply` is delivered by the nono-py package (D-07) — it runs the
+  full offline+live verification before executing a confined command.
+  Do not add an `apply` subcommand here.
+
+\x1b[1mEXAMPLES\x1b[0m
+  nono override audit-emit <base64-meta> --kind rejected
+  nono override audit-emit <base64-meta> --kind revoked
+")]
+    Override(OverrideArgs),
+}
+
+/// Arguments for the `nono override` subcommand group.
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub(crate) struct OverrideArgs {
+    #[command(subcommand)]
+    pub command: OverrideCommands,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+/// Subcommands for `nono override`.
+///
+/// Plan 02 (Wave 1) owns this skeleton.  Plan 03 (Wave 2) adds the `Request`
+/// variant onto the already-merged skeleton — it must NOT re-introduce `OverrideArgs`
+/// or `OverrideCommands` (file-ownership note in 93-02-PLAN.md).
+#[derive(Subcommand, Debug)]
+pub(crate) enum OverrideCommands {
+    /// Emit a PolicyOverrideRejected (10008) or PolicyOverrideRevoked (10010) event
+    /// into the nono-cli HMAC audit chain.
+    ///
+    /// Called by nono-py on the live-reject branch (fail-closed before spawn).
+    /// Carries only jti/kms_key_id/zt_audit_hash from the already-verified
+    /// OverrideAuditMeta — no raw key material.  Exits non-zero on emit failure
+    /// (AUD-04 fail-closed parity).
+    ///
+    /// INTERNAL — not intended for direct user invocation.
+    #[command(name = "audit-emit")]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono override audit-emit <META> --kind <rejected|revoked>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono override audit-emit <base64-meta> --kind rejected
+  nono override audit-emit <base64-meta> --kind revoked
+")]
+    AuditEmit(OverrideAuditEmitArgs),
+}
+
+/// Arguments for `nono override audit-emit`.
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub(crate) struct OverrideAuditEmitArgs {
+    /// Base64url-no-pad-encoded JSON `OverrideAuditMeta` (same encoding as `--override-audit`).
+    pub meta: String,
+
+    /// Kind of denial event to emit.
+    ///
+    /// `rejected` → PolicyOverrideRejected (EventID 10008): timeout / unreachable /
+    /// non-200 / malformed response from the live ZT-Infra endpoint.
+    /// `revoked`  → PolicyOverrideRevoked  (EventID 10010): live endpoint returned
+    /// `decision: deny`.
+    #[arg(long, value_name = "KIND")]
+    pub kind: crate::override_audit_emit::OverrideKind,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
 }
 
 #[derive(Parser, Debug)]
