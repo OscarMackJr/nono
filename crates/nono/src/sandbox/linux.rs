@@ -4,8 +4,8 @@ use crate::capability::{AccessMode, CapabilitySet, IpcMode, NetworkMode, SignalM
 use crate::error::{NonoError, Result};
 use crate::sandbox::SupportInfo;
 use landlock::{
-    Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, NetPort, PathBeneath, PathFd,
-    Ruleset, RulesetAttr, RulesetCreatedAttr, Scope, ABI,
+    ABI, Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, NetPort, PathBeneath,
+    PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, Scope,
 };
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -55,6 +55,12 @@ impl DetectedAbi {
     #[must_use]
     pub fn has_truncate(&self) -> bool {
         AccessFs::from_all(self.abi).contains(AccessFs::Truncate)
+    }
+
+    /// Whether execute access control is supported strongly enough for Tool Sandbox Execution.
+    #[must_use]
+    pub fn has_execute(&self) -> bool {
+        matches!(self.abi, ABI::V3 | ABI::V4 | ABI::V5 | ABI::V6)
     }
 
     /// Whether TCP network filtering is supported (V4+).
@@ -265,11 +271,11 @@ fn detect_wsl2() -> bool {
 
     // Secondary: kernel version string contains "microsoft" or "WSL2"
     // This is written by the kernel build and cannot be spoofed from userspace.
-    if let Ok(version) = std::fs::read_to_string("/proc/version") {
-        if version.contains("microsoft") || version.contains("WSL") {
-            info!("WSL2 detected via /proc/version kernel string");
-            return true;
-        }
+    if let Ok(version) = std::fs::read_to_string("/proc/version")
+        && (version.contains("microsoft") || version.contains("WSL"))
+    {
+        info!("WSL2 detected via /proc/version kernel string");
+        return true;
     }
 
     // WSL_DISTRO_NAME env var is NOT trusted on its own — it is caller-controlled
@@ -297,7 +303,6 @@ pub fn support_info() -> SupportInfo {
             let features = detected.feature_names();
             SupportInfo {
                 is_supported: true,
-                status: crate::sandbox::SupportStatus::Supported,
                 platform: "linux",
                 details: format!(
                     "Landlock available ({}, features: {})",
@@ -308,7 +313,6 @@ pub fn support_info() -> SupportInfo {
         }
         Err(_) => SupportInfo {
             is_supported: false,
-            status: crate::sandbox::SupportStatus::NotImplemented,
             platform: "linux",
             details: "Landlock not available. Requires Linux kernel 5.13+ with Landlock enabled."
                 .to_string(),
@@ -410,159 +414,6 @@ fn is_device_directory(path: &Path) -> bool {
     // Only consider directories directly under /dev as device directories.
     // This avoids granting IoctlDev to arbitrary directories.
     path.starts_with("/dev") && path.is_dir()
-}
-
-/// Predicate matching NVIDIA compute device filenames under `/dev/`.
-///
-/// Upstream parity port of `is_nvidia_compute_device` (upstream d6be972).
-/// Matches:
-/// - `nvidiactl` — control device (required for all CUDA operations)
-/// - `nvidia-uvm` — Unified Virtual Memory (CUDA managed memory)
-/// - `nvidia-uvm-tools` — UVM tool device (CUDA 12.8 / driver 570+, b162b5c)
-/// - `nvidia0`, `nvidia1`, ..., `nvidiaN` — per-GPU device nodes
-///
-/// Deliberately excludes `nvidia-modeset` (display control, not compute,
-/// same rationale as `/dev/dri/card*`).
-#[cfg(target_os = "linux")]
-#[must_use]
-fn is_nvidia_compute_device(name: &str) -> bool {
-    if name == "nvidiactl" || name == "nvidia-uvm" || name == "nvidia-uvm-tools" {
-        return true;
-    }
-    // nvidia[0-9]+ — ASCII-only suffix check avoids allocating
-    if let Some(suffix) = name.strip_prefix("nvidia") {
-        return !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit());
-    }
-    false
-}
-
-/// Enumerate GPU-related filesystem paths to allowlist when
-/// `CapabilitySet::gpu()` is true.
-///
-/// Returns `(paths, nvidia_present)` where `paths` is the list of
-/// `(path, access_mode, is_file)` tuples and `nvidia_present` is true when
-/// any NVIDIA device or MIG cap was discovered. NVIDIA presence triggers
-/// procfs grants (upstream 4df0a8e — required for CUDA init under driver
-/// 570+).
-///
-/// Path list mirrors upstream `maybe_enable_gpu`:
-/// - `/dev/dri/renderD*` (rw, file) — DRM render nodes (compute-only)
-/// - `/dev/nvidia*` (rw, file) — NVIDIA compute devices (see
-///   `is_nvidia_compute_device`)
-/// - `/dev/nvidia-caps/*` (rw, file) — MIG capability devices (A100/H100)
-/// - `/dev/kfd` (rw, file) — AMD KFD (ROCm/HIP)
-/// - `/dev/dxg` (rw, file) — WSL2 GPU passthrough (DirectX paravirt)
-/// - `/usr/lib/wsl/lib` (r, dir) — WSL2 CUDA/D3D12 libraries
-/// - `/proc/driver/nvidia` (r, dir) — NVIDIA procfs (when NVIDIA present)
-/// - `/proc/driver/nvidia-uvm` (r, dir) — UVM procfs (when NVIDIA present)
-/// - `/proc/self` (r, dir) — /proc/self/maps, /proc/self/status, etc.
-/// - `/proc/self/task` (rw, dir) — driver writes /proc/self/task/<tid>/comm
-///   for thread names; EACCES here manifests as CUDA Error 304
-/// - `/usr/share/vulkan` (r, dir) — Vulkan ICD manifests
-/// - `/etc/vulkan` (r, dir) — Vulkan ICD manifests (alt location)
-/// - `/sys/class/drm` (r, dir) — GPU-specific sysfs (scoped to drm subtree
-///   rather than full /sys/devices)
-///
-/// Absent paths are silently skipped — the same CapabilitySet runs under
-/// WSL2 (dxg but no NVIDIA devfs), a pure DRM render-node headless box
-/// (dri but no nvidia), an MIG-only A100 host (caps but no plain nvidia0),
-/// etc.
-///
-/// `CVE-2024-0090` note: `nvidia-uvm` has a privilege-escalation CVE
-/// history. Per upstream, access is accepted risk under explicit
-/// `--allow-gpu` opt-in; it is NOT granted absent the flag (T-20-04-02
-/// mitigation — gated by `caps.gpu()` at the caller).
-#[cfg(target_os = "linux")]
-fn collect_linux_gpu_paths() -> (Vec<(std::path::PathBuf, AccessMode, bool)>, bool) {
-    use std::path::PathBuf;
-
-    let mut out: Vec<(PathBuf, AccessMode, bool)> = Vec::new();
-    let mut nvidia_present = false;
-
-    // DRM render nodes (/dev/dri/renderD*).
-    if let Ok(entries) = std::fs::read_dir("/dev/dri") {
-        for entry in entries.filter_map(|e| e.ok()) {
-            if entry
-                .file_name()
-                .to_str()
-                .is_some_and(|n| n.starts_with("renderD"))
-            {
-                out.push((entry.path(), AccessMode::ReadWrite, true));
-            }
-        }
-    }
-
-    // NVIDIA compute devices (/dev/nvidia*, nvidiactl, nvidia-uvm,
-    // nvidia-uvm-tools, nvidia0..N). MIG caps are enumerated separately.
-    if let Ok(entries) = std::fs::read_dir("/dev") {
-        for entry in entries.filter_map(|e| e.ok()) {
-            if let Some(name) = entry.file_name().to_str() {
-                if is_nvidia_compute_device(name) {
-                    out.push((entry.path(), AccessMode::ReadWrite, true));
-                    nvidia_present = true;
-                }
-            }
-        }
-    }
-
-    // NVIDIA MIG caps (/dev/nvidia-caps/*) — individually enumerated
-    // rather than granting the full directory.
-    if let Ok(entries) = std::fs::read_dir("/dev/nvidia-caps") {
-        for entry in entries.filter_map(|e| e.ok()) {
-            out.push((entry.path(), AccessMode::ReadWrite, true));
-            nvidia_present = true;
-        }
-    }
-
-    // AMD KFD (/dev/kfd).
-    let kfd = Path::new("/dev/kfd");
-    if kfd.exists() {
-        out.push((kfd.to_path_buf(), AccessMode::ReadWrite, true));
-    }
-
-    // WSL2 DirectX GPU passthrough (/dev/dxg).
-    let dxg = Path::new("/dev/dxg");
-    if dxg.exists() {
-        out.push((dxg.to_path_buf(), AccessMode::ReadWrite, true));
-    }
-
-    // WSL2 CUDA/D3D12 libraries (/usr/lib/wsl/lib).
-    let wsl_lib = Path::new("/usr/lib/wsl/lib");
-    if wsl_lib.is_dir() {
-        out.push((wsl_lib.to_path_buf(), AccessMode::Read, false));
-    }
-
-    // NVIDIA procfs paths — only granted when NVIDIA devices are present
-    // (pure DRM/AMD/WSL setups don't need them). Upstream 4df0a8e: CUDA
-    // init reads /proc/driver/nvidia and /proc/driver/nvidia-uvm, and
-    // the driver writes /proc/self/task/<tid>/comm for thread names.
-    // EACCES on that write surfaces as CUDA Error 304.
-    if nvidia_present {
-        for name in ["nvidia", "nvidia-uvm"] {
-            let path = PathBuf::from("/proc/driver").join(name);
-            if path.is_dir() {
-                out.push((path, AccessMode::Read, false));
-            }
-        }
-        // /proc/self read; /proc/self/task rw. These are guaranteed on
-        // Linux so we include them unconditionally when NVIDIA is present.
-        out.push((PathBuf::from("/proc/self"), AccessMode::Read, false));
-        out.push((
-            PathBuf::from("/proc/self/task"),
-            AccessMode::ReadWrite,
-            false,
-        ));
-    }
-
-    // Vulkan ICD manifests + GPU sysfs — read-only, scoped narrowly.
-    for dir in ["/usr/share/vulkan", "/etc/vulkan", "/sys/class/drm"] {
-        let p = Path::new(dir);
-        if p.is_dir() {
-            out.push((p.to_path_buf(), AccessMode::Read, false));
-        }
-    }
-
-    (out, nvidia_present)
 }
 
 /// Determine which Landlock scopes must be enabled for these capabilities.
@@ -753,14 +604,6 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
     // When a seccomp fallback is active (BlockAll or ProxyOnly), the ruleset was
     // created without handle_access(AccessNet), so adding NetPort rules would fail.
     if matches!(seccomp_net_fallback, SeccompNetFallback::None) {
-        if !matches!(caps.network_mode(), NetworkMode::AllowAll)
-            && caps.localhost_ports().contains(&0)
-        {
-            return Err(NonoError::SandboxInit(
-                "open_port 0 (localhost TCP wildcard) is macOS-only; on Linux use explicit ports or a network profile."
-                    .to_string(),
-            ));
-        }
         // Add per-port TCP connect rules (ProxyOnly port + explicit tcp_connect_ports)
         if let NetworkMode::ProxyOnly { port, bind_ports } = caps.network_mode() {
             debug!("Adding ProxyOnly TCP connect rule for port {}", port);
@@ -841,14 +684,11 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
     // Failing silently would violate the principle of least surprise and
     // fail-secure design.
     //
-    // Pathname AF_UNIX socket grants enter Linux enforcement through two
-    // complementary seccomp filters: build_seccomp_af_unix_filter (grant-present
-    // path, routes connect/bind/sendto/sendmsg/sendmmsg to USER_NOTIF for per-call
-    // sockaddr_un validation via UnixSocketCapability::covers()) and
-    // build_seccomp_af_unix_nogrant_filter (no-grant path, bakes static
-    // SECCOMP_RET_ERRNO(EPERM) for send-family syscalls per D-01). Landlock
-    // PathBeneath is still used for filesystem access; seccomp mediates the
-    // socket-level granularity that Landlock cannot express.
+    // Pathname AF_UNIX socket grants currently enter Linux enforcement only
+    // through their implied FsCapability. Landlock PathBeneath is recursive for
+    // directory grants, so SocketScope::DirChildren and SocketScope::DirSubtree
+    // are not distinguishable on this Linux path until the seccomp AF_UNIX
+    // allowlist work enforces UnixSocketCapability::covers().
     let ioctl_dev_available = AccessFs::from_all(target_abi).contains(AccessFs::IoctlDev);
 
     for cap in caps.fs_capabilities() {
@@ -899,64 +739,6 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
             })?;
     }
 
-    // GPU capability dispatch (D-12 upstream parity port, Linux Landlock).
-    //
-    // When `--allow-gpu` is set the Landlock allowlist includes NVIDIA
-    // compute devices, NVIDIA procfs entries (D-13), DRM render nodes,
-    // AMD KFD, and WSL2 /dev/dxg where present. The exact path list
-    // mirrors upstream `maybe_enable_gpu` in `sandbox_prepare.rs`
-    // (scparkinson 4535473 + 4df0a8e, Kexin-xu-01 b162b5c).
-    //
-    // Per-platform discovery: we probe the filesystem at apply-time so
-    // headless setups (no `/dev/dri`), NVIDIA-only systems, AMD-only
-    // systems, and WSL2 hosts each get exactly the devices they have.
-    // Absent devices are skipped rather than erroring so the same
-    // `--allow-gpu` invocation works across diverse hosts.
-    if caps.gpu() {
-        let (gpu_paths, nvidia_present) = collect_linux_gpu_paths();
-        let mut nvidia_device_count = 0usize;
-        for (gpu_path, gpu_access, is_file) in &gpu_paths {
-            let result = access_to_landlock(*gpu_access, target_abi);
-            let mut access = result.effective;
-
-            // Device nodes under /dev on ABI v5+ need IoctlDev for ioctls
-            // like DRM_IOCTL_GEM_*, NVIDIA UVM ioctls, AMD KFD ioctls.
-            if ioctl_dev_available
-                && matches!(gpu_access, AccessMode::Write | AccessMode::ReadWrite)
-                && (is_device_path(gpu_path) || is_device_directory(gpu_path))
-            {
-                access |= AccessFs::IoctlDev;
-            }
-
-            debug!(
-                "Adding GPU Landlock rule: {} (access {:?}, file={})",
-                gpu_path.display(),
-                access,
-                is_file
-            );
-            let path_fd = PathFd::new(gpu_path)?;
-            ruleset = ruleset
-                .add_rule(PathBeneath::new(path_fd, access))
-                .map_err(|e| {
-                    NonoError::SandboxInit(format!(
-                        "Cannot add Landlock GPU rule for {}: {}",
-                        gpu_path.display(),
-                        e
-                    ))
-                })?;
-            if gpu_path.starts_with("/dev/nvidia") || gpu_path.starts_with("/proc/driver/nvidia") {
-                nvidia_device_count = nvidia_device_count.saturating_add(1);
-            }
-        }
-        info!(
-            "--allow-gpu Landlock allowlist: {} path(s) granted ({} NVIDIA-related, \
-             nvidia_present={})",
-            gpu_paths.len(),
-            nvidia_device_count,
-            nvidia_present
-        );
-    }
-
     // Apply the ruleset - THIS IS IRREVERSIBLE
     let status = ruleset
         .restrict_self()
@@ -993,6 +775,82 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
     // installs it post-fork via install_seccomp_proxy_filter().
 
     Ok(seccomp_net_fallback)
+}
+
+/// Apply a second Landlock layer that restricts execute access to the given paths.
+///
+/// Landlock rulesets stack: each `restrict_self()` call adds an immutable layer.
+/// The effective permission for any access right is the intersection of what
+/// every layer grants. This function handles ONLY `AccessFs::Execute`, so paths
+/// not listed here lose execute permission even if the main sandbox granted it
+/// via `AccessMode::Read`. Read/write grants from the main ruleset are unaffected.
+///
+/// Call this after `apply()` / `apply_with_abi()` to lock down which binaries
+/// an already-sandboxed process can exec.
+pub fn restrict_execute(paths: &[impl AsRef<Path>]) -> Result<()> {
+    let abi = detect_abi()?;
+    if !abi.has_execute() {
+        return Err(NonoError::SandboxInit(format!(
+            "Tool Sandbox  execute restriction requires Landlock ABI V3+; detected {}",
+            abi.version_string()
+        )));
+    }
+
+    let mut ruleset = Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
+        .handle_access(AccessFs::Execute)
+        .map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "Tool Sandbox  execute restriction: kernel does not support Landlock Execute: {e}"
+            ))
+        })?
+        .set_compatibility(CompatLevel::BestEffort)
+        .create()
+        .map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "Tool Sandbox  execute restriction: ruleset create failed: {e}"
+            ))
+        })?;
+
+    for path in paths {
+        let p = path.as_ref();
+        let fd = PathFd::new(p).map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "Tool Sandbox  execute restriction: cannot open {}: {e}",
+                p.display()
+            ))
+        })?;
+        ruleset = ruleset
+            .add_rule(PathBeneath::new(fd, AccessFs::Execute))
+            .map_err(|e| {
+                NonoError::SandboxInit(format!(
+                    "Tool Sandbox  execute restriction: add_rule for {}: {e}",
+                    p.display()
+                ))
+            })?;
+    }
+
+    let status = ruleset.restrict_self().map_err(|e| {
+        NonoError::SandboxInit(format!(
+            "Tool Sandbox  execute restriction: restrict_self failed: {e}"
+        ))
+    })?;
+
+    ensure_execute_restriction_fully_enforced(status.ruleset)?;
+
+    Ok(())
+}
+
+fn ensure_execute_restriction_fully_enforced(status: landlock::RulesetStatus) -> Result<()> {
+    match status {
+        landlock::RulesetStatus::FullyEnforced => Ok(()),
+        landlock::RulesetStatus::PartiallyEnforced => Err(NonoError::SandboxInit(
+            "Tool Sandbox  execute restriction: Landlock was only partially enforced".to_string(),
+        )),
+        landlock::RulesetStatus::NotEnforced => Err(NonoError::SandboxInit(
+            "Tool Sandbox  execute restriction: Landlock was not enforced".to_string(),
+        )),
+    }
 }
 
 // ==========================================================================
@@ -1125,7 +983,7 @@ pub const SYS_CONNECT: i32 = libc::SYS_connect as i32;
 #[cfg(target_os = "linux")]
 pub const SYS_BIND: i32 = libc::SYS_bind as i32;
 
-// Syscall numbers for send-family (public for CLI supervisor handler)
+// Syscall numbers for sendto/sendmsg/sendmmsg (public for CLI supervisor handler)
 // Needed to mediate AF_UNIX datagram sends (issue #1089).
 #[cfg(target_os = "linux")]
 pub const SYS_SENDTO: i32 = libc::SYS_sendto as i32;
@@ -1960,50 +1818,26 @@ pub fn seccomp_network_fallback_mode(caps: &CapabilitySet) -> SeccompNetFallback
 
 /// Build a BPF filter for proxy-only network mode.
 ///
-/// Routes connect() to `SECCOMP_RET_USER_NOTIF` so the supervisor can
-/// inspect the sockaddr and allow only localhost:proxy_port.
+/// Routes `connect()`, `bind()`, `sendto()`, `sendmsg()`, and `sendmmsg()` to
+/// `SECCOMP_RET_USER_NOTIF` so the
+/// supervisor can inspect the sockaddr and make a per-family decision:
 ///
-/// - `AF_INET`/`AF_INET6`: allow connect to `localhost:proxy_port`;
-///   allow connect/send destinations to `localhost:proxy_port`;
-///   allow bind on ports in the configured bind-ports list; deny others.
+/// - `AF_INET`/`AF_INET6`: allow connect/send destinations to
+///   `localhost:proxy_port`; allow bind on ports in the configured bind-ports
+///   list; deny others.
 /// - pathname `AF_UNIX`: route to the supervisor, which checks the explicit
 ///   Unix socket capability allowlist against the requested path.
 /// - abstract/unnamed `AF_UNIX`: deny (see `decide_network_notification`).
 ///
-/// socket() is allowed only for AF_UNIX, AF_INET, AF_INET6.
-/// socketpair() is allowed only for AF_UNIX.
-/// io_uring_setup() is denied.
+/// `has_bind_ports` is retained for API compatibility but no longer
+/// influences filter routing — a previous version routed bind directly to
+/// ERRNO when no TCP bind ports were configured, which unconditionally
+/// failed AF_UNIX bind (regression on Landlock V2 kernels where this
+/// fallback fires). The supervisor is the sole arbiter now.
 ///
-/// sendto(), sendmsg(), and sendmmsg() route unconditionally to USER_NOTIF.
-/// The supervisor does the full-width NULL destination checks and inspects
-/// each sendmmsg vector entry.
-///
-/// Instruction layout (23 instructions, jt = jump offset from next insn):
-/// ```text
-///  0: ld  [nr]
-///  1: jeq SYS_SOCKET     jt=+9  (-> 11: load socket family)
-///  2: jeq SYS_CONNECT    jt=+16 (-> 19: notify)
-///  3: jeq SYS_BIND       jt=+16 (-> 20: bind_action)
-///  4: jeq SYS_SOCKETPAIR jt=+11 (-> 16: load socketpair family)
-///  5: jeq SYS_SENDTO     jt=+15 (-> 21: notify)
-///  6: jeq SYS_SENDMSG    jt=+14 (-> 21: notify)
-///  7: jeq SYS_SENDMMSG   jt=+13 (-> 21: notify)
-///  8: jeq SYS_IO_URING   jt=+1  (-> 10: errno)
-///  9: ret ALLOW
-/// 10: ret ERRNO(EACCES)
-/// 11: ld  [args[0]]             ; socket() family
-/// 12: jeq AF_UNIX  jt=+9 (-> 22: allow)
-/// 13: jeq AF_INET  jt=+8 (-> 22: allow)
-/// 14: jeq AF_INET6 jt=+7 (-> 22: allow)
-/// 15: ret ERRNO(EACCES)         ; bad socket family
-/// 16: ld  [args[0]]             ; socketpair() family
-/// 17: jeq AF_UNIX  jt=+4 (-> 22: allow)
-/// 18: ret ERRNO(EACCES)         ; bad socketpair family
-/// 19: ret USER_NOTIF            ; connect
-/// 20: ret bind_action           ; bind (USER_NOTIF)
-/// 21: ret USER_NOTIF            ; sendto/sendmsg/sendmmsg
-/// 22: ret ALLOW                 ; allowed socket/socketpair
-/// ```
+/// `socket()` is allowed only for `AF_UNIX`, `AF_INET`, `AF_INET6`.
+/// `socketpair()` is allowed only for `AF_UNIX`.
+/// `io_uring_setup()` is denied.
 fn build_seccomp_proxy_filter(_has_bind_ports: bool) -> Vec<SockFilterInsn> {
     let errno_ret = SECCOMP_RET_ERRNO | (libc::EACCES as u32);
 
@@ -2019,6 +1853,8 @@ fn build_seccomp_proxy_filter(_has_bind_ports: bool) -> Vec<SockFilterInsn> {
     let bind_action = SECCOMP_RET_USER_NOTIF;
 
     // sendto(), sendmsg(), and sendmmsg() route unconditionally to USER_NOTIF.
+    // The IPC handshake completes before this filter is installed, so no
+    // fd-based exemption is needed.
     // The supervisor does the full-width NULL destination checks and inspects
     // each sendmmsg vector entry.
     //
@@ -2212,25 +2048,29 @@ fn build_seccomp_proxy_filter(_has_bind_ports: bool) -> Vec<SockFilterInsn> {
     ]
 }
 
-/// Build a BPF filter for opt-in pathname AF_UNIX mediation.
+/// Build a BPF filter for opt-in pathname AF_UNIX mediation (Linux-only).
 ///
-/// The filter routes `connect()`, `bind()`, `sendto()`, `sendmsg()`, and
-/// `sendmmsg()` to the supervisor so it can inspect `sockaddr_un` paths.
-/// Everything else is allowed by this filter: TCP policy remains Landlock's
-/// job on V4+ kernels.
+/// Routes `connect()`, `bind()`, `sendto()`, `sendmsg()`, and `sendmmsg()`
+/// to `USER_NOTIF` so the supervisor can inspect `sockaddr_un` paths.
+/// Everything else is allowed: TCP policy is Landlock's responsibility on
+/// V4+ kernels; this filter only handles AF_UNIX.
 ///
-/// The send syscalls route unconditionally. BPF cannot dereference
-/// `msghdr`/`mmsghdr`, and checking only half of a 64-bit `sendto` pointer
-/// is not a reliable NULL test.
+/// The IPC handshake (child→parent SCM_RIGHTS transfer of the notify fd)
+/// must complete *before* this filter is installed. That ordering removes
+/// the need for any fd-based exemption, so the filter is a pure allowlist
+/// with no internal plumbing holes.
 ///
-/// Instruction layout (8 instructions, jt = jump offset from next insn):
+/// BPF cannot dereference `msghdr`/`mmsghdr`; the supervisor performs those
+/// checks instead.
+///
+/// Instruction layout:
 /// ```text
 ///  0: ld  [nr]
-///  1: jeq SYS_CONNECT  jt=+5 (-> 7: notify)
-///  2: jeq SYS_BIND     jt=+4 (-> 7: notify)
-///  3: jeq SYS_SENDTO   jt=+3 (-> 7: notify)
-///  4: jeq SYS_SENDMSG  jt=+2 (-> 7: notify)
-///  5: jeq SYS_SENDMMSG jt=+1 (-> 7: notify)
+///  1: jeq SYS_CONNECT  jt=+5 (->  7: notify)
+///  2: jeq SYS_BIND     jt=+4 (->  7: notify)
+///  3: jeq SYS_SENDTO   jt=+3 (->  7: notify)
+///  4: jeq SYS_SENDMSG  jt=+2 (->  7: notify)
+///  5: jeq SYS_SENDMMSG jt=+1 (->  7: notify)
 ///  6: ret ALLOW
 ///  7: ret USER_NOTIF
 /// ```
@@ -2295,13 +2135,19 @@ fn build_seccomp_af_unix_filter() -> Vec<SockFilterInsn> {
     ]
 }
 
-/// Install a seccomp-notify BPF filter for proxy-only network mode.
+/// Install a seccomp-notify BPF filter for proxy-only network mode (Linux-only).
 ///
-/// Returns the notify fd that the supervisor must poll for connect/bind
-/// notifications. Uses `SECCOMP_FILTER_FLAG_NEW_LISTENER`.
+/// Used on kernels without Landlock V4 TCP support as a fallback: traps
+/// `connect()`, `bind()`, `sendto()`, `sendmmsg()`, and `sendmsg()` for
+/// supervisor mediation. Returns the notify fd the supervisor must poll.
+/// Uses `SECCOMP_FILTER_FLAG_NEW_LISTENER`.
 ///
-/// Must be called AFTER `PR_SET_NO_NEW_PRIVS` is already set (either by
-/// a prior seccomp install or by Landlock's `restrict_self()`).
+/// The IPC handshake (SCM_RIGHTS transfer of the notify fd to the parent)
+/// must complete before this filter is installed so no fd-based exemption
+/// is needed.
+///
+/// Must be called after `PR_SET_NO_NEW_PRIVS` is set (either by a prior
+/// seccomp install or by Landlock's `restrict_self()`).
 ///
 /// # Errors
 ///
@@ -2310,129 +2156,25 @@ pub fn install_seccomp_proxy_filter(has_bind_ports: bool) -> Result<std::os::fd:
     install_seccomp_notify_filter(&build_seccomp_proxy_filter(has_bind_ports), "proxy filter")
 }
 
-/// Install a seccomp-notify BPF filter for pathname AF_UNIX mediation.
+/// Install a seccomp-notify BPF filter for pathname AF_UNIX mediation (Linux-only).
+///
+/// Enables `linux.af_unix_mediation: pathname` enforcement: traps AF_UNIX
+/// `connect()`, `bind()`, `sendto()`, `sendmmsg()`, and `sendmsg()` and
+/// routes them to the supervisor, which checks `sockaddr_un.sun_path`
+/// against the `unix_sockets` allowlist. Connections to unlisted paths
+/// are denied with `EACCES`. Returns the notify fd the supervisor must poll.
+///
+/// The IPC handshake (SCM_RIGHTS transfer of the notify fd to the parent)
+/// must complete before this filter is installed so no fd-based exemption
+/// is needed.
+///
+/// Must be called after `PR_SET_NO_NEW_PRIVS` is set.
 ///
 /// # Errors
 ///
 /// Returns an error if the seccomp syscall fails.
 pub fn install_seccomp_af_unix_filter() -> Result<std::os::fd::OwnedFd> {
     install_seccomp_notify_filter(&build_seccomp_af_unix_filter(), "AF_UNIX mediation filter")
-}
-
-/// Build a static seccomp filter that denies sendto/sendmsg/sendmmsg with EPERM
-/// when no AF_UNIX unix-socket grant exists.
-///
-/// This is the D-01 no-grant path: fail-secure silent EPERM without involving
-/// the USER_NOTIF supervisor.
-///
-/// Instruction layout (6 instructions, jt = jump offset from next insn):
-/// ```text
-///  0: ld  [nr]
-///  1: jeq SYS_SENDTO   jt=+3 (-> 5: EPERM)
-///  2: jeq SYS_SENDMSG  jt=+2 (-> 5: EPERM)
-///  3: jeq SYS_SENDMMSG jt=+1 (-> 5: EPERM)
-///  4: ret ALLOW
-///  5: ret SECCOMP_RET_ERRNO(EPERM)
-/// ```
-fn build_seccomp_af_unix_nogrant_filter() -> Vec<SockFilterInsn> {
-    let eperm_ret = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
-
-    vec![
-        // 0: ld [nr]
-        SockFilterInsn {
-            code: BPF_LD | BPF_W | BPF_ABS,
-            jt: 0,
-            jf: 0,
-            k: SECCOMP_DATA_NR_OFFSET,
-        },
-        // 1: jeq SYS_SENDTO -> 5 (jt = 5-1-1 = 3)
-        SockFilterInsn {
-            code: BPF_JMP | BPF_JEQ | BPF_K,
-            jt: 3,
-            jf: 0,
-            k: SYS_SENDTO as u32,
-        },
-        // 2: jeq SYS_SENDMSG -> 5 (jt = 5-2-1 = 2)
-        SockFilterInsn {
-            code: BPF_JMP | BPF_JEQ | BPF_K,
-            jt: 2,
-            jf: 0,
-            k: SYS_SENDMSG as u32,
-        },
-        // 3: jeq SYS_SENDMMSG -> 5 (jt = 5-3-1 = 1)
-        SockFilterInsn {
-            code: BPF_JMP | BPF_JEQ | BPF_K,
-            jt: 1,
-            jf: 0,
-            k: SYS_SENDMMSG as u32,
-        },
-        // 4: ret ALLOW
-        SockFilterInsn {
-            code: BPF_RET | BPF_K,
-            jt: 0,
-            jf: 0,
-            k: SECCOMP_RET_ALLOW,
-        },
-        // 5: ret SECCOMP_RET_ERRNO(EPERM)
-        SockFilterInsn {
-            code: BPF_RET | BPF_K,
-            jt: 0,
-            jf: 0,
-            k: eperm_ret,
-        },
-    ]
-}
-
-/// Installs a static seccomp filter that denies sendto/sendmsg/sendmmsg with EPERM
-/// when no AF_UNIX unix-socket grant exists.
-///
-/// This is the D-01 no-grant path: fail-secure silent EPERM without involving
-/// the USER_NOTIF supervisor. Called by the CLI child process before exec
-/// when unix-socket mediation is active but no grants are present.
-///
-/// Unlike `install_seccomp_af_unix_filter` (which returns a USER_NOTIF fd),
-/// this filter uses `SECCOMP_RET_ERRNO` and does not produce a notify fd.
-///
-/// # Errors
-///
-/// Returns an error if the seccomp syscall fails.
-pub fn install_seccomp_af_unix_nogrant_filter() -> Result<()> {
-    let filter = build_seccomp_af_unix_nogrant_filter();
-
-    let prog = SockFprog {
-        len: filter.len() as u16,
-        filter: filter.as_ptr(),
-    };
-
-    // SAFETY: `prctl(PR_SET_NO_NEW_PRIVS)` is process-local, takes only scalar
-    // arguments here, and does not dereference pointers.
-    let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
-    if ret != 0 {
-        return Err(NonoError::SandboxInit(format!(
-            "prctl(PR_SET_NO_NEW_PRIVS) failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    // SAFETY: seccomp() with SECCOMP_SET_MODE_FILTER installs a BPF filter.
-    // The prog pointer is valid for the duration of the syscall.
-    let ret = unsafe {
-        libc::syscall(
-            libc::SYS_seccomp,
-            SECCOMP_SET_MODE_FILTER,
-            0,
-            &prog as *const SockFprog,
-        )
-    };
-
-    if ret < 0 {
-        return Err(NonoError::SandboxInit(format!(
-            "seccomp(SECCOMP_SET_MODE_FILTER) for AF_UNIX no-grant filter failed: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-
-    Ok(())
 }
 
 fn install_seccomp_notify_filter(
@@ -2670,46 +2412,19 @@ pub fn read_notif_sockaddr(pid: u32, addr_ptr: u64, addrlen: u64) -> Result<Sock
 /// Returns `None` if `msg_name` is NULL (no destination address, meaning
 /// the socket is already connected and the send does not specify a target).
 ///
-/// # Architecture portability
-///
-/// Field offsets and sizes are derived at compile time from the `libc::msghdr`
-/// layout via `core::mem::offset_of!` and `core::mem::size_of`, so the read
-/// is correct on x86_64, aarch64, riscv64, and 32-bit LP32 targets.
-/// This is the WR-04 fix: the original code hard-coded `MSGHDR_MIN_READ = 12`
-/// (valid only on LP64 platforms) rather than deriving from the struct.
-///
 /// # Errors
 ///
 /// Returns an error if reading `/proc/PID/mem` fails, or if the `msghdr`
 /// layout is too short to contain the `msg_name` and `msg_namelen` fields.
-#[must_use = "Result must be checked — None means msg_name was NULL (connected socket)"]
 pub fn read_msghdr_dest(pid: u32, msghdr_ptr: u64) -> Result<Option<(u64, u64)>> {
     use std::io::Read;
 
-    // Derive field layout from libc::msghdr at compile time (WR-04: arch-portable).
-    //   msg_name:    *mut c_void — pointer-sized, at offset_of!(libc::msghdr, msg_name)
-    //   msg_namelen: socklen_t  — u32, at offset_of!(libc::msghdr, msg_namelen)
+    // struct msghdr (x86_64 Linux):
+    //   void         *msg_name;      // offset 0,  8 bytes
+    //   socklen_t     msg_namelen;   // offset 8,  4 bytes
     //
-    // On LP64 (x86_64, aarch64): msg_name @ 0 (8 bytes), msg_namelen @ 8 (4 bytes) → 12.
-    // On ILP32 (32-bit Linux):  msg_name @ 0 (4 bytes), msg_namelen @ 4 (4 bytes) → 8.
-    // Using offset_of! / size_of ensures correctness on both, replacing the
-    // original hard-coded MSGHDR_MIN_READ = 12 that was only valid on LP64.
-    const MSG_NAME_OFFSET: usize = core::mem::offset_of!(libc::msghdr, msg_name);
-    const MSG_NAME_LEN_OFFSET: usize = core::mem::offset_of!(libc::msghdr, msg_namelen);
-    // size_of::<usize>() == pointer size on all Rust targets.
-    const PTR_SIZE: usize = core::mem::size_of::<usize>();
-    // We must read enough bytes to cover msg_namelen (u32 = 4 bytes) after its offset.
-    const MSGHDR_MIN_READ: usize = MSG_NAME_LEN_OFFSET + 4;
-
-    // Compile-time sanity assertions.
-    const _: () = assert!(
-        MSG_NAME_OFFSET < MSG_NAME_LEN_OFFSET,
-        "msg_name must precede msg_namelen"
-    );
-    const _: () = assert!(
-        MSG_NAME_OFFSET + PTR_SIZE <= MSG_NAME_LEN_OFFSET,
-        "msg_name must not overlap msg_namelen"
-    );
+    // We only need the first 12 bytes.
+    const MSGHDR_MIN_READ: usize = 12;
 
     let mem_path = format!("/proc/{}/mem", pid);
     let mut file = std::fs::File::open(&mem_path)
@@ -2723,32 +2438,16 @@ pub fn read_msghdr_dest(pid: u32, msghdr_ptr: u64) -> Result<Option<(u64, u64)>>
         NonoError::SandboxInit(format!("Failed to read msghdr from {}: {}", mem_path, e))
     })?;
 
-    // msg_name: read pointer-sized value at MSG_NAME_OFFSET (native endian).
-    // Copy the pointer bytes into a zero-padded u64 buffer (handles both
-    // LP64/8-byte and ILP32/4-byte pointer sizes correctly).
-    let mut name_buf = [0u8; 8];
-    name_buf[..PTR_SIZE].copy_from_slice(&buf[MSG_NAME_OFFSET..MSG_NAME_OFFSET + PTR_SIZE]);
-    let msg_name = u64::from_ne_bytes(name_buf);
-
-    // msg_namelen: socklen_t is always u32 (4 bytes, native endian).
-    let namelen_bytes: [u8; 4] = buf[MSG_NAME_LEN_OFFSET..MSG_NAME_LEN_OFFSET + 4]
-        .try_into()
-        .map_err(|_| {
-            NonoError::SandboxInit(
-                "failed to extract msg_namelen bytes from msghdr buf".to_string(),
-            )
-        })?;
-    let msg_namelen = u32::from_ne_bytes(namelen_bytes) as u64;
+    // msg_name is a pointer (8 bytes, native endian on Linux)
+    let msg_name = u64::from_ne_bytes([
+        buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+    ]);
+    // msg_namelen is socklen_t (4 bytes, native endian), cast to u64 for read_notif_sockaddr
+    let msg_namelen = u32::from_ne_bytes([buf[8], buf[9], buf[10], buf[11]]) as u64;
 
     if msg_name == 0 {
         // No destination address: the socket is connected, sendmsg just
         // sends data to the already-connected peer. No mediation needed.
-        //
-        // WR-01 accepted limitation: on CONTINUE the kernel re-reads the
-        // destination from child memory; a multi-threaded child could swap
-        // msg_name after we read it (TOCTOU). This window is inherited from
-        // the upstream design and is documented at the call site in
-        // supervisor_linux.rs. See Phase 87 REVIEW WR-01.
         return Ok(None);
     }
 
@@ -2768,7 +2467,6 @@ pub fn read_msghdr_dest(pid: u32, msghdr_ptr: u64) -> Result<Option<(u64, u64)>>
 ///
 /// Returns an error if `vlen` is unreasonably large, if pointer arithmetic
 /// overflows, or if any message header cannot be read.
-#[must_use = "Result must be checked — empty Vec or all-None means all msg_name fields were NULL"]
 pub fn read_mmsghdr_dests(pid: u32, msgvec_ptr: u64, vlen: u64) -> Result<Vec<Option<(u64, u64)>>> {
     const MAX_MMSGHDRS: u64 = 1024;
 
@@ -2786,10 +2484,10 @@ pub fn read_mmsghdr_dests(pid: u32, msgvec_ptr: u64, vlen: u64) -> Result<Vec<Op
     let mut dests = Vec::with_capacity(count);
     for idx in 0..vlen {
         let offset = idx.checked_mul(stride).ok_or_else(|| {
-            NonoError::SandboxInit(format!("mmsghdr offset overflow at index {idx}"))
+            NonoError::SandboxInit(format!("sendmmsg vector offset overflow at index {idx}"))
         })?;
         let msghdr_ptr = msgvec_ptr.checked_add(offset).ok_or_else(|| {
-            NonoError::SandboxInit(format!("mmsghdr pointer overflow at index {idx}"))
+            NonoError::SandboxInit(format!("sendmmsg vector pointer overflow at index {idx}"))
         })?;
         dests.push(read_msghdr_dest(pid, msghdr_ptr)?);
     }
@@ -2928,6 +2626,7 @@ mod tests {
     fn test_detected_abi_feature_methods() {
         let v1 = DetectedAbi::new(ABI::V1);
         assert!(!v1.has_refer());
+        assert!(!v1.has_execute());
         assert!(!v1.has_truncate());
         assert!(!v1.has_network());
         assert!(!v1.has_ioctl_dev());
@@ -2935,9 +2634,11 @@ mod tests {
 
         let v2 = DetectedAbi::new(ABI::V2);
         assert!(v2.has_refer());
+        assert!(!v2.has_execute());
         assert!(!v2.has_truncate());
 
         let v3 = DetectedAbi::new(ABI::V3);
+        assert!(v3.has_execute());
         assert!(v3.has_refer());
         assert!(v3.has_truncate());
         assert!(!v3.has_network());
@@ -3488,16 +3189,39 @@ mod tests {
         let v4 = DetectedAbi::new(ABI::V4);
         let names = v4.feature_names();
         assert!(names.iter().any(|n| n.starts_with("TCP network filtering")));
-        assert!(names
-            .iter()
-            .any(|n| n == "File rename across directories (Refer)"));
+        assert!(
+            names
+                .iter()
+                .any(|n| n == "File rename across directories (Refer)")
+        );
         assert!(names.iter().any(|n| n == "File truncation (Truncate)"));
 
         let v6 = DetectedAbi::new(ABI::V6);
         let names = v6.feature_names();
-        assert!(names
-            .iter()
-            .any(|n| n == "Signal and abstract UNIX socket scoping"));
+        assert!(
+            names
+                .iter()
+                .any(|n| n == "Signal and abstract UNIX socket scoping")
+        );
+    }
+
+    #[test]
+    fn restrict_execute_rejects_partial_enforcement() {
+        let result =
+            ensure_execute_restriction_fully_enforced(landlock::RulesetStatus::PartiallyEnforced);
+        assert!(matches!(result, Err(err) if err.to_string().contains("partially enforced")));
+    }
+
+    #[test]
+    fn restrict_execute_accepts_only_full_enforcement() {
+        assert!(
+            ensure_execute_restriction_fully_enforced(landlock::RulesetStatus::FullyEnforced)
+                .is_ok()
+        );
+        assert!(
+            ensure_execute_restriction_fully_enforced(landlock::RulesetStatus::NotEnforced)
+                .is_err()
+        );
     }
 
     #[test]
@@ -3777,15 +3501,12 @@ mod tests {
         );
     }
 
-    /// `open_port: [0]` is macOS-only (Landlock cannot express it).
+    /// Rejects `open_port: [0]` on Linux for any restricted network mode (not Landlock-only).
     #[test]
-    fn test_reject_localhost_port_wildcard_zero_under_landlock_net() {
+    fn test_reject_localhost_port_wildcard_zero_on_linux() {
         let Ok(detected) = detect_abi() else {
             return;
         };
-        if AccessNet::from_all(detected.abi).is_empty() {
-            return;
-        }
         let mut caps = CapabilitySet::new().block_network();
         caps.add_localhost_port(0);
         let err = apply_with_abi(&caps, &detected).expect_err("port 0 wildcard must be rejected");
@@ -3846,110 +3567,73 @@ mod tests {
     #[test]
     fn test_build_seccomp_proxy_filter_with_bind() {
         let filter = build_seccomp_proxy_filter(true);
-        // 23 instructions (19 + 3 send-family arms + 1 USER_NOTIF ret for send)
+        // 23 instructions: no check_fd block
         assert_eq!(filter.len(), 23);
 
-        // Instruction 0 should be ld [nr]
         assert_eq!(filter[0].code, BPF_LD | BPF_W | BPF_ABS);
         assert_eq!(filter[0].k, SECCOMP_DATA_NR_OFFSET);
 
-        // Instruction 19 should be USER_NOTIF (connect)
+        // insn 6: jeq SENDMSG -> 21 (jt = 21-6-1 = 14)
+        assert_eq!(filter[6].k, SYS_SENDMSG as u32);
+        assert_eq!(filter[6].jt, 14);
+
+        // insn 19: USER_NOTIF (connect)
         assert_eq!(filter[19].code, BPF_RET | BPF_K);
         assert_eq!(filter[19].k, SECCOMP_RET_USER_NOTIF);
 
-        // Instruction 20 should be USER_NOTIF (bind; supervisor decides)
+        // insn 20: USER_NOTIF (bind)
         assert_eq!(filter[20].code, BPF_RET | BPF_K);
         assert_eq!(filter[20].k, SECCOMP_RET_USER_NOTIF);
 
-        // Instruction 21 should be USER_NOTIF (sendto/sendmsg/sendmmsg)
+        // insn 21: USER_NOTIF (sendto/sendmsg/sendmmsg)
         assert_eq!(filter[21].code, BPF_RET | BPF_K);
         assert_eq!(filter[21].k, SECCOMP_RET_USER_NOTIF);
+
+        // insn 22: ALLOW (good socket/socketpair family)
+        assert_eq!(filter[22].code, BPF_RET | BPF_K);
+        assert_eq!(filter[22].k, SECCOMP_RET_ALLOW);
     }
 
+    /// Regression test for the Landlock V2 + `has_bind_ports=false`
+    /// scenario (issue #685): even with no TCP bind ports configured,
+    /// bind() must route to USER_NOTIF so the supervisor can allow
+    /// pathname AF_UNIX bind.
     #[test]
     fn test_build_seccomp_proxy_filter_without_bind() {
         let filter = build_seccomp_proxy_filter(false);
         assert_eq!(filter.len(), 23);
 
-        // Instruction 20 (bind) must route to USER_NOTIF — the supervisor is the
-        // sole gate for both AF_UNIX pathname bind and TCP bind-port decisions.
-        // (origin/main's PR #10 fix asserted filter[17]; that index predates the
-        // Phase 87 send-family arms — bind is now at index 20, matching the
-        // build_seccomp_proxy_filter instruction table and the with_bind test.)
         assert_eq!(filter[20].code, BPF_RET | BPF_K);
         assert_eq!(
             filter[20].k, SECCOMP_RET_USER_NOTIF,
             "bind must route to USER_NOTIF regardless of has_bind_ports so \
-             the supervisor can permit AF_UNIX pathname bind"
+             the supervisor can permit AF_UNIX pathname bind (#685)"
         );
     }
 
     #[test]
-    fn test_build_seccomp_af_unix_filter_notifies_connect_bind_sendto_sendmsg_sendmmsg() {
+    fn test_build_seccomp_af_unix_filter_notifies_all_syscalls() {
         let filter = build_seccomp_af_unix_filter();
+        // 8 instructions: 0 ld-nr, 1-5 jeq dispatch, 6 ALLOW, 7 USER_NOTIF
+        // No check_fd block — the IPC handshake completes before the filter
+        // is installed, so no fd-based exemption is needed.
         assert_eq!(filter.len(), 8);
         assert_eq!(filter[0].code, BPF_LD | BPF_W | BPF_ABS);
         assert_eq!(filter[0].k, SECCOMP_DATA_NR_OFFSET);
-        // 5 JEQ arms (connect, bind, sendto, sendmsg, sendmmsg)
+
         assert_eq!(filter[1].k, SYS_CONNECT as u32);
         assert_eq!(filter[1].jt, 5); // -> insn 7 (USER_NOTIF)
         assert_eq!(filter[2].k, SYS_BIND as u32);
-        assert_eq!(filter[2].jt, 4); // -> insn 7 (USER_NOTIF)
+        assert_eq!(filter[2].jt, 4); // -> insn 7
         assert_eq!(filter[3].k, SYS_SENDTO as u32);
-        assert_eq!(filter[3].jt, 3); // -> insn 7 (USER_NOTIF)
+        assert_eq!(filter[3].jt, 3); // -> insn 7
         assert_eq!(filter[4].k, SYS_SENDMSG as u32);
-        assert_eq!(filter[4].jt, 2); // -> insn 7 (USER_NOTIF)
+        assert_eq!(filter[4].jt, 2); // -> insn 7 (no special exemption)
         assert_eq!(filter[5].k, SYS_SENDMMSG as u32);
-        assert_eq!(filter[5].jt, 1); // -> insn 7 (USER_NOTIF)
+        assert_eq!(filter[5].jt, 1); // -> insn 7
+
         assert_eq!(filter[6].k, SECCOMP_RET_ALLOW);
         assert_eq!(filter[7].k, SECCOMP_RET_USER_NOTIF);
-    }
-
-    #[test]
-    fn test_build_seccomp_af_unix_nogrant_filter_denies_send_family() {
-        let filter = build_seccomp_af_unix_nogrant_filter();
-        let eperm_ret = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
-
-        // Must be exactly 6 instructions: ld + 3 JEQ + ALLOW + EPERM
-        assert_eq!(
-            filter.len(),
-            6,
-            "no-grant filter must have exactly 6 instructions"
-        );
-
-        // 0: ld [nr]
-        assert_eq!(filter[0].code, BPF_LD | BPF_W | BPF_ABS);
-        assert_eq!(filter[0].k, SECCOMP_DATA_NR_OFFSET);
-
-        // 1: jeq SYS_SENDTO -> 5 (jt = 3)
-        assert_eq!(filter[1].k, SYS_SENDTO as u32);
-        assert_eq!(
-            filter[1].jt, 3,
-            "SYS_SENDTO jt must target EPERM instruction"
-        );
-
-        // 2: jeq SYS_SENDMSG -> 5 (jt = 2)
-        assert_eq!(filter[2].k, SYS_SENDMSG as u32);
-        assert_eq!(
-            filter[2].jt, 2,
-            "SYS_SENDMSG jt must target EPERM instruction"
-        );
-
-        // 3: jeq SYS_SENDMMSG -> 5 (jt = 1)
-        assert_eq!(filter[3].k, SYS_SENDMMSG as u32);
-        assert_eq!(
-            filter[3].jt, 1,
-            "SYS_SENDMMSG jt must target EPERM instruction"
-        );
-
-        // 4: ret ALLOW (non-send-family syscalls fall through)
-        assert_eq!(filter[4].k, SECCOMP_RET_ALLOW);
-
-        // 5: ret SECCOMP_RET_ERRNO(EPERM)
-        assert_eq!(
-            filter[5].k, eperm_ret,
-            "no-grant filter must return EPERM for send-family"
-        );
     }
 
     #[test]
@@ -4000,6 +3684,49 @@ mod tests {
         };
         assert!(info.is_loopback);
         assert_eq!(info.port, 0);
+    }
+
+    // --- classify_af_unix tests (issue #685) --------------------------------
+
+    #[test]
+    fn test_classify_af_unix_pathname() {
+        // `/tmp/test.sock` — first byte is '/'
+        assert_eq!(
+            classify_af_unix(14, Some(b'/')),
+            UnixSocketKind::Pathname,
+            "non-null first byte => pathname"
+        );
+    }
+
+    #[test]
+    fn test_classify_af_unix_abstract() {
+        // \0foo — first byte is null (Linux abstract namespace)
+        assert_eq!(
+            classify_af_unix(6, Some(0)),
+            UnixSocketKind::Abstract,
+            "null first byte => abstract namespace"
+        );
+    }
+
+    #[test]
+    fn test_classify_af_unix_unnamed() {
+        // addrlen == 2: only sa_family, no sun_path
+        assert_eq!(
+            classify_af_unix(2, None),
+            UnixSocketKind::Unnamed,
+            "addrlen <= 2 => unnamed"
+        );
+    }
+
+    #[test]
+    fn test_classify_af_unix_fails_closed_on_short_read() {
+        // Defensive: if we couldn't read sun_path[0] despite addrlen > 2
+        // (unexpected), treat as unnamed so policy fails closed.
+        assert_eq!(
+            classify_af_unix(10, None),
+            UnixSocketKind::Unnamed,
+            "missing sun_path byte => fail-closed to unnamed"
+        );
     }
 
     /// Integration test: seccomp proxy filter blocks connect to non-proxy ports
@@ -4186,6 +3913,145 @@ mod tests {
         );
     }
 
+    /// End-to-end regression test for issue #685: a pathname `AF_UNIX`
+    /// `bind(2)` must succeed under the proxy-only seccomp filter even
+    /// when `has_bind_ports=false`. Previously the filter short-circuited
+    /// bind() to `EACCES` in that configuration, unconditionally failing
+    /// AF_UNIX bind regardless of what the supervisor would have decided.
+    ///
+    /// Structure mirrors `test_seccomp_proxy_filter_allows_proxy_port_blocks_others`:
+    /// fork, install filter in the child, run a minimal supervisor-mimic
+    /// handler in a child thread, try the bind, report result over a pipe.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_seccomp_proxy_filter_allows_af_unix_bind_without_bind_ports() {
+        use std::io::Read;
+
+        // Unique per-test socket path under /tmp so parallel tests don't
+        // collide.
+        let sock_path = format!("/tmp/nono-integ-af-unix-bind-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&sock_path);
+
+        let mut report_pipe = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(report_pipe.as_mut_ptr()) }, 0, "pipe()");
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork() failed");
+
+        if pid == 0 {
+            // CHILD
+            unsafe { libc::close(report_pipe[0]) };
+
+            // Install filter with `has_bind_ports=false` — this is the
+            // exact configuration the #685 bug manifested under.
+            let notify_fd = match install_seccomp_proxy_filter(false) {
+                Ok(fd) => fd,
+                Err(_) => {
+                    // Seccomp unavailable — skip via sentinel.
+                    let sentinel: [u8; 2] = [2, 2];
+                    unsafe {
+                        libc::write(report_pipe[1], sentinel.as_ptr().cast(), sentinel.len());
+                        libc::close(report_pipe[1]);
+                        libc::_exit(0);
+                    }
+                }
+            };
+
+            let notify_raw = {
+                use std::os::fd::AsRawFd;
+                notify_fd.as_raw_fd()
+            };
+
+            // Minimal supervisor mimic: for each bind notification, allow
+            // pathname AF_UNIX, deny everything else. Matches the policy
+            // baked into `decide_network_notification` at PR A commit 1.
+            let handler = std::thread::spawn(move || {
+                for _ in 0..1 {
+                    let notif = match recv_notif(notify_raw) {
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    let info = match read_notif_sockaddr(
+                        notif.pid,
+                        notif.data.args[1],
+                        notif.data.args[2],
+                    ) {
+                        Ok(i) => i,
+                        Err(_) => {
+                            let _ = deny_notif(notify_raw, notif.id);
+                            continue;
+                        }
+                    };
+                    let is_pathname_unix = info.family == libc::AF_UNIX as u16
+                        && matches!(info.unix_kind, Some(UnixSocketKind::Pathname));
+                    if is_pathname_unix {
+                        let _ = continue_notif(notify_raw, notif.id);
+                    } else {
+                        let _ = respond_notif_errno(notify_raw, notif.id, libc::EACCES);
+                    }
+                }
+            });
+
+            // Attempt bind(AF_UNIX) at the pathname socket.
+            let sock = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+            let mut addr: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+            addr.sun_family = libc::AF_UNIX as u16;
+            let bytes = sock_path.as_bytes();
+            assert!(bytes.len() < addr.sun_path.len(), "test path too long");
+            for (i, &b) in bytes.iter().enumerate() {
+                addr.sun_path[i] = b as libc::c_char;
+            }
+            let addrlen = (std::mem::size_of::<u16>() + bytes.len() + 1) as libc::socklen_t;
+
+            let rc =
+                unsafe { libc::bind(sock, (&addr as *const libc::sockaddr_un).cast(), addrlen) };
+            let errno = if rc < 0 {
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(-1)
+            } else {
+                0
+            };
+            unsafe { libc::close(sock) };
+
+            let _ = handler.join();
+            // Clean up the socket file the child just created.
+            let _ = std::fs::remove_file(&sock_path);
+
+            let payload: [u8; 2] = [
+                if rc < 0 { 1 } else { 0 },
+                errno.unsigned_abs().min(255) as u8,
+            ];
+            unsafe {
+                libc::write(report_pipe[1], payload.as_ptr().cast(), payload.len());
+                libc::close(report_pipe[1]);
+                libc::_exit(0);
+            }
+        }
+
+        // PARENT
+        unsafe { libc::close(report_pipe[1]) };
+
+        // Wait for child.
+        let mut status: libc::c_int = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+
+        use std::os::fd::FromRawFd;
+        let mut pipe_read = unsafe { std::fs::File::from_raw_fd(report_pipe[0]) };
+        let mut buf = [0u8; 2];
+        let n = pipe_read.read(&mut buf).expect("read from pipe");
+
+        if n == 2 && buf[0] == 2 && buf[1] == 2 {
+            // Skip sentinel: seccomp not available.
+            return;
+        }
+        assert_eq!(n, 2, "expected 2 bytes from child, got {n}");
+        assert_eq!(
+            buf[0], 0,
+            "AF_UNIX bind must succeed under proxy filter with \
+             has_bind_ports=false (errno={})",
+            buf[1]
+        );
+    }
+
     /// Integration test: ProxyOnly + Landlock V4+ does NOT install seccomp
     /// proxy filter (Landlock handles networking natively).
     ///
@@ -4279,14 +4145,14 @@ mod tests {
         );
     }
 
-    /// Integration test: seccomp proxy filter blocks bind() when no bind_ports.
-    ///
-    /// Forks a child that installs the proxy filter with has_bind_ports=false,
-    /// then attempts to bind a socket. `bind()` now ALWAYS routes to USER_NOTIF
-    /// (the has_bind_ports=false → ERRNO short-circuit was removed because it
-    /// broke AF_UNIX bind), so the child must run a notification handler that
-    /// denies the bind with EACCES. Without a handler the child's bind() would
-    /// block in-kernel forever and the parent's waitpid() would hang.
+    /// Integration test: under the proxy filter with `has_bind_ports=false`,
+    /// an `AF_INET` `bind(2)` must still be denied — but now the denial
+    /// comes from the supervisor (via `USER_NOTIF`), not from the BPF
+    /// filter directly. Issue #685 required the filter to route bind to
+    /// USER_NOTIF regardless of `has_bind_ports` so pathname `AF_UNIX`
+    /// bind can be allowed (see `test_seccomp_proxy_filter_allows_af_unix_bind_without_bind_ports`);
+    /// this test pins the complementary invariant that `AF_INET` bind is
+    /// still rejected when the supervisor's policy says so.
     #[cfg(target_os = "linux")]
     #[test]
     fn test_seccomp_proxy_filter_blocks_bind_without_bind_ports() {
@@ -4300,57 +4166,13 @@ mod tests {
         if pid == 0 {
             unsafe { libc::close(report_pipe[0]) };
 
-            // Install the proxy filter. bind() routes to USER_NOTIF, so we MUST
-            // handle the notification or the bind() below blocks forever.
-            match install_seccomp_proxy_filter(false) {
-                Ok(notify_fd) => {
-                    let notify_raw = {
-                        use std::os::fd::AsRawFd;
-                        notify_fd.as_raw_fd()
-                    };
-
-                    // Handler thread: deny the single expected bind() notification
-                    // with EACCES. This is what the supervisor does when no bind
-                    // ports are configured — and it lets bind() return instead of
-                    // hanging in-kernel waiting for a response.
-                    let handler = std::thread::spawn(move || {
-                        if let Ok(notif) = recv_notif(notify_raw) {
-                            let _ = respond_notif_errno(notify_raw, notif.id, libc::EACCES);
-                        }
-                    });
-
-                    // Attempt bind on an ephemeral port
-                    let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
-
-                    let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
-                    addr.sin_family = libc::AF_INET as u16;
-                    addr.sin_port = 0; // ephemeral
-                    addr.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
-
-                    let bind_result = unsafe {
-                        libc::bind(
-                            sock,
-                            (&addr as *const libc::sockaddr_in).cast(),
-                            std::mem::size_of::<libc::sockaddr_in>() as u32,
-                        )
-                    };
-                    let errno = if bind_result < 0 {
-                        std::io::Error::last_os_error().raw_os_error().unwrap_or(-1) as u8
-                    } else {
-                        0
-                    };
-
-                    handler.join().ok();
-
-                    unsafe {
-                        libc::close(sock);
-                        libc::write(report_pipe[1], &errno as *const u8 as _, 1);
-                        libc::close(report_pipe[1]);
-                        libc::_exit(0);
-                    }
-                }
+            // Install proxy filter with has_bind_ports=false. As of the
+            // #685 fix, bind() now routes to USER_NOTIF — so a handler
+            // IS required even for the "block all bind" policy.
+            let notify_fd = match install_seccomp_proxy_filter(false) {
+                Ok(fd) => fd,
                 Err(_) => {
-                    // Seccomp not available — skip
+                    // Seccomp not available — skip.
                     let skip: u8 = 255;
                     unsafe {
                         libc::write(report_pipe[1], &skip as *const u8 as _, 1);
@@ -4358,6 +4180,50 @@ mod tests {
                         libc::_exit(0);
                     }
                 }
+            };
+            let notify_raw = {
+                use std::os::fd::AsRawFd;
+                notify_fd.as_raw_fd()
+            };
+
+            // Supervisor mimic: deny every bind notification with EACCES.
+            // Models the "no bind ports configured → deny AF_INET bind"
+            // policy that `decide_network_notification` implements in
+            // the real supervisor when `config.proxy_bind_ports` is empty.
+            let handler = std::thread::spawn(move || {
+                for _ in 0..1 {
+                    let notif = match recv_notif(notify_raw) {
+                        Ok(n) => n,
+                        Err(_) => break,
+                    };
+                    let _ = respond_notif_errno(notify_raw, notif.id, libc::EACCES);
+                }
+            });
+
+            let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+            let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+            addr.sin_family = libc::AF_INET as u16;
+            addr.sin_port = 0;
+            addr.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+            let bind_result = unsafe {
+                libc::bind(
+                    sock,
+                    (&addr as *const libc::sockaddr_in).cast(),
+                    std::mem::size_of::<libc::sockaddr_in>() as u32,
+                )
+            };
+            let errno = if bind_result < 0 {
+                std::io::Error::last_os_error().raw_os_error().unwrap_or(-1) as u8
+            } else {
+                0
+            };
+            unsafe { libc::close(sock) };
+            let _ = handler.join();
+
+            unsafe {
+                libc::write(report_pipe[1], &errno as *const u8 as _, 1);
+                libc::close(report_pipe[1]);
+                libc::_exit(0);
             }
         }
 
@@ -4383,7 +4249,8 @@ mod tests {
         assert_eq!(
             buf[0],
             libc::EACCES as u8,
-            "bind() should fail with EACCES when has_bind_ports=false, got errno={}",
+            "AF_INET bind() must still receive EACCES (from supervisor, not filter) \
+             when has_bind_ports=false, got errno={}",
             buf[0]
         );
     }
@@ -4433,102 +4300,6 @@ mod tests {
             assert!(
                 is_supported(),
                 "Landlock must be available when WSL2 or native Linux"
-            );
-        }
-    }
-
-    // --allow-gpu Linux Landlock path list (D-13 upstream parity port)
-    //
-    // Tests the pure predicate `is_nvidia_compute_device` and asserts
-    // that `collect_linux_gpu_paths` produces a list shape consistent
-    // with the upstream contract. File-level checks (path existence) are
-    // not asserted — those depend on the host having NVIDIA/AMD hardware.
-
-    #[test]
-    fn test_is_nvidia_compute_device_accepts_upstream_list() {
-        // Upstream upstream parity list: nvidiactl + nvidia-uvm +
-        // nvidia-uvm-tools + nvidia[0-9]+.
-        for name in [
-            "nvidiactl",
-            "nvidia-uvm",
-            "nvidia-uvm-tools",
-            "nvidia0",
-            "nvidia1",
-            "nvidia9",
-            "nvidia42",
-        ] {
-            assert!(
-                is_nvidia_compute_device(name),
-                "{name} should be accepted as NVIDIA compute device"
-            );
-        }
-    }
-
-    #[test]
-    fn test_is_nvidia_compute_device_rejects_non_compute() {
-        // Explicitly-rejected: nvidia-modeset (display control, not compute).
-        // Also rejected: bare "nvidia" (no numeric suffix), arbitrary
-        // non-NVIDIA names, and cousin-kernel modules that happen to start
-        // with "nvidia" like "nvidia-fs" (not compute, and not on the
-        // upstream allowlist).
-        for name in [
-            "nvidia-modeset",
-            "nvidia",
-            "nvidia-fs",
-            "nvidia-peermem",
-            "nvidiaxyz",
-            "random",
-            "",
-            "nvidia_uvm", // underscore, not hyphen
-            "NVIDIA0",    // uppercase
-        ] {
-            assert!(
-                !is_nvidia_compute_device(name),
-                "{name} should NOT be accepted as NVIDIA compute device"
-            );
-        }
-    }
-
-    #[test]
-    fn test_collect_linux_gpu_paths_is_callable_without_panic() {
-        // Smoke: on any Linux host (CI with no NVIDIA, dev laptop,
-        // headless ARM VM) `collect_linux_gpu_paths` must return without
-        // panic and without unwrap violations. Absent devices are
-        // silently skipped.
-        let (paths, _nvidia_present) = collect_linux_gpu_paths();
-        // No assertion on the length — CI hosts vary. But every returned
-        // tuple must reference an existing filesystem path (we only add
-        // paths after probing).
-        for (path, _access, _is_file) in &paths {
-            assert!(
-                path.exists(),
-                "collect_linux_gpu_paths returned non-existent {path:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_collect_linux_gpu_paths_nvidia_procfs_gated_on_nvidia_presence() {
-        // Contract: procfs NVIDIA grants (/proc/driver/nvidia*, /proc/self,
-        // /proc/self/task) appear ONLY when NVIDIA compute devices are
-        // actually present. Pure DRM / AMD / WSL /dev/dxg setups should
-        // NOT get the procfs grants (least-privilege per upstream 4df0a8e).
-        let (paths, nvidia_present) = collect_linux_gpu_paths();
-        let has_procfs_nvidia = paths
-            .iter()
-            .any(|(p, _, _)| p.starts_with("/proc/driver/nvidia"));
-        let has_procfs_self = paths
-            .iter()
-            .any(|(p, _, _)| p.to_string_lossy().starts_with("/proc/self"));
-
-        if !nvidia_present {
-            assert!(
-                !has_procfs_nvidia,
-                "procfs NVIDIA grant must NOT appear without NVIDIA device"
-            );
-            assert!(
-                !has_procfs_self,
-                "procfs self grant must NOT appear without NVIDIA device"
             );
         }
     }

@@ -24,8 +24,8 @@ User profiles take precedence over built-in profiles of the same name.
     "name": "my-agent",
     "description": "Profile for my agent"
   },
-  "security": {
-    "groups": []
+  "groups": {
+    "include": []
   },
   "workdir": {
     "access": "readwrite"
@@ -56,45 +56,210 @@ Inherit from another profile by name:
 
 - Inheritance chain max depth: 10.
 - Scalar fields: child overrides base.
-- Array fields (`groups`, `filesystem.*`, `policy.*`, `allow_domain`, `open_port`, `listen_port`, `rollback.*`, `upstream_bypass`): child values are appended to base values and deduplicated. To remove inherited entries, use `policy.exclude_groups` for groups; there is no mechanism to remove inherited filesystem paths.
+- Array fields (`groups.include`, `groups.exclude`, `commands.allow`, `commands.deny`, `filesystem.*`, `allow_domain`, `open_port`, `listen_port`, `rollback.*`, `upstream_bypass`): child values are appended to base values and deduplicated. To remove inherited entries, use `groups.exclude` for groups; there is no mechanism to remove inherited filesystem paths. For `allow_domain` entries with endpoint rules, rules for the same domain are merged (appended) rather than replaced.
 - Map fields (`env_credentials`, `hooks`, `custom_credentials`): child entries are merged into base; child keys override matching base keys.
 - `network_profile` supports three-state inheritance via `InheritableValue`: absent = inherit base value, `null` = explicitly clear, string = override. This is the only field that supports null-clearing.
 - `open_urls`: if the child provides the field (even as `{}`), it replaces the base entirely. If absent, the base value is inherited. Setting to `null` in JSON is equivalent to omitting it (both inherit the base).
 - `workdir`: child overrides base unless child is `"none"` (which inherits the base value instead).
 
+### groups
+
+Controls which policy groups apply to the profile. Group definitions live in `policy.json`; list available groups with `nono profile groups`.
+
+| Field     | Type            | Default | Description |
+|-----------|-----------------|---------|-------------|
+| `include` | array of string | `[]`    | Policy group names to apply. |
+| `exclude` | array of string | `[]`    | Group names to remove from the resolved group set, including inherited defaults. |
+
+### commands
+
+Controls startup-time command gating. These checks run only at launch time and are not enforced on child processes — prefer path-based controls in `filesystem` for strong enforcement.
+
+| Field   | Type            | Default | Description |
+|---------|-----------------|---------|-------------|
+| `allow` | array of string | `[]`    | Startup-only command allowlist. Deprecated in v0.33.0; retained for existing profiles. |
+| `deny`  | array of string | `[]`    | Startup-only command denylist extension. Deprecated in v0.33.0; prefer `filesystem.deny` and narrower grants instead. |
+
+### command_policies
+
+tool-sandbox policies live under `command_policies`. Use `commands.<name>.executable` to bind a command name to one exact executable file instead of the first PATH match. By default, tool-sandbox rejects pinned executables and direct parent directories that are writable through the outer sandbox capability set. If a low-assurance profile intentionally grants write access overlapping a pinned executable, `commands.<name>.allow_writable_executable` is available as a per-command trust downgrade. It is valid only with an absolute `executable` path; relative paths and bare command names fail validation. For local demos, `command_policies.allow_writable_executables` disables the writable executable and parent-directory trust check across policy, deny-only, and outer executable allow-list paths. The agent still invokes the command name through the tool-sandbox shim. On macOS, tool-sandbox verifies the file before sandboxing but must still exec by path, so sandbox-writable pinned executables are not suitable for high-assurance policies.
+
+Command sandbox path lists (`fs_read`, `fs_write`, `fs_read_file`, `fs_write_file`) may use dynamic provider tokens. `@git:config-files` expands to trusted global/system Git config files and Git file settings such as attributes, excludes, and commit templates. `@git:hooks-path` expands to trusted global/system `core.hooksPath` directories. These tokens are opt-in per profile and ignore repo-local/worktree Git config so a checkout cannot grant itself extra host filesystem access.
+
+```json
+{
+  "command_policies": {
+    "entrypoint": "demonator",
+    "commands": {
+      "demonator": {
+        "executable": "/opt/homebrew/bin/demonator",
+        "sandbox": {
+          "fs_write": ["/opt/homebrew/bin"]
+        },
+        "allow_writable_executable": true
+      }
+    }
+  }
+}
+```
+
+#### Tool Sandbox  command-policy denials
+
+Tool Sandbox denials are not filesystem denials. A message like:
+
+```text
+nono: tool-sandbox denied gh: Command 'gh' is blocked: agents may read issues but not comment on them
+```
+
+means the tool-sandbox command policy blocked the resolved command invocation. `nono why --path ...` only explains filesystem grants and denials, and `nono why --host ...` only explains network/proxy reachability. For command-policy denials, query the command edge directly:
+
+```sh
+nono why --profile <profile> --command gh -- issue comment 1052
+nono profile show <profile>
+nono profile validate <profile>
+```
+
+Look under `command_policies.commands.<command>.from.<caller>.invocation_policy` for argv or environment rules. For commands started directly by the sandboxed session, the caller is usually `session`; for a child tool launched by another controlled tool, the caller is the parent command name.
+
+`invocation_policy` evaluates in this order: `deny`, then `approve`, then `allow`, then `default`. The `argv` matcher compares against the command arguments after the command name, so `gh issue comment 1052` matches `{"argv": {"prefix": ["issue", "comment"]}}`.
+
+```json
+{
+  "command_policies": {
+    "commands": {
+      "gh": {
+        "from": {
+          "session": {
+            "sandbox": {
+              "fs_read": ["."],
+              "network": {
+                "allow_domain": ["api.github.com"]
+              }
+            },
+            "invocation_policy": {
+              "default": "deny",
+              "deny": [
+                {
+                  "argv": { "prefix": ["issue", "comment"] },
+                  "reason": "agents may read issues but not comment on them"
+                }
+              ],
+              "allow": [
+                {
+                  "argv": { "prefix": ["issue", "list"] },
+                  "reason": "agents may list GitHub issues"
+                },
+                {
+                  "argv": { "prefix": ["issue", "view"] },
+                  "reason": "agents may view GitHub issues"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+To allow a previously denied subcommand, remove or narrow the matching `deny` rule and add a matching `allow` rule, or change `default` if that is the intended policy. Adding a child-profile `allow` does not override an inherited `deny`. When profiles are merged, command policy permissions widen monotonically in most places, and an inherited `invocation_policy` on the same command edge is retained rather than replaced. If the resolved profile already contains the deny you want to remove, edit the profile that owns that rule or extend a base profile that does not include it.
+
+#### Proxy credential endpoint policy
+
+Some Tool Sandbox  policies intentionally use two layers:
+
+1. `invocation_policy` blocks obvious high-level CLI mutations before the child process runs.
+2. `sandbox.credentials[].endpoint_policy` blocks the underlying HTTP method and path even if the CLI uses a broad subcommand such as `gh api`.
+
+If a command uses a proxy credential, both layers must allow the operation. For example, permitting `gh issue comment` at the argv layer is not enough if the GitHub API proxy still denies `POST /repos/<owner>/<repo>/issues/**`.
+
+```json
+{
+  "command_policies": {
+    "credentials": {
+      "github-api": {
+        "type": "proxy",
+        "upstream": "https://api.github.com",
+        "credential_key": "keyring://gh:github.com/example?decode=go-keyring",
+        "env_var": "GH_TOKEN",
+        "inject_header": "Authorization",
+        "credential_format": "Bearer {}"
+      }
+    },
+    "commands": {
+      "gh": {
+        "from": {
+          "session": {
+            "sandbox": {
+              "credentials": [
+                {
+                  "name": "github-api",
+                  "endpoint_policy": {
+                    "default": "deny",
+                    "allow": [
+                      { "method": "GET", "path": "/repos/always-further/nono/issues" },
+                      { "method": "GET", "path": "/repos/always-further/nono/issues/*" },
+                      { "method": "POST", "path": "/repos/always-further/nono/issues/*/comments" }
+                    ],
+                    "deny": [
+                      {
+                        "method": "DELETE",
+                        "path": "/**",
+                        "reason": "destructive GitHub API calls are denied"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            "invocation_policy": {
+              "default": "deny",
+              "allow": [
+                { "argv": { "prefix": ["issue", "list"] } },
+                { "argv": { "prefix": ["issue", "view"] } },
+                { "argv": { "prefix": ["issue", "comment"] } },
+                {
+                  "argv": { "prefix": ["api"] },
+                  "reason": "gh api is constrained by endpoint_policy"
+                }
+              ]
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Endpoint policy uses the same decision order as invocation policy: `deny`, then `approve`, then `allow`, then `default`. A broad `deny` such as `{"method": "POST", "path": "/repos/always-further/nono/issues/**"}` will still win over a later `allow` for issue comments. Remove or narrow the deny when the mutation is intentionally allowed.
+
 ### security
 
 | Field                 | Type            | Default      | Description |
 |-----------------------|-----------------|--------------|-------------|
-| `groups`              | array of string | `[]`         | Policy group names from `policy.json`. Use `nono profile groups` to list available groups. |
-| `allowed_commands`    | array of string | `[]`         | Deprecated in v0.33.0. Startup-only command allowlist override. Not enforced for child processes. |
 | `signal_mode`         | string          | `"isolated"` | One of: `"isolated"`, `"allow_same_sandbox"`, `"allow_all"`. |
 | `process_info_mode`   | string          | `"isolated"` | One of: `"isolated"`, `"allow_same_sandbox"`, `"allow_all"`. |
 | `ipc_mode`            | string          | `"shared_memory_only"` | One of: `"shared_memory_only"`, `"full"`. Use `"full"` for multiprocessing (enables POSIX semaphores). macOS only. |
 | `capability_elevation`| boolean         | `false`      | Enable runtime capability elevation via seccomp-notify. Linux only. |
 | `wsl2_proxy_policy`  | string          | `"error"`    | WSL2 only. Controls behavior when proxy-only network mode cannot be kernel-enforced. `"error"`: refuse to run (fail-secure). `"insecure_proxy"`: allow degraded execution where credential proxy runs but child is not prevented from bypassing it. See [WSL2 docs](https://nono.sh/docs/cli/internals/wsl2). |
 
-### commands
-
-Canonical section per upstream f0abd413 (v0.47.0). Controls command-level allow/deny overrides:
-
-| Field  | Type            | Description |
-|--------|-----------------|-------------|
-| `allow`| array of string | Commands to allow even when a deny-group would block them. |
-| `deny` | array of string | Commands to deny, extending the deny-group command list. |
-
 ### filesystem
 
-| Field              | Type            | Description |
-|--------------------|-----------------|-------------|
-| `allow`            | array of string | Directories with read+write access. |
-| `read`             | array of string | Directories with read-only access. |
-| `write`            | array of string | Directories with write-only access. |
-| `allow_file`       | array of string | Single files with read+write access. |
-| `read_file`        | array of string | Single files with read-only access. |
-| `write_file`       | array of string | Single files with write-only access. |
-| `deny`             | array of string | Paths to deny access to. Applied after `allow` grants so deny takes precedence. Canonical section per upstream f0abd413 (v0.47.0). |
-| `bypass_protection`| array of string | Paths to exempt from deny groups when paired with an explicit grant. Canonical key since v0.47.0 (upstream f0abd413). Legacy key `override_deny` accepted indefinitely via serde alias per D-36-B3. |
+All filesystem grants, denials, and deny-rule exemptions live under this single section.
+
+| Field               | Type            | Description |
+|---------------------|-----------------|-------------|
+| `allow`             | array of string | Directories with read+write access. |
+| `read`              | array of string | Directories with read-only access. |
+| `write`             | array of string | Directories with write-only access. |
+| `allow_file`        | array of string | Single files with read+write access. |
+| `read_file`         | array of string | Single files with read-only access. |
+| `write_file`        | array of string | Single files with write-only access. |
+| `deny`              | array of string | Paths denied filesystem access. |
+| `bypass_protection` | array of string | Paths exempted from deny groups. **This flag does not implicitly grant access** — `bypass_protection` only removes the deny rule; each path must also appear in `filesystem.allow`, `filesystem.read`, or `filesystem.write` (or the matching `*_file` variant) to become accessible. |
+| `ignore`            | array of string | Paths whose runtime denials should not be offered in save-profile prompts. Does not grant access or hide diagnostics. |
 
 All path fields support variable expansion (see Section 6).
 
@@ -104,33 +269,49 @@ All path fields support variable expansion (see Section 6).
 |----------|--------|----------|-------------|
 | `access` | string | `"none"` | One of: `"none"`, `"read"`, `"write"`, `"readwrite"`. Controls automatic CWD sharing with the sandboxed process. |
 
-### policy (patches)
-
-Provides subtractive and additive composition on top of inherited groups and filesystem configuration.
-
-| Field                | Type            | Description |
-|----------------------|-----------------|-------------|
-| `exclude_groups`     | array of string | Group names to remove from the resolved group set, including inherited defaults. |
-| `add_allow_read`     | array of string | Additional read-only path grants. |
-| `add_allow_write`    | array of string | Additional write-only path grants. |
-| `add_allow_readwrite`| array of string | Additional read+write path grants. |
-| `add_deny_access`    | array of string | Additional deny paths. |
-| `add_deny_commands`  | array of string | Command names (basename only) to block. Blocks execution of the named binaries regardless of where they are installed. Checked before the sandbox enforces filesystem rules. |
-| `bypass_protection`  | array of string | Paths to exempt from deny groups. Each path must also be granted via `filesystem` or `add_allow_*`. Does not implicitly grant access; only removes the deny rule. Canonical key since v0.47.0 (upstream f0abd413). Legacy key `override_deny` accepted indefinitely via serde alias per D-36-B3. |
-
 ### network
 
 | Field                   | Type                              | Default  | Description |
 |-------------------------|-----------------------------------|----------|-------------|
 | `block`                 | boolean                           | `false`  | Block all network access. |
 | `network_profile`       | string or null                    | inherit  | Name from `network-policy.json` for proxy filtering. Set to `null` to clear inherited value. |
-| `allow_domain`          | array of string                   | `[]`     | Additional domains to allow through the proxy. Aliases: `proxy_allow`, `allow_proxy`. |
+| `allow_domain`          | array of string or object         | `[]`     | Additional domains to allow through the proxy. Entries can be plain strings (CONNECT tunnel) or objects with endpoint rules (TLS-intercepted L7 filtering). Aliases: `proxy_allow`, `allow_proxy`. |
 | `credentials`           | array of string                   | `[]`     | Credential services to enable via reverse proxy. Alias: `proxy_credentials`. |
 | `open_port`             | array of integer                  | `[]`     | Localhost TCP IPC. Aliases: `port_allow`, `allow_port`. Port **0**: macOS only (`localhost:*` outbound); Linux: explicit ports. |
 | `listen_port`           | array of integer                  | `[]`     | TCP ports the sandboxed child may listen on. |
 | `custom_credentials`    | map of string to credential def   | `{}`     | Custom credential route definitions (see below). |
 | `upstream_proxy`        | string                            | `null`   | Enterprise proxy address (`host:port`). Alias: `external_proxy`. |
 | `upstream_bypass`       | array of string                   | `[]`     | Hosts to bypass the upstream proxy. Supports `*.` wildcard suffixes. Alias: `external_proxy_bypass`. |
+
+#### allow_domain with endpoint restrictions
+
+When an `allow_domain` entry is an object with `endpoints`, the proxy performs TLS interception to enforce method+path restrictions (default-deny). This is useful for restricting access to specific API endpoints without credential injection:
+
+```json
+{
+  "network": {
+    "allow_domain": [
+      "api.openai.com",
+      {
+        "domain": "api.github.com",
+        "endpoints": [
+          { "method": "GET", "path": "/repos/my-org/**" },
+          { "method": "POST", "path": "/repos/my-org/*/issues" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+| Field       | Type   | Required | Description |
+|-------------|--------|----------|-------------|
+| `domain`    | string | yes      | Domain hostname (e.g., `"api.github.com"`). |
+| `endpoints` | array  | yes      | L7 method+path rules. Only requests matching at least one rule are allowed. |
+
+Each endpoint rule has `method` (HTTP method or `"*"` for any) and `path` (glob pattern: `*` = one segment, `**` = zero or more segments).
+
+When profiles extend each other, endpoint rules for the same domain are **appended** (merged), not replaced. Proxy mode is automatically enabled when endpoint rules are present.
 
 #### custom_credentials entry
 
@@ -142,14 +323,18 @@ Define a custom reverse proxy credential route for services not in `network-poli
   "credential_key": "example_api_key",
   "inject_mode": "header",
   "inject_header": "Authorization",
-  "credential_format": "Bearer {}"
+  "credential_format": "Bearer {}",
+  "proxy": {
+    "inject_mode": "query_param",
+    "query_param_name": "api_key"
+  }
 }
 ```
 
 | Field               | Type            | Required    | Description |
 |---------------------|-----------------|-------------|-------------|
 | `upstream`          | string          | yes         | Upstream URL. Must be HTTPS (HTTP only for loopback). |
-| `credential_key`    | string          | yes         | Keystore account name, `op://` URI, `apple-password://` URI, `file://` URI, or `env://` URI. |
+| `credential_key`    | string          | yes         | Keystore account name, `op://` URI, `bw://` URI, `apple-password://` URI, `file://` URI, `env://` URI, or `cmd://` URI referencing `credential_capture`. |
 | `inject_mode`       | string          | no          | One of: `"header"` (default), `"url_path"`, `"query_param"`, `"basic_auth"`. |
 | `inject_header`     | string          | header mode | HTTP header name. Default: `"Authorization"`. |
 | `credential_format` | string          | header mode | Format string with `{}` placeholder. Default: `"Bearer {}"`. |
@@ -157,13 +342,108 @@ Define a custom reverse proxy credential route for services not in `network-poli
 | `path_replacement`  | string          | url_path    | Replacement pattern. Defaults to `path_pattern`. |
 | `query_param_name`  | string          | query_param | Query parameter name for credential injection. |
 | `proxy`             | object          | no          | Optional proxy-side overrides for phantom token parsing. Omitted fields inherit from top-level values. |
-| `env_var`           | string          | URI keys    | Environment variable name for SDK API key. Required when `credential_key` is `op://`, `apple-password://`, or `file://`. Optional for `env://`. |
+| `env_var`           | string          | URI keys    | Environment variable name for SDK API key. Required when `credential_key` is `op://`, `bw://`, `apple-password://`, `file://`, or `cmd://`. Optional for `env://`. |
 | `endpoint_rules`    | array           | no          | L7 allow-list of `{"method": "GET", "path": "/**"}` rules. When non-empty, only matching requests are forwarded (default-deny). |
 | `tls_ca`            | string (path)   | no          | Path to a PEM-encoded CA certificate. Use for upstreams with self-signed or private CA certs (e.g. a Kubernetes API server). |
 | `tls_client_cert`   | string (path)   | no          | Path to a PEM-encoded client certificate for mutual TLS (mTLS). Must be set together with `tls_client_key`. |
 | `tls_client_key`    | string (path)   | no          | Path to the PEM-encoded private key matching `tls_client_cert`. |
 
 `proxy` overrides apply only to how the local proxy validates incoming phantom tokens from the sandboxed process. Outbound upstream credential injection continues to use top-level fields.
+
+### credential_capture
+
+Defines supervisor-side commands that produce credentials for `cmd://` custom credential routes. The command runs lazily when the proxy first needs the credential; only the proxy receives stdout, and the sandboxed child never sees the command output.
+
+```json
+{
+  "network": {
+    "credentials": ["github"],
+    "custom_credentials": {
+      "github": {
+        "upstream": "https://api.github.com",
+        "credential_key": "cmd://github",
+        "env_var": "GH_TOKEN",
+        "credential_format": "token {}"
+      }
+    }
+  },
+  "credential_capture": {
+    "github": {
+      "command": ["gh", "auth", "token"],
+      "timeout_secs": 5,
+      "cache_ttl_secs": 900,
+      "cache_path_regex": "^/(?:repos/|orgs/)?([^/]+)"
+    }
+  }
+}
+```
+
+| Field              | Type            | Required | Default | Description |
+|--------------------|-----------------|----------|---------|-------------|
+| `command`          | array of string | yes      | —       | Command and arguments. No shell interpolation is used. |
+| `timeout_secs`     | integer         | no       | `5`     | Maximum runtime, 1–300 seconds. |
+| `cache_ttl_secs`   | integer         | no       | `900`   | In-memory cache TTL, 0–3600 seconds. `0` disables caching. |
+| `ttl_secs`         | integer         | no       | `900`   | Older alias for `cache_ttl_secs`. Do not set both fields. |
+| `cache_path_regex` | string          | no       | host    | Regex evaluated against the request path. Capture group 1 becomes the cache scope; otherwise the full match is used. |
+| `stdin`            | string          | no       | `null`  | `null` closes stdin; `request_json` writes request metadata JSON to stdin. |
+| `output`           | string/object   | no       | `text`  | `text` captures stdout as one credential. `{"format":"json","allow_headers":[...]}` captures multiple headers. |
+| `interaction`      | object          | no       | none    | Explicit opt-in for capture commands that need inherited stdio or browser opening. |
+
+Capture commands run with `NONO_SESSION_ID`, `NONO_REQUEST_HOST`, `NONO_REQUEST_PATH`, `NONO_REQUEST_METHOD`, `NONO_CACHE_SCOPE`, `NONO_CAPTURE_CREDENTIAL`, and `NONO_CAPTURE_ROUTE` set. Proxy environment variables are removed to avoid recursively using the same proxy route while capturing the credential.
+
+`stdin: "request_json"` sends this shape to the command:
+
+```json
+{
+  "session_id": "c0ffee1234567890",
+  "credential_name": "github",
+  "route_id": "github",
+  "request_host": "api.github.com",
+  "request_path": "/repos/always-further/nono/issues/787",
+  "request_method": "GET",
+  "cache_scope": "always-further"
+}
+```
+
+For multi-header injection, use object-form output and allow every header name explicitly:
+
+```json
+{
+  "credential_capture": {
+    "gateway": {
+      "command": ["internal-auth", "headers"],
+      "output": {
+        "format": "json",
+        "allow_headers": ["Authorization", "X-Gateway-Key"]
+      }
+    }
+  }
+}
+```
+
+The command must print JSON like `{"headers":{"Authorization":"Bearer ...","X-Gateway-Key":"..."}}`. The proxy rejects empty output, unlisted headers, hop-by-hop headers, invalid header names, non-string values, and values containing CR or LF. Audit records include the route, command path, redacted argv, duration, exit status, cache state, cache scope, output format, header names, stdin mode, interaction flag, stdout byte count, and redacted stderr for failures; credential values are never logged.
+
+Browser auth is command-scoped. Add `interaction.open_urls` to a specific capture entry when that command may open a browser:
+
+```json
+{
+  "credential_capture": {
+    "github": {
+      "command": ["gh", "auth", "login"],
+      "interaction": {
+        "stdio": true,
+        "open_urls": {
+          "allow_origins": ["https://github.com"],
+          "allow_localhost": true
+        },
+        "allow_launch_services": true
+      }
+    }
+  }
+}
+```
+
+When `open_urls` is configured, nono gives the capture command a temporary `BROWSER` helper and URL-opening socket. On macOS it also prepends an `open` shim to `PATH`. URL requests through those helpers are validated against that capture entry's `interaction.open_urls`, not the child sandbox's top-level `open_urls`. Non-URL `open` fallback through the shim is available only when `allow_launch_services` is true.
 
 ### env_credentials (alias: secrets)
 
@@ -205,7 +485,6 @@ Controls which environment variables are passed to the sandboxed process. When `
 | `set_vars`    | object (string→string) | `{}` | Static environment variables injected after allow/deny filtering and before credential injection (injected credentials win on conflict). Values support the same expansion as profile paths (`$HOME`, `~`, `$WORKDIR`, `$TMPDIR`, `$XDG_*`, `$NONO_CONFIG`, `$NONO_PACKAGES`); keys are not expanded. `PATH` and any `NONO_*` key are reserved and rejected at load time. Unlike inherited host vars, keys here are NOT subject to the dangerous-variable blocklist (`LD_PRELOAD`, `NODE_OPTIONS`, …) — setting one is an explicit operator decision. |
 
 Inheritance: child `allow_vars` and `deny_vars` are appended to base values and deduplicated; `set_vars` merges as a map, with the child's value winning on key conflict.
-
 
 ### hooks
 
@@ -275,8 +554,8 @@ To replace inherited URL-opening permissions, provide `open_urls` with an explic
     "name": "ci-build",
     "description": "CI build environment"
   },
-  "security": {
-    "groups": ["deny_credentials", "deny_ssh_keys"]
+  "groups": {
+    "include": ["deny_credentials", "deny_ssh_keys"]
   },
   "workdir": {
     "access": "readwrite"
@@ -327,7 +606,7 @@ On Linux, the built-in `default` profile keeps host runtime, sysfs, and shared t
 
 ### Profile with deny overrides
 
-When a deny group blocks a path you need access to, use `bypass_protection` together with an explicit grant:
+When a deny group blocks a path you need access to, use `filesystem.bypass_protection` together with an explicit grant. Remember: `bypass_protection` only removes the deny rule — it does not grant access on its own.
 
 ```json
 {
@@ -340,13 +619,34 @@ When a deny group blocks a path you need access to, use `bypass_protection` toge
     "access": "readwrite"
   },
   "filesystem": {
-    "read_file": ["$HOME/.bashrc", "$HOME/.zshrc"]
-  },
-  "policy": {
+    "read_file": ["$HOME/.bashrc", "$HOME/.zshrc"],
     "bypass_protection": ["$HOME/.bashrc", "$HOME/.zshrc"]
   }
 }
 ```
+
+### Suppress repeated save suggestions
+
+Use `filesystem.suppress_save_prompt` for paths you intentionally do not want
+to grant, but also do not want offered in the save-profile prompt every run:
+
+```json
+{
+  "extends": "default",
+  "meta": {
+    "name": "copilot-local",
+    "description": "Local prompt-suppression choices"
+  },
+  "filesystem": {
+    "suppress_save_prompt": ["$HOME/.copilot/settings.json"]
+  }
+}
+```
+
+The sandbox still denies these paths. `filesystem.suppress_save_prompt` only
+filters the save-profile suggestion. `filesystem.ignore` is accepted as an
+alias, but new profiles should use the explicit suppress name so it is not
+mistaken for an access grant.
 
 ### Denying specific project files
 
@@ -359,8 +659,8 @@ Block access to a file in the working directory while keeping the rest accessibl
     "name": "no-dotenv",
     "description": "Claude Code without .env access"
   },
-  "policy": {
-    "add_deny_access": ["$WORKDIR/.env"]
+  "filesystem": {
+    "deny": ["$WORKDIR/.env"]
   }
 }
 ```
@@ -379,8 +679,8 @@ Block access to a file in the working directory while keeping the rest accessibl
   "security": {
     "capability_elevation": true
   },
-  "policy": {
-    "add_deny_access": ["$WORKDIR/.env"]
+  "filesystem": {
+    "deny": ["$WORKDIR/.env"]
   }
 }
 ```
@@ -389,7 +689,11 @@ With `capability_elevation` enabled, nono runs in supervised mode where every fi
 
 ### Blocking container access (Docker, Podman, kubectl)
 
-Use `add_deny_access` together with `add_deny_commands` for defense-in-depth when you want to prevent an agent from reaching the Docker daemon or similar container runtimes:
+Socket access enforcement is platform-specific because macOS (Seatbelt) and Linux (Landlock + seccomp) have different capabilities.
+
+#### macOS
+
+Use `filesystem.deny` on the socket path. Seatbelt treats `connect(2)` as a network operation, so nono also emits a `network-outbound` deny for the path — the socket is blocked at both the filesystem and network layers:
 
 ```json
 {
@@ -398,14 +702,43 @@ Use `add_deny_access` together with `add_deny_commands` for defense-in-depth whe
     "name": "no-docker",
     "description": "Claude Code without Docker access"
   },
-  "policy": {
-    "add_deny_access": ["/var/run/docker.sock"],
-    "add_deny_commands": ["docker", "docker-compose", "podman", "kubectl"]
+  "filesystem": {
+    "deny": ["/var/run/docker.sock"]
   }
 }
 ```
 
-On macOS, `add_deny_access` on a socket path also emits a Seatbelt `network-outbound` deny — Seatbelt treats `connect(2)` as a network operation so a file deny alone won't block it. Prefer path- and network-based controls; `add_deny_commands` remains as deprecated startup-only compatibility behavior and is visible in `nono profile show` under **Policy patches**.
+#### Linux
+
+Landlock cannot express deny-within-allow, so `filesystem.deny` is a no-op on Linux. Instead, enable `linux.af_unix_mediation` to switch to a default-deny seccomp supervisor for AF_UNIX pathname sockets, then add back only the sockets the agent needs via `filesystem.unix_socket`:
+
+```json
+{
+  "extends": "claude-code",
+  "meta": {
+    "name": "no-docker",
+    "description": "Claude Code without Docker access"
+  },
+  "linux": {
+    "af_unix_mediation": "pathname"
+  }
+}
+```
+
+With no `filesystem.unix_socket` entries, every AF_UNIX pathname connect and bind is blocked — including `/run/docker.sock`. To allow specific sockets back (e.g. tmux, D-Bus), add them explicitly:
+
+```json
+{
+  "linux": { "af_unix_mediation": "pathname" },
+  "filesystem": {
+    "unix_socket": ["/run/user/1000/bus"]
+  }
+}
+```
+
+#### Deprecation note
+
+`commands.deny` is deprecated startup-only gating — it blocks the command from launching but does not enforce socket access and should not be relied on as enforcement. It remains visible in `nono profile show` under the commands section for compatibility.
 
 ### Allowing parent-of-protected-root grants (macOS only)
 
@@ -438,8 +771,8 @@ Remove an inherited deny group that is too restrictive for your use case:
   "workdir": {
     "access": "readwrite"
   },
-  "policy": {
-    "exclude_groups": ["deny_browser_data_macos", "deny_browser_data_linux"]
+  "groups": {
+    "exclude": ["deny_browser_data_macos", "deny_browser_data_linux"]
   }
 }
 ```
@@ -500,12 +833,65 @@ The following variables are expanded in all path fields (`filesystem.*`, includi
 
 Always use these variables instead of hardcoded absolute paths to keep profiles portable across machines and users.
 
-## 7. Key Rules
+## 7. Platform Predicates
 
-- A profile with no `security.groups` has no deny rules. Always include appropriate deny groups for untrusted workloads.
-- `bypass_protection` only removes the deny rule. It does not grant access. You must also add the path via `filesystem` or `policy.add_allow_*`.
-- `exclude_groups` removes groups from the resolved set. This weakens the sandbox. Use it only when you understand which protections you are removing.
+Profile entries that list paths, group names, URL origins, or env credentials can be unconditional strings or conditional objects with `when`.
+
+```json
+{
+  "groups": {
+    "include": [
+      "agent_common",
+      { "name": "agent_linux", "when": "linux" },
+      { "name": "agent_macos", "when": "macos" }
+    ]
+  },
+  "filesystem": {
+    "read": [
+      "$HOME/.agent",
+      { "path": "$HOME/Library/Application Support/Agent", "when": "macos" },
+      { "path": "$XDG_CONFIG_HOME/agent", "when": "linux" }
+    ]
+  },
+  "env_credentials": {
+    "agent_key": { "env_var": "AGENT_API_KEY", "when": ["linux", "macos:>=15"] }
+  }
+}
+```
+
+Supported predicate forms include `linux`, `macos`, `linux:fedora`, `linux:rhel-like`, `linux:ubuntu:>=24.04`, `macos:>=15`, negation such as `!linux:nixos`, and arrays for any-of matching.
+
+## 8. Key Rules
+
+- A profile with no `groups.include` has no deny rules. Always include appropriate deny groups for untrusted workloads.
+- `filesystem.bypass_protection` only removes the deny rule. It does not grant access. You must also add the path via `filesystem.allow`, `filesystem.read`, or `filesystem.write` (or the matching `*_file` variant).
+- `filesystem.suppress_save_prompt` only suppresses save-profile suggestions. It does not grant access, remove deny rules, or hide diagnostics.
+- `groups.exclude` removes groups from the resolved set. This weakens the sandbox. Use it only when you understand which protections you are removing.
 - `extends` chains resolve recursively up to depth 10. Circular inheritance is an error.
-- Platform-specific groups (suffix `_macos` or `_linux`) are filtered at resolution time. Include both variants for cross-platform profiles.
+- Prefer `when` predicates for package-specific platform differences. Put shared OS baseline paths in built-in policy groups instead.
 - `network.block: true` blocks all network access. It cannot be combined with proxy settings.
 - `custom_credentials` upstream URLs must use HTTPS. HTTP is only accepted for loopback addresses (localhost, 127.0.0.1, ::1).
+
+## 9. Migration from previous schema
+
+Issue [#594](https://github.com/always-further/nono/issues/594) restructured the profile JSON schema. The old `policy.*` namespace has been dissolved into `filesystem`, `groups`, and `commands`; `security.groups` and `security.allowed_commands` have moved to top-level `groups.include` and `commands.allow`.
+
+Legacy keys still deserialize — profiles using the old names continue to load and emit a single deprecation warning — but they are scheduled for removal in **v1.0.0**. New profiles and edits should use the canonical keys below.
+
+| OLD                          | NEW                             |
+|------------------------------|---------------------------------|
+| `security.groups`            | `groups.include`                |
+| `security.allowed_commands`  | `commands.allow`                |
+| `policy.add_allow_read`      | `filesystem.read`               |
+| `policy.add_allow_write`     | `filesystem.write`              |
+| `policy.add_allow_readwrite` | `filesystem.allow`              |
+| `policy.add_deny_access`     | `filesystem.deny`               |
+| `policy.add_deny_commands`   | `commands.deny`                 |
+| `policy.override_deny`       | `filesystem.bypass_protection`  |
+| `policy.exclude_groups`      | `groups.exclude`                |
+| `--override-deny` (CLI)      | `--bypass-protection` (CLI)     |
+
+Notes:
+- The old `policy` key is no longer recognized as a top-level section. Its former fields now live directly under `filesystem`, `groups`, or `commands` as shown above.
+- The CLI flag renamed from `--override-deny` to `--bypass-protection` for the same reason the JSON key was renamed: to make the "does not grant access" semantics explicit. The old flag remains as a deprecated alias until v1.0.0.
+- When mechanically migrating a profile, move each `policy.*` entry up one level and rename per the table. Array values are preserved unchanged.
