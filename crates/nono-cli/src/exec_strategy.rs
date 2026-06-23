@@ -30,7 +30,7 @@ use nix::unistd::{fork, ForkResult, Pid};
 use nono::supervisor::{ApprovalDecision, SupervisorMessage, SupervisorResponse};
 use nono::{
     ApprovalBackend, CapabilitySet, DenialReason, DenialRecord, NonoError, Result, Sandbox,
-    SessionDiagnosticReport, SupervisorListener, SupervisorSocket, UnixSocketCapability,
+    SessionDiagnosticReport, SupervisorSocket, UnixSocketCapability,
     UnixSocketMode,
 };
 use std::collections::HashSet;
@@ -1335,7 +1335,7 @@ pub fn execute_supervised(
                 // centralized helper. Both child and parent MUST use the same
                 // predicate (af_unix_send_filter_action) with the same config
                 // so the notify-fd send/recv are always in sync.
-                let has_unix_grants = !config.unix_socket_allowlist.is_empty();
+                let has_unix_grants = !config.caps.unix_socket_capabilities().is_empty();
                 let send_filter_action = af_unix_send_filter_action(
                     config.seccomp_proxy_fallback,
                     config.af_unix_mediation,
@@ -1639,7 +1639,7 @@ pub fn execute_supervised(
             // the child never sends.
             #[cfg(target_os = "linux")]
             let proxy_notify_fd: Option<OwnedFd> = {
-                let has_unix_grants_parent = !config.unix_socket_allowlist.is_empty();
+                let has_unix_grants_parent = !config.caps.unix_socket_capabilities().is_empty();
                 let parent_send_action = af_unix_send_filter_action(
                     config.seccomp_proxy_fallback,
                     config.af_unix_mediation,

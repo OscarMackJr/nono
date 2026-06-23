@@ -1506,6 +1506,26 @@ pub(crate) fn terminal_restore_escape(clear_screen: bool) -> &'static [u8] {
     }
 }
 
+fn drain_terminal_output(fd: RawFd) {
+    // SAFETY: `isatty` only inspects the borrowed fd and does not take ownership.
+    if unsafe { libc::isatty(fd) } != 1 {
+        return;
+    }
+
+    loop {
+        // SAFETY: `tcdrain` waits for queued terminal output on the borrowed fd.
+        let ret = unsafe { libc::tcdrain(fd) };
+        if ret == 0 {
+            break;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() != std::io::ErrorKind::Interrupted {
+            debug!("PTY proxy: terminal output drain failed: {}", err);
+            break;
+        }
+    }
+}
+
 fn write_all_fd(fd: RawFd, mut bytes: &[u8]) -> std::io::Result<()> {
     while !bytes.is_empty() {
         let written =
