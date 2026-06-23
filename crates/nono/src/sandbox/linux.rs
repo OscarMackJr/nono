@@ -3873,6 +3873,9 @@ mod tests {
 
         // Instruction 20 (bind) must route to USER_NOTIF — the supervisor is the
         // sole gate for both AF_UNIX pathname bind and TCP bind-port decisions.
+        // (origin/main's PR #10 fix asserted filter[17]; that index predates the
+        // Phase 87 send-family arms — bind is now at index 20, matching the
+        // build_seccomp_proxy_filter instruction table and the with_bind test.)
         assert_eq!(filter[20].code, BPF_RET | BPF_K);
         assert_eq!(
             filter[20].k, SECCOMP_RET_USER_NOTIF,
@@ -4279,8 +4282,11 @@ mod tests {
     /// Integration test: seccomp proxy filter blocks bind() when no bind_ports.
     ///
     /// Forks a child that installs the proxy filter with has_bind_ports=false,
-    /// then attempts to bind a socket. The bind should fail with EACCES directly
-    /// from the BPF filter (no notification, no handler needed).
+    /// then attempts to bind a socket. `bind()` now ALWAYS routes to USER_NOTIF
+    /// (the has_bind_ports=false → ERRNO short-circuit was removed because it
+    /// broke AF_UNIX bind), so the child must run a notification handler that
+    /// denies the bind with EACCES. Without a handler the child's bind() would
+    /// block in-kernel forever and the parent's waitpid() would hang.
     #[cfg(target_os = "linux")]
     #[test]
     fn test_seccomp_proxy_filter_blocks_bind_without_bind_ports() {
@@ -4294,10 +4300,25 @@ mod tests {
         if pid == 0 {
             unsafe { libc::close(report_pipe[0]) };
 
-            // Install proxy filter with bind disabled (returns ERRNO, not USER_NOTIF)
-            // No notification handler needed — BPF returns EACCES directly.
+            // Install the proxy filter. bind() routes to USER_NOTIF, so we MUST
+            // handle the notification or the bind() below blocks forever.
             match install_seccomp_proxy_filter(false) {
-                Ok(_notify_fd) => {
+                Ok(notify_fd) => {
+                    let notify_raw = {
+                        use std::os::fd::AsRawFd;
+                        notify_fd.as_raw_fd()
+                    };
+
+                    // Handler thread: deny the single expected bind() notification
+                    // with EACCES. This is what the supervisor does when no bind
+                    // ports are configured — and it lets bind() return instead of
+                    // hanging in-kernel waiting for a response.
+                    let handler = std::thread::spawn(move || {
+                        if let Ok(notif) = recv_notif(notify_raw) {
+                            let _ = respond_notif_errno(notify_raw, notif.id, libc::EACCES);
+                        }
+                    });
+
                     // Attempt bind on an ephemeral port
                     let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
 
@@ -4318,6 +4339,8 @@ mod tests {
                     } else {
                         0
                     };
+
+                    handler.join().ok();
 
                     unsafe {
                         libc::close(sock);
