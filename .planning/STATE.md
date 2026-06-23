@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
 status: milestone_complete
-stopped_at: Phase 93 context gathered
+stopped_at: Phase 93 complete — v3.2 milestone complete
 last_updated: "2026-06-23T00:03:25.101Z"
-last_activity: 2026-06-23 -- Phase 93 execution started
+last_activity: 2026-06-23 -- Phase 93 (LAST) complete; VFY-01 + VFY-03a [BLOCKING-93] closed
 progress:
   total_phases: 3
   completed_phases: 3
   total_plans: 13
-  completed_plans: 7
+  completed_plans: 13
   percent: 100
 ---
 
