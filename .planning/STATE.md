@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
-status: milestone_complete
-stopped_at: Phase 93 complete — v3.2 milestone complete
-last_updated: "2026-06-23T00:03:25.101Z"
-last_activity: 2026-06-23 -- Phase 93 (LAST) complete; VFY-01 + VFY-03a [BLOCKING-93] closed
+status: Awaiting next milestone
+stopped_at: v3.2 milestone completed and archived
+last_updated: "2026-06-23T10:34:06.470Z"
+last_activity: 2026-06-23 — Milestone v3.2 completed and archived
 progress:
   total_phases: 3
   completed_phases: 3
@@ -22,22 +22,20 @@ See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90
 
 **Core Value:** A false-positive nono block must be resolvable by a cryptographically-signed, ledgered, non-self-service exception — never by disabling the sandbox.
 
-**Current Focus:** Phase 93 — live-zt-infra-integration-revocation-request-flow
+**Current Focus:** Planning next milestone — v3.2 SHIPPED + ARCHIVED 2026-06-23 (all 3 phases 91-93 complete; VFY-01 b + VFY-03 a [BLOCKING-93] both closed). Run `/gsd-new-milestone`.
 
 ## Current Position
 
-Phase: 93
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-06-23
-
-Progress: [░░░░░░░░░░] 0%
+Phase: Milestone v3.2 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-23 — Milestone v3.2 completed and archived
 
 ## Performance Metrics
 
 **Velocity:** (v3.2 — reset; populated as phases complete)
 
-- Total plans completed: 14
+- Total plans completed: 13
 - Average duration: —
 - Total execution time: —
 
@@ -64,28 +62,30 @@ None.
 
 ### Blockers/Concerns
 
-- **Cross-target clippy**: Phase 92 adds `AuditEventPayload::PolicyOverrideApplied` to `crates/nono/src/audit.rs` (cfg-unconditional) + a new arm in the `SecurityEventLayer` match in nono-cli (may have `cfg(windows)` guards). Both Windows AND Linux clippy must pass (CLAUDE.md MUST/NEVER rule). Note this milestone is overwhelmingly nono-py + additive core-crate work — cross-target is lower risk than v3.1's Unix security patches, but the `SecurityEventLayer` match arm must not produce `unreachable_patterns` on Linux CI.
-- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
+- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All v3.2 commits + the `v3.2` tag are LOCAL ONLY; push is operator-gated.
 - **Milestone-marker only**: no crate publish; a future release must leapfrog the crate version to ≥ `0.65.0`.
-- **ZT-Infra local provisioner required at Phase 93**: `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2` — `npm install && npm start` in the provisioner directory. Confirm availability before Phase 93 planning.
+- **Cross-target clippy (PARTIAL→CI)**: the ZTL-04 `AWS_*` strip in `crates/nono-cli/src/exec_strategy/env_sanitization.rs` is verified native-Windows only; linux-gnu + apple-darwin clippy deferred to CI (host lacks cross C compiler), per CLAUDE.md MUST/NEVER. (Resolved-at-close: the milestone was overwhelmingly additive core/nono-py work; native `cargo build`/`clippy` green on both crates.)
 
 ## Deferred Items
 
-Items acknowledged and deferred at v3.1 close (2026-06-21) — see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`:
+Items acknowledged and deferred at **v3.2 close (2026-06-23)** — `gsd-sdk query audit-open` reported 47 open artifacts, user acknowledged-all (Proceed without audit). All historical or host-gated; none blockers:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| PARTIAL→CI | SEC-01 AF_UNIX seccomp trap (Phase 87) — Unix-cfg-gated, GH Actions decisive | Open (CI-decisive) | v3.1 close |
-| PARTIAL→CI | SEC-02 procfs-remap dedup guard (Phase 87) — Unix-cfg-gated | Open (CI-decisive) | v3.1 close |
-| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) — host lacks cross C compiler | Open (CI-decisive) | v3.1 close |
-| Host-gated | DRAIN-01 live clean-VM silent MSI install — SKIP_HOST_UNAVAILABLE by design | Open (host-gated) | v3.1 close |
-| Host-gated | DRAIN-02 live dual-layer WFP egress block — SKIP by design | Open (host-gated) | v3.1 close |
-| Host-gated | DRAIN-03 live SIEM telemetry emit + admin opt-out — gate FAIL is environmental | Open (host-gated) | v3.1 close |
-| Out-of-scope | 2 env-sensitive DACL-guard tests (Phase 74 code) fail at real-ACL on this host | Open (env-specific) | v3.1 close |
-| Historical | 48 open artifacts (historical quick-tasks + dormant seeds + todos) | Acknowledged | v3.1 close |
+| Historical | 36 open quick-tasks (Mar–Apr 2026 dates, all `missing`/cleaned-up) | Acknowledged | v3.2 close |
+| Historical | 6 seeds SEED-001…006 (all consumed or dormant; SEED-005 = v3.2 scope, delivered) | Acknowledged | v3.2 close |
+| Historical | 4 empty/"None" todo parse artifacts | Acknowledged | v3.2 close |
+| Host-gated | OVERRIDE-02 (DF-02) live allow/revoke proof — needs ZT-Infra provisioner + openssl + elevated session; SKIP_HOST_UNAVAILABLE by design | Open (host-gated) | v3.2 close |
+| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) for ZTL-04 `AWS_*` strip — host lacks cross C compiler | Open (CI-decisive) | v3.2 close |
+
+Prior carry-forwards from v3.1 close (2026-06-21, see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`) remain deferred: SEC-01/SEC-02 AF_UNIX+procfs guards (PARTIAL→CI), DRAIN-01/02/03 live host-gated UAT, 2 env-sensitive Phase-74 DACL-guard tests.
 
 ## Session Continuity
 
-Last session: 2026-06-22T22:09:06.387Z
-Stopped at: Phase 93 context gathered
-Resume file: .planning/phases/93-live-zt-infra-integration-revocation-request-flow/93-CONTEXT.md
+Last session: 2026-06-23 — v3.2 milestone completed and archived
+Stopped at: v3.2 shipped; awaiting next milestone
+Resume file: — (start next milestone via /gsd-new-milestone)
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
