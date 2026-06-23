@@ -1,9 +1,11 @@
 ---
 phase: 93-live-zt-infra-integration-revocation-request-flow
 verified: 2026-06-22T23:00:00Z
-status: gaps_found
-score: 6/8 must-haves verified
+status: passed_with_partials
+score: 8/8 must-haves verified (all gaps closed post-verification — see ADDENDUM)
 overrides_applied: 0
+gaps_closed: true
+gaps_closed_commits: ["358d9c6 (nono-py)", "38121c69 (Nono)"]
 gaps:
   - truth: "verify_override_production() closes VFY-03a [BLOCKING-93]: pubkey is policy-sourced (HKLM) and per-key_id cached on the production Python call path"
     status: failed

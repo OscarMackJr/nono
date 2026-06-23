@@ -42,21 +42,21 @@
 
 ### Live ZT-Infra Integration + Revocation (ZTL)
 
-- [ ] **ZTL-01**: The live decision endpoint is configurable (`NONO_ZT_ACTIONS_URL`) and integrates with the deployed ZT-Infra v2 AWS control plane (KMS-signed audit + DAAL ledger).
-- [ ] **ZTL-02**: The live `POST /actions` call has a bounded timeout (2s default) and fails closed on timeout / error / `deny`.
-- [ ] **ZTL-03**: Revocation is honored — an override id added to the ZT-Infra deny-list is rejected on the next live check; nono adds **no new revocation infrastructure**.
-- [ ] **ZTL-04**: `AWS_*` credentials are stripped from the sandboxed child environment (extending the existing exec-strategy env filter).
-- [ ] **ZTL-05**: Override authorizations are anchored to the ZT-Infra DAAL ledger **asynchronously and non-blocking** — authorization never waits on ledger finality.
+- [x] **ZTL-01**: The live decision endpoint is configurable (`NONO_ZT_ACTIONS_URL`) and integrates with the deployed ZT-Infra v2 AWS control plane (KMS-signed audit + DAAL ledger).
+- [x] **ZTL-02**: The live `POST /actions` call has a bounded timeout (2s default) and fails closed on timeout / error / `deny`.
+- [x] **ZTL-03**: Revocation is honored — an override id added to the ZT-Infra deny-list is rejected on the next live check; nono adds **no new revocation infrastructure**.
+- [x] **ZTL-04**: `AWS_*` credentials are stripped from the sandboxed child environment (extending the existing exec-strategy env filter).
+- [x] **ZTL-05**: Override authorizations are anchored to the ZT-Infra DAAL ledger **asynchronously and non-blocking** — authorization never waits on ledger finality.
 
 ### CLI / Developer UX (CLI)
 
-- [ ] **CLI-01**: A developer who hits a false-positive denial can request an exception via `nono override request`, surfacing the denial context (paths/domains, repo) from the `DiagnosticFormatter`.
-- [ ] **CLI-02**: A developer can apply a received signed token via `nono override apply` (and/or by supplying it to `confined_run`), which runs the full fail-closed verification before any expansion.
+- [x] **CLI-01**: A developer who hits a false-positive denial can request an exception via `nono override request`, surfacing the denial context (paths/domains, repo) from the `DiagnosticFormatter`.
+- [x] **CLI-02**: A developer can apply a received signed token via `nono override apply` (and/or by supplying it to `confined_run`), which runs the full fail-closed verification before any expansion.
 
 ### Verification / Dark Factory (DF)
 
 - [x] **DF-01**: An unattended `verify-dark.ps1 --gate OVERRIDE-01` gate exercises the offline verify path + the fail-closed cases (bad sig, expired, out-of-scope, replay, `algorithm:"none"`) against the ZT-Infra local provisioner / test vectors, emitting a machine-readable verdict.
-- [ ] **DF-02**: Live AWS/KMS + DAAL-anchoring paths are exercised by scripted gates that emit `SKIP_HOST_UNAVAILABLE` when AWS/host is absent (acknowledged host-gated tech-debt, consistent with prior milestones).
+- [x] **DF-02**: Live AWS/KMS + DAAL-anchoring paths are exercised by scripted gates that emit `SKIP_HOST_UNAVAILABLE` when AWS/host is absent (acknowledged host-gated tech-debt, consistent with prior milestones).
 
 ## v2 / Future Requirements
 
@@ -108,15 +108,15 @@ Populated by roadmap creation 2026-06-21. Phase numbering continues from Phase 9
 | AUD-02 | Phase 92 | Complete |
 | AUD-03 | Phase 92 | Complete |
 | AUD-04 | Phase 92 | Complete |
-| ZTL-01 | Phase 93 | Pending |
-| ZTL-02 | Phase 93 | Pending |
-| ZTL-03 | Phase 93 | Pending |
-| ZTL-04 | Phase 93 | Pending |
-| ZTL-05 | Phase 93 | Pending |
-| CLI-01 | Phase 93 | Pending |
-| CLI-02 | Phase 93 | Pending |
+| ZTL-01 | Phase 93 | Complete |
+| ZTL-02 | Phase 93 | Complete |
+| ZTL-03 | Phase 93 | Complete |
+| ZTL-04 | Phase 93 | Complete |
+| ZTL-05 | Phase 93 | Complete |
+| CLI-01 | Phase 93 | Complete |
+| CLI-02 | Phase 93 | Complete |
 | DF-01 | Phase 92 | Complete |
-| DF-02 | Phase 93 | Pending |
+| DF-02 | Phase 93 | Complete |
 
 **Coverage:**
 - v1 requirements: 28 total

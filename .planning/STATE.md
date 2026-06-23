@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.2
 milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
-status: executing
+status: milestone_complete
 stopped_at: Phase 93 context gathered
 last_updated: "2026-06-23T00:03:25.101Z"
 last_activity: 2026-06-23 -- Phase 93 execution started
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 13
   completed_plans: 7
-  percent: 54
+  percent: 100
 ---
 
 # Project State: nono — v3.2 Signed Policy Overrides (ZT-Infra Attestation)
@@ -26,10 +26,10 @@ See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90
 
 ## Current Position
 
-Phase: 93 (live-zt-infra-integration-revocation-request-flow) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 93
-Last activity: 2026-06-23 -- Phase 93 execution started
+Phase: 93
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-06-23
 
 Progress: [░░░░░░░░░░] 0%
 
@@ -37,7 +37,7 @@ Progress: [░░░░░░░░░░] 0%
 
 **Velocity:** (v3.2 — reset; populated as phases complete)
 
-- Total plans completed: 7
+- Total plans completed: 14
 - Average duration: —
 - Total execution time: —
 

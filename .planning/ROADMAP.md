@@ -117,4 +117,4 @@ Plans:
 | 90. v3.0 Host-Gated UAT Drain | v3.1 | 2/2 | Complete | 2026-06-21 |
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete    | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete    | 2026-06-22 |
-| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete   | 2026-06-23 |
+| 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 7/6 | Complete    | 2026-06-23 |
