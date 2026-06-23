@@ -17,12 +17,13 @@
 # WHAT THIS PROVES (satisfies DF-02 / ZTL-01 / ZTL-03 / ZTL-05):
 #   SC1 (allow path -- live two-key AND gate):
 #     Seeds the Phase 91 TEST pubkey + signer ARN into the policy-authoritative trust store
-#     (HKCU registry test-seam, D-05: never env) so the allow path is reachable under
-#     Plan 01's fail-closed KeyNotAllowlisted policy.
+#     (HKLM registry, D-05: trust roots from HKLM only, never env or HKCU) so the production
+#     verify_override_production() HKLM reader path is actually exercised under Plan 01's
+#     fail-closed KeyNotAllowlisted policy.
 #     Mints a token using the Phase 91 test keypair. Seeds an allow rule override.apply*
 #     into the provisioner via ACTION_POLICY_FILE. Calls verify_override_production()
-#     (offline ECDSA) then the live POST /actions AND-gate. Asserts allow -> OverrideGrant.
-#     Asserts the live request body omits flush_daal (ZTL-05).
+#     (offline ECDSA, HKLM-sourced trust) then the live POST /actions AND-gate.
+#     Asserts allow -> OverrideGrant. Asserts the live request body omits flush_daal (ZTL-05).
 #
 #   SC2 (revocation path -- ZTL-03):
 #     Seeds a deny rule override.apply:<jti> for the minted token's jti.
@@ -36,16 +37,17 @@
 #   Requires openssl on PATH for token minting.
 #   Requires the local ZT-Infra provisioner running at NONO_ZT_ACTIONS_URL
 #   (127.0.0.1:3000 by default; start with: cd provisioner && npm install && npm start).
-#   Admin NOT required -- the gate uses HKCU (no elevation) for the test trust-root seam.
-#   On a host without Python/nono_py/openssl/provisioner, the gate SKIPs cleanly.
+#   REQUIRES ELEVATION (admin) -- the gate seeds HKLM (the production trust store as read
+#   by override_trust.rs); HKLM writes require admin. Non-admin host -> SKIP_HOST_UNAVAILABLE.
+#   On a host without Python/nono_py/openssl/provisioner/elevation, the gate SKIPs cleanly.
 #
 # TRUST-ROOT SEED (Plan 01 reader contract D-05/D-06):
-#   The policy-authoritative reader sources:
-#     Override\KmsPublicKeys\<key_id>  = REG_SZ base64(DER public key)
-#     Override\AllowedKeyArns\         = N x REG_SZ (signer ARN allowlist)
-#   under SOFTWARE\Policies\nono. The gate seeds these in HKCU (HKLM read succeeds
-#   transparently in merged HKLM/HKCU view, but for test seams HKCU is preferred --
-#   no elevation required). The seed is torn down in a finally block.
+#   The policy-authoritative reader (override_trust.rs) sources trust roots EXCLUSIVELY from:
+#     HKLM\SOFTWARE\Policies\nono\Override\KmsPublicKeys\<key_id>  = REG_SZ base64(DER public key)
+#     HKLM\SOFTWARE\Policies\nono\Override\AllowedKeyArns\         = N x REG_SZ (signer ARN allowlist)
+#   The gate seeds these values into HKLM (not HKCU) so the HKLM-only reader is genuinely
+#   exercised. This is the only hive the reader opens (RegKey::predef(HKEY_LOCAL_MACHINE)).
+#   Writing HKLM requires elevation. The seed is torn down in a finally block (T-93-06-06).
 #
 # INVOCATION RULE (MEMORY durable):
 #   pwsh -File scripts\verify-dark.ps1 --gate override-02
@@ -60,7 +62,9 @@ $script:FixturesPath  = 'C:\Users\OMack\nono-py\tests\fixtures'
 $script:TestKmsArn    = 'arn:aws:kms:us-east-2:111122223333:key/test'
 
 # Registry path constants (Plan 01 Override trust schema, D-05/D-06)
-$script:RegistryBase          = 'HKCU:\SOFTWARE\Policies\nono\Override'
+# HKLM is used (not HKCU) — override_trust.rs opens HKEY_LOCAL_MACHINE exclusively.
+# Writing HKLM requires admin; Test-Precondition checks elevation and SKIPs if non-admin.
+$script:RegistryBase          = 'HKLM:\SOFTWARE\Policies\nono\Override'
 $script:KmsPublicKeysSubKey   = 'KmsPublicKeys'
 $script:AllowedKeyArnsSubKey  = 'AllowedKeyArns'
 
@@ -89,6 +93,15 @@ function Assert-True {
 function Test-Precondition {
     # Return $null when all preconditions met; return a reason string -> SKIP_HOST_UNAVAILABLE.
 
+    # 0. Elevation check -- HKLM writes require admin. Non-admin -> SKIP (not FAIL).
+    #    The gate seeds trust roots into HKLM (override_trust.rs reads HKLM exclusively).
+    #    Writing HKLM\SOFTWARE\... requires an elevated (admin) process on Windows.
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+        [Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        return 'requires elevation to seed HKLM trust root -- re-run this gate from an elevated (admin) PowerShell session; SKIP_HOST_UNAVAILABLE'
+    }
+
     # 1. Check Python is available.
     $pyCheck = & python --version 2>&1
     if ($LASTEXITCODE -ne 0) {
@@ -101,10 +114,10 @@ function Test-Precondition {
         return "nono_py Python module not importable ($check) -- run 'pip install -e .' in nono-py then re-run"
     }
 
-    # 3. Check verify_override_production and confined_run_checked are available (Phase 91/93 symbols).
-    $ovCheck = & python -c "from nono_py import verify_override, NonoOverrideError, confined_run_checked; from nono_py._live import live_check; print('ok')" 2>&1
+    # 3. Check verify_override_production (Gap 1 production HKLM verifier) and live symbols.
+    $ovCheck = & python -c "from nono_py import verify_override_production, NonoOverrideError; from nono_py._live import live_check; print('ok')" 2>&1
     if ($LASTEXITCODE -ne 0 -or $ovCheck -ne 'ok') {
-        return "nono_py live-arm symbols not importable ($ovCheck) -- ensure Phase 91+92+93 changes are built"
+        return "nono_py live-arm symbols not importable ($ovCheck) -- ensure Phase 91+92+93+gap-closure changes are built (maturin develop)"
     }
 
     # 4. Check openssl on PATH (needed for token minting).
@@ -148,8 +161,9 @@ function Invoke-Gate {
     # NEVER calls exit. NEVER calls Persist-Verdict. Returns exactly one verdict object.
     #
     # Trust-root seeding:
-    #   Seeds the Phase 91 TEST pubkey into HKCU Override\KmsPublicKeys\<test_key_id> +
-    #   the signer ARN into Override\AllowedKeyArns\ (registry test-seam, D-05: never env).
+    #   Seeds the Phase 91 TEST pubkey into HKLM Override\KmsPublicKeys\<test_key_id> +
+    #   the signer ARN into Override\AllowedKeyArns\ (HKLM is the production trust store the
+    #   HKLM-only reader in override_trust.rs opens; D-05: trust roots from HKLM, never env).
     #   Removes both in a finally block (T-93-06-06: gate never leaves test pubkey in policy store).
 
     # Native tools write progress to stderr; do not promote to terminating errors.
@@ -169,9 +183,10 @@ function Invoke-Gate {
     $pubKeyBytes = [System.IO.File]::ReadAllBytes($pubKeyPath)
     $pubKeyB64   = [Convert]::ToBase64String($pubKeyBytes)
 
-    # ---- Step 2: Seed the test trust root into HKCU (registry test-seam).
+    # ---- Step 2: Seed the test trust root into HKLM (the production trust store; test-seam).
     # key_id = $testKmsArn (the value the token carries in kms_signature.key_id).
-    # D-05: trust roots come from registry, never env -- this seed is a test-seam only.
+    # D-05: trust roots come from HKLM registry, never env -- this seed is a test-seam only,
+    # torn down in the finally block so the gate never leaves a test pubkey in the policy store.
     $seededKmsKey = $false
     $seededArnKey = $false
     $kmsRegPath = "$regBase\$kmsSubKey"
@@ -310,7 +325,7 @@ def make_token(jti, scope=None):
     token['kms_signature']['signature'] = sig_b64
     return json.dumps(token, separators=(',', ':'), ensure_ascii=False), pubkey_der
 
-from nono_py import verify_override, NonoOverrideError
+from nono_py import verify_override_production, verify_override, NonoOverrideError
 from nono_py._live import live_check
 
 results = {
@@ -359,11 +374,13 @@ try:
     os.environ['ACTION_POLICY_FILE'] = tmp_policy_path
 
     try:
-        # Step A: offline verify (verify_override uses test-injected pubkey_der
-        # for backward-compat; the live arm is the AND-gate)
-        grant = verify_override(token_json, pubkey_der, allowed_arns=[TEST_KMS_ARN])
+        # Step A: offline verify via production HKLM-sourced verifier (Gap 1 / VFY-03a).
+        # verify_override_production() sources pubkey DER + ARN allowlist from the HKLM
+        # trust root we seeded above (HKLM\SOFTWARE\Policies\nono\Override\). No test-
+        # injected keys — this genuinely exercises the HKLM reader (D-05/D-06).
+        grant = verify_override_production(token_json)
         if grant is None:
-            results['sc1_detail'] = 'verify_override returned None (unexpected)'
+            results['sc1_detail'] = 'verify_override_production returned None (unexpected)'
         else:
             # Step B: live POST /actions AND-gate via _live.live_check
             # Pitfall 4: AWS_* strip applies to the confined CHILD env only (via
@@ -506,8 +523,8 @@ try:
                             results['sc2'] = True
                         else:
                             sc2_actions_url = f'http://127.0.0.1:{sc2_port}/actions'
-                            # Verify offline then hit the deny-seeded provisioner.
-                            grant2 = verify_override(token_json2, pubkey_der2, allowed_arns=[TEST_KMS_ARN])
+                            # Verify offline via HKLM-sourced production verifier (same seeded trust root).
+                            grant2 = verify_override_production(token_json2)
                             sc2_raised = False
                             sc2_kind = None
                             try:
