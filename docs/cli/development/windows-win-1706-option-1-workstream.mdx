@@ -1,0 +1,674 @@
+---
+title: WIN-1706 Option 1 Workstream
+description: Epics, sprint plan, PR candidates, and review criteria for library/runtime alignment on Windows
+---
+
+# WIN-1706 Option 1 Workstream
+
+This document turns `WIN-1706` Option 1 into an executable workstream:
+
+- **promotion means library/runtime alignment**
+- Windows is only first-class supported when the **library** and the **CLI** tell the same story
+- `Sandbox::support_info()` and `Sandbox::apply()` must match the supported Windows runtime behavior
+
+Use this as the handoff artifact for the next PR candidate series.
+
+## Goal
+
+Promote Windows from:
+
+- supported CLI surface + partial library contract
+
+to:
+
+- one aligned Windows support contract across:
+  - `crates/nono`
+  - `crates/nono-cli`
+  - tests
+  - CI
+  - docs and release messaging
+
+## Non-Goals
+
+This workstream does **not** require:
+
+- implementing live `nono shell` on Windows
+- implementing live `nono wrap` on Windows
+- pretending Windows has full Seatbelt/Landlock feature parity
+- broadening support claims beyond the Windows surface already enforced honestly by the runtime
+
+The goal is alignment, not overclaiming.
+
+## Hard Definition of Done
+
+`WIN-1706` Option 1 is complete only when:
+
+1. `Sandbox::support_info()` no longer reports Windows as `partial` for the supported Windows contract.
+2. `Sandbox::apply()` on Windows no longer returns the generic `UnsupportedPlatform` path for the contract the CLI already supports.
+3. CLI support output no longer needs a “CLI supported, library partial” split.
+4. Windows docs and README can describe Windows as first-class supported without qualification about a narrower embedded library boundary.
+5. Verification passes:
+   - `cargo fmt --all -- --check`
+   - `cargo build --workspace`
+   - `cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used`
+   - `cargo test --workspace`
+   - Windows regression harness
+   - docs/release checks
+
+## Program Shape
+
+Recommended breakdown:
+
+- **Epic WIN-1710:** Library Contract Alignment
+- **Epic WIN-1720:** CLI and Runtime Contract Unification
+- **Epic WIN-1730:** CI and Verification Promotion
+- **Epic WIN-1740:** Docs and Release Contract Finalization
+
+Recommended sprint shape:
+
+- **Sprint WIN-17.4:** library apply/support contract
+- **Sprint WIN-17.5:** CLI/runtime alignment and tests
+- **Sprint WIN-17.6:** CI + Windows regression promotion
+- **Sprint WIN-17.7:** docs/release flip and final audit
+
+## Epic WIN-1710: Library Contract Alignment
+
+Goal: make the Windows library surface real enough that `crates/nono` and the CLI are no longer describing different support boundaries.
+
+### Story WIN-1711: Define the aligned Windows library contract
+
+Acceptance criteria:
+
+- an explicit supported Windows capability subset is documented in code comments and tests
+- unsupported capability shapes still fail closed
+- the subset is framed as the actual `Sandbox::apply()` Windows contract, not a CLI-only exception
+
+Primary files:
+
+- [windows.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/windows.rs)
+- [mod.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/mod.rs)
+- [windows-filesystem-parity-contract.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-filesystem-parity-contract.mdx)
+
+Review criteria:
+
+- Is the supported subset explicit enough to audit?
+- Are unsupported cases denied explicitly instead of silently downgraded?
+- Is the contract stated in library terms, not CLI marketing terms?
+
+### Story WIN-1712: Replace Windows `Sandbox::apply()` unsupported stub with aligned backend path
+
+Acceptance criteria:
+
+- `Sandbox::apply()` on Windows routes into a real backend path for the supported subset
+- unsupported shapes return specific fail-closed errors
+- the apply path does not claim support broader than what the backend enforces
+
+Primary files:
+
+- [windows.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/windows.rs)
+- [mod.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/mod.rs)
+
+Review criteria:
+
+- Does `apply()` still hide behind a generic unsupported stub?
+- Are path, network, and supervisor assumptions consistent with actual backend behavior?
+- Is the behavior safe under the repo’s “fail secure” mandate?
+
+### Story WIN-1713: Promote Windows support reporting in the library
+
+Acceptance criteria:
+
+- `support_info()` reports the aligned supported status
+- `is_supported()` and `support_info().status` agree
+- top-level `Sandbox` dispatch and Windows backend classification remain internally consistent
+
+Primary files:
+
+- [windows.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/windows.rs)
+- [mod.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/mod.rs)
+
+Review criteria:
+
+- Do `is_supported`, `support_info`, and `apply` describe the same contract?
+- Is there any remaining code path where Windows says “supported” but still fails like the old stub?
+
+## Epic WIN-1720: CLI and Runtime Contract Unification
+
+Goal: remove the temporary CLI-vs-library messaging split and make the runtime/output reflect the aligned library contract.
+
+### Story WIN-1721: Simplify setup/help/runtime support output
+
+Acceptance criteria:
+
+- `setup --check-only` no longer prints separate CLI/library support labels
+- runtime output no longer relies on the “supported restricted command surface” escape hatch
+- dry-run/help/runtime wording is consistent with the promoted library contract
+
+Primary files:
+
+- [setup.rs](/C:/Users/omack/Nono/crates/nono-cli/src/setup.rs)
+- [main.rs](/C:/Users/omack/Nono/crates/nono-cli/src/main.rs)
+- [output.rs](/C:/Users/omack/Nono/crates/nono-cli/src/output.rs)
+- [command_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/command_runtime.rs)
+- [execution_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/execution_runtime.rs)
+
+Review criteria:
+
+- Is any “library partial” wording still exposed to users?
+- Does the CLI now rely on promoted library support rather than route around it?
+- Are intentionally unsupported product decisions (`shell`, `wrap`) still explicit?
+
+### Story WIN-1722: Align Windows runtime validation with promoted library contract
+
+Acceptance criteria:
+
+- the CLI no longer depends on a separate temporary Windows support gate to justify supported runs
+- backend validation and library contract checks are composed coherently
+- product limitations still fail loudly where they remain intentional
+
+Primary files:
+
+- [command_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/command_runtime.rs)
+- [execution_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/execution_runtime.rs)
+- [supervised_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/supervised_runtime.rs)
+
+Review criteria:
+
+- Is there still duplicate support logic in library vs CLI layers?
+- Did the change remove safety checks rather than align them?
+- Are unsupported flows still explicit and testable?
+
+### Story WIN-1723: Expand tests around the promoted contract
+
+Acceptance criteria:
+
+- library tests cover supported `apply()` behavior on Windows
+- CLI tests assert first-class supported wording without overclaiming unsupported product decisions
+- regression tests cover the promoted Windows contract boundary
+
+Primary files:
+
+- [windows.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/windows.rs)
+- [env_vars.rs](/C:/Users/omack/Nono/crates/nono-cli/tests/env_vars.rs)
+- adjacent sandbox/runtime tests
+
+Review criteria:
+
+- Do tests assert the new support claim directly?
+- Do tests still guard unsupported `shell` / `wrap` behavior?
+- Is the promoted subset encoded in tests instead of only prose?
+
+## Epic WIN-1730: CI and Verification Promotion
+
+Goal: prove the aligned contract in automation, not just local reasoning.
+
+### Story WIN-1731: Promote Windows regression harness to library-aligned expectations
+
+Acceptance criteria:
+
+- Windows harness validates the aligned support contract
+- setup/runtime/help checks no longer assume a library/CLI split
+- failures distinguish host issues from real code regressions
+
+Primary files:
+
+- [windows-test-harness.ps1](/C:/Users/omack/Nono/scripts/windows-test-harness.ps1)
+- [env_vars.rs](/C:/Users/omack/Nono/crates/nono-cli/tests/env_vars.rs)
+
+Review criteria:
+
+- Does the harness prove the promoted support boundary?
+- Are environment failures clearly separate from code failures?
+
+### Story WIN-1732: Make CI enforce the promoted contract
+
+Acceptance criteria:
+
+- CI lanes prove the promoted Windows support boundary
+- docs/release checks do not lag behind runtime behavior
+- no CI assertion still expects Windows to be “partial”
+
+Primary files:
+
+- [.github/workflows/ci.yml](/C:/Users/omack/Nono/.github/workflows/ci.yml)
+- related docs checks / release checks
+
+Review criteria:
+
+- Does CI validate the real promoted contract?
+- Are any stale “partial” expectations left in tests or docs gates?
+
+## Epic WIN-1740: Docs and Release Contract Finalization
+
+Goal: flip docs and release messaging only after code and tests are honest.
+
+### Story WIN-1741: Update promotion and security docs to aligned support story
+
+Acceptance criteria:
+
+- docs no longer describe Windows as CLI-supported but library-partial
+- docs describe the promoted Windows support contract consistently
+- the old decision-package status is clearly superseded by the adopted Option 1 result
+
+Primary files:
+
+- [windows-promotion-criteria.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-promotion-criteria.mdx)
+- [windows-security-model.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-security-model.mdx)
+- [security-model.mdx](/C:/Users/omack/Nono/docs/cli/internals/security-model.mdx)
+- [README.md](/C:/Users/omack/Nono/README.md)
+- [installation.mdx](/C:/Users/omack/Nono/docs/cli/getting_started/installation.mdx)
+
+Review criteria:
+
+- Is any “CLI supported, library partial” language left?
+- Do docs still avoid overclaiming unsupported product decisions?
+
+### Story WIN-1742: Final audit and closeout
+
+Acceptance criteria:
+
+- `WIN-1705` audit remains satisfied under the promoted library contract
+- `WIN-1706` closeout references verification evidence, not intent
+- maintainers can point to a single Windows support contract everywhere
+
+Primary files:
+
+- [windows-promotion-criteria.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-promotion-criteria.mdx)
+- [windows-release-candidate-checklist.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-release-candidate-checklist.mdx)
+
+Review criteria:
+
+- Is there any remaining ambiguity about what “Windows supported” means?
+- Is closeout backed by green verification?
+
+## Sprint Plan
+
+## Sprint WIN-17.4: Library Apply Contract
+
+Goal:
+
+- replace the Windows library stub with a real aligned apply path
+
+Stories:
+
+- `WIN-1711`
+- `WIN-1712`
+- start `WIN-1713`
+
+PR candidate:
+
+- **PR-A:** `feat(windows): align library apply contract with supported runtime subset`
+
+Expected write set:
+
+- `crates/nono/src/sandbox/windows.rs`
+- `crates/nono/src/sandbox/mod.rs`
+- library tests only
+
+Required verification:
+
+- `cargo fmt --all -- --check`
+- `cargo build --workspace`
+- `cargo test -p nono windows:: --lib`
+
+Blocking review questions:
+
+- Does `Sandbox::apply()` still fall back to `UnsupportedPlatform` for supported Windows usage?
+- Is the promoted subset narrower than or equal to the real runtime boundary?
+
+## Sprint WIN-17.5: CLI Contract Unification
+
+Goal:
+
+- remove the temporary product split and align CLI output with the promoted library contract
+
+Stories:
+
+- finish `WIN-1713`
+- `WIN-1721`
+- `WIN-1722`
+- `WIN-1723`
+
+PR candidate:
+
+- **PR-B:** `feat(windows): unify CLI support output with promoted library contract`
+
+Expected write set:
+
+- `crates/nono-cli/src/setup.rs`
+- `crates/nono-cli/src/main.rs`
+- `crates/nono-cli/src/output.rs`
+- `crates/nono-cli/src/command_runtime.rs`
+- `crates/nono-cli/src/execution_runtime.rs`
+- `crates/nono-cli/tests/env_vars.rs`
+
+Required verification:
+
+- `cargo fmt --all -- --check`
+- `cargo build --workspace`
+- `cargo test -p nono-cli --test env_vars`
+- targeted Windows sandbox/runtime tests
+
+Blocking review questions:
+
+- Is any CLI/library split still user-visible?
+- Did the change simplify messaging only after the library contract became real?
+
+## Sprint WIN-17.6: CI and Regression Promotion
+
+Goal:
+
+- prove the promoted contract in automation
+
+Stories:
+
+- `WIN-1731`
+- `WIN-1732`
+
+PR candidate:
+
+- **PR-C:** `ci(windows): promote regression and CI gates to aligned support contract`
+
+Expected write set:
+
+- `.github/workflows/ci.yml`
+- `scripts/windows-test-harness.ps1`
+- any minimal supporting tests
+
+Required verification:
+
+- `cargo fmt --all -- --check`
+- `cargo build --workspace`
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used`
+- `cargo test --workspace`
+- local Windows harness where feasible
+
+Blocking review questions:
+
+- Does CI prove the new contract or merely stop checking the old one?
+- Are host-environment failures separated from actual regressions?
+
+## Sprint WIN-17.7: Docs, Release, and Final Audit
+
+Goal:
+
+- flip public support language only after code and CI are aligned
+
+Stories:
+
+- `WIN-1741`
+- `WIN-1742`
+
+PR candidate:
+
+- **PR-D:** `docs(windows): finalize first-class support after library/runtime alignment`
+
+Expected write set:
+
+- `README.md`
+- `docs/cli/development/windows-promotion-criteria.mdx`
+- `docs/cli/development/windows-security-model.mdx`
+- `docs/cli/internals/security-model.mdx`
+- `docs/cli/getting_started/installation.mdx`
+- closeout checklist docs
+
+Required verification:
+
+- docs checks
+- final full Rust gate
+- Windows regression harness
+
+Blocking review questions:
+
+- Can a maintainer now point to one Windows support contract everywhere?
+- Does any doc still preserve the old Option 2 split?
+
+## Dark Factory Rules
+
+If another LLM executes this workstream, require these constraints:
+
+- Work in PR-sized slices only; do not attempt the entire Option 1 conversion in one branch without checkpoints.
+- Preserve the repo’s security mandates:
+  - no silent fallback
+  - fail closed on unsupported Windows shapes
+  - no broadening path or network access to satisfy tests
+- Prefer restoring branch-compatible Windows behavior when upstream auto-merges Unix-only assumptions over Windows files.
+- Treat Windows host failures separately from source failures:
+  - `LNK1318`
+  - `os error 112`
+  - package cache lock contention
+- Do not update public support language before the library contract is honest.
+- Every PR candidate must include explicit review notes answering the blocking review questions above.
+
+## Review Template
+
+Use this review checklist for every PR in the series:
+
+- **Contract:** What Windows support claim changed in code?
+- **Boundary:** What unsupported Windows behavior still fails closed?
+- **Library parity:** Did `support_info()`, `is_supported()`, and `apply()` stay aligned?
+- **CLI parity:** Did setup/help/runtime output stay consistent with the library contract?
+- **Test proof:** Which tests now encode the promoted support boundary?
+- **Risk:** What would overclaim support if this PR were merged as-is?
+
+## Recommended Next PR Candidate
+
+Start with:
+
+- **PR-A:** `feat(windows): align library apply contract with supported runtime subset`
+
+That is the critical path. Until it lands, every later support claim remains dependent on the temporary split.
+
+## PR-A Implementation Brief
+
+PR title:
+
+- `feat(windows): align library apply contract with supported runtime subset`
+
+PR goal:
+
+- make `crates/nono` honest on Windows for the subset the runtime already supports
+- remove the current library-only `UnsupportedPlatform` stub for supported Windows apply flows
+- leave CLI messaging and docs largely unchanged in this PR except where required for testability
+
+PR boundary:
+
+- **in scope:** library apply path, library support reporting, library tests, minimal runtime call-site alignment required to exercise the library contract
+- **out of scope:** README/support-language flip, release-language cleanup, CI gate promotion, broad docs rewrites
+
+### Exact File-by-File Tasks
+
+#### 1. [windows.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/windows.rs)
+
+Ownership:
+
+- primary implementation file for PR-A
+
+Tasks:
+
+- replace the current top-level `apply(caps)` stub that always returns `UnsupportedPlatform`
+- define the minimum supported `CapabilitySet` shapes that the library will now treat as supported on Windows
+- route supported shapes through a real apply/backend path or a support-aligned enforcement entry point
+- keep unsupported shapes fail-closed with explicit `NonoError::UnsupportedPlatform` messages
+- update `WINDOWS_PREVIEW_SUPPORTED`, `is_supported()`, and `support_info()` so they describe the same promoted subset
+- make support wording library-centered:
+  - avoid CLI-product wording
+  - describe the supported Windows library subset and explicit unsupported cases
+- preserve current security posture:
+  - no string-based path checks
+  - no silent fallback
+  - no unsupported shape implicitly allowed
+
+Expected review questions:
+
+- What exact capability shapes are newly supported by `Sandbox::apply()`?
+- What shapes remain unsupported and why?
+- Is there any path where enforcement is weaker than the support claim?
+
+#### 2. [mod.rs](/C:/Users/omack/Nono/crates/nono/src/sandbox/mod.rs)
+
+Ownership:
+
+- dispatch and top-level support contract alignment
+
+Tasks:
+
+- verify top-level `Sandbox` dispatch on Windows calls the promoted Windows apply path
+- verify top-level support reporting stays consistent with the promoted Windows `support_info()`
+- remove or adjust any top-level logic that still assumes Windows library support is partial-only
+
+Expected review questions:
+
+- Do `Sandbox::apply()`, `Sandbox::support_info()`, and platform dispatch now align?
+- Is there any stale top-level contract code that still describes the old stub behavior?
+
+#### 3. [lib.rs](/C:/Users/omack/Nono/crates/nono/src/lib.rs)
+
+Ownership:
+
+- public crate documentation accuracy
+
+Tasks:
+
+- update crate-level examples/comments only if they currently overstate or understate the new Windows library contract
+- remove wording that says “other platforms return unsupported” if Windows is now genuinely supported for the promoted subset
+- keep examples honest about unsupported product decisions not covered by the library
+
+Expected review questions:
+
+- Does public crate documentation now match the real Windows library behavior?
+
+#### 4. [windows.rs tests](/C:/Users/omack/Nono/crates/nono/src/sandbox/windows.rs)
+
+Ownership:
+
+- primary proof surface for PR-A
+
+Tasks:
+
+- add tests for promoted `support_info()` / `is_supported()` behavior
+- add tests for `apply()` success on the supported subset
+- add tests for `apply()` failure on unsupported capability shapes
+- add tests proving fail-closed behavior remains explicit
+- keep tests deterministic and local:
+  - no real network dependency
+  - no reliance on mutable global state without locking
+
+Minimum new test cases:
+
+- `support_info_reports_supported_status_for_promoted_subset_contract`
+- `apply_accepts_minimal_supported_windows_subset`
+- `apply_rejects_unsupported_windows_capability_expansion_shape`
+- `apply_rejects_unsupported_windows_shell_or_wrap_equivalent_shape_if_expressed`
+- `apply_error_message_remains_explicit_for_unsupported_subset`
+
+Expected review questions:
+
+- Do tests encode the new contract directly?
+- Are unsupported shapes still proven to fail closed?
+
+#### 5. [execution_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/execution_runtime.rs) and [command_runtime.rs](/C:/Users/omack/Nono/crates/nono-cli/src/command_runtime.rs)
+
+Ownership:
+
+- touch only if required to stop the CLI from bypassing or contradicting the promoted library behavior
+
+Tasks:
+
+- keep edits minimal in PR-A
+- only adjust call sites if the promoted library apply path requires the CLI to stop using old preview/stub assumptions
+- do not do the full CLI messaging cleanup here; that belongs to PR-B
+
+Expected review questions:
+
+- Was a CLI change actually required for library alignment, or did this PR expand scope unnecessarily?
+
+#### 6. [setup.rs](/C:/Users/omack/Nono/crates/nono-cli/src/setup.rs)
+
+Ownership:
+
+- touch only if tests need a temporary honest reflection of the promoted library support status
+
+Tasks:
+
+- keep current CLI/library split unless the library contract change makes a specific line false
+- if edited, make the smallest possible adjustment consistent with the new library truth
+- defer the full wording simplification to PR-B
+
+Expected review questions:
+
+- Did this PR keep setup output honest without prematurely taking on PR-B’s messaging work?
+
+### Explicit Non-Changes For PR-A
+
+Do not change these unless strictly required to make the new library contract testable:
+
+- [README.md](/C:/Users/omack/Nono/README.md)
+- [windows-promotion-criteria.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-promotion-criteria.mdx)
+- [windows-security-model.mdx](/C:/Users/omack/Nono/docs/cli/development/windows-security-model.mdx)
+- [security-model.mdx](/C:/Users/omack/Nono/docs/cli/internals/security-model.mdx)
+- [.github/workflows/ci.yml](/C:/Users/omack/Nono/.github/workflows/ci.yml)
+- [windows-test-harness.ps1](/C:/Users/omack/Nono/scripts/windows-test-harness.ps1)
+
+Those belong to later PRs unless a statement becomes immediately false.
+
+### Ordered Test Plan
+
+Run tests in this order:
+
+1. **Library-targeted compile check**
+   - `cargo build -p nono`
+   - Purpose: catch signature/dispatch breakage before broader workspace churn
+
+2. **Windows library unit tests first**
+   - `cargo test -p nono windows:: --lib`
+   - Purpose: prove the promoted contract where it is implemented
+
+3. **Focused sandbox dispatch tests**
+   - `cargo test -p nono sandbox::windows::tests --lib`
+   - Purpose: verify support reporting, apply behavior, and subset enforcement logic
+
+4. **CLI smoke compile after library changes**
+   - `cargo build -p nono-cli`
+   - Purpose: detect any CLI/runtime assumptions that still expect the old stub
+
+5. **Targeted Windows CLI tests only if PR-A touches CLI call sites**
+   - `cargo test -p nono-cli windows_setup_check_only_reports --test env_vars`
+   - add any newly relevant focused tests only
+
+6. **Workspace format gate**
+   - `cargo fmt --all -- --check`
+
+7. **Workspace clippy gate**
+   - `cargo clippy --workspace --all-targets --all-features -- -D warnings -D clippy::unwrap_used`
+
+8. **Workspace build**
+   - `cargo build --workspace`
+
+9. **Workspace tests**
+   - `cargo test --workspace`
+
+If Windows host issues appear:
+
+- classify `LNK1318`, `os error 112`, stale PDB problems, or package-cache lock contention as environment failures
+- do not weaken code to route around host failures
+
+### PR-A Review Checklist
+
+Before calling PR-A done, reviewers should be able to answer:
+
+- What exact Windows library subset is now supported by `Sandbox::apply()`?
+- Is `support_info()` now accurate for that subset?
+- Are unsupported shapes still rejected explicitly?
+- Did the PR avoid taking on PR-B messaging and PR-C CI scope?
+- Do tests prove the promoted contract instead of only changing wording?
+
+### Handoff Notes For Another LLM
+
+If another LLM executes PR-A, give it this operating brief:
+
+- Start in `crates/nono/src/sandbox/windows.rs`.
+- Make the library contract real before touching CLI wording.
+- Treat any CLI edits as compatibility shims, not scope expansion.
+- Prefer adding tests before broad doc changes.
+- Stop if the only way to make tests pass is to broaden the Windows support claim beyond actual enforcement.
