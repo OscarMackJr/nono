@@ -261,8 +261,7 @@ mod tests {
 
         // Act: call a string-returning getter that does NOT go through map_error.
         // SAFETY: deliberately passing NULL (NULL-safe getter).
-        let summary_ptr =
-            unsafe { crate::nono_capability_set_summary(std::ptr::null()) };
+        let summary_ptr = unsafe { crate::nono_capability_set_summary(std::ptr::null()) };
         assert!(summary_ptr.is_null());
 
         // Assert: diagnostic code reset to Other at entry by clear_last_call_state,

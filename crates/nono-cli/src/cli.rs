@@ -5886,8 +5886,8 @@ mod profile_resolver_args_tests {
     #[test]
     fn override_audit_meta_allows_null_zt_audit_hash() {
         let json = r#"{"kms_key_id":"arn:test","jti":"uuid","granted_paths":[],"expires_at":"2026-01-01T00:00:00Z"}"#;
-        let meta: crate::cli::OverrideAuditMeta =
-            serde_json::from_str(json).expect("absent zt_audit_hash must be allowed (serde default)");
+        let meta: crate::cli::OverrideAuditMeta = serde_json::from_str(json)
+            .expect("absent zt_audit_hash must be allowed (serde default)");
         assert_eq!(
             meta.zt_audit_hash, None,
             "zt_audit_hash must default to None when absent"

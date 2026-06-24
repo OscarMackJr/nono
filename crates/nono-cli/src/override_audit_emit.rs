@@ -36,7 +36,10 @@ use nono::{NonoError, Result};
 /// `Err(NonoError)` if `SECURITY_LAYER` is unset or the mutex is poisoned — callers must
 /// propagate this so the process exits non-zero (AUD-04 fail-closed).
 #[must_use = "AUD-04: Err means no audit record was committed — propagate to exit non-zero"]
-pub(crate) fn emit_override_audit_event(meta: &OverrideAuditMeta, kind: OverrideKind) -> Result<()> {
+pub(crate) fn emit_override_audit_event(
+    meta: &OverrideAuditMeta,
+    kind: OverrideKind,
+) -> Result<()> {
     let event_type = match kind {
         // Live POST /actions returned deny → REVOKED (10010)
         OverrideKind::Revoked => SecurityEventType::PolicyOverrideRevoked,

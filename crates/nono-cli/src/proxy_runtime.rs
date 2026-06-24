@@ -92,7 +92,8 @@ pub(crate) fn prepare_proxy_launch_options(
             || network_profile.is_some()
             || !allow_domain.is_empty()
             || upstream_proxy.is_some()
-            || !prepared.custom_credentials.is_empty() // #1197 / D-07
+            || !prepared.custom_credentials.is_empty()
+        // #1197 / D-07
         {
             warn!(
                 "--block-net is active; ignoring proxy configuration \

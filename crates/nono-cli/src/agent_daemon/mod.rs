@@ -403,7 +403,11 @@ pub(crate) fn resolve_machine_egress_policy(
                 "daemon startup: no machine egress policy in HKLM — \
                  using per-user allow_domain list (D-07 absent fall-through)"
             );
-            Ok((per_user_domains.to_vec(), false, nono::TelemetryConfig::default()))
+            Ok((
+                per_user_domains.to_vec(),
+                false,
+                nono::TelemetryConfig::default(),
+            ))
         }
     }
 }

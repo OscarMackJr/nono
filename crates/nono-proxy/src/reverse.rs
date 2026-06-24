@@ -1340,14 +1340,8 @@ mod tests {
         let first_line = "GET /testservice/forbidden HTTP/1.1";
         let remaining_header = b"Host: example.invalid\r\n\r\n";
 
-        let _result = handle_reverse_proxy(
-            first_line,
-            &mut server_stream,
-            remaining_header,
-            &ctx,
-            &[],
-        )
-        .await;
+        let _result =
+            handle_reverse_proxy(first_line, &mut server_stream, remaining_header, &ctx, &[]).await;
 
         // Drop the server side so the client reader can drain to EOF.
         drop(server_stream);

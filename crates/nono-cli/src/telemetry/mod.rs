@@ -607,10 +607,8 @@ mod tests {
 
     #[test]
     fn chain_sequence_genesis_is_zero() {
-        let layer = SecurityEventLayer::new(
-            TelemetryConfig::default(),
-            "test-chain-seq".to_string(),
-        );
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-chain-seq".to_string());
         // Genesis sequence via the pub(crate) accessor (DRAIN-04 D-01 test hook).
         assert_eq!(
             layer.chain_sequence(),
@@ -817,10 +815,8 @@ mod tests {
     /// AUD-01 idempotent ordering: two calls advance chain_sequence from 0 to 2.
     #[test]
     fn emit_override_event_two_calls_advance_by_two() {
-        let layer = SecurityEventLayer::new(
-            TelemetryConfig::default(),
-            "test-two-calls".to_string(),
-        );
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-two-calls".to_string());
         let r1 = layer.emit_override_event(
             &SecurityEventType::PolicyOverrideVerified,
             "jti-1",
@@ -845,10 +841,8 @@ mod tests {
     /// emit_override_event with zt_audit_hash=None returns Ok (CAF v0.1 tokens).
     #[test]
     fn emit_override_event_none_zt_audit_hash_ok() {
-        let layer = SecurityEventLayer::new(
-            TelemetryConfig::default(),
-            "test-no-zt-hash".to_string(),
-        );
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-no-zt-hash".to_string());
         let result = layer.emit_override_event(
             &SecurityEventType::PolicyOverrideVerified,
             "jti-no-zt",

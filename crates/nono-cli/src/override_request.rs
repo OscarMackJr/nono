@@ -51,17 +51,24 @@ use serde_json::{json, Value};
 /// ```
 pub(crate) fn run_override_request(args: OverrideRequestArgs) -> Result<()> {
     let nonce = fresh_nonce();
-    let bundle = build_bundle(&args.scope_paths, &args.scope_domains, &args.repo_context, &args.reason, &nonce);
+    let bundle = build_bundle(
+        &args.scope_paths,
+        &args.scope_domains,
+        &args.repo_context,
+        &args.reason,
+        &nonce,
+    );
 
     let bundle_json = serde_json::to_string_pretty(&bundle).map_err(|e| {
-        NonoError::SandboxInit(format!(
-            "override request: failed to serialize bundle: {e}"
-        ))
+        NonoError::SandboxInit(format!("override request: failed to serialize bundle: {e}"))
     })?;
 
     // Human-readable summary to stdout (before the JSON block for visual clarity).
     println!("=== nono override request bundle ===");
-    println!("Repo context : {}", args.repo_context.as_deref().unwrap_or("<not set>"));
+    println!(
+        "Repo context : {}",
+        args.repo_context.as_deref().unwrap_or("<not set>")
+    );
     println!("Denial reason: {}", args.reason);
     if !args.scope_paths.is_empty() {
         println!("Scope paths  : {}", args.scope_paths.join(", "));
@@ -129,7 +136,10 @@ mod tests {
 
         // All four top-level keys must be present.
         assert!(parsed.get("scope").is_some(), "bundle must have 'scope'");
-        assert!(parsed.get("repo_context").is_some(), "bundle must have 'repo_context'");
+        assert!(
+            parsed.get("repo_context").is_some(),
+            "bundle must have 'repo_context'"
+        );
         assert!(parsed.get("reason").is_some(), "bundle must have 'reason'");
         assert!(parsed.get("nonce").is_some(), "bundle must have 'nonce'");
 
@@ -198,6 +208,9 @@ mod tests {
     fn bundle_repo_context_absent_emits_empty_string() {
         let bundle = build_bundle(&[], &[], &None, "path_not_granted", "abcd1234");
         let repo = bundle.get("repo_context").unwrap().as_str().unwrap();
-        assert_eq!(repo, "", "absent repo_context must be empty string in bundle");
+        assert_eq!(
+            repo, "",
+            "absent repo_context must be empty string in bundle"
+        );
     }
 }

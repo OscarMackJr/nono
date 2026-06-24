@@ -210,16 +210,11 @@ fn run_override_audit_emit(args: crate::cli::OverrideAuditEmitArgs) -> Result<()
     let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(args.meta.as_bytes())
         .map_err(|e| {
-            NonoError::SandboxInit(format!(
-                "override audit-emit: base64 decode failed: {e}"
-            ))
+            NonoError::SandboxInit(format!("override audit-emit: base64 decode failed: {e}"))
         })?;
-    let meta =
-        serde_json::from_slice::<crate::cli::OverrideAuditMeta>(&json).map_err(|e| {
-            NonoError::SandboxInit(format!(
-                "override audit-emit: JSON parse failed: {e}"
-            ))
-        })?;
+    let meta = serde_json::from_slice::<crate::cli::OverrideAuditMeta>(&json).map_err(|e| {
+        NonoError::SandboxInit(format!("override audit-emit: JSON parse failed: {e}"))
+    })?;
 
     crate::override_audit_emit::emit_override_audit_event(&meta, args.kind)
 }

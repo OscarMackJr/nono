@@ -648,7 +648,8 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             "credential route must allow all methods (no endpoint rules, not shadowed)"
         );
         assert!(
-            cred.endpoint_rules.is_allowed("POST", "/v1/chat/completions"),
+            cred.endpoint_rules
+                .is_allowed("POST", "/v1/chat/completions"),
             "credential route must allow all paths (no endpoint rules, not shadowed)"
         );
 
@@ -670,10 +671,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             cred.upstream_host_port.as_deref(),
             Some("api.openai.com:443")
         );
-        assert_eq!(
-            ep.upstream_host_port.as_deref(),
-            Some("api.openai.com:443")
-        );
+        assert_eq!(ep.upstream_host_port.as_deref(), Some("api.openai.com:443"));
 
         // is_route_upstream reports true for the shared upstream host (expected — both
         // routes point there), but this does not imply any shadowing in route dispatch.
