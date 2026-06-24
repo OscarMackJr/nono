@@ -1,6 +1,6 @@
 ---
 slug: macos-set-read-timeout-einval
-status: awaiting_human_verify
+status: resolved
 trigger: "macOS-only unit test exec_strategy::tests::reconnect_survival fails: set_read_timeout(5s) -> EINVAL (os error 22) on the supervisor IPC UnixStream"
 created: 2026-06-24
 updated: 2026-06-24
@@ -57,6 +57,28 @@ reasoning_checkpoint:
   blind_spots: "Cannot run #[cfg(unix)] tests on this Windows host; macOS CI on PR #12 is the only authoritative verifier. The SC1 keep-alive assertion timing (>=200ms) is unaffected by removing the macOS timeout call, but only macOS CI can confirm."
 
 - next_action: Edit exec_strategy.rs:4981-4983 to gate the set_read_timeout call to #[cfg(target_os = \"linux\")] (matching production line 1568); correct the misleading 'as we would in production' comment. Then push to milestone/v2.13-carryforward-closeout and verify via macOS CI on PR #12.
+
+## RESOLUTION (2026-06-24) — both macOS Test failures fixed; macOS Test GREEN
+
+Two distinct PRE-EXISTING macOS failures (neither a v3.x regression), surfaced one-at-a-time
+once the v3.x-introduced failures were cleared:
+
+1. **`reconnect_survival` — deterministic** (`7c9b6b6e`). macOS rejects `setsockopt(SO_RCVTIMEO)`
+   with EINVAL on AF_UNIX SOCK_STREAM socketpairs. Production already gates the SC2 read-timeout
+   call to `#[cfg(target_os = "linux")]` (commit `c3cf3855` / Phase 68-02) and uses poll(200ms)
+   on macOS; the test (`e9032edd` / Phase 59) predated that and called it unconditionally under
+   `#[cfg(unix)]`. Fix: gate the test's call to Linux, matching production. SC2 not weakened.
+
+2. **`test_open_shim_drop_cleans_up_directory` — flaky** (`1a9039a4`). `create_open_shim` copies its
+   `nono_exe` arg; the test passed `current_exe()` (the multi-hundred-MB debug TEST binary), so the
+   copy intermittently failed under CI load/disk → None → panic "create shim". The failure swapped
+   with reconnect_survival across runs (flakiness signature). Fix: pass a tiny stand-in file (the
+   test only checks dir-create + drop-cleanup; the helper is never executed). Pre-existing (PR #340).
+
+Result: **Test (ubuntu) + Test (macos) both GREEN** on PR #12; Clippy/Rustfmt/Verify-FFI green too.
+The entire PR #12 test+lint surface (Linux + macOS, unit + integration) now passes. Remaining reds
+are external baseline only: Cargo Audit (RUSTSEC-2026-0185 quinn-proto), Docs Checks (orphan
+windows-win-1706-option-1-workstream.mdx), Windows suite (chronic baseline).
 
 ## Evidence
 
