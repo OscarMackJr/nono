@@ -50,9 +50,47 @@ pub struct ProxyHandle {
     /// Non-credential allowed hosts that should bypass the proxy (NO_PROXY).
     /// Computed at startup: `allowed_hosts` minus credential upstream hosts.
     no_proxy_hosts: Vec<String>,
+    /// Startup diagnostics from credential loading (empty in this fork — no
+    /// load_with_diagnostics integration yet).
+    diagnostics: Vec<crate::diagnostic::ProxyDiagnostic>,
 }
 
 impl ProxyHandle {
+    /// Startup diagnostics from credential loading.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[crate::diagnostic::ProxyDiagnostic] {
+        &self.diagnostics
+    }
+
+    /// Path to the TLS interception CA bundle, if TLS intercept is active.
+    /// Returns `None` in this fork (TLS interception not implemented).
+    #[must_use]
+    pub fn intercept_ca_path(&self) -> Option<&std::path::Path> {
+        None
+    }
+
+    /// Per-route summary rows for the proxy startup banner.
+    ///
+    /// Returns `(prefix, summary)` pairs. This is a simplified implementation
+    /// that omits OAuth2/TLS intercept fields not present in this fork.
+    #[must_use]
+    pub fn route_diagnostics(&self, config: &crate::config::ProxyConfig) -> Vec<(String, String)> {
+        let mut rows = Vec::with_capacity(config.routes.len());
+        for route in &config.routes {
+            let prefix = route.prefix.trim_matches('/').to_string();
+            let cred_status = if self.loaded_routes.contains(&prefix) {
+                "cred: ok"
+            } else if route.credential_key.is_some() {
+                "cred: missing"
+            } else {
+                "cred: none"
+            };
+            let summary = format!("→ {} | {}", route.upstream, cred_status);
+            rows.push((prefix, summary));
+        }
+        rows
+    }
+
     /// Signal the proxy to shut down gracefully.
     pub fn shutdown(&self) {
         let _ = self.shutdown_tx.send(true);
@@ -347,6 +385,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
         shutdown_tx,
         loaded_routes,
         no_proxy_hosts,
+        diagnostics: vec![],
     })
 }
 
@@ -648,6 +687,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -674,6 +714,7 @@ mod tests {
             shutdown_tx,
             loaded_routes: ["openai".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -690,6 +731,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -725,6 +767,7 @@ mod tests {
             shutdown_tx,
             loaded_routes: ["openai".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -741,6 +784,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -781,6 +825,7 @@ mod tests {
             // Only "openai" was loaded; "github" credential was unavailable
             loaded_routes: ["openai".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
         let config = ProxyConfig {
             routes: vec![
@@ -798,6 +843,7 @@ mod tests {
                     endpoint_rules: vec![],
                     tls_ca: None,
                     oauth2: None,
+                    aws_auth: None,
                 },
                 crate::config::RouteConfig {
                     prefix: "github".to_string(),
@@ -813,6 +859,7 @@ mod tests {
                     endpoint_rules: vec![],
                     tls_ca: None,
                     oauth2: None,
+                    aws_auth: None,
                 },
             ],
             ..Default::default()
@@ -854,6 +901,7 @@ mod tests {
             shutdown_tx,
             loaded_routes: std::collections::HashSet::new(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
 
         // Test leading slash
@@ -872,6 +920,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -903,6 +952,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -938,6 +988,7 @@ mod tests {
             shutdown_tx: shutdown_tx.clone(),
             loaded_routes: ["anthropic".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
         let config_no_env_var = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -954,6 +1005,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -975,6 +1027,7 @@ mod tests {
             shutdown_tx: shutdown_tx2,
             loaded_routes: ["anthropic".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
         let config_fixed = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -991,6 +1044,7 @@ mod tests {
                 endpoint_rules: vec![],
                 tls_ca: None,
                 oauth2: None,
+                aws_auth: None,
             }],
             ..Default::default()
         };
@@ -1016,6 +1070,7 @@ mod tests {
                 "nats.internal:4222".to_string(),
                 "opencode.internal:4096".to_string(),
             ],
+            diagnostics: vec![],
         };
 
         let vars = handle.env_vars();
@@ -1044,6 +1099,7 @@ mod tests {
             shutdown_tx,
             loaded_routes: std::collections::HashSet::new(),
             no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
         };
 
         let vars = handle.env_vars();

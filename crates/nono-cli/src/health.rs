@@ -59,10 +59,15 @@ pub(crate) enum HealthVerdict {
 #[derive(Debug, Clone)]
 enum SubsystemState {
     /// Subsystem is healthy/present/running.
+    /// Constructed only by Windows probes (and tests); non-Windows probes
+    /// currently report `Degraded` only.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Ok,
     /// Subsystem is degraded (stopped service, missing cert, etc.).
     Degraded(String),
     /// Subsystem is broken (absent install, missing PATH, etc.).
+    /// Constructed only by Windows probes (and tests).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Broken(String),
 }
 
@@ -177,8 +182,9 @@ pub(crate) fn run_health(args: &HealthArgs) -> Result<HealthVerdict> {
         },
     });
 
-    let rendered = serde_json::to_string_pretty(&json_verdict)
-        .map_err(|e| NonoError::ConfigParse(format!("nono health: JSON serialization failed: {e}")))?;
+    let rendered = serde_json::to_string_pretty(&json_verdict).map_err(|e| {
+        NonoError::ConfigParse(format!("nono health: JSON serialization failed: {e}"))
+    })?;
     println!("{rendered}");
 
     if !args.json {
@@ -268,9 +274,7 @@ fn probe_install_version() -> (SubsystemState, Option<String>) {
 
     #[cfg(not(target_os = "windows"))]
     (
-        SubsystemState::Degraded(
-            "nono health: install+version probe is Windows-only".to_string(),
-        ),
+        SubsystemState::Degraded("nono health: install+version probe is Windows-only".to_string()),
         None,
     )
 }
@@ -377,9 +381,7 @@ fn probe_machine_policy() -> SubsystemState {
     return probe_machine_policy_windows();
 
     #[cfg(not(target_os = "windows"))]
-    SubsystemState::Degraded(
-        "nono health: machine policy probe is Windows-only".to_string(),
-    )
+    SubsystemState::Degraded("nono health: machine policy probe is Windows-only".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -458,7 +460,13 @@ fn probe_scratch_cert_path_windows() -> (
     let cert_machine = probe_cert_machine_store_windows();
     let cert_user = probe_cert_user_store_windows();
     let (path_state, path_warn) = probe_path_windows();
-    (scratch_state, cert_machine, cert_user, path_state, path_warn)
+    (
+        scratch_state,
+        cert_machine,
+        cert_user,
+        path_state,
+        path_warn,
+    )
 }
 
 /// Probe whether the user-owned scratch dir under `%LOCALAPPDATA%\nono\` exists.
@@ -664,11 +672,7 @@ mod tests {
     /// Aggregation: all Ok -> Healthy verdict.
     #[test]
     fn test_aggregate_all_ok_is_healthy() {
-        let states = vec![
-            SubsystemState::Ok,
-            SubsystemState::Ok,
-            SubsystemState::Ok,
-        ];
+        let states = vec![SubsystemState::Ok, SubsystemState::Ok, SubsystemState::Ok];
         assert_eq!(aggregate(&states), HealthVerdict::Healthy);
     }
 

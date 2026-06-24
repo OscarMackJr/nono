@@ -92,6 +92,8 @@ pub(crate) fn prepare_proxy_launch_options(
             || network_profile.is_some()
             || !allow_domain.is_empty()
             || upstream_proxy.is_some()
+            || !prepared.custom_credentials.is_empty()
+        // #1197 / D-07
         {
             warn!(
                 "--block-net is active; ignoring proxy configuration \
@@ -113,6 +115,7 @@ pub(crate) fn prepare_proxy_launch_options(
             || network_profile.is_some()
             || !allow_domain.is_empty()
             || upstream_proxy.is_some()
+            || !prepared.custom_credentials.is_empty() // #1197 / D-07
     };
 
     Ok(ProxyLaunchOptions {
@@ -265,6 +268,32 @@ pub(crate) fn start_proxy_runtime(
             port, proxy.allow_bind_ports
         );
     }
+
+    // Per-route diagnostic banner. Lifts credential resolution status —
+    // including misses — to the user-visible info level so the silent
+    // "WARN at debug" failure mode (issue #797) becomes immediately
+    // discoverable.
+    let route_rows = handle.route_diagnostics(&proxy_config);
+    if !route_rows.is_empty() {
+        info!("Proxy routes:");
+        for (prefix, summary) in &route_rows {
+            info!("  /{}  {}", prefix, summary);
+        }
+        if handle.intercept_ca_path().is_some() {
+            info!(
+                "TLS interception trust bundle: {}",
+                handle
+                    .intercept_ca_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default()
+            );
+        }
+    }
+
+    let proxy_diagnostics = handle.diagnostics();
+    if !proxy_diagnostics.is_empty() {
+        crate::output::print_proxy_diagnostics(proxy_diagnostics);
+    }
     caps.set_network_mode_mut(nono::NetworkMode::ProxyOnly {
         port,
         bind_ports: proxy.allow_bind_ports.clone(),
@@ -400,6 +429,7 @@ mod tests {
             suppressed_system_service_operations: Vec::new(),
             allowed_env_vars: None,
             denied_env_vars: None,
+            set_vars: None,
             network_block_requested: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
@@ -441,6 +471,165 @@ mod tests {
         assert!(
             !config.strict_filter,
             "strict_filter must default off when network_block is false"
+        );
+    }
+
+    /// D-01 equivalence: build_proxy_config_from_flags maps upstream_proxy to
+    /// ProxyConfig.external_proxy (#1048/#1091). Fork uses the field name `external_proxy`
+    /// where upstream uses `upstream_proxy`; the mapping is already present at
+    /// build_proxy_config_from_flags lines 222-228. This test documents equivalence and
+    /// confirms the cherry-pick of #1048/#1091 is unnecessary (verify-present).
+    #[test]
+    fn build_proxy_config_maps_upstream_proxy_to_external_proxy() {
+        let proxy = crate::launch_runtime::ProxyLaunchOptions {
+            active: true,
+            upstream_proxy: Some("http://corp:3128".into()),
+            ..crate::launch_runtime::ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
+        let ext = config
+            .external_proxy
+            .expect("external_proxy must be Some when upstream_proxy is set");
+        assert_eq!(
+            ext.address, "http://corp:3128",
+            "upstream_proxy must map to external_proxy.address (#1048/#1091 / D-01)"
+        );
+    }
+
+    /// D-07 regression: proxy activates when only customCredentials is configured (#1197).
+    /// CapabilitySet::new() defaults to NetworkMode::Open (not Blocked/ProxyOnly) so only
+    /// the custom_credentials disjunct can trigger active=true here.
+    #[test]
+    fn proxy_activates_with_custom_credentials_only() {
+        use crate::cli::SandboxArgs;
+        use nono::CapabilitySet;
+
+        let mut custom_creds = std::collections::HashMap::new();
+        custom_creds.insert(
+            "my_api".to_string(),
+            crate::profile::CustomCredentialDef {
+                upstream: "https://api.example.com".to_string(),
+                credential_key: Some("my_api_key".to_string()),
+                auth: None,
+                inject_mode: crate::profile::InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                aws_auth: None,
+            },
+        );
+
+        let prepared = crate::sandbox_prepare::PreparedSandbox {
+            caps: CapabilitySet::new(),
+            secrets: Vec::new(),
+            rollback_exclude_patterns: Vec::new(),
+            rollback_exclude_globs: Vec::new(),
+            network_profile: None,
+            allow_domain: vec![],
+            credentials: Vec::new(),
+            custom_credentials: custom_creds,
+            upstream_proxy: None,
+            upstream_bypass: Vec::new(),
+            listen_ports: Vec::new(),
+            capability_elevation: false,
+            #[cfg(target_os = "linux")]
+            wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::default(),
+            #[cfg(target_os = "linux")]
+            af_unix_mediation: crate::profile::LinuxAfUnixMediation::default(),
+            allow_launch_services_active: false,
+            open_url_origins: Vec::new(),
+            open_url_allow_localhost: false,
+            bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
+            allowed_env_vars: None,
+            denied_env_vars: None,
+            set_vars: None,
+            network_block_requested: false,
+            loaded_profile: None,
+            session_hooks: crate::profile::SessionHooks::default(),
+        };
+
+        let args = SandboxArgs::default();
+        let opts = prepare_proxy_launch_options(&args, &prepared, true)
+            .expect("prepare_proxy_launch_options");
+        assert!(
+            opts.active,
+            "proxy must activate when only custom_credentials is set (#1197/D-07)"
+        );
+    }
+
+    /// D-07 regression: --block-net overrides customCredentials activation; active=false (#1197).
+    #[test]
+    fn block_net_overrides_custom_credentials_activation() {
+        use crate::cli::SandboxArgs;
+        use nono::CapabilitySet;
+
+        let mut custom_creds = std::collections::HashMap::new();
+        custom_creds.insert(
+            "my_api".to_string(),
+            crate::profile::CustomCredentialDef {
+                upstream: "https://api.example.com".to_string(),
+                credential_key: Some("my_api_key".to_string()),
+                auth: None,
+                inject_mode: crate::profile::InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                aws_auth: None,
+            },
+        );
+
+        let mut caps = CapabilitySet::new();
+        caps.set_network_mode_mut(nono::NetworkMode::Blocked);
+
+        let prepared = crate::sandbox_prepare::PreparedSandbox {
+            caps,
+            secrets: Vec::new(),
+            rollback_exclude_patterns: Vec::new(),
+            rollback_exclude_globs: Vec::new(),
+            network_profile: None,
+            allow_domain: vec![],
+            credentials: Vec::new(),
+            custom_credentials: custom_creds,
+            upstream_proxy: None,
+            upstream_bypass: Vec::new(),
+            listen_ports: Vec::new(),
+            capability_elevation: false,
+            #[cfg(target_os = "linux")]
+            wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::default(),
+            #[cfg(target_os = "linux")]
+            af_unix_mediation: crate::profile::LinuxAfUnixMediation::default(),
+            allow_launch_services_active: false,
+            open_url_origins: Vec::new(),
+            open_url_allow_localhost: false,
+            bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
+            allowed_env_vars: None,
+            denied_env_vars: None,
+            set_vars: None,
+            network_block_requested: true,
+            loaded_profile: None,
+            session_hooks: crate::profile::SessionHooks::default(),
+        };
+
+        let args = SandboxArgs::default();
+        let opts = prepare_proxy_launch_options(&args, &prepared, true)
+            .expect("prepare_proxy_launch_options");
+        assert!(
+            !opts.active,
+            "--block-net must override custom_credentials activation; active must be false (#1197/D-07)"
         );
     }
 }

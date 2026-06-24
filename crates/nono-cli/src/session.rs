@@ -3,11 +3,13 @@
 //! Session registry for the nono capability runtime.
 //!
 //! Each `nono run` or `nono shell` invocation in supervised mode creates a session
-//! file at `~/.nono/sessions/{session_id}.json`. This enables `nono ps`, `nono stop`,
+//! file at `$XDG_STATE_HOME/nono/sessions/{session_id}.json` (default
+//! `~/.local/state/nono/sessions/`). This enables `nono ps`, `nono stop`,
 //! `nono logs`, and `nono inspect` to discover and manage running sandboxes.
 
 use nono::{NonoError, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -84,7 +86,7 @@ impl ResourceLimitsRecord {
     }
 }
 
-/// Session state persisted to `~/.nono/sessions/{session_id}.json`.
+/// Session state persisted to `$XDG_STATE_HOME/nono/sessions/{session_id}.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionRecord {
     pub session_id: String,
@@ -403,37 +405,43 @@ fn load_reconciled_session_file(path: &Path) -> Result<SessionRecord> {
     Ok(record)
 }
 
-/// Returns `~/.nono/sessions/` without creating it.
+/// Returns the canonical session registry without creating it.
 ///
 /// Use [`ensure_sessions_dir()`] when writing session files.
 pub fn sessions_dir() -> Result<PathBuf> {
-    let home = crate::config::nono_home_dir().map_err(|_| {
-        NonoError::ConfigParse("Cannot determine home directory for session registry".to_string())
-    })?;
-    Ok(home.join(".nono").join("sessions"))
+    crate::state_paths::sessions_dir()
 }
 
-/// Returns `~/.nono/sessions/`, creating with mode 0o700 if needed.
+/// Returns the canonical session registry, creating with mode 0o700 if needed.
 pub(crate) fn ensure_sessions_dir() -> Result<PathBuf> {
     let dir = sessions_dir()?;
+    ensure_private_dir(&dir)
+}
+
+fn ensure_private_dir(dir: &Path) -> Result<PathBuf> {
     if dir.exists() {
-        validate_sessions_dir(&dir)?;
-        return Ok(dir);
+        validate_sessions_dir(dir)?;
+        return Ok(dir.to_path_buf());
     }
-    std::fs::create_dir_all(&dir).map_err(|e| NonoError::ConfigWrite {
-        path: dir.clone(),
-        source: e,
-    })?;
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o700);
-        std::fs::set_permissions(&dir, perms).map_err(|e| NonoError::ConfigWrite {
-            path: dir.clone(),
+        use std::fs::DirBuilder;
+        use std::os::unix::fs::DirBuilderExt;
+        let mut builder = DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder.create(dir).map_err(|e| NonoError::ConfigWrite {
+            path: dir.to_path_buf(),
             source: e,
         })?;
     }
-    Ok(dir)
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir).map_err(|e| NonoError::ConfigWrite {
+            path: dir.to_path_buf(),
+            source: e,
+        })?;
+    }
+    Ok(dir.to_path_buf())
 }
 
 fn validate_sessions_dir(dir: &Path) -> Result<()> {
@@ -536,47 +544,48 @@ pub fn is_prunable(record: &SessionRecord, now_epoch: u64, retention_secs: u64) 
 ///
 /// Returns sessions sorted by start time (newest first).
 pub fn list_sessions() -> Result<Vec<SessionRecord>> {
-    let dir = match sessions_dir() {
-        Ok(d) => d,
-        Err(_) => return Ok(Vec::new()),
-    };
-
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    validate_sessions_dir(&dir)?;
-
     let mut sessions = Vec::new();
-    let entries = std::fs::read_dir(&dir).map_err(|e| NonoError::ConfigWrite {
-        path: dir.clone(),
-        source: e,
-    })?;
+    let mut seen_ids = BTreeSet::new();
+    let legacy_roots = crate::state_paths::LegacyRootSet::resolve()?;
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+    for dir in crate::state_paths::session_registry_dirs_for_read()? {
+        if !dir.exists() {
             continue;
         }
-        // Skip event log files
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".events.json"))
-        {
-            continue;
-        }
+        validate_sessions_dir(&dir)?;
 
-        match load_reconciled_session_file(&path) {
-            Ok(record) => {
-                sessions.push(record);
+        let entries = std::fs::read_dir(&dir).map_err(|e| NonoError::ConfigWrite {
+            path: dir.clone(),
+            source: e,
+        })?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
             }
-            Err(e) => {
-                debug!("Skipping corrupt session file {}: {}", path.display(), e);
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".events.json"))
+            {
+                continue;
+            }
+
+            match load_reconciled_session_file(&path) {
+                Ok(record) => {
+                    if seen_ids.insert(record.session_id.clone()) {
+                        legacy_roots.warn_if_legacy_session_file_read(&path);
+                        sessions.push(record);
+                    }
+                }
+                Err(e) => {
+                    debug!("Skipping corrupt session file {}: {}", path.display(), e);
+                }
             }
         }
     }
 
-    // Sort newest first
     sessions.sort_by(|a, b| b.started.cmp(&a.started));
     Ok(sessions)
 }
@@ -587,56 +596,65 @@ pub fn list_sessions() -> Result<Vec<SessionRecord>> {
 /// tries matching against session names. Returns an error if no match or
 /// multiple matches are found.
 pub fn load_session(query: &str) -> Result<SessionRecord> {
-    let dir = sessions_dir()?;
-    if !dir.exists() {
-        return Err(NonoError::SessionNotFound(query.to_string()));
-    }
-    validate_sessions_dir(&dir)?;
-    let entries = std::fs::read_dir(&dir).map_err(|e| NonoError::ConfigWrite {
-        path: dir.clone(),
-        source: e,
-    })?;
-
     let mut id_matches = Vec::new();
     let mut name_matches = Vec::new();
+    let legacy_roots = crate::state_paths::LegacyRootSet::resolve()?;
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+    for dir in crate::state_paths::session_registry_dirs_for_read()? {
+        if !dir.exists() {
             continue;
         }
-        // Skip event log files
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.ends_with(".events.json"))
-        {
-            continue;
-        }
-        let file_name = match path.file_stem().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
+        validate_sessions_dir(&dir)?;
+        let entries = std::fs::read_dir(&dir).map_err(|e| NonoError::ConfigWrite {
+            path: dir.clone(),
+            source: e,
+        })?;
 
-        if file_name.starts_with(query) {
-            match load_reconciled_session_file(&path) {
-                Ok(record) => id_matches.push(record),
-                Err(e) => debug!("Skipping corrupt session file {}: {}", path.display(), e),
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
             }
-        } else {
-            // Try name match (only load file if ID didn't match)
-            match load_reconciled_session_file(&path) {
-                Ok(record) => {
-                    if record.name.as_deref() == Some(query) {
-                        name_matches.push(record);
+            if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".events.json"))
+            {
+                continue;
+            }
+            let file_name = match path.file_stem().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+
+            if file_name.starts_with(query) {
+                match load_reconciled_session_file(&path) {
+                    Ok(record) => {
+                        legacy_roots.warn_if_legacy_session_file_read(&path);
+                        id_matches.push(record);
                     }
+                    Err(e) => debug!("Skipping corrupt session file {}: {}", path.display(), e),
                 }
-                Err(e) => debug!("Skipping corrupt session file {}: {}", path.display(), e),
+            } else {
+                match load_reconciled_session_file(&path) {
+                    Ok(record) => {
+                        if record.name.as_deref() == Some(query) {
+                            legacy_roots.warn_if_legacy_session_file_read(&path);
+                            name_matches.push(record);
+                        }
+                    }
+                    Err(e) => debug!("Skipping corrupt session file {}: {}", path.display(), e),
+                }
             }
         }
     }
 
-    // Prefer ID matches over name matches
+    if id_matches.is_empty() && name_matches.is_empty() {
+        return Err(NonoError::SessionNotFound(query.to_string()));
+    }
+
+    // Prefer ID matches over name matches; canonical dir is scanned first so
+    // duplicates resolve to the XDG registry entry.
     let matches = if !id_matches.is_empty() {
         id_matches
     } else {
@@ -1402,45 +1420,44 @@ mod tests {
     // callsite) AND the negative contract (the .map_err deviation preserves
     // the legacy ConfigParse message and does NOT leak EnvVarValidation).
 
+    // D-01 (Plan 88-02): sessions_dir() now delegates to state_paths::sessions_dir()
+    // which uses XDG_STATE_HOME/nono/sessions (Unix) or %LOCALAPPDATA%\nono\sessions
+    // (Windows). The NONO_TEST_HOME seam is no longer on this path; the test is
+    // updated to test the new LOCALAPPDATA-backed behavior on Windows.
+    #[cfg(target_os = "windows")]
     #[test]
-    fn sessions_dir_returns_path_under_nono_test_home() {
+    fn sessions_dir_uses_localappdata_on_windows() {
         let _env_lock = crate::test_env::lock_env();
-        #[cfg(target_os = "windows")]
-        let abs = r"C:\nono-test-sessions-dir-nyquist";
-        #[cfg(not(target_os = "windows"))]
-        let abs = "/tmp/nono-test-sessions-dir-nyquist";
-        let _env = crate::test_env::EnvVarGuard::set_all(&[("NONO_TEST_HOME", abs)]);
+        let _env = crate::test_env::EnvVarGuard::set_all(&[(
+            "LOCALAPPDATA",
+            r"C:\Users\tester\AppData\Local",
+        )]);
 
-        let dir = super::sessions_dir().expect("sessions_dir with override");
-        let expected = PathBuf::from(abs).join(".nono").join("sessions");
+        let dir = super::sessions_dir().expect("sessions_dir with LOCALAPPDATA");
+        let expected = PathBuf::from(r"C:\Users\tester\AppData\Local")
+            .join("nono")
+            .join("sessions");
         assert_eq!(dir, expected);
     }
 
+    // D-01 (Plan 88-02): on Unix, sessions_dir() uses XDG_STATE_HOME.
+    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn sessions_dir_maps_envvar_validation_to_config_parse() {
+    fn sessions_dir_uses_xdg_state_home() {
         let _env_lock = crate::test_env::lock_env();
-        // Relative path triggers EnvVarValidation in nono_home_dir(); the
-        // sessions_dir() .map_err deviation must rewrite that into a
-        // ConfigParse with the exact legacy message string.
-        let _env = crate::test_env::EnvVarGuard::set_all(&[("NONO_TEST_HOME", "relative/path")]);
+        let tmp = tempfile::TempDir::new().expect("tmpdir");
+        let state_home = tmp.path().join("state");
+        std::fs::create_dir_all(&state_home).expect("mkdir");
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(&home).expect("mkdir home");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("XDG_STATE_HOME", state_home.to_str().expect("str")),
+            ("HOME", home.to_str().expect("str")),
+        ]);
 
-        let err =
-            super::sessions_dir().expect_err("relative override must fail closed via ConfigParse");
-        match err {
-            NonoError::ConfigParse(msg) => {
-                assert_eq!(
-                    msg, "Cannot determine home directory for session registry",
-                    "deviation must preserve the legacy ConfigParse message verbatim"
-                );
-            }
-            NonoError::EnvVarValidation { .. } => {
-                panic!(
-                    "sessions_dir() must map EnvVarValidation to ConfigParse \
-                     (Plan 02 Edit 1.8 deviation contract); got EnvVarValidation directly"
-                );
-            }
-            other => panic!("expected ConfigParse with legacy message, got: {other:?}"),
-        }
+        let dir = super::sessions_dir().expect("sessions_dir with XDG_STATE_HOME");
+        let expected = state_home.join("nono").join("sessions");
+        assert_eq!(dir, expected);
     }
 }
 

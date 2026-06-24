@@ -1,7 +1,7 @@
 //! Protection for nono's own state paths.
 //!
 //! These checks enforce a hard fail if initial sandbox capabilities overlap
-//! with internal CLI state roots.
+//! with internal CLI state roots (`~/.nono` and `$XDG_STATE_HOME/nono`).
 
 use nono::{CapabilitySet, NonoError, Result};
 use std::path::{Path, PathBuf};
@@ -17,35 +17,17 @@ pub struct ProtectedRoots {
 impl ProtectedRoots {
     /// Build protected roots from current defaults.
     ///
-    /// On Windows, protect both the current OS state root and the historical
-    /// preview-era `~/.nono` subtree so older local state remains fail-closed.
+    /// Protects both the legacy `~/.nono` tree and the canonical `$XDG_STATE_HOME/nono`
+    /// runtime state directory (audit, sessions, rollbacks).
     pub fn from_defaults() -> Result<Self> {
-        #[cfg(target_os = "windows")]
-        {
-            let mut roots = Vec::new();
-
-            if let Some(state_root) = crate::config::user_state_dir() {
-                roots.push(resolve_path(&state_root));
-            }
-
-            roots.push(resolve_path(&crate::config::legacy_windows_state_dir()?));
-            sort_and_dedup_roots(&mut roots);
-
-            if roots.is_empty() {
-                return Err(NonoError::HomeNotFound);
-            }
-
-            Ok(Self { roots })
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let home = crate::config::nono_home_dir()?;
-            let state_root = resolve_path(&home.join(".nono"));
-            Ok(Self {
-                roots: vec![state_root],
-            })
-        }
+        // Apply resolve_path (Windows verbatim-prefix normalization) to ensure
+        // protected roots are in the same form as validated request paths.
+        // state_paths::protected_state_roots() uses try_canonicalize which may
+        // return \\?\ prefixed paths on Windows; resolve_path strips that prefix
+        // for consistent component-wise comparison (D-01 Plan 88-02).
+        let raw_roots = crate::state_paths::protected_state_roots()?;
+        let roots = raw_roots.iter().map(|r| resolve_path(r)).collect();
+        Ok(Self { roots })
     }
 
     /// Return a slice of protected root paths.
@@ -189,12 +171,6 @@ fn resolve_path(path: &Path) -> PathBuf {
     normalize_for_compare(path)
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn sort_and_dedup_roots(roots: &mut Vec<PathBuf>) {
-    roots.sort();
-    roots.dedup_by(|left, right| paths_equal(left, right));
-}
-
 #[cfg(target_os = "windows")]
 fn normalize_for_compare(path: &Path) -> PathBuf {
     let raw = path.as_os_str().to_string_lossy();
@@ -279,13 +255,15 @@ fn path_starts_with(path: &Path, prefix: &Path) -> bool {
     path.starts_with(prefix)
 }
 
+// Used in Windows cfg(test) — dead_code lint does not count test-only callers.
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
     path_starts_with(left, right) && path_starts_with(right, left)
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 fn paths_equal(left: &Path, right: &Path) -> bool {
     left == right
 }

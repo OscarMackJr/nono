@@ -900,7 +900,7 @@ impl SetupRunner {
             #[cfg(not(target_os = "windows"))]
             println!("  # Run Claude Code with built-in profile (recommended)");
             #[cfg(not(target_os = "windows"))]
-            println!("  nono run --profile claude-code -- claude");
+            println!("  nono run --profile always-further/claude -- claude");
             println!();
             #[cfg(not(target_os = "windows"))]
             println!("  # Run any command with current directory access");
@@ -916,11 +916,10 @@ impl SetupRunner {
             #[cfg(not(target_os = "windows"))]
             if self.generate_profiles {
                 println!("Custom profiles:");
-                let profile_dir = crate::profile::resolve_user_config_dir()
-                    .map(|p| p.join("nono").join("profiles"))
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "~/.config/nono/profiles".to_string());
-                println!("  Edit example profiles in: {}", profile_dir);
+                println!(
+                    "  Edit example profiles in: {}",
+                    crate::profile::display_user_profiles_dir()
+                );
                 println!();
             }
 
@@ -1307,7 +1306,7 @@ fn print_shell_help_body() {
 
     println!("  You can add these aliases to {}:", shell_rc);
     println!();
-    println!("    alias nono-claude='nono run --profile claude-code -- claude'");
+    println!("    alias nono-claude='nono run --profile always-further/claude -- claude'");
     println!("    alias nono-safe='nono run --allow-cwd --block-net --'");
     println!();
 }

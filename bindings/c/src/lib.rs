@@ -19,6 +19,7 @@
 //!   it needs.
 
 pub mod capability_set;
+pub mod diagnostic;
 pub mod fs_capability;
 pub mod query;
 pub mod sandbox;
@@ -31,6 +32,7 @@ use std::os::raw::c_char;
 
 // Re-export all public FFI symbols so they appear in the cdylib.
 pub use capability_set::*;
+pub use diagnostic::*;
 pub use fs_capability::*;
 pub use query::*;
 pub use sandbox::*;
@@ -43,6 +45,9 @@ pub use types::*;
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+    static LAST_DIAGNOSTIC_CODE: RefCell<Option<types::NonoDiagnosticCode>> =
+        const { RefCell::new(None) };
+    static LAST_REMEDIATION_JSON: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
 /// Store an error message for the current thread.
@@ -64,6 +69,29 @@ pub(crate) fn set_last_error(msg: &str) {
     });
 }
 
+#[must_use]
+pub(crate) fn last_diagnostic_code() -> types::NonoDiagnosticCode {
+    LAST_DIAGNOSTIC_CODE.with(|cell| cell.borrow().unwrap_or(types::NonoDiagnosticCode::Other))
+}
+
+#[must_use]
+pub(crate) fn last_remediation_json() -> Option<String> {
+    LAST_REMEDIATION_JSON.with(|cell| cell.borrow().clone())
+}
+
+/// Clear all thread-local call state (error, diagnostic code, remediation JSON).
+///
+/// Called at the entry of every `pub unsafe extern "C"` function that can
+/// set any thread-local. This prevents stale diagnostic codes or remediation
+/// JSON from a prior call on the same thread from leaking into the caller's
+/// error-inspection after a new call (CR-01 — deliberate fork-divergence,
+/// recorded in 85-DIVERGENCE-LEDGER.md Phase 88 CR-01 addendum).
+pub(crate) fn clear_last_call_state() {
+    LAST_ERROR.with(|c| *c.borrow_mut() = None);
+    LAST_DIAGNOSTIC_CODE.with(|c| *c.borrow_mut() = None);
+    LAST_REMEDIATION_JSON.with(|c| *c.borrow_mut() = None);
+}
+
 /// Map a `NonoError` to an error code and store the message.
 ///
 /// Every `NonoError` variant is matched explicitly so the compiler will flag
@@ -72,6 +100,14 @@ pub(crate) fn set_last_error(msg: &str) {
 pub(crate) fn map_error(e: &nono::NonoError) -> types::NonoErrorCode {
     use types::NonoErrorCode;
     set_last_error(&e.to_string());
+    LAST_DIAGNOSTIC_CODE.with(|cell| {
+        *cell.borrow_mut() = Some(types::NonoDiagnosticCode::from(e.diagnostic_code()));
+    });
+    LAST_REMEDIATION_JSON.with(|cell| {
+        *cell.borrow_mut() = e
+            .remediation()
+            .and_then(|rem| serde_json::to_string(&rem).ok());
+    });
     match e {
         nono::NonoError::PathNotFound(_) => NonoErrorCode::ErrPathNotFound,
         nono::NonoError::ExpectedDirectory(_) => NonoErrorCode::ErrExpectedDirectory,
@@ -239,6 +275,12 @@ pub extern "C" fn nono_last_error() -> *mut c_char {
 #[unsafe(no_mangle)]
 pub extern "C" fn nono_clear_error() {
     LAST_ERROR.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    LAST_DIAGNOSTIC_CODE.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    LAST_REMEDIATION_JSON.with(|cell| {
         *cell.borrow_mut() = None;
     });
 }

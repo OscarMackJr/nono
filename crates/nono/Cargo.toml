@@ -68,7 +68,7 @@ winreg = "0.56"
 keyring = { version = "3", features = ["windows-native"], optional = true }
 
 [build-dependencies]
-typify = "0.6"
+typify = "0.7"
 serde_json = "1"
 syn = "2"
 prettyplease = "0.2"

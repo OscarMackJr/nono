@@ -183,7 +183,7 @@ const SHELL_AFTER_HELP: &str = "\x1b[1mEXAMPLES\x1b[0m
 #[cfg(not(target_os = "windows"))]
 const SHELL_AFTER_HELP: &str = "\x1b[1mEXAMPLES\x1b[0m
   nono shell --allow .                         # Shell with read/write to current dir
-  nono shell --profile claude-code             # Use a named profile
+  nono shell --profile always-further/claude             # Use a named profile
   nono shell --allow . --shell /bin/zsh        # Override shell binary
 ";
 
@@ -201,8 +201,8 @@ const WRAP_AFTER_HELP: &str = "\x1b[1mEXAMPLES\x1b[0m
 #[cfg(target_os = "windows")]
 const RUN_AFTER_HELP: &str = "\x1b[1mEXAMPLES\x1b[0m
   nono run --allow . claude                    # Read/write current dir, run claude
-  nono run --profile claude-code claude        # Use a built-in profile
-  nono run --profile claude-code --allow-domain api.openai.com claude
+  nono run --profile always-further/claude claude        # Use a built-in profile
+  nono run --profile always-further/claude --allow-domain api.openai.com claude
                                                # Restrict outbound access to listed domains
   nono run --read ./src --write ./output cargo build
                                                # Separate read/write permissions
@@ -219,8 +219,8 @@ const RUN_AFTER_HELP: &str = "\x1b[1mEXAMPLES\x1b[0m
 #[cfg(not(target_os = "windows"))]
 const RUN_AFTER_HELP: &str = "\x1b[1mEXAMPLES\x1b[0m
   nono run --allow . claude                    # Read/write current dir, run claude
-  nono run --profile claude-code claude        # Use a built-in profile
-  nono run --profile claude-code --allow-domain api.openai.com claude
+  nono run --profile always-further/claude claude        # Use a built-in profile
+  nono run --profile always-further/claude --allow-domain api.openai.com claude
                                                # Restrict outbound access to listed domains
   nono run --read ./src --write ./output cargo build
                                                # Separate read/write permissions
@@ -278,6 +278,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1mPOLICY & PROFILES\x1b[0m
   policy     Inspect policy groups, profiles, and security rules
   profile    Create and manage nono profiles
+  override   Manage policy override tokens (lifecycle, audit, and request operations)
 
 \x1b[1mSHELL\x1b[0m
   completion   Generate shell completion scripts
@@ -580,6 +581,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1mPOLICY & PROFILES\x1b[0m
   policy     [deprecated] Use 'nono profile' instead
   profile    Create, inspect, and compare nono profiles
+  override   Manage policy override tokens (lifecycle, audit, and request operations)
 
 \x1b[1mSHELL\x1b[0m
   completion   Generate shell completion scripts
@@ -1206,6 +1208,185 @@ pub enum Commands {
     /// Internal: handle Claude Code hook JSON on stdin
     #[command(name = "claude-code-hook", hide = true)]
     ClaudeCodeHook,
+
+    // ── Policy override lifecycle (Phase 93) ────────────────────────────
+    // NOTE: `nono override apply` is NOT a nono.exe verb — it lives in nono-py
+    // (D-07) where the full offline+live verify orchestration already runs.
+    // Only `nono override audit-emit` (OQ-1) and `nono override request`
+    // (Plan 03) live here.  The asymmetry is intentional and must not be
+    // "fixed" by adding an apply verb to this enum.
+    /// Manage policy override tokens (lifecycle, audit, and request operations)
+    #[command(subcommand_help_heading = "COMMANDS", disable_help_subcommand = true)]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono override <command>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mCOMMANDS\x1b[0m
+  audit-emit   Emit a rejection/revocation event into the HMAC audit chain
+  request      Surface denial context as a JSON override-request bundle
+
+\x1b[1mNOTES\x1b[0m
+  `nono override apply` is delivered by the nono-py package (D-07) — it runs the
+  full offline+live verification before executing a confined command.
+  Do not add an `apply` subcommand here.
+
+\x1b[1mEXAMPLES\x1b[0m
+  nono override audit-emit <base64-meta> --kind rejected
+  nono override audit-emit <base64-meta> --kind revoked
+  nono override request --reason path_not_granted --scope-paths /home/user/.aws
+")]
+    Override(OverrideArgs),
+}
+
+/// Arguments for the `nono override` subcommand group.
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub(crate) struct OverrideArgs {
+    #[command(subcommand)]
+    pub command: OverrideCommands,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+/// Subcommands for `nono override`.
+///
+/// Plan 02 (Wave 1) owns this skeleton.  Plan 03 (Wave 2) adds the `Request`
+/// variant onto the already-merged skeleton — it must NOT re-introduce `OverrideArgs`
+/// or `OverrideCommands` (file-ownership note in 93-02-PLAN.md).
+///
+/// # Deliberate asymmetry — no `Apply` variant (D-07)
+///
+/// `nono override apply` is **NOT** a nono.exe subcommand.  The full
+/// offline+live verification pipeline lives in nono-py (`nono-override-apply`
+/// console script), which already has access to the PyO3 ECDSA verifier,
+/// the live POST /actions check, and `confined_run`.  There is no
+/// nono.exe→nono-py shell-back (D-07 forbids it).  A plan-checker or
+/// help-coverage tool that flags a missing `Apply` arm should be informed
+/// of this design decision rather than triggering the addition of a stub.
+#[derive(Subcommand, Debug)]
+pub(crate) enum OverrideCommands {
+    /// Emit a PolicyOverrideRejected (10008) or PolicyOverrideRevoked (10010) event
+    /// into the nono-cli HMAC audit chain.
+    ///
+    /// Called by nono-py on the live-reject branch (fail-closed before spawn).
+    /// Carries only jti/kms_key_id/zt_audit_hash from the already-verified
+    /// OverrideAuditMeta — no raw key material.  Exits non-zero on emit failure
+    /// (AUD-04 fail-closed parity).
+    ///
+    /// INTERNAL — not intended for direct user invocation.
+    #[command(name = "audit-emit")]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono override audit-emit <META> --kind <rejected|revoked>
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono override audit-emit <base64-meta> --kind rejected
+  nono override audit-emit <base64-meta> --kind revoked
+")]
+    AuditEmit(OverrideAuditEmitArgs),
+
+    /// Surface denial context as a structured JSON override-request bundle (CLI-01).
+    ///
+    /// Gathers scope paths/domains, `repo_context`, and the denial reason from the
+    /// diagnostic context and emits:
+    ///
+    /// 1. A JSON bundle `{ scope, repo_context, reason, nonce }` for submission to
+    ///    the out-of-nono approver/KMS-signing pipeline.
+    /// 2. A human-readable summary to stdout.
+    ///
+    /// Per D-07/D-08 this command performs NO crypto and NO live check.  The
+    /// `apply` step (full offline+live verify) is delivered by the `nono-override-apply`
+    /// console script in nono-py.
+    #[command(name = "request")]
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono override request --reason <REASON> [OPTIONS]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mNOTES\x1b[0m
+  This command does NOT grant any capability.  It only packages the denial context
+  into a signed-request bundle for the approver pipeline (D-07 / D-08).
+
+\x1b[1mEXAMPLES\x1b[0m
+  nono override request --reason path_not_granted --scope-paths /home/user/.aws
+  nono override request --reason sensitive_path --scope-domains api.internal.example.com --repo-context github.com/org/proj
+")]
+    Request(OverrideRequestArgs),
+}
+
+/// Arguments for `nono override audit-emit`.
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub(crate) struct OverrideAuditEmitArgs {
+    /// Base64url-no-pad-encoded JSON `OverrideAuditMeta` (same encoding as `--override-audit`).
+    pub meta: String,
+
+    /// Kind of denial event to emit.
+    ///
+    /// `rejected` → PolicyOverrideRejected (EventID 10008): timeout / unreachable /
+    /// non-200 / malformed response from the live ZT-Infra endpoint.
+    /// `revoked`  → PolicyOverrideRevoked  (EventID 10010): live endpoint returned
+    /// `decision: deny`.
+    #[arg(long, value_name = "KIND")]
+    pub kind: crate::override_audit_emit::OverrideKind,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
+}
+
+/// Arguments for `nono override request` (CLI-01, Phase 93 Plan 03).
+///
+/// Gathers denial context and emits a JSON request bundle for the out-of-nono
+/// approver/KMS-signing pipeline.  No crypto, no live check (D-07).
+#[derive(Parser, Debug)]
+#[command(disable_help_flag = true)]
+pub(crate) struct OverrideRequestArgs {
+    /// Denial reason string (e.g. "sensitive_path", "insufficient_access", "path_not_granted").
+    ///
+    /// Describes why the sandbox denied the operation — used as the `reason` field in the
+    /// request bundle so the approver understands the class of exception needed.
+    #[arg(long, value_name = "REASON", help_heading = "OPTIONS")]
+    pub reason: String,
+
+    /// Filesystem path(s) in the scope of the denial (may be repeated).
+    ///
+    /// Each path that was denied or needs to be granted.  Multiple paths may be
+    /// provided by repeating the flag: `--scope-paths /tmp/a --scope-paths /tmp/b`.
+    /// Uses component-level path comparison internally (not string prefix — CLAUDE.md footgun §4).
+    #[arg(long, value_name = "PATH", help_heading = "OPTIONS")]
+    pub scope_paths: Vec<String>,
+
+    /// Domain(s) in the scope of the denial (may be repeated).
+    ///
+    /// Each domain that was blocked by the network policy.  Repeat the flag for
+    /// multiple domains: `--scope-domains api.example.com --scope-domains cdn.example.com`.
+    #[arg(long, value_name = "DOMAIN", help_heading = "OPTIONS")]
+    pub scope_domains: Vec<String>,
+
+    /// Repository context (e.g. "github.com/org/repo") for the approver's traceability.
+    ///
+    /// Identifies the repository in which the sandboxed operation was attempted.
+    /// Carried as the `repo_context` field in the bundle; optional.
+    #[arg(long, value_name = "REPO", help_heading = "OPTIONS")]
+    pub repo_context: Option<String>,
+
+    /// Print help
+    #[arg(long, short = 'h', action = clap::ArgAction::Help, help_heading = "OPTIONS")]
+    pub help: Option<bool>,
 }
 
 #[derive(Parser, Debug)]
@@ -1625,6 +1806,28 @@ pub struct ProfileResolverArgs {
     pub no_auto_pull: bool,
 }
 
+/// Trusted override audit metadata passed via `--override-audit`.
+///
+/// Deserialized from base64url-no-pad-encoded JSON. All fields are read from
+/// the already-verified `OverrideGrant` in nono-py (D-06: never re-parsed
+/// from the raw token; closes the TOCTOU verify→apply gap).
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OverrideAuditMeta {
+    /// ZT-Infra audit chain hash (bi-directional link, AUD-02). `None` if the token
+    /// predates ZT-Infra audit chain integration (CAF v0.1 allows `Option<String>`).
+    #[serde(default)]
+    pub(crate) zt_audit_hash: Option<String>,
+    /// KMS key ARN used to sign the override token (from `OverrideGrant.signer`).
+    pub(crate) kms_key_id: String,
+    /// JWT ID — single-use nonce (from `OverrideGrant.jti`).
+    pub(crate) jti: String,
+    /// Paths granted by this override, already sanitized in nono-py (D-05).
+    pub(crate) granted_paths: Vec<String>,
+    /// RFC3339 expiry timestamp (from `OverrideGrant.expires_at`).
+    pub(crate) expires_at: String,
+}
+
 #[derive(Parser, Debug, Clone, Default)]
 pub struct SandboxArgs {
     // ── Filesystem ───────────────────────────────────────────────────────
@@ -1828,6 +2031,29 @@ pub struct SandboxArgs {
     #[arg(long, value_name = "PORT", help_heading = "NETWORK")]
     pub proxy_port: Option<u16>,
 
+    /// Add the proxy CA to the macOS user trust store (enables Go CLI tools).
+    /// Shares the CA across sessions via Keychain; regenerates daily.
+    #[cfg(target_os = "macos")]
+    #[arg(
+        long,
+        env = "NONO_TRUST_PROXY_CA",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        action = clap::ArgAction::SetTrue,
+        help_heading = "NETWORK"
+    )]
+    pub trust_proxy_ca: bool,
+
+    /// Proxy CA certificate validity in days (1–365, default: 1).
+    /// Controls how long the ephemeral CA (and its leaf certificates) remain valid.
+    #[arg(
+        long,
+        value_name = "DAYS",
+        env = "NONO_PROXY_CA_VALIDITY",
+        value_parser = clap::value_parser!(u32).range(1..=365),
+        help_heading = "NETWORK"
+    )]
+    pub proxy_ca_validity: Option<u32>,
+
     // ── Credentials ──────────────────────────────────────────────────────
     /// Inject credentials via reverse proxy for a service (repeatable)
     #[arg(
@@ -1972,6 +2198,19 @@ pub struct SandboxArgs {
     /// Show what would be sandboxed without executing
     #[arg(long, help_heading = "OPTIONS")]
     pub dry_run: bool,
+
+    /// Signed override audit metadata (base64url-no-pad-encoded JSON).
+    ///
+    /// Present only when nono-py has verified a signed policy override and is
+    /// passing trusted audit metadata for the SecurityEventLayer HMAC chain.
+    /// nono-cli treats `--allow` paths supplied in this session as override-granted
+    /// if and only if this flag is also present (AUD-04 bilateral gate, D-02).
+    ///
+    /// INTERNAL — not intended for direct user invocation.
+    /// Value: base64url-no-pad of `{"zt_audit_hash":…,"kms_key_id":…,"jti":…,
+    ///        "granted_paths":[…],"expires_at":…}`.
+    #[arg(long, value_name = "META", hide = true, help_heading = "OPTIONS")]
+    pub override_audit: Option<String>,
 }
 
 impl SandboxArgs {
@@ -2312,6 +2551,9 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             external_proxy: None,
             external_proxy_bypass: Vec::new(),
             proxy_port: None,
+            #[cfg(target_os = "macos")]
+            trust_proxy_ca: false,
+            proxy_ca_validity: None,
             proxy_credential: Vec::new(),
             allow_endpoint: Vec::new(),
             env_credential: args.env_credential,
@@ -2327,6 +2569,8 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             verbose: args.verbose,
             dangerous_force_wfp_ready: false,
             dry_run: args.dry_run,
+            // WrapSandboxArgs does not expose --override-audit (internal flag).
+            override_audit: None,
         }
     }
 }
@@ -2390,7 +2634,7 @@ pub struct RunArgs {
     pub skip_dir: Vec<String>,
 
     /// Override the rollback snapshot destination directory.
-    /// By default, snapshots are stored in the platform's nono rollback directory.
+    /// By default, snapshots are stored in $XDG_STATE_HOME/nono/rollbacks/.
     /// The destination must be within a path already granted write access
     /// by --allow (or profile); nono will fail with a clear error if not.
     /// Useful for Docker volume mounts or shared storage paths.
@@ -2406,6 +2650,10 @@ pub struct RunArgs {
     /// Suppress diagnostic footer on command failure
     #[arg(long, help_heading = "OPTIONS")]
     pub no_diagnostics: bool,
+
+    /// After the run, print session diagnostics as JSON on stderr (merged with proxy diagnostics when present).
+    #[arg(long = "diagnostics-json", help_heading = "OPTIONS")]
+    pub diagnostics_json: bool,
 
     /// Kill the process if it has not entered alt-screen mode after this many seconds.
     /// Startup banners and log lines do not count; only a full-screen TUI transition satisfies the check.
@@ -2463,7 +2711,13 @@ pub struct RunArgs {
     pub audit_sign_key: Option<String>,
 
     /// Disable trust verification (not recommended for production)
-    #[arg(long, help_heading = "OPTIONS")]
+    #[arg(
+        long,
+        env = "NONO_TRUST_OVERRIDE",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        action = clap::ArgAction::SetTrue,
+        help_heading = "OPTIONS"
+    )]
     pub trust_override: bool,
 
     /// Name for this session (shown in `nono ps`)
@@ -2474,7 +2728,13 @@ pub struct RunArgs {
     /// Overrides the profile's capability_elevation setting.
     /// When enabled, the supervisor can grant access to paths not in the
     /// initial capability set via interactive prompts.
-    #[arg(long, env = "NONO_CAPABILITY_ELEVATION", help_heading = "OPTIONS")]
+    #[arg(
+        long,
+        env = "NONO_CAPABILITY_ELEVATION",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        action = clap::ArgAction::SetTrue,
+        help_heading = "OPTIONS"
+    )]
     pub capability_elevation: bool,
 
     // ── Resource Limits ──────────────────────────────────────────────
@@ -4934,6 +5194,47 @@ mod tests {
     }
 
     #[test]
+    fn test_capability_elevation_flag_sets_true() {
+        let cli = Cli::parse_from([
+            "nono",
+            "run",
+            "--allow",
+            ".",
+            "--capability-elevation",
+            "echo",
+        ]);
+        match cli.command {
+            Commands::Run(args) => {
+                assert!(args.capability_elevation);
+            }
+            _ => panic!("Expected Run command"),
+        }
+    }
+
+    #[test]
+    fn test_trust_override_flag_sets_true() {
+        let cli = Cli::parse_from(["nono", "run", "--allow", ".", "--trust-override", "echo"]);
+        match cli.command {
+            Commands::Run(args) => {
+                assert!(args.trust_override);
+            }
+            _ => panic!("Expected Run command"),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_trust_proxy_ca_flag_sets_true() {
+        let cli = Cli::parse_from(["nono", "run", "--allow", ".", "--trust-proxy-ca", "echo"]);
+        match cli.command {
+            Commands::Run(args) => {
+                assert!(args.sandbox.trust_proxy_ca);
+            }
+            _ => panic!("Expected Run command"),
+        }
+    }
+
+    #[test]
     fn test_allow_port_parsing() {
         let cli = Cli::parse_from([
             "nono",
@@ -5191,6 +5492,8 @@ mod tests {
         "trust",
         "policy",
         "profile",
+        // Phase 93: policy override lifecycle (audit-emit, request).
+        "override",
         "pull",
         "remove",
         "update",
@@ -5552,5 +5855,46 @@ mod profile_resolver_args_tests {
             }
             _ => panic!("Expected Setup command"),
         }
+    }
+
+    // ── OverrideAuditMeta deserialization (Phase 92 Plan 03 Task 1) ──────────
+
+    /// Valid JSON with all required fields deserializes to OverrideAuditMeta.
+    #[test]
+    fn override_audit_meta_deserializes_valid_json() {
+        let json = r#"{"zt_audit_hash":"abc","kms_key_id":"arn:test","jti":"uuid","granted_paths":["/tmp/x"],"expires_at":"2026-01-01T00:00:00Z"}"#;
+        let meta: crate::cli::OverrideAuditMeta =
+            serde_json::from_str(json).expect("valid JSON must deserialize");
+        assert_eq!(meta.zt_audit_hash, Some("abc".to_string()));
+        assert_eq!(meta.kms_key_id, "arn:test");
+        assert_eq!(meta.jti, "uuid");
+        assert_eq!(meta.granted_paths, vec!["/tmp/x".to_string()]);
+        assert_eq!(meta.expires_at, "2026-01-01T00:00:00Z");
+    }
+
+    /// serde(deny_unknown_fields) rejects JSON with extra fields.
+    ///
+    /// This prevents forged metadata injection where an attacker adds extra
+    /// fields to the base64-JSON payload hoping nono-cli will process them.
+    #[test]
+    fn override_audit_meta_rejects_unknown_fields() {
+        let json = r#"{"zt_audit_hash":"abc","kms_key_id":"arn:test","jti":"uuid","granted_paths":["/tmp/x"],"expires_at":"2026-01-01T00:00:00Z","unexpected_field":"evil"}"#;
+        let result = serde_json::from_str::<crate::cli::OverrideAuditMeta>(json);
+        assert!(
+            result.is_err(),
+            "deny_unknown_fields must reject JSON with extra fields"
+        );
+    }
+
+    /// `zt_audit_hash: null` is allowed (tokens predating ZT-Infra audit chain).
+    #[test]
+    fn override_audit_meta_allows_null_zt_audit_hash() {
+        let json = r#"{"kms_key_id":"arn:test","jti":"uuid","granted_paths":[],"expires_at":"2026-01-01T00:00:00Z"}"#;
+        let meta: crate::cli::OverrideAuditMeta = serde_json::from_str(json)
+            .expect("absent zt_audit_hash must be allowed (serde default)");
+        assert_eq!(
+            meta.zt_audit_hash, None,
+            "zt_audit_hash must default to None when absent"
+        );
     }
 }

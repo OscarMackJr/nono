@@ -6,9 +6,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::writer::MakeWriter;
 
 pub(crate) fn normalize_legacy_flag_env_vars() {
     copy_legacy_env_var("NONO_NET_BLOCK", "NONO_BLOCK_NET");
@@ -120,6 +120,12 @@ pub(crate) fn init_tracing(cli: &Cli, telemetry_config: Option<TelemetryConfig>)
     let config = telemetry_config.unwrap_or_default();
     let security_layer = SecurityEventLayer::new(config, session_id);
 
+    // Phase 92 Plan 03 (OQ-1 resolution): expose the layer for direct access
+    // from execute_sandboxed (AUD-04 gate). SecurityEventLayer::clone() shares
+    // the same Arc<Mutex<...>> inner, so both clones advance the same chain.
+    // OnceLock::set silently fails if already set (double-init guard).
+    let _ = crate::telemetry::SECURITY_LAYER.set(security_layer.clone());
+
     // Delegate to the platform-specific initialization that adds the ETW layer
     // (Windows) or skips it (non-Windows).  The separate helper avoids having
     // tracing-etw's complex generic types flow through all three match arms.
@@ -216,7 +222,6 @@ fn init_registry<W>(
     }
 }
 
-
 #[allow(clippy::disallowed_methods)] // Single-threaded at process startup, before any threads.
 fn copy_legacy_env_var(old: &str, new: &str) {
     if std::env::var_os(new).is_some() {
@@ -287,7 +292,9 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         | Commands::Daemon(_)
         | Commands::Agent(_)
         // Phase 82 DEPLOY-06: health has no verbose flag.
-        | Commands::Health(_) => 0,
+        | Commands::Health(_)
+        // Phase 93 Plan 02: override audit-emit has no verbose flag.
+        | Commands::Override(_) => 0,
     }
 }
 

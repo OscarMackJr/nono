@@ -11,7 +11,7 @@
 
 use super::*;
 use crate::trust_intercept::TrustInterceptor;
-use nono::{try_canonicalize, AccessMode, UnixSocketCapability, UnixSocketOp};
+use nono::{try_canonicalize, AccessMode, NonoRemediation, UnixSocketCapability, UnixSocketOp};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct InitialCapability {
@@ -398,7 +398,7 @@ pub(super) fn handle_seccomp_notification(
         record_denial(
             denials,
             DenialRecord {
-                path: path.clone(),
+                path: canonicalized.clone(),
                 access,
                 reason: DenialReason::RateLimited,
             },
@@ -433,7 +433,7 @@ pub(super) fn handle_seccomp_notification(
                 record_denial(
                     denials,
                     DenialRecord {
-                        path: path.clone(),
+                        path: canonicalized.clone(),
                         access,
                         reason: DenialReason::PolicyBlocked,
                     },
@@ -467,7 +467,7 @@ pub(super) fn handle_seccomp_notification(
                 record_denial(
                     denials,
                     DenialRecord {
-                        path: path.clone(),
+                        path: canonicalized.clone(),
                         access,
                         reason: DenialReason::UserDenied,
                     },
@@ -480,7 +480,7 @@ pub(super) fn handle_seccomp_notification(
             record_denial(
                 denials,
                 DenialRecord {
-                    path: path.clone(),
+                    path: canonicalized.clone(),
                     access,
                     reason: DenialReason::BackendError,
                 },
@@ -577,7 +577,9 @@ pub(super) fn decide_network_notification(
     sockaddr: &nono::sandbox::SockaddrInfo,
     config: &SupervisorConfig<'_>,
 ) -> NetworkDecision {
-    use nono::sandbox::{UnixSocketKind, SYS_BIND, SYS_CONNECT};
+    use nono::sandbox::{
+        UnixSocketKind, SYS_BIND, SYS_CONNECT, SYS_SENDMMSG, SYS_SENDMSG, SYS_SENDTO,
+    };
 
     // AF_UNIX: allow only filesystem-backed (pathname) sockets that match an
     // explicit socket capability. Abstract/unnamed sockets bypass pathname
@@ -617,18 +619,20 @@ pub(super) fn decide_network_notification(
     }
 
     match syscall {
-        SYS_CONNECT => {
-            // Allow connect only to loopback + proxy port
+        SYS_CONNECT | SYS_SENDTO | SYS_SENDMSG | SYS_SENDMMSG => {
+            // Allow connect/sendto/sendmsg/sendmmsg only to loopback + proxy port.
+            // sendto/sendmsg/sendmmsg with a destination address is semantically
+            // equivalent to connect for network reach-out (issue #1089).
             if sockaddr.is_loopback && sockaddr.port == config.proxy_port {
                 debug!(
-                    "Proxy seccomp: allowing connect to loopback:{}",
-                    sockaddr.port
+                    "Proxy seccomp: allowing network syscall nr={} to loopback:{}",
+                    syscall, sockaddr.port
                 );
                 NetworkDecision::Allow
             } else {
                 debug!(
-                    "Proxy seccomp: denying connect to family={} port={} loopback={}",
-                    sockaddr.family, sockaddr.port, sockaddr.is_loopback
+                    "Proxy seccomp: denying network syscall nr={} to family={} port={} loopback={}",
+                    syscall, sockaddr.family, sockaddr.port, sockaddr.is_loopback
                 );
                 NetworkDecision::Deny
             }
@@ -692,11 +696,12 @@ fn decide_af_unix_pathname(
     };
 
     let canonical = match op {
-        UnixSocketOp::Connect => match resolved_path.canonicalize() {
+        UnixSocketOp::Connect | UnixSocketOp::Send => match resolved_path.canonicalize() {
             Ok(path) => path,
             Err(err) => {
                 debug!(
-                    "Proxy seccomp: denying AF_UNIX connect to {}: canonicalize failed: {}",
+                    "Proxy seccomp: denying AF_UNIX {} on {}: canonicalize failed: {}",
+                    op,
                     resolved_path.display(),
                     err
                 );
@@ -744,11 +749,12 @@ fn resolve_af_unix_sockaddr_path(
 }
 
 fn unix_socket_op_for_syscall(syscall: i32) -> Option<UnixSocketOp> {
-    use nono::sandbox::{SYS_BIND, SYS_CONNECT};
+    use nono::sandbox::{SYS_BIND, SYS_CONNECT, SYS_SENDMMSG, SYS_SENDMSG, SYS_SENDTO};
 
     match syscall {
         SYS_CONNECT => Some(UnixSocketOp::Connect),
         SYS_BIND => Some(UnixSocketOp::Bind),
+        SYS_SENDTO | SYS_SENDMSG | SYS_SENDMMSG => Some(UnixSocketOp::Send),
         _ => None,
     }
 }
@@ -761,7 +767,7 @@ fn unix_socket_allowlist_allows(
     allowlist.iter().any(|cap| {
         cap.covers(path)
             && match op {
-                UnixSocketOp::Connect => true,
+                UnixSocketOp::Connect | UnixSocketOp::Send => true, // any grant allows connect/send
                 UnixSocketOp::Bind => cap.mode.permits_bind(),
             }
     })
@@ -817,8 +823,9 @@ pub(super) fn handle_network_notification(
     ipc_denials: &mut Vec<nono::diagnostic::IpcDenialRecord>,
 ) -> nono::error::Result<()> {
     use nono::sandbox::{
-        continue_notif, deny_notif, notif_id_valid, read_notif_sockaddr, recv_notif,
-        respond_notif_errno,
+        continue_notif, deny_notif, notif_id_valid, read_mmsghdr_dests, read_msghdr_dest,
+        read_notif_sockaddr, recv_notif, respond_notif_errno, SYS_BIND, SYS_CONNECT, SYS_SENDMMSG,
+        SYS_SENDMSG, SYS_SENDTO,
     };
 
     let notif = recv_notif(notify_fd)?;
@@ -830,38 +837,188 @@ pub(super) fn handle_network_notification(
         return Ok(());
     }
 
-    // Read sockaddr from child's memory: args[1] = sockaddr*, args[2] = addrlen
-    let sockaddr = match read_notif_sockaddr(notif.pid, notif.data.args[1], notif.data.args[2]) {
-        Ok(info) => info,
-        Err(e) => {
-            debug!("Failed to read sockaddr from seccomp notification: {}", e);
+    // Read sockaddr(s) from child's memory. The location depends on the syscall:
+    //   connect(fd, sockaddr*, addrlen):   args[1] = sockaddr*, args[2] = addrlen
+    //   bind(fd, sockaddr*, addrlen):      args[1] = sockaddr*, args[2] = addrlen
+    //   sendto(fd, buf, len, flags, sockaddr*, addrlen):
+    //       args[4] = sockaddr*, args[5] = addrlen (0 means connected socket)
+    //   sendmsg(fd, msghdr*, flags):       args[1] = msghdr*;
+    //       sockaddr lives inside msghdr.msg_name / msg_namelen
+    //   sendmmsg(fd, mmsghdr*, vlen, flags): args[1] = mmsghdr*, args[2] = vlen;
+    //       each mmsghdr starts with an msghdr that may carry a destination
+    let sockaddrs = match notif.data.nr {
+        SYS_CONNECT | SYS_BIND => {
+            match read_notif_sockaddr(notif.pid, notif.data.args[1], notif.data.args[2]) {
+                Ok(info) => vec![info],
+                Err(e) => {
+                    debug!(
+                        "Failed to read sockaddr from seccomp notification (nr={}): {}",
+                        notif.data.nr, e
+                    );
+                    let _ = deny_notif(notify_fd, notif.id);
+                    return Ok(());
+                }
+            }
+        }
+        SYS_SENDTO => {
+            // args[4] = dest_addr pointer, args[5] = addrlen
+            // Full-width NULL check: if dest_addr is NULL the socket is connected
+            // and no per-call destination is present.
+            if notif.data.args[4] == 0 {
+                if let Err(e) = continue_notif(notify_fd, notif.id) {
+                    debug!("continue_notif failed for sendto NULL dest_addr: {}", e);
+                    return deny_notif(notify_fd, notif.id);
+                }
+                return Ok(());
+            }
+            match read_notif_sockaddr(notif.pid, notif.data.args[4], notif.data.args[5]) {
+                Ok(info) => vec![info],
+                Err(e) => {
+                    debug!(
+                        "Failed to read sendto sockaddr from seccomp notification: {}",
+                        e
+                    );
+                    let _ = deny_notif(notify_fd, notif.id);
+                    return Ok(());
+                }
+            }
+        }
+        SYS_SENDMSG => {
+            // args[1] = msghdr*. Read the msghdr to find msg_name / msg_namelen,
+            // then read the sockaddr from msg_name.
+            match read_msghdr_dest(notif.pid, notif.data.args[1]) {
+                Ok(Some((addr_ptr, addrlen))) => {
+                    match read_notif_sockaddr(notif.pid, addr_ptr, addrlen) {
+                        Ok(info) => vec![info],
+                        Err(e) => {
+                            debug!(
+                                "Failed to read sendmsg sockaddr from seccomp notification: {}",
+                                e
+                            );
+                            let _ = deny_notif(notify_fd, notif.id);
+                            return Ok(());
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // msg_name is NULL: no per-message destination to mediate. Allow immediately.
+                    if let Err(e) = continue_notif(notify_fd, notif.id) {
+                        debug!("continue_notif failed for sendmsg NULL msg_name: {}", e);
+                        return deny_notif(notify_fd, notif.id);
+                    }
+                    return Ok(());
+                }
+                Err(e) => {
+                    debug!(
+                        "Failed to read msghdr from sendmsg seccomp notification: {}",
+                        e
+                    );
+                    let _ = deny_notif(notify_fd, notif.id);
+                    return Ok(());
+                }
+            }
+        }
+        SYS_SENDMMSG => {
+            // args[1] = mmsghdr*, args[2] = vlen
+            let dests = match read_mmsghdr_dests(notif.pid, notif.data.args[1], notif.data.args[2])
+            {
+                Ok(dests) => dests,
+                Err(e) => {
+                    debug!(
+                        "Failed to read sendmmsg message vector from seccomp notification: {}",
+                        e
+                    );
+                    let _ = deny_notif(notify_fd, notif.id);
+                    return Ok(());
+                }
+            };
+
+            let mut addr_list = Vec::new();
+            for (idx, dest) in dests.into_iter().enumerate() {
+                let Some((addr_ptr, addrlen)) = dest else {
+                    // NULL msg_name: this entry uses the connected peer; skip.
+                    continue;
+                };
+                match read_notif_sockaddr(notif.pid, addr_ptr, addrlen) {
+                    Ok(info) => addr_list.push(info),
+                    Err(e) => {
+                        debug!("Failed to read sendmmsg sockaddr at message {}: {}", idx, e);
+                        let _ = deny_notif(notify_fd, notif.id);
+                        return Ok(());
+                    }
+                }
+            }
+
+            if addr_list.is_empty() {
+                // All entries had NULL msg_name: connected-socket sends only. Allow.
+                if let Err(e) = continue_notif(notify_fd, notif.id) {
+                    debug!(
+                        "continue_notif failed for sendmmsg without destinations: {}",
+                        e
+                    );
+                    return deny_notif(notify_fd, notif.id);
+                }
+                return Ok(());
+            }
+
+            addr_list
+        }
+        other => {
+            warn!(
+                "Unexpected syscall {} in network seccomp handler, denying",
+                other
+            );
             let _ = deny_notif(notify_fd, notif.id);
             return Ok(());
         }
     };
 
-    // TOCTOU check
+    // TOCTOU check: perform ONCE before the per-sockaddr loop.
     if !notif_id_valid(notify_fd, notif.id)? {
         debug!("Network seccomp notification expired (TOCTOU check)");
         return Ok(());
     }
 
-    match decide_network_notification(notif.pid, notif.data.nr, &sockaddr, config) {
-        NetworkDecision::Allow => {
-            if let Err(e) = continue_notif(notify_fd, notif.id) {
-                debug!("continue_notif failed for network notification: {}", e);
-                // Must respond to avoid leaving the child blocked. Propagate if
-                // deny also fails — the notification is orphaned.
-                return deny_notif(notify_fd, notif.id);
+    // Deny on ANY single sockaddr denial (fail-secure for multi-message).
+    for sockaddr in &sockaddrs {
+        match decide_network_notification(notif.pid, notif.data.nr, sockaddr, config) {
+            NetworkDecision::Allow => {}
+            NetworkDecision::Deny => {
+                record_af_unix_ipc_denial(sockaddr, notif.pid, notif.data.nr, denials, ipc_denials);
+                respond_notif_errno(notify_fd, notif.id, libc::EACCES)?;
+                if let Err(err) = record_network_audit_denial(config, sockaddr, notif.data.nr) {
+                    warn!("Failed to record network denial audit event: {}", err);
+                }
+                return Ok(());
             }
         }
-        NetworkDecision::Deny => {
-            record_af_unix_ipc_denial(&sockaddr, notif.pid, notif.data.nr, denials, ipc_denials);
-            respond_notif_errno(notify_fd, notif.id, libc::EACCES)?;
-            if let Err(err) = record_network_audit_denial(config, &sockaddr, notif.data.nr) {
-                warn!("Failed to record network denial audit event: {}", err);
-            }
-        }
+    }
+
+    // All sockaddrs allowed.
+    //
+    // WR-01 accepted limitation (TOCTOU on msg_name/msg_namelen): this
+    // CONTINUE response lets the kernel re-execute the syscall, which re-reads
+    // the destination address from child memory. A multi-threaded sandboxed
+    // child could swap the sockaddr pointer between our read and the kernel's
+    // re-read, defeating the pathname allowlist for the actual send. This window
+    // exists because SECCOMP_USER_NOTIF_FLAG_CONTINUE cannot pin child memory.
+    // It is accepted for the same reason as the connect/bind paths: the single-
+    // threaded agent model makes concurrent memory mutation extremely unlikely in
+    // practice; the alternative (emulating sendto without CONTINUE) would require
+    // a privileged kernel bypass not available at this ABI level. See also the
+    // doc warning in `read_msghdr_dest` and Phase 87 REVIEW WR-01.
+    //
+    // WR-03 accepted limitation (sendmmsg all-or-nothing): sendmmsg mediation is
+    // all-or-nothing — we ALLOW or DENY the entire batch. On ALLOW via CONTINUE
+    // the kernel sends all messages; there is no mechanism to allow message[0..k]
+    // and deny message[k]. This is an inherent constraint of USER_NOTIF CONTINUE:
+    // the kernel cannot be told "send N of M messages". Callers should not assume
+    // per-message enforcement for sendmmsg. See Phase 87 REVIEW WR-03.
+    if let Err(e) = continue_notif(notify_fd, notif.id) {
+        debug!("continue_notif failed for network notification: {}", e);
+        // Must respond to avoid leaving the child blocked. Propagate if
+        // deny also fails — the notification is orphaned.
+        return deny_notif(notify_fd, notif.id);
     }
 
     Ok(())
@@ -882,20 +1039,20 @@ fn record_af_unix_ipc_denial(
     let operation = op
         .map(|op| op.to_string())
         .unwrap_or_else(|| format!("syscall {syscall}"));
-    let (target, reason, suggested_flag, path_record) = ipc_denial_details(sockaddr, child_pid, op);
+    let (target, reason, remediation, path_record) = ipc_denial_details(sockaddr, child_pid, op);
 
-    ipc_denials.push(nono::diagnostic::IpcDenialRecord {
+    ipc_denials.push(nono::diagnostic::IpcDenialRecord::new(
         target,
         operation,
         reason,
-        suggested_flag,
-    });
+        remediation,
+    ));
 
     let Some((display_path, op)) = path_record else {
         return;
     };
     let access = match op {
-        UnixSocketOp::Connect => AccessMode::Read,
+        UnixSocketOp::Connect | UnixSocketOp::Send => AccessMode::Read,
         UnixSocketOp::Bind => AccessMode::ReadWrite,
     };
 
@@ -915,7 +1072,7 @@ fn ipc_denial_details(
     sockaddr: &nono::sandbox::SockaddrInfo,
     child_pid: u32,
     op: Option<UnixSocketOp>,
-) -> (String, String, Option<String>, PathIpcDenial) {
+) -> (String, String, Option<NonoRemediation>, PathIpcDenial) {
     match sockaddr.unix_kind {
         Some(nono::sandbox::UnixSocketKind::Pathname) => {
             let Some(path) = sockaddr.unix_path.as_deref() else {
@@ -937,7 +1094,7 @@ fn ipc_denial_details(
             let resolved = resolve_af_unix_sockaddr_path(child_pid, path)
                 .unwrap_or_else(|_| path.to_path_buf());
             let canonical = match op {
-                UnixSocketOp::Connect => resolved.canonicalize(),
+                UnixSocketOp::Connect | UnixSocketOp::Send => resolved.canonicalize(),
                 UnixSocketOp::Bind => canonicalize_unix_socket_bind_path(&resolved),
             };
             let Ok(display_path) = canonical else {
@@ -949,14 +1106,14 @@ fn ipc_denial_details(
                     None,
                 );
             };
-            let flag = match op {
-                UnixSocketOp::Connect => "--allow-unix-socket",
-                UnixSocketOp::Bind => "--allow-unix-socket-bind",
-            };
+            let bind = matches!(op, UnixSocketOp::Bind);
             (
                 display_path.display().to_string(),
                 "no matching unix_socket capability".to_string(),
-                Some(format!("{flag} {}", display_path.display())),
+                Some(NonoRemediation::GrantUnixSocket {
+                    path: display_path.clone(),
+                    bind,
+                }),
                 Some((display_path, op)),
             )
         }
@@ -1647,6 +1804,57 @@ mod tests {
             assert_eq!(
                 decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(4000), &config),
                 NetworkDecision::Allow
+            );
+        }
+
+        // --- send-family (sendto/sendmsg/sendmmsg) tests (D-06 fork-specific) ---
+
+        /// Pathname AF_UNIX sendto is allowed when a connect grant covers the path.
+        /// This is the D-06 fork-specific test for the grant-present USER_NOTIF path.
+        #[test]
+        fn af_unix_pathname_sendto_is_allowed_by_grant() {
+            use nono::sandbox::SYS_SENDTO;
+            let backend = DenyAllBackend;
+            let dir = tempfile::tempdir().expect("tempdir");
+            let path = socket_path(&dir, "dgram.sock");
+            let _listener =
+                std::os::unix::net::UnixListener::bind(&path).expect("bind unix listener");
+            let allowlist = vec![
+                UnixSocketCapability::new_file(&path, UnixSocketMode::Connect)
+                    .expect("socket grant"),
+            ];
+            let config = make_config(&backend, 8080, Vec::new(), &allowlist);
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_SENDTO, &unix_pathname(&path), &config),
+                NetworkDecision::Allow,
+                "pathname AF_UNIX sendto must be allowed when a connect grant covers it"
+            );
+        }
+
+        /// Abstract AF_UNIX sendto is denied (same as connect; abstract sockets
+        /// are not covered by pathname capabilities).
+        #[test]
+        fn af_unix_abstract_sendto_is_denied() {
+            use nono::sandbox::SYS_SENDTO;
+            let backend = DenyAllBackend;
+            let config = make_config(&backend, 0, Vec::new(), &[]);
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_SENDTO, &unix_abstract(), &config),
+                NetworkDecision::Deny,
+                "abstract AF_UNIX sendto must be denied"
+            );
+        }
+
+        /// AF_UNIX-only mode must allow non-AF_UNIX sendto (Landlock handles TCP).
+        #[test]
+        fn af_unix_only_mode_allows_non_af_unix_sendto() {
+            use nono::sandbox::SYS_SENDTO;
+            let backend = DenyAllBackend;
+            let config = make_af_unix_only_config(&backend, &[]);
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_SENDTO, &inet_external(8080), &config),
+                NetworkDecision::Allow,
+                "AF_UNIX-only mode must allow non-AF_UNIX sendto"
             );
         }
     }

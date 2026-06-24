@@ -66,6 +66,7 @@ pub unsafe extern "C" fn nono_sandbox_state_free(state: *mut NonoSandboxState) {
 /// `state` must be a valid pointer or NULL.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nono_sandbox_state_to_json(state: *const NonoSandboxState) -> *mut c_char {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if state.is_null() {
         return std::ptr::null_mut();
     }
@@ -91,6 +92,7 @@ pub unsafe extern "C" fn nono_sandbox_state_to_json(state: *const NonoSandboxSta
 pub unsafe extern "C" fn nono_sandbox_state_from_json(
     json: *const c_char,
 ) -> *mut NonoSandboxState {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     let json_str = match unsafe { c_str_to_str(json) } {
         Some(s) => s,
         None => {
@@ -121,6 +123,7 @@ pub unsafe extern "C" fn nono_sandbox_state_from_json(
 pub unsafe extern "C" fn nono_sandbox_state_to_caps(
     state: *const NonoSandboxState,
 ) -> *mut NonoCapabilitySet {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if state.is_null() {
         set_last_error("state pointer is NULL");
         return std::ptr::null_mut();

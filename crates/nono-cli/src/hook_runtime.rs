@@ -20,7 +20,7 @@
 //!
 //! - Script paths are validated before every execution
 //!   (absolute, canonical, regular file, executable, owned by user, not world-writable)
-//! - Hooks run as subprocesses with minimal environment
+//! - Hooks run as subprocesses
 //! - Process group isolation for timeout-based killing
 //! - NONO_ENV_FILE is used for env var export (not stdout parsing)
 //! - Dangerous env vars are filtered before injection
@@ -193,7 +193,6 @@ fn build_hook_command(
     kind: &HookKind<'_>,
 ) -> Command {
     let mut cmd = Command::new(script);
-    cmd.env_clear();
     cmd.env("NONO_SESSION_ID", session_id);
     cmd.env("NONO_WORKDIR", workdir);
     cmd.env("NONO_HOOK_TYPE", kind.type_env());
@@ -569,6 +568,7 @@ mod tests {
         let hook = profile::SessionHook {
             script,
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         let result = execute_before_hook(&hook, "test-fail-closed", Path::new("/tmp"));
@@ -592,6 +592,7 @@ mod tests {
         let hook = profile::SessionHook {
             script,
             timeout_secs: Some(1),
+            source_pack: None,
         };
 
         let start = std::time::Instant::now();
@@ -619,6 +620,7 @@ mod tests {
         let hook = profile::SessionHook {
             script,
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         let result = execute_after_hook(&hook, "test-after-fail-closed", Path::new("/tmp"), 0);
@@ -645,6 +647,7 @@ mod tests {
         let hook = profile::SessionHook {
             script: script.clone(),
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         let result = execute_before_hook(&hook, "test-basic", Path::new("/tmp")).unwrap();

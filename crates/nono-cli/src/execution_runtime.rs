@@ -243,6 +243,50 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     let proxy_env_vars = active_proxy.env_vars;
     let proxy_handle = active_proxy.handle;
 
+    // AUD-04 bilateral gate: if override audit metadata was passed via
+    // --override-audit, the PolicyOverrideVerified event MUST be committed to
+    // the SecurityEventLayer HMAC chain BEFORE the sandboxed child spawns.
+    // An override that cannot emit its audit record is blocked — never silently
+    // applied (D-02 bilateral gate; AUD-04 fail-closed).
+    //
+    // flags.override_audit is Option<OverrideAuditMeta> — already decoded from
+    // base64url-JSON in prepare_run_launch_plan (DECODE-ONCE, Plan 92-03 Task 1).
+    // No base64/JSON decode here.
+    //
+    // Placement: AFTER start_proxy_runtime (line above) and BEFORE
+    // apply_pre_fork_sandbox (line below) — this is the narrowest window in
+    // which the child process has never been spawned (Pitfall 3 in 92-RESEARCH.md).
+    if let Some(ref meta) = flags.override_audit {
+        // SECURITY_LAYER is an OnceLock<SecurityEventLayer> set by init_tracing
+        // (Plan 92-03 Task 2 / RESEARCH.md OQ-1 resolution).
+        let emit_result = crate::telemetry::SECURITY_LAYER
+            .get()
+            .ok_or_else(|| {
+                NonoError::SandboxInit(
+                    "override audit emission failed \
+                     — SecurityEventLayer not initialized (AUD-04)"
+                        .to_string(),
+                )
+            })?
+            .emit_override_event(
+                &crate::telemetry::SecurityEventType::PolicyOverrideVerified,
+                &meta.jti,
+                &meta.kms_key_id,
+                meta.zt_audit_hash.as_deref(),
+            );
+        match emit_result {
+            Ok(_chain_head) => {
+                // Chain advanced — spawn may proceed.
+            }
+            Err(e) => {
+                return Err(NonoError::SandboxInit(format!(
+                    "override audit emission failed \
+                     — aborting before spawn (AUD-04): {e}"
+                )));
+            }
+        }
+    }
+
     let current_dir = execution_start_dir(&flags.workdir, &caps)?;
 
     // AUD-03 SHA-256 portion (upstream 02ee0bd1): capture the canonical
@@ -438,6 +482,15 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         cap_file: cap_file.as_deref(),
         current_dir: &current_dir,
         no_diagnostics: flags.no_diagnostics || flags.silent,
+        diagnostics_json: flags.diagnostics_json,
+        proxy_diagnostics: proxy_handle.as_ref().and_then(|handle| {
+            let diagnostics = handle.diagnostics();
+            if diagnostics.is_empty() {
+                None
+            } else {
+                Some(diagnostics)
+            }
+        }),
         threading,
         protected_paths: &trust.protected_paths,
         profile_save_base: flags
@@ -462,6 +515,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         af_unix_mediation: flags.af_unix_mediation,
         allowed_env_vars: flags.allowed_env_vars,
         denied_env_vars: flags.denied_env_vars,
+        set_vars: flags.set_vars.unwrap_or_default(),
     };
     // Plan 62-12 (F-62-UAT-05 redesign): the SINGLE per-run identifier for the
     // WFP-enforced broker-no-PTY arm is the AppContainer moniker
@@ -800,6 +854,7 @@ mod tests {
         let hook = profile::SessionHook {
             script: script.clone(),
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         // D-03: before-hook Err propagates to the caller (session aborts).

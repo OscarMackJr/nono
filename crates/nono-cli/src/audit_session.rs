@@ -1,10 +1,12 @@
 //! Session discovery and management for the audit system.
 //!
-//! Audit sessions are stored in `~/.nono/audit/`. For backwards
-//! compatibility, the audit commands also read legacy audit metadata from
-//! `~/.nono/rollbacks/` when no migrated audit entry exists yet.
+//! Audit sessions are stored under `$XDG_STATE_HOME/nono/audit/` (default
+//! `~/.local/state/nono/audit/`). For backwards compatibility, reads also
+//! check `~/.nono/audit/` until v1.0.0, and legacy audit metadata under
+//! `~/.nono/rollbacks/` (or the canonical rollback root) when no migrated
+//! audit entry exists yet.
 
-use crate::rollback_session;
+use crate::state_paths;
 use nono::undo::{SessionMetadata, SnapshotManager};
 use nono::{NonoError, Result};
 use std::collections::BTreeSet;
@@ -31,10 +33,9 @@ pub struct SessionInfo {
     pub is_stale: bool,
 }
 
-/// Get the audit root directory (`~/.nono/audit/`)
+/// Get the canonical audit root directory (`$XDG_STATE_HOME/nono/audit/`).
 pub fn audit_root() -> Result<PathBuf> {
-    let home = crate::config::nono_home_dir()?;
-    Ok(home.join(".nono").join("audit"))
+    state_paths::audit_root()
 }
 
 /// Ensure the audit session directory exists for the given session id.
@@ -75,7 +76,7 @@ pub fn ensure_rollback_session_dir(
 ) -> Result<PathBuf> {
     let root = match rollback_destination {
         Some(path) => path.clone(),
-        None => rollback_session::rollback_root()?,
+        None => state_paths::rollback_root()?,
     };
     let dir = root.join(session_id);
     fs::create_dir_all(&dir).map_err(|e| {
@@ -105,14 +106,12 @@ pub fn discover_sessions() -> Result<Vec<SessionInfo>> {
     let mut sessions = Vec::new();
     let mut seen_ids = BTreeSet::new();
     let primary_root = audit_root()?;
+    let legacy_roots = state_paths::LegacyRootSet::resolve()?;
 
-    for root in [
-        Some(primary_root.clone()),
-        rollback_session::rollback_root().ok(),
-    ] {
-        let Some(root) = root else {
-            continue;
-        };
+    let mut roots: Vec<PathBuf> = state_paths::audit_discovery_roots()?;
+    roots.extend(state_paths::rollback_discovery_roots()?);
+
+    for root in roots {
         if !root.exists() {
             continue;
         }
@@ -149,6 +148,7 @@ pub fn discover_sessions() -> Result<Vec<SessionInfo>> {
                 continue;
             }
 
+            legacy_roots.warn_if_legacy_audit_data_read(&dir);
             sessions.push(build_session_info(dir, metadata));
         }
     }
@@ -181,12 +181,11 @@ fn warn_once_legacy_bundle_path(legacy_dir: &Path, canonical_dir: &Path) {
 pub fn load_session(session_id: &str) -> Result<SessionInfo> {
     validate_session_id(session_id)?;
     let primary_root = audit_root()?;
-    let roots = [
-        Some(primary_root.clone()),
-        rollback_session::rollback_root().ok(),
-    ];
+    let legacy_roots = state_paths::LegacyRootSet::resolve()?;
+    let mut roots: Vec<PathBuf> = state_paths::audit_discovery_roots()?;
+    roots.extend(state_paths::rollback_discovery_roots()?);
 
-    for root in roots.into_iter().flatten() {
+    for root in roots {
         let dir = root.join(session_id);
         if !dir.exists() {
             continue;
@@ -215,6 +214,7 @@ pub fn load_session(session_id: &str) -> Result<SessionInfo> {
             warn_once_legacy_bundle_path(&dir, &primary_root.join(session_id));
         }
 
+        legacy_roots.warn_if_legacy_audit_data_read(&dir);
         return Ok(build_session_info(dir, metadata));
     }
 
@@ -353,7 +353,7 @@ fn calculate_dir_size(dir: &Path) -> u64 {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::test_env::{lock_env, EnvVarGuard};
+    use crate::test_env::{EnvVarGuard, ENV_LOCK};
     #[cfg(not(target_os = "windows"))]
     use nono::undo::RollbackStatus;
 
@@ -369,13 +369,13 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn discover_sessions_excludes_rollback_backed_entries() {
-        let _env_lock = lock_env();
+        let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        fs::create_dir_all(&state).unwrap();
         let home = tmp.path().to_string_lossy().to_string();
-        #[cfg(target_os = "windows")]
-        let _env = EnvVarGuard::set_all(&[("USERPROFILE", &home)]);
-        #[cfg(not(target_os = "windows"))]
-        let _env = EnvVarGuard::set_all(&[("HOME", &home)]);
+        let state_str = state.to_string_lossy().to_string();
+        let _env = EnvVarGuard::set_all(&[("HOME", &home), ("XDG_STATE_HOME", &state_str)]);
 
         let audit_dir = audit_root().unwrap().join("20260421-111111-10001");
         fs::create_dir_all(&audit_dir).unwrap();
@@ -400,7 +400,7 @@ mod tests {
         )
         .unwrap();
 
-        let legacy_audit_dir = rollback_session::rollback_root()
+        let legacy_audit_dir = state_paths::legacy_rollback_root()
             .unwrap()
             .join("20260421-111111-10002");
         fs::create_dir_all(&legacy_audit_dir).unwrap();
@@ -425,7 +425,7 @@ mod tests {
         )
         .unwrap();
 
-        let rollback_dir = rollback_session::rollback_root()
+        let rollback_dir = state_paths::legacy_rollback_root()
             .unwrap()
             .join("20260421-111111-10003");
         fs::create_dir_all(&rollback_dir).unwrap();
@@ -461,23 +461,96 @@ mod tests {
         assert!(!ids.contains(&"20260421-111111-10003"));
     }
 
-    // Phase 27.1 Nyquist gap fill: pin the audit_root() callsite migration
-    // contract. Plan 02 Edit 1.1 routed audit_root() through nono_home_dir(),
-    // but the only behavioral coverage was an OPTIONAL Plan 03 test that was
-    // ultimately deferred (the audit-attestation integration test is
-    // #[ignore]'d per D-27.1-14). This test asserts the seam reaches
-    // audit_root() correctly: NONO_TEST_HOME=<abs> => <abs>/.nono/audit.
     #[test]
-    fn audit_root_honors_nono_test_home() {
-        let _env_lock = lock_env();
-        #[cfg(target_os = "windows")]
-        let abs = r"C:\nono-test-audit-root-nyquist";
-        #[cfg(not(target_os = "windows"))]
-        let abs = "/tmp/nono-test-audit-root-nyquist";
-        let _env = EnvVarGuard::set_all(&[("NONO_TEST_HOME", abs)]);
+    fn discover_sessions_reads_legacy_audit_root() {
+        let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        fs::create_dir_all(&state).unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        let state_str = state.to_string_lossy().to_string();
+        let _env = EnvVarGuard::set_all(&[("HOME", &home), ("XDG_STATE_HOME", &state_str)]);
 
-        let root = audit_root().expect("audit_root with override");
-        let expected = PathBuf::from(abs).join(".nono").join("audit");
-        assert_eq!(root, expected);
+        let legacy_audit_dir = state_paths::legacy_audit_root()
+            .unwrap()
+            .join("20260421-111111-20001");
+        fs::create_dir_all(&legacy_audit_dir).unwrap();
+        SnapshotManager::write_session_metadata(
+            &legacy_audit_dir,
+            &SessionMetadata {
+                session_id: "20260421-111111-20001".to_string(),
+                started: "2026-04-21T11:11:11+01:00".to_string(),
+                ended: Some("2026-04-21T11:11:12+01:00".to_string()),
+                command: vec!["/bin/echo".to_string()],
+                executable_identity: None,
+                tracked_paths: vec![PathBuf::from("/tmp/work")],
+                snapshot_count: 0,
+                exit_code: Some(0),
+                merkle_roots: Vec::new(),
+                network_events: Vec::new(),
+                audit_event_count: 1,
+                audit_integrity: None,
+                audit_attestation: None,
+                rollback_status: Default::default(),
+            },
+        )
+        .unwrap();
+
+        let sessions = discover_sessions().unwrap();
+        let ids: Vec<_> = sessions
+            .iter()
+            .map(|s| s.metadata.session_id.as_str())
+            .collect();
+        assert!(ids.contains(&"20260421-111111-20001"));
+        assert!(is_legacy_audit_only_session(
+            sessions
+                .iter()
+                .find(|s| s.metadata.session_id == "20260421-111111-20001")
+                .expect("legacy session")
+        ));
+    }
+
+    #[test]
+    fn discover_sessions_does_not_warn_when_legacy_audit_root_is_empty() {
+        let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let state = tmp.path().join("state");
+        fs::create_dir_all(&state).unwrap();
+        let home = tmp.path().to_string_lossy().to_string();
+        let state_str = state.to_string_lossy().to_string();
+        let _env = EnvVarGuard::set_all(&[("HOME", &home), ("XDG_STATE_HOME", &state_str)]);
+
+        let legacy_root = state_paths::legacy_audit_root().unwrap();
+        fs::create_dir_all(&legacy_root).unwrap();
+        fs::write(legacy_root.join("ledger.ndjson"), b"{}\n").unwrap();
+
+        let canonical_dir = state_paths::audit_root()
+            .unwrap()
+            .join("20260421-111111-30001");
+        fs::create_dir_all(&canonical_dir).unwrap();
+        SnapshotManager::write_session_metadata(
+            &canonical_dir,
+            &SessionMetadata {
+                session_id: "20260421-111111-30001".to_string(),
+                started: "2026-04-21T11:11:11+01:00".to_string(),
+                ended: Some("2026-04-21T11:11:12+01:00".to_string()),
+                command: vec!["/bin/echo".to_string()],
+                executable_identity: None,
+                tracked_paths: vec![PathBuf::from("/tmp/work")],
+                snapshot_count: 0,
+                exit_code: Some(0),
+                merkle_roots: Vec::new(),
+                network_events: Vec::new(),
+                audit_event_count: 1,
+                audit_integrity: None,
+                audit_attestation: None,
+                rollback_status: Default::default(),
+            },
+        )
+        .unwrap();
+
+        let sessions = discover_sessions().unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert!(is_primary_audit_session(&sessions[0].dir));
     }
 }

@@ -168,6 +168,7 @@ pub(crate) struct ExecutionFlags {
     pub(crate) strategy: exec_strategy::ExecStrategy,
     pub(crate) workdir: PathBuf,
     pub(crate) no_diagnostics: bool,
+    pub(crate) diagnostics_json: bool,
     pub(crate) silent: bool,
     pub(crate) capability_elevation: bool,
     /// Phase 41 Plan 09 (REQ-CI-01 SC#4 gap closure, Gap 2): the field is
@@ -206,12 +207,24 @@ pub(crate) struct ExecutionFlags {
     pub(crate) proxy: ProxyLaunchOptions,
     pub(crate) redaction_policy: nono::ScrubPolicy,
     pub(crate) resource_limits: ResourceLimits,
+    /// Expanded `environment.set_vars` (key, expanded-value), `None` if absent.
+    pub(crate) set_vars: Option<Vec<(String, String)>>,
     pub(crate) startup_timeout_secs: Option<u64>,
     /// Phase 58: session lifecycle hooks to execute before/after the sandboxed
     /// child. Runtime dispatch is platform-specific (`hook_runtime.rs` on Unix,
     /// `hook_runtime_windows.rs` on Windows) but the field is cross-platform so
     /// profiles round-trip cleanly on all platforms.
     pub(crate) session_hooks: crate::profile::SessionHooks,
+    /// Phase 92 Plan 03: decoded override audit metadata from `--override-audit`.
+    ///
+    /// `Some` when nono-py has verified a signed policy override and passed
+    /// trusted audit metadata via the `--override-audit <base64url-json>` flag.
+    /// `None` for all standard invocations (MUT-05: byte-for-byte unchanged path).
+    ///
+    /// Decoded from base64url-no-pad JSON in `prepare_run_launch_plan`;
+    /// consumed by `execute_sandboxed`'s AUD-04 pre-spawn gate to commit
+    /// a `PolicyOverrideApplied` event to the HMAC chain before any spawn.
+    pub(crate) override_audit: Option<crate::cli::OverrideAuditMeta>,
 }
 
 impl ExecutionFlags {
@@ -221,6 +234,7 @@ impl ExecutionFlags {
             workdir: std::env::current_dir()
                 .map_err(|e| NonoError::SandboxInit(format!("Failed to get cwd: {e}")))?,
             no_diagnostics: false,
+            diagnostics_json: false,
             silent,
             capability_elevation: false,
             interactive_shell: false,
@@ -243,9 +257,12 @@ impl ExecutionFlags {
             proxy: ProxyLaunchOptions::default(),
             redaction_policy: nono::ScrubPolicy::secure_default(),
             resource_limits: ResourceLimits::default(),
+            set_vars: None,
             startup_timeout_secs: None,
             // Phase 58: default to no session hooks.
             session_hooks: crate::profile::SessionHooks::default(),
+            // Phase 92: no override audit by default (MUT-05: standard path unchanged).
+            override_audit: None,
         })
     }
 }
@@ -271,6 +288,7 @@ pub(crate) fn prepare_run_launch_plan(
     };
     let args = run_args.sandbox;
     let no_diagnostics = run_args.no_diagnostics;
+    let diagnostics_json = run_args.diagnostics_json;
     let rollback = run_args.rollback;
     let no_rollback_prompt = run_args.no_rollback_prompt;
     let no_audit = run_args.no_audit;
@@ -356,6 +374,7 @@ pub(crate) fn prepare_run_launch_plan(
             // it takes priority over workdir when both are provided.
             workdir: resolve_requested_workdir(args.workspace.as_ref().or(args.workdir.as_ref())),
             no_diagnostics,
+            diagnostics_json,
             silent,
             capability_elevation: prepared.capability_elevation,
             interactive_shell: false,
@@ -393,10 +412,32 @@ pub(crate) fn prepare_run_launch_plan(
             proxy,
             redaction_policy,
             resource_limits,
+            set_vars: prepared.set_vars,
             startup_timeout_secs,
             // Phase 58: wire session_hooks from PreparedSandbox into
             // ExecutionFlags. Source: upstream daa55c8 launch_runtime.rs.
             session_hooks: prepared.session_hooks,
+            // Phase 92: decode --override-audit base64url-JSON into OverrideAuditMeta.
+            // DECODE-ONCE: the raw string from SandboxArgs is decoded here so that
+            // execute_sandboxed always receives Option<OverrideAuditMeta> (the typed
+            // struct), never Option<String>. Decoding errors abort before spawn.
+            override_audit: args
+                .override_audit
+                .as_deref()
+                .map(|b64| {
+                    use base64::Engine as _;
+                    let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+                        .decode(b64.as_bytes())
+                        .map_err(|e| {
+                            NonoError::SandboxInit(format!(
+                                "override-audit: base64 decode failed: {e}"
+                            ))
+                        })?;
+                    serde_json::from_slice::<crate::cli::OverrideAuditMeta>(&json).map_err(|e| {
+                        NonoError::SandboxInit(format!("override-audit: JSON parse failed: {e}"))
+                    })
+                })
+                .transpose()?,
         },
     })
 }
@@ -541,7 +582,7 @@ fn validate_rollback_destination(
 
     Err(NonoError::ConfigParse(format!(
         "--rollback-dest '{}' is not covered by sandbox write permissions. \
-         Add --allow {} to grant access, or omit --rollback-dest to use the default path (~/.nono/rollbacks/).",
+         Add --allow {} to grant access, or omit --rollback-dest to use the default path ($XDG_STATE_HOME/nono/rollbacks/).",
         dest.display(),
         dest.display()
     )))

@@ -18,7 +18,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 /// Keystore service name for signing keys (private key material)
-const TRUST_SERVICE: &str = "nono-trust";
+pub(crate) const TRUST_SERVICE: &str = "nono-trust";
 
 /// Keystore service name for public keys (verification-only, no private key material)
 const TRUST_PUB_SERVICE: &str = "nono-trust-pub";
@@ -725,7 +725,7 @@ fn run_sign_policy(args: TrustSignPolicyArgs) -> Result<()> {
         None if args.user => {
             let user_path =
                 user_trust_policy_path().ok_or_else(|| nono::NonoError::TrustSigning {
-                    path: "~/.config/nono/trust-policy.json".to_string(),
+                    path: crate::profile::display_trust_policy_path(),
                     reason: "could not resolve user config directory".to_string(),
                 })?;
             if !user_path.exists() {
@@ -1589,7 +1589,7 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
         }
         let user_path = user_trust_policy_path()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "~/.config/nono/trust-policy.json".to_string());
+            .unwrap_or_else(crate::profile::display_trust_policy_path);
         eprintln!(
             "  {}",
             "Warning: project-level trust-policy.json found but no user-level policy exists."
@@ -1663,9 +1663,9 @@ pub(crate) fn user_trust_policy_path() -> Option<PathBuf> {
         }
     }
 
-    crate::profile::resolve_user_config_dir()
+    crate::package::nono_config_dir()
         .ok()
-        .map(|d| d.join("nono").join("trust-policy.json"))
+        .map(|d| d.join("trust-policy.json"))
 }
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ mod config;
 mod credential_runtime;
 mod deprecated_policy;
 mod deprecated_schema;
+mod diagnostic;
 mod diagnostic_formatter;
 mod exec_identity;
 #[cfg(target_os = "windows")]
@@ -59,6 +60,14 @@ mod open_url_runtime;
 #[path = "open_url_runtime_windows.rs"]
 mod open_url_runtime;
 mod output;
+// Phase 93 Plan 02: live-reject HMAC chain emission for `nono override audit-emit` (OQ-1 option a).
+// Provides the reject-branch EventID 10008/10010 path that runs BEFORE nono.exe spawns
+// the sandboxed child (nono-py fails closed and calls this subcommand to land the denial event).
+mod override_audit_emit;
+// Phase 93 Plan 03: `nono override request` — denial context bundle for the out-of-nono
+// approver/KMS-signing pipeline (CLI-01).  Performs NO crypto and NO live check (D-07);
+// only gathers scope paths/domains/repo_context/reason and emits a JSON bundle + nonce.
+mod override_request;
 mod pack_update_hint;
 mod package;
 mod package_cmd;
@@ -111,6 +120,7 @@ mod provision_windows;
 #[cfg(not(target_os = "windows"))]
 mod startup_prompt;
 mod startup_runtime;
+mod state_paths;
 mod supervised_runtime;
 mod terminal_approval;
 mod theme;
@@ -338,6 +348,7 @@ mod tests {
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
+            set_vars: None,
             network_block_requested: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
@@ -396,6 +407,7 @@ mod tests {
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
+            set_vars: None,
             network_block_requested: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,

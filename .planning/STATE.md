@@ -1,117 +1,60 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.0
-milestone_name: Enterprise Hardening I
+milestone: v3.2
+milestone_name: Signed Policy Overrides (ZT-Infra Attestation)
 status: Awaiting next milestone
-stopped_at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
-last_updated: "2026-06-19T12:57:53.472Z"
-last_activity: 2026-06-19 — Milestone v3.0 completed and archived
+stopped_at: v3.2 milestone completed and archived
+last_updated: "2026-06-23T10:34:06.470Z"
+last_activity: 2026-06-23 — Milestone v3.2 completed and archived
 progress:
   total_phases: 3
   completed_phases: 3
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 13
+  completed_plans: 13
   percent: 100
 ---
 
-# Project State: nono — v3.0 Enterprise Hardening I (Deploy · Control · Compliance)
+# Project State: nono — v3.2 Signed Policy Overrides (ZT-Infra Attestation)
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.0 milestone started 2026-06-18; v2.13 Phases 76-81 complete, shipped + archived). Phase numbering continues from Phase 81 (Phases 82-84 — NOT reset to 1).
+See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90 complete + archived; tag `v3.1` local). Phase numbering continues from Phase 90 (Phases 91-93 — NOT reset). Scope source: `.planning/seeds/SEED-005-zt-infra-policy-override-attestation.md`. Roadmap: `.planning/ROADMAP.md`.
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and that confinement must be deployable and governable across a corporate Windows fleet.
+**Core Value:** A false-positive nono block must be resolvable by a cryptographically-signed, ledgered, non-self-service exception — never by disabling the sandbox.
 
-**Current Focus:** Phase 84 — siem-edr-telemetry (structurally verified 5/5; human_needed live SIEM UAT host-gated)
+**Current Focus:** Planning next milestone — v3.2 SHIPPED + ARCHIVED 2026-06-23 (all 3 phases 91-93 complete; VFY-01 b + VFY-03 a [BLOCKING-93] both closed). Run `/gsd-new-milestone`.
 
 ## Current Position
 
-Phase: Milestone v3.0 complete
+Phase: Milestone v3.2 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-06-19 — Milestone v3.0 completed and archived
+Last activity: 2026-06-23 — Milestone v3.2 completed and archived
 
 ## Performance Metrics
 
-**Velocity:**
+**Velocity:** (v3.2 — reset; populated as phases complete)
 
-- Total plans completed: 13 (4 Phase 82 + 1 Phase 83)
-- Average duration: ~7m (Phase 83 Plan 01)
-- Total execution time: 7m (Phase 83 Plan 01 only)
+- Total plans completed: 13
+- Average duration: —
+- Total execution time: —
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
-| 83 | 01 | 7m | 3 | 6 |
-| 83 | 03 | 25m | 2 | 6 |
-| 84 | 02 | 65m | 2 | 7 |
 
 *Updated after each plan completion*
-| Phase 83 P02 | 45m | 2 tasks | 3 files |
-| Phase 83 P04 | 30m | 2 tasks | 1 files |
-| Phase 84 P01 | 35m | 3 tasks | 9 files |
-| Phase 84 P02 | 65m | 2 tasks | 7 files |
-| Phase 84 P03 | 30m | 2 tasks | 4 files |
-| Phase 84 P04 | 3m | 2 tasks | 1 files |
 
 ## Accumulated Context
 
-### Decisions (v3.0)
+### Decisions (v3.2 roadmap)
 
 | Decision | Phase | Rationale |
 |----------|-------|-----------|
-| Build order is deployment → policy spine → telemetry | 82→83→84 | MSI provisions the HKLM sentinel key and Event Log source that Phases 83 and 84 test against. Policy spine must exist before egress or telemetry can read from it. |
-| Proxy and WFP wired to HKLM in one atomic phase (83) | 83 | Splitting proxy and WFP wiring across phases creates the allowlist-drift false-security state (Pitfall 2). Both layers read from the same MachineEgressPolicy struct in the same phase. |
-| Stay WiX MSI; MSIX out of scope | 82 | MSIX cannot package the LocalSystem nono-wfp-service or kernel driver. WiX MSI CI pipeline is already proven (Phases 53/61). |
-| Scratch space provisioned at first-run, not MSI time | 82/83 | MSI runs as SYSTEM; %LOCALAPPDATA% resolves to SYSTEM profile path, making every user R-B3 ownership guard fail (Pitfall 4). MSI creates only C:\ProgramData\nono\; user scratch is created at first run in user context. |
-| Application Event Log source (no wevtutil manifest) for v3.0 | 84 | Custom channel requires wevtutil im at install; silent drop on missing registration. Application log source is proven in nono-wfp-service.rs and works without a manifest. Defer custom manifest to future SIEM schema phase. |
-| Tamper-evidence = external SIEM forwarding; local HMAC deferred | 84 | Local HMAC key in HKLM is deletable by local admin — defeats the claim. v3.0 tamper boundary is Windows Event Forwarding to SIEM. SEED-005 ZT-Infra addresses cryptographic-local anchoring. ADR required as first Phase 84 deliverable. |
-| Dark Factory verification carries forward from v2.13 | all | Every phase ships a verify-dark.ps1 gate as its verification mechanism. Milestone closes on the no-flag aggregator. True fleet/SIEM/EDR live UAT is host-gated tech-debt. |
-
-### Decisions (Phase 84 Plan 04)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| Gate auto-discovered by verify-dark.ps1 scripts/gates/*.ps1 scan (D-04); no ValidateSet update | 84-04 | Auto-discovery mechanism confirmed working; telemetry-event-emit.ps1 found without any hardcoded addition |
-| EventID 10003 excluded from gate per Option B carry-forward | 84-04 | LabelViolation is RESERVED-but-unemitted in Phase 84; gate uses range 10001-10005 accepting whichever of the three wired EventIDs appears |
-| Cross-target clippy PARTIAL: C linker absent for Linux+macOS cross targets | 84-04 | Same pre-existing issue as Phase 83; aws-lc-sys/ring require x86_64-linux-gnu-gcc/cc; deferred to live CI |
-
-### Decisions (Phase 84 Plan 03)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| OPTION B label-violation: EventID 10003 RESERVED-but-unemitted in Phase 84 | 84-03 | IL denials surface as NonoError::LabelApplyFailed (aborting session via ?) or as path-deny DenialRecords at exec_strategy layer; no distinct label_violation event emittable; Plan 84-04 gate excludes EventID 10003 |
-| hook_fail_closed wired at hook script write failure | 84-03 | Script write failure = PreToolUse security hook cannot run = fail-closed; most security-relevant fail-closed site in hooks.rs |
-| D-07 ADR delivered: tamper boundary = WEF; in-session HMAC only | 84-03 | docs/adr/telemetry-tamper-evidence.md records scope honestly: WEF is the real tamper boundary; local admin can clear Application log; SEED-005 deferred for cryptographic-local anchoring |
-
-### Decisions (Phase 84 Plan 02)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| D-MSRV executed: MSRV bumped 1.77->1.82 in CLAUDE.md atomically with tracing-etw 0.2.3 dep addition | 84-02 | tracing-etw 0.2.3 requires Rust 1.82; bumped in CLAUDE.md Technology Stack section per D-MSRV pre-approved decision |
-| ETW emit via tracing::warn!(target: nono_security) inside emit_security_event | 84-02 | Simpler than OnceLock approach; the tracing-etw LayerBuilder registered in init_tracing() intercepts the warn! call automatically without per-event provider handle |
-| init_registry() helper with fmt_layer.with_filter(env_filter) pattern | 84-02 | Avoids S-type mismatch when env_filter changes the registry subscriber type; security layer always active regardless of log level |
-| EVENT_ID_* in event.rs (schema) as single source of truth; windows.rs imports via schema_event_id_for | 84-02 | No duplication; tests in both files use the same values; prevents drift between emit and schema |
-
-### Decisions (Phase 84 Plan 01)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| D-MSRV: MSRV bump 1.77→1.82 DEFERRED to Plan 84-02 | 84-01 | tracing-etw 0.2.3 requires Rust 1.82; Plan 01 does not add tracing-etw to Cargo.toml so no MSRV conflict exists yet. Plan 02 edits CLAUDE.md and workspace Cargo.toml atomically when adding the dep. |
-| D-HMAC-PLACEHOLDER: sha2-based advance_chain placeholder in Plan 01 | 84-01 | hmac crate not yet in Cargo.toml (operator checkpoint passed for crates but not yet added); sha2 used as placeholder preserving domain separators; Plan 02 replaces with Hmac<Sha256> |
-| D-CLASSIFY-MULTIPASS: classify_path uses multi-pass component loop | 84-01 | Single-pass ordering was fragile (/var/lib/keystore returned SystemPath because 'lib' appeared before 'keystore'); multi-pass ensures CredentialPath wins regardless of component position |
-| Package legitimacy: hmac 0.13.0 / tracing-etw 0.2.3 / eventlog 0.4.0 APPROVED | 84-01 | Operator-verified all three crates via crates.io API before any Cargo.toml edits (Task 1 checkpoint resolved) |
-
-### Decisions (Phase 83)
-
-| Decision | Phase | Rationale |
-|----------|-------|-----------|
-| D-07: absent→Ok(None) / present-but-broken→Err(PolicyLoadFailed) | 83-01 | Fail-secure: once HKLM key exists ANY read/parse error aborts; implemented via raw_os_error()==2 for absent |
-| D-09: KEY_WOW64_64KEY on all registry opens | 83-01 | Forces 64-bit hive view; prevents 32-bit Intune MDM write to WOW6432Node making key appear absent |
-| D-10: winreg 0.56 Windows-only dep (operator-approved) | 83-01 | Single crate approach; io::Error maps cleanly onto D-07 taxonomy; never unconditional dep |
-| D-13 Option A: enumerate N×REG_SZ subkey values (not REG_MULTI_SZ) | 83-01 | Matches shipped Phase-82 ADMX <list> shape; less churn than changing ADMX |
-| D-14: existing HostFilter leading-dot ends_with+len> form retained | 83-01 | Already passes full SC-4 matrix; sc4_dns_component_matrix codifies the contract |
-| D-11: ADMX named toggles write group TOKENS (anthropic/openai/github-api), not literal FQDNs | 83-03 | Token indirection decouples fleet ADMX template from FQDN lists; nono expands at runtime so provider hosts update without re-issuing ADMX |
-| D-12 (corrected): preset token->FQDN map in embedded network-policy.json groups (not policy.json) | 83-03 | network-policy.json carries domain host[] groups (correct schema); policy.json carries only filesystem allow/deny semantics |
+| 3 phases (not 4) — jti in Phase 91+92, DAAL in Phase 93 | all | jti single-use escalated to v1 (VFY-06); DAAL async/non-blocking (ZTL-05) fits the live-integration phase; all 28 reqs cover in 91/92/93 with no orphans. Research's optional Phase 94 hardening is not needed because jti is already v1 scope. |
+| Mutation + audit fused into Phase 92 (never split) | 92 | An override that applies without emitting a SecurityEventLayer event is silent privilege escalation (AUD-04). Splitting creates a shippable-but-silent window. Both land in Phase 92 atomically. |
+| DF-01 offline gate attaches to Phase 92, DF-02 live gate to Phase 93 | 92/93 | Dark Factory gates verify the phase whose behavior they gate: offline verify path is exercisable at Phase 92 close; live AWS/KMS path is exercisable only at Phase 93 close. |
+| All override logic in nono-py; core gets only AuditEventPayload variant | all | CLAUDE.md library boundary (policy-free core). VFY-01 two-key AND gate, ZTL-01 live decision, CLI-01/02 UX — all nono-py or nono-cli. Core: `PolicyOverrideApplied` variant + reuse of `trust/signing::verify_keyed_signature`. |
+| Python urllib.request for POST /actions (not ureq in Rust) | 93 | Research SUMMARY Tension-2 resolved: stdlib, zero new deps, easily mockable. Re-evaluate ureq only if mTLS fragility appears — explicit checkpoint at Phase 93 plan time. |
 
 ### Pending Todos
 
@@ -119,39 +62,29 @@ None.
 
 ### Blockers/Concerns
 
-- **Cross-target clippy required**: any cfg-gated Unix code touched in this milestone MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`; Windows-host `cargo check` is not a substitute (CLAUDE.md MUST/NEVER rule; `feedback_clippy_cross_target`).
-- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending).
+- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All v3.2 commits + the `v3.2` tag are LOCAL ONLY; push is operator-gated.
+- **Milestone-marker only**: no crate publish; a future release must leapfrog the crate version to ≥ `0.65.0`.
+- **Cross-target clippy (PARTIAL→CI)**: the ZTL-04 `AWS_*` strip in `crates/nono-cli/src/exec_strategy/env_sanitization.rs` is verified native-Windows only; linux-gnu + apple-darwin clippy deferred to CI (host lacks cross C compiler), per CLAUDE.md MUST/NEVER. (Resolved-at-close: the milestone was overwhelmingly additive core/nono-py work; native `cargo build`/`clippy` green on both crates.)
 
 ## Deferred Items
 
-Items acknowledged and carried forward from v2.13 close (2026-06-18):
+Items acknowledged and deferred at **v3.2 close (2026-06-23)** — `gsd-sdk query audit-open` reported 47 open artifacts, user acknowledged-all (Proceed without audit). All historical or host-gated; none blockers:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Host-execution | stale `C:\Program Files\nono\nono.exe` (no `agent` subcommand) → aggregate FAIL on dev host; fix: prepend `target\release` to PATH | Open | v2.13 close |
-| Host-execution | CPLT-03 Copilot CLI literal PASS gated by GitHub org policy | Open | v2.13 close |
-| Host-execution | INST-01 live clean-VM PASS (needs fresh Win11 VM + rebuilt MSI post Phase 80) | Open | v2.13 close |
-| Distribution | DIST-SIGN-01 untrusted-POC-cert broker path not exercised by clean-host gate | Open | v2.13 close |
-| Historical | 44 pre-v2.13 open artifacts (see v2.13 STATE.md) | Acknowledged | v2.13 close |
-| nono-ffi | E0004 non-exhaustive match (PolicyLoadFailed + TelemetryUnavailable/ConfigInvalid) | RESOLVED `f96aba8a` (84 close) | 84-04 |
+| Historical | 36 open quick-tasks (Mar–Apr 2026 dates, all `missing`/cleaned-up) | Acknowledged | v3.2 close |
+| Historical | 6 seeds SEED-001…006 (all consumed or dormant; SEED-005 = v3.2 scope, delivered) | Acknowledged | v3.2 close |
+| Historical | 4 empty/"None" todo parse artifacts | Acknowledged | v3.2 close |
+| Host-gated | OVERRIDE-02 (DF-02) live allow/revoke proof — needs ZT-Infra provisioner + openssl + elevated session; SKIP_HOST_UNAVAILABLE by design | Open (host-gated) | v3.2 close |
+| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) for ZTL-04 `AWS_*` strip — host lacks cross C compiler | Open (CI-decisive) | v3.2 close |
 
-Items acknowledged and deferred at v3.0 milestone close (2026-06-19) — see `.planning/v3.0-MILESTONE-AUDIT.md`:
-
-| Category | Item | Status | Deferred At |
-|----------|------|--------|-------------|
-| Host-execution | DEPLOY-01 clean-VM silent `msiexec /qn` install + exit codes | Open (host-gated) | v3.0 close |
-| Host-execution | DEPLOY-03 live R-B3 user-owned WRITE_OWNER scratch verification | Open (host-gated) | v3.0 close |
-| Host-execution | DEPLOY-05 three-client (CryptoAPI/Node/rustls) TLS-through-proxy round-trip | Open (host-gated) | v3.0 close |
-| Host-execution | EGRESS-02 dual-layer (proxy + kernel WFP) live block proof | Open (host-gated) | v3.0 close |
-| Host-execution | TELEM-01/04 live `telemetry-event-emit` gate PASS + admin opt-out/min_severity HKLM→emit (`84-HUMAN-UAT.md`) | Open (host-gated) | v3.0 close |
-| Cross-phase | Daemon-side telemetry: `nono-agentd` registers no SecurityEventLayer → daemon-launched agent denials emit no `nono_security::*` events (integration warning, not a Phase 84 criterion) | Open (follow-up) | v3.0 close |
-| Historical | 48 open artifacts at v3.0 close (35 quick_tasks mostly pre-v2.13 strays + 5 seeds + 4 todos + 2 uat_gaps + 2 verification_gaps) — overwhelmingly historical/future-seed | Acknowledged | v3.0 close |
+Prior carry-forwards from v3.1 close (2026-06-21, see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`) remain deferred: SEC-01/SEC-02 AF_UNIX+procfs guards (PARTIAL→CI), DRAIN-01/02/03 live host-gated UAT, 2 env-sensitive Phase-74 DACL-guard tests.
 
 ## Session Continuity
 
-Last session: 2026-06-19T00:10:00.000Z
-Stopped at: Phase 84 Plan 04 complete — telemetry-event-emit Dark Factory gate (SC-1/SC-3/SC-5) + cross-target clippy PARTIAL
-Resume file: .planning/phases/84-siem-edr-telemetry/84-04-SUMMARY.md
+Last session: 2026-06-23 — v3.2 milestone completed and archived
+Stopped at: v3.2 shipped; awaiting next milestone
+Resume file: — (start next milestone via /gsd-new-milestone)
 
 ## Operator Next Steps
 

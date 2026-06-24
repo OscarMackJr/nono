@@ -33,8 +33,11 @@ if ! cargo build --release -p nono-cli --features test-trust-overrides 2>&1; the
     exit 1
 fi
 
-export NONO_BIN="$PROJECT_ROOT/target/release/nono"
-export PATH="$PROJECT_ROOT/target/release:$PATH"
+TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+RELEASE_DIR="$TARGET_DIR/release"
+
+export NONO_BIN="$RELEASE_DIR/nono"
+export PATH="$RELEASE_DIR:$PATH"
 
 # Verify binary exists
 if [[ ! -x "$NONO_BIN" ]]; then
@@ -59,12 +62,83 @@ chmod +x "$SCRIPT_DIR"/lib/*.sh
 # Temp directory for suite output files
 RESULTS_DIR=$(mktemp -d)
 TEST_ENV_DIR=$(mktemp -d)
-trap 'rm -rf "$RESULTS_DIR" "$TEST_ENV_DIR"' EXIT
 
 mkdir -p "$TEST_ENV_DIR/trust-config" "$TEST_ENV_DIR/trust-keystore"
 export NONO_TRUST_TEST_USER_POLICY_PATH="$TEST_ENV_DIR/trust-config/trust-policy.json"
 export NONO_TRUST_TEST_KEYSTORE_DIR="$TEST_ENV_DIR/trust-keystore"
 export NONO_NO_UPDATE_CHECK=1
+# Suppress the migration prompt (--profile <pack-name> when the pack
+# isn't installed) and the "save denied paths as user profile?"
+# prompt. Both can fire mid-suite — the migration prompt for any
+# `--profile` referencing a registry pack, the save prompt on any
+# command that hits a denial. Neither is answerable in CI.
+export NONO_NO_MIGRATE=1
+export NONO_NO_SAVE_PROMPT=1
+
+# Audit is on by default, so every test invocation that does not pass
+# --no-audit writes a session under $XDG_STATE_HOME/nono/audit/ (and $XDG_STATE_HOME/nono/rollbacks/
+# for rollback tests), and appends to the audit ledger there. There is
+# no env-var override for the audit root, so snapshot the pre-run state and
+# restore it on exit. This removes only artefacts created during the run;
+# pre-existing user sessions and ledger entries are preserved.
+# Set NONO_TEST_KEEP_AUDIT=1 to skip cleanup for debugging.
+NONO_AUDIT_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/nono/audit"
+NONO_ROLLBACK_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/nono/rollbacks"
+AUDIT_SNAPSHOT_DIR="$TEST_ENV_DIR/audit-snapshot"
+mkdir -p "$AUDIT_SNAPSHOT_DIR"
+
+snapshot_dirs_in() {
+    local root="$1"
+    local out="$2"
+    if [[ -d "$root" ]]; then
+        find "$root" -maxdepth 1 -mindepth 1 -type d -print > "$out" 2>/dev/null || :
+    else
+        : > "$out"
+    fi
+}
+
+snapshot_dirs_in "$NONO_AUDIT_ROOT" "$AUDIT_SNAPSHOT_DIR/audit.before"
+snapshot_dirs_in "$NONO_ROLLBACK_ROOT" "$AUDIT_SNAPSHOT_DIR/rollback.before"
+
+NONO_LEDGER_FILE="$NONO_AUDIT_ROOT/ledger.ndjson"
+NONO_LEDGER_LOCK="$NONO_AUDIT_ROOT/ledger.lock"
+NONO_LEDGER_BACKUP="$AUDIT_SNAPSHOT_DIR/ledger.ndjson"
+NONO_LEDGER_EXISTED=0
+NONO_LEDGER_LOCK_EXISTED=0
+if [[ -f "$NONO_LEDGER_FILE" ]]; then
+    cp "$NONO_LEDGER_FILE" "$NONO_LEDGER_BACKUP"
+    NONO_LEDGER_EXISTED=1
+fi
+[[ -f "$NONO_LEDGER_LOCK" ]] && NONO_LEDGER_LOCK_EXISTED=1
+
+cleanup_test_audit_artifacts() {
+    [[ "${NONO_TEST_KEEP_AUDIT:-0}" == "1" ]] && return 0
+
+    _remove_new_dirs() {
+        local root="$1"
+        local before="$2"
+        [[ -d "$root" ]] || return 0
+        while IFS= read -r -d '' dir; do
+            if ! grep -Fxq "$dir" "$before" 2>/dev/null; then
+                rm -rf "$dir"
+            fi
+        done < <(find "$root" -maxdepth 1 -mindepth 1 -type d -print0)
+    }
+
+    _remove_new_dirs "$NONO_AUDIT_ROOT" "$AUDIT_SNAPSHOT_DIR/audit.before"
+    _remove_new_dirs "$NONO_ROLLBACK_ROOT" "$AUDIT_SNAPSHOT_DIR/rollback.before"
+
+    if [[ "$NONO_LEDGER_EXISTED" -eq 1 ]]; then
+        cp "$NONO_LEDGER_BACKUP" "$NONO_LEDGER_FILE"
+    elif [[ -f "$NONO_LEDGER_FILE" ]]; then
+        rm -f "$NONO_LEDGER_FILE"
+    fi
+    if [[ "$NONO_LEDGER_LOCK_EXISTED" -eq 0 && -f "$NONO_LEDGER_LOCK" ]]; then
+        rm -f "$NONO_LEDGER_LOCK"
+    fi
+}
+
+trap 'cleanup_test_audit_artifacts; rm -rf "$RESULTS_DIR" "$TEST_ENV_DIR"' EXIT
 
 # All suites to run (script:name pairs)
 SUITES=(
@@ -78,6 +152,7 @@ SUITES=(
     "test_policy_queries.sh:Policy Queries"
     "test_shell.sh:Shell"
     "test_profiles.sh:Profiles"
+    "test_pack_resolution.sh:Pack Resolution"
     "test_client_startup.sh:Client Startup"
     "test_silent_output.sh:Silent Output"
     "test_env_sanitization.sh:Env Sanitization"
@@ -87,7 +162,7 @@ SUITES=(
     "test_rollback.sh:Rollback"
     "test_setup.sh:Setup"
     "test_learn.sh:Learn Mode"
-    "test_bypass_protection.sh:Bypass Protection (legacy: Override Deny)"
+    "test_bypass_protection.sh:Bypass Protection"
 )
 
 TOTAL_SUITES=${#SUITES[@]}

@@ -16,6 +16,7 @@ use crate::{map_error, rust_string_to_c, set_last_error};
 /// `caps` must be a valid pointer from `nono_capability_set_new()`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn nono_sandbox_apply(caps: *const NonoCapabilitySet) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if caps.is_null() {
         set_last_error("caps pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;

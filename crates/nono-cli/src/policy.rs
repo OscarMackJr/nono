@@ -24,6 +24,10 @@ pub struct Policy {
     /// Built-in profile definitions
     #[serde(default)]
     pub profiles: HashMap<String, ProfileDef>,
+    /// Namespace-form aliases mapping to bare profile names (D-07/D-08).
+    /// e.g. "always-further/claude" -> "claude-code"
+    #[serde(default)]
+    pub profile_aliases: HashMap<String, String>,
 }
 
 /// Policy metadata
@@ -1325,12 +1329,23 @@ pub fn validate_group_exclusions(policy: &Policy, excluded_groups: &[String]) ->
 /// Returns `None` if the profile name is not defined in policy.json.
 pub fn get_policy_profile(name: &str) -> Result<Option<profile::Profile>> {
     let policy = load_embedded_policy()?;
-    match policy.profiles.get(name) {
-        Some(def) => Ok(Some(crate::profile::resolve_and_finalize_profile(
+    // First try canonical bare-name lookup.
+    if let Some(def) = policy.profiles.get(name) {
+        return Ok(Some(crate::profile::resolve_and_finalize_profile(
             def.to_raw_profile(),
-        )?)),
-        None => Ok(None),
+        )?));
     }
+    // Second: check profile_aliases (D-07/D-08).
+    // Aliases map namespace forms ("always-further/claude") to bare names ("claude-code").
+    // Only one hop is permitted — aliases cannot point to other aliases.
+    if let Some(bare_name) = policy.profile_aliases.get(name) {
+        if let Some(def) = policy.profiles.get(bare_name.as_str()) {
+            return Ok(Some(crate::profile::resolve_and_finalize_profile(
+                def.to_raw_profile(),
+            )?));
+        }
+    }
+    Ok(None)
 }
 
 /// List all built-in profile names from embedded policy.json.
@@ -3282,6 +3297,7 @@ mod tests {
                 before: Some(profile::SessionHook {
                     script: std::path::PathBuf::from("/usr/local/bin/pre.sh"),
                     timeout_secs: Some(30),
+                    source_pack: None,
                 }),
                 after: None,
             },
@@ -3321,8 +3337,8 @@ mod tests {
     #[test]
     fn policy_egress_groups_present_in_network_policy() {
         let json = crate::config::embedded::embedded_network_policy_json();
-        let policy =
-            crate::network_policy::load_network_policy(json).expect("network-policy.json must parse");
+        let policy = crate::network_policy::load_network_policy(json)
+            .expect("network-policy.json must parse");
 
         // anthropic preset: must contain *.anthropic.com
         let anthropic = policy
@@ -3410,8 +3426,17 @@ mod tests {
             "github-api".to_string(),
         ])
         .expect("expand must succeed for known tokens");
-        assert!(hosts.iter().any(|h| h == "*.anthropic.com"), "missing *.anthropic.com");
-        assert!(hosts.iter().any(|h| h == "*.openai.com"), "missing *.openai.com");
-        assert!(hosts.iter().any(|h| h == "api.github.com"), "missing api.github.com");
+        assert!(
+            hosts.iter().any(|h| h == "*.anthropic.com"),
+            "missing *.anthropic.com"
+        );
+        assert!(
+            hosts.iter().any(|h| h == "*.openai.com"),
+            "missing *.openai.com"
+        );
+        assert!(
+            hosts.iter().any(|h| h == "api.github.com"),
+            "missing api.github.com"
+        );
     }
 }

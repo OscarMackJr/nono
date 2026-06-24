@@ -10,11 +10,29 @@
 //! credentials. This module handles only credential-specific concerns.
 
 use crate::config::{InjectMode, RouteConfig};
+use crate::diagnostic::ProxyDiagnostic;
 use crate::error::{ProxyError, Result};
 use base64::Engine;
 use std::collections::HashMap;
 use tracing::{debug, warn};
 use zeroize::Zeroizing;
+
+/// Result of loading credentials at proxy startup.
+#[derive(Debug)]
+pub struct CredentialLoadOutcome {
+    /// Loaded store; may omit routes whose credentials were unavailable.
+    pub store: CredentialStore,
+    /// Per-route warnings for missing or unavailable credentials.
+    pub diagnostics: Vec<ProxyDiagnostic>,
+}
+
+impl CredentialLoadOutcome {
+    /// Extract the store, discarding diagnostics.
+    #[must_use]
+    pub fn into_store(self) -> CredentialStore {
+        self.store
+    }
+}
 
 /// A loaded credential ready for injection.
 ///
@@ -110,6 +128,10 @@ pub struct CredentialStore {
     /// `HashMap`; this guarantees the f77e0e3 "absolute match" case
     /// without runtime checks.
     credentials: HashMap<String, LoadedCredential>,
+    /// Map from route prefix to AWS SigV4 route (placeholder until full
+    /// SigV4 signing is implemented; value is () because no runtime state
+    /// is needed yet).
+    aws_routes: HashMap<String, ()>,
 }
 
 impl CredentialStore {
@@ -125,6 +147,7 @@ impl CredentialStore {
     /// as warnings and the route is skipped.
     pub fn load(routes: &[RouteConfig]) -> Result<Self> {
         let mut credentials = HashMap::new();
+        let mut aws_routes = HashMap::new();
 
         for route in routes {
             // Normalize prefix: strip leading/trailing slashes so it matches
@@ -141,17 +164,22 @@ impl CredentialStore {
                 let secret = match nono::keystore::load_secret_by_ref(KEYRING_SERVICE, key) {
                     Ok(s) => s,
                     Err(nono::NonoError::SecretNotFound(msg)) => {
-                        debug!(
-                            "Credential '{}' not available, skipping route: {}",
-                            normalized_prefix, msg
+                        let redacted = redact_credential_ref(key);
+                        let hint = build_credential_miss_hint(key);
+                        warn!(
+                            "Credential '{}' not available for route '{}': {}.{} \
+                             Managed-credential requests on this route will be denied.",
+                            redacted, normalized_prefix, msg, hint
                         );
                         continue;
                     }
                     Err(nono::NonoError::KeystoreAccess(msg)) => {
+                        let redacted = redact_credential_ref(key);
                         warn!(
                             "Credential '{}' not available for route '{}': {}. \
-                             Managed-credential requests on this route will be denied until the credential is available.",
-                            key, normalized_prefix, msg
+                             Managed-credential requests on this route will be denied until the credential is available. \
+                             Set NONO_KEYRING_TIMEOUT_SECS=N (default 120) to wait longer for keychain unlock; 0 disables the timeout.",
+                            redacted, normalized_prefix, msg
                         );
                         continue;
                     }
@@ -187,10 +215,21 @@ impl CredentialStore {
                         query_param_name: route.query_param_name.clone(),
                     },
                 );
+                continue;
+            } else if route.aws_auth.is_some() {
+                // AWS SigV4 path — no credentials to load yet. Register the
+                // prefix so get_aws() returns true and the proxy can return
+                // 501 Not Implemented. The () value is a placeholder; the
+                // real AwsRoute struct will replace it when SigV4 signing is
+                // implemented.
+                aws_routes.insert(normalized_prefix.clone(), ());
             }
         }
 
-        Ok(Self { credentials })
+        Ok(Self {
+            credentials,
+            aws_routes,
+        })
     }
 
     /// Create an empty credential store (no credential injection).
@@ -198,6 +237,7 @@ impl CredentialStore {
     pub fn empty() -> Self {
         Self {
             credentials: HashMap::new(),
+            aws_routes: HashMap::new(),
         }
     }
 
@@ -219,28 +259,118 @@ impl CredentialStore {
         self.credentials.get(prefix)
     }
 
-    /// Check if any credentials are loaded.
+    /// Returns `Some(())` if an AWS SigV4 route is configured for the given
+    /// prefix, `None` otherwise. The `Option<&()>` return mirrors `get_oauth2`
+    /// so call sites can use `.is_some()` uniformly. The value will become
+    /// `Option<&AwsRoute>` when SigV4 signing is implemented.
+    #[must_use]
+    pub fn get_aws(&self, prefix: &str) -> Option<&()> {
+        self.aws_routes.get(prefix)
+    }
+
+    /// Check if any credentials (static or AWS) are loaded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.credentials.is_empty()
+        self.credentials.is_empty() && self.aws_routes.is_empty()
     }
 
-    /// Number of loaded credentials.
+    /// Number of loaded credentials (static + AWS).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.credentials.len()
+        self.credentials.len() + self.aws_routes.len()
     }
 
-    /// Returns the set of route prefixes that have loaded credentials.
+    /// Returns the set of route prefixes that have loaded credentials
+    /// (static keystore and AWS routes).
     #[must_use]
     pub fn loaded_prefixes(&self) -> std::collections::HashSet<String> {
-        self.credentials.keys().cloned().collect()
+        self.credentials
+            .keys()
+            .chain(self.aws_routes.keys())
+            .cloned()
+            .collect()
     }
 }
 
 /// The keyring service name used by nono for all credentials.
 /// Uses the same constant as `nono::keystore::DEFAULT_SERVICE` to ensure consistency.
 const KEYRING_SERVICE: &str = nono::keystore::DEFAULT_SERVICE;
+
+/// Redact a credential reference for safe display in warnings.
+///
+/// Delegates to the appropriate URI-specific redaction helper so that
+/// secrets (account names, file paths, field names) are never echoed raw.
+fn redact_credential_ref(key: &str) -> String {
+    if nono::keystore::is_op_uri(key) {
+        nono::keystore::redact_op_uri(key)
+    } else if nono::keystore::is_apple_password_uri(key) {
+        nono::keystore::redact_apple_password_uri(key)
+    } else if nono::keystore::is_keyring_uri(key) {
+        nono::keystore::redact_keyring_uri(key)
+    } else if nono::keystore::is_bw_uri(key) {
+        nono::keystore::redact_bw_uri(key)
+    } else if nono::keystore::is_file_uri(key) {
+        nono::keystore::redact_file_uri(key)
+    } else {
+        key.to_string()
+    }
+}
+
+/// Build a hint for the credential-not-found warning that probes other
+/// credential sources for the same name.
+///
+/// Targets the most common confusion pattern in the wild: a route shipped
+/// with `credential_key: env://X` while the user stored their secret in
+/// the system keyring (or vice versa). When we detect the secret in a
+/// *different* source, we name it explicitly so the user can fix the
+/// route's URI in one edit.
+///
+/// The probe is deliberately scoped: we only check the obvious "you put
+/// it in the wrong place" cases (env↔keyring), not URI-managed sources
+/// like `op://` or `apple-password://` whose lookups have side effects.
+fn build_credential_miss_hint(key: &str) -> String {
+    // Case 1: `env://X` failed → the env var isn't set. Check whether a
+    // bare-name keyring entry exists; if so, suggest dropping the prefix.
+    if let Some(var) = key.strip_prefix("env://") {
+        if nono::keystore::load_secret_by_ref(KEYRING_SERVICE, var).is_ok() {
+            return format!(
+                " Tip: a keyring entry exists for '{}'. Change credential_key to bare \
+                 '{}' (no env:// prefix) to use the keyring, or set the env var.",
+                var, var
+            );
+        }
+        return format!(
+            " Looked for env var '{}' (not set). To add to the macOS keychain: \
+             security add-generic-password -s \"nono\" -a \"{}\" -w  — and set credential_key \
+             to bare '{}' (no env:// prefix).",
+            var, var, var
+        );
+    }
+
+    // Case 2: bare key (default keyring) failed → check whether the env
+    // var of the same name is set; if so, suggest the env:// URI.
+    if !key.contains("://") {
+        if std::env::var_os(key).is_some() {
+            return format!(
+                " Tip: env var '{}' is set on the host. Change credential_key to \
+                 'env://{}' to use it, or add a keyring entry for '{}'.",
+                key, key, key
+            );
+        }
+        if cfg!(target_os = "macos") {
+            return format!(
+                " To add it to the macOS keychain: security add-generic-password \
+                 -s \"nono\" -a \"{}\" -w",
+                key
+            );
+        }
+    }
+
+    // URI-managed sources (op://, apple-password://, file://, keyring://)
+    // — no automatic cross-probe; the URI scheme is itself an explicit
+    // statement of where to look, so we trust the user's intent.
+    String::new()
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -311,6 +441,7 @@ mod tests {
             endpoint_rules: vec![],
             tls_ca: None,
             oauth2: None,
+            aws_auth: None,
         }];
         let store = CredentialStore::load(&routes);
         assert!(store.is_ok());
@@ -370,6 +501,7 @@ mod tests {
             endpoint_rules: vec![],
             tls_ca: None,
             oauth2: None,
+            aws_auth: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
         let store = CredentialStore::load(&routes).expect("credential load");
@@ -397,6 +529,7 @@ mod tests {
             endpoint_rules: vec![],
             tls_ca: None,
             oauth2: None,
+            aws_auth: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
         let store = CredentialStore::load(&routes).expect("credential load");

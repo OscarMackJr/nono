@@ -14,7 +14,7 @@ nono run --profile openclaw -- openclaw gateway
 The built-in `openclaw` profile provides:
 - **Read-only access** to the current working directory (Node.js requires this at startup)
 - **Read+write access** to `~/.openclaw` and `~/.config/openclaw` (agent config and state)
-- **Read+write access** to `~/.local` (OpenClaw data/state)
+- **Read+write access** to `~/.local/share/openclaw` and `~/.local/state/openclaw` (OpenClaw XDG data/state; scoped to OpenClaw's own dirs so the grant never overlaps nono's protected state root `~/.local/state/nono`)
 - **Read+write access** to `$TMPDIR/openclaw-$UID` (temporary files)
 - **Network access** enabled (required for messaging APIs)
 

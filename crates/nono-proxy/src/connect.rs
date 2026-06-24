@@ -415,4 +415,102 @@ mod tests {
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].reason.as_deref(), Some("connection timed out"));
     }
+
+    /// D-02 / #1151 keep-open equivalence test.
+    ///
+    /// Drives `handle_connect` with a CONNECT request that has NO `Proxy-Authorization`
+    /// header. Asserts the handler does NOT send a 407 (Proxy Authentication Required)
+    /// and does NOT return an `InvalidToken` error — i.e. missing auth is treated
+    /// leniently (logged at debug, execution continues), which IS the #1151 keep-open
+    /// intent. Any failure in the unit context must be an upstream/host error, not an
+    /// auth rejection.
+    ///
+    /// Targets the direct `connect::handle_connect` path only. The external-proxy bypass
+    /// arm (`server.rs:572-586`) deliberately enforces strict auth first and is out of
+    /// scope (Pitfall 3 in 89-PATTERNS.md).
+    #[tokio::test]
+    async fn connect_keeps_open_on_missing_proxy_auth() {
+        use crate::filter::ProxyFilter;
+        use tokio::io::AsyncReadExt;
+        use tokio::net::TcpListener;
+
+        // Bind a loopback listener so we have a real TcpStream pair to hand to
+        // handle_connect (the function signature requires &mut TcpStream, not a
+        // generic writer).
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        // Accept the server side and connect the client side concurrently.
+        let (connect_result, accept_result) =
+            tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+        let mut server_stream = accept_result.unwrap().0;
+
+        // The connected client-side stream is our "response reader" — we read
+        // whatever handle_connect writes back to the proxy client.
+        let mut client_conn = connect_result.unwrap();
+
+        // CONNECT line — 127.0.0.1:1 is refused quickly; the loopback port
+        // will not accept new connections so we get an UpstreamConnect error
+        // without real network traffic.
+        let connect_line = "CONNECT 127.0.0.1:1 HTTP/1.1";
+
+        // Headers with NO Proxy-Authorization — this is the keep-open scenario.
+        // The handler must ignore the missing auth and proceed to the host-filter
+        // and upstream-connect stages.
+        let remaining_header = b"Host: 127.0.0.1:1\r\n\r\n";
+
+        let session_token = Zeroizing::new("test-session-token".to_string());
+        let filter = ProxyFilter::allow_all();
+        let log = audit::new_audit_log();
+
+        // Run handle_connect. We expect it to proceed past the auth check (no 407
+        // emitted) and fail with an UpstreamConnect / Io error when it cannot
+        // reach 127.0.0.1:1. We do not assert Ok(()); we assert on what failed.
+        let result = handle_connect(
+            connect_line,
+            &mut server_stream,
+            &filter,
+            &session_token,
+            remaining_header,
+            Some(&log),
+        )
+        .await;
+
+        // Drop the server side so the client reader can drain to EOF.
+        drop(server_stream);
+
+        // Read whatever was written to the "client" side of the connection.
+        let mut response_bytes = Vec::new();
+        client_conn.read_to_end(&mut response_bytes).await.unwrap();
+        let response = String::from_utf8_lossy(&response_bytes);
+
+        // ASSERTION 1 (core equivalence): the client must NOT have received a
+        // 407 Proxy Authentication Required status — missing auth is lenient.
+        assert!(
+            !response.starts_with("HTTP/1.1 407"),
+            "D-02: handler must NOT send 407 on missing Proxy-Authorization; got: {:?}",
+            response
+        );
+
+        // ASSERTION 2: the error (if any) must be an upstream/host error, not
+        // an InvalidToken auth rejection.
+        if let Err(ref e) = result {
+            assert!(
+                !matches!(e, ProxyError::InvalidToken),
+                "D-02: handler must NOT return InvalidToken on missing auth; got: {:?}",
+                e
+            );
+        }
+
+        // ASSERTION 3: no auth-failure audit event was emitted.
+        let events = audit::drain_audit_events(&log);
+        for event in &events {
+            assert_ne!(
+                event.denial_category,
+                Some(NetworkAuditDenialCategory::AuthenticationFailed),
+                "D-02: no AuthenticationFailed audit event expected; got: {:?}",
+                event
+            );
+        }
+    }
 }

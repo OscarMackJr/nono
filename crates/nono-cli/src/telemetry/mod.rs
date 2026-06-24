@@ -33,7 +33,20 @@ pub mod event;
 pub mod syslog;
 pub mod windows;
 
-pub use event::{SecurityEvent, SecurityEventType, classify_path, path_hash_for};
+pub use event::{classify_path, path_hash_for, SecurityEvent, SecurityEventType};
+
+/// Global `SecurityEventLayer` instance, set once by `init_tracing` /
+/// `init_daemon_telemetry` (Phase 92 Plan 03 / OQ-1 resolution).
+///
+/// Used by `execute_sandboxed` to call `emit_override_event` (AUD-04 gate).
+/// `SecurityEventLayer` is cheaply cloneable (wraps `Arc<Mutex<...>>` inner),
+/// so this `OnceLock` stores one clone while the tracing registry takes another;
+/// both clones share the same underlying chain state.
+///
+/// `OnceLock::set` silently fails if already set (daemon double-init guard
+/// pattern mirrors `telemetry_init.rs::INIT`).
+pub(crate) static SECURITY_LAYER: std::sync::OnceLock<SecurityEventLayer> =
+    std::sync::OnceLock::new();
 
 use hmac::{Hmac, Mac};
 use nono::TelemetryConfig;
@@ -117,9 +130,7 @@ pub(crate) fn advance_chain(chain: &mut ChainState, event_bytes: &[u8]) {
         Err(e) => {
             // InvalidLength only if key is empty — structurally impossible for
             // our 32-byte OsRng key, but we handle it gracefully per D-14.
-            eprintln!(
-                "nono: telemetry: HMAC key length error ({e}), degrading to zeroed key"
-            );
+            eprintln!("nono: telemetry: HMAC key length error ({e}), degrading to zeroed key");
             // SAFETY: a 32-byte all-zero slice always satisfies HMAC-SHA256's
             // key constraint (any non-empty key is valid).
             match HmacSha256::new_from_slice(&[0u8; 32]) {
@@ -161,6 +172,12 @@ fn severity_for(t: &SecurityEventType) -> nono::TelemetrySeverity {
         | SecurityEventType::LabelViolation
         | SecurityEventType::HookFailClosed
         | SecurityEventType::TelemetryDegraded => TelemetrySeverity::Warning,
+        // Phase 92: override lifecycle events are Warning-level (authorization events).
+        SecurityEventType::PolicyOverridePresented
+        | SecurityEventType::PolicyOverrideVerified
+        | SecurityEventType::PolicyOverrideRejected
+        | SecurityEventType::PolicyOverrideExpired
+        | SecurityEventType::PolicyOverrideRevoked => TelemetrySeverity::Warning,
     }
 }
 
@@ -188,11 +205,45 @@ struct SecurityEventLayerInner {
 ///
 /// The mutable chain state is wrapped in a [`Mutex`] so the layer can be
 /// registered as a global subscriber across multiple threads.
+///
+/// # Cloneability (Phase 92 Plan 03)
+///
+/// `SecurityEventLayer` is cheaply cloneable — `clone()` clones the
+/// `Arc<Mutex<...>>` inner, so all clones share the SAME mutable chain state.
+/// This allows `SECURITY_LAYER` (an `OnceLock<SecurityEventLayer>`) to store
+/// one clone while the tracing registry takes another, with both advancing the
+/// same HMAC chain. This pattern is safe because the `Mutex` serialises all
+/// concurrent access across all clones.
+#[derive(Clone)]
 pub struct SecurityEventLayer {
-    inner: Mutex<SecurityEventLayerInner>,
+    inner: std::sync::Arc<Mutex<SecurityEventLayerInner>>,
 }
 
 impl SecurityEventLayer {
+    /// Return the current HMAC chain sequence number.
+    ///
+    /// The genesis value is `0`.  Each call to [`advance_chain`] increments this
+    /// by one (saturating).  Used by the D-01 non-host-gated integration test to
+    /// assert that an in-process `nono_security::network_deny` event actually
+    /// reached `on_event` and advanced the chain (DRAIN-04).
+    ///
+    /// Returns `0` if the internal mutex is poisoned (fail-silent, never panics).
+    ///
+    /// # Test accessor
+    ///
+    /// This method is intentionally `#[cfg(test)]` — it exists solely to expose
+    /// chain state to inline integration tests.  It is not called in production
+    /// code paths.  This avoids a `dead_code` lint (CLAUDE.md: avoid
+    /// `#[allow(dead_code)]`) while keeping the accessor available to all
+    /// `#[cfg(test)]` modules in the same crate compilation unit.
+    #[cfg(test)]
+    pub(crate) fn chain_sequence(&self) -> u64 {
+        match self.inner.lock() {
+            Ok(guard) => guard.chain.sequence,
+            Err(_) => 0, // Mutex poisoned — return genesis value, never panic
+        }
+    }
+
     /// Construct a new `SecurityEventLayer` with a freshly generated ephemeral
     /// key and session salt.
     ///
@@ -224,13 +275,93 @@ impl SecurityEventLayer {
         };
 
         Self {
-            inner: Mutex::new(SecurityEventLayerInner {
+            inner: std::sync::Arc::new(Mutex::new(SecurityEventLayerInner {
                 chain,
                 session_id,
                 session_salt: salt_bytes,
                 config,
-            }),
+            })),
         }
+    }
+
+    /// Emit a PolicyOverride lifecycle event directly into the HMAC chain.
+    ///
+    /// Bypasses the tracing-intercept path (`on_event`) because override events
+    /// carry `zt_audit_hash`/`kms_key_id` fields, not `path`/`host`. The direct
+    /// method is accessible from `execute_sandboxed` where the layer instance
+    /// is in scope via `SECURITY_LAYER.get()`.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(chain_head_hex)` when the event was emitted and the chain advanced.
+    /// `Err(&'static str)` if the mutex is poisoned or the event cannot be
+    /// committed.
+    ///
+    /// # AUD-04 contract
+    ///
+    /// Callers MUST treat `Err` as FATAL and abort before spawning the sandboxed
+    /// child. A poisoned mutex means telemetry is in an unrecoverable state — the
+    /// override path must not proceed without a committed audit record (D-02
+    /// bilateral gate; AUD-04 fail-closed).
+    ///
+    /// # Telemetry-disabled behaviour (D-14 degrade-not-abort)
+    ///
+    /// When `inner.config.enabled` is `false`, the HMAC chain still advances
+    /// (for sequence correctness and audit ordering) but no ETW/AppLog emit
+    /// occurs. This is a policy choice, not an AUD-04 failure — the function
+    /// returns `Ok`.
+    // This method is called from execution_runtime.rs (compiled only for the `nono`
+    // binary, not for `nono-agentd`). The `dead_code` lint fires for nono-agentd
+    // because that binary does not reach execution_runtime.rs. The method IS used
+    // in production (nono binary + unit tests) — this is a multi-binary compilation
+    // artifact, not actual dead code (per CLAUDE.md rule: tests use it).
+    #[allow(dead_code)]
+    #[must_use = "AUD-04: Err means the audit record was not committed — callers MUST \
+                  return Err before spawning (never silently proceed)"]
+    pub fn emit_override_event(
+        &self,
+        event_type: &SecurityEventType,
+        jti: &str,
+        kms_key_id: &str,
+        zt_audit_hash: Option<&str>,
+    ) -> Result<String, &'static str> {
+        let mut inner = self.inner.lock().map_err(|_| "mutex poisoned")?;
+
+        let timestamp_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        // Build canonical event bytes for chain advancement (same format as on_event).
+        // Fields: event_type | jti | kms_key_id | zt_audit_hash | session_id | ts
+        let pre_chain_bytes = format!(
+            "{event_type:?}|{jti}|{kms_key_id}|{zt}|{session_id}|{ts}",
+            zt = zt_audit_hash.unwrap_or(""),
+            session_id = inner.session_id,
+            ts = timestamp_unix_ms,
+        );
+
+        advance_chain(&mut inner.chain, pre_chain_bytes.as_bytes());
+        let chain_head = chain_head_hex(&inner.chain.head);
+
+        if inner.config.enabled {
+            let security_event = SecurityEvent {
+                event_type: event_type.clone(),
+                agent_pid: std::process::id(),
+                // Override events carry no path — kms_key_id/jti are in
+                // the chain bytes above. path_hash / path_category / host
+                // are None (AUD-03 redaction: raw secrets never in log fields).
+                path_hash: None,
+                path_category: None,
+                host: None,
+                session_id: inner.session_id.clone(),
+                chain_head: chain_head.clone(),
+                timestamp_unix_ms,
+            };
+            windows::emit_security_event(&security_event);
+        }
+
+        Ok(chain_head)
     }
 }
 
@@ -371,13 +502,11 @@ mod tests {
         const AUDIT_EVENT_DOMAIN: &[u8] = b"nono.audit.event.alpha\n";
         const AUDIT_CHAIN_DOMAIN: &[u8] = b"nono.audit.chain.alpha\n";
         assert_ne!(
-            TELEMETRY_EVENT_DOMAIN,
-            AUDIT_EVENT_DOMAIN,
+            TELEMETRY_EVENT_DOMAIN, AUDIT_EVENT_DOMAIN,
             "telemetry EVENT domain must differ from audit EVENT domain (D-06)"
         );
         assert_ne!(
-            TELEMETRY_CHAIN_DOMAIN,
-            AUDIT_CHAIN_DOMAIN,
+            TELEMETRY_CHAIN_DOMAIN, AUDIT_CHAIN_DOMAIN,
             "telemetry CHAIN domain must differ from audit CHAIN domain (D-06)"
         );
     }
@@ -402,6 +531,23 @@ mod tests {
     }
 
     #[test]
+    fn severity_for_override_lifecycle_events_is_warning() {
+        for t in [
+            SecurityEventType::PolicyOverridePresented,
+            SecurityEventType::PolicyOverrideVerified,
+            SecurityEventType::PolicyOverrideRejected,
+            SecurityEventType::PolicyOverrideExpired,
+            SecurityEventType::PolicyOverrideRevoked,
+        ] {
+            assert_eq!(
+                severity_for(&t),
+                TelemetrySeverity::Warning,
+                "override lifecycle event {t:?} must be Warning severity"
+            );
+        }
+    }
+
+    #[test]
     fn min_severity_filter_predicate_matches_policy_threshold() {
         // The on_event guard is `severity_for(event) < min_severity → suppress`.
         // Warning-level events emit at Debug/Info/Warning thresholds and are
@@ -409,7 +555,10 @@ mod tests {
         let event_sev = severity_for(&SecurityEventType::PathDeny); // Warning
         assert!(event_sev >= TelemetrySeverity::Debug, "emits at Debug min");
         assert!(event_sev >= TelemetrySeverity::Info, "emits at Info min");
-        assert!(event_sev >= TelemetrySeverity::Warning, "emits at Warning min (default)");
+        assert!(
+            event_sev >= TelemetrySeverity::Warning,
+            "emits at Warning min (default)"
+        );
         assert!(
             event_sev < TelemetrySeverity::Error,
             "Warning event is suppressed when min_severity=Error"
@@ -419,8 +568,7 @@ mod tests {
     #[test]
     fn telemetry_event_domain_value() {
         assert_eq!(
-            TELEMETRY_EVENT_DOMAIN,
-            b"nono.telemetry.event.alpha\n",
+            TELEMETRY_EVENT_DOMAIN, b"nono.telemetry.event.alpha\n",
             "TELEMETRY_EVENT_DOMAIN must match the locked value"
         );
     }
@@ -444,17 +592,29 @@ mod tests {
         );
         // Salt must be non-zero.
         assert_ne!(
-            inner.session_salt,
-            [0u8; 32],
+            inner.session_salt, [0u8; 32],
             "session salt must be non-zero (OsRng-seeded)"
         );
         // Genesis head is all-zero.
         assert_eq!(
-            inner.chain.head,
-            [0u8; 32],
+            inner.chain.head, [0u8; 32],
             "genesis chain head must be [0u8;32]"
         );
         assert_eq!(inner.chain.sequence, 0, "genesis sequence must be 0");
+    }
+
+    // ── chain_sequence accessor (DRAIN-04 D-01) ───────────────────────────────
+
+    #[test]
+    fn chain_sequence_genesis_is_zero() {
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-chain-seq".to_string());
+        // Genesis sequence via the pub(crate) accessor (DRAIN-04 D-01 test hook).
+        assert_eq!(
+            layer.chain_sequence(),
+            0,
+            "chain_sequence() must return 0 at genesis (no events emitted)"
+        );
     }
 
     // ── advance_chain ─────────────────────────────────────────────────────────
@@ -593,6 +753,105 @@ mod tests {
             chain.head, expected,
             "advance_chain must use Hmac<Sha256> (TELEMETRY_CHAIN_DOMAIN || prev_head || \
              TELEMETRY_EVENT_DOMAIN || event_bytes); sha2 placeholder produces a different value"
+        );
+    }
+
+    // ── emit_override_event (Phase 92 Plan 03 Task 2 — AUD-01 / AUD-04) ─────
+
+    /// AUD-01: emit_override_event on a fresh layer advances chain_sequence by 1.
+    #[test]
+    fn emit_override_event_advances_chain_by_one() {
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig::default(),
+            "test-override-session".to_string(),
+        );
+        assert_eq!(layer.chain_sequence(), 0, "genesis must be 0");
+        let result = layer.emit_override_event(
+            &SecurityEventType::PolicyOverrideVerified,
+            "test-jti-123",
+            "arn:aws:kms:us-east-1:123456789012:key/test",
+            Some("abc123deadbeef"),
+        );
+        assert!(
+            result.is_ok(),
+            "emit_override_event must succeed on fresh layer, got: {result:?}"
+        );
+        assert_eq!(
+            layer.chain_sequence(),
+            1,
+            "chain must advance by exactly 1 after emit_override_event (AUD-01)"
+        );
+    }
+
+    /// AUD-04 fail-closed: poisoned mutex returns Err, never silently Ok.
+    #[test]
+    fn emit_override_event_err_on_poisoned_mutex() {
+        use std::sync::Arc;
+
+        let layer = Arc::new(SecurityEventLayer::new(
+            TelemetryConfig::default(),
+            "test-poison".to_string(),
+        ));
+
+        // Poison the mutex by panicking while holding the lock.
+        let layer_clone = Arc::clone(&layer);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = layer_clone.inner.lock().unwrap();
+            panic!("intentionally poison the mutex");
+        });
+
+        let result = layer.emit_override_event(
+            &SecurityEventType::PolicyOverrideRejected,
+            "jti",
+            "kms_key_id",
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "poisoned mutex must return Err (AUD-04 fail-closed)"
+        );
+    }
+
+    /// AUD-01 idempotent ordering: two calls advance chain_sequence from 0 to 2.
+    #[test]
+    fn emit_override_event_two_calls_advance_by_two() {
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-two-calls".to_string());
+        let r1 = layer.emit_override_event(
+            &SecurityEventType::PolicyOverrideVerified,
+            "jti-1",
+            "arn:kms:1",
+            None,
+        );
+        let r2 = layer.emit_override_event(
+            &SecurityEventType::PolicyOverrideVerified,
+            "jti-2",
+            "arn:kms:2",
+            Some("zt-hash"),
+        );
+        assert!(r1.is_ok(), "first emit must succeed");
+        assert!(r2.is_ok(), "second emit must succeed");
+        assert_eq!(
+            layer.chain_sequence(),
+            2,
+            "chain must advance by 2 after two emit_override_event calls (AUD-01)"
+        );
+    }
+
+    /// emit_override_event with zt_audit_hash=None returns Ok (CAF v0.1 tokens).
+    #[test]
+    fn emit_override_event_none_zt_audit_hash_ok() {
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-no-zt-hash".to_string());
+        let result = layer.emit_override_event(
+            &SecurityEventType::PolicyOverrideVerified,
+            "jti-no-zt",
+            "arn:kms:no-zt",
+            None, // zt_audit_hash absent (pre-ZT-Infra token)
+        );
+        assert!(
+            result.is_ok(),
+            "None zt_audit_hash must return Ok (CAF v0.1 pre-ZT tokens allowed)"
         );
     }
 }

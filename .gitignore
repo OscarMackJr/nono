@@ -4,6 +4,7 @@ dist/windows/*.msi
 dist/windows/*.wixpdb
 
 /target
+crates/*/target/
 .vscode/
 .idea/
 .DS_Store
@@ -16,6 +17,9 @@ proj/
 build_notes/
 docs/presentations/
 docs/cli/development/
+.worktrees
+.nono
+diagnostics.json
 
 
 # Library tests

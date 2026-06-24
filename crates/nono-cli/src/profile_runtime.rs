@@ -41,6 +41,10 @@ pub(crate) struct PreparedProfile {
     /// `profile.environment.deny_vars`. `None` means no deny filter active.
     /// Wired to the Unix execution path via `ExecConfig.denied_env_vars`.
     pub(crate) denied_env_vars: Option<Vec<String>>,
+    /// Expanded `environment.set_vars` entries (key, expanded-value). `None`
+    /// when the profile has no `set_vars`. Values are expanded with
+    /// [`profile::expand_vars`] at prepare time.
+    pub(crate) set_vars: Option<Vec<(String, String)>>,
 }
 
 fn install_profile_hooks(profile_name: Option<&str>, profile: &profile::Profile, silent: bool) {
@@ -83,7 +87,24 @@ fn install_profile_hooks(profile_name: Option<&str>, profile: &profile::Profile,
 /// 2. Verify artifact SHA-256 digests against the lockfile
 /// 3. Re-verify Sigstore bundles from the stored `.nono-trust.bundle` file
 ///    and check signer identity against the lockfile pin.
-fn verify_profile_packs(packs: &[String]) -> crate::Result<()> {
+fn verify_profile_packs(packs: &[String], profile: &profile::Profile) -> crate::Result<()> {
+    if let Some(hook) = [&profile.session_hooks.before, &profile.session_hooks.after]
+        .into_iter()
+        .flatten()
+        .find(|hook| {
+            hook.source_pack
+                .as_ref()
+                .is_some_and(|sp| !packs.contains(&sp.key()))
+        })
+    {
+        // This indicates an internal logic error where the Profile was parsed, but the source_pack
+        // the session hook references is not present in packs to check
+        return Err(nono::NonoError::PackageInstall(format!(
+            "session_hook {} unexpectedly is not part of the packs to verify",
+            hook.script.display()
+        )));
+    }
+
     if packs.is_empty() {
         return Ok(());
     }
@@ -151,6 +172,39 @@ fn verify_profile_packs(packs: &[String]) -> crate::Result<()> {
                      Found:    {}\n\
                      Reinstall with: nono pull {} --force",
                     pack_ref, artifact_name, locked_artifact.sha256, hash, pack_ref
+                )));
+            }
+        }
+
+        // Verify that session hook scripts attributed to this pack are declared
+        // artifacts in the lockfile. A hook script that exists on disk but is
+        // not in the lockfile artifacts was never attested by Sigstore — reject it.
+        for script_path in [&profile.session_hooks.before, &profile.session_hooks.after]
+            .into_iter()
+            .flatten()
+            .filter(|hook| {
+                hook.source_pack
+                    .as_ref()
+                    .is_some_and(|sp| sp.key() == *pack_ref)
+            })
+            .map(|hook| hook.script.as_path())
+        {
+            let relative_path = script_path
+                .strip_prefix(&install_dir)
+                .map_err(|_| {
+                    nono::NonoError::PackageInstall(format!(
+                        "session_hook with path {} is not within the pack",
+                        script_path.display()
+                    ))
+                })?
+                .to_str()
+                .ok_or_else(|| {
+                    nono::NonoError::PackageInstall("Invalid script_path characters".to_string())
+                })?;
+            if !locked_pkg.artifacts.contains_key(relative_path) {
+                return Err(nono::NonoError::PackageInstall(format!(
+                    "session_hook with path {} is not a declared artifact in the pack lockfile",
+                    script_path.display()
                 )));
             }
         }
@@ -457,6 +511,39 @@ fn pre_create_drafts_dir() {
     }
 }
 
+/// Expand the values of `environment.set_vars` using the same variable
+/// substitution as profile paths (`$HOME`, `~`, `$WORKDIR`, `$TMPDIR`,
+/// `$XDG_*`, `$NONO_PACKAGES`). Keys are preserved verbatim. Returns `None`
+/// when the profile has no `set_vars`. Expansion errors are fatal so a
+/// misconfigured value never silently reaches the child.
+fn expand_profile_set_vars(
+    loaded_profile: Option<&profile::Profile>,
+    workdir: &Path,
+) -> crate::Result<Option<Vec<(String, String)>>> {
+    let Some(env_config) = loaded_profile.and_then(|profile| profile.environment.as_ref()) else {
+        return Ok(None);
+    };
+    if env_config.set_vars.is_empty() {
+        return Ok(None);
+    }
+
+    // Sort keys for deterministic ordering (HashMap iteration order is random).
+    let mut keys: Vec<&String> = env_config.set_vars.keys().collect();
+    keys.sort();
+
+    let mut expanded = Vec::with_capacity(keys.len());
+    for key in keys {
+        let Some(value) = env_config.set_vars.get(key) else {
+            continue;
+        };
+        let expanded_value = profile::expand_vars(value, workdir)?
+            .to_string_lossy()
+            .into_owned();
+        expanded.push((key.clone(), expanded_value));
+    }
+    Ok(Some(expanded))
+}
+
 /// Prepare the profile-derived configuration for sandbox execution.
 ///
 /// Phase 37 D-12: takes a [`profile::ResolveContext`] so callers in the
@@ -505,9 +592,29 @@ pub(crate) fn prepare_profile_with_context(
                 packs_to_verify.push(key);
             }
         }
-        verify_profile_packs(&packs_to_verify)?;
-        if !packs_to_verify.is_empty() && !silent {
-            eprintln!("  Verified {} pack(s)", packs_to_verify.len());
+
+        // `--dry-run` resolves the profile and prints the capabilities it
+        // *would* apply, then exits without ever building the sandbox or
+        // executing the target command (see command_runtime::run_command).
+        // Pack verification (lockfile digest + signed trust bundle) gates the
+        // execution of pack-shipped code; a preview executes nothing, so it is
+        // not a verification boundary. Skipping it here keeps `--dry-run`
+        // usable to inspect a pack's profile before a managed `nono pull`
+        // completes (or while recovering missing metadata). A real run still
+        // hits verify_profile_packs below and is rejected if unverified.
+        if args.dry_run {
+            if !packs_to_verify.is_empty() && !silent {
+                eprintln!(
+                    "  Skipping pack verification on --dry-run ({} pack(s)); a real run verifies them",
+                    packs_to_verify.len()
+                );
+            }
+        } else {
+            verify_profile_packs(&packs_to_verify, &profile)?;
+
+            if !packs_to_verify.is_empty() && !silent {
+                eprintln!("  Verified {} pack(s)", packs_to_verify.len());
+            }
         }
         install_profile_hooks(Some(profile_name.as_str()), &profile, silent);
         Some(profile)
@@ -662,6 +769,7 @@ pub(crate) fn prepare_profile_with_context(
                 Some(env_config.deny_vars.clone())
             })
         }),
+        set_vars: expand_profile_set_vars(loaded_profile.as_ref(), workdir)?,
         loaded_profile,
     })
 }
@@ -768,6 +876,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec![],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -822,6 +931,54 @@ mod tests {
             ("APPDATA", config_str),
         ]);
         f(&config_dir)
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn expand_profile_set_vars_expands_home() {
+        use super::expand_profile_set_vars;
+        use std::path::Path;
+
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let _env = crate::test_env::EnvVarGuard::set_all(&[("HOME", "/home/tester")]);
+
+        let mut profile = Profile::default();
+        let mut set_vars = std::collections::HashMap::new();
+        set_vars.insert("RUST_LOG".to_string(), "debug".to_string());
+        set_vars.insert("CFG".to_string(), "$HOME/.config".to_string());
+        profile.environment = Some(EnvironmentConfig {
+            allow_vars: vec![],
+            deny_vars: vec![],
+            set_vars,
+        });
+
+        let workdir = Path::new("/tmp/work");
+        let expanded = expand_profile_set_vars(Some(&profile), workdir)
+            .expect("expansion should succeed")
+            .expect("set_vars should be present");
+
+        // Keys are sorted for determinism: CFG before RUST_LOG.
+        assert_eq!(
+            expanded,
+            vec![
+                ("CFG".to_string(), "/home/tester/.config".to_string()),
+                ("RUST_LOG".to_string(), "debug".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn expand_profile_set_vars_none_when_absent() {
+        use super::expand_profile_set_vars;
+        use std::path::Path;
+
+        let profile = Profile::default();
+        let result = expand_profile_set_vars(Some(&profile), Path::new("/tmp/work"))
+            .expect("expansion should succeed");
+        assert!(result.is_none());
     }
 
     fn create_pack_dir(
@@ -892,7 +1049,7 @@ mod tests {
     fn verify_profile_packs_requires_lockfile_entry_for_installed_pack() {
         let result = with_config_env(|config_dir| {
             create_pack_dir(config_dir, "acme", "widget");
-            super::verify_profile_packs(&["acme/widget".to_string()])
+            super::verify_profile_packs(&["acme/widget".to_string()], &Profile::default())
         });
 
         let err = result.expect_err("installed pack without lockfile entry must fail verification");
@@ -913,7 +1070,7 @@ mod tests {
                 .expect("failed to write package artifact");
             write_lockfile_with_artifact("acme/widget", "package.json", artifact_bytes);
 
-            super::verify_profile_packs(&["acme/widget".to_string()])
+            super::verify_profile_packs(&["acme/widget".to_string()], &Profile::default())
         });
 
         let err = result.expect_err("locked pack without trust bundle must fail verification");

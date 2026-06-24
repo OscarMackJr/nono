@@ -98,6 +98,8 @@ pub(crate) struct PreparedSandbox {
     /// controlled deny-list of environment variable names from the loaded
     /// profile's `environment.deny_vars` block.
     pub(crate) denied_env_vars: Option<Vec<String>>,
+    /// Expanded `environment.set_vars` (key, expanded-value), `None` if absent.
+    pub(crate) set_vars: Option<Vec<(String, String)>>,
     /// True when the profile or CLI requested `network.block`. Carried
     /// through because a CLI proxy flag (e.g. `--credential`) may later
     /// override `caps` to `ProxyOnly`, losing the original intent.
@@ -117,11 +119,12 @@ pub(crate) struct PreparedSandbox {
 
 fn finalize_prepared_sandbox(
     prepared: PreparedSandbox,
+    blocked_grants: &[(PathBuf, Option<String>)],
     args: &SandboxArgs,
     silent: bool,
 ) -> Result<PreparedSandbox> {
     output::print_skipped_requested_paths(&collect_missing_cli_requested_paths(args), silent);
-    output::print_capabilities(&prepared.caps, args.verbose, silent);
+    output::print_capabilities(&prepared.caps, blocked_grants, args.verbose, silent);
 
     if let Some(ref profile_name) = args.profile {
         crate::pack_update_hint::show_pack_update_hints(profile_name, silent);
@@ -348,6 +351,7 @@ pub(crate) fn prepare_sandbox_with_context(
                 // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
                 // deny_vars also unset on the manifest path.
                 denied_env_vars: None,
+                set_vars: None,
                 network_block_requested: args.block_net,
                 // Plan 18.1-03 G-06: manifest path has no loaded Profile —
                 // AIPC widening defaults to hard-coded supervisor allowlist.
@@ -356,6 +360,7 @@ pub(crate) fn prepare_sandbox_with_context(
                 // hooks configured.
                 session_hooks: profile::SessionHooks::default(),
             },
+            &[],
             args,
             silent,
         );
@@ -388,6 +393,7 @@ pub(crate) fn prepare_sandbox_with_context(
         suppressed_system_service_operations,
         allowed_env_vars: profile_allowed_env_vars,
         denied_env_vars: profile_denied_env_vars,
+        set_vars: profile_set_vars,
     } = prepared_profile;
 
     // OAUTH-03 (Plan 22-04): warn when allow_domain entries include `:port`
@@ -452,6 +458,9 @@ pub(crate) fn prepare_sandbox_with_context(
     // re-run validate_deny_overlaps after CWD/pack grants are added below,
     // because Landlock cannot enforce a deny that lives under a later allow.
     let prepared_deny_paths = prepared.deny_paths;
+    // User grants silently blocked by deny groups (macOS); folded into the
+    // capability summary instead of emitting one warning per path.
+    let blocked_grants = prepared.blocked_grants;
 
     // PROF-01 (Phase 22): apply raw Seatbelt rules from the profile (macOS only).
     // On Linux/Windows the field deserializes but is intentionally ignored —
@@ -637,6 +646,7 @@ pub(crate) fn prepare_sandbox_with_context(
             // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
             // forward the env-filter deny-list.
             denied_env_vars: profile_denied_env_vars,
+            set_vars: profile_set_vars,
             network_block_requested,
             // Plan 18.1-03 G-06: preserve the loaded profile so
             // `Profile::resolve_aipc_allowlist` can be consulted at the
@@ -646,6 +656,7 @@ pub(crate) fn prepare_sandbox_with_context(
             // PreparedSandbox. Follows the allowed_env_vars pattern above.
             session_hooks: profile_session_hooks,
         },
+        &blocked_grants,
         args,
         silent,
     )

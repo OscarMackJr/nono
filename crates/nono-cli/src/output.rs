@@ -54,7 +54,12 @@ pub fn print_banner(silent: bool) {
 /// When `verbose` is 0, only user-specified capabilities are shown (CLI flags
 /// and profile filesystem entries). System paths and group-resolved paths are
 /// hidden to reduce noise. Use `-v` to show all capabilities.
-pub fn print_capabilities(caps: &CapabilitySet, verbose: u8, silent: bool) {
+pub fn print_capabilities(
+    caps: &CapabilitySet,
+    blocked_grants: &[(std::path::PathBuf, Option<String>)],
+    verbose: u8,
+    silent: bool,
+) {
     if silent {
         return;
     }
@@ -111,6 +116,11 @@ pub fn print_capabilities(caps: &CapabilitySet, verbose: u8, silent: bool) {
             );
         }
     }
+
+    // Protected paths kept blocked despite a user grant (macOS deny groups).
+    // Folded into one row by default so a broad grant (e.g. ~/Library) that
+    // overlaps several deny groups does not produce a wall of warnings.
+    print_blocked_grants(blocked_grants, verbose, t);
 
     // AF_UNIX socket capabilities (issue #685 / #696)
     let unix_caps = caps.unix_socket_capabilities();
@@ -218,6 +228,69 @@ pub fn print_capabilities(caps: &CapabilitySet, verbose: u8, silent: bool) {
 }
 
 /// Format an access mode as a fixed-width colored badge
+/// Render the paths that a deny group keeps blocked despite a user grant.
+///
+/// Collapsed by default to a single row (a broad grant such as `~/Library`
+/// overlaps many deny groups and would otherwise emit one warning per path).
+/// `-v` expands to the full paths grouped by the deny rule that blocks them,
+/// with the `--bypass-protection` escape hatch shown once.
+fn print_blocked_grants(
+    blocked: &[(std::path::PathBuf, Option<String>)],
+    verbose: u8,
+    t: &theme::Theme,
+) {
+    if blocked.is_empty() {
+        return;
+    }
+
+    let badge = theme::badge("deny ", t.yellow, BADGE_FG_DARK);
+
+    if verbose == 0 {
+        let n = blocked.len();
+        let noun = if n == 1 { "path" } else { "paths" };
+        eprintln!(
+            "  {} {}",
+            badge,
+            theme::fg(
+                &format!("{n} sensitive {noun} kept blocked inside your grants (-v to show)"),
+                t.subtext,
+            ),
+        );
+        return;
+    }
+
+    eprintln!(
+        "  {} {}",
+        badge,
+        theme::fg("sensitive paths kept blocked despite your grants:", t.text),
+    );
+
+    // Group by the deny rule that blocks each path, preserving first-seen order.
+    let mut groups: Vec<(String, Vec<&std::path::Path>)> = Vec::new();
+    for (path, group) in blocked {
+        let group_name = group.as_deref().unwrap_or("a deny rule");
+        match groups.iter_mut().find(|(name, _)| name == group_name) {
+            Some((_, paths)) => paths.push(path.as_path()),
+            None => groups.push((group_name.to_string(), vec![path.as_path()])),
+        }
+    }
+
+    for (name, paths) in &groups {
+        eprintln!("       {}", theme::fg(name, t.subtext));
+        for path in paths {
+            eprintln!("         {}", theme::fg(&path.to_string_lossy(), t.text));
+        }
+    }
+
+    eprintln!(
+        "       {}",
+        theme::fg(
+            "use --bypass-protection <path> to allow a specific path",
+            t.subtext,
+        ),
+    );
+}
+
 fn format_access_badge(access: &AccessMode) -> String {
     let t = theme::current();
     match access {
@@ -447,6 +520,54 @@ pub fn print_applying_sandbox(silent: bool) {
 pub fn print_warning(message: &str) {
     let t = theme::current();
     eprintln!("  {} {}", fg("warning:", t.red).bold(), fg(message, t.text),);
+}
+
+/// Print proxy credential warnings collected at startup.
+pub fn print_proxy_diagnostics(diagnostics: &[nono_proxy::ProxyDiagnostic]) {
+    if diagnostics.is_empty() {
+        return;
+    }
+
+    let t = theme::current();
+    eprintln!();
+    eprintln!(
+        "  {}",
+        theme::fg("Proxy credential warnings:", t.red).bold(),
+    );
+    for diagnostic in diagnostics {
+        let code = diagnostic.code.as_str();
+        eprintln!(
+            "  {} /{} — {}",
+            theme::fg(code, t.subtext),
+            diagnostic.route_prefix,
+            fg(&diagnostic.message, t.text),
+        );
+        if let Some(hint) = &diagnostic.hint {
+            eprintln!("    {}", theme::fg(hint, t.subtext));
+        } else if let Some(action) = proxy_diagnostic_action(&diagnostic.code) {
+            eprintln!("    {}", theme::fg(action, t.subtext));
+        }
+    }
+}
+
+fn proxy_diagnostic_action(code: &nono_proxy::ProxyDiagnosticCode) -> Option<&'static str> {
+    use nono_proxy::ProxyDiagnosticCode;
+    match code {
+        ProxyDiagnosticCode::CredentialNotFound => Some(
+            "Configure a valid credential reference for this route, or use an explicit upstream credential.",
+        ),
+        ProxyDiagnosticCode::CredentialUnavailable => Some(
+            "Unlock the system keychain or authenticate with your credential provider (e.g. `op signin`).",
+        ),
+        ProxyDiagnosticCode::OAuthClientIdUnavailable
+        | ProxyDiagnosticCode::OAuthClientSecretUnavailable => {
+            Some("Provide OAuth client credentials via env/keystore configuration for this route.")
+        }
+        ProxyDiagnosticCode::OAuthTokenExchangeFailed => {
+            Some("Verify OAuth client credentials and provider availability, then retry.")
+        }
+        _ => None,
+    }
 }
 
 /// Format startup-blocked lines for writing to /dev/tty or stderr.
@@ -909,11 +1030,14 @@ pub fn print_profile_hint(program: &str, profile: &str, silent: bool) {
 
 #[cfg(test)]
 mod tests {
+    use super::theme;
     use super::{
-        dry_run_command_line, normalize_terminal_line_endings, print_profile_hint,
-        render_diagnostic_footer,
+        dry_run_command_line, format_unix_socket_mode_badge, normalize_terminal_line_endings,
+        print_blocked_grants, print_capabilities, print_profile_hint, render_diagnostic_footer,
     };
+    use nono::{CapabilitySet, UnixSocketMode};
     use std::ffi::{OsStr, OsString};
+    use tempfile::tempdir;
 
     #[test]
     fn normalize_terminal_line_endings_uses_crlf() {
@@ -984,9 +1108,60 @@ mod tests {
         assert!(!line.contains("private-secret"));
     }
 
-    // NOTE: `unix_socket_mode_badges_are_fixed_width_and_distinct` and
-    // `print_capabilities_with_unix_socket_does_not_panic` from upstream 6472011
-    // were not ported: `format_unix_socket_mode_badge`, `allow_unix_socket`,
-    // and `UnixSocketMode` do not exist in this fork yet (deferred to a future
-    // Unix-socket-capability plan). See 40-03-SCRUB-MODULE-SUMMARY.md.
+    #[test]
+    fn unix_socket_mode_badges_are_fixed_width_and_distinct() {
+        let connect = format_unix_socket_mode_badge(UnixSocketMode::Connect);
+        let bind = format_unix_socket_mode_badge(UnixSocketMode::ConnectBind);
+        // Same rendered-width contract as format_access_badge (5 chars).
+        // We can't `strip_ansi` cleanly here, so check the printable payload
+        // is present rather than the raw length.
+        assert!(connect.contains("sock "));
+        assert!(bind.contains("sock+"));
+        assert_ne!(connect, bind);
+    }
+
+    #[test]
+    fn print_capabilities_with_unix_socket_does_not_panic() {
+        // Smoke test: constructing a CapabilitySet with both connect and
+        // connect+bind unix socket grants (one file, one directory) and
+        // rendering it must not panic. Silent=true keeps stderr quiet in
+        // test output. Dry-run-style `verbose=1` path is also exercised.
+        let dir = tempdir().expect("tempdir");
+        let sock = dir.path().join("a.sock");
+        std::fs::write(&sock, b"").expect("create socket stub");
+
+        let caps = CapabilitySet::new()
+            .allow_unix_socket(&sock, UnixSocketMode::Connect)
+            .expect("connect grant")
+            .allow_unix_socket_dir(dir.path(), UnixSocketMode::ConnectBind)
+            .expect("bind dir grant");
+
+        print_capabilities(&caps, &[], 0, true);
+        print_capabilities(&caps, &[], 1, true);
+    }
+
+    #[test]
+    fn print_blocked_grants_collapsed_and_verbose_do_not_panic() {
+        // Blocked grants render as one folded row by default and expand under
+        // -v; both paths (and the empty case) must render without panicking.
+        let t = theme::current();
+        let blocked = vec![
+            (
+                std::path::PathBuf::from("/Users/x/Library/Application Support/Google/Chrome"),
+                Some("deny_browser_data_macos".to_string()),
+            ),
+            (
+                std::path::PathBuf::from("/Users/x/Library/Application Support/1Password"),
+                Some("deny_keychains_macos".to_string()),
+            ),
+            (
+                std::path::PathBuf::from("/Users/x/Library/Application Support/Unknown"),
+                None,
+            ),
+        ];
+
+        print_blocked_grants(&blocked, 0, t);
+        print_blocked_grants(&blocked, 1, t);
+        print_blocked_grants(&[], 0, t);
+    }
 }

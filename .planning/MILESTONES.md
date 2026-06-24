@@ -1,5 +1,48 @@
 # Milestones
 
+## v3.2 Signed Policy Overrides (ZT-Infra Attestation) (Shipped: 2026-06-23)
+
+**Phases completed:** 3 phases (91-93), 13 plans, 19 tasks. Cross-repo milestone (core `nono`/`nono-cli` in the Nono repo + the `nono-py` PyO3 binding repo). Ran sequential/no-worktree throughout (cross-repo split + Windows worktree fragility). Milestone-marker only — no crate publish; a future release leapfrogs the crate version to ≥ `0.65.0`.
+
+**Delivered:** The "just disable the sandbox" temptation is replaced by cryptographically-signed, ledger-logged policy *exceptions*. A developer hitting a false-positive nono block obtains an authorized, scoped, expiring signed override that the `nono-py` binding verifies via a **two-key AND gate** — the KMS signature verifies offline AND a live ZT-Infra `POST /actions` returns `allow` — then applies as a temporary, audited, revocable, additive `CapabilitySet` expansion that the OS confinement layer still enforces underneath. Non-self-service; fail-closed on every error path.
+
+**Key accomplishments:**
+
+- **Phase 91 — Signed Override Format + Verification Core:** Fully offline, fail-closed ECDSA P-256 verifier in `nono-py/src/override.rs` over the ZT-Infra CAF v0.1 token shape — `canonical_bytes()` byte-exact against all 9 ZT reference vectors, `verify_prehashed` over the digest with an explicit hand-rolled low-S gate (aws-lc-rs does not enforce it), algorithm pin, ARN allowlist, expiry/skew/TTL-cap, in-process jti single-use replay reject → immutable `OverrideGrant`; first-in-repo custom PyO3 exception `NonoOverrideError` with stable kind codes. Every failure mode raises, never silently grants.
+- **Phase 92 — Runtime CapabilitySet Mutation + Audit Wiring:** Additive invocation-scoped expansion fused with mandatory audit emission in one atomic phase — a verified override appends exactly its grant paths as `--allow` flags and emits an `AuditEventPayload::PolicyOverrideApplied` event (core crate; EventIDs 10006-10010) into the `SecurityEventLayer` HMAC chain *before* spawn via the bilateral `--override-audit` handshake + AUD-04 pre-spawn gate (an override that cannot emit its audit record is blocked, not applied). No-token path byte-for-byte identical to pre-v3.2; path-component comparison (no string `starts_with`); DF-01 `OVERRIDE-01` offline gate.
+- **Phase 93 — Live ZT-Infra Integration + Revocation + Request Flow:** Live `POST /actions` AND-gate (`_live.py`, stdlib `urllib`, 2s timeout, fail-closed) closing VFY-01 clause b; fail-secure HKLM (`Policies\nono\Override`) trust-root reader + per-`key_id` `VK_CACHE` + `verify_override_production` closing VFY-03a; live-check-as-sole-revocation-point (ZTL-03, no new infra); `AWS_*` stripped from the sandboxed child env (ZTL-04); async non-blocking DAAL anchoring (ZTL-05); `nono override request` (Rust-native denial bundle, CLI-01) + `nono-override-apply` (nono-py console one-shot verify-then-run, CLI-02); DF-02 `OVERRIDE-02` host-gated live gate.
+
+**Verification note:** Phase 93's verifier caught a real blocker — `verify_override_production` had been built but left `#[allow(dead_code)]` and never exposed to Python, so the production path still used the test-injection verifier and VFY-03a was not actually closed. A gap-closure pass exposed it as a `#[pyfunction]`, wired the production `nono-override-apply` path to it (HKLM-sourced trust, no HKCU/env fallback — D-05 preserved), retargeted the DF-02 gate HKCU→HKLM + added an elevation-SKIP precondition, and eliminated a double live `POST /actions`. Both `[BLOCKING-93]` carry-forwards (VFY-01 b + VFY-03 a) are closed; final verdict PASS-WITH-PARTIALS (8/8).
+
+**Stats:** Nono repo 67 commits / 74 files (+14,564 −1,279); nono-py ~18 commits / 19 files (+5,918 −9). Timeline 2026-06-21 → 2026-06-23.
+
+**Known deferred items at close:** 47 (see STATE.md Deferred Items) — all historical (36 stale quick-tasks, 6 consumed/dormant seeds, 4 empty todos) or host-gated (OVERRIDE-02 live allow/revoke proof needs provisioner + openssl + elevated session). Plus cross-target clippy PARTIAL→CI for the `AWS_*` strip in `exec_strategy/`. None are blockers.
+
+---
+
+## v3.1 UPST9 Upstream Sync + v3.0 Drain (Shipped: 2026-06-21)
+
+**Phases completed:** 6 phases (85-90), 19 plans, 18 tasks. Drain-then-sync upstream milestone: audit and fully absorb the `always-further/nono` `v0.62.0..v0.64.0` window (90 commits / 140 files) while preserving the fork's Windows security model, then drain v3.0's host-gated UAT debt. Milestone-marker only — no crate publish; a future release leapfrogs the crate version to ≥ `0.65.0`.
+
+**Delivered:** Fork brought current with upstream v0.62→v0.64, converging toward upstream's layout (audit stack + structured diagnostics relocated into the core `nono` crate) without regressing Windows security; v3.0 host-gated UAT debt drained to real daemon-telemetry code plus explicit operator-gated residuals.
+
+**Key accomplishments:**
+
+- **Phase 85 — UPST9 Divergence Audit:** Built the `v0.62.0..v0.64.0` DIVERGENCE-LEDGER with per-cluster dispositions (themes A–M) + ADR risk verdicts gating every downstream cherry-pick.
+- **Phase 86 — Library-Boundary Convergence:** Adopted upstream's audit stack + structured-diagnostics *into* the core `nono` crate (~2200 LOC, adopt-upstream) — a deliberate change to the policy-free-library boundary (ADR-86), the highest-merge-risk cluster (FFI + Windows diagnostic paths + proxy `ProxyDiagnostic`). Fixed a Rust 2021 let-chain incompatibility in audit.rs.
+- **Phase 87 — Security Sync:** Shipped the AF_UNIX datagram seccomp trap closing bypass #1096 (SEC-01, incl. CR-01 no-grant-EPERM-filter regression fix) + procfs-remap dedup guard (SEC-02), with CR-02 audit-bypass fork-hardening. Unix-cfg-gated → PARTIAL→CI.
+- **Phase 88 — Feature + Dependency Cherry-Pick Wave:** `set_vars` static env injection, `NONO_KEYRING_TIMEOUT_SECS`, XDG state dirs (state_paths.rs single source of truth), AWS auth config, `$PACK_DIR` session hooks, CI-env detection + truthy-bool flags + profile namespace aliasing, PTY ctrl-z fix, 9-dependency bump (typify 0.7), and the deliberate-fork-divergence FFI clear-on-entry fix (+ WR-01 string-getter follow-up).
+- **Phase 89 — Proxy Hardening Sync:** Proxy activation-gate fix (#1197 — starts on `customCredentials` alone) + external_proxy equivalence test against the fork-divergent TLS-interception surface, with regression coverage.
+- **Phase 90 — v3.0 Host-Gated UAT Drain:** Wired `SecurityEventLayer` into `nono-agentd` so daemon-launched agent denials emit `nono_security::*` events advancing the HMAC chain — real code with a non-host-gated test (DRAIN-04, 69 tests); collapsed DRAIN-01/02/03 to scripted `verify-dark.ps1` gates with explicit operator-gated host-gated residuals.
+
+**Audit:** `tech_debt` — 21/21 requirements shipped & WIRED, 0 critical blockers. Partials are PARTIAL→CI (SEC-01/02 Unix-cfg, cross-target clippy) and by-design host-gated (DRAIN-01/02/03 live-host UAT).
+
+**Known deferred items at close:** 48 open artifacts acknowledged (36 historical quick-tasks Feb–Jun 2026 + 6 dormant seeds incl. consumed SEED-006 + 4 empty todos + 2 by-design host-gated uat_gaps) — none v3.1 blockers; see STATE.md Deferred Items.
+
+**Git:** range `v3.0`(520b65f4) → `3b11843d` · 146 commits · 321 files (+32,395/−23,895) · 2026-06-19 → 2026-06-21 (3 days). Tag `v3.1` created **local-only** (repo stays public pending minifilter-altitude approval; push operator-gated).
+
+---
+
 ## v3.0 Enterprise Hardening I — Deploy · Control · Compliance (Completed: 2026-06-19)
 
 **Phases completed:** 3 phases (82-84), 12 plans, 27 tasks. First milestone of the enterprise arc — make nono deployable and governable across a corporate Windows fleet from one `HKLM\SOFTWARE\Policies\nono` policy spine.

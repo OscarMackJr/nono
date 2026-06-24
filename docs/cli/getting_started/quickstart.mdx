@@ -170,17 +170,27 @@ For setting up nono with a specific AI agent:
 - [OpenCode](/cli/clients/opencode)
 - [OpenClaw](/cli/clients/openclaw)
 
-<Note>
-  If there is an Agent you want supported please open an issue or PR to add it!
+<Note> 
+  If the agent you want to use cannot be found, create an [issue](https://github.com/always-further/nono/issues) to request consideration for adding it to the registry, or better yet, fork an existing profile and submit a PR with the new agent profile! See [Profiles & Groups](/cli/features/package-publishing) for details on how to create your own profiles.
 </Note>
+
+### Build your own profile
+
+It's likely that you are going to want to customize the pre-built profiles or create your own for different tools and needs. You can do this easily with `nono profile init` which will create a new profile based on an existing one, with the option to customize it interactively.
+
+```bash
+nono profile init claude --extends always-further/claude --full
+
+nono profile Created profile at /Users/jdoe/.config/nono/profiles/claude.json
+nono profile Validate with: nono profile validate claude
+nono profile For editor autocomplete: nono profile schema -o nono-profile.schema.json
+```
+
+You can now call your own profile with `--profile claude` just like the pre-built ones.
+
+From here, move to [Profiles & Groups](/cli/features/profiles-groups) for more indepth details on how to create and manage profiles, groups, and the policy engine.
 
 ## Next Steps
 
-- [Developer Workflows](/cli/usage/developer-workflows) - Recommended day-to-day patterns for coding agents
 - [CLI Reference](/cli/usage/flags) - Complete flag documentation
 - [Examples](/cli/usage/examples) - Common usage patterns
-- [Session Lifecycle](/cli/features/session-lifecycle) - Live detached sessions, attach/detach, inspection, and stop flows
-- [Profiles & Groups](/cli/features/profiles-groups) - Pre-configured capability sets and composable security groups
-- [Credential Injection](/cli/features/credential-injection) - Secure API key loading from system keystore
-- [Undo & Snapshots](/cli/features/atomic-rollbacks) - Filesystem snapshots with integrity verification
-- [Troubleshooting](/cli/usage/troubleshooting) - Common issues and solutions

@@ -268,7 +268,6 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         rollback.requested,
         rollback.disabled,
         rollback.audit_disabled,
-        rollback.audit_integrity,
         rollback.destination.as_ref(),
     )?;
     warn_if_rollback_flags_ignored(rollback, silent);
@@ -308,10 +307,11 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
     // Plan 22-05a Task 7 (upstream 6ecade2e): when --audit-sign-key is set,
     // resolve the URI through the keystore (fail-closed if missing) and
     // hand the signer to `finalize_supervised_exit` via RollbackExitContext.
-    let audit_signer = match rollback.audit_sign_key.as_deref() {
-        Some(key_ref) if rollback.audit_integrity => Some(prepare_audit_signer(key_ref)?),
-        _ => None,
-    };
+    let audit_signer: Option<crate::audit_attestation::AuditSigner> =
+        match rollback.audit_sign_key.as_deref() {
+            Some(key_ref) if rollback.audit_integrity => prepare_audit_signer(Some(key_ref))?,
+            _ => None,
+        };
     let (rollback_state, rollback_status) =
         initialize_rollback_state(rollback, caps, audit_state.as_ref(), silent)?;
 

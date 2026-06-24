@@ -2,7 +2,7 @@
 //!
 //! Profiles provide named configurations for common applications like
 //! claude-code, openclaw, and opencode. They can be built-in (compiled
-//! into the binary) or user-defined (in ~/.config/nono/profiles/).
+//! into the binary) or user-defined (in `$XDG_CONFIG_HOME/nono/profiles/`).
 
 pub(crate) mod builtin;
 
@@ -12,6 +12,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::package::PackageRef;
 
 // ============================================================================
 // Phase 56-01 Plan 01: AllowDomainEntry enum (ported from upstream 0ced085)
@@ -1018,6 +1020,14 @@ pub struct CustomCredentialDef {
     /// ambiguity.
     #[serde(default)]
     pub tls_ca: Option<String>,
+
+    /// Optional AWS SigV4 signing configuration.
+    ///
+    /// When present, the proxy will sign outbound requests with AWS SigV4
+    /// credentials resolved from the configured profile (or the default
+    /// credential chain). Mutually exclusive with `credential_key` and `auth`.
+    #[serde(default)]
+    pub aws_auth: Option<nono_proxy::config::AwsAuthConfig>,
 }
 
 fn default_inject_header() -> String {
@@ -1114,6 +1124,15 @@ fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
 ///   - `query_param`: query_param_name required, valid query param name
 ///   - `basic_auth`: no additional required fields
 fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<()> {
+    // Mutual exclusion: aws_auth is incompatible with credential_key and auth.
+    if cred.aws_auth.is_some() && (cred.credential_key.is_some() || cred.auth.is_some()) {
+        return Err(NonoError::ProfileParse(format!(
+            "custom credential '{}' has 'aws_auth' set together with 'credential_key' or 'auth'; \
+             aws_auth is mutually exclusive with both — remove the other auth field",
+            name
+        )));
+    }
+
     // PROF-03 (Phase 22): Mutual exclusion of credential_key and auth.
     if cred.credential_key.is_some() && cred.auth.is_some() {
         return Err(NonoError::ProfileParse(format!(
@@ -1123,10 +1142,10 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
         )));
     }
 
-    // PROF-03 (Phase 22): At least one of credential_key or auth must be set.
-    if cred.credential_key.is_none() && cred.auth.is_none() {
+    // At least one of credential_key, auth, or aws_auth must be set.
+    if cred.credential_key.is_none() && cred.auth.is_none() && cred.aws_auth.is_none() {
         return Err(NonoError::ProfileParse(format!(
-            "custom credential '{}' must have either 'credential_key' or 'auth' set",
+            "custom credential '{}' must have either 'credential_key', 'auth', or 'aws_auth' set",
             name
         )));
     }
@@ -1136,6 +1155,11 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
     // "Fail Secure" / threat T-22-01-02.
     if let Some(ref auth) = cred.auth {
         validate_oauth2_auth(name, auth)?;
+    }
+
+    // Validate aws_auth if present.
+    if let Some(ref aws) = cred.aws_auth {
+        validate_aws_auth(name, aws)?;
     }
 
     // Validate credential_key only when set (Optional from PROF-03 onward).
@@ -1245,6 +1269,52 @@ fn validate_oauth2_auth(name: &str, auth: &OAuth2Config) -> Result<()> {
              Prefer keyring://, env://, file://, or op:// URIs to avoid committing secrets to disk.",
             name
         );
+    }
+
+    Ok(())
+}
+
+/// Validate AWS SigV4 signing configuration subfields.
+///
+/// - `profile`: non-empty, no whitespace (whitespace breaks the AWS INI config
+///   parser). Mixed case is allowed — profile names are case-sensitive.
+/// - `region` / `service`: non-empty, lowercase, no whitespace. The SigV4
+///   credential scope requires lowercase region and service codes.
+fn validate_aws_auth(name: &str, aws: &nono_proxy::config::AwsAuthConfig) -> Result<()> {
+    if let Some(ref profile) = aws.profile {
+        if profile.is_empty() || profile.contains(char::is_whitespace) {
+            return Err(NonoError::ProfileParse(format!(
+                "aws_auth.profile for custom credential '{}' must be a non-empty string \
+                 with no whitespace; omit the field to use the default credential chain",
+                name
+            )));
+        }
+    }
+
+    if let Some(ref region) = aws.region {
+        if region.is_empty()
+            || region.contains(char::is_whitespace)
+            || region.chars().any(|c| c.is_uppercase())
+        {
+            return Err(NonoError::ProfileParse(format!(
+                "aws_auth.region for custom credential '{}' must be a non-empty, \
+                 lowercase string with no whitespace (e.g., \"us-east-1\")",
+                name
+            )));
+        }
+    }
+
+    if let Some(ref service) = aws.service {
+        if service.is_empty()
+            || service.contains(char::is_whitespace)
+            || service.chars().any(|c| c.is_uppercase())
+        {
+            return Err(NonoError::ProfileParse(format!(
+                "aws_auth.service for custom credential '{}' must be a non-empty, \
+                 lowercase string with no whitespace (e.g., \"bedrock\", \"s3\")",
+                name
+            )));
+        }
     }
 
     Ok(())
@@ -1797,6 +1867,14 @@ pub struct SessionHook {
     /// duration. If absent, no timeout is enforced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+
+    /// Internal state to track which pack (from a registry) the session hook originated
+    /// If set, the value is namespace/pack
+    /// If absent, the key was set by a local (non-registry based) pack
+    /// This needs to be tracked per-hook, because a profile extending another profile can override
+    /// a key. The originating source pack is used to track provenance and $PACK_DIR substitution
+    #[serde(skip)]
+    pub(crate) source_pack: Option<PackageRef>,
 }
 
 /// Session lifecycle hooks for a profile.
@@ -2080,6 +2158,20 @@ pub struct EnvironmentConfig {
     /// Use this to strip specific secrets while keeping everything else inherited.
     #[serde(default)]
     pub deny_vars: Vec<String>,
+
+    /// Static environment variables injected into the sandboxed process.
+    ///
+    /// Maps variable names to values, set after allow/deny filtering and before
+    /// credential injection (so injected credentials win on conflict). Values
+    /// support the same expansion as profile paths (`$HOME`, `~`, `$WORKDIR`,
+    /// `$TMPDIR`, `$XDG_*`, `$NONO_CONFIG`, `$NONO_PACKAGES`).
+    ///
+    /// `PATH` and any `NONO_*` key are reserved and rejected at parse time.
+    /// Unlike inherited host variables, keys here are NOT subject to the
+    /// dangerous-variable blocklist: setting one explicitly is a deliberate,
+    /// auditable operator decision.
+    #[serde(default)]
+    pub set_vars: std::collections::HashMap<String, String>,
 }
 
 /// Configuration for supervisor-delegated URL opening.
@@ -2395,7 +2487,7 @@ impl<'de> Deserialize<'de> for Profile {
 
 /// Check whether a profile name is loaded from a user file rather than the built-in set.
 ///
-/// Returns `true` when a user profile file exists at `~/.config/nono/profiles/<name>.json`,
+/// Returns `true` when a user profile file exists at `$XDG_CONFIG_HOME/nono/profiles/<name>.json`,
 /// which means the user has overridden or shadowed any built-in profile of the same name.
 pub fn is_user_override(name: &str) -> bool {
     if !is_valid_profile_name(name) {
@@ -2488,12 +2580,14 @@ pub struct ResolveContext {
 /// treated as a direct file path. Otherwise it is resolved as a profile name.
 ///
 /// Name loading precedence:
-/// 1. User profiles from ~/.config/nono/profiles/<name>.json (allows customization)
-/// 2. Built-in profiles (compiled into binary, fallback)
-///
-/// Phase 37 D-12: this is a thin wrapper over [`load_profile_with_context`]
-/// using the default [`ResolveContext`]. Callers that need to honor
-/// `--no-auto-pull` MUST use the `_with_context` variant.
+/// 1. User profiles from `$XDG_CONFIG_HOME/nono/profiles/<name>.json` — never written
+///    by nono. Users (and Claude's "Option B" guidance) own this directory.
+/// 2. Pack-store scan — any installed pack with a profile artifact whose
+///    `install_as` matches the requested name. Self-heals Claude Code plugin
+///    wiring (symlink + `enabledPlugins`) on every successful resolution.
+/// 3. Built-in profiles (compiled into binary).
+/// 4. Auto-pull prompt for the registry pack `always-further/claude` when
+///    the requested profile is `claude-code` (or inherits from it).
 pub fn load_profile(name_or_path: &str) -> Result<Profile> {
     load_profile_with_context(name_or_path, &ResolveContext::default())
 }
@@ -2539,7 +2633,11 @@ pub fn load_profile_with_context(name_or_path: &str, ctx: &ResolveContext) -> Re
             "Loading pack-store profile from: {}",
             profile_path.display()
         );
-        let mut profile = finalize_profile(load_from_file(&profile_path)?)?;
+        let mut profile = load_from_file(&profile_path)?;
+        resolve_store_pack_session_hooks(&mut profile, &pack_key)?;
+        let mut profile = finalize_profile(profile)?;
+        // Inject the source pack ref so it's always present in the
+        // verification list, even if the profile JSON doesn't declare it.
         if !profile.packs.contains(&pack_key) {
             profile.packs.push(pack_key);
         }
@@ -2574,6 +2672,33 @@ pub(crate) fn is_registry_ref(s: &str) -> bool {
 /// rather than a simple profile name or registry reference.
 pub(crate) fn is_file_path_ref(s: &str) -> bool {
     !is_registry_ref(s) && (s.contains('/') || s.ends_with(".json") || s.ends_with(".jsonc"))
+}
+
+/// Stamp store provenance onto a profile's session hooks, and expand $PACK_DIR vars
+///
+/// This function adds provenance data for the session_hooks, so that as any profiles are extended,
+/// the origination of the session hook can be traced back to the registry pack that added it.
+/// Additionally, if the hook path starts with `$PACK_DIR`, the prefix is replaced with the full
+/// path to the pack's install directory.
+fn resolve_store_pack_session_hooks(profile: &mut Profile, pack_key: &str) -> Result<()> {
+    let pack_ref = crate::package::parse_package_ref(pack_key)?;
+    let install_dir = crate::package::package_install_dir(&pack_ref.namespace, &pack_ref.name)?;
+
+    for hook in [
+        &mut profile.session_hooks.before,
+        &mut profile.session_hooks.after,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if hook.source_pack.is_none() {
+            hook.source_pack = Some(pack_ref.clone());
+            if let Ok(rest) = hook.script.strip_prefix("$PACK_DIR") {
+                hook.script = install_dir.join(rest);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Load a profile from a registry pack honoring the supplied resolver
@@ -2648,7 +2773,9 @@ fn load_registry_profile_with_context(name_or_path: &str, ctx: &ResolveContext) 
                 .join(format!("{install_name}.json"));
             if profile_path.exists() {
                 tracing::info!("Loading registry profile from: {}", profile_path.display());
-                return finalize_profile(load_from_file(&profile_path)?);
+                let mut profile = load_from_file(&profile_path)?;
+                resolve_store_pack_session_hooks(&mut profile, &package_ref.key())?;
+                return finalize_profile(profile);
             }
         }
     }
@@ -2793,6 +2920,14 @@ pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
     validate_profile_custom_credentials(&profile)?;
     validate_env_credential_keys(&profile)?;
     validate_profile_aipc_tokens(&profile)?;
+    // Validate environment.set_vars keys (reserved/invalid keys are fatal)
+    if let Some(env_config) = profile.environment.as_ref() {
+        if !env_config.set_vars.is_empty() {
+            if let Some(err) = crate::exec_strategy::validate_set_vars(&env_config.set_vars) {
+                return Err(NonoError::ProfileParse(err));
+            }
+        }
+    }
     Ok(profile)
 }
 
@@ -2847,6 +2982,15 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
     // request. Reuses Profile::resolve_aipc_allowlist's per-type from_token
     // parsers.
     validate_profile_aipc_tokens(&profile)?;
+
+    // Validate environment.set_vars keys (reserved/invalid keys are fatal)
+    if let Some(env_config) = profile.environment.as_ref() {
+        if !env_config.set_vars.is_empty() {
+            if let Some(err) = crate::exec_strategy::validate_set_vars(&env_config.set_vars) {
+                return Err(NonoError::ProfileParse(err));
+            }
+        }
+    }
 
     Ok(profile)
 }
@@ -2961,18 +3105,15 @@ enum ResolvedBase {
 /// profiles. Built-in profiles are loaded as raw profile definitions so
 /// inheritance can resolve before implicit default groups are merged.
 ///
-/// `source_file` is the path to the child profile that initiated the
-/// extends-resolution; when set, the sibling-directory probe skips the file
-/// matching that path to prevent self-references (e.g. `.nono/codex.json`
-/// extending `"codex"`).
-///
-/// Fork-divergence note: upstream's commit `bc443928` adds two additional
-/// resolver branches — pack-store lookup (`find_pack_store_profile`) and
-/// pack-provided rescue (`crate::migration::check_and_run`). The fork does
-/// not have the pack-store subsystem or `migration::check_and_run` in the
-/// same shape; those branches are omitted here and remain out of scope for
-/// Plan 34-04 (C7 cluster). The sibling-resolution behavior (the actual
-/// "fix" in the commit subject) is adopted in full.
+/// If all resolvers miss AND the requested name is in
+/// `migration::PACK_PROVIDED_PROFILES` AND we were entered via
+/// `load_profile` (not `load_profile_no_migrate`), prompt the user to
+/// install the providing pack, then retry the pack-store lookup once.
+/// This handles the v0.42 → v0.43 upgrade case where a user profile
+/// `extends: ["claude-code"]` and the inbuilt `claude-code` is gone:
+/// instead of an inscrutable "base profile not found" error, the user
+/// sees the same install prompt that `--profile always-further/claude` would
+/// produce, with the chain still resolving cleanly on accept.
 fn load_base_profile_raw(
     name: &str,
     context_dir: Option<&Path>,
@@ -3016,8 +3157,9 @@ fn load_base_profile_raw(
     // doesn't declare its own pack.
     if let Some((profile_path, pack_key)) = find_pack_store_profile(name) {
         let mut base = parse_profile_file(&profile_path)?;
+        resolve_store_pack_session_hooks(&mut base, &pack_key)?;
         if !base.packs.contains(&pack_key) {
-            base.packs.push(pack_key);
+            base.packs.push(pack_key.clone());
         }
         return Ok(ResolvedBase::Global(base));
     }
@@ -3199,6 +3341,11 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 // Plan 34-08a Task 4 (D-20 replay of v0.52.0 `3657c935`):
                 // deny_vars merges identically to allow_vars.
                 deny_vars: dedup_append(&base_env.deny_vars, &child_env.deny_vars),
+                set_vars: {
+                    let mut merged = base_env.set_vars.clone();
+                    merged.extend(child_env.set_vars.clone());
+                    merged
+                },
             }),
         },
         // NOTE: WorkdirAccess::None serves as both "not specified" and "explicitly no access".
@@ -3365,7 +3512,30 @@ pub(crate) fn resolve_user_profile_path(name: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn user_profile_dir() -> Result<PathBuf> {
-    Ok(resolve_user_config_dir()?.join("nono").join("profiles"))
+    Ok(crate::package::nono_config_dir()?.join("profiles"))
+}
+
+/// Display hint for `$XDG_CONFIG_HOME/nono` when runtime resolution fails.
+pub const NONO_CONFIG_DIR_HINT: &str = "$XDG_CONFIG_HOME/nono (default ~/.config/nono)";
+
+/// Resolved user profile directory for user-facing output.
+#[must_use]
+pub fn display_user_profiles_dir() -> String {
+    user_profile_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| format!("{NONO_CONFIG_DIR_HINT}/profiles"))
+}
+
+/// Resolved user trust-policy path for user-facing output.
+#[must_use]
+pub fn display_trust_policy_path() -> String {
+    crate::package::nono_config_dir()
+        .map(|p| p.join("trust-policy.json").display().to_string())
+        .unwrap_or_else(|_| format!("{NONO_CONFIG_DIR_HINT}/trust-policy.json"))
+}
+
+pub(crate) fn user_profile_draft_dir() -> Result<PathBuf> {
+    Ok(crate::package::nono_config_dir()?.join("profile-drafts"))
 }
 
 /// Returns the path to a user profile draft (under `profile-drafts/` sibling
@@ -3377,11 +3547,7 @@ pub(crate) fn user_profile_dir() -> Result<PathBuf> {
 /// path security relies on the caller's pre-validation gate.
 #[must_use = "draft path should be used or stored"]
 pub(crate) fn get_user_profile_draft_path(name: &str) -> Result<PathBuf> {
-    let config_dir = resolve_user_config_dir()?;
-    Ok(config_dir
-        .join("nono")
-        .join("profile-drafts")
-        .join(format!("{}.json", name)))
+    Ok(user_profile_draft_dir()?.join(format!("{}.json", name)))
 }
 
 /// Returns the path to a profile draft's sidecar base-hash file (`<name>.base`).
@@ -3395,11 +3561,7 @@ pub(crate) fn get_user_profile_draft_path(name: &str) -> Result<PathBuf> {
 /// path security relies on the caller's pre-validation gate.
 #[must_use = "draft base path should be used or stored"]
 pub(crate) fn get_user_profile_draft_base_path(name: &str) -> Result<PathBuf> {
-    let config_dir = resolve_user_config_dir()?;
-    Ok(config_dir
-        .join("nono")
-        .join("profile-drafts")
-        .join(format!("{}.base", name)))
+    Ok(user_profile_draft_dir()?.join(format!("{}.base", name)))
 }
 
 /// Resolve the user config directory with secure validation.
@@ -3478,6 +3640,7 @@ pub(crate) fn is_valid_profile_name(name: &str) -> bool {
 /// - $WORKDIR: Working directory (--workdir or cwd)
 /// - $HOME: User's home directory
 /// - $XDG_CONFIG_HOME: XDG config directory
+/// - $NONO_CONFIG: nono config root (`$XDG_CONFIG_HOME/nono`)
 /// - $XDG_DATA_HOME: XDG data directory
 /// - $XDG_STATE_HOME: XDG state directory
 /// - $XDG_CACHE_HOME: XDG cache directory
@@ -3581,6 +3744,16 @@ pub fn expand_vars(path: &str, workdir: &Path) -> Result<PathBuf> {
     // Only expand $XDG_RUNTIME_DIR when set; leave literal otherwise
     if let Some(ref rt) = xdg_runtime {
         expanded = expanded.replace("$XDG_RUNTIME_DIR", rt);
+    }
+
+    // Expand $NONO_CONFIG / $NONO_PACKAGES to resolved nono config paths
+    if expanded.contains("$NONO_CONFIG") {
+        let config_dir = crate::package::nono_config_dir()?;
+        expanded = expanded.replace("$NONO_CONFIG", &config_dir.to_string_lossy());
+    }
+    if expanded.contains("$NONO_PACKAGES") {
+        let packages_dir = crate::package::package_store_dir()?;
+        expanded = expanded.replace("$NONO_PACKAGES", &packages_dir.to_string_lossy());
     }
 
     Ok(PathBuf::from(expanded))
@@ -3913,6 +4086,53 @@ mod tests {
         );
     }
 
+    // XDG tests use Unix-style paths and are not meaningful on Windows.
+    #[cfg(unix)]
+    #[test]
+    fn test_expand_vars_xdg_config_home() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("HOME", "/home/user"),
+            ("XDG_CONFIG_HOME", "/custom/config"),
+        ]);
+
+        let workdir = PathBuf::from("/projects/myapp");
+        let expanded = expand_vars("$XDG_CONFIG_HOME/nono/profiles", &workdir).expect("valid env");
+        assert_eq!(expanded, PathBuf::from("/custom/config/nono/profiles"));
+
+        _env.remove("XDG_CONFIG_HOME");
+        let expanded = expand_vars("$XDG_CONFIG_HOME/nono/profiles", &workdir).expect("valid env");
+        assert_eq!(expanded, PathBuf::from("/home/user/.config/nono/profiles"));
+    }
+
+    // Test uses Unix HOME path; on Windows APPDATA is used for config resolution.
+    #[cfg(unix)]
+    #[test]
+    fn test_expand_vars_nono_config() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_home = tmp.path().join("config");
+        std::fs::create_dir_all(&config_home).expect("create config home");
+        let config_home_str = config_home.to_string_lossy().to_string();
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("HOME", "/home/user"),
+            ("XDG_CONFIG_HOME", &config_home_str),
+        ]);
+
+        let workdir = PathBuf::from("/projects/myapp");
+        let expanded = expand_vars("$NONO_CONFIG/profiles", &workdir).expect("valid env");
+        assert_eq!(
+            nono::try_canonicalize(&expanded),
+            nono::try_canonicalize(&config_home.join("nono").join("profiles"))
+        );
+    }
+
     #[test]
     fn test_expand_vars_xdg_cache_home() {
         let _guard = env_lock();
@@ -4237,6 +4457,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["GH_TOKEN".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4244,6 +4465,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["ANTHROPIC_API_KEY".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4260,6 +4482,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["GH_TOKEN".into(), "ANTHROPIC_API_KEY".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4267,6 +4490,7 @@ mod tests {
             environment: Some(EnvironmentConfig {
                 allow_vars: vec![],
                 deny_vars: vec!["ANTHROPIC_API_KEY".into()],
+                set_vars: Default::default(),
             }),
             ..Default::default()
         };
@@ -4544,6 +4768,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         }
     }
 
@@ -4721,6 +4946,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("telegram", &cred).is_ok());
     }
@@ -4740,6 +4966,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("telegram", &cred);
         let err = result.expect_err("missing path_pattern should be rejected");
@@ -4761,6 +4988,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("telegram", &cred);
         let err = result.expect_err("pattern without {} should be rejected");
@@ -4782,6 +5010,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("telegram", &cred).is_ok());
     }
@@ -4801,6 +5030,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("telegram", &cred);
         let err = result.expect_err("replacement without {} should be rejected");
@@ -4822,6 +5052,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("google_maps", &cred).is_ok());
     }
@@ -4841,6 +5072,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("google_maps", &cred);
         let err = result.expect_err("missing query_param_name should be rejected");
@@ -4862,6 +5094,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("google_maps", &cred);
         let err = result.expect_err("empty query_param_name should be rejected");
@@ -4883,6 +5116,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         // BasicAuth mode doesn't require additional fields
         // Credential value is expected to be "username:password" format
@@ -5275,6 +5509,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -5294,6 +5529,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -5431,6 +5667,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -5450,6 +5687,7 @@ mod tests {
                 env_var: None,
                 endpoint_rules: vec![],
                 tls_ca: None,
+                aws_auth: None,
             },
         );
 
@@ -6280,7 +6518,7 @@ mod tests {
     fn test_top_level_schema_field_allowed_in_profile() {
         let profile: Profile = serde_json::from_str(
             r#"{
-                "$schema": "https://nono.dev/schemas/nono-profile.schema.json",
+                "$schema": "https://nono.sh/schemas/nono-profile.schema.json",
                 "meta": { "name": "schema-ok" }
             }"#,
         )
@@ -6720,6 +6958,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: Some("EXAMPLE_API_KEY".to_string()),
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(
             validate_custom_credential("example", &cred).is_ok(),
@@ -6742,6 +6981,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: None,
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         let err = result.expect_err("file:// URI without env_var should be rejected");
@@ -6767,6 +7007,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: Some("EXAMPLE_API_KEY".to_string()),
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         let err = result.expect_err("file:// URI with relative path should be rejected");
@@ -6792,6 +7033,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: Some("EXAMPLE_API_KEY".to_string()),
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         assert!(
@@ -6849,6 +7091,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: None,
             tls_ca: None,
+            aws_auth: None,
         };
         assert!(validate_custom_credential("example", &cred).is_ok());
     }
@@ -6868,6 +7111,7 @@ mod tests {
             endpoint_rules: vec![],
             env_var: None,
             tls_ca: None,
+            aws_auth: None,
         };
         let result = validate_custom_credential("example", &cred);
         assert!(result.is_err(), "env://LD_PRELOAD should be rejected");
@@ -7424,6 +7668,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let err = validate_custom_credential("v", &cred).expect_err("mutual exclusion");
         assert!(err.to_string().contains("mutually exclusive"));
@@ -7444,6 +7689,7 @@ mod tests {
             env_var: None,
             endpoint_rules: vec![],
             tls_ca: None,
+            aws_auth: None,
         };
         let err = validate_custom_credential("v", &cred)
             .expect_err("must require credential_key or auth");
@@ -7908,6 +8154,40 @@ mod windows_low_il_broker_tests {
     // -------------------------------------------------------------------------
 
     #[test]
+    fn set_vars_parses_valid_keys() {
+        let json = br#"{
+            "meta": { "name": "set-vars-valid" },
+            "environment": {
+                "set_vars": { "RUST_LOG": "debug", "FOO": "$HOME/.config" }
+            }
+        }"#;
+        let profile = parse_profile_bytes(json).expect("valid set_vars should parse");
+        let env = profile.environment.expect("environment present");
+        assert_eq!(env.set_vars.get("RUST_LOG"), Some(&"debug".to_string()));
+        assert_eq!(env.set_vars.get("FOO"), Some(&"$HOME/.config".to_string()));
+    }
+
+    #[test]
+    fn set_vars_rejects_reserved_path_key() {
+        let json = br#"{
+            "meta": { "name": "set-vars-path" },
+            "environment": { "set_vars": { "PATH": "/usr/bin" } }
+        }"#;
+        let err = parse_profile_bytes(json).expect_err("PATH in set_vars must be rejected");
+        assert!(err.to_string().contains("PATH"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn set_vars_rejects_reserved_nono_prefix() {
+        let json = br#"{
+            "meta": { "name": "set-vars-nono" },
+            "environment": { "set_vars": { "NONO_FOO": "bar" } }
+        }"#;
+        let err = parse_profile_bytes(json).expect_err("NONO_* in set_vars must be rejected");
+        assert!(err.to_string().contains("NONO_"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn jsonc_comments_and_trailing_commas() {
         let jsonc = br#"{
             // Profile for my agent
@@ -8237,10 +8517,12 @@ mod session_hooks_tests {
                 before: Some(SessionHook {
                     script: std::path::PathBuf::from("/base/pre.sh"),
                     timeout_secs: None,
+                    source_pack: None,
                 }),
                 after: Some(SessionHook {
                     script: std::path::PathBuf::from("/base/post.sh"),
                     timeout_secs: Some(60),
+                    source_pack: None,
                 }),
             },
             ..Default::default()
@@ -8250,6 +8532,7 @@ mod session_hooks_tests {
                 before: Some(SessionHook {
                     script: std::path::PathBuf::from("/child/pre.sh"),
                     timeout_secs: None,
+                    source_pack: None,
                 }),
                 after: None, // child does not set after → inherits from base
             },
@@ -8282,6 +8565,7 @@ mod session_hooks_tests {
                 before: Some(SessionHook {
                     script: std::path::PathBuf::from("/base/pre.sh"),
                     timeout_secs: Some(10),
+                    source_pack: None,
                 }),
                 after: None,
             },

@@ -324,6 +324,73 @@ Silent `msiexec /qn` fleet install + machine-wide PATH + ADMX/Intune + unified f
 
 ---
 
+## Milestone: v3.1 — UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain
+
+**Shipped:** 2026-06-21
+**Phases:** 6 (85-90) | **Plans:** 19
+
+### What Was Built
+Audited (`85-DIVERGENCE-LEDGER`, themes A–M) and fully absorbed the upstream `v0.62.0..v0.64.0` window (90 commits / 140 files): library-boundary convergence relocating the audit/attestation/ledger stack + structured-diagnostics model into the core `nono` crate with FFI + Windows-diag + proxy reconciliation (ADR-86, Phase 86); the AF_UNIX datagram seccomp trap (#1096 / SEC-01) + procfs-remap dedup guard (#1064 / SEC-02) with fork-hardening (Phase 87); the additive feature/dependency wave — set_vars, XDG state dirs, keyring timeout, AWS auth, $PACK_DIR hooks, CI-env/namespace/truthy-bool, PTY ctrl-z, 9-dep bump, FFI clear-on-entry (Phase 88); proxy hardening against the fork-divergent TLS-interception surface (#1197 activation + equivalence tests, Phase 89). Then drained v3.0's host-gated UAT debt: daemon `SecurityEventLayer` telemetry wiring as real code with a non-host-gated 69-test suite (DRAIN-04), and DRAIN-01/02/03 collapsed to scripted verify-dark.ps1 gates with explicit operator-gated residuals (Phase 90).
+
+### What Worked
+- **Audit-first gating held across a 90-commit window.** Phase 85's DIVERGENCE-LEDGER dispositioned every cluster before any cherry-pick; the two HIGH-conflict refactors were explicitly `will-sync / adopt-upstream` with an ADR for the boundary change, so the heaviest merge risk landed first and deliberately rather than by surprise.
+- **The review/verify layer caught real same-phase regressions in the phase's own flagship fix — twice.** Phase 87 code-review caught CR-01: the no-grant static-EPERM filter was installed in DEFAULT Off mode, breaking ALL UDP/DNS on supervised Linux — a defect a Windows host could never compile, the cross-target blind-spot exemplar. Phase 88 code-review caught WR-01: 4 FFI string-getters missed the clear-on-entry that was *that phase's own* CR-01 fix. Both fixed inline.
+- **The drain disposition was honest.** DRAIN-04 shipped as genuine code; DRAIN-01/02/03 were collapsed to scripted gates with residuals recorded as operator-gated tech-debt rather than faked green. The telemetry-event-emit FAIL was root-caused as environmental (pre-telemetry PATH binary + unobservable AppContainer denial), not patched to mask it (D-04).
+
+### What Was Inefficient
+- **SUMMARY one-liner frontmatter still left empty by most executors** → the SDK's auto-extracted MILESTONES accomplishments were "One-liner:" placeholders again (3rd milestone running: v2.13, v3.0, v3.1); the entry was rewritten by hand. This is now a reliable manual step at close.
+- **Cross-target clippy remains structurally unverifiable on the Windows dev host** (ring/aws-lc-sys `-sys` build needs a cross C compiler) — SEC-01/02 + cross-target carried as PARTIAL→CI for the Nth time; GH Actions Linux/macOS lanes stay the only decisive signal.
+- **A SpyLayer workaround was needed** because RESEARCH Assumption A2 (`Arc<L: Layer>` impl) was wrong in tracing-subscriber 0.3.23 — surfaced only at test-compile time in Phase 90.
+
+### Patterns Established
+- **Library-boundary convergence as its own sequenced phase** (right after the audit, before dependent work) when adopting a large upstream relocation that touches FFI + diagnostics — with an ADR recording the deliberate invariant change rather than silent drift.
+- **Drain phase split: real-code requirement (DRAIN-04) vs scripted-gate-collapse requirements (DRAIN-01/02/03)** — the latter's success criterion is gate collapse + explicit host-gated residual, not a live PASS.
+- **`/gsd-validate-phase` Nyquist audit on a UAT-drain phase** correctly terminates PARTIAL (1 automated / 3 manual-only by design) rather than spawning an auditor to write un-writable tests for fresh-VM install / kernel WFP / live SIEM.
+
+### Key Lessons
+- **The cross-target blind spot is not theoretical.** SEC-01's CR-01 broke all UDP/DNS on supervised Linux in default mode and was invisible on the Windows host by construction — exactly the failure mode CLAUDE.md's MUST/NEVER rule and the review layer exist to catch. They did.
+- **On Windows, `nono_security::*` telemetry emits ONLY via the daemon+WFP path.** Direct `nono run` path-deny is kernel-side/unobserved on the AppContainer backend; network-deny proxy-filtering is "not implemented for Windows supervised runs." This durable fact is why DRAIN-04 (daemon wiring) was the real code and why the live telemetry gate is host-gated.
+- **A self-reported "69 passed" can drift to red by close.** Re-running the bin at validation time surfaced 2 env-sensitive DACL-guard tests (Phase 74 code, green at exec time) now failing on the host — flagged as out-of-scope, not a v3.1 regression. Re-run, don't trust the SUMMARY's count.
+
+### Cost Observations
+- Not instrumented. The 90-commit absorption dominated wall-clock; Phase 90 plan 01 was notably fast (~13 min) because the work was tightly scoped (a reachability probe + 3 tasks). Sequential/low-worktree execution again avoided Windows worktree fragility.
+
+---
+
+## Milestone: v3.2 — Signed Policy Overrides (ZT-Infra Attestation)
+
+**Shipped:** 2026-06-23
+**Phases:** 3 (91-93) | **Plans:** 13
+
+### What Was Built
+A cryptographically-signed, ledger-logged policy-exception path that replaces the "just disable the sandbox" temptation. The `nono-py` binding verifies a signed override via a **two-key AND gate** — offline KMS-signature verification (ECDSA P-256, CAF v0.1 canonical form, jti single-use, fail-closed) AND a live ZT-Infra `POST /actions` allow — then applies a temporary, scoped, expiring, additive `CapabilitySet` expansion the OS confinement layer still enforces underneath, emitting a `PolicyOverrideApplied` event into the `SecurityEventLayer` HMAC chain (EventIDs 10006-10010) before spawn. Phase 91 = offline verifier core (9/9 ZT reference vectors byte-exact, first-in-repo PyO3 `NonoOverrideError`). Phase 92 = additive mutation fused with mandatory pre-spawn audit (bilateral `--override-audit` handshake + AUD-04 gate; no-token path byte-identical to pre-v3.2; DF-01 `OVERRIDE-01` offline gate). Phase 93 = the live arm (`_live.py` urllib 2s-fail-closed AND-gate closing VFY-01 b; fail-secure HKLM `Policies\nono\Override` trust reader + per-key_id `VK_CACHE` + `verify_override_production` closing VFY-03a; live-check-as-revocation ZTL-03; `AWS_*` env strip ZTL-04; async DAAL ZTL-05; `nono override request`/`nono-override-apply` CLI; DF-02 `OVERRIDE-02` host-gated gate). Rust core stayed policy-free (only the `PolicyOverrideApplied` variant).
+
+### What Worked
+- **The phase verifier caught the marquee blocker the executors missed.** Phase 93's gsd-verifier found that `verify_override_production` — the HKLM trust reader + key cache built specifically to close VFY-03a — had been left `#[allow(dead_code)]` and was never exposed to Python: every production path still used the test-injection `verify_override(token, pubkey_der, allowed_arns)`, so the `[BLOCKING-93]` carry-forward this whole final phase existed to close was *not actually closed*. A targeted gap-closure pass exposed it as a `#[pyfunction]`, wired the `nono-override-apply` path to it, and the milestone goal was genuinely met. Without the goal-backward verify, v3.2 would have shipped with its headline requirement inert.
+- **Security judgment overrode the naive fix.** The gate seeded the test pubkey into HKCU while the reader read HKLM. The wrong fix (add an HKCU fallback to the reader) would have let any non-admin/tampered environment install a rogue trust root — defeating D-05. The right fix kept the reader HKLM-only and moved the gate to seed HKLM behind an elevation precondition (SKIP when non-admin). Fail-secure won over making the gate green.
+- **Cross-repo sequential/no-worktree execution was the correct call again.** The milestone spans the Nono repo and the separate nono-py repo; `isolation="worktree"` only forks Nono, so it cannot isolate nono-py edits. Running sequential/no-worktree (as in 91/92) avoided false isolation and Windows worktree fragility entirely.
+
+### What Was Inefficient
+- **Two executors died on `Stream idle timeout` mid-plan (#2410 SSE).** 93-04 Task 2 and the gap-closure pass both hit the SSE idle-timeout at high cache_read. `SendMessage` was unavailable to resume the dead agents, so the recovery was: spot-check git/filesystem state, then spawn a *fresh* executor (clean context = lower timeout risk) to finish the uncommitted work. No work was lost, but each timeout cost a recovery round-trip.
+- **The "built but not wired" gap is a recurring class.** `verify_override_production` compiled, was unit-tested in Rust, and had `#[allow(dead_code)]` with a comment naming a future call site that was never created — so every gate the SUMMARYs claimed green was green against the *test-injection* path. A "built" symbol with a dangling planned-call-site is not a delivered requirement.
+- **SUMMARY one-liner frontmatter empty again** → SDK auto-extracted MILESTONES accomplishments were `One-liner:`/`Date:` fragments (4th milestone running: v2.13/v3.0/v3.1/v3.2); the entry was rewritten by hand. Now a reliable manual close step.
+
+### Patterns Established
+- **Goal-backward verify must trace each requirement to its *production* call site, not its definition.** A `#[pyfunction]`/symbol existing and passing isolated tests is necessary but not sufficient; the verifier must confirm the production entry point actually calls it. `#[allow(dead_code)]` on a security-critical function is a red flag that the wiring is incomplete.
+- **On executor stream-timeout: verify-then-resume-fresh.** When an agent dies mid-plan with partial uncommitted work, inspect `git log`/`git status`/the working tree to establish exactly what landed, then dispatch a fresh executor with explicit "do not redo committed Task N; finish the uncommitted Task M" instructions — never assume failure, never blindly re-run from scratch.
+- **Test-seam vs production trust store must agree on the registry hive.** A gate that seeds a different hive than the reader reads proves nothing about the production path; either seed the authoritative hive (with the elevation it requires + SKIP otherwise) or the gate is a no-op for the requirement it claims to verify.
+
+### Key Lessons
+1. **A verifier that traces requirements goal-backward is the load-bearing gate, not the executor's self-check.** The whole milestone's headline blocker (VFY-03a) survived 13 plans of green SUMMARYs and was caught only by the independent goal-backward verify — exactly as in v3.0 (84-04 masked blockers) and v3.1 (same-phase flagship-fix regressions). Keep the verify layer mandatory.
+2. **"Built and tested" ≠ "wired into the path that ships."** `verify_override_production` was both, yet inert. Verify the production caller exists.
+3. **Fail-secure beats a green gate.** The cheap way to make OVERRIDE-02 exercise the trust path was an HKCU reader fallback; it would have opened a non-admin rogue-pubkey hole. Seed HKLM behind elevation + SKIP instead.
+4. **Stream-idle timeouts are now an expected executor failure mode on long high-context plans** — recover by filesystem/git spot-check + fresh-agent finish, and keep executor prompts lean (commit code before writing SUMMARY) to shrink the window.
+
+### Cost Observations
+- Not instrumented. Executor model = sonnet; orchestrator = opus. Most overhead went to the two stream-timeout recoveries and the post-verify gap-closure pass (expose+wire `verify_override_production`, retarget the gate, de-dup the live call), not the wave execution itself. Sequential/no-worktree across both repos again avoided Windows worktree fragility.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -339,6 +406,8 @@ Silent `msiexec /qn` fleet install + machine-wide PATH + ADMX/Intune + unified f
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork + explicitly host-gated validation); go/no-go ADR shipped `Proposed`→`Accepted` on human sign-off; macOS CI green as HARD close gate; EDR-proxy as a recorded-caveat stand-in for cloud-EDR |
 | v2.13 Carry-Forward Closeout (Dark Factory) | 6 | 13 | Self-verifying-harness mandate: every host-gated item ships a scripted unattended gate emitting a machine-readable verdict + one aggregator as the close signal; gate contract (`Test-Precondition`/`Invoke-Gate`, runner owns exit mapping); `SKIP_HOST_UNAVAILABLE` as a first-class verdict; verify-the-verifier (fail-secure edges) caught by code review at the foundation phase |
 | v3.0 Enterprise Hardening I (Deploy · Control · Compliance) | 3 | 12 | Single-integration-spine milestone (MSI→HKLM reader→proxy+WFP→telemetry, one struct); post-execution gate stack (code-review + independent verifier + audit-before-archive) caught an executor masking 2 real blockers + a build break it self-reported as PASS; reinforced that the milestone local gate must be `--workspace --all-targets`, not `--bin nono`; package-legitimacy human-verify checkpoint (crates.io provenance before Cargo edits) |
+| v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain | 6 | 19 | Largest single-window absorption to date (90 commits/140 files) gated by an audit-first DIVERGENCE-LEDGER; library-boundary convergence as its own sequenced phase with an ADR for the deliberate policy-free-library invariant change; review layer caught a same-phase regression in the phase's OWN flagship fix twice (SEC-01 CR-01 broke all supervised-Linux UDP/DNS in default mode — the cross-target blind-spot exemplar; FEAT CR-01's WR-01 follow-up); drain split (real-code DRAIN-04 + scripted-gate-collapse DRAIN-01/02/03 with honest host-gated residuals); Nyquist validate-phase correctly terminates PARTIAL on a UAT-drain phase |
+| v3.2 Signed Policy Overrides (ZT-Infra Attestation) | 3 | 13 | Two-key AND gate (offline KMS-sig + live `POST /actions`) verified in the nono-py binding with policy-free Rust core; goal-backward verifier caught the milestone's headline blocker — `verify_override_production` built+tested but `#[allow(dead_code)]`/never wired to the production Python path, leaving VFY-03a inert behind 13 green SUMMARYs (3rd consecutive milestone the independent verify/audit layer caught what executors masked: v3.0 84-04, v3.1 flagship-fix, v3.2 VFY-03a); fail-secure beat a green gate (HKLM-only reader kept, gate seeds HKLM behind elevation+SKIP rather than an HKCU reader fallback); stream-idle-timeout (#2410) recovery = verify-via-git-then-resume-fresh-agent (SendMessage unavailable); cross-repo sequential/no-worktree again |
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork/audit/ADR-draft + explicitly host-gated validation); go/no-go ADR ships `Proposed`, human D-06 flip to `Accepted`; macOS CI green as HARD close gate surfaces a real enforcement defect; EDR-proxy (Sysmon+Defender) as MDE stand-in with explicit caveat; per-phase `.continue-here` checkpoints carry state across context exhaustions |
 
 ### Cumulative Quality

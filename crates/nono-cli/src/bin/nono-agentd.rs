@@ -42,6 +42,21 @@ fn main() {
 #[path = "../agent_daemon/mod.rs"]
 mod agent_daemon;
 
+// Make the telemetry module reachable from the daemon binary via #[path]-include,
+// mirroring the agent_daemon include pattern above. The daemon binary has no lib
+// target, so telemetry (normally part of the `nono` binary via main.rs) must be
+// explicitly included here (DRAIN-04 D-02 / Pitfall 2).
+#[cfg(target_os = "windows")]
+#[path = "../telemetry/mod.rs"]
+mod telemetry;
+
+// The daemon-side telemetry init helper (D-02): minimal registry composition
+// that registers SecurityEventLayer in both run_service and run_foreground_mode.
+// Houses the D-01 inline integration test (chain_sequence == 1 after network_deny).
+#[cfg(target_os = "windows")]
+#[path = "../agent_daemon/telemetry_init.rs"]
+mod telemetry_init;
+
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::ffi::OsString;
@@ -154,19 +169,30 @@ mod windows_impl {
         // Absent key → Ok(None) → no-proxy path (D-07 fall-through).
         // Present-but-broken key → Err → abort with fail-secure (D-07 Pitfall 3).
         // D-06 restart-to-apply: this snapshot is held for the daemon lifetime.
-        let (egress_domains, machine_policy_active) =
+        // D-03 (DRAIN-04): telemetry_config is threaded from the same SOLE read.
+        let (egress_domains, machine_policy_active, telemetry_config) =
             match super::agent_daemon::resolve_machine_egress_policy(&[]) {
                 Ok(result) => result,
                 Err(e) => {
                     return Err(windows_service::Error::Winapi(std::io::Error::other(
-                        format!("nono-agentd: machine egress policy load failed (fail-secure): {e}"),
+                        format!(
+                            "nono-agentd: machine egress policy load failed (fail-secure): {e}"
+                        ),
                     )));
                 }
             };
 
-        let daemon_state = rt.block_on(async {
-            build_daemon_state(machine_policy_active, &egress_domains).await
-        });
+        // D-02 (DRAIN-04): register the SecurityEventLayer once at daemon startup,
+        // after policy resolution so the telemetry config is available. The OnceLock
+        // guard in init_daemon_telemetry makes the second call (foreground-fallback
+        // path) a no-op (Pitfall 1: double-init guard).
+        super::telemetry_init::init_daemon_telemetry(
+            telemetry_config,
+            format!("nono-agentd-service-{}", std::process::id()),
+        );
+
+        let daemon_state =
+            rt.block_on(async { build_daemon_state(machine_policy_active, &egress_domains).await });
 
         let daemon_state = match daemon_state {
             Ok(state) => Arc::new(state),
@@ -254,20 +280,26 @@ mod windows_impl {
         }
 
         // D-04 SOLE read: resolve machine egress policy exactly once at daemon startup.
-        let (egress_domains, machine_policy_active) =
+        // D-03 (DRAIN-04): telemetry_config is threaded from the same SOLE read.
+        let (egress_domains, machine_policy_active, telemetry_config) =
             match super::agent_daemon::resolve_machine_egress_policy(&[]) {
                 Ok(result) => result,
                 Err(e) => {
-                    eprintln!(
-                        "nono-agentd: machine egress policy load failed (fail-secure): {e}"
-                    );
+                    eprintln!("nono-agentd: machine egress policy load failed (fail-secure): {e}");
                     return ExitCode::from(1);
                 }
             };
 
-        let daemon_state = rt.block_on(async {
-            build_daemon_state(machine_policy_active, &egress_domains).await
-        });
+        // D-02 (DRAIN-04): register the SecurityEventLayer once at daemon startup.
+        // The OnceLock guard is a no-op if run_service already registered the subscriber
+        // before falling through to run_foreground_mode (Pitfall 1: double-init guard).
+        super::telemetry_init::init_daemon_telemetry(
+            telemetry_config,
+            format!("nono-agentd-foreground-{}", std::process::id()),
+        );
+
+        let daemon_state =
+            rt.block_on(async { build_daemon_state(machine_policy_active, &egress_domains).await });
 
         let daemon_state = match daemon_state {
             Ok(state) => Arc::new(state),

@@ -632,21 +632,19 @@ fn cmd_verify(args: AuditVerifyArgs) -> Result<()> {
     // the bundle's subjects match the recorded `(session_id, chain_head,
     // merkle_root)` tuple. Verification requires the integrity summary,
     // which must be present whenever an attestation is present.
-    let attestation_status = match (
-        session.metadata.audit_attestation.as_ref(),
-        session.metadata.audit_integrity.as_ref(),
-    ) {
-        (Some(att), Some(integrity)) => Some(verify_audit_attestation(
+    // verify_audit_attestation now uses the upstream 3-arg form: (session_dir, metadata,
+    // expected_public_key_file). The integrity summary is embedded in metadata.
+    // When attestation is present but integrity summary is missing, the function
+    // returns an AuditAttestationVerificationResult with signature_verified=false.
+    let attestation_status: Option<bool> = if session.metadata.audit_attestation.is_some() {
+        let vr = verify_audit_attestation(
             &session.dir,
-            att,
-            &session.metadata.session_id,
-            integrity,
+            &session.metadata,
             args.public_key_file.as_deref(),
-        )?),
-        // Attestation present but no integrity summary recorded —
-        // fail-closed: there is nothing to bind the signature to.
-        (Some(_), None) => Some(false),
-        (None, _) => None,
+        )?;
+        Some(vr.is_valid())
+    } else {
+        None
     };
 
     if args.json {

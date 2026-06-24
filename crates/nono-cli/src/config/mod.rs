@@ -2,7 +2,7 @@
 //!
 //! This module handles loading and merging configuration from multiple sources:
 //! - Embedded policy.json (composable security groups, single source of truth)
-//! - User-level config at ~/.config/nono/ (overrides with acknowledgment)
+//! - User-level config at `$XDG_CONFIG_HOME/nono/` (default `~/.config/nono/`)
 //! - CLI flags (highest precedence)
 
 pub mod embedded;
@@ -152,58 +152,27 @@ fn warn_once_test_home(path: &Path) {
     }
 }
 
-/// Get the user config directory path
-#[allow(dead_code)]
+/// User-level nono config root (`$XDG_CONFIG_HOME/nono`, default `~/.config/nono`).
+///
+/// Uses the same XDG resolution as profiles and packages (`resolve_user_config_dir`),
+/// not platform-specific dirs such as macOS `~/Library/Application Support`.
 pub fn user_config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|p| p.join("nono"))
+    crate::profile::resolve_user_config_dir()
+        .ok()
+        .map(|dir| dir.join("nono"))
 }
 
-/// Get the user state directory path (for version tracking).
+/// Get the user state directory path (for version tracking and runtime state).
 ///
-/// When `NONO_TEST_HOME` is set, returns `<NONO_TEST_HOME>/.nono` so that
-/// `rollback_root()` and `audit_root()` co-locate under one parent (Phase
-/// 27.1 D-27.1-05 — closes the Windows path-mismatch bug class surfaced
-/// by Phase 27 Blocker 2). The `.nono` segment mirrors the production
-/// layout that the `dirs::home_dir()`-based callsites already use, so
-/// tests get predictable production-mirroring paths (D-27.1-06).
-///
-/// When `NONO_TEST_HOME` is unset, behavior is byte-identical to the
-/// status quo: `dirs::state_dir()` falling through to
-/// `dirs::data_local_dir()`, with `nono` appended.
-#[allow(dead_code)]
+/// D-01: delegates to state_paths::user_state_dir() as the single source of
+/// truth for all runtime state paths (audit, rollback, sessions).
 pub fn user_state_dir() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("NONO_TEST_HOME") {
-        let path = PathBuf::from(&value);
-        if path.is_absolute() {
-            return Some(path.join(".nono"));
-        }
-        // Non-absolute override: fall through to platform default rather
-        // than panicking. The next call to nono_home_dir() will emit
-        // NonoError::EnvVarValidation, which is the fail-closed surface
-        // for invalid overrides. Returning None here would mask the error
-        // upstream; falling through to the platform default at least
-        // keeps the system functional while the validation error fires
-        // on the actual home-dir lookup.
-    }
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .map(|p| p.join("nono"))
+    crate::state_paths::user_state_dir().ok()
 }
 
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> &'static Mutex<()> {
     &crate::test_env::ENV_LOCK
-}
-
-/// Legacy Windows state directory used by earlier preview builds.
-///
-/// The Windows port now uses the OS state directory, but we still need to
-/// recognize the historical `~/.nono` subtree for protected-path checks and
-/// compatibility with older local data.
-#[cfg(target_os = "windows")]
-pub fn legacy_windows_state_dir() -> Result<PathBuf> {
-    let home = validated_home()?;
-    Ok(Path::new(&home).join(".nono"))
 }
 
 // ============================================================================
@@ -327,9 +296,11 @@ mod tests {
 
     #[test]
     fn test_check_sensitive_path() {
-        let _guard = test_env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+
         assert!(check_sensitive_path("~/.ssh")
             .expect("should not fail")
             .is_some());
@@ -349,11 +320,37 @@ mod tests {
             .is_none());
     }
 
+    // XDG fallback uses $HOME/.config/nono on Unix; Windows uses APPDATA.
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn test_user_config_dir_uses_xdg_fallback() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().to_str().expect("temp path");
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("HOME", home),
+            ("XDG_CONFIG_HOME", "__placeholder__"),
+        ]);
+        _env.remove("XDG_CONFIG_HOME");
+
+        let dir = user_config_dir().expect("user config dir");
+        let expected = tmp.path().join(".config").join("nono");
+        assert_eq!(
+            nono::try_canonicalize(&dir),
+            nono::try_canonicalize(&expected)
+        );
+    }
+
     #[test]
     fn test_check_sensitive_path_component_wise() {
-        let _guard = test_env_lock()
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+
         // ~/.sshevil must NOT match ~/.ssh (component-wise comparison)
         let home = validated_home().expect("HOME must be set");
         let evil_path = format!("{}/.sshevil", home);
@@ -458,12 +455,15 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
-    fn user_state_dir_honors_nono_test_home() {
+    fn user_state_dir_uses_localappdata_on_windows() {
         let _guard = test_env_lock().lock().expect("env lock");
-        let abs = r"C:\nono-test-state-override";
-        let _env = EnvVarGuard::set_all(&[("NONO_TEST_HOME", abs)]);
-
-        let state = user_state_dir().expect("override should produce Some on Windows");
-        assert_eq!(state, PathBuf::from(r"C:\nono-test-state-override\.nono"));
+        // D-01: user_state_dir() delegates to state_paths::user_state_dir()
+        // which uses %LOCALAPPDATA%\nono on Windows. Verify delegation.
+        let _env = EnvVarGuard::set_all(&[("LOCALAPPDATA", r"C:\Users\tester\AppData\Local")]);
+        let state = user_state_dir().expect("LOCALAPPDATA should resolve");
+        assert_eq!(
+            state,
+            PathBuf::from(r"C:\Users\tester\AppData\Local").join("nono")
+        );
     }
 }

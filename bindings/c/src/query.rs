@@ -130,6 +130,7 @@ pub unsafe extern "C" fn nono_query_context_query_path(
     mode: u32,
     out_result: *mut NonoQueryResult,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if ctx.is_null() || out_result.is_null() {
         set_last_error("ctx or out_result pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;
@@ -172,6 +173,7 @@ pub unsafe extern "C" fn nono_query_context_query_network(
     ctx: *const NonoQueryContext,
     out_result: *mut NonoQueryResult,
 ) -> NonoErrorCode {
+    crate::clear_last_call_state(); // CR-01: reset stale diagnostic state from prior call
     if ctx.is_null() || out_result.is_null() {
         set_last_error("ctx or out_result pointer is NULL");
         return NonoErrorCode::ErrInvalidArg;

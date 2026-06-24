@@ -839,4 +839,60 @@ mod tests {
             );
         }
     }
+
+    // --- D-07/D-08 alias resolution tests ---
+    // Verify that namespace-form aliases resolve to the same profile as bare names.
+
+    #[test]
+    fn test_get_builtin_claude_code_by_namespace_alias() {
+        // D-07: always-further/claude resolves to the claude-code profile
+        let by_alias = get_builtin("always-further/claude").expect("Alias not found");
+        let by_bare = get_builtin("claude-code").expect("Bare name not found");
+        assert_eq!(by_alias.meta.name, "claude-code");
+        assert_eq!(by_alias.meta.name, by_bare.meta.name);
+        assert_eq!(by_alias.network.block, by_bare.network.block);
+    }
+
+    #[test]
+    fn test_get_builtin_swival_by_namespace_alias() {
+        // D-08: swival/default resolves to the swival profile
+        let by_alias = get_builtin("swival/default").expect("Alias not found");
+        let by_bare = get_builtin("swival").expect("Bare name not found");
+        assert_eq!(by_alias.meta.name, "swival");
+        assert_eq!(by_alias.meta.name, by_bare.meta.name);
+    }
+
+    #[test]
+    fn test_get_builtin_nono_ts_wfp_test_open_by_namespace_alias() {
+        // D-08: nono-ts/wfp-test-open resolves to the nono-ts-wfp-test-open profile
+        let by_alias = get_builtin("nono-ts/wfp-test-open").expect("Alias not found");
+        let by_bare = get_builtin("nono-ts-wfp-test-open").expect("Bare name not found");
+        assert_eq!(by_alias.meta.name, "nono-ts-wfp-test-open");
+        assert_eq!(by_alias.meta.name, by_bare.meta.name);
+    }
+
+    #[test]
+    fn test_get_builtin_nono_ts_wfp_test_blocked_by_namespace_alias() {
+        // D-08: nono-ts/wfp-test-blocked resolves to the nono-ts-wfp-test-blocked profile
+        let by_alias = get_builtin("nono-ts/wfp-test-blocked").expect("Alias not found");
+        let by_bare = get_builtin("nono-ts-wfp-test-blocked").expect("Bare name not found");
+        assert_eq!(by_alias.meta.name, "nono-ts-wfp-test-blocked");
+        assert_eq!(by_alias.meta.name, by_bare.meta.name);
+    }
+
+    #[test]
+    fn test_get_builtin_nono_ts_default_by_namespace_alias() {
+        // D-08: nono-ts/default resolves to the nono-ts-default profile
+        let by_alias = get_builtin("nono-ts/default").expect("Alias not found");
+        let by_bare = get_builtin("nono-ts-default").expect("Bare name not found");
+        assert_eq!(by_alias.meta.name, "nono-ts-default");
+        assert_eq!(by_alias.meta.name, by_bare.meta.name);
+    }
+
+    #[test]
+    fn test_bare_name_claude_code_still_resolves() {
+        // D-07: bare name backward compat — --profile claude-code continues to work
+        let profile = get_builtin("claude-code").expect("Bare name not found");
+        assert_eq!(profile.meta.name, "claude-code");
+    }
 }

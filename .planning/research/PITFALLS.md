@@ -1,476 +1,524 @@
 # Pitfalls Research
 
-**Domain:** Enterprise hardening of a Windows security product — silent MSI fleet deploy, machine-policy HKLM egress allowlist, and SIEM/EDR telemetry (nono v3.0)
-**Researched:** 2026-06-18
-**Confidence:** HIGH (grounded in in-tree `nono-wfp-service.rs`, `network_policy.rs`, `diagnostic.rs`, Phase 53/61/62 signed-MSI history, Phase 56 `allow_domain`, project memory `windows_mandatory_label_write_owner`, `windows_appcontainer_wfp_validated`, `windows_wfp_enforcement_is_service_only`, `windows_msi_wxs_is_generated`, SEED-001/002/003 seeds, and verified Win32/WFP/Event-Log semantics)
-
-> Scope note: this file covers pitfalls that are NEW with the v3.0 enterprise features — silent-install/GPO, HKLM policy spine, egress reconciliation, and telemetry. The per-invocation confinement traps banked in prior milestones carry forward unchanged. Cross-references to known codebase landmines are made explicit where the v3.0 work amplifies them.
+**Domain:** Signed policy overrides + external AWS cloud-trust integration in a capability-based OS sandbox
+**Researched:** 2026-06-21
+**Confidence:** HIGH — derived from project-specific sources (CLAUDE.md security footguns, ZT-Infra v2 CANONICAL_FORM spec, provisioner source, FAILURE_MODES.md, POC contract, SEED-005 breadcrumbs) rather than generic web research
 
 ---
 
 ## Critical Pitfalls
 
-### Pitfall 1: Fail-OPEN on HKLM policy read failure (security hole disguised as robustness)
+### Pitfall 1: Fail-OPEN on Any Error Path (the Cardinal Sin)
 
 **What goes wrong:**
-The machine policy reader (`HKLM\SOFTWARE\Policies\nono`) returns an error — key absent on a pre-provisioned host, ACL mismatch, registry-service hiccup, or WOW6432Node redirection confusing the reader. The code catches the error and falls back to an empty allow-list or the per-user profile. The agent runs with a permissive user-configured allowlist (or no network restriction at all) while the operator believes machine policy is enforced. From a fleet CISO's perspective this is a silent security regression: every new deploy default-denies nothing while the IT team waits for GPO replication.
+Any error condition in the verification pipeline — network timeout reaching KMS, JSON parse failure on the override token, `None`/`null` returned from a signature check, AWS credential expiry, panicked Rust thread — silently grants execution instead of denying it. The sandbox expands its `CapabilitySet` when it should have kept the baseline.
+
+This is the single most dangerous pitfall in the entire milestone. It converts a security control into a liability: an attacker (or a network partition) can trigger the grant by engineering an error.
 
 **Why it happens:**
-The instinct is "policy absent = not yet configured = don't break the user's workflow." That instinct is correct for feature configuration (e.g., update-check URLs) but catastrophically wrong for a security boundary. The HKLM key is the deny-by-default egress allowlist spine — absence means the enterprise policy has not been applied to this machine, which is a reason to restrict MORE aggressively, not less. Developers who grew up writing user-facing software treat config-read errors as "use defaults"; security products must treat them as "fail closed."
+Developers write `match result { Ok(verified) => grant(), Err(_) => grant_anyway() }` as a "don't block the developer" reflex. Or they use `unwrap_or_default()` on an `Option<Override>`, which returns an empty/permissive default when the parse fails (see CLAUDE.md Common Footgun #2: "silent fallbacks"). In Python/PyO3 this also manifests as a bare `except` clause that returns `True` (allow).
 
 **How to avoid:**
-- Codify the policy-read failure contract in Rust as an enum: `PolicyReadResult::Enforced(AllowList)`, `PolicyReadResult::NotConfigured`, `PolicyReadResult::ReadError(NonoError)`. Only `NotConfigured` falls back to per-user profile; `ReadError` must be fatal (deny-all or abort launch).
-- At the call site: `match read_machine_policy() { ReadError(e) => return Err(NonoError::PolicyLoadFailed(e)), NotConfigured => load_user_profile(), Enforced(list) => use list }`.
-- Add a dark-factory gate: run the policy reader against a deliberately permission-denied registry key and assert the process exits non-zero with a `PolicyLoadFailed` error — not a permissive launch.
-- CLAUDE.md already mandates: "Configuration load failures must be fatal. If security lists fail to load, abort." Apply that rule explicitly to the registry reader.
+Every error variant in the override verification path — network failure, timeout, parse error, missing field, unknown algorithm, expired cert, ledger unavailable — MUST map to `Err(NonoError::OverrideVerificationFailed(...))` and the caller MUST propagate `?` rather than pattern-matching to a fallback. No `unwrap_or`, no `unwrap_or_default`, no `unwrap_or_else(|_| allow())`. Apply `#[must_use]` to the verification `Result`. Write a test for every error variant that asserts deny (not grant) is the outcome. In the PyO3 boundary, ensure `PyCapsuleError` / `PyErr` propagates upward and is never silently absorbed by a broad `except` clause.
 
 **Warning signs:**
-- `RegQueryValueExW` return value is checked with `if err != ERROR_SUCCESS { return Ok(Default::default()) }` rather than `if err != ERROR_SUCCESS { return Err(...) }`.
-- `unwrap_or_default()` anywhere in the registry-read path.
-- A test that intentionally corrupts the policy key and asserts that nono still launches with some allow-list.
-- No test for the `ReadError` → abort path.
+- Verification function signature returns `bool` rather than `Result<bool, NonoError>` — eliminates the ability to distinguish "check passed" from "check errored".
+- Code that does `if let Ok(ov) = verify_override(...) { expand() }` with no `else` branch.
+- Tests that assert "error path doesn't crash" rather than "error path returns deny".
+- Any place where a timeout is set to `None`/infinity for the AWS call.
 
 **Phase to address:**
-Phase 83 (machine-policy HKLM reader). Make the fail-secure contract the first acceptance criterion, verified by a dark-factory gate that injects an unreadable key.
+Phase 91 (Signed Override Format + Verification Core) — the verification function signature and error-propagation contract must be locked in as fail-closed from day one. Write the fail-open test vectors first; any implementation that passes them is wrong.
 
 ---
 
-### Pitfall 2: proxy allowlist and WFP allowlist drifting out of sync (false sense of security)
+### Pitfall 2: Bypass of OS Confinement Layer (Override Replaces, Not Expands)
 
 **What goes wrong:**
-The existing `nono-proxy` (Layer 7) and `nono-wfp-service` (kernel Layer 3/4) are separately configured. When v3.0 adds the HKLM policy spine, both layers must read from it. The pitfall is wiring only one layer to the new HKLM source while leaving the other on its old per-user profile path. The visible symptom is that one policy is enforced but the other is not: an agent blocked at the proxy can still open a raw TCP socket that bypasses the proxy entirely (WFP would have blocked it, but WFP was never updated); or conversely, WFP blocks the socket but the proxy's allow-list was never consulted for methods/paths. The worst case: both layers are wired to HKLM but through independent deserialization — an admin makes one registry change that the proxy reads correctly but WFP interprets as "allow all" due to a missing key or a version mismatch.
+An approved override disables the OS sandbox entirely rather than expanding only the specific allow-list entry. Example: the code calls `Sandbox::apply()` with the baseline `CapabilitySet`, then on a valid override calls some kind of "unrestrict" or replaces the `CapabilitySet` wholesale with a permissive one. Since nono's sandbox cannot be un-applied once `restrict_self()` / `sandbox_init()` fires (CLAUDE.md Key Design Decision #1: "No escape hatch"), the temptation is to apply the sandbox AFTER verification — but if verification fails open or is skipped, the process runs unconfined.
+
+A related failure: the override token is verified but the resulting `CapabilitySet` expansion is larger than the override scope (e.g., override grants write to `/tmp/project`, code grants write to all of `/tmp`).
 
 **Why it happens:**
-The proxy and WFP service were built at different milestones (Phases 56 and 62) with separate configuration paths. When a cross-cutting policy source is added, the natural instinct is "update the proxy first, WFP is harder, do it later." Later never arrives before the feature ships, and the partial wiring is invisible until a penetration test.
+Developers conflate "policy decision layer" (ZT-Infra: allow/deny) with "enforcement layer" (nono: OS sandbox). The POC runbook is explicit that `allow` from zt-infra never bypasses nono confinement — nono runs underneath. But it is easy to invert this by applying nono conditionally or by treating a verified override as a bypass flag.
 
 **How to avoid:**
-- Define a single `MachineEgressPolicy` struct that both `nono-proxy` and `nono-wfp-service` consume. Deserialize once from HKLM at startup; pass the same struct to both enforcement layers. Never let each layer parse independently.
-- In the dark-factory gate for egress (SEED-002): establish a test that injects a corpus of domain entries into the HKLM key, launches an agent, and asserts BOTH layers reflect the policy — proxy filter (`/proxy-allowed-hosts` debug endpoint or log line) AND WFP filter-state proof (see `verify-dark.ps1 --gate WFP-01` pattern from v2.13). A pass on one layer only is not a pass.
-- Treat the proxy as L7 defense-in-depth, not the sole boundary. WFP is the structural kernel enforcement; the proxy adds method/path filtering. Documented in the risk model so no one believes "proxy-only" ships the feature.
-- Version-stamp the policy schema in the registry key (`HKLM\SOFTWARE\Policies\nono\PolicyVersion = DWORD`). If WFP service starts and reads a version higher than it understands, it must fail-safe (block-all or refuse to install filters) rather than silently use a stale allow-list.
+Apply the OS sandbox unconditionally before any override processing. Overrides only add entries to the `CapabilitySet`; they never remove the baseline sandbox or change the enforcement mechanism. The override scope in the token (paths, network, access mode) MUST map 1:1 to discrete `FsCapability` / `NetworkCapability` additions, not to a profile replacement. Test that a valid override with scope `/tmp/project` does NOT grant write to `/tmp/project-evil` (path component comparison — see Pitfall 5).
 
 **Warning signs:**
-- `nono-proxy` and `nono-wfp-service` have separate `load_config()` functions that each open `HKLM\SOFTWARE\Policies\nono` independently.
-- The SEED-002 dark-factory gate tests proxy-side blocking but does not assert WFP filter state.
-- A changelog entry says "proxy now reads machine policy" with no corresponding WFP entry.
-- `network_policy.rs`'s `ResolvedNetworkPolicy` struct has no path to the WFP service's filter-install routine.
+- Any code path where `Sandbox::apply()` is called inside an `if override_valid { ... }` branch.
+- Code that constructs the full `CapabilitySet` from the override token's allow list rather than merging into the baseline.
+- Override format that encodes a profile name (e.g., `"profile": "unrestricted"`) rather than explicit scoped grants.
 
 **Phase to address:**
-Phase 83 (machine-policy spine) must include a single `MachineEgressPolicy` reader used by BOTH layers. The dark-factory gate must verify both. Do not split this across two phases without a failing integration test that enforces consistency.
+Phase 91 (Override Format) — require that the override schema encodes explicit scoped grants, not profile references. Phase 92 (Runtime Mutation) — enforce that the sandbox is applied before capability mutation; the mutation is an additive merge, never a replacement.
 
 ---
 
-### Pitfall 3: Wildcard matching footgun — proxy suffix matching and WFP bypass via unlisted subdomain
+### Pitfall 3: Path Scope Escape via String Comparison
 
 **What goes wrong:**
-The existing `network_policy.rs` suffix list (e.g., `.anthropic.com`) is converted to a `*.anthropic.com` wildcard for the proxy filter via `build_proxy_config`. The proxy correctly blocks `evil.com`. However, the matching code uses a string suffix comparison, not a DNS component comparison. An attacker-controlled domain `anthropic.com.evil.com` could in theory match a naively-written `endswith(".anthropic.com")` check. More practically: a corporate allow-list entry for `.corp.internal` added via GPO ADMX accidentally allows `anything.corp.internal` including `exfil.corp.internal` — the wildcard is far broader than intended.
+The override token grants write access to `/home/user/project`. The verification code checks whether the requested path is in scope using `path.starts_with("/home/user/project")` as a string comparison. An attacker (or a confused developer) requests access to `/home/user/project-evil` and the string comparison matches.
 
-The WFP side has the complementary problem: WFP filters must specify exact remote IP ranges (v3) or remote FQDNs (v4+, limited). A suffix wildcard in the HKLM allow-list cannot be directly expressed as a WFP ALE condition; the implementation might resolve the wildcard to a snapshot of IP addresses at policy-load time, which goes stale as CDN IPs rotate. An agent can then reach a newly-rotated `api.anthropic.com` IP that is no longer in the WFP filter.
+This is CLAUDE.md Common Footgun #1 and is listed explicitly in the Path Handling CRITICAL section: "String `starts_with()` on paths is a vulnerability."
 
 **Why it happens:**
-The proxy wildcard matching bug is well-understood in the codebase (CLAUDE.md: "String `starts_with()` on paths is a vulnerability"; `network_policy.rs` already uses proper `starts_with('.')` guards for the loopback case). But the same discipline must be applied to the suffix matching in the proxy filter layer itself — not just nono's config parsing. The WFP IP-snapshot problem is inherent to mixing a DNS-name policy with an IP-layer enforcement mechanism and is easy to underestimate.
+String `starts_with` is the obvious, idiomatic check. The path component boundary is non-obvious. In Python (the nono-py boundary), `pathlib.Path` provides `is_relative_to()` for correct component-aware containment, but developers often reach for `str.startswith()`. In Rust, `Path::starts_with()` IS correct (it compares components), but only if both paths have been canonicalized first. A non-canonicalized input path containing `..` segments can escape the prefix check.
 
 **How to avoid:**
-- For proxy suffix matching: use DNS component comparison, not string suffix. A function `matches_suffix(host: &str, suffix: &str) -> bool` should split both on `.` and compare components from right to left, never use `host.ends_with(suffix)` directly. This already partially exists in the codebase; audit every site that calls into the proxy `filter.rs` matching logic after HKLM integration.
-- For WFP and CDN-rotated IPs: the correct architecture is to rely on the proxy layer for FQDN-level enforcement (the proxy can verify the SNI/Host header) and use WFP only to enforce "only traffic through the nono proxy port is allowed" rather than enumerating every remote IP. This is the AppContainer + proxy architecture that SEED-002 implies is already in place from Phase 62 — preserve it; do not try to enumerate AI-provider IPs in WFP directly.
-- Ensure the machine-policy schema documents which entries are exact-host vs suffix, and that GPO ADMX template only allows suffix entries in the `AllowedSuffixes` multi-string key, not the `AllowedHosts` exact-match key. Mixing them in one flat list invites operator mistakes.
+- In Rust: use `Path::starts_with()` (NOT `str.starts_with()`), and canonicalize both the token's scope path and the requested path before comparison. Use the existing "canonicalize at grant time" pattern in `capability.rs`.
+- In Python/nono-py: use `pathlib.Path.is_relative_to()` (Python 3.9+), never `str.startswith()`. Canonicalize with `Path.resolve()` first.
+- In the override token schema: store paths in canonicalized form; reject any token path that is not absolute.
+- Write scope-escape test cases: `/tmp/project` does not cover `/tmp/project-evil`, `/tmp/project/../secret`, `/tmp/project//subdir` (double-slash).
 
 **Warning signs:**
-- `host.ends_with(&format!(".{}", suffix))` without first stripping a leading `.` from `suffix`.
-- A test showing `anthropic.com.evil.com` is blocked is missing.
-- WFP filter-install code resolves `*.anthropic.com` to a list of IPs via `GetAddrInfoW` and hard-codes them into `FwpmFilterAdd0` conditions.
-- GPO ADMX template uses a single `REG_MULTI_SZ` for both exact hosts and wildcard suffixes.
+- Any occurrence of `str.startswith(scope_path)` or `.starts_with(scope_str)` (non-Path receiver) in the scope-checking code.
+- Override paths stored without canonicalization in the token.
+- Scope-check tests that only cover exact-match and subdirectory cases, with no adversarial escapes.
 
 **Phase to address:**
-Phase 83 (HKLM policy reader + egress reconciliation). The suffix-matching review is a pull-request gate item — all callers of `filter.rs` suffix matching must use component comparison before the HKLM-backed allow-list ships.
+Phase 91 (Override Format) — define the scope format as canonicalized absolute paths. Phase 92 (Runtime Mutation) — enforce component-aware containment in `apply_override()`.
 
 ---
 
-### Pitfall 4: Silent MSI per-user vs per-machine context confusion — WRITE_OWNER scratch-space and service install
+### Pitfall 4: Self-Service Token Minting (Signer Identity Not Enforced)
 
 **What goes wrong:**
-A silent push via SCCM/Intune runs the MSI in the SYSTEM context (per-machine install, `MSIINSTALLPERUSER=""` or `ALLUSERS=1`). The nono MSI's custom action that provisions the WRITE_OWNER scratch space (`%LOCALAPPDATA%\nono\workspaces\`) resolves `%LOCALAPPDATA%` as `C:\Windows\system32\config\systemprofile\AppData\Local` — the SYSTEM account's local app data, not the target user's. The result: scratch workspaces are provisioned for SYSTEM and every subsequent `nono run` for a real user fails the R-B3 user-ownership guard (the directory is SYSTEM-owned, not user-owned), producing a cryptic access-denied that looks like a sandbox bug.
+The developer who hits the false positive is the same person who can produce a valid signature, because the signing authority is insufficiently constrained. Scenarios: the signing key is in the developer's local keychain; the override token only requires a valid KMS signature but does not verify which KMS key ID was used; the token schema has a `signer` field but no code checks that the signer is an authorized approver (engineering manager, security team); the local provisioner's allow list can be edited by the developer to grant themselves overrides.
 
 **Why it happens:**
-`%LOCALAPPDATA%` is a per-user environment variable that resolves differently under SYSTEM than under the install-target user. WiX MSI custom actions that resolve env vars during the install do so in the SYSTEM token context for per-machine installs. The Phase 60 scratch-space provisioner (`grant_sid_write_on_path`, `AppliedDaclGrantsGuard`) was designed and tested under a user-context launch, not a SYSTEM-context MSI custom action.
+Developers focus on "is the signature valid?" (cryptographic check) and forget "is the signer authorized?" (policy check). KMS signature verification confirms that the KMS key signed the payload; it does not confirm that the key belongs to an authorized approver. The ZT-Infra provisioner's policy is loaded from a JSON file that could be editable locally.
 
 **How to avoid:**
-- Provision scratch space at first-run (when the user actually launches nono), not at MSI install time. The MSI should only create `C:\ProgramData\nono\` (machine-global, SYSTEM/Admins-writeable) and `C:\Program Files\nono\` (binaries). User-specific scratch space (`%LOCALAPPDATA%\nono\workspaces\`) must be created by nono itself on first use, in the user's security context. This eliminates the SYSTEM-context resolution problem entirely.
-- If the MSI must pre-provision for "zero-touch first run" experience: use a deferred custom action running as the logged-in user (WiX `Impersonate="yes"` on the custom action) rather than in the SYSTEM context.
-- The machine MSI should install a Group Policy object or registry entry at `HKLM\SOFTWARE\nono\ScratchRoot` pointing to `%ProgramData%\nono\workspaces\<USERNAME>` as a pattern, with a note that nono-cli expands `<USERNAME>` at runtime in the user's token. Never let the MSI expand per-user paths under SYSTEM.
-- Dark-factory gate: run the MSI install with `msiexec /i ... /quiet ALLUSERS=1` under a non-admin test account and verify the workspace path is owned by the test account, not SYSTEM.
-- Cross-references to known landmines: `feedback_windows_mandatory_label_write_owner` (WRITE_OWNER not implicit for Owner; drive-root user dirs fail), Phase 60 `AppliedDaclGrantsGuard`.
+- The override token MUST include a `signer_key_id` field bound to a KMS key ARN. The verifier MUST check that the key ARN is in an allowlist of approved signing keys (stored in machine policy under `HKLM\SOFTWARE\Policies\nono` or equivalent, loaded at startup, not runtime-patchable by the sandboxed process).
+- The approved signing key allowlist MUST be loaded from a policy channel the developer cannot modify without elevated privilege — not from the developer's home directory or a user-writable config file.
+- Include a `signer_role` or `signer_identity` claim in the token that is checked against an expected approver identity (e.g., a service account ARN or a SPIFFE/SPIRE SVID).
+- Audit test: developer-produced token (signed with a key not in the allowlist) must be rejected.
 
 **Warning signs:**
-- MSI custom action creates `%LOCALAPPDATA%\nono\workspaces\` without `Impersonate="yes"`.
-- The provisioner is called from within a `<CustomAction>` that runs `Execute="deferred"` without explicitly setting `Impersonate="yes"`.
-- First-run on a machine-installed nono shows the workspace path is `C:\Windows\system32\config\systemprofile\...`.
-- Tests only cover the case where the provisioner is called from the user's own process, never from a SYSTEM-context script.
+- Verifier only checks that the signature is cryptographically valid, not that the signing key is authorized.
+- The approved-signers list is stored in a user-writable location.
+- No test for "valid signature from unauthorized key → reject".
+- Override format does not include a `signer_key_id` / `signer_arn` field.
 
 **Phase to address:**
-Phase 82 (silent MSI install flags). The scratch-space provisioner must be re-evaluated against the SYSTEM-context install path before the machine-install gate ships.
+Phase 91 (Override Format) — the token schema must include and mandate `signer_key_id`. Phase 92 (Verification) — implement the signer-allowlist check as a hard gate before capability expansion.
 
 ---
 
-### Pitfall 5: Service install in MSI is non-atomic — rollback leaves the service half-registered
+### Pitfall 5: Signature Stripping — Token Without Signature Accepted
 
 **What goes wrong:**
-The WiX MSI uses the built-in `ServiceInstall` and `ServiceControl` elements to register and start `nono-wfp-service`. If the service start fails (e.g., the WFP driver is blocked by a corporate policy, or the service binary is not yet signed and fails a code-integrity check), Windows MSI rolls back the installation but leaves artifacts:
-- The service registration in SCM may or may not be cleaned up (depends on MSI rollback sequencing).
-- The `HKLM\SYSTEM\CurrentControlSet\Services\nono-wfp-service` registry key may persist.
-- A partial machine MSI install with no user-visible error is reported as "success" on some MDM platforms because `msiexec` exits 0 if the rollback itself succeeds.
+The verifier parses the override token as JSON, checks signature fields if present, but does not reject a token that has no `kms_signature` field at all (or where `kms_signature.signature` is an empty string). An attacker strips the signature field and the "no signature = unsigned = unsigned is allowed" path executes.
 
-The v2.11 milestone explicitly made service start non-fatal for this reason (`nono-wfp-service` start is non-fatal so a service hiccup doesn't roll back the product). But the v3.0 machine-policy spine depends on the service being reliably present — if the service is half-registered, machine-policy egress enforcement is silently absent.
+Relatedly: the canonical form spec (CANONICAL_FORM.md R10) removes `current_hash` and `kms_signature` before hashing. If the verifier accidentally strips them before checking (rather than after), a stripped token hashes identically to a signed one.
 
 **Why it happens:**
-MSI rollback is a best-effort mechanism; it reverses registered actions in reverse order but custom error states (SCM partial-register) are not well-tested. "Non-fatal service start" is the right call for end-user UX but creates a grey area for enterprise fleet where the IT desk needs a hard binary: "installed and enforcing" or "not installed." The nuance is invisible to SCCM/Intune compliance checks.
+Pattern matching on JSON fields in a flexible language: `if token.get("kms_signature") { verify() }` — the `else` branch falls through to allow. In Rust this manifests as `if let Some(sig) = token.kms_signature { verify(sig) }` with no `else { return Err(...) }`.
 
 **How to avoid:**
-- Separate service-install from service-start in the WiX sequences. The service should always be registered (the binary is already in `Program Files`); start failure is a deferred error that `nono setup` checks and surfaces via Event Log.
-- Ship a `nono health` command that emits a machine-readable JSON verdict: `{"wfp_service": "running|stopped|not_installed", "machine_policy": "enforced|not_configured|read_error", "scratch_space": "ok|error"}`. This is what SCCM/Intune compliance scripts call, not `sc query`.
-- The dark-factory gate for the MSI must simulate a service-start failure and assert: (a) `msiexec` exits non-zero or emits an Event Log entry; (b) `nono health` reports the degraded state; (c) nono-cli refuses to launch a confined agent when `wfp_service` is `not_installed` (fail-secure, deny egress).
-- Do not rely on MSI `ServiceControl/@Wait` semantics for compliance evidence — they are unreliable under SCM.
-- Cross-reference: `windows_msi_wxs_is_generated` (the `.wxs` is regenerated from `build-windows-msi.ps1`; edit the script, not the `.wxs`).
+Require `kms_signature` as a mandatory field in the token schema (use `jsonschema` validation, which is already a workspace dependency). Deserialization must fail if the field is absent. The verifier must reject `{ "algorithm": "none", "key_id": "", "signature": "" }` (the "no KMS configured" shape from the local provisioner's `signHash` fallback). Enforce that `algorithm` must be exactly `"ECDSA_SHA_256"` — reject `"none"`, reject unknown strings.
 
 **Warning signs:**
-- The WiX `ServiceControl` element has `Wait="yes"` and the install sequence continues regardless of start outcome.
-- `msiexec /quiet` exits 0 on a machine where `sc query nono-wfp-service` returns `FAILED`.
-- No `nono health` verb exists.
-- SCCM compliance script just checks `(Get-Service nono-wfp-service).Status -eq "Running"` without testing nono-cli's own assessment.
+- Token schema where `kms_signature` is `Option<...>` rather than a required struct.
+- Code that falls through to allow when signature verification is skipped.
+- Tests that only test the "valid signature present" path, not the "signature absent" or "algorithm: none" paths.
 
 **Phase to address:**
-Phase 82 (silent MSI). The `nono health` verdict command is a phase deliverable, not a nice-to-have. The dark-factory gate must verify the degraded-service path.
+Phase 91 (Override Format + Schema) — make `kms_signature` mandatory in the JSON schema with `jsonschema` validation. Phase 92 (Verification) — add explicit rejection of the `algorithm: none` and empty-signature shapes.
 
 ---
 
-### Pitfall 6: Machine-wide env-var propagation lag — new PATH or NONO_ env vars not visible until re-logon
+### Pitfall 6: Algorithm Confusion and Missing Expiry/nbf Checks
 
 **What goes wrong:**
-The MSI registers nono in the system PATH (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment\Path`) and sets machine-wide env vars like `NONO_POLICY_PATH`. These changes are broadcast to running processes via `WM_SETTINGCHANGE`. However:
-- Sessions already logged in at install time will not see the new PATH until they log out and back in (or open a new process tree). On a machine where an engineer keeps a terminal open all day, nono is installed by SCCM but `nono run` gives "command not found" for hours.
-- The `WM_SETTINGCHANGE` broadcast is delivered only to windows (message-loop processes). Console-only tools (cmd.exe, PowerShell without a window, CI agents) never receive it.
-- If `NONO_POLICY_PATH` is set machine-wide to point at the HKLM policy file path, but the user's process was spawned before the machine env-var was set, nono reads an old/absent policy path and silently uses defaults — the fail-OPEN risk from Pitfall 1 via a different mechanism.
+**Algorithm confusion:** The token includes `"algorithm": "RS256"` or `"algorithm": "HS256"` but the verifier only checks the signature against its expected algorithm (`ECDSA_SHA_256`). If the verifier uses a library that auto-detects algorithm from the token header, an attacker can substitute a weaker algorithm. OR: the verifier hard-codes `ECDSA_SHA_256` but doesn't reject tokens claiming a different algorithm — those tokens pass the field check but the signature is verified against the wrong algorithm, producing a spurious pass.
+
+**Missing expiry/nbf:** The override token has an `expires_at` field but the verifier doesn't check it, or checks it with clock skew too large (>5 minutes), or doesn't check `not_before`. An old override token works indefinitely.
+
+**ECDSA low-S / malleability:** The ECDSA signature over NIST P-256 is malleable: for any valid `(r, s)` signature, `(r, n - s)` is also a valid signature. If the verifier accepts high-S signatures, a third party can produce an alternative valid signature for the same payload without the signing key, enabling audit bypass (two different signature bytes for the same token). The ZT-Infra provisioner already enforces low-S (`normalizeEcdsaDerLowS`) and the CANONICAL_FORM.md spec says "verifiers accepting signatures from arbitrary federation participants MUST enforce low-S."
 
 **Why it happens:**
-Windows env-var propagation semantics are widely misunderstood. Developers test the install on a fresh shell opened after the install and it works; they never test the "install while sessions are open" case, which is the common fleet scenario.
+Algorithm confusion: developers trust the token's algorithm claim. Expiry: "we'll add expiry checking later." Low-S: developers are unaware ECDSA over P-256 is malleable without the low-S normalization.
 
 **How to avoid:**
-- Do not rely on env-var PATH for the machine-policy path at runtime. Machine policy should ALWAYS be read from a fixed, well-known registry key (`HKLM\SOFTWARE\Policies\nono`) regardless of env vars. The registry is always current; env vars are snapshotted at process start.
-- The HKLM policy reader must call `RegOpenKeyExW` at every policy-evaluation point (or on a short TTL cache), never read an env-var path that was captured at startup.
-- Document the post-install re-logon requirement in the SCCM deployment note; add a check in `nono health` that warns if the current process's PATH does not include the nono install dir (detects the "installed but old session" case).
-- If machine env-vars are used (e.g., `NONO_POLICY_OVERRIDE` for escape-hatch testing), they are advisory only and must not affect the security path. The security path reads from the registry directly.
+- Hard-code the expected algorithm (`ECDSA_SHA_256`) in the verifier and reject any token where `kms_signature.algorithm != "ECDSA_SHA_256"`. Do not read the algorithm from the token itself.
+- Check `expires_at` (MUST be present) with a maximum of 2 minutes of clock skew tolerance. Reject tokens with `expires_at` in the past.
+- Check `not_before` (nbf): reject tokens not yet valid.
+- Enforce low-S on the DER-encoded signature before verifying: `s <= n/2` where `n` is the P-256 order. Reject high-S signatures.
+- Test vector: expired token → reject; future nbf → reject; wrong algorithm claim → reject; high-S signature → reject.
 
 **Warning signs:**
-- `std::env::var("NONO_POLICY_PATH")` in the policy-loading code path.
-- Policy is loaded once at startup and cached for the process lifetime without a TTL.
-- The MSI's install test runs in a fresh shell opened after install (never validates the already-open-session case).
-- A test sets an env var to simulate machine policy rather than writing to a temporary registry key.
+- Algorithm value read from the token struct rather than hard-coded in the verifier.
+- No `expires_at` field in the override schema, or field present but not validated.
+- No low-S enforcement in the Rust ECDSA verifier.
+- Clock used for expiry check is `SystemTime::now()` without skew tolerance documented.
 
 **Phase to address:**
-Phase 83 (machine-policy HKLM reader). The reader must be registry-direct, not env-var-mediated.
+Phase 91 (Override Format) — require `expires_at` and `not_before` as mandatory fields with ISO 8601 timestamps. Phase 92 (Verification) — enforce algorithm pinning, expiry, nbf, and low-S in the core verifier; include all four in the fail-closed test suite.
 
 ---
 
-### Pitfall 7: WOW6432Node registry redirection silently reads wrong policy
+### Pitfall 7: Replay Attack — Token Reuse After Expiry or Revocation
 
 **What goes wrong:**
-On 64-bit Windows, a 32-bit process reads `HKLM\SOFTWARE\Policies\nono` as `HKLM\SOFTWARE\WOW6432Node\Policies\nono` unless the key open uses `KEY_WOW64_64KEY`. nono-cli is always 64-bit, so it reads the 64-bit hive. BUT the Group Policy client writes to `HKLM\SOFTWARE\Policies\nono` (the 64-bit hive), while some Intune MDM service agents (e.g., the Intune Management Extension, which can be 32-bit) write to `HKLM\SOFTWARE\WOW6432Node\Policies\nono` via redirected writes. If the writing agent and the reading agent read from different hives, the policy appears absent to nono (fail-OPEN per Pitfall 1), or the hives diverge (stale policy in one, current in the other).
+A developer obtains a valid signed override for `/tmp/project` valid for 1 hour. After the hour expires, they (or a process with access to the token file) reuse the same token bytes. If the verifier only checks the signature and expiry timestamp but has no memory of previously-used tokens, the token is accepted indefinitely after its first use. Worse: the override is revoked mid-session (the manager who approved it changes their mind) but the process holds a valid non-expired token and the verifier has no revocation check.
 
 **Why it happens:**
-WOW6432Node redirection is automatic and silent for 32-bit processes on 64-bit Windows; developers on 64-bit dev hosts never observe it because their test processes are 64-bit. The problem surfaces only when the Intune or SCCM delivery agent happens to be 32-bit.
+Stateless verification is simpler to implement. Developers assume expiry alone prevents replay. Revocation check requires a live network call, which conflicts with the "don't fail if AWS is slow" instinct (which itself is a fail-open instinct).
 
 **How to avoid:**
-- Always open the machine-policy key with `RegOpenKeyExW(..., KEY_READ | KEY_WOW64_64KEY)` to explicitly request the 64-bit hive regardless of nono-cli's own bitness.
-- Document in the ADMX template and Intune CSP OMA-URI that the policy path is the 64-bit hive; the deployment package must deploy-via-64-bit-capable mechanism (PowerShell `[Microsoft.Win32.RegistryView]::Registry64` when setting keys via script).
-- Dark-factory gate: write a test that explicitly creates the key under `HKLM\SOFTWARE\WOW6432Node\Policies\nono` and verifies nono does NOT read it (i.e., the 64-bit path is authoritative). This catches the "accidentally reads WOW hive" regression.
+- Include a `jti` (token ID / nonce) field in the override token. The verifier maintains a per-session set of consumed `jti` values. After first use, the `jti` is marked consumed and a second use is rejected.
+- For longer-lived overrides: query the ZT-Infra `/actions` endpoint on each apply (not just at first use) with a dedicated "is this override still valid?" call. If the endpoint returns deny or the override is not in the ledger, block.
+- Default override TTL should be short (15–60 minutes). The format should discourage multi-day tokens via a schema-level maximum.
+- Revocation: the ZT-Infra ledger write is the revocation anchor. The verifier SHOULD check the ledger for the override token's `jti` before applying.
 
 **Warning signs:**
-- `RegOpenKeyExW` calls without `KEY_WOW64_64KEY`.
-- Policy integration test uses a PowerShell script without `[Registry]::LocalMachine.OpenSubKey(..., [RegistryView]::Registry64)`.
-- No WOW64 redirection coverage in tests.
+- Override token format has no `jti`/nonce field.
+- Verifier has no per-session consumed-token state.
+- No test case for "valid token used twice → second use rejected".
+- Override TTL defaulting to 24 hours or unbounded.
 
 **Phase to address:**
-Phase 83 (machine-policy HKLM reader). One-liner fix, but must be explicitly tested.
+Phase 91 (Override Format) — mandate `jti` and max TTL in the schema. Phase 92 (Verification) — implement consumed-token tracking. Phase 93 (Ledger Integration) — implement revocation check against ZT-Infra ledger.
 
 ---
 
-### Pitfall 8: Default-deny that accidentally blocks the AI provider and bricks the agent
+### Pitfall 8: Canonicalization Mismatch Between Signer and Verifier
 
 **What goes wrong:**
-The machine-policy allow-list is configured with corporate domains and `api.anthropic.com`. The GPO template ships the list without entries for Anthropic's CDN, OAuth endpoints, or the streaming endpoint (`api2.anthropic.com`, `*.anthropic.com` for streamed completions). An agent that runs an LLM call sees a WFP/proxy block on the streaming connection. The agent silently fails (no error dialog, the stream just hangs then times out), and the user reports "nono broke Claude." Because default-deny is correct, this is an operator-configuration problem, but nono's diagnostics do not attribute the failure to the policy block — the error is just a timeout in the AI SDK.
+The ZT-Infra control plane produces the signed override record using the CAF v0.1 canonical form (sorted keys, no whitespace, UTF-8, no `0x` prefix on hashes, ASN.1 DER base64 signature). The nono Rust verifier deserializes the JSON with `serde_json` and re-serializes with a different key order or whitespace behavior, producing a different byte sequence, and therefore a different SHA-256 digest. Signature verification fails for all legitimately-signed tokens — or worse, the verifier falls back to a less-strict verification path that accepts the mismatch.
+
+Related: the verifier receives a pretty-printed token (with whitespace) and hashes it directly without canonicalizing first. Since the signing side removed `current_hash` and `kms_signature` before hashing (CANONICAL_FORM R10), the verifier must also strip those fields before recomputing the digest.
 
 **Why it happens:**
-The AI provider's outbound requirements are not static: Anthropic uses multiple subdomains and CDN prefixes that change over maintenance windows. Corporate IT uses the documented `api.anthropic.com` entry but misses the streaming-origin variant. The deny happens silently at the kernel (WFP BLOCK) and the AI SDK retries until timeout without surfacing a clear reason.
+`serde_json` serializes object keys in insertion order by default; the CAF spec requires Unicode code-point sorted order. Developers test with a token produced by the same Rust code and never notice the mismatch. The cross-language mismatch (Node.js provisioner → Rust verifier) is only visible in integration testing.
 
 **How to avoid:**
-- Ship a vetted `anthropic-claude-code` group entry in the embedded `network-policy.json` (already present from Phase 56) that includes ALL required subdomains for Claude Code operation (`api.anthropic.com`, `statsig.anthropic.com`, `sentry.io` subset, etc.). The HKLM policy schema should support a `"use_builtin_group": ["claude-code"]` key that references the vetted embedded list, so enterprise admins can say "allow Claude Code traffic" without enumerating IPs.
-- The `DiagnosticFormatter` must surface WFP and proxy blocks when the AI provider endpoint is blocked. Currently it formats path-deny explanations; extend it to format network-deny explanations with the blocked host name and the matching policy rule (or "not in allowlist").
-- Provide a `nono diagnose-egress <hostname>` subcommand that tests whether a given host passes the machine-policy + proxy filter without launching a full agent session.
-- The machine-policy schema's `AllowedHosts` must validate that entries are syntactically valid hostnames/wildcards at policy-load time, not at enforcement time. An ADMX-pushed value of `api .anthropic.com` (space included) silently denies and is impossible to debug without the validator.
+- Implement a dedicated `canonical_bytes()` function in Rust that: (1) strips `current_hash` and `kms_signature` fields before serializing, (2) serializes with sorted keys and no whitespace, (3) produces UTF-8 bytes. Use the CAF test vectors from `test-vectors/canonical-form/vectors.json` as the authoritative compliance suite.
+- Test the Rust canonicalizer against those vectors before wiring to signature verification.
+- The verifier MUST NOT hash the raw received bytes — it MUST re-derive the canonical form from the parsed struct.
+- Reject tokens where received `current_hash` does not match the locally-computed canonical hash (hash-chain integrity check).
 
 **Warning signs:**
-- The only diagnostic for a blocked network connection is a timeout in the AI SDK with no nono-attributed error.
-- The embedded `claude-code` network profile in `network-policy.json` does not include all outbound endpoints required by Claude Code.
-- No `nono diagnose-egress` or equivalent.
-- An IT admin can push an empty `AllowedHosts` list via GPO and nono accepts it without warning (silently blocks everything).
+- Verifier hashes the raw JSON bytes of the received token directly.
+- No cross-language round-trip test of the canonicalizer against the provisioner's output.
+- `serde_json::to_string()` used in the canonical path (produces non-deterministic key order).
 
 **Phase to address:**
-Phase 83 (egress reconciliation). The AI-provider group entries in `network-policy.json` must be reviewed and a `nono diagnose-egress` or dry-run mode must be a deliverable.
+Phase 91 (Override Format) — define the canonical form for the nono override token (it need not be identical to CAF AuditRecord but must be documented). Phase 92 (Verification) — implement and test the Rust `canonical_bytes()` against ZT-Infra test vectors.
 
 ---
 
-### Pitfall 9: TOCTOU on machine-policy reload — allow-list widens mid-session
+### Pitfall 9: KMS Public Key Trust and Rotation Blindness
 
 **What goes wrong:**
-The machine-policy reader caches the allow-list in memory for the lifetime of a supervised session (typically minutes to hours for a long agentic run). An admin pushes a new HKLM policy — typically a widening (adds a new corporate SaaS domain) — while the agent is running. The running session is still using the old (more restrictive) allow-list; the new request gets blocked; the operator assumes nono is broken because the policy was updated. Conversely, if nono refreshes the policy mid-session, a malicious insider could push a widened policy that permits exfiltration targets just before a compromised agent makes the request.
+The nono verifier fetches the KMS public key once at startup (or bundles it at build time) and uses it forever. When the KMS key is rotated — which is a routine operation — all future tokens are rejected because the old public key no longer matches the new signature. Meanwhile, any token signed with the old key (even after rotation) is still accepted if the old key is cached, opening a window where revoked-key tokens are valid.
+
+Related: the verifier trusts any key it receives from the KMS `GetPublicKey` call without pinning the expected key ARN or alias. An attacker with AWS credential access can substitute a key they control.
 
 **Why it happens:**
-Caching vs. live-reload is a classic tradeoff. Security products almost always prefer caching (the session's security context is fixed at launch); operational products prefer live-reload. Enterprise customers will ask for live-reload because their IT teams push policy changes during business hours without wanting to bounce sessions.
+Fetching the public key on every verification is expensive and introduces AWS latency on the hot path. Developers cache it. They forget to implement key-ID checking or a key-rotation refresh path.
 
 **How to avoid:**
-- Fix: the allow-list is fixed at session start (launch-time snapshot). The "no escape hatch" principle (nono core invariant) applies to the network layer: you cannot widen the allowed scope of a running session. Narrowing mid-session is acceptable (add a policy-change watcher that can only REMOVE entries from the running cache, never add them).
-- Document this explicitly in the GPO ADMX template tooltip: "Policy changes apply to new sessions. Running sessions retain the policy in effect at launch."
-- If live-reload is demanded: it must be widen-only through an explicit operator command (`nono update-policy`), not automatic — and even then the design needs ADR treatment.
-- The dark-factory gate should test: push a widened policy mid-session; assert the running session still uses the old (more restrictive) list; assert a newly launched session picks up the new list.
+- The override token MUST include `kms_signature.key_id` (already present in the ZT-Infra provisioner shape). The verifier MUST match this `key_id` against the allowlist of trusted key ARNs (stored in machine policy, not user config).
+- Cache the KMS public key per `key_id` with a TTL (e.g., 5 minutes). On cache miss or TTL expiry, re-fetch via `GetPublicKey`.
+- On key rotation: both the old and new key ARNs can appear in the allowlist during the transition window; tokens referencing the old key are rejected after the old ARN is removed from the allowlist.
+- Pin the expected key ARN; never accept a `key_id` not in the allowlist regardless of whether the public key fetches successfully.
 
 **Warning signs:**
-- The allow-list is stored in an `Arc<RwLock<AllowList>>` that is written by a `tokio::fs::watch` on the registry.
-- Policy reload is triggered by `WM_SETTINGCHANGE` delivery (which an unprivileged process can forge via `SendMessage`).
-- No test for "policy changed while session running."
+- Public key fetched once and stored as a static `lazy_static!` / `OnceLock`.
+- No `key_id` field in the override token schema.
+- Verifier does not compare `token.kms_signature.key_id` against an approved-key allowlist before verifying.
 
 **Phase to address:**
-Phase 83 (HKLM policy reader). Codify the snapshot-at-launch model in the ADR. The widen-only-narrow mid-session rule is a security invariant.
+Phase 92 (Verification) — implement key-ID allowlist check and per-key-ID cache with TTL. Phase 93 (AWS Integration) — test key rotation path end-to-end.
 
 ---
 
-### Pitfall 10: Event Log custom-channel registration requires admin and manifest deployment
+### Pitfall 10: TOCTOU Between Verify and Apply
 
 **What goes wrong:**
-Creating a custom Event Log channel (e.g., `nono/Security`) requires:
-1. A `.man` event manifest compiled to a `.mc` file.
-2. `wevtutil im nono.man` run as admin during installation to register the provider GUID and channel in `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Publishers\<GUID>`.
-3. The compiled `.dll` resource file (or the nono binary itself if resources are embedded) on a stable path.
-
-If step 2 is skipped (manifest not installed) or the resource DLL path changes (e.g., nono is moved from `C:\Program Files\nono\` after install), Event Log writes fail. The failure mode is: `RegisterEventSourceW` returns NULL, `ReportEventW` is never called, and the security event is silently dropped. From the CISO's perspective, the telemetry pipeline appears to work (no error) but emits nothing.
+The verifier checks the override, returns `VerifiedOverride { scope, expires_at, ... }`, and then the caller applies the capability expansion in a separate step. In a multi-threaded nono-agentd scenario, another thread or a race on the supervisor pipe can inject a different scope between the verify and the apply steps. Alternatively: the token is verified, stored in a struct, and applied seconds later, by which time the token has expired — but the expiry was only checked at verify time, not at apply time.
 
 **Why it happens:**
-The MSI's custom action that runs `wevtutil im` requires elevation and runs in the SYSTEM context — it must succeed during the install, not later. Developers test `ReportEventW` from a dev machine where they ran `wevtutil im` manually; the automated CI/MDM install never does this, so the registration is absent in production.
-
-The nono-wfp-service already uses the Application Event Log (`EVENT_LOG_SOURCE: &str = SERVICE_NAME`) and writes `ReportEventW` for sweep operations — this is the existing pattern, but it relies on Windows auto-registering the Application log source at first write (which works for the generic Application log but NOT for a custom channel with structured schema).
+The separation of verify (async, may block on AWS) from apply (sync, must be fast) is architecturally sound, but creates a window if the verified result is mutable or if expiry is not re-checked.
 
 **How to avoid:**
-- Use the existing **Application event log source** pattern (`RegisterEventSourceW(SERVICE_NAME)`) for v3.0 rather than a custom channel. This works without a manifest and is already proven in `nono-wfp-service.rs`. Add nono-specific event IDs to the existing source. Defer custom channel + structured manifest to a future "SIEM schema hardening" milestone.
-- If a custom channel IS needed: the manifest compilation (`mc.exe`), resource compilation (`rc.exe`), and `wevtutil im` must all be wired into the WiX MSI's install sequence via `CustomAction`/`ExePackage`, and `wevtutil um` must be in the uninstall sequence. The manifest path must be pinned to the `Program Files` install root; use `[INSTALLDIR]` in the manifest XML, not a hard-coded path.
-- Dark-factory gate: run the MSI on a clean machine (no prior `wevtutil im`), emit a security event via `nono run`, and assert the event appears in Event Viewer under the expected log/source. A missing event is a test failure.
-- The emission code must treat `RegisterEventSourceW` returning NULL as a `NonoError::TelemetryUnavailable` (logged to stderr), NOT silently ignored. Silent drop of security events is not acceptable.
+- The `VerifiedOverride` struct must be immutable (`pub struct VerifiedOverride { ... }` with no `&mut self` methods). Freeze capability scope at verify time.
+- Check `expires_at >= now()` again at apply time, not just at verify time.
+- Apply must happen atomically from the point of view of the supervisor: verify the override, then immediately expand the `CapabilitySet` within the same synchronous critical section, without yielding to the async runtime between the two steps.
+- In nono-agentd: hold the supervisor pipe lock from the moment verification completes until capability expansion is committed.
 
 **Warning signs:**
-- `RegisterEventSourceW` return value is not checked.
-- The MSI has no `wevtutil im` or `EventManifest` component.
-- Security events are tested only on the dev machine where `wevtutil im` was run manually.
-- `ReportEventW` fails silently (returns false) and the code continues without logging the failure.
+- `VerifiedOverride` struct with mutable fields or setter methods.
+- `apply_override()` does not re-check `expires_at`.
+- Async `.await` points between the end of `verify_override()` and the start of `CapabilitySet` mutation.
+- Tests only single-threaded; no concurrent-apply tests.
 
 **Phase to address:**
-Phase 84 (SIEM/EDR telemetry — SEED-003). Use the Application log source approach for v3.0; defer custom manifest to a later hardening phase.
+Phase 92 (Runtime Mutation) — design the verify→apply path as a single atomic function. Write a concurrent test that verifies a token, delays by TTL+1, and asserts the delayed apply is rejected.
 
 ---
 
-### Pitfall 11: Telemetry events leaking secrets and file paths into the Windows Event Log
+### Pitfall 11: Audit Gap — Override Applied Without SecurityEventLayer Emission
 
 **What goes wrong:**
-The `DiagnosticFormatter` generates human-readable denial messages that include the full path of the denied file (e.g., `C:\Users\alice\Projects\secret-project\src\main.rs denied write access`). When this is emitted to the Windows Event Log — which is forwarded to Splunk/Sentinel via Windows Event Forwarding — every denied-access event includes:
-- The full path of the corporate codebase being protected.
-- Possibly credential-adjacent paths (e.g., `C:\Users\alice\.ssh\id_rsa` denied read — this path is now in the SIEM and tells an attacker what to target).
-- In the network-deny case, the request URL may include query parameters containing tokens or session IDs if the AI SDK embeds them in the URL.
+A verified override expands the `CapabilitySet`. No security event is emitted into the v3.0/v3.1 `SecurityEventLayer` HMAC chain. The expansion is invisible to SIEM / Splunk / Sentinel. From the audit trail perspective, the process has more permissions than its profile but there is no record of why. This is silent privilege escalation — no override that doesn't emit a security event is acceptable (PROJECT.md §Tamper-evident audit linkage).
 
-The "tamper-evident" claim for the telemetry is then undermined: the SIEM becomes itself a target for correlation-attack reconnaissance.
+Relatedly: the override is emitted into the local HMAC chain but not written to the ZT-Infra ledger (missing the "zt-infra decides, nono records" coupling). The local chain can be tampered after the fact without the blockchain anchor.
 
 **Why it happens:**
-The `DiagnosticFormatter` was designed for a human engineer reading stderr, where full paths are helpful for debugging. Re-using it verbatim for SIEM emission treats a debugging tool as a structured security signal. The distinction between "debug detail" and "security event schema" is not enforced at the API boundary.
+Audit emission is added as an afterthought. Developers test that the capability expansion works and forget that the security event path must also fire. The `SecurityEventLayer` lives on the daemon path (Phase 90 finding: it's in main.rs, not directly reachable from library code); wiring an override event through it requires the same `#[path]`-include or daemon-IPC pattern established in Phase 90.
 
 **How to avoid:**
-- Define a separate `SecurityEvent` struct that is distinct from `DiagnosticOutput`. The `SecurityEvent` carries:
-  - An opaque path hash (`sha256(canonical_path)[0..8]`) rather than the full path — sufficient for correlation, safe for SIEM forwarding.
-  - A path category tag (`workspace_file`, `system_path`, `user_profile`, `temp`) rather than the raw path.
-  - For network denials: the hostname only (no URL path, no query string).
-- The `DiagnosticFormatter` continues to emit full paths to stderr (for debugging). `SecurityEvent` is the SIEM-safe schema. These are two separate emission paths; they share the `DenialReason` enum but diverge on detail level.
-- Mark any `SecurityEvent` field that could be PII-adjacent (full path, full URL) as `#[zeroize]` or `#[sensitive]` with a note that it MUST NOT be placed in the Event Log payload.
-- The ADMX template should include a `TelemetryDetailLevel = DWORD` key: `0 = hashed`, `1 = category`, `2 = full-path` (requires explicit admin consent + elevated audit-log permissions). Default must be `0`.
-- Review the nono-wfp-service's existing `ReportEventW` calls for the sweep events — they currently log object GUIDs and error codes, which is safe. Ensure the new denied-action events follow the same pattern.
+- Make audit emission a prerequisite of apply: the function signature must be `fn apply_override(verified: VerifiedOverride, auditor: &mut SecurityEventLayer) -> Result<()>`. If `auditor` is not wired, it's a compile error.
+- Emit a `SecurityEvent` with a new EventID (next in the HMAC chain after EventIDs 10001-10005) containing: `jti`, `actor`, `scope` (paths + access modes), `signer_key_id`, `expires_at`, `timestamp`, HMAC chain hash.
+- Also write the override decision to the ZT-Infra audit ledger via the `ActionAuditor.record()` shape so it appears in CloudWatch and the DAAL anchor.
+- Write a test that asserts: after `apply_override()`, the audit layer has exactly one more event in its chain that matches the override's `jti`.
 
 **Warning signs:**
-- `SecurityEvent` is a type alias for `DiagnosticOutput`.
-- A network-deny event includes the full request URL in the Event Log message string.
-- The Event Log emission code calls `diagnostic_formatter.format_human_readable()` and passes the result as the Event Log message.
-- No `TelemetryDetailLevel` configuration; all emitted events include full paths.
-- Tests emit events and assert on substrings of full paths (which confirms the path is in the event).
+- `apply_override()` has no `auditor` parameter.
+- No EventID allocated for override events in the security event schema.
+- Integration test for override applies but does not assert an audit event was emitted.
+- Override ledger write to ZT-Infra is optional / best-effort.
 
 **Phase to address:**
-Phase 84 (SIEM/EDR telemetry). The `SecurityEvent` schema is a phase deliverable. Define it before wiring to the emission backend.
+Phase 92 (Runtime Mutation) — `auditor` is a required parameter of `apply_override`. Phase 93 (Ledger Integration) — wire override decisions to ZT-Infra's `ActionAuditor.record()`.
 
 ---
 
-### Pitfall 12: "Tamper-evident" telemetry claims that are not — append-only with no cryptographic anchor
+### Pitfall 12: PyO3 Boundary Error Absorption
 
 **What goes wrong:**
-SEED-003 specifies "tamper-evident append-only event chain." The common implementation mistake is to add an incrementing sequence number and a per-record HMAC signed with a key stored in `HKLM\SOFTWARE\nono\TelemetryKey`. An attacker with local admin (the threat model for a compromised agent that escaped confinement to admin-level) can delete or overwrite `HKLM\SOFTWARE\nono\TelemetryKey`, re-sign any sequence of events with a new key, and the "tamper-evident" chain no longer detects the gap.
+The override verification runs in Rust and returns a `Result<VerifiedOverride, NonoError>`. When called from Python via PyO3, a returned `Err` variant is converted to a Python exception. If the Python caller uses a bare `except Exception: pass` or a broad `except` that logs and continues, the Rust error is silently swallowed and execution proceeds as if the override was valid (or as if there was no override check). This is a special case of Pitfall 1 but specific to the language boundary.
 
-A more subtle version: events are written to the Windows Event Log (which is append-only at the OS level) and the "tamper evidence" claim is that Event Log is protected by Windows ACLs. This is true for the Security log (SYSTEM-only write, `SeSecurityPrivilege` to clear) but NOT for the Application log (any process running as the event's registered source can write to it, and an admin can clear the Application log with zero audit trail).
+Additionally: PyO3 conversion of complex types can panic if the Python interpreter state is not as expected (e.g., called from a thread without the GIL). A panic in a `#[pyfunction]` will unwind into Python with `SystemError` — but `SystemError` is a subclass of `Exception` and will be caught by `except Exception`.
 
 **Why it happens:**
-"Tamper-evident" is an easy claim to make and a hard property to actually provide in user-space. The shortcut is to protect the log with the same ACLs that protect the OS — which is fine for the Windows Security log but is a weaker claim for Application log or file-based logs. SEED-003 correctly cross-references SEED-005 (ZT-Infra signed policy overrides) as the immutable-audit angle; the pitfall is shipping a v3.0 "tamper-evident" claim without the ZT-Infra backing.
+Python developers treat Rust extension errors as "unexpected" and use broad exception handling defensively. The nono-py binding is the enforcement surface (`confined_run` / `confine`) — if the Python layer fails to propagate the error, the Rust-side fail-close is bypassed.
 
 **How to avoid:**
-- Do NOT claim full tamper-evidence in v3.0. Claim: "structured security events emitted to Windows Event Log; forwarding to SIEM provides external copy beyond local attacker's reach."
-- The actual tamper-evidence story is: events are written to the Application log + forwarded via Windows Event Forwarding (WEF) to a SIEM collector. The SIEM's copy is out-of-reach for a locally-compromised host. Document this architecture in the SEED-003 deliverable explicitly: tamper-evidence = remote forwarding, not local crypto chain.
-- If a local crypto chain is required: the HMAC key must be stored in a hardware-backed TPM PCR-sealed secret or in a remote key-management service, not in a registry key a local admin can delete. Defer this to the SEED-005 ZT-Infra milestone (it is scope-appropriate there).
-- The ADR for Phase 84 should explicitly record: "Local HMAC chain rejected — attacker with local admin can forge. External SIEM forwarding is the tamper boundary."
+- Define a specific `NonoOverrideError(RuntimeError)` Python exception class in the nono-py binding. Verifier errors must raise this specific class, not the generic `RuntimeError`.
+- The glue code in nono-py must `raise` on any `Err` from the Rust side — never convert to a return value of `None` or `False`.
+- Document in the API that callers MUST NOT catch `NonoOverrideError` and continue execution; they must re-raise or fail.
+- Test at the PyO3 boundary: inject a Rust-side error and assert that Python receives a `NonoOverrideError` exception (not `None`, not a boolean `False`).
 
 **Warning signs:**
-- `TelemetryHmacKey` is stored in `HKLM\SOFTWARE\nono\`.
-- The "tamper-evident" claim in the user documentation is not qualified with "via external SIEM forwarding."
-- The tamper-detection test does not simulate an admin deleting the HMAC key and verify the chain is broken.
-- SEED-005 features (signed policy, remote attestation) are implemented inside Phase 84 instead of in their own milestone.
+- `#[pyfunction]` that returns `PyResult<bool>` where `Ok(false)` means "override rejected" — this is ambiguous because `Err` is also a rejected state; error and deny look the same to the caller.
+- No custom Python exception class in the nono-py binding for override failures.
+- nono-py README shows usage with bare `except Exception` in the examples.
+- No PyO3 boundary test for error propagation.
 
 **Phase to address:**
-Phase 84 (SIEM/EDR telemetry). Write the ADR first; be explicit about the tamper-evidence scope. Reference SEED-005 as the future work.
+Phase 92 (Verification) — define `NonoOverrideError` and enforce it in all `#[pyfunction]` wrappers. Phase 93 (nono-py Integration) — write the boundary error-propagation test suite.
 
 ---
 
-### Pitfall 13: Silent root-cert install via GPO modifying the wrong store — proxy TLS interception fails fleet-wide
+### Pitfall 13: AWS Dependency Operational Failures (Latency, Outage, Credential Exposure)
 
 **What goes wrong:**
-The nono proxy intercepts HTTPS traffic (for domain filtering and credential injection) using a machine-local CA. For enterprise fleet deploy, this CA cert must be in the user's `Trusted Root Certification Authorities` store so the AI SDK's TLS stack accepts the proxy's re-issued certificates. The GPO/Intune deployment pushes the cert to `HKLM\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates\` (the machine root store). However, .NET-based tools and Electron apps (like Claude Code) use the `CurrentUser\Root` store first, falling back to `LocalMachine\Root`. The cert installed in `LocalMachine\Root` is visible to Win32 `CertVerifyCertificateChainPolicy` calls but may NOT be visible to LibreSSL/OpenSSL-bundled runtimes (common in Rust binaries) that do not consult the Windows cert store at all unless explicitly configured.
+**Latency:** KMS `GetPublicKey` and `Sign` calls add 50–200ms to every override verification. If override verification is on the hot path (called before every tool execution), this adds unacceptable latency. If the timeout is set too high, slow KMS responses can stall the agent.
+
+**Outage:** AWS KMS or CloudWatch Logs is unavailable. The "fail closed vs. degrade gracefully" question arises. The correct answer per CLAUDE.md ("Fail Secure: On any error, deny access. Never silently degrade") is: KMS unavailable → no override can be verified → baseline capabilities only. But this blocks developer workflow if overrides are needed for legitimate work.
+
+**Credential exposure:** The nono process needs AWS credentials to call KMS `GetPublicKey`. These credentials (IAM role, access key, or instance profile) must be accessible to the nono process. If the credentials are in environment variables visible to the sandboxed child process, a compromised agent can exfiltrate them and make its own KMS calls. If they are in a file readable by the child, same risk.
 
 **Why it happens:**
-Windows has five root cert stores (CurrentUser\Root, LocalMachine\Root, LocalMachine\AuthRoot, service stores, and others). "Install via GPO" lands in `LocalMachine\Root`. Rust binaries using `rustls` or `native-tls` with `webpki` roots do not consult the Windows cert store by default — they use the compiled-in root set. Claude Code (Electron+Node) uses Node's `tls` module which DOES consult the Windows cert store. The matrix is: some clients pick it up, some don't, with no visible error — just TLS handshake failure appearing as a network-deny.
+AWS credential handling is an afterthought. Developers put the key in the environment (as in the zt-infra `.env` model) without considering that nono's supervised child inherits the parent's environment by default. Latency concerns cause developers to move verification into the background or skip it.
 
 **How to avoid:**
-- Map the TLS trust paths for every client process that will go through the nono proxy: `nono-proxy` itself (Rust/rustls), Claude Code (Electron/Node), the AI SDK (check if it ships its own cert bundle). Document which stores each client uses.
-- For nono-proxy: ensure `rustls` is configured with `rustls_native_certs` (which reads the Windows cert store) rather than the default `webpki` roots. This is a single configuration change but must be verified.
-- For the machine-CA cert: install to BOTH `LocalMachine\Root` (for Win32/CryptoAPI clients) AND `CurrentUser\Root` for the installing user. The WiX `CertificateRef` element handles this.
-- GPO/Intune cert deployment: use the "Computer Configuration > Policies > Windows Settings > Security Settings > Public Key Policies > Trusted Root Certification Authorities" GPO path, which lands in `LocalMachine\Root` and is replicated by Group Policy to all machine stores.
-- Dark-factory gate: after MSI install with the CA cert, open a TLS connection to a known endpoint through the proxy from (a) a PowerShell script (uses CryptoAPI), (b) a Node.js script (uses Windows cert store via Node), and (c) from within nono-cli itself. All three must succeed without TLS errors.
+- **Latency:** Cache the verified KMS public key per key-ID with a 5-minute TTL (see Pitfall 9). Do NOT call KMS on every verification — the public key is stable; only the signature check needs the public key, not a live KMS call. The one live AWS call (at cache-miss or TTL expiry) should have a 2-second timeout with fail-closed behavior.
+- **Outage:** Define the policy clearly in requirements: KMS unreachable → no overrides accepted → baseline sandbox applies. This is the correct fail-closed behavior. Log the outage as a security event (not silently). Provide a scripted dark-gate test that simulates KMS unavailability and asserts baseline-only behavior.
+- **Credential exposure:** Load AWS credentials in the supervisor (nono-cli / nono-agentd) ONLY. Strip the credentials from the child process's environment before spawning (the existing `env_clear` / env-filtering pattern in the exec strategy layer). The sandboxed child must never have `AWS_ACCESS_KEY_ID` or role credentials visible. Use the `keyring` crate (already a workspace dependency) or the machine policy channel to inject credentials into the supervisor process only.
 
 **Warning signs:**
-- `rustls` is initialized with `RootCertStore::empty()` + `load_native_certs()` missing.
-- The CA cert is installed only via `certutil -addstore Root` (adds to LocalMachine\Root only).
-- TLS tests pass in dev environments (where the engineer's machine already has the cert in CurrentUser\Root from manual testing) but fail on fleet deploy.
-- No test for the Rust/rustls trust path independently from the Node/CryptoAPI path.
+- AWS credentials passed via environment variables that are inherited by the sandboxed child.
+- No timeout on the KMS `GetPublicKey` future.
+- Override verification called on every tool invocation without caching.
+- No test simulating KMS 503 or timeout that asserts deny.
 
 **Phase to address:**
-Phase 82 (silent MSI) — the cert install must be part of the MSI's `CertificateRef` component, and the trust paths for all client types verified in the dark-factory gate.
+Phase 91 (Override Format + Trust Setup) — define credential handling policy (supervisor-only, never inherited by child). Phase 93 (AWS Integration) — implement timeout, caching, and credential isolation; write the KMS-outage dark gate.
+
+---
+
+### Pitfall 14: Repo-Context Binding Bypass
+
+**What goes wrong:**
+The override token is issued for repository context `github.com/org/projectA`. The developer copies the token file to a different working directory (`/home/user/projectB`) and the verifier does not check the repo-context claim. The override grants write access to projectB's directories because the scope paths were relative or loosely specified.
+
+**Why it happens:**
+Developers implement the cryptographic checks (signature, expiry, scope paths) but treat `repo_context` as informational metadata rather than an enforcement field. Path scope alone may not be sufficient if the override was intended for a specific project context and the developer has multiple projects in sibling directories.
+
+**How to avoid:**
+- Include a mandatory `repo_context` field in the override token (e.g., git remote URL or SHA of the repo's `.git/config`). At apply time, compute the current repo context from the working directory and compare against the token's claim. Reject if they don't match.
+- The repo context MUST be verified using a structural comparison (git remote URL normalization: strip trailing `.git`, normalize `http://` vs `https://`), not a string equality check that can be tricked by case differences or trailing slashes.
+- Write a test: token issued for `github.com/org/projectA` rejected when applied in `github.com/org/projectB` working directory.
+
+**Warning signs:**
+- No `repo_context` field in the override token schema.
+- `repo_context` field present but not validated at apply time.
+- Scope paths are relative (e.g., `./tmp`) rather than absolute and canonicalized.
+
+**Phase to address:**
+Phase 91 (Override Format) — require `repo_context` with a normalization spec. Phase 92 (Runtime Mutation) — enforce repo-context match at apply time.
+
+---
+
+### Pitfall 15: Wildcard and Glob Scope Expansion
+
+**What goes wrong:**
+The override token encodes scope as a glob pattern: `"/home/user/project/**"`. The verifier uses `glob::Pattern::matches()` to check if a requested path matches. Depending on the glob library's semantics, `**` may or may not match across directory separators, `?` may match `/`, and a carefully crafted scope pattern can match paths outside the intended directory (e.g., `"/home/user/project/../../../etc/**"`).
+
+**Why it happens:**
+Globs feel natural for expressing "write anywhere in this project." Glob libraries have inconsistent semantics around `**` and path separators. The ZT-Infra policy evaluator already uses a glob-like `endsWith("*")` matcher (see `policy.js` `matches()`). If nono adopts the same pattern without the CLAUDE.md path-component awareness, it inherits the escape risk.
+
+**How to avoid:**
+- Prohibit glob patterns in the override scope. Require explicit absolute canonical paths (directories or files). Expansion is "this exact directory and everything below it" — expressed as a canonicalized `PathBuf` prefix, not a glob string.
+- If globs are required for flexibility, restrict to `/**` suffix only (no `?`, no `[...]`, no bare `*` in intermediate segments) and verify the prefix before the `/**` is a canonicalized absolute path with no `..` components.
+- Apply CLAUDE.md's `Path::starts_with()` (component-aware) for all containment checks, never glob matching.
+
+**Warning signs:**
+- Override token schema uses `string` type for scope paths with no documented format constraint.
+- Scope checking uses any form of glob, regex, or pattern matching instead of canonical prefix comparison.
+- Test cases for scope validation do not include `..` traversal, double-slash, or glob injection attempts.
+
+**Phase to address:**
+Phase 91 (Override Format) — define scope as an array of absolute canonicalized path strings; document the containment semantics explicitly. Phase 92 (Verification) — enforce no-glob; use `Path::starts_with()` only.
 
 ---
 
 ## Technical Debt Patterns
 
+Shortcuts that seem reasonable but create long-term problems.
+
 | Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
 |----------|-------------------|----------------|-----------------|
-| Fall back to per-user profile on HKLM read error | Doesn't break developer setups | Fail-OPEN: machine policy appears enforced but isn't (Pitfall 1) | Never for the egress allowlist |
-| Use `std::env::var("NONO_POLICY_PATH")` for machine policy path | Easy to test in CI | Env var snapshotted at process start; stale after machine env-var update (Pitfall 6) | Never for security config; OK for override in test-only code with explicit comment |
-| Wire only proxy to HKLM; do WFP later | Faster first pass | Proxy/WFP allowlist drift; false sense of security (Pitfall 2) | Never; must be a single atomic phase |
-| Re-use `DiagnosticFormatter` output verbatim for SIEM events | Zero new code | Full paths and URLs in SIEM; PII leakage (Pitfall 11) | Never |
-| Store HMAC telemetry key in HKLM | Simple to implement | Local admin can delete and re-sign; tamper-evidence claim is false (Pitfall 12) | Never; use external SIEM forwarding instead |
-| Provision scratch space from the MSI SYSTEM context | No first-run provisioning code needed | Workspace owned by SYSTEM not user; R-B3 guard fails fleet-wide (Pitfall 4) | Never; provision at first-run in user context |
-| Use Application log source without `wevtutil im` manifest | Works on dev host | Silent event-drop in production if registration was never run (Pitfall 10) | OK only if using the generic Application source (no manifest needed); NOT OK for custom channels |
-| Single flat `REG_MULTI_SZ` for hosts and wildcard suffixes | Simple registry schema | Operator can't distinguish exact vs suffix entries; wildcard creep (Pitfall 3) | Never; use separate keys for hosts and suffixes |
+| Caching KMS public key forever (no TTL) | Eliminates AWS call latency after first use | Old key remains trusted after rotation; rotation window creates security gap | Never — implement 5-min TTL |
+| Skipping ledger write on KMS outage | Prevents outage from blocking legitimate work | Override decisions not anchored; DAAL integrity broken | Never in production; acceptable in dark-gate test mode with explicit flag |
+| Local provisioner for all dev testing | No AWS required for CI | Self-signed / no-KMS tokens exercise different code paths than production; `algorithm: none` passes verifier | Acceptable in unit tests if the `algorithm: none` path is explicitly rejected in production build via cfg flag |
+| Single-use token without jti tracking | Simpler verifier state | Replay attacks trivially possible | Never |
+| `unwrap_or_default()` on scope parse | Short code | Empty scope = deny nothing = full access | Never |
+| Relative paths in override scope | Easier to write tokens manually | Symlink escape, working-directory ambiguity | Never in production tokens |
+
+---
 
 ## Integration Gotchas
 
+Common mistakes when connecting to external services.
+
 | Integration | Common Mistake | Correct Approach |
 |-------------|----------------|------------------|
-| HKLM registry reader | `RegOpenKeyExW` without `KEY_WOW64_64KEY` | Always pass `KEY_READ \| KEY_WOW64_64KEY` to read the 64-bit hive (Pitfall 7) |
-| WFP + nono-proxy allowlist | Each layer parses HKLM independently | Deserialize once into `MachineEgressPolicy`; pass to both layers (Pitfall 2) |
-| MSI custom action for scratch space | Resolve `%LOCALAPPDATA%` in SYSTEM context | Create scratch space at first-run from user context; MSI creates only machine-global `ProgramData\nono\` (Pitfall 4) |
-| Event Log custom channel | Skip `wevtutil im` manifest registration | Use existing Application source pattern for v3.0; defer custom manifest (Pitfall 10) |
-| Root CA cert install | `certutil -addstore Root` only | WiX `CertificateRef` for both `LocalMachine\Root` and `CurrentUser\Root`; verify `rustls_native_certs` in nono-proxy (Pitfall 13) |
-| GPO ADMX + Intune MDM | Intune MDM Extension (32-bit) writes to WOW6432Node | All readers must use `KEY_WOW64_64KEY`; deployment scripts use `[RegistryView]::Registry64` (Pitfall 7) |
-| Policy reload | `Arc<RwLock<AllowList>>` updated by file watcher | Snapshot policy at session start; no mid-session widening (Pitfall 9) |
-| `DiagnosticFormatter` → SIEM | Pass `format_human_readable()` output as Event Log message | Define separate `SecurityEvent` struct with hashed paths; `DiagnosticFormatter` = stderr only (Pitfall 11) |
+| AWS KMS signature verification | Using `MessageType=RAW` instead of `MessageType=DIGEST` — sends the full message to KMS and KMS double-hashes it, producing a wrong digest | Use `MessageType=DIGEST` with the raw 32-byte SHA-256 output, matching the ZT-Infra provisioner's `signHash()` implementation |
+| ZT-Infra canonical form | Hashing the JSON bytes as received | Re-derive canonical bytes after parsing: sorted keys, no whitespace, strip `current_hash` and `kms_signature` before hashing (CANONICAL_FORM R10) |
+| nono-py `confined_run` | Treating `Err` from override check as `None` / allowing execution | Override check must raise `NonoOverrideError`; caller must let it propagate |
+| DAAL ledger write | Blocking the authorization path on ledger confirmation | DAAL write is async and must not block the nono apply path; local audit record is the system of record, ledger is eventual |
+| CloudWatch Logs | Writing the override token's raw scope paths to CloudWatch without redaction | Log only `jti`, `actor`, `signer_key_id`, `expires_at`; hash or omit scope paths |
+| sigstore-rs | Reusing the sigstore keyless-OIDC path for KMS override signing | KMS-signed overrides use a different trust root (AWS KMS key ARN) than sigstore's Rekor/Fulcio path; do not mix the two verification flows |
+
+---
 
 ## Performance Traps
 
+Patterns that work at small scale but fail as usage grows.
+
 | Trap | Symptoms | Prevention | When It Breaks |
 |------|----------|------------|----------------|
-| Per-request `RegOpenKeyExW` + full policy deserialization | Latency spike on every network connection attempt | Cache the policy at session start; re-read only on explicit policy-change notification | Any workload with > ~100 network requests/session |
-| WFP filter bulk-install on every session start | Startup latency; WFP filter-churn; potential race with existing filters | Install WFP filters once in the service at policy-load time; individual session start just verifies the filter is active | Fleet with frequent short sessions (e.g. CI agents) |
-| Event Log writes on every denied action | High-frequency agents generate thousands of events/min; Event Log fills; forwarding backlog | Deduplicate repeated deny events with a time-window bucket; emit a "N events suppressed" aggregate | Agents with tight retry loops hitting a blocked host |
+| Live KMS call on every tool invocation | Agent latency spikes 100–300ms per tool call | Cache public key per key_id with 5-min TTL; live call only on miss or explicit refresh | From first tool call |
+| Synchronous ledger write blocking apply | Override takes 2–10 seconds when DAAL submission is slow | Make DAAL write async (already the ZT-Infra architecture); only the local hash-chain write is synchronous | When blockchain congestion or provider latency increases |
+| Schema validation on every token re-check | CPU spike if `jsonschema` validates large tokens on every capability check | Parse and validate once at ingest; store the `VerifiedOverride` struct | At high tool-call frequency |
+
+---
 
 ## Security Mistakes
 
+Domain-specific security issues beyond general web security.
+
 | Mistake | Risk | Prevention |
 |---------|------|------------|
-| `unwrap_or_default()` on HKLM registry read | Fail-OPEN: machine policy appears enforced but isn't | `ReadError` must be fatal; fail-secure return (Pitfall 1) |
-| HMAC telemetry key in local registry | Attacker with local admin forges event chain; "tamper-evident" claim is false | External SIEM forwarding is the tamper boundary; local crypto deferred to SEED-005 (Pitfall 12) |
-| Full path and URL in Event Log security event | PII/reconnaissance in SIEM forwarding; leaked corporate codepath structure | `SecurityEvent` schema with hashed path + category only; configurable detail level (Pitfall 11) |
-| String suffix matching `host.ends_with(".corp")` | `evil.corp.com` bypasses the rule with `notcorp.com` crafted hostname | DNS component comparison; use `Path::starts_with` analogy for domain components (Pitfall 3) |
-| Mid-session policy widening via registry watcher | Malicious insider pushes wider policy mid-session for exfiltration window | Snapshot-at-launch; narrowing only mid-session (Pitfall 9) |
-| Service-start failure silently treated as success | Fleet machine not enforcing WFP egress; appears healthy to MDM | `nono health` verdict command; fail-secure on WFP service absent (Pitfall 5) |
-| Per-machine MSI custom action writes to SYSTEM `%LOCALAPPDATA%` | Scratch space owned by SYSTEM; every user's R-B3 guard fails | First-run provisioner in user context; MSI writes only to `ProgramData` (Pitfall 4) |
+| AWS credentials inherited by sandboxed child | Child process exfiltrates IAM credentials, makes its own KMS calls | Strip `AWS_*` environment variables before spawning child; load credentials in supervisor only |
+| Override token stored in user-writable directory | Attacker modifies token file between verify and apply (TOCTOU) | Store in a temp location owned by the supervisor; verify and apply in the same synchronous block |
+| Accepting `algorithm: none` or unknown algorithms | Unsigned tokens accepted as verified | Hard-code expected algorithm; reject any deviation |
+| Missing low-S enforcement | Signature malleability; two different byte sequences both valid for same payload | Enforce `s <= n/2` per CANONICAL_FORM spec; reject high-S |
+| Wildcard scope `/**` matching `/../../../etc` | Path escape from intended scope | Validate that glob prefix is canonical and absolute before accepting |
+| Override token logging with full scope in plaintext | Information disclosure of confidential directory layouts | Log only `jti`, `actor`, `signer_key_id`, `expires_at`; hash or omit scope paths |
+
+---
 
 ## "Looks Done But Isn't" Checklist
 
-- [ ] **HKLM policy reader:** Often missing the `ReadError` → abort path — verify a permission-denied key causes a non-zero exit, not a permissive launch.
-- [ ] **Egress reconciliation:** Often wires only proxy, not WFP — verify both layers reflect the same HKLM-sourced allow-list via the dark-factory gate.
-- [ ] **Wildcard suffix matching:** Often uses string `ends_with` — verify `anthropic.com.evil.com` is correctly rejected as NOT matching `.anthropic.com`.
-- [ ] **Scratch space provisioner:** Often tested only in user context — verify the per-machine MSI install (ALLUSERS=1) creates workspace paths owned by the target user, not SYSTEM.
-- [ ] **WOW64 registry reads:** Often missing `KEY_WOW64_64KEY` — verify nono reads the 64-bit hive even when tested from a 32-bit host script.
-- [ ] **Event Log manifest registration:** Often only works on dev host where `wevtutil im` was run manually — verify a clean-host MSI install emits detectable events without prior manual setup.
-- [ ] **Security event schema:** Often re-uses `DiagnosticFormatter` output — verify the Event Log event body does NOT contain a full file path or URL.
-- [ ] **TOCTOU policy reload:** Often missing the mid-session widening test — verify a policy pushed while a session is running does not widen the running session's allow-list.
-- [ ] **Service health verdict:** Often missing `nono health` command — verify the command emits a machine-readable JSON verdict and exits non-zero if WFP service is absent.
-- [ ] **Root cert trust paths:** Often tested only for one client type — verify TLS through nono-proxy works from PowerShell (CryptoAPI), Node.js, AND from nono-cli (rustls/native-certs).
+Items that appear complete but are missing critical pieces.
+
+- [ ] **Fail-closed on AWS outage:** verify that with KMS unreachable, the override is rejected (not granted) — test with a mock that returns 503
+- [ ] **Fail-closed on parse error:** verify that a malformed token JSON returns `Err`, not `Ok(deny)` — both must be distinguishable from success
+- [ ] **Signer-key allowlist check:** verify that a valid signature from an unauthorized KMS key ARN is rejected — not just that the signature is cryptographically valid
+- [ ] **Algorithm pinning:** verify that tokens with `"algorithm": "none"` or `"algorithm": "RS256"` are rejected before signature verification runs
+- [ ] **Expiry enforced at apply time:** verify that a token that was valid at verify time but expired before apply is rejected
+- [ ] **Low-S enforcement:** verify that a high-S variant of a valid signature is rejected
+- [ ] **Path component containment:** verify that `/tmp/project-evil` is not covered by a scope of `/tmp/project`
+- [ ] **Repo-context binding:** verify that a token issued for projectA is rejected in projectB's working directory
+- [ ] **Replay prevention:** verify that a consumed token (same `jti`) is rejected on second use
+- [ ] **Audit emission:** verify that `apply_override()` emits exactly one `SecurityEventLayer` event per override application
+- [ ] **PyO3 error propagation:** verify that a Rust-side `Err` raises `NonoOverrideError` in Python, not `None` or `False`
+- [ ] **Child environment isolation:** verify that after `confined_run()` with an override, the child process cannot read `AWS_ACCESS_KEY_ID` from its environment
+
+---
 
 ## Recovery Strategies
 
+When pitfalls occur despite prevention, how to recover.
+
 | Pitfall | Recovery Cost | Recovery Steps |
 |---------|---------------|----------------|
-| Fail-OPEN on HKLM read shipped to fleet | HIGH | Emergency GPO push + registry key creation; hotfix nono-cli to treat read error as fatal; re-deploy MSI |
-| Proxy/WFP allowlist drift discovered post-deploy | HIGH | Audit WFP filter-state on fleet machines; push corrected policy; hotfix WFP reader to use shared struct |
-| Scratch space owned by SYSTEM, R-B3 failing fleet-wide | MEDIUM | Run `nono setup --fix-scratch` (new command) in user context via SCCM run-as-user job; hotfix MSI custom action |
-| Event Log events silent-dropped (no manifest registered) | MEDIUM | Push manifest registration as a SCCM/Intune remediation script; hotfix the emission code to treat RegisterEventSource NULL as an error |
-| Full paths in SIEM events discovered in audit | MEDIUM | Redact/purge affected SIEM events (coordination with SIEM admin); deploy patched nono with `SecurityEvent` schema; configure `TelemetryDetailLevel=0` via GPO |
-| Fake tamper-evidence claim in docs/compliance | LOW (docs) / HIGH (compliance audit) | Amend documentation to clarify external-SIEM-forwarding model; remove local crypto chain claims; expedite SEED-005 milestone |
-| AI provider blocked by default-deny on first deploy | LOW-MEDIUM | `nono diagnose-egress api.anthropic.com`; GPO add the missing host group; session restart |
+| Fail-open regression shipped | HIGH | Hotfix: add error→deny mapping; revoke any overrides granted during the window; audit SecurityEventLayer for anomalous expansions |
+| OS confinement bypass discovered | HIGH | Emergency: disable override system entirely; revert to baseline profiles; incident response |
+| Path escape via string comparison | HIGH | Patch comparison to use `Path::starts_with()`; review all existing issued tokens for scope overlap; rotate affected tokens |
+| Replay attack on consumed token | MEDIUM | Invalidate all outstanding tokens; reissue with new `jti` values; patch consumed-token tracking |
+| KMS key not in allowlist accepted | HIGH | Rotate the trusted-key allowlist; audit all overrides verified since the bad key was added |
+| Audit gap (no SecurityEventLayer event) | MEDIUM | Reconstruct audit from ZT-Infra CloudWatch logs (secondary source); patch emission; re-verify retroactively |
+| AWS credentials leaked to child | HIGH | Rotate IAM credentials immediately; review agent's network calls during the session; patch env stripping |
+
+---
 
 ## Pitfall-to-Phase Mapping
 
+How roadmap phases should address these pitfalls.
+
 | Pitfall | Prevention Phase | Verification |
 |---------|------------------|--------------|
-| 1. Fail-OPEN on HKLM read failure | Phase 83 (HKLM policy reader) | Dark-factory gate: permission-denied key → non-zero exit |
-| 2. Proxy/WFP allowlist drift | Phase 83 (egress reconciliation) | Dark-factory gate: both layers reflect HKLM list |
-| 3. Wildcard suffix matching footgun | Phase 83 (HKLM reader + proxy integration) | Unit test: `anthropic.com.evil.com` rejected |
-| 4. MSI per-machine SYSTEM scratch-space | Phase 82 (silent MSI) | Dark-factory gate: `ALLUSERS=1` install → workspace owned by user |
-| 5. Non-atomic service install / health verdict | Phase 82 (silent MSI) | Dark-factory gate: service-start failure → `nono health` reports degraded |
-| 6. Env-var propagation lag | Phase 83 (HKLM reader) | Code review: no `std::env::var` in security policy path |
-| 7. WOW6432Node registry redirection | Phase 83 (HKLM reader) | Unit test: 32-bit-simulated write to WOW hive → NOT read by nono |
-| 8. Default-deny blocks AI provider | Phase 83 (egress + diagnostics) | `nono diagnose-egress api.anthropic.com` passes; diagnostic on block includes hostname |
-| 9. TOCTOU policy reload widening | Phase 83 (HKLM reader) | Dark-factory gate: mid-session policy push → running session unaffected |
-| 10. Event Log manifest not registered | Phase 84 (SIEM/EDR telemetry) | Dark-factory gate: clean-host install → detectable event emitted |
-| 11. Secrets/paths in telemetry events | Phase 84 (SIEM/EDR telemetry) | Unit test: `SecurityEvent` serialized body contains no raw path strings |
-| 12. False "tamper-evident" claim | Phase 84 (SIEM/EDR telemetry) | ADR records external-SIEM-forwarding model; no local crypto chain in v3.0 |
-| 13. Root-cert TLS trust path | Phase 82 (silent MSI) | Dark-factory gate: TLS through proxy passes for PowerShell + Node + nono-cli |
+| Fail-OPEN on any error | Phase 91 (format) + Phase 92 (verify) | Test every error variant asserts deny; `#[must_use]` on Result |
+| OS confinement bypass | Phase 91 (format schema) + Phase 92 (runtime) | Test: override apply does not disable sandbox |
+| Path scope escape via string comparison | Phase 91 (format) + Phase 92 (verify) | Adversarial test vectors: `/tmp/project-evil`, `../..` |
+| Self-service token minting | Phase 91 (format) + Phase 92 (verify) | Test: unauthorized-signer token rejected |
+| Signature stripping | Phase 91 (schema) + Phase 92 (verify) | Test: absent sig field → rejected; `algorithm: none` → rejected |
+| Algorithm confusion + missing expiry/nbf/low-S | Phase 91 (format) + Phase 92 (verify) | Test vectors: wrong alg, expired, future nbf, high-S |
+| Replay attack | Phase 91 (format, jti) + Phase 92 (verify, jti tracking) + Phase 93 (ledger) | Test: same jti twice → second rejected |
+| Canonicalization mismatch | Phase 91 (format) + Phase 92 (verify) | Cross-lang vectors from ZT-Infra `test-vectors/` pass |
+| KMS key trust / rotation blindness | Phase 92 (verify) + Phase 93 (AWS) | Test: key not in allowlist → rejected; rotation path |
+| TOCTOU between verify and apply | Phase 92 (runtime mutation) | Concurrent test with delay between verify and apply |
+| Audit gap | Phase 92 (runtime) + Phase 93 (ledger) | Test: apply emits SecurityEventLayer event |
+| PyO3 error absorption | Phase 92 (verify) + Phase 93 (nono-py) | PyO3 boundary error propagation test |
+| AWS credential exposure / outage | Phase 91 (trust setup) + Phase 93 (AWS integration) | Dark gate: child env has no `AWS_*`; KMS-503 → deny |
+| Repo-context binding bypass | Phase 91 (format) + Phase 92 (verify) | Test: projectA token rejected in projectB workdir |
+| Wildcard / glob scope expansion | Phase 91 (format) + Phase 92 (verify) | Test: no glob accepted; `..` in scope path → rejected |
+
+---
 
 ## Sources
 
-- In-tree code (HIGH — authoritative, current):
-  - `crates/nono-cli/src/bin/nono-wfp-service.rs` — Application Event Log source pattern (`EVENT_LOG_SOURCE = SERVICE_NAME`), `RegisterEventSourceW` and `ReportEventW` usage, WFP control pipe SDDL `PIPE_SDDL`.
-  - `crates/nono-cli/src/network_policy.rs` — `ResolvedNetworkPolicy`, `build_proxy_config`, `expand_proxy_allow`, suffix wildcard → `*.` conversion, `partition_allow_domain`, `is_loopback_domain` DNS-component fix (WR-01 precedent).
-  - `crates/nono/src/diagnostic.rs` — `DiagnosticFormatter`, `DenialReason` enum (existing denial path; the re-use risk for SIEM emission is identified here).
-- Project memory (HIGH):
-  - `windows_mandatory_label_write_owner` — WRITE_OWNER not implicit; drive-root user dirs fail; `%USERPROFILE%` works; paired with `path_is_owned_by_current_user` + `GetEffectiveRightsFromAclW`.
-  - `windows_msi_wxs_is_generated` — `.wxs` is generated from `build-windows-msi.ps1`; always edit the script.
-  - `windows_appcontainer_wfp_validated` — per-run AppContainer + WFP kernel-blockable; must `CreateAppContainerProfile` (derive-only → ERROR_FILE_NOT_FOUND).
-  - `windows_wfp_enforcement_is_service_only` — WFP = service-path only; `nono agent launch` → `wfp_filter_add`; not direct `nono run`; WFP-01 dark gate = structural filter-state proof.
-- Phase history (HIGH):
-  - Phase 53/61 — signed machine+user MSI pipeline; `release.yml` signing-order fix.
-  - Phase 56 — fine-grained `allow_domain`; WR-01 `is_loopback_domain` DNS-component bug fix (string prefix hazard directly analogous to Pitfall 3).
-  - Phase 60 — `grant_sid_write_on_path` / `AppliedDaclGrantsGuard` / R-B3 user-ownership guard.
-  - v2.11 — `nono-wfp-service` start made non-fatal (Pitfall 5 background).
-- SEED documents (HIGH): SEED-001, SEED-002, SEED-003.
-- CLAUDE.md security principles (HIGH): "Configuration load failures must be fatal. If security lists fail to load, abort." + path string comparison footgun + `unwrap_or_default()` footgun.
+- `C:\Users\OMack\Nono\CLAUDE.md` — Security Considerations, Path Handling CRITICAL, Common Footguns, Key Design Decisions (project-specific, HIGH confidence)
+- `C:\Users\OMack\Nono\.planning\seeds\SEED-005-zt-infra-policy-override-attestation.md` — scope, breadcrumbs, breadcrumb context (project-specific, HIGH confidence)
+- `C:\Users\OMack\Nono\proj\POC-zt-infra-e5-local-provisioner.md` — fail-closed contract, E5 composition model, what an allow does and does not bypass (project-specific, HIGH confidence)
+- `C:\Users\OMack\Nono\.planning\PROJECT.md` §v3.2 — milestone goal, key context/decisions (project-specific, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\CANONICAL_FORM.md` — CAF v0.1 canonical form spec (R1-R12), signature computation, low-S mandate, rationale (authoritative, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\audit.js` — KMS `MessageType=DIGEST`, `ECDSA_SHA_256`, `normalizeEcdsaDerLowS`, `algorithm: none` shape, hash-chain structure (authoritative, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\canonical.js` — `stableJson()` implementation, sorted keys, string validation, forbidden characters (authoritative, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\policy.js` — `matches()` with glob `endsWith("*")`, default-deny policy shape (authoritative, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\FAILURE_MODES.md` — operational failure mode table; policy engine unavailable = fail closed (authoritative, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ENTERPRISE_READINESS.md` — DAAL async design, signer policy, failure behavior table (authoritative, HIGH confidence)
+- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ARCHITECTURE.md` — composition model: zt-infra decides, nono enforces underneath; layer boundaries table (authoritative, HIGH confidence)
 
 ---
-*Pitfalls research for: nono v3.0 Enterprise Hardening I (Windows fleet deploy, machine-policy egress, SIEM telemetry)*
-*Researched: 2026-06-18*
+*Pitfalls research for: signed policy overrides + external AWS cloud-trust integration in a capability-based OS sandbox*
+*Researched: 2026-06-21*

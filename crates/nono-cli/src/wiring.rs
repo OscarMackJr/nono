@@ -28,6 +28,23 @@
 //! so callers can pass `ExecuteOptions { allow_unmanaged_identical_write_files: true }`
 //! today. The full WriteFile/execute wiring is deferred to v2.5-FU-3; when that
 //! work lands, `execute_with_options` will route `force` into the execute path.
+//!
+//! # Design rules
+//!
+//!   - The CLI knows nothing about specific agents. The directives
+//!     are agent-agnostic file ops; the pack supplies the inputs.
+//!   - The vocabulary is fixed and small (6 types). New directive
+//!     types require a CLI release; new agents do not.
+//!   - Every directive records what it did into a `WiringRecord`,
+//!     stored in the lockfile. `nono remove` replays records in
+//!     reverse — the install plan never has to be re-derived.
+//!   - Variables expanded at execution time: `$PACK_DIR`, `$NS`
+//!     (pack namespace), `$PLUGIN` (pack name, the second segment
+//!     of `<ns>/<pack>`), `$HOME`, `$XDG_CONFIG_HOME`, `$NONO_CONFIG`,
+//!     `$NONO_PACKAGES`. No shell evaluation, no user-controlled inputs
+//!     flow in.
+//!   - Idempotent: re-running a directive with the same inputs is a
+//!     no-op and reports `wiring_changed = false`.
 
 use nono::{NonoError, Result};
 use serde::{Deserialize, Serialize};

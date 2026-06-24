@@ -117,6 +117,7 @@ pub async fn handle_reverse_proxy(
 
     // Look up credential for service (optional — not all routes inject credentials)
     let cred = ctx.credential_store.get(&service);
+    let aws_route = ctx.credential_store.get_aws(&service);
 
     // Authenticate the request. Every reverse proxy request must prove
     // possession of the session token, regardless of whether a credential
@@ -177,6 +178,16 @@ pub async fn handle_reverse_proxy(
             send_error(stream, 407, "Proxy Authentication Required").await?;
             return Ok(());
         }
+    }
+
+    // AWS SigV4 signing is not yet implemented. Return 501 so the caller
+    // knows the route exists but is not functional. This branch will be
+    // replaced with real SigV4 signing in a follow-up. (D-15 fork adaptation:
+    // upstream's 501 is in tls_intercept/handle.rs which the fork does not
+    // have; this is the equivalent guard on the non-TLS proxy path.)
+    if aws_route.is_some() {
+        send_error(stream, 501, "Not Implemented").await?;
+        return Ok(());
     }
 
     // Transform the path based on injection mode (url_path and query_param modes).
@@ -1228,5 +1239,141 @@ mod tests {
         let path = "/api/data";
         let result = transform_query_param(path, "api_key", &credential).unwrap();
         assert_eq!(result, "/api/data?api_key=key%20with%20spaces");
+    }
+
+    // ============================================================================
+    // D-09 / #1077 — 403 + EndpointPolicy audit equivalence test
+    // ============================================================================
+    //
+    // Async harness imports copied from connect.rs tests (lines 276-285).
+    use nono::undo::{NetworkAuditDecision, NetworkAuditDenialCategory};
+    use tokio::io::AsyncReadExt;
+
+    /// Drain a reader to end-of-stream and return the bytes as a String.
+    async fn read_to_string<R: tokio::io::AsyncRead + Unpin>(mut reader: R) -> String {
+        let mut buf = Vec::new();
+        reader.read_to_end(&mut buf).await.unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    /// D-09 / #1077 403+audit equivalence test.
+    ///
+    /// Drives `handle_reverse_proxy` with a route that allows only `GET /v1/models`
+    /// via endpoint_rules (default-deny). The request asks for `GET /forbidden`, which
+    /// the endpoint rules deny. Asserts:
+    ///   1. The client receives `HTTP/1.1 403 Forbidden`.
+    ///   2. `audit::drain_audit_events` yields one event with
+    ///      `decision == NetworkAuditDecision::Deny` and
+    ///      `denial_category == Some(NetworkAuditDenialCategory::EndpointPolicy)`.
+    ///
+    /// The 403 is sent BEFORE any credential operation (reverse.rs:96-116), which IS
+    /// #1077's intent. Cherry-pick of a5d623fd skipped (equivalence confirmed); non-test
+    /// code is unchanged.
+    #[tokio::test]
+    async fn denied_endpoint_returns_403_and_audit() {
+        use crate::config::{EndpointRule, RouteConfig};
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+
+        // Build a RouteStore with one route: service prefix "testservice", allowing
+        // only GET /v1/models. Any other path is endpoint-denied.
+        let routes = vec![RouteConfig {
+            prefix: "testservice".to_string(),
+            upstream: "https://example.invalid".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![EndpointRule {
+                method: "GET".to_string(),
+                path: "/v1/models".to_string(),
+            }],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+        }];
+
+        let route_store = RouteStore::load(&routes).unwrap();
+        let credential_store = CredentialStore::empty();
+        let session_token = Zeroizing::new("test-session-token".to_string());
+        let filter = ProxyFilter::allow_all();
+
+        // Build a minimal TLS connector. It is required by ReverseProxyCtx but will
+        // NOT be exercised because the endpoint-deny path returns before any upstream
+        // TLS connection is attempted.
+        let root_store = crate::route::build_base_root_store();
+        let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+        let tls_connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+
+        let audit_log = audit::new_audit_log();
+
+        let ctx = ReverseProxyCtx {
+            route_store: &route_store,
+            credential_store: &credential_store,
+            session_token: &session_token,
+            filter: &filter,
+            tls_connector: &tls_connector,
+            audit_log: Some(&audit_log),
+        };
+
+        // Bind a loopback listener so we have a real TcpStream pair (handle_reverse_proxy
+        // requires &mut TcpStream, not a generic AsyncWrite).
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (connect_result, accept_result) =
+            tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+        let mut server_stream = accept_result.unwrap().0;
+        let mut client_conn = connect_result.unwrap();
+
+        // Request: GET /testservice/forbidden — endpoint rules deny /forbidden on this route.
+        let first_line = "GET /testservice/forbidden HTTP/1.1";
+        let remaining_header = b"Host: example.invalid\r\n\r\n";
+
+        let _result =
+            handle_reverse_proxy(first_line, &mut server_stream, remaining_header, &ctx, &[]).await;
+
+        // Drop the server side so the client reader can drain to EOF.
+        drop(server_stream);
+
+        // Read what was written to the "client" side.
+        let response = read_to_string(&mut client_conn).await;
+
+        // ASSERTION 1 (core equivalence): 403 Forbidden returned.
+        assert!(
+            response.starts_with("HTTP/1.1 403"),
+            "D-09: expected HTTP/1.1 403 response; got: {:?}",
+            response
+        );
+
+        // ASSERTION 2: audit event carries Deny + EndpointPolicy.
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            !events.is_empty(),
+            "D-09: expected at least one audit event; got none"
+        );
+        let event = &events[0];
+        assert_eq!(
+            event.decision,
+            NetworkAuditDecision::Deny,
+            "D-09: expected Deny decision; got: {:?}",
+            event.decision
+        );
+        assert_eq!(
+            event.denial_category,
+            Some(NetworkAuditDenialCategory::EndpointPolicy),
+            "D-09: expected EndpointPolicy denial_category; got: {:?}",
+            event.denial_category
+        );
     }
 }

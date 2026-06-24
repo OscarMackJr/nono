@@ -335,7 +335,7 @@ fn expand_preset_tokens_from_embedded(tokens: &[String]) -> Result<Vec<String>, 
 ///
 /// # Returns
 ///
-/// `(effective_allowlist, machine_enforcement_active)` where:
+/// `(effective_allowlist, machine_enforcement_active, telemetry_config)` where:
 /// - `effective_allowlist` — the FQDN list to configure `ProxyFilter::new_strict`
 ///   with.  When machine policy is `Some`, this is the WHOLESALE override
 ///   (suffixes + hosts + expanded preset tokens); the `per_user_domains` slice is
@@ -344,6 +344,11 @@ fn expand_preset_tokens_from_embedded(tokens: &[String]) -> Result<Vec<String>, 
 /// - `machine_enforcement_active` — `true` when a machine policy was found.
 ///   Callers use this to decide whether to start the in-process proxy server and
 ///   whether to flip the per-agent WFP request to `proxy-only` mode (EGRESS-02).
+/// - `telemetry_config` — the `TelemetryConfig` from the machine policy (D-03:
+///   thread the already-read config so no second HKLM read is needed).  When
+///   policy is `None` (absent), returns `TelemetryConfig::default()` (default-ON,
+///   matching CLI parity).  The `Err` → abort path (D-07 fail-secure) is
+///   **preserved unchanged** — SOLE-read contract (Phase 83 D-04) is not broken.
 ///
 /// # Errors
 ///
@@ -351,7 +356,7 @@ fn expand_preset_tokens_from_embedded(tokens: &[String]) -> Result<Vec<String>, 
 /// unreadable or malformed (D-07 fail-secure).
 pub(crate) fn resolve_machine_egress_policy(
     per_user_domains: &[String],
-) -> nono::Result<(Vec<String>, bool)> {
+) -> nono::Result<(Vec<String>, bool, nono::TelemetryConfig)> {
     // D-04 SOLE read — exactly one call site in the entire daemon.
     // `?` propagates Err(PolicyLoadFailed) → abort startup (D-07).
     // NEVER `.ok()`/`.unwrap_or` here (Pitfall 3, fail-open vulnerability).
@@ -359,6 +364,11 @@ pub(crate) fn resolve_machine_egress_policy(
 
     match machine_policy {
         Some(policy) => {
+            // D-03: capture telemetry config from the already-read policy.
+            // `policy.telemetry` is `TelemetryConfig` (non-Option, serde-default).
+            // No second `read_machine_egress_policy()` call — SOLE-read preserved.
+            let telemetry = policy.telemetry.clone();
+
             // Machine policy present → wholesale override (D-08).
             // Per-user `per_user_domains` is IGNORED entirely — it can never
             // widen the fleet allowlist set by the admin (T-83-peruser-widen).
@@ -383,16 +393,21 @@ pub(crate) fn resolve_machine_egress_policy(
                  per-user allow_domain list ignored; \
                  GPO changes take effect on next daemon restart (D-06)"
             );
-            Ok((allowlist, true))
+            Ok((allowlist, true, telemetry))
         }
         None => {
             // Machine policy absent → fall through to per-user (D-07 absent branch).
             // No enforcement change; per-user domains are passed through verbatim.
+            // D-03: absent policy → TelemetryConfig::default() (default-ON, CLI parity).
             tracing::debug!(
                 "daemon startup: no machine egress policy in HKLM — \
                  using per-user allow_domain list (D-07 absent fall-through)"
             );
-            Ok((per_user_domains.to_vec(), false))
+            Ok((
+                per_user_domains.to_vec(),
+                false,
+                nono::TelemetryConfig::default(),
+            ))
         }
     }
 }
@@ -636,7 +651,7 @@ mod tests {
     #[test]
     fn machine_policy_handoff_absent_falls_through_to_per_user() {
         let per_user = vec!["*.example.com".to_string(), "api.foo.bar".to_string()];
-        let (allowlist, active) = resolve_machine_egress_policy(&per_user)
+        let (allowlist, active, telemetry_cfg) = resolve_machine_egress_policy(&per_user)
             .expect("resolve_machine_egress_policy must not fail when key is absent");
 
         // On a dev host without a machine policy key (most cases), the fallback
@@ -647,6 +662,11 @@ mod tests {
             assert_eq!(
                 allowlist, per_user,
                 "absent machine policy must return per-user domains verbatim"
+            );
+            // D-03: absent branch must return TelemetryConfig::default() (default-ON).
+            assert!(
+                telemetry_cfg.enabled,
+                "absent machine policy must return default-ON TelemetryConfig (D-03)"
             );
         }
         // If active=true a machine policy key happened to exist on the host; the

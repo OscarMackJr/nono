@@ -16,6 +16,7 @@ mod supervisor_linux;
 #[cfg(target_os = "macos")]
 mod supervisor_macos;
 
+use crate::diagnostic::{DiagnosticFormatter, DiagnosticMode};
 use crate::rollback_runtime::{
     finalize_supervised_exit, AuditState, RollbackExitContext, RollbackRuntimeState,
 };
@@ -28,8 +29,8 @@ use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::{fork, ForkResult, Pid};
 use nono::supervisor::{ApprovalDecision, SupervisorMessage, SupervisorResponse};
 use nono::{
-    ApprovalBackend, CapabilitySet, DenialReason, DenialRecord, DiagnosticFormatter,
-    DiagnosticMode, NonoError, Result, Sandbox, SupervisorSocket,
+    ApprovalBackend, CapabilitySet, DenialReason, DenialRecord, NonoError, Result, Sandbox,
+    SessionDiagnosticReport, SupervisorSocket,
 };
 use std::collections::HashSet;
 use std::ffi::{CString, OsStr};
@@ -48,6 +49,7 @@ use env_sanitization::should_skip_env_var;
 #[allow(unused_imports)]
 // Re-exported for cross-module consumers; profile_runtime uses a local copy.
 pub(crate) use env_sanitization::validate_env_var_patterns;
+pub(crate) use env_sanitization::validate_set_vars;
 
 use crate::timeouts;
 
@@ -169,31 +171,41 @@ const MAX_DENIAL_RECORDS: usize = 1000;
 /// Hard cap on request IDs tracked for replay detection.
 const MAX_TRACKED_REQUEST_IDS: usize = 4096;
 
+struct ProfileSaveOffer<'a> {
+    policy_explanations: &'a [crate::diagnostic::PolicyExplanation],
+    error_observation: &'a crate::diagnostic::ErrorObservation,
+    caps: &'a CapabilitySet,
+    command: &'a [String],
+    compared_profile: Option<&'a str>,
+    // Constructed for diagnostic completeness but not yet consumed by
+    // `offer_save_run_profile`; retained to preserve violation-tracking context.
+    #[allow(dead_code)]
+    sandbox_violations: &'a [nono::SandboxViolation],
+    #[allow(dead_code)]
+    ignored_denial_paths: &'a [std::path::PathBuf],
+}
+
 fn offer_profile_save_for_child(
     pty: Option<&mut crate::pty_proxy::PtyProxy>,
-    policy_explanations: &[nono::diagnostic::PolicyExplanation],
-    error_observation: &nono::diagnostic::ErrorObservation,
-    caps: &CapabilitySet,
-    command: &[String],
-    compared_profile: Option<&str>,
+    offer: ProfileSaveOffer<'_>,
 ) -> Result<()> {
     if let Some(proxy) = pty {
         let _released_terminal = proxy.release_terminal_for_prompt();
         return crate::profile_save_runtime::offer_save_run_profile(
-            policy_explanations,
-            error_observation,
-            caps,
-            command,
-            compared_profile,
+            offer.policy_explanations,
+            offer.error_observation,
+            offer.caps,
+            offer.command,
+            offer.compared_profile,
         );
     }
 
     crate::profile_save_runtime::offer_save_run_profile(
-        policy_explanations,
-        error_observation,
-        caps,
-        command,
-        compared_profile,
+        offer.policy_explanations,
+        offer.error_observation,
+        offer.caps,
+        offer.command,
+        offer.compared_profile,
     )
 }
 
@@ -295,6 +307,10 @@ pub struct ExecConfig<'a> {
     pub current_dir: &'a std::path::Path,
     /// Whether to suppress diagnostic output.
     pub no_diagnostics: bool,
+    /// Emit session diagnostics as JSON on stderr after the run.
+    pub diagnostics_json: bool,
+    /// Proxy startup diagnostics when a credential proxy is active.
+    pub proxy_diagnostics: Option<&'a [nono_proxy::ProxyDiagnostic]>,
     /// Threading context for fork safety validation.
     pub threading: ThreadingContext,
     /// Paths that are write-protected (signed instruction files).
@@ -340,6 +356,10 @@ pub struct ExecConfig<'a> {
     /// This is a UX gate, not a security gate: paths in this list are STILL
     /// denied by the sandbox; the field only controls footer annotation.
     pub ignored_denial_paths: &'a [std::path::PathBuf],
+    /// Static environment variables (`environment.set_vars`) injected after host
+    /// env filtering and before `env_vars` (credentials/proxy/hooks). Values are
+    /// already variable-expanded. Bypasses allow/deny filtering by design.
+    pub set_vars: Vec<(String, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -416,6 +436,68 @@ fn should_install_macos_open_shim(supervisor: Option<&SupervisorConfig<'_>>) -> 
 #[cfg(target_os = "linux")]
 const fn linux_child_requires_dumpable(capability_elevation: bool, network_notify: bool) -> bool {
     capability_elevation || network_notify
+}
+
+/// What send-family (sendto/sendmsg/sendmmsg) seccomp filter the child should install.
+///
+/// Used by [`af_unix_send_filter_action`] to centralize the gate logic used by
+/// both the child's fork arm (installs the filter, optionally sends a notify fd)
+/// and the parent's fork arm (decides whether to recv a notify fd). Both sides
+/// MUST evaluate the same predicate from the same `config` to avoid deadlocking
+/// on `recv_fd` / `send_fd` mismatches.
+///
+/// # Invariant
+///
+/// When `has_unix_grants` is true, `action` is `UserNotify` — the USER_NOTIF
+/// AF_UNIX filter is installed and a notify fd is exchanged between child and parent.
+/// When `has_unix_grants` is false and `is_pathname` is true, `action` is
+/// `StaticEperm` — a static EPERM filter for send-family syscalls is installed,
+/// and NO notify fd is exchanged. In `Off` mode (neither proxy nor pathname),
+/// `action` is `NoFilter` — no filter is installed and no notify fd is exchanged.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AfUnixSendFilterAction {
+    /// Install nothing. Default supervised mode with no AF_UNIX mediation.
+    NoFilter,
+    /// Install static EPERM filter for send-family syscalls (no notify fd).
+    /// Applies when pathname mediation is active but no unix-socket grants exist.
+    StaticEperm,
+    /// Install USER_NOTIF filter (proxy or pathname+grants); exchange notify fd.
+    UserNotify,
+}
+
+/// Compute the send-family seccomp filter action for a given supervisor config.
+///
+/// This is the single source of truth for the three-way gate used by BOTH the
+/// child (filter install) and the parent (recv_fd coordination). Keeping it as
+/// a pure function makes the logic unit-testable and prevents child/parent skew.
+///
+/// # Semantics
+///
+/// - `proxy_fallback=true` → always `UserNotify` (proxy handles send-family via USER_NOTIF)
+/// - `is_pathname=true, has_grants=true` → `UserNotify` (AF_UNIX USER_NOTIF with grants)
+/// - `is_pathname=true, has_grants=false` → `StaticEperm` (no grants: static deny, no fd)
+/// - `is_pathname=false` (Off mode) → `None` (no filter, default networking intact)
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn af_unix_send_filter_action(
+    proxy_fallback: bool,
+    mediation: crate::profile::LinuxAfUnixMediation,
+    has_unix_grants: bool,
+) -> AfUnixSendFilterAction {
+    if proxy_fallback {
+        return AfUnixSendFilterAction::UserNotify;
+    }
+    if mediation.is_pathname() {
+        if has_unix_grants {
+            AfUnixSendFilterAction::UserNotify
+        } else {
+            AfUnixSendFilterAction::StaticEperm
+        }
+    } else {
+        // Off mode: no AF_UNIX mediation requested. Install nothing.
+        AfUnixSendFilterAction::NoFilter
+    }
 }
 
 /// Execute a command using the Direct strategy (exec, nono disappears).
@@ -501,6 +583,12 @@ pub fn execute_direct(
         cmd.env("NONO_CAP_FILE", cap_file);
     }
 
+    // Static profile vars (set_vars): after host filtering, before credentials
+    // so injected credentials win on conflict.
+    for (key, value) in &config.set_vars {
+        cmd.env(key, value);
+    }
+
     for (key, value) in &config.env_vars {
         cmd.env(key, value);
     }
@@ -550,6 +638,43 @@ pub fn execute_direct(
 /// Does NOT pipe stdout/stderr. The child inherits the parent's terminal directly,
 /// preserving TTY semantics for interactive programs (e.g., Claude Code, vim).
 /// The parent prints diagnostics and rollback UI after the child exits.
+///
+/// Append `set_vars` to a raw `execve` environment vector, deduplicating by key.
+///
+/// `env_c` is a raw `KEY=VALUE` vector passed straight to `execve` — unlike
+/// [`std::process::Command::env`] it does not collapse duplicate keys, so we
+/// must dedupe by hand. Passing duplicate keys to `execve` is
+/// platform-dependent and a potential dynamic-linker-bypass vector.
+///
+/// Precedence matches `execute_direct`: credentials (`env_vars`) win over
+/// `set_vars`, which win over inherited host vars. A `set_vars` key already
+/// destined to be set by `env_vars` is skipped; any earlier entry (e.g. an
+/// inherited host var) with the same key is removed before the new value is
+/// pushed.
+fn push_set_vars(
+    env_c: &mut Vec<CString>,
+    set_vars: &[(String, String)],
+    env_vars: &[(&str, &str)],
+) {
+    for (key, value) in set_vars {
+        if env_vars.iter().any(|(ek, _)| ek == key) {
+            continue;
+        }
+        let mut prefix = Vec::with_capacity(key.len() + 1);
+        prefix.extend_from_slice(key.as_bytes());
+        prefix.push(b'=');
+        env_c.retain(|cstr| !cstr.as_bytes().starts_with(&prefix));
+
+        let mut kv = Vec::with_capacity(key.len() + 1 + value.len() + 1);
+        kv.extend_from_slice(key.as_bytes());
+        kv.push(b'=');
+        kv.extend_from_slice(value.as_bytes());
+        if let Ok(cstr) = CString::new(kv) {
+            env_c.push(cstr);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn execute_supervised(
     config: &ExecConfig<'_>,
@@ -679,6 +804,10 @@ pub fn execute_supervised(
             }
         }
     }
+
+    // Static profile vars (set_vars): after host filtering, before credentials
+    // so injected credentials win on conflict.
+    push_set_vars(&mut env_c, &config.set_vars, &config.env_vars);
 
     // Add user-specified environment variables (secrets, etc.)
     for (key, value) in &config.env_vars {
@@ -1205,14 +1334,25 @@ pub fn execute_supervised(
                     }
                 }
 
+                // Determine the send-family seccomp filter action using the
+                // centralized helper. Both child and parent MUST use the same
+                // predicate (af_unix_send_filter_action) with the same config
+                // so the notify-fd send/recv are always in sync.
+                let has_unix_grants = !config.caps.unix_socket_capabilities().is_empty();
+                let send_filter_action = af_unix_send_filter_action(
+                    config.seccomp_proxy_fallback,
+                    config.af_unix_mediation,
+                    has_unix_grants,
+                );
+
                 // If the parent determined that network seccomp-notify is
                 // needed, install exactly one connect/bind notify filter and
                 // send its fd to the parent. Proxy fallback uses the stricter
-                // proxy filter; V4+ AF_UNIX mediation uses an AF_UNIX-only
-                // policy filter that lets non-AF_UNIX traffic continue to the
-                // existing Landlock/network policy.
+                // proxy filter; V4+ AF_UNIX mediation with grants uses an
+                // AF_UNIX-only policy filter that lets non-AF_UNIX traffic
+                // continue to the existing Landlock/network policy.
                 let install_network_notify =
-                    config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname();
+                    send_filter_action == AfUnixSendFilterAction::UserNotify;
                 if install_network_notify && nono::sandbox::is_wsl2() {
                     let msg = b"nono: WSL2 detected, skipping seccomp proxy filter (proxy network filtering unavailable)\n";
                     unsafe {
@@ -1270,6 +1410,45 @@ pub fn execute_supervised(
                                     libc::_exit(126);
                                 }
                             }
+                        }
+                    }
+                }
+
+                // D-01 no-grant path: install a static EPERM filter for send-family
+                // syscalls only when ALL of:
+                //   1. AF_UNIX pathname mediation is active (is_pathname() = true), AND
+                //   2. No unix-socket grants are present (unix_socket_allowlist is empty).
+                // This closes the SOCK_DGRAM bypass where a child holding an existing
+                // AF_UNIX socket fd could call sendto() → SECCOMP_RET_ALLOW before
+                // sandbox lock-down.
+                //
+                // IMPORTANT: This must NOT install in the default Off mode. In Off mode
+                // the child has no AF_UNIX mediation and the filter would blanket-EPERM
+                // all datagram sends (UDP/DNS/QUIC) even under NetworkMode::AllowAll —
+                // that was the CR-01 regression.
+                //
+                // WR-02 accepted limitation: if install fails, the child writes a
+                // warning to stderr and continues without the filter. On this code path
+                // AF_UNIX pathname mediation was explicitly requested, so failing open
+                // leaves the SOCK_DGRAM bypass open. Landlock V4 does NOT backstop
+                // AF_UNIX sends — this is a real residual risk documented here and in
+                // the Phase 87 verification report. Failing closed (_exit(126)) was
+                // considered but rejected: a kernel that supports pathname mediation
+                // (Landlock V4) but not prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER) is
+                // exceedingly rare; treating it as fatal would break legitimate
+                // deployments. Operators on kernels without seccomp-BPF must understand
+                // this limitation.
+                if send_filter_action == AfUnixSendFilterAction::StaticEperm {
+                    if let Err(_e) = nono::sandbox::install_seccomp_af_unix_nogrant_filter() {
+                        const MSG_NOGRANT: &[u8] =
+                            b"nono: AF_UNIX no-grant seccomp filter not available (WR-02: bypass residual risk on this kernel)\n";
+                        // SAFETY: write is async-signal-safe.
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_NOGRANT.as_ptr().cast::<libc::c_void>(),
+                                MSG_NOGRANT.len(),
+                            );
                         }
                     }
                 }
@@ -1455,11 +1634,21 @@ pub fn execute_supervised(
             };
 
             // On Linux: if the parent determined seccomp proxy fallback is needed,
-            // receive the proxy notify fd from the child. Only attempt recv when
-            // we know the child will send it (both sides use the same flag).
+            // receive the proxy notify fd from the child. MUST use the same
+            // af_unix_send_filter_action predicate as the child to avoid deadlock:
+            // the child sends a fd only when action == UserNotify, so the parent
+            // must recv only when action == UserNotify. Using a different predicate
+            // here would cause the parent to block on recv_fd() waiting for a fd
+            // the child never sends.
             #[cfg(target_os = "linux")]
-            let proxy_notify_fd: Option<OwnedFd> =
-                if config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname() {
+            let proxy_notify_fd: Option<OwnedFd> = {
+                let has_unix_grants_parent = !config.caps.unix_socket_capabilities().is_empty();
+                let parent_send_action = af_unix_send_filter_action(
+                    config.seccomp_proxy_fallback,
+                    config.af_unix_mediation,
+                    has_unix_grants_parent,
+                );
+                if parent_send_action == AfUnixSendFilterAction::UserNotify {
                     if let Some(ref sup_sock) = supervisor_sock {
                         match sup_sock.recv_fd() {
                             Ok(fd) => {
@@ -1476,7 +1665,8 @@ pub fn execute_supervised(
                     }
                 } else {
                     None
-                };
+                }
+            };
 
             // Set up signal forwarding.
             setup_signal_forwarding(child, pty_proxy.as_ref().map(|p| p.poll_fds().0));
@@ -1677,7 +1867,7 @@ pub fn execute_supervised(
             let error_observation = pty_proxy
                 .as_ref()
                 .map(|p| {
-                    nono::diagnostic::analyze_error_output(
+                    crate::diagnostic::analyze_error_output(
                         &p.screen_plaintext(),
                         config.protected_paths,
                         Some(config.current_dir),
@@ -1730,7 +1920,7 @@ pub fn execute_supervised(
 
             // Print diagnostic footer on non-zero exit or when the PTY
             // output or OS sandbox logs show a likely sandbox-related issue.
-            if should_print_diagnostics {
+            if should_print_diagnostics || config.diagnostics_json {
                 let diag_session_id = if supervisor.is_some() {
                     pty_session_id
                         .or_else(|| supervisor.map(|s| s.session_id))
@@ -1751,7 +1941,7 @@ pub fn execute_supervised(
                     .iter()
                     .map(|d| nono::try_canonicalize(&d.path))
                     .collect();
-                let mut formatter = DiagnosticFormatter::new(config.caps)
+                let mut base_formatter = DiagnosticFormatter::new(config.caps)
                     .with_mode(mode)
                     .with_denials(&denials)
                     .with_ipc_denials(&ipc_denials)
@@ -1767,14 +1957,29 @@ pub fn execute_supervised(
                     )
                     .with_canonical_denial_paths(canonical_denial_paths);
                 if let Some(program) = config.command.first() {
-                    formatter = formatter.with_command(nono::diagnostic::CommandContext {
-                        program: program.clone(),
-                        resolved_path: config.resolved_program.to_path_buf(),
-                        args: nono::scrub_argv_with_policy(config.command, redaction_policy),
-                    });
+                    base_formatter =
+                        base_formatter.with_command(crate::diagnostic::CommandContext {
+                            program: program.clone(),
+                            resolved_path: config.resolved_program.to_path_buf(),
+                            args: nono::scrub_argv_with_policy(config.command, redaction_policy),
+                        });
                 }
-                let footer = formatter.format_footer(exit_code);
-                crate::output::print_diagnostic_footer(&footer);
+
+                let diagnostic_report = base_formatter.build_session_report(exit_code);
+
+                if config.diagnostics_json {
+                    if let Err(e) =
+                        emit_merged_diagnostics_json(&diagnostic_report, config.proxy_diagnostics)
+                    {
+                        warn!("Failed to emit diagnostics JSON: {e}");
+                    }
+                }
+
+                if should_print_diagnostics {
+                    let formatter = base_formatter.with_session_report(&diagnostic_report);
+                    let footer = formatter.format_footer(exit_code);
+                    crate::output::print_diagnostic_footer(&footer);
+                }
             }
 
             // Telemetry: emit a security event for each denied path so
@@ -1813,11 +2018,15 @@ pub fn execute_supervised(
                 clear_signal_forwarding_target();
                 offer_profile_save_for_child(
                     pty_proxy.as_mut(),
-                    &prompt_policy_explanations,
-                    &prompt_error_observation,
-                    config.caps,
-                    config.command,
-                    config.profile_save_base,
+                    ProfileSaveOffer {
+                        policy_explanations: &prompt_policy_explanations,
+                        error_observation: &prompt_error_observation,
+                        caps: config.caps,
+                        command: config.command,
+                        compared_profile: config.profile_save_base,
+                        sandbox_violations: &visible_sandbox_violations,
+                        ignored_denial_paths: config.ignored_denial_paths,
+                    },
                 )?;
             }
 
@@ -1836,8 +2045,8 @@ fn build_policy_explanations(
     denials: &[nono::diagnostic::DenialRecord],
     sandbox_violations: &[nono::SandboxViolation],
     caps: &nono::CapabilitySet,
-) -> Vec<nono::diagnostic::PolicyExplanation> {
-    use nono::diagnostic::PolicyExplanation;
+) -> Vec<crate::diagnostic::PolicyExplanation> {
+    use crate::diagnostic::PolicyExplanation;
     use nono::AccessMode;
     use std::collections::BTreeMap;
 
@@ -1888,20 +2097,11 @@ fn build_policy_explanations(
     let mut explanations = Vec::new();
     for (path, access) in paths {
         match crate::query_ext::query_path(&path, access, caps, &[]) {
-            Ok(crate::query_ext::QueryResult::Denied {
-                reason,
-                details,
-                policy_source,
-                suggested_flag,
-                ..
-            }) => {
+            Ok(crate::query_ext::QueryResult::Denied { reason, .. }) => {
                 explanations.push(PolicyExplanation {
                     path,
                     access,
                     reason,
-                    details,
-                    policy_source,
-                    suggested_flag,
                 });
             }
             Ok(crate::query_ext::QueryResult::Allowed { .. }) => {
@@ -1944,13 +2144,35 @@ fn login_keychain_db_path() -> Option<PathBuf> {
         .map(|home| PathBuf::from(home).join("Library/Keychains/login.keychain-db"))
 }
 
+/// Write merged session and proxy diagnostics JSON to stderr.
+fn emit_merged_diagnostics_json(
+    report: &SessionDiagnosticReport,
+    proxy_diagnostics: Option<&[nono_proxy::ProxyDiagnostic]>,
+) -> Result<()> {
+    let proxy_json = proxy_diagnostics
+        .filter(|d| !d.is_empty())
+        .map(|diagnostics| {
+            serde_json::to_string(diagnostics)
+                .map_err(|e| NonoError::ConfigParse(format!("proxy diagnostics JSON error: {e}")))
+        });
+    let proxy_json = match proxy_json {
+        Some(Ok(json)) => Some(json),
+        Some(Err(e)) => return Err(e),
+        None => None,
+    };
+    let pretty =
+        SessionDiagnosticReport::merge_with_proxy_json(&report.to_json()?, proxy_json.as_deref())?;
+    print_terminal_safe_stderr(&pretty);
+    Ok(())
+}
+
 fn should_print_diagnostic_footer(
     no_diagnostics: bool,
     exit_code: i32,
     denials: &[nono::diagnostic::DenialRecord],
     ipc_denials: &[nono::diagnostic::IpcDenialRecord],
     sandbox_violations: &[nono::SandboxViolation],
-    error_observation: &nono::diagnostic::ErrorObservation,
+    error_observation: &crate::diagnostic::ErrorObservation,
 ) -> bool {
     !no_diagnostics
         && (exit_code != 0
@@ -1981,8 +2203,8 @@ fn filter_suppressed_system_service_violations(
 fn should_offer_profile_save(
     no_diagnostics: bool,
     exit_code: i32,
-    policy_explanations: &[nono::diagnostic::PolicyExplanation],
-    error_observation: &nono::diagnostic::ErrorObservation,
+    policy_explanations: &[crate::diagnostic::PolicyExplanation],
+    error_observation: &crate::diagnostic::ErrorObservation,
     sandbox_violations: &[nono::SandboxViolation],
 ) -> bool {
     !no_diagnostics
@@ -2092,6 +2314,7 @@ fn wait_for_child_with_pty(
         }
         let in_band_detach_requested = pty.take_detach_request();
         handle_pty_detach_request(Some(pty), pause_requested, in_band_detach_requested);
+        handle_pty_suspension(Some(pty), child);
 
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
@@ -2385,6 +2608,122 @@ fn handle_pty_detach_request(
     }
 }
 
+/// Send `sig` to the PTY's foreground process group, falling back to `child`.
+///
+/// A shell (bash) running a foreground job (vim) puts that job in its own
+/// process group and makes it the PTY's foreground PG. Job-control signals must
+/// reach that whole group, not just the immediate child, so we query it via
+/// tcgetpgrp on the master fd and signal the negated PGID. On any error we fall
+/// back to the bare child.
+fn signal_pty_foreground_group(pty: &crate::pty_proxy::PtyProxy, child: Pid, sig: Signal) {
+    match nix::unistd::tcgetpgrp(pty.master_fd()) {
+        Ok(pgid) => {
+            let _ = signal::kill(Pid::from_raw(-pgid.as_raw()), sig);
+        }
+        Err(_) => {
+            let _ = signal::kill(child, sig);
+        }
+    }
+}
+
+/// Handle a Ctrl-Z suspension request intercepted by the PtyProxy.
+///
+/// The handling depends on whether the PTY foreground group is nono's direct
+/// child. A nested job (e.g. vim under `bash -i`) is NOT orphaned — its parent
+/// shell is in the same session — so the kernel delivers normal job-control
+/// signals: we forward a plain SIGTSTP and let the inner shell suspend/resume
+/// it. The direct child is orphaned (setsid() put it in a new session whose
+/// parent, nono, is elsewhere), so the kernel drops SIGTSTP and we must drive
+/// suspension manually: SIGSTOP, restore the terminal, raise(SIGTSTP) on nono
+/// itself, then SIGCONT on resume.
+fn handle_pty_suspension(pty: Option<&mut crate::pty_proxy::PtyProxy>, child: Pid) {
+    let pty = match pty {
+        Some(p) => p,
+        None => return,
+    };
+
+    if !pty.take_suspension_request() {
+        return;
+    }
+
+    let fg_pgid = nix::unistd::tcgetpgrp(pty.master_fd()).ok();
+    let child_is_foreground = match fg_pgid {
+        Some(pgid) => pgid.as_raw() == child.as_raw(),
+        None => true,
+    };
+
+    // Nested job: forward SIGTSTP and let the inner shell handle it. Do not
+    // waitpid() — the stopped job is not our child, and the inner shell is
+    // already blocked waiting on it, so waiting here would hang.
+    if !child_is_foreground {
+        if let Some(pgid) = fg_pgid {
+            let _ = signal::kill(Pid::from_raw(-pgid.as_raw()), Signal::SIGTSTP);
+        }
+        return;
+    }
+
+    // Direct child (orphaned PG): SIGSTOP is uncatchable, unlike SIGTSTP which
+    // an interactive bash ignores, so it forces the stopped state immediately.
+    signal_pty_foreground_group(pty, child, Signal::SIGSTOP);
+
+    loop {
+        match waitpid(child, Some(WaitPidFlag::WUNTRACED)) {
+            Ok(WaitStatus::Stopped(_, sig)) => {
+                debug!("Child stopped by signal {:?} for suspension", sig);
+                break;
+            }
+            Ok(WaitStatus::Exited(..) | WaitStatus::Signaled(..)) => {
+                return;
+            }
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(_) => return,
+            _ => {}
+        }
+    }
+
+    // Save raw settings for restore-on-resume, and preserve the
+    // cooked settings for later detach (restore_terminal consumes them).
+    let raw_termios = nix::sys::termios::tcgetattr(std::io::stdin()).ok();
+    let cooked_termios = pty.saved_termios.clone();
+
+    // Exit the alternate screen so the shell's "[1]+ Stopped" prompt shows on
+    // the normal screen, then restore cooked mode.
+    pty.leave_screen_for_suspension();
+    pty.restore_terminal();
+
+    // Stop nono itself. The shell shows "[1]+  Stopped   nono run ..."
+    // When user types 'fg', the shell sends SIGCONT and we resume here.
+    unsafe {
+        let _ = signal::signal(Signal::SIGTSTP, signal::SigHandler::SigDfl);
+    }
+    let _ = signal::raise(Signal::SIGTSTP);
+
+    // --- Resumed by SIGCONT from fg ---
+
+    // Restore raw mode for PTY I/O.
+    if let Some(termios) = raw_termios {
+        let _ = nix::sys::termios::tcsetattr(
+            std::io::stdin(),
+            nix::sys::termios::SetArg::TCSANOW,
+            &termios,
+        );
+    }
+    // Restore cooked settings so detach works correctly later.
+    pty.saved_termios = cooked_termios;
+
+    // Re-enter the alternate screen the child was using before resuming it.
+    pty.reenter_screen_for_resume();
+
+    signal_pty_foreground_group(pty, child, Signal::SIGCONT);
+
+    // SIGSTOP doesn't give the child a chance to clean up its terminal state.
+    // When resumed, TUI apps (opencode, vim, htop) don't know they need to
+    // redraw because they missed the TSTP/CONT cycle they normally rely on.
+    // Sending SIGWINCH to the foreground group triggers a full redraw in both
+    // the shell and any nested TUI.
+    signal_pty_foreground_group(pty, child, Signal::SIGWINCH);
+}
+
 struct SignalForwardingGuard;
 
 impl Drop for SignalForwardingGuard {
@@ -2605,6 +2944,7 @@ fn run_supervisor_loop(
             pause_requested,
             in_band_detach_requested,
         );
+        handle_pty_suspension(pty.as_deref_mut(), child);
 
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
@@ -2854,6 +3194,7 @@ fn run_supervisor_loop(
             pause_requested,
             in_band_detach_requested,
         );
+        handle_pty_suspension(pty.as_deref_mut(), child);
 
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
@@ -3903,6 +4244,75 @@ mod tests {
         ControlFlags, InputFlags, LocalFlags, OutputFlags, SpecialCharacterIndices,
     };
 
+    fn env_strings(env_c: &[CString]) -> Vec<String> {
+        env_c
+            .iter()
+            .map(|c| c.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn push_set_vars_appends_new_keys() {
+        let mut env_c = vec![CString::new("HOME=/home/x").expect("cstring")];
+        let set_vars = vec![("RUST_LOG".to_string(), "debug".to_string())];
+        push_set_vars(&mut env_c, &set_vars, &[]);
+        assert_eq!(env_strings(&env_c), vec!["HOME=/home/x", "RUST_LOG=debug"]);
+    }
+
+    #[test]
+    fn push_set_vars_overrides_inherited_host_var_without_duplicating() {
+        // An inherited host var with the same key must be replaced, not duplicated.
+        let mut env_c = vec![
+            CString::new("PRE=1").expect("cstring"),
+            CString::new("RUST_LOG=info").expect("cstring"),
+            CString::new("POST=2").expect("cstring"),
+        ];
+        let set_vars = vec![("RUST_LOG".to_string(), "debug".to_string())];
+        push_set_vars(&mut env_c, &set_vars, &[]);
+        // Exactly one RUST_LOG entry, carrying the set_vars value.
+        let entries = env_strings(&env_c);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| e.starts_with("RUST_LOG="))
+                .count(),
+            1
+        );
+        assert!(entries.contains(&"RUST_LOG=debug".to_string()));
+        assert!(entries.contains(&"PRE=1".to_string()));
+        assert!(entries.contains(&"POST=2".to_string()));
+    }
+
+    #[test]
+    fn push_set_vars_skips_keys_overridden_by_env_vars() {
+        // A key also set via env_vars (credentials) is skipped entirely, so
+        // env_vars wins and there is no duplicate. The inherited host entry is
+        // left for env_vars (appended later) to override.
+        let mut env_c = vec![CString::new("TOKEN=host").expect("cstring")];
+        let set_vars = vec![("TOKEN".to_string(), "from_set_vars".to_string())];
+        let env_vars = vec![("TOKEN", "from_credentials")];
+        push_set_vars(&mut env_c, &set_vars, &env_vars);
+        // set_vars did not push its value...
+        let entries = env_strings(&env_c);
+        assert!(!entries.contains(&"TOKEN=from_set_vars".to_string()));
+        // ...and did not duplicate the key.
+        assert_eq!(
+            entries.iter().filter(|e| e.starts_with("TOKEN=")).count(),
+            1
+        );
+    }
+
+    #[test]
+    fn push_set_vars_does_not_substring_match_other_keys() {
+        // PATH must not be removed when set_vars sets PA (prefix-collision guard).
+        let mut env_c = vec![CString::new("PATH=/usr/bin").expect("cstring")];
+        let set_vars = vec![("PA".to_string(), "x".to_string())];
+        push_set_vars(&mut env_c, &set_vars, &[]);
+        let entries = env_strings(&env_c);
+        assert!(entries.contains(&"PATH=/usr/bin".to_string()));
+        assert!(entries.contains(&"PA=x".to_string()));
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn test_linux_child_requires_dumpable_only_for_seccomp_driven_features() {
@@ -3956,13 +4366,68 @@ mod tests {
     }
 
     #[test]
+    fn test_session_diagnostic_report_matches_denial_sources() {
+        let denials = vec![DenialRecord {
+            path: PathBuf::from("/tmp/secret.txt"),
+            access: nono::AccessMode::Read,
+            reason: DenialReason::UserDenied,
+        }];
+        let ipc_denials = vec![nono::IpcDenialRecord::new(
+            "/run/user/1000/bus".to_string(),
+            "connect".to_string(),
+            "no matching unix_socket capability".to_string(),
+            Some(nono::NonoRemediation::GrantUnixSocket {
+                path: PathBuf::from("/run/user/1000/bus"),
+                bind: false,
+            }),
+        )];
+        let violations = vec![nono::SandboxViolation {
+            operation: "file-read-data".to_string(),
+            target: Some("/etc/hosts".to_string()),
+        }];
+
+        let report = SessionDiagnosticReport::from_session(1, denials, ipc_denials, violations);
+
+        assert_eq!(report.exit_code, 1);
+        assert_eq!(
+            report.denials.len(),
+            2,
+            "filesystem violations merge into denials"
+        );
+        assert_eq!(report.ipc_denials.len(), 1);
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.diagnostics.len(), 3);
+        assert_eq!(
+            report
+                .diagnostics
+                .iter()
+                .filter(|d| d.code == nono::NonoDiagnosticCode::SandboxDeniedPath)
+                .count(),
+            2,
+            "expected path diagnostics for logged denial and filesystem violation"
+        );
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.code == nono::NonoDiagnosticCode::SandboxDeniedUnixSocket));
+        assert!(report
+            .denials
+            .iter()
+            .any(|d| d.path == Path::new("/tmp/secret.txt")));
+        assert!(report
+            .denials
+            .iter()
+            .any(|d| d.path == Path::new("/etc/hosts")));
+    }
+
+    #[test]
     fn test_diagnostic_footer_triggers_on_successful_sandbox_violation() {
         let violations = vec![nono::SandboxViolation {
             operation: "file-read-data".to_string(),
             target: Some("/tmp/secret.txt".to_string()),
         }];
         let denials = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
 
         assert!(should_print_diagnostic_footer(
             false,
@@ -3984,15 +4449,12 @@ mod tests {
 
     #[test]
     fn test_profile_save_prompt_triggers_on_policy_explanation_with_zero_exit() {
-        let explanations = vec![nono::diagnostic::PolicyExplanation {
+        let explanations = vec![crate::diagnostic::PolicyExplanation {
             path: PathBuf::from("/tmp/secret.txt"),
             access: nono::AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            details: None,
-            policy_source: None,
-            suggested_flag: Some("--read-file /tmp/secret.txt".to_string()),
         }];
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
 
         assert!(should_offer_profile_save(
             false,
@@ -4004,9 +4466,27 @@ mod tests {
     }
 
     #[test]
+    fn test_profile_save_prompt_triggers_on_user_preferences_violation_with_zero_exit() {
+        let explanations = Vec::new();
+        let observation = crate::diagnostic::ErrorObservation::default();
+        let violations = vec![nono::SandboxViolation {
+            operation: "user-preference-read".to_string(),
+            target: Some("kcfpreferencesanyapplication".to_string()),
+        }];
+
+        assert!(should_offer_profile_save(
+            false,
+            0,
+            &explanations,
+            &observation,
+            &violations,
+        ));
+    }
+
+    #[test]
     fn test_suppressed_system_service_violations_do_not_offer_profile_save() {
         let explanations = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
         let violations = vec![nono::SandboxViolation {
             operation: "forbidden-exec-sugid".to_string(),
             target: None,
@@ -4054,7 +4534,7 @@ mod tests {
     #[test]
     fn test_profile_save_prompt_preserves_nonzero_exit_behavior() {
         let explanations = Vec::new();
-        let observation = nono::diagnostic::ErrorObservation::default();
+        let observation = crate::diagnostic::ErrorObservation::default();
 
         assert!(should_offer_profile_save(
             false,
@@ -4498,7 +4978,16 @@ mod tests {
                 drop(child_stream);
                 let mut sock = SupervisorSocket::from_stream(parent_stream);
 
-                // Set the read timeout as we would in production (SC2).
+                // Set the read timeout exactly as production does (SC2).
+                //
+                // Production gates this call to Linux (see the SC2 block in
+                // run_with_supervisor: `#[cfg(target_os = "linux")]`, commit
+                // c3cf3855 / Phase 68-02 D1). macOS rejects
+                // setsockopt(SO_RCVTIMEO) with EINVAL on AF_UNIX SOCK_STREAM
+                // socketpairs (Darwin kernel limitation) and instead relies on
+                // the poll(200ms) supervisor loop for bounded IPC behavior.
+                // The test must mirror production: only Linux sets the timeout.
+                #[cfg(target_os = "linux")]
                 sock.set_read_timeout(Some(crate::timeouts::supervisor_ipc_read_timeout()))
                     .expect("set_read_timeout must succeed");
 
@@ -4996,12 +5485,170 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn test_open_shim_drop_cleans_up_directory() {
-        let exe = std::env::current_exe().expect("current_exe");
-        let shim = create_open_shim(&exe, 42).expect("create shim");
+        // create_open_shim copies its `nono_exe` arg into the shim dir. Pass a tiny
+        // stand-in file rather than current_exe(): copying the multi-hundred-MB debug
+        // TEST binary is a flaky failure point under CI load/disk, and this test only
+        // exercises shim-dir creation + cleanup-on-drop (the helper is never executed
+        // here), so a small dummy file is sufficient and deterministic.
+        let fake_exe = tempfile::Builder::new()
+            .prefix("nono-fake-exe-")
+            .tempfile()
+            .expect("create fake exe");
+        std::fs::write(fake_exe.path(), b"#!/bin/sh\nexit 0\n").expect("write fake exe");
+        let shim = create_open_shim(fake_exe.path(), 42).expect("create shim");
         let dir = shim.dir.path().to_path_buf();
 
         assert!(dir.exists(), "shim dir should exist before drop");
         drop(shim);
         assert!(!dir.exists(), "shim dir should be removed on drop");
+    }
+
+    // ── CR-01 regression guard: af_unix_send_filter_action gate logic ───────
+    //
+    // These tests assert the gate logic for the send-family seccomp filter
+    // selection. They do NOT require Linux kernel execution — they test the
+    // pure decision function used by both child and parent. Regression
+    // prevention for the CR-01 over-blocking bug where `!is_pathname()` was
+    // used instead of `is_pathname() && !has_grants`, causing the static-EPERM
+    // filter to install in the default Off mode and break UDP/DNS in supervised
+    // runs.
+    #[cfg(target_os = "linux")]
+    mod af_unix_send_filter_action_tests {
+        use super::super::{af_unix_send_filter_action, AfUnixSendFilterAction};
+        use crate::profile::LinuxAfUnixMediation;
+
+        // CR-01 regression guard: Off mode must NEVER install a filter.
+        // This is the exact scenario that was broken: default supervised runs
+        // (no proxy, no pathname mediation) were installing the static-EPERM
+        // filter and blocking all UDP sends.
+        #[test]
+        fn off_mode_no_proxy_no_grants_installs_nothing() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Off, false),
+                AfUnixSendFilterAction::NoFilter,
+                "Off mode with no grants must install nothing (CR-01 regression guard)"
+            );
+        }
+
+        // Off mode with grants present should also install nothing.
+        // Grants are ignored when mediation is Off — Off means "no AF_UNIX filter".
+        #[test]
+        fn off_mode_no_proxy_with_grants_installs_nothing() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Off, true),
+                AfUnixSendFilterAction::NoFilter,
+                "Off mode with grants must still install nothing"
+            );
+        }
+
+        // Pathname mode with grants → USER_NOTIF filter (notify fd exchanged).
+        #[test]
+        fn pathname_mode_with_grants_installs_user_notif() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Pathname, true),
+                AfUnixSendFilterAction::UserNotify,
+                "Pathname + grants must use USER_NOTIF filter"
+            );
+        }
+
+        // Pathname mode with no grants → static EPERM filter (no notify fd).
+        // This is the D-01 no-grant path: closes the SOCK_DGRAM bypass.
+        #[test]
+        fn pathname_mode_no_grants_installs_static_eperm() {
+            assert_eq!(
+                af_unix_send_filter_action(false, LinuxAfUnixMediation::Pathname, false),
+                AfUnixSendFilterAction::StaticEperm,
+                "Pathname + no grants must use static-EPERM filter (no notify fd)"
+            );
+        }
+
+        // Proxy fallback → always USER_NOTIF, regardless of mediation or grants.
+        #[test]
+        fn proxy_fallback_always_user_notif() {
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Off, false),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Off, no grants)"
+            );
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Pathname, false),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Pathname, no grants)"
+            );
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Pathname, true),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Pathname, with grants)"
+            );
+            assert_eq!(
+                af_unix_send_filter_action(true, LinuxAfUnixMediation::Off, true),
+                AfUnixSendFilterAction::UserNotify,
+                "Proxy fallback must always use USER_NOTIF (Off, with grants)"
+            );
+        }
+
+        // Exhaustive table-driven coverage: all (proxy, mediation, grants) triples.
+        // Ensures no unintended action for any combination.
+        #[test]
+        fn exhaustive_gate_table() {
+            let cases: &[(bool, LinuxAfUnixMediation, bool, AfUnixSendFilterAction)] = &[
+                // (proxy_fallback, mediation, has_grants, expected)
+                (
+                    false,
+                    LinuxAfUnixMediation::Off,
+                    false,
+                    AfUnixSendFilterAction::NoFilter,
+                ),
+                (
+                    false,
+                    LinuxAfUnixMediation::Off,
+                    true,
+                    AfUnixSendFilterAction::NoFilter,
+                ),
+                (
+                    false,
+                    LinuxAfUnixMediation::Pathname,
+                    false,
+                    AfUnixSendFilterAction::StaticEperm,
+                ),
+                (
+                    false,
+                    LinuxAfUnixMediation::Pathname,
+                    true,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Off,
+                    false,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Off,
+                    true,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Pathname,
+                    false,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+                (
+                    true,
+                    LinuxAfUnixMediation::Pathname,
+                    true,
+                    AfUnixSendFilterAction::UserNotify,
+                ),
+            ];
+            for (proxy, med, grants, expected) in cases {
+                assert_eq!(
+                    af_unix_send_filter_action(*proxy, *med, *grants),
+                    *expected,
+                    "gate mismatch: proxy={proxy} mediation={med:?} has_grants={grants}"
+                );
+            }
+        }
     }
 }

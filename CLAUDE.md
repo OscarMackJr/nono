@@ -77,17 +77,25 @@ bindings/c/src/                     # C FFI - extern "C" wrappers over core libr
 
 ### Library vs CLI Boundary
 
-The library is a **pure sandbox primitive**. It applies ONLY what clients explicitly add to `CapabilitySet`:
+The library applies ONLY what clients explicitly add to `CapabilitySet` — audit and diagnostics
+modules are observability primitives, not security policy:
 
 | In Library | In CLI |
 |------------|--------|
 | `CapabilitySet` builder | Policy groups (deny rules, dangerous commands, system paths) |
 | `Sandbox::apply()` | Group resolver (`policy.rs`) and platform-aware deny handling |
 | `SandboxState` | `ExecStrategy` (Direct/Monitor/Supervised) |
-| `DiagnosticFormatter` | Profile loading and hooks |
-| `QueryContext` | All output and UX |
-| `keystore` | `learn` mode |
-| `undo` module (ObjectStore, SnapshotManager, MerkleTree, ExclusionFilter) | Rollback lifecycle, exclusion policy, rollback UI |
+| `audit` module (AuditRecorder, ledger append+verify, attestation sign/verify, merkle/inclusion-proof) | `diagnostic/formatter.rs` (DiagnosticFormatter, all rendering, flag suggestions) |
+| `diagnostic/*` (structured codes, diagnostic facts, SessionDiagnosticReport — NOT UX or rendering) | `audit_commands.rs`, `audit_session.rs` (thin wrappers); audit business logic in core `audit` module |
+| `QueryContext` | Profile loading and hooks |
+| `keystore` | All output and UX |
+| `undo` module (ObjectStore, SnapshotManager, MerkleTree, ExclusionFilter) | `learn` mode |
+|  | Rollback lifecycle, exclusion policy, rollback UI |
+
+> **Phase 86 D-02 carve-out:** Windows denial rendering (`exec_strategy_windows/`) stays
+> CLI-side, bridged to the new `diagnostic_code()`/`remediation()` surface at the `NonoError`
+> method level; full convergence deferred. This is a deliberate fork carve-out, not drift —
+> see `proj/ADR-86-library-boundary-convergence.md`.
 
 ## Build & Test
 
