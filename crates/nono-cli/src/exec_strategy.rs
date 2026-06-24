@@ -4978,7 +4978,16 @@ mod tests {
                 drop(child_stream);
                 let mut sock = SupervisorSocket::from_stream(parent_stream);
 
-                // Set the read timeout as we would in production (SC2).
+                // Set the read timeout exactly as production does (SC2).
+                //
+                // Production gates this call to Linux (see the SC2 block in
+                // run_with_supervisor: `#[cfg(target_os = "linux")]`, commit
+                // c3cf3855 / Phase 68-02 D1). macOS rejects
+                // setsockopt(SO_RCVTIMEO) with EINVAL on AF_UNIX SOCK_STREAM
+                // socketpairs (Darwin kernel limitation) and instead relies on
+                // the poll(200ms) supervisor loop for bounded IPC behavior.
+                // The test must mirror production: only Linux sets the timeout.
+                #[cfg(target_os = "linux")]
                 sock.set_read_timeout(Some(crate::timeouts::supervisor_ipc_read_timeout()))
                     .expect("set_read_timeout must succeed");
 
