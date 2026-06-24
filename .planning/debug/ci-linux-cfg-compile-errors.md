@@ -102,6 +102,30 @@ The 17 (same on linux + macos):
 
 CONSTRAINT: still can't compile linux/macos locally (aws-lc-sys cross C compiler). Windows `cargo check --workspace` is a guard that fixes don't break Windows. CI (Test ubuntu+macos) is the verifier.
 
+## Layer 3 (after c64c5977 dead_code + 468ccb9a fmt) — RESOLVED
+Rustfmt PASS. Test target then failed to compile: 2 Unix-gated test-constructor errors
+(E0063 SessionHook missing source_pack @ execution_runtime.rs:854; E0560 PolicyExplanation
+stale suggested_flag @ profile_save_runtime.rs:1051). Fixed in d01b1393 → Clippy(ubuntu+macos) PASS.
+
+## Layer 4 (after d01b1393) — test RUNTIME failures (1467 passed; 6 failed; linux+macos)
+Bin + tests now compile; Clippy green. 6 runtime assertion failures:
+1. cli::tests::test_root_help_lists_all_commands (cli.rs:5531) — Commands enum variant `override`
+   not in ALL_SUBCOMMANDS + root help_template. REAL v3.2 omission (Phase 93 added `override`).
+2. cli::tests::test_subcommand_help_structure (cli.rs:5627) — `nono override --help` EXAMPLES
+   cites `--scope-path`, not a real flag on the subcommand. REAL v3.2 help bug.
+3. profile::builtin::tests::test_all_profiles_signal_mode_resolves (builtin.rs:820) — profile
+   'openclaw' grants ~/.local which overlaps protected XDG state root ~/.local/state/nono
+   (Phase 88 FEAT-02 XDG move). SECURITY-RELEVANT interaction — fix must NOT weaken the
+   protected-state-root overlap guard; correct fix likely narrows the openclaw grant.
+4-6. telemetry::event::tests classify_aws_path_is_credential / _system32_is_system_path /
+   _temp_is_temp (event.rs:346/358/370) — classifier returns WorkspaceFile instead of
+   CredentialPath/SystemPath/Temp. Likely test-hermeticity (CI cwd under /home/runner/work/nono
+   makes the test paths classify as workspace) OR classify-order bug. Investigate: does classify
+   check workspace membership before credential/system/temp? Are test paths absolute + outside cwd?
+
+CONSTRAINT unchanged: linux/macos test runtime only verifiable via CI. Windows --all-targets does
+NOT compile the Unix-gated tests. CI (Test ubuntu+macos) is the verifier.
+
 ## Evidence
 
 - timestamp: 2026-06-23 — `git diff 5370d7ae 0eb9d6a0 --name-only` shows merge touched only command_runtime.rs, execution_runtime.rs, sandbox/linux.rs. Failing files untouched → errors pre-exist on branch.

@@ -342,8 +342,13 @@ mod tests {
 
     #[test]
     fn classify_aws_path_is_credential() {
-        let path = std::path::Path::new(r"C:\Users\alice\.aws\credentials");
-        assert_eq!(classify_path(path), PathCategory::CredentialPath);
+        // Build from components so `.aws` is a distinct path component on every
+        // platform (a `\`-separated literal is a single component on Unix, which
+        // makes the classifier — correctly — never see `.aws`).
+        let path: std::path::PathBuf = ["/", "home", "alice", ".aws", "credentials"]
+            .iter()
+            .collect();
+        assert_eq!(classify_path(&path), PathCategory::CredentialPath);
     }
 
     #[test]
@@ -354,8 +359,10 @@ mod tests {
 
     #[test]
     fn classify_system32_is_system_path() {
-        let path = std::path::Path::new(r"C:\Windows\system32\ntdll.dll");
-        assert_eq!(classify_path(path), PathCategory::SystemPath);
+        // Component-built path so `system32` is a distinct component on Unix CI
+        // too (a `\`-separated literal would be a single opaque component there).
+        let path: std::path::PathBuf = ["/", "Windows", "system32", "ntdll.dll"].iter().collect();
+        assert_eq!(classify_path(&path), PathCategory::SystemPath);
     }
 
     #[test]
@@ -366,8 +373,13 @@ mod tests {
 
     #[test]
     fn classify_temp_is_temp() {
-        let path = std::path::Path::new(r"C:\Users\alice\AppData\Local\Temp\foo.tmp");
-        assert_eq!(classify_path(path), PathCategory::Temp);
+        // Component-built path so `Temp` is a distinct component on Unix CI too
+        // (a `\`-separated literal would be a single opaque component there).
+        let path: std::path::PathBuf =
+            ["/", "Users", "alice", "AppData", "Local", "Temp", "foo.tmp"]
+                .iter()
+                .collect();
+        assert_eq!(classify_path(&path), PathCategory::Temp);
     }
 
     #[test]

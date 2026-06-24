@@ -861,7 +861,8 @@
         "allow": [
           "$HOME/.openclaw",
           "$HOME/.config/openclaw",
-          "$HOME/.local",
+          "$HOME/.local/share/openclaw",
+          "$HOME/.local/state/openclaw",
           "$TMPDIR/openclaw-$UID"
         ]
       },

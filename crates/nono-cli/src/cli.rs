@@ -278,6 +278,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1mPOLICY & PROFILES\x1b[0m
   policy     Inspect policy groups, profiles, and security rules
   profile    Create and manage nono profiles
+  override   Manage policy override tokens (lifecycle, audit, and request operations)
 
 \x1b[1mSHELL\x1b[0m
   completion   Generate shell completion scripts
@@ -580,6 +581,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
 \x1b[1mPOLICY & PROFILES\x1b[0m
   policy     [deprecated] Use 'nono profile' instead
   profile    Create, inspect, and compare nono profiles
+  override   Manage policy override tokens (lifecycle, audit, and request operations)
 
 \x1b[1mSHELL\x1b[0m
   completion   Generate shell completion scripts
@@ -1235,7 +1237,7 @@ pub enum Commands {
 \x1b[1mEXAMPLES\x1b[0m
   nono override audit-emit <base64-meta> --kind rejected
   nono override audit-emit <base64-meta> --kind revoked
-  nono override request --reason path_not_granted --scope-path /home/user/.aws
+  nono override request --reason path_not_granted --scope-paths /home/user/.aws
 ")]
     Override(OverrideArgs),
 }
@@ -1319,8 +1321,8 @@ pub(crate) enum OverrideCommands {
   into a signed-request bundle for the approver pipeline (D-07 / D-08).
 
 \x1b[1mEXAMPLES\x1b[0m
-  nono override request --reason path_not_granted --scope-path /home/user/.aws
-  nono override request --reason sensitive_path --scope-domain api.internal.example.com --repo-context github.com/org/proj
+  nono override request --reason path_not_granted --scope-paths /home/user/.aws
+  nono override request --reason sensitive_path --scope-domains api.internal.example.com --repo-context github.com/org/proj
 ")]
     Request(OverrideRequestArgs),
 }
@@ -1363,7 +1365,7 @@ pub(crate) struct OverrideRequestArgs {
     /// Filesystem path(s) in the scope of the denial (may be repeated).
     ///
     /// Each path that was denied or needs to be granted.  Multiple paths may be
-    /// provided by repeating the flag: `--scope-path /tmp/a --scope-path /tmp/b`.
+    /// provided by repeating the flag: `--scope-paths /tmp/a --scope-paths /tmp/b`.
     /// Uses component-level path comparison internally (not string prefix — CLAUDE.md footgun §4).
     #[arg(long, value_name = "PATH", help_heading = "OPTIONS")]
     pub scope_paths: Vec<String>,
@@ -1371,7 +1373,7 @@ pub(crate) struct OverrideRequestArgs {
     /// Domain(s) in the scope of the denial (may be repeated).
     ///
     /// Each domain that was blocked by the network policy.  Repeat the flag for
-    /// multiple domains: `--scope-domain api.example.com --scope-domain cdn.example.com`.
+    /// multiple domains: `--scope-domains api.example.com --scope-domains cdn.example.com`.
     #[arg(long, value_name = "DOMAIN", help_heading = "OPTIONS")]
     pub scope_domains: Vec<String>,
 
@@ -5490,6 +5492,8 @@ mod tests {
         "trust",
         "policy",
         "profile",
+        // Phase 93: policy override lifecycle (audit-emit, request).
+        "override",
         "pull",
         "remove",
         "update",
