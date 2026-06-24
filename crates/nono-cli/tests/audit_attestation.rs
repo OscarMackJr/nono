@@ -36,38 +36,42 @@ fn setup_isolated_home() -> (
     PathBuf,
     PathBuf,
 ) {
-    // The fake HOME's protected `.nono` state root and sensitive-path deny rules
-    // must not fall under ANY path the sandbox grants. Two grants are in play and
-    // they pull in opposite directions, so HOME and the --allow-cwd workspace must
-    // live in DIFFERENT trees:
+    // The fake HOME's protected `.nono` state root + sensitive-path deny rules must
+    // not fall under any BROAD grant, while the workspace MUST fall under a grant so
+    // the run (and rollback snapshot) can access it. Two broad grants are in play and
+    // they force HOME and the workspace into DIFFERENT trees:
     //
-    //  - `nono run --allow-cwd` grants the workspace's project (repo) root. If the
-    //    workspace lived under this repo, that grant would be the whole repo root,
-    //    overlapping a fake HOME placed under the repo (fatal on Linux — Landlock
-    //    cannot deny-within-allow — and refused on macOS as a protected-state-root
-    //    overlap). So the workspace goes in the SYSTEM temp dir, which has no git
-    //    root above it: --allow-cwd then grants only the workspace itself.
-    //  - On macOS the system temp dir (/private/var/folders, /tmp) is read-granted
-    //    by `group:system_read_macos` (policy.json grants /private/var and /tmp),
-    //    which would overlap a fake HOME placed there. So HOME/state go UNDER the
-    //    repo (/Users/... — not a system_read path), kept disjoint from the
-    //    system-temp workspace grant.
+    //  - `nono run --allow-cwd` grants the whole REPO ROOT (observed: source=user
+    //    grant of the repo root even when cwd is elsewhere). So the workspace lives
+    //    UNDER the repo (target/test-artifacts) where that grant covers it.
+    //  - That same repo-root grant must NOT cover the fake HOME, and on macOS
+    //    `group:system_read_macos` grants /private/var and /tmp (policy.json), so the
+    //    fake HOME also must not live in the system temp dir. The one tree that is
+    //    neither the repo nor a macOS system-read root is the REAL user home: place
+    //    HOME/state in a tempdir directly under $HOME, a sibling of the repo. The
+    //    default profile only grants specific `$HOME/...` subpaths (resolved against
+    //    the FAKE home), never the whole home, so no broad parent grant reaches it.
     let repo_artifacts = std::env::current_dir()
         .expect("cwd")
         .join("target")
         .join("test-artifacts");
     fs::create_dir_all(&repo_artifacts).expect("create repo artifacts root");
+
+    // Real user home (the test process's HOME — NOT the fake one we set per-spawn).
+    let real_home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
     let home_state_tmp = tempfile::Builder::new()
         .prefix("nono-audit-attestation-it-")
-        .tempdir_in(&repo_artifacts)
-        .expect("home/state tempdir");
+        .tempdir_in(&real_home)
+        .expect("home/state tempdir under real home");
     let home = home_state_tmp.path().join("home");
     let state = home_state_tmp.path().join("state");
 
     let workspace_tmp = tempfile::Builder::new()
         .prefix("nono-audit-attestation-ws-")
-        .tempdir()
-        .expect("workspace tempdir");
+        .tempdir_in(&repo_artifacts)
+        .expect("workspace tempdir under repo");
     let workspace = workspace_tmp.path().join("workspace");
 
     fs::create_dir_all(home.join(".config")).expect("create config dir");
