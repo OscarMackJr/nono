@@ -1,6 +1,6 @@
 ---
 slug: ci-linux-cfg-compile-errors
-status: investigating
+status: resolved
 trigger: "PR #12 (v3.1/v3.2 -> main) CI red: pre-existing Linux cfg-gated compile errors never caught on Windows host"
 created: 2026-06-23
 updated: 2026-06-23
@@ -125,6 +125,34 @@ Bin + tests now compile; Clippy green. 6 runtime assertion failures:
 
 CONSTRAINT unchanged: linux/macos test runtime only verifiable via CI. Windows --all-targets does
 NOT compile the Unix-gated tests. CI (Test ubuntu+macos) is the verifier.
+
+## RESOLUTION (2026-06-24)
+
+Goal met: every v3.1/v3.2-INTRODUCED CI failure fixed. Ubuntu Test GREEN (all unit + integration);
+Clippy ubuntu+macos GREEN; Rustfmt GREEN; Phase 37 GREEN; Verify FFI GREEN. 10 fix commits f0c5e8a4..49861b25:
+- f0c5e8a4 5 Linux cfg compile errors (SupervisorListener/unix_socket_allowlist/drain_terminal_output)
+- c64c5977 17 dead_code lints (cfg-gate Windows-only / remove cherry-pick leftovers)
+- 468ccb9a Rustfmt drift (cargo fmt --all)
+- d01b1393 2 test-target compile errors (SessionHook source_pack / PolicyExplanation suggested_flag)
+- 717f1474 6 unit-test runtime fails (override help reg, openclaw grant narrow, hermetic classify tests)
+- c07616bd audit_attestation: add required --audit-integrity
+- 69ce42d2 → 5b2fdad6 → cb70956b → 49861b25 audit_attestation sandbox isolation + verify-JSON shape:
+  flipped decouple = workspace UNDER repo (covered by --allow-cwd repo-root grant), fake HOME under
+  REAL $HOME (sibling of repo: outside repo grant AND outside macOS system_read /private/var + /tmp).
+  verify-JSON assertions updated to fork's flat {integrity, attestation_present, attestation_valid}
+  shape (persistence confirmed correct; NOT a regression — upstream cherry-pick 0a09ff41 only rewrote
+  the test to upstream's nested envelope the fork never wired).
+
+REMAINING REDS = ALL PRE-EXISTING BASELINE (would fail on main too; NOT v3.1/v3.2 regressions), per
+operator decision "stop at v3.2-introduced green":
+- macOS Test `exec_strategy::tests::reconnect_survival` — set_read_timeout EINVAL on macOS. Test+wiring
+  added in e9032edd Phase 59 (v2.8), socket.rs set_read_timeout older still. Pre-existing macOS baseline.
+- Cargo Audit — RUSTSEC-2026-0185 (quinn-proto transitive) + 4 unmaintained warnings (time-based advisory).
+- Docs Checks — orphan docs/cli/development/windows-win-1706-option-1-workstream.mdx not in docs.json nav.
+- Windows suite — chronic red baseline (see memory nono_cli_windows_baseline_test_failures).
+
+Also surfaced (pre-existing, noted not fixed): audit_ledger.rs is an orphan module (no `mod` decl,
+uncompiled) → upstream append-only ledger feature not wired in fork.
 
 ## Evidence
 
