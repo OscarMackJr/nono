@@ -30,14 +30,16 @@ fn assert_success(output: &Output) {
 }
 
 fn setup_isolated_home() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    let temp_root = std::env::current_dir()
-        .expect("cwd")
-        .join("target")
-        .join("test-artifacts");
-    fs::create_dir_all(&temp_root).expect("create temp root");
+    // Create the isolated HOME/state/workspace in the system temp dir, NOT under
+    // the repo tree. `nono run --allow-cwd` grants the workspace's project root;
+    // if the fake HOME (with its `.nono` state root and sensitive-path deny rules)
+    // lived inside the repo, that grant would overlap the protected/denied paths —
+    // fatal on Linux (Landlock cannot deny-within-allow) and refused on macOS
+    // (grant overlaps protected nono state root). A system-temp location keeps the
+    // workspace's project root and the fake HOME's protected paths disjoint.
     let tmp = tempfile::Builder::new()
         .prefix("nono-audit-attestation-it-")
-        .tempdir_in(&temp_root)
+        .tempdir()
         .expect("tempdir");
     let home = tmp.path().join("home");
     let state = tmp.path().join("state");
