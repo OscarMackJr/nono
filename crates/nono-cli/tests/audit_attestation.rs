@@ -107,6 +107,7 @@ fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
     let run_output = run_nono(
         &[
             "run",
+            "--audit-integrity",
             "--allow-cwd",
             "--audit-sign-key",
             &keyref,
@@ -157,6 +158,7 @@ fn rollback_signed_session_verifies_from_audit_dir_bundle() {
     let run_output = run_nono(
         &[
             "run",
+            "--audit-integrity",
             "--allow-cwd",
             "--rollback",
             "--no-rollback-prompt",
