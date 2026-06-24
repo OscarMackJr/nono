@@ -5485,8 +5485,17 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn test_open_shim_drop_cleans_up_directory() {
-        let exe = std::env::current_exe().expect("current_exe");
-        let shim = create_open_shim(&exe, 42).expect("create shim");
+        // create_open_shim copies its `nono_exe` arg into the shim dir. Pass a tiny
+        // stand-in file rather than current_exe(): copying the multi-hundred-MB debug
+        // TEST binary is a flaky failure point under CI load/disk, and this test only
+        // exercises shim-dir creation + cleanup-on-drop (the helper is never executed
+        // here), so a small dummy file is sufficient and deterministic.
+        let fake_exe = tempfile::Builder::new()
+            .prefix("nono-fake-exe-")
+            .tempfile()
+            .expect("create fake exe");
+        std::fs::write(fake_exe.path(), b"#!/bin/sh\nexit 0\n").expect("write fake exe");
+        let shim = create_open_shim(fake_exe.path(), 42).expect("create shim");
         let dir = shim.dir.path().to_path_buf();
 
         assert!(dir.exists(), "shim dir should exist before drop");
