@@ -1048,7 +1048,6 @@ mod tests {
             path: target,
             access: AccessMode::Read,
             reason: "path_not_granted".to_string(),
-            suggested_flag: None,
         };
 
         let patch = build_run_profile_patch(

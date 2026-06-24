@@ -854,6 +854,7 @@ mod tests {
         let hook = profile::SessionHook {
             script: script.clone(),
             timeout_secs: Some(5),
+            source_pack: None,
         };
 
         // D-03: before-hook Err propagates to the caller (session aborts).
