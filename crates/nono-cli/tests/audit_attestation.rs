@@ -29,25 +29,51 @@ fn assert_success(output: &Output) {
     );
 }
 
-fn setup_isolated_home() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf) {
-    // Create the isolated HOME/state/workspace in the system temp dir, NOT under
-    // the repo tree. `nono run --allow-cwd` grants the workspace's project root;
-    // if the fake HOME (with its `.nono` state root and sensitive-path deny rules)
-    // lived inside the repo, that grant would overlap the protected/denied paths —
-    // fatal on Linux (Landlock cannot deny-within-allow) and refused on macOS
-    // (grant overlaps protected nono state root). A system-temp location keeps the
-    // workspace's project root and the fake HOME's protected paths disjoint.
-    let tmp = tempfile::Builder::new()
+fn setup_isolated_home() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    PathBuf,
+    PathBuf,
+    PathBuf,
+) {
+    // The fake HOME's protected `.nono` state root and sensitive-path deny rules
+    // must not fall under ANY path the sandbox grants. Two grants are in play and
+    // they pull in opposite directions, so HOME and the --allow-cwd workspace must
+    // live in DIFFERENT trees:
+    //
+    //  - `nono run --allow-cwd` grants the workspace's project (repo) root. If the
+    //    workspace lived under this repo, that grant would be the whole repo root,
+    //    overlapping a fake HOME placed under the repo (fatal on Linux — Landlock
+    //    cannot deny-within-allow — and refused on macOS as a protected-state-root
+    //    overlap). So the workspace goes in the SYSTEM temp dir, which has no git
+    //    root above it: --allow-cwd then grants only the workspace itself.
+    //  - On macOS the system temp dir (/private/var/folders, /tmp) is read-granted
+    //    by `group:system_read_macos` (policy.json grants /private/var and /tmp),
+    //    which would overlap a fake HOME placed there. So HOME/state go UNDER the
+    //    repo (/Users/... — not a system_read path), kept disjoint from the
+    //    system-temp workspace grant.
+    let repo_artifacts = std::env::current_dir()
+        .expect("cwd")
+        .join("target")
+        .join("test-artifacts");
+    fs::create_dir_all(&repo_artifacts).expect("create repo artifacts root");
+    let home_state_tmp = tempfile::Builder::new()
         .prefix("nono-audit-attestation-it-")
+        .tempdir_in(&repo_artifacts)
+        .expect("home/state tempdir");
+    let home = home_state_tmp.path().join("home");
+    let state = home_state_tmp.path().join("state");
+
+    let workspace_tmp = tempfile::Builder::new()
+        .prefix("nono-audit-attestation-ws-")
         .tempdir()
-        .expect("tempdir");
-    let home = tmp.path().join("home");
-    let state = tmp.path().join("state");
-    let workspace = tmp.path().join("workspace");
+        .expect("workspace tempdir");
+    let workspace = workspace_tmp.path().join("workspace");
+
     fs::create_dir_all(home.join(".config")).expect("create config dir");
     fs::create_dir_all(&state).expect("create state dir");
     fs::create_dir_all(&workspace).expect("create workspace dir");
-    (tmp, home, state, workspace)
+    (home_state_tmp, workspace_tmp, home, state, workspace)
 }
 
 fn audit_root(state: &Path) -> PathBuf {
@@ -102,7 +128,7 @@ fn only_audit_session_id(state: &Path) -> String {
 
 #[test]
 fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
-    let (_tmp, home, state, workspace) = setup_isolated_home();
+    let (_home_tmp, _workspace_tmp, home, state, workspace) = setup_isolated_home();
     let key_path = generate_file_signing_key(&home, &state, &workspace);
     let keyref = format!("file://{}", key_path.display());
 
@@ -161,7 +187,7 @@ fn audit_verify_reports_signed_attestation_with_pinned_public_key() {
 
 #[test]
 fn rollback_signed_session_verifies_from_audit_dir_bundle() {
-    let (_tmp, home, state, workspace) = setup_isolated_home();
+    let (_home_tmp, _workspace_tmp, home, state, workspace) = setup_isolated_home();
     fs::write(workspace.join("tracked.txt"), "before\n").expect("write tracked file");
     let key_path = generate_file_signing_key(&home, &state, &workspace);
     let keyref = format!("file://{}", key_path.display());
