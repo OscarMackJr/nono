@@ -168,22 +168,25 @@ pub(crate) fn create_audit_state(
     rollback_requested: bool,
     rollback_disabled: bool,
     audit_disabled: bool,
-    audit_integrity_requested: bool,
     rollback_destination: Option<&PathBuf>,
 ) -> Result<Option<AuditState>> {
     if audit_disabled {
         return Ok(None);
     }
+    // Audit is ON by default for every supervised session (upstream #269): a
+    // plain `nono run` creates an audit session under the XDG state audit root
+    // (audit_session::ensure_audit_session_dir); `--no-audit` (audit_disabled,
+    // above) is the sole opt-out. `--audit-integrity` adds the Merkle ledger +
+    // attestation bundle and `--rollback` adds the snapshot root, but neither is
+    // required to create the session.
+    //
+    // (Removed the prior Plan 22-05a "minimal scope" gate
+    // `if !rollback_active && !audit_integrity_requested { return Ok(None) }`,
+    // which only created a session for --rollback/--audit-integrity runs — a
+    // fork divergence from the documented default-on behavior that left plain
+    // `nono run` with no audit session. See test_audit.sh Tests 1-4 and debug
+    // session plain-run-audit-no-session.)
     let rollback_active = rollback_requested && !rollback_disabled;
-    // Plan 22-05a Decision 5 minimal scope: when --audit-integrity is set
-    // without --rollback, create an audit-only session under
-    // ~/.nono/audit/<id> via crate::audit_session::ensure_audit_session_dir.
-    // This keeps audit sessions namespaced separately from rollback sessions
-    // (per upstream 4f9552ec restructuring). When --rollback is active, fall
-    // back to the existing rollback root path for backward compatibility.
-    if !rollback_active && !audit_integrity_requested {
-        return Ok(None);
-    }
 
     let session_id = format!(
         "{}-{}",
@@ -714,6 +717,48 @@ pub(crate) fn finalize_supervised_exit(ctx: RollbackExitContext<'_>) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env::{lock_env, EnvVarGuard};
+
+    #[test]
+    fn plain_run_creates_audit_session_default_on_no_audit_opts_out() {
+        // #269 default-on audit: a plain supervised run (no --no-audit, no
+        // --rollback, no --audit-integrity) MUST create an audit session under
+        // the XDG state audit root; --no-audit is the sole opt-out. Guards
+        // create_audit_state against the Plan 22-05a "minimal scope" gate that
+        // only created a session for --rollback/--audit-integrity runs (debug
+        // session plain-run-audit-no-session).
+        let _env_lock = lock_env();
+        let state_home = tempfile::tempdir().expect("tempdir");
+        let _env = EnvVarGuard::set_all(&[(
+            "XDG_STATE_HOME",
+            state_home.path().to_str().expect("state home path"),
+        )]);
+
+        let audit_root = crate::state_paths::audit_root().expect("audit_root");
+
+        // Plain run → audit session under the XDG audit root, no rollback dir.
+        let state = create_audit_state(false, false, false, None)
+            .expect("create_audit_state ok")
+            .expect("plain run must create an audit session (default-on audit)");
+        assert!(
+            state.session_dir.starts_with(&audit_root),
+            "plain-run session_dir {:?} must live under the XDG state audit root {:?}",
+            state.session_dir,
+            audit_root
+        );
+        assert!(
+            state.rollback_dir.is_none(),
+            "plain run (no --rollback) must not create a rollback dir"
+        );
+
+        // --no-audit → no session.
+        assert!(
+            create_audit_state(false, false, true, None)
+                .expect("create_audit_state ok")
+                .is_none(),
+            "--no-audit must be the sole opt-out (no audit session)"
+        );
+    }
 
     #[test]
     fn partial_restore_error_display_names_failed_paths() {
