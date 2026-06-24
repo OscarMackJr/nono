@@ -745,6 +745,7 @@ fn agent_demote(tenant_id: String) -> Result<()> {
 /// any SID string (SC4 — no cross-tenant disclosure in the response).
 ///
 /// On non-Windows: returns `Err` with a diagnostic.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn classify_daemon_request(pid: u32, json_output: bool) -> Result<()> {
     #[cfg(target_os = "windows")]
     {
@@ -1055,6 +1056,7 @@ pub(crate) fn windows_control_pipe_request(json_payload: &str) -> Result<String>
 ///
 /// Distinguishes "daemon not running" from other I/O errors so callers can
 /// provide a targeted user message instead of a raw error.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn is_pipe_not_found(err: &nono::NonoError) -> bool {
     let msg = err.to_string();
     // GLE=2: ERROR_FILE_NOT_FOUND (pipe does not exist — daemon not running)

@@ -28,6 +28,9 @@ pub struct SessionInfo {
 }
 
 /// Get the canonical rollback root directory (`$XDG_STATE_HOME/nono/rollbacks/`).
+///
+/// Non-test callers are Windows-only (`setup::windows_storage_layout`).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn rollback_root() -> Result<PathBuf> {
     state_paths::rollback_root()
 }

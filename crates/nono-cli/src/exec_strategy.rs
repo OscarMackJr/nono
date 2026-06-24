@@ -30,8 +30,7 @@ use nix::unistd::{fork, ForkResult, Pid};
 use nono::supervisor::{ApprovalDecision, SupervisorMessage, SupervisorResponse};
 use nono::{
     ApprovalBackend, CapabilitySet, DenialReason, DenialRecord, NonoError, Result, Sandbox,
-    SessionDiagnosticReport, SupervisorSocket, UnixSocketCapability,
-    UnixSocketMode,
+    SessionDiagnosticReport, SupervisorSocket,
 };
 use std::collections::HashSet;
 use std::ffi::{CString, OsStr};
@@ -178,7 +177,11 @@ struct ProfileSaveOffer<'a> {
     caps: &'a CapabilitySet,
     command: &'a [String],
     compared_profile: Option<&'a str>,
+    // Constructed for diagnostic completeness but not yet consumed by
+    // `offer_save_run_profile`; retained to preserve violation-tracking context.
+    #[allow(dead_code)]
     sandbox_violations: &'a [nono::SandboxViolation],
+    #[allow(dead_code)]
     ignored_denial_paths: &'a [std::path::PathBuf],
 }
 

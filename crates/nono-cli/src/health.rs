@@ -59,10 +59,15 @@ pub(crate) enum HealthVerdict {
 #[derive(Debug, Clone)]
 enum SubsystemState {
     /// Subsystem is healthy/present/running.
+    /// Constructed only by Windows probes (and tests); non-Windows probes
+    /// currently report `Degraded` only.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Ok,
     /// Subsystem is degraded (stopped service, missing cert, etc.).
     Degraded(String),
     /// Subsystem is broken (absent install, missing PATH, etc.).
+    /// Constructed only by Windows probes (and tests).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Broken(String),
 }
 

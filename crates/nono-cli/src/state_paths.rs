@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 
 const LEGACY_HOME_SUBDIR: &str = ".nono";
 const LEGACY_REMOVE_BY: &str = "v1.0.0";
-// PARTIAL→CI: used in non-Windows code paths and tests; suppressed on Windows host.
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+// Used by `maybe_migrate_legacy_audit_ledger` (below) and tests. The sole
+// non-test caller (`audit_ledger.rs`) is not currently wired into the module
+// tree, so this is dead on all platforms until that module is declared.
+#[allow(dead_code)]
 const AUDIT_LEDGER_FILENAME: &str = "ledger.ndjson";
 
 thread_local! {
@@ -261,9 +263,10 @@ impl LegacyRootSet {
 ///
 /// Caller must hold the audit ledger lock before calling this function.
 ///
-/// PARTIAL→CI: called from `audit_ledger.rs` which is Unix-primary. Suppressed
-/// on Windows host; CI verifies on Linux/macOS runners.
-#[cfg_attr(target_os = "windows", allow(dead_code))]
+/// Called from `audit_ledger.rs` (the Unix-primary upstream caller) and tests.
+/// `audit_ledger.rs` is not currently declared in the module tree, so this is
+/// dead on all platforms until that module is wired in; verified by tests.
+#[allow(dead_code)]
 pub fn maybe_migrate_legacy_audit_ledger() -> Result<()> {
     let primary = audit_root()?;
     let legacy = legacy_audit_root()?;

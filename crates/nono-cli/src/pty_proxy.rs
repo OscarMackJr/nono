@@ -374,11 +374,6 @@ impl PtyProxy {
         true
     }
 
-    /// Whether the child process is currently using the alternate screen buffer.
-    pub fn in_alt_screen(&self) -> bool {
-        self.screen.alternate_screen_active()
-    }
-
     /// Before suspending, if the child is in the alternate screen buffer, exit
     /// it so the shell's "[1]+ Stopped" prompt shows on the normal screen. Use
     /// the clearing restore (same as detach) so the normal screen starts clean:
@@ -404,15 +399,6 @@ impl PtyProxy {
             let _ = write_all_fd(libc::STDOUT_FILENO, &self.scrollback_snapshot());
             drain_terminal_output(libc::STDOUT_FILENO);
         }
-    }
-
-    /// Shut down the attach listener so no new connections can be accepted.
-    ///
-    /// Removes the socket file. This prevents the kernel from accepting new
-    /// connections after the supervisor loop has exited but before the
-    /// `PtyProxy` is dropped — the window that causes "Broken pipe" errors on attach.
-    pub fn shutdown_attach_listener(&mut self) {
-        let _ = std::fs::remove_file(&self.attach_path);
     }
 
     /// Accept an attach connection.

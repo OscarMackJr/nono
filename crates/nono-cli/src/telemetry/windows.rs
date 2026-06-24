@@ -32,6 +32,9 @@ use super::event::{event_id_for as schema_event_id_for, SecurityEvent, SecurityE
 /// `SYSTEM\CurrentControlSet\Services\EventLog\Application\nono`.
 /// Must match the source string used by the MSI `cmpNonoCliEventLogSource`
 /// component in `scripts/build-windows-msi.ps1`.
+///
+/// Only referenced by the Windows-only Event Log emit path.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const EVENT_LOG_SOURCE: &str = "nono";
 
 // ── EventLogLevel ─────────────────────────────────────────────────────────────
@@ -41,6 +44,9 @@ pub(crate) const EVENT_LOG_SOURCE: &str = "nono";
 /// All security events currently use `Warning` level.  `Information` is
 /// retained for future use (e.g., TelemetryDegraded self-reporting at a
 /// lower severity) and for parity with the `nono-wfp-service` pattern.
+///
+/// Only referenced by the Windows-only Event Log emit path.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EventLogLevel {
     #[allow(dead_code)]
@@ -76,6 +82,9 @@ fn build_event_payload(event: &SecurityEvent) -> String {
 // ── build_event_log_message ───────────────────────────────────────────────────
 
 /// Build a fallback stderr message for the D-03 NULL-handle path.
+///
+/// Only invoked by the Windows-only Event Log emit path.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn build_event_log_message(level: EventLogLevel, event_id: u32, body: &str) -> String {
     let level_str = match level {
         EventLogLevel::Information => "INFO",

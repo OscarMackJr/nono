@@ -3,7 +3,6 @@ use crate::diagnostic::{ErrorObservation, PolicyExplanation};
 use crate::theme;
 use crate::{profile, query_ext};
 use colored::Colorize;
-use nono::SandboxViolation;
 use nono::{AccessMode, CapabilitySet, NonoError, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, IsTerminal, Write};

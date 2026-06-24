@@ -78,6 +78,30 @@ files_changed:
   - crates/nono-cli/src/exec_strategy.rs
   - crates/nono-cli/src/pty_proxy.rs
 
+## Layer 2 (after fix push f0c5e8a4)
+
+The 3 resolution fixes (E0432/E0609/E0425) WORKED — those errors are gone. They had masked **17 dead_code/unused lints** promoted to errors by CI's `-Dwarnings`. **Linux and macOS show the IDENTICAL 17** → all are items used only on Windows (or genuinely dead). Fix rule:
+- Symbol used elsewhere ONLY under Windows cfg / in a Windows path → `#[cfg_attr(not(target_os = "windows"), allow(dead_code))]` (matches existing codebase pattern, e.g. ExecConfig.audit_recorder).
+- Symbol referenced NOWHERE (cherry-pick leftover etc.) → remove per CLAUDE.md "avoid allow(dead_code); remove if unused".
+- Unused import → remove the specific item (cfg-gate the import if used only on Windows).
+
+The 17 (same on linux + macos):
+1. unused import `RejectStage` — audit_integrity.rs:1:63
+2. unused imports `UnixSocketCapability`,`UnixSocketMode` — exec_strategy.rs:33:48
+3. unused import `nono::SandboxViolation` — profile_save_runtime.rs:6:5
+4. fn `classify_daemon_request` never used — agent_cli.rs:748 (Windows named-pipe?)
+5. fn `is_pipe_not_found` never used — agent_cli.rs:1058 (Windows named-pipe?)
+6. fields `sandbox_violations`,`ignored_denial_paths` never read — exec_strategy.rs:181
+7. methods `in_alt_screen`,`shutdown_attach_listener` never used — pty_proxy.rs:378 (#1135 cherry-pick leftovers)
+8. fn `rollback_root` never used — rollback_session.rs:31
+9-11. fns `import_machine_root`/`import_current_user_root`/`is_cert_present_current_user` — cert_trust.rs:207/214/222 (Windows cert store)
+12. variants `Ok`,`Broken` never constructed — health.rs:62
+13. const `AUDIT_LEDGER_FILENAME` never used — state_paths.rs:15
+14. fn `maybe_migrate_legacy_audit_ledger` never used — state_paths.rs:267
+15-17. const `EVENT_LOG_SOURCE`/enum `EventLogLevel`/fn `build_event_log_message` — telemetry/windows.rs:35/45/79 (Windows Event Log)
+
+CONSTRAINT: still can't compile linux/macos locally (aws-lc-sys cross C compiler). Windows `cargo check --workspace` is a guard that fixes don't break Windows. CI (Test ubuntu+macos) is the verifier.
+
 ## Evidence
 
 - timestamp: 2026-06-23 — `git diff 5370d7ae 0eb9d6a0 --name-only` shows merge touched only command_runtime.rs, execution_runtime.rs, sandbox/linux.rs. Failing files untouched → errors pre-exist on branch.

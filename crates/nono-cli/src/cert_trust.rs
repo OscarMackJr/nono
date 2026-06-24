@@ -204,6 +204,7 @@ fn extract_thumbprint(cert_path: &Path) -> Result<String> {
 // ── non-Windows stubs ─────────────────────────────────────────────────────────
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)] // non-Windows stub; all callers are Windows-gated
 pub(crate) fn import_machine_root(_cert_path: &Path) -> Result<()> {
     Err(NonoError::UnsupportedPlatform(
         "cert_trust::import_machine_root is Windows-only".to_string(),
@@ -211,6 +212,7 @@ pub(crate) fn import_machine_root(_cert_path: &Path) -> Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)] // non-Windows stub; all callers are Windows-gated
 pub(crate) fn import_current_user_root(_cert_path: &Path) -> Result<()> {
     Err(NonoError::UnsupportedPlatform(
         "cert_trust::import_current_user_root is Windows-only".to_string(),
@@ -218,6 +220,7 @@ pub(crate) fn import_current_user_root(_cert_path: &Path) -> Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)] // non-Windows stub; all callers are Windows-gated
 #[must_use = "caller must check whether cert is already present before importing"]
 pub(crate) fn is_cert_present_current_user(_thumbprint: &str) -> Result<bool> {
     Err(NonoError::UnsupportedPlatform(

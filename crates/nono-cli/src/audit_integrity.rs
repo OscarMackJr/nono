@@ -1,4 +1,7 @@
-pub(crate) use nono::audit::{verify_audit_log, AuditRecorder, RejectStage};
+pub(crate) use nono::audit::{verify_audit_log, AuditRecorder};
+// RejectStage is referenced only by exec_strategy_windows/ (Windows-only callers).
+#[cfg(target_os = "windows")]
+pub(crate) use nono::audit::RejectStage;
 // AUDIT_EVENTS_FILENAME is used by audit_commands and exec_strategy_windows (non-test callers).
 pub(crate) use nono::audit::AUDIT_EVENTS_FILENAME;
 
