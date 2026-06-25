@@ -243,6 +243,93 @@ impl MachineEgressPolicy {
         // 84-PATTERNS.md invariant 3.
     }
 
+    /// Validate all string-valued fields of this policy for structural sanity (IN-01).
+    ///
+    /// Checks performed:
+    ///
+    /// - `allowed_hosts` and `allowed_suffixes`: each entry must be non-empty after
+    ///   trimming and contain only ASCII alphanumeric, `-`, `.`, or `*` characters
+    ///   (the characters used in FQDNs and normalized wildcard suffixes).
+    /// - `preset_tokens`: each entry must be non-empty after trimming and contain only
+    ///   ASCII alphanumeric or `-` characters, and must not start with `-`.  Dots,
+    ///   spaces, underscores, and other non-DNS-label characters are rejected.
+    ///
+    /// This method does **NOT** validate that hosts are resolvable, that tokens exist
+    /// in any embedded JSON, or that suffixes match any actual domain — only structural
+    /// character-set sanity is enforced so the library remains policy-free.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(NonoError::PolicyLoadFailed)` on the first invalid entry found.
+    /// The error `reason` describes which field and why the entry was rejected.
+    pub fn validate(&self) -> crate::Result<()> {
+        use crate::NonoError;
+
+        for entry in &self.allowed_hosts {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: "allowed_hosts contains an empty or whitespace-only entry".to_string(),
+                });
+            }
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*'))
+            {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: format!(
+                        "allowed_hosts entry '{trimmed}' contains invalid characters \
+                         (expected DNS label characters: a-z 0-9 - . *)"
+                    ),
+                });
+            }
+        }
+
+        for entry in &self.allowed_suffixes {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: "allowed_suffixes contains an empty or whitespace-only entry"
+                        .to_string(),
+                });
+            }
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*'))
+            {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: format!(
+                        "allowed_suffixes entry '{trimmed}' contains invalid characters \
+                         (expected DNS label characters: a-z 0-9 - . *)"
+                    ),
+                });
+            }
+        }
+
+        for token in &self.preset_tokens {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: "preset_tokens contains an empty or whitespace-only entry".to_string(),
+                });
+            }
+            if trimmed.starts_with('-')
+                || !trimmed
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: format!(
+                        "preset_tokens entry '{trimmed}' contains invalid characters \
+                         (expected alphanumeric and hyphen only; must not start with '-')"
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Normalize a single `AllowedSuffixes` entry to the `*.`-prefixed wildcard
     /// form that [`crate::HostFilter`] buckets as a suffix (CR-01).
     ///
@@ -258,6 +345,79 @@ impl MachineEgressPolicy {
             format!("*.{s}")
         }
     }
+}
+
+/// Expand preset egress tokens to a flat list of FQDN host strings using the
+/// supplied `network_policy_json`.
+///
+/// # Design (WR-02, D-11)
+///
+/// The canonical implementation lives here (core `nono` crate) so both the
+/// standalone `nono-agentd` binary and the `nono-cli` crate can call it without
+/// duplicating logic.  The caller supplies the JSON bytes; this function does not
+/// embed or load files, keeping the library policy-free (CLAUDE.md § Library vs
+/// CLI Boundary).
+///
+/// # Suffixes exclusion
+///
+/// Suffixes are intentionally excluded from preset expansion: AI-provider groups
+/// express wildcard coverage as `*.domain` entries in `hosts`, not as `suffixes`.
+/// Including `suffixes` would double-add them when the caller also includes
+/// `MachineEgressPolicy::raw_allowlist()` suffixes.  Only `hosts` entries are
+/// expanded.
+///
+/// # Fail-Secure (T-83-token-widen)
+///
+/// An unknown token expands to an **empty** host list — it never silently widens
+/// the allowlist to all hosts.  Unknown tokens are logged at `tracing::debug!`
+/// level.
+///
+/// # Errors
+///
+/// Returns `Err(NonoError::PolicyLoadFailed)` if `network_policy_json` cannot
+/// be parsed as JSON or if it lacks a `"groups"` object.
+pub fn expand_preset_tokens(tokens: &[String], network_policy_json: &str) -> Result<Vec<String>> {
+    use crate::NonoError;
+
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Parse the supplied JSON using serde_json::Value (minimal deps; no schema binding).
+    let root: serde_json::Value =
+        serde_json::from_str(network_policy_json).map_err(|e| NonoError::PolicyLoadFailed {
+            reason: format!("expand_preset_tokens: failed to parse network-policy.json: {e}"),
+        })?;
+
+    let groups = root
+        .get("groups")
+        .and_then(|g| g.as_object())
+        .ok_or_else(|| NonoError::PolicyLoadFailed {
+            reason: "expand_preset_tokens: network-policy.json missing 'groups' object".to_string(),
+        })?;
+
+    let mut result: Vec<String> = Vec::new();
+    for token in tokens {
+        if let Some(group) = groups.get(token.as_str()) {
+            // Expand only `hosts` — see docstring for why `suffixes` are excluded.
+            if let Some(hosts) = group.get("hosts").and_then(|h| h.as_array()) {
+                for host in hosts {
+                    if let Some(h) = host.as_str() {
+                        result.push(h.to_string());
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(
+                token = %token,
+                "expand_preset_tokens: unknown preset token — expanding to empty (T-83-token-widen fail-secure)"
+            );
+        }
+    }
+
+    result.sort_unstable();
+    result.dedup();
+    Ok(result)
 }
 
 // ── Windows reader ────────────────────────────────────────────────────────────
@@ -433,12 +593,21 @@ mod windows_reader {
         // D-12: read telemetry sub-section in the same registry open.
         // D-14: malformed telemetry degrades; only egress errors abort (D-07).
         let telemetry = parse_telemetry_config(key);
-        Ok(MachineEgressPolicy {
+        let policy = MachineEgressPolicy {
             allowed_suffixes,
             allowed_hosts,
             preset_tokens,
             telemetry,
-        })
+        };
+        // IN-01: validate structural sanity of all string fields after construction.
+        // Any invalid entry returns Err(reason) which read_machine_egress_policy_impl
+        // wraps in Err(NonoError::PolicyLoadFailed { reason }) via the existing
+        // .map_err(|reason| NonoError::PolicyLoadFailed { reason }) chain (D-07 abort).
+        policy.validate().map_err(|e| match e {
+            NonoError::PolicyLoadFailed { reason } => reason,
+            other => other.to_string(),
+        })?;
+        Ok(policy)
     }
 
     /// Read `HKLM\SOFTWARE\Policies\nono` and deserialize into
@@ -536,6 +705,192 @@ pub fn read_machine_egress_policy() -> Result<Option<MachineEgressPolicy>> {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod validate_tests {
+    use super::*;
+    use crate::NonoError;
+
+    fn valid_policy() -> MachineEgressPolicy {
+        MachineEgressPolicy {
+            allowed_hosts: vec!["api.github.com".to_string()],
+            allowed_suffixes: vec!["*.anthropic.com".to_string()],
+            preset_tokens: vec!["anthropic".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn valid_policy_returns_ok() {
+        assert!(valid_policy().validate().is_ok());
+    }
+
+    #[test]
+    fn empty_policy_returns_ok() {
+        // Empty lists → unconfigured, not invalid.
+        assert!(MachineEgressPolicy::default().validate().is_ok());
+    }
+
+    #[test]
+    fn empty_host_entry_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.allowed_hosts.push("".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(
+            matches!(err, NonoError::PolicyLoadFailed { .. }),
+            "empty host must return PolicyLoadFailed; got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("empty") || msg.contains("whitespace"),
+            "error must mention empty; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_suffix_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.allowed_suffixes.push("   ".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("empty") || msg.contains("whitespace"),
+            "whitespace suffix must mention empty; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn preset_token_with_space_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("bad token!".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid"),
+            "token with space+exclamation must mention invalid; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn preset_token_leading_dash_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("-leading-dash".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid"),
+            "leading-dash token must mention invalid; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn preset_token_underscore_returns_err() {
+        // "anthropic_ai" — underscore is not a valid DNS label character.
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("anthropic_ai".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid"),
+            "token with underscore must mention invalid; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn valid_alphanumeric_hyphen_token_is_ok() {
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("anthropic".to_string());
+        assert!(
+            p.validate().is_ok(),
+            "alphanumeric-only token must be valid"
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod expand_tests {
+    use super::expand_preset_tokens;
+    use crate::NonoError;
+
+    /// Fixture network-policy.json with two groups, one having both hosts and suffixes.
+    const FIXTURE_JSON: &str = r#"{
+        "groups": {
+            "anthropic": {
+                "hosts": ["*.anthropic.com"]
+            },
+            "openai": {
+                "hosts": ["*.openai.com"],
+                "suffixes": [".openai.com"]
+            }
+        }
+    }"#;
+
+    #[test]
+    fn known_single_token_returns_hosts() {
+        let tokens = vec!["anthropic".to_string()];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        assert_eq!(result, vec!["*.anthropic.com"]);
+    }
+
+    #[test]
+    fn unknown_token_returns_empty_not_error() {
+        let tokens = vec!["unknown-token".to_string()];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        assert!(
+            result.is_empty(),
+            "unknown token must expand to empty (fail-secure T-83-token-widen); got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn empty_tokens_returns_empty() {
+        let tokens: Vec<String> = vec![];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn multiple_tokens_returns_union_sorted_deduped() {
+        let tokens = vec!["anthropic".to_string(), "openai".to_string()];
+        let mut result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        result.sort_unstable(); // ensure deterministic comparison
+                                // Both host entries should be present; suffixes excluded.
+        assert_eq!(result, vec!["*.anthropic.com", "*.openai.com"]);
+    }
+
+    #[test]
+    fn malformed_json_returns_policy_load_failed() {
+        let tokens = vec!["tok".to_string()];
+        let err = expand_preset_tokens(&tokens, "not valid json }{").unwrap_err();
+        assert!(
+            matches!(err, NonoError::PolicyLoadFailed { .. }),
+            "malformed JSON must return PolicyLoadFailed; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn group_with_suffixes_only_expands_hosts_not_suffixes() {
+        // The "openai" group has both hosts and suffixes; only hosts must be returned.
+        let tokens = vec!["openai".to_string()];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        // Must contain the host entry.
+        assert!(
+            result.contains(&"*.openai.com".to_string()),
+            "openai hosts must be present; got: {result:?}"
+        );
+        // Must NOT contain the suffix entry ".openai.com".
+        assert!(
+            !result.contains(&".openai.com".to_string()),
+            "suffixes must NOT be expanded (WR-02 design decision); got: {result:?}"
+        );
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

@@ -30,3 +30,22 @@ exec. `--memory` is therefore not enforced (and the child dies with 126 instead 
 `nono run --memory <N> -- <child>` enforces RLIMIT_AS on a real macOS host (the D-09 test
 `macos_memory_limit_kills_at_rlimit_as` passes with `NONO_RESL_HOST_VALIDATED=1`), OR macOS RLIMIT_AS
 limitations are characterized and `--memory` behavior is documented/handled fail-secure with a clear rationale.
+
+## RESOLVED — 2026-06-25 (acceptance branch 2)
+Already fixed by commit **`648c5856`** *"fix(68-02): D2 downgrade RLIMIT_AS abort to warn-and-continue
+on macOS; flip D-09 test assertion"* (Phase 68-02). The abort-with-`_exit(126)` behavior this todo
+describes no longer exists. Verified in current code 2026-06-25:
+
+- **Supervised child arm** (`crates/nono-cli/src/exec_strategy.rs:1129`): `setrlimit(RLIMIT_AS)` failure
+  emits `MSG_RLIMIT_AS_WARN` ("not enforced on macOS (best-effort); continuing") to stderr and continues
+  — no longer aborts.
+- **Direct-path analog** (`crates/nono-cli/src/exec_strategy/supervisor_macos.rs:277`): same best-effort
+  handling (`is_err()` → continue to exec).
+- **Root cause characterized + documented:** dyld pre-maps several hundred MiB of VAS; `setrlimit`
+  below current VAS usage returns EINVAL; macOS arm64 does not reliably enforce RLIMIT_AS. See the
+  `## RLIMIT_AS vs RSS` section in `supervisor_macos.rs` and the inline `D2 (Phase 68-02)` comments.
+- **`--max-processes` (RLIMIT_NPROC) remains fail-closed** on macOS; only the RLIMIT_AS arm is best-effort.
+
+Disposition: best-effort warn-and-continue (operator-acknowledged 2026-06-25). RLIMIT_AS is a resource
+cap, not part of nono's OS-enforced isolation boundary (Seatbelt), so best-effort is acceptable. The
+host-gated D-09 test (`NONO_RESL_HOST_VALIDATED=1`) remains the real-Mac confirmation point.

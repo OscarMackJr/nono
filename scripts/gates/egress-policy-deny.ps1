@@ -89,7 +89,8 @@ function Get-NonoBlockSids {
         if ($f.action.type -ne 'FWP_ACTION_BLOCK') { continue }
         $cond = $f.filterCondition.item | Where-Object { $_.fieldKey -eq 'FWPM_CONDITION_ALE_USER_ID' }
         $sd = $cond.conditionValue.sd
-        if ($sd -match '(S-1-15-2-[\d-]+)') { $sids[$Matches[1]] = $true }
+        # IN-03: unified SID regex; matches AppContainer package SIDs (one or more -NNN segments)
+        if ($sd -match '(S-1-15-2(?:-\d+)+)') { $sids[$Matches[1]] = $true }
     }
     return @($sids.Keys)
 }
@@ -98,7 +99,8 @@ function Get-NonoBlockSids {
 # (the daemon prints "  sid=S-1-15-2-..."). Returns $null if not present.
 function Get-LaunchSid {
     param([string]$Text)
-    if ($Text -match 'sid=(S-1-15-2[^\s]+)') { return $Matches[1] }
+    # IN-03: unified SID regex; matches AppContainer package SIDs (one or more -NNN segments)
+    if ($Text -match 'sid=(S-1-15-2(?:-\d+)+)') { return $Matches[1] }
     return $null
 }
 
@@ -302,6 +304,11 @@ function Invoke-Gate {
     # SC-3: Dual-layer deny — proxy rejects out-of-list host AND per-SID WFP
     # block filter is present (EGRESS-02).
     #
+    # HOST-GATED (WR-03): live proxy probe added. Full verification requires a
+    # provisioned host with nono-agentd + proxy running. This gate cannot be
+    # live-verified on a dev-only host (no daemon). Probe is skipped automatically
+    # when proxy_port is absent from the daemon launch response.
+    #
     # Launches a confined agent through the daemon under a machine policy of
     # only *.anthropic.com (the profile nono-ts-wfp-test-blocked is used as the
     # agent carrier; the machine-level proxy filter is the enforcement surface).
@@ -378,43 +385,101 @@ function Invoke-Gate {
     $afterLaunch = @(Get-NonoBlockSids)
     $wfpBlockPresent = ($afterLaunch -contains $sid) -and (-not ($baseline -contains $sid))
 
-    # (b) The proxy deny for an out-of-list host is structurally guaranteed when:
-    #     - the daemon started the proxy with machine_policy_active = true (EGRESS-01)
-    #     - the proxy was initialized with ProxyFilter::new_strict([*.anthropic.com])
-    #     - any CONNECT to evil.example.com is denied by the proxy at the L7 layer
-    #     The structural proof is the presence of the machine policy key + proxy port
-    #     in the daemon state. We assert this structurally from the launch response
-    #     (the daemon prints proxy wiring details) and from the WFP block filter
-    #     (which requires the proxy-only mode to have been activated, proving both
-    #     layers are live). For full live verification, a network probe against the
-    #     proxy would be required; on this gate we assert the dual-layer structural
-    #     proof: WFP block (kernel) + proxy-only mode (L7) both activated.
-    #     The plan's "proxy denies an out-of-list host" assertion is satisfied
-    #     structurally: if the WFP block filter is present it proves the daemon
-    #     activated proxy-only mode (which implies the ProxyFilter is active).
-    #
-    # Note: a live proxy-probe could be added as a future enhancement; the
-    # structural proof (WFP block + proxy-only activation) is the Dark Factory
-    # mandate's "wired, not just coded" standard.
-    $proxyLayerActive = $wfpBlockPresent  # proxy-only mode activation is proven by WFP block
+    # (b) WR-03: live proxy probe — assert deny for an out-of-list host and allow for a
+    # listed host. HOST-GATED: this probe requires a provisioned host with nono-agentd
+    # + proxy running. If the proxy port is not available (no daemon response with
+    # proxy_port=NNNN), the probe is skipped and proxyLayerActive is set from structural
+    # WFP evidence only. The probe is NOT optional when the daemon IS running; a running
+    # proxy that fails the probe is a FAIL.
+    $proxyLayerActive = $false
+    $proxyProbeSkipped = $false
+    $proxyPort = $null
 
-    $detail = [ordered]@{
-        assertion            = 'SC-2 + SC-3'
-        sc2Pass              = $sc2Pass
-        sc2ExitCode          = $sc2ExitCode
-        sc3AgentSid          = $sid
-        sc3WfpBlockPresent   = $wfpBlockPresent
-        sc3ProxyLayerActive  = $proxyLayerActive
-        sc3LaunchOutput      = $respSC3.Trim()
-        baselineBlockSidCount = $baseline.Count
-        afterLaunchSidCount  = $afterLaunch.Count
+    # Extract the proxy port from the launch response (daemon prints "proxy_port=NNNN").
+    if ($respSC3 -match 'proxy_port=(\d+)') {
+        $proxyPort = [int]$Matches[1]
+    }
+
+    if ($null -ne $proxyPort -and $proxyPort -gt 0) {
+        # Probe 1: CONNECT to out-of-list host (evil.example.com:443) -> expect deny (non-200 or refused).
+        $denyProbePass = $false
+        try {
+            $denyResp = Invoke-WebRequest -Uri "http://127.0.0.1:$proxyPort" `
+                -Method 'CONNECT' `
+                -Headers @{ Host = 'evil.example.com:443' } `
+                -TimeoutSec 5 `
+                -ErrorAction SilentlyContinue
+            # A 200 response means the proxy allowed the CONNECT -- that is a FAIL.
+            $denyProbePass = ($null -eq $denyResp -or $denyResp.StatusCode -ne 200)
+        } catch {
+            # Connection refused or 4xx/5xx from proxy -> deny confirmed.
+            $denyProbePass = $true
+        }
+
+        # Probe 2: CONNECT to allowed host (api.anthropic.com:443) -> expect allow (200 or TCP-established).
+        $allowProbePass = $false
+        try {
+            $allowResp = Invoke-WebRequest -Uri "http://127.0.0.1:$proxyPort" `
+                -Method 'CONNECT' `
+                -Headers @{ Host = 'api.anthropic.com:443' } `
+                -TimeoutSec 5 `
+                -ErrorAction SilentlyContinue
+            $allowProbePass = ($null -ne $allowResp -and $allowResp.StatusCode -eq 200)
+        } catch [System.Net.WebException] {
+            # A TCP-tunnel establishment followed by TLS failure may throw; that still
+            # means the proxy accepted the CONNECT (tunnel opened). Inspect the exception.
+            $allowProbePass = ($_.Exception.Response -ne $null -and
+                               [int]$_.Exception.Response.StatusCode -eq 200) -or
+                              ($_.Exception.Message -match '200|tunnel|established')
+        } catch {
+            $allowProbePass = $false
+        }
+
+        $proxyLayerActive = $denyProbePass -and $allowProbePass
+        $detail = [ordered]@{
+            assertion            = 'SC-2 + SC-3'
+            sc2Pass              = $sc2Pass
+            sc2ExitCode          = $sc2ExitCode
+            sc3AgentSid          = $sid
+            sc3WfpBlockPresent   = $wfpBlockPresent
+            sc3ProxyLayerActive  = $proxyLayerActive
+            proxyPort            = $proxyPort
+            proxyDenyProbePass   = $denyProbePass
+            proxyAllowProbePass  = $allowProbePass
+            sc3LaunchOutput      = $respSC3.Trim()
+            baselineBlockSidCount = $baseline.Count
+            afterLaunchSidCount  = $afterLaunch.Count
+        }
+    } else {
+        # No proxy port in launch response -- daemon not running proxy or response format changed.
+        # Fall back to structural proof: WFP block implies proxy-only mode was activated.
+        $proxyLayerActive = $wfpBlockPresent
+        $proxyProbeSkipped = $true
+        $detail = [ordered]@{
+            assertion              = 'SC-2 + SC-3'
+            sc2Pass                = $sc2Pass
+            sc2ExitCode            = $sc2ExitCode
+            sc3AgentSid            = $sid
+            sc3WfpBlockPresent     = $wfpBlockPresent
+            sc3ProxyLayerActive    = $proxyLayerActive
+            proxyProbeSkipped      = $true
+            proxyProbeSkipReason   = 'proxy_port not found in launch response; structural WFP proof used'
+            sc3LaunchOutput        = $respSC3.Trim()
+            baselineBlockSidCount  = $baseline.Count
+            afterLaunchSidCount    = $afterLaunch.Count
+        }
     }
 
     if ($sc2Pass -and $wfpBlockPresent -and $proxyLayerActive) {
+        $passReason = if ($proxyProbeSkipped) {
+            'SC-2 proven: nono daemon exited non-zero on malformed machine-policy key (fail-secure wired). SC-3 proven structurally: per-SID WFP block filter present (proxy probe skipped: no proxy_port in daemon response).'
+        } else {
+            'SC-2 proven: nono daemon exited non-zero on malformed machine-policy key (fail-secure wired). SC-3 proven: per-SID WFP block filter present AND live proxy probe confirmed deny for evil.example.com + allow for api.anthropic.com (dual-layer enforce wired).'
+        }
         return [ordered]@{
             gate      = 'egress-policy-deny'
             verdict   = 'PASS'
-            reason    = 'SC-2 proven: nono daemon exited non-zero on malformed machine-policy key (fail-secure wired). SC-3 proven: confined agent received per-SID WFP block filter (proxy-only mode active, dual-layer deny wired).'
+            reason    = $passReason
             detail    = $detail
             timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
         }
@@ -433,7 +498,7 @@ function Invoke-Gate {
     return [ordered]@{
         gate      = 'egress-policy-deny'
         verdict   = 'FAIL'
-        reason    = 'SC-3 FAILED: dual-layer deny not proven (proxy-only activation or WFP block check failed)'
+        reason    = 'SC-3 FAILED: dual-layer deny not proven (proxy probe failed: deny or allow probe did not pass)'
         detail    = $detail
         timestamp = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffZ')
     }
