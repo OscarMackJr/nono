@@ -272,7 +272,10 @@ impl MachineEgressPolicy {
                     reason: "allowed_hosts contains an empty or whitespace-only entry".to_string(),
                 });
             }
-            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*')) {
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*'))
+            {
                 return Err(NonoError::PolicyLoadFailed {
                     reason: format!(
                         "allowed_hosts entry '{trimmed}' contains invalid characters \
@@ -290,7 +293,10 @@ impl MachineEgressPolicy {
                         .to_string(),
                 });
             }
-            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*')) {
+            if !trimmed
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*'))
+            {
                 return Err(NonoError::PolicyLoadFailed {
                     reason: format!(
                         "allowed_suffixes entry '{trimmed}' contains invalid characters \
@@ -307,7 +313,11 @@ impl MachineEgressPolicy {
                     reason: "preset_tokens contains an empty or whitespace-only entry".to_string(),
                 });
             }
-            if trimmed.starts_with('-') || !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            if trimmed.starts_with('-')
+                || !trimmed
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
                 return Err(NonoError::PolicyLoadFailed {
                     reason: format!(
                         "preset_tokens entry '{trimmed}' contains invalid characters \
@@ -383,8 +393,7 @@ pub fn expand_preset_tokens(tokens: &[String], network_policy_json: &str) -> Res
         .get("groups")
         .and_then(|g| g.as_object())
         .ok_or_else(|| NonoError::PolicyLoadFailed {
-            reason: "expand_preset_tokens: network-policy.json missing 'groups' object"
-                .to_string(),
+            reason: "expand_preset_tokens: network-policy.json missing 'groups' object".to_string(),
         })?;
 
     let mut result: Vec<String> = Vec::new();
@@ -851,7 +860,7 @@ mod expand_tests {
         let tokens = vec!["anthropic".to_string(), "openai".to_string()];
         let mut result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
         result.sort_unstable(); // ensure deterministic comparison
-        // Both host entries should be present; suffixes excluded.
+                                // Both host entries should be present; suffixes excluded.
         assert_eq!(result, vec!["*.anthropic.com", "*.openai.com"]);
     }
 

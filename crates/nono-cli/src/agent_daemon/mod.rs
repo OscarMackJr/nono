@@ -158,8 +158,8 @@ pub(crate) fn build_daemon_capability_set(
     resolved_exe: &std::path::Path,
     workspace: &std::path::Path,
 ) -> nono::Result<nono::CapabilitySet> {
-    use nono::{AccessMode, NonoError};
     use launch::resolve_exe_path;
+    use nono::{AccessMode, NonoError};
 
     // 1. Parse embedded policy JSON (same approach as is_known_profile).
     let policy: serde_json::Value = serde_json::from_str(EMBEDDED_POLICY_JSON).map_err(|e| {
@@ -193,13 +193,12 @@ pub(crate) fn build_daemon_capability_set(
     })?;
     // WR-05: canonicalize failure is fatal — granting an unresolved path is
     // TOCTOU-adjacent (the path may not be what the kernel resolves at access time).
-    let exe_parent_canon =
-        std::fs::canonicalize(exe_parent).map_err(|e| {
-            NonoError::SandboxInit(format!(
-                "build_daemon_capability_set: could not canonicalize exe parent dir {}: {e}",
-                exe_parent.display()
-            ))
-        })?;
+    let exe_parent_canon = std::fs::canonicalize(exe_parent).map_err(|e| {
+        NonoError::SandboxInit(format!(
+            "build_daemon_capability_set: could not canonicalize exe parent dir {}: {e}",
+            exe_parent.display()
+        ))
+    })?;
     caps = caps
         .allow_path(&exe_parent_canon, AccessMode::Read)
         .map_err(|e| {
@@ -622,8 +621,8 @@ mod tests {
     #[cfg(target_os = "windows")]
     fn wr04_systemroot_subpath_passes_allowlist_check() {
         // Use GetWindowsDirectoryW (the same API as build_daemon_capability_set).
-        let win_dir = get_windows_directory()
-            .expect("get_windows_directory must succeed on Windows");
+        let win_dir =
+            get_windows_directory().expect("get_windows_directory must succeed on Windows");
         let canon_system_root = std::fs::canonicalize(&win_dir).unwrap_or(win_dir.clone());
 
         // A path inside SystemRoot\System32 — typical for cmd.exe, python.exe, etc.
@@ -638,10 +637,8 @@ mod tests {
         );
 
         // Also verify that C:\WindowsEvil is NOT matched (string starts_with would match).
-        let evil_path = std::path::PathBuf::from(format!(
-            "{}Evil\\bin",
-            canon_system_root.display()
-        ));
+        let evil_path =
+            std::path::PathBuf::from(format!("{}Evil\\bin", canon_system_root.display()));
         // Component-aware starts_with must NOT match the evil path.
         assert!(
             !evil_path.starts_with(&canon_system_root),
@@ -663,11 +660,11 @@ mod tests {
 
         // A tempdir is under %TEMP% — never under SystemRoot or ProgramFiles.
         let tmp_dir = tempdir().expect("tempdir must be creatable");
-        let canon_tmp = std::fs::canonicalize(tmp_dir.path())
-            .unwrap_or_else(|_| tmp_dir.path().to_path_buf());
+        let canon_tmp =
+            std::fs::canonicalize(tmp_dir.path()).unwrap_or_else(|_| tmp_dir.path().to_path_buf());
 
-        let win_dir = get_windows_directory()
-            .expect("get_windows_directory must succeed on Windows");
+        let win_dir =
+            get_windows_directory().expect("get_windows_directory must succeed on Windows");
         let canon_system_root = std::fs::canonicalize(&win_dir).unwrap_or(win_dir);
 
         let mut allowed_roots = vec![canon_system_root];
