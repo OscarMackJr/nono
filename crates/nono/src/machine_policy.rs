@@ -260,6 +260,80 @@ impl MachineEgressPolicy {
     }
 }
 
+/// Expand preset egress tokens to a flat list of FQDN host strings using the
+/// supplied `network_policy_json`.
+///
+/// # Design (WR-02, D-11)
+///
+/// The canonical implementation lives here (core `nono` crate) so both the
+/// standalone `nono-agentd` binary and the `nono-cli` crate can call it without
+/// duplicating logic.  The caller supplies the JSON bytes; this function does not
+/// embed or load files, keeping the library policy-free (CLAUDE.md § Library vs
+/// CLI Boundary).
+///
+/// # Suffixes exclusion
+///
+/// Suffixes are intentionally excluded from preset expansion: AI-provider groups
+/// express wildcard coverage as `*.domain` entries in `hosts`, not as `suffixes`.
+/// Including `suffixes` would double-add them when the caller also includes
+/// `MachineEgressPolicy::raw_allowlist()` suffixes.  Only `hosts` entries are
+/// expanded.
+///
+/// # Fail-Secure (T-83-token-widen)
+///
+/// An unknown token expands to an **empty** host list — it never silently widens
+/// the allowlist to all hosts.  Unknown tokens are logged at `tracing::debug!`
+/// level.
+///
+/// # Errors
+///
+/// Returns `Err(NonoError::PolicyLoadFailed)` if `network_policy_json` cannot
+/// be parsed as JSON or if it lacks a `"groups"` object.
+pub fn expand_preset_tokens(tokens: &[String], network_policy_json: &str) -> Result<Vec<String>> {
+    use crate::NonoError;
+
+    if tokens.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Parse the supplied JSON using serde_json::Value (minimal deps; no schema binding).
+    let root: serde_json::Value =
+        serde_json::from_str(network_policy_json).map_err(|e| NonoError::PolicyLoadFailed {
+            reason: format!("expand_preset_tokens: failed to parse network-policy.json: {e}"),
+        })?;
+
+    let groups = root
+        .get("groups")
+        .and_then(|g| g.as_object())
+        .ok_or_else(|| NonoError::PolicyLoadFailed {
+            reason: "expand_preset_tokens: network-policy.json missing 'groups' object"
+                .to_string(),
+        })?;
+
+    let mut result: Vec<String> = Vec::new();
+    for token in tokens {
+        if let Some(group) = groups.get(token.as_str()) {
+            // Expand only `hosts` — see docstring for why `suffixes` are excluded.
+            if let Some(hosts) = group.get("hosts").and_then(|h| h.as_array()) {
+                for host in hosts {
+                    if let Some(h) = host.as_str() {
+                        result.push(h.to_string());
+                    }
+                }
+            }
+        } else {
+            tracing::debug!(
+                token = %token,
+                "expand_preset_tokens: unknown preset token — expanding to empty (T-83-token-widen fail-secure)"
+            );
+        }
+    }
+
+    result.sort_unstable();
+    result.dedup();
+    Ok(result)
+}
+
 // ── Windows reader ────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -536,6 +610,86 @@ pub fn read_machine_egress_policy() -> Result<Option<MachineEgressPolicy>> {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod expand_tests {
+    use super::expand_preset_tokens;
+    use crate::NonoError;
+
+    /// Fixture network-policy.json with two groups, one having both hosts and suffixes.
+    const FIXTURE_JSON: &str = r#"{
+        "groups": {
+            "anthropic": {
+                "hosts": ["*.anthropic.com"]
+            },
+            "openai": {
+                "hosts": ["*.openai.com"],
+                "suffixes": [".openai.com"]
+            }
+        }
+    }"#;
+
+    #[test]
+    fn known_single_token_returns_hosts() {
+        let tokens = vec!["anthropic".to_string()];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        assert_eq!(result, vec!["*.anthropic.com"]);
+    }
+
+    #[test]
+    fn unknown_token_returns_empty_not_error() {
+        let tokens = vec!["unknown-token".to_string()];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        assert!(
+            result.is_empty(),
+            "unknown token must expand to empty (fail-secure T-83-token-widen); got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn empty_tokens_returns_empty() {
+        let tokens: Vec<String> = vec![];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn multiple_tokens_returns_union_sorted_deduped() {
+        let tokens = vec!["anthropic".to_string(), "openai".to_string()];
+        let mut result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        result.sort_unstable(); // ensure deterministic comparison
+        // Both host entries should be present; suffixes excluded.
+        assert_eq!(result, vec!["*.anthropic.com", "*.openai.com"]);
+    }
+
+    #[test]
+    fn malformed_json_returns_policy_load_failed() {
+        let tokens = vec!["tok".to_string()];
+        let err = expand_preset_tokens(&tokens, "not valid json }{").unwrap_err();
+        assert!(
+            matches!(err, NonoError::PolicyLoadFailed { .. }),
+            "malformed JSON must return PolicyLoadFailed; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn group_with_suffixes_only_expands_hosts_not_suffixes() {
+        // The "openai" group has both hosts and suffixes; only hosts must be returned.
+        let tokens = vec!["openai".to_string()];
+        let result = expand_preset_tokens(&tokens, FIXTURE_JSON).unwrap();
+        // Must contain the host entry.
+        assert!(
+            result.contains(&"*.openai.com".to_string()),
+            "openai hosts must be present; got: {result:?}"
+        );
+        // Must NOT contain the suffix entry ".openai.com".
+        assert!(
+            !result.contains(&".openai.com".to_string()),
+            "suffixes must NOT be expanded (WR-02 design decision); got: {result:?}"
+        );
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

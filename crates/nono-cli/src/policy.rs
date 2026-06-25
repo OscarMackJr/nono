@@ -1457,48 +1457,21 @@ pub fn load_package_groups(policy: &mut Policy) -> Result<()> {
 /// # Ok(())
 /// # }
 /// ```
-// EGRESS-04 (Plan 83-03): this is the CLI-layer preset-token expander, intended
-// for any `crate::policy`-reachable caller (e.g. future `nono run` / profile
-// resolution wiring).  The daemon startup path (Plan 83-02) does NOT call this
-// function: `nono-agentd` is a standalone binary that cannot reach
-// `crate::policy`, so it uses its own embedded-JSON expander
-// `agent_daemon::expand_preset_tokens_from_embedded` over the same
-// `network-policy.json`.  This function is therefore currently uncalled outside
-// tests; the `dead_code` lint is suppressed because it is the CLI-layer
-// counterpart and is fully exercised by the cfg(test) module.
-// (Collapsing the two expanders to a single shared implementation is tracked
-// separately as WR-02 — do not change the dedup/inclusion rules here.)
-#[allow(dead_code)]
+// EGRESS-04 (Plan 83-03, WR-02): this is the CLI-layer preset-token expander.
+// It delegates to the canonical implementation in the core nono crate
+// (nono::machine_policy::expand_preset_tokens) which is also used by the
+// standalone nono-agentd binary.  The #[allow(dead_code)] attribute has been
+// replaced with #[expect(dead_code)] because:
+//   - The duplicate-expander finding (WR-02) is resolved: canonical impl is
+//     the single source of truth; this function is a thin shim.
+//   - The function is not yet wired to a non-test caller (pending machine policy
+//     expansion for `nono run` / profile resolution).
+//   - #[expect(dead_code)] (unlike #[allow]) will warn when the function is
+//     eventually called, ensuring the attribute is removed at that point.
+#[expect(dead_code, reason = "pending wiring of machine policy preset expansion for nono run / profile path (WR-02 close)")]
 pub fn expand_egress_preset_tokens(tokens: &[String]) -> Result<Vec<String>> {
-    if tokens.is_empty() {
-        return Ok(Vec::new());
-    }
-
     let json = crate::config::embedded::embedded_network_policy_json();
-    let network_policy = crate::network_policy::load_network_policy(json)?;
-
-    let mut hosts: Vec<String> = Vec::new();
-    for token in tokens {
-        match network_policy.groups.get(token.as_str()) {
-            Some(group) => {
-                hosts.extend(group.hosts.iter().cloned());
-                // Note: `suffixes` in a preset group would also be valid to include,
-                // but the AI-provider presets use only `hosts` (wildcard form `*.domain`).
-                // Suffixes are intentionally excluded here to keep the allowlist shape
-                // consistent with the HostFilter's wildcard-host vs suffix semantics.
-            }
-            None => {
-                // Unknown token → expand to nothing (T-83-token-widen fail-secure).
-                // No warning emitted here; the caller (Plan 02 wiring) can log if desired.
-            }
-        }
-    }
-
-    // Deduplicate in case multiple tokens share hosts (future-proof).
-    hosts.sort_unstable();
-    hosts.dedup();
-
-    Ok(hosts)
+    nono::machine_policy::expand_preset_tokens(tokens, json)
 }
 
 // ============================================================================

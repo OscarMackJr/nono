@@ -370,55 +370,24 @@ const EMBEDDED_NETWORK_POLICY_JSON: &str =
 
 /// Expand preset egress tokens to FQDNs using the embedded network-policy.json.
 ///
-/// Mirrors `crate::policy::expand_egress_preset_tokens` (Plan 83-03) but operates
-/// directly on the module-local `EMBEDDED_NETWORK_POLICY_JSON` constant so that
-/// the standalone `nono-agentd` binary does not need `crate::policy` in scope.
+/// Delegates to the canonical implementation [`nono::machine_policy::expand_preset_tokens`]
+/// (WR-02 consolidation), supplying the module-local `EMBEDDED_NETWORK_POLICY_JSON`
+/// constant so that the standalone `nono-agentd` binary does not need `crate::policy`
+/// in scope.
 ///
 /// # Fail-secure
 ///
 /// An unknown token expands to an empty slice — never silently widening the allowlist
-/// to all hosts (T-83-token-widen).  An unrecognised token is logged at `debug` level.
+/// to all hosts (T-83-token-widen).  An unrecognised token is logged at `debug` level
+/// inside the canonical expander.
 ///
 /// # Errors
 ///
 /// Returns `Err(reason)` (a plain `String`) if the embedded JSON cannot be parsed.
 /// The caller maps this to `NonoError::PolicyLoadFailed` (D-07 abort).
 fn expand_preset_tokens_from_embedded(tokens: &[String]) -> Result<Vec<String>, String> {
-    if tokens.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Parse the embedded network-policy.json using serde_json::Value (minimal deps).
-    let root: serde_json::Value = serde_json::from_str(EMBEDDED_NETWORK_POLICY_JSON)
-        .map_err(|e| format!("failed to parse embedded network-policy.json: {e}"))?;
-
-    let groups = root
-        .get("groups")
-        .and_then(|g| g.as_object())
-        .ok_or_else(|| "embedded network-policy.json missing 'groups' object".to_string())?;
-
-    let mut result: Vec<String> = Vec::new();
-    for token in tokens {
-        if let Some(group) = groups.get(token.as_str()) {
-            if let Some(hosts) = group.get("hosts").and_then(|h| h.as_array()) {
-                for host in hosts {
-                    if let Some(h) = host.as_str() {
-                        result.push(h.to_string());
-                    }
-                }
-            }
-        } else {
-            tracing::debug!(
-                token = %token,
-                "expand_preset_tokens_from_embedded: unknown preset token — expanding to empty (T-83-token-widen fail-secure)"
-            );
-        }
-    }
-
-    // Deduplicate (future-proof for overlapping presets).
-    result.sort_unstable();
-    result.dedup();
-    Ok(result)
+    nono::machine_policy::expand_preset_tokens(tokens, EMBEDDED_NETWORK_POLICY_JSON)
+        .map_err(|e| e.to_string())
 }
 
 /// Resolve the effective machine egress allowlist from the single startup read.
