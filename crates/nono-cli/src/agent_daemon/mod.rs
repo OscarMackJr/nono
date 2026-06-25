@@ -74,16 +74,68 @@ pub(crate) fn is_known_profile(profile_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Resolve the Windows directory via `GetWindowsDirectoryW`.
+///
+/// Replaces `std::env::var("SystemRoot")` fallback (WR-05): the `%SystemRoot%`
+/// environment variable can be spoofed or absent; the Windows API is authoritative.
+///
+/// # Safety
+///
+/// Two calls are made to `GetWindowsDirectoryW`:
+/// 1. Probe call with a null pointer and zero length — the documented idiom for
+///    querying the required buffer size. No write occurs; the return value is the
+///    required character count including the null terminator.
+/// 2. Fill call with a correctly-sized `Vec<u16>` buffer — `GetWindowsDirectoryW`
+///    writes at most `buf_len` UTF-16 code units including the null terminator.
+#[cfg(target_os = "windows")]
+fn get_windows_directory() -> nono::Result<std::path::PathBuf> {
+    use nono::NonoError;
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
+
+    // Probe: pass null + 0 to query the required buffer length.
+    // SAFETY: documented probe idiom — no write occurs on a null/0 call;
+    // the API returns the required length including the null terminator.
+    let needed = unsafe { GetWindowsDirectoryW(std::ptr::null_mut(), 0) };
+    if needed == 0 {
+        let os_err = std::io::Error::last_os_error();
+        return Err(NonoError::SandboxInit(format!(
+            "build_daemon_capability_set: GetWindowsDirectoryW probe failed: {os_err}"
+        )));
+    }
+
+    let buf_len = needed + 1; // +1 for safety margin
+    let mut buf: Vec<u16> = vec![0u16; buf_len as usize];
+
+    // Fill call: buf is a writable Vec<u16> of the required capacity;
+    // SAFETY: GetWindowsDirectoryW writes at most buf_len characters
+    // including the null terminator.
+    let written = unsafe { GetWindowsDirectoryW(buf.as_mut_ptr(), buf_len) };
+    if written == 0 || written >= buf_len {
+        let os_err = std::io::Error::last_os_error();
+        return Err(NonoError::SandboxInit(format!(
+            "build_daemon_capability_set: GetWindowsDirectoryW fill failed (written={written}, buf_len={buf_len}): {os_err}"
+        )));
+    }
+
+    buf.truncate(written as usize);
+    let os_str = OsString::from_wide(&buf);
+    Ok(std::path::PathBuf::from(os_str))
+}
+
 /// Build a real `CapabilitySet` for a daemon-launched agent (GAP-75-B fix).
 ///
 /// Grants cover:
 /// - Engine exe parent directory (Read): so the runtime linker can load the engine.
 /// - `%SystemRoot%`, `%SystemRoot%\System32`, `%SystemRoot%\SysWOW64` (Read): CLR/PE
 ///   loader baseline (Phase 58 lesson: CLR fails with `0xFFFF0000` if these are absent).
-/// - Per-profile interpreter directories (Read): resolved via `where <interp_name>` for
-///   each entry in `policy["profiles"][profile_name]["windows_interpreters"]`. Missing
-///   interpreters are logged and skipped (non-fatal — the engine may not need all of them
-///   at startup; the DACL guard will still confine what it can).
+/// - Per-profile interpreter directories (Read): resolved via `SearchPathW` (the safe,
+///   absolute-path resolver) for each entry in
+///   `policy["profiles"][profile_name]["windows_interpreters"]`. Interpreter dirs are
+///   validated against a component-aware allowlist of known-safe roots (SystemRoot +
+///   ProgramFiles) per WR-04; dirs outside the allowlist are warn+skipped (fail-secure).
+///   Missing interpreters are logged and skipped (non-fatal).
 /// - Per-tenant workspace (ReadWrite): the workspace directory that the daemon created
 ///   before calling this function. The workspace MUST exist on disk (verified by this
 ///   function via `workspace.exists()`).
@@ -96,6 +148,8 @@ pub(crate) fn is_known_profile(profile_name: &str) -> bool {
 /// Returns `Err(NonoError::SandboxInit(_))` if:
 /// - `EMBEDDED_POLICY_JSON` cannot be parsed.
 /// - The engine exe has no parent directory.
+/// - `std::fs::canonicalize(exe_parent)` fails (WR-05 — fatal, not a warn+continue).
+/// - `GetWindowsDirectoryW` fails (WR-05 — replaces %SystemRoot% env var fallback).
 /// - `caps.allow_path(...)` fails for any path.
 /// - The workspace directory does not exist.
 #[cfg(target_os = "windows")]
@@ -105,6 +159,7 @@ pub(crate) fn build_daemon_capability_set(
     workspace: &std::path::Path,
 ) -> nono::Result<nono::CapabilitySet> {
     use nono::{AccessMode, NonoError};
+    use launch::resolve_exe_path;
 
     // 1. Parse embedded policy JSON (same approach as is_known_profile).
     let policy: serde_json::Value = serde_json::from_str(EMBEDDED_POLICY_JSON).map_err(|e| {
@@ -136,15 +191,15 @@ pub(crate) fn build_daemon_capability_set(
             resolved_exe.display()
         ))
     })?;
-    // Canonicalize for accuracy; fall back to unresolved on failure.
-    let exe_parent_canon = std::fs::canonicalize(exe_parent).unwrap_or_else(|e| {
-        tracing::warn!(
-            path = %exe_parent.display(),
-            error = %e,
-            "build_daemon_capability_set: could not canonicalize exe parent; using unresolved path"
-        );
-        exe_parent.to_path_buf()
-    });
+    // WR-05: canonicalize failure is fatal — granting an unresolved path is
+    // TOCTOU-adjacent (the path may not be what the kernel resolves at access time).
+    let exe_parent_canon =
+        std::fs::canonicalize(exe_parent).map_err(|e| {
+            NonoError::SandboxInit(format!(
+                "build_daemon_capability_set: could not canonicalize exe parent dir {}: {e}",
+                exe_parent.display()
+            ))
+        })?;
     caps = caps
         .allow_path(&exe_parent_canon, AccessMode::Read)
         .map_err(|e| {
@@ -156,15 +211,11 @@ pub(crate) fn build_daemon_capability_set(
 
     // 3b. CLR/PE loader baseline: %SystemRoot%, %SystemRoot%\System32, %SystemRoot%\SysWOW64.
     // Phase 58 lesson (MEMORY.md): CLR returns 0xFFFF0000 if SystemRoot is absent.
-    let system_root_str = std::env::var("SystemRoot").unwrap_or_else(|_| {
-        tracing::warn!(
-            "build_daemon_capability_set: %SystemRoot% not set; defaulting to C:\\Windows"
-        );
-        "C:\\Windows".to_string()
-    });
-    let system_root = std::path::Path::new(&system_root_str);
+    // WR-05: use GetWindowsDirectoryW instead of env::var("SystemRoot") — the env var
+    // can be spoofed; the Windows API is authoritative and non-spoofable.
+    let system_root = get_windows_directory()?;
     for dir in &[
-        system_root.to_path_buf(),
+        system_root.clone(),
         system_root.join("System32"),
         system_root.join("SysWOW64"),
     ] {
@@ -176,58 +227,103 @@ pub(crate) fn build_daemon_capability_set(
         })?;
     }
 
-    // 3c. Interpreter directories (Read). Resolved via `where <name>` (Windows PATH search).
+    // 3c. Interpreter directories (Read). Resolved via SearchPathW (safe absolute-path resolver).
+    //
+    // WR-04: interpreter resolution uses resolve_exe_path (SearchPathW-backed) instead of
+    // Command::new("where"), which is subject to PATH-shim hijacking. After resolving the
+    // absolute interpreter path, the parent directory is canonicalized and validated against a
+    // component-aware allowlist of kernel-managed roots (SystemRoot + ProgramFiles). Per-user or
+    // per-app writable install locations (e.g. %LOCALAPPDATA%\Programs\...) are deliberately
+    // excluded from the allowlist — they are the PATH-hijack vector this fix closes.
+    //
+    // If a legitimately-installed interpreter is rejected, an operator can extend this allowlist.
+    // The check uses Path::starts_with (component-aware, not string comparison) so a path like
+    // C:\WindowsEvil is never matched by the C:\Windows root (CLAUDE.md path security rule).
+
+    // Build the allowlist of acceptable interpreter roots.
+    // system_root is already canonicalized (GetWindowsDirectoryW returns an absolute path).
+    let canon_system_root = std::fs::canonicalize(&system_root).unwrap_or(system_root.clone());
+    let mut allowed_roots: Vec<std::path::PathBuf> = vec![canon_system_root];
+
+    // %ProgramFiles%: absent or un-canonicalizable → skip (no hardcoded fallback).
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        if let Ok(canon_pf) = std::fs::canonicalize(&pf) {
+            allowed_roots.push(canon_pf);
+        }
+    }
+    // %ProgramFiles(x86)%: same pattern.
+    if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+        if let Ok(canon_pf86) = std::fs::canonicalize(&pf86) {
+            allowed_roots.push(canon_pf86);
+        }
+    }
+
     for interp_name in &interpreter_names {
-        let output = std::process::Command::new("where")
-            .arg(interp_name.as_str())
-            .output();
-        match output {
-            Ok(out) if out.status.success() && !out.stdout.is_empty() => {
-                // Parse first line of `where` output as a path.
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                let first_line = stdout.lines().next().unwrap_or("").trim();
-                if first_line.is_empty() {
-                    tracing::warn!(
-                        interp = %interp_name,
-                        "build_daemon_capability_set: `where` output was empty for interpreter; skipping"
-                    );
-                    continue;
-                }
-                let interp_path = std::path::PathBuf::from(first_line);
-                let interp_dir = match interp_path.parent() {
-                    Some(p) => p.to_path_buf(),
-                    None => {
-                        tracing::warn!(
-                            interp = %interp_name,
-                            path = %interp_path.display(),
-                            "build_daemon_capability_set: interpreter has no parent dir; skipping"
-                        );
-                        continue;
-                    }
-                };
-                caps = caps
-                    .allow_path(&interp_dir, AccessMode::Read)
-                    .map_err(|e| {
-                        NonoError::SandboxInit(format!(
-                        "build_daemon_capability_set: allow_path(interpreter_dir={}) failed: {e}",
-                        interp_dir.display()
-                    ))
-                    })?;
-            }
-            Ok(_) => {
-                tracing::warn!(
+        let interp_path = std::path::PathBuf::from(interp_name.as_str());
+
+        // resolve_exe_path uses SearchPathW — returns an absolute, kernel-resolved path.
+        let resolved_interp = match resolve_exe_path(interp_path) {
+            Ok(p) => p,
+            Err(_) => {
+                tracing::debug!(
                     interp = %interp_name,
-                    "build_daemon_capability_set: interpreter not found via `where`; skipping"
+                    "build_daemon_capability_set: interpreter not found via SearchPathW; skipping"
                 );
+                continue;
             }
+        };
+
+        let interp_dir = match resolved_interp.parent() {
+            Some(p) => p.to_path_buf(),
+            None => {
+                tracing::debug!(
+                    interp = %interp_name,
+                    path = %resolved_interp.display(),
+                    "build_daemon_capability_set: interpreter has no parent dir; skipping"
+                );
+                continue;
+            }
+        };
+
+        // Canonicalize the interpreter dir for accurate root-containment check.
+        // On failure: warn+skip (fail-secure — do not grant an unresolved path, WR-04).
+        let canon_interp_dir = match std::fs::canonicalize(&interp_dir) {
+            Ok(c) => c,
             Err(e) => {
                 tracing::warn!(
                     interp = %interp_name,
+                    dir = %interp_dir.display(),
                     error = %e,
-                    "build_daemon_capability_set: `where` command failed for interpreter; skipping"
+                    "build_daemon_capability_set: could not canonicalize interpreter dir (WR-04); skipping grant"
                 );
+                continue;
             }
+        };
+
+        // WR-04: root-containment check using Path::starts_with (component-aware).
+        // Per-user/writable install locations (e.g. %LOCALAPPDATA%\Programs\...) are
+        // deliberately excluded — they are the PATH-hijack vector this fix closes.
+        let in_allowed_root = allowed_roots
+            .iter()
+            .any(|root| canon_interp_dir.starts_with(root));
+
+        if !in_allowed_root {
+            tracing::warn!(
+                interp = %interp_name,
+                dir = %canon_interp_dir.display(),
+                "build_daemon_capability_set: interpreter dir not under a known-safe root (WR-04); skipping grant"
+            );
+            continue;
         }
+
+        caps = caps
+            .allow_path(&canon_interp_dir, AccessMode::Read)
+            .map_err(|e| {
+                NonoError::SandboxInit(format!(
+                    "build_daemon_capability_set: allow_path(interpreter_dir={}) failed: {e}",
+                    canon_interp_dir.display()
+                ))
+            })?;
     }
 
     // 3d. Per-tenant workspace (ReadWrite). The workspace MUST exist (created by handle_launch).
@@ -546,6 +642,85 @@ mod tests {
             !policy.rules.is_empty(),
             "CapabilitySet for 'aider' profile must produce at least one filesystem rule; \
              got 0 rules (exe_parent, SystemRoot dirs, and workspace should each contribute)"
+        );
+    }
+
+    /// WR-04: interpreter dir under SystemRoot passes the root-containment check.
+    ///
+    /// Constructs a synthetic path under C:\Windows\System32 and verifies that the
+    /// Path::starts_with component check (not string comparison) returns true.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wr04_systemroot_subpath_passes_allowlist_check() {
+        // Use GetWindowsDirectoryW (the same API as build_daemon_capability_set).
+        let win_dir = get_windows_directory()
+            .expect("get_windows_directory must succeed on Windows");
+        let canon_system_root = std::fs::canonicalize(&win_dir).unwrap_or(win_dir.clone());
+
+        // A path inside SystemRoot\System32 — typical for cmd.exe, python.exe, etc.
+        let sys32 = canon_system_root.join("System32");
+        // Use Path::starts_with (component-aware) as the function does.
+        assert!(
+            sys32.starts_with(&canon_system_root),
+            "System32 must be recognized as under the SystemRoot allowlist (WR-04); \
+             sys32={} root={}",
+            sys32.display(),
+            canon_system_root.display()
+        );
+
+        // Also verify that C:\WindowsEvil is NOT matched (string starts_with would match).
+        let evil_path = std::path::PathBuf::from(format!(
+            "{}Evil\\bin",
+            canon_system_root.display()
+        ));
+        // Component-aware starts_with must NOT match the evil path.
+        assert!(
+            !evil_path.starts_with(&canon_system_root),
+            "WR-04: C:\\WindowsEvil must NOT be matched by C:\\Windows allowlist root (component check); \
+             evil_path={} root={}",
+            evil_path.display(),
+            canon_system_root.display()
+        );
+    }
+
+    /// WR-04: an interpreter dir NOT under SystemRoot or ProgramFiles is rejected.
+    ///
+    /// Creates a tempdir (simulating a user-writable install location) and verifies
+    /// it is not in the allowed-roots list. This is the PATH-hijack vector.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn wr04_user_writable_tempdir_rejected_by_allowlist() {
+        use tempfile::tempdir;
+
+        // A tempdir is under %TEMP% — never under SystemRoot or ProgramFiles.
+        let tmp_dir = tempdir().expect("tempdir must be creatable");
+        let canon_tmp = std::fs::canonicalize(tmp_dir.path())
+            .unwrap_or_else(|_| tmp_dir.path().to_path_buf());
+
+        let win_dir = get_windows_directory()
+            .expect("get_windows_directory must succeed on Windows");
+        let canon_system_root = std::fs::canonicalize(&win_dir).unwrap_or(win_dir);
+
+        let mut allowed_roots = vec![canon_system_root];
+        if let Ok(pf) = std::env::var("ProgramFiles") {
+            if let Ok(cpf) = std::fs::canonicalize(&pf) {
+                allowed_roots.push(cpf);
+            }
+        }
+        if let Ok(pf86) = std::env::var("ProgramFiles(x86)") {
+            if let Ok(cpf86) = std::fs::canonicalize(&pf86) {
+                allowed_roots.push(cpf86);
+            }
+        }
+
+        // The tempdir must NOT be under any allowed root.
+        let in_allowed = allowed_roots.iter().any(|root| canon_tmp.starts_with(root));
+        assert!(
+            !in_allowed,
+            "WR-04: tempdir {} must NOT be in the SystemRoot+ProgramFiles allowlist (PATH-hijack rejection); \
+             allowed_roots={:?}",
+            canon_tmp.display(),
+            allowed_roots
         );
     }
 
