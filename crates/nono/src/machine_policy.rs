@@ -243,6 +243,83 @@ impl MachineEgressPolicy {
         // 84-PATTERNS.md invariant 3.
     }
 
+    /// Validate all string-valued fields of this policy for structural sanity (IN-01).
+    ///
+    /// Checks performed:
+    ///
+    /// - `allowed_hosts` and `allowed_suffixes`: each entry must be non-empty after
+    ///   trimming and contain only ASCII alphanumeric, `-`, `.`, or `*` characters
+    ///   (the characters used in FQDNs and normalized wildcard suffixes).
+    /// - `preset_tokens`: each entry must be non-empty after trimming and contain only
+    ///   ASCII alphanumeric or `-` characters, and must not start with `-`.  Dots,
+    ///   spaces, underscores, and other non-DNS-label characters are rejected.
+    ///
+    /// This method does **NOT** validate that hosts are resolvable, that tokens exist
+    /// in any embedded JSON, or that suffixes match any actual domain — only structural
+    /// character-set sanity is enforced so the library remains policy-free.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(NonoError::PolicyLoadFailed)` on the first invalid entry found.
+    /// The error `reason` describes which field and why the entry was rejected.
+    pub fn validate(&self) -> crate::Result<()> {
+        use crate::NonoError;
+
+        for entry in &self.allowed_hosts {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: "allowed_hosts contains an empty or whitespace-only entry".to_string(),
+                });
+            }
+            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*')) {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: format!(
+                        "allowed_hosts entry '{trimmed}' contains invalid characters \
+                         (expected DNS label characters: a-z 0-9 - . *)"
+                    ),
+                });
+            }
+        }
+
+        for entry in &self.allowed_suffixes {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: "allowed_suffixes contains an empty or whitespace-only entry"
+                        .to_string(),
+                });
+            }
+            if !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '*')) {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: format!(
+                        "allowed_suffixes entry '{trimmed}' contains invalid characters \
+                         (expected DNS label characters: a-z 0-9 - . *)"
+                    ),
+                });
+            }
+        }
+
+        for token in &self.preset_tokens {
+            let trimmed = token.trim();
+            if trimmed.is_empty() {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: "preset_tokens contains an empty or whitespace-only entry".to_string(),
+                });
+            }
+            if trimmed.starts_with('-') || !trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(NonoError::PolicyLoadFailed {
+                    reason: format!(
+                        "preset_tokens entry '{trimmed}' contains invalid characters \
+                         (expected alphanumeric and hyphen only; must not start with '-')"
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Normalize a single `AllowedSuffixes` entry to the `*.`-prefixed wildcard
     /// form that [`crate::HostFilter`] buckets as a suffix (CR-01).
     ///
@@ -507,12 +584,21 @@ mod windows_reader {
         // D-12: read telemetry sub-section in the same registry open.
         // D-14: malformed telemetry degrades; only egress errors abort (D-07).
         let telemetry = parse_telemetry_config(key);
-        Ok(MachineEgressPolicy {
+        let policy = MachineEgressPolicy {
             allowed_suffixes,
             allowed_hosts,
             preset_tokens,
             telemetry,
-        })
+        };
+        // IN-01: validate structural sanity of all string fields after construction.
+        // Any invalid entry returns Err(reason) which read_machine_egress_policy_impl
+        // wraps in Err(NonoError::PolicyLoadFailed { reason }) via the existing
+        // .map_err(|reason| NonoError::PolicyLoadFailed { reason }) chain (D-07 abort).
+        policy.validate().map_err(|e| match e {
+            NonoError::PolicyLoadFailed { reason } => reason,
+            other => other.to_string(),
+        })?;
+        Ok(policy)
     }
 
     /// Read `HKLM\SOFTWARE\Policies\nono` and deserialize into
@@ -610,6 +696,112 @@ pub fn read_machine_egress_policy() -> Result<Option<MachineEgressPolicy>> {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod validate_tests {
+    use super::*;
+    use crate::NonoError;
+
+    fn valid_policy() -> MachineEgressPolicy {
+        MachineEgressPolicy {
+            allowed_hosts: vec!["api.github.com".to_string()],
+            allowed_suffixes: vec!["*.anthropic.com".to_string()],
+            preset_tokens: vec!["anthropic".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn valid_policy_returns_ok() {
+        assert!(valid_policy().validate().is_ok());
+    }
+
+    #[test]
+    fn empty_policy_returns_ok() {
+        // Empty lists → unconfigured, not invalid.
+        assert!(MachineEgressPolicy::default().validate().is_ok());
+    }
+
+    #[test]
+    fn empty_host_entry_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.allowed_hosts.push("".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(
+            matches!(err, NonoError::PolicyLoadFailed { .. }),
+            "empty host must return PolicyLoadFailed; got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("empty") || msg.contains("whitespace"),
+            "error must mention empty; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_suffix_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.allowed_suffixes.push("   ".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("empty") || msg.contains("whitespace"),
+            "whitespace suffix must mention empty; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn preset_token_with_space_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("bad token!".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid"),
+            "token with space+exclamation must mention invalid; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn preset_token_leading_dash_returns_err() {
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("-leading-dash".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid"),
+            "leading-dash token must mention invalid; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn preset_token_underscore_returns_err() {
+        // "anthropic_ai" — underscore is not a valid DNS label character.
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("anthropic_ai".to_string());
+        let err = p.validate().unwrap_err();
+        assert!(matches!(err, NonoError::PolicyLoadFailed { .. }));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid"),
+            "token with underscore must mention invalid; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn valid_alphanumeric_hyphen_token_is_ok() {
+        let mut p = MachineEgressPolicy::default();
+        p.preset_tokens.push("anthropic".to_string());
+        assert!(
+            p.validate().is_ok(),
+            "alphanumeric-only token must be valid"
+        );
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
