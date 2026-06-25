@@ -2,39 +2,44 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: planning
-last_updated: "2026-06-25T22:25:34.717Z"
+status: active
+last_updated: "2026-06-25"
 last_activity: 2026-06-25
 progress:
-  total_phases: 0
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
 ---
 
-# Project State: nono — v3.2 Signed Policy Overrides (ZT-Infra Attestation)
+# Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90 complete + archived; tag `v3.1` local). Phase numbering continues from Phase 90 (Phases 91-93 — NOT reset). Scope source: `.planning/seeds/SEED-005-zt-infra-policy-override-attestation.md`. Roadmap: `.planning/ROADMAP.md`.
+See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93 complete + archived; tag `v3.2` local). Phase numbering continues from Phase 93 (Phases 94-97 — NOT reset). Roadmap: `.planning/ROADMAP.md`. Requirements: `.planning/REQUIREMENTS.md`.
 
-**Core Value:** A false-positive nono block must be resolvable by a cryptographically-signed, ledgered, non-self-service exception — never by disabling the sandbox.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Planning next milestone — v3.2 SHIPPED + ARCHIVED 2026-06-23 (all 3 phases 91-93 complete; VFY-01 b + VFY-03 a [BLOCKING-93] both closed). Run `/gsd-new-milestone`.
+**Current Focus:** Phase 94 — UPST10 Divergence Audit (not yet started; run `/gsd:plan-phase 94`).
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+```
+Phase 94 of 97 | Plan: — | Status: Not started
+[                                        ] 0%
+```
+
+Phase: 94 — UPST10 Divergence Audit
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-25 — Milestone v3.3 started
+Status: Not started
+Last activity: 2026-06-25 — v3.3 roadmap created; Phase 94 is next
 
 ## Performance Metrics
 
-**Velocity:** (v3.2 — reset; populated as phases complete)
+**Velocity:** (v3.3 — reset; populated as phases complete)
 
-- Total plans completed: 13
+- Total plans completed: 0
 - Average duration: —
 - Total execution time: —
 
@@ -45,25 +50,28 @@ Last activity: 2026-06-25 — Milestone v3.3 started
 
 ## Accumulated Context
 
-### Decisions (v3.2 roadmap)
+### Key Decisions (v3.3 roadmap)
 
 | Decision | Phase | Rationale |
 |----------|-------|-----------|
-| 3 phases (not 4) — jti in Phase 91+92, DAAL in Phase 93 | all | jti single-use escalated to v1 (VFY-06); DAAL async/non-blocking (ZTL-05) fits the live-integration phase; all 28 reqs cover in 91/92/93 with no orphans. Research's optional Phase 94 hardening is not needed because jti is already v1 scope. |
-| Mutation + audit fused into Phase 92 (never split) | 92 | An override that applies without emitting a SecurityEventLayer event is silent privilege escalation (AUD-04). Splitting creates a shippable-but-silent window. Both land in Phase 92 atomically. |
-| DF-01 offline gate attaches to Phase 92, DF-02 live gate to Phase 93 | 92/93 | Dark Factory gates verify the phase whose behavior they gate: offline verify path is exercisable at Phase 92 close; live AWS/KMS path is exercisable only at Phase 93 close. |
-| All override logic in nono-py; core gets only AuditEventPayload variant | all | CLAUDE.md library boundary (policy-free core). VFY-01 two-key AND gate, ZTL-01 live decision, CLI-01/02 UX — all nono-py or nono-cli. Core: `PolicyOverrideApplied` variant + reuse of `trust/signing::verify_keyed_signature`. |
-| Python urllib.request for POST /actions (not ureq in Rust) | 93 | Research SUMMARY Tension-2 resolved: stdlib, zero new deps, easily mockable. Re-evaluate ureq only if mTLS fragility appears — explicit checkpoint at Phase 93 plan time. |
+| 4 phases (94-97), not 2-3 | all | Three distinct concerns (audit, absorb, cross-target, release) each have a clean delivery boundary and different risk profiles; collapsing absorb+release creates a dependency inversion (version bump must come after sync). |
+| UPST10-04 (remote relocation) folded into Phase 94 | 94 | The `nolabs-ai/nono` rename is audit-setup work — done at audit-open when fetching commits; a separate phase would be artificial. |
+| Version leapfrog (RLS-05) in Phase 97, after Phase 95 sync | 97 | Bump once, post-sync, to a clean ≥ 0.65.0; bumping mid-sync creates a rebasing treadmill and dirty Cargo.lock during cherry-picks. |
+| Cross-target (Phase 96) sequenced after Phase 95 sync | 96 | XTGT clippy gates should run against the synced + post-sync tree, not a pre-sync snapshot that will change. |
+| Release scope = PREPARE ONLY | 97 | Preserves LOCAL-ONLY posture; repo PUBLIC pending Microsoft minifilter-altitude approval; actual push/publish is operator-gated manual step outside this milestone. |
 
 ### Pending Todos
 
-None.
+None yet.
 
 ### Blockers/Concerns
 
-- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All v3.2 commits + the `v3.2` tag are LOCAL ONLY; push is operator-gated.
-- **Milestone-marker only**: no crate publish; a future release must leapfrog the crate version to ≥ `0.65.0`.
-- **Cross-target clippy (PARTIAL→CI)**: the ZTL-04 `AWS_*` strip in `crates/nono-cli/src/exec_strategy/env_sanitization.rs` is verified native-Windows only; linux-gnu + apple-darwin clippy deferred to CI (host lacks cross C compiler), per CLAUDE.md MUST/NEVER. (Resolved-at-close: the milestone was overwhelmingly additive core/nono-py work; native `cargo build`/`clippy` green on both crates.)
+- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All tags remain LOCAL ONLY; push is operator-gated.
+- **Upstream relocated**: canonical upstream is now `nolabs-ai/nono` (was `always-further/nono`); Phase 94 updates the remote and PROJECT.md.
+- **Cross-target clippy**: XTGT-03 (apple-darwin) explicitly allows a documented hard-blocker outcome if osxcross/SDK is infeasible from Windows. Phase 96 resolves the outcome either way.
+- **Cross-repo release**: nono-py at `../nono-py`, nono-ts at `../nono-ts`. Phase 97 version bump must touch both sibling repos.
+- **PARTIAL→CI carry-forwards**: SEC-01/SEC-02 (v3.1), ZTL-04 AWS_* strip (v3.2) — still PARTIAL→CI; Phase 96 may resolve if linux-gnu toolchain clears them.
+- **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` required on every commit including cherry-picks (use `-x` + manual DCO trailer).
 
 ### Quick Tasks Completed
 
@@ -76,7 +84,7 @@ None.
 
 ## Deferred Items
 
-Items acknowledged and deferred at **v3.2 close (2026-06-23)** — `gsd-sdk query audit-open` reported 47 open artifacts, user acknowledged-all (Proceed without audit). All historical or host-gated; none blockers:
+Items acknowledged and deferred at **v3.2 close (2026-06-23)** — `gsd-sdk query audit-open` reported 47 open artifacts, user acknowledged-all. All historical or host-gated; none blockers:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
@@ -84,16 +92,16 @@ Items acknowledged and deferred at **v3.2 close (2026-06-23)** — `gsd-sdk quer
 | Historical | 6 seeds SEED-001…006 (all consumed or dormant; SEED-005 = v3.2 scope, delivered) | Acknowledged | v3.2 close |
 | Historical | 4 empty/"None" todo parse artifacts | Acknowledged | v3.2 close |
 | Host-gated | OVERRIDE-02 (DF-02) live allow/revoke proof — needs ZT-Infra provisioner + openssl + elevated session; SKIP_HOST_UNAVAILABLE by design | Open (host-gated) | v3.2 close |
-| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) for ZTL-04 `AWS_*` strip — host lacks cross C compiler | Open (CI-decisive) | v3.2 close |
+| PARTIAL→CI | Cross-target clippy (linux-gnu + apple-darwin) for ZTL-04 `AWS_*` strip | Open (CI-decisive; may resolve in Phase 96) | v3.2 close |
 
-Prior carry-forwards from v3.1 close (2026-06-21, see `.planning/milestones/v3.1-MILESTONE-AUDIT.md`) remain deferred: SEC-01/SEC-02 AF_UNIX+procfs guards (PARTIAL→CI), DRAIN-01/02/03 live host-gated UAT, 2 env-sensitive Phase-74 DACL-guard tests.
+Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs guards (PARTIAL→CI), DRAIN-01/02/03 live host-gated UAT, 2 env-sensitive Phase-74 DACL-guard tests.
 
 ## Session Continuity
 
-Last session: 2026-06-23 — v3.2 milestone completed and archived
-Stopped at: v3.2 shipped; awaiting next milestone
-Resume file: — (start next milestone via /gsd-new-milestone)
+Last session: 2026-06-25 — v3.3 milestone started; roadmap created (Phases 94-97)
+Stopped at: v3.3 roadmap written; Phase 94 planning next
+Resume file: — (run `/gsd:plan-phase 94`)
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Run `/gsd:plan-phase 94` to plan the UPST10 divergence audit

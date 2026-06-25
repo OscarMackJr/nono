@@ -63,16 +63,16 @@ Populated by roadmap creation 2026-06-25. Phase numbering continues from Phase 9
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UPST10-01 | TBD | Pending |
-| UPST10-02 | TBD | Pending |
-| UPST10-03 | TBD | Pending |
-| UPST10-04 | TBD | Pending |
-| RLS-05 | TBD | Pending |
-| RLS-06 | TBD | Pending |
-| RLS-07 | TBD | Pending |
-| RLS-08 | TBD | Pending |
-| RLS-09 | TBD | Pending |
-| XTGT-01 | TBD | Pending |
-| XTGT-02 | TBD | Pending |
-| XTGT-03 | TBD | Pending |
-| XTGT-04 | TBD | Pending |
+| UPST10-01 | Phase 94 | Pending |
+| UPST10-04 | Phase 94 | Pending |
+| UPST10-02 | Phase 95 | Pending |
+| UPST10-03 | Phase 95 | Pending |
+| XTGT-01 | Phase 96 | Pending |
+| XTGT-02 | Phase 96 | Pending |
+| XTGT-03 | Phase 96 | Pending |
+| XTGT-04 | Phase 96 | Pending |
+| RLS-05 | Phase 97 | Pending |
+| RLS-06 | Phase 97 | Pending |
+| RLS-07 | Phase 97 | Pending |
+| RLS-08 | Phase 97 | Pending |
+| RLS-09 | Phase 97 | Pending |
