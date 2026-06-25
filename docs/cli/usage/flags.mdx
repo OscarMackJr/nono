@@ -577,6 +577,24 @@ nono run --profile openclaw --proxy-port 19999 --listen-port 18789 -- openclaw g
 Without `--proxy-port`, nono uses an OS-assigned ephemeral port and sets environment variables like `GEMINI_BASE_URL=http://127.0.0.1:PORT/gemini`. Applications that read these env vars don't need `--proxy-port`. Use it only when the application requires manual base URL configuration.
 </Note>
 
+#### `--trust-proxy-ca`
+
+<Note>macOS only.</Note>
+
+Add the proxy CA to the macOS user trust store so Go-based CLI tools (which ignore the `SSL_CERT_FILE` environment variable) trust the credential proxy. The CA is shared across sessions via the Keychain and regenerates daily. Can also be set via the `NONO_TRUST_PROXY_CA` environment variable.
+
+```bash
+nono run --allow-cwd --network-profile developer --trust-proxy-ca -- my-go-tool
+```
+
+#### `--proxy-ca-validity`
+
+Proxy CA certificate validity in days (range `1`–`365`, default: `1`). Controls how long the generated proxy CA certificate remains valid before regeneration.
+
+```bash
+nono run --allow-cwd --network-profile developer --proxy-ca-validity 7 -- my-agent
+```
+
 #### `--listen-port`
 
 Allow the sandboxed process to listen on a TCP port. Required when running server applications (like AI gateways) in proxy mode.
@@ -852,6 +870,14 @@ Working directory for `$WORKDIR` expansion in profiles (defaults to current dire
 
 ```bash
 nono run --profile always-further/claude --workdir ./my-project -- claude
+```
+
+#### `--workspace`
+
+Absolute path to the writable workspace. Defaults to the current directory (canonicalized) when omitted. This single value is used as both the child engine's working directory **and** the writable filesystem grant — a single source of truth for "where the agent may write".
+
+```bash
+nono run --profile always-further/claude --workspace /srv/agent/run-42 -- claude
 ```
 
 #### `--allow-cwd`

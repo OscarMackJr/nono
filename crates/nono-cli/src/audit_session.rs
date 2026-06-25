@@ -363,9 +363,7 @@ mod tests {
     // storage` when HOME/USERPROFILE round-trip is incomplete). The fixture
     // is ported verbatim from upstream so the file matches; gate it
     // `cfg(not(target_os = "windows"))` so the cross-platform baseline still
-    // exercises it. Windows-specific re-enablement lands in Plan 22-05b
-    // alongside the audit_ledger.rs port (which is the upstream caller of
-    // this discovery path).
+    // exercises it. Windows-specific re-enablement is deferred.
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn discover_sessions_excludes_rollback_backed_entries() {

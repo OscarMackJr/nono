@@ -4,17 +4,17 @@
 //! `~/.local/state/nono/`). Until v1.0.0, reads also fall back to legacy
 //! `~/.nono/{audit,sessions,rollbacks}/` trees with a one-time deprecation warning.
 
-use nono::{try_canonicalize, NonoError, Result};
+use nono::{try_canonicalize, Result};
+// `NonoError` is only constructed in the Windows-only `%LOCALAPPDATA%` arm of
+// `user_state_dir`; importing it unconditionally is an unused-import error under
+// `-Dwarnings` on Linux/macOS.
+#[cfg(target_os = "windows")]
+use nono::NonoError;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
 const LEGACY_HOME_SUBDIR: &str = ".nono";
 const LEGACY_REMOVE_BY: &str = "v1.0.0";
-// Used by `maybe_migrate_legacy_audit_ledger` (below) and tests. The sole
-// non-test caller (`audit_ledger.rs`) is not currently wired into the module
-// tree, so this is dead on all platforms until that module is declared.
-#[allow(dead_code)]
-const AUDIT_LEDGER_FILENAME: &str = "ledger.ndjson";
 
 thread_local! {
     static LEGACY_AUDIT_WARNED: Cell<bool> = const { Cell::new(false) };
@@ -259,67 +259,6 @@ impl LegacyRootSet {
     }
 }
 
-/// Copy a legacy audit ledger into the canonical root on first write, if needed.
-///
-/// Caller must hold the audit ledger lock before calling this function.
-///
-/// Called from `audit_ledger.rs` (the Unix-primary upstream caller) and tests.
-/// `audit_ledger.rs` is not currently declared in the module tree, so this is
-/// dead on all platforms until that module is wired in; verified by tests.
-#[allow(dead_code)]
-pub fn maybe_migrate_legacy_audit_ledger() -> Result<()> {
-    let primary = audit_root()?;
-    let legacy = legacy_audit_root()?;
-    if primary == legacy {
-        return Ok(());
-    }
-
-    let new_ledger = primary.join(AUDIT_LEDGER_FILENAME);
-    if new_ledger.exists() {
-        return Ok(());
-    }
-
-    let legacy_ledger = legacy.join(AUDIT_LEDGER_FILENAME);
-    if !legacy_ledger.exists() {
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(&primary).map_err(|e| {
-        NonoError::Snapshot(format!(
-            "Failed to create audit root {}: {e}",
-            primary.display()
-        ))
-    })?;
-
-    let tmp_ledger = primary.join(format!("{AUDIT_LEDGER_FILENAME}.tmp"));
-    if tmp_ledger.exists() {
-        std::fs::remove_file(&tmp_ledger).map_err(|e| {
-            NonoError::Snapshot(format!(
-                "Failed to remove stale audit ledger migration temp file {}: {e}",
-                tmp_ledger.display()
-            ))
-        })?;
-    }
-
-    std::fs::copy(&legacy_ledger, &tmp_ledger).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_ledger);
-        NonoError::Snapshot(format!(
-            "Failed to copy legacy audit ledger to temporary file {}: {e}",
-            tmp_ledger.display()
-        ))
-    })?;
-
-    std::fs::rename(&tmp_ledger, &new_ledger).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp_ledger);
-        NonoError::Snapshot(format!(
-            "Failed to rename temporary audit ledger to {}: {e}",
-            new_ledger.display()
-        ))
-    })?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -423,28 +362,5 @@ mod tests {
         assert_eq!(roots.len(), 2);
         assert!(roots[0].ends_with("nono/rollbacks"));
         assert!(roots[1].ends_with(".nono/rollbacks"));
-    }
-
-    #[test]
-    fn maybe_migrate_legacy_audit_ledger_copies_via_temp_rename() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = tempfile::tempdir().unwrap();
-        let (_env, home) = isolated_env(tmp.path());
-
-        let legacy_ledger = legacy_audit_root().unwrap().join(AUDIT_LEDGER_FILENAME);
-        fs::create_dir_all(legacy_ledger.parent().unwrap()).unwrap();
-        fs::write(&legacy_ledger, b"{\"sequence\":0}\n").unwrap();
-
-        maybe_migrate_legacy_audit_ledger().unwrap();
-
-        let migrated = audit_root().unwrap().join(AUDIT_LEDGER_FILENAME);
-        assert!(migrated.exists());
-        assert!(!audit_root()
-            .unwrap()
-            .join(format!("{AUDIT_LEDGER_FILENAME}.tmp"))
-            .exists());
-        let content = fs::read_to_string(&migrated).unwrap();
-        assert_eq!(content, "{\"sequence\":0}\n");
-        let _ = home;
     }
 }

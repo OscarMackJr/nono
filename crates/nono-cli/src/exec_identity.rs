@@ -6,8 +6,8 @@
 //!
 //! AUD-03 SHA-256 portion (Plan 22-05a Task 4 — manual port replay of upstream
 //! `02ee0bd1` per D-02 fallback gate; the full upstream commit also included
-//! `MerkleScheme::DomainSeparatedV3`, `audit_ledger.rs` flock changes, and
-//! cross-file refactors that breached D-02 thresholds for cherry-pick).
+//! `MerkleScheme::DomainSeparatedV3` and cross-file refactors that breached
+//! D-02 thresholds for cherry-pick).
 //!
 //! Plan 22-05b Task 4 (fork-only D-17 ALLOWED): Windows Authenticode
 //! signer-trust verification lands as a SIBLING `AuthenticodeStatus`

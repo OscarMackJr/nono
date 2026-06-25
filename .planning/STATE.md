@@ -29,7 +29,7 @@ See: `.planning/PROJECT.md` (v3.2 milestone active 2026-06-21; v3.1 Phases 85-90
 Phase: Milestone v3.2 complete
 Plan: —
 Status: Awaiting next milestone
-Last activity: 2026-06-23 — Milestone v3.2 completed and archived
+Last activity: 2026-06-24 — Completed quick tasks 260624-q98 (remove orphan audit_ledger.rs) + 260624-q9j (fix red Docs Checks)
 
 ## Performance Metrics
 
@@ -65,6 +65,14 @@ None.
 - **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All v3.2 commits + the `v3.2` tag are LOCAL ONLY; push is operator-gated.
 - **Milestone-marker only**: no crate publish; a future release must leapfrog the crate version to ≥ `0.65.0`.
 - **Cross-target clippy (PARTIAL→CI)**: the ZTL-04 `AWS_*` strip in `crates/nono-cli/src/exec_strategy/env_sanitization.rs` is verified native-Windows only; linux-gnu + apple-darwin clippy deferred to CI (host lacks cross C compiler), per CLAUDE.md MUST/NEVER. (Resolved-at-close: the milestone was overwhelmingly additive core/nono-py work; native `cargo build`/`clippy` green on both crates.)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260624-p1c | Cargo Audit: bump quinn-proto past RUSTSEC-2026-0185 (remote memory exhaustion) | 2026-06-24 | 78b50f04 | [260624-p1c-cargo-audit-bump-quinn-proto-past-rustse](./quick/260624-p1c-cargo-audit-bump-quinn-proto-past-rustse/) |
+| 260624-q98 | Remove orphan audit_ledger.rs + dead state_paths helpers (never compiled) | 2026-06-24 | e350df23 | [260624-q98-remove-orphan-audit-ledger-rs-and-its-de](./quick/260624-q98-remove-orphan-audit-ledger-rs-and-its-de/) |
+| 260624-q9j | Fix red Docs Checks: force-add already-in-nav windows-win-1706-option-1-workstream.mdx | 2026-06-24 | 3475b470 | [260624-q9j-exclude-docs-cli-development-from-docs-c](./quick/260624-q9j-exclude-docs-cli-development-from-docs-c/) |
 
 ## Deferred Items
 
