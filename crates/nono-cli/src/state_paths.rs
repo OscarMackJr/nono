@@ -4,7 +4,12 @@
 //! `~/.local/state/nono/`). Until v1.0.0, reads also fall back to legacy
 //! `~/.nono/{audit,sessions,rollbacks}/` trees with a one-time deprecation warning.
 
-use nono::{try_canonicalize, NonoError, Result};
+use nono::{try_canonicalize, Result};
+// `NonoError` is only constructed in the Windows-only `%LOCALAPPDATA%` arm of
+// `user_state_dir`; importing it unconditionally is an unused-import error under
+// `-Dwarnings` on Linux/macOS.
+#[cfg(target_os = "windows")]
+use nono::NonoError;
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
@@ -254,7 +259,6 @@ impl LegacyRootSet {
     }
 }
 
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -359,5 +363,4 @@ mod tests {
         assert!(roots[0].ends_with("nono/rollbacks"));
         assert!(roots[1].ends_with(".nono/rollbacks"));
     }
-
 }
