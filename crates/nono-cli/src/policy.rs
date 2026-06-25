@@ -1460,15 +1460,11 @@ pub fn load_package_groups(policy: &mut Policy) -> Result<()> {
 // EGRESS-04 (Plan 83-03, WR-02): this is the CLI-layer preset-token expander.
 // It delegates to the canonical implementation in the core nono crate
 // (nono::machine_policy::expand_preset_tokens) which is also used by the
-// standalone nono-agentd binary.  The #[allow(dead_code)] attribute has been
-// replaced with #[expect(dead_code)] because:
-//   - The duplicate-expander finding (WR-02) is resolved: canonical impl is
-//     the single source of truth; this function is a thin shim.
-//   - The function is not yet wired to a non-test caller (pending machine policy
-//     expansion for `nono run` / profile resolution).
-//   - #[expect(dead_code)] (unlike #[allow]) will warn when the function is
-//     eventually called, ensuring the attribute is removed at that point.
-#[expect(dead_code, reason = "pending wiring of machine policy preset expansion for nono run / profile path (WR-02 close)")]
+// standalone nono-agentd binary.  Dead code suppression is scoped to the binary
+// target only (not test targets, where the function is fully exercised):
+// the duplicate-expander finding (WR-02) is resolved; this function is a thin
+// shim pending wiring of machine policy preset expansion for `nono run`.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn expand_egress_preset_tokens(tokens: &[String]) -> Result<Vec<String>> {
     let json = crate::config::embedded::embedded_network_policy_json();
     nono::machine_policy::expand_preset_tokens(tokens, json)
