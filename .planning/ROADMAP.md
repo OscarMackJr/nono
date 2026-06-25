@@ -24,7 +24,9 @@ updated: 2026-06-25
 
 Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64.0..v0.65.1` window (v0.64.1, v0.65.0, v0.65.1) without regressing the Windows security model; stand up a local cross C toolchain to retire the PARTIAL→CI debt; then make the workspace genuinely releasable — crate leapfrog ≥ `0.65.0`, a gated build+sign+dry-run pipeline, and a one-step operator push runbook. Release scope = PREPARE ONLY (the actual push/publish is operator-gated manual step outside the milestone).
 
-- [ ] **Phase 94: UPST10 Divergence Audit** — 0/TBD plans
+- [ ] **Phase 94: UPST10 Divergence Audit** — 0/2 plans
+  - [ ] 94-01-PLAN.md — Author the v0.64.0..v0.65.1 DIVERGENCE-LEDGER (clusters, carve-out re-touch check, ADR matrix)
+  - [ ] 94-02-PLAN.md — Repoint upstream to nolabs-ai/nono + PROJECT.md parity process + Future Cycles stub
 - [ ] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 0/TBD plans
 - [ ] **Phase 96: Cross-Target Toolchain** — 0/TBD plans
 - [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
@@ -66,7 +68,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   1. A `DIVERGENCE-LEDGER` document exists for `v0.64.0..v0.65.1` (covering v0.64.1, v0.65.0, v0.65.1) with every commit classified into will-sync / fork-preserve / won't-sync / split clusters, a `windows-touch` flag per commit, and a per-cell ADR-review verdict.
   2. The git `upstream` remote and PROJECT.md `## Upstream Parity Process` both reference `nolabs-ai/nono` (not the former `always-further/nono`), with a Future Cycles stub noting the next sync trigger past v0.65.1.
   3. Each cluster's disposition is justified by one of the three criteria: security impact, Windows-backend touch, or library-boundary relevance — no cluster is left with a bare `TBD` verdict.
-**Plans**: TBD
+**Plans**: 2 plans (94-01 ledger authoring · 94-02 remote relocation + PROJECT.md)
 
 ### Phase 95: Upstream Absorb + Fork-Invariant Verify
 **Goal**: All will-sync clusters from the Phase 94 ledger are absorbed into the fork and the Windows security model is provably unregressed.
