@@ -601,6 +601,8 @@ Feedback/observations from v2.1 shipping:
 
 ## Upstream Parity Process
 
+**Canonical upstream: `nolabs-ai/nono` (see Phase 94, D-06 for relocation record).** The git `upstream` remote points at `https://github.com/nolabs-ai/nono.git`; the former upstream remote is retained as `upstream-legacy` for provenance only.
+
 To prevent the Windows-vs-macOS parity gap from re-opening as upstream ships v0.41+:
 
 1. **Inventory drift** — `make check-upstream-drift` reports unabsorbed upstream commits grouped by file category. JSON output (`make check-upstream-drift ARGS="--from <tag> --to <tag> --format json"`) is suitable for templates and CI; default `--format table` for human review.
@@ -611,6 +613,20 @@ To prevent the Windows-vs-macOS parity gap from re-opening as upstream ships v0.
 For the long-form runbook (output formats, categorization rules, fixture regeneration procedure, fork-divergence catalog rationale), see [`docs/cli/development/upstream-drift.mdx`](../docs/cli/development/upstream-drift.mdx).
 
 - **AIPC Unix futures** — see [docs/architecture/aipc-unix-futures.md](../docs/architecture/aipc-unix-futures.md) for the locked decision on which AIPC HandleKinds admit Unix backends (File / Socket / Pipe = yes via SCM_RIGHTS; JobObject / Event / Mutex = Windows-only by design).
+
+### Future Cycles
+
+**Current high-water mark:** `nolabs-ai/nono` v0.65.1 (SHA `1d1c88c9`). The `v0.64.0..v0.65.1` window is fully audited in Phase 94's `DIVERGENCE-LEDGER.md`.
+
+**Next sync trigger:** the next sync window opens when **`nolabs-ai/nono` ships any `v*` tag past v0.65.1**. Observable via:
+
+```
+git ls-remote --tags https://github.com/nolabs-ai/nono.git
+```
+
+The trigger is **next-`v*`-tag** — NOT drift-count, NOT time-based. This matches the established drain-then-sync per-tag-window cadence used across UPST6 through UPST10.
+
+When the trigger fires: run the drift tool against the new tag window, scaffold a new DIVERGENCE-LEDGER (following Phase 94 / Phase 85 structure as the template), then plan a new absorption phase.
 
 ## Evolution
 
