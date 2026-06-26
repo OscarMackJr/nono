@@ -688,6 +688,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };
@@ -732,6 +733,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };
@@ -785,6 +787,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };
@@ -844,6 +847,7 @@ mod tests {
                     tls_ca: None,
                     oauth2: None,
                     aws_auth: None,
+                    endpoint_policy: None,
                 },
                 crate::config::RouteConfig {
                     prefix: "github".to_string(),
@@ -860,6 +864,7 @@ mod tests {
                     tls_ca: None,
                     oauth2: None,
                     aws_auth: None,
+                    endpoint_policy: None,
                 },
             ],
             ..Default::default()
@@ -921,6 +926,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };
@@ -953,6 +959,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };
@@ -1006,6 +1013,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };
@@ -1045,6 +1053,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             }],
             ..Default::default()
         };

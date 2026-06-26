@@ -442,6 +442,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
         let store = CredentialStore::load(&routes);
         assert!(store.is_ok());
@@ -502,6 +503,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
         let store = CredentialStore::load(&routes).expect("credential load");
@@ -530,6 +532,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
         let store = CredentialStore::load(&routes).expect("credential load");

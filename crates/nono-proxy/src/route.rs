@@ -10,7 +10,7 @@
 //! (inject mode, header name/value, raw secret). Both stores are keyed by the
 //! normalised route prefix and are consulted independently by the proxy handlers.
 
-use crate::config::{CompiledEndpointRules, RouteConfig};
+use crate::config::{CompiledEndpointPolicy, CompiledEndpointRules, RouteConfig};
 use crate::error::{ProxyError, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,6 +36,10 @@ pub struct LoadedRoute {
     /// When empty, all method+path combinations are permitted.
     pub endpoint_rules: CompiledEndpointRules,
 
+    /// Pre-compiled explicit endpoint policy. When no explicit policy is
+    /// configured this preserves legacy `endpoint_rules` semantics.
+    pub endpoint_policy: CompiledEndpointPolicy,
+
     /// Per-route TLS connector with custom CA trust, if configured.
     /// Built once at startup from the route's `tls_ca` certificate file.
     /// When `None`, the shared default connector (webpki roots only) is used.
@@ -48,6 +52,7 @@ impl std::fmt::Debug for LoadedRoute {
             .field("upstream", &self.upstream)
             .field("upstream_host_port", &self.upstream_host_port)
             .field("endpoint_rules", &self.endpoint_rules)
+            .field("endpoint_policy", &self.endpoint_policy)
             .field("has_custom_tls_ca", &self.tls_connector.is_some())
             .finish()
     }
@@ -83,6 +88,12 @@ impl RouteStore {
             let endpoint_rules = CompiledEndpointRules::compile(&route.endpoint_rules)
                 .map_err(|e| ProxyError::Config(format!("route '{}': {}", normalized_prefix, e)))?;
 
+            let endpoint_policy = CompiledEndpointPolicy::compile(
+                route.endpoint_policy.as_ref(),
+                &route.endpoint_rules,
+            )
+            .map_err(|e| ProxyError::Config(format!("route '{}': {}", normalized_prefix, e)))?;
+
             let tls_connector = match route.tls_ca {
                 Some(ref ca_path) => {
                     debug!(
@@ -102,6 +113,7 @@ impl RouteStore {
                     upstream: route.upstream.clone(),
                     upstream_host_port,
                     endpoint_rules,
+                    endpoint_policy,
                     tls_connector,
                 },
             );
@@ -318,6 +330,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
 
         let store = RouteStore::load(&routes).unwrap();
@@ -351,6 +364,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
 
         let store = RouteStore::load(&routes).unwrap();
@@ -375,6 +389,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
 
         let store = RouteStore::load(&routes).unwrap();
@@ -400,6 +415,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             },
             RouteConfig {
                 prefix: "anthropic".to_string(),
@@ -416,6 +432,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                endpoint_policy: None,
             },
         ];
 
@@ -467,6 +484,7 @@ mod tests {
             upstream: "https://api.openai.com".to_string(),
             upstream_host_port: Some("api.openai.com:443".to_string()),
             endpoint_rules: CompiledEndpointRules::compile(&[]).unwrap(),
+            endpoint_policy: CompiledEndpointPolicy::compile(None, &[]).unwrap(),
             tls_connector: None,
         };
         let debug_output = format!("{:?}", route);
@@ -598,6 +616,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         };
 
         // (b) allow_domain endpoint route — key "_ep_api.openai.com", SAME upstream host
@@ -620,6 +639,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         };
 
         let routes = vec![credential_route, endpoint_route];

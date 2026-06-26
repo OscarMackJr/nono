@@ -1295,6 +1295,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            endpoint_policy: None,
         }];
 
         let route_store = RouteStore::load(&routes).unwrap();

@@ -245,6 +245,7 @@ pub fn resolve_credentials(
                 // actual token-exchange client; here we just preserve the config.
                 oauth2: cred.auth.clone(),
                 aws_auth: cred.aws_auth.clone(),
+                endpoint_policy: None,
             });
         } else if let Some(cred) = policy.credentials.get(name) {
             // Validate env_var against dangerous variable blocklist
@@ -274,6 +275,7 @@ pub fn resolve_credentials(
                 tls_ca: None, // Built-in credentials don't support custom CAs
                 oauth2: None, // PROF-03 (Plan 22-01): Task 6 will wire oauth2
                 aws_auth: None,
+                endpoint_policy: None,
             });
         }
         // We already validated existence above, so this else branch won't be hit
@@ -407,6 +409,7 @@ pub fn partition_allow_domain(
                         tls_ca: None,
                         oauth2: None,
                         aws_auth: None,
+                        endpoint_policy: None,
                         // NOTE: upstream also sets proxy/tls_client_cert/tls_client_key
                         // — these fields are ABSENT from the fork's RouteConfig (Phase 34
                         // fork-preserve decision, confirmed c9f25164 invariant).
