@@ -2369,7 +2369,7 @@ dependencies = [
 
 [[package]]
 name = "nono"
-version = "0.62.2"
+version = "0.66.0"
 dependencies = [
  "der",
  "getrandom 0.4.2",
@@ -2402,7 +2402,7 @@ dependencies = [
 
 [[package]]
 name = "nono-cli"
-version = "0.62.2"
+version = "0.66.0"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "nono-ffi"
-version = "0.62.2"
+version = "0.66.0"
 dependencies = [
  "cbindgen",
  "nono",
@@ -2476,14 +2476,14 @@ dependencies = [
 
 [[package]]
 name = "nono-fltmgr-client"
-version = "0.62.2"
+version = "0.66.0"
 dependencies = [
  "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "nono-proxy"
-version = "0.62.2"
+version = "0.66.0"
 dependencies = [
  "base64 0.22.1",
  "getrandom 0.4.2",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "nono-shell-broker"
-version = "0.62.2"
+version = "0.66.0"
 dependencies = [
  "nono",
  "thiserror 2.0.18",
