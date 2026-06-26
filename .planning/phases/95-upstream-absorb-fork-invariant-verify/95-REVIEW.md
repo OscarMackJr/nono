@@ -1,267 +1,200 @@
 ---
 phase: 95-upstream-absorb-fork-invariant-verify
-reviewed: 2026-06-26T05:11:02Z
+reviewed: 2026-06-26T13:16:40Z
 depth: standard
-files_reviewed: 15
+files_reviewed: 4
 files_reviewed_list:
-  - crates/nono-cli/src/exec_strategy.rs
-  - crates/nono-cli/src/exec_strategy/supervisor_linux.rs
-  - crates/nono-cli/src/network_policy.rs
-  - crates/nono-cli/tests/socket_access_run.rs
-  - crates/nono-proxy/src/config.rs
-  - crates/nono-proxy/src/credential.rs
-  - crates/nono-proxy/src/reverse.rs
-  - crates/nono-proxy/src/route.rs
-  - crates/nono-proxy/src/server.rs
-  - crates/nono/src/audit.rs
-  - crates/nono/src/keystore.rs
   - crates/nono/src/sandbox/linux.rs
-  - crates/nono/src/sandbox/mod.rs
-  - crates/nono/src/scrub.rs
-  - crates/nono/src/supervisor/socket.rs
+  - crates/nono-cli/src/exec_strategy.rs
+  - crates/nono-proxy/src/reverse.rs
+  - crates/nono-proxy/src/config.rs
 findings:
   critical: 1
-  warning: 6
-  info: 2
-  total: 9
+  warning: 3
+  info: 3
+  total: 7
 status: issues_found
 ---
 
-# Phase 95: Code Review Report
+# Phase 95: Code Review Report (gap-closure pass)
 
-**Reviewed:** 2026-06-26T05:11:02Z
+**Reviewed:** 2026-06-26T13:16:40Z
 **Depth:** standard
-**Files Reviewed:** 15
+**Files Reviewed:** 4
 **Status:** issues_found
+
+> Scope: gap-closure diffs since `1891ac1d` (commits `8bca078b` WR-02, `5d1e9077` WR-03,
+> `2a8b639e` WR-01, `c81429aa` CR-01). This supersedes the earlier broad 95-REVIEW pass
+> for these four files.
 
 ## Summary
 
-This phase absorbs upstream commits via cherry-pick (Cluster A: AF_UNIX seccomp-notify
-deadlock fix; Cluster B: tool-sandbox shared-surface additions). Several fork invariants
-explicitly checked for in the review brief are **intact**: the CR-02 audit invariant
-(`records_verified: event_count > 0`, audit.rs:1570) is preserved, the `cmd://` keystore
-scheme fails closed in `load_secret_by_ref` (keystore.rs:306), `restrict_execute` fails
-secure on partial/non-enforcement (linux.rs:844), and config-load failures for the new
-endpoint policy propagate fatally (route.rs:91).
+Three of the four restored fork-invariants are correct and well-constructed:
 
-However, the cherry-pick **clobbered two documented fork invariants** in
-`crates/nono/src/sandbox/linux.rs`: the WR-04 arch-portable `msghdr` field-offset
-derivation was reverted to a hardcoded LP64 layout, and the entire `--allow-gpu` Linux
-enforcement (`collect_linux_gpu_paths` / `is_nvidia_compute_device` and the `caps.gpu()`
-allowlist branch) was deleted. This is precisely the class of fork-invariant loss this
-phase is meant to detect.
+- **WR-02** (`linux.rs` `read_msghdr_dest`): `offset_of!`/`size_of`-derived field layout with
+  compile-time overlap assertions is sound on LP64 and ILP32. Buffer bounds are statically
+  guaranteed by `MSGHDR_MIN_READ = MSG_NAME_LEN_OFFSET + 4` plus the
+  `MSG_NAME_OFFSET + PTR_SIZE <= MSG_NAME_LEN_OFFSET` assertion. Correct.
+- **WR-01** (`exec_strategy.rs`): the two post-fork-child `format!()` calls are correctly
+  replaced with `const &[u8]` static byte strings written via async-signal-safe `libc::write` +
+  `_exit(126)`. Change is correctly scoped to the child arm (lines 1411, 1453); the surrounding
+  `format!()` at lines 1599-1668 are in the PARENT arm and are fine. A sentinel-bounded
+  regression test (`resl_nix_async_signal_safety.rs`) guards the region.
+- **WR-03** (`linux.rs` GPU enforcement): `collect_linux_gpu_paths` mirrors upstream
+  `maybe_enable_gpu`, is gated behind `caps.gpu()` (`--allow-gpu` opt-in), skips absent devices,
+  scopes NVIDIA procfs grants to `nvidia_present`, and adds `IoctlDev` only for device paths.
+  `is_nvidia_compute_device` correctly excludes `nvidia-modeset` and non-numeric suffixes. Correct.
 
-The most serious issue is the new endpoint-policy machinery in `nono-proxy`: it is fully
-deserializable from operator config (`RouteConfig.endpoint_policy`), compiled at startup,
-and stored on every `LoadedRoute` — but `CompiledEndpointPolicy::evaluate()` is **never
-called on the request path**, which still consults the legacy `endpoint_rules`. An operator
-who configures `endpoint_policy.deny` rules gets silent non-enforcement (fail-open).
-
-A secondary theme: a large amount of Cluster B "shared-surface" code (audit recorders,
-env-scrub helpers, the entire endpoint-policy outcome surface) was absorbed but is **not
-wired into any caller**, contradicting the project's no-dead-code convention and shipping
-untested public API.
-
-## Narrative Findings (AI reviewer)
+The CR-01 wiring (`reverse.rs`) introduces a **fail-open security defect**: `evaluate()` is a
+three-way decision (`Deny`/`Allow`/`Approve`) but the handler only acts on `Deny`. An `Approve`
+outcome — operator-configurable via `approve:` rules or `default: approve` — falls through and
+the request is forwarded to the upstream with the real credential injected. See CR-01.
 
 ## Critical Issues
 
-### CR-01: Endpoint policy is configurable but never enforced (fail-open)
+### CR-01: endpoint_policy `Approve` outcome is silently treated as allow (fail-open)
 
-**File:** `crates/nono-proxy/src/config.rs:419` (`evaluate`), `crates/nono-proxy/src/route.rs:91` (compile-and-store), `crates/nono-proxy/src/reverse.rs:96` (request path)
+**File:** `crates/nono-proxy/src/reverse.rs:125-151`
 **Issue:**
-The new `EndpointPolicyConfig` is a live, operator-facing config surface:
-`RouteConfig.endpoint_policy` is `#[serde(default)]`-deserializable and parses with
-`deny_unknown_fields`. At startup `RouteStore::load` compiles it into
-`LoadedRoute.endpoint_policy` (route.rs:91) and the policy supports `deny`, `approve`, and
-`allow` rules with a fail-secure default (`EndpointPolicyDecision::Deny`).
+`CompiledEndpointPolicy::evaluate()` returns one of three variants — `Deny`, `Allow`, `Approve`
+(`config.rs:295-309`, `419-455`). The new enforcement block only matches `Deny`:
 
-But the actual request authorization in `reverse.rs:96` still calls
-`route.endpoint_rules.is_allowed(...)` — the *legacy* path. `CompiledEndpointPolicy::evaluate()`
-and `allows_all_without_l7()` have **zero callers** anywhere in the crate (verified via grep;
-only `compile` is referenced, at route.rs:91 and a single test). No test exercises the
-deny/approve/allow evaluation logic.
-
-Consequence: an operator who writes an `endpoint_policy` with `deny` rules — reasonably
-expecting requests matching those rules to be blocked — gets those rules silently ignored.
-Because the legacy `endpoint_rules` is empty in that configuration, it defaults to allow-all.
-A control the operator believes is enforced is not. In a security-critical proxy that
-mediates outbound agent traffic, a configured-but-unenforced deny rule is a fail-open gap.
-
-**Fix:** Either (a) wire `endpoint_policy.evaluate()` into the request path in `reverse.rs`
-so it takes precedence over / replaces `endpoint_rules.is_allowed`, mapping `Deny` →
-403/blocked, `Approve` → approval flow, `Allow` → forward; or (b) if enforcement is
-deliberately deferred to a later phase, do NOT expose `endpoint_policy` in the public
-`RouteConfig` schema yet — reject configs that set it with an explicit
-`ProxyError::Config("endpoint_policy not yet supported")` at load time so operators cannot
-silently rely on an unenforced control. Fail closed on an unimplemented security knob.
 ```rust
-// reverse.rs, replacing the endpoint_rules.is_allowed check:
+if let EndpointPolicyOutcome::Deny { reason, rule_label } =
+    route.endpoint_policy.evaluate(&method, &upstream_path)
+{ ... send_error(stream, 403, ...); return Ok(()); }
+```
+
+Any non-`Deny` outcome falls through and the request proceeds to credential injection and
+upstream forwarding. `Approve` is a first-class, operator-configurable decision:
+`EndpointPolicyDecision::Approve` (`config.rs:209`), per-route `approve:` rule lists
+(`config.rs:257`), and `default: approve` (`config.rs:448-453`), each carrying
+`backend`/`timeout_secs` metadata signalling "route to an approval backend / hold for approval."
+Treating it as a silent allow forwards the request with the real upstream credential, emits no
+`audit::log_denied`, and returns no 403/hold. `evaluate()` is consumed in exactly one place
+(confirmed by grep across the crate) — nothing else handles `Approve`.
+
+This violates **Fail Secure** ("On any error, deny access. Never silently degrade to a less
+secure state.") and **Explicit Over Implicit** from CLAUDE.md. The comment at `reverse.rs:119`
+("evaluate explicit deny/approve/allow rules") reinforces the false impression that approve is
+handled.
+
+**Fix:** Match the full enum so the compiler forces handling of every (and future) variant.
+Until an approval backend exists, `Approve` must fail closed (deny + audit), not fall through:
+
+```rust
 match route.endpoint_policy.evaluate(&method, &upstream_path) {
     EndpointPolicyOutcome::Allow { .. } => { /* proceed */ }
     EndpointPolicyOutcome::Deny { reason, rule_label } => {
-        // emit audit + return 403
-        return Ok(forbidden_response(rule_label, reason));
+        // existing 403 + audit::log_denied path
+        send_error(stream, 403, "Forbidden").await?;
+        return Ok(());
     }
-    EndpointPolicyOutcome::Approve { .. } => { /* route to approval backend */ }
+    EndpointPolicyOutcome::Approve { rule_label, .. } => {
+        let deny_reason = format!(
+            "endpoint_policy requires approval (not implemented): {} {} on '{}' (rule: {})",
+            method, upstream_path, service, rule_label,
+        );
+        warn!("{}", deny_reason);
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(&service),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
+                ..Default::default()
+            },
+            &service, 0, &deny_reason,
+        );
+        send_error(stream, 403, "Forbidden").await?;
+        return Ok(());
+    }
 }
 ```
+
+Add a test asserting a route with an `approve` rule (or `default: approve`) does NOT forward.
 
 ## Warnings
 
-### WR-01: `format!()` heap allocation in post-fork/pre-exec child reverts CR-01 fork-safety invariant
+### WR-01: CR-01 regression test only greps `format!(` — misses other heap allocations
 
-**File:** `crates/nono-cli/src/exec_strategy.rs:1411`, `crates/nono-cli/src/exec_strategy.rs:1450`
+**File:** `crates/nono-cli/tests/resl_nix_async_signal_safety.rs:156-186`
 **Issue:**
-Both new error paths in the proxy-notify-fd handling run in the post-`fork`/pre-`execve`
-child. The surrounding code (lines 1304-1331, unchanged) deliberately uses `const … &[u8]`
-static byte strings with the explicit comment *"CR-01: static byte string in post-fork
-child."* — because the child is single-threaded after fork and the global allocator lock may
-have been held by another thread at fork time, so any heap allocation can deadlock. The new
-code instead builds the message with `format!(...)` (heap allocation) before the `write` +
-`_exit(126)`:
+`cr_01_no_format_macro_in_post_fork_child_branch` enforces async-signal-safety of the post-fork
+child arm via `stripped.matches("format!(").count()`. It will not catch `.to_string()`,
+`String::new()`/`String::from`, `vec!`, `Vec::with_capacity`, `.collect::<Vec<_>>()`,
+`.to_owned()`, or `format_args!`. A future `let m = err.to_string();` inside the child arm would
+pass silently while reintroducing the allocation-deadlock class WR-01 closes. The production fix
+is correct; the guard is weaker than its stated mandate ("any heap-allocating call ... is
+forbidden", `exec_strategy.rs:1026-1029`).
+**Fix:** Extend the forbidden-token set, e.g. assert each of
+`["format!(", "to_string()", "String::", "vec!", "Vec::", ".collect(", "to_owned()", "format_args!("]`
+has count 0 within the sentinel region; keep the loud failure message.
+
+### WR-02: guard test comment-stripper corrupts lines with `//` inside string literals
+
+**File:** `crates/nono-cli/tests/resl_nix_async_signal_safety.rs:163-170`
+**Issue:**
+The stripper truncates each line at the first `//`:
 ```rust
-let detail = format!(
-    "nono: failed to write proxy seccomp notify fd number: {}\n",
-    std::io::Error::last_os_error()
-);  // <-- heap alloc in post-fork child
+.map(|line| match line.find("//") {
+    Some(idx) => &line[..idx],
+    None => line,
+})
 ```
-This regresses the established CR-01 invariant. It is on error paths only, so it will rarely
-trigger, but a child that hits it can hang instead of reporting the failure and exiting.
-**Fix:** Use a static `&[u8]` message exactly as the adjacent code does, dropping the errno
-interpolation (or write the message then the raw errno via a stack-only itoa). Example:
-```rust
-const MSG_PROXY_WRITE: &[u8] = b"nono: failed to write proxy seccomp notify fd number\n";
-unsafe {
-    libc::write(libc::STDERR_FILENO, MSG_PROXY_WRITE.as_ptr().cast(), MSG_PROXY_WRITE.len());
-    libc::_exit(126);
-}
-```
+A line with `//` inside a byte-string literal (e.g. a future `b"see https://...\n"`) is
+truncated mid-literal. A `format!(` after such a `//` on the same line would be a false negative.
+Robustness defect in the test parser, not the production code, but it weakens the WR-01 guard.
+**Fix:** Strip only lines whose first non-whitespace chars are `//`, or use a minimal
+string-literal-aware lexer; at minimum document the limitation.
 
-### WR-02: WR-04 arch-portable `msghdr` offset derivation reverted to hardcoded LP64 layout
+### WR-03: `evaluate()` duplicates `is_allowed()` on every legacy-route request
 
-**File:** `crates/nono/src/sandbox/linux.rs:2427` (`read_msghdr_dest`)
+**File:** `crates/nono-proxy/src/reverse.rs:97-151`
 **Issue:**
-Pre-diff (baseline `ed6cdde1`) this function derived `msg_name` / `msg_namelen` offsets at
-compile time via `core::mem::offset_of!(libc::msghdr, …)` and `size_of`, with compile-time
-overlap assertions, explicitly documented as *"the WR-04 fix: the original code hard-coded
-`MSGHDR_MIN_READ = 12` (valid only on LP64)."* The cherry-pick reverted this to the hardcoded
-form: `const MSGHDR_MIN_READ: usize = 12;` and `buf[0..8]` → `msg_name`, `buf[8..12]` →
-`msg_namelen`. This is the AF_UNIX `sendmsg`/`sendmmsg` destination-mediation read path — a
-security-critical primitive. On the fork's shipped 64-bit targets (x86_64, aarch64) the
-offsets are coincidentally correct, so runtime behavior is unaffected today, but the
-explicit fork-hardening invariant was silently dropped by the absorb, and a future 32-bit /
-LP32 target would misread the destination sockaddr (wrong mediation decision). Two
-`#[must_use]` attributes on `read_msghdr_dest` and `read_mmsghdr_dests` were also removed,
-violating the CLAUDE.md "`#[must_use]` on functions returning critical Results" rule, and the
-WR-01 TOCTOU documentation comment at the `msg_name == 0` branch was deleted.
-**Fix:** Restore the `offset_of!`/`size_of`-derived constants and the compile-time
-assertions, re-apply `#[must_use = "..."]` to both `read_msghdr_dest` and
-`read_mmsghdr_dests`, and restore the TOCTOU comment. This is a fork-invariant the phase is
-chartered to preserve; record it in the DIVERGENCE-LEDGER if the revert was intentional.
-
-### WR-03: `--allow-gpu` Linux enforcement deleted — silent feature regression
-
-**File:** `crates/nono/src/sandbox/linux.rs` (removed `collect_linux_gpu_paths`, `is_nvidia_compute_device`, and the `if caps.gpu() { … }` allowlist branch around former line 915)
-**Issue:**
-The cherry-pick removed the entire Linux GPU-path enforcement: the `collect_linux_gpu_paths`
-and `is_nvidia_compute_device` helpers (and their tests) are gone, and the `caps.gpu()`
-branch that translated the grant into Landlock allowlist rules for `/dev/dri/renderD*`,
-`/dev/nvidia*`, `/dev/dxg`, `/sys/class/drm`, etc. is gone. The capability itself still
-exists (`capability.rs:1451 gpu()`), the `--allow-gpu` CLI flag still exists
-(`cli.rs`, `capability_ext.rs`), and **macOS still honors it** (`sandbox/macos.rs`). The net
-effect: on Linux, `nono run --allow-gpu …` now silently grants no GPU device paths, so GPU
-access for sandboxed agents is broken on Linux while the flag still appears accepted.
-This is not a security *weakening* (the sandbox is strictly more restrictive), but it is a
-silent breakage of a documented fork feature and a divergence from macOS behavior, and
-exactly the kind of fork-invariant loss this phase verifies against.
-**Fix:** Re-apply the fork's GPU-path collection and the `caps.gpu()` Landlock branch on
-Linux, or — if GPU support is being deliberately dropped — also remove/error the
-`--allow-gpu` flag and `caps.gpu()` so the capability cannot be requested silently, and
-record the removal in the DIVERGENCE-LEDGER.
-
-### WR-04: WSL2 child/parent asymmetry can deadlock the supervisor on the notify-fd handshake
-
-**File:** `crates/nono-cli/src/exec_strategy.rs:1364` (child WSL2 skip) vs `crates/nono-cli/src/exec_strategy.rs:1694` (parent recv predicate)
-**Issue:**
-The child installs the notify filter and writes the fd number only when
-`install_network_notify && !is_wsl2()` (the WSL2 branch at 1364 writes a warning and skips
-the send). The parent unconditionally calls `recv_raw_fd_number()` whenever
-`config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname()` (1694), with **no**
-`is_wsl2()` guard. `recv_raw_fd_number` does a blocking `read_exact` of 4 bytes
-(`supervisor/socket.rs:185`). On WSL2 the child never writes those bytes, so the parent
-blocks until the child reaches `execve` and the socket closes (EOF) — at which point it is
-handled, but the new ack handshake means the child also blocks on its own
-`read(fd, ack, 1)` only when it took the send path, so the ordering is fragile. This WSL2
-asymmetry pre-dates this diff (the old parent also lacked the guard), but this change
-rewrote both predicates and the handshake, so it should be made symmetric now rather than
-relying on EOF semantics.
-**Fix:** Guard the parent recv with the same WSL2 check the child uses:
-```rust
-let proxy_notify_fd = if (config.seccomp_proxy_fallback
-    || config.af_unix_mediation.is_pathname())
-    && !nono::sandbox::is_wsl2()
-{ /* recv_raw_fd_number + pidfd_getfd */ } else { None };
-```
-
-### WR-05: Cluster B audit/scrub surface absorbed with no callers (untested dead public API)
-
-**File:** `crates/nono/src/audit.rs:584` (`record_sandbox_runtime_event`), `crates/nono/src/audit.rs:590` (`record_command_policy_event`), `crates/nono/src/scrub.rs:236` (`scrub_env_name`), `crates/nono/src/scrub.rs:251` (`scrub_env_value`)
-**Issue:**
-The newly absorbed `record_sandbox_runtime_event` / `record_command_policy_event` recorders
-(and the whole `SandboxRuntimeAuditEvent` / `CommandPolicyAuditEvent` / `CommandPolicyStdio*`
-type family) and the `scrub_env_name` / `scrub_env_value` helpers have **no callers**
-anywhere in the workspace outside their own definitions (verified via `git grep`). The audit
-recorders even carry `#[cfg_attr(not(target_os = "linux"), allow(dead_code))]`, acknowledging
-they are dead off-Linux — but they are dead on Linux too. CLAUDE.md: *"Avoid
-`#[allow(dead_code)]`. If code is unused, either remove it or write tests that use it."*
-Because these are `pub`, clippy will not flag them, so the dead surface ships silently and
-untested. This is staged infrastructure for a feature (tool-sandbox command mediation) that
-is not wired up in this fork.
-**Fix:** Either wire these recorders/helpers into the actual sandbox-runtime and
-tool-sandbox command paths, or defer absorbing them until the consuming code lands. If they
-must be carried now, add unit tests that exercise serialization + the redaction logic, and
-note the staged-surface decision in the DIVERGENCE-LEDGER so reviewers don't read it as
-accidental dead code.
-
-### WR-06: New `cmd://` keystore validators are unused and untested public API
-
-**File:** `crates/nono/src/keystore.rs:862` (`is_cmd_uri`), `crates/nono/src/keystore.rs:870` (`validate_cmd_uri`)
-**Issue:**
-`is_cmd_uri` and `validate_cmd_uri` are new `pub fn`s with no callers and no tests anywhere
-in the workspace (verified via `git grep`). The fail-closed branch in `load_secret_by_ref`
-(keystore.rs:306) does its own inline `starts_with(CMD_URI_PREFIX)` check rather than calling
-`is_cmd_uri`, so the helpers are pure dead surface. `validate_cmd_uri`'s `[A-Za-z0-9_]+`
-allowlist is reasonable, but with no caller nothing actually validates a `cmd://` name before
-use, and with no test the validator's behavior is unverified.
-**Fix:** Call `validate_cmd_uri` wherever a `cmd://` reference is parsed/accepted (the
-supervisor credential-capture path the doc-comment references), and add unit tests for the
-empty-name and invalid-character rejection cases. If the consuming path is not in scope for
-this phase, defer the helpers until it lands.
+For legacy routes (no explicit `endpoint_policy`), `route.endpoint_policy` is compiled FROM the
+same `endpoint_rules` (`route.rs:91-92`, `config.rs:361-390`). Each request is L7-checked twice:
+`endpoint_rules.is_allowed()` (line 97) then `endpoint_policy.evaluate()` (line 126), recompiling
+glob matches and `format!`-building two `rule_label` strings on the hot path. Method/glob matching
+is verified identical between the two (`config.rs:330-339` vs `480-483`), so this is not a
+correctness bug — but it is dead work and obscures which check is authoritative.
+**Fix:** After CR-01 is fixed, make `endpoint_policy.evaluate()` the single authoritative L7 gate
+and remove the subsumed `is_allowed()` block (legacy rules already compile into the policy as
+`allow` entries with a deny-default). Confirm via existing legacy tests in `config.rs`.
 
 ## Info
 
-### IN-01: Doubled space in `restrict_execute` error strings
+### IN-01: redundant `#[cfg(target_os = "linux")]` inside an already-Linux-only module
 
-**File:** `crates/nono/src/sandbox/linux.rs:794` and following error strings in `restrict_execute`
-**Issue:** Every error message in `restrict_execute` reads `"Tool Sandbox  execute
-restriction…"` with two spaces between "Sandbox" and "execute". Cosmetic, but user-facing.
-**Fix:** Collapse to a single space.
+**File:** `crates/nono/src/sandbox/linux.rs:430, 479, 906`
+**Issue:**
+`linux.rs` is gated `#[cfg(target_os = "linux")] mod linux;` (`sandbox/mod.rs:13-14`), so the
+file only compiles on Linux. The added `#[cfg(target_os = "linux")]` on
+`is_nvidia_compute_device`, `collect_linux_gpu_paths`, and the `if caps.gpu()` block in
+`apply_with_abi` are no-ops. Harmless, but they imply `apply_with_abi` has non-Linux branches and
+could mislead a future reader.
+**Fix:** Drop the redundant attributes or add a one-line "belt-and-suspenders" note.
 
-### IN-02: `read()` ack loop in supervisor child ignores partial/zero-byte reads
+### IN-02: `try_into()` error arm in `read_msghdr_dest` is unreachable
 
-**File:** `crates/nono-cli/src/exec_strategy.rs:1432`
-**Issue:** The child's ack loop breaks on any non-EINTR return, including `n == 0` (EOF,
-parent died) and `n < 0` for non-EINTR errors. On EOF/error it proceeds to exec rather than
-treating a lost ack as fatal. The comment claims the loop ensures the parent acquired the fd
-before `O_CLOEXEC` closes it, but a zero/negative read defeats that guarantee silently. Low
-practical risk (parent death is already terminal), but the loop does not deliver the
-invariant its comment asserts.
-**Fix:** Distinguish `n == 1` (acked) from `n <= 0` (parent gone / error) and, on the
-latter, write a static error message and `_exit(126)` rather than proceeding to exec.
+**File:** `crates/nono/src/sandbox/linux.rs:2686-2692`
+**Issue:**
+`buf[MSG_NAME_LEN_OFFSET..MSG_NAME_LEN_OFFSET + 4].try_into()` into `[u8; 4]` slices a fixed
+4-byte range from a stack buffer of static size `MSG_NAME_LEN_OFFSET + 4`; the conversion can
+never fail, so the `.map_err(...)` arm allocating a `NonoError::SandboxInit(String)` is dead.
+Acceptable defensive code, but genuinely unreachable.
+**Fix:** Optional — leave as defensive, or use an infallible slice-to-array copy. No action required.
+
+### IN-03: `reverse.rs:119` comment overstates current behavior
+
+**File:** `crates/nono-proxy/src/reverse.rs:119`
+**Issue:**
+"Structured L7 endpoint policy: evaluate explicit deny/approve/allow rules" claims all three
+decisions are evaluated, but only `Deny` is enforced (see CR-01).
+**Fix:** Update the comment to match actual behavior (it becomes accurate once CR-01 is fixed).
 
 ---
 
-_Reviewed: 2026-06-26T05:11:02Z_
+_Reviewed: 2026-06-26T13:16:40Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
