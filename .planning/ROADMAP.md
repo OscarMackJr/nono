@@ -25,8 +25,8 @@ updated: 2026-06-25
 Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64.0..v0.65.1` window (v0.64.1, v0.65.0, v0.65.1) without regressing the Windows security model; stand up a local cross C toolchain to retire the PARTIAL→CI debt; then make the workspace genuinely releasable — crate leapfrog ≥ `0.65.0`, a gated build+sign+dry-run pipeline, and a one-step operator push runbook. Release scope = PREPARE ONLY (the actual push/publish is operator-gated manual step outside the milestone).
 
 - [ ] **Phase 94: UPST10 Divergence Audit** — 0/2 plans
-  - [ ] 94-01-PLAN.md — Author the v0.64.0..v0.65.1 DIVERGENCE-LEDGER (clusters, carve-out re-touch check, ADR matrix)
-  - [ ] 94-02-PLAN.md — Repoint upstream to nolabs-ai/nono + PROJECT.md parity process + Future Cycles stub
+  - [x] 94-01-PLAN.md — Author the v0.64.0..v0.65.1 DIVERGENCE-LEDGER (clusters, carve-out re-touch check, ADR matrix)
+  - [x] 94-02-PLAN.md — Repoint upstream to nolabs-ai/nono + PROJECT.md parity process + Future Cycles stub
 - [ ] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 0/TBD plans
 - [ ] **Phase 96: Cross-Target Toolchain** — 0/TBD plans
 - [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
@@ -118,7 +118,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete | 2026-06-22 |
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete | 2026-06-23 |
-| 94. UPST10 Divergence Audit | v3.3 | 0/TBD | Not started | - |
+| 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete   | 2026-06-26 |
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 0/TBD | Not started | - |
 | 96. Cross-Target Toolchain | v3.3 | 0/TBD | Not started | - |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/TBD | Not started | - |
