@@ -37,7 +37,7 @@ Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64
   - [x] 95-07-PLAN.md — [BLOCKING] Cross-target clippy gate + gap-closure status commit (PARTIAL→CI)
 - [ ] **Phase 96: Cross-Target Toolchain** — 0/3 plans
   - [x] 96-01-PLAN.md — linux-gnu gate stand-up (Docker precondition + `cross clippy` green) + structural drift fix (XTGT-01, XTGT-02)
-  - [ ] 96-02-PLAN.md — apple-darwin bounded cargo-zigbuild attempt → disposition (local-runnable OR XTGT-03(b) hard-blocker → PARTIAL→CI)
+  - [x] 96-02-PLAN.md — apple-darwin bounded cargo-zigbuild attempt → disposition (local-runnable OR XTGT-03(b) hard-blocker → PARTIAL→CI)
   - [ ] 96-03-PLAN.md — protocol rewrite: checklist cross-form + per-gate PARTIAL retirement + CLAUDE.md one-line pointer (XTGT-04)
 - [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
 
@@ -130,5 +130,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete | 2026-06-23 |
 | 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete | 2026-06-26 |
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete    | 2026-06-26 |
-| 96. Cross-Target Toolchain | v3.3 | 1/3 | In Progress|  |
+| 96. Cross-Target Toolchain | v3.3 | 2/3 | In Progress|  |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/TBD | Not started | - |
