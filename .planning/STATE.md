@@ -2,12 +2,12 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: milestone_complete
-stopped_at: Completed Phase 95 Plan 07 (cross-target clippy gate + gap-closure complete)
-last_updated: "2026-06-26T12:58:27.133Z"
+status: completed
+stopped_at: Phase 96 context gathered
+last_updated: "2026-06-26T14:01:55.584Z"
 last_activity: 2026-06-26
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
   total_plans: 9
   completed_plans: 9
@@ -108,9 +108,9 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T13:45:00Z
-Stopped at: Completed Phase 95 Plan 07 (cross-target clippy gate + gap-closure complete)
-Resume file: None
+Last session: 2026-06-26T14:01:55.572Z
+Stopped at: Phase 96 context gathered
+Resume file: .planning/phases/96-cross-target-toolchain/96-CONTEXT.md
 
 ## Operator Next Steps
 
