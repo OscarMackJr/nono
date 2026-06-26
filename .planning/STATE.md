@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: executing
+status: verifying
 stopped_at: Phase 96 context gathered
-last_updated: "2026-06-26T16:18:52.745Z"
+last_updated: "2026-06-26T16:25:24.285Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 12
-  completed_plans: 11
-  percent: 92
+  completed_plans: 12
+  percent: 100
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -27,14 +27,14 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 ## Current Position
 
 ```
-Phase 95 of 97 complete | In: Phase 96 (Cross-Target Toolchain), plans 2/3 done | v3.3 milestone
-[===============                         ] 38%
+Phase 96 of 97: all 3 plans executed (XTGT-01..04 closed) | ready for verification | v3.3 milestone
+[==============================          ] 75%
 ```
 
-Phase: 96 (Cross-Target Toolchain) — EXECUTING
-Plan: 3 of 3 (96-01 linux-gnu gate GREEN; 96-02 apple-darwin gate LOCAL-RUNNABLE; next 96-03 doc/protocol rewrite)
-Status: Ready to execute 96-03
-Last activity: 2026-06-26 -- 96-02 apple-darwin cross clippy gate green (exit 0); XTGT-03 closed (LOCAL-RUNNABLE)
+Phase: 96 (Cross-Target Toolchain) — ALL PLANS EXECUTED, READY FOR VERIFICATION
+Plan: 3 of 3 done (96-01 linux-gnu GREEN; 96-02 apple-darwin LOCAL-RUNNABLE; 96-03 doc/protocol rewrite — XTGT-04 closed)
+Status: Phase complete — ready for /gsd:verify-phase 96
+Last activity: 2026-06-26 -- 96-03 cross-target verification protocol rewritten (checklist + CLAUDE.md); PARTIAL→CI default retired per-gate
 
 ## Performance Metrics
 
@@ -55,6 +55,7 @@ Last activity: 2026-06-26 -- 96-02 apple-darwin cross clippy gate green (exit 0)
 | Phase 95 P07 | 30 | 1 task | 0 source files (verification gate) |
 | Phase 96 P01 | 26 | 2 tasks | 3 files |
 | Phase 96-cross-target-toolchain P02 | 14 | 2 tasks | 1 files |
+| Phase 96-cross-target-toolchain P03 | 2 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -73,6 +74,7 @@ Last activity: 2026-06-26 -- 96-02 apple-darwin cross clippy gate green (exit 0)
 | Cross-target clippy gate PARTIAL→CI (both Linux and macOS) | 95-07 | Rust targets installed; aws-lc-sys/ring require C cross-linker (x86_64-linux-gnu-gcc) absent; Docker Desktop not running; WSL absent; failure is C toolchain missing, not Rust clippy error in changed files; GH Actions decisive on HEAD be42a5af; Phase 96 resolution target |
 | linux-gnu cross clippy gate GREEN locally (exit 0) — PARTIAL→CI retired for linux-gnu | 96-01 | `cross clippy` in pinned image `ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c0...`; first local run surfaced COMPILE errors (not lints) in cfg(linux) code: Phase 95 absorb of upstream ae77d198 (#1210) silently dropped fork invariants — SEC-01 AF_UNIX no-grant static-EPERM filter + cgroup v2 resource-enforcement module — and left stale audit/approval call sites. Restored verbatim from ae77d198^; aligned stale sites to converged API. All structural, no silencing allows. Native clippy+fmt still green. Windows clippy is structurally blind to cfg(linux) drift — this is the gate's whole value. |
 | apple-darwin cross clippy gate LOCAL-RUNNABLE (exit 0) — PARTIAL→CI retired for apple-darwin too | 96-02 | zig 0.16.0 + cargo-zigbuild 0.23.0 (host installs); ONE bounded `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` exited 0 with SDKROOT UNSET and no SDK extraction. The expected D-04(b) aws-lc-sys SDK-licensing wall did NOT materialize — zig's bundled macOS C target support satisfied the `aws-lc-sys 0.41.0`/`ring 0.17.14` build-dep probe (assumption A3 favorable branch). Working invocation is the direct-binary `cargo-zigbuild clippy …` form (NOT `cargo zigbuild clippy`, which mis-parses). Both cross-targets now provably local-runnable; XTGT-03 closed via D-04 clean-exit branch (not the hard-blocker). |
+| XTGT-04 closed: verification protocol rewritten — both gates LOCAL-RUNNABLE, PARTIAL→CI demoted to documented-runner-failure fallback | 96-03 | Checklist (`.planning/templates/cross-target-verify-checklist.md`) rewritten as single source of truth (D-06): Q2 linux-gnu → `cross clippy` (bare `cargo clippy --target` removed); Q3 apple-darwin flipped to MUST-run-locally via direct-binary `cargo-zigbuild clippy` (SDKROOT unset), per 96-02 record. Auto-default-to-PARTIAL retired per-gate (D-07) — PARTIAL only on a *documented* runner failure (stopped daemon / absent-but-installable tool excluded). Added anti-patterns 5 (default-PARTIAL) + 6 (`cargo zigbuild clippy` mis-parse). CLAUDE.md bullet collapsed to a one-line pointer carrying both commands; security mandate + "Windows `cargo check` not a substitute" preserved. Docs-only, no source changes. |
 
 ### Pending Todos
 
@@ -112,7 +114,7 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T16:18:45.260Z
+Last session: 2026-06-26T16:25:08.764Z
 Stopped at: Phase 96 context gathered
 Resume file: None
 
