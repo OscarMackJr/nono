@@ -1,14 +1,14 @@
 ---
-status: partial
+status: resolved
 phase: 97-release-engineering-leapfrog-pipeline-runbook
 source: [97-VERIFICATION.md, 97-REVIEW.md]
 started: 2026-06-26T13:55:00Z
-updated: 2026-06-26T13:55:00Z
+updated: 2026-06-26T14:10:00Z
 ---
 
 ## Current Test
 
-[awaiting human decision]
+[resolved — operator chose the 3-crate set]
 
 ## Tests
 
@@ -28,14 +28,17 @@ detail: |
   Resolution is a one-line change either direction:
   (A) Add a nono-shell-broker publish step to release.yml → 4-crate set everywhere.
   (B) Mark nono-shell-broker `publish = false` and drop it from the dry-run + runbook → 3-crate set everywhere.
-result: [pending]
+result: RESOLVED — operator chose (B), the 3-crate set. nono-shell-broker marked `publish = false`
+  (crates/nono-shell-broker/Cargo.toml); removed from scripts/release-dry-run.ps1 ($PublishableCrates)
+  and from RELEASE-RUNBOOK.md publish order. Now consistent with release.yml's existing 3-crate
+  publish-crates job (nono → nono-proxy → nono-cli). Build clean; release-readiness gate PASS. Commit on branch.
 
 ## Summary
 
 total: 1
-passed: 0
+passed: 1
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

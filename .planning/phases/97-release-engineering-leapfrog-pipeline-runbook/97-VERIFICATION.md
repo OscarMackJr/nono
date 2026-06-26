@@ -1,13 +1,13 @@
 ---
 phase: 97-release-engineering-leapfrog-pipeline-runbook
 verified: 2026-06-26T20:00:00Z
-status: human_needed
+status: passed
 score: 9/9 must-haves verified
 overrides_applied: 0
-human_verification:
+human_verification_resolved:
   - test: "Resolve publish-set divergence before the operator push (WR-02)"
     expected: "release.yml publish-crates job and scripts/release-dry-run.ps1 publish the same crate set; RELEASE-RUNBOOK.md reflects the canonical set."
-    why_human: "nono-shell-broker has no publish=false and IS publishable, but release.yml only publishes 3 crates (nono, nono-proxy, nono-cli) while the dry-run and runbook document 4 (adding nono-shell-broker). This is a policy decision — either add nono-shell-broker to the release.yml publish-crates job (after nono, before nono-cli), or mark it publish=false and remove it from the dry-run and runbook. Must be resolved before the operator tag push to avoid ambiguity about what ends up on crates.io."
+    resolution: "Operator chose the 3-crate set. nono-shell-broker marked publish=false (internal Windows broker — ships inside the MSI, not a standalone crate); removed from scripts/release-dry-run.ps1 and RELEASE-RUNBOOK.md publish order. Now consistent with release.yml's existing 3-crate publish-crates job (nono → nono-proxy → nono-cli). Build clean; release-readiness gate PASS. See 97-HUMAN-UAT.md (resolved)."
 ---
 
 # Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook — Verification Report
