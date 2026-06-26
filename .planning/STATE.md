@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: executing
-stopped_at: Completed 97-03-PLAN.md
-last_updated: "2026-06-26T17:40:06.844Z"
+status: verifying
+stopped_at: Completed 97-04-PLAN.md (phase 97 complete)
+last_updated: "2026-06-26T17:51:25.823Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 16
-  completed_plans: 15
-  percent: 94
+  completed_plans: 16
+  percent: 100
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -34,7 +34,7 @@ Phase 96 of 97 COMPLETE + VERIFIED (PASS, 4/4) | Next: Phase 97 (unplanned) | v3
 Phase: 97 (release-engineering-leapfrog-pipeline-runbook) — EXECUTING
 Plan: 4 of 4
 Next: Phase 97 (Release Engineering — Leapfrog + Pipeline + Runbook) — not yet planned
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-26
 
 ## Performance Metrics
@@ -60,6 +60,7 @@ Last activity: 2026-06-26
 | Phase 97 P01 | 6 | 2 tasks | 7 files |
 | Phase 97 P02 | 15 | 2 tasks | 2 files |
 | Phase 97 P03 | 35 | 2 tasks | 1 files |
+| Phase 97 P04 | 3 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -83,6 +84,8 @@ Last activity: 2026-06-26
 | release.yml homebrew download-url corrected to OscarMackJr/nono | 97-02 | T-97-07 mitigation: fork ships its own release tarball; always-further/nono is an abandoned org; nolabs-ai/nono is upstream — neither is the fork's release repo |
 | cargo publish --dry-run PRE_PUBLISH_REGISTRY_BLOCKED for downstream workspace crates | 97-03 | cargo resolves deps from live crates.io index at package time; nono-proxy/shell-broker/cli exit 101 until nono 0.66.0 is published; only nono is always-runnable; downstream crates re-run after nono publish |
 | nono-py RouteConfig missing endpoint_policy (hard blocker for PyPI release) | 97-03 | maturin build exits 1: endpoint_policy field added to nono-proxy RouteConfig in phase 95 absorb but nono-py src/policy.rs:743 and src/proxy.rs:206 were not updated; fix = add `endpoint_policy: None,` to both initializers |
+| Release-readiness gate: policy violations return FAIL verdict; infrastructure failures throw | 97-04 | Enforces T-97-11/12/13 threat model — private-path leak is a FAIL verdict (operator can diagnose), not a harness error; command-not-found is a throw (harness-internal error, exit 4) |
+| Runbook documents 4-crate publish set (nono, nono-proxy, nono-shell-broker, nono-cli) | 97-04 | nono-shell-broker has no publish=false; publishable independently even as a Windows dev-dep; runbook includes it to prevent future publish-order failures |
 
 ### Pending Todos
 
@@ -123,7 +126,7 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T19:30:00Z
+Last session: 2026-06-26T17:51:25.806Z
 Stopped at: Completed 97-03-PLAN.md
 Resume file: None
 

@@ -43,7 +43,7 @@ Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64
   - [x] 97-01-PLAN.md — Version leapfrog to 0.66.0 across all 6 workspace crates + path-dep pins + both binding repos (RLS-05)
   - [x] 97-02-PLAN.md — Release pipeline build + sign verification; release.yml audit (RLS-06, RLS-08)
   - [x] 97-03-PLAN.md — Dry-run publish validation: crates.io + PyPI + npm, no live push (RLS-07, RLS-06)
-  - [ ] 97-04-PLAN.md — Operator runbook + release-readiness verify-dark gate (RLS-09)
+  - [x] 97-04-PLAN.md — Operator runbook + release-readiness verify-dark gate (RLS-09)
 
 </details>
 
@@ -135,4 +135,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete | 2026-06-26 |
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete    | 2026-06-26 |
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete    | 2026-06-26 |
-| 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 3/4 | In Progress|  |
+| 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete   | 2026-06-26 |
