@@ -2,7 +2,7 @@
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 status: active
-updated: 2026-06-25
+updated: 2026-06-26
 ---
 
 # Roadmap: nono
@@ -27,7 +27,11 @@ Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64
 - [x] **Phase 94: UPST10 Divergence Audit** — 2/2 plans — completed 2026-06-26
   - [x] 94-01-PLAN.md — Author the v0.64.0..v0.65.1 DIVERGENCE-LEDGER (clusters, carve-out re-touch check, ADR matrix)
   - [x] 94-02-PLAN.md — Repoint upstream to nolabs-ai/nono + PROJECT.md parity process + Future Cycles stub
-- [ ] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 0/TBD plans
+- [ ] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 0/4 plans
+  - [ ] 95-01-PLAN.md — D-04 baseline capture + Cluster A cherry-pick (9ce74e92 AF_UNIX fix)
+  - [ ] 95-02-PLAN.md — Cluster B manual hunk extraction (11fd10e0 shared-surface split)
+  - [ ] 95-03-PLAN.md — Cluster C manual hunk extraction (9b37dc52 credentials_intent split)
+  - [ ] 95-04-PLAN.md — Fork-invariant verification checklist + DIVERGENCE-LEDGER closeout + PARTIAL→96 record
 - [ ] **Phase 96: Cross-Target Toolchain** — 0/TBD plans
 - [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
 
@@ -79,7 +83,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. `make build` and `make test` pass on the dev host (Windows) on the post-sync tree with no new test failures introduced by the cherry-picks.
   3. Fork-divergent invariants — the AppContainer/WFP/broker Windows backend, the ADR-86 audit/diagnostics library-boundary carve-out, and the `exec_strategy_windows/` denial-rendering fork — are each explicitly verified post-sync (checklist entry per invariant, none marked regressed).
   4. Any security-relevant will-sync commit (network filtering, seccomp, path-handling) has a dedicated verification note confirming the fork's Windows equivalents remain intact.
-**Plans**: TBD
+**Plans**: 4 plans (95-01 baseline+Cluster A · 95-02 Cluster B split · 95-03 Cluster C split · 95-04 invariant verify+closeout)
 
 ### Phase 96: Cross-Target Toolchain
 **Goal**: The dev host can run `linux-gnu` clippy locally, retiring the automatic PARTIAL→CI default for that gate; the `apple-darwin` gate outcome (pass or documented hard-blocker) is explicitly resolved.
@@ -118,7 +122,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 91. Signed Override Format + Verification Core | v3.2 | 3/3 | Complete | 2026-06-22 |
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete | 2026-06-22 |
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete | 2026-06-23 |
-| 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete    | 2026-06-26 |
-| 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 0/TBD | Not started | - |
+| 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete | 2026-06-26 |
+| 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 0/4 | Not started | - |
 | 96. Cross-Target Toolchain | v3.3 | 0/TBD | Not started | - |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/TBD | Not started | - |
