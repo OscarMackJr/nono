@@ -35,7 +35,10 @@ Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64
   - [x] 95-05-PLAN.md — Gap closure: WR-02 msghdr offset_of! restore + WR-03 GPU enforcement restore
   - [x] 95-06-PLAN.md — Gap closure: WR-01 static byte strings + CR-01 evaluate() wiring
   - [x] 95-07-PLAN.md — [BLOCKING] Cross-target clippy gate + gap-closure status commit (PARTIAL→CI)
-- [ ] **Phase 96: Cross-Target Toolchain** — 0/TBD plans
+- [ ] **Phase 96: Cross-Target Toolchain** — 0/3 plans
+  - [ ] 96-01-PLAN.md — linux-gnu gate stand-up (Docker precondition + `cross clippy` green) + structural drift fix (XTGT-01, XTGT-02)
+  - [ ] 96-02-PLAN.md — apple-darwin bounded cargo-zigbuild attempt → disposition (local-runnable OR XTGT-03(b) hard-blocker → PARTIAL→CI)
+  - [ ] 96-03-PLAN.md — protocol rewrite: checklist cross-form + per-gate PARTIAL retirement + CLAUDE.md one-line pointer (XTGT-04)
 - [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
 
 </details>
@@ -97,7 +100,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` runs to completion locally and exits 0; any drift found in cfg-gated Unix code is fixed before this criterion is satisfied.
   3. The apple-darwin gate is either: (a) passing locally with the same invocation pattern, or (b) accompanied by a written hard-blocker record (osxcross/SDK infeasibility from Windows) that explicitly commits apple-darwin to PARTIAL→CI with rationale — either outcome closes XTGT-03.
   4. CLAUDE.md and `.planning/templates/cross-target-verify-checklist.md` are updated to reflect which gates are now locally runnable, retiring the PARTIAL→CI *default* for those gates.
-**Plans**: TBD
+**Plans**: 3 plans (96-01 linux-gnu gate + drift fix · 96-02 apple-darwin bounded attempt → disposition · 96-03 protocol/doc rewrite)
 
 ### Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook
 **Goal**: The workspace is one operator push away from a fully published release — all versions bumped, all artifacts built and signed, all publish paths dry-run GREEN, with a documented runbook for the final step.
@@ -127,5 +130,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete | 2026-06-23 |
 | 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete | 2026-06-26 |
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete    | 2026-06-26 |
-| 96. Cross-Target Toolchain | v3.3 | 0/TBD | Not started | - |
+| 96. Cross-Target Toolchain | v3.3 | 0/3 | Not started | - |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/TBD | Not started | - |
