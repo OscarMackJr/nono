@@ -24,7 +24,7 @@ updated: 2026-06-25
 
 Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64.0..v0.65.1` window (v0.64.1, v0.65.0, v0.65.1) without regressing the Windows security model; stand up a local cross C toolchain to retire the PARTIAL→CI debt; then make the workspace genuinely releasable — crate leapfrog ≥ `0.65.0`, a gated build+sign+dry-run pipeline, and a one-step operator push runbook. Release scope = PREPARE ONLY (the actual push/publish is operator-gated manual step outside the milestone).
 
-- [ ] **Phase 94: UPST10 Divergence Audit** — 0/2 plans
+- [x] **Phase 94: UPST10 Divergence Audit** — 2/2 plans — completed 2026-06-26
   - [x] 94-01-PLAN.md — Author the v0.64.0..v0.65.1 DIVERGENCE-LEDGER (clusters, carve-out re-touch check, ADR matrix)
   - [x] 94-02-PLAN.md — Repoint upstream to nolabs-ai/nono + PROJECT.md parity process + Future Cycles stub
 - [ ] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 0/TBD plans
