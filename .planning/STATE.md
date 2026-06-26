@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: verifying
-stopped_at: Phase 96 context gathered
+status: executing
+stopped_at: Phase 96 complete + verified (PASS); Phase 97 unplanned
 last_updated: "2026-06-26T16:25:24.285Z"
-last_activity: 2026-06-26
+last_activity: 2026-06-26 -- Phase 96 executed + verified
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 3
   total_plans: 12
   completed_plans: 12
-  percent: 100
+  percent: 75
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -22,25 +22,25 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Phase 96 — Cross-Target Toolchain
+**Current Focus:** Phase 97 — Release Engineering (next; unplanned)
 
 ## Current Position
 
 ```
-Phase 96 of 97: all 3 plans executed (XTGT-01..04 closed) | ready for verification | v3.3 milestone
+Phase 96 of 97 COMPLETE + VERIFIED (PASS, 4/4) | Next: Phase 97 (unplanned) | v3.3 milestone 3/4 phases
 [==============================          ] 75%
 ```
 
-Phase: 96 (Cross-Target Toolchain) — ALL PLANS EXECUTED, READY FOR VERIFICATION
-Plan: 3 of 3 done (96-01 linux-gnu GREEN; 96-02 apple-darwin LOCAL-RUNNABLE; 96-03 doc/protocol rewrite — XTGT-04 closed)
-Status: Phase complete — ready for /gsd:verify-phase 96
-Last activity: 2026-06-26 -- 96-03 cross-target verification protocol rewritten (checklist + CLAUDE.md); PARTIAL→CI default retired per-gate
+Phase: 96 — COMPLETE + VERIFIED (PASS); both cross-target gates now LOCAL-RUNNABLE
+Next: Phase 97 (Release Engineering — Leapfrog + Pipeline + Runbook) — not yet planned
+Status: Executing (between phases)
+Last activity: 2026-06-26 -- Phase 96 executed (3/3 plans) + verifier PASS
 
 ## Performance Metrics
 
 **Velocity:** (v3.3 — reset; populated as phases complete)
 
-- Total plans completed: 9
+- Total plans completed: 12
 - Average duration: —
 - Total execution time: —
 
