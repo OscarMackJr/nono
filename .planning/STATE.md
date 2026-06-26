@@ -4,14 +4,14 @@ milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 status: executing
 stopped_at: Phase 96 context gathered
-last_updated: "2026-06-26T14:20:04.815Z"
-last_activity: 2026-06-26 -- Phase 96 planning complete
+last_updated: "2026-06-26T16:01:07.082Z"
+last_activity: 2026-06-26
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 12
-  completed_plans: 9
-  percent: 75
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -22,19 +22,19 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Phase 95 — upstream-absorb-fork-invariant-verify
+**Current Focus:** Phase 96 — Cross-Target Toolchain
 
 ## Current Position
 
 ```
-Phase 94 of 97 complete | Next: Phase 95 (unplanned) | v3.3 milestone 1/4 phases
-[==========                              ] 25%
+Phase 95 of 97 complete | In: Phase 96 (Cross-Target Toolchain), plan 1/3 done | v3.3 milestone
+[==============                          ] 35%
 ```
 
-Phase: 95
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-06-26 -- Phase 96 planning complete
+Phase: 96 (Cross-Target Toolchain) — EXECUTING
+Plan: 2 of 3 (96-01 complete: linux-gnu gate GREEN; next 96-02 apple-darwin bounded attempt)
+Status: Ready to execute 96-02
+Last activity: 2026-06-26 -- 96-01 linux-gnu cross clippy gate green; XTGT-01/02 complete
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Last activity: 2026-06-26 -- Phase 96 planning complete
 | Phase 95 P05 | 8 | 2 tasks | 1 files |
 | Phase 95-upstream-absorb-fork-invariant-verify P06 | 18 | 2 tasks | 3 files |
 | Phase 95 P07 | 30 | 1 task | 0 source files (verification gate) |
+| Phase 96 P01 | 26 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,7 @@ Last activity: 2026-06-26 -- Phase 96 planning complete
 | WR-01 gap closed: dynamic errno lost in post-fork static message | 95-06 | format!() heap allocation is unsafe in post-fork child; message type sufficient for operator diagnosis; errno inaccessible safely post-fork |
 | CR-01 gap closed: evaluate() placed AFTER endpoint_rules check (additive) | 95-06 | Preserves backward compat for legacy routes while enforcing explicit deny rules; compile() wraps endpoint_rules as allow entries with deny-default |
 | Cross-target clippy gate PARTIAL→CI (both Linux and macOS) | 95-07 | Rust targets installed; aws-lc-sys/ring require C cross-linker (x86_64-linux-gnu-gcc) absent; Docker Desktop not running; WSL absent; failure is C toolchain missing, not Rust clippy error in changed files; GH Actions decisive on HEAD be42a5af; Phase 96 resolution target |
+| linux-gnu cross clippy gate GREEN locally (exit 0) — PARTIAL→CI retired for linux-gnu | 96-01 | `cross clippy` in pinned image `ghcr.io/cross-rs/x86_64-unknown-linux-gnu:0.2.5@sha256:9e5b39c0...`; first local run surfaced COMPILE errors (not lints) in cfg(linux) code: Phase 95 absorb of upstream ae77d198 (#1210) silently dropped fork invariants — SEC-01 AF_UNIX no-grant static-EPERM filter + cgroup v2 resource-enforcement module — and left stale audit/approval call sites. Restored verbatim from ae77d198^; aligned stale sites to converged API. All structural, no silencing allows. Native clippy+fmt still green. Windows clippy is structurally blind to cfg(linux) drift — this is the gate's whole value. |
 
 ### Pending Todos
 

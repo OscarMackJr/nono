@@ -30,8 +30,8 @@
 
 ### Cross-Target Toolchain (XTGT)
 
-- [ ] **XTGT-01**: A local cross C toolchain (cross/Docker or equivalent) is installed on the dev host and documented (setup steps + invocation) so cfg-gated Unix code compiles locally.
-- [ ] **XTGT-02**: `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` runs locally and passes; any drift surfaced in cfg-gated Unix code is fixed in-milestone.
+- [x] **XTGT-01**: A local cross C toolchain (cross/Docker or equivalent) is installed on the dev host and documented (setup steps + invocation) so cfg-gated Unix code compiles locally.
+- [x] **XTGT-02**: `cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used` runs locally and passes; any drift surfaced in cfg-gated Unix code is fixed in-milestone.
 - [ ] **XTGT-03**: `cargo clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` runs locally and passes — OR a documented hard blocker (osxcross/macOS-SDK infeasibility from the Windows host) is recorded and apple-darwin stays explicitly PARTIAL→CI with rationale.
 - [ ] **XTGT-04**: The CLAUDE.md cross-target verification protocol + `.planning/templates/cross-target-verify-checklist.md` are updated to reflect local-runnable status, retiring the PARTIAL→CI *default* for the gate(s) now provably runnable on the host.
 
@@ -67,8 +67,8 @@ Populated by roadmap creation 2026-06-25. Phase numbering continues from Phase 9
 | UPST10-04 | Phase 94 | Complete |
 | UPST10-02 | Phase 95 | Complete |
 | UPST10-03 | Phase 95 | Complete |
-| XTGT-01 | Phase 96 | Pending |
-| XTGT-02 | Phase 96 | Pending |
+| XTGT-01 | Phase 96 | Complete |
+| XTGT-02 | Phase 96 | Complete |
 | XTGT-03 | Phase 96 | Pending |
 | XTGT-04 | Phase 96 | Pending |
 | RLS-05 | Phase 97 | Pending |
