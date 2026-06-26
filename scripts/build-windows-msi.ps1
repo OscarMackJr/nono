@@ -277,7 +277,7 @@ if ($Scope -eq "machine") {
       <Component Id="cmpProgramDataNono" Guid="*" Directory="PROGRAMDATANONO">
         <RegistryValue
             Root="HKLM"
-            Key="Software\always-further\nono\machine"
+            Key="Software\OscarMackJr\nono\machine"
             Name="ProgramDataRoot"
             Type="string"
             Value="[PROGRAMDATANONO]"
@@ -488,8 +488,8 @@ $wxsContent = @"
     <Property Id="ARPCOMMENTS" Value="nono Windows native installer ($($scopeInfo.ScopeLabel))" />
     <Property Id="ARPCONTACT" Value="$Manufacturer" />
     <Property Id="ARPURLHELP" Value="https://docs.nono.sh/cli/getting_started/installation" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/always-further/nono" />
-    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/always-further/nono/releases" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/OscarMackJr/nono" />
+    <Property Id="ARPURLUPDATEINFO" Value="https://github.com/OscarMackJr/nono/releases" />
     <Property Id="ARPNOMODIFY" Value="1" />
     <Property Id="ARPNOREPAIR" Value="1" />
     <Feature Id="MainFeature" Title="nono" Level="1">
@@ -524,7 +524,7 @@ $($scopeInfo.DirectoryXml)
       <Component Id="cmpPath" Guid="*">
         <RegistryValue
             Root="$($scopeInfo.RegistryRoot)"
-            Key="Software\always-further\nono\$Scope"
+            Key="Software\OscarMackJr\nono\$Scope"
             Name="InstallDir"
             Type="string"
             Value="[INSTALLFOLDER]"
