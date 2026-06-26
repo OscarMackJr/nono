@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: milestone_complete
-stopped_at: Phase 94 context gathered
-last_updated: "2026-06-25T23:45:15.993Z"
-last_activity: 2026-06-25 -- Phase 94 planning complete
+status: executing
+stopped_at: Phase 94 complete — verified 10/10; Phases 95-97 remain (not yet planned)
+last_updated: "2026-06-26T00:45:00.000Z"
+last_activity: 2026-06-26 -- Phase 94 (UPST10 Divergence Audit) complete + verified
 progress:
-  total_phases: 1
+  total_phases: 4
   completed_phases: 1
   total_plans: 2
-  completed_plans: 0
-  percent: 100
+  completed_plans: 2
+  percent: 25
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -22,18 +22,18 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Phase 94 — UPST10 Divergence Audit (not yet started; run `/gsd:plan-phase 94`).
+**Current Focus:** Phase 95 — Upstream Absorb + Fork-Invariant Verify (next; not yet planned — run `/gsd:discuss-phase 95` or `/gsd:plan-phase 95`).
 
 ## Current Position
 
 ```
-Phase 94 of 97 | Plan: — | Status: Not started
-[                                        ] 0%
+Phase 94 of 97 complete | Next: Phase 95 (unplanned) | v3.3 milestone 1/4 phases
+[==========                              ] 25%
 ```
 
-Phase: 94
-Plan: Not started
-Status: Milestone complete
+Phase: 94 — UPST10 Divergence Audit (COMPLETE, verified 10/10)
+Plan: 94-01 + 94-02 complete
+Status: Phase 94 complete; Phases 95-97 remain
 Last activity: 2026-06-26
 
 ## Performance Metrics
