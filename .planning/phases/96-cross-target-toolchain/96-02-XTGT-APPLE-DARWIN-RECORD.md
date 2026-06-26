@@ -105,4 +105,35 @@ hard-blocker branch was entered and `SDKROOT` was never set.
 
 ---
 
-*Disposition section follows (Task 2). Consumed by Plan 96-03 (checklist / CLAUDE.md rewrite) and by `/gsd:verify-work`.*
+## 6. Disposition (XTGT-03 resolution) — apple-darwin is LOCAL-RUNNABLE
+
+XTGT-03 resolves to **exactly one** explicit end-state: the **clean-exit branch** of D-04
+(the bounded attempt yielded a clean `clippy` run), NOT the XTGT-03(b) hard-blocker branch.
+
+**apple-darwin = LOCAL-RUNNABLE.** Reproducible setup:
+
+| Element | Value |
+|---------|-------|
+| Working invocation | `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used` |
+| Tooling | `zig 0.16.0` + `cargo-zigbuild 0.23.0` (host installs; versions in § 1) |
+| Env requirement | `SDKROOT` MUST stay UNSET (it was unset for the green run; setting it would be the D-04(b) violation and is unnecessary) |
+| Outcome | exit 0, zero warnings/errors under `-D warnings -D clippy::unwrap_used` |
+
+The XTGT-03(b) hard-blocker record is **not** written, because no SDK/framework/Mach-O failure
+signature was captured — the gate passed without crossing the proprietary-SDK licensing boundary.
+
+### Plan 03 handoff flag (D-07 per-gate retirement)
+
+> **apple-darwin Q3 branch FLIPS to "MUST run locally."** Rewrite the
+> `.planning/templates/cross-target-verify-checklist.md` decision tree so the apple-darwin gate is
+> **MUST run locally via `cargo-zigbuild clippy --workspace --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used`** (with `zig`+`cargo-zigbuild` setup and `SDKROOT` UNSET), and the
+> auto-default-to-PARTIAL→CI is **retired** for apple-darwin (PARTIAL allowed only on a *documented*
+> zig/cargo-zigbuild failure, NOT a stopped-tool or absent-toolchain state). Both cross-targets
+> (linux-gnu via `cross clippy`, apple-darwin via `cargo-zigbuild clippy`) are now provably
+> local-runnable on this host — the verifier may flip Unix-touching REQs to VERIFIED locally for
+> BOTH gates. Use the `cargo-zigbuild clippy` form (direct binary), not `cargo zigbuild clippy`
+> (see § 2 invocation-form note).
+
+---
+
+*Consumed by Plan 96-03 (checklist / CLAUDE.md rewrite) and by `/gsd:verify-work`.*
