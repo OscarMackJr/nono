@@ -27,11 +27,14 @@ Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64
 - [x] **Phase 94: UPST10 Divergence Audit** — 2/2 plans — completed 2026-06-26
   - [x] 94-01-PLAN.md — Author the v0.64.0..v0.65.1 DIVERGENCE-LEDGER (clusters, carve-out re-touch check, ADR matrix)
   - [x] 94-02-PLAN.md — Repoint upstream to nolabs-ai/nono + PROJECT.md parity process + Future Cycles stub
-- [ ] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 0/4 plans
+- [x] **Phase 95: Upstream Absorb + Fork-Invariant Verify** — 7/7 plans
   - [x] 95-01-PLAN.md — D-04 baseline capture + Cluster A cherry-pick (9ce74e92 AF_UNIX fix)
   - [x] 95-02-PLAN.md — Cluster B manual hunk extraction (11fd10e0 shared-surface split)
   - [x] 95-03-PLAN.md — Cluster C manual hunk extraction (9b37dc52 credentials_intent split)
   - [x] 95-04-PLAN.md — Fork-invariant verification checklist + DIVERGENCE-LEDGER closeout + PARTIAL→96 record
+  - [x] 95-05-PLAN.md — Gap closure: WR-02 msghdr offset_of! restore + WR-03 GPU enforcement restore
+  - [x] 95-06-PLAN.md — Gap closure: WR-01 static byte strings + CR-01 evaluate() wiring
+  - [x] 95-07-PLAN.md — [BLOCKING] Cross-target clippy gate + gap-closure status commit (PARTIAL→CI)
 - [ ] **Phase 96: Cross-Target Toolchain** — 0/TBD plans
 - [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
 
@@ -123,6 +126,6 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 92. Runtime CapabilitySet Mutation + Audit Wiring | v3.2 | 4/4 | Complete | 2026-06-22 |
 | 93. Live ZT-Infra Integration + Revocation + Request Flow | v3.2 | 6/6 | Complete | 2026-06-23 |
 | 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete | 2026-06-26 |
-| 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 6/7 | In Progress|  |
+| 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete | 2026-06-26 |
 | 96. Cross-Target Toolchain | v3.3 | 0/TBD | Not started | - |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/TBD | Not started | - |
