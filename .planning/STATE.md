@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 status: executing
-stopped_at: Phase 95 context gathered
-last_updated: "2026-06-26T12:50:36.465Z"
+stopped_at: Completed Phase 95 Plan 06 (WR-01 + CR-01 gap closure)
+last_updated: "2026-06-26T12:58:27.133Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -32,7 +32,7 @@ Phase 94 of 97 complete | Next: Phase 95 (unplanned) | v3.3 milestone 1/4 phases
 ```
 
 Phase: 95 (upstream-absorb-fork-invariant-verify) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 Status: Ready to execute
 Last activity: 2026-06-26
 
@@ -51,6 +51,7 @@ Last activity: 2026-06-26
 | Phase 95-upstream-absorb-fork-invariant-verify P01 | 180 | 2 tasks | 7 files |
 | Phase 95-upstream-absorb-fork-invariant-verify P04 | 30 | 2 tasks | 2 files |
 | Phase 95 P05 | 8 | 2 tasks | 1 files |
+| Phase 95-upstream-absorb-fork-invariant-verify P06 | 18 | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -64,6 +65,8 @@ Last activity: 2026-06-26
 | Cross-target (Phase 96) sequenced after Phase 95 sync | 96 | XTGT clippy gates should run against the synced + post-sync tree, not a pre-sync snapshot that will change. |
 | Release scope = PREPARE ONLY | 97 | Preserves LOCAL-ONLY posture; repo PUBLIC pending Microsoft minifilter-altitude approval; actual push/publish is operator-gated manual step outside this milestone. |
 | D-02 confirmed: Cluster C (9b37dc52) structural no-op | 95-03 | Upstream CredentialProxyIntent refactor is structurally incompatible with fork's flat ProxyLaunchOptions; no code change; Phase 89 || !prepared.custom_credentials.is_empty() active predicate preserved |
+| WR-01 gap closed: dynamic errno lost in post-fork static message | 95-06 | format!() heap allocation is unsafe in post-fork child; message type sufficient for operator diagnosis; errno inaccessible safely post-fork |
+| CR-01 gap closed: evaluate() placed AFTER endpoint_rules check (additive) | 95-06 | Preserves backward compat for legacy routes while enforcing explicit deny rules; compile() wraps endpoint_rules as allow entries with deny-default |
 
 ### Pending Todos
 
@@ -103,8 +106,8 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T12:50:36.449Z
-Stopped at: Phase 95 context gathered
+Last session: 2026-06-26T12:58:27.118Z
+Stopped at: Completed Phase 95 Plan 06 (WR-01 + CR-01 gap closure)
 Resume file: None
 
 ## Operator Next Steps
