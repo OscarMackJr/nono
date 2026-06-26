@@ -1,204 +1,207 @@
-# Phase 95 Fork-Invariant Verification
+---
+phase: 95-upstream-absorb-fork-invariant-verify
+verified: 2026-06-26T00:00:00Z
+status: gaps_found
+score: 6/10 must-haves verified
+re_verification:
+  previous_status: passed  # self-verification produced SC3 PASS — this is the first external verification
+  previous_score: 3/3 invariants (self-reported)
+  gaps_closed: []
+  gaps_remaining:
+    - "WR-02: arch-portable msghdr offset derivation reverted to hardcoded LP64 layout"
+    - "WR-03: --allow-gpu Linux Landlock enforcement deleted (silent fail-open regression)"
+    - "CR-01: CompiledEndpointPolicy.evaluate() is never called (operator deny rules silently ignored)"
+    - "WR-01: format!() heap allocation in post-fork/pre-exec child reverts CR-01 fork-safety invariant"
+  regressions:
+    - "WR-02 and WR-03 are both confirmed regressions introduced by the Cluster A cherry-pick conflict resolution that the self-verification (95-04) did not examine"
+gaps:
+  - truth: "Fork-divergent invariants are explicitly preserved — the WR-04 arch-portable msghdr offset derivation (offset_of!/size_of, compile-time assertions, #[must_use]) is intact post-sync"
+    status: failed
+    reason: "cherry-pick ae77d198 (Cluster A) reverted the WR-04 fork hardening in read_msghdr_dest. Current linux.rs:2427 has const MSGHDR_MIN_READ: usize = 12 (hardcoded LP64 layout). The phase-base (ed6cdde1) had core::mem::offset_of!(libc::msghdr, msg_name/msg_namelen), compile-time overlap assertions, and #[must_use] on both functions. All three elements are now absent."
+    artifacts:
+      - path: "crates/nono/src/sandbox/linux.rs"
+        issue: "Line 2427: const MSGHDR_MIN_READ: usize = 12 (hardcoded). Missing: offset_of!/size_of derivation, compile-time assertions, #[must_use] on read_msghdr_dest (line 2419) and read_mmsghdr_dests (line 2470), TOCTOU comment at msg_name==0 branch"
+    missing:
+      - "Restore const MSG_NAME_OFFSET/MSG_NAME_LEN_OFFSET/PTR_SIZE via core::mem::offset_of! and size_of"
+      - "Restore const _: () = assert!() compile-time layout assertions"
+      - "Re-apply #[must_use = \"...\"] to read_msghdr_dest and read_mmsghdr_dests"
+      - "Restore the WR-01 TOCTOU comment at the msg_name == 0 branch"
 
-**Date:** 2026-06-26
-**Post-sync commit:** a6576138 docs(95-03): complete Cluster C structural no-op absorb plan summary and state
-**Baseline commit:** 449138a9 chore(phase-95): capture D-04 Windows baseline red set before cherry-picks
+  - truth: "Fork-divergent invariants are explicitly preserved — --allow-gpu Linux Landlock enforcement (collect_linux_gpu_paths, is_nvidia_compute_device, caps.gpu() branch) is intact post-sync"
+    status: failed
+    reason: "cherry-pick ae77d198 + fix 61689ef8 deleted the entire Linux GPU-path enforcement. collect_linux_gpu_paths, is_nvidia_compute_device, and the caps.gpu() Landlock allowlist branch around former line 915 are all absent from linux.rs. The capability.rs gpu()/allow_gpu() API, the --allow-gpu CLI flag, and macOS enforcement all still exist. Net effect: on Linux, nono run --allow-gpu silently grants no GPU device paths."
+    artifacts:
+      - path: "crates/nono/src/sandbox/linux.rs"
+        issue: "collect_linux_gpu_paths and is_nvidia_compute_device functions deleted, caps.gpu() branch deleted. Zero GPU references in file. Phase-base had these at lines 417-476, 915-916."
+      - path: "crates/nono/src/capability.rs"
+        issue: "gpu()/allow_gpu() capability still present (line 1181/1451) — API contract now silent fail-open on Linux"
+    missing:
+      - "Re-apply collect_linux_gpu_paths() and is_nvidia_compute_device() helper functions"
+      - "Re-apply the caps.gpu() conditional Landlock allowlist branch in the apply path"
+      - "Alternatively: if GPU support is deliberately dropped, remove the --allow-gpu flag, gpu() capability, and macOS enforcement too, and record in DIVERGENCE-LEDGER"
 
-**Absorb commits (baseline → HEAD):**
-- ae77d198 fix(sandbox): exempt IPC fd from sendmsg trapping to resolve af_unix_mediation deadlock (#1210) [Cluster A cherry-pick]
-- 61689ef8 fix(95-01): post-cherry-pick compilation and formatting fixes [Cluster A post-fix]
-- 91d526e6 feat(audit,sandbox): absorb Cluster B shared-surface additions from 11fd10e0 [Cluster B]
-- 62dbf013 refactor(proxy): record Cluster C 9b37dc52 as structural no-op in fork [Cluster C]
-(docs/planning commits interspersed: 251c1481, 438fc8f9, a6576138)
+  - truth: "Absorb does not introduce operator-configurable security controls that silently do nothing (endpoint_policy fail-open)"
+    status: failed
+    reason: "CompiledEndpointPolicy.evaluate() has zero callers anywhere in the workspace. The reverse.rs request path (line 96) still calls route.endpoint_rules.is_allowed(). An operator who configures endpoint_policy deny rules gets silent non-enforcement. Because endpoint_policy is exposed as a live serde-deserializable field in RouteConfig with deny_unknown_fields, this is a real operator-facing fail-open."
+    artifacts:
+      - path: "crates/nono-proxy/src/reverse.rs"
+        issue: "Line 96 calls route.endpoint_rules.is_allowed() -- endpoint_policy.evaluate() never invoked on request path"
+      - path: "crates/nono-proxy/src/config.rs"
+        issue: "evaluate() defined at line 419, allows_all_without_l7() at line 404, zero callers in workspace"
+    missing:
+      - "Either wire endpoint_policy.evaluate() into reverse.rs replacing the endpoint_rules.is_allowed check, OR reject configs that set endpoint_policy with ProxyError::Config at load time so the knob cannot be silently relied upon"
 
-**Diff anchor:** All `git diff` commands use explicit baseline SHA `449138a9` rather than `HEAD~N`
-because docs commits are interspersed between absorb commits (N would be 7, not 3).
+  - truth: "Post-fork/pre-exec child code uses only async-signal-safe, non-heap-allocating operations (CR-01 fork-safety invariant)"
+    status: failed
+    reason: "exec_strategy.rs lines 1411-1414 and 1450-1451 use format!() (heap allocation) in the post-fork/pre-exec child. Adjacent code at lines 1064-1139 has explicit CR-01 comments forbidding format!() and uses static byte strings. The new error paths for proxy notify fd handling use format!() then convert to bytes, violating the established pattern."
+    artifacts:
+      - path: "crates/nono-cli/src/exec_strategy.rs"
+        issue: "Lines 1411-1414: let detail = format!(\"nono: failed to write proxy seccomp notify fd number: {}\\n\", std::io::Error::last_os_error()); Lines 1450-1451: let detail = format!(\"nono: seccomp proxy filter not available: {}\\n\", e);"
+    missing:
+      - "Replace both format!() allocations with const &[u8] static byte strings, matching the adjacent CR-01 pattern"
+      - "Use libc::write directly with the static slice as the adjacent code does"
+deferred: []
+---
+
+# Phase 95: Fork-Invariant Verification Report
+
+**Phase Goal:** Absorb the UPST10 upstream sync clusters (Cluster A AF_UNIX deadlock fix, Cluster B tool-sandbox shared-surface, Cluster C credentials_intent) into the fork WITHOUT regressing any fork invariant or the fork's security model. Then produce a fork-invariant verification checklist.
+**Verified:** 2026-06-26
+**Status:** gaps_found
+**Score:** 6/10 must-haves verified
+
+**Note on prior self-verification (95-04):** The 95-VERIFICATION.md produced by Plan 95-04 was a self-verification that checked exec_strategy_windows/ byte-stability, the ADR-86 audit boundary, and the Cluster C proxy guard. It did NOT inspect the linux.rs hunks changed by the Cluster A cherry-pick conflict resolution. This external verification found two confirmed regressions (WR-02, WR-03) and two additional gaps (CR-01, WR-01) in that uninspected surface.
 
 ---
 
-## Invariant Checklist (UPST10-03)
+## Goal Achievement
 
-### Invariant 1: AppContainer/WFP/Broker Windows Backend
+### Observable Truths
 
-**Status:** PASS
-**Files checked:** crates/nono-cli/src/exec_strategy_windows/ (all files), crates/nono/src/sandbox/windows.rs
-**Verification:**
-```
-git diff 449138a9 HEAD -- crates/nono-cli/src/exec_strategy_windows/
-(empty — no output)
+| # | Truth | Status | Evidence |
+|---|-------|--------|---------|
+| 1 | Cluster A (9ce74e92 AF_UNIX deadlock fix) is present in git log with -x trailer and DCO | VERIFIED | ae77d198 in log; Cherry-picked from commit 9ce74e92 in body; Signed-off-by: Oscar Mack Jr present |
+| 2 | Cluster B shared-surface (11fd10e0) absorbed additively; CR-02 records_verified:event_count > 0 intact | VERIFIED | audit.rs:1570 byte-intact; SandboxRuntimeAuditEvent/CommandPolicyAuditEvent present; tool-sandbox/ absent |
+| 3 | Cluster C (9b37dc52) absorbed; Phase 89 fail-secure proxy activation predicate preserved | VERIFIED | proxy_runtime.rs:95 has || !prepared.custom_credentials.is_empty(); proxy_activates_with_custom_credentials_only test at line 503 asserts opts.active |
+| 4 | exec_strategy_windows/ is byte-for-byte unchanged (AppContainer/WFP/broker backend unaffected) | VERIFIED | git diff ed6cdde1..HEAD -- crates/nono-cli/src/exec_strategy_windows/ returns 0 lines |
+| 5 | ADR-86 boundary intact: DiagnosticFormatter in CLI-side; diagnostic_code()/remediation() in error.rs; bindings/c/src/ untouched | VERIFIED | formatter.rs in nono-cli/src/diagnostic/; error.rs lines 383/452; bindings/c/src/ diff empty |
+| 6 | Cluster B restrict_execute/has_execute, CMD_URI_PREFIX, SENSITIVE_ENV_VARS, endpoint_policy field, shutdown_tx all absorbed | VERIFIED | restrict_execute at linux.rs:790, mod.rs:29; CMD_URI_PREFIX at keystore.rs:161; SENSITIVE_ENV_VARS expanded at scrub.rs:47; endpoint_policy at route.rs:41 |
+| 7 | WR-04 fork hardening: arch-portable msghdr offset derivation (offset_of!, compile-time assertions, #[must_use]) intact post-sync | FAILED | linux.rs:2427 has const MSGHDR_MIN_READ: usize = 12 (hardcoded LP64). Phase-base ed6cdde1 had offset_of!(libc::msghdr, msg_name/msg_namelen), compile-time assertions, and #[must_use] on both functions. All reverted by Cluster A cherry-pick. |
+| 8 | --allow-gpu Linux Landlock enforcement (collect_linux_gpu_paths, is_nvidia_compute_device, caps.gpu() branch) intact post-sync | FAILED | Zero GPU references in linux.rs. Functions deleted by Cluster A cherry-pick. capability.rs gpu()/allow_gpu() and --allow-gpu CLI flag still exist — silent fail-open on Linux. |
+| 9 | No operator-configurable security controls that silently do nothing (endpoint_policy evaluator wired into request path) | FAILED | CompiledEndpointPolicy.evaluate() has zero callers in workspace. reverse.rs:96 still calls endpoint_rules.is_allowed(). Endpoint_policy deny rules silently ignored. |
+| 10 | Post-fork/pre-exec child uses only async-signal-safe non-heap-allocating operations (CR-01 fork-safety) | FAILED | exec_strategy.rs:1411-1414 and :1450-1451 use format!() for heap-allocated error messages in post-fork child, reverting the established static-byte-string CR-01 pattern |
 
-git diff 449138a9 HEAD -- crates/nono/src/sandbox/windows.rs
-(empty — no output)
-```
-**Evidence:** All four absorb commits (ae77d198, 61689ef8, 91d526e6, 62dbf013) touch only Linux-only or shared-surface files. The 94-DIVERGENCE-LEDGER.md records `windows-touch: no` for Clusters A, B, and C. The git diff against the phase-base commit confirms zero modifications to exec_strategy_windows/ and sandbox/windows.rs. The Windows AppContainer/WFP/broker security model is byte-for-byte unchanged.
-
----
-
-### Invariant 2: ADR-86 Audit/Diagnostics Library-Boundary Carve-Out
-
-**Status:** PASS
-**Files checked:** crates/nono/src/audit.rs (CR-02), bindings/c/src/ (CR-01), crates/nono-cli/src/diagnostic/ (UX stays CLI-side)
-**Verification:**
-```
-grep -n "records_verified" crates/nono/src/audit.rs | grep "event_count"
-1570:        records_verified: event_count > 0,
-
-cargo test -p nono --lib -- audit::tests::verify_empty_log_with_no_stored_metadata_is_not_valid
-running 1 test
-test audit::tests::verify_empty_log_with_no_stored_metadata_is_not_valid ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 802 filtered out; finished in 0.00s
-
-git diff 449138a9 HEAD -- bindings/c/src/
-(empty — no output)
-
-ls crates/nono-cli/src/diagnostic/
-formatter.rs
-mod.rs
-```
-**Evidence:** The CR-02 carve-out field `records_verified: event_count > 0` is present at line 1570 of audit.rs, byte-intact. The Cluster B absorb (91d526e6) added only additive structs (SandboxRuntimeAuditEvent, CommandPolicyAuditEvent) and did NOT touch the verify_audit_log return block. The ADR-87 CR-02 guard test `verify_empty_log_with_no_stored_metadata_is_not_valid` passes (1/1). bindings/c/src/ is CR-01 clean — no changes in the Phase 95 window. DiagnosticFormatter remains in crates/nono-cli/src/diagnostic/ (CLI-side, as required by ADR-86).
+**Score:** 6/10 truths verified
 
 ---
 
-### Invariant 3: exec_strategy_windows/ Denial-Rendering Fork (ADR-86 D-03 Carve-Out)
+## Required Artifacts
 
-**Status:** PASS
-**Files checked:** crates/nono-cli/src/exec_strategy_windows/launch.rs, network.rs; crates/nono/src/error.rs (diagnostic_code/remediation bridge)
-**Verification:**
-```
-git diff 449138a9 HEAD -- crates/nono-cli/src/exec_strategy_windows/launch.rs
-(empty — no output)
-
-git diff 449138a9 HEAD -- crates/nono-cli/src/exec_strategy_windows/network.rs
-(empty — no output)
-
-grep -n "diagnostic_code\|remediation" crates/nono/src/error.rs | head -10
-77:    /// remediation pointer (e.g., a boot-flag suggestion).
-212:        /// Human-actionable hint for remediation.
-233:        /// Human-actionable hint for remediation.
-383:    pub fn diagnostic_code(&self) -> crate::diagnostic::NonoDiagnosticCode {
-452:    pub fn remediation(&self) -> Option<crate::diagnostic::NonoRemediation> {
-671:    fn cwd_prompt_maps_to_structured_code_and_remediation() {
-673:        assert_eq!(err.diagnostic_code(), NonoDiagnosticCode::CwdAccessRequired);
-674:        assert_eq!(err.remediation(), Some(NonoRemediation::AllowCwd));
-681:            err.diagnostic_code(),
-685:            err.remediation(),
-```
-**Evidence:** No absorb commit in Phase 95 touches exec_strategy_windows/launch.rs or network.rs — both diffs against the phase-base are empty. The ADR-86 D-03 carve-out (Windows denial rendering stays CLI-side, bridged via diagnostic_code()/remediation() at the NonoError level) is at the same location as when Phase 86 established it. Both bridge methods are present in crates/nono/src/error.rs at lines 383 and 452.
+| Artifact | Expected | Status | Details |
+|---------|---------|--------|---------|
+| `ci-logs-local/baseline-95/baseline-before-cherry-picks.txt` | D-04 baseline with 5 FAILED | VERIFIED | Exists; 95-01-SUMMARY confirms 5 failures captured pre-cherry-pick |
+| `crates/nono/src/sandbox/linux.rs` | AF_UNIX fix + arch-portable msghdr offsets + GPU enforcement intact | PARTIAL/STUB | AF_UNIX fix landed (ae77d198); msghdr hardcoded (WR-02); GPU deleted (WR-03) |
+| `crates/nono-proxy/src/config.rs` | evaluate() wired into request path | STUB | evaluate() defined but never called — zero callers workspace-wide |
+| `crates/nono-cli/src/exec_strategy.rs` | Post-fork child uses static byte strings (CR-01) | STUB | Lines 1411/1450 use format!() heap allocation |
+| `.planning/phases/95-upstream-absorb-fork-invariant-verify/95-VERIFICATION.md` | Fork-invariant checklist covering linux.rs regressions | MISSING | Prior self-verification did not examine linux.rs hunks; missed WR-02 and WR-03 |
 
 ---
 
-## SC4: Security-Relevant Will-Sync Commit Notes
+## Key Link Verification
 
-### Cluster A (9ce74e92) — AF_UNIX Mediation Deadlock Fix
-
-**Security relevance:** Fixes 4 bugs in AF_UNIX pathname mediation (deadlock, wrong jt offsets,
-rate-limiter starvation, dup2 bypass). BPF filter now installed AFTER IPC handshake; both filters
-are pure allowlists with no fd-based holes. This is a direct continuation of Phase 87 SEC-01 work.
-
-Bug specifics:
-1. Sendmsg deadlock — BPF filter trapped child's SCM_RIGHTS handshake for notify fd
-2. Wrong jt offsets — connect/bind/sendto/sendmmsg fell through to ALLOW instead of USER_NOTIF
-3. Rate-limiter starvation — TCP/UDP calls drained the burst bucket before AF_UNIX decisions
-4. dup2 bypass — IPC fd exemption allowed sandboxed process to dup2 an arbitrary socket
-
-**Windows equivalents intact?** YES — AF_UNIX mediation is Linux-only (uses Landlock + seccomp BPF,
-which are Linux kernel features). The fork's Windows path (exec_strategy_windows/) is NOT touched
-by this commit. The 94-DIVERGENCE-LEDGER.md records `windows-touch: no` for Cluster A.
-
-**Verification of Windows-equivalent preservation:**
-```
-git diff 449138a9 HEAD -- crates/nono-cli/src/exec_strategy_windows/
-(empty — confirms Windows path untouched by all Phase 95 absorbs)
-```
-
-**Proxy Cluster F guard (Phase 89 D-02 divergence sentinel):**
-```
-cargo test -p nono-cli -- proxy_activates_with_custom_credentials_only
-running 1 test
-test proxy_runtime::tests::proxy_activates_with_custom_credentials_only ... ok
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1381 filtered out; finished in 0.00s
-```
-
-The Phase 89 active predicate `|| !prepared.custom_credentials.is_empty()` at lines 95 and 118 of
-proxy_runtime.rs is intact. The guard test `proxy_activates_with_custom_credentials_only` with
-`assert!(opts.active)` passes — the Cluster C structural no-op (62dbf013) preserved the fork's
-fail-secure proxy activation divergence.
+| From | To | Via | Status | Details |
+|------|----|-----|--------|---------|
+| `ae77d198` (Cluster A) | git log | -x trailer + DCO | VERIFIED | Cherry-picked from commit 9ce74e92; Oscar Mack Jr DCO present |
+| `91d526e6` (Cluster B) | git log | upstream SHA in body + DCO | VERIFIED | "Cherry-picked from upstream nolabs-ai/nono 11fd10e0" in body |
+| `62dbf013` (Cluster C) | proxy_runtime.rs | !prepared.custom_credentials.is_empty() preserved | VERIFIED | Line 95 and 118 of proxy_runtime.rs intact |
+| `endpoint_policy` (route.rs) | reverse.rs request path | evaluate() call | NOT_WIRED | reverse.rs:96 calls endpoint_rules.is_allowed() — evaluate() never invoked |
+| `read_msghdr_dest` (linux.rs) | offset_of! derivation | compile-time layout proof | NOT_WIRED | Hardcoded const 12 replaces offset_of!; no compile-time assertions |
+| `caps.gpu()` (capability.rs) | linux.rs apply path | Landlock allowlist branch | NOT_WIRED | GPU branch deleted; --allow-gpu flag still accepted silently |
+| Post-fork error paths (exec_strategy.rs) | static byte string pattern | CR-01 invariant | NOT_WIRED | Lines 1411, 1450 use format!() contrary to established pattern |
 
 ---
 
-## PARTIAL → Phase 96 Deferral Record
+## Data-Flow Trace (Level 4)
 
-Cross-target clippy gate SKIPPED on Windows dev host due to missing cross C compiler toolchain
-(x86_64-unknown-linux-gnu, x86_64-apple-darwin). The following commits touch cfg-gated Unix code
-blocks requiring Phase 96 cross-target verification:
-
-| Commit | Files with #[cfg(unix/linux/macos)] blocks | Phase 96 verification required |
-|--------|--------------------------------------------|-------------------------------|
-| ae77d198 (Cluster A cherry-pick 9ce74e92) | crates/nono/src/sandbox/linux.rs, crates/nono-cli/src/exec_strategy/supervisor_linux.rs, crates/nono-cli/src/exec_strategy.rs (Linux/macOS cfg blocks) | cargo clippy --workspace --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used AND --target x86_64-apple-darwin |
-| 61689ef8 (Cluster A post-fix) | Same files: linux.rs let-chain rewrite, supervisor_linux.rs let-chain rewrite, exec_strategy.rs block structure fix | Same cross-target gates |
-| 91d526e6 (Cluster B shared-surface extraction) | crates/nono/src/sandbox/mod.rs (restrict_execute re-export, cfg(target_os = "linux") blocks), crates/nono/src/sandbox/linux.rs (via chain from Cluster A) | Same cross-target gates |
-
-Per CLAUDE.md § Cross-target clippy verification:
-> Any commit touching cfg-gated Unix code MUST be verified via `cargo clippy --workspace --target x86_64-unknown-linux-gnu` AND `--target x86_64-apple-darwin`. If the cross-toolchain is not installed, the related verification REQ MUST be marked PARTIAL and deferred to live CI.
-
-UPST10-02 marked PARTIAL pending Phase 96 XTGT verification. The live GitHub Actions Linux Clippy
-and macOS Clippy lanes on the HEAD SHA are the decisive signals.
-
-**Carry-forward PARTIAL→CI items from earlier phases (NOT resolved by Phase 95):**
-- SEC-01/SEC-02 AF_UNIX guards (v3.1 — Phase 87): Linux/macOS cfg-gated supervisor IPC code
-- ZTL-04 AWS_* strip (v3.2 — Phase 92/93): credential-stripping code in nono-py
-These remain Phase 96's resolution vehicle.
+| Artifact | Data Variable | Source | Produces Real Data | Status |
+|---------|--------------|--------|-------------------|--------|
+| `reverse.rs` request path | `endpoint_policy` | `CompiledEndpointPolicy::evaluate()` | No — never called | DISCONNECTED |
+| `linux.rs:read_msghdr_dest` | `MSGHDR_MIN_READ` | `core::mem::offset_of!` | No — hardcoded 12 | STATIC (fork-hardening reverted) |
+| `linux.rs` apply path | `caps.gpu()` | `collect_linux_gpu_paths()` | No — function deleted | DISCONNECTED |
 
 ---
 
-## Phase 95 Completion Gate Results (SC1–SC5)
+## Anti-Patterns Found
 
-### SC1 — All will-sync commits present in git log
+| File | Line | Pattern | Severity | Impact |
+|------|------|---------|---------|--------|
+| `crates/nono/src/sandbox/linux.rs` | 2427 | `const MSGHDR_MIN_READ: usize = 12` — hardcoded LP64 offset replacing offset_of! | BLOCKER | Security-critical: AF_UNIX sendmsg destination mediation reads wrong layout on non-LP64 targets; explicit fork hardening (WR-04) silently reverted |
+| `crates/nono/src/sandbox/linux.rs` | ~476 (deleted) | `collect_linux_gpu_paths` and `is_nvidia_compute_device` deleted; caps.gpu() branch deleted | BLOCKER | Silent feature regression: --allow-gpu accepted on Linux with zero Landlock enforcement; macOS still enforces |
+| `crates/nono-proxy/src/reverse.rs` | 96 | `endpoint_rules.is_allowed()` — endpoint_policy.evaluate() never called despite being operator-configurable | BLOCKER | Fail-open: configured deny rules silently not enforced on request path |
+| `crates/nono-cli/src/exec_strategy.rs` | 1411, 1450 | `format!(...)` in post-fork/pre-exec child | WARNING | Heap allocation in child after fork — can deadlock if allocator lock held at fork time; violates established CR-01 pattern |
+| `crates/nono/src/audit.rs` | 585, 591 | `#[cfg_attr(not(target_os = "linux"), allow(dead_code))]` on record_sandbox_runtime_event/record_command_policy_event | WARNING | Dead on Linux too; CLAUDE.md prohibits allow(dead_code) for unused code — add callers or remove until the consuming path lands |
+| `crates/nono/src/keystore.rs` | 862, 870 | `is_cmd_uri` / `validate_cmd_uri` have zero callers — validator not used where cmd:// refs are accepted | WARNING | load_secret_by_ref uses inline starts_with check, not validate_cmd_uri; validator's behavior unverified |
 
-```
-git log --oneline | grep "9ce74e92\|af_unix_mediation"
-ae77d198 fix(sandbox): exempt IPC fd from sendmsg trapping to resolve af_unix_mediation deadlock (#1210)
+---
 
-git log --format="%B" 449138a9..HEAD | grep "11fd10e0"
-(cherry picked from commit 11fd10e0...)
-[match found in 91d526e6 commit body]
+## Requirements Coverage
 
-git log --format="%B" 449138a9..HEAD | grep "9b37dc52"
-(9b37dc52 is a structural no-op in the fork)
-[match found in 62dbf013 commit body]
-```
+| Requirement | Phase | Description | Status | Evidence |
+|-------------|-------|------------|--------|---------|
+| UPST10-02 | Phase 95 | All will-sync clusters absorbed without regressing Windows security model | PARTIAL | Clusters A/B/C absorbed (commits present, DCO signed); but Cluster A cherry-pick introduced WR-02 (msghdr hardcoded) and WR-03 (GPU deleted) — fork-invariant regressions introduced, not just Windows model |
+| UPST10-03 | Phase 95 | Fork-divergent invariants explicitly preserved and verified | FAILED | Self-verification (95-04) produced PASS but did not examine linux.rs hunks changed by Cluster A. WR-02 and WR-03 are confirmed violations of fork invariants that this requirement is chartered to preserve |
 
-**Result:** SC1 PASS — all three upstream SHAs (9ce74e92 via cherry-pick trailer, 11fd10e0 and
-9b37dc52 via commit bodies) are referenced in the Phase 95 absorb commits.
+---
 
-### SC2 — No new test failures
+## Behavioral Spot-Checks
 
-D-04 baseline documented 5 known failures on Windows:
-- nono lib: try_set_mandatory_label (1)
-- nono-cli: profile_cmd init + 3 protected_paths (4)
+Step 7b: SKIPPED — no runnable entry points verifiable without a Linux environment. The key invariants are verified via static grep/diff analysis. Cross-target clippy is PARTIAL->CI per D-03 and Phase 96.
 
-Post-absorb: same 5 failures. No new failures introduced by Clusters A, B, or C.
-(Environmental flakiness: audit_session ENV_LOCK cascade documented in 95-02/95-03 SUMMARY — not a
-regression; audit_session.rs is unchanged by any absorb commit.)
+---
 
-**Result:** SC2 PASS
+## Probe Execution
 
-### SC3 — Fork-invariant checklist all PASS
+Step 7c: No probe-*.sh files declared or discovered for Phase 95.
 
-Invariants 1, 2, and 3 above all marked PASS with actual command outputs.
+---
 
-**Result:** SC3 PASS (3/3 invariants PASS)
+## What the Absorb DID Achieve (Confirmed)
 
-### SC4 — Security note for Cluster A documented
+These items are verified PASS and should NOT be re-opened in gap closure:
 
-AF_UNIX mediation deadlock fix security note with Windows-equivalent preservation evidence is
-documented in the SC4 section above. grep "AF_UNIX\|dup2\|9ce74e92" on this file will match.
+1. **Cluster A AF_UNIX deadlock fix landed** — ae77d198 is in git log with correct -x trailer and DCO. The BPF filter-install ordering fix, IPC handshake timing, and dup2 bypass closure all landed.
+2. **exec_strategy_windows/ byte-unchanged** — `git diff ed6cdde1..HEAD -- crates/nono-cli/src/exec_strategy_windows/` returns empty. Windows AppContainer/WFP/broker unaffected.
+3. **ADR-86 audit boundary intact** — records_verified: event_count > 0 at audit.rs:1570. DiagnosticFormatter in CLI-side diagnostic/. bindings/c/src/ untouched.
+4. **CR-02 invariant intact** — verify_empty_log_with_no_stored_metadata_is_not_valid test passing per self-verification.
+5. **Cluster B additive surface absorbed correctly** — SandboxRuntimeAuditEvent, CommandPolicyAuditEvent, restrict_execute, CMD_URI_PREFIX, SENSITIVE_ENV_VARS expansion, endpoint_policy field all present. Tool-sandbox dir and tls_intercept/ absent.
+6. **Cluster C Phase 89 invariant preserved** — proxy_activates_with_custom_credentials_only test at proxy_runtime.rs:503; || !prepared.custom_credentials.is_empty() at lines 95/118.
+7. **DIVERGENCE-LEDGER closed** — Clusters A/B/C marked absorbed per 95-04 bookkeeping.
 
-**Result:** SC4 PASS
+---
 
-### SC5 — No open will-sync rows in ledger
+## Gaps Summary
 
-94-DIVERGENCE-LEDGER.md Downstream routing block updated to mark Clusters A, B, C as ABSORBED.
-All Cluster A/B/C rows carry absorbed annotations. Cluster D remains won't-sync → Phase 97.
+Four gaps block the phase goal "absorb WITHOUT regressing any fork invariant":
 
-**Result:** SC5 PASS (after Task 2 ledger update)
+**WR-02 (BLOCKER):** The Cluster A cherry-pick conflict resolution silently reverted the WR-04 fork hardening in `read_msghdr_dest` (linux.rs:2427). The arch-portable `offset_of!` derivation was replaced with hardcoded `12`, compile-time assertions deleted, and `#[must_use]` stripped from both `read_msghdr_dest` and `read_mmsghdr_dests`. This is a security-critical path (AF_UNIX sendmsg destination mediation). The self-verification (95-04) only checked exec_strategy_windows/ and the ADR-86 boundary — it never ran `git diff ed6cdde1..HEAD -- crates/nono/src/sandbox/linux.rs` and compared the msghdr handling.
+
+**WR-03 (BLOCKER):** The same Cluster A cherry-pick deleted the entire Linux GPU-path enforcement (`collect_linux_gpu_paths`, `is_nvidia_compute_device`, `caps.gpu()` Landlock branch). The `--allow-gpu` flag, `gpu()` capability, and macOS enforcement all remain — creating a silent fail-open where `nono run --allow-gpu` on Linux accepts the flag but applies zero Landlock rules for GPU devices.
+
+**CR-01 (BLOCKER):** The Cluster B absorb added `CompiledEndpointPolicy` to `RouteConfig` as a live operator-configurable field, but `evaluate()` is never called on the request path. `reverse.rs:96` still uses the legacy `endpoint_rules.is_allowed()`. An operator who configures `endpoint_policy.deny` rules gets them silently ignored — a fail-open in a security proxy.
+
+**WR-01 (WARNING):** Two new error paths in the post-fork/pre-exec child (exec_strategy.rs:1411, :1450) use `format!()` for heap allocation, contradicting the explicit CR-01 static-byte-string pattern established in adjacent code. This is an error-path-only issue but can deadlock if the allocator lock was held at fork time.
+
+Root cause common to WR-02 and WR-03: the conflict resolution for the Cluster A cherry-pick in linux.rs accepted the upstream version of the conflicting sections, which did not have the fork's WR-04 hardening or GPU enforcement (those were fork-only additions absent in upstream). The executor resolved conflicts by "accepting upstream" without checking whether upstream's version was MISSING fork-only invariants.
+
+Gap closure scope: WR-02 and WR-03 require restoring fork-specific linux.rs code that was lost in the conflict resolution. CR-01 requires either wiring endpoint_policy into the request path or adding a load-time guard that rejects configs using it. WR-01 requires replacing two format!() calls with static byte strings.
+
+---
+
+## Human Verification Required
+
+None — all findings are statically verifiable via grep/diff. Cross-target clippy remains PARTIAL->CI per D-03 (deferred to Phase 96 by design).
+
+---
+
+_Verified: 2026-06-26_
+_Verifier: Claude (gsd-verifier) — external verification, adversarial stance_
