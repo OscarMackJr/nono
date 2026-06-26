@@ -446,17 +446,26 @@ pub(super) fn handle_seccomp_notification(
         None
     };
 
-    // 8. Delegate to approval backend (for both instruction and non-instruction files)
-    let request = nono::supervisor::ApprovalRequest::Capability {
+    // 8. Delegate to approval backend (for both instruction and non-instruction files).
+    // Phase-11-shaped (file path) CapabilityRequest: path-based dispatch, no AIPC
+    // handle target. `path` is the deprecated-but-required backward-compat field
+    // (see CapabilityRequest docs); the narrow `allow(deprecated)` is the
+    // API-sanctioned construction pattern, mirroring terminal_approval.rs.
+    #[allow(deprecated)]
+    let request = nono::CapabilityRequest {
         request_id: format!("seccomp-{}", unique_request_id()),
         path: path.clone(),
         access,
         reason: Some("Sandbox intercepted file operation (seccomp-notify)".to_string()),
         child_pid: child.as_raw() as u32,
         session_id: config.session_id.to_string(),
+        session_token: String::new(),
+        kind: nono::supervisor::types::HandleKind::File,
+        target: None,
+        access_mask: 0,
     };
 
-    let decision = match config.approval_backend.request_approval(&request) {
+    let decision = match config.approval_backend.request_capability(&request) {
         Ok(d) => {
             if d.is_denied() {
                 record_denial(
@@ -493,7 +502,7 @@ pub(super) fn handle_seccomp_notification(
 
     // 10. Act on the decision
     // Pass verified_digest to enable TOCTOU re-verification for instruction files
-    if decision.is_granted() {
+    if decision.is_approved() {
         match open_path_for_access(
             &path,
             &access,
@@ -1142,24 +1151,7 @@ fn record_network_audit_denial(
         managed_credential_active: None,
         injection_mode: None,
         denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
-        endpoint_policy_action: None,
-        endpoint_policy_rule: None,
-        approval_backend: None,
-        credential_capture_action: None,
-        credential_capture_name: None,
-        credential_capture_command: None,
-        credential_capture_argv: None,
-        credential_capture_exit_status: None,
-        credential_capture_duration_ms: None,
-        credential_capture_stdout_bytes: None,
-        credential_capture_stderr: None,
-        credential_capture_cache_scope: None,
-        credential_capture_output_format: None,
-        credential_capture_header_names: None,
-        credential_capture_stdin_mode: None,
-        credential_capture_interactive: None,
         target,
-        upstream: None,
         port: if sockaddr.port == 0 {
             None
         } else {
@@ -2023,6 +2015,730 @@ mod tests {
                 decide_network_notification(test_pid(), SYS_SENDTO, &inet_external(8080), &config),
                 NetworkDecision::Allow,
                 "AF_UNIX-only mode must allow non-AF_UNIX sendto"
+            );
+        }
+    }
+}
+
+pub(super) mod cgroup {
+    use crate::launch_runtime::ResourceLimits;
+    use nono::{NonoError, Result, CGROUP_V2_HINT};
+    use std::io;
+    use std::path::PathBuf;
+    use tracing::warn;
+
+    /// RAII guard for a cgroup v2 session.
+    ///
+    /// Creates and manages a cgroup for a sandboxed process tree. On drop, removes
+    /// the cgroup directory unconditionally (panic-safe cleanup).
+    ///
+    /// # RAII Guarantee
+    ///
+    /// The cgroup directory is removed when this struct is dropped, regardless of
+    /// whether the session completed successfully or panicked. This prevents leftover
+    /// cgroup directories that would waste kernel resources.
+    pub(crate) struct CgroupSession {
+        /// Absolute path to the nono-<session-id> cgroup directory.
+        pub(crate) path: PathBuf,
+        /// Resource limits to apply (stored for `apply_limits`).
+        pub(crate) limits: ResourceLimits,
+    }
+
+    impl CgroupSession {
+        /// Parse a `/proc/self/cgroup` contents string and extract the delegated cgroup path.
+        ///
+        /// # cgroup v2 format
+        ///
+        /// A pure cgroup v2 system produces exactly ONE line:
+        /// ```text
+        /// 0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-foo.scope
+        /// ```
+        ///
+        /// A cgroup v1 or hybrid system produces multiple lines (one per hierarchy) or
+        /// lines with a non-zero hierarchy ID. Both cases cause a fail-fast error.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err(NonoError::UnsupportedKernelFeature { .. })` (with the
+        /// LOCKED `cgroup_no_v1=all` boot-flag hint per Phase 37 D-07) when:
+        /// - The contents are empty
+        /// - There are multiple lines (cgroup v1 or hybrid mode)
+        /// - The single line does not start with `0::` (not pure cgroup v2)
+        ///
+        /// Returns `Err(NonoError::UnsupportedPlatform(...))` only for the
+        /// path-traversal guard below (kernel is fine; /proc content is
+        /// malformed/malicious — the boot-flag hint would mislead the user).
+        pub(crate) fn detect_from_str(contents: &str) -> Result<PathBuf> {
+            let trimmed = contents.trim();
+            if trimmed.is_empty() {
+                // Phase 37 D-05 / D-07 site 1: empty /proc/self/cgroup is a
+                // kernel-misconfig signal (cgroup-v1 host or no delegation).
+                return Err(NonoError::UnsupportedKernelFeature {
+                    feature: "cgroup_v2".into(),
+                    hint: CGROUP_V2_HINT.into(),
+                });
+            }
+            let mut lines = trimmed.lines();
+            let first = lines.next().unwrap_or("");
+            if lines.next().is_some() {
+                // Phase 37 D-05 / D-07 site 2: multi-line content = cgroup v1
+                // or hybrid mode; pure v2 emits exactly one line.
+                return Err(NonoError::UnsupportedKernelFeature {
+                    feature: "cgroup_v2".into(),
+                    hint: CGROUP_V2_HINT.into(),
+                });
+            }
+            // Pure cgroup v2 has exactly one line starting with "0::"
+            let cgroup_rel = first.strip_prefix("0::").ok_or_else(|| {
+                // Phase 37 D-05 / D-07 site 3: missing `0::` prefix = cgroup v1
+                // or hybrid mode (still a kernel-misconfig signal).
+                NonoError::UnsupportedKernelFeature {
+                    feature: "cgroup_v2".into(),
+                    hint: CGROUP_V2_HINT.into(),
+                }
+            })?;
+            let abs_path = PathBuf::from("/sys/fs/cgroup")
+                .join(cgroup_rel.trim_start_matches('/').trim_end_matches('/'));
+            // WR-03: Validate the constructed path stays within /sys/fs/cgroup.
+            //
+            // We perform two complementary component-level checks (NOT string
+            // operations) per CLAUDE.md § Path Handling:
+            //
+            //   1. `Path::starts_with("/sys/fs/cgroup")` rejects entries that, after
+            //      `trim_start_matches('/')`, somehow produce a path that does not
+            //      have `/sys/fs/cgroup` as a component prefix. Note that this check
+            //      alone is NOT sufficient to catch `..` traversal because
+            //      `Path::starts_with` does not normalize parent-dir references —
+            //      `/sys/fs/cgroup/../../etc` has the components `[/, sys, fs,
+            //      cgroup, .., .., etc]` and DOES start with `/sys/fs/cgroup`.
+            //
+            //   2. We additionally reject any path containing a `Component::ParentDir`
+            //      (`..`). A well-formed cgroup-v2 delegated path from
+            //      `/proc/self/cgroup` never contains `..`; its presence indicates a
+            //      malicious or compromised /proc entry attempting to redirect path
+            //      construction outside `/sys/fs/cgroup` (e.g., `0::/../../etc`).
+            //
+            // Both checks fail closed with `NonoError::UnsupportedPlatform`
+            // (Phase 37 D-07: KEEP — this site is /proc-tampering, not kernel misconfig).
+            use std::path::Component;
+            if !abs_path.starts_with("/sys/fs/cgroup")
+                || abs_path
+                    .components()
+                    .any(|c| matches!(c, Component::ParentDir))
+            {
+                // Phase 37 D-07: KEEP as UnsupportedPlatform — /proc tampering, not kernel misconfig.
+                // The cgroup_no_v1=all boot-flag hint would mislead the user here because the
+                // kernel is fine — /proc/self/cgroup content is malformed/malicious. This is the
+                // 1-of-5 detection site intentionally NOT swapped to UnsupportedKernelFeature.
+                return Err(NonoError::UnsupportedPlatform(format!(
+                    "cgroup_v2: constructed cgroup path {abs_path:?} escapes /sys/fs/cgroup \
+                     (path traversal detected in /proc/self/cgroup content)"
+                )));
+            }
+            Ok(abs_path)
+        }
+
+        /// Detect the systemd-delegated cgroup v2 path for the current process.
+        ///
+        /// Reads `/proc/self/cgroup`, validates it is pure cgroup v2, and returns
+        /// the absolute path to the delegated cgroup directory under `/sys/fs/cgroup`.
+        ///
+        /// # Fail-fast guarantee
+        ///
+        /// If the system is not running pure cgroup v2 with systemd delegation,
+        /// returns `Err(NonoError::UnsupportedKernelFeature { feature: "cgroup_v2", hint })`
+        /// (Phase 37 D-05) BEFORE any child is spawned. This is the enforcement point
+        /// for REQ-RESL-NIX-01 acceptance criterion 5. The path-traversal guard inside
+        /// `detect_from_str` is the one exception that still returns
+        /// `NonoError::UnsupportedPlatform(...)` (Phase 37 D-07).
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err` if:
+        /// - `/proc/self/cgroup` cannot be read
+        /// - The contents indicate cgroup v1 or hybrid mode
+        /// - The resolved path does not exist as a directory
+        pub(crate) fn detect() -> Result<PathBuf> {
+            // Phase 37 D-05 / D-07 site 5a: failure to read /proc/self/cgroup is
+            // treated as a kernel-misconfig signal (no /proc, no procfs mount,
+            // or v1 host without cgroup-v2 controller).
+            let contents = std::fs::read_to_string("/proc/self/cgroup").map_err(|_e| {
+                NonoError::UnsupportedKernelFeature {
+                    feature: "cgroup_v2".into(),
+                    hint: CGROUP_V2_HINT.into(),
+                }
+            })?;
+            let delegated = Self::detect_from_str(&contents)?;
+            // Verify the resolved path is an accessible directory.
+            // Phase 37 D-05 / D-07 sites 5b + 5c: missing/non-directory delegated
+            // cgroup path is treated as kernel-misconfig (v2 unified hierarchy
+            // not mounted or delegation not granted by systemd).
+            match std::fs::metadata(&delegated) {
+                Ok(m) if m.is_dir() => Ok(delegated),
+                Ok(_) => Err(NonoError::UnsupportedKernelFeature {
+                    feature: "cgroup_v2".into(),
+                    hint: CGROUP_V2_HINT.into(),
+                }),
+                Err(_e) => Err(NonoError::UnsupportedKernelFeature {
+                    feature: "cgroup_v2".into(),
+                    hint: CGROUP_V2_HINT.into(),
+                }),
+            }
+        }
+
+        /// Create a new cgroup session for the given session ID and resource limits.
+        ///
+        /// # Steps
+        ///
+        /// 1. Calls `detect()` to locate the delegated cgroup.
+        /// 2. Enables `+memory +cpu +pids` in the parent's `cgroup.subtree_control`
+        ///    (read-modify-write to avoid clobbering existing controllers).
+        /// 3. Creates `<delegated>/nono-<session-id>/` — fails fast on `EEXIST`
+        ///    (duplicate session ID is a bug, not a retry target).
+        /// 4. Stores the path and limits for later use.
+        ///
+        /// # Errors
+        ///
+        /// - `UnsupportedKernelFeature { feature: "cgroup_v2", .. }`: cgroup v2
+        ///   not available (see `detect()`; Phase 37 D-05). The path-traversal
+        ///   guard inside `detect_from_str` still surfaces `UnsupportedPlatform`
+        ///   per Phase 37 D-07.
+        /// - `SandboxInit`: controller enablement or directory creation failed.
+        pub(crate) fn new(session_id: &str, limits: &ResourceLimits) -> Result<Self> {
+            let delegated = Self::detect()?;
+            // Enable required controllers in the PARENT's cgroup.subtree_control.
+            // Per cgroup v2 docs: controllers must be enabled in the parent cgroup
+            // before child cgroups can use them.
+            let subtree_control = delegated.join("cgroup.subtree_control");
+            // Read existing controllers; if the file is unreadable treat as empty
+            // (some delegated cgroups may not have subtree_control initially).
+            let current_controllers = std::fs::read_to_string(&subtree_control).unwrap_or_default();
+            // Build the write string: only add controllers not already present.
+            let mut additions = String::new();
+            for controller in &["memory", "cpu", "pids"] {
+                if !current_controllers.contains(controller) {
+                    if !additions.is_empty() {
+                        additions.push(' ');
+                    }
+                    additions.push('+');
+                    additions.push_str(controller);
+                }
+            }
+            if !additions.is_empty() {
+                std::fs::write(&subtree_control, &additions).map_err(|e| {
+                    let cgroup_contents =
+                        std::fs::read_to_string("/proc/self/cgroup").unwrap_or_default();
+                    NonoError::SandboxInit(format!(
+                        "cgroup_v2: failed to enable controllers ({additions}) in \
+                         {subtree_control:?}: {e}\n\
+                         /proc/self/cgroup: {cgroup_contents}"
+                    ))
+                })?;
+            }
+            // Construct the child cgroup path: <delegated>/nono-<session-id>/
+            let child_name = format!("nono-{session_id}");
+            let child_path = delegated.join(&child_name);
+            // Fail fast on EEXIST: reusing leftover state is a security bug.
+            if let Err(e) = std::fs::create_dir(&child_path) {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    return Err(NonoError::SandboxInit(format!(
+                        "cgroup_v2: cgroup directory {child_path:?} already exists \
+                         (duplicate session ID '{session_id}' — leftover state from a \
+                         previous crash?). Remove it manually: rmdir {child_path:?}"
+                    )));
+                }
+                return Err(NonoError::SandboxInit(format!(
+                    "cgroup_v2: failed to create cgroup directory {child_path:?}: {e}"
+                )));
+            }
+            Ok(Self {
+                path: child_path,
+                limits: limits.clone(),
+            })
+        }
+
+        /// Apply resource limits to the cgroup pseudo-files.
+        ///
+        /// # Limit-to-file mapping
+        ///
+        /// | ResourceLimits field | Kernel file   | Format                     |
+        /// |----------------------|---------------|----------------------------|
+        /// | `memory_bytes`       | `memory.max`  | decimal bytes + newline    |
+        /// | `cpu_percent`        | `cpu.max`     | `<quota> <period>\n`       |
+        /// | `max_processes`      | `pids.max`    | decimal count + newline    |
+        /// | `timeout`            | (not here)    | Task 5 watchdog handles it |
+        ///
+        /// # cpu.max format
+        ///
+        /// `<quota> <period>` where period = 100000 µs (100ms) and quota = percent * period / 100.
+        /// Example: `--cpu-percent 50` → `"50000 100000\n"`.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err(NonoError::SandboxInit(...))` naming the failing limit and the kernel error.
+        pub(crate) fn apply_limits(&self) -> Result<()> {
+            if let Some(bytes) = self.limits.memory_bytes {
+                let content = format!("{bytes}\n");
+                std::fs::write(self.path.join("memory.max"), &content).map_err(|e| {
+                    NonoError::SandboxInit(format!(
+                        "cgroup_v2: failed to write memory.max ({bytes} bytes) to {:?}: {e}",
+                        self.path
+                    ))
+                })?;
+            }
+            if let Some(percent) = self.limits.cpu_percent {
+                const PERIOD: u64 = 100_000; // 100ms in µs
+                let quota = (percent as u64)
+                    .checked_mul(PERIOD)
+                    .map(|q| q / 100)
+                    .ok_or_else(|| {
+                        NonoError::SandboxInit(format!(
+                            "cgroup_v2: cpu_percent {percent} * {PERIOD} overflows u64"
+                        ))
+                    })?;
+                let content = format!("{quota} {PERIOD}\n");
+                std::fs::write(self.path.join("cpu.max"), &content).map_err(|e| {
+                    NonoError::SandboxInit(format!(
+                        "cgroup_v2: failed to write cpu.max ({content:?}) to {:?}: {e}",
+                        self.path
+                    ))
+                })?;
+            }
+            if let Some(n) = self.limits.max_processes {
+                let content = format!("{n}\n");
+                std::fs::write(self.path.join("pids.max"), &content).map_err(|e| {
+                    NonoError::SandboxInit(format!(
+                        "cgroup_v2: failed to write pids.max ({n}) to {:?}: {e}",
+                        self.path
+                    ))
+                })?;
+            }
+            Ok(())
+        }
+
+        /// Install a `pre_exec` hook on `cmd` that places the child PID in this cgroup.
+        ///
+        /// The hook runs in the forked child, post-fork pre-exec (before `execve`),
+        /// writing the child's own PID to `<self.path>/cgroup.procs`.
+        ///
+        /// # Race window
+        ///
+        /// Between `fork()` returning in the parent and this `pre_exec` hook running
+        /// in the child, the child is a Rust runtime stub with NO user code running —
+        /// kernel scheduler latency only. The parent has ALREADY called `apply_limits`
+        /// BEFORE fork, so the cgroup is fully configured when the child enters it.
+        ///
+        /// # SAFETY
+        ///
+        /// The closure passed to `pre_exec` runs in the forked child in a
+        /// async-signal-unsafe context (memory model: single-threaded, but
+        /// allocator may be in an inconsistent state from the parent's state at
+        /// fork time). Therefore:
+        ///
+        /// - Only raw libc syscalls are used: `libc::getpid`, `libc::open`,
+        ///   `libc::write`, `libc::close`. These are all async-signal-safe.
+        /// - PID is formatted into a stack-allocated `[u8; 20]` buffer (no
+        ///   `format!` macro, no heap allocation).
+        /// - The cgroup.procs path is pre-computed into a `Vec<u8>` in the parent
+        ///   (before fork, where allocation is safe) and moved into the closure
+        ///   as an owned value.
+        pub(crate) fn install_pre_exec(&self, cmd: &mut std::process::Command) {
+            use std::os::unix::process::CommandExt;
+            // Build the cgroup.procs path as bytes in the parent (before fork, allocation OK).
+            let procs_path = self.procs_path_nul();
+
+            // SAFETY: This closure runs in the forked child, post-fork pre-exec.
+            // `place_self_in_cgroup_raw` uses only async-signal-safe libc calls
+            // (getpid, open, write, close). No Rust allocator, no Mutex.
+            // The procs_path Vec is moved in by value (heap allocation happened
+            // in the parent before fork).
+            //
+            // Race window: between fork() returning in the parent and this pre_exec
+            // running in the child, the child is a Rust runtime stub with no user
+            // code. The parent MUST call apply_limits() before fork so the cgroup
+            // is fully configured.
+            unsafe {
+                cmd.pre_exec(move || -> std::io::Result<()> {
+                    CgroupSession::place_self_in_cgroup_raw(&procs_path)
+                });
+            }
+        }
+
+        /// Place the calling process (child after fork, before execve) in this cgroup.
+        ///
+        /// This is the async-signal-safe equivalent of `install_pre_exec` for use in
+        /// the supervised execution path where raw `fork()` + `execve()` is used
+        /// instead of `std::process::Command`. Must be called in the forked child,
+        /// after `fork()` returns but before `execve()`.
+        ///
+        /// # SAFETY
+        ///
+        /// Called in the forked child, post-fork pre-exec. Uses only raw libc calls
+        /// (async-signal-safe). No Rust allocator, no Mutex.
+        ///
+        /// Returns `Ok(())` on success, `Err(io::Error)` on failure. The caller
+        /// in the child branch should convert this to a libc write + `_exit(126)`.
+        pub(crate) fn place_self_in_cgroup_raw(procs_path_nul: &[u8]) -> std::io::Result<()> {
+            // SAFETY: we are in the forked child, post-fork pre-exec.
+            // getpid, open, write, close are all async-signal-safe per POSIX.
+            unsafe {
+                use nix::libc;
+                let pid = libc::getpid();
+                // Format PID + '\n' into a stack buffer (no allocation).
+                let mut buf = [0u8; 21];
+                buf[20] = b'\n';
+                let mut n = pid as u64;
+                let mut idx = 20usize;
+                if n == 0 {
+                    idx -= 1;
+                    buf[idx] = b'0';
+                } else {
+                    while n > 0 {
+                        idx -= 1;
+                        buf[idx] = b'0' + (n % 10) as u8;
+                        n /= 10;
+                    }
+                }
+                let pid_bytes = &buf[idx..];
+                let fd = libc::open(
+                    procs_path_nul.as_ptr().cast::<libc::c_char>(),
+                    libc::O_WRONLY | libc::O_CLOEXEC,
+                );
+                if fd < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let written = libc::write(
+                    fd,
+                    pid_bytes.as_ptr().cast::<libc::c_void>(),
+                    pid_bytes.len(),
+                );
+                libc::close(fd);
+                if written < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        }
+
+        /// Build the null-terminated cgroup.procs path bytes for use in `place_self_in_cgroup_raw`.
+        ///
+        /// Returns a `Vec<u8>` with a trailing `\0` byte, suitable for passing to
+        /// `libc::open`. This must be pre-computed in the PARENT before fork (where
+        /// Rust allocation is safe).
+        pub(crate) fn procs_path_nul(&self) -> Vec<u8> {
+            use std::os::unix::ffi::OsStrExt;
+            let mut v: Vec<u8> = self.path.as_os_str().as_bytes().to_vec();
+            v.extend_from_slice(b"/cgroup.procs\0");
+            v
+        }
+
+        /// Atomically kill all processes in this cgroup tree by writing `1\n` to
+        /// `<self.path>/cgroup.kill`.
+        ///
+        /// The kernel delivers SIGKILL to every process in the cgroup and all
+        /// descendant cgroups simultaneously. This is the correct mechanism for
+        /// timeout enforcement (REQ-RESL-NIX-02) because it avoids any race window
+        /// between identifying child PIDs and sending signals.
+        ///
+        /// # Errors
+        ///
+        /// Returns `Err(NonoError::SandboxInit(...))` if the write fails. On a
+        /// session that has already been cleaned up, this will fail with ENOENT —
+        /// callers should treat that as a no-op (the cgroup is already gone).
+        #[cfg(test)]
+        pub(crate) fn kill_all(&self) -> Result<()> {
+            let kill_path = self.path.join("cgroup.kill");
+            std::fs::write(&kill_path, "1\n").map_err(|e| {
+                NonoError::SandboxInit(format!("cgroup_v2: failed to write to {kill_path:?}: {e}"))
+            })
+        }
+    }
+
+    impl Drop for CgroupSession {
+        fn drop(&mut self) {
+            // Check for surviving processes (should be empty after cgroup.kill).
+            let procs_path = self.path.join("cgroup.procs");
+            if let Ok(contents) = std::fs::read_to_string(&procs_path) {
+                let surviving = contents.trim();
+                if !surviving.is_empty() {
+                    warn!(
+                        "cgroup_v2: Drop: {} still has processes: [{}] — \
+                         supervisor bug (cgroup.kill should have cleared them)",
+                        self.path.display(),
+                        surviving.lines().collect::<Vec<_>>().join(", ")
+                    );
+                }
+            }
+            // Remove the cgroup directory. Errors are logged but not propagated
+            // (Drop cannot return Result).
+            if let Err(e) = std::fs::remove_dir(&self.path) {
+                warn!(
+                    "cgroup_v2: Drop: failed to remove cgroup directory {:?}: {e}",
+                    self.path
+                );
+            }
+        }
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    #[allow(clippy::unwrap_used)]
+    mod tests {
+        use super::*;
+
+        // ── detect_from_str unit tests ───────────────────────────────────────────
+
+        #[test]
+        fn detect_from_str_valid_cgroup_v2() {
+            let contents =
+                "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-foo.scope\n";
+            let path = CgroupSession::detect_from_str(contents).unwrap();
+            assert_eq!(
+                path,
+                std::path::PathBuf::from(
+                    "/sys/fs/cgroup/user.slice/user-1000.slice/\
+                     user@1000.service/app.slice/app-foo.scope"
+                )
+            );
+        }
+
+        #[test]
+        fn detect_from_str_cgroup_v1_rejected() {
+            // Phase 37 D-05 / D-07: missing `0::` prefix on a v1 host now
+            // returns the typed UnsupportedKernelFeature variant.
+            let contents = "1:cpu:/foo\n";
+            let err = CgroupSession::detect_from_str(contents).unwrap_err();
+            assert!(
+                matches!(err, NonoError::UnsupportedKernelFeature { .. }),
+                "expected UnsupportedKernelFeature, got: {err:?}"
+            );
+        }
+
+        #[test]
+        fn detect_from_str_hybrid_rejected() {
+            // Phase 37 D-05 / D-07: hybrid (multi-line) content now returns
+            // the typed UnsupportedKernelFeature variant.
+            let contents = "0::/user.slice/foo\n1:cpu:/foo\n";
+            let err = CgroupSession::detect_from_str(contents).unwrap_err();
+            assert!(
+                matches!(err, NonoError::UnsupportedKernelFeature { .. }),
+                "expected UnsupportedKernelFeature, got: {err:?}"
+            );
+        }
+
+        #[test]
+        fn detect_from_str_empty_rejected() {
+            // Phase 37 D-05 / D-07: empty /proc/self/cgroup now returns the
+            // typed UnsupportedKernelFeature variant.
+            let err = CgroupSession::detect_from_str("").unwrap_err();
+            assert!(
+                matches!(err, NonoError::UnsupportedKernelFeature { .. }),
+                "expected UnsupportedKernelFeature, got: {err:?}"
+            );
+        }
+
+        // ── WR-03 traversal-guard regression tests ──────────────────────────────
+        //
+        // These tests defend the fix for code-review finding WR-03: a malicious
+        // /proc/self/cgroup entry containing `..` components could redirect the
+        // path-construction in `detect_from_str` outside `/sys/fs/cgroup`. The
+        // production fix uses `Path::starts_with("/sys/fs/cgroup")` (component-
+        // level comparison, NOT string `starts_with`) per CLAUDE.md § Path Handling.
+
+        #[test]
+        fn cgroup_path_rejects_parent_dir_traversal() {
+            // Attacker-controlled /proc/self/cgroup with .. to escape /sys/fs/cgroup.
+            let err = CgroupSession::detect_from_str("0::/../../etc")
+                .expect_err("must reject path traversal");
+            match err {
+                NonoError::UnsupportedPlatform(msg) => {
+                    assert!(
+                        msg.contains("path traversal") || msg.contains("escapes"),
+                        "error message must mention traversal, got: {msg}"
+                    );
+                }
+                other => panic!("expected UnsupportedPlatform, got: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn cgroup_path_rejects_encoded_traversal() {
+            // Variant: leading ../ after trim_start_matches strips the slash.
+            let err = CgroupSession::detect_from_str("0::/../../../proc/self")
+                .expect_err("must reject path traversal with leading slash");
+            assert!(matches!(err, NonoError::UnsupportedPlatform(_)));
+        }
+
+        #[test]
+        fn cgroup_path_accepts_normal_path() {
+            // Normal systemd-delegated cgroup path must still construct successfully.
+            // detect_from_str does NOT check filesystem existence — that is detect()'s job.
+            let path =
+                CgroupSession::detect_from_str("0::/user.slice/user-1000.slice/session-1.scope")
+                    .expect("normal cgroup path must be accepted");
+            assert!(
+                path.starts_with("/sys/fs/cgroup"),
+                "path must be under /sys/fs/cgroup, got: {path:?}"
+            );
+        }
+
+        /// Helper: attempt to create a real cgroup session. Returns None and
+        /// prints a skip message if cgroup v2 delegation is not available.
+        fn try_cgroup_session(session_id: &str) -> Option<CgroupSession> {
+            let limits = ResourceLimits {
+                memory_bytes: Some(256 * 1024 * 1024),
+                cpu_percent: Some(50),
+                max_processes: Some(10),
+                timeout: None,
+            };
+            match CgroupSession::new(session_id, &limits) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    eprintln!("skipping: no cgroup v2 delegation ({e})");
+                    None
+                }
+            }
+        }
+
+        #[test]
+        fn cgroup_session_lifecycle() {
+            let Some(session) = try_cgroup_session("test-lifecycle-001") else {
+                return;
+            };
+            let path = session.path.clone();
+            assert!(path.is_dir(), "cgroup directory must exist after creation");
+            drop(session);
+            assert!(
+                !path.exists(),
+                "cgroup directory must be removed after Drop"
+            );
+        }
+
+        #[test]
+        fn cgroup_session_apply_limits() -> std::result::Result<(), Box<dyn std::error::Error>> {
+            let Some(session) = try_cgroup_session("test-apply-001") else {
+                return Ok(());
+            };
+            session.apply_limits()?;
+            let memory_max = std::fs::read_to_string(session.path.join("memory.max"))?;
+            assert_eq!(
+                memory_max.trim(),
+                "268435456",
+                "memory.max should be 256*1024*1024 bytes"
+            );
+            let cpu_max = std::fs::read_to_string(session.path.join("cpu.max"))?;
+            assert_eq!(
+                cpu_max.trim(),
+                "50000 100000",
+                "cpu.max should be quota=50000 period=100000"
+            );
+            let pids_max = std::fs::read_to_string(session.path.join("pids.max"))?;
+            assert_eq!(pids_max.trim(), "10", "pids.max should be 10");
+            Ok(())
+        }
+
+        #[test]
+        fn cgroup_session_pre_exec_places_pid(
+        ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            let Some(session) = try_cgroup_session("test-pre-exec-001") else {
+                return Ok(());
+            };
+            session.apply_limits()?;
+            let mut cmd = std::process::Command::new("sleep");
+            cmd.arg("5");
+            session.install_pre_exec(&mut cmd);
+            let mut child = cmd.spawn()?;
+            let child_pid = child.id();
+            // Poll cgroup.procs for up to 500ms for the PID to appear.
+            let procs_path = session.path.join("cgroup.procs");
+            let found = (0..50).any(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::fs::read_to_string(&procs_path)
+                    .map(|c| c.lines().any(|l| l.trim() == child_pid.to_string()))
+                    .unwrap_or(false)
+            });
+            // Kill the child and reap regardless of assertion result —
+            // closes clippy::zombie_processes by waiting on the Child handle.
+            let _ = session.kill_all();
+            let _ = child.kill();
+            let _ = child.wait();
+            assert!(
+                found,
+                "child PID {child_pid} should appear in cgroup.procs within 500ms"
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn cgroup_kill_terminates_grandchildren(
+        ) -> std::result::Result<(), Box<dyn std::error::Error>> {
+            let Some(session) = try_cgroup_session("test-kill-001") else {
+                return Ok(());
+            };
+            session.apply_limits()?;
+            let mut cmd = std::process::Command::new("bash");
+            cmd.args(["-c", "for i in 1 2 3; do sleep 60 & done; wait"]);
+            session.install_pre_exec(&mut cmd);
+            let mut child = cmd.spawn()?;
+            // Give bash time to fork the sleep children.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            session.kill_all()?;
+            let result = child.wait()?;
+            assert!(
+                !result.success(),
+                "bash should have been killed (non-zero exit)"
+            );
+            Ok(())
+        }
+    }
+
+    /// Phase 37 D-05 / D-07 swap tests: 4-of-5 cgroup-v2 detection sites now
+    /// emit `NonoError::UnsupportedKernelFeature` with the LOCKED
+    /// `cgroup_no_v1=all` boot-flag hint. Site 4 (path-traversal guard)
+    /// INTENTIONALLY remains `UnsupportedPlatform` per D-07 (kernel is fine;
+    /// /proc content is malformed — boot flag would mislead the user).
+    #[cfg(all(test, target_os = "linux"))]
+    #[allow(clippy::unwrap_used)]
+    mod unsupported_kernel_feature_swap_tests {
+        use super::*;
+
+        const LOCKED_HINT_SUBSTR: &str = "cgroup_no_v1=all";
+
+        #[test]
+        fn detect_from_str_empty_returns_unsupported_kernel_feature() {
+            let err = CgroupSession::detect_from_str("").unwrap_err();
+            match err {
+                NonoError::UnsupportedKernelFeature { feature, hint } => {
+                    assert_eq!(feature, "cgroup_v2");
+                    assert!(
+                        hint.contains(LOCKED_HINT_SUBSTR),
+                        "hint must contain LOCKED substring; got: {hint}"
+                    );
+                }
+                other => panic!("expected UnsupportedKernelFeature; got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn detect_from_str_v1_multiline_returns_unsupported_kernel_feature() {
+            let err = CgroupSession::detect_from_str("11:cpu:/\n10:memory:/\n").unwrap_err();
+            assert!(matches!(err, NonoError::UnsupportedKernelFeature { .. }));
+        }
+
+        #[test]
+        fn detect_from_str_missing_zero_prefix_returns_unsupported_kernel_feature() {
+            let err = CgroupSession::detect_from_str("1::/some/path").unwrap_err();
+            assert!(matches!(err, NonoError::UnsupportedKernelFeature { .. }));
+        }
+
+        #[test]
+        fn detect_from_str_path_traversal_returns_unsupported_platform_not_kernel_feature() {
+            // Phase 37 D-07: site 4 INTENTIONALLY kept as UnsupportedPlatform.
+            // The kernel is fine; /proc/self/cgroup content is malformed
+            // (or malicious), so the cgroup_no_v1=all hint would mislead.
+            let err = CgroupSession::detect_from_str("0::/../../etc").unwrap_err();
+            assert!(
+                matches!(err, NonoError::UnsupportedPlatform(_)),
+                "site 4 (path-traversal guard) must remain UnsupportedPlatform per D-07; got {err:?}"
             );
         }
     }

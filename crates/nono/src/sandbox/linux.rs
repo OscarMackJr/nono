@@ -303,6 +303,7 @@ pub fn support_info() -> SupportInfo {
             let features = detected.feature_names();
             SupportInfo {
                 is_supported: true,
+                status: crate::sandbox::SupportStatus::Supported,
                 platform: "linux",
                 details: format!(
                     "Landlock available ({}, features: {})",
@@ -313,6 +314,7 @@ pub fn support_info() -> SupportInfo {
         }
         Err(_) => SupportInfo {
             is_supported: false,
+            status: crate::sandbox::SupportStatus::NotImplemented,
             platform: "linux",
             details: "Landlock not available. Requires Linux kernel 5.13+ with Landlock enabled."
                 .to_string(),
@@ -2387,6 +2389,122 @@ pub fn install_seccomp_af_unix_filter() -> Result<std::os::fd::OwnedFd> {
     install_seccomp_notify_filter(&build_seccomp_af_unix_filter(), "AF_UNIX mediation filter")
 }
 
+/// Build a static seccomp filter that denies sendto/sendmsg/sendmmsg with EPERM
+/// when no AF_UNIX unix-socket grant exists.
+///
+/// This is the D-01 no-grant path: fail-secure silent EPERM without involving
+/// the USER_NOTIF supervisor.
+///
+/// Instruction layout (6 instructions, jt = jump offset from next insn):
+/// ```text
+///  0: ld  [nr]
+///  1: jeq SYS_SENDTO   jt=+3 (-> 5: EPERM)
+///  2: jeq SYS_SENDMSG  jt=+2 (-> 5: EPERM)
+///  3: jeq SYS_SENDMMSG jt=+1 (-> 5: EPERM)
+///  4: ret ALLOW
+///  5: ret SECCOMP_RET_ERRNO(EPERM)
+/// ```
+fn build_seccomp_af_unix_nogrant_filter() -> Vec<SockFilterInsn> {
+    let eperm_ret = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
+
+    vec![
+        // 0: ld [nr]
+        SockFilterInsn {
+            code: BPF_LD | BPF_W | BPF_ABS,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_DATA_NR_OFFSET,
+        },
+        // 1: jeq SYS_SENDTO -> 5 (jt = 5-1-1 = 3)
+        SockFilterInsn {
+            code: BPF_JMP | BPF_JEQ | BPF_K,
+            jt: 3,
+            jf: 0,
+            k: SYS_SENDTO as u32,
+        },
+        // 2: jeq SYS_SENDMSG -> 5 (jt = 5-2-1 = 2)
+        SockFilterInsn {
+            code: BPF_JMP | BPF_JEQ | BPF_K,
+            jt: 2,
+            jf: 0,
+            k: SYS_SENDMSG as u32,
+        },
+        // 3: jeq SYS_SENDMMSG -> 5 (jt = 5-3-1 = 1)
+        SockFilterInsn {
+            code: BPF_JMP | BPF_JEQ | BPF_K,
+            jt: 1,
+            jf: 0,
+            k: SYS_SENDMMSG as u32,
+        },
+        // 4: ret ALLOW
+        SockFilterInsn {
+            code: BPF_RET | BPF_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ALLOW,
+        },
+        // 5: ret SECCOMP_RET_ERRNO(EPERM)
+        SockFilterInsn {
+            code: BPF_RET | BPF_K,
+            jt: 0,
+            jf: 0,
+            k: eperm_ret,
+        },
+    ]
+}
+
+/// Installs a static seccomp filter that denies sendto/sendmsg/sendmmsg with EPERM
+/// when no AF_UNIX unix-socket grant exists.
+///
+/// This is the D-01 no-grant path: fail-secure silent EPERM without involving
+/// the USER_NOTIF supervisor. Called by the CLI child process before exec
+/// when unix-socket mediation is active but no grants are present.
+///
+/// Unlike `install_seccomp_af_unix_filter` (which returns a USER_NOTIF fd),
+/// this filter uses `SECCOMP_RET_ERRNO` and does not produce a notify fd.
+///
+/// # Errors
+///
+/// Returns an error if the seccomp syscall fails.
+pub fn install_seccomp_af_unix_nogrant_filter() -> Result<()> {
+    let filter = build_seccomp_af_unix_nogrant_filter();
+
+    let prog = SockFprog {
+        len: filter.len() as u16,
+        filter: filter.as_ptr(),
+    };
+
+    // SAFETY: `prctl(PR_SET_NO_NEW_PRIVS)` is process-local, takes only scalar
+    // arguments here, and does not dereference pointers.
+    let ret = unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) };
+    if ret != 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "prctl(PR_SET_NO_NEW_PRIVS) failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    // SAFETY: seccomp() with SECCOMP_SET_MODE_FILTER installs a BPF filter.
+    // The prog pointer is valid for the duration of the syscall.
+    let ret = unsafe {
+        libc::syscall(
+            libc::SYS_seccomp,
+            SECCOMP_SET_MODE_FILTER,
+            0,
+            &prog as *const SockFprog,
+        )
+    };
+
+    if ret < 0 {
+        return Err(NonoError::SandboxInit(format!(
+            "seccomp(SECCOMP_SET_MODE_FILTER) for AF_UNIX no-grant filter failed: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+
+    Ok(())
+}
+
 fn install_seccomp_notify_filter(
     filter: &[SockFilterInsn],
     label: &str,
@@ -3884,6 +4002,53 @@ mod tests {
 
         assert_eq!(filter[6].k, SECCOMP_RET_ALLOW);
         assert_eq!(filter[7].k, SECCOMP_RET_USER_NOTIF);
+    }
+
+    #[test]
+    fn test_build_seccomp_af_unix_nogrant_filter_denies_send_family() {
+        let filter = build_seccomp_af_unix_nogrant_filter();
+        let eperm_ret = SECCOMP_RET_ERRNO | (libc::EPERM as u32);
+
+        // Must be exactly 6 instructions: ld + 3 JEQ + ALLOW + EPERM
+        assert_eq!(
+            filter.len(),
+            6,
+            "no-grant filter must have exactly 6 instructions"
+        );
+
+        // 0: ld [nr]
+        assert_eq!(filter[0].code, BPF_LD | BPF_W | BPF_ABS);
+        assert_eq!(filter[0].k, SECCOMP_DATA_NR_OFFSET);
+
+        // 1: jeq SYS_SENDTO -> 5 (jt = 3)
+        assert_eq!(filter[1].k, SYS_SENDTO as u32);
+        assert_eq!(
+            filter[1].jt, 3,
+            "SYS_SENDTO jt must target EPERM instruction"
+        );
+
+        // 2: jeq SYS_SENDMSG -> 5 (jt = 2)
+        assert_eq!(filter[2].k, SYS_SENDMSG as u32);
+        assert_eq!(
+            filter[2].jt, 2,
+            "SYS_SENDMSG jt must target EPERM instruction"
+        );
+
+        // 3: jeq SYS_SENDMMSG -> 5 (jt = 1)
+        assert_eq!(filter[3].k, SYS_SENDMMSG as u32);
+        assert_eq!(
+            filter[3].jt, 1,
+            "SYS_SENDMMSG jt must target EPERM instruction"
+        );
+
+        // 4: ret ALLOW (non-send-family syscalls fall through)
+        assert_eq!(filter[4].k, SECCOMP_RET_ALLOW);
+
+        // 5: ret SECCOMP_RET_ERRNO(EPERM)
+        assert_eq!(
+            filter[5].k, eperm_ret,
+            "no-grant filter must return EPERM for send-family"
+        );
     }
 
     #[test]
