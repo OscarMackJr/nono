@@ -15,10 +15,10 @@
 
 ### UPST10 — Upstream Sync (UPST10)
 
-- [ ] **UPST10-01**: A DIVERGENCE-LEDGER for the `nolabs-ai/nono` `v0.64.0..v0.65.1` window classifies every commit into will-sync / fork-preserve / won't-sync / split clusters, with a `windows-touch` flag per commit and a per-cell ADR-review verdict (continue/escalate).
+- [x] **UPST10-01**: A DIVERGENCE-LEDGER for the `nolabs-ai/nono` `v0.64.0..v0.65.1` window classifies every commit into will-sync / fork-preserve / won't-sync / split clusters, with a `windows-touch` flag per commit and a per-cell ADR-review verdict (continue/escalate).
 - [ ] **UPST10-02**: All will-sync clusters are absorbed into the fork (cherry-pick with `-x` or manual replay), each commit DCO-signed, without regressing the Windows security model.
 - [ ] **UPST10-03**: Fork-divergent invariants are explicitly preserved and verified post-sync — the Windows backend (AppContainer/WFP/broker), the ADR-86 audit/diagnostics library-boundary carve-out, and the `exec_strategy_windows/` denial-rendering fork — with workspace `make build` + `make test` green on the dev host.
-- [ ] **UPST10-04**: The upstream relocation (`always-further/nono` → `nolabs-ai/nono`) is recorded — the git `upstream` remote and the PROJECT.md `## Upstream Parity Process` references point at the new canonical source; a Future Cycles stub notes the next sync trigger.
+- [x] **UPST10-04**: The upstream relocation (`always-further/nono` → `nolabs-ai/nono`) is recorded — the git `upstream` remote and the PROJECT.md `## Upstream Parity Process` references point at the new canonical source; a Future Cycles stub notes the next sync trigger.
 
 ### Release Engineering — First Real Release (RLS)
 
@@ -63,8 +63,8 @@ Populated by roadmap creation 2026-06-25. Phase numbering continues from Phase 9
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UPST10-01 | Phase 94 | Pending |
-| UPST10-04 | Phase 94 | Pending |
+| UPST10-01 | Phase 94 | Complete |
+| UPST10-04 | Phase 94 | Complete |
 | UPST10-02 | Phase 95 | Pending |
 | UPST10-03 | Phase 95 | Pending |
 | XTGT-01 | Phase 96 | Pending |
