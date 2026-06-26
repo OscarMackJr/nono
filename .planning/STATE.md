@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 status: executing
-stopped_at: Phase 95 context gathered
-last_updated: "2026-06-26T04:46:01.604Z"
+stopped_at: Phase 95 Plan 03 complete (Cluster C structural no-op confirmed; Phase 89 fail-secure preserved)
+last_updated: "2026-06-26T04:54:18.319Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 6
-  completed_plans: 4
-  percent: 67
+  completed_plans: 5
+  percent: 83
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -32,7 +32,7 @@ Phase 94 of 97 complete | Next: Phase 95 (unplanned) | v3.3 milestone 1/4 phases
 ```
 
 Phase: 95 (upstream-absorb-fork-invariant-verify) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-26
 
@@ -61,6 +61,7 @@ Last activity: 2026-06-26
 | Version leapfrog (RLS-05) in Phase 97, after Phase 95 sync | 97 | Bump once, post-sync, to a clean ≥ 0.65.0; bumping mid-sync creates a rebasing treadmill and dirty Cargo.lock during cherry-picks. |
 | Cross-target (Phase 96) sequenced after Phase 95 sync | 96 | XTGT clippy gates should run against the synced + post-sync tree, not a pre-sync snapshot that will change. |
 | Release scope = PREPARE ONLY | 97 | Preserves LOCAL-ONLY posture; repo PUBLIC pending Microsoft minifilter-altitude approval; actual push/publish is operator-gated manual step outside this milestone. |
+| D-02 confirmed: Cluster C (9b37dc52) structural no-op | 95-03 | Upstream CredentialProxyIntent refactor is structurally incompatible with fork's flat ProxyLaunchOptions; no code change; Phase 89 || !prepared.custom_credentials.is_empty() active predicate preserved |
 
 ### Pending Todos
 
@@ -100,10 +101,10 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T04:46:01.585Z
+Last session: 2026-06-26T04:54:18.303Z
 Stopped at: Phase 95 context gathered
 Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd:plan-phase 95` to plan the Upstream Absorb + Fork-Invariant Verify phase (95-CONTEXT.md ready)
+- Run `/gsd:execute-phase 95` plan 04 to execute the fork-invariant verification checklist and PARTIAL→96 handoff record
