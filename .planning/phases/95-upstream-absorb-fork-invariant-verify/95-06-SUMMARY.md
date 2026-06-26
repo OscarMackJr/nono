@@ -125,6 +125,30 @@ Tests: 175 nono-proxy tests pass (2 new added). 1 pre-existing baseline fail (`t
 - Phase 96 cross-target clippy can run against the updated exec_strategy.rs (unix cfg-gated code); no new cfg-gated branches were added
 - No blockers
 
+## Code-Review Fix
+
+**Finding:** CR-01 (95-REVIEW.md, 2026-06-26) identified a fail-open in the `endpoint_policy`
+wiring added by this plan. `CompiledEndpointPolicy::evaluate()` returns three variants —
+`Deny`, `Allow`, `Approve` — but `reverse.rs` matched only `Deny` with `if let`. An `Approve`
+outcome (reachable via `approve:` rules or `default: approve` in operator config) silently
+fell through and forwarded the request upstream with the real injected credential and no audit
+event, violating the Fail-Secure principle.
+
+**Fix (commit `fix(95-06): fail Approve outcome closed in reverse.rs endpoint_policy (code-review CR-01)`):**
+
+- Replaced the `if let EndpointPolicyOutcome::Deny { .. }` block in `reverse.rs` with an
+  exhaustive `match` over all three arms (no `_` wildcard — compiler-enforced exhaustiveness
+  prevents any future variant from silently falling open).
+- `Allow` arm: explicit empty body — request proceeds to credential lookup.
+- `Deny` arm: existing 403 + `audit::log_denied` path, unchanged.
+- `Approve` arm: fails closed — 403 + `audit::log_denied` with a distinct reason string making
+  clear no approval backend is wired ("endpoint_policy requires approval but no approval backend
+  is configured — failing closed: ...").
+- Added `endpoint_policy_approve_without_backend_is_recognized` test in `config.rs` asserting
+  that an explicit `approve:` rule and a `default: approve` both produce `Approve` outcome from
+  `evaluate()`, documenting the contract that reverse.rs must handle.
+- `cargo test -p nono-proxy`: 176 passed (175 prior + 1 new). Clippy and fmt clean.
+
 ---
 *Phase: 95-upstream-absorb-fork-invariant-verify*
 *Completed: 2026-06-26*
