@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: completed
-stopped_at: Phase 95 context gathered
+status: executing
+stopped_at: Phase 95 context gathered (95-CONTEXT.md) — Phase 94 complete; 95-97 remain
 last_updated: "2026-06-26T01:50:23.722Z"
-last_activity: 2026-06-26
+last_activity: 2026-06-26 -- Phase 95 context gathered; ready to plan
 progress:
-  total_phases: 2
+  total_phases: 4
   completed_phases: 1
   total_plans: 2
   completed_plans: 2
-  percent: 100
+  percent: 25
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Phase 95 — Upstream Absorb + Fork-Invariant Verify (next; not yet planned — run `/gsd:discuss-phase 95` or `/gsd:plan-phase 95`).
+**Current Focus:** Phase 95 — Upstream Absorb + Fork-Invariant Verify (context gathered; ready to plan — run `/gsd:plan-phase 95`).
 
 ## Current Position
 
@@ -105,4 +105,4 @@ Resume file: .planning/phases/95-upstream-absorb-fork-invariant-verify/95-CONTEX
 
 ## Operator Next Steps
 
-- Run `/gsd:plan-phase 94` to plan the UPST10 divergence audit
+- Run `/gsd:plan-phase 95` to plan the Upstream Absorb + Fork-Invariant Verify phase (95-CONTEXT.md ready)
