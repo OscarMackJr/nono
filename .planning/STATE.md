@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: executing
+status: milestone_complete
 stopped_at: Completed Phase 95 Plan 07 (cross-target clippy gate + gap-closure complete)
 last_updated: "2026-06-26T12:58:27.133Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 9
   completed_plans: 9
-  percent: 92
+  percent: 100
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -31,16 +31,16 @@ Phase 94 of 97 complete | Next: Phase 95 (unplanned) | v3.3 milestone 1/4 phases
 [==========                              ] 25%
 ```
 
-Phase: 95 (upstream-absorb-fork-invariant-verify) — EXECUTING
-Plan: 7 of 7
-Status: Ready to execute
+Phase: 95
+Plan: Not started
+Status: Milestone complete
 Last activity: 2026-06-26
 
 ## Performance Metrics
 
 **Velocity:** (v3.3 — reset; populated as phases complete)
 
-- Total plans completed: 2
+- Total plans completed: 9
 - Average duration: —
 - Total execution time: —
 
