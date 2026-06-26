@@ -39,7 +39,11 @@ Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.64
   - [x] 96-01-PLAN.md — linux-gnu gate stand-up (Docker precondition + `cross clippy` green) + structural drift fix (XTGT-01, XTGT-02)
   - [x] 96-02-PLAN.md — apple-darwin bounded cargo-zigbuild attempt → disposition (local-runnable OR XTGT-03(b) hard-blocker → PARTIAL→CI)
   - [x] 96-03-PLAN.md — protocol rewrite: checklist cross-form + per-gate PARTIAL retirement + CLAUDE.md one-line pointer (XTGT-04)
-- [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/TBD plans
+- [ ] **Phase 97: Release Engineering — Leapfrog + Pipeline + Runbook** — 0/4 plans
+  - [ ] 97-01-PLAN.md — Version leapfrog to 0.66.0 across all 6 workspace crates + path-dep pins + both binding repos (RLS-05)
+  - [ ] 97-02-PLAN.md — Release pipeline build + sign verification; release.yml audit (RLS-06, RLS-08)
+  - [ ] 97-03-PLAN.md — Dry-run publish validation: crates.io + PyPI + npm, no live push (RLS-07, RLS-06)
+  - [ ] 97-04-PLAN.md — Operator runbook + release-readiness verify-dark gate (RLS-09)
 
 </details>
 
@@ -112,7 +116,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. `cargo publish --dry-run` completes without errors for each workspace crate in dependency order; `twine check` (or `maturin build` validation) and `npm publish --dry-run` also pass — no live registry push occurs.
   4. `release.yml` runs (or is locally validated to produce) a GitHub Release carrying signed MSI + binary assets with no `0s startup_failure` and all required build legs green.
   5. A documented operator runbook exists, a green release-readiness gate confirms the workspace is publish-ready, and the runbook embeds the PUBLIC-repo pre-push checklist (no `build_notes/`/`.gsd/` staged; crate leapfrog ≥ `0.65.0` confirmed; operator push = sole remaining action).
-**Plans**: TBD
+**Plans**: 4 plans (97-01 version leapfrog · 97-02 pipeline build+sign + release.yml audit · 97-03 dry-run publish validation · 97-04 runbook + readiness gate)
 **UI hint**: no
 
 ## Progress
@@ -131,4 +135,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 94. UPST10 Divergence Audit | v3.3 | 2/2 | Complete | 2026-06-26 |
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete    | 2026-06-26 |
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete    | 2026-06-26 |
-| 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/TBD | Not started | - |
+| 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 0/4 | Planned | - |
