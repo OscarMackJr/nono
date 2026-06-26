@@ -529,6 +529,6 @@ jobs:
         with:
           formula-name: nono
           tag-name: ${{ env.RELEASE_TAG }}
-          download-url: "https://github.com/always-further/nono/archive/refs/tags/${{ env.RELEASE_TAG }}.tar.gz"
+          download-url: "https://github.com/OscarMackJr/nono/archive/refs/tags/${{ env.RELEASE_TAG }}.tar.gz"
         env:
           COMMITTER_TOKEN: ${{ secrets.HOMEBREW_CORE_TOKEN }}
