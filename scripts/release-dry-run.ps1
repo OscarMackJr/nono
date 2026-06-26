@@ -101,6 +101,116 @@ try {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+# LEG 2 — PyPI dry-run  (maturin build + twine check)
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Banner "PyPI dry-run (maturin build + twine check)"
+
+$maturin = Get-Command maturin -ErrorAction SilentlyContinue
+if ($null -eq $maturin) {
+    $sig = "maturin: command not found"
+    Write-Host "  SKIP [SKIP_HOST_UNAVAILABLE]: $sig" -ForegroundColor Yellow
+    Add-Result "pypi.maturin_build" "SKIP" $sig
+    Add-Result "pypi.twine_check"   "SKIP" "twine check skipped: maturin absent"
+} else {
+    Push-Location $NoonoPyDir
+    try {
+        Write-Host "  maturin build ..." -NoNewline
+        $mbOut  = maturin build 2>&1
+        $mbExit = $LASTEXITCODE
+        if ($mbExit -eq 0) {
+            Write-Host "  OK" -ForegroundColor Green
+            Add-Result "pypi.maturin_build" "PASS" "maturin build exited 0"
+
+            # Locate twine (CLI or python -m twine fallback)
+            $twineAvail = $false
+            $twineCmd   = $null
+            if (Get-Command twine -ErrorAction SilentlyContinue) {
+                $twineAvail = $true
+                $twineCmd   = @("twine")
+            } else {
+                $pyTwineCheck = python -m twine --version 2>&1 | Out-String
+                if ($pyTwineCheck -match "twine") {
+                    $twineAvail = $true
+                    $twineCmd   = @("python", "-m", "twine")
+                }
+            }
+
+            if (-not $twineAvail) {
+                $sig = "twine: command not found (tried: twine CLI; python -m twine)"
+                Write-Host "  SKIP [SKIP_HOST_UNAVAILABLE]: $sig" -ForegroundColor Yellow
+                Add-Result "pypi.twine_check" "SKIP" $sig
+            } else {
+                $wheels = Get-ChildItem -Path "target/wheels" -Filter "*.whl" -ErrorAction SilentlyContinue
+                if ($null -eq $wheels -or $wheels.Count -eq 0) {
+                    Add-Result "pypi.twine_check" "FAIL" "No .whl files found under target/wheels after maturin build"
+                } else {
+                    Write-Host "  twine check target/wheels/*.whl ..." -NoNewline
+                    $tcOut  = & $twineCmd[0] ($twineCmd[1..99] + @("check") + $wheels.FullName) 2>&1
+                    $tcExit = $LASTEXITCODE
+                    if ($tcExit -eq 0) {
+                        Write-Host "  OK" -ForegroundColor Green
+                        Add-Result "pypi.twine_check" "PASS" "twine check exited 0"
+                    } else {
+                        Write-Host "  FAILED (exit $tcExit)" -ForegroundColor Red
+                        Write-Host ($tcOut | Out-String)
+                        Add-Result "pypi.twine_check" "FAIL" "twine check exited $tcExit"
+                    }
+                }
+            }
+        } else {
+            Write-Host "  FAILED (exit $mbExit)" -ForegroundColor Red
+            Write-Host ($mbOut | Out-String)
+            Add-Result "pypi.maturin_build" "FAIL" "maturin build exited $mbExit"
+            Add-Result "pypi.twine_check"   "SKIP" "twine check skipped: maturin build failed"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LEG 3 — npm dry-run  (npm publish --dry-run)
+# ══════════════════════════════════════════════════════════════════════════════
+Write-Banner "npm dry-run (npm publish --dry-run)"
+
+$npmExe = Get-Command npm -ErrorAction SilentlyContinue
+if ($null -eq $npmExe) {
+    $sig = "npm: command not found"
+    Write-Host "  SKIP [SKIP_HOST_UNAVAILABLE]: $sig" -ForegroundColor Yellow
+    Add-Result "npm.dry_run" "SKIP" $sig
+} else {
+    Push-Location $NonoTsDir
+    try {
+        Write-Host "  npm publish --dry-run ..." -NoNewline
+        $npmOut  = npm publish --dry-run 2>&1
+        $npmExit = $LASTEXITCODE
+        if ($npmExit -eq 0) {
+            $manifest    = $npmOut | Out-String
+            $hasIndexJs  = $manifest -match "index\.js"
+            $hasIndexDts = $manifest -match "index\.d\.ts"
+            if ($hasIndexJs -and $hasIndexDts) {
+                Write-Host "  OK (index.js + index.d.ts present)" -ForegroundColor Green
+                Add-Result "npm.dry_run" "PASS" "npm publish --dry-run exited 0; index.js + index.d.ts in manifest"
+            } else {
+                $missing = @()
+                if (-not $hasIndexJs)  { $missing += "index.js" }
+                if (-not $hasIndexDts) { $missing += "index.d.ts" }
+                $msg = "tarball manifest missing: $($missing -join ', ')"
+                Write-Host "  FAIL: $msg" -ForegroundColor Red
+                Write-Host $manifest
+                Add-Result "npm.dry_run" "FAIL" $msg
+            }
+        } else {
+            Write-Host "  FAILED (exit $npmExit)" -ForegroundColor Red
+            Write-Host ($npmOut | Out-String)
+            Add-Result "npm.dry_run" "FAIL" "npm publish --dry-run exited $npmExit"
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 # FINAL VERDICT
 # ══════════════════════════════════════════════════════════════════════════════
 Write-Banner "Dry-Run Results"
@@ -117,13 +227,16 @@ foreach ($key in $Results.Keys) {
 
 Write-Host ""
 
+# Overall verdict:
+#   PASS  = no hard failures; PRE_PUBLISH_REGISTRY_BLOCKED and SKIPs are not failures
+#   FAIL  = at least one hard FAIL (packaging error, unexpected compilation failure, etc.)
 if ($HardFailures -eq 0) {
     $blockedCount = ($Results.Values | Where-Object { $_.Status -eq "PRE_PUBLISH_REGISTRY_BLOCKED" }).Count
-    if ($blockedCount -gt 0) {
-        Write-Host "PASS: nono base crate dry-run passed. $blockedCount downstream crate(s) are" -ForegroundColor Green
-        Write-Host "      PRE_PUBLISH_REGISTRY_BLOCKED — re-run after publishing nono to crates.io." -ForegroundColor Green
+    $skipCount    = ($Results.Values | Where-Object { $_.Status -eq "SKIP" }).Count
+    if ($blockedCount -gt 0 -or $skipCount -gt 0) {
+        Write-Host "PASS: Hard failures: 0. Blocked: $blockedCount (pre-publish). Skipped: $skipCount (toolchain absent)." -ForegroundColor Green
     } else {
-        Write-Host "PASS: All dry-run checks passed or recorded a documented SKIP." -ForegroundColor Green
+        Write-Host "PASS: All dry-run checks passed." -ForegroundColor Green
     }
     exit 0
 } else {
