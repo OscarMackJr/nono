@@ -22,7 +22,7 @@
 
 ### Release Engineering — First Real Release (RLS)
 
-- [ ] **RLS-05**: All 5 workspace crates (`nono`, `nono-cli`, `nono-proxy`, `nono-shell-broker`, `nono-ffi`) plus the `nono-py` / `nono-ts` bindings are version-bumped to a leapfrogged ≥ `0.65.0` release version, with internal path-dep `version` pins consistent across every `Cargo.toml` and both binding manifests (`Cargo.lock` regenerated; workspace builds clean).
+- [x] **RLS-05**: All 5 workspace crates (`nono`, `nono-cli`, `nono-proxy`, `nono-shell-broker`, `nono-ffi`) plus the `nono-py` / `nono-ts` bindings are version-bumped to a leapfrogged ≥ `0.65.0` release version, with internal path-dep `version` pins consistent across every `Cargo.toml` and both binding manifests (`Cargo.lock` regenerated; workspace builds clean).
 - [ ] **RLS-06**: The release pipeline builds and signs all release artifacts reproducibly from a single tag — workspace binaries, signed Windows machine + user MSIs (payload signed before WiX harvest, admin-extract verify gate), `nono-py` wheels, and `nono-ts` native packages.
 - [ ] **RLS-07**: The pipeline runs a **dry-run** publish to crates.io (`cargo publish --dry-run` across the dependency-ordered workspace), PyPI (`twine check` / maturin build validation), and npm (`npm publish --dry-run`) that validates packaging + metadata WITHOUT pushing, and is gated GREEN.
 - [ ] **RLS-08**: `release.yml` produces (or dry-run-validates) a GitHub Release carrying the signed MSI + binary assets, with no `0s startup_failure` and all required build legs green.
@@ -71,7 +71,7 @@ Populated by roadmap creation 2026-06-25. Phase numbering continues from Phase 9
 | XTGT-02 | Phase 96 | Complete |
 | XTGT-03 | Phase 96 | Complete |
 | XTGT-04 | Phase 96 | Complete |
-| RLS-05 | Phase 97 | Pending |
+| RLS-05 | Phase 97 | Complete |
 | RLS-06 | Phase 97 | Pending |
 | RLS-07 | Phase 97 | Pending |
 | RLS-08 | Phase 97 | Pending |
