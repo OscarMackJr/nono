@@ -725,7 +725,12 @@ they will be Phase 96's cross-target concern).
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three are **execution-time unknowns** (resolvable only by running git against the live
+> tree at cherry-pick time), each with a prescribed mitigation wired into a specific plan task.
+> None blocks planning; `cargo check --workspace` in the owning task's acceptance criteria is the
+> backstop that catches any miss.
 
 1. **Cluster B `route.rs` `endpoint_policy` field — does the fork compile with the new field?**
    - What we know: `RouteConfig` in `nono-proxy/src/route.rs` is the struct; Cluster B adds
@@ -734,18 +739,30 @@ they will be Phase 96's cross-target concern).
      without the new field (would cause compile error)
    - Recommendation: Before applying the `route.rs` hunk, grep for `RouteConfig {` across the
      codebase and add `endpoint_policy: None` to each site.
+   - **RESOLVED:** Plan 95-02 Task 1 Step 6 pre-checks all `RouteConfig {` construction sites and
+     adds `endpoint_policy: None` to each before committing; compile failure is caught by
+     `cargo check --workspace` in Task 1 acceptance criteria. Resolved at execution time per the
+     prescribed pre-check.
 
 2. **Cluster A conflict in `exec_strategy.rs` — exact conflict shape at cherry-pick time**
    - What we know: Both Cluster A and the fork touch `execute_supervised()` in different ways
    - What's unclear: Whether the conflict is cleanly resolvable or requires manual study
    - Recommendation: Run `git cherry-pick -x 9ce74e92` first (possibly with `--strategy-option=theirs`
      then manual restore of fork-divergent lines); inspect `git diff ORIG_HEAD` to understand scope
+   - **RESOLVED:** Plan 95-01 Task 2 resolves at cherry-pick time — run `git cherry-pick -x 9ce74e92`,
+     accept the upstream IPC-ordering hunks (Cluster A is the security fix; no fork-preserve override
+     applies to its mediation logic), restore any fork-divergent surrounding lines, and verify scope
+     via `git diff ORIG_HEAD`. Exact conflict shape is determined at cherry-pick time per the
+     fork-preserve rule.
 
 3. **NetworkAuditEvent boxing — call site count**
    - What we know: `record_network_event` signature changes to box the event internally
    - What's unclear: How many call sites exist and whether any match on `AuditEventPayload::Network`
    - Recommendation: Run `grep -rn "AuditEventPayload::Network\|record_network_event" crates/` before
      applying this hunk; count the sites; update all atomically
+   - **RESOLVED:** Plan 95-02 Task 1 Step 5 greps all `AuditEventPayload::Network` / `record_network_event`
+     sites and updates them atomically in the same commit; `cargo check --workspace` in Task 1
+     acceptance criteria catches any missed site. Resolved at execution time per the prescribed grep.
 
 ---
 
