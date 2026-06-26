@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 status: executing
-stopped_at: Completed 97-02-PLAN.md
-last_updated: "2026-06-26T18:35:00.000Z"
+stopped_at: Completed 97-03-PLAN.md
+last_updated: "2026-06-26T17:40:06.844Z"
 last_activity: 2026-06-26
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 16
-  completed_plans: 14
-  percent: 88
+  completed_plans: 15
+  percent: 94
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -32,7 +32,7 @@ Phase 96 of 97 COMPLETE + VERIFIED (PASS, 4/4) | Next: Phase 97 (unplanned) | v3
 ```
 
 Phase: 97 (release-engineering-leapfrog-pipeline-runbook) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Next: Phase 97 (Release Engineering — Leapfrog + Pipeline + Runbook) — not yet planned
 Status: Ready to execute
 Last activity: 2026-06-26
@@ -59,6 +59,7 @@ Last activity: 2026-06-26
 | Phase 96-cross-target-toolchain P03 | 2 | 2 tasks | 2 files |
 | Phase 97 P01 | 6 | 2 tasks | 7 files |
 | Phase 97 P02 | 15 | 2 tasks | 2 files |
+| Phase 97 P03 | 35 | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,8 @@ Last activity: 2026-06-26
 | XTGT-04 closed: verification protocol rewritten — both gates LOCAL-RUNNABLE, PARTIAL→CI demoted to documented-runner-failure fallback | 96-03 | Checklist (`.planning/templates/cross-target-verify-checklist.md`) rewritten as single source of truth (D-06): Q2 linux-gnu → `cross clippy` (bare `cargo clippy --target` removed); Q3 apple-darwin flipped to MUST-run-locally via direct-binary `cargo-zigbuild clippy` (SDKROOT unset), per 96-02 record. Auto-default-to-PARTIAL retired per-gate (D-07) — PARTIAL only on a *documented* runner failure (stopped daemon / absent-but-installable tool excluded). Added anti-patterns 5 (default-PARTIAL) + 6 (`cargo zigbuild clippy` mis-parse). CLAUDE.md bullet collapsed to a one-line pointer carrying both commands; security mandate + "Windows `cargo check` not a substitute" preserved. Docs-only, no source changes. |
 | 3-crate publish set confirmed sufficient (nono, nono-proxy, nono-cli) | 97-02 | nono-shell-broker appears ONLY under `[target.'cfg(target_os = "windows")'.dev-dependencies]` in nono-cli/Cargo.toml — a version-pinned Windows dev-dep that cargo does not resolve during publish-verify and downstream consumers ignore entirely |
 | release.yml homebrew download-url corrected to OscarMackJr/nono | 97-02 | T-97-07 mitigation: fork ships its own release tarball; always-further/nono is an abandoned org; nolabs-ai/nono is upstream — neither is the fork's release repo |
+| cargo publish --dry-run PRE_PUBLISH_REGISTRY_BLOCKED for downstream workspace crates | 97-03 | cargo resolves deps from live crates.io index at package time; nono-proxy/shell-broker/cli exit 101 until nono 0.66.0 is published; only nono is always-runnable; downstream crates re-run after nono publish |
+| nono-py RouteConfig missing endpoint_policy (hard blocker for PyPI release) | 97-03 | maturin build exits 1: endpoint_policy field added to nono-proxy RouteConfig in phase 95 absorb but nono-py src/policy.rs:743 and src/proxy.rs:206 were not updated; fix = add `endpoint_policy: None,` to both initializers |
 
 ### Pending Todos
 
@@ -93,6 +96,7 @@ None yet.
 - **Cross-repo release**: nono-py at `../nono-py`, nono-ts at `../nono-ts`. Phase 97 version bump must touch both sibling repos.
 - **PARTIAL→CI carry-forwards**: SEC-01/SEC-02 (v3.1), ZTL-04 AWS_* strip (v3.2) — still PARTIAL→CI; Phase 96 may resolve if linux-gnu toolchain clears them.
 - **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` required on every commit including cherry-picks (use `-x` + manual DCO trailer).
+- **nono-py PyPI blocker (97-03)**: `maturin build` exits 1 — nono-py `src/policy.rs:743` and `src/proxy.rs:206` are missing `endpoint_policy: None,` in `RouteConfig` struct initializers. Must be fixed in nono-py repo before the actual PyPI release.
 
 ### Quick Tasks Completed
 
@@ -119,8 +123,8 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T17:21:48.053Z
-Stopped at: Completed 97-01-PLAN.md
+Last session: 2026-06-26T19:30:00Z
+Stopped at: Completed 97-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

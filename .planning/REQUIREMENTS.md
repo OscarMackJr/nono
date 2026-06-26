@@ -24,7 +24,7 @@
 
 - [x] **RLS-05**: All 5 workspace crates (`nono`, `nono-cli`, `nono-proxy`, `nono-shell-broker`, `nono-ffi`) plus the `nono-py` / `nono-ts` bindings are version-bumped to a leapfrogged ≥ `0.65.0` release version, with internal path-dep `version` pins consistent across every `Cargo.toml` and both binding manifests (`Cargo.lock` regenerated; workspace builds clean).
 - [x] **RLS-06**: The release pipeline builds and signs all release artifacts reproducibly from a single tag — workspace binaries, signed Windows machine + user MSIs (payload signed before WiX harvest, admin-extract verify gate), `nono-py` wheels, and `nono-ts` native packages.
-- [ ] **RLS-07**: The pipeline runs a **dry-run** publish to crates.io (`cargo publish --dry-run` across the dependency-ordered workspace), PyPI (`twine check` / maturin build validation), and npm (`npm publish --dry-run`) that validates packaging + metadata WITHOUT pushing, and is gated GREEN.
+- [x] **RLS-07**: The pipeline runs a **dry-run** publish to crates.io (`cargo publish --dry-run` across the dependency-ordered workspace), PyPI (`twine check` / maturin build validation), and npm (`npm publish --dry-run`) that validates packaging + metadata WITHOUT pushing, and is gated GREEN.
 - [x] **RLS-08**: `release.yml` produces (or dry-run-validates) a GitHub Release carrying the signed MSI + binary assets, with no `0s startup_failure` and all required build legs green.
 - [ ] **RLS-09**: The release is **one-step-push ready** — a documented operator runbook plus a green release-readiness gate confirm the only remaining action is the manual `git push` of tags + `cargo/twine/npm publish`, and the runbook embeds the PUBLIC-repo pre-push checklist (no `build_notes/`/`.gsd/` staged; crate leapfrog ≥ `0.65.0` confirmed).
 
@@ -73,6 +73,6 @@ Populated by roadmap creation 2026-06-25. Phase numbering continues from Phase 9
 | XTGT-04 | Phase 96 | Complete |
 | RLS-05 | Phase 97 | Complete |
 | RLS-06 | Phase 97 | Complete |
-| RLS-07 | Phase 97 | Pending |
+| RLS-07 | Phase 97 | Complete |
 | RLS-08 | Phase 97 | Complete |
 | RLS-09 | Phase 97 | Pending |
