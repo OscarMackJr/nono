@@ -15,6 +15,7 @@
 //! forwarded without buffering.
 
 use crate::audit;
+use crate::config::EndpointPolicyOutcome;
 use crate::config::InjectMode;
 use crate::credential::{CredentialStore, LoadedCredential};
 use crate::error::{ProxyError, Result};
@@ -110,6 +111,40 @@ pub async fn handle_reverse_proxy(
             &service,
             0,
             &reason,
+        );
+        send_error(stream, 403, "Forbidden").await?;
+        return Ok(());
+    }
+
+    // Structured L7 endpoint policy: evaluate explicit deny/approve/allow rules.
+    // evaluate() is idempotent on legacy routes (endpoint_rules only) because
+    // CompiledEndpointPolicy::compile() wraps legacy rules as allow entries with
+    // a deny-default when rules are non-empty, mirroring endpoint_rules semantics.
+    // When an explicit endpoint_policy is configured, this enforces deny rules
+    // that the legacy endpoint_rules path would silently ignore.
+    if let EndpointPolicyOutcome::Deny { reason, rule_label } =
+        route.endpoint_policy.evaluate(&method, &upstream_path)
+    {
+        let deny_reason = format!(
+            "endpoint_policy denied: {} {} on service '{}' (rule: {})",
+            method, upstream_path, service, rule_label,
+        );
+        if let Some(r) = reason {
+            warn!("{} — reason: {}", deny_reason, r);
+        } else {
+            warn!("{}", deny_reason);
+        }
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(&service),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
+                ..Default::default()
+            },
+            &service,
+            0,
+            &deny_reason,
         );
         send_error(stream, 403, "Forbidden").await?;
         return Ok(());

@@ -1234,4 +1234,72 @@ mod tests {
         assert!(aws.region.is_none());
         assert!(aws.service.is_none());
     }
+
+    // ========================================================================
+    // CR-01 / 95-06: CompiledEndpointPolicy.evaluate() enforcement tests
+    // ========================================================================
+
+    /// CR-01: A route with an explicit endpoint_policy deny rule for
+    /// "DELETE /admin/*" must return EndpointPolicyOutcome::Deny when
+    /// evaluate() is called with method="DELETE" and path="/admin/users".
+    ///
+    /// This test proves that operator-configurable endpoint_policy deny rules
+    /// are actually enforced by evaluate() — covering the fix in reverse.rs
+    /// where evaluate() is now called on the request path.
+    #[test]
+    fn endpoint_policy_deny_rule_is_enforced() {
+        let policy = EndpointPolicyConfig {
+            default: EndpointPolicyDefault {
+                decision: EndpointPolicyDecision::Allow,
+                backend: None,
+                timeout_secs: None,
+            },
+            deny: vec![EndpointPolicyRule {
+                method: "DELETE".to_string(),
+                path: "/admin/*".to_string(),
+                backend: None,
+                reason: Some("admin endpoint blocked".to_string()),
+                timeout_secs: None,
+            }],
+            approve: vec![],
+            allow: vec![],
+        };
+        let compiled = CompiledEndpointPolicy::compile(Some(&policy), &[]).unwrap();
+        // The deny rule must fire for DELETE /admin/users.
+        let outcome = compiled.evaluate("DELETE", "/admin/users");
+        assert!(
+            matches!(outcome, EndpointPolicyOutcome::Deny { .. }),
+            "expected Deny outcome for DELETE /admin/users; got Allow or Approve"
+        );
+        // A non-denied method must still pass through (default: Allow).
+        let outcome_get = compiled.evaluate("GET", "/admin/users");
+        assert!(
+            matches!(outcome_get, EndpointPolicyOutcome::Allow { .. }),
+            "expected Allow outcome for GET /admin/users; got Deny or Approve"
+        );
+    }
+
+    /// CR-01: evaluate() on a legacy route (no explicit endpoint_policy, only
+    /// endpoint_rules) must NOT introduce a fail-open. A route with one allow
+    /// rule compiled via legacy path must Deny requests that do not match.
+    #[test]
+    fn endpoint_policy_legacy_route_preserves_deny_semantics() {
+        let legacy_rules = vec![EndpointRule {
+            method: "GET".to_string(),
+            path: "/v1/models".to_string(),
+        }];
+        let compiled = CompiledEndpointPolicy::compile(None, &legacy_rules).unwrap();
+        // Allowed path must pass.
+        let allow = compiled.evaluate("GET", "/v1/models");
+        assert!(
+            matches!(allow, EndpointPolicyOutcome::Allow { .. }),
+            "expected Allow for GET /v1/models on legacy route"
+        );
+        // Non-matching path must be denied (default-deny when legacy rules are non-empty).
+        let deny = compiled.evaluate("DELETE", "/admin/nuke");
+        assert!(
+            matches!(deny, EndpointPolicyOutcome::Deny { .. }),
+            "expected Deny for DELETE /admin/nuke on legacy route (default-deny)"
+        );
+    }
 }
