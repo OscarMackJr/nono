@@ -1408,16 +1408,19 @@ pub fn execute_supervised(
                                     break n;
                                 };
                                 if written < 0 {
-                                    let detail = format!(
-                                        "nono: failed to write proxy seccomp notify fd number: {}\n",
-                                        std::io::Error::last_os_error()
-                                    );
-                                    let msg = detail.as_bytes();
+                                    // CR-01: static byte string — format!() is unsafe in the post-fork
+                                    // child (heap allocation can deadlock if parent held allocator mutex
+                                    // at fork() time). Dynamic errno detail is lost; the message type
+                                    // is sufficient for operator diagnosis.
+                                    const MSG_PROXY_WRITE_FAIL: &[u8] =
+                                        b"nono: failed to write proxy seccomp notify fd number\n";
+                                    // SAFETY: write and _exit are async-signal-safe; we are in the
+                                    // post-fork child branch where heap allocation is unsafe.
                                     unsafe {
                                         libc::write(
                                             libc::STDERR_FILENO,
-                                            msg.as_ptr().cast::<libc::c_void>(),
-                                            msg.len(),
+                                            MSG_PROXY_WRITE_FAIL.as_ptr().cast::<libc::c_void>(),
+                                            MSG_PROXY_WRITE_FAIL.len(),
                                         );
                                         libc::_exit(126);
                                     }
@@ -1446,15 +1449,20 @@ pub fn execute_supervised(
                                 // can call pidfd_getfd. O_CLOEXEC closes it at exec.
                                 proxy_notify_fd_keep = Some(proxy_notify_fd);
                             }
-                            Err(e) => {
-                                let detail =
-                                    format!("nono: seccomp proxy filter not available: {}\n", e);
-                                let msg = detail.as_bytes();
+                            Err(_e) => {
+                                // CR-01: static byte string — format!() is unsafe in the post-fork
+                                // child (heap allocation can deadlock if parent held allocator mutex
+                                // at fork() time). The error type is lost; the message conveys the
+                                // failure category for operator diagnosis.
+                                const MSG_PROXY_FILTER_FAIL: &[u8] =
+                                    b"nono: seccomp proxy filter not available\n";
+                                // SAFETY: write and _exit are async-signal-safe; we are in the
+                                // post-fork child branch where heap allocation is unsafe.
                                 unsafe {
                                     libc::write(
                                         libc::STDERR_FILENO,
-                                        msg.as_ptr().cast::<libc::c_void>(),
-                                        msg.len(),
+                                        MSG_PROXY_FILTER_FAIL.as_ptr().cast::<libc::c_void>(),
+                                        MSG_PROXY_FILTER_FAIL.len(),
                                     );
                                     libc::_exit(126);
                                 }
