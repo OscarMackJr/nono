@@ -4,14 +4,14 @@ milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
 status: executing
 stopped_at: Phase 95 context gathered
-last_updated: "2026-06-26T02:34:38.418Z"
-last_activity: 2026-06-26 -- Phase 95 planning complete
+last_updated: "2026-06-26T04:03:12.171Z"
+last_activity: 2026-06-26
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 6
-  completed_plans: 2
-  percent: 33
+  completed_plans: 3
+  percent: 50
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -22,7 +22,7 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Phase 95 — Upstream Absorb + Fork-Invariant Verify (context gathered; ready to plan — run `/gsd:plan-phase 95`).
+**Current Focus:** Phase 95 — upstream-absorb-fork-invariant-verify
 
 ## Current Position
 
@@ -31,10 +31,10 @@ Phase 94 of 97 complete | Next: Phase 95 (unplanned) | v3.3 milestone 1/4 phases
 [==========                              ] 25%
 ```
 
-Phase: 94 — UPST10 Divergence Audit (COMPLETE, verified 10/10)
-Plan: 94-01 + 94-02 complete
+Phase: 95 (upstream-absorb-fork-invariant-verify) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-06-26 -- Phase 95 planning complete
+Last activity: 2026-06-26
 
 ## Performance Metrics
 
@@ -48,6 +48,7 @@ Last activity: 2026-06-26 -- Phase 95 planning complete
 |-------|------|----------|-------|-------|
 
 *Updated after each plan completion*
+| Phase 95-upstream-absorb-fork-invariant-verify P01 | 180 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -99,9 +100,9 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-26T01:50:23.687Z
+Last session: 2026-06-26T04:03:12.155Z
 Stopped at: Phase 95 context gathered
-Resume file: .planning/phases/95-upstream-absorb-fork-invariant-verify/95-CONTEXT.md
+Resume file: None
 
 ## Operator Next Steps
 
