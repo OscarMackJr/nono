@@ -120,34 +120,69 @@ pub async fn handle_reverse_proxy(
     // evaluate() is idempotent on legacy routes (endpoint_rules only) because
     // CompiledEndpointPolicy::compile() wraps legacy rules as allow entries with
     // a deny-default when rules are non-empty, mirroring endpoint_rules semantics.
-    // When an explicit endpoint_policy is configured, this enforces deny rules
-    // that the legacy endpoint_rules path would silently ignore.
-    if let EndpointPolicyOutcome::Deny { reason, rule_label } =
-        route.endpoint_policy.evaluate(&method, &upstream_path)
-    {
-        let deny_reason = format!(
-            "endpoint_policy denied: {} {} on service '{}' (rule: {})",
-            method, upstream_path, service, rule_label,
-        );
-        if let Some(r) = reason {
-            warn!("{} — reason: {}", deny_reason, r);
-        } else {
-            warn!("{}", deny_reason);
+    // When an explicit endpoint_policy is configured, this enforces deny and approve
+    // rules that the legacy endpoint_rules path would silently ignore.
+    //
+    // Approve fails closed: no approval backend is wired yet. A route that matches
+    // an approve rule (or default: approve) returns 403 until an approval backend
+    // is implemented. This preserves Fail-Secure — an operator-configurable control
+    // must never silently degrade to a pass-through.
+    //
+    // IMPORTANT: match is exhaustive (no wildcard arm) so the compiler forces
+    // handling of every current and future EndpointPolicyOutcome variant.
+    match route.endpoint_policy.evaluate(&method, &upstream_path) {
+        EndpointPolicyOutcome::Allow { .. } => {
+            // Explicit allow — fall through to credential lookup below.
         }
-        audit::log_denied(
-            ctx.audit_log,
-            audit::ProxyMode::Reverse,
-            &audit::EventContext {
-                route_id: Some(&service),
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
-                ..Default::default()
-            },
-            &service,
-            0,
-            &deny_reason,
-        );
-        send_error(stream, 403, "Forbidden").await?;
-        return Ok(());
+        EndpointPolicyOutcome::Deny { reason, rule_label } => {
+            let deny_reason = format!(
+                "endpoint_policy denied: {} {} on service '{}' (rule: {})",
+                method, upstream_path, service, rule_label,
+            );
+            if let Some(r) = reason {
+                warn!("{} — reason: {}", deny_reason, r);
+            } else {
+                warn!("{}", deny_reason);
+            }
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(&service),
+                    denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
+                    ..Default::default()
+                },
+                &service,
+                0,
+                &deny_reason,
+            );
+            send_error(stream, 403, "Forbidden").await?;
+            return Ok(());
+        }
+        EndpointPolicyOutcome::Approve { rule_label, .. } => {
+            // No approval backend is implemented — fail closed rather than
+            // forwarding the request with the real upstream credential.
+            let deny_reason = format!(
+                "endpoint_policy requires approval but no approval backend is configured \
+                 — failing closed: {} {} on service '{}' (rule: {})",
+                method, upstream_path, service, rule_label,
+            );
+            warn!("{}", deny_reason);
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(&service),
+                    denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
+                    ..Default::default()
+                },
+                &service,
+                0,
+                &deny_reason,
+            );
+            send_error(stream, 403, "Forbidden").await?;
+            return Ok(());
+        }
     }
 
     // Look up credential for service (optional — not all routes inject credentials)

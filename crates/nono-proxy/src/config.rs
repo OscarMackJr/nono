@@ -1302,4 +1302,66 @@ mod tests {
             "expected Deny for DELETE /admin/nuke on legacy route (default-deny)"
         );
     }
+
+    /// CR-01 code-review fix: A route with an explicit approve rule must return
+    /// EndpointPolicyOutcome::Approve — documenting the contract that the call
+    /// site in reverse.rs MUST fail closed on this outcome (no approval backend
+    /// is wired; forwarding the request with the real credential would be a
+    /// fail-open). Also verifies `default: approve` produces Approve.
+    ///
+    /// This test proves evaluate() correctly surfaces the Approve outcome so
+    /// the exhaustive match in reverse.rs can be verified correct by the compiler.
+    #[test]
+    fn endpoint_policy_approve_without_backend_is_recognized() {
+        // Case 1: explicit approve rule fires for POST /sensitive/*.
+        let policy_explicit = EndpointPolicyConfig {
+            default: EndpointPolicyDefault {
+                decision: EndpointPolicyDecision::Allow,
+                backend: None,
+                timeout_secs: None,
+            },
+            deny: vec![],
+            approve: vec![EndpointPolicyRule {
+                method: "POST".to_string(),
+                path: "/sensitive/*".to_string(),
+                backend: Some("approval-service".to_string()),
+                reason: Some("requires human sign-off".to_string()),
+                timeout_secs: Some(300),
+            }],
+            allow: vec![],
+        };
+        let compiled_explicit =
+            CompiledEndpointPolicy::compile(Some(&policy_explicit), &[]).unwrap();
+        let outcome = compiled_explicit.evaluate("POST", "/sensitive/action");
+        assert!(
+            matches!(outcome, EndpointPolicyOutcome::Approve { .. }),
+            "expected Approve outcome for POST /sensitive/action with approve rule; \
+             reverse.rs must fail closed on this outcome (no approval backend wired)"
+        );
+        // A non-matching path falls through to default Allow.
+        let non_match = compiled_explicit.evaluate("GET", "/public/status");
+        assert!(
+            matches!(non_match, EndpointPolicyOutcome::Allow { .. }),
+            "expected Allow for GET /public/status (no approve rule matches)"
+        );
+
+        // Case 2: default: approve — every unmatched request produces Approve.
+        let policy_default = EndpointPolicyConfig {
+            default: EndpointPolicyDefault {
+                decision: EndpointPolicyDecision::Approve,
+                backend: None,
+                timeout_secs: None,
+            },
+            deny: vec![],
+            approve: vec![],
+            allow: vec![],
+        };
+        let compiled_default = CompiledEndpointPolicy::compile(Some(&policy_default), &[]).unwrap();
+        let outcome_default = compiled_default.evaluate("DELETE", "/anything");
+        assert!(
+            matches!(outcome_default, EndpointPolicyOutcome::Approve { .. }),
+            "expected Approve for DELETE /anything with default: approve; \
+             reverse.rs must fail closed on this outcome"
+        );
+    }
 }
