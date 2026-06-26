@@ -14,8 +14,8 @@ human_verification_resolved:
 
 **Phase Goal:** The workspace is one operator push away from a fully published release — all versions bumped, all artifacts built and signed, all publish paths dry-run GREEN, with a documented runbook for the final step.
 **Verified:** 2026-06-26T20:00:00Z
-**Status:** human_needed
-**Re-verification:** No — initial verification
+**Status:** PASSED — the single human-verification item (WR-02 publish-set divergence) was resolved before archive; see frontmatter `human_verification_resolved` and the RESOLVED section below.
+**Re-verification:** No — initial verification (WR-02 reconciled post-verification)
 
 ---
 
@@ -48,7 +48,7 @@ human_verification_resolved:
 | `crates/nono/Cargo.toml` | version = "0.66.0" at line 3 | VERIFIED | Confirmed by direct read |
 | `crates/nono-cli/Cargo.toml` | 0.66.0 + path-dep pins at 0.66.0 | VERIFIED | Three pins (nono, nono-proxy, nono-shell-broker dev-dep) all at 0.66.0 |
 | `crates/nono-proxy/Cargo.toml` | version = "0.66.0", nono pin 0.66.0 | VERIFIED | Confirmed |
-| `crates/nono-shell-broker/Cargo.toml` | version = "0.66.0", nono pin 0.66.0 | VERIFIED | Confirmed; no publish=false (it IS publishable) |
+| `crates/nono-shell-broker/Cargo.toml` | version = "0.66.0", nono pin 0.66.0, publish=false | VERIFIED | Confirmed at 0.66.0; `publish = false` at line 4 (WR-02 resolution — internal Windows broker, ships inside the MSI, excluded from the crates.io publish set) |
 | `crates/nono-fltmgr-client/Cargo.toml` | version = "0.66.0", publish=false | VERIFIED | publish = false present |
 | `bindings/c/Cargo.toml` (nono-ffi) | version = "0.66.0", publish=false | VERIFIED | publish = false present |
 | `Cargo.lock` | Regenerated with 0.66.0 workspace entries | VERIFIED | 7 occurrences of 0.66.0 |
@@ -111,42 +111,31 @@ No `TBD`, `FIXME`, or `XXX` debt markers found in phase-modified files.
 
 ---
 
-## WR-02 Publish-Set Divergence — Verifier Judgment
+## WR-02 Publish-Set Divergence — RESOLVED
 
-Code review WR-02 surfaced a three-way inconsistency:
+Code review WR-02 surfaced a three-way inconsistency at verification time:
 
 - `release.yml` `publish-crates` job: **3 crates** (nono, nono-proxy, nono-cli)
 - `scripts/release-dry-run.ps1`: **4 crates** (nono, nono-proxy, nono-shell-broker, nono-cli)
 - `RELEASE-RUNBOOK.md` Step 4 manual fallback: **4 crates**
 
-`nono-shell-broker` has no `publish = false` (confirmed by direct grep). It is genuinely publishable. Plan 97-02 analytically determined the 3-crate set is sufficient for `nono-cli` to publish (nono-shell-broker is only a Windows dev-dep at publish time). Plan 97-04 then documented a 4-crate set in the runbook because publishing it avoids potential future publish-order failures if the dependency relationship changes.
-
-**Verifier judgment: this is an operator-reconcilable inconsistency, not a structural phase gap.** The workspace IS prepared. No automated path is broken. However, the inconsistency needs to be resolved before the operator push, because at the one moment correctness matters (the live push), the operator will face contradictory instructions: CI publishes 3, runbook says 4. The operator must decide which is canonical and update both artifacts in a follow-on commit before pushing. This is why the status is `human_needed` (operator decision required) rather than `gaps_found` or `passed`.
-
-Resolution options:
-1. Add a `Publish nono-shell-broker` step to `release.yml` publish-crates (after `nono`, before `nono-cli`, with `sleep 30`) — makes CI match the 4-crate dry-run/runbook.
-2. Mark `nono-shell-broker` `publish = false` in its `Cargo.toml` and remove it from `release-dry-run.ps1`'s `$PublishableCrates` array and from the RELEASE-RUNBOOK.md Step 4 — makes dry-run/runbook match the 3-crate CI set.
+**Resolution (operator decision, applied before archive):** the **3-crate set is canonical**. `nono-shell-broker` is internal release infrastructure — it ships inside the MSI and is a Windows-only dev-dep at publish time, so `nono-cli` does not need it on crates.io. It was marked `publish = false` in `crates/nono-shell-broker/Cargo.toml` (line 4) and removed from `scripts/release-dry-run.ps1`'s `$PublishableCrates` array and the `RELEASE-RUNBOOK.md` publish order. All three sources of truth now agree on the same 3-crate set (nono → nono-proxy → nono-cli), matching `release.yml`'s existing `publish-crates` job. Build clean; release-readiness gate PASS. See `97-HUMAN-UAT.md` (resolved).
 
 ---
 
 ## Human Verification Required
 
-### 1. Resolve publish-set divergence before operator push (WR-02)
+None outstanding.
 
-**Test:** Review the three sources of truth for the crates.io publish set:
-- `.github/workflows/release.yml` lines 501/509/517 (publish-crates job — 3 crates: nono, nono-proxy, nono-cli)
-- `scripts/release-dry-run.ps1` line 71 (`$PublishableCrates` — 4 crates, includes nono-shell-broker)
-- `RELEASE-RUNBOOK.md` Step 4 manual fallback (4 crates, includes nono-shell-broker)
+### 1. Resolve publish-set divergence before operator push (WR-02) — RESOLVED
 
-**Expected:** A single consistent publish set documented across all three artifacts before the tag push.
-
-**Why human:** This is a policy decision — whether nono-shell-broker should be published to crates.io as part of this release. Both 3-crate and 4-crate approaches are technically valid (nono-cli does not require nono-shell-broker to be on crates.io), but the inconsistency will confuse the operator at push time and could result in nono-shell-broker being published from the manual path but not the CI path, leading to an unmonitored discrepancy.
+The publish-set divergence has been reconciled to a single canonical 3-crate set across `release.yml`, `scripts/release-dry-run.ps1`, and `RELEASE-RUNBOOK.md`, with `nono-shell-broker` marked `publish = false`. See the **WR-02 Publish-Set Divergence — RESOLVED** section above and frontmatter `human_verification_resolved`. No operator decision remains for this item.
 
 ---
 
 ## Gaps Summary
 
-No hard blockers. All 9 truths are verified. The one human verification item (WR-02 publish-set divergence) does not prevent the phase goal from being structurally achieved — the workspace is prepared, the readiness gate is green, and the runbook exists. However, the inconsistency must be resolved by the operator before the push to avoid confusion at the critical moment.
+No hard blockers. All 9 truths are verified, and the one human-verification item (WR-02 publish-set divergence) has been resolved before archive — the publish set is now consistently the 3-crate set across CI, dry-run, and runbook, with `nono-shell-broker` `publish = false`. The workspace is prepared, the readiness gate is green, and the runbook exists.
 
 **Sanctioned carry-forward (not a gap):** nono-py `maturin build` fails due to a missing `endpoint_policy` field in two `RouteConfig` initializers — this is a phase-95 upstream-absorb carry-forward in a read-only sibling repo, explicitly acknowledged as an expected operator-action item (not a phase gap) per orchestrator context and documented in the RELEASE-RUNBOOK.md known blockers table.
 
