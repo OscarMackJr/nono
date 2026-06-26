@@ -1,5 +1,25 @@
 # Milestones
 
+## v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release (Shipped: 2026-06-26)
+
+**Phases completed:** 4 phases, 16 plans, 22 tasks (91 commits; 29 source files, +6,179/−423)
+
+**Delivered:** The fork is synced to relocated upstream `nolabs-ai/nono` v0.65.1 and, for the first time, genuinely releasable — a gated, signed, multi-registry pipeline prepared GREEN at v0.66.0 for a one-step operator push, with the Windows security model intact.
+
+**Key accomplishments:**
+
+- **Upstream absorb (Phases 94–95):** Audited and absorbed the `v0.64.0..v0.65.1` window (8 commits / 4 clusters) — Cluster A AF_UNIX mediation-deadlock fix (pidfd IPC), Cluster B additive audit + `CompiledEndpointPolicy` shared-surface, Cluster C confirmed a structural no-op preserving the Phase 89 fail-secure proxy divergence — with the Windows `exec_strategy_windows/` carve-out byte-preserved.
+- **Fork-invariant regressions caught + closed (Phase 95 gap-closure):** Verifier + code review + the new local clippy gate together surfaced and restored four real regressions the cherry-pick conflict introduced (arch-portable `offset_of!` msghdr derivation, GPU Landlock enforcement, post-fork fork-safety, and `endpoint_policy.evaluate()` wiring) — the phase's whole reason for existing.
+- **Local cross-target toolchain (Phase 96):** Stood up `cross clippy` (Docker) for `x86_64-unknown-linux-gnu` and direct-binary `cargo-zigbuild clippy` (zig) for `x86_64-apple-darwin`, both GREEN locally on the Windows dev host — retiring the chronic PARTIAL→CI default. The first local Linux run immediately caught a silently-dropped SEC-01 AF_UNIX no-grant EPERM filter + cgroup v2 enforcement module.
+- **Version leapfrog (Phase 97):** Bumped the whole tree to **0.66.0** (first SemVer > upstream 0.65.1) across 6 workspace crates + 6 internal path-dep pins + both sibling binding repos (nono-py, nono-ts), lockfile regenerated, builds clean.
+- **First real (prepare-only) release pipeline (Phase 97):** Local signed-order MSI build + `release-dry-run.ps1` 3-registry dry-run orchestrator (cargo / maturin+twine / npm — no live push, no token) + auto-discovered `release-readiness` verify-dark gate (PASS) + operator one-step-push `RELEASE-RUNBOOK.md`; release.yml signing-order + homebrew-URL invariants reconciled; publish set decided at 3 crates (nono → nono-proxy → nono-cli).
+
+**Known deferred items at close:** 48 (40 historical quick-tasks, 6 consumed seeds SEED-001…006, 2 future-scoped FUT-02/03 signing todos) — all acknowledged, none v3.3 blockers (see STATE.md Deferred Items).
+
+**Operator-action carry-forwards (PREPARE-ONLY — outside milestone):** (1) fix nono-py `RouteConfig` missing `endpoint_policy` field at `src/policy.rs:743` + `src/proxy.rs:206` before PyPI publish; (2) commit the sibling-repo version bumps in nono-py/nono-ts; (3) downstream crates' `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.0` is published first. Tags/publish remain a manual operator step (repo PUBLIC pending Microsoft minifilter-altitude approval).
+
+---
+
 ## v3.2 Signed Policy Overrides (ZT-Infra Attestation) (Shipped: 2026-06-23)
 
 **Phases completed:** 3 phases (91-93), 13 plans, 19 tasks. Cross-repo milestone (core `nono`/`nono-cli` in the Nono repo + the `nono-py` PyO3 binding repo). Ran sequential/no-worktree throughout (cross-repo split + Windows worktree fragility). Milestone-marker only — no crate publish; a future release leapfrogs the crate version to ≥ `0.65.0`.

@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: milestone_complete
-stopped_at: Completed 97-04-PLAN.md (phase 97 complete)
-last_updated: "2026-06-26T17:51:25.823Z"
-last_activity: 2026-06-26
+status: Awaiting next milestone
+stopped_at: Completed 97-03-PLAN.md
+last_updated: "2026-06-26T18:32:29.578Z"
+last_activity: 2026-06-26 — Milestone v3.3 completed and archived
 progress:
   total_phases: 4
-  completed_phases: 5
+  completed_phases: 4
   total_plans: 16
   completed_plans: 16
-  percent: 125
+  percent: 100
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -22,20 +22,14 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
 
-**Current Focus:** Phase 97 — release-engineering-leapfrog-pipeline-runbook
+**Current Focus:** Milestone v3.3 complete + archived 2026-06-26 (tag `v3.3` local). Awaiting next milestone — `/gsd-new-milestone`.
 
 ## Current Position
 
-```
-Phase 96 of 97 COMPLETE + VERIFIED (PASS, 4/4) | Next: Phase 97 (unplanned) | v3.3 milestone 3/4 phases
-[==============================          ] 75%
-```
-
-Phase: 97
-Plan: Not started
-Next: Phase 97 (Release Engineering — Leapfrog + Pipeline + Runbook) — not yet planned
-Status: Milestone complete
-Last activity: 2026-06-26
+Phase: Milestone v3.3 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-06-26 — Milestone v3.3 completed and archived
 
 ## Performance Metrics
 
@@ -85,7 +79,7 @@ Last activity: 2026-06-26
 | cargo publish --dry-run PRE_PUBLISH_REGISTRY_BLOCKED for downstream workspace crates | 97-03 | cargo resolves deps from live crates.io index at package time; nono-proxy/shell-broker/cli exit 101 until nono 0.66.0 is published; only nono is always-runnable; downstream crates re-run after nono publish |
 | nono-py RouteConfig missing endpoint_policy (hard blocker for PyPI release) | 97-03 | maturin build exits 1: endpoint_policy field added to nono-proxy RouteConfig in phase 95 absorb but nono-py src/policy.rs:743 and src/proxy.rs:206 were not updated; fix = add `endpoint_policy: None,` to both initializers |
 | Release-readiness gate: policy violations return FAIL verdict; infrastructure failures throw | 97-04 | Enforces T-97-11/12/13 threat model — private-path leak is a FAIL verdict (operator can diagnose), not a harness error; command-not-found is a throw (harness-internal error, exit 4) |
-| Runbook documents 4-crate publish set (nono, nono-proxy, nono-shell-broker, nono-cli) | 97-04 | nono-shell-broker has no publish=false; publishable independently even as a Windows dev-dep; runbook includes it to prevent future publish-order failures |
+| Publish set reconciled to 3 crates (nono → nono-proxy → nono-cli) — WR-02 | 97-04/close | Code review + verifier flagged a divergence: release.yml published 3 crates but the dry-run + runbook specified 4 (adding nono-shell-broker). Operator chose the 3-crate set — nono-shell-broker marked `publish=false` (internal Windows broker, ships inside the MSI, bin-only crate / no lib target), dropped from release-dry-run.ps1 + RELEASE-RUNBOOK.md; now consistent with release.yml's existing publish-crates job. Build clean; release-readiness gate re-PASS. Supersedes the 97-04 "4-crate set" entry. |
 
 ### Pending Todos
 
@@ -124,12 +118,24 @@ Items acknowledged and deferred at **v3.2 close (2026-06-23)** — `gsd-sdk quer
 
 Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs guards (PARTIAL→CI), DRAIN-01/02/03 live host-gated UAT, 2 env-sensitive Phase-74 DACL-guard tests.
 
+Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk query audit-open` reported 48 open artifacts (after resolving both HUMAN-UAT gaps), user acknowledged-all. All historical or future-scoped; none v3.3 blockers:
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Historical | 40 open quick-tasks (Mar–Apr 2026 dates, all `missing`/cleaned-up) | Acknowledged | v3.3 close |
+| Historical | 6 seeds SEED-001…006 (all consumed; SEED-006 = UPST9 window, delivered v3.1) | Acknowledged | v3.3 close |
+| Future-scoped | 2 todos FUT-02 (poc-cert-broker clean-host) + FUT-03 (msi-vcredist-prereq) — Azure Trusted Signing distribution milestone | Acknowledged | v3.3 close |
+
+**Resolved at v3.3 close (not deferred):** 95-HUMAN-UAT cross-target clippy CI-lane confirmation → superseded by Phase 96 local cross-target toolchain (both gates GREEN locally); 97-HUMAN-UAT WR-02 publish-set divergence → operator chose the 3-crate set, reconciled. The v3.1/v3.2 PARTIAL→CI cross-target carry-forwards are likewise retired — Phase 96 made both Unix clippy gates locally runnable.
+
+**Operator-action carry-forwards (PREPARE-ONLY, outside any milestone):** (1) nono-py `RouteConfig` missing `endpoint_policy` field (`src/policy.rs:743` + `src/proxy.rs:206`) — fix before PyPI publish; (2) commit the v0.66.0 version bumps in sibling repos nono-py/nono-ts; (3) downstream crate `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.0` is on crates.io; (4) follow RELEASE-RUNBOOK.md for the tag push + publish.
+
 ## Session Continuity
 
-Last session: 2026-06-26T17:51:25.806Z
-Stopped at: Completed 97-03-PLAN.md
+Last session: 2026-06-26 — v3.3 milestone completion (all 4 phases verified, archived, tagged local)
+Stopped at: Milestone v3.3 complete + archived
 Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd:execute-phase 95` plan 04 to execute the fork-invariant verification checklist and PARTIAL→96 handoff record
+- Start the next milestone with /gsd-new-milestone
