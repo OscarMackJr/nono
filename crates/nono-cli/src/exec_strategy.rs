@@ -1384,33 +1384,71 @@ pub fn execute_supervised(
                             nono::sandbox::install_seccomp_af_unix_filter()
                         };
 
-                    match notify_result {
-                        Ok(proxy_notify_fd) => {
-                            // Write the raw fd number via write() — not intercepted
-                            // by the BPF filter (which only traps connect/bind/send*).
-                            // The parent reads this number and calls pidfd_getfd.
-                            let fd_num = proxy_notify_fd.as_raw_fd();
-                            let fd_bytes = fd_num.to_ne_bytes();
-                            let written = loop {
-                                // SAFETY: fd is a valid socket fd; fd_bytes is
-                                // a valid 4-byte buffer.
-                                let n = unsafe {
-                                    libc::write(
-                                        fd,
-                                        fd_bytes.as_ptr().cast::<libc::c_void>(),
-                                        fd_bytes.len(),
-                                    )
+                        match notify_result {
+                            Ok(proxy_notify_fd) => {
+                                // Write the raw fd number via write() — not intercepted
+                                // by the BPF filter (which only traps connect/bind/send*).
+                                // The parent reads this number and calls pidfd_getfd.
+                                let fd_num = proxy_notify_fd.as_raw_fd();
+                                let fd_bytes = fd_num.to_ne_bytes();
+                                let written = loop {
+                                    // SAFETY: fd is a valid socket fd; fd_bytes is
+                                    // a valid 4-byte buffer.
+                                    let n = unsafe {
+                                        libc::write(
+                                            fd,
+                                            fd_bytes.as_ptr().cast::<libc::c_void>(),
+                                            fd_bytes.len(),
+                                        )
+                                    };
+                                    if n < 0 && unsafe { *libc::__errno_location() } == libc::EINTR
+                                    {
+                                        continue;
+                                    }
+                                    break n;
                                 };
-                                if n < 0 && unsafe { *libc::__errno_location() } == libc::EINTR {
-                                    continue;
+                                if written < 0 {
+                                    let detail = format!(
+                                        "nono: failed to write proxy seccomp notify fd number: {}\n",
+                                        std::io::Error::last_os_error()
+                                    );
+                                    let msg = detail.as_bytes();
+                                    unsafe {
+                                        libc::write(
+                                            libc::STDERR_FILENO,
+                                            msg.as_ptr().cast::<libc::c_void>(),
+                                            msg.len(),
+                                        );
+                                        libc::_exit(126);
+                                    }
                                 }
-                                break n;
-                            };
-                            if written < 0 {
-                                let detail = format!(
-                                    "nono: failed to write proxy seccomp notify fd number: {}\n",
-                                    std::io::Error::last_os_error()
-                                );
+                                // Block until the parent acks that it has called
+                                // pidfd_getfd. This prevents exec (and O_CLOEXEC
+                                // closing the notify fd) before the parent acquires
+                                // its own copy. read() is not trapped by the BPF
+                                // filter (only connect/bind/send* are), so this
+                                // does not deadlock. Loop on EINTR so a signal
+                                // cannot cause the child to proceed prematurely.
+                                let mut ack = [0u8; 1];
+                                loop {
+                                    // SAFETY: fd is a valid socket fd; ack is a
+                                    // valid 1-byte buffer.
+                                    let n = unsafe {
+                                        libc::read(fd, ack.as_mut_ptr().cast::<libc::c_void>(), 1)
+                                    };
+                                    if n < 0 && unsafe { *libc::__errno_location() } == libc::EINTR
+                                    {
+                                        continue;
+                                    }
+                                    break;
+                                }
+                                // Keep alive past close_inherited_fds so the parent
+                                // can call pidfd_getfd. O_CLOEXEC closes it at exec.
+                                proxy_notify_fd_keep = Some(proxy_notify_fd);
+                            }
+                            Err(e) => {
+                                let detail =
+                                    format!("nono: seccomp proxy filter not available: {}\n", e);
                                 let msg = detail.as_bytes();
                                 unsafe {
                                     libc::write(
@@ -1420,41 +1458,6 @@ pub fn execute_supervised(
                                     );
                                     libc::_exit(126);
                                 }
-                            }
-                            // Block until the parent acks that it has called
-                            // pidfd_getfd. This prevents exec (and O_CLOEXEC
-                            // closing the notify fd) before the parent acquires
-                            // its own copy. read() is not trapped by the BPF
-                            // filter (only connect/bind/send* are), so this
-                            // does not deadlock. Loop on EINTR so a signal
-                            // cannot cause the child to proceed prematurely.
-                            let mut ack = [0u8; 1];
-                            loop {
-                                // SAFETY: fd is a valid socket fd; ack is a
-                                // valid 1-byte buffer.
-                                let n = unsafe {
-                                    libc::read(fd, ack.as_mut_ptr().cast::<libc::c_void>(), 1)
-                                };
-                                if n < 0 && unsafe { *libc::__errno_location() } == libc::EINTR {
-                                    continue;
-                                }
-                                break;
-                            }
-                            // Keep alive past close_inherited_fds so the parent
-                            // can call pidfd_getfd. O_CLOEXEC closes it at exec.
-                            proxy_notify_fd_keep = Some(proxy_notify_fd);
-                        }
-                        Err(e) => {
-                            let detail =
-                                format!("nono: seccomp proxy filter not available: {}\n", e);
-                            let msg = detail.as_bytes();
-                            unsafe {
-                                libc::write(
-                                    libc::STDERR_FILENO,
-                                    msg.as_ptr().cast::<libc::c_void>(),
-                                    msg.len(),
-                                );
-                                libc::_exit(126);
                             }
                         }
                     }
