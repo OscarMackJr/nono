@@ -83,12 +83,12 @@ the per-cluster inventories in this ledger. Any new output indicates an upstream
 
 ## Cluster Summary
 
-| cluster_id | theme | commits | disposition | windows-touch | rationale |
-|------------|-------|---------|-------------|---------------|-----------|
-| A | AF_UNIX mediation deadlock fix (security + supervisor IPC) | 1 | will-sync | no | Security fix: 4 bugs in AF_UNIX pathname mediation (deadlock, wrong jt offsets, rate-limiter starvation, dup2 bypass); Phase 95 |
-| B | Tool sandbox + proxy/audit surface expansion | 1 | split | no | Massive new feature (tool-sandbox dir absent in fork); tls_intercept/ hunks won't-apply; audit.rs touches CR-02 carve-out; sandbox/linux.rs cfg(linux)-gated; proxy surface touches Cluster F carve-out; Phase 95 |
-| C | Custom credentials explicit-activation refactor | 1 | split | no | Upstream reverses the Phase 89 fail-secure divergence (0c08e5d2); fork must preserve its expression; Phase 95 |
-| D | Release metadata + dep bump | 5 | won't-sync | no | Version management (v0.64.1, v0.65.0, v0.65.1 releases + sigstore-verify dep bump); fork uses own leapfrog convention; leapfrog floor >= 0.65.0 for Phase 97 |
+| cluster_id | theme | commits | disposition | windows-touch | rationale | phase-95-status |
+|------------|-------|---------|-------------|---------------|-----------|-----------------|
+| A | AF_UNIX mediation deadlock fix (security + supervisor IPC) | 1 | will-sync | no | Security fix: 4 bugs in AF_UNIX pathname mediation (deadlock, wrong jt offsets, rate-limiter starvation, dup2 bypass); Phase 95 | absorbed 2026-06-26 — git cherry-pick -x 9ce74e92 (ae77d198 + post-fix 61689ef8; DCO signed) |
+| B | Tool sandbox + proxy/audit surface expansion | 1 | split | no | Massive new feature (tool-sandbox dir absent in fork); tls_intercept/ hunks won't-apply; audit.rs touches CR-02 carve-out; sandbox/linux.rs cfg(linux)-gated; proxy surface touches Cluster F carve-out; Phase 95 | absorbed 2026-06-26 — shared-surface extraction (11fd10e0 hunks; tool-sandbox/tls_intercept/ skipped per D-01; DCO signed; commit 91d526e6) |
+| C | Custom credentials explicit-activation refactor | 1 | split | no | Upstream reverses the Phase 89 fail-secure divergence (0c08e5d2); fork must preserve its expression; Phase 95 | absorbed 2026-06-26 — credentials_intent fix / structural no-op per D-02; Phase 89 active predicate preserved; DCO signed; commit 62dbf013 |
+| D | Release metadata + dep bump | 5 | won't-sync | no | Version management (v0.64.1, v0.65.0, v0.65.1 releases + sigstore-verify dep bump); fork uses own leapfrog convention; leapfrog floor >= 0.65.0 for Phase 97 | won't-sync → Phase 97 (unchanged) |
 
 ---
 
@@ -439,9 +439,9 @@ requirement). Phase 97 picks up the >= 0.65.0 leapfrog floor from Cluster D. Esc
 threshold not reached; continue.
 
 **Downstream routing:**
-- Cluster A → Phase 95 (will-sync; cross-target clippy MUST)
-- Cluster B → Phase 95 (split; tls_intercept/ skip; tool-sandbox dir skip; cross-target clippy MUST)
-- Cluster C → Phase 95 (split; preserve Phase 89 activation predicate; apply credentials_intent fix only)
+- Cluster A → Phase 95 ABSORBED (9ce74e92 cherry-picked as ae77d198 + post-fix 61689ef8; DCO signed; cross-target clippy PARTIAL→96)
+- Cluster B → Phase 95 ABSORBED (shared-surface extraction from 11fd10e0; tool-sandbox/tls_intercept/ skipped per D-01; commit 91d526e6; DCO signed; cross-target clippy PARTIAL→96)
+- Cluster C → Phase 95 ABSORBED (D-02 split: structural no-op confirmed; Phase 89 fail-secure active predicate preserved; commit 62dbf013; DCO signed)
 - Cluster D → Phase 97 (won't-sync; leapfrog floor ref; sigstore-verify dep evaluation in Phase 95 DEPS)
 
 ---
