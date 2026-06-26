@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.3
 milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: executing
-stopped_at: Phase 94 complete — verified 10/10; Phases 95-97 remain (not yet planned)
-last_updated: "2026-06-26T00:45:00.000Z"
-last_activity: 2026-06-26 -- Phase 94 (UPST10 Divergence Audit) complete + verified
+status: completed
+stopped_at: Phase 95 context gathered
+last_updated: "2026-06-26T01:50:23.722Z"
+last_activity: 2026-06-26
 progress:
-  total_phases: 4
+  total_phases: 2
   completed_phases: 1
   total_plans: 2
   completed_plans: 2
-  percent: 25
+  percent: 100
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -99,9 +99,9 @@ Prior carry-forwards from v3.1 close (2026-06-21): SEC-01/SEC-02 AF_UNIX+procfs 
 
 ## Session Continuity
 
-Last session: 2026-06-25T23:25:53.326Z
-Stopped at: Phase 94 context gathered
-Resume file: .planning/phases/94-upst10-divergence-audit/94-CONTEXT.md
+Last session: 2026-06-26T01:50:23.687Z
+Stopped at: Phase 95 context gathered
+Resume file: .planning/phases/95-upstream-absorb-fork-invariant-verify/95-CONTEXT.md
 
 ## Operator Next Steps
 
