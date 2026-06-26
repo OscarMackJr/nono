@@ -1,6 +1,7 @@
 [package]
 name = "nono-shell-broker"
 version = "0.66.0"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

@@ -16,7 +16,7 @@
 
     PRE_PUBLISH_REGISTRY_BLOCKED: cargo publish --dry-run resolves all dependencies
     against the live crates.io index at package time.  For downstream workspace crates
-    (nono-proxy, nono-shell-broker, nono-cli) this will fail with "failed to select a
+    (nono-proxy, nono-cli) this will fail with "failed to select a
     version for nono = ^0.66.0" until nono 0.66.0 has been published.  This is an
     EXPECTED pre-publish state, not a packaging error.  The status is surfaced
     transparently so the operator can re-run after publishing the base crate.
@@ -61,14 +61,14 @@ function Write-Banner([string]$Title) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LEG 1 — crates.io dry-run  (dependency order: nono → nono-proxy →
-#          nono-shell-broker → nono-cli)
+# LEG 1 — crates.io dry-run  (dependency order: nono → nono-proxy → nono-cli)
 # ══════════════════════════════════════════════════════════════════════════════
 Write-Banner "crates.io dry-run (dependency order)"
 
 # Publishable set (no publish=false) in crates.io dependency order.
-# Excluded (publish=false): nono-fltmgr-client, nono-ffi (bindings/c), tools/sign-fixture.
-$PublishableCrates = @("nono", "nono-proxy", "nono-shell-broker", "nono-cli")
+# Excluded (publish=false): nono-shell-broker (internal Windows broker — ships inside
+# the MSI, not a standalone crate), nono-fltmgr-client, nono-ffi (bindings/c), tools/sign-fixture.
+$PublishableCrates = @("nono", "nono-proxy", "nono-cli")
 
 Push-Location $RepoRoot
 try {

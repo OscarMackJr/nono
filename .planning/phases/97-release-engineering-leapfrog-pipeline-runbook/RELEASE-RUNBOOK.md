@@ -44,7 +44,7 @@ pwsh -File scripts/release-dry-run.ps1
 Expected outcome (current known state):
 
 - `crates.nono` → PASS
-- `crates.nono-proxy/nono-shell-broker/nono-cli` → `PRE_PUBLISH_REGISTRY_BLOCKED`
+- `crates.nono-proxy/nono-cli` → `PRE_PUBLISH_REGISTRY_BLOCKED`
   (expected pre-publish state: nono 0.66.0 is not yet on crates.io)
 - `pypi.maturin_build` → currently FAIL (see blocker below)
 - `pypi.twine_check` → SKIP (twine absent on this host)
@@ -128,22 +128,20 @@ sleep 30
 cargo publish -p nono-proxy
 sleep 30
 
-cargo publish -p nono-shell-broker
-sleep 30
-
 cargo publish -p nono-cli
 ```
 
-**Publish set:** 4 crates (nono, nono-proxy, nono-shell-broker, nono-cli). The
-`nono-fltmgr-client` and `nono-ffi` crates have `publish = false` and are
-workspace-internal only. `nono-shell-broker` is included even though it is a Windows
-dev-dependency of `nono-cli`, because it has no `publish = false` guard and can be
-published independently; publishing it avoids future publish-order failures if its
-dependency status changes.
+**Publish set:** 3 crates (nono, nono-proxy, nono-cli). The `nono-shell-broker`,
+`nono-fltmgr-client`, and `nono-ffi` crates have `publish = false` and are
+workspace-internal only. `nono-shell-broker` is internal release infrastructure — it
+ships as a binary inside the Windows MSI, not as a standalone crates.io artifact, and is
+a Windows-only dev-dependency of `nono-cli` (cargo does not resolve dev-deps at
+publish-verify time, so it does not force `nono-cli` into the publish set). This matches
+the `release.yml` publish-crates job, which publishes exactly these 3 crates.
 
-Note: `cargo publish --dry-run -p nono-proxy/nono-shell-broker/nono-cli` will exit 101
+Note: `cargo publish --dry-run -p nono-proxy/nono-cli` will exit 101
 (PRE_PUBLISH_REGISTRY_BLOCKED) until `nono 0.66.0` is on crates.io. Re-run the dry-run
-after publishing nono to confirm all four crates package cleanly.
+after publishing nono to confirm all three crates package cleanly.
 
 ### Step 5 — PyPI (nono-py Wheel)
 
