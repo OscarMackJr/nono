@@ -1,14 +1,15 @@
 ---
-milestone: v3.3
-milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: shipped
-updated: 2026-06-26
+milestone: v3.4
+milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
+status: active
+updated: 2026-06-30
 ---
 
 # Roadmap: nono
 
 ## Milestones
 
+- 🔄 **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (active 2026-06-30)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
 - ✅ **v3.2 Signed Policy Overrides (ZT-Infra Attestation)** — Phases 91-93 (shipped 2026-06-23) — [archive](milestones/v3.2-ROADMAP.md)
 - ✅ **v3.1 UPST9 Upstream Sync (v0.62→v0.64) + v3.0 Drain** — Phases 85-90 (shipped 2026-06-21) — [archive](milestones/v3.1-ROADMAP.md)
@@ -18,6 +19,17 @@ updated: 2026-06-26
 > Earlier milestones (v2.5–v2.12) are archived under `.planning/milestones/`.
 
 ## Phases
+
+<details open>
+<summary>🔄 v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile (Phases 98-100) — ACTIVE</summary>
+
+Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.65.1..v0.66.0` window (19 PRs) without regressing the Windows security model or the ADR-86 policy-free-library boundary; settle the high-conflict #1225 `NetworkIntent` refactor via an ADR; then reconcile the prepare-only release pipeline, close the nono-py `RouteConfig` PyPI blocker, and leapfrog all workspace crates to `0.66.1` so an operator push is one step away. Cross-target clippy must be GREEN locally on both Unix gates (no PARTIAL→CI). Release scope = PREPARE ONLY.
+
+- [ ] **Phase 98: UPST11 Divergence Audit** — 0/TBD plans
+- [ ] **Phase 99: Upstream Absorb + Fork-Invariant Verify** — 0/TBD plans
+- [ ] **Phase 100: Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker** — 0/TBD plans
+
+</details>
 
 <details>
 <summary>✅ v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release (Phases 94-97) — SHIPPED 2026-06-26</summary>
@@ -56,6 +68,41 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 </details>
 
+## Phase Details
+
+### Phase 98: UPST11 Divergence Audit
+**Goal**: The fork has a complete, commit-level DIVERGENCE-LEDGER for the `nolabs-ai/nono` `v0.65.1..v0.66.0` window and the #1225 `NetworkIntent`-vs-`ProxyOnly` disposition is settled by an ADR.
+**Depends on**: Nothing (first phase of v3.4)
+**Requirements**: UPST11-01
+**Success Criteria** (what must be TRUE):
+  1. A DIVERGENCE-LEDGER document exists for `v0.65.1..v0.66.0` (the 19 PRs referenced by upstream release-cut #1293) classifying every commit into will-sync / fork-preserve / won't-sync / split clusters, with a `windows-touch` flag per commit and a per-cell ADR-review verdict (continue/escalate) — refining the `260629-toe` quick-task ledger's preliminary per-PR dispositions to per-commit resolution.
+  2. The #1225 `NetworkIntent`-vs-`ProxyOnly` adopt-vs-fork-divergence call is settled in an ADR — either full-sync-adopt (precedent: v3.1 Phase 86 boundary-convergence) or a written fork-divergence carve-out with rationale for which fork invariants (policy-free-library boundary ADR-86, Windows WFP/AppContainer backends) would be affected.
+  3. Each cluster's disposition is justified by the established criteria (security impact, Windows-backend touch, or library-boundary relevance); no cluster carries a bare TBD verdict.
+  4. The audit is the sole deliverable of this phase: no cherry-picks are initiated here; the ledger and ADR gate Phase 99.
+**Plans**: TBD
+
+### Phase 99: Upstream Absorb + Fork-Invariant Verify
+**Goal**: All will-sync clusters from the Phase 98 ledger are absorbed into the fork in dependency order and the Windows security model, policy-free-library boundary, and cross-target clippy gates are provably unregressed.
+**Depends on**: Phase 98
+**Requirements**: UPST11-02, UPST11-03, UPST11-04
+**Success Criteria** (what must be TRUE):
+  1. Every commit in will-sync clusters is present in the fork (cherry-picked with `-x` trailer or manually replayed), DCO-signed (`Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>`), with no `will-sync` row left open in the DIVERGENCE-LEDGER — covering tool-sandbox (#1268, #1271, #1253, #1249), network (#1263, #1127), proxy (#983, #1243), sandbox (#1207), and tests (#1213) per their Phase 98 audited dispositions, absorbed in dependency order (#1225 and deps before code that uses them).
+  2. Dependency, CI, and documentation clusters are absorbed or reconciled — sigstore-trust-root 0.8.0→0.9.0 (#1229, sigstore-rs cascade checked), criterion 0.5.1→0.8.2 (#1232), CI compile-step mapping fix (#1251), proxy docs (#1247 activation, #1246 stale `X-Nono-Token`), and the `always-further`→`nolabs-ai` org-rename (#1235) verified N/A-or-applied — with `Cargo.lock` regenerated and the workspace building clean.
+  3. Local cross-target clippy is GREEN on both Unix gates (`cross clippy` x86_64-unknown-linux-gnu + direct-binary `cargo-zigbuild clippy` x86_64-apple-darwin, `-D warnings -D clippy::unwrap_used`, no PARTIAL→CI); `make ci` (clippy + fmt + tests) is clean on the dev host.
+  4. Fork-divergent invariants are explicitly verified post-sync — the AppContainer/WFP/broker Windows backends, the ADR-86 policy-free-library boundary, and the `exec_strategy_windows/` denial-rendering carve-out each have a checklist entry (none marked regressed); a code-review + verifier pass confirm no Windows-backend or boundary regression.
+**Plans**: TBD
+
+### Phase 100: Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker
+**Goal**: The workspace is at crate version `0.66.1` (minimal collision-free bump above upstream `0.66.0`), the prepare-only release pipeline is reconciled and gate-GREEN, the nono-py PyPI blocker is closed, and a one-step operator push is the only remaining action.
+**Depends on**: Phase 99 (sync complete before bumping; the post-sync tree is what gets released)
+**Requirements**: RLS-10, RLS-11, RLS-12, RLS-13
+**Success Criteria** (what must be TRUE):
+  1. All 5 workspace crates (`nono`, `nono-cli`, `nono-proxy`, `nono-shell-broker`, `nono-ffi`) plus the `nono-py`/`nono-ts` binding manifests carry version `0.66.1`; internal path-dep `version` pins are consistent across every `Cargo.toml`; `Cargo.lock` is regenerated and `make build` passes clean.
+  2. The carried-forward nono-py `RouteConfig` PyPI blocker is closed: the missing `endpoint_policy` field is added at `src/policy.rs:743` and `src/proxy.rs:206` so the `nono-py` wheel builds and `twine check` / maturin validation passes for publish.
+  3. Upstream CI changes are reconciled against the fork's prepare-only pipeline — #1245 (idempotent `publish-crates` + cross-compile check on release PRs) and #1251 (compile-step mapping fix) adopted or adapted without breaking the existing `release-readiness` verify-dark gate or the signed-MSI build order.
+  4. `scripts/release-dry-run.ps1` and the `release-readiness` verify-dark gate both re-run GREEN at `0.66.1`; `RELEASE-RUNBOOK.md` is updated for the `0.66.1` tag embedding the PUBLIC-repo pre-push checklist (no `build_notes/`/`.gsd/` staged; crate version `0.66.1` > upstream `0.66.0` confirmed); the actual tag push + registry publish remain operator-gated.
+**Plans**: TBD
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -73,3 +120,6 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete | 2026-06-26 |
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete | 2026-06-26 |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
+| 98. UPST11 Divergence Audit | v3.4 | 0/TBD | Not started | - |
+| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 0/TBD | Not started | - |
+| 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 0/TBD | Not started | - |

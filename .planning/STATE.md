@@ -2,39 +2,39 @@
 gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
-status: planning
+status: active
 last_updated: "2026-06-30T01:50:13.352Z"
 last_activity: 2026-06-30
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
   percent: 0
 ---
 
-# Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
+# Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93 complete + archived; tag `v3.2` local). Phase numbering continues from Phase 93 (Phases 94-97 — NOT reset). Roadmap: `.planning/ROADMAP.md`. Requirements: `.planning/REQUIREMENTS.md`.
+See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97 complete + archived; tag `v3.3` local). Phase numbering continues from Phase 97 (Phases 98-100 — NOT reset). Roadmap: `.planning/ROADMAP.md`. Requirements: `.planning/REQUIREMENTS.md`.
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and is, for the first time, genuinely releasable: a gated, signed, multi-registry pipeline prepared GREEN for a one-step operator push.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and turns the v3.3 prepare-only pipeline into a genuinely operator-pushable `0.66.1` release.
 
-**Current Focus:** Milestone v3.3 complete + archived 2026-06-26 (tag `v3.3` local). Awaiting next milestone — `/gsd-new-milestone`.
+**Current Focus:** Milestone v3.4 active 2026-06-30 (roadmap created, Phases 98-100 defined). Phase 98 (UPST11 Divergence Audit) is next.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 98 — UPST11 Divergence Audit
 Plan: —
-Status: Defining requirements
-Last activity: 2026-06-30 — Milestone v3.4 started
+Status: Not started
+Last activity: 2026-06-30 — v3.4 roadmap created (Phases 98-100)
 
 ## Performance Metrics
 
-**Velocity:** (v3.3 — reset; populated as phases complete)
+**Velocity:** (v3.4 — reset; populated as phases complete)
 
-- Total plans completed: 16
+- Total plans completed: 0
 - Average duration: —
 - Total execution time: —
 
@@ -42,22 +42,10 @@ Last activity: 2026-06-30 — Milestone v3.4 started
 |-------|------|----------|-------|-------|
 
 *Updated after each plan completion*
-| Phase 95-upstream-absorb-fork-invariant-verify P01 | 180 | 2 tasks | 7 files |
-| Phase 95-upstream-absorb-fork-invariant-verify P04 | 30 | 2 tasks | 2 files |
-| Phase 95 P05 | 8 | 2 tasks | 1 files |
-| Phase 95-upstream-absorb-fork-invariant-verify P06 | 18 | 2 tasks | 3 files |
-| Phase 95 P07 | 30 | 1 task | 0 source files (verification gate) |
-| Phase 96 P01 | 26 | 2 tasks | 3 files |
-| Phase 96-cross-target-toolchain P02 | 14 | 2 tasks | 1 files |
-| Phase 96-cross-target-toolchain P03 | 2 | 2 tasks | 2 files |
-| Phase 97 P01 | 6 | 2 tasks | 7 files |
-| Phase 97 P02 | 15 | 2 tasks | 2 files |
-| Phase 97 P03 | 35 | 2 tasks | 1 files |
-| Phase 97 P04 | 3 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
-### Key Decisions (v3.3 roadmap)
+### Key Decisions (v3.3 roadmap — historical)
 
 | Decision | Phase | Rationale |
 |----------|-------|-----------|
@@ -80,6 +68,14 @@ Last activity: 2026-06-30 — Milestone v3.4 started
 | Release-readiness gate: policy violations return FAIL verdict; infrastructure failures throw | 97-04 | Enforces T-97-11/12/13 threat model — private-path leak is a FAIL verdict (operator can diagnose), not a harness error; command-not-found is a throw (harness-internal error, exit 4) |
 | Publish set reconciled to 3 crates (nono → nono-proxy → nono-cli) — WR-02 | 97-04/close | Code review + verifier flagged a divergence: release.yml published 3 crates but the dry-run + runbook specified 4 (adding nono-shell-broker). Operator chose the 3-crate set — nono-shell-broker marked `publish=false` (internal Windows broker, ships inside the MSI, bin-only crate / no lib target), dropped from release-dry-run.ps1 + RELEASE-RUNBOOK.md; now consistent with release.yml's existing publish-crates job. Build clean; release-readiness gate re-PASS. Supersedes the 97-04 "4-crate set" entry. |
 
+### Key Decisions (v3.4 roadmap)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| 3 phases (98-100), drain-then-sync shape | all | Audit (98) gates absorb (99), absorb completes before version bump (100) — same dependency-inversion protection as v3.3. #1225 HIGH-CONFLICT disposition settled in 98 before any cherry-pick begins. |
+| #1225 ADR deferred to Phase 98 | 98 | The NetworkIntent refactor touches the core network-capability enum the Windows backends key off — adopt-vs-diverge decision must be deliberate and documented, not decided mid-absorb. Mirrors the v3.1 Phase 86 precedent. |
+| Release reconcile in Phase 100, after sync | 100 | Version bump to 0.66.1 must follow the sync to avoid a dirty Cargo.lock during cherry-picks; PyPI blocker fixed in the same phase since it gates the release. |
+
 ### Pending Todos
 
 None yet.
@@ -87,12 +83,12 @@ None yet.
 ### Blockers/Concerns
 
 - **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All tags remain LOCAL ONLY; push is operator-gated.
-- **Upstream relocated**: canonical upstream is now `nolabs-ai/nono` (was `always-further/nono`); Phase 94 updates the remote and PROJECT.md.
-- **Cross-target clippy**: XTGT-03 (apple-darwin) explicitly allows a documented hard-blocker outcome if osxcross/SDK is infeasible from Windows. Phase 96 resolves the outcome either way.
-- **Cross-repo release**: nono-py at `../nono-py`, nono-ts at `../nono-ts`. Phase 97 version bump must touch both sibling repos.
-- **PARTIAL→CI carry-forwards**: SEC-01/SEC-02 (v3.1), ZTL-04 AWS_* strip (v3.2) — still PARTIAL→CI; Phase 96 may resolve if linux-gnu toolchain clears them.
+- **#1225 HIGH-CONFLICT**: fork has deep `NetworkMode::ProxyOnly` usage; adopt-vs-fork-divergence call deferred to Phase 98 ADR. This item alone justifies the separate audit phase.
+- **Cross-target clippy MUST be GREEN**: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) must exit 0 locally — PARTIAL→CI is not the default (retired in v3.3 Phase 96). #1225, #1207, #1213, #1249 all touch cfg-gated Unix code.
+- **Version collision at 0.66.0**: fork is at crate 0.66.0; upstream also shipped 0.66.0. The fork bumps to 0.66.1 in Phase 100 — do NOT publish 0.66.0 from the fork.
+- **nono-py PyPI blocker (RLS-12)**: `maturin build` exits 1 — nono-py `src/policy.rs:743` and `src/proxy.rs:206` missing `endpoint_policy: None,` in `RouteConfig` initializers. Phase 100 closes this.
 - **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` required on every commit including cherry-picks (use `-x` + manual DCO trailer).
-- **nono-py PyPI blocker (97-03)**: `maturin build` exits 1 — nono-py `src/policy.rs:743` and `src/proxy.rs:206` are missing `endpoint_policy: None,` in `RouteConfig` struct initializers. Must be fixed in nono-py repo before the actual PyPI release.
+- **Release scope = PREPARE ONLY**: actual tag push + registry publish remain an operator-gated manual step outside this milestone.
 
 ### Quick Tasks Completed
 
@@ -128,14 +124,14 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 **Resolved at v3.3 close (not deferred):** 95-HUMAN-UAT cross-target clippy CI-lane confirmation → superseded by Phase 96 local cross-target toolchain (both gates GREEN locally); 97-HUMAN-UAT WR-02 publish-set divergence → operator chose the 3-crate set, reconciled. The v3.1/v3.2 PARTIAL→CI cross-target carry-forwards are likewise retired — Phase 96 made both Unix clippy gates locally runnable.
 
-**Operator-action carry-forwards (PREPARE-ONLY, outside any milestone):** (1) nono-py `RouteConfig` missing `endpoint_policy` field (`src/policy.rs:743` + `src/proxy.rs:206`) — fix before PyPI publish; (2) commit the v0.66.0 version bumps in sibling repos nono-py/nono-ts; (3) downstream crate `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.0` is on crates.io; (4) follow RELEASE-RUNBOOK.md for the tag push + publish.
+**Operator-action carry-forwards into v3.4 (PREPARE-ONLY — outside any prior milestone):** (1) nono-py `RouteConfig` missing `endpoint_policy` field (`src/policy.rs:743` + `src/proxy.rs:206`) — closed by Phase 100 (RLS-12); (2) downstream crate `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.0` is on crates.io; (3) follow updated RELEASE-RUNBOOK.md (at 0.66.1) for the tag push + publish.
 
 ## Session Continuity
 
-Last session: 2026-06-26 — v3.3 milestone completion (all 4 phases verified, archived, tagged local)
-Stopped at: Milestone v3.3 complete + archived
+Last session: 2026-06-30 — v3.4 roadmap created (Phases 98-100 defined, requirements mapped)
+Stopped at: Roadmap created; Phase 98 ready to plan
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Run `/gsd:plan-phase 98` to plan the UPST11 Divergence Audit phase
