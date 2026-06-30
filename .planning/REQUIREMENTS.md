@@ -44,7 +44,7 @@
 | PR #1251 | 84b5e7ce | Noise | OUT-OF-FILTER | CI yaml only |
 | PR #1247 | 8aee0e77 | Noise | OUT-OF-FILTER | data/ dir only |
 | PR #1293 | d817ed53 | H | WON'T-SYNC | release metadata; Phase 100 leapfrog 0.66.1 |
-- [ ] **UPST11-04**: Fork-divergent invariants are explicitly preserved and verified post-sync — local cross-target clippy is GREEN on both Unix gates (`cross clippy` linux-gnu + direct-binary `cargo-zigbuild clippy` apple-darwin, `-D warnings -D clippy::unwrap_used`, no PARTIAL→CI), `make ci` (clippy + fmt + tests) is clean on the dev host, and a code-review + verifier pass confirm no Windows-backend (AppContainer/WFP/broker) or ADR-86 boundary regression.
+- [x] **UPST11-04**: Fork-divergent invariants are explicitly preserved and verified post-sync — local cross-target clippy is GREEN on both Unix gates (`cross clippy` linux-gnu + direct-binary `cargo-zigbuild clippy` apple-darwin, `-D warnings -D clippy::unwrap_used`, no PARTIAL→CI), `make ci` (clippy + fmt + tests) is clean on the dev host, and a code-review + verifier pass confirm no Windows-backend (AppContainer/WFP/broker) or ADR-86 boundary regression.
 
 ### Release Reconcile (RLS)
 
@@ -85,7 +85,7 @@ Populated by roadmap creation 2026-06-30. Phase numbering continues from Phase 9
 | UPST11-01 | Phase 98 | Complete |
 | UPST11-02 | Phase 99 | Complete |
 | UPST11-03 | Phase 99 | Complete |
-| UPST11-04 | Phase 99 | Pending |
+| UPST11-04 | Phase 99 | Complete |
 | RLS-10 | Phase 100 | Pending |
 | RLS-11 | Phase 100 | Pending |
 | RLS-12 | Phase 100 | Pending |
