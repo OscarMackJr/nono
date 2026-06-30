@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
-status: executing
-stopped_at: Phase 98 Plan 01 complete
-last_updated: "2026-06-30T03:43:13.330Z"
+status: verifying
+stopped_at: Phase 98 Plan 04 complete — Phase 98 COMPLETE
+last_updated: "2026-06-30T03:51:06.733Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 1
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -22,13 +22,13 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and turns the v3.3 prepare-only pipeline into a genuinely operator-pushable `0.66.1` release.
 
-**Current Focus:** Phase 98 Plan 03 complete (ADR-98 NetworkIntent disposition — full-sync-adopt). Next: Phase 98 Plan 04 (ledger cross-references + phase close).
+**Current Focus:** Phase 98 COMPLETE (Plan 04 done — carve-out re-touch check finalized + ADR-98 cross-referenced + completeness sweep PASS). Next: Phase 99 (UPST11 absorb).
 
 ## Current Position
 
 Phase: 98 (upst11-divergence-audit) — EXECUTING
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-30
 
 ## Performance Metrics
@@ -84,6 +84,8 @@ Last activity: 2026-06-30
 | Cluster A windows-touch=yes confirmed: 7 of 11 #1225-touched files have cfg(windows) | 98-01 | grep confirms capability_ext.rs, supervised_runtime.rs, command_runtime.rs, execution_runtime.rs, launch_runtime.rs, output.rs, terminal_approval.rs; cross-target clippy REQUIRED in Phase 99 if adopted |
 | #1225 actual-diff confirmed CLI-side only; Cluster E verify→will-sync; ADR-98 sole Phase 99 blocking gate | 98-02 | git show on all 14 commits: no core library changes in window; c808f000 D-03 re-confirmed as will-sync (mechanical nolabs-ai URL update; package namespace identifiers preserved); per-cluster ADR risk matrix complete (Cluster A=H dominant; no TBD cells) |
 | ADR-98 Decision: full-sync-adopt upstream #1225 NetworkIntent refactor (Option A) | 98-03 | CLI-only refactor; ADR-86 library boundary non-regressed (NetworkMode::ProxyOnly in crates/nono/src/ untouched); Windows WFP/AppContainer non-regressed (exec_strategy_windows/network.rs reads enforcement-time WindowsNetworkPolicyMode::ProxyOnly, not CLI intent type); Phase 86 convergence precedent applies; Phase 99 deviations: WSL2ProxyFallback preservation + CompiledEndpointPolicy compatibility in proxy_runtime.rs |
+| Carve-out re-touch check finalized: 2 CLEAN, 3 HIT (with guard tests), 1 additive-HIT | 98-04 | CR-02+v3.2-override=clean; Cluster-F+endpoint-policy=HIT-expected-conflict-preserve-fork-expression; linux.rs=HIT-additive-only; guard tests named for all HITs; ADR-98 cross-referenced in endpoint-policy subsection (highest re-touch exposure) |
+| Completeness sweep PASS: 14+6=20; no TBD; six verdicts; 0.66.1 floor anchored | 98-04 | All five assertions PASS; ledger is complete; Phase 99 gate document ready |
 
 ### Pending Todos
 
@@ -92,7 +94,7 @@ None yet.
 ### Blockers/Concerns
 
 - **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push` (minifilter-altitude approval pending). All tags remain LOCAL ONLY; push is operator-gated.
-- **#1225 HIGH-CONFLICT**: fork has deep `NetworkMode::ProxyOnly` usage; adopt-vs-fork-divergence call deferred to Phase 98 ADR. This item alone justifies the separate audit phase.
+- **#1225 SETTLED**: ADR-98 Accepted — full-sync-adopt (2026-06-30); Phase 99 applies 72bcfd66 + d457ecc3 with WSL2ProxyFallback + CompiledEndpointPolicy deviations.
 - **Cross-target clippy MUST be GREEN**: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) must exit 0 locally — PARTIAL→CI is not the default (retired in v3.3 Phase 96). #1225, #1207, #1213, #1249 all touch cfg-gated Unix code.
 - **Version collision at 0.66.0**: fork is at crate 0.66.0; upstream also shipped 0.66.0. The fork bumps to 0.66.1 in Phase 100 — do NOT publish 0.66.0 from the fork.
 - **nono-py PyPI blocker (RLS-12)**: `maturin build` exits 1 — nono-py `src/policy.rs:743` and `src/proxy.rs:206` missing `endpoint_policy: None,` in `RouteConfig` initializers. Phase 100 closes this.
@@ -137,7 +139,7 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-06-30T03:43:13.315Z
+Last session: 2026-06-30T03:51:06.718Z
 Stopped at: Phase 98 Plan 01 complete
 Resume file: None
 

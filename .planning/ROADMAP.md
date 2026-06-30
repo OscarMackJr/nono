@@ -83,7 +83,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 98-01-PLAN.md — Window fetch, Reproduction block + noise reconciliation + cluster scaffold
 - [x] 98-02-PLAN.md — Per-commit cluster classification, re-export scan + ADR risk matrix
 - [x] 98-03-PLAN.md — #1225 NetworkIntent-vs-ProxyOnly disposition ADR (proj/ADR-98)
-- [ ] 98-04-PLAN.md — Expanded six-carve-out re-touch check + ADR-98 cross-reference
+- [x] 98-04-PLAN.md — Expanded six-carve-out re-touch check + ADR-98 cross-reference
 
 ### Phase 99: Upstream Absorb + Fork-Invariant Verify
 **Goal**: All will-sync clusters from the Phase 98 ledger are absorbed into the fork in dependency order and the Windows security model, policy-free-library boundary, and cross-target clippy gates are provably unregressed.
@@ -124,6 +124,6 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 95. Upstream Absorb + Fork-Invariant Verify | v3.3 | 7/7 | Complete | 2026-06-26 |
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete | 2026-06-26 |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
-| 98. UPST11 Divergence Audit | v3.4 | 3/4 | In Progress|  |
+| 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete   | 2026-06-30 |
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 0/TBD | Not started | - |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 0/TBD | Not started | - |
