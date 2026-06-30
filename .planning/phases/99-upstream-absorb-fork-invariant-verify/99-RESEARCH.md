@@ -631,14 +631,14 @@ direct code inspection or git show against the live repository.
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **sigstore-verify 0.8.0 → 0.9.0 compatibility**
+1. **sigstore-verify 0.8.0 → 0.9.0 compatibility** — RESOLVED: deferred to executor at apply time. Plan 05 Task 1's cascade-check procedure covers both resolution paths (resolver bumps sigstore-verify 0.9.0 → co-bump + `"tuf"` feature check; resolver keeps 0.8.0 → accept dual-version), so no planning-time decision is required.
    - What we know: fork is at 0.8.0, upstream was at 0.9.0 at window base; Cluster F bumps trust-root to 0.9.0
-   - What's unclear: whether `cargo update -p sigstore-trust-root` will ALSO pull sigstore-verify 0.9.0 due to transitive deps, and whether the `"tuf"` feature still exists in sigstore-verify 0.9.0
+   - What's unclear (runtime-deferred): whether `cargo update -p sigstore-trust-root` will ALSO pull sigstore-verify 0.9.0 due to transitive deps, and whether the `"tuf"` feature still exists in sigstore-verify 0.9.0
    - Recommendation: executor should run `cargo update -p sigstore-trust-root --dry-run` (if available) or inspect the Cargo.lock diff after `cargo update -p sigstore-trust-root` to check what gets pulled before committing. If `sigstore-verify` also gets bumped by the resolver, inspect the API diff.
 
-2. **`command_policy.rs` and `migration.rs` deletion in fork**
+2. **`command_policy.rs` and `migration.rs` deletion in fork** — RESOLVED: N/A — files absent in fork HEAD (deleted). Plan 04 Task 2 skips them with an explicit `ls ... || echo absent` absence-verification step, so there is nothing to update in the fork.
    - What we know: Cluster E's `c808f000` tries to modify these files but they are deleted in the fork HEAD (modify-delete conflict). Upstream's changes are just string replacements.
    - What's unclear: whether there are any remaining references to these files in the fork that would need updating if the string content were still present.
    - Recommendation: mark as N/A for Cluster E — the files don't exist in the fork so there's nothing to update. Verify with `ls crates/nono-cli/src/command_policy.rs 2>/dev/null || echo absent`.
