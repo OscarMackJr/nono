@@ -132,5 +132,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete | 2026-06-26 |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
-| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete   | 2026-06-30 |
+| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 0/TBD | Not started | - |
