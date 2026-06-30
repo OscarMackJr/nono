@@ -740,6 +740,25 @@ do careful split extraction: skip tls_intercept/ hunks, verify endpoint-policy w
 preserved. `c808f000` (E) is org-string only in `route.rs`. `08ca19a8` (C) is a targeted
 wildcard-matching fix in `route.rs` — likely additive.
 
+**ADR-98 cross-reference (highest re-touch exposure):** Cluster A (#1225, `72bcfd66`) also
+rewrites `proxy_runtime.rs` — the same file the fork's `CompiledEndpointPolicy` wiring passes
+through. ADR-98 is **Accepted — full-sync-adopt** (2026-06-30); see
+`proj/ADR-98-network-intent-disposition.md`. Recommendation in one line: adopt `72bcfd66` +
+`d457ecc3` (CLI-only refactor; ADR-86 library boundary non-regressed; Phase 86 precedent).
+Phase 99 MUST reconcile the NetworkIntent adoption (`72bcfd66` Cluster A) with the
+`CompiledEndpointPolicy::compile()` → `evaluate()` chain in `proxy_runtime.rs` as a fork-specific
+deviation (ADR-98 §Consequences, item 2).
+
+**Guard tests (D-08):** `denied_endpoint_returns_403_and_audit` (Phase 89 — primary signal for
+`CompiledEndpointPolicy::evaluate()` chain); `allow_domain_endpoint_route_does_not_shadow_credential_route`
+(Phase 89 — route resolution order). Both must pass after Phase 99 split extraction.
+
+**Phase 99 guidance:** Apply `cdeeb5b9` split extraction (SKIP tls_intercept/ hunks; APPLY
+pool.rs + shared proxy surfaces); apply `46bcfbb9` endpoint wiring AFTER verifying
+`CompiledEndpointPolicy` compatibility; apply `08ca19a8` wildcard fix (additive). Apply Cluster A
+(`72bcfd66` + `d457ecc3`) per ADR-98; reconcile `proxy_runtime.rs` overlap as deviation.
+Run Phase 89 guard tests to confirm evaluate() chain survives.
+
 ### v3.3 Phase 95 Restored Fork Invariants (linux.rs AF_UNIX/seccomp/cgroup paths)
 
 ```bash
@@ -755,6 +774,16 @@ loop). It does NOT touch the AF_UNIX seccomp BPF filter path, the cgroup v2 reso
 enforcement module, or the `restrict_self()` / `apply_landlock()` entry points restored in
 Phase 95/96. Phase 99 executor: apply `5b8e94da` with cross-target clippy gate (linux.rs is
 cfg-gated; CLAUDE.md MUST rule).
+
+**Guard tests (D-08, additive hit — verify fork invariants survive apply):**
+`proxy_no_v4_seccomp` / `proxy_v4_no_seccomp` (Phase 95/96 — ProxyOnly on Linux V4+/pre-V4
+kernels; restored from upstream ae77d198 in Phase 96-01). These cover the
+`restrict_self()` + seccomp-fallback paths that `5b8e94da` does NOT modify — run them to
+confirm the 9P warning addition does not perturb the Landlock/seccomp invariants.
+
+**Phase 99 guidance:** Apply `5b8e94da` as will-sync (Cluster D). Run
+`cross clippy --workspace --target x86_64-unknown-linux-gnu` (CLAUDE.md MUST rule; linux.rs
+cfg-gated). Then run Phase 95/96 guard tests to verify fork invariants are intact.
 
 ### v3.2 Override Surface (PolicyOverrideApplied audit variant / EventIDs 10006-10010)
 
