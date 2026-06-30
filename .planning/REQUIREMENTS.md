@@ -19,8 +19,31 @@
 ### UPST11 — Upstream Sync (UPST11)
 
 - [x] **UPST11-01**: A DIVERGENCE-LEDGER for the `nolabs-ai/nono` `v0.65.1..v0.66.0` window classifies every commit into will-sync / fork-preserve / won't-sync / split clusters, with a `windows-touch` flag per commit and a per-cell ADR-review verdict (continue/escalate); the #1225 `NetworkIntent`-vs-`ProxyOnly` disposition is settled with an ADR (full-sync-adopt OR fork-divergence carve-out, with rationale).
-- [ ] **UPST11-02**: All will-sync feature/fix clusters are absorbed into the fork (cherry-pick with `-x` or manual replay, each commit DCO-signed) without regressing the Windows security model or the policy-free-library boundary — covering tool-sandbox (#1268 self-invocation policy, #1271 `@git:common-dir` token, #1253 skip-missing-dirs, #1249 TLS-trust-bundle env), network (#1263 contradictory-flags error, #1127 `--allow-endpoint`→credential-routes wiring), proxy (#983 HTTP/2 reverse-proxy + credential injection, #1243 wildcard credential routes), sandbox (#1207 9P-filesystem warn), and tests (#1213 e2e exec-strategy integration tests), per their audited Phase 98 dispositions.
-- [ ] **UPST11-03**: The dependency, CI, and documentation clusters are absorbed or reconciled — `sigstore-trust-root` 0.8.0→0.9.0 (#1229, sigstore-rs cascade checked), `criterion` 0.5.1→0.8.2 (#1232), CI compile-step mapping fix (#1251), proxy docs (#1247 activation, #1246 stale `X-Nono-Token`), and the `always-further`→`nolabs-ai` org-rename (#1235) verified N/A-or-applied across the live tree — with `Cargo.lock` regenerated and the workspace building clean.
+- [ ] **UPST11-02**: All will-sync feature/fix clusters are absorbed into the fork (cherry-pick with `-x` or manual replay, each commit DCO-signed) without regressing the Windows security model or the policy-free-library boundary — Cluster A full-sync-adopt (ADR-98): 72bcfd66 (#1225 NetworkIntent) + d457ecc3 (#1263 contradictory-flag guard); (tool-sandbox Cluster B: won't-sync — fork lacks tool-sandbox/; carry-forward); proxy (#983 Cluster C split, #1127 Cluster C, #1243 Cluster C), sandbox (#1207 Cluster D), tests (#1213 out-of-filter: tests/ subdir only), per their audited Phase 98 dispositions.
+- [ ] **UPST11-03**: The dependency, CI, and documentation clusters are absorbed or reconciled — `sigstore-trust-root` 0.8.0→0.9.0 (#1229 Cluster F, sigstore-rs cascade checked), `criterion` 0.5.1→0.8.2 (#1232) (N/A — nono-cli/Cargo.toml only; out of drift-filter; reconcile separately), CI compile-step mapping fix (#1251) (N/A — CI yaml only; reconcile in Phase 100), proxy docs (#1247 activation) (N/A — crates/nono-cli/data/ dir; out of filter), proxy docs/X-Nono-Token fix (#1246 Cluster G), and the `always-further`→`nolabs-ai` org-rename (#1235 Cluster E) verified N/A-or-applied — with `Cargo.lock` regenerated and the workspace building clean.
+
+**PR→cluster mapping (D-02 reconciliation — full traceability):**
+
+| PR | SHA | Cluster | Disposition | Notes |
+|----|-----|---------|-------------|-------|
+| PR #1225 | 72bcfd66 | A | IN SCOPE full-sync-adopt | NetworkIntent |
+| PR #1263 | d457ecc3 | A | IN SCOPE companion | contradictory-flag guard |
+| PR #983 | cdeeb5b9 | C | IN SCOPE split | HTTP/2 pool |
+| PR #1127 | 46bcfbb9 | C | IN SCOPE apply | endpoint wiring |
+| PR #1243 | 08ca19a8 | C | IN SCOPE apply | wildcard route |
+| PR #1207 | 5b8e94da | D | IN SCOPE will-sync | 9P warning |
+| PR #1235 | c808f000 | E | IN SCOPE will-sync | org-ref migration |
+| PR #1229 | 2e64798d | F | IN SCOPE will-sync | sigstore-trust-root |
+| PR #1246 | a4d68189 | G | IN SCOPE will-sync | proxy docs/token fix |
+| PR #1268 | 691e0f4f | B | WON'T-SYNC | fork lacks tool-sandbox/ |
+| PR #1271 | 7011bc85 | B | WON'T-SYNC | fork lacks tool-sandbox/ |
+| PR #1253 | d2252225 | B | WON'T-SYNC | fork lacks tool-sandbox/ |
+| PR #1249 | 853d5236 | B | WON'T-SYNC | fork lacks tool-sandbox/ |
+| PR #1213 | 30cfee67 | Noise | OUT-OF-FILTER | tests/ subdir only |
+| PR #1232 | 5441f4eb | Noise | OUT-OF-FILTER | nono-cli/Cargo.toml only |
+| PR #1251 | 84b5e7ce | Noise | OUT-OF-FILTER | CI yaml only |
+| PR #1247 | 8aee0e77 | Noise | OUT-OF-FILTER | data/ dir only |
+| PR #1293 | d817ed53 | H | WON'T-SYNC | release metadata; Phase 100 leapfrog 0.66.1 |
 - [ ] **UPST11-04**: Fork-divergent invariants are explicitly preserved and verified post-sync — local cross-target clippy is GREEN on both Unix gates (`cross clippy` linux-gnu + direct-binary `cargo-zigbuild clippy` apple-darwin, `-D warnings -D clippy::unwrap_used`, no PARTIAL→CI), `make ci` (clippy + fmt + tests) is clean on the dev host, and a code-review + verifier pass confirm no Windows-backend (AppContainer/WFP/broker) or ADR-86 boundary regression.
 
 ### Release Reconcile (RLS)
