@@ -214,29 +214,40 @@ fn extract_host_port(url: &str) -> Option<String> {
 }
 
 /// Check whether `pattern` (a pre-normalised `host:port` string) matches
-/// `candidate` (a pre-normalised `host:port` string).
+/// `target` (a pre-normalised `host:port` string).
 ///
-/// Supports a leading `*.` wildcard prefix on the host portion of `pattern`:
-/// `"*.openai.com:443"` matches `"api.openai.com:443"` but NOT
-/// `"openai.com:443"` (the wildcard requires at least one label prefix).
+/// Supports a leading `*.` wildcard prefix on the host portion of `pattern`.
+/// The wildcard matches any non-empty sub-tree of labels — for example:
+/// - `"*.openai.com:443"` matches `"api.openai.com:443"` ✓
+/// - `"*.openai.com:443"` matches `"x.api.openai.com:443"` ✓ (multi-label)
+/// - `"*.openai.com:443"` does NOT match `"openai.com:443"` (no prefix label)
 ///
 /// Upstream 08ca19a8 (#1243): added to fix CONNECT-block detection and
 /// NO_PROXY computation when wildcard upstreams are configured.
-pub(crate) fn host_port_matches(pattern: &str, candidate: &str) -> bool {
-    if pattern == candidate {
+pub(crate) fn host_port_matches(pattern: &str, target: &str) -> bool {
+    if pattern == target {
         return true;
     }
-    // Wildcard pattern: "*.rest:port" matches "label.rest:port" where label
-    // is a non-empty single DNS label (may not itself contain a wildcard).
-    // Exact equality is checked first (above) so "*.openai.com:443" does NOT
-    // match "openai.com:443" — the wildcard requires at least one label prefix.
-    if let Some(wildcard_rest) = pattern.strip_prefix("*.") {
-        if let Some(dot_pos) = candidate.find('.') {
-            let candidate_rest = &candidate[dot_pos + 1..];
-            return candidate_rest == wildcard_rest;
-        }
+    if !pattern.starts_with("*.") {
+        return false;
     }
-    false
+
+    let Some((pattern_host, pattern_port)) = pattern.rsplit_once(':') else {
+        return false;
+    };
+    let Some((target_host, target_port)) = target.rsplit_once(':') else {
+        return false;
+    };
+    if pattern_port != target_port {
+        return false;
+    }
+
+    let Some(suffix) = pattern_host.strip_prefix("*.") else {
+        return false;
+    };
+    target_host
+        .strip_suffix(suffix)
+        .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
 }
 
 /// Build a root cert store combining webpki roots with the OS trust store.
@@ -499,6 +510,14 @@ mod tests {
         assert!(hosts.contains("api.openai.com:443"));
         assert!(hosts.contains("api.anthropic.com:443"));
         assert_eq!(hosts.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_host_port_preserves_wildcard_host() {
+        assert_eq!(
+            extract_host_port("https://*.dev.example.net"),
+            Some("*.dev.example.net:443".to_string())
+        );
     }
 
     #[test]
@@ -798,9 +817,10 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     }
 
     #[test]
-    fn host_port_matches_wildcard_does_not_match_multi_label() {
-        // *.openai.com:443 must NOT match x.api.openai.com:443 (two-label prefix)
-        assert!(!host_port_matches(
+    fn host_port_matches_wildcard_matches_multi_label_prefix() {
+        // *.openai.com:443 also matches x.api.openai.com:443 (multi-label prefix allowed)
+        // The wildcard matches any non-empty sub-tree, not just single labels.
+        assert!(host_port_matches(
             "*.openai.com:443",
             "x.api.openai.com:443"
         ));
@@ -815,5 +835,33 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     #[test]
     fn host_port_matches_no_wildcard_no_match() {
         assert!(!host_port_matches("openai.com:443", "api.openai.com:443"));
+    }
+
+    #[test]
+    fn test_host_port_matches_wildcard_subdomain_only() {
+        // multi-label subdomains are matched (sub-tree wildcard)
+        assert!(host_port_matches(
+            "*.dev.example.net:443",
+            "api.admin.dev.example.net:443"
+        ));
+        assert!(host_port_matches(
+            "*.dev.example.net:443",
+            "admin.dev.example.net:443"
+        ));
+        // apex must NOT match
+        assert!(!host_port_matches(
+            "*.dev.example.net:443",
+            "dev.example.net:443"
+        ));
+        // port mismatch
+        assert!(!host_port_matches(
+            "*.dev.example.net:443",
+            "api.admin.dev.example.net:8443"
+        ));
+        // different suffix
+        assert!(!host_port_matches(
+            "*.dev.example.net:443",
+            "api.admin.other.net:443"
+        ));
     }
 }
