@@ -552,6 +552,10 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Legacy alias for upstream_bypass."
+        },
+        "allow_http2": {
+          "type": "boolean",
+          "description": "Allow HTTP/2 to upstream servers via ALPN negotiation. Defaults to false (HTTP/1.1 with keep-alive). Equivalent to the --allow-http2 CLI flag. Upstream cdeeb5b9 (#983)."
         }
       }
     },

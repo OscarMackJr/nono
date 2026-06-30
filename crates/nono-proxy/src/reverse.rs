@@ -23,6 +23,7 @@ use crate::filter::ProxyFilter;
 use crate::route::RouteStore;
 use crate::token;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -50,8 +51,14 @@ pub struct ReverseProxyCtx<'a> {
     pub session_token: &'a Zeroizing<String>,
     /// Host filter for upstream validation
     pub filter: &'a ProxyFilter,
-    /// Shared TLS connector
+    /// Shared TLS connector (direct-TLS forwarding path)
     pub tls_connector: &'a TlsConnector,
+    /// Default TLS client configuration (for `UpstreamPool` per-route client identity).
+    /// Upstream cdeeb5b9 (#983): pool infrastructure absorbed; direct-TLS path retained.
+    pub default_tls_config: &'a Arc<rustls::ClientConfig>,
+    /// Upstream HTTP connection pool (HTTP/1.1 keep-alive + optional HTTP/2 multiplexing).
+    /// Upstream cdeeb5b9 (#983): pool infrastructure absorbed; direct-TLS path retained.
+    pub upstream_pool: &'a crate::pool::UpstreamPool,
     /// Shared network audit sink for session metadata capture
     pub audit_log: Option<&'a audit::SharedAuditLog>,
 }
@@ -1384,7 +1391,9 @@ mod tests {
         .unwrap()
         .with_root_certificates(root_store)
         .with_no_client_auth();
-        let tls_connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+        let tls_config_arc = Arc::new(tls_config);
+        let tls_connector = tokio_rustls::TlsConnector::from(Arc::clone(&tls_config_arc));
+        let upstream_pool = crate::pool::UpstreamPool::new(Arc::clone(&tls_config_arc), false);
 
         let audit_log = audit::new_audit_log();
 
@@ -1394,6 +1403,8 @@ mod tests {
             session_token: &session_token,
             filter: &filter,
             tls_connector: &tls_connector,
+            default_tls_config: &tls_config_arc,
+            upstream_pool: &upstream_pool,
             audit_log: Some(&audit_log),
         };
 

@@ -44,6 +44,22 @@ pub struct LoadedRoute {
     /// Built once at startup from the route's `tls_ca` certificate file.
     /// When `None`, the shared default connector (webpki roots only) is used.
     pub tls_connector: Option<tokio_rustls::TlsConnector>,
+
+    /// Per-route TLS client configuration backing `tls_connector`.
+    ///
+    /// Stored separately from the connector so that `UpstreamPool` can create
+    /// a pooled client keyed by `Arc<ClientConfig>` pointer identity, providing
+    /// per-route TLS isolation for the connection pool.
+    ///
+    /// `None` when the route uses the shared default TLS config.
+    pub tls_client_config: Option<Arc<rustls::ClientConfig>>,
+
+    /// Stable string key for the route's TLS settings.
+    ///
+    /// Derived from the `tls_ca` file path; used for diagnostics and as a
+    /// human-readable label in pool statistics. `None` for routes using the
+    /// default TLS config.
+    pub tls_config_key: Option<String>,
 }
 
 impl std::fmt::Debug for LoadedRoute {
@@ -54,6 +70,7 @@ impl std::fmt::Debug for LoadedRoute {
             .field("endpoint_rules", &self.endpoint_rules)
             .field("endpoint_policy", &self.endpoint_policy)
             .field("has_custom_tls_ca", &self.tls_connector.is_some())
+            .field("tls_config_key", &self.tls_config_key)
             .finish()
     }
 }
@@ -94,15 +111,16 @@ impl RouteStore {
             )
             .map_err(|e| ProxyError::Config(format!("route '{}': {}", normalized_prefix, e)))?;
 
-            let tls_connector = match route.tls_ca {
+            let (tls_connector, tls_client_config, tls_config_key) = match route.tls_ca {
                 Some(ref ca_path) => {
                     debug!(
                         "Building TLS connector with custom CA for route '{}': {}",
                         normalized_prefix, ca_path
                     );
-                    Some(build_tls_connector_with_ca(ca_path)?)
+                    let (connector, config) = build_tls_connector_with_ca(ca_path)?;
+                    (Some(connector), Some(config), Some(ca_path.clone()))
                 }
-                None => None,
+                None => (None, None, None),
             };
 
             let upstream_host_port = extract_host_port(&route.upstream);
@@ -115,6 +133,8 @@ impl RouteStore {
                     endpoint_rules,
                     endpoint_policy,
                     tls_connector,
+                    tls_client_config,
+                    tls_config_key,
                 },
             );
         }
@@ -151,6 +171,10 @@ impl RouteStore {
     /// Check whether `host_port` (e.g. `"api.openai.com:443"`) matches
     /// any route's upstream URL. Uses pre-normalised `host:port` strings
     /// computed at load time to avoid per-request URL parsing.
+    ///
+    /// Supports wildcard prefixes in stored upstream patterns (e.g. a route
+    /// upstream of `"*.openai.com:443"` matches `"api.openai.com:443"`).
+    /// Upstream 08ca19a8 (#1243): wildcard credential upstream route fix.
     #[must_use]
     pub fn is_route_upstream(&self, host_port: &str) -> bool {
         let normalised = host_port.to_lowercase();
@@ -158,7 +182,7 @@ impl RouteStore {
             route
                 .upstream_host_port
                 .as_ref()
-                .is_some_and(|hp| *hp == normalised)
+                .is_some_and(|hp| host_port_matches(hp, &normalised))
         })
     }
 
@@ -187,6 +211,32 @@ fn extract_host_port(url: &str) -> Option<String> {
     };
     let port = parsed.port().unwrap_or(default_port);
     Some(format!("{}:{}", host.to_lowercase(), port))
+}
+
+/// Check whether `pattern` (a pre-normalised `host:port` string) matches
+/// `candidate` (a pre-normalised `host:port` string).
+///
+/// Supports a leading `*.` wildcard prefix on the host portion of `pattern`:
+/// `"*.openai.com:443"` matches `"api.openai.com:443"` but NOT
+/// `"openai.com:443"` (the wildcard requires at least one label prefix).
+///
+/// Upstream 08ca19a8 (#1243): added to fix CONNECT-block detection and
+/// NO_PROXY computation when wildcard upstreams are configured.
+pub(crate) fn host_port_matches(pattern: &str, candidate: &str) -> bool {
+    if pattern == candidate {
+        return true;
+    }
+    // Wildcard pattern: "*.rest:port" matches "label.rest:port" where label
+    // is a non-empty single DNS label (may not itself contain a wildcard).
+    // Exact equality is checked first (above) so "*.openai.com:443" does NOT
+    // match "openai.com:443" — the wildcard requires at least one label prefix.
+    if let Some(wildcard_rest) = pattern.strip_prefix("*.") {
+        if let Some(dot_pos) = candidate.find('.') {
+            let candidate_rest = &candidate[dot_pos + 1..];
+            return candidate_rest == wildcard_rest;
+        }
+    }
+    false
 }
 
 /// Build a root cert store combining webpki roots with the OS trust store.
@@ -223,12 +273,18 @@ pub(crate) fn build_base_root_store() -> rustls::RootCertStore {
     store
 }
 
-/// Build a `TlsConnector` that trusts the system roots plus a custom CA certificate.
+/// Build a `TlsConnector` and the underlying `ClientConfig` that trusts the
+/// system roots plus a custom CA certificate.
+///
+/// Returns both the connector and the raw `Arc<ClientConfig>` so callers can
+/// create per-route `UpstreamPool` clients keyed by pointer identity.
 ///
 /// The CA file must be PEM-encoded and contain at least one certificate.
 /// Returns an error if the file cannot be read, contains no valid certificates,
 /// or the TLS configuration fails.
-fn build_tls_connector_with_ca(ca_path: &str) -> Result<tokio_rustls::TlsConnector> {
+fn build_tls_connector_with_ca(
+    ca_path: &str,
+) -> Result<(tokio_rustls::TlsConnector, Arc<rustls::ClientConfig>)> {
     let ca_path = std::path::Path::new(ca_path);
 
     let ca_pem = Zeroizing::new(std::fs::read(ca_path).map_err(|e| {
@@ -286,7 +342,9 @@ fn build_tls_connector_with_ca(ca_path: &str) -> Result<tokio_rustls::TlsConnect
     .with_root_certificates(root_store)
     .with_no_client_auth();
 
-    Ok(tokio_rustls::TlsConnector::from(Arc::new(tls_config)))
+    let config_arc = Arc::new(tls_config);
+    let connector = tokio_rustls::TlsConnector::from(Arc::clone(&config_arc));
+    Ok((connector, config_arc))
 }
 
 #[cfg(test)]
@@ -486,6 +544,8 @@ mod tests {
             endpoint_rules: CompiledEndpointRules::compile(&[]).unwrap(),
             endpoint_policy: CompiledEndpointPolicy::compile(None, &[]).unwrap(),
             tls_connector: None,
+            tls_client_config: None,
+            tls_config_key: None,
         };
         let debug_output = format!("{:?}", route);
         assert!(debug_output.contains("api.openai.com"));
@@ -696,5 +756,64 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         // is_route_upstream reports true for the shared upstream host (expected — both
         // routes point there), but this does not imply any shadowing in route dispatch.
         assert!(store.is_route_upstream("api.openai.com:443"));
+    }
+
+    // ── host_port_matches tests (cdeeb5b9 wildcard routing) ──────────────────
+
+    #[test]
+    fn host_port_matches_exact_match() {
+        assert!(host_port_matches(
+            "api.openai.com:443",
+            "api.openai.com:443"
+        ));
+    }
+
+    #[test]
+    fn host_port_matches_exact_mismatch() {
+        assert!(!host_port_matches(
+            "api.openai.com:443",
+            "api.anthropic.com:443"
+        ));
+    }
+
+    #[test]
+    fn host_port_matches_wildcard_single_label() {
+        // *.openai.com:443 matches api.openai.com:443
+        assert!(host_port_matches("*.openai.com:443", "api.openai.com:443"));
+    }
+
+    #[test]
+    fn host_port_matches_wildcard_different_label() {
+        // *.openai.com:443 also matches files.openai.com:443
+        assert!(host_port_matches(
+            "*.openai.com:443",
+            "files.openai.com:443"
+        ));
+    }
+
+    #[test]
+    fn host_port_matches_wildcard_does_not_match_apex() {
+        // *.openai.com:443 must NOT match openai.com:443 (no prefix label)
+        assert!(!host_port_matches("*.openai.com:443", "openai.com:443"));
+    }
+
+    #[test]
+    fn host_port_matches_wildcard_does_not_match_multi_label() {
+        // *.openai.com:443 must NOT match x.api.openai.com:443 (two-label prefix)
+        assert!(!host_port_matches(
+            "*.openai.com:443",
+            "x.api.openai.com:443"
+        ));
+    }
+
+    #[test]
+    fn host_port_matches_wildcard_port_mismatch() {
+        // Port must also match
+        assert!(!host_port_matches("*.openai.com:443", "api.openai.com:80"));
+    }
+
+    #[test]
+    fn host_port_matches_no_wildcard_no_match() {
+        assert!(!host_port_matches("openai.com:443", "api.openai.com:443"));
     }
 }

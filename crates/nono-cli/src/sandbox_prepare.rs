@@ -116,6 +116,12 @@ pub(crate) struct PreparedSandbox {
     /// runtime execution is platform-gated in `hook_runtime.rs` (Unix) /
     /// `hook_runtime_windows.rs` (Windows).
     pub(crate) session_hooks: profile::SessionHooks,
+    /// True when the profile or CLI requested HTTP/2 for upstream proxy connections.
+    ///
+    /// Set from `--allow-http2` OR profile `network.allow_http2`. Carried into
+    /// `ProxyLaunchOptions.enable_h2` via `prepare_proxy_launch_options`.
+    /// Upstream cdeeb5b9 (#983): absorbed.
+    pub(crate) allow_http2_requested: bool,
 }
 
 fn finalize_prepared_sandbox(
@@ -452,6 +458,9 @@ pub(crate) fn prepare_sandbox_with_context(
                 // Phase 58: manifest path has no loaded Profile — no session
                 // hooks configured.
                 session_hooks: profile::SessionHooks::default(),
+                // Upstream cdeeb5b9 (#983): manifest path has no profile —
+                // HTTP/2 defaults off.
+                allow_http2_requested: false,
             },
             &[],
             args,
@@ -710,6 +719,14 @@ pub(crate) fn prepare_sandbox_with_context(
         .as_ref()
         .map(|p| p.session_hooks.clone())
         .unwrap_or_default();
+    // Upstream cdeeb5b9 (#983): carry profile's allow_http2 intent into
+    // PreparedSandbox so prepare_proxy_launch_options can merge it with
+    // the CLI --allow-http2 flag.
+    let profile_allow_http2 = loaded_profile
+        .as_ref()
+        .map(|p| p.network.allow_http2)
+        .unwrap_or(false);
+    let allow_http2_requested = args.allow_http2 || profile_allow_http2;
 
     finalize_prepared_sandbox(
         PreparedSandbox {
@@ -750,6 +767,8 @@ pub(crate) fn prepare_sandbox_with_context(
             // Phase 58: carry session_hooks from the loaded profile into
             // PreparedSandbox. Follows the allowed_env_vars pattern above.
             session_hooks: profile_session_hooks,
+            // Upstream cdeeb5b9 (#983): carry HTTP/2 intent.
+            allow_http2_requested,
         },
         &blocked_grants,
         args,
@@ -824,6 +843,7 @@ mod tests {
             profile_network_block: false,
             loaded_profile: None,
             session_hooks: profile::SessionHooks::default(),
+            allow_http2_requested: false,
         }
     }
 

@@ -2487,8 +2487,10 @@ name = "nono-proxy"
 version = "0.66.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "getrandom 0.4.2",
  "globset",
+ "http 1.4.0",
  "http-body-util",
  "hyper 1.10.1",
  "hyper-rustls",

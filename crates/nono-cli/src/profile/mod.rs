@@ -1732,6 +1732,16 @@ pub struct NetworkConfig {
     /// `external_proxy_bypass` accepted).
     #[serde(default, rename = "upstream_bypass", alias = "external_proxy_bypass")]
     pub upstream_bypass: Vec<String>,
+
+    /// Allow HTTP/2 to upstream servers via ALPN negotiation.
+    ///
+    /// When `true`, the nono proxy negotiates HTTP/2 with upstream API
+    /// servers that support it. Reduces connection overhead for high-concurrency
+    /// workloads. Defaults to `false` (HTTP/1.1 with keep-alive).
+    /// Equivalent to the `--allow-http2` CLI flag.
+    /// Upstream cdeeb5b9 (#983): absorbed.
+    #[serde(default)]
+    pub allow_http2: bool,
 }
 
 impl NetworkConfig {
@@ -3309,6 +3319,8 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 &base.network.upstream_bypass,
                 &child.network.upstream_bypass,
             ),
+            // allow_http2 is additive: either base or child opting in enables h2.
+            allow_http2: base.network.allow_http2 || child.network.allow_http2,
         },
         linux: LinuxConfig {
             af_unix_mediation: child
@@ -5269,6 +5281,7 @@ mod tests {
                 custom_credentials: HashMap::new(),
                 upstream_proxy: None,
                 upstream_bypass: Vec::new(),
+                allow_http2: false,
             },
             diagnostics: DiagnosticsConfig::default(),
             linux: LinuxConfig::default(),
@@ -5360,6 +5373,7 @@ mod tests {
                 custom_credentials: HashMap::new(),
                 upstream_proxy: None,
                 upstream_bypass: Vec::new(),
+                allow_http2: false,
             },
             diagnostics: DiagnosticsConfig::default(),
             linux: LinuxConfig::default(),

@@ -290,6 +290,15 @@ impl CredentialStore {
             .cloned()
             .collect()
     }
+
+    /// Insert a pre-built credential directly into the store for testing.
+    ///
+    /// Not available in production builds. Use this in tests to set up
+    /// credential stores without going through the keystore loading path.
+    #[cfg(test)]
+    pub fn insert_for_test(&mut self, prefix: String, cred: LoadedCredential) {
+        self.credentials.insert(prefix, cred);
+    }
 }
 
 /// The keyring service name used by nono for all credentials.

@@ -62,6 +62,15 @@ pub struct ProxyConfig {
     /// Maximum concurrent connections (0 = unlimited).
     #[serde(default)]
     pub max_connections: usize,
+
+    /// Enable HTTP/2 ALPN negotiation for upstream connections.
+    ///
+    /// When `true`, the upstream connection pool advertises `h2` via ALPN
+    /// and will use HTTP/2 multiplexing when the upstream server supports it.
+    /// Defaults to `false` (HTTP/1.1 with keep-alive).
+    /// Equivalent to the `--allow-http2` CLI flag.
+    #[serde(default)]
+    pub enable_h2: bool,
 }
 
 impl Default for ProxyConfig {
@@ -75,6 +84,7 @@ impl Default for ProxyConfig {
             external_proxy: None,
             direct_connect_ports: Vec::new(),
             max_connections: 256,
+            enable_h2: false,
         }
     }
 }

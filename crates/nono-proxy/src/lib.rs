@@ -26,6 +26,7 @@ pub mod error;
 pub mod external;
 pub mod filter;
 pub mod oauth2;
+pub mod pool;
 pub mod reverse;
 pub mod route;
 pub mod server;

@@ -115,6 +115,19 @@ pub(crate) struct ProxyLaunchOptions {
     /// Upstream 72bcfd66 (#1225): renamed from `network_block` to match its
     /// actual meaning (deny unlisted hosts, not block-all-net).
     pub(crate) strict_filter: bool,
+
+    /// Enable HTTP/2 ALPN negotiation for upstream proxy connections.
+    /// Set from `--allow-http2` or profile `network.allow_http2`.
+    /// Upstream cdeeb5b9 (#983): absorbed.
+    pub(crate) enable_h2: bool,
+
+    /// Per-credential endpoint restrictions from `--allow-endpoint SERVICE:METHOD:PATH`.
+    ///
+    /// Each entry is `(service_prefix, EndpointRule)`. Applied in
+    /// `build_proxy_config_from_flags` to add extra endpoint rules to the
+    /// matching credential route's `endpoint_rules` list.
+    /// Upstream 46bcfbb9 (#1127): absorbed.
+    pub(crate) endpoint_restrictions: Vec<(String, nono_proxy::config::EndpointRule)>,
 }
 
 /// Resolved network intent, derived from CLI flags and profile before any

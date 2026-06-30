@@ -2160,6 +2160,15 @@ pub struct SandboxArgs {
     #[arg(long, help_heading = "OPTIONS")]
     pub allow_gpu: bool,
 
+    /// Allow HTTP/2 multiplexing for upstream proxy connections.
+    ///
+    /// When set, the proxy negotiates HTTP/2 via ALPN with upstream servers
+    /// that support it. Reduces connection overhead for APIs with high
+    /// request concurrency. Equivalent to profile `network.allow_http2`.
+    /// Upstream cdeeb5b9 (#983): absorbed as `--allow-http2` CLI flag.
+    #[arg(long, help_heading = "OPTIONS")]
+    pub allow_http2: bool,
+
     /// Internal: force WFP readiness for test-built Windows binaries.
     /// Hidden from --help (hide = true); intended only for the nono-cli
     /// integration test harness. Phase 41 (REQ-CI-02): promoted out of
@@ -2185,7 +2194,7 @@ pub struct SandboxArgs {
             "block_net", "allow_net", "network_profile", "allow_proxy",
             "allow_bind", "allow_port", "allow_connect_port", "external_proxy", "proxy_port",
             "proxy_credential", "allow_endpoint", "env_credential", "env_credential_map",
-            "allow_command", "block_command", "allow_launch_services",
+            "allow_command", "block_command", "allow_launch_services", "allow_http2",
         ],
         help_heading = "OPTIONS"
     )]
@@ -2565,6 +2574,8 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             profile: args.profile,
             allow_launch_services: args.allow_launch_services,
             allow_gpu: args.allow_gpu,
+            // WrapSandboxArgs does not expose --allow-http2 (upstream-connection tuning).
+            allow_http2: false,
             config: args.config,
             verbose: args.verbose,
             dangerous_force_wfp_ready: false,

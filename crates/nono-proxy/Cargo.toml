@@ -21,7 +21,7 @@ system-keyring = ["nono/system-keyring"]
 nono = { version = "0.66.0", path = "../nono", default-features = false }
 tokio.workspace = true
 hyper.workspace = true
-hyper-util.workspace = true
+hyper-util = { workspace = true, features = ["client-legacy"] }
 http-body-util.workspace = true
 thiserror.workspace = true
 serde.workspace = true
@@ -37,7 +37,7 @@ urlencoding = "2"
 globset.workspace = true
 
 # TLS for upstream connections (reverse proxy mode)
-hyper-rustls = { version = "0.27", features = ["http1", "ring", "webpki-tokio"] }
+hyper-rustls = { version = "0.27", features = ["http1", "http2", "ring", "webpki-tokio"] }
 tokio-rustls = "0.26"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
@@ -48,6 +48,10 @@ webpki-roots = "1"
 # Replays the security intent of upstream 8ddb143 / 54c7552 native-CA loading
 # WITHOUT pulling in upstream's tls_intercept module (not in fork; per D-40-B2).
 rustls-native-certs = "0.8"
+# HTTP body framing used by pool.rs (UpstreamPool request body type)
+bytes = "1"
+# Typed HTTP request/response used by pool.rs
+http = "1"
 
 [dev-dependencies]
 tempfile.workspace = true

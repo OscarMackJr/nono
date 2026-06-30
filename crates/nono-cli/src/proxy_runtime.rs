@@ -56,6 +56,39 @@ fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
     AllowDomainEntry::Plain(input.to_string())
 }
 
+/// Parse a `--allow-endpoint SERVICE:METHOD:PATH` argument into a
+/// `(service_prefix, EndpointRule)` pair, or `None` if the argument is
+/// malformed.
+///
+/// Format: `SERVICE:METHOD:PATH` where:
+/// - `SERVICE` is the credential/route prefix (e.g., `openai`, `github`)
+/// - `METHOD` is an HTTP method or `*` (e.g., `GET`, `POST`, `*`)
+/// - `PATH` is an exact or glob path pattern (e.g., `/v1/chat/completions`,
+///   `/repos/*/issues`)
+///
+/// Upstream 46bcfbb9 (#1127): absorbed as `parse_allow_endpoint_arg`.
+fn parse_allow_endpoint_arg(
+    input: &str,
+) -> Option<(String, nono_proxy::config::EndpointRule)> {
+    // Split on ':' into at most 3 parts so paths containing ':' are preserved.
+    let mut parts = input.splitn(3, ':');
+    let service = parts.next()?.trim();
+    let method = parts.next()?.trim();
+    let path = parts.next()?.trim();
+
+    if service.is_empty() || method.is_empty() || path.is_empty() {
+        return None;
+    }
+
+    Some((
+        service.to_string(),
+        nono_proxy::config::EndpointRule {
+            method: method.to_uppercase(),
+            path: path.to_string(),
+        },
+    ))
+}
+
 /// Prepare the network intent for the sandbox run.
 ///
 /// Returns a `NetworkIntent` describing the resolved network mode:
@@ -134,6 +167,13 @@ pub(crate) fn prepare_proxy_launch_options(
 
     let active = would_activate;
 
+    // Parse --allow-endpoint SERVICE:METHOD:PATH args into typed (prefix, EndpointRule) pairs.
+    let endpoint_restrictions = args
+        .allow_endpoint
+        .iter()
+        .filter_map(|s| parse_allow_endpoint_arg(s))
+        .collect();
+
     Ok(NetworkIntent::ProxyFiltered(Box::new(ProxyLaunchOptions {
         active,
         network_profile,
@@ -148,6 +188,8 @@ pub(crate) fn prepare_proxy_launch_options(
         open_url_allow_localhost: prepared.open_url_allow_localhost,
         allow_launch_services_active: prepared.allow_launch_services_active,
         strict_filter,
+        enable_h2: prepared.allow_http2_requested || args.allow_http2,
+        endpoint_restrictions,
     })))
 }
 
@@ -237,6 +279,19 @@ pub(crate) fn build_proxy_config_from_flags(
     resolved.routes.extend(endpoint_routes);
     let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts);
     proxy_config.strict_filter = proxy.strict_filter;
+    proxy_config.enable_h2 = proxy.enable_h2;
+
+    // Apply per-service endpoint restrictions from `--allow-endpoint` args.
+    // Each restriction adds an EndpointRule to the matching route's endpoint_rules.
+    for (service_prefix, rule) in &proxy.endpoint_restrictions {
+        if let Some(route) = proxy_config
+            .routes
+            .iter_mut()
+            .find(|r| r.prefix.trim_matches('/') == service_prefix.as_str())
+        {
+            route.endpoint_rules.push(rule.clone());
+        }
+    }
 
     if let Some(ref addr) = proxy.upstream_proxy {
         proxy_config.external_proxy = Some(nono_proxy::config::ExternalProxyConfig {
@@ -458,6 +513,7 @@ mod tests {
             profile_network_block: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
+            allow_http2_requested: false,
         };
 
         let args = SandboxArgs::default();
@@ -579,6 +635,7 @@ mod tests {
             profile_network_block: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
+            allow_http2_requested: false,
         };
 
         let args = SandboxArgs::default();
@@ -703,6 +760,7 @@ mod tests {
             profile_network_block: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
+            allow_http2_requested: false,
         };
 
         // Upstream 72bcfd66: block_wins now driven by args.block_net (flag) not NetworkMode.

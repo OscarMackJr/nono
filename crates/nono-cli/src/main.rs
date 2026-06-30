@@ -355,6 +355,8 @@ mod tests {
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.
             session_hooks: crate::profile::SessionHooks::default(),
+            // Upstream cdeeb5b9: test fixture does not request HTTP/2.
+            allow_http2_requested: false,
         };
 
         let effective = resolve_effective_proxy_settings(&args, &prepared);
@@ -414,6 +416,8 @@ mod tests {
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.
             session_hooks: crate::profile::SessionHooks::default(),
+            // Upstream cdeeb5b9: test fixture does not request HTTP/2.
+            allow_http2_requested: false,
         };
 
         let effective = resolve_effective_proxy_settings(&args, &prepared);

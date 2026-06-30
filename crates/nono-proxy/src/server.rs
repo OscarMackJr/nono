@@ -17,6 +17,7 @@ use crate::filter::ProxyFilter;
 use crate::reverse;
 use crate::route::{self, RouteStore};
 use crate::token;
+use rustls::ClientConfig;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -216,6 +217,14 @@ struct ProxyState {
     /// Shared TLS connector for upstream connections (reverse proxy mode).
     /// Created once at startup to avoid rebuilding the root cert store per request.
     tls_connector: tokio_rustls::TlsConnector,
+    /// Default TLS client configuration backing `tls_connector`.
+    /// Stored separately so `UpstreamPool` can create per-route clients keyed
+    /// by `Arc<ClientConfig>` pointer identity.
+    /// Upstream cdeeb5b9 (#983): pool infrastructure absorbed.
+    default_tls_config: Arc<rustls::ClientConfig>,
+    /// HTTP connection pool for upstream requests (HTTP/1.1 keep-alive + optional HTTP/2).
+    /// Upstream cdeeb5b9 (#983): pool infrastructure absorbed; direct-TLS path retained.
+    upstream_pool: crate::pool::UpstreamPool,
     /// Active connection count for connection limiting.
     active_connections: AtomicUsize,
     /// Shared network audit log for this proxy session.
@@ -295,7 +304,12 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     .map_err(|e| ProxyError::Config(format!("TLS config error: {}", e)))?
     .with_root_certificates(root_store)
     .with_no_client_auth();
-    let tls_connector = tokio_rustls::TlsConnector::from(Arc::new(tls_config));
+    // Store the Arc<ClientConfig> separately so UpstreamPool can key per-route
+    // clients by pointer identity without re-building the root cert store.
+    let tls_config_arc: Arc<ClientConfig> = Arc::new(tls_config);
+    let tls_connector = tokio_rustls::TlsConnector::from(Arc::clone(&tls_config_arc));
+    let upstream_pool =
+        crate::pool::UpstreamPool::new(Arc::clone(&tls_config_arc), config.enable_h2);
 
     // Build bypass matcher from external proxy config (once, not per-request)
     let bypass_matcher = config
@@ -322,7 +336,6 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     let no_proxy_hosts: Vec<String> = if cfg!(target_os = "macos") {
         Vec::new()
     } else {
-        let route_hosts = route_store.route_upstream_hosts();
         config
             .allowed_hosts
             .iter()
@@ -342,7 +355,10 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
                         format!("{}:443", h)
                     }
                 };
-                if route_hosts.contains(&normalised) {
+                // Use is_route_upstream (wildcard-aware) so that wildcard route upstreams
+                // like "*.api.example.com:443" correctly exclude matching allowed_hosts.
+                // Upstream 08ca19a8 (#1243): updated from HashSet::contains exact match.
+                if route_store.is_route_upstream(&normalised) {
                     return false;
                 }
                 // Only bypass the proxy if the sandbox grants direct
@@ -368,6 +384,8 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
         credential_store,
         config,
         tls_connector,
+        default_tls_config: tls_config_arc,
+        upstream_pool,
         active_connections: AtomicUsize::new(0),
         audit_log: Arc::clone(&audit_log),
         bypass_matcher,
@@ -603,6 +621,8 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
             session_token: &state.session_token,
             filter: &state.filter,
             tls_connector: &state.tls_connector,
+            default_tls_config: &state.default_tls_config,
+            upstream_pool: &state.upstream_pool,
             audit_log: Some(&state.audit_log),
         };
         reverse::handle_reverse_proxy(first_line, &mut stream, &header_bytes, &ctx, &buffered).await
