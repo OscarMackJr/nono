@@ -4,14 +4,14 @@ milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
 stopped_at: Phase 98 context gathered
-last_updated: "2026-06-30T02:27:42.106Z"
+last_updated: "2026-06-30T03:15:43.298Z"
 last_activity: 2026-06-30 -- Phase 98 planning complete
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 4
-  completed_plans: 0
-  percent: 0
+  completed_plans: 1
+  percent: 25
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -22,25 +22,26 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and turns the v3.3 prepare-only pipeline into a genuinely operator-pushable `0.66.1` release.
 
-**Current Focus:** Milestone v3.4 active 2026-06-30 (roadmap created, Phases 98-100 defined). Phase 98 (UPST11 Divergence Audit) is next.
+**Current Focus:** Phase 98 Plan 01 complete (divergence ledger + cluster scaffold). Next: Phase 98 Plan 02 (cluster actual-diff inspection).
 
 ## Current Position
 
-Phase: 98 — UPST11 Divergence Audit
-Plan: —
-Status: Ready to execute
-Last activity: 2026-06-30 -- Phase 98 planning complete
+Phase: 98 (upst11-divergence-audit) — EXECUTING
+Plan: 2 of 4
+Status: Executing Phase 98 — Plan 01 complete, Plan 02 next
+Last activity: 2026-06-29 -- Phase 98 Plan 01 complete (divergence ledger)
 
 ## Performance Metrics
 
 **Velocity:** (v3.4 — reset; populated as phases complete)
 
-- Total plans completed: 0
-- Average duration: —
-- Total execution time: —
+- Total plans completed: 1
+- Average duration: 25 min
+- Total execution time: 25 min
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
+| 98 | 01 | 25 min | 2 | 1 |
 
 *Updated after each plan completion*
 
@@ -76,6 +77,10 @@ Last activity: 2026-06-30 -- Phase 98 planning complete
 | 3 phases (98-100), drain-then-sync shape | all | Audit (98) gates absorb (99), absorb completes before version bump (100) — same dependency-inversion protection as v3.3. #1225 HIGH-CONFLICT disposition settled in 98 before any cherry-pick begins. |
 | #1225 ADR deferred to Phase 98 | 98 | The NetworkIntent refactor touches the core network-capability enum the Windows backends key off — adopt-vs-diverge decision must be deliberate and documented, not decided mid-absorb. Mirrors the v3.1 Phase 86 precedent. |
 | Release reconcile in Phase 100, after sync | 100 | Version bump to 0.66.1 must follow the sync to avoid a dirty Cargo.lock during cherry-picks; PyPI blocker fixed in the same phase since it gates the release. |
+| UPST11 window: 14 substantive + 6 noise = 20 total; 8 clusters A-H | 98-01 | D-12 closed: empirical accounting from drift tool (14) + git log enumeration (6 noise) = 20 total non-merge commits in v0.65.1..v0.66.0 |
+| #1225 NetworkIntent refactor is CLI-side ONLY — no core library changes | 98-01 | actual-diff of 72bcfd66 shows 11 files all under crates/nono-cli/src/; preliminary 260629-toe scan suggested library touches but upstream chose CLI-side approach; conflict is fork CLI vs upstream CLI, not library-boundary issue |
+| Cluster B (4 tool-sandbox commits) won't-sync: fork lacks tool-sandbox/ dir | 98-01 | Fork skipped tool-sandbox feature in Phase 94/95 Cluster B; all 4 commits (691e0f4f, 7011bc85, d2252225, 853d5236) patch absent files; carry-forward if feature adopted |
+| Cluster A windows-touch=yes confirmed: 7 of 11 #1225-touched files have cfg(windows) | 98-01 | grep confirms capability_ext.rs, supervised_runtime.rs, command_runtime.rs, execution_runtime.rs, launch_runtime.rs, output.rs, terminal_approval.rs; cross-target clippy REQUIRED in Phase 99 if adopted |
 
 ### Pending Todos
 
@@ -129,10 +134,10 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-06-30T02:11:48.377Z
-Stopped at: Phase 98 context gathered
-Resume file: .planning/phases/98-upst11-divergence-audit/98-CONTEXT.md
+Last session: 2026-06-30T03:15:43.265Z
+Stopped at: Phase 98 Plan 01 complete
+Resume file: .planning/phases/98-upst11-divergence-audit/98-01-SUMMARY.md
 
 ## Operator Next Steps
 
-- Run `/gsd:plan-phase 98` to plan the UPST11 Divergence Audit phase
+- Run `/gsd:execute-phase 98` to execute Phase 98 Plan 02 (cluster actual-diff inspection)

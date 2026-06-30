@@ -18,7 +18,7 @@
 
 ### UPST11 — Upstream Sync (UPST11)
 
-- [ ] **UPST11-01**: A DIVERGENCE-LEDGER for the `nolabs-ai/nono` `v0.65.1..v0.66.0` window classifies every commit into will-sync / fork-preserve / won't-sync / split clusters, with a `windows-touch` flag per commit and a per-cell ADR-review verdict (continue/escalate); the #1225 `NetworkIntent`-vs-`ProxyOnly` disposition is settled with an ADR (full-sync-adopt OR fork-divergence carve-out, with rationale).
+- [x] **UPST11-01**: A DIVERGENCE-LEDGER for the `nolabs-ai/nono` `v0.65.1..v0.66.0` window classifies every commit into will-sync / fork-preserve / won't-sync / split clusters, with a `windows-touch` flag per commit and a per-cell ADR-review verdict (continue/escalate); the #1225 `NetworkIntent`-vs-`ProxyOnly` disposition is settled with an ADR (full-sync-adopt OR fork-divergence carve-out, with rationale).
 - [ ] **UPST11-02**: All will-sync feature/fix clusters are absorbed into the fork (cherry-pick with `-x` or manual replay, each commit DCO-signed) without regressing the Windows security model or the policy-free-library boundary — covering tool-sandbox (#1268 self-invocation policy, #1271 `@git:common-dir` token, #1253 skip-missing-dirs, #1249 TLS-trust-bundle env), network (#1263 contradictory-flags error, #1127 `--allow-endpoint`→credential-routes wiring), proxy (#983 HTTP/2 reverse-proxy + credential injection, #1243 wildcard credential routes), sandbox (#1207 9P-filesystem warn), and tests (#1213 e2e exec-strategy integration tests), per their audited Phase 98 dispositions.
 - [ ] **UPST11-03**: The dependency, CI, and documentation clusters are absorbed or reconciled — `sigstore-trust-root` 0.8.0→0.9.0 (#1229, sigstore-rs cascade checked), `criterion` 0.5.1→0.8.2 (#1232), CI compile-step mapping fix (#1251), proxy docs (#1247 activation, #1246 stale `X-Nono-Token`), and the `always-further`→`nolabs-ai` org-rename (#1235) verified N/A-or-applied across the live tree — with `Cargo.lock` regenerated and the workspace building clean.
 - [ ] **UPST11-04**: Fork-divergent invariants are explicitly preserved and verified post-sync — local cross-target clippy is GREEN on both Unix gates (`cross clippy` linux-gnu + direct-binary `cargo-zigbuild clippy` apple-darwin, `-D warnings -D clippy::unwrap_used`, no PARTIAL→CI), `make ci` (clippy + fmt + tests) is clean on the dev host, and a code-review + verifier pass confirm no Windows-backend (AppContainer/WFP/broker) or ADR-86 boundary regression.
@@ -59,7 +59,7 @@ Populated by roadmap creation 2026-06-30. Phase numbering continues from Phase 9
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UPST11-01 | Phase 98 | Pending |
+| UPST11-01 | Phase 98 | Complete |
 | UPST11-02 | Phase 99 | Pending |
 | UPST11-03 | Phase 99 | Pending |
 | UPST11-04 | Phase 99 | Pending |
