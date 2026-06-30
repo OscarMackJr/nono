@@ -57,33 +57,42 @@ fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
 }
 
 /// Parse a `--allow-endpoint SERVICE:METHOD:PATH` argument into a
-/// `(service_prefix, EndpointRule)` pair, or `None` if the argument is
+/// `(service_prefix, EndpointRule)` pair, or an error if the argument is
 /// malformed.
 ///
 /// Format: `SERVICE:METHOD:PATH` where:
 /// - `SERVICE` is the credential/route prefix (e.g., `openai`, `github`)
 /// - `METHOD` is an HTTP method or `*` (e.g., `GET`, `POST`, `*`)
-/// - `PATH` is an exact or glob path pattern (e.g., `/v1/chat/completions`,
+/// - `PATH` is an exact or glob path pattern starting with `/` (e.g., `/v1/chat/completions`,
 ///   `/repos/*/issues`)
 ///
-/// Upstream 46bcfbb9 (#1127): absorbed as `parse_allow_endpoint_arg`.
+/// Upstream 46bcfbb9 (#1127): absorbed; returns `Result` for fail-fast error reporting.
 fn parse_allow_endpoint_arg(
-    input: &str,
-) -> Option<(String, nono_proxy::config::EndpointRule)> {
-    // Split on ':' into at most 3 parts so paths containing ':' are preserved.
-    let mut parts = input.splitn(3, ':');
-    let service = parts.next()?.trim();
-    let method = parts.next()?.trim();
-    let path = parts.next()?.trim();
-
+    entry: &str,
+) -> nono::Result<(String, nono_proxy::config::EndpointRule)> {
+    let err = || {
+        nono::NonoError::ConfigParse(format!(
+            "--allow-endpoint '{}': expected format SERVICE:METHOD:PATH \
+             (e.g., 'github:GET:/repos/*/issues')",
+            entry
+        ))
+    };
+    let (service, rest) = entry.split_once(':').ok_or_else(err)?;
+    let (method, path) = rest.split_once(':').ok_or_else(err)?;
     if service.is_empty() || method.is_empty() || path.is_empty() {
-        return None;
+        return Err(err());
     }
-
-    Some((
+    if !path.starts_with('/') {
+        return Err(nono::NonoError::ConfigParse(format!(
+            "--allow-endpoint '{}': path pattern must start with '/' \
+             (e.g., '/repos/*/issues', not 'repos/*/issues')",
+            entry
+        )));
+    }
+    Ok((
         service.to_string(),
         nono_proxy::config::EndpointRule {
-            method: method.to_uppercase(),
+            method: method.to_string(),
             path: path.to_string(),
         },
     ))
@@ -168,11 +177,12 @@ pub(crate) fn prepare_proxy_launch_options(
     let active = would_activate;
 
     // Parse --allow-endpoint SERVICE:METHOD:PATH args into typed (prefix, EndpointRule) pairs.
+    // Fails fast on the first malformed argument (service missing, path missing leading '/').
     let endpoint_restrictions = args
         .allow_endpoint
         .iter()
-        .filter_map(|s| parse_allow_endpoint_arg(s))
-        .collect();
+        .map(|s| parse_allow_endpoint_arg(s))
+        .collect::<nono::Result<Vec<_>>>()?;
 
     Ok(NetworkIntent::ProxyFiltered(Box::new(ProxyLaunchOptions {
         active,
@@ -282,15 +292,23 @@ pub(crate) fn build_proxy_config_from_flags(
     proxy_config.enable_h2 = proxy.enable_h2;
 
     // Apply per-service endpoint restrictions from `--allow-endpoint` args.
-    // Each restriction adds an EndpointRule to the matching route's endpoint_rules.
+    // Runs before domain-endpoint routes are merged so the prefix lookup
+    // only matches credential routes (never `_ep_*` entries).
+    // Errors if a specified service prefix is not found in active routes —
+    // this prevents silently no-op restrictions (fail-secure; upstream 46bcfbb9).
     for (service_prefix, rule) in &proxy.endpoint_restrictions {
-        if let Some(route) = proxy_config
+        let route = proxy_config
             .routes
             .iter_mut()
             .find(|r| r.prefix.trim_matches('/') == service_prefix.as_str())
-        {
-            route.endpoint_rules.push(rule.clone());
-        }
+            .ok_or_else(|| {
+                nono::NonoError::ConfigParse(format!(
+                    "--allow-endpoint: service '{}' not found in active credentials; \
+                     ensure --credential {} is also specified",
+                    service_prefix, service_prefix
+                ))
+            })?;
+        route.endpoint_rules.push(rule.clone());
     }
 
     if let Some(ref addr) = proxy.upstream_proxy {
@@ -773,6 +791,127 @@ mod tests {
         assert!(
             !intent.is_proxy_active(),
             "--block-net must override custom_credentials activation; proxy must not be active (#1197/D-07)"
+        );
+    }
+
+    // ── parse_allow_endpoint_arg tests (46bcfbb9) ────────────────────────────
+
+    #[test]
+    fn test_parse_allow_endpoint_arg_valid() {
+        let (service, rule) =
+            parse_allow_endpoint_arg("github:GET:/repos/*/issues").expect("should parse");
+        assert_eq!(service, "github");
+        assert_eq!(rule.method, "GET");
+        assert_eq!(rule.path, "/repos/*/issues");
+    }
+
+    #[test]
+    fn test_parse_allow_endpoint_arg_wildcard_method() {
+        let (service, rule) =
+            parse_allow_endpoint_arg("openai:*:/v1/chat/completions").expect("should parse");
+        assert_eq!(service, "openai");
+        assert_eq!(rule.method, "*");
+        assert_eq!(rule.path, "/v1/chat/completions");
+    }
+
+    #[test]
+    fn test_parse_allow_endpoint_arg_path_must_start_with_slash() {
+        let result = parse_allow_endpoint_arg("github:GET:repos/no-leading-slash");
+        assert!(result.is_err());
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("must start with '/'"),
+            "error should explain the leading slash requirement, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_parse_allow_endpoint_arg_missing_parts() {
+        assert!(parse_allow_endpoint_arg("github:GET").is_err());
+        assert!(parse_allow_endpoint_arg("github").is_err());
+        assert!(parse_allow_endpoint_arg("").is_err());
+    }
+
+    fn ep(service: &str, method: &str, path: &str) -> (String, nono_proxy::config::EndpointRule) {
+        (
+            service.to_string(),
+            nono_proxy::config::EndpointRule {
+                method: method.to_string(),
+                path: path.to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn test_allow_endpoint_applied_to_credential_route() {
+        let proxy = ProxyLaunchOptions {
+            credentials: vec!["github".to_string()],
+            endpoint_restrictions: vec![
+                ep("github", "GET", "/repos/*/issues"),
+                ep("github", "POST", "/repos/*/issues/*/comments"),
+            ],
+            ..ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build");
+        let github = config
+            .routes
+            .iter()
+            .find(|r| r.prefix == "github")
+            .expect("github route must exist");
+        assert_eq!(github.endpoint_rules.len(), 2);
+        assert_eq!(github.endpoint_rules[0].method, "GET");
+        assert_eq!(github.endpoint_rules[0].path, "/repos/*/issues");
+        assert_eq!(github.endpoint_rules[1].method, "POST");
+        assert_eq!(github.endpoint_rules[1].path, "/repos/*/issues/*/comments");
+    }
+
+    #[test]
+    fn test_allow_endpoint_does_not_affect_other_routes() {
+        let proxy = ProxyLaunchOptions {
+            credentials: vec!["github".to_string(), "openai".to_string()],
+            endpoint_restrictions: vec![ep("github", "GET", "/repos/*/issues")],
+            ..ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build");
+        let openai = config
+            .routes
+            .iter()
+            .find(|r| r.prefix == "openai")
+            .expect("openai route must exist");
+        assert!(
+            openai.endpoint_rules.is_empty(),
+            "openai route should not have endpoint rules when only github was restricted"
+        );
+    }
+
+    #[test]
+    fn test_allow_endpoint_unknown_service_errors() {
+        let proxy = ProxyLaunchOptions {
+            credentials: vec!["github".to_string()],
+            endpoint_restrictions: vec![ep("nonexistent", "GET", "/path")],
+            ..ProxyLaunchOptions::default()
+        };
+        let result = build_proxy_config_from_flags(&proxy);
+        assert!(result.is_err());
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("nonexistent"),
+            "error should name the unknown service, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_allow_endpoint_no_credential_errors() {
+        let proxy = ProxyLaunchOptions {
+            credentials: Vec::new(),
+            endpoint_restrictions: vec![ep("github", "GET", "/repos")],
+            ..ProxyLaunchOptions::default()
+        };
+        let result = build_proxy_config_from_flags(&proxy);
+        assert!(
+            result.is_err(),
+            "--allow-endpoint for a service without --credential must error"
         );
     }
 }
