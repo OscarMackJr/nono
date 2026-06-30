@@ -4,14 +4,14 @@ milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
 stopped_at: Phase 98 Plan 01 complete
-last_updated: "2026-06-30T03:35:18.473Z"
+last_updated: "2026-06-30T03:43:13.330Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -22,12 +22,12 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and turns the v3.3 prepare-only pipeline into a genuinely operator-pushable `0.66.1` release.
 
-**Current Focus:** Phase 98 Plan 02 complete (cluster actual-diff inspection + ADR Review). Next: Phase 98 Plan 03 (NetworkIntent ADR-98).
+**Current Focus:** Phase 98 Plan 03 complete (ADR-98 NetworkIntent disposition — full-sync-adopt). Next: Phase 98 Plan 04 (ledger cross-references + phase close).
 
 ## Current Position
 
 Phase: 98 (upst11-divergence-audit) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -83,6 +83,7 @@ Last activity: 2026-06-30
 | Cluster B (4 tool-sandbox commits) won't-sync: fork lacks tool-sandbox/ dir | 98-01 | Fork skipped tool-sandbox feature in Phase 94/95 Cluster B; all 4 commits (691e0f4f, 7011bc85, d2252225, 853d5236) patch absent files; carry-forward if feature adopted |
 | Cluster A windows-touch=yes confirmed: 7 of 11 #1225-touched files have cfg(windows) | 98-01 | grep confirms capability_ext.rs, supervised_runtime.rs, command_runtime.rs, execution_runtime.rs, launch_runtime.rs, output.rs, terminal_approval.rs; cross-target clippy REQUIRED in Phase 99 if adopted |
 | #1225 actual-diff confirmed CLI-side only; Cluster E verify→will-sync; ADR-98 sole Phase 99 blocking gate | 98-02 | git show on all 14 commits: no core library changes in window; c808f000 D-03 re-confirmed as will-sync (mechanical nolabs-ai URL update; package namespace identifiers preserved); per-cluster ADR risk matrix complete (Cluster A=H dominant; no TBD cells) |
+| ADR-98 Decision: full-sync-adopt upstream #1225 NetworkIntent refactor (Option A) | 98-03 | CLI-only refactor; ADR-86 library boundary non-regressed (NetworkMode::ProxyOnly in crates/nono/src/ untouched); Windows WFP/AppContainer non-regressed (exec_strategy_windows/network.rs reads enforcement-time WindowsNetworkPolicyMode::ProxyOnly, not CLI intent type); Phase 86 convergence precedent applies; Phase 99 deviations: WSL2ProxyFallback preservation + CompiledEndpointPolicy compatibility in proxy_runtime.rs |
 
 ### Pending Todos
 
@@ -136,7 +137,7 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-06-30T03:35:18.445Z
+Last session: 2026-06-30T03:43:13.315Z
 Stopped at: Phase 98 Plan 01 complete
 Resume file: None
 
