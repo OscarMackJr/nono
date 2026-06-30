@@ -8593,3 +8593,76 @@ mod session_hooks_tests {
         );
     }
 }
+
+/// D-08 deviation tests: ADR-98 Cluster A fork-invariant verification.
+///
+/// These tests prove the two ADR-98-named Cluster A deviations survive upstream
+/// commit 72bcfd66 (#1225 NetworkIntent) adoption. They document fork-specific
+/// extensions not present in upstream that must remain intact post-absorption.
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod d08_deviation_tests {
+    use super::*;
+
+    /// D-08 deviation test: WSL2ProxyFallback preservation.
+    ///
+    /// After upstream commit 72bcfd66 (#1225 NetworkIntent) adoption,
+    /// `Wsl2ProxyPolicy` enum and its variants must remain accessible in
+    /// `profile/mod.rs` — they are fork-specific extensions not present in upstream.
+    ///
+    /// This test proves the enum and its field on `SecurityConfig` survive
+    /// Cluster A absorption (ADR-98 deviation 1).
+    ///
+    /// Fork deviation from 72bcfd66: Wsl2ProxyPolicy preserved (ADR-98 deviation 1)
+    #[test]
+    fn test_wsl2_proxy_policy_deviation_preserved() {
+        // Prove both variants compile and are directly accessible.
+        let _error: Wsl2ProxyPolicy = Wsl2ProxyPolicy::Error;
+        let _insecure: Wsl2ProxyPolicy = Wsl2ProxyPolicy::InsecureProxy;
+
+        // Prove the SecurityConfig struct carries the wsl2_proxy_policy field.
+        let config = SecurityConfig {
+            wsl2_proxy_policy: Some(Wsl2ProxyPolicy::Error),
+            ..SecurityConfig::default()
+        };
+        assert!(
+            config.wsl2_proxy_policy.is_some(),
+            "wsl2_proxy_policy field must be present on SecurityConfig (ADR-98 deviation 1)"
+        );
+        assert_eq!(
+            config.wsl2_proxy_policy,
+            Some(Wsl2ProxyPolicy::Error),
+            "wsl2_proxy_policy must carry the Error variant"
+        );
+
+        // Prove serde round-trip: Error variant serializes to "error" (snake_case).
+        let json_error =
+            serde_json::to_string(&Wsl2ProxyPolicy::Error).unwrap();
+        assert_eq!(
+            json_error, r#""error""#,
+            "Wsl2ProxyPolicy::Error must serialize as \"error\""
+        );
+        let deserialized: Wsl2ProxyPolicy =
+            serde_json::from_str(r#""error""#).unwrap();
+        assert_eq!(
+            deserialized,
+            Wsl2ProxyPolicy::Error,
+            "\"error\" must deserialize back to Wsl2ProxyPolicy::Error"
+        );
+
+        // Prove InsecureProxy variant round-trips as "insecure_proxy" (snake_case).
+        let json_insecure =
+            serde_json::to_string(&Wsl2ProxyPolicy::InsecureProxy).unwrap();
+        assert_eq!(
+            json_insecure, r#""insecure_proxy""#,
+            "Wsl2ProxyPolicy::InsecureProxy must serialize as \"insecure_proxy\""
+        );
+        let deserialized_insecure: Wsl2ProxyPolicy =
+            serde_json::from_str(r#""insecure_proxy""#).unwrap();
+        assert_eq!(
+            deserialized_insecure,
+            Wsl2ProxyPolicy::InsecureProxy,
+            "\"insecure_proxy\" must deserialize back to Wsl2ProxyPolicy::InsecureProxy"
+        );
+    }
+}

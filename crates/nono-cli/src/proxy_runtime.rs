@@ -564,6 +564,63 @@ mod tests {
         );
     }
 
+    /// D-08 deviation test: CompiledEndpointPolicy compatibility.
+    ///
+    /// After upstream commit 72bcfd66 (#1225 NetworkIntent) adoption,
+    /// `CompiledEndpointPolicy::compile() → evaluate()` chain must remain intact
+    /// in `proxy_runtime.rs` context — this is a fork-specific extension from Phase 95.
+    ///
+    /// The `denied_endpoint_returns_403_and_audit` integration test in
+    /// `crates/nono-proxy/src/reverse.rs` covers the HTTP-level 403 response;
+    /// this unit test documents the direct type-accessibility invariant from within
+    /// proxy_runtime context.
+    ///
+    /// Fork deviation from 72bcfd66: CompiledEndpointPolicy chain preserved
+    /// (Phase 95 / ADR-98 deviation 2)
+    #[test]
+    fn test_compiled_endpoint_policy_compat_deviation_preserved() {
+        use nono_proxy::config::{
+            CompiledEndpointPolicy, EndpointPolicyConfig, EndpointPolicyDecision,
+            EndpointPolicyDefault, EndpointPolicyOutcome, EndpointPolicyRule,
+        };
+
+        // Build a policy with a deny rule to verify the compile → evaluate chain
+        // produces the expected Deny outcome for a denied endpoint.
+        let deny_rule = EndpointPolicyRule {
+            method: "*".to_string(),
+            path: "/restricted/**".to_string(),
+            backend: None,
+            reason: Some("Endpoint restricted by fork endpoint policy".to_string()),
+            timeout_secs: None,
+        };
+        let policy = EndpointPolicyConfig {
+            default: EndpointPolicyDefault {
+                decision: EndpointPolicyDecision::Allow,
+                backend: None,
+                timeout_secs: None,
+            },
+            deny: vec![deny_rule],
+            approve: Vec::new(),
+            allow: Vec::new(),
+        };
+
+        let compiled = CompiledEndpointPolicy::compile(Some(&policy), &[])
+            .expect("CompiledEndpointPolicy::compile must succeed (ADR-98 D-08)");
+
+        let denied = compiled.evaluate("GET", "/restricted/secret");
+        assert!(
+            matches!(denied, EndpointPolicyOutcome::Deny { .. }),
+            "CompiledEndpointPolicy::evaluate must produce Deny for a denied path \
+             (CEP chain intact post-72bcfd66 replay)"
+        );
+
+        let allowed = compiled.evaluate("GET", "/public/resource");
+        assert!(
+            matches!(allowed, EndpointPolicyOutcome::Allow { .. }),
+            "CompiledEndpointPolicy::evaluate must produce Allow for a non-denied path"
+        );
+    }
+
     /// D-07 regression: --block-net overrides customCredentials activation; active=false (#1197).
     #[test]
     fn block_net_overrides_custom_credentials_activation() {
