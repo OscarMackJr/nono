@@ -20,8 +20,9 @@ date: 2026-06-29
 distributed across 8 ledger clusters: A through H. Dispositions confirmed by uniform
 actual-diff (`git show`) per D-09:
 
-- `needs-decision` **1** cluster — A (2 commits: #1225 NetworkIntent + #1263 contradictory-flag
-  guard; disposition settles in ADR-98, Plan 03)
+- `settled` **1** cluster — A (2 commits: #1225 NetworkIntent + #1263 contradictory-flag
+  guard; ADR-98 **Accepted — full-sync-adopt**, 2026-06-30;
+  see `proj/ADR-98-network-intent-disposition.md`)
 - `won't-sync` **2** clusters — B (4 tool-sandbox commits; fork lacks tool-sandbox/) + H (1
   release commit; leapfrog floor **0.66.1** for Phase 100 — D-15)
 - `split` **1** cluster — C (3 proxy evolution commits; tls_intercept/ absent; shared proxy
@@ -41,10 +42,14 @@ additions to `crates/nono` core. Cluster C adds `pub mod pool` to `crates/nono-p
 (new connection-pooling module, intra-proxy, won't-apply if tls_intercept/ hunks skipped).
 No cross-cluster `pub use` / `pub mod` violations detected.
 
-**Fork-specific deliverables:** (1) **#1225 NetworkIntent disposition** — Cluster A; ADR-98
-(`proj/ADR-98-network-intent-disposition.md`); Plan 03. (2) **Expanded carve-out re-touch
-check** — D-07; six surfaces; this window: CR-02 CLEAN, CR-01 CLEAN, Cluster F HIT 5 commits,
-linux.rs HIT 1 (additive), endpoint-policy HIT 3, v3.2 override CLEAN.
+**Fork-specific deliverables:** (1) **#1225 NetworkIntent disposition** — Cluster A;
+ADR-98 **Accepted — full-sync-adopt** (adopt `72bcfd66` + `d457ecc3`; CLI-only refactor;
+ADR-86 library boundary + Windows WFP model non-regressed; Phase 86 precedent applies);
+standalone file: `proj/ADR-98-network-intent-disposition.md`. (2) **Expanded carve-out
+re-touch check** — D-07; six surfaces; this window: CR-02 CLEAN, CR-01 CLEAN, Cluster F HIT 5
+commits (expected conflict — preserve fork expression), linux.rs HIT 1 (additive — no
+fork-expression conflict), endpoint-policy HIT 3 (expected conflict — preserve fork expression;
+cross-ref ADR-98), v3.2 override CLEAN.
 
 **#1225 note:** actual-diff confirms CLI-side ONLY (11 files all in `crates/nono-cli/src/`; no
 changes to `crates/nono/src/capability.rs` or any core library file). The conflict is fork CLI
@@ -53,7 +58,8 @@ narrower than the 260629-toe "HIGH-CONFLICT" preliminary scan suggested, but sti
 decision-blocking for Phase 99 absorb.
 
 **Downstream routing:**
-- Cluster A → ADR-98 (Plan 03) PENDING; Phase 99 absorb after decision
+- Cluster A → Phase 99 full-sync-adopt (ADR-98 Accepted; apply `72bcfd66` + `d457ecc3`;
+  cross-target clippy MUST; WSL2ProxyFallback + CompiledEndpointPolicy deviations)
 - Cluster B → won't-sync; future phase if tool-sandbox/ adopted
 - Cluster C → Phase 99 split extraction (skip tls_intercept/ hunks; apply pool.rs + shared
   proxy surface + endpoint wiring; Cluster F carve-out review)
@@ -130,7 +136,7 @@ an upstream push after `2026-06-29`; re-run the full audit if the count changes.
 
 | cluster_id | theme | commits | disposition | windows-touch | rationale | phase-99-status |
 |------------|-------|---------|-------------|---------------|-----------|-----------------|
-| A | NetworkIntent refactor + contradictory-flag guard (HIGH-CONFLICT) | 2 | needs-decision (ADR-98) | yes | #1225 CLI-owned NetworkIntent enum replaces ProxyOnly placeholder pattern; #1263 pairs with #1225 (block-net conflict validation); 7 of 11 touched files have cfg(windows) blocks; ADR-98 settles adopt vs fork-diverge carve-out | ADR-98 (Plan 03) → Phase 99 after decision |
+| A | NetworkIntent refactor + contradictory-flag guard | 2 | full-sync-adopt (ADR-98 Accepted) | yes | #1225 CLI-owned NetworkIntent enum replaces ProxyOnly placeholder pattern; #1263 pairs with #1225 (block-net conflict validation); 7 of 11 touched files have cfg(windows) blocks; ADR-98 settles adopt: CLI-only refactor, ADR-86 boundary non-regressed, Phase 86 precedent | Phase 99 full-sync-adopt (apply 72bcfd66 + d457ecc3; WSL2ProxyFallback + CompiledEndpointPolicy deviations; cross-target clippy MUST) |
 | B | Tool-sandbox enhancements (won't-sync — fork lacks tool-sandbox/) | 4 | won't-sync | no | Fork lacks tool-sandbox/ dir (skipped in Phase 94/95 Cluster B); all 4 commits patch files absent from fork; carry-forward if tool-sandbox ever adopted | won't-sync → future phase |
 | C | Proxy evolution: HTTP/2 + endpoint routing (split — tls_intercept/ absent) | 3 | split | no | #983 large multi-file commit includes tls_intercept/ h2_forward/h2_probe hunks (won't-apply); shared proxy surfaces (pool.rs, route.rs, server.rs, reverse.rs) extractable; Cluster F carve-out applies | Phase 99 split (skip tls_intercept/; apply pool.rs + shared surface + endpoint wiring; Cluster F carve-out review) |
 | D | 9P filesystem capability warning | 1 | will-sync | no | Additive diagnostic in sandbox/linux.rs; Linux cfg-gated; additive-only, no conflict with Phase 95 fork invariants (linux.rs carve-out check HIT 1 — additive) | Phase 99 will-sync (cross-target clippy gate required; linux.rs cfg(linux)) |
@@ -145,10 +151,11 @@ an upstream push after `2026-06-29`; re-run the full audit if the count changes.
 
 **Commits:** 2 — 72bcfd66, d457ecc3
 
-**Disposition:** needs-decision (ADR-98) — `proj/ADR-98-network-intent-disposition.md`
-(Plan 03). The disposition for both commits is gated on the ADR outcome: full-sync-adopt
-(both commits apply together) vs fork-diverge carve-out (d457ecc3's `validate_block_net_conflicts`
-logic is independently valuable but references `NetworkIntent` — requires adaptation if fork-diverge).
+**Disposition:** **full-sync-adopt** — ADR-98 Accepted, 2026-06-30;
+`proj/ADR-98-network-intent-disposition.md`. Recommendation in one line: adopt the
+`NetworkIntent` refactor — CLI-only refactor, ADR-86 library boundary non-regressed,
+Windows WFP/AppContainer model non-regressed, Phase 86 convergence precedent applies.
+Both commits apply together in Phase 99: `72bcfd66` (#1225) then `d457ecc3` (#1263).
 
 **Windows-touch:** yes — `72bcfd66` (#1225) touches 7 files with `cfg(target_os = "windows")`
 blocks: `capability_ext.rs`, `supervised_runtime.rs`, `command_runtime.rs`,
@@ -942,7 +949,8 @@ be settled before Phase 99 can begin absorbing Cluster A. All other clusters hav
 dispositions and clear Phase 99 guidance. Continue.
 
 **Downstream routing (final — confirmed by actual-diff):**
-- Cluster A → **ADR-98 (Plan 03) PENDING**; Phase 99 after ADR settles; cross-target clippy MUST
+- Cluster A → **Phase 99 full-sync-adopt** (ADR-98 Accepted; apply `72bcfd66` + `d457ecc3`;
+  WSL2ProxyFallback + CompiledEndpointPolicy deviations; cross-target clippy MUST)
 - Cluster B → **won't-sync**; future phase if tool-sandbox/ adopted; 4-commit carry-forward
 - Cluster C → **Phase 99 split** (skip tls_intercept/ hunks; apply pool.rs + shared surface +
   endpoint wiring; Cluster F carve-out review; CompiledEndpointPolicy compat check)
@@ -951,3 +959,54 @@ dispositions and clear Phase 99 guidance. Continue.
 - Cluster F → **Phase 99 will-sync** (apply 2e64798d; sigstore cascade compat check)
 - Cluster G → **Phase 99 will-sync** (apply a4d68189; clean apply; token.rs Cluster F carve-out safe)
 - Cluster H → **Phase 100 won't-sync** (leapfrog floor 0.66.1; D-15 recorded)
+
+---
+
+## Completeness Verification
+
+Recorded at Plan 04 close (2026-06-30). Validates ledger internal consistency before Phase 99.
+
+**(a) Every substantive SHA classified exactly once.**
+14 SHAs across 8 clusters:
+- Cluster A (2): `72bcfd66`, `d457ecc3`
+- Cluster B (4): `691e0f4f`, `7011bc85`, `d2252225`, `853d5236`
+- Cluster C (3): `cdeeb5b9`, `46bcfbb9`, `08ca19a8`
+- Cluster D (1): `5b8e94da`
+- Cluster E (1): `c808f000`
+- Cluster F (1): `2e64798d`
+- Cluster G (1): `a4d68189`
+- Cluster H (1): `d817ed53`
+
+Total: 14 unique SHAs, each appearing in exactly one per-commit table. **PASS.**
+
+**(b) Substantive + noise = total.**
+14 substantive + 6 noise = 20 total. Matches
+`git log --oneline 1d1c88c9..d817ed53 | wc -l` = 20 (verified in Excluded as Noise section).
+**PASS.**
+
+**(c) No bare TBD.**
+Per-cluster ADR risk matrix in ADR Review is complete: all 8 clusters have explicit dispositions
+and risk-cell values; no cell reads `TBD`. Cluster dispositions: A=full-sync-adopt (ADR-98
+Accepted), B=won't-sync, C=split, D=will-sync, E=will-sync, F=will-sync, G=will-sync,
+H=won't-sync. **PASS.**
+
+**(d) Six carve-out verdicts present.**
+- CR-02 (`crates/nono/src/audit.rs`): clean — no re-touch in window.
+- CR-01 (`bindings/c/src/` FFI entry points): clean — no re-touch in window.
+- Cluster F proxy fork-preserve surface (5 paths): HIT (5 commits) — expected conflict —
+  preserve fork expression.
+- Phase 95 endpoint-policy wiring (`CompiledEndpointPolicy`/`evaluate()`): HIT (3 commits) —
+  expected conflict — preserve fork expression; ADR-98 cross-reference present.
+- Phase 95 restored fork invariants (`sandbox/linux.rs` AF_UNIX/seccomp/cgroup paths): HIT
+  (1 commit) — additive only — no fork-expression conflict; guard tests named.
+- v3.2 override surface (`PolicyOverrideApplied` / EventIDs 10006-10010): clean — no re-touch
+  in window.
+
+All six have explicit verdict lines; no carve-out is silent. **PASS.**
+
+**(e) Won't-sync cluster carries 0.66.1 floor cross-ref.**
+Cluster H records D-15: leapfrog floor 0.66.1 for Phase 100; upstream 0.66.0 is the floor;
+do NOT publish fork's 0.66.0. **PASS.**
+
+All five sweep assertions: **PASS.** Ledger is complete, every commit classified exactly once,
+no bare TBD, six carve-out verdicts recorded, Phase 100 leapfrog floor anchored at 0.66.1.
