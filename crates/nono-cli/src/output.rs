@@ -59,6 +59,10 @@ pub fn print_capabilities(
     blocked_grants: &[(std::path::PathBuf, Option<String>)],
     verbose: u8,
     silent: bool,
+    // When true, a proxy will start even though caps may show Blocked or AllowAll.
+    // Upstream 72bcfd66 (#1225): display yellow "proxy" or "proxy (strict)" rather
+    // than "outbound blocked" / "outbound allowed" when a proxy is pending.
+    proxy_pending: bool,
 ) {
     if silent {
         return;
@@ -177,37 +181,58 @@ pub fn print_capabilities(
     // Network status
     match caps.network_mode() {
         NetworkMode::Blocked => {
-            eprintln!(
-                "  {} {}",
-                theme::badge(" net ", t.red, BADGE_FG_DARK),
-                theme::fg("outbound blocked", t.subtext),
-            );
+            if proxy_pending {
+                // Profile set network.block but CLI added proxy flags — proxy
+                // will start in strict_filter mode and owns the network mode.
+                eprintln!(
+                    "  {} {}",
+                    theme::badge(" net ", t.yellow, BADGE_FG_DARK),
+                    theme::fg("proxy (strict)", t.subtext),
+                );
+            } else {
+                eprintln!(
+                    "  {} {}",
+                    theme::badge(" net ", t.red, BADGE_FG_DARK),
+                    theme::fg("outbound blocked", t.subtext),
+                );
+            }
         }
         NetworkMode::ProxyOnly { port, bind_ports } => {
+            let port_str = if *port == 0 {
+                String::new()
+            } else {
+                format!(" localhost:{port}")
+            };
             if bind_ports.is_empty() {
                 eprintln!(
                     "  {} {}",
                     theme::badge(" net ", t.yellow, BADGE_FG_DARK),
-                    theme::fg(&format!("proxy localhost:{port}"), t.subtext),
+                    theme::fg(&format!("proxy{port_str}"), t.subtext),
                 );
             } else {
                 let ports_str: Vec<String> = bind_ports.iter().map(|p| p.to_string()).collect();
+                let bind_info = format!(", bind: {}", ports_str.join(", "));
                 eprintln!(
                     "  {} {}",
                     theme::badge(" net ", t.yellow, BADGE_FG_DARK),
-                    theme::fg(
-                        &format!("proxy localhost:{port}, bind: {}", ports_str.join(", ")),
-                        t.subtext,
-                    ),
+                    theme::fg(&format!("proxy{port_str}{bind_info}"), t.subtext,),
                 );
             }
         }
         NetworkMode::AllowAll => {
-            eprintln!(
-                "  {} {}",
-                theme::badge(" net ", t.green, BADGE_FG_DARK),
-                theme::fg("outbound allowed", t.subtext),
-            );
+            if proxy_pending {
+                eprintln!(
+                    "  {} {}",
+                    theme::badge(" net ", t.yellow, BADGE_FG_DARK),
+                    theme::fg("proxy", t.subtext),
+                );
+            } else {
+                eprintln!(
+                    "  {} {}",
+                    theme::badge(" net ", t.green, BADGE_FG_DARK),
+                    theme::fg("outbound allowed", t.subtext),
+                );
+            }
         }
     }
     if !caps.localhost_ports().is_empty() {
@@ -1136,8 +1161,8 @@ mod tests {
             .allow_unix_socket_dir(dir.path(), UnixSocketMode::ConnectBind)
             .expect("bind dir grant");
 
-        print_capabilities(&caps, &[], 0, true);
-        print_capabilities(&caps, &[], 1, true);
+        print_capabilities(&caps, &[], 0, true, false);
+        print_capabilities(&caps, &[], 1, true, false);
     }
 
     #[test]

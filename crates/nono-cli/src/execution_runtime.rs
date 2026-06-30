@@ -125,7 +125,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     } = plan;
     let rollback = &flags.rollback;
     let trust = &flags.trust;
-    let proxy = &flags.proxy;
+    let network = &flags.network;
     let session = &flags.session;
 
     if let Some(blocked) =
@@ -170,9 +170,13 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     // Derive plain domain strings and endpoint state from Vec<AllowDomainEntry>.
     // domain_endpoints captures WithEndpoints entries for the capability state file;
     // plain_allowed_domains is the flat domain list for the allowed_domains field.
-    let domain_endpoints: Vec<DomainEndpointState> = flags
-        .proxy
-        .allow_domain
+    // Upstream 72bcfd66: allow_domain now lives inside NetworkIntent::ProxyFiltered(opts).
+    let allow_domain_entries: &[crate::profile::AllowDomainEntry] = flags
+        .network
+        .proxy_options()
+        .map(|opts| opts.allow_domain.as_slice())
+        .unwrap_or(&[]);
+    let domain_endpoints: Vec<DomainEndpointState> = allow_domain_entries
         .iter()
         .filter_map(|entry| {
             if let AllowDomainEntry::WithEndpoints { domain, endpoints } = entry {
@@ -191,9 +195,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
             }
         })
         .collect();
-    let plain_allowed_domains: Vec<String> = flags
-        .proxy
-        .allow_domain
+    let plain_allowed_domains: Vec<String> = allow_domain_entries
         .iter()
         .map(|e| e.domain().to_string())
         .collect();
@@ -223,23 +225,24 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     let strategy = flags.strategy;
 
     if matches!(strategy, exec_strategy::ExecStrategy::Supervised) {
-        output::print_supervised_info(flags.silent, rollback.requested, proxy.active);
+        output::print_supervised_info(flags.silent, rollback.requested, network.is_proxy_active());
     }
 
     // Fail-secure guard (D-02): if the user's intent is proxy-only mode
     // (caps were set to ProxyOnly by a profile or credential path at
-    // capability_ext.rs:535) but `proxy.active` is false (no network profile,
-    // no credentials, no upstream proxy — see proxy_runtime.rs lines 52-78),
+    // capability_ext.rs:535) but the network intent has no active proxy (no network
+    // profile, no credentials, no upstream proxy — see proxy_runtime.rs),
     // the sandboxed process would have no proxy to route traffic through.
     // Fail before `start_proxy_runtime` and before any WFP/sandbox activation.
-    if matches!(caps.network_mode(), nono::NetworkMode::ProxyOnly { .. }) && !proxy.active {
+    // Upstream 72bcfd66: check intent.is_proxy_active() instead of proxy.active.
+    if matches!(caps.network_mode(), nono::NetworkMode::ProxyOnly { .. }) && !network.is_proxy_active() {
         return Err(NonoError::SandboxInit(
             "Cannot use proxy-only mode without a network profile or credential configuration."
                 .to_string(),
         ));
     }
 
-    let active_proxy = start_proxy_runtime(proxy, &mut caps)?;
+    let active_proxy = start_proxy_runtime(network, &mut caps)?;
     let proxy_env_vars = active_proxy.env_vars;
     let proxy_handle = active_proxy.handle;
 
@@ -397,7 +400,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     #[cfg(not(target_os = "windows"))]
     let threading = select_threading_context(
         !loaded_secrets.is_empty(),
-        proxy.active,
+        network.is_proxy_active(),
         trust.scan_performed,
         trust.interception_active,
     );
@@ -697,7 +700,7 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
                 session,
                 rollback,
                 trust,
-                proxy,
+                network,
                 proxy_handle: proxy_handle.as_ref(),
                 executable_identity: executable_identity.as_ref(),
                 // audit_signer is created inside execute_supervised_runtime from

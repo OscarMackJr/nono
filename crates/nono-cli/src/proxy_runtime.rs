@@ -1,5 +1,5 @@
 use crate::cli::SandboxArgs;
-use crate::launch_runtime::ProxyLaunchOptions;
+use crate::launch_runtime::{NetworkIntent, ProxyLaunchOptions};
 use crate::network_policy;
 use crate::profile::AllowDomainEntry;
 use crate::sandbox_prepare::{validate_external_proxy_bypass, PreparedSandbox};
@@ -56,11 +56,21 @@ fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
     AllowDomainEntry::Plain(input.to_string())
 }
 
+/// Prepare the network intent for the sandbox run.
+///
+/// Returns a `NetworkIntent` describing the resolved network mode:
+/// - `BlockAll` when `--block-net` or profile `network.block` wins over any proxy config.
+/// - `ProxyFiltered(opts)` when proxy-activating features are configured.
+/// - `Unrestricted` when `--allow-net` or no network flags are given.
+///
+/// Upstream 72bcfd66 (#1225): changed return type from ProxyLaunchOptions to NetworkIntent;
+/// removed ProxyOnly { port: 0 } placeholder detection (no longer set in capability_ext.rs);
+/// replaced network_block_requested with profile_network_block + direct args.block_net check.
 pub(crate) fn prepare_proxy_launch_options(
     args: &SandboxArgs,
     prepared: &PreparedSandbox,
     silent: bool,
-) -> Result<ProxyLaunchOptions> {
+) -> Result<NetworkIntent> {
     validate_external_proxy_bypass(args, prepared)?;
 
     let effective_proxy = resolve_effective_proxy_settings(args, prepared);
@@ -87,14 +97,20 @@ pub(crate) fn prepare_proxy_launch_options(
         bypass
     };
 
-    let active = if matches!(prepared.caps.network_mode(), nono::NetworkMode::Blocked) {
-        if !credentials.is_empty()
-            || network_profile.is_some()
-            || !allow_domain.is_empty()
-            || upstream_proxy.is_some()
-            || !prepared.custom_credentials.is_empty()
-        // #1197 / D-07
-        {
+    // Determine whether any proxy-activating configuration is present.
+    let would_activate = !credentials.is_empty()
+        || network_profile.is_some()
+        || !allow_domain.is_empty()
+        || upstream_proxy.is_some()
+        || !prepared.custom_credentials.is_empty(); // #1197 / D-07
+
+    // --block-net always wins; profile network.block yields to any proxy config.
+    // Per upstream 72bcfd66 (#1225): block_wins replaces the old NetworkMode::Blocked check.
+    let block_wins =
+        args.block_net || (prepared.profile_network_block && !would_activate);
+
+    if block_wins {
+        if would_activate {
             warn!(
                 "--block-net is active; ignoring proxy configuration \
                  that would re-enable network access"
@@ -106,19 +122,19 @@ pub(crate) fn prepare_proxy_launch_options(
                 );
             }
         }
-        false
-    } else {
-        matches!(
-            prepared.caps.network_mode(),
-            nono::NetworkMode::ProxyOnly { .. }
-        ) || !credentials.is_empty()
-            || network_profile.is_some()
-            || !allow_domain.is_empty()
-            || upstream_proxy.is_some()
-            || !prepared.custom_credentials.is_empty() // #1197 / D-07
-    };
+        return Ok(NetworkIntent::BlockAll);
+    }
 
-    Ok(ProxyLaunchOptions {
+    if args.allow_net {
+        return Ok(NetworkIntent::Unrestricted);
+    }
+
+    // Profile network.block + proxy flags → strict mode: deny unlisted hosts.
+    let strict_filter = prepared.profile_network_block;
+
+    let active = would_activate;
+
+    Ok(NetworkIntent::ProxyFiltered(Box::new(ProxyLaunchOptions {
         active,
         network_profile,
         allow_domain,
@@ -131,8 +147,8 @@ pub(crate) fn prepare_proxy_launch_options(
         open_url_origins: prepared.open_url_origins.clone(),
         open_url_allow_localhost: prepared.open_url_allow_localhost,
         allow_launch_services_active: prepared.allow_launch_services_active,
-        network_block: prepared.network_block_requested,
-    })
+        strict_filter,
+    })))
 }
 
 pub(crate) fn resolve_effective_proxy_settings(
@@ -220,7 +236,7 @@ pub(crate) fn build_proxy_config_from_flags(
     }
     resolved.routes.extend(endpoint_routes);
     let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts);
-    proxy_config.strict_filter = proxy.network_block;
+    proxy_config.strict_filter = proxy.strict_filter;
 
     if let Some(ref addr) = proxy.upstream_proxy {
         proxy_config.external_proxy = Some(nono_proxy::config::ExternalProxyConfig {
@@ -237,16 +253,25 @@ pub(crate) fn build_proxy_config_from_flags(
     Ok(proxy_config)
 }
 
+/// Start the proxy runtime based on the resolved `NetworkIntent`.
+///
+/// Upstream 72bcfd66 (#1225): signature changed from `&ProxyLaunchOptions` to `&NetworkIntent`;
+/// callers now pass the intent returned by `prepare_proxy_launch_options` directly.
+/// Non-proxy intents (BlockAll, Unrestricted) return an inactive runtime without starting
+/// a proxy server; ProxyFiltered with active=false also returns inactive.
 pub(crate) fn start_proxy_runtime(
-    proxy: &ProxyLaunchOptions,
+    intent: &NetworkIntent,
     caps: &mut CapabilitySet,
 ) -> Result<ActiveProxyRuntime> {
-    if !proxy.active {
-        return Ok(ActiveProxyRuntime {
-            env_vars: Vec::new(),
-            handle: None,
-        });
-    }
+    let proxy = match intent {
+        NetworkIntent::ProxyFiltered(opts) if opts.active => opts.as_ref(),
+        _ => {
+            return Ok(ActiveProxyRuntime {
+                env_vars: Vec::new(),
+                handle: None,
+            });
+        }
+    };
 
     let mut proxy_config = build_proxy_config_from_flags(proxy)?;
     proxy_config.direct_connect_ports = caps.tcp_connect_ports().to_vec();
@@ -430,7 +455,7 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             set_vars: None,
-            network_block_requested: false,
+            profile_network_block: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
         };
@@ -445,18 +470,19 @@ mod tests {
         );
     }
 
-    /// `network_block: true` must set `strict_filter` on the generated `ProxyConfig`.
+    /// `strict_filter: true` must propagate to `ProxyConfig.strict_filter`.
+    /// Upstream 72bcfd66: field renamed from network_block to strict_filter on ProxyLaunchOptions.
     #[test]
-    fn test_build_proxy_config_propagates_network_block_to_strict_filter() {
+    fn test_build_proxy_config_propagates_strict_filter() {
         let proxy = ProxyLaunchOptions {
             active: true,
-            network_block: true,
+            strict_filter: true,
             ..ProxyLaunchOptions::default()
         };
         let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
         assert!(
             config.strict_filter,
-            "network_block: true must set strict_filter on ProxyConfig"
+            "strict_filter: true on ProxyLaunchOptions must set strict_filter on ProxyConfig"
         );
     }
 
@@ -464,13 +490,13 @@ mod tests {
     fn test_build_proxy_config_strict_filter_off_when_no_block() {
         let proxy = ProxyLaunchOptions {
             active: true,
-            network_block: false,
+            strict_filter: false,
             ..ProxyLaunchOptions::default()
         };
         let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
         assert!(
             !config.strict_filter,
-            "strict_filter must default off when network_block is false"
+            "strict_filter must default off when strict_filter is false on ProxyLaunchOptions"
         );
     }
 
@@ -550,16 +576,16 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             set_vars: None,
-            network_block_requested: false,
+            profile_network_block: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
         };
 
         let args = SandboxArgs::default();
-        let opts = prepare_proxy_launch_options(&args, &prepared, true)
+        let intent = prepare_proxy_launch_options(&args, &prepared, true)
             .expect("prepare_proxy_launch_options");
         assert!(
-            opts.active,
+            intent.is_proxy_active(),
             "proxy must activate when only custom_credentials is set (#1197/D-07)"
         );
     }
@@ -622,6 +648,7 @@ mod tests {
     }
 
     /// D-07 regression: --block-net overrides customCredentials activation; active=false (#1197).
+    /// Upstream 72bcfd66: block detection now via args.block_net (not NetworkMode::Blocked cap).
     #[test]
     fn block_net_overrides_custom_credentials_activation() {
         use crate::cli::SandboxArgs;
@@ -647,11 +674,8 @@ mod tests {
             },
         );
 
-        let mut caps = CapabilitySet::new();
-        caps.set_network_mode_mut(nono::NetworkMode::Blocked);
-
         let prepared = crate::sandbox_prepare::PreparedSandbox {
-            caps,
+            caps: CapabilitySet::new(),
             secrets: Vec::new(),
             rollback_exclude_patterns: Vec::new(),
             rollback_exclude_globs: Vec::new(),
@@ -676,17 +700,21 @@ mod tests {
             allowed_env_vars: None,
             denied_env_vars: None,
             set_vars: None,
-            network_block_requested: true,
+            profile_network_block: false,
             loaded_profile: None,
             session_hooks: crate::profile::SessionHooks::default(),
         };
 
-        let args = SandboxArgs::default();
-        let opts = prepare_proxy_launch_options(&args, &prepared, true)
+        // Upstream 72bcfd66: block_wins now driven by args.block_net (flag) not NetworkMode.
+        let args = SandboxArgs {
+            block_net: true,
+            ..SandboxArgs::default()
+        };
+        let intent = prepare_proxy_launch_options(&args, &prepared, true)
             .expect("prepare_proxy_launch_options");
         assert!(
-            !opts.active,
-            "--block-net must override custom_credentials activation; active must be false (#1197/D-07)"
+            !intent.is_proxy_active(),
+            "--block-net must override custom_credentials activation; proxy must not be active (#1197/D-07)"
         );
     }
 }

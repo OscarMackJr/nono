@@ -161,7 +161,8 @@ const DETACHED_LAUNCH_ENV: &str = "NONO_DETACHED_LAUNCH";
 const DETACHED_SESSION_ID_ENV: &str = "NONO_DETACHED_SESSION_ID";
 
 pub(crate) use launch_runtime::rollback_base_exclusions;
-pub(crate) use proxy_runtime::merge_dedup_ports;
+// Upstream 72bcfd66 (#1225): pub(crate) use proxy_runtime::merge_dedup_ports removed;
+// merge_dedup_ports is now only called inside proxy_runtime itself (no external callers).
 
 fn main() {
     let legacy_network_warnings = collect_legacy_network_warnings();
@@ -349,7 +350,7 @@ mod tests {
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
             set_vars: None,
-            network_block_requested: false,
+            profile_network_block: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.
@@ -408,7 +409,7 @@ mod tests {
             // test fixture has no env-filter deny-list either.
             denied_env_vars: None,
             set_vars: None,
-            network_block_requested: false,
+            profile_network_block: false,
             // Plan 18.1-03 G-06: test fixture has no loaded profile.
             loaded_profile: None,
             // Phase 58: test fixture has no session hooks.

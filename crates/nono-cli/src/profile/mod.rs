@@ -1744,14 +1744,11 @@ impl NetworkConfig {
         self.credentials.as_deref().unwrap_or(&[])
     }
 
-    /// Whether any profile setting requires proxy mode activation.
-    pub fn has_proxy_flags(&self) -> bool {
-        self.resolved_network_profile().is_some()
-            || !self.allow_domain.is_empty()
-            || !self.resolved_credentials().is_empty()
-            || self.upstream_proxy.is_some()
-    }
 }
+// Upstream 72bcfd66 (#1225): has_proxy_flags() removed. The NetworkIntent decision is now
+// computed directly in prepare_proxy_launch_options (proxy_runtime.rs) without going
+// through has_proxy_flags. Callers in capability_ext.rs (ProxyOnly placeholder) were
+// also removed (upstream 72bcfd66). See ADR-98.
 
 /// Secrets configuration in a profile
 ///
@@ -6156,15 +6153,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_credentials_none_does_not_activate_proxy() {
-        let mut config = NetworkConfig::default();
-        assert!(!config.has_proxy_flags()); // None = no proxy
-        config.credentials = Some(Vec::new());
-        assert!(!config.has_proxy_flags()); // Some([]) = no proxy
-        config.credentials = Some(vec!["openai".to_string()]);
-        assert!(config.has_proxy_flags()); // Some(["openai"]) = proxy
-    }
+    // Upstream 72bcfd66 (#1225): test_credentials_none_does_not_activate_proxy removed.
+    // has_proxy_flags() is removed; proxy activation now computed in prepare_proxy_launch_options.
 
     #[test]
     fn test_credentials_deserialization_absent_vs_empty() {
@@ -6657,7 +6647,7 @@ mod tests {
 
         let profile = load_profile_from_path(&profile_path).expect("load profile");
         assert_eq!(profile.network.resolved_network_profile(), None);
-        assert!(!profile.network.has_proxy_flags());
+        // Upstream 72bcfd66: has_proxy_flags() removed; proxy activation via prepare_proxy_launch_options.
         assert!(
             profile
                 .filesystem

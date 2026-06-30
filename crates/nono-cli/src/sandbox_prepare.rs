@@ -100,10 +100,11 @@ pub(crate) struct PreparedSandbox {
     pub(crate) denied_env_vars: Option<Vec<String>>,
     /// Expanded `environment.set_vars` (key, expanded-value), `None` if absent.
     pub(crate) set_vars: Option<Vec<(String, String)>>,
-    /// True when the profile or CLI requested `network.block`. Carried
-    /// through because a CLI proxy flag (e.g. `--credential`) may later
-    /// override `caps` to `ProxyOnly`, losing the original intent.
-    pub(crate) network_block_requested: bool,
+    /// True when the profile's `network.block` is set. The CLI `--block-net`
+    /// flag is read directly from `SandboxArgs` at proxy-launch time, so only
+    /// the profile's contribution needs to be carried through.
+    /// Fork deviation from 72bcfd66: renamed network_block_requested → profile_network_block
+    pub(crate) profile_network_block: bool,
     /// Plan 18.1-03 G-06: the loaded profile (if any) is preserved past
     /// profile destructuring so its `capabilities.aipc` widening can be
     /// resolved at Windows supervisor construction time via
@@ -124,7 +125,19 @@ fn finalize_prepared_sandbox(
     silent: bool,
 ) -> Result<PreparedSandbox> {
     output::print_skipped_requested_paths(&collect_missing_cli_requested_paths(args), silent);
-    output::print_capabilities(&prepared.caps, blocked_grants, args.verbose, silent);
+    // Compute proxy_pending before print_capabilities so the display shows
+    // yellow "proxy" when AllowAll caps but a proxy will start, or when
+    // Blocked caps but proxy flags override it (strict_filter mode).
+    // Per upstream 72bcfd66 (#1225).
+    let has_proxy_intent = args.has_proxy_flags()
+        || prepared.network_profile.is_some()
+        || !prepared.allow_domain.is_empty()
+        || !prepared.credentials.is_empty()
+        || prepared.upstream_proxy.is_some();
+    let block_wins =
+        args.block_net || (prepared.profile_network_block && !has_proxy_intent);
+    let proxy_pending = !block_wins && !args.allow_net && has_proxy_intent;
+    output::print_capabilities(&prepared.caps, blocked_grants, args.verbose, silent, proxy_pending);
 
     if let Some(ref profile_name) = args.profile {
         crate::pack_update_hint::show_pack_update_hints(profile_name, silent);
@@ -352,7 +365,9 @@ pub(crate) fn prepare_sandbox_with_context(
                 // deny_vars also unset on the manifest path.
                 denied_env_vars: None,
                 set_vars: None,
-                network_block_requested: args.block_net,
+                // Manifest path has no profile, so profile_network_block is false.
+                // The CLI --block-net flag is read directly at proxy-launch time.
+                profile_network_block: false,
                 // Plan 18.1-03 G-06: manifest path has no loaded Profile —
                 // AIPC widening defaults to hard-coded supervisor allowlist.
                 loaded_profile: None,
@@ -596,7 +611,9 @@ pub(crate) fn prepare_sandbox_with_context(
         .as_ref()
         .map(|p| p.network.block)
         .unwrap_or(false);
-    let network_block_requested = args.block_net || profile_network_block;
+    // Note: the CLI `args.block_net` is now read directly at proxy-launch time
+    // via prepare_proxy_launch_options; only the profile's block contribution
+    // is carried in PreparedSandbox.profile_network_block.
 
     // Plan 18.1-03 G-06: clone env_credentials.mappings out by reference so
     // `loaded_profile` stays owned and can be preserved in `PreparedSandbox`
@@ -647,7 +664,7 @@ pub(crate) fn prepare_sandbox_with_context(
             // forward the env-filter deny-list.
             denied_env_vars: profile_denied_env_vars,
             set_vars: profile_set_vars,
-            network_block_requested,
+            profile_network_block,
             // Plan 18.1-03 G-06: preserve the loaded profile so
             // `Profile::resolve_aipc_allowlist` can be consulted at the
             // Windows supervisor construction site.

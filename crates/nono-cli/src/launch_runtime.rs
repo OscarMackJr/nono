@@ -93,7 +93,7 @@ pub(crate) struct TrustLaunchOptions {
     pub(crate) protected_paths: Vec<PathBuf>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ProxyLaunchOptions {
     pub(crate) active: bool,
     pub(crate) network_profile: Option<String>,
@@ -107,10 +107,53 @@ pub(crate) struct ProxyLaunchOptions {
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
     pub(crate) allow_launch_services_active: bool,
-    /// True when the user requested `network.block` or `--block-net`.
-    /// Propagated to `ProxyConfig.strict_filter` so the filter denies
-    /// unlisted hosts instead of falling back to allow-all.
-    pub(crate) network_block: bool,
+    /// When `true`, the proxy denies any host not explicitly allowed rather
+    /// than falling back to allow-all. Set when the user combined proxy
+    /// features with `--block-net` or profile `network.block`.
+    /// Upstream 72bcfd66 (#1225): renamed from `network_block` to match its
+    /// actual meaning (deny unlisted hosts, not block-all-net).
+    pub(crate) strict_filter: bool,
+}
+
+/// Resolved network intent, derived from CLI flags and profile before any
+/// proxy is started. This is the single source of truth for which network
+/// mode the sandbox will run in.
+///
+/// Variants are ordered by decreasing restriction:
+/// - `BlockAll` — OS sandbox denies all outbound connections.
+/// - `ProxyFiltered` — outbound connections are gated through the nono proxy.
+/// - `Unrestricted` — no network restriction.
+///
+/// Upstream 72bcfd66 (#1225): introduced to replace the `ProxyOnly { port: 0 }`
+/// placeholder pattern. Placed in launch_runtime.rs (fork deviation from upstream's
+/// placement) to avoid a circular dependency between sandbox_prepare.rs and
+/// launch_runtime.rs — ADR-98 deviation note in SUMMARY.
+#[derive(Clone, Debug, Default)]
+pub(crate) enum NetworkIntent {
+    /// `--allow-net` or default when no network flags are given: no restriction.
+    #[default]
+    Unrestricted,
+    /// `--block-net` or profile `network.block` with no active proxy override:
+    /// outbound connections are denied by the OS sandbox.
+    BlockAll,
+    /// Proxy-activating features are configured (credentials, network profile,
+    /// allow-domain, etc.). The proxy starts only if the options are active.
+    ProxyFiltered(Box<ProxyLaunchOptions>),
+}
+
+impl NetworkIntent {
+    /// True when the intent is `ProxyFiltered` and the proxy options are active.
+    pub(crate) fn is_proxy_active(&self) -> bool {
+        matches!(self, Self::ProxyFiltered(opts) if opts.active)
+    }
+
+    /// Return the underlying `ProxyLaunchOptions` when the intent is `ProxyFiltered`.
+    pub(crate) fn proxy_options(&self) -> Option<&ProxyLaunchOptions> {
+        match self {
+            Self::ProxyFiltered(opts) => Some(opts),
+            _ => None,
+        }
+    }
 }
 
 /// Optional resource caps applied to the sandboxed agent tree.
@@ -204,7 +247,8 @@ pub(crate) struct ExecutionFlags {
     pub(crate) session: SessionLaunchOptions,
     pub(crate) rollback: RollbackLaunchOptions,
     pub(crate) trust: TrustLaunchOptions,
-    pub(crate) proxy: ProxyLaunchOptions,
+    /// Resolved network intent (upstream 72bcfd66 #1225: replaces `proxy: ProxyLaunchOptions`).
+    pub(crate) network: NetworkIntent,
     pub(crate) redaction_policy: nono::ScrubPolicy,
     pub(crate) resource_limits: ResourceLimits,
     /// Expanded `environment.set_vars` (key, expanded-value), `None` if absent.
@@ -254,7 +298,7 @@ impl ExecutionFlags {
                     .map_err(|e| NonoError::SandboxInit(format!("Failed to get cwd: {e}")))?,
                 ..TrustLaunchOptions::default()
             },
-            proxy: ProxyLaunchOptions::default(),
+            network: NetworkIntent::default(),
             redaction_policy: nono::ScrubPolicy::secure_default(),
             resource_limits: ResourceLimits::default(),
             set_vars: None,
@@ -343,7 +387,7 @@ pub(crate) fn prepare_run_launch_plan(
         prepared.caps.set_extensions_enabled(true);
     }
 
-    let proxy = prepare_proxy_launch_options(&args, &prepared, silent)?;
+    let network = prepare_proxy_launch_options(&args, &prepared, silent)?;
     let rollback_options = prepare_rollback_launch_options(
         &run_args.rollback_exclude,
         run_args.rollback_all,
@@ -354,7 +398,7 @@ pub(crate) fn prepare_run_launch_plan(
 
     let strategy = select_exec_strategy(
         rollback,
-        proxy.active,
+        network.is_proxy_active(),
         prepared.capability_elevation,
         trust.interception_active,
         run_args.detached,
@@ -409,7 +453,7 @@ pub(crate) fn prepare_run_launch_plan(
                 ..rollback_options
             },
             trust,
-            proxy,
+            network,
             redaction_policy,
             resource_limits,
             set_vars: prepared.set_vars,

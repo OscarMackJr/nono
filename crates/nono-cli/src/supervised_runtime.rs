@@ -1,9 +1,10 @@
 use crate::audit_attestation::{prepare_audit_signer, AuditSigner};
 use crate::audit_integrity::AuditRecorder;
 use crate::launch_runtime::{
-    ProxyLaunchOptions, ResourceLimits, RollbackLaunchOptions, SessionLaunchOptions,
-    TrustLaunchOptions,
+    NetworkIntent, ResourceLimits, RollbackLaunchOptions, SessionLaunchOptions, TrustLaunchOptions,
 };
+#[cfg(not(target_os = "windows"))]
+use crate::launch_runtime::ProxyLaunchOptions;
 #[cfg(not(target_os = "windows"))]
 use crate::protected_paths;
 use crate::rollback_runtime::{
@@ -32,7 +33,8 @@ pub(crate) struct SupervisedRuntimeContext<'a> {
     pub(crate) session: &'a SessionLaunchOptions,
     pub(crate) rollback: &'a RollbackLaunchOptions,
     pub(crate) trust: &'a TrustLaunchOptions,
-    pub(crate) proxy: &'a ProxyLaunchOptions,
+    /// Upstream 72bcfd66: changed from &'a ProxyLaunchOptions to &'a NetworkIntent.
+    pub(crate) network: &'a NetworkIntent,
     pub(crate) proxy_handle: Option<&'a nono_proxy::server::ProxyHandle>,
     /// AUD-03 SHA-256 portion (upstream 02ee0bd1): canonical path + SHA-256
     /// of the launched binary, computed in `execution_runtime` before
@@ -204,7 +206,7 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         session,
         rollback,
         trust,
-        proxy,
+        network,
         proxy_handle,
         executable_identity,
         audit_signer: _audit_signer_ctx,
@@ -337,6 +339,10 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
     let approval_backend: std::sync::Arc<terminal_approval::TerminalApproval> =
         std::sync::Arc::new(terminal_approval::TerminalApproval);
     let supervisor_session_id = build_supervisor_session_id(audit_state.as_ref());
+    // Upstream 72bcfd66: extract ProxyLaunchOptions from NetworkIntent once,
+    // then use proxy_opts for field access throughout (replaces direct proxy.* access).
+    #[cfg(not(target_os = "windows"))]
+    let proxy_opts: Option<&ProxyLaunchOptions> = network.proxy_options();
     #[cfg(not(target_os = "windows"))]
     let protected_roots = protected_paths::ProtectedRoots::from_defaults()?;
     #[cfg(not(target_os = "windows"))]
@@ -346,12 +352,14 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         session_id: &supervisor_session_id,
         attach_initial_client: !session.detached_start,
         detach_sequence: session.detach_sequence.as_deref(),
-        open_url_origins: &proxy.open_url_origins,
-        open_url_allow_localhost: proxy.open_url_allow_localhost,
+        open_url_origins: proxy_opts.map(|p| p.open_url_origins.as_slice()).unwrap_or(&[]),
+        open_url_allow_localhost: proxy_opts.map(|p| p.open_url_allow_localhost).unwrap_or(false),
         audit_recorder: audit_recorder.as_deref(),
         network_audit_events: supervisor_network_audit_events.as_ref(),
         redaction_policy,
-        allow_launch_services_active: proxy.allow_launch_services_active,
+        allow_launch_services_active: proxy_opts
+            .map(|p| p.allow_launch_services_active)
+            .unwrap_or(false),
         #[cfg(target_os = "linux")]
         proxy_port: match caps.network_mode() {
             nono::NetworkMode::ProxyOnly { port, .. } => *port,
@@ -377,7 +385,7 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         requested_features: nono::Sandbox::windows_supervisor_support(
             nono::WindowsSupervisorContext {
                 rollback_snapshots: rollback.requested && !rollback.disabled,
-                proxy_filtering: proxy.active,
+                proxy_filtering: network.is_proxy_active(),
                 runtime_capability_expansion: capability_elevation,
                 runtime_trust_interception: trust.interception_active,
             },
@@ -385,7 +393,7 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         .requested_feature_labels(),
         support: nono::Sandbox::windows_supervisor_support(nono::WindowsSupervisorContext {
             rollback_snapshots: rollback.requested && !rollback.disabled,
-            proxy_filtering: proxy.active,
+            proxy_filtering: network.is_proxy_active(),
             runtime_capability_expansion: capability_elevation,
             runtime_trust_interception: trust.interception_active,
         }),
