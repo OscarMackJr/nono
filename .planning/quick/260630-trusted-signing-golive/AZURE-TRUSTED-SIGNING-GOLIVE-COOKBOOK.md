@@ -181,6 +181,23 @@ via Trusted Signing, and asserts Authenticode = `Valid`. **It publishes nothing.
 **If this fails, STOP and fix it here** — do not cut a release until smoke is green. See
 Troubleshooting below.
 
+> **⚠ FIELD NOTE (first live run, 2026-06-30, run `28467925298`):** OIDC login + the Sign step
+> **succeeded** (auth, RBAC role, and endpoint/account/profile vars all correct; signer =
+> `CN=TWGGLOBAL.onmicrosoft.com`). But **Verify failed with `Status: UnknownError`**, issuer
+> `CN=Microsoft Enterprise ID Verified Policy AOC CA 01`. Two things to settle before a release:
+> 1. **Confirm the certificate profile is type _Public Trust_.** The publicly-trusted code-signing
+>    chain is named `Microsoft ID Verified **CS** EOC/AOC CA NN`. An issuer reading
+>    `…Enterprise ID Verified Policy AOC CA…` is *not* that naming — verify the profile type in
+>    Azure and, if needed, create a Public Trust profile and update `TRUSTED_SIGNING_PROFILE`.
+> 2. **`UnknownError` ≠ `UntrustedRoot`** — it usually means the chain could not be *built* on that
+>    machine (new AOC intermediate/root absent on the `windows-latest` runner, or a revocation/CRL
+>    fetch timed out). Re-verify on a fully-updated clean **Win11** host with
+>    `signtool verify /pa /v <file>`; if it is `Valid` there, the signing is fine and only the
+>    runner-side gate is stale.
+>
+> Note `release.yml:259` uses the **same** `Get-AuthenticodeSignature -ne 'Valid'` check (fail-closed),
+> so a release tag will also abort at verify until this resolves to `Valid`.
+
 ---
 
 ## 6. GATE 2 — Cut the first trusted-signed release
@@ -262,6 +279,8 @@ This is the acceptance criterion in `.planning/todos/pending/20260611-poc-cert-b
 | `azure/login` succeeds, signing step → `403 / AuthorizationFailed` | SP missing the signer role, or role scoped wrong | Re-run §3c; scope must be the **account** resource ID, role name exactly `Trusted Signing Certificate Profile Signer`. |
 | Signing → `profile not found` / `account not found` | Wrong `TRUSTED_SIGNING_*` variables | Re-check §4 against the §2 recorded values; endpoint is region-prefixed (`https://eus.…`). |
 | Smoke `Status: NotSigned` after sign step | wrong endpoint region, or profile is "Test" not "Public Trust" | Confirm profile type = **Public Trust**; confirm endpoint region matches the account. |
+| Sign succeeds but Verify `Status: UnknownError` (chain can't be built) | profile not Public Trust, OR runner lacks the new AOC/EOC intermediate/root, OR revocation check timed out | (1) Confirm profile type = **Public Trust** (issuer should read `Microsoft ID Verified **CS** EOC/AOC CA NN`); (2) re-verify on an updated clean Win11 host with `signtool verify /pa /v`; if Valid there, the signing is fine. Seen on first live run 2026-06-30. |
+| Signature `Valid` but "Windows protected your PC" on first run | new `AOC CA` intermediate has no SmartScreen reputation yet | Expected for new profiles; reputation accrues over time/volume. Validity is unaffected. |
 | Clean-host: MSI `Valid` but `nono run` won't spawn broker | broker `.exe` wasn't signed by the same profile | The pre-package step signs all top-level `.exe` (incl. broker) — confirm `nono-shell-broker.exe` was in `target/<target>/release` at sign time (`release.yml:159-163`). |
 | Release run pauses on every OS matrix leg | protection rule added to `Development` environment | Remove required-reviewer / wait-timer from the `Development` environment (§4). |
 
