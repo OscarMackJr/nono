@@ -7,7 +7,8 @@ use crate::launch_runtime::{
 };
 use crate::output;
 use crate::sandbox_prepare::{
-    prepare_sandbox, print_allow_launch_services_warning, validate_external_proxy_bypass,
+    prepare_sandbox, print_allow_launch_services_warning, validate_block_net_conflicts,
+    validate_external_proxy_bypass,
 };
 use crate::theme;
 #[cfg(target_os = "windows")]
@@ -145,6 +146,7 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
     if args.dry_run {
         let prepared =
             crate::sandbox_prepare::prepare_sandbox_with_context(&args, silent, &resolve_ctx)?;
+        validate_block_net_conflicts(&args, &prepared)?;
         validate_external_proxy_bypass(&args, &prepared)?;
         if !prepared.secrets.is_empty() && !silent {
             eprintln!(
