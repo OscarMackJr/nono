@@ -1,17 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.3
-milestone_name: UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
-status: Awaiting next milestone
-stopped_at: Completed 97-03-PLAN.md
-last_updated: "2026-06-26T18:32:29.578Z"
-last_activity: 2026-06-26 — Milestone v3.3 completed and archived
+milestone: v3.4
+milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
+status: planning
+last_updated: "2026-06-30T01:50:13.352Z"
+last_activity: 2026-06-30
 progress:
-  total_phases: 4
-  completed_phases: 4
-  total_plans: 16
-  completed_plans: 16
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State: nono — v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release
@@ -26,10 +25,10 @@ See: `.planning/PROJECT.md` (v3.3 milestone active 2026-06-25; v3.2 Phases 91-93
 
 ## Current Position
 
-Phase: Milestone v3.3 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-06-26 — Milestone v3.3 completed and archived
+Status: Defining requirements
+Last activity: 2026-06-30 — Milestone v3.4 started
 
 ## Performance Metrics
 
