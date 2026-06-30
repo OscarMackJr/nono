@@ -47,10 +47,14 @@ keyring = { version = "3", optional = true }
 # and nono uses only those constructors (no struct-literal `VerificationPolicy { ... }` sites
 # in-tree, verified via `grep -rnE "VerificationPolicy\s*\{" crates/`).
 sigstore-verify = { version = "0.8.0", default-features = false, features = ["tuf"] }
-# Phase 99 Plan 99-05: replay upstream 2e64798d (#1229). Pin sigstore-trust-root to =0.9.0.
-# Dual-version resolution: sigstore-verify 0.8.0 retains its transitive trust-root 0.8.0
-# dependency; this direct pin tracks the upstream-mandated coherent version of the TUF root.
-# sigstore-verify 0.8.0→0.9.0 (upstream 9e084cbb) will be folded in a future sync phase.
+# Phase 99 Plan 99-05: replay upstream 2e64798d (#1229) as a deferred-cascade marker.
+# IMPORTANT: this direct pin has NO runtime effect today. Attestation verification still
+# runs entirely on trust-root 0.8.0, pulled in transitively by sigstore-verify 0.8.0 above —
+# the effective TUF root in use is 0.8.0, NOT 0.9.0. Cargo resolves both versions side by
+# side (dual-version). The 0.9.0 pin only records the upstream-coherent target version and
+# is unreferenced by any code in crates/nono/src/ until sigstore-verify is bumped to 0.9.0
+# (upstream 9e084cbb), which RESEARCH cascade assumption A1 intentionally deferred to a
+# future sync phase. Removal-vs-keep is tracked in 99-HUMAN-UAT.md (WR-01).
 sigstore-trust-root = "=0.9.0"
 x509-cert = { version = "0.2", default-features = false }
 der = { version = "0.7", default-features = false }
