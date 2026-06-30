@@ -100,7 +100,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 99-03-PLAN.md — Cluster A: d457ecc3 validate_block_net_conflicts + Phase 89 proxy guard verification
 - [x] 99-04-PLAN.md — Clusters D+E: 5b8e94da 9P warning + c808f000 org-ref migration
 - [x] 99-05-PLAN.md — Clusters F+G: 2e64798d sigstore-trust-root bump + a4d68189 proxy docs fix
-- [ ] 99-06-PLAN.md — Cluster C split: cdeeb5b9 pool (APPLY) + 46bcfbb9 endpoint wiring + 08ca21a8 wildcard fix
+- [x] 99-06-PLAN.md — Cluster C split: cdeeb5b9 pool (APPLY) + 46bcfbb9 endpoint wiring + 08ca21a8 wildcard fix
 - [ ] 99-07-PLAN.md — Fork-invariant verify gate: cross-target clippy + make ci + D-10 carve-out checklist
 
 ### Phase 100: Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker
@@ -132,5 +132,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete | 2026-06-26 |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
-| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 5/7 | In Progress|  |
+| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 6/7 | In Progress|  |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 0/TBD | Not started | - |
