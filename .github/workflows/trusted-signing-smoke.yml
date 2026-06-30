@@ -71,3 +71,16 @@ jobs:
             exit 1
           }
           Write-Host "OK: Trusted Signing smoke test PASSED — the D-02 signing path is live."
+
+      # Upload the CI-signed binary so it can be verified offline on a clean, NON-proxied
+      # Win11 host. `if: always()` so the artifact is produced even when the verify step
+      # above fails (Status: UnknownError) — that is exactly the case we want to inspect.
+      # The exe is a throwaway hello-world; its embedded signature carries only the public
+      # cert (already public on any signed release) — no secret is exposed.
+      - name: Upload CI-signed smoke binary for offline verification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trusted-signing-smoke-signed
+          path: smoke/nono-smoke.exe
+          if-no-files-found: warn
