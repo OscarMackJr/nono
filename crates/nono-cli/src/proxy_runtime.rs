@@ -148,8 +148,7 @@ pub(crate) fn prepare_proxy_launch_options(
 
     // --block-net always wins; profile network.block yields to any proxy config.
     // Per upstream 72bcfd66 (#1225): block_wins replaces the old NetworkMode::Blocked check.
-    let block_wins =
-        args.block_net || (prepared.profile_network_block && !would_activate);
+    let block_wins = args.block_net || (prepared.profile_network_block && !would_activate);
 
     if block_wins {
         if would_activate {

@@ -139,7 +139,13 @@ fn finalize_prepared_sandbox(
     let proxy_intent = has_proxy_intent(args, &prepared);
     let block_wins = args.block_net || (prepared.profile_network_block && !proxy_intent);
     let proxy_pending = !block_wins && !args.allow_net && proxy_intent;
-    output::print_capabilities(&prepared.caps, blocked_grants, args.verbose, silent, proxy_pending);
+    output::print_capabilities(
+        &prepared.caps,
+        blocked_grants,
+        args.verbose,
+        silent,
+        proxy_pending,
+    );
 
     if let Some(ref profile_name) = args.profile {
         crate::pack_update_hint::show_pack_update_hints(profile_name, silent);

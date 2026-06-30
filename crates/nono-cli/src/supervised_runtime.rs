@@ -1,10 +1,10 @@
 use crate::audit_attestation::{prepare_audit_signer, AuditSigner};
 use crate::audit_integrity::AuditRecorder;
+#[cfg(not(target_os = "windows"))]
+use crate::launch_runtime::ProxyLaunchOptions;
 use crate::launch_runtime::{
     NetworkIntent, ResourceLimits, RollbackLaunchOptions, SessionLaunchOptions, TrustLaunchOptions,
 };
-#[cfg(not(target_os = "windows"))]
-use crate::launch_runtime::ProxyLaunchOptions;
 #[cfg(not(target_os = "windows"))]
 use crate::protected_paths;
 use crate::rollback_runtime::{
@@ -352,8 +352,12 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         session_id: &supervisor_session_id,
         attach_initial_client: !session.detached_start,
         detach_sequence: session.detach_sequence.as_deref(),
-        open_url_origins: proxy_opts.map(|p| p.open_url_origins.as_slice()).unwrap_or(&[]),
-        open_url_allow_localhost: proxy_opts.map(|p| p.open_url_allow_localhost).unwrap_or(false),
+        open_url_origins: proxy_opts
+            .map(|p| p.open_url_origins.as_slice())
+            .unwrap_or(&[]),
+        open_url_allow_localhost: proxy_opts
+            .map(|p| p.open_url_allow_localhost)
+            .unwrap_or(false),
         audit_recorder: audit_recorder.as_deref(),
         network_audit_events: supervisor_network_audit_events.as_ref(),
         redaction_policy,

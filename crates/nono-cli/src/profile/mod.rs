@@ -1753,7 +1753,6 @@ impl NetworkConfig {
     pub fn resolved_credentials(&self) -> &[String] {
         self.credentials.as_deref().unwrap_or(&[])
     }
-
 }
 // Upstream 72bcfd66 (#1225): has_proxy_flags() removed. The NetworkIntent decision is now
 // computed directly in prepare_proxy_launch_options (proxy_runtime.rs) without going
@@ -8640,14 +8639,12 @@ mod d08_deviation_tests {
         );
 
         // Prove serde round-trip: Error variant serializes to "error" (snake_case).
-        let json_error =
-            serde_json::to_string(&Wsl2ProxyPolicy::Error).unwrap();
+        let json_error = serde_json::to_string(&Wsl2ProxyPolicy::Error).unwrap();
         assert_eq!(
             json_error, r#""error""#,
             "Wsl2ProxyPolicy::Error must serialize as \"error\""
         );
-        let deserialized: Wsl2ProxyPolicy =
-            serde_json::from_str(r#""error""#).unwrap();
+        let deserialized: Wsl2ProxyPolicy = serde_json::from_str(r#""error""#).unwrap();
         assert_eq!(
             deserialized,
             Wsl2ProxyPolicy::Error,
@@ -8655,8 +8652,7 @@ mod d08_deviation_tests {
         );
 
         // Prove InsecureProxy variant round-trips as "insecure_proxy" (snake_case).
-        let json_insecure =
-            serde_json::to_string(&Wsl2ProxyPolicy::InsecureProxy).unwrap();
+        let json_insecure = serde_json::to_string(&Wsl2ProxyPolicy::InsecureProxy).unwrap();
         assert_eq!(
             json_insecure, r#""insecure_proxy""#,
             "Wsl2ProxyPolicy::InsecureProxy must serialize as \"insecure_proxy\""

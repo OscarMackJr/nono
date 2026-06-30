@@ -235,7 +235,9 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
     // the sandboxed process would have no proxy to route traffic through.
     // Fail before `start_proxy_runtime` and before any WFP/sandbox activation.
     // Upstream 72bcfd66: check intent.is_proxy_active() instead of proxy.active.
-    if matches!(caps.network_mode(), nono::NetworkMode::ProxyOnly { .. }) && !network.is_proxy_active() {
+    if matches!(caps.network_mode(), nono::NetworkMode::ProxyOnly { .. })
+        && !network.is_proxy_active()
+    {
         return Err(NonoError::SandboxInit(
             "Cannot use proxy-only mode without a network profile or credential configuration."
                 .to_string(),

@@ -33,8 +33,7 @@ use std::sync::{Arc, Mutex};
 /// DNS rebinding protection is enforced at the filter level via
 /// `ProxyFilter::check_host()`; pinned addresses from that check are stored in
 /// `UpstreamPool.resolver` for auditing purposes.
-type PooledClient =
-    Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
+type PooledClient = Client<hyper_rustls::HttpsConnector<HttpConnector>, Full<Bytes>>;
 
 /// DNS address cache for rebinding protection.
 ///
@@ -182,9 +181,10 @@ impl UpstreamPool {
         let client = if ptr == self.default_config_ptr {
             self.default_client.clone()
         } else {
-            let mut clients = self.route_clients.lock().map_err(|_| {
-                ProxyError::Config("upstream pool lock poisoned".to_string())
-            })?;
+            let mut clients = self
+                .route_clients
+                .lock()
+                .map_err(|_| ProxyError::Config("upstream pool lock poisoned".to_string()))?;
             let enable_h2 = self.enable_h2;
             clients
                 .entry(ptr)
@@ -192,10 +192,13 @@ impl UpstreamPool {
                 .clone()
         };
 
-        client.request(req).await.map_err(|e| ProxyError::UpstreamConnect {
-            host,
-            reason: e.to_string(),
-        })
+        client
+            .request(req)
+            .await
+            .map_err(|e| ProxyError::UpstreamConnect {
+                host,
+                reason: e.to_string(),
+            })
     }
 }
 

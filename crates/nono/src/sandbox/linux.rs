@@ -933,16 +933,16 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
             );
         }
 
-        if let Some(dev) = unsupported_filesystem_dev(&cap.resolved)
-            && warned_unsupported_devs.insert(dev)
-        {
-            warn!(
-                "Path '{}' is on a 9P filesystem (e.g. WSL2 Windows host mount, QEMU virtfs). \
-                 Landlock enforcement on 9P paths is unreliable — grants may be silently ignored \
-                 or incompletely enforced, causing unexpected access denials. \
-                 Move your working directory to a native Linux filesystem to use nono safely.",
-                cap.resolved.display()
-            );
+        if let Some(dev) = unsupported_filesystem_dev(&cap.resolved) {
+            if warned_unsupported_devs.insert(dev) {
+                warn!(
+                    "Path '{}' is on a 9P filesystem (e.g. WSL2 Windows host mount, QEMU virtfs). \
+                     Landlock enforcement on 9P paths is unreliable — grants may be silently ignored \
+                     or incompletely enforced, causing unexpected access denials. \
+                     Move your working directory to a native Linux filesystem to use nono safely.",
+                    cap.resolved.display()
+                );
+            }
         }
 
         debug!(
