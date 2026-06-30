@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
-stopped_at: Phase 99 context gathered
-last_updated: "2026-06-30T14:44:22.077Z"
+stopped_at: Completed Plan 99-04 (Clusters D+E absorbed)
+last_updated: "2026-06-30T14:56:07.284Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 11
-  completed_plans: 7
-  percent: 64
+  completed_plans: 8
+  percent: 73
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 ## Current Position
 
 Phase: 99 (upstream-absorb-fork-invariant-verify) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -47,6 +47,7 @@ Last activity: 2026-06-30
 *Updated after each plan completion*
 | Phase 99 P01 | 3 min | 2 tasks | 2 files |
 | Phase 99 P02 | 90 | 2 tasks | 9 files |
+| Phase 99 P04 | 10 min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Last activity: 2026-06-30
 | ADR-98 Decision: full-sync-adopt upstream #1225 NetworkIntent refactor (Option A) | 98-03 | CLI-only refactor; ADR-86 library boundary non-regressed (NetworkMode::ProxyOnly in crates/nono/src/ untouched); Windows WFP/AppContainer non-regressed (exec_strategy_windows/network.rs reads enforcement-time WindowsNetworkPolicyMode::ProxyOnly, not CLI intent type); Phase 86 convergence precedent applies; Phase 99 deviations: WSL2ProxyFallback preservation + CompiledEndpointPolicy compatibility in proxy_runtime.rs |
 | Carve-out re-touch check finalized: 2 CLEAN, 3 HIT (with guard tests), 1 additive-HIT | 98-04 | CR-02+v3.2-override=clean; Cluster-F+endpoint-policy=HIT-expected-conflict-preserve-fork-expression; linux.rs=HIT-additive-only; guard tests named for all HITs; ADR-98 cross-referenced in endpoint-policy subsection (highest re-touch exposure) |
 | Completeness sweep PASS: 14+6=20; no TBD; six verdicts; 0.66.1 floor anchored | 98-04 | All five assertions PASS; ledger is complete; Phase 99 gate document ready |
+| Cluster D (5b8e94da): 9P warning via statfs/V9FS_MAGIC additive in linux.rs; fork GPU tests preserved | 99-04 | is_9p_path detection (statfs probe, V9FS_MAGIC 0x01021997) inserted before Landlock capability-add loop; warnings deduplicated per mount device ID; fork GPU tests unaffected |
+| Cluster E (c808f000): always-further/nono→nolabs-ai GitHub URLs in 3 src/ files; package identifiers and production URLs preserved | 99-04 | profile/mod.rs, proxy_runtime.rs, route.rs had no matching lines in fork (test fixtures diverged); always-further/claude registry identifiers preserved; OscarMackJr/nono fork identity preserved |
 
 ### Pending Todos
 
@@ -141,7 +144,7 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-06-30T14:44:22.061Z
+Last session: 2026-06-30T14:56:07.269Z
 Stopped at: Phase 99 context gathered
 Resume file: None
 
