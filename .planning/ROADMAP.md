@@ -25,7 +25,7 @@ updated: 2026-06-30
 
 Drain-then-sync upstream milestone: audit and absorb the `nolabs-ai/nono` `v0.65.1..v0.66.0` window (19 PRs) without regressing the Windows security model or the ADR-86 policy-free-library boundary; settle the high-conflict #1225 `NetworkIntent` refactor via an ADR; then reconcile the prepare-only release pipeline, close the nono-py `RouteConfig` PyPI blocker, and leapfrog all workspace crates to `0.66.1` so an operator push is one step away. Cross-target clippy must be GREEN locally on both Unix gates (no PARTIAL→CI). Release scope = PREPARE ONLY.
 
-- [ ] **Phase 98: UPST11 Divergence Audit** — 0/TBD plans
+- [ ] **Phase 98: UPST11 Divergence Audit** — 0/4 plans
 - [ ] **Phase 99: Upstream Absorb + Fork-Invariant Verify** — 0/TBD plans
 - [ ] **Phase 100: Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker** — 0/TBD plans
 
@@ -79,7 +79,11 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. The #1225 `NetworkIntent`-vs-`ProxyOnly` adopt-vs-fork-divergence call is settled in an ADR — either full-sync-adopt (precedent: v3.1 Phase 86 boundary-convergence) or a written fork-divergence carve-out with rationale for which fork invariants (policy-free-library boundary ADR-86, Windows WFP/AppContainer backends) would be affected.
   3. Each cluster's disposition is justified by the established criteria (security impact, Windows-backend touch, or library-boundary relevance); no cluster carries a bare TBD verdict.
   4. The audit is the sole deliverable of this phase: no cherry-picks are initiated here; the ledger and ADR gate Phase 99.
-**Plans**: TBD
+**Plans**: 4 plans
+- [ ] 98-01-PLAN.md — Window fetch, Reproduction block + noise reconciliation + cluster scaffold
+- [ ] 98-02-PLAN.md — Per-commit cluster classification, re-export scan + ADR risk matrix
+- [ ] 98-03-PLAN.md — #1225 NetworkIntent-vs-ProxyOnly disposition ADR (proj/ADR-98)
+- [ ] 98-04-PLAN.md — Expanded six-carve-out re-touch check + ADR-98 cross-reference
 
 ### Phase 99: Upstream Absorb + Fork-Invariant Verify
 **Goal**: All will-sync clusters from the Phase 98 ledger are absorbed into the fork in dependency order and the Windows security model, policy-free-library boundary, and cross-target clippy gates are provably unregressed.
