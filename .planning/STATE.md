@@ -103,6 +103,7 @@ None yet.
 | 260624-q98 | Remove orphan audit_ledger.rs + dead state_paths helpers (never compiled) | 2026-06-24 | e350df23 | [260624-q98-remove-orphan-audit-ledger-rs-and-its-de](./quick/260624-q98-remove-orphan-audit-ledger-rs-and-its-de/) |
 | 260624-q9j | Fix red Docs Checks: force-add already-in-nav windows-win-1706-option-1-workstream.mdx | 2026-06-24 | 3475b470 | [260624-q9j-exclude-docs-cli-development-from-docs-c](./quick/260624-q9j-exclude-docs-cli-development-from-docs-c/) |
 | 260625-crs | Phase 83 deferred code-review findings: WR-02/03/04/05 + IN-01/IN-03 (interpreter PATH-hijack, GetWindowsDirectoryW, canonical expander, validate(), gate probe, SID regex) | 2026-06-25 | 4af1e8f9 | [260625-crs-address-phase-83-code-review-deferred-fi](./quick/260625-crs-address-phase-83-code-review-deferred-fi/) |
+| 260629-toe | UPST11 v0.66.0 parity phase definition: reviewed upstream PR #1293, authored divergence ledger for v0.65.1→v0.66.0 (19 PRs) + fork-invariant gates + 3-wave structure; #1225 NetworkIntent flagged HIGH-CONFLICT; 0.66.0 version collision → next release ≥0.67.0 | 2026-06-29 | (docs) | [260629-toe-v066-parity](./quick/260629-toe-v066-parity/) |
 
 ## Deferred Items
 
