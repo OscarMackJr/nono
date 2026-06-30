@@ -37,7 +37,11 @@ requirements_completed:
 
 # Phase 99 Plan 07: Fork-Invariant Verify Gate Summary
 
-**Phase 99 terminal gate: both cross-target clippy gates GREEN after fixing let_chains edition-2021 incompatibility in linux.rs (caught by linux-gnu gate) and rustfmt drift in 6 files (caught by fmt-check); D-10 fork-invariant carve-out checklist complete with three "Verified unregressed" verdicts; human sign-off awaited.**
+**Phase 99 terminal gate: both cross-target clippy gates GREEN after fixing let_chains edition-2021 incompatibility in linux.rs (caught by linux-gnu gate) and rustfmt drift in 6 files (caught by fmt-check); D-10 fork-invariant carve-out checklist complete with three "Verified unregressed" verdicts; human sign-off APPROVED.**
+
+## Human sign-off: approved 2026-06-30
+
+The human reviewer approved the verification record. Both cross-target clippy gates GREEN (linux-gnu + apple-darwin), the 11 nono-cli test failures confirmed as the pre-existing documented baseline (not Phase 99 regressions), and all three D-10 fork-invariant verdicts ("Verified unregressed") accepted. Phase 99 gate is satisfied; the fork is cleared to proceed to Phase 100 (version leapfrog 0.66.1 + release pipeline reconcile + nono-py RouteConfig PyPI blocker).
 
 ## Gate Results
 
