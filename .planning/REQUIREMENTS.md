@@ -83,8 +83,8 @@ Populated by roadmap creation 2026-06-30. Phase numbering continues from Phase 9
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | UPST11-01 | Phase 98 | Complete |
-| UPST11-02 | Phase 99 | Pending |
-| UPST11-03 | Phase 99 | Pending |
+| UPST11-02 | Phase 99 | Complete |
+| UPST11-03 | Phase 99 | Complete |
 | UPST11-04 | Phase 99 | Pending |
 | RLS-10 | Phase 100 | Pending |
 | RLS-11 | Phase 100 | Pending |
