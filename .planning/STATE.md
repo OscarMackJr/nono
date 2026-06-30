@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
-stopped_at: Completed Plan 99-04 (Clusters D+E absorbed)
-last_updated: "2026-06-30T14:56:07.284Z"
+stopped_at: Completed Plan 99-05 (Clusters F+G absorbed)
+last_updated: "2026-06-30T15:19:06.077Z"
 last_activity: 2026-06-30
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 11
-  completed_plans: 8
-  percent: 73
+  completed_plans: 9
+  percent: 82
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 ## Current Position
 
 Phase: 99 (upstream-absorb-fork-invariant-verify) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-06-30
 
@@ -48,6 +48,7 @@ Last activity: 2026-06-30
 | Phase 99 P01 | 3 min | 2 tasks | 2 files |
 | Phase 99 P02 | 90 | 2 tasks | 9 files |
 | Phase 99 P04 | 10 min | 2 tasks | 4 files |
+| Phase 99 P05 | 13 min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,8 @@ Last activity: 2026-06-30
 | Completeness sweep PASS: 14+6=20; no TBD; six verdicts; 0.66.1 floor anchored | 98-04 | All five assertions PASS; ledger is complete; Phase 99 gate document ready |
 | Cluster D (5b8e94da): 9P warning via statfs/V9FS_MAGIC additive in linux.rs; fork GPU tests preserved | 99-04 | is_9p_path detection (statfs probe, V9FS_MAGIC 0x01021997) inserted before Landlock capability-add loop; warnings deduplicated per mount device ID; fork GPU tests unaffected |
 | Cluster E (c808f000): always-further/nono→nolabs-ai GitHub URLs in 3 src/ files; package identifiers and production URLs preserved | 99-04 | profile/mod.rs, proxy_runtime.rs, route.rs had no matching lines in fork (test fixtures diverged); always-further/claude registry identifiers preserved; OscarMackJr/nono fork identity preserved |
+| Cluster F (2e64798d): sigstore-trust-root =0.9.0 pinned; dual-version cascade (resolver kept sigstore-verify 0.8.0 + trust-root 0.8.0 for sigstore-verify; new trust-root 0.9.0 direct dep for nono); make build GREEN; cargo audit clean | 99-05 | sigstore-verify bump (upstream 9e084cbb) deferred to future sync phase; assumption A1 confirmed favorable: dual-version resolution is stable; no HIGH/CRITICAL advisories |
+| Cluster G (a4d68189): X-Nono-Token stale claim removed from proxy README and token.rs; cli_bootstrap.rs deprecated flag warnings now 3-tuple with remove_by field (--proxy-credential → Will be removed in v1.0.0) | 99-05 | cli.rs ALIAS annotation absent in fork — skipped; behavioral change fully captured in cli_bootstrap.rs; 176/176 nono-proxy tests pass |
 
 ### Pending Todos
 
@@ -144,7 +147,7 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-06-30T14:56:07.269Z
+Last session: 2026-06-30T15:19:06.060Z
 Stopped at: Phase 99 context gathered
 Resume file: None
 
