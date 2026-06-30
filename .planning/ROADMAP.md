@@ -96,7 +96,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   4. Fork-divergent invariants are explicitly verified post-sync — the AppContainer/WFP/broker Windows backends, the ADR-86 policy-free-library boundary, and the `exec_strategy_windows/` denial-rendering carve-out each have a checklist entry (none marked regressed); a code-review + verifier pass confirm no Windows-backend or boundary regression.
 **Plans**: 7 plans
 - [x] 99-01-PLAN.md — D-02 SC/REQUIREMENTS reconciliation (stale text correction)
-- [ ] 99-02-PLAN.md — Cluster A: 72bcfd66 NetworkIntent replay + D-08 deviation tests
+- [x] 99-02-PLAN.md — Cluster A: 72bcfd66 NetworkIntent replay + D-08 deviation tests
 - [ ] 99-03-PLAN.md — Cluster A: d457ecc3 validate_block_net_conflicts + Phase 89 proxy guard verification
 - [ ] 99-04-PLAN.md — Clusters D+E: 5b8e94da 9P warning + c808f000 org-ref migration
 - [ ] 99-05-PLAN.md — Clusters F+G: 2e64798d sigstore-trust-root bump + a4d68189 proxy docs fix
@@ -132,5 +132,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 96. Cross-Target Toolchain | v3.3 | 3/3 | Complete | 2026-06-26 |
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
-| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 1/7 | In Progress|  |
+| 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 2/7 | In Progress|  |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 0/TBD | Not started | - |
