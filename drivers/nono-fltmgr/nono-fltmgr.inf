@@ -6,13 +6,12 @@
 ; loaded on demand only; it does NOT auto-start at boot, preventing a
 ; boot loop if the spike driver causes a load failure on Phase 64.
 ;
-; D-08 altitude: Instance1.Altitude is a PLACEHOLDER in the FSFilter
-; Activity Monitor band (360000–389999). The final number is chosen in
-; Phase 64 after running `fltmc filters` on the test VM to find a
-; non-colliding slot AND after the official Microsoft altitude assignment
-; arrives (fsfcomm@microsoft.com request pending — status filled by Plan
-; 63-02).  MUST NOT be in the AV range 320000–329998 (Pitfall 5: altitude
-; collision blinds EDR or fails registration).
+; D-08 altitude: Instance1.Altitude is the OFFICIAL Microsoft-assigned
+; altitude 377813.5, allocated by the Microsoft File System Filter team
+; (fsfcomm@microsoft.com) for the nono-fltmgr.sys minifilter. It sits in
+; the FSFilter Activity Monitor band (360000–389999) and is clear of the
+; AV range 320000–329998 (Pitfall 5: altitude collision blinds EDR or
+; fails registration).
 
 [Version]
 Signature   = "$Windows NT$"
@@ -73,9 +72,9 @@ ServiceName         = "nono-fltmgr"
 ServiceDescription  = "nono Gap 6b minifilter feasibility spike (TEST-SIGNED POC)"
 DefaultInstance     = "nono-fltmgr Instance"
 Instance1.Name      = "nono-fltmgr Instance"
-; PLACEHOLDER altitude — FSFilter Activity Monitor band 360000–389999 (D-08).
-; Phase 64 picks the final non-colliding number after `fltmc filters` enumeration
-; on the test VM and after the Microsoft altitude-assignment reply arrives.
-; MUST NOT use range 320000–329998 (AV/EDR range; Pitfall 5 altitude collision).
-Instance1.Altitude  = "365678"
+; OFFICIAL Microsoft-assigned altitude — 377813.5, allocated by the Microsoft
+; File System Filter team (fsfcomm@microsoft.com) for nono-fltmgr.sys. Sits in
+; the FSFilter Activity Monitor band 360000–389999 (D-08) and is clear of the
+; AV/EDR range 320000–329998 (Pitfall 5 altitude collision).
+Instance1.Altitude  = "377813.5"
 Instance1.Flags     = 0x0

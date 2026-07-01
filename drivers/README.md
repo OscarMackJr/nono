@@ -31,11 +31,11 @@ the step-by-step operator guide `.planning/phases/64-.../64-SC1-VM-RUNBOOK.md`.
   (configures the current shell; use this for headless `az vm run-command`). Alternatively
   WDK 28000.1761 + VS 2026. `msbuild`, `signtool`, `inf2cat`, `certmgr` must be on PATH
   inside the build env.
-- **Altitude**: run `fltmc filters` on the VM and pick a **non-colliding** number in the
-  FSFilter Activity Monitor band **360000–389999**, avoiding the AV range 320000–329998.
-  The validated spike value is **365678**. Set it in `nono-fltmgr/nono-fltmgr.inf`
-  (`Instance1.Altitude`). The official Microsoft altitude (request to `fsfcomm@microsoft.com`)
-  is pending; the test-signed spike uses the temporary non-colliding number.
+- **Altitude**: `nono-fltmgr.sys` uses the **official Microsoft-assigned altitude 377813.5**,
+  allocated by the Microsoft File System Filter team (`fsfcomm@microsoft.com`). It sits in the
+  FSFilter Activity Monitor band **360000–389999** and is clear of the AV range 320000–329998.
+  It is already set in `nono-fltmgr/nono-fltmgr.inf` (`Instance1.Altitude`); run `fltmc filters`
+  on the VM only to confirm no local collision before loading.
 - **BSOD safeguard**: take an OS-disk snapshot before first load (the driver is
   `StartType = DEMAND`, so a reboot recovers without auto-loading). See
   `nono-fltmgr/DESIGN.md` for the BSOD-avoidance contract (no `ZwCreateFile`/`NtCreateFile`
@@ -92,7 +92,7 @@ copy /Y x64\Release\nono-fltmgr.sys C:\Windows\System32\drivers\nono-fltmgr.sys
 fltmc load nono-fltmgr
 
 :: 9. Verify
-fltmc filters       :: nono-fltmgr at the chosen altitude (e.g. 365678)
+fltmc filters       :: nono-fltmgr at the assigned altitude 377813.5
 fltmc instances     :: attached to C: / E: / \Device\Mup
 ```
 
@@ -139,8 +139,8 @@ works on a Windows host; it compiles to an empty crate on Linux/macOS CI.)
   untouched.
 - **`nono-fltmgr.sys` / `.cat` / `.obj`** — VM-local throwaway build artifacts; never
   committed (`DESIGN.md` §Security, T-63-05).
-- **Official altitude** — pending `fsfcomm@microsoft.com` assignment; the spike uses a
-  temporary non-colliding Activity Monitor number (see `64-SC1-driver-evidence.md`).
+- **Official altitude** — **377813.5**, assigned by the Microsoft File System Filter team
+  (`fsfcomm@microsoft.com`) and set in `nono-fltmgr.inf` (see `64-SC1-driver-evidence.md`).
 
 ## See also
 

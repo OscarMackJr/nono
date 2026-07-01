@@ -35,7 +35,7 @@ without an explicit Phase 64 task that references this contract.
 | T-63-01 | Driver-originated recursive file I/O → stack-overflow BSOD | Denial of Service | No kernel file-open APIs (`ZwCreateFile` / `NtCreateFile`) anywhere in the driver. If internal I/O is ever unavoidable, use `FltCreateFile` on the driver's own minifilter instance only — this breaks the recursion. |
 | T-63-02 | Infinite `FltSendMessage` → host hang | Denial of Service | `FltSendMessage` MUST use a finite timeout (~500 ms). On `STATUS_TIMEOUT`: fail-open (permit the I/O and log the miss). **Production ADR revisit:** fail-direction for a production driver is a separate decision; the spike uses fail-open to avoid locking the test VM during development. |
 | T-63-03 | IRQL violation in callback → BSOD | Denial of Service | All callback-reachable memory allocations must use `NonPagedPoolNx`. Insert `NT_ASSERT(KeGetCurrentIrql() <= APC_LEVEL)` at the entry of every callback that may block. No mutex held across an `FltSendMessage` call. |
-| T-63-04 | Altitude in AV/EDR range → EDR blinded / registration failure | Tampering / Elevation | Use FSFilter Activity Monitor band (360000–389999). NEVER use AV range 320000–329998. Request an official altitude assignment from Microsoft (fsfcomm@microsoft.com) before any production use. |
+| T-63-04 | Altitude in AV/EDR range → EDR blinded / registration failure | Tampering / Elevation | Use FSFilter Activity Monitor band (360000–389999). NEVER use AV range 320000–329998. Official Microsoft altitude **377813.5** assigned (fsfcomm@microsoft.com) and set in `nono-fltmgr.inf`. |
 | T-63-05 | Spike `.sys` leaking into main repo or MSI | Tampering | The spike `.sys` is a VM-local throwaway compile artifact. It is NOT committed, NOT bundled in the MSI. The existing `nono-wfp-driver.sys` placeholder in `crates/nono-cli/data/windows/` is a separate driver and must not be modified by this spike. |
 
 ## IPC Design: Ring-Buffer + Worker-Thread Pattern
@@ -103,8 +103,8 @@ simultaneously.
 |-----------|-------|-----------|
 | Altitude band | FSFilter Activity Monitor (360000–389999) | Activity-Monitor drivers observe I/O without blocking it; appropriate for a spike that intercepts + denies via user-mode decision |
 | AV range to avoid | 320000–329998 | Registering in this range collides with EDR/AV drivers, causing registration failure or blinding the EDR |
-| Phase 63 placeholder | 370020 (nullFilter default) | Temporary; Phase 64 MUST enumerate `fltmc filters` on the test VM and pick a non-colliding number in the Activity-Monitor band |
-| Microsoft assignment | **PENDING** — request sent 2026-06-07; Send-date: `2026-06-07`; assigned altitude: `[awaiting Microsoft response]` | An official altitude is required before any non-disposable deployment. Draft email body + submission channel recorded in `63-altitude-request.md`. |
+| Assigned altitude | **377813.5** | Official Microsoft-assigned altitude for `nono-fltmgr.sys`; set in `nono-fltmgr.inf` (`Instance1.Altitude`). Sits in the Activity-Monitor band and is clear of the AV range. |
+| Microsoft assignment | **ASSIGNED** — `377813.5` allocated by the Microsoft File System Filter team (fsfcomm@microsoft.com); request sent 2026-06-07. | Official altitude granted; cleared for non-disposable deployment. Draft email body + submission channel recorded in `63-altitude-request.md`. |
 
 ## Scope Boundary
 
