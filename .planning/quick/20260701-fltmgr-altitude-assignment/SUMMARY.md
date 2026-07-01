@@ -37,12 +37,15 @@ Two **tracking** references still described the old PENDING state and were recon
    RECEIVED 2026-07-01; safety invariant (repo stays PUBLIC, no `build_notes/`/`.gsd/`
    staged before push, LOCAL-only tags, operator-gated push) preserved verbatim.
 
-## Flagged to operator (NOT done)
+## Operator decision — go-private CANCELLED (2026-07-01)
 
-- **PUBLIC → PRIVATE repo flip.** Altitude approval was the *gate condition* for the
-  deferred go-private decision (memory: go-private commit `74a47742` was cancelled
-  pending approval). Flipping repo visibility is consequential and hard to reverse —
-  it is an explicit operator decision, deliberately left un-taken.
+- **PUBLIC → PRIVATE repo flip: CANCELLED, not deferred.** Altitude approval was the
+  *gate condition* for the deferred go-private decision (memory: go-private commit
+  `74a47742` was cancelled pending approval). With the gate cleared, the operator
+  decided the repo will **remain PUBLIC permanently**; the go-private idea is retired.
+  Recorded in `STATE.md` Blockers/Concerns (commit below) and in persistent memory.
+  The operational invariant persists *because* the repo stays public: never stage
+  `build_notes/`/`.gsd/` before a push.
 
 ## Not touched (intentional)
 

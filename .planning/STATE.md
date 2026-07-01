@@ -102,7 +102,7 @@ None yet.
 
 ### Blockers/Concerns
 
-- **Repo stays PUBLIC**: verify no `build_notes/` or `.gsd/` files staged before any `git push`. Minifilter-altitude approval **RECEIVED 2026-07-01** (official 377813.5 assigned by fsfcomm@microsoft.com) — approval is no longer the blocker; the PUBLIC → PRIVATE flip is now purely an **operator decision** and remains un-taken. All tags remain LOCAL ONLY; push is operator-gated.
+- **Repo stays PUBLIC — go-private CANCELLED (operator decision 2026-07-01):** the repository will remain PUBLIC. Minifilter-altitude approval was **RECEIVED 2026-07-01** (official 377813.5 assigned by fsfcomm@microsoft.com), which cleared the only gate that had been holding the PUBLIC → PRIVATE flip open — but the operator has decided **not** to go private; the idea is retired, not merely deferred. The earlier go-private commit `74a47742` was already cancelled. Operational invariant unchanged: verify no `build_notes/` or `.gsd/` files staged before any `git push`; all tags remain LOCAL ONLY; push is operator-gated.
 - **#1225 SETTLED**: ADR-98 Accepted — full-sync-adopt (2026-06-30); Phase 99 applies 72bcfd66 + d457ecc3 with WSL2ProxyFallback + CompiledEndpointPolicy deviations.
 - **Cross-target clippy MUST be GREEN**: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) must exit 0 locally — PARTIAL→CI is not the default (retired in v3.3 Phase 96). #1225, #1207, #1213, #1249 all touch cfg-gated Unix code.
 - **Version collision at 0.66.0**: fork is at crate 0.66.0; upstream also shipped 0.66.0. The fork bumps to 0.66.1 in Phase 100 — do NOT publish 0.66.0 from the fork.
