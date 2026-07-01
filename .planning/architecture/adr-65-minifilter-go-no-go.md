@@ -92,6 +92,17 @@ not-yet-requested** — required before any production load-order guarantee, but
 needed for the spike. A production milestone must request and receive an assigned
 altitude.
 
+> **Amendment 2026-07-01 — altitude ASSIGNED.** The Microsoft File System Filter team
+> (fsfcomm@microsoft.com) has since allocated official altitude **377813.5** for
+> `nono-fltmgr.sys`. It sits in the same FSFilter Activity-Monitor band (360000–389999)
+> and is clear of the AV range (320000–329998). This satisfies the "must request and
+> receive an assigned altitude" precondition above for the deferred production milestone
+> (DRV-PROD-01). The assigned value is wired into `drivers/nono-fltmgr/nono-fltmgr.inf`
+> (`Instance1.Altitude = "377813.5"`), `drivers/nono-fltmgr/DESIGN.md`, and
+> `drivers/README.md` (commit `2041fc62`). The spike itself was built and live-proved at
+> 365678 (Phase 64) — that historical fact is left unchanged above; 377813.5 governs any
+> production load.
+
 ## 6. Decision — Go/No-Go verdict
 
 ### Verdict scoring table (D-05 — five inputs against the WFP+AppContainer gap)
