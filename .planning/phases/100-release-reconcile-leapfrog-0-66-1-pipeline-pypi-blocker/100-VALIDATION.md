@@ -1,8 +1,8 @@
 ---
 phase: 100
 slug: release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-01
 ---
@@ -52,11 +52,22 @@ created: 2026-07-01
 
 ## Per-Task Verification Map
 
-*Populated by the planner/executor as tasks are created. Each task row maps to a Req ID above and its automated command. Known gotcha: `cargo publish --dry-run` for downstream crates exits 101 until `nono` is published (v3.3 97-03) — expected, not a failure.*
+*Populated from the 5 committed plans. Known gotcha: `cargo publish --dry-run` for downstream crates exits 101 until `nono` is published (v3.3 97-03) — expected, not a failure.*
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| (planner fills) | | | | | | | | | ⬜ pending |
+| 100-01-01 | 01 | 1 | RLS-10 | version-collision | No `0.66.0` version string remains in the 6 members | source | `grep -rn 'version = "0.66.0"' crates/*/Cargo.toml bindings/c/Cargo.toml \| wc -l` (→ 0) | ✅ | ⬜ pending |
+| 100-01-02 | 01 | 1 | RLS-10 | — | Workspace builds clean at 0.66.1 | build | `cargo build --workspace --all-targets` (exit 0) | ✅ | ⬜ pending |
+| 100-02-01 | 02 | 1 | RLS-11 | unsigned/wrong-order MSI | publish-crates idempotency adapted; sign-order preserved | source | `grep -c 'cargo search' .github/workflows/release.yml` | ✅ | ⬜ pending |
+| 100-02-02 | 02 | 1 | RLS-11 | — | cross-compile job adapted (not dead upstream trigger) | source | `grep -n 'cross-compile\|workflow_dispatch' .github/workflows/ci.yml` | ✅ | ⬜ pending |
+| 100-02-03 | 02 | 1 | RLS-11 | — | ADR-100 records adopt-vs-adapt disposition | source | `grep -c '^## ' proj/ADR-100-ci-pipeline-reconcile.md` | ✅ | ⬜ pending |
+| 100-03-01 | 03 | 1 | RLS-10, RLS-12 | intermediate-0.66.0 leak | nono-py at 0.66.1 + `endpoint_policy: None`; wheel builds | integration | `cd C:/Users/OMack/nono-py && maturin build` | ✅ | ⬜ pending |
+| 100-03-02 | 03 | 1 | RLS-10 | intermediate-0.66.0 leak | nono-ts at 0.66.1; package validates | integration | `cd C:/Users/OMack/nono-ts && npm publish --dry-run` | ✅ | ⬜ pending |
+| 100-04-01 | 04 | 2 | RLS-13 | private-path leak | release-readiness gate PASS at 0.66.1 | gate | `pwsh -File scripts/verify-dark.ps1 -Gate release-readiness` | ✅ | ⬜ pending |
+| 100-04-02 | 04 | 2 | RLS-13 | — | dry-run orchestrator exits 0 at 0.66.1 | script | `pwsh -File scripts/release-dry-run.ps1` | ✅ | ⬜ pending |
+| 100-04-03 | 04 | 2 | RLS-13 | — | runbook updated for 0.66.1 (no stale 0.66.0) | source | `grep -c '0.66.0' .../RELEASE-RUNBOOK.md` | ✅ | ⬜ pending |
+| 100-05-01 | 05 | 3 | RLS-13 | — | clean-host gate returns SKIP_HOST_UNAVAILABLE (host-gated) | gate (manual) | `pwsh -File scripts/gates/clean-host-install.ps1` | ✅ | ⬜ pending (host-gated) |
+| 100-05-02 | 05 | 3 | RLS-13 | — | both folded todos record Phase 100 status | source | `grep -c 'Phase 100' .planning/todos/pending/20260611-*.md` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -84,11 +95,11 @@ re-runs existing scripts.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an automated gate/build verify or a documented manual/host-gated reason
-- [ ] Sampling continuity: gate re-run after each version-string edit
-- [ ] Wave 0 covers all MISSING references (none — existing infra)
-- [ ] No watch-mode flags
-- [ ] Both release scripts GREEN at `0.66.1` before verify-work
-- [ ] `nyquist_compliant: true` set in frontmatter after planner fills the per-task map
+- [x] All tasks have an automated gate/build verify or a documented manual/host-gated reason
+- [x] Sampling continuity: gate re-run after each version-string edit (no 3-consecutive-task gap)
+- [x] Wave 0 covers all MISSING references (none — existing infra)
+- [x] No watch-mode flags
+- [x] Both release scripts GREEN at `0.66.1` before verify-work (per-task map rows 100-04-01/02)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-07-01 (plan-checker VERIFICATION PASSED; per-task map synced from committed plans)

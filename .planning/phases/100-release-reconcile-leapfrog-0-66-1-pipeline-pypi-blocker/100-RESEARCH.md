@@ -430,9 +430,11 @@ not runtime state in the sense this section covers.)
 
 No claim above required a package-name provenance check (no new packages introduced this phase).
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should `CHANGELOG.md` get a `0.66.1` (or a retroactive `0.66.0`) entry?**
+> Both questions carry recommendations the plans honored: no plan edits `CHANGELOG.md`, and no plan adds a `no-stale-0.66.0` gate assertion (optional, not required for GREEN). Resolutions marked inline.
+
+1. **Should `CHANGELOG.md` get a `0.66.1` (or a retroactive `0.66.0`) entry?** — **RESOLVED: out of scope** (flagged to operator; no plan touches it).
    - What we know: `CHANGELOG.md`'s newest entry is `[0.62.2]` (2026-06-06) — it has not been
      updated across v3.0, v3.1, v3.2, v3.3, or the current `0.66.0` leapfrog. This drift predates
      Phase 100 and is not called out in CONTEXT.md's decisions or canonical refs.
@@ -443,7 +445,7 @@ No claim above required a package-name provenance check (no new packages introdu
      the operator, do not silently expand Phase 100 to fix multi-milestone changelog debt).
 
 2. **Does the release-readiness gate need a new `no-stale-0.66.0` assertion (mirroring its
-   existing `no-stale-0.62.2` check)?**
+   existing `no-stale-0.62.2` check)?** — **RESOLVED: not required for GREEN** (optional; ASSERTION (a) version-family already catches stale values in the 6 tracked crates; no plan adds it).
    - What we know: The existing ASSERTION (b) hard-codes `0.62.2` as the one historical stale
      value to guard against; there is no generic "no stale prior version" check.
    - What's unclear: Whether a `0.66.0` residue anywhere in a tracked `Cargo.toml` after the bump
