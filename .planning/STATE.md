@@ -2,15 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
-status: Roadmap approved — 7 phases (101-107), 10/10 requirements mapped, ready for plan-phase
-stopped_at: Phase 101 context gathered
-last_updated: "2026-07-02T18:38:58.493Z"
-last_activity: 2026-07-02 — Roadmap created
+status: executing
+stopped_at: Completed 101-01-PLAN.md (RED+GREEN, Assert-TrustedSignature helper)
+last_updated: "2026-07-02T20:52:32.088Z"
+last_activity: 2026-07-02
 progress:
   total_phases: 1
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 4
+  completed_plans: 1
+  percent: 25
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -21,14 +22,14 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and, for v3.5, actually *distributable*: a publicly-trusted-signed release that runs out-of-the-box on a clean host.
 
-**Current Focus:** v3.5 — Trusted Signing Go-Live + First Distributed Release. Full go-live EXECUTE (operator-in-loop): resolve the Azure Trusted Signing verify-gate `UnknownError`, cut the first trusted-signed `0.66.1` release, publish live to crates.io/PyPI/npm (FUT-01), drain both host-gated clean-host todos on a fresh Azure Win11 VM (FUT-03), and close out.
+**Current Focus:** Phase 101 — verify-gate-hardening-azure-profile-confirmation
 
 ## Current Position
 
-Phase: 101 (Verify-Gate Hardening + Azure Profile Confirmation) — not started
-Plan: —
-Status: Roadmap approved — 7 phases (101-107), 10/10 requirements mapped, ready for plan-phase
-Last activity: 2026-07-02 — Roadmap created
+Phase: 101 (verify-gate-hardening-azure-profile-confirmation) — EXECUTING
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-07-02
 
 ## Performance Metrics
 
@@ -42,6 +43,7 @@ Last activity: 2026-07-02 — Roadmap created
 |-------|------|----------|-------|-------|
 
 *Updated after each plan completion*
+| Phase 101 P01 | 9min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -79,6 +81,11 @@ Last activity: 2026-07-02 — Roadmap created
 | 7 phases (101-107), spine 101→104→105/106→107, with 102 and 103 parallelizable | roadmap | Registry-ownership question is pre-resolved by the PUB-01 rename decision (fork publishes under owned `nono-sandbox` names, no upstream co-owner-grant preflight needed) — so the research's suggested "Phase 1: registry preflight" collapses into Phase 102 (the rename phase) rather than a separate go/no-go gate. Verify-gate hardening (101) must land before the release cut (104, "do not cut a release until smoke is green"); the rename (102) is independent of signing and parallelizable; Azure IaC + gates (103) reuse 101's shared verify helper but are otherwise independent infra work; live publish (105) needs both the rename (102) and a real release (104); clean-host UAT (106) needs the real release (104) but NOT the live registry publish (105) — the GitHub Release artifact is sufficient; close-out (107) is strictly gated on 106 PASS, never merely on 104 green (Pitfall 10). |
 | CHOST-03 does not depend on PUB-02 | roadmap | Architecture research's suggested build order has Phase 8 (VM UAT) depend on Phases 2/3/6 (IaC, gates, release cut) but not Phase 7 (publish) — the VM stages GitHub Release artifacts directly, not registry-installed packages, so live publish is not a precondition for clean-host UAT. |
 | Operator-in-loop checkpoints explicitly annotated per success criterion (not just per phase) | roadmap | Phases 104-107 each mix autonomous prep with operator-only actions (Azure profile config, tag push, registry publish commands, RDP session, secret deletion) — annotating at the success-criterion level (not phase level) keeps `/gsd:plan-phase` from mis-scoping an operator action as executor-automatable. |
+| SIGN-02 helper: reused `Find-Signtool` verbatim from `scripts/sign-windows-artifacts.ps1` | 101-01 | Live, already-proven repo code for locating `signtool.exe` on `windows-latest`; avoids re-deriving the SDK-path probe |
+| SIGN-02 helper: `Start-Process -PassThru -Wait` for signtool exit-code capture, not bare `& signtool ...; $LASTEXITCODE` | 101-01 | `Assert-TrustedSignature` interleaves GAS + signtool + diagnostic logic around the invocation — exactly the interleaving scenario that makes bare `$LASTEXITCODE` unsafe (101-RESEARCH.md Pitfall 3) |
+| SIGN-02 helper: byte-for-byte preserved `if ($gas.Status -ne 'Valid')` as the sole Strict-mode fail-closed gate | 101-01 | Grep-verified single occurrence, guarding a `throw`; never weakened to accept `UnknownError` — matches `release.yml:269`/`:311` and `trusted-signing-smoke.yml:69` |
+| knownGood test fixture trusts its throwaway cert via `Cert:\CurrentUser\Root`, not `Cert:\LocalMachine\Root` | 101-01 | Dev host not elevated; `LocalMachine\Root` requires administrator. GAS/`X509Chain.Build()` both consult CurrentUser Root for the current-user context, producing `Status=Valid` equivalently. Security-neutral, test-fixture-only. |
+| knownGood test fixture imports the throwaway cert via the raw `X509Store` API, not `Import-Certificate` | 101-01 | `Import-Certificate -CertStoreLocation Cert:\CurrentUser\Root` triggers a blocking interactive "Security Warning" CryptUI dialog with no non-interactive suppression — hangs indefinitely; `X509Store.Add()`/`.Remove()` bypasses the trust-UI layer entirely (mirrors this repo's own `Add-TrustForVerify`/`Remove-TrustForVerify` pattern) |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -181,9 +188,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-02T18:38:58.475Z
-Stopped at: Phase 101 context gathered
-Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-CONTEXT.md
+Last session: 2026-07-02T20:52:32.074Z
+Stopped at: Completed 101-01-PLAN.md (RED+GREEN, Assert-TrustedSignature helper)
+Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-02-PLAN.md
 
 ## Operator Next Steps
 

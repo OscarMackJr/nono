@@ -96,7 +96,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. The fail-closed `Status -ne 'Valid'` contract is provably unweakened — diff review confirms the condition itself is unchanged; all new logic is additive corroboration/diagnosis, not a loosened pass condition.
   4. The **"Trusted Signing Smoke Test"** workflow runs GREEN on `windows-latest` (Gate 1) — a throwaway exe signs and Authenticode-verifies `Valid` with an issuer chaining to a public `Microsoft ID Verified CS EOC/AOC CA NN` root (not `PublicTrustTest`, not the POC root).
 **Plans**:
-- [ ] 101-01-PLAN.md — Build scripts/verify-authenticode.ps1 (Assert-TrustedSignature: D-01 AND-gate, D-02 retry, D-03 modes, D-04 diagnostics) + test harness (TDD)
+- [x] 101-01-PLAN.md — Build scripts/verify-authenticode.ps1 (Assert-TrustedSignature: D-01 AND-gate, D-02 retry, D-03 modes, D-04 diagnostics) + test harness (TDD)
 - [ ] 101-02-PLAN.md — Wire the shared helper into release.yml (2 sites) + trusted-signing-smoke.yml (1 site), preserving the fail-closed condition and .sys carve-out
 - [ ] 101-03-PLAN.md — Operator checkpoint: confirm/fix the Azure Trusted Signing certificate profile type (SIGN-01), document the finding
 - [ ] 101-04-PLAN.md — Dispatch the Trusted Signing Smoke Test on windows-latest, assert GREEN with correct issuer chain (SIGN-03)
@@ -186,7 +186,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
-| 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 0/4 | Not started | - |
+| 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 1/4 | In Progress|  |
 | 102. Fork-Owned Package Rename | v3.5 | 0/? | Not started | - |
 | 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/? | Not started | - |
 | 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |
