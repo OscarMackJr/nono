@@ -4,8 +4,8 @@ milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
 stopped_at: Phase 100 context gathered
-last_updated: "2026-07-01T21:35:24.953Z"
-last_activity: 2026-07-01 -- Phase 100 planning complete
+last_updated: "2026-07-02T13:25:13.680Z"
+last_activity: 2026-07-02 -- Phase 100 execution started
 progress:
   total_phases: 3
   completed_phases: 2
@@ -26,10 +26,10 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 
 ## Current Position
 
-Phase: 100
-Plan: Not started (context gathered)
-Status: Ready to execute
-Last activity: 2026-07-01 -- Phase 100 planning complete
+Phase: 100 (release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker) — EXECUTING
+Plan: 2 of 5
+Status: Executing Phase 100 — Plan 100-01 complete (workspace leapfrogged to 0.66.1)
+Last activity: 2026-07-02 -- Plan 100-01 complete: 6 crates + 6 path-dep pins bumped to 0.66.1, Cargo.lock regenerated (scoped diff), build/clippy/fmt/audit green
 
 ## Performance Metrics
 
@@ -95,6 +95,8 @@ Last activity: 2026-07-01 -- Phase 100 planning complete
 | Cluster E (c808f000): always-further/nono→nolabs-ai GitHub URLs in 3 src/ files; package identifiers and production URLs preserved | 99-04 | profile/mod.rs, proxy_runtime.rs, route.rs had no matching lines in fork (test fixtures diverged); always-further/claude registry identifiers preserved; OscarMackJr/nono fork identity preserved |
 | Cluster F (2e64798d): sigstore-trust-root =0.9.0 pinned; dual-version cascade (resolver kept sigstore-verify 0.8.0 + trust-root 0.8.0 for sigstore-verify; new trust-root 0.9.0 direct dep for nono); make build GREEN; cargo audit clean | 99-05 | sigstore-verify bump (upstream 9e084cbb) deferred to future sync phase; assumption A1 confirmed favorable: dual-version resolution is stable; no HIGH/CRITICAL advisories |
 | Cluster G (a4d68189): X-Nono-Token stale claim removed from proxy README and token.rs; cli_bootstrap.rs deprecated flag warnings now 3-tuple with remove_by field (--proxy-credential → Will be removed in v1.0.0) | 99-05 | cli.rs ALIAS annotation absent in fork — skipped; behavioral change fully captured in cli_bootstrap.rs; 176/176 nono-proxy tests pass |
+| RLS-10 leapfrog to 0.66.1: full 6-member set bumped (D-03 correction of stale 5-crate text) | 100-01 | nono-fltmgr-client IS one of the gate's 6 tracked crates and was included; 6 [package] versions + 6 internal path-dep pins → 0.66.1; tools/sign-fixture (0.1.0) + root repository/homepage (always-further/nono, Deferred Idea) untouched; Cargo.lock regenerated via `cargo build --workspace --all-targets` with exactly 6 workspace-member hunks, zero third-party drift; clippy/fmt/audit/nono+nono-ffi tests green |
+| make ci not fully green on dev host — nono-cli test leg has 11 pre-existing env-state failures, NOT this plan's doing | 100-01 | Zero source files changed (Cargo.toml×6 + Cargo.lock only); failures are leftover dev-host state (my-agent.json dated May 26 → profile_cmd "already exists"; env-lock PoisonError cascade; 17-vs-1 session dirs) — documented in memory nono_cli_windows_baseline_test_failures.md as baseline; out of scope per deviation SCOPE BOUNDARY |
 
 ### Pending Todos
 

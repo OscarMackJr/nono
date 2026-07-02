@@ -113,7 +113,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. Upstream CI changes are reconciled against the fork's prepare-only pipeline — #1245 (idempotent `publish-crates` + cross-compile check on release PRs) and #1251 (compile-step mapping fix) adopted or adapted without breaking the existing `release-readiness` verify-dark gate or the signed-MSI build order.
   4. `scripts/release-dry-run.ps1` and the `release-readiness` verify-dark gate both re-run GREEN at `0.66.1`; `RELEASE-RUNBOOK.md` is updated for the `0.66.1` tag embedding the PUBLIC-repo pre-push checklist (no `build_notes/`/`.gsd/` staged; crate version `0.66.1` > upstream `0.66.0` confirmed); the actual tag push + registry publish remain operator-gated.
 **Plans**: 5 plans
-- [ ] 100-01-PLAN.md — Workspace version bump: 6 crate versions + 6 internal path-dep pins to 0.66.1, Cargo.lock regen (RLS-10)
+- [x] 100-01-PLAN.md — Workspace version bump: 6 crate versions + 6 internal path-dep pins to 0.66.1, Cargo.lock regen (RLS-10)
 - [ ] 100-02-PLAN.md — CI reconcile (adapt, not adopt, #1245/#1251) + proj/ADR-100 (RLS-11)
 - [ ] 100-03-PLAN.md — Cross-repo: nono-py 0.66.1 bump + endpoint_policy PyPI stub, nono-ts 0.66.1 bump (RLS-10, RLS-12)
 - [ ] 100-04-PLAN.md — release-readiness gate + release-dry-run re-green at 0.66.1 + RELEASE-RUNBOOK.md update (RLS-13)
@@ -138,4 +138,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
-| 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 0/5 | Not started | - |
+| 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 1/5 | In Progress|  |
