@@ -71,7 +71,6 @@ function Test-KnownGood {
     New-Item -ItemType Directory -Path $workDir -Force | Out-Null
     $exePath = Join-Path $workDir "knowngood.exe"
     $csPath = Join-Path $workDir "prog.cs"
-    $cerPath = Join-Path $workDir "fixture.cer"
     $thumbprint = $null
 
     try {
@@ -96,8 +95,17 @@ function Test-KnownGood {
         }
 
         # DEVIATION: Cert:\CurrentUser\Root, not Cert:\LocalMachine\Root — see header note.
-        Export-Certificate -Cert "Cert:\CurrentUser\My\$thumbprint" -FilePath $cerPath | Out-Null
-        Import-Certificate -FilePath $cerPath -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+        # Use the raw X509Store API (not Export-Certificate + Import-Certificate) to add
+        # the cert: the Import-Certificate cmdlet invokes the CryptUI "Security Warning"
+        # trust-confirmation dialog for CurrentUser\Root, which HANGS a non-interactive
+        # session (observed empirically) — exactly the class of footgun this repo already
+        # documents for LocalMachine\Root in Add-TrustForVerify/Remove-TrustForVerify
+        # (scripts/sign-windows-artifacts.ps1). X509Store.Add() writes the store directly,
+        # bypassing the trust-UI layer entirely — no dialog, no hang.
+        $rootStoreAdd = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+        $rootStoreAdd.Open('ReadWrite')
+        $rootStoreAdd.Add($cert)
+        $rootStoreAdd.Close()
 
         $infoOutput = $null
         $result = Assert-TrustedSignature -Path $exePath -Mode Strict -InformationVariable infoOutput
@@ -109,7 +117,22 @@ function Test-KnownGood {
     }
     finally {
         if ($thumbprint) {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
+            # Remove-Item on Cert:\CurrentUser\Root raises an interactive UI consent
+            # prompt ("The operation is on user root store and UI is not allowed" when
+            # non-interactive) — mirrors the documented LocalMachine\Root footgun in
+            # scripts/sign-windows-artifacts.ps1's Remove-TrustForVerify. Use the
+            # X509Store API instead, which removes without a prompt.
+            try {
+                $rootStore = [System.Security.Cryptography.X509Certificates.X509Store]::new('Root', 'CurrentUser')
+                $rootStore.Open('ReadWrite')
+                foreach ($c in @($rootStore.Certificates | Where-Object { $_.Thumbprint -eq $thumbprint })) {
+                    $rootStore.Remove($c)
+                }
+                $rootStore.Close()
+            }
+            catch {
+                Write-Host "Warning: could not remove test fixture cert from CurrentUser\Root: $($_.Exception.Message)"
+            }
             Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
         }
         Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
