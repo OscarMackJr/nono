@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
-stopped_at: Phase 100 context gathered
-last_updated: "2026-07-02T13:25:13.680Z"
-last_activity: 2026-07-02 -- Phase 100 execution started
+stopped_at: Phase 100 Plan 02 complete
+last_updated: "2026-07-02T14:33:39.776Z"
+last_activity: "2026-07-02 -- Plan 100-02 complete: idempotent publish-crates guard (release.yml) + workflow_dispatch-gated cross-compile job (ci.yml) adapted from upstream #1245/#1251; ADR-100 records adopt-vs-adapt disposition"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 11
-  percent: 69
+  completed_plans: 13
+  percent: 81
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -27,9 +27,9 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 ## Current Position
 
 Phase: 100 (release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker) — EXECUTING
-Plan: 2 of 5
-Status: Executing Phase 100 — Plan 100-01 complete (workspace leapfrogged to 0.66.1)
-Last activity: 2026-07-02 -- Plan 100-01 complete: 6 crates + 6 path-dep pins bumped to 0.66.1, Cargo.lock regenerated (scoped diff), build/clippy/fmt/audit green
+Plan: 3 of 5
+Status: Executing Phase 100 — Plan 100-02 complete (release.yml + ci.yml CI reconcile, ADR-100)
+Last activity: 2026-07-02 -- Plan 100-02 complete: idempotent publish-crates guard (release.yml) + workflow_dispatch-gated cross-compile job (ci.yml) adapted from upstream #1245/#1251; ADR-100 records adopt-vs-adapt disposition
 
 ## Performance Metrics
 
@@ -50,6 +50,7 @@ Last activity: 2026-07-02 -- Plan 100-01 complete: 6 crates + 6 path-dep pins bu
 | Phase 99 P04 | 10 min | 2 tasks | 4 files |
 | Phase 99 P05 | 13 min | 2 tasks | 5 files |
 | Phase 99 P06 | 130 | 2 tasks | 16 files |
+| Phase 100 P02 | 12min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,7 @@ Last activity: 2026-07-02 -- Plan 100-01 complete: 6 crates + 6 path-dep pins bu
 | Cluster G (a4d68189): X-Nono-Token stale claim removed from proxy README and token.rs; cli_bootstrap.rs deprecated flag warnings now 3-tuple with remove_by field (--proxy-credential → Will be removed in v1.0.0) | 99-05 | cli.rs ALIAS annotation absent in fork — skipped; behavioral change fully captured in cli_bootstrap.rs; 176/176 nono-proxy tests pass |
 | RLS-10 leapfrog to 0.66.1: full 6-member set bumped (D-03 correction of stale 5-crate text) | 100-01 | nono-fltmgr-client IS one of the gate's 6 tracked crates and was included; 6 [package] versions + 6 internal path-dep pins → 0.66.1; tools/sign-fixture (0.1.0) + root repository/homepage (always-further/nono, Deferred Idea) untouched; Cargo.lock regenerated via `cargo build --workspace --all-targets` with exactly 6 workspace-member hunks, zero third-party drift; clippy/fmt/audit/nono+nono-ffi tests green |
 | make ci not fully green on dev host — nono-cli test leg has 11 pre-existing env-state failures, NOT this plan's doing | 100-01 | Zero source files changed (Cargo.toml×6 + Cargo.lock only); failures are leftover dev-host state (my-agent.json dated May 26 → profile_cmd "already exists"; env-lock PoisonError cascade; 17-vs-1 session dirs) — documented in memory nono_cli_windows_baseline_test_failures.md as baseline; out of scope per deviation SCOPE BOUNDARY |
+| ADR-100: #1245/#1251 ADAPTED not adopted verbatim — publish-crates idempotency clean 1:1 port; cross-compile job trigger rewritten from dead upstream 'chore: release v...' PR-title convention to workflow_dispatch | 100-02 | Fork's release model is manual tag-push/workflow_dispatch (release.yml), never a release-please-bot PR — verbatim adoption would add a permanently-false if: condition (silent false-assurance gap); #1251's pre-corrected quoted-string if: form applied inline from the start; release-readiness verify-dark gate + signed-MSI sign-before-harvest order (D-06) confirmed untouched by either hunk |
 
 ### Pending Todos
 
@@ -151,10 +153,10 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-01T12:48:21.425Z
-Stopped at: Phase 100 context gathered
-Resume file: .planning/phases/100-release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker/100-CONTEXT.md
+Last session: 2026-07-02T14:33:39.763Z
+Stopped at: Phase 100 Plan 02 complete
+Resume file: .planning/phases/100-release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker/100-03-PLAN.md
 
 ## Operator Next Steps
 
-- Run `/gsd:execute-phase 98` to execute Phase 98 Plan 02 (cluster actual-diff inspection)
+- Run `/gsd:execute-phase 100` to execute Phase 100 Plan 03
