@@ -7,6 +7,7 @@
 **Resolves phase:** 80 — Clean-Host Install UAT (v2.13; INST-01) — origin Phase 67 (v2.11; DIST-01/DIST-02), UAT carried forward
 **Resolves phase (v3.0):** 82 — Fleet Deployment Infrastructure (DEPLOY-01 / DEPLOY-06)
 **Resolves phase (v3.1):** 90 — v3.0 Host-Gated UAT Drain (DRAIN-01 clean-VM silent MSI install)
+**Resolves phase (v3.5):** 106 — Azure VM Clean-Host UAT (CHOST-03) — drained to a genuine PASS via the reused `clean-host-install` gate on a fresh Azure Win11 VM with no VC++ redist (no 1603/rollback, nono.exe launches).
 
 ## Original problem
 On a clean Win11 host (no VC++ runtime), the v0.62.2 **machine** MSI failed `1603`: both

@@ -6,6 +6,7 @@
 **Source:** `.planning/phases/66-wr-02-edr-human-uat/66-HUMAN-UAT.md` (findings)
 **Resolves phase:** 67 — Clean-Host Windows Install (v2.11; TRUST-01/TRUST-02 interim trust path only — real publicly-trusted signing is DIST-SIGN-01, deferred to the enterprise milestone)
 **Resolves phase (v3.0):** 82 — Fleet Deployment Infrastructure (DEPLOY-05 silent POC root-cert install so the broker works on a clean fleet host; real publicly-trusted signing remains DIST-SIGN-01, out of scope)
+**Resolves phase (v3.5):** 106 — Azure VM Clean-Host UAT (CHOST-03) — drained to a genuine PASS on a fresh Azure Win11 VM running the trusted-signed 0.66.1 release (broker spawns with no manual cert import). Root-cause DIST-SIGN-01 (publicly-trusted signing) delivered by v3.5 Phase 101/104.
 
 ## Problem
 v0.62.2 is Authenticode-signed with a **self-signed `CN=nono Test Signing` POC cert**. On any
