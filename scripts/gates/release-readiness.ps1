@@ -73,8 +73,8 @@ function Invoke-Gate {
         $failedChecks = [System.Collections.Generic.List[string]]::new()
         $detail       = [ordered]@{}
 
-        $targetVersion       = '0.66.0'
-        $upstreamHighest     = '0.65.1'
+        $targetVersion       = '0.66.1'
+        $upstreamHighest     = '0.66.0'
         $versionFamilyCrates = @(
             'nono',
             'nono-cli',
@@ -85,7 +85,7 @@ function Invoke-Gate {
         )
 
         # -----------------------------------------------------------------------
-        # ASSERTION (a): cargo metadata reports all version-family crates at 0.66.0
+        # ASSERTION (a): cargo metadata reports all version-family crates at 0.66.1
         # -----------------------------------------------------------------------
         Push-Location $repoRoot
         try {
@@ -160,7 +160,7 @@ function Invoke-Gate {
         }
 
         # -----------------------------------------------------------------------
-        # ASSERTION (c): leapfrog — 0.66.0 is strictly greater than upstream 0.65.1
+        # ASSERTION (c): leapfrog — 0.66.1 is strictly greater than upstream 0.66.0
         # -----------------------------------------------------------------------
         $releaseVer  = [Version]$targetVersion
         $upstreamVer = [Version]$upstreamHighest
@@ -206,19 +206,19 @@ function Invoke-Gate {
         }
 
         # -----------------------------------------------------------------------
-        # ASSERTION (e): Cargo.lock contains 0.66.0 workspace entries
+        # ASSERTION (e): Cargo.lock contains $targetVersion workspace entries
         # -----------------------------------------------------------------------
         $lockFile = [System.IO.Path]::Combine($repoRoot, 'Cargo.lock')
         if (-not (Test-Path -LiteralPath $lockFile)) {
             throw "Cargo.lock not found at $lockFile — workspace is not materialized"
         }
         $lockContent = Get-Content -Path $lockFile -Raw -Encoding UTF8
-        if ($lockContent -notmatch '0\.66\.0') {
+        if ($lockContent -notmatch [regex]::Escape($targetVersion)) {
             $failedChecks.Add('cargo-lock-version')
-            $detail['cargo_lock'] = "FAIL: Cargo.lock does not contain any 0.66.0 entry"
+            $detail['cargo_lock'] = "FAIL: Cargo.lock does not contain any $targetVersion entry"
         } else {
-            $matchCount = ([regex]::Matches($lockContent, [regex]::Escape('0.66.0'))).Count
-            $detail['cargo_lock'] = "0.66.0 found ($matchCount occurrence(s)) in Cargo.lock"
+            $matchCount = ([regex]::Matches($lockContent, [regex]::Escape($targetVersion))).Count
+            $detail['cargo_lock'] = "$targetVersion found ($matchCount occurrence(s)) in Cargo.lock"
         }
 
         # -----------------------------------------------------------------------
