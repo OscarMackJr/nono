@@ -127,3 +127,8 @@ per the deviation SCOPE BOUNDARY (pre-existing failures in unrelated files are n
 RLS-13 (release-dry-run + release-readiness gate) both assert against this version. The
 `nono-py`/`nono-ts` sibling repos and the nono-py `RouteConfig` PyPI blocker (RLS-12) are
 separate plans in this phase.
+
+## Self-Check: PASSED
+
+- Files verified present: 100-01-SUMMARY.md, crates/nono/Cargo.toml, Cargo.lock
+- Commits verified in git log: 11f0caf2 (Task 1), c26e53bb (Task 2), 97c2e2d4 (SUMMARY)
