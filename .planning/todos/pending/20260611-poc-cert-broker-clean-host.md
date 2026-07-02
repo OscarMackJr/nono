@@ -60,3 +60,16 @@ cert-trust step (or the limitation is explicitly documented + a supported trust 
 Real publicly-trusted signing was originally tracked as DIST-SIGN-01 (enterprise milestone); the
 pipeline work landed early via `260603-i31`. The dev-layout binary remains the supported trust path
 for local/dev use until a trusted-signed release ships.
+
+## Phase 100 status (2026-07-01)
+
+**This item remains OPEN and externally blocked.** No trusted-signed release has been cut at
+`0.66.1` yet — the tag push is operator-gated and stays outside this phase's scope (Phase 100
+is prepare-only). Independently, the active Azure Trusted Signing verify-gate thread
+(`quick 260630-trusted-signing-golive`) reports the OIDC sign step succeeds (signer
+`CN=TWGGLOBAL.onmicrosoft.com`) but the verify step currently fails with `UnknownError`
+(issuer `Microsoft Enterprise ID Verified Policy AOC CA 01`) — so even once a `0.66.1` tag is
+pushed, the resulting binaries cannot yet be confirmed trusted-signed until that verify-gate
+defect is resolved. Clean-host UAT for this todo cannot be meaningfully attempted until both
+(1) a `0.66.1` release is actually cut and (2) the Azure Trusted Signing verify-gate is fixed
+and re-confirmed clean on a fresh Win11 host.

@@ -39,3 +39,23 @@ Boot a **clean Win11 VM with no VC++ runtime installed** and confirm:
 ## Acceptance
 v0.62.2-equivalent machine MSI installs and runs cleanly on a fresh Win11 host with no manual
 redist step — confirmed on a clean VM (INST-01 / DRAIN-01).
+
+## Phase 100 status (2026-07-01)
+
+The `clean-host-install` verify-dark gate was invoked on this dev host per Phase 100 Plan 05:
+
+```
+pwsh -File scripts/verify-dark.ps1 -Gate clean-host-install
+```
+
+- **verdict:** `SKIP_HOST_UNAVAILABLE`
+- **exit code:** `3`
+- **reason:** "clean-host-install gate requires elevation (machine MSI install needs admin) - re-run from an elevated shell"
+- **persisted to:** `.nono-runtime/verdicts/clean-host-install.json`
+- **timestamp:** `2026-07-02T11:53:58.622Z`
+
+This SKIP is the expected, acceptable outcome per CONTEXT.md D-09 (folded todos may
+`SKIP_HOST_UNAVAILABLE` by design) and was operator-accepted at Phase 100 close ("Accept
+SKIP & close phase"). **This item remains OPEN/host-gated** — a `SKIP_HOST_UNAVAILABLE`
+result does not close it; genuine closure still requires running this gate on a real clean
+Win11 VM with a staged machine MSI at `dist\windows\nono-machine.msi`.
