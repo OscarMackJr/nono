@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
-stopped_at: Phase 100 Plan 02 complete
-last_updated: "2026-07-02T14:33:39.776Z"
-last_activity: "2026-07-02 -- Plan 100-02 complete: idempotent publish-crates guard (release.yml) + workflow_dispatch-gated cross-compile job (ci.yml) adapted from upstream #1245/#1251; ADR-100 records adopt-vs-adapt disposition"
+stopped_at: Phase 100 Plan 03 complete
+last_updated: "2026-07-02T15:33:20.630Z"
+last_activity: 2026-07-02
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 13
-  percent: 81
+  completed_plans: 14
+  percent: 88
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -27,9 +27,9 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 ## Current Position
 
 Phase: 100 (release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker) — EXECUTING
-Plan: 3 of 5
-Status: Executing Phase 100 — Plan 100-02 complete (release.yml + ci.yml CI reconcile, ADR-100)
-Last activity: 2026-07-02 -- Plan 100-02 complete: idempotent publish-crates guard (release.yml) + workflow_dispatch-gated cross-compile job (ci.yml) adapted from upstream #1245/#1251; ADR-100 records adopt-vs-adapt disposition
+Plan: 4 of 5
+Status: Plan 100-03 complete (cross-repo binding version bump + nono-py PyPI blocker closed) — ready to execute Plan 100-04
+Last activity: 2026-07-02 -- Plan 100-03 complete: nono-py + nono-ts bumped to 0.66.1 (one DCO-signed commit each, nono-py 84e8f18 / nono-ts dd7d416); nono-py RouteConfig/ProxyConfig PyPI blocker closed (endpoint_policy + enable_h2 stubs); maturin build + npm publish --dry-run both green
 
 ## Performance Metrics
 
@@ -51,6 +51,7 @@ Last activity: 2026-07-02 -- Plan 100-02 complete: idempotent publish-crates gua
 | Phase 99 P05 | 13 min | 2 tasks | 5 files |
 | Phase 99 P06 | 130 | 2 tasks | 16 files |
 | Phase 100 P02 | 12min | 3 tasks | 2 files |
+| Phase 100 P03 | 20min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,8 @@ Last activity: 2026-07-02 -- Plan 100-02 complete: idempotent publish-crates gua
 | RLS-10 leapfrog to 0.66.1: full 6-member set bumped (D-03 correction of stale 5-crate text) | 100-01 | nono-fltmgr-client IS one of the gate's 6 tracked crates and was included; 6 [package] versions + 6 internal path-dep pins → 0.66.1; tools/sign-fixture (0.1.0) + root repository/homepage (always-further/nono, Deferred Idea) untouched; Cargo.lock regenerated via `cargo build --workspace --all-targets` with exactly 6 workspace-member hunks, zero third-party drift; clippy/fmt/audit/nono+nono-ffi tests green |
 | make ci not fully green on dev host — nono-cli test leg has 11 pre-existing env-state failures, NOT this plan's doing | 100-01 | Zero source files changed (Cargo.toml×6 + Cargo.lock only); failures are leftover dev-host state (my-agent.json dated May 26 → profile_cmd "already exists"; env-lock PoisonError cascade; 17-vs-1 session dirs) — documented in memory nono_cli_windows_baseline_test_failures.md as baseline; out of scope per deviation SCOPE BOUNDARY |
 | ADR-100: #1245/#1251 ADAPTED not adopted verbatim — publish-crates idempotency clean 1:1 port; cross-compile job trigger rewritten from dead upstream 'chore: release v...' PR-title convention to workflow_dispatch | 100-02 | Fork's release model is manual tag-push/workflow_dispatch (release.yml), never a release-please-bot PR — verbatim adoption would add a permanently-false if: condition (silent false-assurance gap); #1251's pre-corrected quoted-string if: form applied inline from the start; release-readiness verify-dark gate + signed-MSI sign-before-harvest order (D-06) confirmed untouched by either hunk |
+| Cross-repo binding bump finished 0.66.0→0.66.1 in both nono-py + nono-ts, one DCO-signed commit each (nono-py 84e8f18, nono-ts dd7d416); no 0.66.0 commit ever landed | 100-03 | D-01/D-02/D-07: both repos already had stale uncommitted 0.66.0 edits from a prior session — finished in place rather than starting from committed HEAD; publish stayed operator-gated (maturin build + npm publish --dry-run only, no push) |
+| nono-py RouteConfig PyPI blocker (RLS-12) closed: endpoint_policy: None added at both RouteConfig construction sites (src/proxy.rs, src/policy.rs); Rule 3 auto-fix also added ProxyConfig.enable_h2: false (same-class binding drift, only surfaced by actually running maturin build, not by static grep) | 100-03 | maturin build now exits 0; both fields are no-op stubs matching nono-proxy's own defaults, not policy/business-logic changes; full endpoint_policy threading deferred to a named future phase per D-08 |
 
 ### Pending Todos
 
@@ -149,14 +152,14 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 **Resolved at v3.3 close (not deferred):** 95-HUMAN-UAT cross-target clippy CI-lane confirmation → superseded by Phase 96 local cross-target toolchain (both gates GREEN locally); 97-HUMAN-UAT WR-02 publish-set divergence → operator chose the 3-crate set, reconciled. The v3.1/v3.2 PARTIAL→CI cross-target carry-forwards are likewise retired — Phase 96 made both Unix clippy gates locally runnable.
 
-**Operator-action carry-forwards into v3.4 (PREPARE-ONLY — outside any prior milestone):** (1) nono-py `RouteConfig` missing `endpoint_policy` field (`src/policy.rs:743` + `src/proxy.rs:206`) — closed by Phase 100 (RLS-12); (2) downstream crate `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.0` is on crates.io; (3) follow updated RELEASE-RUNBOOK.md (at 0.66.1) for the tag push + publish.
+**Operator-action carry-forwards into v3.4 (PREPARE-ONLY — outside any prior milestone):** (1) nono-py `RouteConfig` missing `endpoint_policy` field (`src/policy.rs:743` + `src/proxy.rs:206`) — **CLOSED 2026-07-02, Phase 100 Plan 03 (RLS-12)**: `endpoint_policy: None` added at both sites, `maturin build` exits 0; (2) downstream crate `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.1` is on crates.io; (3) follow updated RELEASE-RUNBOOK.md (at 0.66.1) for the tag push + publish.
 
 ## Session Continuity
 
-Last session: 2026-07-02T14:33:39.763Z
-Stopped at: Phase 100 Plan 02 complete
-Resume file: .planning/phases/100-release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker/100-03-PLAN.md
+Last session: 2026-07-02T15:33:20.615Z
+Stopped at: Phase 100 Plan 03 complete
+Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd:execute-phase 100` to execute Phase 100 Plan 03
+- Run `/gsd:execute-phase 100` to execute Phase 100 Plan 04
