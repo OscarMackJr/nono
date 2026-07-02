@@ -1,428 +1,231 @@
-# Architecture Research: Signed Policy Overrides (ZT-Infra Attestation)
+# Architecture Research
 
-**Domain:** Runtime capability mutation via signed external policy decisions
-**Researched:** 2026-06-21
-**Confidence:** HIGH — all components are existing, readable source code; no speculative claims
+**Domain:** CI/CD release-signing pipeline hardening + ephemeral cloud-VM UAT infrastructure (GitHub Actions + Azure Trusted Signing + Azure VM IaC + PowerShell dark-factory gate harness)
+**Researched:** 2026-07-02
+**Confidence:** HIGH (all integration points cited against the actual `release.yml`, `trusted-signing-smoke.yml`, `scripts/verify-dark.ps1`, and existing `scripts/gates/*.ps1` in this repo; MEDIUM on Azure Bicep/VM specifics, which is new-to-this-repo territory not yet grounded in a live Azure resource)
 
----
+> **Note:** this file previously held v3.2 (Signed Policy Overrides) research. That milestone
+> shipped and archived; this is the v3.5 (Trusted Signing Go-Live) replacement.
 
-## The Core Architectural Constraint: Library-Is-Policy-Free
+## Standard Architecture
 
-The single most important architectural decision this milestone must honor is the one already
-encoded in CLAUDE.md's Library vs CLI Boundary table:
-
-> "The library applies ONLY what clients explicitly add to `CapabilitySet` — audit and diagnostics
-> modules are observability primitives, not security policy."
-
-This invariant has a direct consequence for signed-override placement:
-
-- **`crates/nono` (core library):** MAY supply `CapabilitySet` builder mutations and a new
-  `AuditEventPayload` variant. It must NOT embed HTTP clients, ZT-Infra URLs, signature
-  verification policy, or token-format definitions. Adding "verify against ZT-Infra" to the
-  core library would make the library opinionated about which external authority is trusted — a
-  policy decision, not a primitive.
-- **`crates/nono-cli`:** The existing group/deny resolver (`policy.rs`) is where all current
-  policy lives. CLI-side is the natural home for an optional operator CLI verb (e.g. `nono
-  override apply <token>`). But the CLI is not the enforcement surface for this milestone — the
-  milestone's explicit decision is that enforcement lives in `nono-py`.
-- **`nono-py` binding (enforcement surface):** This is where the signed-override verification
-  and the HTTP round-trip to ZT-Infra `POST /actions` live. The milestone explicitly designates
-  `nono-py` as the enforcement surface, consistent with the existing E5 pre-exec interception
-  slot in `DESIGN-engine-abstraction.md` §"Forward-Compat: zt-infra.org Integration". The
-  binding is already the integration point for `confined_run`/`confine`; adding override
-  verification here keeps the Rust core policy-free and concentrates the external-authority
-  dependency in the binding.
-
-**Placement verdict:**
-
-| Layer | Role in v3.2 |
-|-------|-------------|
-| `crates/nono` (lib) | New `AuditEventPayload::PolicyOverrideApplied` variant; `CapabilitySet` builder unchanged — still a pure primitive; `trust/` module's existing `verify_keyed_signature` reused for ECDSA token verification |
-| `crates/nono-cli` | Optional new `nono override` verb for operator UX; does NOT add verification to the run path — that would conflate CLI policy with binding enforcement |
-| `nono-py` | New `override.rs` module; mutated `confined_run`/`confine` signatures; owns the HTTP round-trip, token parsing, signature verification, expiry/scope checks, scoped `CapabilitySet` mutation, and audit event emission |
-| ZT-Infra v2 (external) | `POST /actions` decision + hash-chained KMS-signed audit record; DAAL ledger anchor (optional, not a required gate) |
-
----
-
-## System Overview
+### System Overview
 
 ```
-  Developer workflow (out-of-band — happens before the confined_run call)
-  ────────────────────────────────────────────────────────────────────────
-  Developer hits a nono block
-       |
-       v
-  Operator/EM uses ZT-Infra v2 control plane (AWS Tailscale/SSM or local provisioner)
-       |  POST /actions  {"actor":"dev","action":"nono.fs.override",
-       |                  "resource":"git://github.com/org/repo","scope":{...},"expiry":"..."}
-       |
-       v
-  ZT-Infra ActionAuditor.record():
-      previous_hash <- last chain entry (or ZERO_HASH)
-      current_hash = SHA-256(stableJson({actor,action,resource,decision,reason,timestamp,previous_hash}))
-      kms_signature = KMS.SignCommand(ECDSA_SHA_256, current_hash)  // normalizeEcdsaDerLowS applied
-      append to audit-chain.jsonl + CloudWatch + optional DAAL anchor (Base Sepolia)
-       |
-       v
-  Operator delivers signed override token to developer (email / secrets manager / file):
-  {
-    "actor": "dev@example.com",
-    "action": "nono.fs.override",
-    "decision": "allow",
-    "scope": {"paths":["/var/cache/pip"],"mode":"READ_WRITE"},
-    "expiry": "2026-06-22T00:00:00Z",
-    "repo_context": "git://github.com/org/repo@abc123",
-    "audit": {
-      "previous_hash": "0000...000",
-      "current_hash": "a1b2...",
-      "kms_signature": {"algorithm":"ECDSA_SHA_256","key_id":"arn:...","signature":"<b64>"}
+┌──────────────────────────────── GitHub (existing, MODIFIED) ─────────────────────────────────┐
+│  trusted-signing-smoke.yml (workflow_dispatch, windows-latest)                                │
+│    azure/login (OIDC) → csc.exe compiles throwaway exe → trusted-signing-action signs          │
+│    → [MODIFIED] Verify-Authenticode shared helper (Get-AuthenticodeSignature +                │
+│       signtool /pa /v fallback + chain-build/revocation diagnostics)                           │
+│    → upload-artifact (signed exe, for offline inspection)                                      │
+│                                                                                                  │
+│  release.yml (push tag v*.*.*  |  workflow_dispatch)                                            │
+│   job:build (5-leg matrix, environment:Development)                                             │
+│     … cargo build … Package …                                                                   │
+│     azure/login (OIDC) → Sign Windows binaries (pre-package, line ~167)                         │
+│     → Package (Windows MSIs, line ~186) → Sign Windows MSIs (line ~241)                         │
+│     → [MODIFIED] Verify Authenticode signatures (~line 259, fail-closed D-13)                   │
+│     → Verify MSI payload signatures (admin-extract, ~line 281)                                  │
+│     → zip / upload-artifact                                                                     │
+│   job:release (needs build) → GitHub Release + checksums                                        │
+│   job:publish-crates (needs release) → crates.io (nono, nono-proxy, nono-cli)                   │
+│   job:update-homebrew-core (needs release)                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                          │  published artifacts (MSI, exe, checksums)
+                                          ▼
+┌────────────────────── Azure (NEW) ──────────────────────┐   ┌────── Operator (manual, keeps) ──┐
+│  clean-vm/ IaC module (Bicep + deploy script)            │   │  crates.io publish (already CI'd) │
+│    - fresh Win11 VM, no POC cert, no VC++ redist          │   │  PyPI: cd nono-py; maturin publish│
+│    - NSG allowing RDP from operator IP only               │   │  npm:  cd nono-ts; npm publish     │
+│    - tags: ephemeral=true, purpose=nono-clean-host-uat     │   └───────────────────────────────────┘
+│    - teardown script (destroy after UAT)                  │
+└──────────────────────────┬────────────────────────────────┘
+                            │ RDP (operator session)
+                            ▼
+┌───────────────────── scripts/verify-dark.ps1 harness (existing, gate-discovery UNCHANGED) ─────┐
+│  Gate auto-discovery scans scripts/gates/*.ps1 — NEW gate files just need to exist there:        │
+│    - clean-host-install.ps1        [REUSED unmodified — MSI-clean-install]                       │
+│    - trusted-signed-assertion.ps1  [NEW — Issuer-chain assertion on shipped artifacts]           │
+│    - broker-spawn-on-clean-host.ps1[NEW — nono run --profile claude-code spawns, no cert import] │
+│  Test-Precondition → Invoke-Gate → {gate,verdict,reason,detail,timestamp} → persist → emit → exit│
+└────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Component Responsibilities
+
+| Component | Responsibility | Status this milestone |
+|-----------|----------------|------------------------|
+| `release.yml` "Verify Authenticode signatures" step (~line 259) | Fail-closed gate: `Get-AuthenticodeSignature -ne 'Valid'` aborts before upload | **MODIFIED** — add `signtool /pa /v` fallback + diagnostics, preserve fail-closed semantics |
+| `release.yml` "Verify MSI payload signatures" step (~line 281-321) | Admin-extract, per-payload-exe signature check | **MODIFIED** — same hardening applied to the extracted-payload loop |
+| `trusted-signing-smoke.yml` "Verify the embedded signature" step (~line 62-73) | Non-destructive proof the D-02 signing chain is live, publishes nothing | **MODIFIED** first (cheapest place to prove the fix), **DELETED** at close-out |
+| New shared verify helper (e.g. `scripts/verify-authenticode.ps1`) | One PowerShell function/script implementing the hardened check, called from both workflows AND the new `trusted-signed-assertion` gate | **NEW** — avoids drift between 3 call sites |
+| Azure clean-VM IaC module (`scripts/azure/clean-vm/`) | Stand up/tear down a fresh Win11 VM with no POC cert / no VC++ | **NEW** |
+| `scripts/gates/clean-host-install.ps1` | MSI install proof on a clean host (INST-01) | **REUSED unmodified** — was previously always `SKIP_HOST_UNAVAILABLE` on the dev host; now runs for-real on the Azure VM |
+| `scripts/gates/trusted-signed-assertion.ps1` | Assert Issuer chains to `Microsoft ID Verified CS` root for `nono.exe`, broker, and both MSIs | **NEW** |
+| `scripts/gates/broker-spawn-on-clean-host.ps1` | `nono run --profile claude-code -- <cmd>` spawns the broker with zero manual cert-trust step | **NEW** |
+| `scripts/verify-dark.ps1` | Gate auto-discovery, `Test-Precondition`→`Invoke-Gate` contract, verdict persistence/emit, exit-code mapping | **UNCHANGED** — new gates plug in purely by filename convention (D-04 auto-discovery, confirmed lines 133-145) |
+| `RELEASE-RUNBOOK.md` (currently under `.planning/milestones/v3.3-phases/97-.../`) | Operator step-by-step for the push sequence | **MODIFIED** — Step 3 push sequence flips from "prepare-only, not executed" to actually executed; add VM-UAT + close-out steps |
+| GitHub repo secrets `WINDOWS_SIGNING_CERT` / `_PASSWORD` (POC self-signed cert, legacy pre-Trusted-Signing) | Old fallback signing path, no longer referenced by current `release.yml` (confirmed: no `WINDOWS_SIGNING_CERT` reference anywhere in the file as read) | **RETIRE** (delete the GitHub secrets) at close-out — code already doesn't use them; this is pure secret hygiene |
+| `docs/cli/development/windows-signing-guide.mdx` (~lines 244-251) | Developer-facing signing docs | **MODIFIED** at close-out — still describes the retired PFX flow |
+
+## Recommended Project Structure
+
+```
+.github/workflows/
+├── release.yml                          # MODIFIED: harden ~line 259 + ~line 281 verify steps
+└── trusted-signing-smoke.yml             # MODIFIED then DELETED (close-out)
+
+scripts/
+├── verify-authenticode.ps1               # NEW: shared hardened-verify function/script
+│                                          #   (Get-AuthenticodeSignature + signtool /pa /v
+│                                          #    fallback + UnknownError-vs-UntrustedRoot
+│                                          #    diagnostic classification). Dot-sourced by
+│                                          #   release.yml steps, trusted-signing-smoke.yml,
+│                                          #   AND scripts/gates/trusted-signed-assertion.ps1.
+├── azure/
+│   └── clean-vm/
+│       ├── main.bicep                    # NEW: Win11 VM + NSG (RDP from operator IP only)
+│       │                                  #   + no-cert/no-VC++ baseline image
+│       ├── deploy-clean-vm.ps1            # NEW: az deployment wrapper, prints RDP connection
+│       │                                  #   info, tags resource group ephemeral=true
+│       └── teardown-clean-vm.ps1          # NEW: az group delete, confirms before destroying
+└── gates/
+    ├── clean-host-install.ps1            # REUSED unmodified — now actually exercised (not SKIP)
+    ├── trusted-signed-assertion.ps1      # NEW gate: Issuer-chain check via verify-authenticode.ps1
+    └── broker-spawn-on-clean-host.ps1    # NEW gate: nono run --profile claude-code spawn proof
+
+.planning/todos/
+├── pending/20260611-poc-cert-broker-clean-host.md   # drained by broker-spawn-on-clean-host PASS
+└── pending/20260611-msi-vcredist-prereq.md          # drained by clean-host-install PASS on the VM
+
+RELEASE-RUNBOOK.md (or successor at repo root)         # MODIFIED: prepare-only → executed, +VM UAT
+docs/cli/development/windows-signing-guide.mdx         # MODIFIED at close-out (gitignored-but-tracked,
+                                                        #   needs `git add -f`)
+```
+
+### Structure Rationale
+
+- **`scripts/verify-authenticode.ps1` as a shared helper, not copy-pasted 3x:** `release.yml` verifies signatures in two places (loose-binary loop ~line 259-274, MSI-admin-extract-payload loop ~line 281-321) and `trusted-signing-smoke.yml` verifies once (~line 62-73). All three currently do an inline `Get-AuthenticodeSignature -ne 'Valid'` check with slightly different loop shapes. Introducing a single dot-sourced function with a fixed `{status, issuer, chainBuildOk, revocationOk, diagnosis}` return shape means the `UnknownError`-diagnosis logic is written once and the new `trusted-signed-assertion.ps1` verify-dark gate can reuse the exact same classification on a downloaded release artifact — no drift between "does CI think it's signed" and "does the operator's dark gate think it's signed."
+- **`scripts/azure/clean-vm/` mirrors no existing pattern (new territory)** — there is no existing `scripts/azure/` directory in this repo; Bicep is the natural IaC choice given the workflows already use `az`/OIDC (azure/login) elsewhere, keeping the tooling surface Azure-CLI-centric rather than introducing Terraform.
+- **New gates live in `scripts/gates/` alongside existing ones, not a separate directory** — `verify-dark.ps1`'s auto-discovery (D-04, `Get-ChildItem -Path $gatesDir -Filter "*.ps1"`) is directory-scoped and name-agnostic; no harness code changes are needed to add a gate, only a new file matching the `Test-Precondition`/`Invoke-Gate` contract (confirmed against `harness-self-check.ps1`/`clean-host-install.ps1`/`release-readiness.ps1`, all following the identical two-function shape).
+- **One gate per concern, matching the existing 10-gate convention** — `clean-host-install.ps1`, `release-readiness.ps1`, `wfp-egress-isolation.ps1`, `override-01/02.ps1`, `telemetry-event-emit.ps1`, `egress-policy-deny.ps1`, `copilot-e2e.ps1`, `deploy-silent-install.ps1` are each single-purpose. `trusted-signed-assertion` and `broker-spawn-on-clean-host` follow that shape rather than being bolted onto `clean-host-install.ps1` as extra steps — this also lets each gate SKIP/PASS/FAIL independently and gives 3 distinct verdict JSON files instead of one overloaded one, which matches the cookbook's Gate 3 checklist (3 distinct assertions: signature Valid+Issuer, install succeeds, broker spawns).
+
+## Architectural Patterns
+
+### Pattern 1: Fail-closed verify with graduated fallback (not "or")
+
+**What:** The existing `release.yml` verify step is a hard boolean gate (`Status -ne 'Valid'` → `exit 1`, D-13). Hardening must ADD a `signtool verify /pa /v` fallback *without* weakening that boolean — i.e., the fallback is a second, independent attempt to reach `Valid`, and the overall step is still fail-closed if BOTH checks disagree-with-Valid. Do not turn this into "pass if either check says Valid" without also asserting the two checks agree on WHY the other failed (chain-build vs genuine untrusted-root) — that distinction is the entire point of the hardening (cookbook §5 field note: `UnknownError` ≠ `UntrustedRoot`).
+**When to use:** Any place `release.yml`/`trusted-signing-smoke.yml` currently does `Get-AuthenticodeSignature -ne 'Valid'` → `exit 1` (3 call sites: ~259, ~281-321 loop, smoke ~69-72).
+**Trade-offs:** More CI runtime (chain-build + revocation checks take longer, especially with a CRL/OCSP round-trip); worth it because a silent regression back to "sign succeeds but verify never confirms it" reproduces the exact `UnknownError` blocker this milestone exists to close.
+
+**Example (shape, not literal code):**
+```powershell
+function Test-TrustedSignedArtifact {
+    param([string]$Path)
+    $psSig = Get-AuthenticodeSignature -FilePath $Path
+    if ($psSig.Status -eq 'Valid') {
+        return @{ valid = $true; method = 'Get-AuthenticodeSignature'; issuer = $psSig.SignerCertificate.Issuer }
     }
-  }
-
-  Runtime execution path (in-band — inside confined_run / confine)
-  ─────────────────────────────────────────────────────────────────
-
-  nono_py.confined_run(exe, args, allow, profile, override_token=token_json)
-       |
-       +--[1] No token? --> proceed as today (no mutation, no new behavior)
-       |
-       +--[2] Token present? --> verify_override(token_json, kms_pubkey_config)
-       |       a. Parse token JSON, validate required fields present
-       |       b. Check expiry: token.expiry > utcnow()
-       |          FAIL-CLOSED: expired -> raise PyRuntimeError, nothing runs
-       |       c. Check repo_context binding (git URL + commit hash match)
-       |          FAIL-CLOSED: mismatch -> raise PyRuntimeError, nothing runs
-       |       d. Recompute current_hash = SHA-256(stableJson(unsigned_fields))
-       |          Verify ECDSA_SHA_256(kms_signature.signature, current_hash, pinned_kms_pubkey)
-       |          via nono::trust::signing::verify_keyed_signature
-       |          FAIL-CLOSED: invalid sig -> raise PyRuntimeError, nothing runs
-       |       e. (Optional) Live ZT-Infra check: POST /actions to confirm not revoked
-       |          FAIL-CLOSED: deny or timeout -> raise PyRuntimeError, nothing runs
-       |       f. Return OverrideGrant{paths, mode, expiry, zt_audit_hash}
-       |
-       +--[3] Scoped CapabilitySet mutation (Rust side, before spawn):
-       |       base_caps = build from (allow, profile) as today
-       |       for path in grant.paths:
-       |           append --allow <path> to nono.exe run invocation
-       |       (network expansion via allow_domain deferred -- nono-proxy is the right surface)
-       |       OS confinement still applies to the expanded set -- no bypass
-       |
-       +--[4] Emit override event into nono audit HMAC chain (before spawn, fail-soft):
-       |       AuditEventPayload::PolicyOverrideApplied {
-       |           actor,
-       |           scope (paths, mode, expiry),
-       |           zt_audit_hash: token.audit.current_hash  // <-- bi-directional link
-       |           kms_key_id
-       |       }
-       |       SecurityEventLayer -> EventID 10006 (NONO_POLICY_OVERRIDE_APPLIED)
-       |       -> Windows Event Log (Application channel) + ETW -> Splunk/Sentinel
-       |
-       +--[5] Execute under OS confinement:
-               nono.exe run --profile <profile> --allow <paths>... --allow <grant.paths>... -- <exe> <args>
-               Low-IL + AppContainer + Job + WFP apply regardless of grant
-               An allow NEVER bypasses the OS layer -- nono is the sandbox underneath
-
-  Forensic cross-reference (bi-directional):
-  ────────────────────────────────────────────
-  nono chain -> ZT-Infra:  zt_audit_hash in PolicyOverrideApplied points to the ZT-Infra
-                            audit-chain.jsonl / CloudWatch entry that authorized the override
-  ZT-Infra -> nono chain:  correlation_id in the POST /actions request can carry the nono
-                            session's HMAC chain head (optional; the server.js correlation_id
-                            field is already supported)
-```
-
----
-
-## Component Boundaries
-
-| Component | Responsibility | Communicates With | Status |
-|-----------|---------------|-------------------|--------|
-| `nono-py/src/override.rs` (NEW) | Token parse, expiry/scope/sig verify, optional live ZT check, `OverrideGrant` type | ZT-Infra `POST /actions` (HTTP blocking); `crates/nono::trust::signing::verify_keyed_signature` | New file |
-| `nono-py/src/windows_confined_run.rs` (MODIFIED) | Accept `override_token: Option<String>`; call `verify_override`; add grant paths via `append_caps_allow_flags`; emit audit event before spawn | `override.rs` (same crate); `nono.exe run` subprocess | Modified |
-| `nono-py/src/sandboxed_exec.rs` (MODIFIED) | Same override wiring for Unix `sandboxed_exec` | `override.rs` | Modified |
-| `nono-py/src/lib.rs` (MODIFIED) | Register new `override.rs` module and expose `OverrideGrant` as `#[pyclass]` | PyO3 module registry | Modified |
-| `crates/nono/src/audit.rs` (MODIFIED) | New `AuditEventPayload::PolicyOverrideApplied` variant with `zt_audit_hash` field | `SecurityEventLayer` in nono-cli via `tracing` | Modified |
-| nono-cli `SecurityEventLayer` (MODIFIED) | Emit EventID 10006 for `PolicyOverrideApplied`; follow existing EventID 10001-10005 pattern | Windows Event Log + ETW | Modified |
-| `crates/nono/src/trust/signing.rs` (REUSED AS-IS) | `verify_keyed_signature` for raw ECDSA P-256 verification | Called from `override.rs` | Existing, unchanged |
-| ZT-Infra `POST /actions` (EXTERNAL) | Policy decision + hash-chained KMS-signed audit record | Called by `override.rs` over HTTP | External, unchanged |
-
----
-
-## Data Flow
-
-### Override Token Format
-
-The token is a JSON envelope delivered out-of-band. It is the ZT-Infra `POST /actions`
-response augmented with scope and expiry fields added by the operator or a thin helper
-script. It is NOT a Sigstore bundle (those are for file attestation). The `audit.current_hash`
-field is the bi-directional linkage key.
-
-The `unsigned_fields` used for hash computation match the `stableJson` fields in ZT-Infra's
-`ActionAuditor.record()` implementation exactly:
-`{actor, action, resource, decision, reason, timestamp, previous_hash}`.
-The `scope`, `expiry`, and `repo_context` fields are additional metadata NOT in the original
-unsigned payload — they must be validated against the signed `action`/`resource` fields, not
-treated as independently authenticated.
-
-This creates one design choice to resolve in the planning phase: either (a) the operator
-embeds scope/expiry directly into the ZT-Infra `resource` or `action` field (making them part
-of the signed payload) or (b) scope/expiry are out-of-band metadata validated separately.
-Option (a) is more tamper-evident and should be the recommendation to the planner.
-
-### Signature Verification Path
-
-```
-nono-py/src/override.rs::verify_override(token_json, kms_pubkey_config)
-  |
-  +-> serde_json::from_str(token_json) -> OverrideToken
-  +-> check token.expiry > Utc::now()      [fail-closed]
-  +-> check token.repo_context             [fail-closed]
-  +-> recompute current_hash = SHA-256(stableJson(unsigned_fields))
-  +-> nono::trust::signing::verify_keyed_signature(
-          message: current_hash_bytes,
-          signature: base64_decode(token.audit.kms_signature.signature),
-          public_key: kms_pubkey_config.der_bytes
-      )
-      [fail-closed: any Err -> raise PyRuntimeError]
-  +-> (optional) HTTP POST /actions to ZT-Infra for live revocation check
-      [fail-closed: deny or timeout -> raise PyRuntimeError]
-  +-> Ok(OverrideGrant { paths, mode, expiry, zt_audit_hash })
-```
-
-The `verify_keyed_signature` function in `crates/nono/src/trust/signing.rs` already handles
-ECDSA P-256 verification. The KMS output uses the same P-256 curve and DER encoding. The
-`normalizeEcdsaDerLowS` normalization applied by ZT-Infra's `audit.js` ensures low-S form,
-which is the form `verify_keyed_signature` expects. This reuse is verified by reading the
-actual source of both components.
-
-To expose `verify_keyed_signature` to `override.rs` (same Rust workspace via path dep):
-`nono-py` already depends on `nono` (it uses `nono::CapabilitySet`, `nono::Sandbox`, etc.).
-The call from `override.rs` to `nono::trust::signing::verify_keyed_signature` is a plain
-Rust function call — no PyO3 boundary needed for the internal path.
-
-### CapabilitySet Mutation
-
-No new Rust primitive is needed. The existing `append_caps_allow_flags` function in
-`windows_confined_run.rs` already converts a list of paths into `--allow` flags on the
-`nono.exe run` command. The override grant paths are appended to the same command:
-
-```rust
-// Existing code path (unchanged):
-build_nono_run_args(&mut cmd, profile.as_deref(), allow.as_deref(), cwd.as_deref());
-// New: override grant paths appended via the same mechanism
-if let Some(ref grant) = override_grant {
-    for path in &grant.paths {
-        cmd.arg("--allow").arg(path);
-    }
+    # Fallback: signtool's /pa (default Authenticode policy) chain-builds independently
+    # of PowerShell's WinVerifyTrust wrapper and surfaces distinct exit codes/verbose text
+    # for "chain could not be built" vs "explicit distrust".
+    $stError = Join-Path $env:TEMP "signtool-verify-$(Split-Path -Leaf $Path).log"
+    & signtool.exe verify /pa /v $Path *> $stError
+    $signtoolOk = ($LASTEXITCODE -eq 0)
+    $diagnosis = if ($signtoolOk) { 'chain-build-or-revocation-transient (resolved by signtool)' }
+                 elseif ($psSig.Status -eq 'UnknownError') { 'chain-build-or-revocation-failure (unresolved)' }
+                 else { 'genuine-untrusted-or-invalid' }
+    return @{ valid = $signtoolOk; method = 'signtool /pa /v (fallback)'; diagnosis = $diagnosis; log = $stError }
 }
 ```
 
-The `CapabilitySet` builder in `crates/nono` is not mutated at the Rust library level —
-the mutation happens entirely at the `nono.exe run` invocation level, staying inside
-`nono-py` where policy belongs.
+### Pattern 2: Dark-factory gate is the single UAT contract — Azure VM is just a host, not a new harness
 
-### Audit Chain + SecurityEventLayer Bi-Directional Linkage
+**What:** `verify-dark.ps1` already generalizes "run this assertion, emit a typed verdict, persist before emit, map to a reserved exit code" across every prior host-gated UAT (clean-host install, WFP egress, override live-check, telemetry emission). The Azure VM does NOT need its own bespoke verification framework — it needs (a) the IaC to exist, (b) the operator to RDP in, stage artifacts, and run `pwsh -File scripts/verify-dark.ps1 -Gate <name>` (or `-All`) exactly as documented for every prior host-gated gate, and (c) the resulting `.nono-runtime/verdicts/*.json` to be the same machine-readable proof format already used to close every prior todo.
+**When to use:** Any new "prove it on a real host" requirement in this codebase, not just this milestone.
+**Trade-offs:** None — this is a straight reuse. The only new work is writing 2 new gate bodies + 1 IaC module; zero harness changes required.
 
-The new `AuditEventPayload::PolicyOverrideApplied` variant follows the exact same pattern
-as the existing fork extension `RejectStage` (which also adds fields not present in upstream):
+### Pattern 3: Version-family / release-readiness style static gate for the VM's clean-host precondition
 
-```rust
-// In crates/nono/src/audit.rs, added to the existing AuditEventPayload enum:
-/// A signed policy override was verified and applied to the runtime CapabilitySet.
-PolicyOverrideApplied {
-    /// Actor identity from the override token.
-    actor: String,
-    /// Canonical granted paths.
-    paths: Vec<String>,
-    /// Access mode granted ("read", "write", or "read+write").
-    mode: String,
-    /// ISO-8601 expiry from the token.
-    expiry: String,
-    /// The ZT-Infra audit chain hash that authorized this override.
-    /// Cross-reference: look up in ZT-Infra CloudWatch / audit-chain.jsonl
-    /// to find the original authorization record.
-    zt_audit_hash: String,
-    /// AWS KMS key ID used for signing (for key rotation auditing).
-    kms_key_id: String,
-},
+**What:** `Test-Precondition` in `clean-host-install.ps1` already fails-open-to-SKIP (not FAIL) when the host is dirty (elevation missing, `nono.exe` already under Program Files, services already registered, MSI not staged) — see lines 65-98. The two new gates should follow this exact shape: `trusted-signed-assertion.ps1`'s precondition is "artifact files exist at the expected staged paths"; `broker-spawn-on-clean-host.ps1`'s precondition is "nono is currently installed" (i.e., it should be run AFTER `clean-host-install` in the same `-All` sweep, or accept a pre-staged binary path parameter) plus elevation if it needs to install first itself.
+**When to use:** Designing the two new gates.
+**Trade-offs:** Decide explicitly whether `broker-spawn-on-clean-host` assumes a prior successful `clean-host-install` run (cheaper, but creates an inter-gate ordering dependency the aggregator doesn't enforce — `-All` runs gates in `Sort-Object Name` alphabetical order, so `broker-spawn-on-clean-host` < `clean-host-install` < `trusted-signed-assertion` alphabetically, meaning **broker-spawn would run BEFORE install** in an unmodified `-All` sweep) or is self-contained (installs, tests spawn, uninstalls — more code, but order-independent and matches how `clean-host-install.ps1` itself is already fully self-contained). **Recommend self-contained** given the alphabetical-ordering gotcha just identified — do not rely on gate execution order.
+
+## Data Flow
+
+### Verify-gate hardening data flow (CI, autonomous)
+
+```
+azure/trusted-signing-action (sign step)
+    ↓ (signed .exe / .msi in files-folder)
+[NEW] Test-TrustedSignedArtifact (shared helper)
+    ↓
+  Get-AuthenticodeSignature  →  Valid? ──yes──→ PASS, upload proceeds
+       │ no (incl. UnknownError)
+       ▼
+  signtool verify /pa /v      →  exit 0? ──yes──→ PASS (chain-build/revocation transient resolved), upload proceeds, log which check saved it
+       │ no
+       ▼
+  classify: UnknownError-without-signtool-fix → "chain-build/revocation failure, needs investigation"
+            explicit distrust/InvalidSignature → "genuine untrusted/invalid, STOP"
+    ↓
+  exit 1 (fail-closed preserved either way — D-13 unchanged)
 ```
 
-This event is appended to the nono HMAC chain via `AuditRecorder` before the confined
-process is spawned. The `chain_hash` field of the resulting `AuditEventRecord` commits to
-all prior events in the session, making the override tamper-evident within the session log.
+### VM clean-host UAT data flow (operator-in-loop)
 
-The SecurityEventLayer in nono-cli handles the new variant identically to existing ones:
-emit to `NONO_POLICY_OVERRIDE_APPLIED` (EventID 10006) with named EventData fields matching
-the struct. This follows the v3.0 pattern for EventIDs 10001-10005.
-
----
-
-## PyO3 Python/Rust Split
-
-| Concern | Language | Location | Rationale |
-|---------|----------|----------|-----------|
-| HTTP round-trip to ZT-Infra | Rust (`ureq` or `reqwest` blocking) | `nono-py/src/override.rs` | Keep in Rust; avoids Python HTTP dep; runs under `py.detach()` GIL release |
-| Token JSON parsing | Rust (`serde_json`) | `nono-py/src/override.rs` | Type safety; avoid Python-side field confusion |
-| Expiry check (UTC) | Rust (`chrono`) | `nono-py/src/override.rs` | Avoid Python/Rust clock drift; `chrono` already in workspace |
-| Repo context binding check | Rust | `nono-py/src/override.rs` | String-exact comparison of canonical git URL |
-| ECDSA sig verification | Rust (`nono::trust::signing`) | `nono-py/src/override.rs` → direct crate call | Crypto stays in audited Rust; no PyO3 boundary for the internal call |
-| `OverrideGrant` type | Rust `#[pyclass]` | `nono-py/src/override.rs` | Python-consumable typed result |
-| `verify_override` | Rust `#[pyfunction]` | `nono-py/src/override.rs` | Optionally exposed to Python for testing; always called from Rust in the hot path |
-| CapabilitySet mutation | Rust (inside `confined_run`) | `windows_confined_run.rs` / `sandboxed_exec.rs` | `append_caps_allow_flags` + manual `--allow` args; no new API |
-| Audit event emission | Rust | `crates/nono/src/audit.rs` + nono-cli `SecurityEventLayer` | Follows existing AuditRecorder pattern |
-| `confined_run` / `confine` signature | Rust `#[pyfunction]` | `windows_confined_run.rs` | Add `override_token: Option<String>` parameter |
-
-GIL handling: the existing `py.detach(|| do_spawn_and_wait(...))` block in `confined_run`
-must wrap both the `verify_override` call and the spawn+wait. The structure:
-
-```rust
-py.detach(|| {
-    let grant = override_token.as_deref()
-        .map(|tok| verify_override(tok, &kms_pubkey_config))
-        .transpose()?;
-    do_spawn_and_wait(build_cmd(nono_path, allow, profile, grant.as_ref()), timeout_secs)
-})
+```
+[NEW] scripts/azure/clean-vm/deploy-clean-vm.ps1  →  fresh Win11 VM (Azure)
+    ↓ (RDP, operator)
+Operator downloads published nono-v0.66.1-*.msi + nono.exe from GitHub Release
+    ↓ (stage at expected paths)
+pwsh -File scripts/verify-dark.ps1 -All
+    ↓ (gate auto-discovery, alphabetical)
+  broker-spawn-on-clean-host  [self-contained: install → nono run --profile claude-code → assert broker spawns → uninstall]
+  clean-host-install          [REUSED: msiexec /i → nono --version → uninstall]
+  ... (existing gates SKIP_HOST_UNAVAILABLE where not applicable to this VM, e.g. override-01/02) ...
+  trusted-signed-assertion    [NEW: Issuer-chain check on the staged exe/msi]
+    ↓
+  {gates:[...], overall: PASS | PASS_WITH_SKIPS | FAIL | HARNESS_ERROR}
+    ↓ persisted to .nono-runtime/verdicts/_aggregate.json (WR-04: before stdout emit)
+Operator inspects verdict → if all 3 new-relevant gates PASS → Gate 3 satisfied → close-out
 ```
 
----
+### Key Data Flows
 
-## Fail-Closed Points
+1. **UnknownError resolution proof chain:** smoke workflow (cheap, no publish) → hardened verify passes on GitHub's `windows-latest` runner → confidence the SAME hardened verify will pass in `release.yml`'s build job → tag push → real release. This ordering (smoke before tag) is already mandated by the cookbook ("If this fails, STOP and fix it here — do not cut a release until smoke is green") and must be preserved as the phase-1→phase-2 gate.
+2. **Verdict-file-of-record before stdout (WR-04):** every new gate MUST persist its JSON to `.nono-runtime/verdicts/<gate>.json` before writing to stdout — this is enforced by the harness itself (`Persist-Verdict` called before `[Console]::Out.Write`), not by the gate author, so no new discipline is required, just conformance to the `[ordered]@{gate;verdict;reason;detail;timestamp}` return contract.
+3. **Registry publish ordering (unchanged, reused):** `publish-crates` job already encodes `nono` → (30s sleep) → `nono-proxy` → (30s sleep) → `nono-cli` dependency order; PyPI/npm remain manual operator steps per `RELEASE-RUNBOOK.md` Steps 5-6 — this milestone does not change that mechanism, only flips it from documented-but-unexecuted to executed.
 
-| Failure | Behavior | Where enforced |
-|---------|----------|---------------|
-| Token missing required field | `Err -> PyRuntimeError` before spawn | `override.rs` |
-| Token expired | `Err -> PyRuntimeError` before spawn | `override.rs` |
-| Repo context mismatch | `Err -> PyRuntimeError` before spawn | `override.rs` |
-| Signature verification failure | `Err -> PyRuntimeError` before spawn | `override.rs` via `nono::trust` |
-| ZT-Infra live check returns deny | `Err -> PyRuntimeError` before spawn | `override.rs` |
-| ZT-Infra HTTP call times out | `Err -> PyRuntimeError` before spawn — never degrade | `override.rs` |
-| KMS pubkey not configured but token present | `Err -> PyRuntimeError` before spawn | `override.rs` config validation |
-| Audit event append failure | Warn, DO NOT block execution (observability, not a security gate) | `crates/nono/src/audit.rs` |
-| SecurityEventLayer emit failure | Warn, DO NOT block execution | nono-cli |
+## Scaling Considerations
 
-The final two entries follow the existing behavior of `AuditRecorder`: audit is observability.
-The OS confinement (Low-IL + AppContainer + Job) is applied by `nono.exe run` regardless.
+Not applicable in the traditional sense (this is release infrastructure, not a live service). The relevant "scale" axis is **frequency of re-run**:
 
----
+| Concern | Single go-live (this milestone) | Ongoing (future releases) | Fleet-wide (many concurrent VMs) |
+|---------|----------------------------------|----------------------------|-----------------------------------|
+| Azure VM cost | One VM, RDP session, teardown after UAT | Same pattern reused per release if VM is destroyed each time — consider a reusable-but-resettable VM (snapshot + revert) if UAT cadence increases, to save the ~10-15 min VM provisioning time per release | Not needed; this is a manual gate, not a fleet |
+| Smoke workflow | Deleted at close-out per its own header | N/A — no longer exists | N/A |
+| verify-dark gate count | +2 new gates (12 total) | Harness already scales to N gates via auto-discovery; no redesign needed | N/A |
+| Trusted Signing quota/rate limits | Not researched — MEDIUM confidence gap; Azure Trusted Signing has account-level signing-operation quotas that could matter if release cadence increases sharply | Flag for future research if release frequency grows | N/A |
 
-## New vs. Modified Components
+### Scaling Priorities
 
-### New Components
+1. **First real friction point:** repeated VM provisioning cost/time if clean-host UAT becomes a per-release gate rather than a one-time go-live proof. Mitigate by scripting VM snapshot+revert (`teardown-clean-vm.ps1` could instead be `reset-clean-vm.ps1` that restores from a "never touched by nono" snapshot) — defer until UAT cadence is known.
+2. **Second friction point:** if `signtool verify /pa /v` revocation checks (CRL/OCSP round-trips) add meaningful CI wall-clock time across 1 leg × N releases, consider caching a positive verify result keyed by artifact hash for a short TTL — not needed at go-live-once scale.
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| Override verifier | `nono-py/src/override.rs` | Parse token, verify ECDSA sig via `nono::trust`, check expiry/scope/repo-context, optional live ZT check, produce `OverrideGrant #[pyclass]` |
-| KMS pubkey config | env var `NONO_ZT_KMS_PUBKEY` (DER base64) or config file | Pin the KMS public key used to verify tokens; fail-closed if absent when a token is presented |
-| `PolicyOverrideApplied` audit variant | `crates/nono/src/audit.rs` | New `AuditEventPayload` variant; carries `zt_audit_hash` for bi-directional linkage; follows fork-extension pattern |
-| EventID 10006 | nono-cli `SecurityEventLayer` | New EventID constant + match arm for `PolicyOverrideApplied`; mirrors existing 10001-10005 pattern |
+## Anti-Patterns
 
-### Modified Components
+### Anti-Pattern 1: Weakening the fail-closed verify to "unblock the release"
 
-| Component | File | Change |
-|-----------|------|--------|
-| `confined_run` | `nono-py/src/windows_confined_run.rs` | Add `override_token: Option<String>` parameter; call `verify_override`; add grant paths via `--allow` flags; emit audit event inside `py.detach` block |
-| `confine` | `nono-py/src/windows_confined_run.rs` | Same override wiring |
-| `sandboxed_exec` | `nono-py/src/sandboxed_exec.rs` | Same override wiring for Unix path |
-| Module registration | `nono-py/src/lib.rs` | `mod override; m.add_class::<override::OverrideGrant>()?;` |
-| `AuditEventPayload` | `crates/nono/src/audit.rs` | New variant (non-breaking: tagged enum, `#[serde(tag="type")]`, existing variants unchanged) |
-| SecurityEventLayer match | nono-cli `main.rs` | New arm for `AuditEventPayload::PolicyOverrideApplied` → EventID 10006 |
+**What people do:** Under go-live time pressure, change `Status -ne 'Valid'` to something permissive (e.g., accept `UnknownError` as passing, or wrap the check in `-ErrorAction SilentlyContinue` and ignore the result) to get past the `UnknownError` blocker.
+**Why it's wrong:** This is exactly D-13's threat model — it silently ships a possibly-untrusted binary. `UnknownError` genuinely can mean "the AOC intermediate is absent and Windows will show 'Windows protected your PC'" — the whole point of this milestone is to resolve WHY it's UnknownError (chain-build/revocation vs profile-type), not to stop checking.
+**Do this instead:** Add the `signtool /pa /v` fallback as a second independent attempt to reach a definitive `Valid`; if both checks disagree with Valid, still fail-closed and surface the diagnosis (chain-build vs untrusted) so the next debugging step is obvious from the CI log.
 
-### Unchanged Components
+### Anti-Pattern 2: Testing "clean host" behavior on the operator's corporate dev host
 
-| Component | Reason |
-|-----------|--------|
-| `crates/nono/src/capability.rs` | `CapabilitySet` builder already sufficient; no new API needed |
-| `crates/nono-cli/src/policy.rs` | Group/deny resolver unchanged; overrides are additive, not a policy group |
-| `crates/nono/src/trust/signing.rs` | Reused as-is via direct crate call from `override.rs` |
-| `crates/nono/src/sandbox/` | OS confinement layer completely unchanged |
-| ZT-Infra v2 codebase | External dependency; nono consumes existing `POST /actions` API unchanged |
-
----
-
-## Suggested Build Order
-
-Dependency order: verify infrastructure before integration, integration before emission,
-emission before verification closure.
-
-**Wave 1 — Token verifier (no AWS, no spawn)**
-
-Build `nono-py/src/override.rs`:
-- `OverrideToken` (serde), `OverrideGrant` (`#[pyclass]`), `verify_override` function
-- Expiry check, repo context check, ECDSA sig verify via `nono::trust::signing`
-- Unit tests using `generate_signing_key` + `sign_bytes` from `trust/signing.rs` (no AWS, no KMS)
-- Test fail-closed paths: expired, bad sig, wrong repo, missing fields
-- Test that `override_token = None` produces identical behavior to today
-
-Wave 1 is fully self-contained on any dev host. No AWS, no local provisioner needed.
-
-**Wave 2 — CapabilitySet mutation wiring**
-
-Wire `override_token: Option<String>` into `confined_run`, `confine`, and `sandboxed_exec`:
-- Call `verify_override` when token present; fail-closed on any error
-- Add grant paths as `--allow` flags via existing `append_caps_allow_flags` or inline `cmd.arg`
-- Integration test: a token granting `/tmp/override-dir` produces a `nono.exe run` invocation
-  that includes `--allow /tmp/override-dir` and the path is accessible inside the confined process
-- Verify no-token path is byte-for-byte identical to pre-v3.2 (regression gate)
-
-**Wave 3 — Audit + SecurityEventLayer wiring**
-
-Add `AuditEventPayload::PolicyOverrideApplied` and EventID 10006:
-- Unit test: new variant serializes to expected JSON; chain hash advances correctly
-- Unit test: existing variants' serialization is unchanged (regression)
-- `SecurityEventLayer` arm emits EventID 10006 with correct EventData field names
-- Cross-target clippy: `audit.rs` is cfg-unconditional; Windows and Linux clippy both cover it.
-  The SecurityEventLayer match is in nono-cli which may have `cfg(windows)` guards on the ETW
-  emitter — verify no `unreachable_patterns` warning on Linux CI
-
-**Wave 4 — Live ZT-Infra integration (host-gated)**
-
-Add the optional live-check `POST /actions` call inside `verify_override` controlled by
-`NONO_ZT_ACTIONS_URL` (unset = offline-only; set = live check enabled):
-- Local provisioner (`cd provisioner && npm install && npm start`) fully testable on dev host
-- AWS KMS path is host-gated; scripted `verify-dark.ps1` gate per Dark Factory mandate
-- DAAL ledger linkage (`token.audit.daal`) recorded in `PolicyOverrideApplied` as an
-  informational field; not a required verification gate in v3.2
-
----
-
-## Anti-Patterns to Avoid
-
-### Anti-Pattern 1: Verify inside `crates/nono` (core library)
-
-Adding a `CapabilitySet::apply_override(token, kms_pubkey)` method or similar to the library
-makes it opinionated about the external authority format and key pinning policy. Every downstream
-client embedding the library would be forced into the ZT-Infra model. The CLAUDE.md boundary
-table is explicit on this. Keep `crates/nono` to the `AuditEventPayload` variant (observability
-primitive) and the existing `trust/signing` ECDSA primitive. Everything ZT-Infra-specific goes
-in `nono-py`.
-
-### Anti-Pattern 2: Using `decision: "allow"` as the sole gate
-
-The `decision` field is unauthenticated JSON text. An attacker can craft `{"decision":"allow"}`
-with any fields. The signature over `current_hash` — which commits to the `decision` field via
-`stableJson` — is the only authenticating gate. Verification order in `verify_override` must be:
-parse → verify signature → then inspect semantic fields (scope, expiry, decision).
-
-### Anti-Pattern 3: Expanding beyond the signed scope
-
-The override grants exactly the paths listed in `scope.paths` at `scope.mode`. Any expansion
-(adding parent directories, upgrading READ to READ_WRITE) violates the signed grant. Apply
-`grant.paths` exactly; fail-closed if the scoped paths are insufficient for the task. The
-developer should request a broader token from the operator.
-
-### Anti-Pattern 4: Silent fallback on token verification failure
-
-`confined_run(..., override_token=bad_token)` must raise `PyRuntimeError` and spawn nothing.
-Never silently fall back to the base profile: the caller does not know whether the override
-was applied, making audit logs unreliable.
-
-### Anti-Pattern 5: Token carries its own verification key
-
-If the token's JSON includes the public key used to verify it, an attacker provides both the
-data and the verification key. The KMS public key must be pinned in the deployment configuration
-(`NONO_ZT_KMS_PUBKEY` env var or operator-controlled config), not inside the token.
-
----
+**What people do:** Run the new `broker-spawn-on-clean-host` / `trusted-signed-assertion` gates on the same Windows box used for development, reasoning "it's basically clean now that the POC cert path is gone."
+**Why it's wrong:** Per `PROJECT.md`'s explicit milestone context, the corporate dev host previously had the POC cert imported, has VC++ preinstalled, and sits behind corporate proxy/EDR/managed-trust-store — any of which can mask the exact chain-build/revocation failure being debugged (a managed trust store might already carry the missing AOC intermediate that GitHub's `windows-latest` runner lacks). This is precisely why the milestone specifies an Azure VM.
+**Do this instead:** Only trust a PASS from a freshly-provisioned VM (or GitHub's `windows-latest` runner for the CI-side smoke/verify, which is also genuinely clean per-run) as evidence Gate 3 (cookbook) is satisfied. The existing `clean-host-install.ps1` precondition check (lines 78-89: detects `nono.exe` already under Program Files or nono services already registered) already encodes this discipline — reuse it, don't bypass it.
 
 ## Integration Points
 
@@ -430,37 +233,61 @@ data and the verification key. The KMS public key must be pinned in the deployme
 
 | Service | Integration Pattern | Notes |
 |---------|---------------------|-------|
-| ZT-Infra `POST /actions` (local or AWS) | Blocking HTTPS POST from `override.rs`; timeout enforced; response parsed for `decision` + `audit` | URL via `NONO_ZT_ACTIONS_URL`; unset = offline token-only mode |
-| AWS KMS | NOT called directly by nono; KMS is called by ZT-Infra; nono only verifies the KMS-produced signature using a pinned public key | Avoids AWS SDK as a nono-py dependency |
-| ZT-Infra DAAL ledger | `token.audit.daal` recorded in the nono audit event as informational; not verified by nono in v3.2 | Full DAAL reconciliation is a future enhancement |
+| Azure Trusted Signing | `azure/login@v2` (OIDC, `id-token: write`) + `azure/trusted-signing-action@v0`, already wired in both workflows | Federated credential subject MUST be exactly `repo:OscarMackJr/nono:environment:Development` (cookbook §0, verified against `release.yml:29-32` and `trusted-signing-smoke.yml:20-21`) — do not touch this; the bug is downstream in verify, not in the sign/auth steps, per the cookbook's own field note. |
+| Azure VM (new) | `az deployment group create` with a Bicep template + `az vm run-command` or plain RDP for the operator session | No existing az/Bicep tooling in this repo (`scripts/azure/` does not yet exist) — this is genuinely new infrastructure, not an extension of an existing pattern. Confirm subscription quota for a Win11 Azure Marketplace image before scripting. |
+| crates.io / PyPI / npm | Unchanged from v3.4 prepare-only state — `publish-crates` job (CI-automated) + `RELEASE-RUNBOOK.md` Steps 5-6 (operator manual, `maturin publish` / `npm publish`) | This milestone flips these from "documented, not run" to "actually run" — no code changes to the mechanism itself. |
 
 ### Internal Boundaries
 
 | Boundary | Communication | Notes |
 |----------|---------------|-------|
-| `nono-py/override.rs` -> `crates/nono/trust/signing.rs` | Direct Rust crate call (`nono-py` already depends on `nono`); no PyO3 boundary | `verify_keyed_signature(message, sig, pubkey)` -> `Result<(), NonoError>` |
-| `windows_confined_run.rs` -> `override.rs` | Direct Rust call (same crate); `verify_override` returns `Result<OverrideGrant, PyErr>` | Both in `nono-py`; no subprocess or IPC |
-| `crates/nono/audit.rs` -> nono-cli `SecurityEventLayer` | Existing `tracing` event mechanism; new EventID 10006 arm in the `AuditEventPayload` match | Follows exact same pattern as EventIDs 10001-10005 from v3.0 |
-| `confined_run` (nono-py) -> `nono.exe run` (nono-cli) | Unchanged subprocess spawn; override just adds more `--allow` flags | No new IPC; existing `build_nono_run_args` + `--allow` pattern reused |
+| `release.yml` verify step ↔ new shared `verify-authenticode.ps1` | PowerShell dot-source or direct script invocation from the workflow YAML `run:` block | Keep the fail-closed contract at the CALL SITE (the workflow step still does `if (-not $result.valid) { exit 1 }`), not buried inside the helper, so `-D13` remains auditable by reading the workflow YAML alone. |
+| `trusted-signing-smoke.yml` ↔ same shared helper | Same as above | Smoke is the FIRST place this helper gets exercised live (cheapest, non-destructive) — prove it here before it gates the real release. |
+| New verify-dark gates ↔ `scripts/verify-dark.ps1` harness | File-presence convention only (`scripts/gates/<name>.ps1`, two exported functions) | Zero harness code changes; confirmed via `Get-ChildItem -Path $gatesDir -Filter "*.ps1"` auto-discovery (verify-dark.ps1 lines 140-145) and the `-All` alphabetical-order gotcha noted in Pattern 3 above. |
+| New verify-dark gates ↔ shared `verify-authenticode.ps1` | `trusted-signed-assertion.ps1`'s `Invoke-Gate` dot-sources/calls the same helper the CI workflows use | Ensures "CI thinks it's signed" and "operator's dark gate thinks it's signed" can never silently diverge. |
+| Azure VM IaC ↔ verify-dark gates | Purely operational (operator RDPs in, stages artifacts, invokes `pwsh -File scripts/verify-dark.ps1`) — no programmatic coupling | The VM is infrastructure that makes the gates' `Test-Precondition` pass (elevation available, host genuinely clean); it is not itself part of the harness contract. |
+| `RELEASE-RUNBOOK.md` ↔ push sequence | Documentation, manually followed by the operator | Needs a new "Step 7 — Azure VM Clean-Host UAT" and "Step 8 — Close-out" appended, mirroring cookbook §7-§8, once Steps 1-6 stop being hypothetical. |
 
----
+## Suggested Phase / Build Order (feeds gsd-roadmapper)
+
+Ordering respects three hard dependencies: (1) you cannot prove smoke-green without the hardened verify existing, (2) you cannot cut a release before smoke is green (cookbook: "If this fails, STOP... do not cut a release until smoke is green"), (3) you cannot run clean-host UAT before a real trusted-signed release exists to download.
+
+| # | Phase (suggested) | Depends on | Operator checkpoint? | Produces |
+|---|--------------------|------------|------------------------|----------|
+| 1 | **CI verify-gate hardening** — shared `verify-authenticode.ps1` helper + wire into `release.yml` (~259, ~281-321) and `trusted-signing-smoke.yml` (~62-73); diagnostics for UnknownError-vs-untrusted-root | none (autonomous, code-only) | No | Modified `release.yml`, `trusted-signing-smoke.yml`, new `scripts/verify-authenticode.ps1` |
+| 2 | **Azure VM clean-host IaC** — Bicep module + deploy/teardown scripts | none (parallelizable with phase 1) | Partial — Azure subscription access/cost approval likely needed before first real deploy | New `scripts/azure/clean-vm/` |
+| 3 | **New verify-dark gates** — `trusted-signed-assertion.ps1`, `broker-spawn-on-clean-host.ps1` (script authoring; will `SKIP_HOST_UNAVAILABLE` on the dev host, same as `clean-host-install.ps1` does today) | Phase 1 (reuses its helper) | No | New gate files under `scripts/gates/` |
+| 4 | **Operator: Azure Public Trust profile config** — confirm/create Public Trust certificate profile, correct `TRUSTED_SIGNING_PROFILE`, verify FIC subject (already correct per cookbook §0) | Phase 1 (need the hardened workflow to test against) | **YES — operator-only, Azure portal/CLI RBAC-admin action** | Corrected Azure Trusted Signing config |
+| 5 | **Smoke green** — run hardened `trusted-signing-smoke.yml`, confirm `Status: Valid` + Issuer chains to `Microsoft ID Verified CS` | Phases 1 + 4 | Operator triggers the run; may need to iterate with dev on diagnostics output | Proof the D-02 chain is genuinely live |
+| 6 | **Cut the release** — operator tags `v0.66.1`, pushes; `release.yml` build job runs hardened verify, fail-closed green | Phase 5 (smoke MUST be green first, per cookbook) | **YES — operator executes `git push origin v0.66.1`** (this milestone's tag push is intentional, unlike v3.1-v3.4) | Trusted-signed GitHub Release with MSI/exe/checksums |
+| 7 | **Multi-registry live publish (FUT-01)** — `publish-crates` job auto-runs on release; PyPI (`maturin publish`) + npm (`npm publish`) are operator-manual per `RELEASE-RUNBOOK.md` Steps 5-6 | Phase 6 | **YES — PyPI/npm are manual operator commands** | Live packages on crates.io, PyPI, npm |
+| 8 | **Azure VM clean-host UAT (FUT-03 drain)** — deploy VM (phase 2 IaC), operator RDPs in, stages the phase-6/7 published artifacts, runs phase-3 gates (+ reused `clean-host-install.ps1`) via `verify-dark.ps1 -All` | Phases 2, 3, 6 (needs real published artifacts) | **YES — operator RDP session, stages files, runs the harness** | `.nono-runtime/verdicts/*.json` PASS evidence; drains both `poc-cert-broker-clean-host` and `msi-vcredist-prereq` todos |
+| 9 | **Close-out** — retire POC secrets (`WINDOWS_SIGNING_CERT`/`_PASSWORD` in GitHub repo settings), `git rm .github/workflows/trusted-signing-smoke.yml`, fix `docs/cli/development/windows-signing-guide.mdx` (needs `git add -f`, gitignored-but-tracked), move both todos `pending/` → `resolved/`, update `STATE.md`/`PROJECT.md` | Phase 8 PASS | **YES — operator deletes GitHub secrets** (code-only parts can be autonomous) | Clean, closed-out repository state; DIST-SIGN-01 arc closed |
+
+**Phases that can run in parallel:** 1 and 2 (independent code/infra work); phase 3 can start as soon as phase 1's helper shape is stable, even before phase 2's VM exists (gates author against `SKIP_HOST_UNAVAILABLE` the same way `clean-host-install.ps1` already does).
+
+**Hard sequential dependency chain:** 1 → 4 → 5 → 6 → 7/8 → 9 (this is the actual go-live critical path; 2 and 3 feed into 8 but don't block 4-7).
+
+**Operator-in-loop checkpoints, summarized:** 4 (Azure profile config — cannot be automated, requires Azure RBAC-admin), 6 (the tag push itself — deliberate, unlike every prior prepare-only milestone), 7 (PyPI/npm publish commands — no CI automation exists for these two registries per current `RELEASE-RUNBOOK.md`), 8 (physically RDP into the VM and run the harness), 9 (delete GitHub repo secrets — a console action, not a code change). Phases 1, 2 (authoring), and 3 (authoring) are autonomous engineering work with no operator checkpoint.
 
 ## Sources
 
-- `CLAUDE.md` §"Library vs CLI Boundary" (confirmed current; post-ADR-86)
-- `proj/DESIGN-engine-abstraction.md` §"E5" + §"Forward-Compat: zt-infra.org Integration"
-- `proj/POC-zt-infra-e5-local-provisioner.md` — E5 composition proof and `POST /actions` data shape
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\audit.js` — `ActionAuditor.record()`; KMS signing; `normalizeEcdsaDerLowS`; hash-chain structure
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\server.js` — `POST /actions` request/response shape; `correlation_id` field
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\policy.js` — policy evaluation; default-deny shape
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\ARCHITECTURE.md` — layer boundaries; ZT-Infra/nono composition model
-- `crates/nono/src/audit.rs` — `AuditEventPayload` enum; `AuditEventRecord` chain; fork extension pattern (`RejectStage`)
-- `crates/nono/src/trust/mod.rs` + `trust/signing.rs` — `verify_keyed_signature`, `verify_bundle_keyed`
-- `nono-py/src/windows_confined_run.rs` — `confined_run`, `confine`, `append_caps_allow_flags`, `build_nono_run_args`, `py.detach` GIL pattern
-- `nono-py/src/lib.rs` — PyO3 module registration pattern; `mod` declarations
-- `.planning/seeds/SEED-005-zt-infra-policy-override-attestation.md` — scope, breadcrumbs, design intent
-- `.planning/PROJECT.md` §"Current Milestone: v3.2" — enforcement surface decision, fail-closed requirement, AWS-depth requirement
+- `.github/workflows/release.yml` (this repo, read in full — line numbers cited throughout are from this read)
+- `.github/workflows/trusted-signing-smoke.yml` (this repo, read in full)
+- `scripts/verify-dark.ps1` (this repo, read in full — gate-discovery mechanics at lines 133-145, `-All` alphabetical ordering at line 276)
+- `scripts/gates/clean-host-install.ps1`, `scripts/gates/release-readiness.ps1` (this repo, read in full — reference for the `Test-Precondition`/`Invoke-Gate` contract shape new gates must follow)
+- `.planning/quick/260630-trusted-signing-golive/AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md` (this repo — authoritative operator runbook; Gates 1/2/3 + close-out §8 directly inform the phase build order)
+- `.planning/todos/pending/20260611-poc-cert-broker-clean-host.md`, `.planning/todos/pending/20260611-msi-vcredist-prereq.md` (this repo — acceptance criteria for what "drained" means)
+- `.planning/milestones/v3.3-phases/97-release-engineering-leapfrog-pipeline-runbook/RELEASE-RUNBOOK.md` (this repo — current operator push sequence, Steps 1-6, to be extended)
+- `.planning/PROJECT.md` (this repo — v3.5 milestone scope, key decisions, "Full go-live EXECUTE posture")
+- No live Azure documentation lookup was performed for Bicep VM specifics (WebFetch/WebSearch not used in this pass — all findings above are grounded in the actual repo files). **Gap flagged below.**
 
 ---
-*Architecture research for: Signed Policy Overrides (ZT-Infra Attestation) — v3.2*
-*Researched: 2026-06-21*
+*Architecture research for: nono v3.5 Trusted Signing Go-Live + First Distributed Release*
+*Researched: 2026-07-02*
+
+## Confidence Gaps (flag for phase-specific research)
+
+- **MEDIUM/LOW:** Azure Bicep syntax for a Windows 11 Marketplace VM image + NSG RDP-restriction is not verified against current Azure docs in this pass (no WebFetch/WebSearch performed — this research prioritized grounding every claim in the actual repo files per the quality gate). The phase that authors `scripts/azure/clean-vm/main.bicep` should do a fresh Context7/official-docs pass on `Microsoft.Compute/virtualMachines` + `Microsoft.Network/networkSecurityGroups` Bicep resource schemas before writing the template.
+- **LOW:** Whether `signtool.exe` is present by default on GitHub's `windows-latest` runner (it ships with the Windows SDK, which is typically preinstalled on `windows-latest`, but this was not explicitly re-verified against the current runner image manifest in this pass) — the phase implementing Pattern 1 should confirm `Get-Command signtool` resolves before relying on it, and add an explicit SDK-install fallback step if not.
+- **LOW:** Azure Trusted Signing account-level rate/quota limits were not researched — flagged only as a scaling consideration, not a go-live blocker (this is a one-time go-live, not a high-frequency release cadence).

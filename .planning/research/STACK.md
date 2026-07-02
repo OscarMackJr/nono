@@ -1,203 +1,122 @@
 # Stack Research
 
-**Domain:** Cryptographically-signed policy-override tokens + AWS ZT-Infra v2 control plane integration for a Rust/PyO3 capability sandbox (nono v3.2)
-**Researched:** 2026-06-21
-**Confidence:** HIGH — verified against in-tree Cargo.toml, nono-py Cargo.toml, ZT-Infra v2 source (provisioner/src/audit.js + canonical.js), CANONICAL_FORM.md spec, and crates.io current releases
+**Domain:** Windows Authenticode/code-signing CI hardening + Azure cloud PKI (Trusted Signing) + ephemeral Azure Win11 VM IaC + live multi-registry package publish
+**Researched:** 2026-07-02
+**Confidence:** MEDIUM-HIGH (Azure Trusted Signing CLI surface and cert-chain naming verified against current Microsoft Learn docs; some Azure region/portal specifics are inherently drift-prone and flagged below)
 
----
-
-## Executive Framing
-
-The v3.2 milestone needs three new capabilities on top of the existing workspace:
-
-1. **Signed policy-exception token** — define, parse, and verify a structured token (signer identity, scope, expiry, repo-context binding) using a compatible signature scheme. The KMS signature algorithm is `ECDSA_SHA_256` over P-256 (secp256r1). The existing `sigstore-verify` / `sigstore-sign` + `aws-lc-rs` are already present; the question is whether they already expose raw P-256 ECDSA verification, or whether a lightweight shim crate is needed.
-
-2. **AWS ZT-Infra v2 HTTP client from nono-py** — `POST /actions` round-trip, including reading the `audit.kms_signature` field from the JSON response. The enforcement surface is the `nono-py` PyO3 binding (Python process), not the Rust CLI. The simplest correct split is: do the HTTP call in Python (standard library or a thin library), then pass the verified decision and relevant hash fields into a new Rust function via PyO3.
-
-3. **KMS signature verification** — verify the `ECDSA_SHA_256` DER-encoded, base64-stored signature from the ZT-Infra audit record against the AWS KMS public key. The canonical form is fully specified in `CANONICAL_FORM.md` (CAF v0.1): SHA-256 over sorted-key, whitespace-free UTF-8 JSON with `current_hash` and `kms_signature` stripped before hashing.
-
----
-
-## Reuse vs New — Decision Table
-
-| Capability | Status | Crate / Library | Action |
-|---|---|---|---|
-| ECDSA P-256 signature verification | **REUSE** | `aws-lc-rs` 1.x (already in `nono-cli`) | Expose raw `UnparsedPublicKey::verify` path behind a new `nono` library function |
-| SHA-256 hashing | **REUSE** | `sha2` workspace dep | Already at `sha2 = "0.11"` — no change |
-| JSON serialization (canonical form) | **REUSE** | `serde_json` workspace dep (`preserve_order = false` for sorted keys is the default) | Implement `canonical_json()` helper following CAF v0.1 R1-R10 — no new crate |
-| Base64 decode (DER signature from audit record) | **REUSE** | `aws-lc-rs` (includes `base64` utilities) or `base64` crate 0.22 | `base64` 0.22 already transitive via sigstore graph — promote to direct dep in `nono` if needed, or use `aws-lc-rs::encoding` |
-| Sigstore keyless bundle verification (existing use case) | **REUSE** | `sigstore-verify` 0.8.0 | Unchanged; KMS override path is a separate code path |
-| HTTP client (nono-py → ZT-Infra `POST /actions`) | **NEW (Python-side)** | Python `urllib.request` (stdlib) | No new Rust dep; the POC already demonstrates this works and is the cheapest path for a host-gated integration |
-| Policy-exception token type (serde struct) | **NEW (Rust-side, in `nono` lib)** | `serde` + `serde_json` (already present) | New `PolicyOverride` struct and `OverrideVerifier` in `crates/nono/src/override.rs` |
-| Expiry / timestamp parsing | **NEW (Rust-side)** | `chrono` 0.4 (already in `nono-cli`) or RFC 3339 via `serde_json` string + `std::time` | Promote `chrono` to `nono` lib or use `std::time::SystemTime` comparison with ISO-8601 string parsing |
-| PyO3 bridge for override verification result | **NEW (nono-py-side)** | `pyo3` 0.28 (already in `nono-py/Cargo.toml`) | New `#[pyfunction] fn verify_override(...)` in `nono-py/src/override.rs` |
-| SecurityEventLayer audit emission | **REUSE** | Existing `SecurityEventLayer` HMAC chain (v3.0/v3.1) | Call existing emission path from the override-verify result |
-
----
+This is a **subsequent-milestone, additions-only** stack doc. It does NOT re-document the Rust build, MSI build, or `verify-dark.ps1` harness (already validated, v3.0–v3.4). It covers only what v3.5 (Phase 101 verify-gate hardening, Phase 102 Azure VM IaC, and the live go-live/publish steps) newly touches.
 
 ## Recommended Stack
 
-### Core Technologies — Rust Side (`crates/nono`)
+### Core Technologies
 
 | Technology | Version | Purpose | Why Recommended |
-|---|---|---|---|
-| `aws-lc-rs` | `1` (already in `nono-cli`) | P-256 ECDSA signature verification for KMS-signed audit records | AWS KMS produces `ECDSA_SHA_256` (P-256/secp256r1) with low-S DER encoding. `aws-lc-rs` is the canonical Rust wrapper for AWS-LC (BoringSSL fork), used by rustls and the sigstore ecosystem. It exposes `agreement::UnparsedPublicKey` and `signature::UnparsedPublicKey::verify` for raw ECDSA P-256. Already a direct dep in `nono-cli`; must be promoted to `nono` lib dep to live at the right library boundary. |
-| `sha2` | `0.11` (workspace) | SHA-256 for CAF v0.1 canonical hash computation | Already present, no change. CAF v0.1 `canonical_hash = lower_hex(sha256(canonical_bytes(record)))`. |
-| `serde` / `serde_json` | workspace | `PolicyOverride` token deserialize + CAF canonical JSON serialization | Already present. Canonical form requires sorted keys with no whitespace — `serde_json::to_string` produces RFC 8259 JSON that can be sorted with a custom serializer or a `BTreeMap` intermediary to satisfy CAF R3. |
-| `base64` | `0.22` | Decode KMS DER signature from base64 string in audit record | Already transitively present via sigstore; promote to direct dep in `nono`. Version 0.22 uses the Engine API (non-deprecated). |
-| `chrono` | `0.4` (already in `nono-cli`) | RFC 3339 expiry timestamp parsing and comparison for `PolicyOverride.expires_at` | Already in `nono-cli`; needs to be promoted to `nono` lib if expiry logic lives there, OR expiry check stays CLI-side with only token parsing in the lib. Prefer promoting to `nono` lib — the fail-closed expiry gate is a security invariant that belongs in the verifier. |
-| `zeroize` | `1` (workspace) | Zero sensitive token fields (signing key material) on drop | Already present. |
+|------------|---------|---------|-----------------|
+| `signtool.exe` (Windows SDK) | Whatever ships with the current `windows-latest` GitHub runner image (Windows 11 SDK, currently 10.0.26100.x-family) — **do not pin/download a separate copy** | Verbose Authenticode chain-build diagnostics as a **fallback/diagnostic** layer alongside the existing `Get-AuthenticodeSignature` fail-closed check | `signtool verify /pa /v /debug <file>` prints the actual chain-build failure reason (missing intermediate, revocation-check timeout, policy OID mismatch) that `Get-AuthenticodeSignature` collapses into an opaque `UnknownError` enum value. It is pre-installed on `windows-latest` under `C:\Program Files (x86)\Windows Kits\10\bin\<ver>\<arch>\signtool.exe` — no install step needed, only a `PATH`/glob-resolve step since the exact SDK-version subfolder varies by runner image update. `/pa` = "use the Default Authenticode Verification Policy" (WinVerifyTrust's default action, matching what `Get-AuthenticodeSignature`/the OS actually does at execution time) rather than `/kp` (kernel-mode driver policy) — **use `/pa`, not the bare default**, or you are diagnosing the wrong policy. |
+| `Get-AuthenticodeSignature` (`Microsoft.PowerShell.Security`, built into PowerShell 5.1+/7+) | Built-in — no version to pin | The existing fail-closed gate in `release.yml:259/281/310/351` — **do not replace, only supplement with signtool** | Already load-bearing in 4 places in `release.yml`. `.Status` is a `System.Management.Automation.SignatureStatus` enum: `Valid`, `UnknownError`, `NotSigned`, `HashMismatch`, `NotTrusted`, `NotSupportedFileFormat`, `Incompatible`. **`UnknownError` is the catch-all WinVerifyTrust returned an error code the cmdlet didn't map to a named status** — critically, it is a *different* value from `NotTrusted`/`UntrustedRoot`-flavored failures. In practice `UnknownError` after a Trusted Signing sign is almost always a **chain-build failure** (`CRYPT_E_NO_REVOCATION_CHECK` / `TRUST_E_CHAIN_NOT_TRUSTED` under the hood — the cmdlet doesn't surface the underlying HRESULT), not a genuinely-untrusted root. This matches the 2026-06-30 field note in the go-live cookbook exactly. |
+| Azure CLI `trustedsigning` extension | Requires **Azure CLI ≥ 2.57.0**; extension auto-installs on first `az trustedsigning ...` call (currently a **Preview** command group) | Create/inspect the Public Trust certificate profile from script/CI rather than only the portal | `az trustedsigning certificate-profile create --profile-type PublicTrust` — note the CLI's accepted `--profile-type` values are exactly `{PrivateTrust, PrivateTrustCIPolicy, PublicTrust, PublicTrustTest, VBSEnclave}`. **There is no plain `Test` value** — the cookbook's informal "Test" almost certainly maps to `PublicTrustTest`, which is a *separate, not-publicly-trusted* profile type (confirmed independently by a `dotnet/sign` GitHub issue where `PublicTrustTest`-issued certs, signer `Microsoft Developer ID Test CS AOC CA 02`, fail exactly this "failed to build chain" case). **This is the highest-value diagnostic check for Phase 101**: `az trustedsigning certificate-profile show -g <rg> --account-name <acct> -n <profile>` and confirm `profileType == PublicTrust` before touching anything CI-side. |
+| `azure/trusted-signing-action@v0` (GitHub Action) | Already pinned at `@v0` in both `release.yml` and `trusted-signing-smoke.yml` — **no version change needed** | Signing step itself | Already correctly implemented (commit `20cd68d9`); do not touch unless the action's own release notes show a fix for `UnknownError`-class chain-build issues on `windows-latest`. |
+| `az` CLI + Bicep (bundled) | Azure CLI ≥ 2.57 (same install as above); Bicep CLI auto-bootstraps on first `az deployment ... --template-file *.bicep` call, or `az bicep install`/`az bicep upgrade` explicitly | Declarative, repeatable stand-up/tear-down of the clean-host Win11 VM (Phase 102) | Bicep is the natural fit here because it's **already `az`-native** (no separate binary/npm install, no state-file management like Terraform) and the milestone explicitly wants IaC that composes with the existing `az`-based go-live cookbook (§2/§3 already use raw `az` calls). Keep the VM **ephemeral** (`az group delete` after each UAT run, or `az vm deallocate` between sessions) — this is a verification fixture, not fleet infra; provisioning a persistent VM would itself become an unmanaged asset outside the enterprise-policy story (v3.0) this repo already built. |
+| `MicrosoftWindowsDesktop:windows-11` Marketplace image, Gen2, `--security-type TrustedLaunch` | SKU: latest available **client** SKU in the deploy region, e.g. `win11-24h2-pro`/`win11-23h2-pro` (`az vm image list-skus --publisher MicrosoftWindowsDesktop --offer windows-11 --location <region>` to confirm what's live in-region — SKU availability is region- and time-sensitive, **do not hardcode a SKU string into the Bicep without a list-skus check at plan time**) | The actual clean-host OS under test | Must be genuine **Windows 11 client**, not Windows Server — the acceptance criteria (`Microsoft ID Verified CS` root trust, broker AppContainer spawn, MSI silent install) are validating client-OS-specific trust-store and AppContainer/Job-Object behavior that Windows Server does not exercise identically. Windows 11 **requires** a Gen2 (UEFI) image with `--security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true` — Trusted Launch's vTPM satisfies the TPM 2.0 hardware-requirement check Windows 11 setup normally enforces; a Gen1/BIOS image will not boot a Windows 11 marketplace image correctly. |
 
-### Core Technologies — Python Side (`nono-py`)
-
-| Technology | Version | Purpose | Why Recommended |
-|---|---|---|---|
-| Python `urllib.request` | stdlib (Python 3.10+) | `POST /actions` HTTP call to ZT-Infra control plane | No new dependency. The POC runbook already demonstrates this (30 lines; timeout via `urlopen(..., timeout=5)`). The ZT-Infra endpoint speaks plain HTTP/HTTPS JSON. Adding `httpx` or `requests` would be unnecessary weight for a single endpoint call. |
-| `pyo3` | `0.28` (already in `nono-py/Cargo.toml`) | Bridge for new `verify_override` Rust function callable from Python | No change needed. |
-
-### Supporting Libraries — Rust Side
+### Supporting Libraries
 
 | Library | Version | Purpose | When to Use |
-|---|---|---|---|
-| `sigstore-verify` | `0.8.0` (already in `nono`) | Sigstore keyless bundle verification (existing use: instruction-file attestation) | NOT on the KMS override path — keep as-is for the existing sigstore use case. Do not reuse for KMS verification; they are different trust roots. |
-| `x509-cert` | `0.2` (already in `nono`) | DER cert parsing (used in existing trust module) | May be needed to import the AWS KMS public key from its DER/PEM export for verification bootstrapping. Already present. |
-| `der` | `0.7` (already in `nono`) | DER encoding/decoding | Needed if parsing the DER-encoded ECDSA signature directly (before `aws-lc-rs` ingestion). Already present. |
-| `hmac` | `0.13` (already in `nono-cli`) | HMAC-SHA256 for SecurityEventLayer chain | Unchanged; override events enter the existing chain. |
+|---------|---------|---------|-------------|
+| `certutil.exe` (built into Windows, `certutil -verify` / `certutil -URL`) | Built-in, no version | Interactive/manual AIA-chase and CRL/OCSP-fetch diagnosis, one level below `signtool /v` | `certutil -URL <exported-cert-or-signed-file>` opens the GUI per-URL retrieval tester that walks every AIA (chain-build) and CDP (revocation) URL individually and reports per-URL success/failure — this is the tool that answers "did the runner actually fail to *fetch* the AOC/EOC intermediate, or fail to *validate* it once fetched." `certutil -verify -urlfetch <exported .cer>` does the same chain-build-with-live-fetch programmatically (for scripting into a gate). `certutil -urlcache CRL delete` clears a stale local AIA/CRL cache before re-testing — useful because GitHub-hosted runners are fresh per-job so this rarely matters in CI itself, but matters on the operator's own host when re-testing locally. Reserve for interactive debugging of the `UnknownError` root cause, not for the CI gate itself (the CI gate stays `Get-AuthenticodeSignature`/`signtool /pa /v`, both scriptable and exit-code-driven). |
+| `maturin` | `>=1.13.2` — **already pinned** in `../nono-py/pyproject.toml` (`requires = ["maturin>=1,<2"]` and `"maturin>=1.13.2"` in the dev deps) | PyO3 wheel build backend for the `nono-py` PyPI leg | No change needed. `scripts/release-dry-run.ps1` already drives `maturin build` + `twine check` and is proven; the only thing v3.5 does differently is remove the `--dry-run`/SKIP posture and actually run `twine upload` against live PyPI with a real API token. Current stable maturin (per PyPI/GitHub as of this research, June 2026) is in the 1.14.x line and added PEP 740 publish attestations — a nice-to-have, not a requirement; **do not force an upgrade** past the `<2` pin already in `pyproject.toml` without a separate compatibility check. |
+| `twine` | Latest from PyPI (unpinned in the repo today — `scripts/release-dry-run.ps1` only checks `Get-Command twine`) | Upload signed wheels to PyPI; `twine check` validates README/metadata rendering before upload | Live use in v3.5 = same tool, same invocation, now pointed at real PyPI with `TWINE_USERNAME=__token__` / `TWINE_PASSWORD=<PyPI API token>` (or `twine upload --repository pypi`). Consider pinning a `twine>=5` floor only if the live run surfaces a metadata-validation gap the dry-run didn't catch (unlikely — `twine check` already ran in prepare-only mode). |
+| `@napi-rs/cli` | `^3.0.0-alpha.63` — **already pinned** in `../nono-ts/package.json` | napi-rs native-module build/artifact/prepublish tooling for the npm leg | No change needed. `napi build --platform --release` / `napi artifacts` / `napi prepublish -t npm` are already wired via `package.json` scripts (`build`, `artifacts`, `prepublishOnly`). Live use = `npm publish` (not `npm publish --dry-run`) with a real npm auth token (`NODE_AUTH_TOKEN` / `.npmrc` with `//registry.npmjs.org/:_authToken=`). Alpha-pinned `@napi-rs/cli` is a pre-existing decision from an earlier milestone — **not this milestone's problem to fix**; only flag if the live publish step itself fails on it. |
+| npm CLI provenance (`npm publish --provenance`) | npm **≥ 9.5.0** (bundled with current Node LTS) | Optional supply-chain hardening for the npm leg, publishing from GitHub Actions | Not currently used by the repo's npm publish path. **Consider but do not require** for v3.5 — it needs `id-token: write` (already granted at the workflow level for the OIDC/Trusted-Signing job) and a cloud-hosted runner (GitHub Actions qualifies). If added, it's an npm-side-only change (no interaction with the Windows signing gate) — do not conflate with Trusted Signing's own attestation model. |
+| `cargo publish` (bundled with the Rust toolchain already pinned via `dtolnay/rust-toolchain@stable` in `release.yml`) | Whatever `stable` resolves to at CI run time — **no separate pin needed**, this is not new tooling | crates.io publish for `nono`, `nono-proxy`, `nono-cli` | Already fully wired in `release.yml`'s `publish-crates` job (dependency-ordered, `sleep 30` between publishes for crates.io indexing, per-crate already-published skip check via `cargo search`). Nothing new to add here — v3.5 just removes the "prepare-only" framing; the mechanism is unchanged. |
 
 ### Development Tools
 
 | Tool | Purpose | Notes |
-|---|---|---|
-| `cargo clippy --workspace --target x86_64-unknown-linux-gnu` | Cross-target lint for new cfg-gated code | Mandatory per CLAUDE.md §Coding Standards — any new `#[cfg(windows)]` code in `nono` or `nono-py` must be verified cross-target |
-| `maturin develop --release` | Build nono-py binding with new Rust functions | Required after adding `verify_override` to `nono-py/src/` |
-| Python `unittest` / `pytest` | Test `POST /actions` adapter and token parsing in Python | Keep in `nono-py/tests/`; gate with `pytest.mark.integration` for host-gated AWS path |
+|------|---------|-------|
+| Bicep CLI (via `az bicep install`) | Author/deploy `.bicep` templates for the Phase 102 clean-host VM | Confirm with `az bicep version` before authoring; Bicep transpiles to ARM JSON under the hood, so `az deployment group what-if` is available for a dry-run preview of the VM stand-up before actually creating it — useful given this is billable compute. |
+| `az vm image list-skus --publisher MicrosoftWindowsDesktop --offer windows-11 --location <region>` | Discover the currently-available Windows 11 client SKU string for the target region at plan time | Run this **at Phase 102 plan-authoring time**, not baked into research — Marketplace SKU availability (21h2/22h2/23h2/24h2/25h2 generations) is time- and region-sensitive and has already shifted mid-2026 per the search results above. |
+| RDP client (`mstsc.exe` on Windows, or Azure Bastion / the Azure portal's browser-based RDP) for the human-in-loop Gate 3 UAT session | Manual verification step per the cookbook's Gate 3 | Not new tooling to install — this is how the operator actually touches the VM for the MSI-install / broker-spawn checks. If NSG-based RDP (`--nsg-rule RDP` on `az vm create`, opening 3389) is judged too exposed even for an ephemeral VM, Azure Bastion is the safer managed alternative — evaluate cost/complexity tradeoff at Phase 102 plan time, not in this research doc. |
+| `az role assignment create --role "Trusted Signing Certificate Profile Signer"` | RBAC data-action grant for the CI service principal | **Not an API/Graph permission** — this is called out explicitly and correctly in the existing cookbook (§3c); reconfirming here because it's the #1 source of `403 AuthorizationFailed` in Trusted Signing setups per the troubleshooting research (a data-plane RBAC role, not an app registration API-permissions-blade grant). |
 
----
+## Installation
 
-## Installation (New Additions Only)
-
-All Rust-side additions are version bumps or promotions of existing transitive deps — no new `cargo add` calls for net-new crates.
-
-```toml
-# In crates/nono/Cargo.toml — promote these from transitive to direct:
-aws-lc-rs = "1"          # was direct in nono-cli only; needed in nono lib for verify_override
-base64 = "0.22"          # was transitive via sigstore; needed for DER sig decode
-chrono = { version = "0.4", features = ["serde"] }   # was in nono-cli only
-```
-
-Python side — no new packages:
 ```bash
-# Python stdlib only for the HTTP adapter (urllib.request + json)
-# pytest already in nono-py dev dependencies
+# Azure CLI extension (auto-installs on first use, or explicitly):
+az extension add -n trustedsigning
+az extension update -n trustedsigning   # keep current — Preview command group, moves fast
+
+# Bicep CLI (bundled/managed by az):
+az bicep install
+az bicep upgrade
+
+# Nothing new to `cargo install` / `pip install` / `npm install` for the publish legs —
+# maturin, twine, @napi-rs/cli, and cargo are already present per the repo's existing
+# pyproject.toml / package.json / Cargo.toml pins (see Supporting Libraries above).
 ```
 
----
+```powershell
+# signtool.exe — already present on windows-latest; resolve the path rather than installing:
+$signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" |
+             Sort-Object VersionInfo.ProductVersion -Descending | Select-Object -First 1).FullName
+& $signtool verify /pa /v /debug <file>
+```
 
 ## Alternatives Considered
 
-| Recommended | Alternative | Why Not |
-|---|---|---|
-| `aws-lc-rs` for P-256 ECDSA verify | `ring` | `ring` is FIPS-incompatible and blocked by the existing aws-lc-rs choice in nono-cli; importing both would create two crypto backends. `aws-lc-rs` is a drop-in with the same `ring`-compatible API surface. |
-| `aws-lc-rs` for P-256 ECDSA verify | `p256` crate (RustCrypto) | `p256` is fine cryptographically but adds a second ECDSA implementation when `aws-lc-rs` already ships one. Duplication with no benefit. |
-| `sigstore-verify` for KMS override | reusing existing sigstore bundle path | The Sigstore trust chain (Fulcio CA + Rekor transparency log) is incompatible with the ZT-Infra KMS trust model. KMS uses a static asymmetric key whose public key is fetched once from AWS KMS; Sigstore uses OIDC-issued short-lived certs and CT logs. These are fundamentally different trust anchors; do not conflate them. |
-| Python `urllib.request` for HTTP | `httpx` or `requests` in nono-py | nono-py is a compiled PyO3 extension — adding a Python runtime dependency makes distribution fragile (pip install required) and the existing POC works fine with stdlib. |
-| Python `urllib.request` for HTTP | Rust `hyper`/`reqwest` in nono-py Rust layer | The Rust-side has no tokio runtime in the nono-py `confined_run` synchronous call path. Spinning up an async runtime for a single HTTP call inside a PyO3 `#[pyfunction]` is overly complex. Python handles the HTTP round-trip; Rust handles signature verification. |
-| `chrono` for timestamp | `time` crate | `time` is already in the workspace (transitive via sigstore); either works. `chrono` is already a direct dep in `nono-cli` and its `DateTime::parse_from_rfc3339` + `Utc::now()` comparison is the idiomatic approach for the override expiry pattern. |
-| BTreeMap-based canonical JSON | `olpc-cjson` or `json-canon` crates | Adding a new crate for something implementable in ~40 lines against the normative CAF v0.1 spec (CANONICAL_FORM.md). The spec is fully documented; a bespoke `canonical_json()` function is auditable and zero-dependency. |
+| Recommended | Alternative | When to Use Alternative |
+|-------------|-------------|--------------------------|
+| `signtool verify /pa /v` as a diagnostic fallback alongside `Get-AuthenticodeSignature` | Replace `Get-AuthenticodeSignature` entirely with `signtool` in `release.yml` | Never for the primary gate — `Get-AuthenticodeSignature` is already correctly wired fail-closed in 4 places and is the simpler, more idiomatic PowerShell check for a scripted gate's exit-code contract. Use `signtool /v` only where you need the *human-readable reason* behind a non-`Valid` status (diagnostics/troubleshooting output on failure), not as the pass/fail condition itself. |
+| Azure CLI `trustedsigning` extension | PowerShell `Az.TrustedSigning` module (`Get-AzTrustedSigningCertificateProfile`, etc.) | If the go-live work is done from a PowerShell-first operator session and Azure CLI isn't already installed. The existing cookbook (§2/§3) and this repo's scripting conventions are already `az`/bash-first — stay consistent rather than introducing a second Azure automation surface. |
+| Bicep for the clean-host VM IaC | Terraform (`azurerm` provider) | If the project already had Terraform state management elsewhere in the repo (it doesn't) or needed multi-cloud portability (it doesn't — this is Azure-only, throwaway verification infra). Bicep's zero-install-via-az and no-state-file model is strictly simpler for a single ephemeral resource group. |
+| `MicrosoftWindowsDesktop:windows-11` Marketplace image under a Dev/Test-eligible subscription (no Multitenant Hosting Rights licensing needed for non-production testing) | A licensed production Windows 11 Multitenant Hosting Rights deployment (M365 E3/E5 or Windows VDA-entitled) | Only relevant if this VM were to become a **persistent** or production-facing asset. Per Microsoft's own guidance, Student/Free-Trial/Dev-Test-eligible subscriptions may deploy Windows 11 client images for **development or testing purposes** without holding Multitenant Hosting Rights entitlement — which is exactly this milestone's use case (a throwaway clean-host verification fixture, torn down after Gate 3). Confirm the target subscription type before provisioning; if it's a standard (non-Dev/Test) pay-as-you-go subscription, verify licensing entitlement or use the Dev/Test offer explicitly. |
 
----
-
-## What NOT to Add
+## What NOT to Use
 
 | Avoid | Why | Use Instead |
-|---|---|---|
-| `reqwest` in nono-py Cargo.toml | Pulls in a full async HTTP stack (tokio, h2, rustls) inside a sync PyO3 extension; version conflicts with existing tokio features in nono-py are likely | Python `urllib.request` stdlib in the Python adapter layer |
-| A new JWT library (`jsonwebtoken` / `jwt-simple`) | The `PolicyOverride` token format is not JWT — it is a custom JSON struct signed with KMS ECDSA. Adding JWT parsing would import the wrong token model and a needless dep | `serde_json` deserialization of a defined `PolicyOverride` struct + manual ECDSA verify via `aws-lc-rs` |
-| `openssl` crate | Would introduce a second TLS/crypto backend conflicting with `aws-lc-rs`. Forbidden by the existing security posture | `aws-lc-rs` already provides equivalent P-256 ECDSA |
-| DAAL/blockchain integration in this milestone | The DAAL layer is async, EVM-specific, and requires external wallet infrastructure. The primary authorization path doesn't wait for ledger confirmation (per ZT-Infra architecture). DAAL anchoring is a ZT-Infra server-side concern, not nono-side | If DAAL receipt verification is ever needed client-side, treat it as a later phase with a scoped spike |
-| `ethers` or `viem` in nono-py | EVM transaction sending is not nono's responsibility; nono reads `audit.daal` as an opaque field for logging into SecurityEventLayer | Read `daal` field as `Option<serde_json::Value>` and emit into event chain without interpretation |
-| Promoting `sigstore-sign` to nono-py | nono-py does not sign overrides — it verifies them. Sigstore signing is a nono-cli concern (instruction-file attestation, existing use) | Verification-only path via `aws-lc-rs` |
+|-------|-----|--------------|
+| Downloading/exporting the Trusted Signing certificate from Azure Key Vault and using it as a local PFX | Microsoft's own guidance (confirmed via a Microsoft Q&A thread on this exact `UnknownError`/untrusted-root symptom) is explicit: Trusted Signing does **not** expose the private key for extraction — "We don't pull certs from AKV." A self-signed or KV-exported cert path produces a chain that terminates in an untrusted root, which is a *different* bug masquerading as the same `UnknownError` symptom. | The existing keyless-OIDC `azure/login` + `azure/trusted-signing-action@v0` flow — already correctly implemented, do not add a parallel PFX-based path "just to test." |
+| `--profile-type PublicTrustTest` (or any informal "Test" profile) for the real release | Not publicly trusted — chains to `Microsoft Developer ID Test CS AOC CA 02`-style test roots that are absent from a clean Win11 trust store, reproducing the exact clean-host failure this milestone exists to fix. | `--profile-type PublicTrust` only, confirmed via `az trustedsigning certificate-profile show`. |
+| Direct `signtool sign` with a locally-held PFX/self-signed cert anywhere in the *release* pipeline | This is precisely the POC-signing posture v3.5 is retiring (`WINDOWS_SIGNING_CERT`/`_PASSWORD` secrets, closed out in this milestone's close-out step). | Azure Trusted Signing only, for both the pre-package binary signing and the MSI-wrapper signing steps (both already correctly ordered per Phase 53's sign-before-harvest fix). |
+| Terraform, Pulumi, or ARM JSON authored by hand for the VM | Adds a second IaC toolchain/state-management model to a repo that has none today, for a single ephemeral resource. | Bicep, deployed via plain `az deployment group create` (stateless — Azure Resource Manager is the state store). |
+| A persistent/always-on Azure VM for clean-host UAT | Ongoing cost + becomes an unmanaged asset the v3.0 enterprise-policy story (HKLM policy spine, fleet telemetry) was explicitly built to govern — an ad-hoc unmanaged VM undermines that story. | Provision-run-teardown per UAT session (`az group delete --yes --no-wait` after Gate 3), or deallocate between sessions if a short reuse window is wanted. |
+| Windows Server marketplace images (e.g. `MicrosoftWindowsServer:WindowsServer`) as a stand-in for "a Windows box to test on" | Different default trust-store provisioning, different AppContainer/Job-Object semantics from client Windows 11 — would not actually validate the same install/broker-spawn path a real end-user hits. | `MicrosoftWindowsDesktop:windows-11`, Gen2, Trusted Launch. |
+| Adding npm `--provenance` / new twine / new maturin major-version bumps as part of this milestone's scope | Out of scope — the milestone context explicitly says the publish tooling is "already present, now used live." Bumping majors mid-go-live risks introducing an unrelated build break at the exact moment the pipeline needs to be provably stable. | Use the pinned versions already in `pyproject.toml`/`package.json`/`Cargo.toml` as-is; only touch them if the live run itself surfaces a hard failure the dry-run didn't catch. |
 
----
+## Stack Patterns by Variant
 
-## Architecture Split: Python vs Rust
+**If the verify-gate `UnknownError` persists on `windows-latest` after confirming `PublicTrust` profile type:**
+- Add a CI-side `certutil -urlcache CRL delete` (or equivalent cache-bypass) immediately before the `Get-AuthenticodeSignature` check, since GitHub-hosted runners are usually cache-clean but a resource-group-cached AOC/EOC intermediate from a prior job step could theoretically persist within a single job.
+- Add the `signtool verify /pa /v /debug` fallback as a **diagnostics-only** step that runs `if: always()` after the `Get-AuthenticodeSignature` check, so a failure still surfaces the human-readable chain-build reason in the workflow log without changing the pass/fail gate itself.
+- If `signtool /pa` reports revocation/OCSP timeout specifically (not a missing intermediate), that points at network egress from the runner rather than a profile-type problem — different remediation (retry/backoff, or confirming the runner's outbound access to `ocsp.msocsp.com`/`crl.microsoft.com`-family endpoints isn't blocked).
 
-The enforcement surface is `nono-py`'s `confined_run` / `confine`. The split must be clean:
-
-```
-Python layer (nono-py Python wrapper or caller):
-  1. POST /actions to ZT-Infra (urllib.request, JSON body)
-  2. Parse JSON response → {decision, audit.current_hash, audit.kms_signature}
-  3. Call Rust: verify_override(token_json: str, kms_public_key_der: bytes) -> PyResult<OverrideDecision>
-  4. On OverrideDecision::Allow → call confined_run() with expanded CapabilitySet
-  5. On OverrideDecision::Deny / verification failure → fail-closed (do not spawn)
-
-Rust layer (nono lib + nono-py bridge):
-  1. PolicyOverride struct: serde-deserialize from token_json
-     Fields: actor, action, resource, scope (paths/network), expires_at (RFC 3339), repo_context (git remote URL hash), kms_key_id
-  2. OverrideVerifier::verify(token, public_key_der):
-     a. Strip current_hash + kms_signature per CAF v0.1 R10
-     b. Compute canonical_json() → SHA-256 → 32-byte digest
-     c. Base64-decode kms_signature.signature → DER bytes
-     d. aws-lc-rs UnparsedPublicKey::verify(EC_PUBLIC_KEY, P256, digest, sig)
-     e. Check expires_at > Utc::now() (fail-closed if expired or parse fails)
-     f. Check repo_context matches caller's repo (supplied by nono-py)
-     g. Return Ok(OverrideDecision::Allow { scope }) or Err(NonoError::OverrideVerificationFailed)
-  3. #[pyfunction] verify_override(...) → PyResult<PyOverrideDecision> in nono-py bridge
-  4. Emit SecurityEventLayer event (EventID 10006 or next available) on both Allow and Deny
-```
-
-**Why this split?** The HTTP call is unavoidably host-gated (requires live AWS endpoint) — keeping it in Python makes it easy to mock with `unittest.mock.patch`. The cryptographic verification is Rust-side where type safety and the existing `aws-lc-rs` dep live. The PyO3 boundary is the narrowest possible interface: token JSON string in, decision + scope out.
-
----
-
-## KMS Public Key Distribution
-
-This is an **operational gap that must be resolved in requirements**, not a stack question:
-
-- The nono-py verifier needs the AWS KMS P-256 public key in DER format to verify signatures offline (without a round-trip to KMS `GetPublicKey`).
-- The public key is stable as long as the KMS key is not rotated.
-- Two viable approaches: (a) embed the public key in a config file loaded by nono-py / nono-cli at startup; (b) fetch it at startup via `aws-kms GetPublicKey` (requires AWS credentials in the nono process — heavy dep). Approach (a) is recommended for MVP: the public key is not secret (it is the *public* half), and embedding it avoids an AWS SDK dep in nono.
-- If approach (a), the key distribution/rotation mechanism is a policy question out of scope for the stack, but the roadmap must flag it.
-
----
-
-## CAF v0.1 Canonical Form Implementation Note
-
-The ZT-Infra audit record canonical form is fully specified in `CANONICAL_FORM.md`. Implementing it in Rust requires:
-
-1. A `BTreeMap`-based JSON value walk that sorts object keys (satisfying R3) and produces no whitespace (R2).
-2. String validation per R7.4: reject control chars U+0000–U+001F, U+2028, U+2029, surrogates, and chars above U+FFFF.
-3. Strip `current_hash` and `kms_signature` from the top level before hashing (R10).
-4. SHA-256 the canonical UTF-8 bytes; output as lowercase hex (no `0x` prefix).
-
-This is ~60-80 lines of Rust and does not require a new crate. Implementing it against the spec (not against the JS reference implementation) is the correct approach.
-
----
+**If the Azure region for the Trusted Signing account doesn't have a current Windows 11 client SKU available for `az vm create`:**
+- Trusted Signing endpoints are regional (`eus`/`weu`/etc. prefix in `TRUSTED_SIGNING_ENDPOINT`) but the VM does **not** need to be in the same region as the Trusted Signing account — decouple the two; pick whatever region currently publishes a Win11 client SKU per `az vm image list-skus`.
 
 ## Version Compatibility
 
 | Package A | Compatible With | Notes |
-|---|---|---|
-| `aws-lc-rs 1` | `sha2 0.11` (workspace) | No conflict; separate crates with no shared types at the verify boundary |
-| `aws-lc-rs 1` | `sigstore-verify 0.8.0` | sigstore-verify already uses aws-lc-rs transitively; no second copy |
-| `base64 0.22` | `aws-lc-rs 1` | base64 0.22 already in lock file via sigstore graph; promote is safe |
-| `chrono 0.4` | `serde 1` (workspace) | chrono's `serde` feature required for `DateTime<Utc>` deserialization |
-| `pyo3 0.28` | Python 3.10+ | Already the nono-py constraint; no change |
-
----
+|-----------|------------------|-------|
+| Azure CLI `trustedsigning` extension | Azure CLI ≥ 2.57.0 | Preview command group — extension version and accepted `--profile-type` values can change between CLI releases faster than GA surfaces; re-check `az trustedsigning certificate-profile create -h` output at Phase 101 execution time rather than trusting this doc's flag list verbatim if there's a long gap between research and execution. |
+| `azure/trusted-signing-action@v0` | `azure/login@v2` (already paired in both workflows) | The action reads Azure creds from the `azure/login` session in the same job — no separate secret needed for the signing action itself, confirmed by the existing `release.yml` comment at lines 163-166. |
+| `MicrosoftWindowsDesktop:windows-11` Gen2 image | `--security-type TrustedLaunch --enable-secure-boot true --enable-vtpm true` | Trusted Launch/vTPM is **mandatory**, not optional, for a Win11 marketplace image to boot/pass setup correctly — Gen1 (BIOS) images are not offered for windows-11 and will not satisfy the TPM 2.0 check. |
+| `maturin >=1.13.2,<2` (pinned) | PyO3 / `nono-py` Rust edition already in use | No new compatibility surface — this pin predates v3.5 and is unaffected by the live-vs-dry-run publish change. |
 
 ## Sources
 
-- `C:\Users\OMack\Nono\crates\nono\Cargo.toml` — confirmed `sigstore-verify 0.8.0`, `aws-lc-rs 1` (via `nono-cli/Cargo.toml`), `sha2 0.11`, `base64` transitive, `x509-cert 0.2`, `der 0.7` (HIGH confidence — in-tree)
-- `C:\Users\OMack\Nono\crates\nono-cli\Cargo.toml` — confirmed `aws-lc-rs = "1"` direct dep, `chrono 0.4`, `hmac 0.13`, `sigstore-sign 0.8.0`, `sigstore-trust-root 0.8.0` (HIGH confidence — in-tree)
-- `C:\Users\OMack\nono-py\Cargo.toml` — confirmed `pyo3 = "0.28"`, `serde_json = "1"` (HIGH confidence — in-tree)
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\audit.js` — confirmed `ECDSA_SHA_256`, `SigningAlgorithm`, `MessageType: "DIGEST"`, DER encoding, base64 output, `normalizeEcdsaDerLowS` (HIGH confidence — source)
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\docs\CANONICAL_FORM.md` — confirmed CAF v0.1 spec: P-256 / SHA-256, sorted keys, strip `current_hash`+`kms_signature`, low-S enforcement (HIGH confidence — normative spec)
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\src\canonical.js` — confirms `stableJson()` key-sort implementation matches CAF spec (HIGH confidence — source)
-- `C:\Users\OMack\ZeroTrust2\ZERO_TRUST_V2\provisioner\package.json` — confirmed `@aws-sdk/client-kms 3.1046.0`, `ethers 6.16.0` (ZT-Infra server-side, NOT nono-side) (HIGH confidence — source)
-- `C:\Users\OMack\Nono\proj\POC-zt-infra-e5-local-provisioner.md` — confirmed Python `urllib.request` is the proven POC HTTP path; E5 composition contract (HIGH confidence — in-tree)
+- [Get-AuthenticodeSignature — Grokipedia summary of PowerShell SignatureStatus enum](https://grokipedia.com/page/Get-AuthenticodeSignature) — MEDIUM (community-compiled, cross-checked against the repo's own `release.yml` usage which is HIGH-confidence primary evidence of the enum's real-world `UnknownError` behavior)
+- [Root certificate trust problem after creating an Azure Trusted Signing certificate profile — Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/2140998/root-certificate-trust-problem-after-creating-an-a) — MEDIUM-HIGH (Microsoft Q&A, official guidance quoted directly: do not pull certs from Key Vault)
+- [Azure Trusted Signing fails when using Public Trust test certificates — dotnet/sign#908](https://github.com/dotnet/sign/issues/908) — MEDIUM (independent confirmation that `PublicTrustTest`-issued certs chain to a `Microsoft Developer ID Test CS AOC CA 02` root and fail chain-build, corroborating the cookbook's own field note)
+- [az trustedsigning certificate-profile — Microsoft Learn CLI reference](https://learn.microsoft.com/en-us/cli/azure/trustedsigning/certificate-profile?view=azure-cli-latest) — HIGH (official, fetched directly; confirms `--profile-type` accepted values, extension version floor 2.57.0, Preview status)
+- [Artifact Signing trust models — Microsoft Learn](https://learn.microsoft.com/en-us/azure/artifact-signing/concept-trust-models) — HIGH (official; Public Trust model chains to Microsoft Identity Verification Root CA 2020)
+- [Trusted Signing profile pinned to AOC CA 03 — Microsoft Q&A](https://learn.microsoft.com/en-ca/answers/questions/5863283/trusted-signing-profile-makologics-pinned-to-aoc-c) — MEDIUM (confirms current intermediate naming pattern `Microsoft ID Verified CS AOC/EOC CA NN`, matches cookbook's expected-issuer guidance)
+- [How to deploy Windows 11 on Azure — Microsoft Learn (Multitenant Hosting Rights)](https://learn.microsoft.com/en-us/azure/virtual-machines/windows/windows-desktop-multitenant-hosting-deployment) — HIGH (official, fetched directly; licensing entitlement rules, image publisher/offer/SKU values, Dev/Test exemption for Student & Free Trial accounts)
+- [Trusted Launch for Azure VMs — Microsoft Learn](https://learn.microsoft.com/en-us/azure/virtual-machines/trusted-launch) — HIGH (official; vTPM/Secure Boot requirement for Gen2 images, confirmed via search summary)
+- [maturin GitHub Releases](https://github.com/pyo3/maturin/releases) — MEDIUM (community/search-summarized; current stable line 1.14.x with PEP 740 attestations, cross-checked against the repo's own `>=1.13.2,<2` pin which is HIGH-confidence primary evidence)
+- [npm provenance statements — npm Docs](https://docs.npmjs.com/generating-provenance-statements/) — HIGH (official docs; npm ≥9.5.0, `id-token: write`, cloud-hosted-runner requirement)
+- [certutil — Microsoft Learn Windows Commands reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/certutil) — MEDIUM (official reference exists; exact `-verify`/`-URL` interactive-diagnostic flag behavior drawn from established training-data knowledge of the tool, flagged here as the lower-confidence element of the certutil guidance — verify flag syntax against `certutil -?` at execution time)
+- Repo-internal (HIGH, primary): `.github/workflows/release.yml`, `.github/workflows/trusted-signing-smoke.yml`, `.planning/quick/260630-trusted-signing-golive/AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md`, `../nono-py/pyproject.toml`, `../nono-ts/package.json`, `scripts/release-dry-run.ps1`
 
 ---
-*Stack research for: nono v3.2 Signed Policy Overrides (ZT-Infra Attestation)*
-*Researched: 2026-06-21*
+*Stack research for: nono v3.5 — Trusted Signing Go-Live + First Distributed Release*
+*Researched: 2026-07-02*
