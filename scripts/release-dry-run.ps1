@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Dry-run validation for all three publish paths at v0.66.0.
+    Dry-run validation for all three publish paths at v0.66.1.
 
 .DESCRIPTION
     Validates crates.io, PyPI (nono-py), and npm (nono-ts) packaging WITHOUT uploading
@@ -17,7 +17,7 @@
     PRE_PUBLISH_REGISTRY_BLOCKED: cargo publish --dry-run resolves all dependencies
     against the live crates.io index at package time.  For downstream workspace crates
     (nono-proxy, nono-cli) this will fail with "failed to select a
-    version for nono = ^0.66.0" until nono 0.66.0 has been published.  This is an
+    version for nono = ^0.66.1" until nono 0.66.1 has been published.  This is an
     EXPECTED pre-publish state, not a packaging error.  The status is surfaced
     transparently so the operator can re-run after publishing the base crate.
 
@@ -82,13 +82,13 @@ try {
         } else {
             $outStr = $output | Out-String
             # Detect pre-publish registry-resolution block: downstream crates depend on
-            # nono = ^0.66.0 which does not exist on crates.io until after nono is published.
+            # nono = ^0.66.1 which does not exist on crates.io until after nono is published.
             # This is an expected pre-publish state, NOT a packaging error.
             # Pattern matched per-line; distinctive phrase appears in the error message.
             if ($outStr -match 'failed to select a version for the requirement') {
                 Write-Host "  PRE_PUBLISH_REGISTRY_BLOCKED" -ForegroundColor Yellow
                 Add-Result "crates.$crate" "PRE_PUBLISH_REGISTRY_BLOCKED" `
-                    "nono ^0.66.0 not yet on crates.io; re-run after publishing nono"
+                    "nono ^0.66.1 not yet on crates.io; re-run after publishing nono"
             } else {
                 Write-Host "  FAILED (exit $exitCode)" -ForegroundColor Red
                 Write-Host ($outStr)
@@ -128,8 +128,13 @@ if ($null -eq $maturin) {
                 $twineAvail = $true
                 $twineCmd   = @("twine")
             } else {
-                $pyTwineCheck = python -m twine --version 2>&1 | Out-String
-                if ($pyTwineCheck -match "twine") {
+                # Check exit code, not output text: `python -m twine --version` when the
+                # module is absent still prints "No module named twine" to stderr, which
+                # itself contains the substring "twine" and previously false-matched a
+                # plain string search, masking a real absence as available.
+                $null = python -m twine --version 2>&1 | Out-String
+                $pyTwineExit = $LASTEXITCODE
+                if ($pyTwineExit -eq 0) {
                     $twineAvail = $true
                     $twineCmd   = @("python", "-m", "twine")
                 }
