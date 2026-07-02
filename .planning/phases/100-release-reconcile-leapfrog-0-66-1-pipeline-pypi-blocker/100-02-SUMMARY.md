@@ -102,3 +102,7 @@ None - no external service configuration required. This plan edits CI YAML only;
 ---
 *Phase: 100-release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker*
 *Completed: 2026-07-02*
+
+## Self-Check: PASSED
+
+All created/modified files verified present on disk (.github/workflows/release.yml, .github/workflows/ci.yml, proj/ADR-100-ci-pipeline-reconcile.md, this SUMMARY.md); all 4 commit hashes (7b78a859, b5582429, 5a722140, 97c57cd9) verified present in git log.
