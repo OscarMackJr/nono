@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
-status: executing
+status: verifying
 stopped_at: Phase 100 Plan 04 complete
-last_updated: "2026-07-02T15:50:25.784Z"
+last_updated: "2026-07-02T16:02:01.395Z"
 last_activity: 2026-07-02
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 16
-  completed_plans: 15
-  percent: 94
+  completed_plans: 16
+  percent: 100
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -28,8 +28,8 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 
 Phase: 100 (release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker) — EXECUTING
 Plan: 5 of 5
-Status: Plan 100-04 complete (release-readiness gate + release-dry-run.ps1 re-run GREEN at 0.66.1; RELEASE-RUNBOOK.md updated for the 0.66.1 tag) — ready to execute Plan 100-05
-Last activity: 2026-07-02 -- Plan 100-04 complete: release-readiness.ps1 re-pointed to targetVersion=0.66.1/upstreamHighest=0.66.0 (7e67d9db); release-dry-run.ps1 re-run exit 0 with pypi.maturin_build now PASS (34adcb12); RELEASE-RUNBOOK.md fully updated for the 0.66.1 tag, PyPI blocker marked resolved (c827340b); 2 Rule-1 bugs auto-fixed (hardcoded Cargo.lock literal in gate assertion e; false-positive twine detection in dry-run)
+Status: Phase complete — ready for verification
+Last activity: 2026-07-02 -- Plan 100-05 complete: captured clean-host-install gate verdict (SKIP_HOST_UNAVAILABLE / exit 3, operator-accepted) recorded verbatim on msi-vcredist-prereq todo; poc-cert-broker-clean-host todo documented as externally blocked on the active Azure Trusted Signing verify-gate UnknownError thread (quick 260630-trusted-signing-golive); neither todo marked resolved, both remain under .planning/todos/pending/. Phase 100 (final phase of v3.4) now fully executed (all 5 plans complete) -- ready for phase verification / milestone close.
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Last activity: 2026-07-02 -- Plan 100-04 complete: release-readiness.ps1 re-poin
 | Phase 100 P02 | 12min | 3 tasks | 2 files |
 | Phase 100 P03 | 20min | 2 tasks | 11 files |
 | Phase 100 P04 | 15min | 3 tasks | 3 files |
+| Phase 100 P05 | 8min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -105,6 +106,8 @@ Last activity: 2026-07-02 -- Plan 100-04 complete: release-readiness.ps1 re-poin
 | nono-py RouteConfig PyPI blocker (RLS-12) closed: endpoint_policy: None added at both RouteConfig construction sites (src/proxy.rs, src/policy.rs); Rule 3 auto-fix also added ProxyConfig.enable_h2: false (same-class binding drift, only surfaced by actually running maturin build, not by static grep) | 100-03 | maturin build now exits 0; both fields are no-op stubs matching nono-proxy's own defaults, not policy/business-logic changes; full endpoint_policy threading deferred to a named future phase per D-08 |
 | RLS-13 closed: release-readiness gate re-pointed targetVersion=0.66.1/upstreamHighest=0.66.0; both mandatory pre-push gates re-run GREEN; RELEASE-RUNBOOK.md fully updated for the 0.66.1 tag | 100-04 | Rule 1 auto-fix: gate assertion (e) hardcoded a stale '0.66.0' Cargo.lock literal instead of referencing $targetVersion — Cargo.lock now contains zero 0.66.0 occurrences (all 6 crates at 0.66.1), so the old check would have false-FAILed the very re-green this plan exists to deliver; rewritten to reference $targetVersion |
 | release-dry-run.ps1 twine-detection bug fixed: false-positived on Python's own "No module named twine" error text (contains the substring "twine") instead of checking $LASTEXITCODE, masking a real toolchain-absent SKIP as a hard FAIL | 100-04 | Discovered on first re-run after the version bump (pypi.twine_check FAILed with exit 1); switched detection to $LASTEXITCODE; re-run now correctly SKIPs with SKIP_HOST_UNAVAILABLE and the overall dry-run exits 0 with zero FAIL keys |
+| Checkpoint clean-host-install gate verdict pre-resolved by orchestrator; SKIP_HOST_UNAVAILABLE/exit 3 operator-accepted ("Accept SKIP & close phase") and recorded verbatim on the msi-vcredist-prereq todo rather than re-run | 100-05 | Plan's `<how-to-verify>` treats SKIP_HOST_UNAVAILABLE/exit 3 as the expected, acceptable outcome per CONTEXT.md D-09; re-running would have been redundant |
+| Neither host-gated todo marked resolved: msi-vcredist-prereq stays open pending a genuine clean Win11 VM run; poc-cert-broker-clean-host stays open pending both an actual 0.66.1 tag push (operator-gated) and a fix to the Azure Trusted Signing verify-gate UnknownError (quick 260630-trusted-signing-golive) | 100-05 | Fold-without-resolve pattern (mirrors v3.1 Phase 90 DRAIN) — a todo can be formally documented at milestone close without claiming false completion |
 
 ### Pending Todos
 
@@ -159,10 +162,10 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-02T15:50:25.772Z
-Stopped at: Phase 100 Plan 04 complete
+Last session: 2026-07-02T15:56:32.492Z
+Stopped at: Phase 100 Plan 05 complete
 Resume file: None
 
 ## Operator Next Steps
 
-- Run `/gsd:execute-phase 100` to execute Phase 100 Plan 04
+- Phase 100 (final phase of v3.4) is fully executed (5/5 plans). Next: verify Phase 100 and proceed to v3.4 milestone close/archive.

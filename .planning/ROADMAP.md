@@ -117,7 +117,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 100-02-PLAN.md — CI reconcile (adapt, not adopt, #1245/#1251) + proj/ADR-100 (RLS-11)
 - [x] 100-03-PLAN.md — Cross-repo: nono-py 0.66.1 bump + endpoint_policy PyPI stub, nono-ts 0.66.1 bump (RLS-10, RLS-12)
 - [x] 100-04-PLAN.md — release-readiness gate + release-dry-run re-green at 0.66.1 + RELEASE-RUNBOOK.md update (RLS-13)
-- [ ] 100-05-PLAN.md — Folded host-gated clean-host UAT closeout (gated/deferred, not a hard exit criterion)
+- [x] 100-05-PLAN.md — Folded host-gated clean-host UAT closeout (gated/deferred, not a hard exit criterion)
 
 ## Progress
 
@@ -138,4 +138,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 97. Release Engineering — Leapfrog + Pipeline + Runbook | v3.3 | 4/4 | Complete | 2026-06-26 |
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
-| 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 4/5 | In Progress|  |
+| 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
