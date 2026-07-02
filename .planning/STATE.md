@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
 status: executing
-stopped_at: Phase 100 Plan 03 complete
-last_updated: "2026-07-02T15:33:20.630Z"
+stopped_at: Phase 100 Plan 04 complete
+last_updated: "2026-07-02T15:50:25.784Z"
 last_activity: 2026-07-02
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 14
-  percent: 88
+  completed_plans: 15
+  percent: 94
 ---
 
 # Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
@@ -27,9 +27,9 @@ See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97
 ## Current Position
 
 Phase: 100 (release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker) — EXECUTING
-Plan: 4 of 5
-Status: Plan 100-03 complete (cross-repo binding version bump + nono-py PyPI blocker closed) — ready to execute Plan 100-04
-Last activity: 2026-07-02 -- Plan 100-03 complete: nono-py + nono-ts bumped to 0.66.1 (one DCO-signed commit each, nono-py 84e8f18 / nono-ts dd7d416); nono-py RouteConfig/ProxyConfig PyPI blocker closed (endpoint_policy + enable_h2 stubs); maturin build + npm publish --dry-run both green
+Plan: 5 of 5
+Status: Plan 100-04 complete (release-readiness gate + release-dry-run.ps1 re-run GREEN at 0.66.1; RELEASE-RUNBOOK.md updated for the 0.66.1 tag) — ready to execute Plan 100-05
+Last activity: 2026-07-02 -- Plan 100-04 complete: release-readiness.ps1 re-pointed to targetVersion=0.66.1/upstreamHighest=0.66.0 (7e67d9db); release-dry-run.ps1 re-run exit 0 with pypi.maturin_build now PASS (34adcb12); RELEASE-RUNBOOK.md fully updated for the 0.66.1 tag, PyPI blocker marked resolved (c827340b); 2 Rule-1 bugs auto-fixed (hardcoded Cargo.lock literal in gate assertion e; false-positive twine detection in dry-run)
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Last activity: 2026-07-02 -- Plan 100-03 complete: nono-py + nono-ts bumped to 0
 | Phase 99 P06 | 130 | 2 tasks | 16 files |
 | Phase 100 P02 | 12min | 3 tasks | 2 files |
 | Phase 100 P03 | 20min | 2 tasks | 11 files |
+| Phase 100 P04 | 15min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,8 @@ Last activity: 2026-07-02 -- Plan 100-03 complete: nono-py + nono-ts bumped to 0
 | ADR-100: #1245/#1251 ADAPTED not adopted verbatim — publish-crates idempotency clean 1:1 port; cross-compile job trigger rewritten from dead upstream 'chore: release v...' PR-title convention to workflow_dispatch | 100-02 | Fork's release model is manual tag-push/workflow_dispatch (release.yml), never a release-please-bot PR — verbatim adoption would add a permanently-false if: condition (silent false-assurance gap); #1251's pre-corrected quoted-string if: form applied inline from the start; release-readiness verify-dark gate + signed-MSI sign-before-harvest order (D-06) confirmed untouched by either hunk |
 | Cross-repo binding bump finished 0.66.0→0.66.1 in both nono-py + nono-ts, one DCO-signed commit each (nono-py 84e8f18, nono-ts dd7d416); no 0.66.0 commit ever landed | 100-03 | D-01/D-02/D-07: both repos already had stale uncommitted 0.66.0 edits from a prior session — finished in place rather than starting from committed HEAD; publish stayed operator-gated (maturin build + npm publish --dry-run only, no push) |
 | nono-py RouteConfig PyPI blocker (RLS-12) closed: endpoint_policy: None added at both RouteConfig construction sites (src/proxy.rs, src/policy.rs); Rule 3 auto-fix also added ProxyConfig.enable_h2: false (same-class binding drift, only surfaced by actually running maturin build, not by static grep) | 100-03 | maturin build now exits 0; both fields are no-op stubs matching nono-proxy's own defaults, not policy/business-logic changes; full endpoint_policy threading deferred to a named future phase per D-08 |
+| RLS-13 closed: release-readiness gate re-pointed targetVersion=0.66.1/upstreamHighest=0.66.0; both mandatory pre-push gates re-run GREEN; RELEASE-RUNBOOK.md fully updated for the 0.66.1 tag | 100-04 | Rule 1 auto-fix: gate assertion (e) hardcoded a stale '0.66.0' Cargo.lock literal instead of referencing $targetVersion — Cargo.lock now contains zero 0.66.0 occurrences (all 6 crates at 0.66.1), so the old check would have false-FAILed the very re-green this plan exists to deliver; rewritten to reference $targetVersion |
+| release-dry-run.ps1 twine-detection bug fixed: false-positived on Python's own "No module named twine" error text (contains the substring "twine") instead of checking $LASTEXITCODE, masking a real toolchain-absent SKIP as a hard FAIL | 100-04 | Discovered on first re-run after the version bump (pypi.twine_check FAILed with exit 1); switched detection to $LASTEXITCODE; re-run now correctly SKIPs with SKIP_HOST_UNAVAILABLE and the overall dry-run exits 0 with zero FAIL keys |
 
 ### Pending Todos
 
@@ -112,10 +115,10 @@ None yet.
 - **Repo stays PUBLIC — go-private CANCELLED (operator decision 2026-07-01):** the repository will remain PUBLIC. Minifilter-altitude approval was **RECEIVED 2026-07-01** (official 377813.5 assigned by fsfcomm@microsoft.com), which cleared the only gate that had been holding the PUBLIC → PRIVATE flip open — but the operator has decided **not** to go private; the idea is retired, not merely deferred. The earlier go-private commit `74a47742` was already cancelled. Operational invariant unchanged: verify no `build_notes/` or `.gsd/` files staged before any `git push`; all tags remain LOCAL ONLY; push is operator-gated.
 - **#1225 SETTLED**: ADR-98 Accepted — full-sync-adopt (2026-06-30); Phase 99 applies 72bcfd66 + d457ecc3 with WSL2ProxyFallback + CompiledEndpointPolicy deviations.
 - **Cross-target clippy MUST be GREEN**: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) must exit 0 locally — PARTIAL→CI is not the default (retired in v3.3 Phase 96). #1225, #1207, #1213, #1249 all touch cfg-gated Unix code.
-- **Version collision at 0.66.0**: fork is at crate 0.66.0; upstream also shipped 0.66.0. The fork bumps to 0.66.1 in Phase 100 — do NOT publish 0.66.0 from the fork.
-- **nono-py PyPI blocker (RLS-12)**: `maturin build` exits 1 — nono-py `src/policy.rs:743` and `src/proxy.rs:206` missing `endpoint_policy: None,` in `RouteConfig` initializers. Phase 100 closes this.
+- **Version collision at 0.66.0 — RESOLVED (Phase 100 Plans 01/04)**: fork and upstream both shipped 0.66.0; the fork leapfrogged to 0.66.1 (Plan 01) and the release-readiness gate + release-dry-run.ps1 re-confirmed GREEN at 0.66.1 (Plan 04). Do NOT publish 0.66.0 from the fork.
+- **nono-py PyPI blocker (RLS-12) — CLOSED 2026-07-02, Phase 100 Plan 03**: `endpoint_policy: None` added at both `RouteConfig` initializer sites; `maturin build` now exits 0, confirmed again by Plan 04's dry-run re-run.
 - **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` required on every commit including cherry-picks (use `-x` + manual DCO trailer).
-- **Release scope = PREPARE ONLY**: actual tag push + registry publish remain an operator-gated manual step outside this milestone.
+- **Release scope = PREPARE ONLY**: actual tag push + registry publish remain an operator-gated manual step outside this milestone. RLS-13 closed (Phase 100 Plan 04) — both mandatory pre-push gates are GREEN and RELEASE-RUNBOOK.md is current; the operator push sequence itself was not executed.
 
 ### Quick Tasks Completed
 
@@ -156,8 +159,8 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-02T15:33:20.615Z
-Stopped at: Phase 100 Plan 03 complete
+Last session: 2026-07-02T15:50:25.772Z
+Stopped at: Phase 100 Plan 04 complete
 Resume file: None
 
 ## Operator Next Steps

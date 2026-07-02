@@ -51,7 +51,7 @@
 - [x] **RLS-10**: All 5 workspace crates (`nono`, `nono-cli`, `nono-proxy`, `nono-shell-broker`, `nono-ffi`) plus the `nono-py` / `nono-ts` bindings are version-bumped to **`0.66.1`** (the minimal collision-free bump above upstream's own `0.66.0`), with internal path-dep `version` pins consistent across every `Cargo.toml` and both binding manifests (`Cargo.lock` regenerated; workspace builds clean).
 - [x] **RLS-11**: The upstream CI changes are reconciled against the fork's prepare-only release pipeline — #1245 (idempotent `publish-crates` + cross-compile check on release PRs) and #1251 (compile-step mapping fix) are adopted or adapted without breaking the existing `release-readiness` verify-dark gate or the signed-MSI build order.
 - [x] **RLS-12**: The carried-forward `nono-py` `RouteConfig` PyPI blocker is closed — the missing `endpoint_policy` field is added (`src/policy.rs:743` + `src/proxy.rs:206`) so the `nono-py` wheel builds and `twine check` / maturin validation passes for publish.
-- [ ] **RLS-13**: The release is **one-step-push ready at `0.66.1`** — `scripts/release-dry-run.ps1` plus the `release-readiness` gate are re-run GREEN, and `RELEASE-RUNBOOK.md` is updated for the `0.66.1` tag, embedding the PUBLIC-repo pre-push checklist (no `build_notes/`/`.gsd/` staged; crate version `0.66.1` > upstream `0.66.0` confirmed). The actual tag push + registry publish remain operator-gated.
+- [x] **RLS-13**: The release is **one-step-push ready at `0.66.1`** — `scripts/release-dry-run.ps1` plus the `release-readiness` gate are re-run GREEN, and `RELEASE-RUNBOOK.md` is updated for the `0.66.1` tag, embedding the PUBLIC-repo pre-push checklist (no `build_notes/`/`.gsd/` staged; crate version `0.66.1` > upstream `0.66.0` confirmed). The actual tag push + registry publish remain operator-gated.
 
 ## v2 / Future Requirements
 
@@ -89,4 +89,4 @@ Populated by roadmap creation 2026-06-30. Phase numbering continues from Phase 9
 | RLS-10 | Phase 100 | Complete |
 | RLS-11 | Phase 100 | Complete |
 | RLS-12 | Phase 100 | Complete |
-| RLS-13 | Phase 100 | Pending |
+| RLS-13 | Phase 100 | Complete |
