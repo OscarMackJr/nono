@@ -1,59 +1,47 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.4
-milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
-status: Awaiting next milestone
-stopped_at: Phase 100 Plan 05 complete
-last_updated: "2026-07-02T16:35:46.446Z"
-last_activity: 2026-07-02 — Milestone v3.4 completed and archived
+milestone: v3.5
+milestone_name: Trusted Signing Go-Live + First Distributed Release
+status: planning
+last_updated: "2026-07-02T17:01:14.692Z"
+last_activity: 2026-07-02
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 16
-  completed_plans: 16
-  percent: 100
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# Project State: nono — v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
+# Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.4 SHIPPED + archived 2026-07-02; tag `v3.4` local. Phases 98-100 archived to `milestones/v3.4-ROADMAP.md`). Roadmap: `.planning/ROADMAP.md`. REQUIREMENTS.md removed — a fresh one is created by `/gsd-new-milestone`.
+See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + archived, tag `v3.4` local. Phases 98-100 archived to `milestones/v3.4-ROADMAP.md`). Roadmap: `.planning/ROADMAP.md`. Requirements: `.planning/REQUIREMENTS.md` (defined below). Phase numbering continues 100 → 101+ (no reset).
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and, for v3.5, actually *distributable*: a publicly-trusted-signed release that runs out-of-the-box on a clean host.
 
-**Current Focus:** Awaiting next milestone (`/gsd-new-milestone`). v3.4 delivered the UPST11 sync to upstream `0.66.0` and a prepare-only, operator-push-ready `0.66.1` release.
+**Current Focus:** v3.5 — Trusted Signing Go-Live + First Distributed Release. Full go-live EXECUTE (operator-in-loop): resolve the Azure Trusted Signing verify-gate `UnknownError`, cut the first trusted-signed `0.66.1` release, publish live to crates.io/PyPI/npm (FUT-01), drain both host-gated clean-host todos on a fresh Azure Win11 VM (FUT-03), and close out.
 
 ## Current Position
 
-Phase: Milestone v3.4 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-07-02 — Milestone v3.4 completed and archived
+Status: Defining requirements
+Last activity: 2026-07-02 — Milestone v3.5 started
 
 ## Performance Metrics
 
-**Velocity:** (v3.4 — reset; populated as phases complete)
+**Velocity:** (v3.5 — reset; populated as phases complete)
 
-- Total plans completed: 12
-- Average duration: 25 min
-- Total execution time: 25 min
+- Total plans completed: 0
+- Average duration: —
+- Total execution time: —
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
-| 98 | 01 | 25 min | 2 | 1 |
-| 98 | 02 | 45 min | 2 | 1 |
 
 *Updated after each plan completion*
-| Phase 99 P01 | 3 min | 2 tasks | 2 files |
-| Phase 99 P02 | 90 | 2 tasks | 9 files |
-| Phase 99 P04 | 10 min | 2 tasks | 4 files |
-| Phase 99 P05 | 13 min | 2 tasks | 5 files |
-| Phase 99 P06 | 130 | 2 tasks | 16 files |
-| Phase 100 P02 | 12min | 3 tasks | 2 files |
-| Phase 100 P03 | 20min | 2 tasks | 11 files |
-| Phase 100 P04 | 15min | 3 tasks | 3 files |
-| Phase 100 P05 | 8min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -80,7 +68,18 @@ Last activity: 2026-07-02 — Milestone v3.4 completed and archived
 | Release-readiness gate: policy violations return FAIL verdict; infrastructure failures throw | 97-04 | Enforces T-97-11/12/13 threat model — private-path leak is a FAIL verdict (operator can diagnose), not a harness error; command-not-found is a throw (harness-internal error, exit 4) |
 | Publish set reconciled to 3 crates (nono → nono-proxy → nono-cli) — WR-02 | 97-04/close | Code review + verifier flagged a divergence: release.yml published 3 crates but the dry-run + runbook specified 4 (adding nono-shell-broker). Operator chose the 3-crate set — nono-shell-broker marked `publish=false` (internal Windows broker, ships inside the MSI, bin-only crate / no lib target), dropped from release-dry-run.ps1 + RELEASE-RUNBOOK.md; now consistent with release.yml's existing publish-crates job. Build clean; release-readiness gate re-PASS. Supersedes the 97-04 "4-crate set" entry. |
 
-### Key Decisions (v3.4 roadmap)
+### Key Decisions (v3.5 roadmap)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| Full go-live EXECUTE posture (operator-in-loop), not prepare-only | all | The Azure VM removes the clean-host access blocker (operator's corporate host is contaminated: POC cert imported + VC++ installed + corporate proxy/EDR/managed-trust confounds the chain-build/revocation failure being debugged). Milestone closes only when binaries are Verified-publisher + broker spawns on the VM. |
+| Verify-gate debugging is CI-side (GitHub `windows-latest`), not user-host | all | Smoke test + `signtool /pa` re-verify run on GitHub's clean cloud runner; only the behavioral install/broker-spawn/no-VC++ tests need the Azure VM. Fork's autonomous deliverable = CI verify hardening + Azure-VM IaC + scripted gates. |
+| Ship reproducible Azure-VM IaC (`az`/Bicep) + scripted `verify-dark.ps1` gates | — | Operator selected "Ship IaC + scripted gate" over runbook-only: a fresh Win11 VM (no POC cert, no VC++) stood up by script + unattended gates the operator runs over RDP, emitting machine-readable verdicts (`SKIP_HOST_UNAVAILABLE` when no VM). |
+| FUT-01 live multi-registry publish IN scope | — | Operator broadened scope: actually publish `0.66.1` to crates.io + PyPI + npm in-milestone (v3.4 was PREPARE-ONLY). |
+
+*Further v3.5 decisions populated as phases complete.*
+
+### Key Decisions (v3.4 roadmap — historical)
 
 | Decision | Phase | Rationale |
 |----------|-------|-----------|
@@ -111,17 +110,19 @@ Last activity: 2026-07-02 — Milestone v3.4 completed and archived
 
 ### Pending Todos
 
-None yet.
+Two host-gated distribution todos are IN SCOPE for v3.5 (FUT-03 drain), to be run on the Azure Win11 VM:
+- **`20260611-poc-cert-broker-clean-host.md`** — after a trusted-signed `0.66.1` release, confirm `nono run --profile claude-code` spawns the broker on a clean host with NO manual cert-trust step. Blocked until (1) the verify-gate `UnknownError` is fixed and (2) a real trusted-signed `0.66.1` is cut.
+- **`20260611-msi-vcredist-prereq.md`** — confirm the machine MSI installs on a fresh Win11 host with no VC++ redist (code fix `+crt-static` already shipped/verified; only the clean-VM empirical confirmation remains).
 
 ### Blockers/Concerns
 
-- **Repo stays PUBLIC — go-private CANCELLED (operator decision 2026-07-01):** the repository will remain PUBLIC. Minifilter-altitude approval was **RECEIVED 2026-07-01** (official 377813.5 assigned by fsfcomm@microsoft.com), which cleared the only gate that had been holding the PUBLIC → PRIVATE flip open — but the operator has decided **not** to go private; the idea is retired, not merely deferred. The earlier go-private commit `74a47742` was already cancelled. Operational invariant unchanged: verify no `build_notes/` or `.gsd/` files staged before any `git push`; all tags remain LOCAL ONLY; push is operator-gated.
-- **#1225 SETTLED**: ADR-98 Accepted — full-sync-adopt (2026-06-30); Phase 99 applies 72bcfd66 + d457ecc3 with WSL2ProxyFallback + CompiledEndpointPolicy deviations.
-- **Cross-target clippy MUST be GREEN**: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) must exit 0 locally — PARTIAL→CI is not the default (retired in v3.3 Phase 96). #1225, #1207, #1213, #1249 all touch cfg-gated Unix code.
-- **Version collision at 0.66.0 — RESOLVED (Phase 100 Plans 01/04)**: fork and upstream both shipped 0.66.0; the fork leapfrogged to 0.66.1 (Plan 01) and the release-readiness gate + release-dry-run.ps1 re-confirmed GREEN at 0.66.1 (Plan 04). Do NOT publish 0.66.0 from the fork.
-- **nono-py PyPI blocker (RLS-12) — CLOSED 2026-07-02, Phase 100 Plan 03**: `endpoint_policy: None` added at both `RouteConfig` initializer sites; `maturin build` now exits 0, confirmed again by Plan 04's dry-run re-run.
-- **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` required on every commit including cherry-picks (use `-x` + manual DCO trailer).
-- **Release scope = PREPARE ONLY**: actual tag push + registry publish remain an operator-gated manual step outside this milestone. RLS-13 closed (Phase 100 Plan 04) — both mandatory pre-push gates are GREEN and RELEASE-RUNBOOK.md is current; the operator push sequence itself was not executed.
+- **Azure Trusted Signing verify-gate `UnknownError` (v3.5 headline blocker):** first live smoke run (`28467925298`, 2026-06-30) — OIDC login + Sign succeeded (signer `CN=TWGGLOBAL.onmicrosoft.com`) but Verify FAILED `Status: UnknownError`, issuer `CN=Microsoft Enterprise ID Verified Policy AOC CA 01`. Two causes to settle: (1) confirm the profile is **Public Trust** (public chain reads `Microsoft ID Verified CS EOC/AOC CA NN`, not `…Enterprise ID Verified Policy AOC CA…`); (2) `UnknownError` ≠ `UntrustedRoot` → chain couldn't be *built* on `windows-latest` (AOC intermediate absent / CRL-OCSP timeout) — re-verify with `signtool verify /pa /v`. `release.yml:259` uses the same fail-closed `-ne 'Valid'` check, so a release tag aborts at verify until this is `Valid`. Runbook: `.planning/quick/260630-trusted-signing-golive/AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md`. See [[azure_trusted_signing_golive]].
+- **Correct GitHub OIDC FIC subject** (both workflows): `repo:OscarMackJr/nono:environment:Development` — the old `260603-i31` cookbook's `oscarmackjr-twg` + `ref:` subject is STALE and causes `AADSTS700213`.
+- **Operator's corporate host is NOT a valid clean host** — POC cert previously imported + VC++ installed + corporate proxy/EDR/managed-trust-store confound the exact chain-build/revocation failure being debugged. Clean-host UAT must run on a fresh Azure Win11 VM (off corporate LAN, clean revocation egress, never trusted the POC cert, no VC++).
+- **Base crate `0.66.1` already prepared (v3.4)** — all 6 workspace crates + both binding repos at `0.66.1`; both mandatory pre-push gates GREEN; RELEASE-RUNBOOK.md current. v3.5 executes the actual go-live from this prepared state. Do NOT publish `0.66.0`.
+- **Repo stays PUBLIC** (minifilter altitude 377813.5 received 2026-07-01; go-private retired). Verify no `build_notes/`/`.gsd/` staged before any push. Unlike prior prepare-only tags, v3.5's tag push is *intended* (go-live).
+- **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` on every commit.
+- **Cross-target clippy MUST be GREEN** if any cfg-gated Unix code is touched: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) exit 0 locally — PARTIAL→CI retired (v3.3 Phase 96). (v3.5 is primarily CI-yaml + PowerShell + IaC; likely low Unix-cfg exposure, but the rule stands.)
 
 ### Quick Tasks Completed
 
@@ -179,4 +180,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- v3.5 opened 2026-07-02 — defining requirements → roadmap. Next: `/gsd:plan-phase 101` (or `/gsd:discuss-phase 101`) once the roadmap is approved.
