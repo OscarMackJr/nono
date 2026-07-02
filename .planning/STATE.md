@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
-status: active
-last_updated: "2026-07-02T17:15:00.000Z"
-last_activity: 2026-07-02
+status: Roadmap approved — 7 phases (101-107), 10/10 requirements mapped, ready for plan-phase
+stopped_at: Phase 101 context gathered
+last_updated: "2026-07-02T18:38:58.493Z"
+last_activity: 2026-07-02 — Roadmap created
 progress:
-  total_phases: 7
+  total_phases: 1
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 0
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -114,6 +114,7 @@ Last activity: 2026-07-02 — Roadmap created
 ### Pending Todos
 
 Two host-gated distribution todos are IN SCOPE for v3.5 (CHOST-03 / FUT-03 drain), to be run on the Azure Win11 VM (Phase 106):
+
 - **`20260611-poc-cert-broker-clean-host.md`** — after a trusted-signed `0.66.1` release, confirm `nono run --profile claude-code` spawns the broker on a clean host with NO manual cert-trust step. Blocked until (1) the verify-gate `UnknownError` is fixed (Phase 101) and (2) a real trusted-signed `0.66.1` is cut (Phase 104).
 - **`20260611-msi-vcredist-prereq.md`** — confirm the machine MSI installs on a fresh Win11 host with no VC++ redist (code fix `+crt-static` already shipped/verified; only the clean-VM empirical confirmation remains).
 
@@ -180,11 +181,12 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-02T17:15:00.000Z
-Stopped at: Roadmap created (Phases 101-107)
-Resume file: None
+Last session: 2026-07-02T18:38:58.475Z
+Stopped at: Phase 101 context gathered
+Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-CONTEXT.md
 
 ## Operator Next Steps
 
 - v3.5 roadmap approved 2026-07-02 — 7 phases (101-107), 10/10 requirements mapped, no orphans. Next: `/gsd:plan-phase 101` (or `/gsd:discuss-phase 101`) to begin Phase 101 (Verify-Gate Hardening + Azure Profile Confirmation).
+
 </content>
