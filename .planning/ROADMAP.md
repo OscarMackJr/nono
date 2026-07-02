@@ -1,7 +1,7 @@
 ---
-milestone: v3.4
-milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
-status: shipped
+milestone: v3.5
+milestone_name: Trusted Signing Go-Live + First Distributed Release
+status: active
 updated: 2026-07-02
 ---
 
@@ -9,6 +9,7 @@ updated: 2026-07-02
 
 ## Milestones
 
+- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02)
 - ✅ **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (shipped 2026-07-02) — [archive](milestones/v3.4-ROADMAP.md)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
 - ✅ **v3.2 Signed Policy Overrides (ZT-Infra Attestation)** — Phases 91-93 (shipped 2026-06-23) — [archive](milestones/v3.2-ROADMAP.md)
@@ -19,6 +20,21 @@ updated: 2026-07-02
 > Earlier milestones (v2.5–v2.12) are archived under `.planning/milestones/`.
 
 ## Phases
+
+<details open>
+<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — ACTIVE</summary>
+
+Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode verify-gate and resolve the Azure Trusted Signing `UnknownError`, rename the fork's published package identities to fork-owned `nono-sandbox` names, stand up ephemeral Azure Win11 VM IaC + new clean-host gates, cut the first publicly-trusted-signed `0.66.1` release, publish it live to crates.io/PyPI/npm, drain both host-gated clean-host UAT todos on the real VM, then retire the POC signing path. Hard dependency spine: verify-gate hardening (101) gates the release cut (104); the rename (102) and the Azure IaC+gates (103) are parallelizable with 101/104; live publish (105) needs both the rename and a real release; clean-host UAT (106) needs the real release (not the live publish); close-out (107) is strictly gated on clean-host UAT PASS, never merely on a green release.
+
+- [ ] **Phase 101: Verify-Gate Hardening + Azure Profile Confirmation** — 0/? plans
+- [ ] **Phase 102: Fork-Owned Package Rename** — 0/? plans
+- [ ] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 0/? plans
+- [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 0/? plans
+- [ ] **Phase 105: Live Multi-Registry Publish** — 0/? plans
+- [ ] **Phase 106: Azure VM Clean-Host UAT** — 0/? plans
+- [ ] **Phase 107: Close-Out** — 0/? plans
+
+</details>
 
 <details>
 <summary>✅ v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile (Phases 98-100) — SHIPPED 2026-07-02</summary>
@@ -68,6 +84,84 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 </details>
 
+## Phase Details
+
+### Phase 101: Verify-Gate Hardening + Azure Profile Confirmation
+**Goal**: The Trusted Signing verify path is provably fixed — root cause disambiguated and documented, the fail-closed verify hardened without ever loosening it — and the smoke workflow runs GREEN on GitHub's clean `windows-latest` runner, proving the signing chain is live before any release is cut.
+**Depends on**: Nothing (first phase of v3.5)
+**Requirements**: SIGN-01, SIGN-02, SIGN-03
+**Success Criteria** (what must be TRUE):
+  1. **[Operator-in-loop]** `az trustedsigning certificate-profile show` confirms `profileType == PublicTrust` (or the operator creates a `PublicTrust` profile and corrects `TRUSTED_SIGNING_PROFILE` + the FIC subject `repo:OscarMackJr/nono:environment:Development`); the finding (profile type + issuer chain) is documented, not guessed.
+  2. A shared `scripts/verify-authenticode.ps1` helper exists and is dot-sourced by both fail-closed verify sites in `release.yml` (~line 259, ~281-321) and `trusted-signing-smoke.yml` (~line 62-73), adding a `signtool verify /pa /v` deep-check fallback and classifying chain-build failure distinctly from a genuine untrusted root.
+  3. The fail-closed `Status -ne 'Valid'` contract is provably unweakened — diff review confirms the condition itself is unchanged; all new logic is additive corroboration/diagnosis, not a loosened pass condition.
+  4. The **"Trusted Signing Smoke Test"** workflow runs GREEN on `windows-latest` (Gate 1) — a throwaway exe signs and Authenticode-verifies `Valid` with an issuer chaining to a public `Microsoft ID Verified CS EOC/AOC CA NN` root (not `PublicTrustTest`, not the POC root).
+**Plans**: TBD
+
+### Phase 102: Fork-Owned Package Rename
+**Goal**: The published package identities are renamed to fork-owned `nono-sandbox` family names across all three registries, with the `nono` binary/lib/repo names left unchanged, so a later live publish (Phase 105) has an unblocked, owned target.
+**Depends on**: Nothing (parallelizable with Phase 101 — independent of signing)
+**Requirements**: PUB-01
+**Success Criteria** (what must be TRUE):
+  1. crates.io `[package] name` is renamed on the 3-crate publish set: `nono` → `nono-sandbox`, `nono-proxy` → `nono-sandbox-proxy`, `nono-cli` → `nono-sandbox-cli`; internal path-dependency names/pins are reconciled across the workspace; `[[bin]] name = "nono"` and `[lib] name = "nono"` are unchanged (`use nono::` internal imports untouched).
+  2. The `nono-py` binding's PyPI project name is renamed to `nono-sandbox`, and the `nono-ts` binding's npm package name is renamed to the scoped `@oscarmackjr/nono-ts` — in both sibling binding repos.
+  3. Each new registry identity's availability is confirmed live against the actual registry (crates.io `nono-sandbox`/`nono-sandbox-proxy`/`nono-sandbox-cli`, PyPI `nono-sandbox`, npm `@oscarmackjr/nono-ts`) before committing to the rename.
+  4. The workspace build (`make build`) and both binding builds (`maturin build`, napi build) are green under the new names.
+**Plans**: TBD
+
+### Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates
+**Goal**: A reproducible, fork-owned Azure Win11 clean-host VM can be stood up and torn down on demand, and two new self-contained `verify-dark.ps1` gates exist to assert trusted-signed status and out-of-box broker spawn on it — both authored and provably `SKIP_HOST_UNAVAILABLE` on the dev host, ready to run for-real once a VM and a real release exist.
+**Depends on**: Phase 101 (the `trusted-signed-assertion` gate reuses the `verify-authenticode.ps1` shared helper)
+**Requirements**: CHOST-01, CHOST-02
+**Success Criteria** (what must be TRUE):
+  1. `scripts/azure/clean-vm/` contains a Bicep module (`main.bicep`) provisioning a Gen2 + Trusted-Launch (`--enable-secure-boot true --enable-vtpm true`) `MicrosoftWindowsDesktop:windows-11` VM with the SKU resolved live via `az vm image list-skus` (never hardcoded), an NSG scoped to the operator's IP, and deploy/teardown scripts implementing a documented ephemeral create → use → teardown lifecycle (never persistent).
+  2. `scripts/gates/trusted-signed-assertion.ps1` exists, reuses the Phase 101 `verify-authenticode.ps1` shared helper to assert Authenticode `Valid` + issuer chaining to the `Microsoft ID Verified CS` root on staged artifacts, and plugs into the existing `verify-dark.ps1` gate-discovery harness with zero harness code changes.
+  3. `scripts/gates/broker-spawn-on-clean-host.ps1` exists, is **self-contained** (install → `nono run --profile claude-code` spawns the broker with no manual cert import → uninstall) — not dependent on `-All`'s alphabetical execution order.
+  4. Both new gates run on the dev host and correctly return `SKIP_HOST_UNAVAILABLE` (same discipline as the existing `clean-host-install.ps1` precondition), proving they are wired into the harness before any VM exists.
+**Plans**: TBD
+
+### Phase 104: Smoke Green + Cut the Trusted-Signed Release
+**Goal**: The first publicly-trusted-signed `0.66.1` release exists on GitHub, with every signed artifact passing the hardened fail-closed verify and showing Verified publisher — the actual go-live moment.
+**Depends on**: Phase 101 (SIGN-03 smoke green is a hard precondition — "do not cut a release until smoke is green")
+**Requirements**: REL-01
+**Success Criteria** (what must be TRUE):
+  1. **[Operator-in-loop]** Immediately before the tag push, the operator re-runs the hardened "Trusted Signing Smoke Test" workflow and confirms it is GREEN (the FIC-subject/profile canary re-check, per Pitfall 9's AADSTS700213 recurrence risk).
+  2. **[Operator-in-loop]** The operator pushes tag `v0.66.1`; the `Release` workflow runs to green — all top-level `.exe` (`nono.exe`, `nono-shell-broker.exe`, `nono-wfp-service.exe`) and both MSIs pass the hardened fail-closed verify from Phase 101.
+  3. The published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** — Issuer chains to the `Microsoft ID Verified CS` root, not `CN=nono Test Signing`.
+**Plans**: TBD
+
+### Phase 105: Live Multi-Registry Publish
+**Goal**: `0.66.1` is live and installable from all three registries under the fork-owned `nono-sandbox` identities.
+**Depends on**: Phase 102 (renamed, owned identities) + Phase 104 (a real trusted-signed release exists to publish)
+**Requirements**: PUB-02
+**Success Criteria** (what must be TRUE):
+  1. **[Operator-in-loop]** crates.io publish runs in strict dependency order — `nono-sandbox` → `nono-sandbox-proxy` → `nono-sandbox-cli` — using index-visibility polling (not a fixed `sleep`) to confirm each crate is indexed before the next depends on it.
+  2. **[Operator-in-loop]** PyPI publish (`maturin` build + `twine upload --skip-existing`) succeeds for `nono-sandbox`, and the actual published wheel/platform coverage is verified post-publish (not just exit code).
+  3. **[Operator-in-loop]** npm publish succeeds for `@oscarmackjr/nono-ts` with all required platform-specific native packages present (explicitly avoiding the documented upstream missing-platform-package failure).
+  4. `cargo install nono-sandbox-cli`, `pip install nono-sandbox`, and `npm i @oscarmackjr/nono-ts` all resolve successfully post-publish.
+**Plans**: TBD
+
+### Phase 106: Azure VM Clean-Host UAT
+**Goal**: Both long-standing host-gated distribution todos are drained to a genuine PASS on a real, never-contaminated Azure Win11 VM running the real trusted-signed `0.66.1` release.
+**Depends on**: Phase 103 (VM IaC + gates exist) + Phase 104 (a real trusted-signed release exists to install) — does NOT require Phase 105's live registry publish; the GitHub Release artifact is sufficient.
+**Requirements**: CHOST-03
+**Success Criteria** (what must be TRUE):
+  1. **[Operator-in-loop]** The operator deploys the Phase 103 IaC, RDPs into the fresh VM (never touched by the POC cert or corporate trust store), and stages the Phase 104 published Release artifacts.
+  2. **[Operator-in-loop]** The `broker-spawn-on-clean-host` gate PASSes — `nono run --profile claude-code` spawns the broker with zero manual cert-trust step.
+  3. **[Operator-in-loop]** The reused `clean-host-install` gate PASSes — the machine MSI installs on fresh Win11 with no VC++ redist preinstalled (no `1603`/rollback, `nono.exe` launches, no `0xC0000135`).
+  4. Both `poc-cert-broker-clean-host` and `msi-vcredist-prereq` todos are moved `pending/` → `resolved/` with the passing verdict JSON referenced.
+**Plans**: TBD
+
+### Phase 107: Close-Out
+**Goal**: The POC signing path is retired, the disposable smoke workflow is removed, and stale documentation + STATE are corrected — but strictly only after clean-host UAT has proven the new path works end-to-end, preserving a fallback signing path until then.
+**Depends on**: Phase 106 (CHOST-03 must PASS first — never merely a green release; this is the highest-severity sequencing risk in the milestone)
+**Requirements**: CLOSE-01
+**Success Criteria** (what must be TRUE):
+  1. **[Operator-in-loop]** The close-out step structurally requires a link to a passed Phase 106 verdict JSON before the POC secrets (`WINDOWS_SIGNING_CERT` / `WINDOWS_SIGNING_CERT_PASSWORD`) are deleted from GitHub repo settings.
+  2. `trusted-signing-smoke.yml` is removed (`git rm`) now that the real release path is proven green end-to-end.
+  3. `docs/cli/development/windows-signing-guide.mdx` is corrected to point at the go-live cookbook instead of the retired PFX flow (gitignored-but-tracked — needs `git add -f`).
+  4. `RELEASE-RUNBOOK.md` and `STATE.md`/`PROJECT.md` are updated to reflect FUT-01/FUT-02/FUT-03 + DIST-SIGN-01 cleared.
+**Plans**: TBD
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -88,3 +182,11 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
+| 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 0/? | Not started | - |
+| 102. Fork-Owned Package Rename | v3.5 | 0/? | Not started | - |
+| 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/? | Not started | - |
+| 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |
+| 105. Live Multi-Registry Publish | v3.5 | 0/? | Not started | - |
+| 106. Azure VM Clean-Host UAT | v3.5 | 0/? | Not started | - |
+| 107. Close-Out | v3.5 | 0/? | Not started | - |
+</content>

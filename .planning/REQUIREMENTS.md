@@ -68,17 +68,18 @@ Explicit exclusions, documented to prevent scope creep.
 
 ## Traceability
 
-Populated by roadmap creation. Phase numbering continues from Phase 100 → Phase 101+.
+Phase numbering continues from Phase 100 → Phase 101+.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| SIGN-01 | TBD | Pending |
-| SIGN-02 | TBD | Pending |
-| SIGN-03 | TBD | Pending |
-| REL-01 | TBD | Pending |
-| PUB-01 | TBD | Pending |
-| PUB-02 | TBD | Pending |
-| CHOST-01 | TBD | Pending |
-| CHOST-02 | TBD | Pending |
-| CHOST-03 | TBD | Pending |
-| CLOSE-01 | TBD | Pending |
+| SIGN-01 | Phase 101 | Pending |
+| SIGN-02 | Phase 101 | Pending |
+| SIGN-03 | Phase 101 | Pending |
+| REL-01 | Phase 104 | Pending |
+| PUB-01 | Phase 102 | Pending |
+| PUB-02 | Phase 105 | Pending |
+| CHOST-01 | Phase 103 | Pending |
+| CHOST-02 | Phase 103 | Pending |
+| CHOST-03 | Phase 106 | Pending |
+| CLOSE-01 | Phase 107 | Pending |
+</content>

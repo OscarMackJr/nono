@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
-status: planning
-last_updated: "2026-07-02T17:01:14.692Z"
+status: active
+last_updated: "2026-07-02T17:15:00.000Z"
 last_activity: 2026-07-02
 progress:
-  total_phases: 0
+  total_phases: 7
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -17,7 +17,7 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + archived, tag `v3.4` local. Phases 98-100 archived to `milestones/v3.4-ROADMAP.md`). Roadmap: `.planning/ROADMAP.md`. Requirements: `.planning/REQUIREMENTS.md` (defined below). Phase numbering continues 100 → 101+ (no reset).
+See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + archived, tag `v3.4` local. Phases 98-100 archived to `milestones/v3.4-ROADMAP.md`). Roadmap: `.planning/ROADMAP.md` (Phases 101-107, 10/10 requirements mapped). Requirements: `.planning/REQUIREMENTS.md` (defined below). Phase numbering continues 100 → 101+ (no reset).
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and, for v3.5, actually *distributable*: a publicly-trusted-signed release that runs out-of-the-box on a clean host.
 
@@ -25,10 +25,10 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 101 (Verify-Gate Hardening + Azure Profile Confirmation) — not started
 Plan: —
-Status: Defining requirements
-Last activity: 2026-07-02 — Milestone v3.5 started
+Status: Roadmap approved — 7 phases (101-107), 10/10 requirements mapped, ready for plan-phase
+Last activity: 2026-07-02 — Roadmap created
 
 ## Performance Metrics
 
@@ -76,6 +76,9 @@ Last activity: 2026-07-02 — Milestone v3.5 started
 | Verify-gate debugging is CI-side (GitHub `windows-latest`), not user-host | all | Smoke test + `signtool /pa` re-verify run on GitHub's clean cloud runner; only the behavioral install/broker-spawn/no-VC++ tests need the Azure VM. Fork's autonomous deliverable = CI verify hardening + Azure-VM IaC + scripted gates. |
 | Ship reproducible Azure-VM IaC (`az`/Bicep) + scripted `verify-dark.ps1` gates | — | Operator selected "Ship IaC + scripted gate" over runbook-only: a fresh Win11 VM (no POC cert, no VC++) stood up by script + unattended gates the operator runs over RDP, emitting machine-readable verdicts (`SKIP_HOST_UNAVAILABLE` when no VM). |
 | FUT-01 live multi-registry publish IN scope | — | Operator broadened scope: actually publish `0.66.1` to crates.io + PyPI + npm in-milestone (v3.4 was PREPARE-ONLY). |
+| 7 phases (101-107), spine 101→104→105/106→107, with 102 and 103 parallelizable | roadmap | Registry-ownership question is pre-resolved by the PUB-01 rename decision (fork publishes under owned `nono-sandbox` names, no upstream co-owner-grant preflight needed) — so the research's suggested "Phase 1: registry preflight" collapses into Phase 102 (the rename phase) rather than a separate go/no-go gate. Verify-gate hardening (101) must land before the release cut (104, "do not cut a release until smoke is green"); the rename (102) is independent of signing and parallelizable; Azure IaC + gates (103) reuse 101's shared verify helper but are otherwise independent infra work; live publish (105) needs both the rename (102) and a real release (104); clean-host UAT (106) needs the real release (104) but NOT the live registry publish (105) — the GitHub Release artifact is sufficient; close-out (107) is strictly gated on 106 PASS, never merely on 104 green (Pitfall 10). |
+| CHOST-03 does not depend on PUB-02 | roadmap | Architecture research's suggested build order has Phase 8 (VM UAT) depend on Phases 2/3/6 (IaC, gates, release cut) but not Phase 7 (publish) — the VM stages GitHub Release artifacts directly, not registry-installed packages, so live publish is not a precondition for clean-host UAT. |
+| Operator-in-loop checkpoints explicitly annotated per success criterion (not just per phase) | roadmap | Phases 104-107 each mix autonomous prep with operator-only actions (Azure profile config, tag push, registry publish commands, RDP session, secret deletion) — annotating at the success-criterion level (not phase level) keeps `/gsd:plan-phase` from mis-scoping an operator action as executor-automatable. |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -110,19 +113,21 @@ Last activity: 2026-07-02 — Milestone v3.5 started
 
 ### Pending Todos
 
-Two host-gated distribution todos are IN SCOPE for v3.5 (FUT-03 drain), to be run on the Azure Win11 VM:
-- **`20260611-poc-cert-broker-clean-host.md`** — after a trusted-signed `0.66.1` release, confirm `nono run --profile claude-code` spawns the broker on a clean host with NO manual cert-trust step. Blocked until (1) the verify-gate `UnknownError` is fixed and (2) a real trusted-signed `0.66.1` is cut.
+Two host-gated distribution todos are IN SCOPE for v3.5 (CHOST-03 / FUT-03 drain), to be run on the Azure Win11 VM (Phase 106):
+- **`20260611-poc-cert-broker-clean-host.md`** — after a trusted-signed `0.66.1` release, confirm `nono run --profile claude-code` spawns the broker on a clean host with NO manual cert-trust step. Blocked until (1) the verify-gate `UnknownError` is fixed (Phase 101) and (2) a real trusted-signed `0.66.1` is cut (Phase 104).
 - **`20260611-msi-vcredist-prereq.md`** — confirm the machine MSI installs on a fresh Win11 host with no VC++ redist (code fix `+crt-static` already shipped/verified; only the clean-VM empirical confirmation remains).
 
 ### Blockers/Concerns
 
-- **Azure Trusted Signing verify-gate `UnknownError` (v3.5 headline blocker):** first live smoke run (`28467925298`, 2026-06-30) — OIDC login + Sign succeeded (signer `CN=TWGGLOBAL.onmicrosoft.com`) but Verify FAILED `Status: UnknownError`, issuer `CN=Microsoft Enterprise ID Verified Policy AOC CA 01`. Two causes to settle: (1) confirm the profile is **Public Trust** (public chain reads `Microsoft ID Verified CS EOC/AOC CA NN`, not `…Enterprise ID Verified Policy AOC CA…`); (2) `UnknownError` ≠ `UntrustedRoot` → chain couldn't be *built* on `windows-latest` (AOC intermediate absent / CRL-OCSP timeout) — re-verify with `signtool verify /pa /v`. `release.yml:259` uses the same fail-closed `-ne 'Valid'` check, so a release tag aborts at verify until this is `Valid`. Runbook: `.planning/quick/260630-trusted-signing-golive/AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md`. See [[azure_trusted_signing_golive]].
+- **Azure Trusted Signing verify-gate `UnknownError` (v3.5 headline blocker — Phase 101 target):** first live smoke run (`28467925298`, 2026-06-30) — OIDC login + Sign succeeded (signer `CN=TWGGLOBAL.onmicrosoft.com`) but Verify FAILED `Status: UnknownError`, issuer `CN=Microsoft Enterprise ID Verified Policy AOC CA 01`. Two causes to settle: (1) confirm the profile is **Public Trust** (public chain reads `Microsoft ID Verified CS EOC/AOC CA NN`, not `…Enterprise ID Verified Policy AOC CA…`); (2) `UnknownError` ≠ `UntrustedRoot` → chain couldn't be *built* on `windows-latest` (AOC intermediate absent / CRL-OCSP timeout) — re-verify with `signtool verify /pa /v`. `release.yml:259` uses the same fail-closed `-ne 'Valid'` check, so a release tag aborts at verify until this is `Valid`. Runbook: `.planning/quick/260630-trusted-signing-golive/AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md`. See [[azure_trusted_signing_golive]].
 - **Correct GitHub OIDC FIC subject** (both workflows): `repo:OscarMackJr/nono:environment:Development` — the old `260603-i31` cookbook's `oscarmackjr-twg` + `ref:` subject is STALE and causes `AADSTS700213`.
-- **Operator's corporate host is NOT a valid clean host** — POC cert previously imported + VC++ installed + corporate proxy/EDR/managed-trust-store confound the exact chain-build/revocation failure being debugged. Clean-host UAT must run on a fresh Azure Win11 VM (off corporate LAN, clean revocation egress, never trusted the POC cert, no VC++).
+- **Operator's corporate host is NOT a valid clean host** — POC cert previously imported + VC++ installed + corporate proxy/EDR/managed-trust-store confound the exact chain-build/revocation failure being debugged. Clean-host UAT must run on a fresh Azure Win11 VM (off corporate LAN, clean revocation egress, never trusted the POC cert, no VC++) — Phase 106.
 - **Base crate `0.66.1` already prepared (v3.4)** — all 6 workspace crates + both binding repos at `0.66.1`; both mandatory pre-push gates GREEN; RELEASE-RUNBOOK.md current. v3.5 executes the actual go-live from this prepared state. Do NOT publish `0.66.0`.
 - **Repo stays PUBLIC** (minifilter altitude 377813.5 received 2026-07-01; go-private retired). Verify no `build_notes/`/`.gsd/` staged before any push. Unlike prior prepare-only tags, v3.5's tag push is *intended* (go-live).
 - **All commits DCO-signed**: `Signed-off-by: Oscar Mack Jr <oscar.mack.jr@gmail.com>` on every commit.
 - **Cross-target clippy MUST be GREEN** if any cfg-gated Unix code is touched: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) exit 0 locally — PARTIAL→CI retired (v3.3 Phase 96). (v3.5 is primarily CI-yaml + PowerShell + IaC; likely low Unix-cfg exposure, but the rule stands.)
+- **Registry ownership pre-resolved, not a live blocker** — crates.io `nono`/`nono-proxy`, PyPI `nono-py`, npm `nono-ts` are upstream-owned; the fork publishes under fork-owned `nono-sandbox` family names instead of requesting a co-owner grant (PUB-01, Phase 102). Each new name's availability must still be confirmed live before committing to the rename.
+- **CLOSE-01 secret-retirement ordering is a structural gate, not a checklist item** — Phase 107 must NOT run until Phase 106 (CHOST-03) has a passed verdict; retiring POC secrets after only Phase 104 (release green) leaves no fallback signing path if clean-host UAT reveals a problem invisible on CI runners.
 
 ### Quick Tasks Completed
 
@@ -134,6 +139,7 @@ Two host-gated distribution todos are IN SCOPE for v3.5 (FUT-03 drain), to be ru
 | 260625-crs | Phase 83 deferred code-review findings: WR-02/03/04/05 + IN-01/IN-03 (interpreter PATH-hijack, GetWindowsDirectoryW, canonical expander, validate(), gate probe, SID regex) | 2026-06-25 | 4af1e8f9 | [260625-crs-address-phase-83-code-review-deferred-fi](./quick/260625-crs-address-phase-83-code-review-deferred-fi/) |
 | 260629-toe | UPST11 v0.66.0 parity phase definition: reviewed upstream PR #1293, authored divergence ledger for v0.65.1→v0.66.0 (19 PRs) + fork-invariant gates + 3-wave structure; #1225 NetworkIntent flagged HIGH-CONFLICT; 0.66.0 version collision → next release ≥0.67.0 | 2026-06-29 | (docs) | [260629-toe-v066-parity](./quick/260629-toe-v066-parity/) |
 | 20260701-fltmgr-altitude | Wire official Microsoft altitude 377813.5 for nono-fltmgr.sys: live artifacts (INF/DESIGN/README) already done in 2041fc62; reconciled ADR-65 §5 amendment + STATE approval-RECEIVED. PUBLIC→PRIVATE flip flagged as operator decision (un-taken) | 2026-07-01 | e8ea5508 | [20260701-fltmgr-altitude-assignment](./quick/20260701-fltmgr-altitude-assignment/) |
+| 260630-trusted-signing-golive | Live smoke run `28467925298` on the Azure Trusted Signing path — OIDC login + Sign succeeded, Verify FAILED `UnknownError`; authored the go-live cookbook (`AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md`) that seeds this milestone's Phase 101/104 gates | 2026-06-30 | (docs) | [260630-trusted-signing-golive](./quick/260630-trusted-signing-golive/) |
 
 ## Deferred Items
 
@@ -167,17 +173,18 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 |----------|------|--------|-------------|
 | Historical | 41 open quick-tasks (Mar–Apr 2026 dates, all `missing`/cleaned-up) | Acknowledged | v3.4 close |
 | Dormant | 6 seeds SEED-001…006 (all consumed/dormant; delivered across prior milestones) | Acknowledged | v3.4 close |
-| Host-gated | 2 todos — `msi-vcredist-prereq` (clean Win11 VM MSI install) + `poc-cert-broker-clean-host` (trusted-signed release + broker spawns out-of-box) — FUT-02/03 Azure Trusted Signing distribution; folded-without-resolve in Plan 100-05 | Open (host-gated) | v3.4 close |
+| Host-gated | 2 todos — `msi-vcredist-prereq` (clean Win11 VM MSI install) + `poc-cert-broker-clean-host` (trusted-signed release + broker spawns out-of-box) — FUT-02/03 Azure Trusted Signing distribution; folded-without-resolve in Plan 100-05; both now IN SCOPE for v3.5 CHOST-03 (Phase 106) | In progress (v3.5 Phase 106) | v3.4 close |
 | Product-decision | `99-HUMAN-UAT` partial (3 open scenarios): WR-01 unused `sigstore-trust-root 0.9.0` direct-dep pin (keep-vs-remove), WR-03 `validate_block_net_conflicts` vs strict-filter semantics (fail-closed today, consistency not vuln), WR-02 `--allow-http2` runtime no-op (`UpstreamPool` absorbed but not yet wired — advertise-or-wire before H2 release notes) | Open (non-blocking) | v3.4 close |
 
-**Blocked-external (not a milestone deferral, tracked separately):** the signed `0.66.1` release is blocked on the open Azure Trusted Signing verify-gate `UnknownError` (quick `260630-trusted-signing-golive`) — signing works, verify fails; confirm Public Trust profile + re-verify clean Win11 before any signed push.
+**Blocked-external (now the v3.5 headline target, not merely tracked):** the signed `0.66.1` release was blocked on the open Azure Trusted Signing verify-gate `UnknownError` (quick `260630-trusted-signing-golive`) — signing works, verify fails; v3.5 Phase 101 exists specifically to resolve this before Phase 104 cuts the release.
 
 ## Session Continuity
 
-Last session: 2026-07-02T15:56:32.492Z
-Stopped at: Phase 100 Plan 05 complete
+Last session: 2026-07-02T17:15:00.000Z
+Stopped at: Roadmap created (Phases 101-107)
 Resume file: None
 
 ## Operator Next Steps
 
-- v3.5 opened 2026-07-02 — defining requirements → roadmap. Next: `/gsd:plan-phase 101` (or `/gsd:discuss-phase 101`) once the roadmap is approved.
+- v3.5 roadmap approved 2026-07-02 — 7 phases (101-107), 10/10 requirements mapped, no orphans. Next: `/gsd:plan-phase 101` (or `/gsd:discuss-phase 101`) to begin Phase 101 (Verify-Gate Hardening + Azure Profile Confirmation).
+</content>
