@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v3.4
 milestone_name: UPST11 Upstream Sync to v0.66.0 + Release-Reconcile
-status: verifying
-stopped_at: Phase 100 Plan 04 complete
-last_updated: "2026-07-02T16:02:01.395Z"
-last_activity: 2026-07-02
+status: Awaiting next milestone
+stopped_at: Phase 100 Plan 05 complete
+last_updated: "2026-07-02T16:35:46.446Z"
+last_activity: 2026-07-02 — Milestone v3.4 completed and archived
 progress:
   total_phases: 3
   completed_phases: 3
@@ -18,18 +18,18 @@ progress:
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.4 milestone active 2026-06-30; v3.3 Phases 94-97 complete + archived; tag `v3.3` local). Phase numbering continues from Phase 97 (Phases 98-100 — NOT reset). Roadmap: `.planning/ROADMAP.md`. Requirements: `.planning/REQUIREMENTS.md`.
+See: `.planning/PROJECT.md` (v3.4 SHIPPED + archived 2026-07-02; tag `v3.4` local. Phases 98-100 archived to `milestones/v3.4-ROADMAP.md`). Roadmap: `.planning/ROADMAP.md`. REQUIREMENTS.md removed — a fresh one is created by `/gsd-new-milestone`.
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model — and turns the v3.3 prepare-only pipeline into a genuinely operator-pushable `0.66.1` release.
+**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms. The fork stays current with upstream without regressing its Windows security model.
 
-**Current Focus:** Phase 100 — release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker
+**Current Focus:** Awaiting next milestone (`/gsd-new-milestone`). v3.4 delivered the UPST11 sync to upstream `0.66.0` and a prepare-only, operator-push-ready `0.66.1` release.
 
 ## Current Position
 
-Phase: 100 (release-reconcile-leapfrog-0-66-1-pipeline-pypi-blocker) — EXECUTING
-Plan: 5 of 5
-Status: Phase complete — ready for verification
-Last activity: 2026-07-02 -- Plan 100-05 complete: captured clean-host-install gate verdict (SKIP_HOST_UNAVAILABLE / exit 3, operator-accepted) recorded verbatim on msi-vcredist-prereq todo; poc-cert-broker-clean-host todo documented as externally blocked on the active Azure Trusted Signing verify-gate UnknownError thread (quick 260630-trusted-signing-golive); neither todo marked resolved, both remain under .planning/todos/pending/. Phase 100 (final phase of v3.4) now fully executed (all 5 plans complete) -- ready for phase verification / milestone close.
+Phase: Milestone v3.4 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-07-02 — Milestone v3.4 completed and archived
 
 ## Performance Metrics
 
@@ -160,6 +160,17 @@ Items acknowledged and deferred at **v3.3 close (2026-06-26)** — `gsd-sdk quer
 
 **Operator-action carry-forwards into v3.4 (PREPARE-ONLY — outside any prior milestone):** (1) nono-py `RouteConfig` missing `endpoint_policy` field (`src/policy.rs:743` + `src/proxy.rs:206`) — **CLOSED 2026-07-02, Phase 100 Plan 03 (RLS-12)**: `endpoint_policy: None` added at both sites, `maturin build` exits 0; (2) downstream crate `cargo publish --dry-run` stays PRE_PUBLISH_REGISTRY_BLOCKED until `nono 0.66.1` is on crates.io; (3) follow updated RELEASE-RUNBOOK.md (at 0.66.1) for the tag push + publish.
 
+Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk query audit-open` reported 50 open artifacts, user acknowledged-all. All historical, dormant, or host-gated; none v3.4 blockers:
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| Historical | 41 open quick-tasks (Mar–Apr 2026 dates, all `missing`/cleaned-up) | Acknowledged | v3.4 close |
+| Dormant | 6 seeds SEED-001…006 (all consumed/dormant; delivered across prior milestones) | Acknowledged | v3.4 close |
+| Host-gated | 2 todos — `msi-vcredist-prereq` (clean Win11 VM MSI install) + `poc-cert-broker-clean-host` (trusted-signed release + broker spawns out-of-box) — FUT-02/03 Azure Trusted Signing distribution; folded-without-resolve in Plan 100-05 | Open (host-gated) | v3.4 close |
+| Product-decision | `99-HUMAN-UAT` partial (3 open scenarios): WR-01 unused `sigstore-trust-root 0.9.0` direct-dep pin (keep-vs-remove), WR-03 `validate_block_net_conflicts` vs strict-filter semantics (fail-closed today, consistency not vuln), WR-02 `--allow-http2` runtime no-op (`UpstreamPool` absorbed but not yet wired — advertise-or-wire before H2 release notes) | Open (non-blocking) | v3.4 close |
+
+**Blocked-external (not a milestone deferral, tracked separately):** the signed `0.66.1` release is blocked on the open Azure Trusted Signing verify-gate `UnknownError` (quick `260630-trusted-signing-golive`) — signing works, verify fails; confirm Public Trust profile + re-verify clean Win11 before any signed push.
+
 ## Session Continuity
 
 Last session: 2026-07-02T15:56:32.492Z
@@ -168,4 +179,4 @@ Resume file: None
 
 ## Operator Next Steps
 
-- Phase 100 (final phase of v3.4) is fully executed (5/5 plans). Next: verify Phase 100 and proceed to v3.4 milestone close/archive.
+- Start the next milestone with /gsd-new-milestone

@@ -1,5 +1,24 @@
 # Milestones
 
+## v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile (Shipped: 2026-07-02)
+
+**Phases completed:** 3 phases (98-100), 16 plans, 25 tasks (89 commits since v3.3 tag; 162 files, +13,726/−406)
+
+**Delivered:** The fork is synced to upstream `nolabs-ai/nono` `v0.66.0` (the 19-PR `v0.65.1..v0.66.0` window) without regressing the Windows security model or the ADR-86 policy-free-library boundary, and the prepare-only release pipeline is leapfrogged to a genuinely operator-pushable **`0.66.1`** — one step above upstream's own colliding `0.66.0`.
+
+**Key accomplishments:**
+
+- **UPST11 divergence audit (Phase 98):** Refined the `260629-toe` per-PR ledger to per-commit resolution — 14 substantive commits across 8 clusters A-H (+ 6 noise = 20 total; drift tool SHA-pinned to 0834aa66), each `windows-touch`-flagged with an ADR-review verdict and no bare TBD. Settled the highest-conflict item via **ADR-98: full-sync-adopt of upstream #1225 `NetworkIntent`** (confirmed CLI-side only — `NetworkMode::ProxyOnly` in the core crate and the Windows WFP/AppContainer enforcement-time `WindowsNetworkPolicyMode` are untouched; Phase 86 convergence precedent). Six carve-out surfaces re-touch-checked with git-log verdicts + guard tests.
+- **Upstream absorb + fork-invariant verify (Phase 99):** Absorbed every will-sync cluster DCO-signed with upstream SHA trailers — Cluster A (72bcfd66 `NetworkIntent` replay + d457ecc3 contradictory-flag guard), Cluster C split (cdeeb5b9 HTTP/2 `UpstreamPool` + 46bcfbb9 fail-fast `--allow-endpoint` + 08ca19a8 wildcard route), Cluster D (5b8e94da 9P/V9FS statfs warning, additive in `linux.rs`), Cluster E (c808f000 `always-further`→`nolabs-ai` org-ref), Cluster F (2e64798d `sigstore-trust-root` 0.8.0→0.9.0 dual-version cascade), Cluster G (a4d68189 proxy docs / stale `X-Nono-Token` removal). Cluster B (4 tool-sandbox commits) won't-sync — fork lacks `tool-sandbox/`. Both cross-target clippy gates GREEN locally (fixed a `let_chains` edition-2021 break in `linux.rs` the linux-gnu gate caught + rustfmt drift in 6 files); `make ci` clean; D-10 carve-out checklist has three "Verified unregressed" verdicts; code-review + verifier + human sign-off APPROVED.
+- **Release reconcile — leapfrog 0.66.1 (Phase 100):** Bumped the full 6-member workspace set + 6 internal path-dep pins + both binding repos (nono-py, nono-ts, one DCO-signed commit each; intermediate 0.66.0 never committed) to `0.66.1`, Cargo.lock regenerated with zero third-party drift. Reconciled upstream CI #1245/#1251 via **ADR-100 ADAPT-not-adopt** — the dead upstream release-please PR-title trigger rewritten to operator-invocable `workflow_dispatch`, verify-dark gate + sign-before-harvest order untouched.
+- **PyPI blocker closed + one-step-push ready (Phase 100, RLS-12/13):** Closed the carried-forward nono-py `RouteConfig` blocker (`endpoint_policy: None` at both sites; Rule-3 auto-fix also caught `ProxyConfig.enable_h2: false` — same-class binding drift only `maturin build` surfaces) so the wheel builds. Re-pointed the release-readiness gate to `targetVersion=0.66.1/upstreamHighest=0.66.0`, fixed a hardcoded-literal bug in assertion (e) + a false-positive twine-detection bug in `release-dry-run.ps1`; both mandatory pre-push gates re-run GREEN and RELEASE-RUNBOOK.md is current for the 0.66.1 tag. Host-gated `msi-vcredist-prereq` + `poc-cert-broker-clean-host` todos folded-without-resolve (mirrors v3.1 Phase 90 DRAIN).
+
+**Known deferred items at close:** 50 (41 historical quick-tasks, 6 dormant/consumed seeds SEED-001…006, 2 host-gated distribution todos FUT-02/03, 1 partial UAT gap `99-HUMAN-UAT` with 3 product-decision scenarios) — all acknowledged, none v3.4 blockers (see STATE.md Deferred Items).
+
+**Release scope = PREPARE ONLY.** The pipeline is reconciled, dry-run GREEN, and gated at `0.66.1`; the actual tag push + live registry publish remain an operator-gated manual step outside this milestone (repo stays PUBLIC; no `build_notes/`/`.gsd/` staged before any push). The signed release is additionally blocked on the open Azure Trusted Signing verify-gate `UnknownError` (quick `260630-trusted-signing-golive`).
+
+---
+
 ## v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release (Shipped: 2026-06-26)
 
 **Phases completed:** 4 phases, 16 plans, 22 tasks (91 commits; 29 source files, +6,179/−423)
