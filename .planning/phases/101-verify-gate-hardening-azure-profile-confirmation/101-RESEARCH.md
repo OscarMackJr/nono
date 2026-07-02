@@ -607,7 +607,14 @@ if ($issuer -match 'Enterprise ID Verified Policy') {
 fail-closed direction if wrong (worst case is spurious retries or a diagnostic false
 positive, never a loosened pass).
 
-## Open Questions
+## Open Questions (RESOLVED during planning)
+
+> All three questions are operationally resolved by the Phase 101 plans (no execution risk):
+> **Q1** → Plan 101-03 SIGN-01 operator checkpoint (`autonomous: false`, gates SIGN-03 smoke).
+> **Q2** → Plan 101-01 reuses the live `Find-Signtool` dynamic highest-version probe from
+> `scripts/sign-windows-artifacts.ps1:22-58` (per PATTERNS.md), making the SDK-path question moot.
+> **Q3** → resolved to implementer discretion (default `Invoke-WebRequest -Method Head`); it is a
+> diagnostics-only, failure-path probe with no gating effect.
 
 1. **Is the account's current certificate profile actually `PublicTrustTest`?**
    - What we know: the observed issuer `CN=Microsoft Enterprise ID Verified Policy AOC CA 01`
