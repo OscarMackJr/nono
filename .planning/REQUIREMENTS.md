@@ -35,7 +35,7 @@
 ### Clean-Host UAT — Azure VM (CHOST — FUT-03)
 
 - [x] **CHOST-01**: A reproducible fresh-Win11 clean-host is stood up from fork-owned IaC (`az` CLI / Bicep under `scripts/azure/`) — a Gen2 + Trusted-Launch (vTPM) `windows-11` VM (SKU resolved live, not hardcoded), never-trusted-POC-cert, no VC++ runtime, RDP-reachable — with a documented create → use → teardown lifecycle (ephemeral, never persistent).
-- [ ] **CHOST-02**: Two new unattended `verify-dark.ps1` gates assert clean-host trust and plug into the existing gate-discovery harness (emitting `SKIP_HOST_UNAVAILABLE` when no clean host is present): a `trusted-signed-assertion` gate (Authenticode `Valid`, Issuer = `Microsoft ID Verified CS` root, reusing the SIGN-02 shared helper) and a **self-contained** `broker-spawn-on-clean-host` gate (install → `nono run --profile claude-code` spawns the broker with NO manual cert import → uninstall; ordered-safe under a `-All` sweep).
+- [x] **CHOST-02**: Two new unattended `verify-dark.ps1` gates assert clean-host trust and plug into the existing gate-discovery harness (emitting `SKIP_HOST_UNAVAILABLE` when no clean host is present): a `trusted-signed-assertion` gate (Authenticode `Valid`, Issuer = `Microsoft ID Verified CS` root, reusing the SIGN-02 shared helper) and a **self-contained** `broker-spawn-on-clean-host` gate (install → `nono run --profile claude-code` spawns the broker with NO manual cert import → uninstall; ordered-safe under a `-All` sweep).
 - [ ] **CHOST-03**: On the Azure VM, both host-gated distribution todos are drained to a genuine PASS (Gate 3) — `poc-cert-broker-clean-host` (the broker spawns out-of-box on the trusted-signed `0.66.1` release) via CHOST-02, and `msi-vcredist-prereq` (the machine MSI installs on fresh Win11 with no VC++ redist — no `1603`/rollback, `nono.exe` launches, no `0xC0000135`) via the existing `clean-host-install.ps1` gate — and both todos are moved `pending/` → `resolved/`.
 
 ### Close-Out (CLOSE)
@@ -79,7 +79,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 | PUB-01 | Phase 102 | Complete (5/5 plans done, phase gate PASSED 2026-07-03) |
 | PUB-02 | Phase 105 | Pending |
 | CHOST-01 | Phase 103 | Complete |
-| CHOST-02 | Phase 103 | Pending |
+| CHOST-02 | Phase 103 | Complete |
 | CHOST-03 | Phase 106 | Pending |
 | CLOSE-01 | Phase 107 | Pending |
 </content>
