@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: "Phase 103 complete: CHOST-01 + CHOST-02 phase-gate verified (all 4 success criteria confirmed simultaneously); ready for /gsd:plan-phase 104"
-last_updated: "2026-07-03T21:32:03.586Z"
+stopped_at: Phase 104 Plan 02 complete (publish-crates neutralized via job-level if:false, regression guard + local root pre-check scripts added, REL-01/SC3 disproven issuer-substring wording corrected); ready to execute Phase 104 Plan 03
+last_updated: "2026-07-03T21:42:22.761Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 4
@@ -27,8 +27,8 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 ## Current Position
 
 Phase: 104 (smoke-green-cut-the-trusted-signed-release) — EXECUTING
-Plan: 2 of 3
-Status: Plan 01 (REL-01 D-04 flush fix + NoCheck-mode classification) complete; ready to execute Plan 02
+Plan: 3 of 3
+Status: Plan 02 (publish-crates neutralization + regression guard + root pre-check + doc correction) complete; ready to execute Plan 03 (operator checkpoint)
 Last activity: 2026-07-03
 
 ## Performance Metrics
@@ -56,6 +56,7 @@ Last activity: 2026-07-03
 | Phase 103 P02 | 10min | 2 tasks | 2 files |
 | Phase 103 P03 | 2min | 2 tasks | 0 files |
 | Phase 104 P01 | 3min | 2 tasks | 2 files |
+| Phase 104 P02 | 24min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,7 @@ Last activity: 2026-07-03
 | CHOST-02 authored: `scripts/gates/trusted-signed-assertion.ps1` (dot-sources `verify-authenticode.ps1`, gates solely on `Status='Valid'` via `Assert-TrustedSignature -Mode Strict`, catches its throw -> returned FAIL, issuer captured `detail.issuerInformational`-only never a branch condition) + `scripts/gates/broker-spawn-on-clean-host.ps1` (self-contained install -> `nono run --profile claude-code` -> uninstall cycle, zero dependency on the alphabetically-later install gate under `-All`); both confirmed SKIP_HOST_UNAVAILABLE (exit 3) on this dev host; zero edits to `scripts/verify-dark.ps1` | 103-02 | Split issuer-capture across separate variables/statements so no single line contains both an `if`-substring (e.g. inside `Certificate`) and `Issuer`, satisfying the plan's zero-match `if.*Issuer` grep while still capturing the issuer informational-only; reworded all prose references to the other gate file generically ("the Phase 80 INST-01 install-proof gate") rather than its literal filename, since the plan's own acceptance criteria grep the whole file for zero occurrences of `clean-host-install` |
 | Phase 103 CLOSED at the phase-gate: `az bicep build` re-confirmed exit 0; both new gates independently re-confirmed exit 3 (SKIP_HOST_UNAVAILABLE); full `-All` sweep JSON programmatically parsed (not eyeballed) confirming both new gates present at `SKIP_HOST_UNAVAILABLE` and no gate besides the unrelated pre-existing `release-readiness` reporting FAIL/HARNESS_ERROR; `git diff --stat scripts/verify-dark.ps1` confirmed empty (zero harness edits across both plans); CHOST-01 and CHOST-02 both confirmed satisfied simultaneously | 103-03 | `-All` sweep's `overall: "FAIL"` is a pre-existing baseline condition (release-readiness gate's version-family cargo-metadata check, authored Phase 97/re-pointed Phase 100, zero file overlap with Plans 01/02), not a Phase 103 regression — independently re-traced (git history + file-overlap check), not merely re-stated from Plan 02's own prior observation of the same FAIL |
 | REL-01 D-04 flush fix landed: `Write-Error -ErrorAction Continue` on both Strict-mode failure branches guarantees `Write-ChainDiagnostic` runs before the terminating `throw` under CI's forced `$ErrorActionPreference='Stop'`; `Merge-NoCheckOverride` (pure, one-directional) + a NoCheck-mode corroborating `X509Chain` build wired into `Get-ChainClassification` prevent a genuine untrusted root from being misclassified as a retry-able transient. Both fail-closed gate conditions (`Status -ne 'Valid'`, `ExitCode -ne 0`) grep-confirmed byte-for-byte unchanged; 6/6 harness cases pass; manual revert-then-restore proved the new `diagnosticFlushUnderStop` case would have caught the pre-fix bug (FAIL observed, then PASS after restore, file byte-identical after) | 104-01 | Purely additive legibility/classification hardening per `104-RESEARCH.md` Pattern 1/Pattern 2 — does not and cannot fix the external Microsoft root-certificate propagation gap (still open, tracked separately); makes the *next* verify failure fully legible on the first attempt regardless of cause |
+| `publish-crates` job neutralized via job-level `if: false` (Pitfall 104-A closed) — 3 stale `cargo publish -p nono*` lines + `update-homebrew-core` left untouched; new `scripts/verify-release-yml-publish-selectors.ps1` regression-proven (FAIL-then-PASS observed via a throwaway substring injected into `update-homebrew-core`, then removed); new `scripts/azure/check-trusted-signing-root.ps1` live-run this session confirms Microsoft's root CTL still ABSENT the thumbprint (554 certs checked, exit 1) — external blocker unresolved, no code fallback exists; `REQUIREMENTS.md` REL-01 / `ROADMAP.md` Phase 104 SC3 wording corrected off the disproven issuer-substring heuristic to Status=Valid + non-test-signer, issuer informational-only (Finding B) | 104-02 | Closes the newly-discovered SC2 landmine before the operator's Plan 104-03 tag push; the local pre-check avoids burning CI-dispatch minutes polling for an external, unforceable propagation fix; the doc correction prevents a future reader from reintroducing the disproven heuristic as a gate condition |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -219,8 +221,8 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T21:30:48.000Z
-Stopped at: Phase 104 Plan 01 complete (REL-01 D-04 flush fix + NoCheck-mode untrusted-root classification, 6/6 harness cases pass, both fail-closed gates grep-confirmed unchanged); ready to execute Phase 104 Plan 02
+Last session: 2026-07-03T21:42:22.761Z
+Stopped at: Phase 104 Plan 02 complete (publish-crates neutralized via job-level if:false, regression guard + local root pre-check scripts added, REL-01/SC3 disproven issuer-substring wording corrected); ready to execute Phase 104 Plan 03
 Resume file: None
 
 ## Operator Next Steps

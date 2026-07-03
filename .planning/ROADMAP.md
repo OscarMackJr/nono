@@ -141,7 +141,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. The published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** — `Get-AuthenticodeSignature.Status -eq 'Valid'` plus a non-test signer (rejecting `CN=nono Test Signing`/`PublicTrustTest`), with the issuer captured informationally only, never gated on an issuer-substring match (per `101-SIGN03-SMOKE-VERDICT.md` Finding B, which disproved the prior issuer-naming heuristic).
 **Plans**: 3 plans
 - [x] 104-01-PLAN.md — verify-authenticode.ps1 hardening: D-04 diagnostic-flush fix (Write-Error -ErrorAction Continue) + NoCheck-mode untrusted-root classification (Merge-NoCheckOverride), plus 2 new regression-guard test cases
-- [ ] 104-02-PLAN.md — Neutralize release.yml's stale publish-crates job (if: false, Pitfall 104-A) + local publish-selector regression guard + local root-availability pre-check (certutil) + correct disproven issuer-substring wording in REQUIREMENTS.md/ROADMAP.md
+- [x] 104-02-PLAN.md — Neutralize release.yml's stale publish-crates job (if: false, Pitfall 104-A) + local publish-selector regression guard + local root-availability pre-check (certutil) + correct disproven issuer-substring wording in REQUIREMENTS.md/ROADMAP.md — publish-crates job-level `if: false` (regression-proven), certutil pre-check live-run (ABSENT, 554 certs checked, matching research), REL-01/SC3 wording corrected to Status=Valid + non-test-signer condition
 - [ ] 104-03-PLAN.md — Operator checkpoint: poll-until-green smoke re-run (SC1) → tag push v0.66.1 → confirm Release workflow green + Verified publisher via the Finding-B-corrected gate (SC2 + SC3)
 
 ### Phase 105: Live Multi-Registry Publish
