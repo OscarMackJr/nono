@@ -62,14 +62,12 @@ jobs:
       - name: Verify the embedded signature is OUR Trusted Signing cert
         shell: pwsh
         run: |
+          . (Join-Path $PWD "scripts\verify-authenticode.ps1")
           $sig = Get-AuthenticodeSignature smoke\nono-smoke.exe
           Write-Host "Status: $($sig.Status)"
           Write-Host "Signer: $($sig.SignerCertificate.Subject)"
           Write-Host "Issuer: $($sig.SignerCertificate.Issuer)"
-          if ($sig.Status -ne 'Valid') {
-            Write-Error "Smoke test FAILED: Authenticode status is $($sig.Status) (expected Valid)."
-            exit 1
-          }
+          Assert-TrustedSignature -Path "smoke\nono-smoke.exe" -Mode Strict
           Write-Host "OK: Trusted Signing smoke test PASSED — the D-02 signing path is live."
 
       # Upload the CI-signed binary so it can be verified offline on a clean, NON-proxied
