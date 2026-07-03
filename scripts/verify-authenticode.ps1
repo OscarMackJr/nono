@@ -131,11 +131,44 @@ function Get-FlagClassification {
 }
 
 # -----------------------------------------------------------------------------
+# Merge-NoCheckOverride
+# -----------------------------------------------------------------------------
+# PURE function (no chain building, no I/O). Strictly one-directional: when a NoCheck-mode
+# corroborating chain build has confirmed a genuine UntrustedRoot on the root element, this
+# forces the classification to IsUntrustedRoot=$true / IsTransient=$false — i.e. it can only
+# ever move a classification TOWARD "do not retry, this is real," never toward "treat as
+# passing." It never touches Passed/gasOk/signToolOk (those are computed independently in
+# $verifyBlock, before this classification is even consulted). When $NoCheckUntrustedRoot is
+# $false, $Classification is returned completely unchanged (identity pass-through).
+function Merge-NoCheckOverride {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Classification,
+        [Parameter(Mandatory)][bool]$NoCheckUntrustedRoot
+    )
+
+    if ($NoCheckUntrustedRoot) {
+        $Classification.IsTransient = $false
+        $Classification.IsUntrustedRoot = $true
+    }
+    return $Classification
+}
+
+# -----------------------------------------------------------------------------
 # Get-ChainClassification
 # -----------------------------------------------------------------------------
 # Builds an X509Chain from the signer certificate with online revocation checking,
 # ORs all resulting ChainStatus flags together, and delegates to Get-FlagClassification.
 # Attaches the built $chain object (for Write-ChainDiagnostic's failure-path dump).
+#
+# Also builds a second, NoCheck-mode chain purely as diagnostic/classification
+# corroboration (research Pattern 1): Online mode can truncate the chain to 3 elements
+# and omit the root entirely when revocation can't be checked, masking a genuine
+# UntrustedRoot behind transient-looking RevocationStatusUnknown/OfflineRevocation
+# flags. NoCheck never calls out to a network endpoint, so it reliably surfaces the
+# root element and its true UntrustedRoot status when one exists. This NoCheck build
+# is strictly additive corroboration — it never becomes a new pass condition, and it
+# can only make a classification MORE conservative (see Merge-NoCheckOverride).
 function Get-ChainClassification {
     [CmdletBinding()]
     param(
@@ -152,8 +185,23 @@ function Get-ChainClassification {
     foreach ($status in $chain.ChainStatus) { $allFlags = $allFlags -bor [int]$status.Status }
     $flags = [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]$allFlags
 
+    $noCheckChain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+    $noCheckChain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    $noCheckChain.ChainPolicy.RevocationFlag = [System.Security.Cryptography.X509Certificates.X509RevocationFlag]::EntireChain
+    $null = $noCheckChain.Build($Certificate)
+    $noCheckUntrustedRoot = $false
+    foreach ($element in $noCheckChain.ChainElements) {
+        foreach ($status in $element.ChainElementStatus) {
+            if ($status.Status -band [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::UntrustedRoot) {
+                $noCheckUntrustedRoot = $true
+            }
+        }
+    }
+
     $classification = Get-FlagClassification -Flags $flags -Built $built
+    $classification = Merge-NoCheckOverride -Classification $classification -NoCheckUntrustedRoot $noCheckUntrustedRoot
     $classification | Add-Member -MemberType NoteProperty -Name Chain -Value $chain -Force
+    $classification | Add-Member -MemberType NoteProperty -Name NoCheckChain -Value $noCheckChain -Force
     return $classification
 }
 
@@ -339,12 +387,12 @@ function Assert-TrustedSignature {
     # diff-checks it. This is the fail-closed gate: it is never weakened to accept
     # UnknownError, and it always guards a `throw`, never a mere log.
     if ($gas.Status -ne 'Valid') {
-        Write-Error "Authenticode verification failed for $Path with status $($gas.Status)."
+        Write-Error -ErrorAction Continue "Authenticode verification failed for $Path with status $($gas.Status)."
         Write-ChainDiagnostic -Path $Path -Gas $gas -SignToolResult $signToolResult -Classification $attemptResult.Classification
         throw "Assert-TrustedSignature: GAS status not Valid ($($gas.Status)) for $Path"
     }
     if ($signToolResult.ExitCode -ne 0) {
-        Write-Error "signtool verify /pa /v failed for $Path (exit $($signToolResult.ExitCode))."
+        Write-Error -ErrorAction Continue "signtool verify /pa /v failed for $Path (exit $($signToolResult.ExitCode))."
         Write-ChainDiagnostic -Path $Path -Gas $gas -SignToolResult $signToolResult -Classification $attemptResult.Classification
         throw "Assert-TrustedSignature: signtool verify failed (exit $($signToolResult.ExitCode)) for $Path"
     }
