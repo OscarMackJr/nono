@@ -29,7 +29,7 @@ Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode ve
 - [ ] **Phase 101: Verify-Gate Hardening + Azure Profile Confirmation** — 4/4 plans (SIGN-03 FAILED/Deferred, RED — live-dispatched and diagnosed 2026-07-03, not fully satisfied)
 - [x] **Phase 102: Fork-Owned Package Rename** — 5/5 plans
 - [x] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 3/3 plans
-- [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 0/? plans
+- [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 0/3 plans
 - [ ] **Phase 105: Live Multi-Registry Publish** — 0/? plans
 - [ ] **Phase 106: Azure VM Clean-Host UAT** — 0/? plans
 - [ ] **Phase 107: Close-Out** — 0/? plans
@@ -139,7 +139,10 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   1. **[Operator-in-loop]** Immediately before the tag push, the operator re-runs the hardened "Trusted Signing Smoke Test" workflow and confirms it is GREEN (the FIC-subject/profile canary re-check, per Pitfall 9's AADSTS700213 recurrence risk).
   2. **[Operator-in-loop]** The operator pushes tag `v0.66.1`; the `Release` workflow runs to green — all top-level `.exe` (`nono.exe`, `nono-shell-broker.exe`, `nono-wfp-service.exe`) and both MSIs pass the hardened fail-closed verify from Phase 101.
   3. The published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** — Issuer chains to the `Microsoft ID Verified CS` root, not `CN=nono Test Signing`.
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 104-01-PLAN.md — verify-authenticode.ps1 hardening: D-04 diagnostic-flush fix (Write-Error -ErrorAction Continue) + NoCheck-mode untrusted-root classification (Merge-NoCheckOverride), plus 2 new regression-guard test cases
+- [ ] 104-02-PLAN.md — Neutralize release.yml's stale publish-crates job (if: false, Pitfall 104-A) + local publish-selector regression guard + local root-availability pre-check (certutil) + correct disproven issuer-substring wording in REQUIREMENTS.md/ROADMAP.md
+- [ ] 104-03-PLAN.md — Operator checkpoint: poll-until-green smoke re-run (SC1) → tag push v0.66.1 → confirm Release workflow green + Verified publisher via the Finding-B-corrected gate (SC2 + SC3)
 
 ### Phase 105: Live Multi-Registry Publish
 **Goal**: `0.66.1` is live and installable from all three registries under the fork-owned `nono-sandbox` identities.
@@ -197,8 +200,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 4/4 | Failed (SIGN-03 RED, diagnosed, deferred to Phase 104) | 2026-07-03 |
 | 102. Fork-Owned Package Rename | v3.5 | 5/5 | Complete   | 2026-07-03 |
 | 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 3/3 | Complete   | 2026-07-03 |
-| 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |
+| 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/3 | Not started | - |
 | 105. Live Multi-Registry Publish | v3.5 | 0/? | Not started | - |
 | 106. Azure VM Clean-Host UAT | v3.5 | 0/? | Not started | - |
 | 107. Close-Out | v3.5 | 0/? | Not started | - |
-</content>
