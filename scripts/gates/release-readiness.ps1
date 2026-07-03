@@ -75,10 +75,13 @@ function Invoke-Gate {
 
         $targetVersion       = '0.66.1'
         $upstreamHighest     = '0.66.0'
+        # Publish-set crates renamed to fork-owned names in Phase 102 (PUB-01):
+        # nono->nono-sandbox, nono-cli->nono-sandbox-cli, nono-proxy->nono-sandbox-proxy.
+        # The other three keep their original package names (not in the publish set).
         $versionFamilyCrates = @(
-            'nono',
-            'nono-cli',
-            'nono-proxy',
+            'nono-sandbox',
+            'nono-sandbox-cli',
+            'nono-sandbox-proxy',
             'nono-shell-broker',
             'nono-fltmgr-client',
             'nono-ffi'
