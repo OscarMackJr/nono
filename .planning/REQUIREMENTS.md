@@ -75,7 +75,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 | SIGN-01 | Phase 101 | Complete |
 | SIGN-02 | Phase 101 | Complete |
 | SIGN-03 | Phase 101 | Failed/Deferred |
-| REL-01 | Phase 104 | Pending |
+| REL-01 | Phase 104 | In Progress (Plan 01/3 done: D-04 flush fix + NoCheck-mode classification landed; SC1-SC3 pending Plans 02-03) |
 | PUB-01 | Phase 102 | Complete (5/5 plans done, phase gate PASSED 2026-07-03) |
 | PUB-02 | Phase 105 | Pending |
 | CHOST-01 | Phase 103 | Complete |
