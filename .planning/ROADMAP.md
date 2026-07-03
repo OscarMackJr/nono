@@ -28,7 +28,7 @@ Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode ve
 
 - [ ] **Phase 101: Verify-Gate Hardening + Azure Profile Confirmation** — 4/4 plans (SIGN-03 FAILED/Deferred, RED — live-dispatched and diagnosed 2026-07-03, not fully satisfied)
 - [x] **Phase 102: Fork-Owned Package Rename** — 5/5 plans
-- [ ] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 0/? plans
+- [ ] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 0/3 plans
 - [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 0/? plans
 - [ ] **Phase 105: Live Multi-Registry Publish** — 0/? plans
 - [ ] **Phase 106: Azure VM Clean-Host UAT** — 0/? plans
@@ -126,7 +126,10 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. `scripts/gates/trusted-signed-assertion.ps1` exists, reuses the Phase 101 `verify-authenticode.ps1` shared helper to assert Authenticode `Valid` + issuer chaining to the `Microsoft ID Verified CS` root on staged artifacts, and plugs into the existing `verify-dark.ps1` gate-discovery harness with zero harness code changes.
   3. `scripts/gates/broker-spawn-on-clean-host.ps1` exists, is **self-contained** (install → `nono run --profile claude-code` spawns the broker with no manual cert import → uninstall) — not dependent on `-All`'s alphabetical execution order.
   4. Both new gates run on the dev host and correctly return `SKIP_HOST_UNAVAILABLE` (same discipline as the existing `clean-host-install.ps1` precondition), proving they are wired into the harness before any VM exists.
-**Plans**: TBD
+**Plans**: 3 plans
+- [ ] 103-01-PLAN.md — Bicep IaC (main.bicep + deploy.ps1/teardown.ps1), Gen2+Trusted-Launch, live SKU/IP resolution, ephemeral RG_Nono_CleanHost lifecycle
+- [ ] 103-02-PLAN.md — Two new verify-dark gates (trusted-signed-assertion.ps1 reusing verify-authenticode.ps1; broker-spawn-on-clean-host.ps1 self-contained), both SKIP-safe on dev host
+- [ ] 103-03-PLAN.md — Phase gate: bicep lint + both single-gate SKIP checks + full -All sweep + harness-diff regression, consolidated SC1-SC4 verification
 
 ### Phase 104: Smoke Green + Cut the Trusted-Signed Release
 **Goal**: The first publicly-trusted-signed `0.66.1` release exists on GitHub, with every signed artifact passing the hardened fail-closed verify and showing Verified publisher — the actual go-live moment.
@@ -193,7 +196,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
 | 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 4/4 | Failed (SIGN-03 RED, diagnosed, deferred to Phase 104) | 2026-07-03 |
 | 102. Fork-Owned Package Rename | v3.5 | 5/5 | Complete   | 2026-07-03 |
-| 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/? | Not started | - |
+| 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/3 | Not started | - |
 | 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |
 | 105. Live Multi-Registry Publish | v3.5 | 0/? | Not started | - |
 | 106. Azure VM Clean-Host UAT | v3.5 | 0/? | Not started | - |
