@@ -1,5 +1,5 @@
 [package]
-name = "nono"
+name = "nono-sandbox"
 version = "0.66.1"
 edition.workspace = true
 rust-version.workspace = true
