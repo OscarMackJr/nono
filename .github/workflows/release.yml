@@ -260,17 +260,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          . (Join-Path $PWD "scripts\verify-authenticode.ps1")
           $binary = Join-Path $PWD "target\\${{ matrix.target }}\\release\\${{ matrix.artifact }}"
           $broker = Join-Path $PWD "target\\${{ matrix.target }}\\release\\nono-shell-broker.exe"
           $machineMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-machine.msi"
           $userMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-user.msi"
           foreach ($artifact in @($binary, $broker, $machineMsi, $userMsi)) {
-            $sig = Get-AuthenticodeSignature -FilePath $artifact
-            if ($sig.Status -ne "Valid") {
-              Write-Error "Authenticode verification failed for $artifact with status $($sig.Status)."
-              exit 1
-            }
-            Write-Host "Authenticode OK: $artifact"
+            Assert-TrustedSignature -Path $artifact -Mode Strict
           }
 
       # Phase 53 regression guard (UAT-B): verify the binaries EMBEDDED IN THE MSI are
@@ -282,6 +278,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          . (Join-Path $PWD "scripts\verify-authenticode.ps1")
           $machineMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-machine.msi"
           $userMsi = Join-Path $PWD "artifact_staging\\nono-${{ env.RELEASE_TAG }}-x86_64-pc-windows-msvc-user.msi"
           foreach ($msi in @($machineMsi, $userMsi)) {
@@ -307,16 +304,10 @@ jobs:
               exit 1
             }
             foreach ($f in $exePayload) {
-              $sig = Get-AuthenticodeSignature -FilePath $f.FullName
-              if ($sig.Status -ne "Valid") {
-                Write-Error "MSI payload signature invalid: $($f.FullName) status $($sig.Status) — the MSI shipped an unsigned binary (signing-order regression)."
-                exit 1
-              }
-              Write-Host "MSI payload Authenticode OK: $($f.Name) [$name]"
+              Assert-TrustedSignature -Path $f.FullName -Mode Strict
             }
             foreach ($d in (Get-ChildItem -LiteralPath $extractDir -Recurse -File | Where-Object { $_.Extension -eq '.sys' })) {
-              $dsig = Get-AuthenticodeSignature -FilePath $d.FullName
-              Write-Host "MSI payload driver signature (informational, WHQL regime): $($d.Name) status=$($dsig.Status) [$name]"
+              Assert-TrustedSignature -Path $d.FullName -Mode Informational
             }
           }
 
@@ -339,6 +330,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          . (Join-Path $PWD "scripts\verify-authenticode.ps1")
           $zipName = "nono-${{ env.RELEASE_TAG }}-${{ matrix.target }}.zip"
           $extractRoot = Join-Path $PWD "zip-signature-check"
           if (Test-Path $extractRoot) {
@@ -347,12 +339,7 @@ jobs:
           Expand-Archive -LiteralPath $zipName -DestinationPath $extractRoot -Force
           foreach ($name in @("${{ matrix.artifact }}", "nono-shell-broker.exe")) {
             $extractedBinary = Join-Path $extractRoot $name
-            $sig = Get-AuthenticodeSignature -FilePath $extractedBinary
-            if ($sig.Status -ne "Valid") {
-              Write-Error "Zip payload signature verification failed for $extractedBinary with status $($sig.Status)."
-              exit 1
-            }
-            Write-Host "Zip payload Authenticode OK: $extractedBinary"
+            Assert-TrustedSignature -Path $extractedBinary -Mode Strict
           }
 
       # Artifact upload is downstream of all signing and verification steps (D-13).
