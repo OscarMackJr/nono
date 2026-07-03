@@ -15,7 +15,7 @@
 # missing implementation, not a bug in the test itself. Task 2 (GREEN) makes this pass.
 
 param(
-    [ValidateSet('knownGood', 'whqlInformational', 'transientRetry', 'untrustedRootNoRetry', 'All')]
+    [ValidateSet('knownGood', 'whqlInformational', 'transientRetry', 'untrustedRootNoRetry', 'diagnosticFlushUnderStop', 'noCheckOverridesTransient', 'All')]
     [string]$Case = 'All'
 )
 
@@ -235,6 +235,76 @@ function Test-UntrustedRootNoRetry {
 }
 
 # ---------------------------------------------------------------------------
+# Case: diagnosticFlushUnderStop
+# ---------------------------------------------------------------------------
+# D-04 flush-order regression guard. This harness already runs under
+# $ErrorActionPreference = "Stop" (top of file) — exactly the ambient condition
+# GitHub Actions injects into every pwsh `run:` step (actions/runner ADR 0277). An
+# intentionally-unsigned fixture drives Assert-TrustedSignature -Mode Strict down the
+# GAS-status failure branch; asserts (a) it still throws (fail-closed, unchanged
+# behavior) and (b) the captured -InformationVariable output contains the
+# Write-ChainDiagnostic marker — proving the diagnostic dump actually ran BEFORE the
+# throw propagated, rather than being skipped by a terminating Write-Error.
+function Test-DiagnosticFlushUnderStop {
+    $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+    if (-not (Test-Path -LiteralPath $csc)) {
+        throw "Test-DiagnosticFlushUnderStop: csc.exe not found at $csc — cannot stage a fixture."
+    }
+
+    $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("nono-verify-authenticode-flush-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
+    New-Item -ItemType Directory -Path $workDir -Force | Out-Null
+    $exePath = Join-Path $workDir "unsigned.exe"
+    $csPath = Join-Path $workDir "prog.cs"
+
+    try {
+        'class P { static void Main() { System.Console.WriteLine("nono verify-authenticode diagnosticFlushUnderStop fixture"); } }' |
+            Set-Content -LiteralPath $csPath
+
+        & $csc /nologo /out:$exePath $csPath | Out-Null
+        if (-not (Test-Path -LiteralPath $exePath)) {
+            throw "Test-DiagnosticFlushUnderStop: csc.exe did not produce $exePath"
+        }
+
+        $diagOutput = $null
+        $threw = $false
+        try {
+            Assert-TrustedSignature -Path $exePath -Mode Strict -InformationVariable diagOutput | Out-Null
+        }
+        catch {
+            $threw = $true
+        }
+
+        Assert-True ($threw -eq $true) "diagnosticFlushUnderStop: Assert-TrustedSignature -Mode Strict must still fail closed (throw) on an unsigned file"
+
+        $diagText = ($diagOutput | ForEach-Object { $_.MessageData.Message }) -join "`n"
+        Assert-True ($diagText -match [regex]::Escape('=== Authenticode chain diagnostic')) "diagnosticFlushUnderStop: expected Write-ChainDiagnostic's marker line to appear in captured output before the throw, but it was not found (D-04 flush gap regression)"
+    }
+    finally {
+        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Case: noCheckOverridesTransient
+# ---------------------------------------------------------------------------
+# NoCheck-mode classification regression guard. Directly unit-tests the pure
+# Merge-NoCheckOverride function: confirms the override fires (flips
+# IsUntrustedRoot/IsTransient) only when NoCheckUntrustedRoot=$true, and is a
+# no-op pass-through when $false — proving the override is conditional, not
+# unconditional.
+function Test-NoCheckOverridesTransient {
+    $syntheticClassification = [pscustomobject]@{ IsTransient = $true; IsUntrustedRoot = $false }
+    $overridden = Merge-NoCheckOverride -Classification $syntheticClassification -NoCheckUntrustedRoot $true
+    Assert-True ($overridden.IsUntrustedRoot -eq $true) "noCheckOverridesTransient: NoCheckUntrustedRoot=`$true should set IsUntrustedRoot=`$true, got $($overridden.IsUntrustedRoot)"
+    Assert-True ($overridden.IsTransient -eq $false) "noCheckOverridesTransient: NoCheckUntrustedRoot=`$true should set IsTransient=`$false, got $($overridden.IsTransient)"
+
+    $syntheticClassification2 = [pscustomobject]@{ IsTransient = $true; IsUntrustedRoot = $false }
+    $passthrough = Merge-NoCheckOverride -Classification $syntheticClassification2 -NoCheckUntrustedRoot $false
+    Assert-True ($passthrough.IsTransient -eq $true) "noCheckOverridesTransient: NoCheckUntrustedRoot=`$false must leave IsTransient unchanged (`$true), got $($passthrough.IsTransient)"
+    Assert-True ($passthrough.IsUntrustedRoot -eq $false) "noCheckOverridesTransient: NoCheckUntrustedRoot=`$false must leave IsUntrustedRoot unchanged (`$false), got $($passthrough.IsUntrustedRoot)"
+}
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 function Invoke-NamedCase {
@@ -257,11 +327,15 @@ switch ($Case) {
     'whqlInformational' { Invoke-NamedCase -CaseName 'whqlInformational' -Block { Test-WhqlInformational } }
     'transientRetry' { Invoke-NamedCase -CaseName 'transientRetry' -Block { Test-TransientRetry } }
     'untrustedRootNoRetry' { Invoke-NamedCase -CaseName 'untrustedRootNoRetry' -Block { Test-UntrustedRootNoRetry } }
+    'diagnosticFlushUnderStop' { Invoke-NamedCase -CaseName 'diagnosticFlushUnderStop' -Block { Test-DiagnosticFlushUnderStop } }
+    'noCheckOverridesTransient' { Invoke-NamedCase -CaseName 'noCheckOverridesTransient' -Block { Test-NoCheckOverridesTransient } }
     'All' {
         Invoke-NamedCase -CaseName 'knownGood' -Block { Test-KnownGood }
         Invoke-NamedCase -CaseName 'whqlInformational' -Block { Test-WhqlInformational }
         Invoke-NamedCase -CaseName 'transientRetry' -Block { Test-TransientRetry }
         Invoke-NamedCase -CaseName 'untrustedRootNoRetry' -Block { Test-UntrustedRootNoRetry }
+        Invoke-NamedCase -CaseName 'diagnosticFlushUnderStop' -Block { Test-DiagnosticFlushUnderStop }
+        Invoke-NamedCase -CaseName 'noCheckOverridesTransient' -Block { Test-NoCheckOverridesTransient }
     }
 }
 
