@@ -23,7 +23,13 @@ issuer-string pattern-matching.
 | Trusted Signing (code signing) account | `ArtifactNono` |
 | Certificate profile type | **`PublicTrust`** (operator statement: "this is the public trust") |
 | Identity id associated with the public-trust profile | `20cb70d3-2d17-4fdb-9121-963628df6b63` |
-| Profile name | Not separately reported by the operator — not invented here. Account = `ArtifactNono`; the distinct profile name under that account was not captured in this confirmation pass. |
+| Profile name | `NonoCertProfile` — source: repo-scoped GitHub Actions variable `TRUSTED_SIGNING_PROFILE`, verified 2026-07-02. Account = `ArtifactNono`; endpoint = `https://eus.codesigning.azure.net/`. |
+
+**Correction (2026-07-02):** the row above originally read "Not separately reported by the
+operator." Independent verification found the real profile name recorded in the repo-scoped
+GitHub Actions variable `TRUSTED_SIGNING_PROFILE`, alongside `TRUSTED_SIGNING_ACCOUNT=ArtifactNono`
+and `TRUSTED_SIGNING_ENDPOINT=https://eus.codesigning.azure.net/` (all created 2026-06-04). See
+also the corrected "Follow-Up Note" below.
 
 ## Fix Status
 
@@ -59,29 +65,48 @@ investigated via **Plan 01's D-04 full chain-introspection diagnostics** (the sh
 04 / Phase 104), not attributed to, or guessed as, a profile-type defect. Do not re-open the
 profile-type hypothesis without new evidence.
 
-## Follow-Up Note (material for Phase 104 planning): GitHub Trusted Signing Config Does Not Exist Yet
+## Follow-Up Note (material for Phase 104 planning): GitHub Trusted Signing Config — Corrected
 
-The operator confirmed there are currently **NO GitHub Actions variables or secrets** —
-repo-level or environment-scoped — for Trusted Signing on the `OscarMackJr/nono` GitHub
-repo. Specifically:
+**Correction (2026-07-02):** the section below originally reported that no GitHub Trusted
+Signing config existed on the repo. Independent verification (`101-VERIFICATION.md`) found
+this claim **factually wrong**, contradicted by live `gh` evidence in the same session:
 
-- `TRUSTED_SIGNING_ACCOUNT`, `TRUSTED_SIGNING_PROFILE`, `TRUSTED_SIGNING_ENDPOINT` do not
-  exist.
-- The OIDC federated credential (FIC) does not exist.
+- Repo-scoped variables `TRUSTED_SIGNING_ACCOUNT` (`ArtifactNono`), `TRUSTED_SIGNING_PROFILE`
+  (`NonoCertProfile`), and `TRUSTED_SIGNING_ENDPOINT` (`https://eus.codesigning.azure.net/`)
+  **do exist**, created 2026-06-04 (before this phase began).
+- The OIDC federated credential **does exist and works** — run `28469674206` (2026-06-30)
+  shows a successful OIDC login with the exact expected subject claim
+  `repo:OscarMackJr/nono:environment:Development`, and the Sign step succeeded.
 
-**Consequences:**
+The most likely cause of the earlier false report: the operator checked only the GitHub
+**environment-scoped** ("`Development`" environment) variables/secrets page, which is empty —
+while the workflow's job specifies `environment: Development` but reads `${{ vars.TRUSTED_SIGNING_* }}`,
+which GitHub Actions resolves from **repository-level** scope when no environment-level
+override exists. No `Development` *environment* exists on the repo at all. This reconciliation
+is recorded here for the record; it remains **pending explicit operator confirmation** should
+the operator have independent reason to believe otherwise (e.g., intentional decommissioning).
 
-- This plan's originally-anticipated sub-steps — "update the GitHub
-  `TRUSTED_SIGNING_PROFILE` variable" and "correct the FIC subject to
-  `repo:OscarMackJr/nono:environment:Development`" — are **DEFERRED**, because there is
-  currently no existing GitHub configuration to update or correct.
-- The **SIGN-03 smoke dispatch (Plan 04)** is **BLOCKED** until the GitHub Trusted Signing
-  configuration (variables + OIDC federated credential) is re-provisioned from scratch.
-- Any future GitHub-variable provisioning work **must use the live Azure names confirmed
-  here** — account `ArtifactNono`, resource group `RG_Nono`, identity id
-  `20cb70d3-2d17-4fdb-9121-963628df6b63` — **not** the go-live cookbook's example values
-  (`nono-trusted-signing`, `rg-nono-signing`). The live names differ from the cookbook
-  examples and this is a known, intentional divergence to carry forward, not a defect.
+**Corrected consequences:**
+
+- This plan's originally-anticipated sub-steps — "update the GitHub `TRUSTED_SIGNING_PROFILE`
+  variable" and "correct the FIC subject to `repo:OscarMackJr/nono:environment:Development`" —
+  remain **not needed**: the variable is already correctly `NonoCertProfile` and the FIC subject
+  already matches the corrected form, confirmed working by the 2026-06-30 Sign step.
+- The **SIGN-03 smoke dispatch (Plan 04)** is **BLOCKED**, but not on missing GitHub
+  configuration. The sole remaining gates are: (1) Plan 02's hardened
+  `trusted-signing-smoke.yml` is unpushed (all Phase 101 commits are local-only), so a dispatch
+  today would run the pre-hardening workflow; (2) pushing + dispatching live Azure Trusted
+  Signing CI is outward-facing and gated on explicit operator authorization under this fork's
+  prepare-only/push-operator-gated posture; and (3) the prior real run's Verify `UnknownError`
+  is still unresolved and must be re-diagnosed via Plan 01's D-04 chain diagnostics on the
+  eventual hardened re-run. See the corrected `101-SIGN03-SMOKE-VERDICT.md` for full detail.
+- **No fresh GitHub-variable or OIDC-FIC provisioning is expected to be necessary.** Do not
+  re-create a second, possibly-misconfigured federated credential or duplicate variables
+  against an Azure AD application that already has a working FIC — that would be needless
+  config drift on a security-critical signing pipeline. The live names to keep using if any
+  future provisioning is ever warranted: account `ArtifactNono`, resource group `RG_Nono`,
+  profile `NonoCertProfile`, identity id `20cb70d3-2d17-4fdb-9121-963628df6b63` — **not** the
+  go-live cookbook's example values (`nono-trusted-signing`, `rg-nono-signing`).
 
 ## SIGN-01 Requirement Satisfaction
 

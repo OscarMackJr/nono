@@ -98,8 +98,8 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Plans**:
 - [x] 101-01-PLAN.md — Build scripts/verify-authenticode.ps1 (Assert-TrustedSignature: D-01 AND-gate, D-02 retry, D-03 modes, D-04 diagnostics) + test harness (TDD)
 - [x] 101-02-PLAN.md — Wire the shared helper into release.yml (2 sites) + trusted-signing-smoke.yml (1 site), preserving the fail-closed condition and .sys carve-out
-- [x] 101-03-PLAN.md — Operator checkpoint: confirm/fix the Azure Trusted Signing certificate profile type (SIGN-01), document the finding — confirmed PublicTrust, no fix needed; UnknownError root cause open (not profile-type); GitHub Trusted Signing config confirmed absent, blocking Plan 04
-- [x] 101-04-PLAN.md — Dispatch the Trusted Signing Smoke Test on windows-latest, assert GREEN with correct issuer chain (SIGN-03) — executed as a BLOCKED verdict (no dispatch attempted; see `101-SIGN03-SMOKE-VERDICT.md`); SIGN-03 hands off to Phase 104
+- [x] 101-03-PLAN.md — Operator checkpoint: confirm/fix the Azure Trusted Signing certificate profile type (SIGN-01), document the finding — confirmed PublicTrust (profile `NonoCertProfile`), no fix needed; UnknownError root cause open (not profile-type); GitHub Trusted Signing config originally reported absent, later CORRECTED 2026-07-02 (config confirmed to already exist and work — see `101-SIGN01-FINDING.md`)
+- [x] 101-04-PLAN.md — Dispatch the Trusted Signing Smoke Test on windows-latest, assert GREEN with correct issuer chain (SIGN-03) — executed as a BLOCKED verdict (no dispatch attempted; see `101-SIGN03-SMOKE-VERDICT.md`, corrected 2026-07-02: real gates are unpushed hardened workflow + operator-gated push/dispatch + unresolved Verify UnknownError); SIGN-03 hands off to Phase 104
 
 ### Phase 102: Fork-Owned Package Rename
 **Goal**: The published package identities are renamed to fork-owned `nono-sandbox` family names across all three registries, with the `nono` binary/lib/repo names left unchanged, so a later live publish (Phase 105) has an unblocked, owned target.
