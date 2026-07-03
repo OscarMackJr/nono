@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
-status: verifying
+status: executing
 stopped_at: "Phase 102 complete: phase-gate verification (Plan 05) confirmed all 4 PUB-01 SC1-SC4 against live repo+registry state across all 3 repos; ready for /gsd:plan-phase 103 or next v3.5 phase"
-last_updated: "2026-07-03T14:29:04.655Z"
+last_updated: "2026-07-03T18:31:16.248Z"
 last_activity: 2026-07-03
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
+  total_plans: 12
+  completed_plans: 10
+  percent: 83
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -22,13 +22,13 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and, for v3.5, actually *distributable*: a publicly-trusted-signed release that runs out-of-the-box on a clean host.
 
-**Current Focus:** Phase 102 — fork-owned-package-rename
+**Current Focus:** Phase 103 — azure-clean-host-vm-iac-new-verify-dark-gates
 
 ## Current Position
 
-Phase: 102 (fork-owned-package-rename) — COMPLETE
-Plan: 5 of 5 (all plans landed; phase-gate verification passed)
-Status: Phase 102 closed. Next: proceed to Phase 103 (Azure IaC + gates, parallelizable with 102/104 per roadmap spine) or Phase 104 (release cut), per operator direction.
+Phase: 103 (azure-clean-host-vm-iac-new-verify-dark-gates) — EXECUTING
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-07-03
 
 ## Performance Metrics
@@ -52,6 +52,7 @@ Last activity: 2026-07-03
 | Phase 102 P03 | 6min | 2 tasks | 3 files |
 | Phase 102 P04 | 12min | 2 tasks | 7 files |
 | Phase 102 P05 | 8min | 2 tasks | 0 files |
+| Phase 103 P01 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -106,6 +107,7 @@ Last activity: 2026-07-03
 | Rule 3 auto-fix: force-added gitignored `../nono-py/Cargo.lock` (`git add -f`) to satisfy the plan's explicit requirement that it be present in the rename commit | 102-03 | `../nono-py/.gitignore` excludes `Cargo.lock` by default (standard for a Rust binding crate); the plan's own `files_modified`/acceptance criteria explicitly name this file, so the gitignore rule was treated as a staging-mechanism obstacle, not grounds to omit the file |
 | `../nono-ts`'s own Cargo.toml patched with `package = "nono-sandbox"`; npm identity hand-rescoped to `@oscarmackjr/nono-ts` across package.json + all 4 platform subpackages + optionalDependencies (NOT via the official `napi rename` tool); `napi build --platform --release` proven green; all 7 files landed in ONE DCO-signed commit (`c2f5aaa`) in the nono-ts repo | 102-04 | The installed `@napi-rs/cli@3.6.0` `rename` subcommand's real implementation diverges from 102-RESEARCH.md's documentation-derived description: it cannot run non-interactively even with all documented flags supplied (real-TTY-only `@inquirer/prompts`), it contains NO code path that rewrites `npm/*/package.json` or `optionalDependencies` at all, and it OVERWRITES the crate's own `Cargo.toml [package].name` with a sanitized form of `--binary-name` — which would have corrupted nono-ts's required-unchanged `nono-node` identity. All 6 JSON manifests were hand-edited instead, with every optionalDependencies-key-to-subpackage-name cross-reference individually verified; `cargo tree \| grep nono-sandbox` confirmed resolution against the renamed core crate |
 | Phase 102 CLOSED at the phase-gate: fresh 5-way registry re-check (crates.io x3, PyPI, npm) all 404 same-day as Plans 01-04, zero same-window squat; `cargo build --workspace --all-targets` + both `make build` constituent `cargo build -p` commands + `maturin build` (nono-py) + `napi build --platform --release` (nono-ts) all green; all 4 PUB-01 SC1-SC4 confirmed against live state across all 3 repos, each with a DCO-signed rename commit | 102-05 | `make` remains absent from this host's PATH (consistent with 102-02's own finding) — substituted its two constituent `cargo build -p nono-sandbox`/`-p nono-sandbox-cli` invocations, per this plan's explicit environment-substitution instruction; did not gate on `make ci`/`make test` (documented pre-existing Windows baseline test failures, unrelated to this rename). Zero source files touched (verification-only plan) |
+| CHOST-01 authored: `main.bicep` self-contained (own VNet/Subnet/NSG/PublicIP/NIC), Gen2 + Trusted-Launch, `vmImageSku`/`operatorIpCidr` required with NO default; `deploy.ps1`/`teardown.ps1` default to dedicated ephemeral `RG_Nono_CleanHost` (never `RG_Nono`), resolve SKU/IP live (never hardcoded, never `az`'s REST passthrough, never a TLS-bypass flag); `az bicep build` exits 0; neither script invoked live | 103-01 | Bicep CLI 0.44.1 was already present at `~/.azure/bin/bicep.exe` from Phase 103 research — no re-install needed; comments describing forbidden literal patterns (wildcard CIDR, REST-passthrough command name, async-delete flag) were reworded to avoid containing the exact grep-checked substrings, since the plan's own acceptance criteria grep the whole file with zero tolerance |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -211,7 +213,7 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T14:29:04.638Z
+Last session: 2026-07-03T18:31:16.226Z
 Stopped at: Phase 102 complete: phase-gate verification (Plan 05) confirmed all 4 PUB-01 SC1-SC4 against live repo+registry state across all 3 repos; ready for /gsd:plan-phase 103 or next v3.5 phase
 Resume file: None
 
