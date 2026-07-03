@@ -471,8 +471,18 @@ jobs:
     name: Publish to crates.io
     needs: release
     runs-on: ubuntu-latest
-    # Only publish stable releases to crates.io
-    if: ${{ !contains(github.event.inputs.tag || github.ref_name, 'alpha') && !contains(github.event.inputs.tag || github.ref_name, 'beta') && !contains(github.event.inputs.tag || github.ref_name, 'rc') }}
+    # NEUTRALIZED for the Phase 104 (REL-01) release cut (2026-07-03): this job's
+    # -p nono / -p nono-proxy / -p nono-cli selectors reference the PRE-Phase-102-
+    # rename package identities. Phase 102 renamed the actual [package] names to
+    # nono-sandbox / nono-sandbox-proxy / nono-sandbox-cli, so these selectors no
+    # longer resolve to any workspace package and would fail this job immediately
+    # on the very tag push this phase exists to cut (Pitfall 104-A). Phase 105
+    # (PUB-02) rewrites this job with the correct names plus dependency-ordered,
+    # index-visibility-polled publish logic, and re-enables it then. The
+    # job-level condition below (not a step-level no-op) guarantees the entire
+    # job body, including every CARGO_REGISTRY_TOKEN secret reference, never
+    # executes.
+    if: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
