@@ -20,6 +20,12 @@ jobs:
     # MUST match the federated-credential subject repo:OscarMackJr/nono:environment:Development
     environment: Development
     steps:
+      # Required so the verify step can dot-source scripts/verify-authenticode.ps1
+      # (Plan 101-02 wired the shared helper in; this workflow otherwise generates its
+      # fixture inline and never checked out the repo).
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Azure login (OIDC)
         uses: azure/login@v2
         with:
