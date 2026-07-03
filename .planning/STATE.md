@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: Completed 101-01-PLAN.md (RED+GREEN, Assert-TrustedSignature helper)
-last_updated: "2026-07-02T20:52:32.088Z"
-last_activity: 2026-07-02
+stopped_at: Completed 101-02-PLAN.md (release.yml + trusted-signing-smoke.yml wired to Assert-TrustedSignature)
+last_updated: "2026-07-03T00:32:19.267Z"
+last_activity: 2026-07-03
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 4
-  completed_plans: 1
-  percent: 25
+  completed_plans: 2
+  percent: 50
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -27,9 +27,9 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 ## Current Position
 
 Phase: 101 (verify-gate-hardening-azure-profile-confirmation) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
-Last activity: 2026-07-02
+Last activity: 2026-07-03
 
 ## Performance Metrics
 
@@ -44,6 +44,7 @@ Last activity: 2026-07-02
 
 *Updated after each plan completion*
 | Phase 101 P01 | 9min | 2 tasks | 2 files |
+| Phase 101 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,7 @@ Last activity: 2026-07-02
 | SIGN-02 helper: byte-for-byte preserved `if ($gas.Status -ne 'Valid')` as the sole Strict-mode fail-closed gate | 101-01 | Grep-verified single occurrence, guarding a `throw`; never weakened to accept `UnknownError` — matches `release.yml:269`/`:311` and `trusted-signing-smoke.yml:69` |
 | knownGood test fixture trusts its throwaway cert via `Cert:\CurrentUser\Root`, not `Cert:\LocalMachine\Root` | 101-01 | Dev host not elevated; `LocalMachine\Root` requires administrator. GAS/`X509Chain.Build()` both consult CurrentUser Root for the current-user context, producing `Status=Valid` equivalently. Security-neutral, test-fixture-only. |
 | knownGood test fixture imports the throwaway cert via the raw `X509Store` API, not `Import-Certificate` | 101-01 | `Import-Certificate -CertStoreLocation Cert:\CurrentUser\Root` triggers a blocking interactive "Security Warning" CryptUI dialog with no non-interactive suppression — hangs indefinitely; `X509Store.Add()`/`.Remove()` bypasses the trust-UI layer entirely (mirrors this repo's own `Add-TrustForVerify`/`Remove-TrustForVerify` pattern) |
+| All 3 named verify sites (release.yml Site 1/Site 2, trusted-signing-smoke.yml) wired to `Assert-TrustedSignature`, plus a 4th plan-unenumerated inline gate | 101-02 | release.yml's "Verify signed binaries inside zip (Windows)" step (~L329) had its own duplicate `Get-AuthenticodeSignature`/`Status -ne 'Valid'` gate not named in the plan's `read_first`; wired it too (Rule 2) to satisfy the plan's own whole-file grep acceptance criterion (`grep -c "sig.Status -ne"` returns `0`) |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -188,9 +190,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-02T20:52:32.074Z
-Stopped at: Completed 101-01-PLAN.md (RED+GREEN, Assert-TrustedSignature helper)
-Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-02-PLAN.md
+Last session: 2026-07-03T00:32:19.255Z
+Stopped at: Completed 101-02-PLAN.md (release.yml + trusted-signing-smoke.yml wired to Assert-TrustedSignature)
+Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-03-PLAN.md
 
 ## Operator Next Steps
 
