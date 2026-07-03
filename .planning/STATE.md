@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: SIGN-03 live smoke dispatch executed 2026-07-03 (operator-authorized push + dispatch) — FAILED (RED, diagnosed): Run 28636000664 hit a real missing-checkout wiring defect (fixed 83eefe11); authoritative Run 28636133664 ran the hardened verify path and still returned Status:UnknownError (issuer Microsoft Enterprise ID Verified Policy AOC CA 02) on a genuinely-signed PublicTrust binary — fail-closed gate correctly refused to pass; disproves the research issuer-naming heuristic; honest FAIL verdict recorded in 101-SIGN03-SMOKE-VERDICT.md, no fabricated PASS; hand-off to Phase 104
-last_updated: "2026-07-03T01:00:00.000Z"
+stopped_at: "Phase 102 Plan 01 complete: 3-crate publish set renamed (nono/nono-proxy/nono-cli -> nono-sandbox/nono-sandbox-proxy/nono-sandbox-cli); cargo build --workspace --all-targets green; Cargo.lock regenerated with exactly 3 renamed hunks; ready for Plan 02 (Makefile/CI reconciliation)"
+last_updated: "2026-07-03T13:39:38.943Z"
 last_activity: 2026-07-03
 progress:
-  total_phases: 1
-  completed_phases: 0
-  total_plans: 4
-  completed_plans: 4
-  percent: 100
+  total_phases: 2
+  completed_phases: 1
+  total_plans: 9
+  completed_plans: 5
+  percent: 56
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -22,13 +22,13 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 
 **Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and, for v3.5, actually *distributable*: a publicly-trusted-signed release that runs out-of-the-box on a clean host.
 
-**Current Focus:** Phase 101 — verify-gate-hardening-azure-profile-confirmation
+**Current Focus:** Phase 102 — fork-owned-package-rename
 
 ## Current Position
 
-Phase: 101 (verify-gate-hardening-azure-profile-confirmation) — 4/4 plans executed; SIGN-03 Failed/Deferred (live-dispatched, diagnosed RED, not satisfied)
-Plan: 4 of 4 (complete — outcome FAIL/RED post live dispatch, not a failure of SIGN-01/SIGN-02)
-Status: Phase 101 plans exhausted; SIGN-03 hands off to Phase 104 for root-cause fix + re-attempt
+Phase: 102 (fork-owned-package-rename) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
 Last activity: 2026-07-03
 
 ## Performance Metrics
@@ -47,6 +47,7 @@ Last activity: 2026-07-03
 | Phase 101 P02 | 2min | 2 tasks | 2 files |
 | Phase 101 P03 | 6min | 2 tasks | 2 files |
 | Phase 101 P04 | 8min | 1 task (Task 1 deliberately skipped) | 4 files |
+| Phase 102 P01 | 12min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -94,6 +95,8 @@ Last activity: 2026-07-03
 | GitHub Trusted Signing config (vars + OIDC FIC) originally reported absent — CORRECTED 2026-07-02: config exists and works | 101-03, corrected post-verification | Plan 03's operator confirmation pass reported no `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` variables or federated credential existed. Independent verification (`101-VERIFICATION.md`) found this false: repo-scoped variables (`ArtifactNono`/`NonoCertProfile`/`https://eus.codesigning.azure.net/`) and the OIDC FIC were both provisioned 2026-06-04 and confirmed working by run `28469674206` (2026-06-30, OIDC+Sign GREEN). Likely cause: the operator checked only the empty `Development` environment-scoped page, not the populated repo-scoped variables the workflow actually reads. See corrected `101-SIGN01-FINDING.md` / `101-SIGN03-SMOKE-VERDICT.md`. |
 | SIGN-03 smoke dispatch NOT attempted; verdict recorded as BLOCKED (not FAIL, not PASS) — reasoning corrected 2026-07-02 | 101-04 | Original verdict cited 5 conditions (no OIDC FIC, no GitHub variables, workflow unpushed, `gh` wrong-repo, outward-facing posture) — 3 of these were false per independent verification (OIDC FIC exists/works, GitHub variables exist, `gh` correctly resolves to `OscarMackJr/nono`). The 2 genuine gates: Plan 02's hardened workflow is unpushed (all Phase 101 commits local-only), and dispatching is outward-facing/operator-gated under the fork's prepare-only posture — plus the prior run's Verify `UnknownError` remains unresolved. Recorded verbatim (with explicit retraction of the false premises) in the corrected `101-SIGN03-SMOKE-VERDICT.md`; SIGN-03 stays Blocked/Deferred in REQUIREMENTS.md; hands off to Phase 104, which needs push + operator authorization + re-verify — not fresh OIDC/variable re-provisioning. |
 | SIGN-03 live smoke dispatch executed 2026-07-03 (operator-authorized push + dispatch); verdict rewritten BLOCKED → **FAILED (RED, diagnosed)** | 101-04 (live re-run) | Two runs: `28636000664` failed on a real Plan-02 wiring defect (no `actions/checkout` before the dot-source of `verify-authenticode.ps1`), fixed in `83eefe11`; authoritative `28636133664` ran the real hardened verify path and still returned `Status:UnknownError` on a genuinely-signed `PublicTrust` binary (`CN=TWGGLOBAL.onmicrosoft.com`, issuer `Microsoft Enterprise ID Verified Policy AOC CA 02`) — the fail-closed gate retried the transient case then correctly refused to pass; NOT loosened. Also **disproves** `101-RESEARCH.md`'s issuer-naming heuristic (`Enterprise ID Verified Policy` ≠ reliable `PublicTrustTest` tell — `PublicTrust` chains through it too), so any future gate must not resurrect that differentiator. A real D-04 diagnostic-flush gap was also found (chain-dump/`signtool /pa` output not visible in the CI log before the throw). Full evidence + 3 findings (A root cause, B heuristic disproven, C diagnostic gap) + Phase 104 hand-off in the rewritten `101-SIGN03-SMOKE-VERDICT.md`; `101-SIGN01-FINDING.md` updated with a corroborating 2026-07-03 note; REQUIREMENTS.md SIGN-03 now **Failed/Deferred** (not Blocked). |
+| PUB-01 3-crate publish set renamed to fork-owned family: `nono`→`nono-sandbox`, `nono-proxy`→`nono-sandbox-proxy`, `nono-cli`→`nono-sandbox-cli`, live-availability-gated (all 5 registry names re-confirmed 404 on 2026-07-03) before any manifest edit | 102-01 | `[package] name` renamed via Cargo's `package =` dependency-key mechanism (table keys `nono`/`nono-proxy` left unchanged in all 5 in-workspace dependents, including publish=false `nono-shell-broker`/`nono-ffi`) — zero `use nono::`/`use nono_proxy::` import changed; `cargo build --workspace --all-targets` green with a Cargo.lock diff limited to exactly the 3 renamed packages |
+| Rule 3 auto-fix: pinned explicit `[lib] name = "nono"` in `crates/nono/Cargo.toml` alongside the `[package]` rename | 102-01 | `crates/nono/tests/manifest_types.rs` (the crate's own integration test) links via Cargo's default-derived lib name, which silently became `nono_sandbox` once `[package] name` changed — a distinct failure mode from the well-documented dependency-key-vs-`package=` consumer pitfall, not covered by 102-RESEARCH.md's cross-crate scratch test. Pin has zero effect on the `package=` consumer mechanism (consumer extern names are controlled solely by their own dependency-table key, per 102-RESEARCH.md's own empirical finding) |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -199,9 +202,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T01:00:00.000Z
-Stopped at: SIGN-03 live smoke dispatch executed 2026-07-03 (operator-authorized push to origin/OscarMackJr/nono through 83eefe11 + live dispatch, two runs). Run 28636000664 failed on a real missing-`actions/checkout` wiring defect (fixed 83eefe11). Authoritative Run 28636133664 ran the hardened verify path and FAILED: Status:UnknownError, issuer Microsoft Enterprise ID Verified Policy AOC CA 02, on a genuinely-signed PublicTrust binary — fail-closed gate correctly refused to pass. Disproves the research issuer-naming heuristic. Verdict rewritten BLOCKED → FAILED (RED, diagnosed) in 101-SIGN03-SMOKE-VERDICT.md (findings A/B/C); 101-SIGN01-FINDING.md updated; REQUIREMENTS.md SIGN-03 now Failed/Deferred; hands off to Phase 104 for root-cause fix + issuer-regex correction + D-04 diagnostic-flush fix
-Resume file: none — Phase 101 plans exhausted (4/4); next phase is 102 or 104 per roadmap dependency spine
+Last session: 2026-07-03T13:39:38.930Z
+Stopped at: Phase 102 Plan 01 complete: 3-crate publish set renamed (nono/nono-proxy/nono-cli -> nono-sandbox/nono-sandbox-proxy/nono-sandbox-cli); cargo build --workspace --all-targets green; Cargo.lock regenerated with exactly 3 renamed hunks; ready for Plan 02 (Makefile/CI reconciliation)
+Resume file: None
 
 ## Operator Next Steps
 

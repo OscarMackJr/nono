@@ -27,7 +27,7 @@ updated: 2026-07-02
 Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode verify-gate and resolve the Azure Trusted Signing `UnknownError`, rename the fork's published package identities to fork-owned `nono-sandbox` names, stand up ephemeral Azure Win11 VM IaC + new clean-host gates, cut the first publicly-trusted-signed `0.66.1` release, publish it live to crates.io/PyPI/npm, drain both host-gated clean-host UAT todos on the real VM, then retire the POC signing path. Hard dependency spine: verify-gate hardening (101) gates the release cut (104); the rename (102) and the Azure IaC+gates (103) are parallelizable with 101/104; live publish (105) needs both the rename and a real release; clean-host UAT (106) needs the real release (not the live publish); close-out (107) is strictly gated on clean-host UAT PASS, never merely on a green release.
 
 - [ ] **Phase 101: Verify-Gate Hardening + Azure Profile Confirmation** — 4/4 plans (SIGN-03 FAILED/Deferred, RED — live-dispatched and diagnosed 2026-07-03, not fully satisfied)
-- [ ] **Phase 102: Fork-Owned Package Rename** — 0/5 plans
+- [ ] **Phase 102: Fork-Owned Package Rename** — 1/5 plans
 - [ ] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 0/? plans
 - [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 0/? plans
 - [ ] **Phase 105: Live Multi-Registry Publish** — 0/? plans
@@ -111,7 +111,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. Each new registry identity's availability is confirmed live against the actual registry (crates.io `nono-sandbox`/`nono-sandbox-proxy`/`nono-sandbox-cli`, PyPI `nono-sandbox`, npm `@oscarmackjr/nono-ts`) before committing to the rename.
   4. The workspace build (`make build`) and both binding builds (`maturin build`, napi build) are green under the new names.
 **Plans**: 5 plans
-- [ ] 102-01-PLAN.md — Live registry-availability gate + rename the 3-crate publish set (nono/nono-proxy/nono-cli) + patch remaining in-workspace dependents + regenerate Cargo.lock
+- [x] 102-01-PLAN.md — Live registry-availability gate + rename the 3-crate publish set (nono/nono-proxy/nono-cli) + patch remaining in-workspace dependents + regenerate Cargo.lock
 - [ ] 102-02-PLAN.md — Reconcile Makefile + permanent CI workflow package selectors (release.yml publish steps explicitly deferred to Phase 105)
 - [ ] 102-03-PLAN.md — nono-py sibling rename (Cargo.toml package= fix + pyproject.toml PyPI name + maturin build + DCO commit)
 - [ ] 102-04-PLAN.md — nono-ts sibling rename (Cargo.toml package= fix + napi rename --package-name + napi build + DCO commit)
@@ -192,7 +192,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
 | 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 4/4 | Failed (SIGN-03 RED, diagnosed, deferred to Phase 104) | 2026-07-03 |
-| 102. Fork-Owned Package Rename | v3.5 | 0/5 | Not started | - |
+| 102. Fork-Owned Package Rename | v3.5 | 1/5 | In Progress|  |
 | 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/? | Not started | - |
 | 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |
 | 105. Live Multi-Registry Publish | v3.5 | 0/? | Not started | - |
