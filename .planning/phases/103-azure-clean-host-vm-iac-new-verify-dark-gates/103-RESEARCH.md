@@ -473,9 +473,11 @@ resource vm 'Microsoft.Compute/virtualMachines@2024-07-01' = {
 
 **If this table is empty:** N/A — see entries above.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Which exact resource-group / networking scope should `main.bicep` target?**
+**RESOLVED (2026-07-03, during planning):** Q1 → `main.bicep` is fully self-contained (its own VNet/Subnet/NSG/PIP/NIC) and `deploy.ps1`/`teardown.ps1` target a dedicated ephemeral `RG_Nono_CleanHost` (never bare `RG_Nono`), for clean teardown (Plan 103-01). Q2 → `az deployment group what-if` is treated as out-of-scope for this author+lint phase; `az bicep build --stdout` is the validation gate.
+
+1. **RESOLVED — Which exact resource-group / networking scope should `main.bicep` target?** *(→ self-contained networking + dedicated `RG_Nono_CleanHost`, Plan 103-01.)*
    - What we know: `RG_Nono` exists live [VERIFIED: `az group show -n RG_Nono`] and currently
      contains only `ArtifactNono` (`Microsoft.CodeSigning/codeSigningAccounts`) — no VNet/subnet
      to attach to.
