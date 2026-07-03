@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: Completed 101-03-PLAN.md (SIGN-01 Azure profile confirmed PublicTrust; no fix needed; UnknownError root cause routed to D-04 diagnostics; GitHub Trusted Signing config confirmed absent, blocking Plan 04)
-last_updated: "2026-07-03T00:45:00.000Z"
+stopped_at: Completed 101-04-PLAN.md (SIGN-03 smoke dispatch BLOCKED — no GitHub Trusted Signing OIDC/variables provisioned; honest BLOCKED verdict recorded, no fabricated PASS; hand-off to Phase 104)
+last_updated: "2026-07-03T01:00:00.000Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 4
-  completed_plans: 3
-  percent: 75
+  completed_plans: 4
+  percent: 100
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -26,9 +26,9 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 
 ## Current Position
 
-Phase: 101 (verify-gate-hardening-azure-profile-confirmation) — EXECUTING
-Plan: 4 of 4
-Status: Ready to execute
+Phase: 101 (verify-gate-hardening-azure-profile-confirmation) — 4/4 plans executed; SIGN-03 BLOCKED/Deferred (not satisfied)
+Plan: 4 of 4 (complete — outcome BLOCKED, not a failure of SIGN-01/SIGN-02)
+Status: Phase 101 plans exhausted; SIGN-03 hands off to Phase 104 for re-attempt
 Last activity: 2026-07-03
 
 ## Performance Metrics
@@ -46,6 +46,7 @@ Last activity: 2026-07-03
 | Phase 101 P01 | 9min | 2 tasks | 2 files |
 | Phase 101 P02 | 2min | 2 tasks | 2 files |
 | Phase 101 P03 | 6min | 2 tasks | 2 files |
+| Phase 101 P04 | 8min | 1 task (Task 1 deliberately skipped) | 4 files |
 
 ## Accumulated Context
 
@@ -91,6 +92,7 @@ Last activity: 2026-07-03
 | All 3 named verify sites (release.yml Site 1/Site 2, trusted-signing-smoke.yml) wired to `Assert-TrustedSignature`, plus a 4th plan-unenumerated inline gate | 101-02 | release.yml's "Verify signed binaries inside zip (Windows)" step (~L329) had its own duplicate `Get-AuthenticodeSignature`/`Status -ne 'Valid'` gate not named in the plan's `read_first`; wired it too (Rule 2) to satisfy the plan's own whole-file grep acceptance criterion (`grep -c "sig.Status -ne"` returns `0`) |
 | SIGN-01 confirmed live: profileType == PublicTrust (account ArtifactNono / RG_Nono / identity 20cb70d3-2d17-4fdb-9121-963628df6b63); no fix applied | 101-03 | Confirmed via Azure Portal (not `az` CLI — `trustedsigning` extension failed on a corporate-TLS SSL error). This rules out the profile-type hypothesis for the 2026-06-30 `UnknownError`; root cause remains open, routed to Plan 01's D-04 chain diagnostics on a future smoke run — not guessed. Recorded verbatim in `101-SIGN01-FINDING.md`. |
 | GitHub Trusted Signing config (vars + OIDC FIC) confirmed absent — Plan 04 SIGN-03 dispatch BLOCKED | 101-03 | Operator confirmed no `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` variables or federated credential currently exist on the repo; the plan's GitHub-var-update + FIC-subject-correction sub-steps are deferred (nothing to update); future provisioning must use the live Azure names (ArtifactNono/RG_Nono), not the cookbook's example names (nono-trusted-signing/rg-nono-signing) |
+| SIGN-03 smoke dispatch NOT attempted; verdict recorded as BLOCKED (not FAIL, not PASS) | 101-04 | Five independent conditions each make a correctly-chained GREEN result structurally impossible: no OIDC FIC, no GitHub variables, Plan 02's hardened workflow unpushed, `gh` resolves to `nolabs-ai/nono` not `OscarMackJr/nono`, and a live dispatch would be outward-facing against the fork's prepare-only/push-operator-gated posture. Recorded verbatim in `101-SIGN03-SMOKE-VERDICT.md` with unblock preconditions; SIGN-03 set to Blocked/Deferred in REQUIREMENTS.md; hands off to Phase 104 whose success criterion #1 already requires this operator re-run before the release tag push. |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -143,6 +145,7 @@ Two host-gated distribution todos are IN SCOPE for v3.5 (CHOST-03 / FUT-03 drain
 - **CLOSE-01 secret-retirement ordering is a structural gate, not a checklist item** — Phase 107 must NOT run until Phase 106 (CHOST-03) has a passed verdict; retiring POC secrets after only Phase 104 (release green) leaves no fallback signing path if clean-host UAT reveals a problem invisible on CI runners.
 - **GitHub Trusted Signing config does not exist yet (new, Phase 101 Plan 03)** — no `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` variables or OIDC federated credential currently exist on the `OscarMackJr/nono` repo. Plan 04's SIGN-03 smoke dispatch is BLOCKED until this is provisioned, using the live Azure names confirmed in `101-SIGN01-FINDING.md` (account `ArtifactNono`, resource group `RG_Nono`, identity `20cb70d3-2d17-4fdb-9121-963628df6b63`) — NOT the go-live cookbook's example values.
 - **Residual `UnknownError` root cause still open (profile-type hypothesis ruled out)** — the live Azure profile is confirmed `PublicTrust`, so the 2026-06-30 smoke-run `UnknownError` is NOT a profile-type issue. True cause (chain-build staleness or CRL/OCSP revocation transient) remains to be diagnosed via Plan 01's `Assert-TrustedSignature` D-04 chain-introspection output on the next smoke run.
+- **SIGN-03 BLOCKED/Deferred (Phase 101 Plan 04) — hands off to Phase 104** — no GitHub Trusted Signing OIDC federated credential or `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` variables exist on `OscarMackJr/nono`, Plan 02's hardened smoke workflow has not been pushed, and `gh` on this host resolves to `nolabs-ai/nono` not the fork. A smoke dispatch was NOT attempted (guaranteed to fail before reaching verify); see `101-SIGN03-SMOKE-VERDICT.md` for the full 5-reason enumeration and unblock preconditions. Phase 104's success criterion #1 already requires re-running this smoke test GREEN before the release tag push — that re-run is where GitHub config must first be re-provisioned.
 
 ### Quick Tasks Completed
 
@@ -195,9 +198,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T00:45:00.000Z
-Stopped at: Completed 101-03-PLAN.md (SIGN-01 Azure profile confirmed PublicTrust; UnknownError root cause open, routed to D-04 diagnostics; GitHub Trusted Signing config confirmed absent)
-Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-04-PLAN.md
+Last session: 2026-07-03T01:00:00.000Z
+Stopped at: Completed 101-04-PLAN.md (SIGN-03 smoke dispatch BLOCKED — recorded honest BLOCKED verdict in 101-SIGN03-SMOKE-VERDICT.md; no dispatch attempted; SIGN-03 set to Blocked/Deferred; hands off to Phase 104)
+Resume file: none — Phase 101 plans exhausted (4/4); next phase is 102 or 104 per roadmap dependency spine
 
 ## Operator Next Steps
 

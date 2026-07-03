@@ -26,7 +26,7 @@ updated: 2026-07-02
 
 Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode verify-gate and resolve the Azure Trusted Signing `UnknownError`, rename the fork's published package identities to fork-owned `nono-sandbox` names, stand up ephemeral Azure Win11 VM IaC + new clean-host gates, cut the first publicly-trusted-signed `0.66.1` release, publish it live to crates.io/PyPI/npm, drain both host-gated clean-host UAT todos on the real VM, then retire the POC signing path. Hard dependency spine: verify-gate hardening (101) gates the release cut (104); the rename (102) and the Azure IaC+gates (103) are parallelizable with 101/104; live publish (105) needs both the rename and a real release; clean-host UAT (106) needs the real release (not the live publish); close-out (107) is strictly gated on clean-host UAT PASS, never merely on a green release.
 
-- [ ] **Phase 101: Verify-Gate Hardening + Azure Profile Confirmation** — 0/4 plans
+- [ ] **Phase 101: Verify-Gate Hardening + Azure Profile Confirmation** — 4/4 plans (SIGN-03 BLOCKED/Deferred — not fully satisfied)
 - [ ] **Phase 102: Fork-Owned Package Rename** — 0/? plans
 - [ ] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 0/? plans
 - [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 0/? plans
@@ -99,7 +99,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 101-01-PLAN.md — Build scripts/verify-authenticode.ps1 (Assert-TrustedSignature: D-01 AND-gate, D-02 retry, D-03 modes, D-04 diagnostics) + test harness (TDD)
 - [x] 101-02-PLAN.md — Wire the shared helper into release.yml (2 sites) + trusted-signing-smoke.yml (1 site), preserving the fail-closed condition and .sys carve-out
 - [x] 101-03-PLAN.md — Operator checkpoint: confirm/fix the Azure Trusted Signing certificate profile type (SIGN-01), document the finding — confirmed PublicTrust, no fix needed; UnknownError root cause open (not profile-type); GitHub Trusted Signing config confirmed absent, blocking Plan 04
-- [ ] 101-04-PLAN.md — Dispatch the Trusted Signing Smoke Test on windows-latest, assert GREEN with correct issuer chain (SIGN-03) — BLOCKED pending GitHub Trusted Signing config re-provisioning
+- [x] 101-04-PLAN.md — Dispatch the Trusted Signing Smoke Test on windows-latest, assert GREEN with correct issuer chain (SIGN-03) — executed as a BLOCKED verdict (no dispatch attempted; see `101-SIGN03-SMOKE-VERDICT.md`); SIGN-03 hands off to Phase 104
 
 ### Phase 102: Fork-Owned Package Rename
 **Goal**: The published package identities are renamed to fork-owned `nono-sandbox` family names across all three registries, with the `nono` binary/lib/repo names left unchanged, so a later live publish (Phase 105) has an unblocked, owned target.
@@ -186,7 +186,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 98. UPST11 Divergence Audit | v3.4 | 4/4 | Complete    | 2026-06-30 |
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
-| 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 3/4 | In Progress|  |
+| 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 4/4 | Blocked (SIGN-03 deferred to Phase 104) | 2026-07-02 |
 | 102. Fork-Owned Package Rename | v3.5 | 0/? | Not started | - |
 | 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/? | Not started | - |
 | 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |

@@ -21,7 +21,7 @@
 
 - [x] **SIGN-01**: The Azure Trusted Signing certificate profile is confirmed to be type **`PublicTrust`** — the operator runs `az trustedsigning certificate-profile show` and verifies `profileType == PublicTrust`; if it is `PublicTrustTest` (the likely root cause — its issuer naming matches the observed `…Enterprise ID Verified Policy AOC CA…`), a `PublicTrust` profile is created and `TRUSTED_SIGNING_PROFILE` (+ the corrected FIC subject `repo:OscarMackJr/nono:environment:Development`) are updated. The finding is recorded (profile type + issuer chain) so the root cause is documented, not guessed. **CONFIRMED 2026-07-02** via Azure Portal (CLI extension unavailable — corporate-TLS SSL error): live account `ArtifactNono` / RG `RG_Nono` is already `PublicTrust`; no fix needed. The observed `UnknownError` is therefore NOT a profile-type issue — root cause remains open, routed to D-04 chain diagnostics on a future smoke run. See `101-SIGN01-FINDING.md`.
 - [x] **SIGN-02**: The CI Authenticode verify is hardened into a single shared `scripts/verify-authenticode.ps1` helper, dot-sourced by both fail-closed verify sites in `release.yml` and the smoke workflow — it adds a `signtool verify /pa /v` deep check, builds/repairs the cert chain and handles CRL/OCSP-revocation transients, and reports chain-build failure distinctly from a genuine untrusted root — WITHOUT ever loosening the fail-closed `Status -ne 'Valid'` contract.
-- [ ] **SIGN-03**: The **"Trusted Signing Smoke Test"** workflow runs GREEN on GitHub's clean `windows-latest` runner (Gate 1) — a throwaway exe signs and verifies `Valid` with an issuer chaining to a public `Microsoft ID Verified CS EOC/AOC CA NN` root (not `PublicTrustTest`, not the POC root) — proving the signing path is live end-to-end before any release is cut.
+- [ ] **SIGN-03**: The **"Trusted Signing Smoke Test"** workflow runs GREEN on GitHub's clean `windows-latest` runner (Gate 1) — a throwaway exe signs and verifies `Valid` with an issuer chaining to a public `Microsoft ID Verified CS EOC/AOC CA NN` root (not `PublicTrustTest`, not the POC root) — proving the signing path is live end-to-end before any release is cut. **BLOCKED/DEFERRED 2026-07-02**: no OIDC federated credential, no `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` GitHub variables, Plan 02's hardened workflow not yet pushed, and `gh` on this host resolves to `nolabs-ai/nono` not `OscarMackJr/nono` — a dispatch is guaranteed to fail before reaching the verify step, so none was attempted. Unblock preconditions + hand-off to Phase 104 recorded in `101-SIGN03-SMOKE-VERDICT.md`.
 
 ### Trusted-Signed Release Go-Live (REL)
 
@@ -74,7 +74,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 |-------------|-------|--------|
 | SIGN-01 | Phase 101 | Complete |
 | SIGN-02 | Phase 101 | Complete |
-| SIGN-03 | Phase 101 | Pending |
+| SIGN-03 | Phase 101 | Blocked/Deferred |
 | REL-01 | Phase 104 | Pending |
 | PUB-01 | Phase 102 | Pending |
 | PUB-02 | Phase 105 | Pending |
