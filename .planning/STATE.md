@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: Completed 101-02-PLAN.md (release.yml + trusted-signing-smoke.yml wired to Assert-TrustedSignature)
-last_updated: "2026-07-03T00:32:19.267Z"
+stopped_at: Completed 101-03-PLAN.md (SIGN-01 Azure profile confirmed PublicTrust; no fix needed; UnknownError root cause routed to D-04 diagnostics; GitHub Trusted Signing config confirmed absent, blocking Plan 04)
+last_updated: "2026-07-03T00:45:00.000Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 4
-  completed_plans: 2
-  percent: 50
+  completed_plans: 3
+  percent: 75
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 ## Current Position
 
 Phase: 101 (verify-gate-hardening-azure-profile-confirmation) — EXECUTING
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-07-03
 
@@ -45,6 +45,7 @@ Last activity: 2026-07-03
 *Updated after each plan completion*
 | Phase 101 P01 | 9min | 2 tasks | 2 files |
 | Phase 101 P02 | 2min | 2 tasks | 2 files |
+| Phase 101 P03 | 6min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -88,6 +89,8 @@ Last activity: 2026-07-03
 | knownGood test fixture trusts its throwaway cert via `Cert:\CurrentUser\Root`, not `Cert:\LocalMachine\Root` | 101-01 | Dev host not elevated; `LocalMachine\Root` requires administrator. GAS/`X509Chain.Build()` both consult CurrentUser Root for the current-user context, producing `Status=Valid` equivalently. Security-neutral, test-fixture-only. |
 | knownGood test fixture imports the throwaway cert via the raw `X509Store` API, not `Import-Certificate` | 101-01 | `Import-Certificate -CertStoreLocation Cert:\CurrentUser\Root` triggers a blocking interactive "Security Warning" CryptUI dialog with no non-interactive suppression — hangs indefinitely; `X509Store.Add()`/`.Remove()` bypasses the trust-UI layer entirely (mirrors this repo's own `Add-TrustForVerify`/`Remove-TrustForVerify` pattern) |
 | All 3 named verify sites (release.yml Site 1/Site 2, trusted-signing-smoke.yml) wired to `Assert-TrustedSignature`, plus a 4th plan-unenumerated inline gate | 101-02 | release.yml's "Verify signed binaries inside zip (Windows)" step (~L329) had its own duplicate `Get-AuthenticodeSignature`/`Status -ne 'Valid'` gate not named in the plan's `read_first`; wired it too (Rule 2) to satisfy the plan's own whole-file grep acceptance criterion (`grep -c "sig.Status -ne"` returns `0`) |
+| SIGN-01 confirmed live: profileType == PublicTrust (account ArtifactNono / RG_Nono / identity 20cb70d3-2d17-4fdb-9121-963628df6b63); no fix applied | 101-03 | Confirmed via Azure Portal (not `az` CLI — `trustedsigning` extension failed on a corporate-TLS SSL error). This rules out the profile-type hypothesis for the 2026-06-30 `UnknownError`; root cause remains open, routed to Plan 01's D-04 chain diagnostics on a future smoke run — not guessed. Recorded verbatim in `101-SIGN01-FINDING.md`. |
+| GitHub Trusted Signing config (vars + OIDC FIC) confirmed absent — Plan 04 SIGN-03 dispatch BLOCKED | 101-03 | Operator confirmed no `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` variables or federated credential currently exist on the repo; the plan's GitHub-var-update + FIC-subject-correction sub-steps are deferred (nothing to update); future provisioning must use the live Azure names (ArtifactNono/RG_Nono), not the cookbook's example names (nono-trusted-signing/rg-nono-signing) |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -138,6 +141,8 @@ Two host-gated distribution todos are IN SCOPE for v3.5 (CHOST-03 / FUT-03 drain
 - **Cross-target clippy MUST be GREEN** if any cfg-gated Unix code is touched: Docker `cross` (linux-gnu) + zig `cargo-zigbuild` (apple-darwin) exit 0 locally — PARTIAL→CI retired (v3.3 Phase 96). (v3.5 is primarily CI-yaml + PowerShell + IaC; likely low Unix-cfg exposure, but the rule stands.)
 - **Registry ownership pre-resolved, not a live blocker** — crates.io `nono`/`nono-proxy`, PyPI `nono-py`, npm `nono-ts` are upstream-owned; the fork publishes under fork-owned `nono-sandbox` family names instead of requesting a co-owner grant (PUB-01, Phase 102). Each new name's availability must still be confirmed live before committing to the rename.
 - **CLOSE-01 secret-retirement ordering is a structural gate, not a checklist item** — Phase 107 must NOT run until Phase 106 (CHOST-03) has a passed verdict; retiring POC secrets after only Phase 104 (release green) leaves no fallback signing path if clean-host UAT reveals a problem invisible on CI runners.
+- **GitHub Trusted Signing config does not exist yet (new, Phase 101 Plan 03)** — no `TRUSTED_SIGNING_ACCOUNT`/`_PROFILE`/`_ENDPOINT` variables or OIDC federated credential currently exist on the `OscarMackJr/nono` repo. Plan 04's SIGN-03 smoke dispatch is BLOCKED until this is provisioned, using the live Azure names confirmed in `101-SIGN01-FINDING.md` (account `ArtifactNono`, resource group `RG_Nono`, identity `20cb70d3-2d17-4fdb-9121-963628df6b63`) — NOT the go-live cookbook's example values.
+- **Residual `UnknownError` root cause still open (profile-type hypothesis ruled out)** — the live Azure profile is confirmed `PublicTrust`, so the 2026-06-30 smoke-run `UnknownError` is NOT a profile-type issue. True cause (chain-build staleness or CRL/OCSP revocation transient) remains to be diagnosed via Plan 01's `Assert-TrustedSignature` D-04 chain-introspection output on the next smoke run.
 
 ### Quick Tasks Completed
 
@@ -190,9 +195,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T00:32:19.255Z
-Stopped at: Completed 101-02-PLAN.md (release.yml + trusted-signing-smoke.yml wired to Assert-TrustedSignature)
-Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-03-PLAN.md
+Last session: 2026-07-03T00:45:00.000Z
+Stopped at: Completed 101-03-PLAN.md (SIGN-01 Azure profile confirmed PublicTrust; UnknownError root cause open, routed to D-04 diagnostics; GitHub Trusted Signing config confirmed absent)
+Resume file: .planning/phases/101-verify-gate-hardening-azure-profile-confirmation/101-04-PLAN.md
 
 ## Operator Next Steps
 
