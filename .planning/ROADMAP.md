@@ -112,7 +112,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   4. The workspace build (`make build`) and both binding builds (`maturin build`, napi build) are green under the new names.
 **Plans**: 5 plans
 - [x] 102-01-PLAN.md — Live registry-availability gate + rename the 3-crate publish set (nono/nono-proxy/nono-cli) + patch remaining in-workspace dependents + regenerate Cargo.lock
-- [ ] 102-02-PLAN.md — Reconcile Makefile + permanent CI workflow package selectors (release.yml publish steps explicitly deferred to Phase 105)
+- [x] 102-02-PLAN.md — Reconcile Makefile + permanent CI workflow package selectors (release.yml publish steps explicitly deferred to Phase 105)
 - [ ] 102-03-PLAN.md — nono-py sibling rename (Cargo.toml package= fix + pyproject.toml PyPI name + maturin build + DCO commit)
 - [ ] 102-04-PLAN.md — nono-ts sibling rename (Cargo.toml package= fix + napi rename --package-name + napi build + DCO commit)
 - [ ] 102-05-PLAN.md — Phase gate: fresh registry re-check + make ci + consolidated SC1-SC4 verification across all 3 repos
@@ -192,7 +192,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 99. Upstream Absorb + Fork-Invariant Verify | v3.4 | 7/7 | Complete    | 2026-06-30 |
 | 100. Release Reconcile — Leapfrog 0.66.1 + Pipeline + PyPI Blocker | v3.4 | 5/5 | Complete   | 2026-07-02 |
 | 101. Verify-Gate Hardening + Azure Profile Confirmation | v3.5 | 4/4 | Failed (SIGN-03 RED, diagnosed, deferred to Phase 104) | 2026-07-03 |
-| 102. Fork-Owned Package Rename | v3.5 | 1/5 | In Progress|  |
+| 102. Fork-Owned Package Rename | v3.5 | 2/5 | In Progress|  |
 | 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 0/? | Not started | - |
 | 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 0/? | Not started | - |
 | 105. Live Multi-Registry Publish | v3.5 | 0/? | Not started | - |

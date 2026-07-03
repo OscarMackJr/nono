@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: "Phase 102 Plan 01 complete: 3-crate publish set renamed (nono/nono-proxy/nono-cli -> nono-sandbox/nono-sandbox-proxy/nono-sandbox-cli); cargo build --workspace --all-targets green; Cargo.lock regenerated with exactly 3 renamed hunks; ready for Plan 02 (Makefile/CI reconciliation)"
-last_updated: "2026-07-03T13:39:38.943Z"
+stopped_at: "Phase 102 Plan 02 complete: Makefile + 4 permanent CI workflows reconciled to renamed -p nono-sandbox/-p nono-sandbox-cli selectors; cargo build --workspace --all-targets + make build's constituent commands + cargo fmt --all -- --check all green; ready for Plan 03 (nono-py rename)"
+last_updated: "2026-07-03T13:54:47.729Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 5
-  percent: 56
+  completed_plans: 6
+  percent: 67
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 ## Current Position
 
 Phase: 102 (fork-owned-package-rename) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-07-03
 
@@ -48,6 +48,7 @@ Last activity: 2026-07-03
 | Phase 101 P03 | 6min | 2 tasks | 2 files |
 | Phase 101 P04 | 8min | 1 task (Task 1 deliberately skipped) | 4 files |
 | Phase 102 P01 | 12min | 3 tasks | 6 files |
+| Phase 102 P02 | 9min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,7 @@ Last activity: 2026-07-03
 | SIGN-03 live smoke dispatch executed 2026-07-03 (operator-authorized push + dispatch); verdict rewritten BLOCKED → **FAILED (RED, diagnosed)** | 101-04 (live re-run) | Two runs: `28636000664` failed on a real Plan-02 wiring defect (no `actions/checkout` before the dot-source of `verify-authenticode.ps1`), fixed in `83eefe11`; authoritative `28636133664` ran the real hardened verify path and still returned `Status:UnknownError` on a genuinely-signed `PublicTrust` binary (`CN=TWGGLOBAL.onmicrosoft.com`, issuer `Microsoft Enterprise ID Verified Policy AOC CA 02`) — the fail-closed gate retried the transient case then correctly refused to pass; NOT loosened. Also **disproves** `101-RESEARCH.md`'s issuer-naming heuristic (`Enterprise ID Verified Policy` ≠ reliable `PublicTrustTest` tell — `PublicTrust` chains through it too), so any future gate must not resurrect that differentiator. A real D-04 diagnostic-flush gap was also found (chain-dump/`signtool /pa` output not visible in the CI log before the throw). Full evidence + 3 findings (A root cause, B heuristic disproven, C diagnostic gap) + Phase 104 hand-off in the rewritten `101-SIGN03-SMOKE-VERDICT.md`; `101-SIGN01-FINDING.md` updated with a corroborating 2026-07-03 note; REQUIREMENTS.md SIGN-03 now **Failed/Deferred** (not Blocked). |
 | PUB-01 3-crate publish set renamed to fork-owned family: `nono`→`nono-sandbox`, `nono-proxy`→`nono-sandbox-proxy`, `nono-cli`→`nono-sandbox-cli`, live-availability-gated (all 5 registry names re-confirmed 404 on 2026-07-03) before any manifest edit | 102-01 | `[package] name` renamed via Cargo's `package =` dependency-key mechanism (table keys `nono`/`nono-proxy` left unchanged in all 5 in-workspace dependents, including publish=false `nono-shell-broker`/`nono-ffi`) — zero `use nono::`/`use nono_proxy::` import changed; `cargo build --workspace --all-targets` green with a Cargo.lock diff limited to exactly the 3 renamed packages |
 | Rule 3 auto-fix: pinned explicit `[lib] name = "nono"` in `crates/nono/Cargo.toml` alongside the `[package]` rename | 102-01 | `crates/nono/tests/manifest_types.rs` (the crate's own integration test) links via Cargo's default-derived lib name, which silently became `nono_sandbox` once `[package] name` changed — a distinct failure mode from the well-documented dependency-key-vs-`package=` consumer pitfall, not covered by 102-RESEARCH.md's cross-crate scratch test. Pin has zero effect on the `package=` consumer mechanism (consumer extern names are controlled solely by their own dependency-table key, per 102-RESEARCH.md's own empirical finding) |
+| Makefile + 4 permanent CI workflows (ci.yml, image-build.yml, release.yml build steps, phase-37-linux-resl.yml) reconciled to `-p nono-sandbox`/`-p nono-sandbox-cli` selectors; `nono-ffi`/`nono-shell-broker` selectors and release.yml's 3 `cargo publish` lines left untouched, with a new Phase 105 deferral comment added above the first publish step | 102-02 | PUB-01 SC4 names `make build` as its literal verification command — those selectors would otherwise error against the now-nonexistent old package names after Plan 102-01's rename; `cargo build --workspace --all-targets`, `make build`'s two constituent cargo invocations, and `cargo fmt --all -- --check` all verified green |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -202,8 +204,8 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T13:39:38.930Z
-Stopped at: Phase 102 Plan 01 complete: 3-crate publish set renamed (nono/nono-proxy/nono-cli -> nono-sandbox/nono-sandbox-proxy/nono-sandbox-cli); cargo build --workspace --all-targets green; Cargo.lock regenerated with exactly 3 renamed hunks; ready for Plan 02 (Makefile/CI reconciliation)
+Last session: 2026-07-03T13:54:47.714Z
+Stopped at: Phase 102 Plan 02 complete: Makefile + 4 permanent CI workflows reconciled to renamed -p nono-sandbox/-p nono-sandbox-cli selectors; cargo build --workspace --all-targets + make build's constituent commands + cargo fmt --all -- --check all green; ready for Plan 03 (nono-py rename)
 Resume file: None
 
 ## Operator Next Steps
