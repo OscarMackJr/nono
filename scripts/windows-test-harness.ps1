@@ -84,49 +84,49 @@ function Invoke-LoggedCommand {
 }
 
 $smokeTests = @(
-    @{ Package = "nono-cli"; Filter = "test_root_help_mentions_windows_restricted_execution_surface" },
-    @{ Package = "nono-cli"; Filter = "windows_setup_check_only_reports_live_profile_subset" },
-    @{ Package = "nono-cli"; Filter = "windows_setup_check_only_reports_unified_support_status" },
-    @{ Package = "nono-cli"; Filter = "windows_run_executes_basic_command" },
-    @{ Package = "nono-cli"; Filter = "windows_run_live_default_profile_executes_command" },
-    @{ Package = "nono-cli"; Filter = "windows_shell_help_reports_documented_limitation" },
-    @{ Package = "nono-cli"; Filter = "windows_wrap_help_reports_documented_limitation" }
+    @{ Package = "nono-sandbox-cli"; Filter = "test_root_help_mentions_windows_restricted_execution_surface" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_setup_check_only_reports_live_profile_subset" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_setup_check_only_reports_unified_support_status" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_executes_basic_command" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_live_default_profile_executes_command" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_shell_help_reports_documented_limitation" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_wrap_help_reports_documented_limitation" }
 )
 
 $integrationTests = @(
-    @{ Package = "nono-cli"; Filter = "windows_run_redirects_profile_state_vars_into_writable_allowlist" },
-    @{ Package = "nono-cli"; Filter = "windows_run_honors_workdir" },
-    @{ Package = "nono-cli"; Filter = "windows_run_live_codex_profile_fails_intentionally_with_backend_reason" },
-    @{ Package = "nono-cli"; Filter = "windows_run_supervised_rollback_executes_command" },
-    @{ Package = "nono-cli"; Filter = "windows_run_smoke_validates_stdout_stderr_and_exit_code" }
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_redirects_profile_state_vars_into_writable_allowlist" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_honors_workdir" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_live_codex_profile_fails_intentionally_with_backend_reason" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_supervised_rollback_executes_command" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_smoke_validates_stdout_stderr_and_exit_code" }
 )
 
 $securityTests = @(
-    @{ Package = "nono"; Filter = "validate_preview_entry_point_rejects_shell" },
-    @{ Package = "nono"; Filter = "validate_preview_entry_point_rejects_wrap" },
-    @{ Package = "nono"; Filter = "validate_command_args_rejects_relative_parent_escape_outside_policy" },
-    @{ Package = "nono"; Filter = "validate_command_args_rejects_symlink_escape_inside_policy" },
-    @{ Package = "nono"; Filter = "validate_command_args_rejects_junction_escape_inside_policy" },
-    @{ Package = "nono-cli"; Filter = "test_handle_windows_supervisor_message_rejects_duplicate_request_ids" },
-    @{ Package = "nono-cli"; Filter = "test_handle_windows_supervisor_message_reports_open_url_limitation" },
-    @{ Package = "nono-cli"; Filter = "windows_open_url_helper_reports_documented_limitation" },
-    @{ Package = "nono-cli"; Filter = "windows_run_block_net_blocks_probe_connection" },
-    @{ Package = "nono-cli"; Filter = "windows_run_block_net_cleans_up_promoted_wfp_filters_after_exit" }
+    @{ Package = "nono-sandbox"; Filter = "validate_preview_entry_point_rejects_shell" },
+    @{ Package = "nono-sandbox"; Filter = "validate_preview_entry_point_rejects_wrap" },
+    @{ Package = "nono-sandbox"; Filter = "validate_command_args_rejects_relative_parent_escape_outside_policy" },
+    @{ Package = "nono-sandbox"; Filter = "validate_command_args_rejects_symlink_escape_inside_policy" },
+    @{ Package = "nono-sandbox"; Filter = "validate_command_args_rejects_junction_escape_inside_policy" },
+    @{ Package = "nono-sandbox-cli"; Filter = "test_handle_windows_supervisor_message_rejects_duplicate_request_ids" },
+    @{ Package = "nono-sandbox-cli"; Filter = "test_handle_windows_supervisor_message_reports_open_url_limitation" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_open_url_helper_reports_documented_limitation" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_block_net_blocks_probe_connection" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_block_net_cleans_up_promoted_wfp_filters_after_exit" }
 )
 
 $regressionTests = @(
-    @{ Package = "nono"; Filter = "normalize_windows_path_strips_verbatim_prefix" },
-    @{ Package = "nono"; Filter = "normalize_windows_path_strips_unc_verbatim_prefix" },
-    @{ Package = "nono"; Filter = "windows_paths_start_with_case_insensitive_matches_drive_case" },
-    @{ Package = "nono"; Filter = "low_integrity_compatible_dir_matches_localappdata_temp_low" },
-    @{ Package = "nono-cli"; Filter = "windows_protected_path_check_handles_verbatim_prefix_and_case_insensitive_drive_letters" },
-    @{ Package = "nono-cli"; Filter = "windows_path_overlaps_filter_handles_verbatim_prefix_and_drive_case" },
-    @{ Package = "nono-cli"; Filter = "windows_run_prefers_managed_low_integrity_runtime_root_inside_allowlist" },
-    @{ Package = "nono-cli"; Filter = "windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified" },
-    @{ Package = "nono-cli"; Filter = "windows_run_redirects_temp_vars_into_writable_allowlist" },
-    @{ Package = "nono-cli"; Filter = "windows_run_redirects_profile_state_vars_into_writable_allowlist" },
-    @{ Package = "nono-cli"; Filter = "config_with_valid_manifest_is_accepted" },
-    @{ Package = "nono-cli"; Filter = "test_show_format_manifest_round_trip" }
+    @{ Package = "nono-sandbox"; Filter = "normalize_windows_path_strips_verbatim_prefix" },
+    @{ Package = "nono-sandbox"; Filter = "normalize_windows_path_strips_unc_verbatim_prefix" },
+    @{ Package = "nono-sandbox"; Filter = "windows_paths_start_with_case_insensitive_matches_drive_case" },
+    @{ Package = "nono-sandbox"; Filter = "low_integrity_compatible_dir_matches_localappdata_temp_low" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_protected_path_check_handles_verbatim_prefix_and_case_insensitive_drive_letters" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_path_overlaps_filter_handles_verbatim_prefix_and_drive_case" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_prefers_managed_low_integrity_runtime_root_inside_allowlist" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_redirects_temp_vars_into_writable_allowlist" },
+    @{ Package = "nono-sandbox-cli"; Filter = "windows_run_redirects_profile_state_vars_into_writable_allowlist" },
+    @{ Package = "nono-sandbox-cli"; Filter = "config_with_valid_manifest_is_accepted" },
+    @{ Package = "nono-sandbox-cli"; Filter = "test_show_format_manifest_round_trip" }
 )
 
 $suites = if ($Suite -eq "all") {

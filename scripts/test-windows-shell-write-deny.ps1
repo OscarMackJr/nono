@@ -69,10 +69,10 @@ Write-Log "==> Nono binary: $NonoBinary"
 
 # ---- Step 1: Build (skippable) ----------------------------------------------
 if (-not $SkipBuild) {
-    Write-Log "==> Step 1: cargo build -p nono-cli --release --target x86_64-pc-windows-msvc"
+    Write-Log "==> Step 1: cargo build -p nono-sandbox-cli --release --target x86_64-pc-windows-msvc"
     Push-Location (Join-Path $PSScriptRoot '..')
     try {
-        cargo build -p nono-cli --release --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -Variable buildOut | Out-Null
+        cargo build -p nono-sandbox-cli --release --target x86_64-pc-windows-msvc 2>&1 | Tee-Object -Variable buildOut | Out-Null
         $buildOut | ForEach-Object { Write-Log $_ "BUILD" }
         if ($LASTEXITCODE -ne 0) {
             Write-Log "Build failed with exit $LASTEXITCODE" "ERROR"

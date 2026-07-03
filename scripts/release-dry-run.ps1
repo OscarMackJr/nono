@@ -68,7 +68,7 @@ Write-Banner "crates.io dry-run (dependency order)"
 # Publishable set (no publish=false) in crates.io dependency order.
 # Excluded (publish=false): nono-shell-broker (internal Windows broker — ships inside
 # the MSI, not a standalone crate), nono-fltmgr-client, nono-ffi (bindings/c), tools/sign-fixture.
-$PublishableCrates = @("nono", "nono-proxy", "nono-cli")
+$PublishableCrates = @("nono-sandbox", "nono-sandbox-proxy", "nono-sandbox-cli")
 
 Push-Location $RepoRoot
 try {
