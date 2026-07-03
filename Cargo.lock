@@ -2368,7 +2368,24 @@ dependencies = [
 ]
 
 [[package]]
-name = "nono"
+name = "nono-ffi"
+version = "0.66.1"
+dependencies = [
+ "cbindgen",
+ "nono-sandbox",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nono-fltmgr-client"
+version = "0.66.1"
+dependencies = [
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "nono-sandbox"
 version = "0.66.1"
 dependencies = [
  "der",
@@ -2402,7 +2419,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nono-cli"
+name = "nono-sandbox-cli"
 version = "0.66.1"
 dependencies = [
  "async-trait",
@@ -2428,8 +2445,8 @@ dependencies = [
  "keyring",
  "landlock",
  "nix",
- "nono",
- "nono-proxy",
+ "nono-sandbox",
+ "nono-sandbox-proxy",
  "nono-shell-broker",
  "proptest",
  "rand 0.10.1",
@@ -2466,24 +2483,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nono-ffi"
-version = "0.66.1"
-dependencies = [
- "cbindgen",
- "nono",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "nono-fltmgr-client"
-version = "0.66.1"
-dependencies = [
- "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "nono-proxy"
+name = "nono-sandbox-proxy"
 version = "0.66.1"
 dependencies = [
  "base64 0.22.1",
@@ -2495,7 +2495,7 @@ dependencies = [
  "hyper 1.10.1",
  "hyper-rustls",
  "hyper-util",
- "nono",
+ "nono-sandbox",
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
@@ -2518,7 +2518,7 @@ dependencies = [
 name = "nono-shell-broker"
 version = "0.66.1"
 dependencies = [
- "nono",
+ "nono-sandbox",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

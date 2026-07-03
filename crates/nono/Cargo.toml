@@ -12,6 +12,19 @@ readme = "README.md"
 keywords = ["sandbox", "security", "capability", "landlock", "seatbelt"]
 categories = ["os", "api-bindings"]
 
+# [lib] name pinned to "nono" (Rule 3 auto-fix, 102-01 Task 3 deviation): without an
+# explicit [lib] section, Cargo derives the default library crate name from [package]
+# name with hyphens converted to underscores -- i.e. "nono_sandbox" after this rename.
+# That default is invisible to external consumers (they resolve the extern crate name
+# from their OWN dependency-table key via `package = "nono-sandbox"`, per 102-RESEARCH.md,
+# completely independent of this producer's [lib] name), but it DOES break this crate's
+# own integration tests under tests/*.rs, which link against the library via the implicit
+# default lib name and use bare `use nono::...` imports. Pinning [lib] name here keeps
+# those in-crate `use nono::` imports byte-for-byte unchanged, with zero effect on the
+# package= consumer mechanism used by nono-proxy/nono-cli/nono-shell-broker/nono-ffi.
+[lib]
+name = "nono"
+
 [features]
 default = ["system-keyring"]
 # Enables OS system keyring access (macOS Keychain / Linux Secret Service).
