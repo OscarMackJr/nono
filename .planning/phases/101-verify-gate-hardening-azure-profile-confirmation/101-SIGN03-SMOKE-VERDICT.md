@@ -3,108 +3,95 @@
 **Cross-reference:** `.planning/REQUIREMENTS.md` — **SIGN-03**
 **Date:** 2026-07-02
 **Corrected:** 2026-07-02 (same-day factual-correction pass, post-verification)
-**Verdict: BLOCKED** (explicitly NOT a PASS — SIGN-03 is NOT satisfied)
+**Live smoke-run update:** 2026-07-02/03 UTC (operator authorized push + live dispatch; two runs executed)
+**Verdict: FAIL** (RED — explicitly NOT a PASS; SIGN-03 is NOT satisfied)
 
-## Correction (2026-07-02)
+This is a **rewrite** of the prior BLOCKED verdict. The workflow is no longer blocked-unpushed:
+the operator authorized pushing the branch and dispatching the hardened smoke workflow live.
+Two runs executed. The first exposed a real defect in this phase's own wiring (fixed same
+session); the second is the authoritative diagnostic run and it FAILED at Verify. The record
+below documents the accurate outcome — a real, precisely-diagnosed failure — not the earlier
+"never dispatched" state.
 
-An independent verifier (`101-VERIFICATION.md`) found that the original version of this
-document's stated blockers rested on **false premises**, contradicted by live `gh`/`git`
-evidence gathered in the same session. This section retracts those premises explicitly so
-the record does not silently drift. The corrected reasoning follows in the next section.
+## Live Smoke-Run Evidence (2026-07-02/03 UTC)
 
-**Retracted (false) claims from the original verdict:**
+- Branch `milestone/v2.13-carryforward-closeout` was pushed to `origin/OscarMackJr/nono`
+  (commits through `83eefe11`), satisfying the "push the hardened workflow" precondition from
+  the prior verdict.
+- **Run #1 — `28636000664`**
+  (https://github.com/OscarMackJr/nono/actions/runs/28636000664): **FAILED**, but not at
+  Verify — the smoke workflow had **no `actions/checkout` step**, so Plan 02's dot-source of
+  `scripts\verify-authenticode.ps1` could not resolve the repo-relative path on the runner
+  ("The term '...\scripts\verify-authenticode.ps1' is not recognized"). Sign succeeded before
+  this failure. This was a **real defect Plan 02 introduced** — wiring a repo-file dot-source
+  into a workflow that never checked the repo out — and static grep/YAML-shape gates could not
+  have caught it; it only surfaces on an actual dispatch.
+- **FIX — commit `83eefe11`**: added `actions/checkout@v4` as the first step of
+  `trusted-signing-smoke.yml`.
+- **Run #2 — `28636133664`**
+  (https://github.com/OscarMackJr/nono/actions/runs/28636133664): checkout succeeded, the
+  hardened `Assert-TrustedSignature` verify path ran for real, and it **still FAILED**. This is
+  the **authoritative diagnostic run** for SIGN-03. Verbatim verify-step log:
 
-- ~~"No OIDC federated credential exists."~~ **FALSE.** The FIC exists and works. Run
-  `28469674206` (2026-06-30) shows a successful OIDC login with the exact expected subject
-  claim `repo:OscarMackJr/nono:environment:Development`, and the Sign step succeeded
-  ("Number of errors: 0"). An earlier run (`26925847471`, 2026-06-04) also completed
-  successfully.
-- ~~"No GitHub Actions variables exist."~~ **FALSE.** Repo-scoped variables `TRUSTED_SIGNING_ACCOUNT`
-  (`ArtifactNono`), `TRUSTED_SIGNING_PROFILE` (`NonoCertProfile`), and `TRUSTED_SIGNING_ENDPOINT`
-  (`https://eus.codesigning.azure.net/`) all exist, created 2026-06-04 — before this phase
-  started — and were exercised successfully by the same 2026-06-30 run above.
-- ~~"`gh` resolves to the wrong repo (`nolabs-ai/nono`)."~~ **FALSE / not reproducible.**
-  `origin` is `https://github.com/OscarMackJr/nono.git`, and `gh repo view` correctly resolves
-  to `OscarMackJr/nono`. The earlier report of a wrong-repo resolution came from an operator/
-  orchestrator query that mistakenly hit a non-existent `--env Development` scope (producing a
-  404 against a different lookup path), not an actual `gh` misconfiguration.
+  ```
+  Status: UnknownError
+  Signer: CN=TWGGLOBAL.onmicrosoft.com, O=TWGGLOBAL.onmicrosoft.com, OU=Information Technology
+  Issuer: CN=Microsoft Enterprise ID Verified Policy AOC CA 02, O=Microsoft Corporation, C=US
+  Transient chain/revocation failure (attempt 1/3) - retrying in 2s
+  Assert-TrustedSignature: ... Authenticode verification failed for smoke\nono-smoke.exe with status UnknownError.
+  ```
 
-**Root cause of the discrepancy:** there is no GitHub "Environment" named `Development` on this
-repo — the environment-scoped variables/secrets page for it is empty. The workflow's job
-specifies `environment: Development` but reads `${{ vars.TRUSTED_SIGNING_* }}`, which GitHub
-Actions resolves from **repository-level** scope when no environment-level override exists.
-The operator's earlier "no env vars anywhere" report is explained by checking only
-the environment-scoped page and not the repo-scoped one. **Reconciliation CONFIRMED by the
-operator on 2026-07-02: the signing config is present and current** (not being decommissioned).
-The repo-scoped variables + OIDC federated credential are authoritative and live.
+  Step conclusions for Run #2: Checkout success, Azure login (OIDC) success, Compile success,
+  Sign success ("Number of errors: 0"), **Verify FAILURE**.
 
-## Corrected Reasoning: Why No Dispatch Was Performed
+## Findings
 
-No `gh workflow run trusted-signing-smoke.yml` dispatch was performed, and no run ID or run
-URL exists for this attempt — that remains an honest, deliberate absence, not an oversight.
-The genuine reasons are narrower than originally stated:
+### Finding (A) — SIGN-03 root cause, diagnosed
 
-1. **Plan 02's hardened `trusted-signing-smoke.yml` is unpushed.** All 14 Phase 101 commits
-   are local-only (`git log origin/main..HEAD` lists them; none exist on `origin/main`). A
-   dispatch today would run the **pre-hardening** version of the workflow on GitHub, not the
-   `Assert-TrustedSignature`-wired version this phase built — making any result unrepresentative
-   of the SIGN-02 hardening this gate exists to validate. **[GENUINE]**
-2. **Dispatching live Azure Trusted Signing CI is outward-facing.** This fork is currently
-   under a documented prepare-only / push-operator-gated release posture. Pushing the Phase
-   101 branch and triggering a live signing round-trip against Azure infrastructure requires
-   explicit operator authorization before either action is taken. **[GENUINE — operator gate,
-   not a technical defect]**
-3. **The prior real smoke run's Verify failure is unresolved.** Run `28469674206` (2026-06-30)
-   succeeded through OIDC login and Sign, but failed the Verify step with `Status: UnknownError`
-   (issuer `CN=Microsoft Enterprise ID Verified Policy AOC CA 01`). This is a real, open root
-   cause — not fixed merely by the GitHub config being confirmed present. It must be
-   re-investigated via Plan 01's D-04 chain-introspection diagnostics (the `Assert-TrustedSignature`
-   helper's failure-path chain dump) on the eventual hardened re-run. **[GENUINE — the actual
-   open question this gate exists to resolve]**
+`Get-AuthenticodeSignature` returns `UnknownError` for a **genuinely-signed** binary (a real
+org-validated certificate, `CN=TWGGLOBAL.onmicrosoft.com`, issued from the operator-confirmed
+`PublicTrust` profile — see `101-SIGN01-FINDING.md`). The shared helper's bounded retry
+correctly classified this as a **TRANSIENT** condition (chain-build/revocation-status, not
+`UntrustedRoot`), retried once, and — still unable to validate the chain — **threw fail-closed**
+per its Strict-mode contract. **This is correct security behavior**: the gate did not accept
+`UnknownError`, and it was never loosened to do so (per SIGN-02's invariant).
 
-Per Plan 04's own Task 2 rule ("If Task 1's run was NOT a correctly-chained success, this file
-records that failure verbatim rather than a false PASS"), the honest record remains that Task 1
-was not run, and this verdict is BLOCKED rather than a fabricated FAIL or PASS artifact — only
-the *rationale* for the block has been corrected.
+The failure itself is an **environmental chain-build / revocation-validation problem on the
+`windows-latest` GitHub-hosted runner** — most likely the runner's revocation-check endpoint
+(CRL/OCSP) being unreachable or slow, or the `Microsoft Enterprise ID Verified Policy AOC CA 02`
+intermediate/root not yet fully distributed to the runner's trust store — **NOT** the
+certificate profile type, and **NOT** a defect in the SIGN-02 gate/code itself.
 
-## Unblock Preconditions for a Future SIGN-03 Attempt (Corrected)
+### Finding (B) — Research issuer-naming heuristic DISPROVEN
 
-Before any future dispatch of `trusted-signing-smoke.yml` can produce a meaningful verdict:
+`101-RESEARCH.md` (§4 and the SIGN-01/SIGN-03 evidence section) proposed an issuer-substring
+differentiator: issuer containing `Enterprise ID Verified Policy` ⇒ likely `PublicTrustTest`;
+issuer matching `Microsoft ID Verified CS.*(EOC|AOC) CA` ⇒ `PublicTrust`. Plan 04's acceptance
+criteria for SIGN-03 encoded the same tell (reject `Enterprise ID Verified Policy`, expect a
+`Microsoft ID Verified CS EOC/AOC CA NN` issuer string).
 
-1. **Push the Phase 101 commits** (including Plan 02's hardened `trusted-signing-smoke.yml`
-   wiring, e.g. `5bd7567c`/`51d75786`) to the `OscarMackJr/nono` default branch, so a dispatch
-   actually exercises the hardened verify path (`Assert-TrustedSignature -Mode Strict`), not
-   the pre-hardening workflow.
-2. **Operator authorization to push + dispatch.** Because this is outward-facing (a live Azure
-   Trusted Signing round-trip against real infrastructure), the operator must explicitly
-   authorize both the push and the dispatch — this is a posture gate, not a missing-config
-   gate.
-3. **No re-provisioning of GitHub OIDC/variables is expected to be necessary** — they already
-   exist and already worked on 2026-06-30 (Sign step GREEN). Do not create a second, possibly
-   duplicate OIDC federated credential or duplicate variables against the same Azure AD
-   application; that would be needless config drift/attack-surface on a security-critical
-   signing pipeline. If the operator's reconciliation (above) concludes otherwise, this
-   precondition must be revised.
+The live run **disproves this heuristic**: the operator-confirmed `PublicTrust` profile
+(account `ArtifactNono`, resource group `RG_Nono`, profile `NonoCertProfile` — Plan 03,
+`101-SIGN01-FINDING.md`) produced a real signature whose issuer is
+`CN=Microsoft Enterprise ID Verified Policy AOC CA 02` — the exact substring both the research
+and Plan 04 labeled as the `PublicTrustTest` tell. **`PublicTrust` can and does chain through an
+`Enterprise ID Verified Policy AOC CA` issuer.** Had Plan 04's issuer-regex assertion been
+applied literally to this run, it would have **wrongly rejected a legitimate `PublicTrust`
+signature** as if it were `PublicTrustTest`. Any future gate must not resurrect this
+differentiator as a pass/fail condition.
 
-Once the push + operator authorization above are satisfied, dispatch
-`gh workflow run trusted-signing-smoke.yml --repo OscarMackJr/nono` and observe:
+### Finding (C) — D-04 diagnostic-flush gap
 
-- If the hardened D-04 diagnostics + bounded transient-retry (Plan 01) resolve the
-  `UnknownError` — because it was a transient CRL/OCSP revocation-check failure — the run goes
-  GREEN and SIGN-03 is satisfied.
-- If it was not transient, the hardened verify fails closed (never loosened) with a full
-  chain-diagnostic dump identifying the true root cause, which must then be addressed before
-  any release is cut.
-
-## Relevant Context Carried Forward (Plan 03's Finding)
-
-Per `101-SIGN01-FINDING.md`, the live Azure certificate profile is confirmed
-`profileType == PublicTrust` (account `ArtifactNono`, resource group `RG_Nono`, profile name
-`NonoCertProfile`) — the profile-type hypothesis for the 2026-06-30 `UnknownError` is **ruled
-out**. The previously observed `Status: UnknownError` / `Issuer: CN=Microsoft Enterprise ID
-Verified Policy AOC CA 01` residual remains unresolved and open, to be diagnosed via Plan 01's
-`Assert-TrustedSignature` D-04 chain-introspection output on the eventual hardened re-run — not
-guessed at here.
+The failure-path `Write-ChainDiagnostic` full chain dump and the `signtool verify /pa`
+StdOut/StdErr capture (Plan 01's D-04 chain-introspection diagnostics) did **not** appear in the
+CI log before the terminating `throw` in Run #2 — only the single retry line and the throw
+message surfaced. This means we still cannot see, from this run, whether the `signtool verify
+/pa` arm would have **passed** where `Get-AuthenticodeSignature` returned `UnknownError` — which
+the research explicitly flagged as plausible (signtool walks a different chain/policy
+validation path than GAS). This is a real legibility gap in D-04 that undercuts its stated
+purpose (giving the operator fast, evidence-based root-cause attribution) and needs a follow-up
+fix: ensure `Write-ChainDiagnostic` output is flushed to the CI log **before** the terminating
+throw, and surface the `signtool /pa` arm's result explicitly rather than only the GAS status.
 
 ## SIGN-03 Requirement Status
 
@@ -112,22 +99,37 @@ Per `.planning/REQUIREMENTS.md` **SIGN-03**: "The Trusted Signing Smoke Test wor
 GREEN on GitHub's clean windows-latest runner... proving the signing path is live end-to-end
 before any release is cut."
 
-**This requirement is NOT satisfied by this plan.** No run was dispatched, no GREEN result
-exists, and none is claimed. SIGN-03 remains open, marked **Blocked/Deferred** in
-`.planning/REQUIREMENTS.md`, pending the corrected unblock preconditions above.
+**This requirement is NOT satisfied.** The workflow was pushed and dispatched twice with full
+operator authorization; the first run failed on a real wiring defect (fixed); the second,
+authoritative run failed at the fail-closed Verify gate with `UnknownError`, correctly
+diagnosed per Findings (A)-(C) above. No GREEN result exists, and none is claimed. SIGN-03
+remains open, marked **Failed/Deferred** (RED, diagnosed — not BLOCKED, not a fabricated PASS)
+in `.planning/REQUIREMENTS.md`.
 
-## Hand-off
+## Hand-off to Phase 104
 
-This is **not** a failure of the SIGN-02 hardening — that work (Plans 01-02) is complete and
-live in the working tree, and the shared `Assert-TrustedSignature` helper is fully wired into
-all fail-closed verify sites. SIGN-03 is a **deferred blocker** on (a) the hardened workflow
-being unpushed and (b) the operator-gated posture around pushing/dispatching live signing CI,
-plus (c) the still-open `UnknownError` root cause — not a defect in this phase's own
-deliverables, and (as of this correction) not a missing-GitHub-config problem.
+This is **not** a failure of the SIGN-02 hardening — that work (Plans 01-02) is complete, the
+shared `Assert-TrustedSignature` helper is fully wired into all fail-closed verify sites, and it
+did exactly what a fail-closed gate should do when it cannot validate a chain: it retried the
+transient case and then refused to pass. SIGN-03 hands off to **Phase 104** (Smoke Green + Cut
+the Trusted-Signed Release), which must:
 
-The push + dispatch of the hardened smoke workflow are handed off to **Phase 104** (Smoke Green
-+ Cut the Trusted-Signed Release), whose own success criterion #1 already requires "the
-operator re-runs the hardened Trusted Signing Smoke Test workflow and confirms it is GREEN"
-immediately before the release tag push. Phase 104 must push Plan 02's local branch (with
-operator authorization) before it can perform that re-run — it does **not** need to
-re-provision GitHub OIDC/variables absent new evidence to the contrary.
+1. **Resolve the runner-side chain/revocation validation of the `AOC CA 02` chain.** Candidates:
+   re-run on a clean/updated `windows-latest` image (Microsoft periodically refreshes runner
+   images and CA trust stores); investigate whether the runner can reach the relevant CRL/OCSP
+   endpoints; and/or treat the `signtool verify /pa` arm's result as authoritative when GAS
+   returns `UnknownError` instead of (or in addition to) `Get-AuthenticodeSignature` — do NOT
+   loosen the fail-closed `Status -ne 'Valid'` gate itself; if `signtool /pa` is to be trusted
+   over GAS for this class of error, that must be an explicit, documented gate redesign, not a
+   silent softening.
+2. **Fix Plan 04's issuer-regex acceptance criteria** to stop rejecting issuers containing
+   `Enterprise ID Verified Policy` — Finding (B) disproves that heuristic empirically. A
+   `PublicTrust` profile chaining through `Microsoft Enterprise ID Verified Policy AOC CA NN` is
+   a legitimate, expected outcome, not a `PublicTrustTest` tell.
+3. **Close the D-04 diagnostic-flush gap** (Finding C) — make `Write-ChainDiagnostic` output and
+   the `signtool /pa` result visible in the CI log before any terminating throw, so the next
+   dispatch produces a fully legible diagnostic instead of a bare retry-then-throw.
+
+**Never recommend loosening the fail-closed `Status -ne 'Valid'` gate itself to accept
+`UnknownError`** — per SIGN-02's invariant and `.planning/REQUIREMENTS.md`'s explicit
+Out-of-Scope entry, that would be a security regression, not a fix.

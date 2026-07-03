@@ -108,6 +108,37 @@ decommissioned) — the repo-scoped variables + OIDC federated credential are au
   profile `NonoCertProfile`, identity id `20cb70d3-2d17-4fdb-9121-963628df6b63` — **not** the
   go-live cookbook's example values (`nono-trusted-signing`, `rg-nono-signing`).
 
+## Live-Run Update (2026-07-03): Heuristic Disproven, Finding Reconfirmed
+
+The operator authorized pushing the branch and dispatching the hardened
+`trusted-signing-smoke.yml` live. The authoritative diagnostic run,
+`28636133664` (https://github.com/OscarMackJr/nono/actions/runs/28636133664, run after fixing a
+missing-`actions/checkout` defect exposed by the first attempt, `28636000664`), signed a
+throwaway binary with the confirmed `PublicTrust` profile (`ArtifactNono`/`RG_Nono`/
+`NonoCertProfile`) and produced:
+
+```
+Signer: CN=TWGGLOBAL.onmicrosoft.com, O=TWGGLOBAL.onmicrosoft.com, OU=Information Technology
+Issuer: CN=Microsoft Enterprise ID Verified Policy AOC CA 02, O=Microsoft Corporation, C=US
+Status: UnknownError
+```
+
+This **disproves** the `101-RESEARCH.md` issuer-naming heuristic (`…Enterprise ID Verified
+Policy AOC CA…` = `PublicTrustTest` tell vs `Microsoft ID Verified CS EOC/AOC CA NN` =
+`PublicTrust`). The profile is live-confirmed `PublicTrust` (this finding, above), yet its real
+signature chains through exactly the issuer string the research and Plan 04's acceptance
+criteria labeled as the `PublicTrustTest` tell. A `PublicTrust` profile chaining through
+`Enterprise ID Verified Policy AOC CA` is evidently a legitimate, expected outcome — that
+issuer-substring differentiator must not be used as a pass/fail condition in any future gate
+(see `101-SIGN03-SMOKE-VERDICT.md` Finding B).
+
+This is **consistent with, and reconfirms**, this finding's earlier conclusion: the observed
+`UnknownError` is **not a profile-type issue**. The live evidence narrows the true root cause
+further — it is a runner-side chain-build / revocation-validation problem on `windows-latest`
+for the `AOC CA 02` chain (see `101-SIGN03-SMOKE-VERDICT.md` Finding A), not a certificate
+profile defect and not a code/gate weakness. Root-cause resolution and the Plan 04
+issuer-regex fix are handed off to Phase 104.
+
 ## SIGN-01 Requirement Satisfaction
 
 Per `.planning/REQUIREMENTS.md` SIGN-01: "The Azure Trusted Signing certificate profile is
