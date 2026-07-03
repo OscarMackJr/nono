@@ -138,7 +138,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Success Criteria** (what must be TRUE):
   1. **[Operator-in-loop]** Immediately before the tag push, the operator re-runs the hardened "Trusted Signing Smoke Test" workflow and confirms it is GREEN (the FIC-subject/profile canary re-check, per Pitfall 9's AADSTS700213 recurrence risk).
   2. **[Operator-in-loop]** The operator pushes tag `v0.66.1`; the `Release` workflow runs to green — all top-level `.exe` (`nono.exe`, `nono-shell-broker.exe`, `nono-wfp-service.exe`) and both MSIs pass the hardened fail-closed verify from Phase 101.
-  3. The published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** — Issuer chains to the `Microsoft ID Verified CS` root, not `CN=nono Test Signing`.
+  3. The published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** — `Get-AuthenticodeSignature.Status -eq 'Valid'` plus a non-test signer (rejecting `CN=nono Test Signing`/`PublicTrustTest`), with the issuer captured informationally only, never gated on an issuer-substring match (per `101-SIGN03-SMOKE-VERDICT.md` Finding B, which disproved the prior issuer-naming heuristic).
 **Plans**: 3 plans
 - [x] 104-01-PLAN.md — verify-authenticode.ps1 hardening: D-04 diagnostic-flush fix (Write-Error -ErrorAction Continue) + NoCheck-mode untrusted-root classification (Merge-NoCheckOverride), plus 2 new regression-guard test cases
 - [ ] 104-02-PLAN.md — Neutralize release.yml's stale publish-crates job (if: false, Pitfall 104-A) + local publish-selector regression guard + local root-availability pre-check (certutil) + correct disproven issuer-substring wording in REQUIREMENTS.md/ROADMAP.md

@@ -25,7 +25,7 @@
 
 ### Trusted-Signed Release Go-Live (REL)
 
-- [ ] **REL-01**: The first publicly-trusted-signed release is cut at **`0.66.1`** (Gate 2) — a tag push runs the `Release` workflow to green with all top-level `.exe` (`nono.exe`, `nono-shell-broker.exe`, `nono-wfp-service.exe`) and both MSIs Trusted-Signed and passing the hardened fail-closed verify; the published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** (Issuer = `Microsoft ID Verified CS` root, not `CN=nono Test Signing`).
+- [ ] **REL-01**: The first publicly-trusted-signed release is cut at **`0.66.1`** (Gate 2) — a tag push runs the `Release` workflow to green with all top-level `.exe` (`nono.exe`, `nono-shell-broker.exe`, `nono-wfp-service.exe`) and both MSIs Trusted-Signed and passing the hardened fail-closed verify; the published `OscarMackJr/nono` GitHub Release artifacts show **Verified publisher** — `Get-AuthenticodeSignature.Status -eq 'Valid'` plus a non-test signer (rejecting `CN=nono Test Signing`/`PublicTrustTest`), with the issuer captured informationally only, never gated on an issuer-substring match (per `101-SIGN03-SMOKE-VERDICT.md` Finding B, which disproved the prior issuer-naming heuristic: a genuine `PublicTrust` signature can chain through `Microsoft Enterprise ID Verified Policy AOC CA NN`).
 
 ### Fork-Owned Multi-Registry Publish (PUB — FUT-01)
 
