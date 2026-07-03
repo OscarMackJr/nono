@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: "Phase 102 Plan 02 complete: Makefile + 4 permanent CI workflows reconciled to renamed -p nono-sandbox/-p nono-sandbox-cli selectors; cargo build --workspace --all-targets + make build's constituent commands + cargo fmt --all -- --check all green; ready for Plan 03 (nono-py rename)"
-last_updated: "2026-07-03T13:54:47.729Z"
+stopped_at: "Phase 102 Plan 03 complete: nono-py Cargo.toml/pyproject.toml patched with package= keys + [project] name = nono-sandbox; maturin build green; cargo tree confirms nono-sandbox resolution; DCO-signed commit 787e2dd in ../nono-py; ready for Plan 04 (nono-ts rename)"
+last_updated: "2026-07-03T14:06:58.821Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 6
-  percent: 67
+  completed_plans: 7
+  percent: 78
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -27,7 +27,7 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 ## Current Position
 
 Phase: 102 (fork-owned-package-rename) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-07-03
 
@@ -49,6 +49,7 @@ Last activity: 2026-07-03
 | Phase 101 P04 | 8min | 1 task (Task 1 deliberately skipped) | 4 files |
 | Phase 102 P01 | 12min | 3 tasks | 6 files |
 | Phase 102 P02 | 9min | 3 tasks | 5 files |
+| Phase 102 P03 | 6min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -99,6 +100,8 @@ Last activity: 2026-07-03
 | PUB-01 3-crate publish set renamed to fork-owned family: `nono`→`nono-sandbox`, `nono-proxy`→`nono-sandbox-proxy`, `nono-cli`→`nono-sandbox-cli`, live-availability-gated (all 5 registry names re-confirmed 404 on 2026-07-03) before any manifest edit | 102-01 | `[package] name` renamed via Cargo's `package =` dependency-key mechanism (table keys `nono`/`nono-proxy` left unchanged in all 5 in-workspace dependents, including publish=false `nono-shell-broker`/`nono-ffi`) — zero `use nono::`/`use nono_proxy::` import changed; `cargo build --workspace --all-targets` green with a Cargo.lock diff limited to exactly the 3 renamed packages |
 | Rule 3 auto-fix: pinned explicit `[lib] name = "nono"` in `crates/nono/Cargo.toml` alongside the `[package]` rename | 102-01 | `crates/nono/tests/manifest_types.rs` (the crate's own integration test) links via Cargo's default-derived lib name, which silently became `nono_sandbox` once `[package] name` changed — a distinct failure mode from the well-documented dependency-key-vs-`package=` consumer pitfall, not covered by 102-RESEARCH.md's cross-crate scratch test. Pin has zero effect on the `package=` consumer mechanism (consumer extern names are controlled solely by their own dependency-table key, per 102-RESEARCH.md's own empirical finding) |
 | Makefile + 4 permanent CI workflows (ci.yml, image-build.yml, release.yml build steps, phase-37-linux-resl.yml) reconciled to `-p nono-sandbox`/`-p nono-sandbox-cli` selectors; `nono-ffi`/`nono-shell-broker` selectors and release.yml's 3 `cargo publish` lines left untouched, with a new Phase 105 deferral comment added above the first publish step | 102-02 | PUB-01 SC4 names `make build` as its literal verification command — those selectors would otherwise error against the now-nonexistent old package names after Plan 102-01's rename; `cargo build --workspace --all-targets`, `make build`'s two constituent cargo invocations, and `cargo fmt --all -- --check` all verified green |
+| `../nono-py`'s own Cargo.toml/pyproject.toml patched with `package = "nono-sandbox"`/`package = "nono-sandbox-proxy"` and `[project] name = "nono-sandbox"`; `maturin build` proven green; all edits landed in ONE DCO-signed commit (`787e2dd`) in the nono-py repo, separate from this repo's history | 102-03 | `../nono-py` is outside this Cargo workspace and path-deps in by relative path — invisible to `cargo build --workspace`; Plan 102-03's own acceptance criteria required Cargo.toml + pyproject.toml + regenerated Cargo.lock together in one commit, so Task 1/Task 2 were combined rather than committed separately; `cargo tree -p nono-py \| grep nono-sandbox` returned 3 matches confirming resolution against the renamed core crates via the correct relative path |
+| Rule 3 auto-fix: force-added gitignored `../nono-py/Cargo.lock` (`git add -f`) to satisfy the plan's explicit requirement that it be present in the rename commit | 102-03 | `../nono-py/.gitignore` excludes `Cargo.lock` by default (standard for a Rust binding crate); the plan's own `files_modified`/acceptance criteria explicitly name this file, so the gitignore rule was treated as a staging-mechanism obstacle, not grounds to omit the file |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -204,9 +207,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T13:54:47.714Z
-Stopped at: Phase 102 Plan 02 complete: Makefile + 4 permanent CI workflows reconciled to renamed -p nono-sandbox/-p nono-sandbox-cli selectors; cargo build --workspace --all-targets + make build's constituent commands + cargo fmt --all -- --check all green; ready for Plan 03 (nono-py rename)
-Resume file: None
+Last session: 2026-07-03T14:06:58.806Z
+Stopped at: Phase 102 Plan 03 complete: nono-py Cargo.toml/pyproject.toml patched with package= keys + [project] name = nono-sandbox; maturin build green; cargo tree confirms nono-sandbox resolution; DCO-signed commit 787e2dd in ../nono-py; ready for Plan 04 (nono-ts rename)
+Resume file: .planning/phases/102-fork-owned-package-rename/102-04-PLAN.md
 
 ## Operator Next Steps
 

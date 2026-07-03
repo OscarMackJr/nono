@@ -29,7 +29,7 @@
 
 ### Fork-Owned Multi-Registry Publish (PUB — FUT-01)
 
-- [ ] **PUB-01**: The published package identities are renamed to fork-owned **`nono-sandbox`** family names — crates.io `nono-sandbox` / `nono-sandbox-proxy` / `nono-sandbox-cli`, PyPI `nono-sandbox`, npm `@oscarmackjr/nono-ts` — via `[package] name` (crates) + binding manifest changes only; the `[[bin]] name = "nono"`, `[lib] name = "nono"`, and the `OscarMackJr/nono` repo are unchanged, internal path-dep names/pins are reconciled, each new name's availability is confirmed on its registry, and the workspace + both binding builds are green. *(Plans 102-01/102-02 of 5 complete 2026-07-03: crates.io rename `[package] name` + `package=` reconciliation done, workspace `cargo build --workspace --all-targets` green, all 5 registry names live-confirmed available; Makefile + 4 permanent CI workflows reconciled to the renamed `-p nono-sandbox`/`-p nono-sandbox-cli` selectors, `make build`'s constituent commands + `cargo fmt --all -- --check` green. Remaining: 102-03 PyPI rename, 102-04 npm rename, 102-05 phase gate confirming both binding builds green.)*
+- [ ] **PUB-01**: The published package identities are renamed to fork-owned **`nono-sandbox`** family names — crates.io `nono-sandbox` / `nono-sandbox-proxy` / `nono-sandbox-cli`, PyPI `nono-sandbox`, npm `@oscarmackjr/nono-ts` — via `[package] name` (crates) + binding manifest changes only; the `[[bin]] name = "nono"`, `[lib] name = "nono"`, and the `OscarMackJr/nono` repo are unchanged, internal path-dep names/pins are reconciled, each new name's availability is confirmed on its registry, and the workspace + both binding builds are green. *(Plans 102-01/102-02/102-03 of 5 complete 2026-07-03: crates.io rename `[package] name` + `package=` reconciliation done, workspace `cargo build --workspace --all-targets` green, all 5 registry names live-confirmed available; Makefile + 4 permanent CI workflows reconciled to the renamed `-p nono-sandbox`/`-p nono-sandbox-cli` selectors, `make build`'s constituent commands + `cargo fmt --all -- --check` green; `../nono-py` Cargo.toml/pyproject.toml patched with `package=`/`[project] name = "nono-sandbox"`, `maturin build` green, `cargo tree` confirms resolution, DCO-signed commit `787e2dd` in the nono-py repo. Remaining: 102-04 npm rename, 102-05 phase gate confirming both binding builds green.)*
 - [ ] **PUB-02**: `0.66.1` is published **LIVE** to all three registries under the fork-owned identities — crates.io in dependency order (`nono-sandbox` → `nono-sandbox-proxy` → `nono-sandbox-cli`) with index-visibility polling (not a fixed `sleep`), PyPI via maturin + `twine upload --skip-existing`, npm `@oscarmackjr/nono-ts` (all platform-specific packages present, avoiding the documented missing-platform-package failure) — each registry's own idempotency/resume semantics respected; `cargo install nono-sandbox-cli`, `pip install nono-sandbox`, and `npm i @oscarmackjr/nono-ts` all resolve post-publish.
 
 ### Clean-Host UAT — Azure VM (CHOST — FUT-03)
@@ -76,7 +76,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 | SIGN-02 | Phase 101 | Complete |
 | SIGN-03 | Phase 101 | Failed/Deferred |
 | REL-01 | Phase 104 | Pending |
-| PUB-01 | Phase 102 | In Progress (Plans 01-02/5 done) |
+| PUB-01 | Phase 102 | In Progress (Plans 01-03/5 done) |
 | PUB-02 | Phase 105 | Pending |
 | CHOST-01 | Phase 103 | Pending |
 | CHOST-02 | Phase 103 | Pending |
