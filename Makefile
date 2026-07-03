@@ -15,10 +15,10 @@ all: build
 build: build-lib build-cli
 
 build-lib:
-	cargo build -p nono
+	cargo build -p nono-sandbox
 
 build-cli:
-	cargo build -p nono-cli
+	cargo build -p nono-sandbox-cli
 
 build-ffi:
 	cargo build -p nono-ffi
@@ -27,10 +27,10 @@ build-release:
 	cargo build --release
 
 build-release-lib:
-	cargo build --release -p nono
+	cargo build --release -p nono-sandbox
 
 build-release-cli:
-	cargo build --release -p nono-cli
+	cargo build --release -p nono-sandbox-cli
 
 # Cross-compilation: Linux ARM64 (aarch64-unknown-linux-gnu)
 # Uses `cross` which handles both native (ARM64) and cross-compilation (e.g. x86_64).
@@ -38,16 +38,16 @@ build-release-cli:
 # If `cross` fails with "may not be able to run on this system",
 # install from git: cargo install cross --git https://github.com/cross-rs/cross
 build-arm64:
-	@cross build --release --target aarch64-unknown-linux-gnu -p nono-cli
+	@cross build --release --target aarch64-unknown-linux-gnu -p nono-sandbox-cli
 
 # Test targets
 test: test-lib test-cli test-ffi
 
 test-lib:
-	cargo test -p nono
+	cargo test -p nono-sandbox
 
 test-cli:
-	cargo test -p nono-cli
+	cargo test -p nono-sandbox-cli
 
 test-ffi:
 	cargo test -p nono-ffi
@@ -113,17 +113,17 @@ install:
 
 # Run the CLI (for quick testing)
 run:
-	cargo run -p nono-cli -- --help
+	cargo run -p nono-sandbox-cli -- --help
 
 run-setup:
-	cargo run -p nono-cli -- setup --check-only
+	cargo run -p nono-sandbox-cli -- setup --check-only
 
 run-dry:
-	cargo run -p nono-cli -- run --allow-cwd --dry-run -- echo "test"
+	cargo run -p nono-sandbox-cli -- run --allow-cwd --dry-run -- echo "test"
 
 # Development helpers
 watch:
-	cargo watch -x 'build -p nono-cli'
+	cargo watch -x 'build -p nono-sandbox-cli'
 
 watch-test:
 	cargo watch -x 'test'
@@ -133,7 +133,7 @@ doc:
 	cargo doc --no-deps --open
 
 doc-lib:
-	cargo doc -p nono --no-deps --open
+	cargo doc -p nono-sandbox --no-deps --open
 
 # Security audit
 audit:
