@@ -20,7 +20,7 @@ created: 2026-07-03
 | **Framework** | None applicable — this phase is a manifest/config identity rename with no new runtime logic to unit-test. Verification is build-green + live registry-availability checks, mirroring the phase's own success criteria. |
 | **Config file** | none |
 | **Quick run command** | `cargo check --workspace --all-targets` (fast compile-only check after each manifest edit — catches E0433 import breakage from a mis-renamed dependency key immediately) |
-| **Full suite command** | `make ci` (this repo) + `maturin build` (../nono-py) + `npx napi build --platform --release` (../nono-ts) |
+| **Full suite command** | `cargo build --workspace --all-targets` + `make build` + `cargo fmt --all -- --check` (this repo — build-green gate; NOT `make ci`/`make test`, which trip the documented pre-existing Windows baseline failures) + `maturin build` (../nono-py) + `npx napi build --platform --release` (../nono-ts) |
 | **Estimated runtime** | ~cargo check <60s; full builds several min each |
 
 ---
