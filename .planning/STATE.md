@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: "Phase 102 Plan 03 complete: nono-py Cargo.toml/pyproject.toml patched with package= keys + [project] name = nono-sandbox; maturin build green; cargo tree confirms nono-sandbox resolution; DCO-signed commit 787e2dd in ../nono-py; ready for Plan 04 (nono-ts rename)"
-last_updated: "2026-07-03T14:06:58.821Z"
+stopped_at: "Phase 102 Plan 04 complete: nono-ts rename hand-applied (napi rename tool unusable), napi build green, DCO commit c2f5aaa in ../nono-ts; ready for Plan 05"
+last_updated: "2026-07-03T14:19:27.067Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 9
-  completed_plans: 7
-  percent: 78
+  completed_plans: 8
+  percent: 89
 ---
 
 # Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
@@ -27,8 +27,8 @@ See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + ar
 ## Current Position
 
 Phase: 102 (fork-owned-package-rename) — EXECUTING
-Plan: 4 of 5
-Status: Ready to execute
+Plan: 5 of 5
+Status: Plan 04 complete (Wave 2 done); ready to execute Plan 05 (phase gate)
 Last activity: 2026-07-03
 
 ## Performance Metrics
@@ -50,6 +50,7 @@ Last activity: 2026-07-03
 | Phase 102 P01 | 12min | 3 tasks | 6 files |
 | Phase 102 P02 | 9min | 3 tasks | 5 files |
 | Phase 102 P03 | 6min | 2 tasks | 3 files |
+| Phase 102 P04 | 12min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -102,6 +103,7 @@ Last activity: 2026-07-03
 | Makefile + 4 permanent CI workflows (ci.yml, image-build.yml, release.yml build steps, phase-37-linux-resl.yml) reconciled to `-p nono-sandbox`/`-p nono-sandbox-cli` selectors; `nono-ffi`/`nono-shell-broker` selectors and release.yml's 3 `cargo publish` lines left untouched, with a new Phase 105 deferral comment added above the first publish step | 102-02 | PUB-01 SC4 names `make build` as its literal verification command — those selectors would otherwise error against the now-nonexistent old package names after Plan 102-01's rename; `cargo build --workspace --all-targets`, `make build`'s two constituent cargo invocations, and `cargo fmt --all -- --check` all verified green |
 | `../nono-py`'s own Cargo.toml/pyproject.toml patched with `package = "nono-sandbox"`/`package = "nono-sandbox-proxy"` and `[project] name = "nono-sandbox"`; `maturin build` proven green; all edits landed in ONE DCO-signed commit (`787e2dd`) in the nono-py repo, separate from this repo's history | 102-03 | `../nono-py` is outside this Cargo workspace and path-deps in by relative path — invisible to `cargo build --workspace`; Plan 102-03's own acceptance criteria required Cargo.toml + pyproject.toml + regenerated Cargo.lock together in one commit, so Task 1/Task 2 were combined rather than committed separately; `cargo tree -p nono-py \| grep nono-sandbox` returned 3 matches confirming resolution against the renamed core crates via the correct relative path |
 | Rule 3 auto-fix: force-added gitignored `../nono-py/Cargo.lock` (`git add -f`) to satisfy the plan's explicit requirement that it be present in the rename commit | 102-03 | `../nono-py/.gitignore` excludes `Cargo.lock` by default (standard for a Rust binding crate); the plan's own `files_modified`/acceptance criteria explicitly name this file, so the gitignore rule was treated as a staging-mechanism obstacle, not grounds to omit the file |
+| `../nono-ts`'s own Cargo.toml patched with `package = "nono-sandbox"`; npm identity hand-rescoped to `@oscarmackjr/nono-ts` across package.json + all 4 platform subpackages + optionalDependencies (NOT via the official `napi rename` tool); `napi build --platform --release` proven green; all 7 files landed in ONE DCO-signed commit (`c2f5aaa`) in the nono-ts repo | 102-04 | The installed `@napi-rs/cli@3.6.0` `rename` subcommand's real implementation diverges from 102-RESEARCH.md's documentation-derived description: it cannot run non-interactively even with all documented flags supplied (real-TTY-only `@inquirer/prompts`), it contains NO code path that rewrites `npm/*/package.json` or `optionalDependencies` at all, and it OVERWRITES the crate's own `Cargo.toml [package].name` with a sanitized form of `--binary-name` — which would have corrupted nono-ts's required-unchanged `nono-node` identity. All 6 JSON manifests were hand-edited instead, with every optionalDependencies-key-to-subpackage-name cross-reference individually verified; `cargo tree \| grep nono-sandbox` confirmed resolution against the renamed core crate |
 
 *Further v3.5 decisions populated as phases complete.*
 
@@ -207,9 +209,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-03T14:06:58.806Z
-Stopped at: Phase 102 Plan 03 complete: nono-py Cargo.toml/pyproject.toml patched with package= keys + [project] name = nono-sandbox; maturin build green; cargo tree confirms nono-sandbox resolution; DCO-signed commit 787e2dd in ../nono-py; ready for Plan 04 (nono-ts rename)
-Resume file: .planning/phases/102-fork-owned-package-rename/102-04-PLAN.md
+Last session: 2026-07-03T14:19:27.053Z
+Stopped at: Phase 102 Plan 04 complete: nono-ts rename hand-applied (napi rename tool unusable), napi build green, DCO commit c2f5aaa in ../nono-ts; ready for Plan 05
+Resume file: .planning/phases/102-fork-owned-package-rename/102-05-PLAN.md
 
 ## Operator Next Steps
 
