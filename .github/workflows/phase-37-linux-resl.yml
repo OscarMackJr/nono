@@ -116,14 +116,14 @@ jobs:
       # tests are reached via `--bin nono`, not `--lib`.
       - name: Run Plan 37-01 unit tests (UnsupportedKernelFeature)
         run: |
-          cargo test -p nono --lib unsupported_kernel_feature --release
+          cargo test -p nono-sandbox --lib unsupported_kernel_feature --release
           cargo test -p nono-ffi map_error_unsupported_kernel_feature --release
-          cargo test -p nono-cli --bin nono exec_strategy::supervisor_linux::cgroup::unsupported_kernel_feature_swap_tests --release
+          cargo test -p nono-sandbox-cli --bin nono exec_strategy::supervisor_linux::cgroup::unsupported_kernel_feature_swap_tests --release
 
       # Plan 37-03 unit tests — LOCKED Limits-block strings emitted by
       # `format_limits_block`. Pure-formatter tests; no systemd needed.
       - name: Run Plan 37-03 unit tests (Limits-block LOCKED strings)
-        run: cargo test -p nono-cli --bin nono limits_block_format_tests --release
+        run: cargo test -p nono-sandbox-cli --bin nono limits_block_format_tests --release
 
       # Integration tests MUST run under a real systemd-user-session because
       # the production code path writes to `cpu.max` / `memory.max` / `pids.max`
@@ -140,7 +140,7 @@ jobs:
           WORKSPACE: ${{ github.workspace }}
         run: |
           sudo machinectl shell ${USER}@.host /usr/bin/env bash -c \
-            "cd \"$WORKSPACE\" && cargo test -p nono-cli --test resl_nix_linux --test resl_nix_async_signal_safety --release -- --nocapture"
+            "cd \"$WORKSPACE\" && cargo test -p nono-sandbox-cli --test resl_nix_linux --test resl_nix_async_signal_safety --release -- --nocapture"
 
       # Cross-target clippy gate (Linux-from-Linux sanity). The companion
       # Windows/macOS clippy gates run in the umbrella ci.yml.
@@ -300,7 +300,7 @@ jobs:
           # `nono::trust::signing::GITHUB_ACTIONS_OIDC_ISSUER`).
           NONO_TRUST_OIDC_ISSUER: https://token.actions.githubusercontent.com
         run: |
-          cargo test -p nono-cli --test auto_pull_e2e_linux --release -- --nocapture
+          cargo test -p nono-sandbox-cli --test auto_pull_e2e_linux --release -- --nocapture
 
       # Cross-target clippy gate (Linux-from-Linux sanity). The companion
       # Windows/macOS clippy gates run in the umbrella ci.yml.

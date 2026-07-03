@@ -101,11 +101,11 @@ jobs:
 
       - name: Build (x86_64)
         if: matrix.target != 'aarch64-unknown-linux-gnu'
-        run: cargo build --release --target ${{ matrix.target }} -p nono-cli
+        run: cargo build --release --target ${{ matrix.target }} -p nono-sandbox-cli
 
       - name: Build (aarch64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --target aarch64-unknown-linux-gnu -p nono-cli
+        run: cross build --release --target aarch64-unknown-linux-gnu -p nono-sandbox-cli
 
       - name: Prepare binary artifact
         run: |

@@ -79,13 +79,13 @@ jobs:
 
       - name: Build
         if: matrix.target != 'aarch64-unknown-linux-gnu' && runner.os != 'Windows'
-        run: cargo build --release --target ${{ matrix.target }} -p nono-cli
+        run: cargo build --release --target ${{ matrix.target }} -p nono-sandbox-cli
 
       - name: Build (Windows — static CRT)
         if: runner.os == 'Windows'
         env:
           RUSTFLAGS: -Dwarnings -C target-feature=+crt-static
-        run: cargo build --release --target ${{ matrix.target }} -p nono-cli
+        run: cargo build --release --target ${{ matrix.target }} -p nono-sandbox-cli
 
       - name: Build broker (Windows)
         if: runner.os == 'Windows'
@@ -95,7 +95,7 @@ jobs:
 
       - name: Build (cross aarch64-unknown-linux-gnu)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: cross build --release --target aarch64-unknown-linux-gnu -p nono-cli
+        run: cross build --release --target aarch64-unknown-linux-gnu -p nono-sandbox-cli
 
       - name: Install WiX
         if: runner.os == 'Windows'
@@ -484,6 +484,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
 
+      # Phase 105 (PUB-02) rewrites these publish targets to nono-sandbox /
+      # nono-sandbox-proxy / nono-sandbox-cli with dependency-ordered,
+      # index-visibility-polled publish logic. Deliberately left unchanged here.
       - name: Publish nono (core library)
         run: |
           VERSION="${{ env.RELEASE_TAG }}"
