@@ -82,9 +82,9 @@ The most likely cause of the earlier false report: the operator checked only the
 **environment-scoped** ("`Development`" environment) variables/secrets page, which is empty —
 while the workflow's job specifies `environment: Development` but reads `${{ vars.TRUSTED_SIGNING_* }}`,
 which GitHub Actions resolves from **repository-level** scope when no environment-level
-override exists. No `Development` *environment* exists on the repo at all. This reconciliation
-is recorded here for the record; it remains **pending explicit operator confirmation** should
-the operator have independent reason to believe otherwise (e.g., intentional decommissioning).
+override exists. No `Development` *environment* exists on the repo at all. **Reconciliation
+CONFIRMED by the operator on 2026-07-02: the signing config is present and current** (not being
+decommissioned) — the repo-scoped variables + OIDC federated credential are authoritative.
 
 **Corrected consequences:**
 

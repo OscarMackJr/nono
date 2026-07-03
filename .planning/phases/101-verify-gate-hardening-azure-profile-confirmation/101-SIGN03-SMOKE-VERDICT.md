@@ -33,12 +33,10 @@ the record does not silently drift. The corrected reasoning follows in the next 
 repo — the environment-scoped variables/secrets page for it is empty. The workflow's job
 specifies `environment: Development` but reads `${{ vars.TRUSTED_SIGNING_* }}`, which GitHub
 Actions resolves from **repository-level** scope when no environment-level override exists.
-The operator's earlier "no env vars anywhere" report is very likely explained by checking only
-the environment-scoped page and not the repo-scoped one. **This reconciliation is still
-pending explicit operator confirmation** — if the operator is intentionally decommissioning
-this configuration (e.g., deliberately rotating credentials, or these values are stale/
-unexpected for some other reason), this verdict must be revisited accordingly. Absent that
-signal, the live evidence above is treated as authoritative.
+The operator's earlier "no env vars anywhere" report is explained by checking only
+the environment-scoped page and not the repo-scoped one. **Reconciliation CONFIRMED by the
+operator on 2026-07-02: the signing config is present and current** (not being decommissioned).
+The repo-scoped variables + OIDC federated credential are authoritative and live.
 
 ## Corrected Reasoning: Why No Dispatch Was Performed
 
