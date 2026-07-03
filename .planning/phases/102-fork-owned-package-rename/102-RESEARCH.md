@@ -234,14 +234,16 @@ All results verified live in this session via the Bash tool — **VERIFIED**, no
 
 **If this table is empty:** N/A — see above; all four assumptions are LOW-to-MEDIUM risk, none blocking, and each has an obvious detection mechanism baked into the phase's own build-green success criterion.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should the sibling repos' Cargo.toml edits be scoped INTO Phase 102, or handed off as a dependency to Phase 105?**
+**RESOLVED (2026-07-03, during planning):** Q1 resolved → sibling-repo edits are scoped INTO Phase 102 (Plans 102-03 for nono-py, 102-04 for nono-ts, re-verified in 102-05), each a separate DCO-signed commit in its own repo. Q2 resolved → npm `@oscarmackjr` scope ownership is captured as a non-blocking Phase 105 precondition (see `102-VALIDATION.md` Manual-Only Verifications), NOT a Phase 102 gate.
+
+1. **Should the sibling repos' Cargo.toml edits be scoped INTO Phase 102, or handed off as a dependency to Phase 105?** *(RESOLVED: scoped into Phase 102 — Plans 102-03/04/05.)*
    - What we know: PUB-01 success criterion 4 explicitly requires "both binding builds are green," which is impossible without patching `../nono-py/Cargo.toml` and `../nono-ts/Cargo.toml`'s own `nono`/`nono-proxy` dependency stanzas (Pitfall 2).
    - What's unclear: Whether the phase's task list should physically edit files in `../nono-py`/`../nono-ts` (separate git repos, separate commit history) within the same `/gsd:execute-phase 102` run, or whether that requires a distinct commit/PR flow per repo.
    - Recommendation: Scope it INTO Phase 102 — the success criterion is unambiguous, and deferring it would mean Phase 102 "completes" with green in this repo alone while silently leaving two repos broken. Use three separate DCO-signed commits (one per repo), matching this project's existing pattern for cross-repo binding bumps (see `100-03` decision log: "cross-repo binding bump ... one DCO-signed commit each").
 
-2. **Does the operator need to create the `oscarmackjr` npm user/org before Phase 102 closes, or only before Phase 105?**
+2. **Does the operator need to create the `oscarmackjr` npm user/org before Phase 102 closes, or only before Phase 105?** *(RESOLVED: only before Phase 105 — non-blocking note here, hard gate there.)*
    - What we know: Phase 102 success criterion 3 only requires confirming the NAME is available (done, live-verified). Actually reserving/owning the `@oscarmackjr` scope requires npm account/org creation, which is an operator action with no `curl`-based verification path (requires an authenticated npm login).
    - What's unclear: Whether "confirmed live against the actual registry" in PUB-01's wording implies the scope-ownership precondition should also be raised NOW as an operator checkpoint, even though it isn't strictly required to complete Phase 102's manifest-rename work.
    - Recommendation: Raise it as a non-blocking operator note in this phase's plan (informational, not a checkpoint gate) — the real gate belongs in Phase 105 (PUB-02, actual publish), where it would hard-block `npm publish`.

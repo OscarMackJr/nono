@@ -1,9 +1,9 @@
 ---
 phase: 102
 slug: fork-owned-package-rename
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-03
 ---
 
@@ -71,6 +71,6 @@ created: 2026-07-03
 - [x] Wave 0 covers all MISSING references (none — existing tooling suffices)
 - [x] No watch-mode flags
 - [x] Feedback latency < 60s (per-task cargo check)
-- [ ] `nyquist_compliant: true` set in frontmatter (set by planner/checker once plans assign task IDs)
+- [x] `nyquist_compliant: true` set in frontmatter (plans 102-01..05 now assign task IDs; SC→command map encoded into task acceptance criteria)
 
-**Approval:** pending
+**Approval:** approved 2026-07-03
