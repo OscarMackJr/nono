@@ -1,9 +1,9 @@
 ---
 phase: 105
 slug: live-multi-registry-publish
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-07-03
 ---
 
@@ -85,7 +85,7 @@ Live registry publishing is IRREVERSIBLE and operator-in-loop. This phase AUTHOR
 - [x] Wave 0 covers all MISSING references (twine, index-poll helper, resolve wrapper, win32 leg)
 - [x] No watch-mode flags
 - [x] Feedback latency < 2 min
-- [ ] `nyquist_compliant: true` set once plans assign task IDs
+- [x] `nyquist_compliant: true` set (plans 105-01..05 assign task IDs; Wave 0 gaps folded into Wave-1 tasks — twine install, crates-index-poll.ps1, verify-post-publish-resolve.ps1, win32 leg)
 - [x] Registry tokens NEVER echoed/logged; pre-publish availability re-check before EVERY live checkpoint; publish is workflow_dispatch-only (never accidental)
 
 **Approval:** pending

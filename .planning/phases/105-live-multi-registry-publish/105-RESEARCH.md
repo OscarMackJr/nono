@@ -312,14 +312,16 @@ This exact check, run this session, reports `MISSING platform packages: [ '@osca
 
 **If this table is empty:** N/A — see above.
 
-## Open Questions
+## Open Questions (RESOLVED during planning)
 
-1. **Should Phase 105 create real fork-owned `OscarMackJr/nono-py`/`OscarMackJr/nono-ts` GitHub repos, or explicitly scope this phase's npm/PyPI publish to what's locally buildable on this one Windows operator machine?**
+**RESOLVED (2026-07-03, via AskUserQuestion → 105-CONTEXT.md):** Q1 → RESOLVED by D-02 (scope to LOCALLY-BUILDABLE platforms only; forking `OscarMackJr/nono-py`/`nono-ts` for full multi-platform CI is DEFERRED; reduced Linux/macOS coverage documented as a known limitation). Q2 → RESOLVED by D-03 (the `publish-crates` job becomes a `workflow_dispatch`-only decoupled workflow, never auto on tag-push).
+
+1. **RESOLVED (D-02) — Should Phase 105 create real fork-owned `OscarMackJr/nono-py`/`OscarMackJr/nono-ts` GitHub repos, or explicitly scope this phase's npm/PyPI publish to what's locally buildable on this one Windows operator machine?**
    - What we know: no such repos exist today (verified); the sibling repos' own inherited CI would solve multi-platform coverage cleanly and reuses proven patterns, but repo creation + CI repair is nontrivial, unbudgeted work not implied by PUB-01/PUB-02's wording.
    - What's unclear: whether "publish `0.66.1` live to ... npm ... all platform-specific native packages present" (PUB-02) is meant to require full 5-platform parity in THIS phase, or whether a documented, reduced Windows(+best-effort-Linux) coverage satisfies the requirement's intent given the infrastructure gap discovered.
    - Recommendation: raise this explicitly to the user/planner as a scoping decision before task authoring — do not silently pick either path. If deferred, log a new `FUT-XX` entry for full multi-platform parity, matching this project's existing pattern (see REQUIREMENTS.md `FUT-04`..`FUT-07`).
 
-2. **Should the rewritten `publish-crates` CI job be re-enabled to run automatically on tag push, or converted to a `workflow_dispatch`-only, separately-triggered workflow?**
+2. **RESOLVED (D-03) — Should the rewritten `publish-crates` CI job be re-enabled to run automatically on tag push, or converted to a `workflow_dispatch`-only, separately-triggered workflow?**
    - What we know: crates.io publishes are permanent; the existing trigger (`needs: release`, itself triggered by `on: push: tags: 'v*.*.*'`) offers no independent human-confirmation gate once un-neutralized.
    - What's unclear: whether decoupling it into its own `workflow_dispatch`-only workflow is worth the added file/complexity versus simply requiring a `workflow_dispatch` input on the existing job (keeping it in `release.yml`).
    - Recommendation: favor the `workflow_dispatch`-only approach (matching `nono-ts`'s own inherited `publish.yml` pattern, which already uses an `inputs.publish_target` choice of `dry-run`/`npm` as its live-vs-dry gate) — it is a smaller, proven pattern already present elsewhere in this project's dependency tree.
