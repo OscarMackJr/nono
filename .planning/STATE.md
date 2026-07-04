@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v3.5
 milestone_name: Trusted Signing Go-Live + First Distributed Release
 status: executing
-stopped_at: Phase 104 Plan 02 complete (publish-crates neutralized via job-level if:false, regression guard + local root pre-check scripts added, REL-01/SC3 disproven issuer-substring wording corrected); ready to execute Phase 104 Plan 03
-last_updated: "2026-07-03T21:42:22.761Z"
+stopped_at: "Phase 104 Plan 03 Task 1 (automated pre-flight) COMPLETE + PASSING this session (2026-07-03): root-propagation pre-check ABSENT (thumbprint 991D364E97882715B80ED978F53E1F35DC2F07C2 NOT in live Trusted Root CTL, 554 certs checked, exit 1); release-readiness gate PASS (exit 0); publish-selectors neutralization PASS (exit 0). Tasks 2+3 (poll-until-green smoke dispatch + irreversible v0.66.1 tag push) BLOCKED at operator checkpoint on the external, time-bound Microsoft root-propagation blocker — no code change here can resolve it. Awaiting operator: re-run pre-check when root propagates → GREEN smoke → tag push."
+last_updated: "2026-07-03T22:40:42.808Z"
 last_activity: 2026-07-03
 progress:
   total_phases: 4
