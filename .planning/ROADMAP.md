@@ -30,7 +30,7 @@ Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode ve
 - [x] **Phase 102: Fork-Owned Package Rename** — 5/5 plans
 - [x] **Phase 103: Azure Clean-Host VM IaC + New Verify-Dark Gates** — 3/3 plans
 - [ ] **Phase 104: Smoke Green + Cut the Trusted-Signed Release** — 1/3 plans
-- [ ] **Phase 105: Live Multi-Registry Publish** — 0/? plans
+- [ ] **Phase 105: Live Multi-Registry Publish** — 0/5 plans
 - [ ] **Phase 106: Azure VM Clean-Host UAT** — 0/? plans
 - [ ] **Phase 107: Close-Out** — 0/? plans
 
@@ -153,7 +153,12 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. **[Operator-in-loop]** PyPI publish (`maturin` build + `twine upload --skip-existing`) succeeds for `nono-sandbox`, and the actual published wheel/platform coverage is verified post-publish (not just exit code).
   3. **[Operator-in-loop]** npm publish succeeds for `@oscarmackjr/nono-ts` with all required platform-specific native packages present (explicitly avoiding the documented upstream missing-platform-package failure).
   4. `cargo install nono-sandbox-cli`, `pip install nono-sandbox`, and `npm i @oscarmackjr/nono-ts` all resolve successfully post-publish.
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 105-01-PLAN.md — crates.io machinery: sparse-index poll helper + workflow_dispatch-only publish-crates.yml (retires the neutralized in-line job)
+- [ ] 105-02-PLAN.md — PyPI machinery: twine install + confirm-gated maturin build + twine upload + post-publish coverage verification
+- [ ] 105-03-PLAN.md — npm machinery: close the win32-x64-msvc platform-package gap + confirm-gated, platform-first-then-main publish script
+- [ ] 105-04-PLAN.md — Verification tooling: pre-checkpoint registry-availability/scope re-check + SC4 isolated post-publish resolve wrapper
+- [ ] 105-05-PLAN.md — Operator checkpoint (Wave 2): pre-publish gate, live publish (crates.io/PyPI/npm), post-publish resolve verification
 
 ### Phase 106: Azure VM Clean-Host UAT
 **Goal**: Both long-standing host-gated distribution todos are drained to a genuine PASS on a real, never-contaminated Azure Win11 VM running the real trusted-signed `0.66.1` release.
@@ -164,7 +169,12 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. **[Operator-in-loop]** The `broker-spawn-on-clean-host` gate PASSes — `nono run --profile claude-code` spawns the broker with zero manual cert-trust step.
   3. **[Operator-in-loop]** The reused `clean-host-install` gate PASSes — the machine MSI installs on fresh Win11 with no VC++ redist preinstalled (no `1603`/rollback, `nono.exe` launches, no `0xC0000135`).
   4. Both `poc-cert-broker-clean-host` and `msi-vcredist-prereq` todos are moved `pending/` → `resolved/` with the passing verdict JSON referenced.
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 105-01-PLAN.md — crates.io machinery: sparse-index poll helper + workflow_dispatch-only publish-crates.yml (retires the neutralized in-line job)
+- [ ] 105-02-PLAN.md — PyPI machinery: twine install + confirm-gated maturin build + twine upload + post-publish coverage verification
+- [ ] 105-03-PLAN.md — npm machinery: close the win32-x64-msvc platform-package gap + confirm-gated, platform-first-then-main publish script
+- [ ] 105-04-PLAN.md — Verification tooling: pre-checkpoint registry-availability/scope re-check + SC4 isolated post-publish resolve wrapper
+- [ ] 105-05-PLAN.md — Operator checkpoint (Wave 2): pre-publish gate, live publish (crates.io/PyPI/npm), post-publish resolve verification
 
 ### Phase 107: Close-Out
 **Goal**: The POC signing path is retired, the disposable smoke workflow is removed, and stale documentation + STATE are corrected — but strictly only after clean-host UAT has proven the new path works end-to-end, preserving a fallback signing path until then.
@@ -175,7 +185,12 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. `trusted-signing-smoke.yml` is removed (`git rm`) now that the real release path is proven green end-to-end.
   3. `docs/cli/development/windows-signing-guide.mdx` is corrected to point at the go-live cookbook instead of the retired PFX flow (gitignored-but-tracked — needs `git add -f`).
   4. `RELEASE-RUNBOOK.md` and `STATE.md`/`PROJECT.md` are updated to reflect FUT-01/FUT-02/FUT-03 + DIST-SIGN-01 cleared.
-**Plans**: TBD
+**Plans**: 5 plans
+- [ ] 105-01-PLAN.md — crates.io machinery: sparse-index poll helper + workflow_dispatch-only publish-crates.yml (retires the neutralized in-line job)
+- [ ] 105-02-PLAN.md — PyPI machinery: twine install + confirm-gated maturin build + twine upload + post-publish coverage verification
+- [ ] 105-03-PLAN.md — npm machinery: close the win32-x64-msvc platform-package gap + confirm-gated, platform-first-then-main publish script
+- [ ] 105-04-PLAN.md — Verification tooling: pre-checkpoint registry-availability/scope re-check + SC4 isolated post-publish resolve wrapper
+- [ ] 105-05-PLAN.md — Operator checkpoint (Wave 2): pre-publish gate, live publish (crates.io/PyPI/npm), post-publish resolve verification
 
 ## Progress
 
@@ -201,6 +216,6 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 102. Fork-Owned Package Rename | v3.5 | 5/5 | Complete   | 2026-07-03 |
 | 103. Azure Clean-Host VM IaC + New Verify-Dark Gates | v3.5 | 3/3 | Complete   | 2026-07-03 |
 | 104. Smoke Green + Cut the Trusted-Signed Release | v3.5 | 1/3 | In Progress|  |
-| 105. Live Multi-Registry Publish | v3.5 | 0/? | Not started | - |
+| 105. Live Multi-Registry Publish | v3.5 | 0/5 | Not started | - |
 | 106. Azure VM Clean-Host UAT | v3.5 | 0/? | Not started | - |
 | 107. Close-Out | v3.5 | 0/? | Not started | - |
