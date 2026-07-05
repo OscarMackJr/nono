@@ -3,58 +3,76 @@
 <img src="assets/nono-logo.png" alt="nono logo" width="600"/>
 
 <p>
-  From the creator of
-  <a href="https://sigstore.dev"><strong>Sigstore</strong></a>
-  <br/>
-  <sub>The standard for secure software attestation, used by PyPI, npm, brew, and Maven Central</sub>
-</p>
-<p>
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/></a>
-  <a href="https://github.com/always-further/nono/actions/workflows/ci.yml"><img src="https://github.com/always-further/nono/actions/workflows/ci.yml/badge.svg" alt="CI Status"/></a>
-  <a href="https://docs.nono.sh"><img src="https://img.shields.io/badge/Docs-docs.nono.sh-green.svg" alt="Documentation"/></a>
-</p>
-<p>
-  <a href="https://discord.gg/pPcjYzGvbS">
-    <img src="https://img.shields.io/badge/Chat-Join%20Discord-7289da?style=for-the-badge&logo=discord&logoColor=white" alt="Join Discord"/>
-  </a>
-  <a href="https://github.com/marketplace/actions/agent-sign">
-    <img src="https://img.shields.io/badge/Secure_Action-agent--sign-2088FF?style=for-the-badge&logo=github-actions&logoColor=white" alt="agent-sign GitHub Action"/>
-  </a>
+  <a href="https://github.com/OscarMackJr/nono/actions/workflows/ci.yml"><img src="https://github.com/OscarMackJr/nono/actions/workflows/ci.yml/badge.svg" alt="CI Status"/></a>
+  <img src="https://img.shields.io/badge/Platform-Windows%20native%20%7C%20Linux%20%7C%20macOS-informational.svg" alt="Platform support"/>
 </p>
 
 </div>
 
+> [!IMPORTANT]
+> **This is an independent, hard-diverged fork.**
+> `OscarMackJr/nono` began as a downstream fork of the upstream nono project (originally by the
+> creator of [Sigstore](https://sigstore.dev), now at
+> [`nolabs-ai/nono`](https://github.com/nolabs-ai/nono)) and has since diverged by thousands of
+> commits. It will most likely **never** be merged back upstream. The core sandbox primitive still
+> tracks upstream through periodic sync cycles, but the **Windows-native backend, the install /
+> distribution model, and the ZT-Infra signed-override integration are fork-only and diverge
+> significantly** from anything upstream ships. Where this README and the upstream one disagree,
+> **this one describes what is actually in this repository.**
+
 > [!WARNING]
-> Early alpha -- not yet audited for production use. Active development may cause breakage. Please don't point a coding agent at the repo and raise large LLM-generated security issues, we likely already know about them; instead ask in [Discord](https://discord.gg/pPcjYzGvbS) first.
+> Early alpha / not yet audited for production use. Active development may cause breakage. The first
+> publicly-trusted-signed release and registry publish are still being finalized (see
+> **Install** below) — until then, build from source.
 
 ---
 
-nono wraps any AI agent or process in a kernel-isolated sandbox in seconds. No hypervisor. No infrastructure required. A single binary, zero added latency, and flexible enough to fit a solo developer's workflow or a fleet of agents running at scale in production.
+nono wraps any AI agent or process in a kernel-isolated sandbox in seconds. No hypervisor, no
+infrastructure required: a single binary, zero added latency, flexible enough for a solo developer's
+workflow or a fleet of agents at scale. Unauthorized operations are made *structurally impossible* by
+the OS kernel — Landlock (Linux), Seatbelt (macOS), and **AppContainer + Windows Filtering Platform
+(WFP)** on Windows.
 
-**Platform support:** macOS, Linux, [WSL2](https://nono.sh/docs/cli/internals/wsl2), and the Windows native CLI are supported today. Windows native builds support a real restricted-execution command surface for setup, dry-run, direct execution, blocked-network, and selected supervised flows. Live `nono shell` and `nono wrap` remain intentionally unavailable on Windows; use their `--dry-run` forms to inspect policy. See the [Installation Guide](https://docs.nono.sh/cli/getting_started/installation) for the current Windows boundary.
+## What makes this fork different
 
-**Install:**
+This fork's headline investment is **bringing the Windows backend to functional parity with the Unix
+platforms** — real, kernel-enforced isolation rather than a limited preview — plus a two-key signed
+policy-override integration with an external Zero-Trust control plane.
+
+| Area | This fork |
+|------|-----------|
+| **Windows isolation** | Per-run **AppContainer (lowbox)** for filesystem/process confinement + **WFP** kernel-level network enforcement (per-package-SID egress filtering). Job Objects, a supervisor-led process model, and a **Low-IL broker** (`nono-shell-broker`) for spawning restricted shell children. |
+| **Windows services / daemons** | `nono-agentd` (persistent multi-tenant agent daemon) and `nono-wfp-service` (drives real kernel `FwpmFilterAdd0` WFP filters for confined-egress on the daemon path). |
+| **Windows "sandbox-the-tools"** | Run an agent (e.g. Claude Code) at Medium integrity and confine **each individual tool call** through a `PreToolUse` hook that re-invokes `nono run` — the recommended Windows pattern. |
+| **Distribution** | Fork-owned package identities (`nono-sandbox*`), a signed Windows **MSI**, and **Azure Trusted Signing** for a publicly-trusted release. |
+| **ZT-Infra signed overrides** | Capability-policy overrides gated behind a **two-key AND**: an offline ECDSA P-256 signature *and* a live allow decision from an external [ZT-Infra](https://github.com/nolabs-ai/nono) control plane (`POST /actions`). The Rust core stays policy-free and only emits attestation telemetry. |
+
+**Windows boundary (honest status):** direct execution, `setup`, `--dry-run`, blocked-network, and
+supervised flows work natively. Live interactive `nono shell` / `nono wrap` TUIs remain OS-blocked
+(`0xC0000142`) on Windows today — use `--dry-run` to inspect policy, or the "sandbox-the-tools"
+hook pattern for real per-tool confinement.
+
+---
+
+## Install
+
+> The fork reserves its own package names (`nono-sandbox`, `nono-sandbox-proxy`, `nono-sandbox-cli`
+> on crates.io; `nono-sandbox` on PyPI; `@oscarmackjr/nono-ts` on npm) but the **first live publish +
+> publicly-trusted-signed release is still in progress**. Prefer building from source for now.
+
+**Build from source (all platforms):**
 ```bash
-brew install nono
+git clone https://github.com/OscarMackJr/nono.git
+cd nono
+cargo build --release --workspace   # produces target/release/nono(.exe)
 ```
 
-Other options in the [Installation Guide](https://docs.nono.sh/cli/getting_started/installation).
+**Windows (MSI):** built via `scripts/build-windows-msi.ps1`; release MSIs are Authenticode-signed
+through Azure Trusted Signing. Run `nono setup --check-only` to see what the current host supports.
 
----
-
-## Latest News
-
-**Detach and reattach to sandboxed agents** -- Run agents in the background with `nono run --detach`, reconnect with `nono attach`. Includes `nono ps`, `nono stop`, and `nono inspect`. ([#526](https://github.com/always-further/nono/pull/526))
-
-**WSL2 support** -- Auto-detection with ~84% feature coverage out of the box. Run `nono setup --check-only` to see what's available. ([#522](https://github.com/always-further/nono/pull/522))
-
-**Portable capability manifests** -- Export fully-resolved sandbox configs with `nono policy show <profile> --format manifest` for CI/Kubernetes deployment. ([#534](https://github.com/always-further/nono/pull/534))
-
-**API endpoint filtering** -- Control which endpoints agents can reach with L7 filtering: `--allow-endpoint 'github:GET:/repos/*/issues/**'`. ([#513](https://github.com/always-further/nono/pull/513))
-
-**Custom CAs and file-based credentials for k8s** -- `tls_ca` for self-signed endpoints ([#548](https://github.com/always-further/nono/pull/548)), `file://` URIs for mounted secrets ([#552](https://github.com/always-further/nono/pull/552)).
-
-[All updates](https://github.com/always-further/nono/discussions/categories/announcements)
+The installed binary/library/repository names are still `nono` — only the *published package
+identities* were renamed to the fork-owned `nono-sandbox` family.
 
 ---
 
@@ -64,7 +82,7 @@ Other options in the [Installation Guide](https://docs.nono.sh/cli/getting_start
 # Any CLI agent -- just put your command after --
 $ nono run --profile claude-code -- claude
 
-# or with tmux style multiplexer and atomic snapshots
+# or detached, with atomic snapshots
 $ nono run --detached --profile claude-code --rollback -- claude
 Started detached session 7a6a652f7273fe60.
 Attach with: nono attach 7a6a652f7273fe60
@@ -72,14 +90,14 @@ Attach with: nono attach 7a6a652f7273fe60
 # Any given command
 nono run -- python3 my_agent.py
 nono run --read /data -- npx @modelcontextprotocol/server-filesystem /data
-nono run --profile codex -- codex
 ```
 
-Built-in profiles for [Claude Code](https://docs.nono.sh/cli/clients/claude-code), [Codex](https://docs.nono.sh/cli/clients/codex), [OpenCode](https://docs.nono.sh/cli/clients/opencode), [OpenClaw](https://docs.nono.sh/cli/clients/openclaw), and [Swival](https://docs.nono.sh/cli/clients/swival) -- or [define your own](https://docs.nono.sh/cli/features/profiles-groups).
+Built-in profiles for popular agents ship in the CLI; you can also define your own.
 
 ## Library
 
-The core is a Rust library that can be embedded into any application. Policy-free -- it applies only what clients explicitly request.
+The core is a Rust library (`nono-sandbox` on crates.io, imported as `nono`) that embeds into any
+application. Policy-free — it applies only what clients explicitly request.
 
 ```rust
 use nono::{CapabilitySet, Sandbox};
@@ -91,33 +109,55 @@ caps.allow_write("/tmp/workspace")?;
 Sandbox::apply(&caps)?;  // Irreversible -- kernel-enforced from here on
 ```
 
-Also available as [Python](https://github.com/always-further/nono-py) , [TypeScript](https://github.com/always-further/nono-ts), [Go](https://github.com/always-further/nono-go)  bindings.
+Language bindings live in sibling repositories:
+[Python (`nono-sandbox` on PyPI)](https://github.com/OscarMackJr/nono-py) ·
+[TypeScript (`@oscarmackjr/nono-ts` on npm)](https://github.com/OscarMackJr/nono-ts).
+
+## Workspace layout
+
+| Crate / member | Role |
+|----------------|------|
+| `crates/nono` (`nono-sandbox`) | Core library — pure sandbox primitive, no built-in policy. |
+| `crates/nono-cli` (`nono-sandbox-cli`) | CLI binary (`nono`) + `nono-agentd`, `nono-wfp-service` bins. Owns all security policy, profiles, hooks, UX. |
+| `crates/nono-proxy` (`nono-sandbox-proxy`) | Network-filtering proxy — domain/endpoint allowlisting + credential injection. |
+| `crates/nono-shell-broker` | Medium-IL broker for spawning Low-IL nono shell children on Windows. |
+| `crates/nono-fltmgr-client` | Windows minifilter (filter-manager) client — kernel-driver spike surface. |
+| `bindings/c` (`nono-ffi`) | C FFI bindings + generated `nono.h`. |
 
 ## Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Kernel sandbox** | Landlock (Linux) + Seatbelt (macOS). Irreversible, inherited by child processes. |
-| **Credential injection** | Proxy mode keeps API keys outside the sandbox entirely. Supports keystore, 1Password, Apple Passwords. |
-| **Attestation** | Sigstore-based signing and verification of instruction files (SKILLS.md, CLAUDE.md, etc.). |
-| **Network filtering** | Allowlist-based host and endpoint filtering via local proxy. Cloud metadata endpoints hard-denied. |
-| **Snapshots** | Content-addressable rollback with SHA-256 dedup and Merkle tree integrity. |
-| **Policy profiles** | Pre-built profiles for popular agents and use cases. Custom profile builder for your own needs. |
+| **Kernel sandbox** | Landlock (Linux) + Seatbelt (macOS) + AppContainer/WFP (Windows). Irreversible, inherited by children. |
+| **Windows-native parity** | AppContainer confinement, WFP kernel egress filtering, Job Objects, supervisor model, Low-IL broker, multi-tenant daemon. |
+| **Credential injection** | Proxy mode keeps API keys outside the sandbox entirely. Keystore, 1Password, Apple Passwords. |
+| **ZT-Infra signed overrides** | Two-key AND gate (offline ECDSA + live ZT-Infra allow) for auditable, attested policy overrides. |
+| **Attestation** | Sigstore-based signing/verification of instruction files (SKILLS.md, CLAUDE.md, etc.). |
+| **Network filtering** | Allowlist host + L7 endpoint filtering via local proxy. Cloud metadata endpoints hard-denied. |
+| **Snapshots** | Content-addressable rollback with SHA-256 dedup and Merkle-tree integrity. |
 | **Audit logs** | Verifiable logs of all agent actions, with optional remote upload and monitoring. |
-| **Cross-platform** | Support for macOS, Linux, and WSL2. Native Windows CLI support. |
-| **Multiplexing** | Run multiple agents in parallel with separate sandboxes. Attach/detach to long-running agents. |
-| **Runs anywhere** | Local CLI, CI pipelines, Containers / Kubernetes, cloud VMs, microVMs. |
+| **Multiplexing** | Run multiple agents in parallel with separate sandboxes; attach/detach to long-running agents. |
 
-See the [full documentation](https://docs.nono.sh) for details and configuration.
+## Relationship to upstream
+
+The core sandbox primitive is periodically synced from upstream
+([`nolabs-ai/nono`](https://github.com/nolabs-ai/nono)) via explicit divergence-audit + absorb
+cycles; the fork's crate versions **leapfrog** upstream's to stay collision-free (currently
+`0.66.1`). Upstream's own documentation at `docs.nono.sh` describes the shared core, but **does not
+cover** this fork's Windows-native backend, install/distribution model, or ZT-Infra integration —
+those are documented in-repo under `proj/`, `docs/`, and `.planning/`.
 
 ## Contributing
 
-We encourage using AI tools to contribute. However, you must understand and carefully review any AI-generated code before submitting. Security is paramount. If you don't understand how a change works, ask in [Discord](https://discord.gg/pPcjYzGvbS) first.
+AI-assisted contributions are welcome, but you must understand and carefully review any AI-generated
+code before submitting — security is paramount. All commits require a DCO `Signed-off-by` line.
 
 ## Security
 
-If you discover a security vulnerability, please **do not open a public issue**. Follow the process in our [Security Policy](https://github.com/always-further/nono/security).
+**Security is non-negotiable in this codebase.** If you discover a vulnerability, please **do not
+open a public issue** — follow the process in
+[`SECURITY.md`](https://github.com/OscarMackJr/nono/security).
 
 ## License
 
-Apache-2.0
+Apache-2.0. Retains upstream copyright and attribution.
