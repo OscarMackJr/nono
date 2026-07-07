@@ -107,4 +107,8 @@ nono-poc-signing.cer
 nono-v*-poc.cer
 nono-v*.cer
 dist/windows/*.cer
+# Azure Trusted Signing operational payloads (certificate-profile create/show
+# JSON, e.g. profileType + identityValidationId). Local operator artifacts,
+# not source — must not land in the public repo.
+pt.json
 
