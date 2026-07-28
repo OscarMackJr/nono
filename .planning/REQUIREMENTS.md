@@ -82,4 +82,78 @@ Phase numbering continues from Phase 100 → Phase 101+.
 | CHOST-02 | Phase 103 | Complete |
 | CHOST-03 | Phase 106 | Pending |
 | CLOSE-01 | Phase 107 | Pending |
+
+---
+
+# ══════════════════════════════════════════════════════════════════
+# Requirements: nono v3.6 — UPST12: Upstream Sync v0.66.0 → v0.69.0
+# ══════════════════════════════════════════════════════════════════
+
+**Defined:** 2026-07-28
+**Parallel to:** v3.5 (HELD on the external Azure Trusted-Signing root-propagation block; engineering proceeds on v3.6 meanwhile — operator decision 2026-07-28). Both milestones are simultaneously active; v3.5 owns phases 101–107, v3.6 owns phases 108–111.
+**Core Value:** Keep the fork current with upstream `nolabs-ai/nono` without regressing the Windows security model or the ADR-86 policy-free-library boundary — a routine drain-then-sync (mirrors v3.1/v3.3/v3.4).
+
+**Scope:** absorb the cross-platform delta from upstream `v0.66.0..v0.69.0` (v0.67.0, v0.67.1, v0.68.0, v0.69.0) — proxy/network features, profile/policy features (incl. `platform_overrides`), macOS Seatbelt carry, and resource-CLI alignment — then leapfrog all 6 workspace crates + both binding repos to `0.70.0` (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem and its refinements: upstream introduced it in v0.65.0 (PR #1105) and the fork never absorbed it — it is a standing structural divergence handled by a dedicated later milestone (v3.7 Windows Tool-Sandbox Parity), not this routine sync. Scope source: quick task `260727-jkn` (`.planning/quick/260727-jkn-map-macos-0-69-parity-gap-phases-for-the/260727-jkn-PLAN.md`).
+
+> **Architecture invariants:**
+> - **tool-sandbox is OUT.** The 7 tool-sandbox refinement PRs in this window (#1280/#1322/#1325/#1384/#1394/#1413/#1417) ride on a subsystem the fork does not have; they are recorded DEFERRED→v3.7 in the ledger, not absorbed here.
+> - **Never regress the Windows security model** (AppContainer / Low-IL / WFP / Job-Object) or the ADR-86 policy-free-library boundary. Verifier + code review + both cross-target clippy gates are mandatory before close.
+> - **Cross-target clippy is MUST** for cfg-gated Unix edits — `cross` (linux-gnu) + `cargo-zigbuild` (apple-darwin), both GREEN locally, no PARTIAL→CI (retired in v3.3 Phase 96). `make ci` (clippy+fmt+tests), not clippy-only.
+> - **`platform_overrides` is the intended vehicle for Windows divergence** — migrating the fork's `windows_low_il_broker`/`windows_interpreters` top-level flags into it retires flag-sprawl; keep back-compat aliases.
+> - **WFP expresses port ranges natively** — the Windows remote-port-range emitter is simpler than macOS Seatbelt's per-port unroll; keep discrete-list back-compat.
+> - **Binding struct-drift is caught only by building** — re-run `maturin build` (nono-py) + `napi build` (nono-ts) after any nono-proxy struct touch ([[project_v34_opened]] durable).
+> - **Release scope = PREPARE ONLY** — leapfrog `0.70.0` (collision-free above upstream 0.69.0), no operator push. Repo PUBLIC; no `build_notes/`/`.gsd/` staged. DCO-signed.
+
+## v3.6 Requirements
+
+### UPST12 Divergence Audit (UPST12)
+- [ ] **UPST12-01**: An authoritative `108-DIVERGENCE-LEDGER.md` for upstream `v0.66.0..v0.69.0` exists — every substantive commit classified (adopt / adapt / skip / split) with a `windows-touch` flag and ADR-review verdict; re-export surfaces diff-inspected (not just `--name-only`, per the cluster-isolation-can-be-empirically-false lesson); and the 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) explicitly recorded DEFERRED→v3.7.
+
+### Proxy / Network Absorb (NET)
+- [ ] **NET-01**: `deny_domain` deny-list network filtering (#1374) is absorbed into the proxy filter + profile schema, composing correctly with the fork's existing `allow_domain` allowlist model without weakening default-deny.
+- [ ] **NET-02**: SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed.
+- [ ] **NET-03**: The SigV4 encoded-URI generation fix (#1430) and the sibling-route cross-deny fix (#1437) are absorbed; HTTP/2 injection, `HTTP_PROXY` forward-proxy, and `no_proxy` bypass are verified non-regressed; `maturin` + `napi` binding builds are green.
+
+### Profile / Policy Absorb (PROF)
+- [ ] **PROF-01**: `platform_overrides` per-OS profile patching (#1371) is absorbed and preserved through `extends` resolution (#1380); the fork's `windows_low_il_broker` and `windows_interpreters` top-level flags are migrated into `platform_overrides.windows` with back-compat aliases.
+- [ ] **PROF-02**: `$VAR` process-env token expansion (#1296) and `@git:*` dynamic token expansion (#1298) in profile filesystem paths are absorbed.
+- [ ] **PROF-03**: The port-range profile schema (#1398) is absorbed with a WFP-native remote-port-range emitter on Windows and discrete-list back-compat.
+- [ ] **PROF-04**: The `bun` (#1305) and `mise` (#1387) runtime presets are absorbed.
+
+### macOS / Core Carry + Resource CLI (CORE)
+- [ ] **CORE-01**: The macOS Seatbelt/core carry lands as-is for cross-target parity — `macos.rs` port-range emitter (#1398), `~/.cache` grant (#1378), and `MAX_CRYPTO_THREADS`=12 libdispatch tuning (#1424).
+- [ ] **CORE-02**: The upstream resource-limit CLI surface (`--memory` / `--max-processes`, #1269/#1403) is reconciled with the fork's existing kernel-enforced Job Object implementation — flag names/semantics aligned, no new enforcement, no regression to `--cpu-percent`/`--timeout`.
+
+### Fork-Invariant Verify + Release (VERIFY / RLS)
+- [ ] **VERIFY-01**: Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` (clippy+fmt+tests) are GREEN locally, and a fork-invariant pass confirms the Windows security model + ADR-86 boundary are non-regressed.
+- [ ] **RLS-14**: All 6 workspace crates + internal path-dep pins + both binding repos (`../nono-py`, `../nono-ts`) are leapfrogged to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected third-party drift, and the prepare-only release gate is GREEN — no operator push.
+
+## v3.6 Out of Scope
+
+| Feature | Reason |
+|---------|--------|
+| The `tool-sandbox/` subsystem (PR #1105) + its 7 refinement PRs | Standing structural divergence (fork never absorbed the v0.65.0 subsystem); handled by the dedicated v3.7 Windows Tool-Sandbox Parity milestone, not a routine sync. |
+| A Windows `tool-sandbox/platform/windows.rs` driver | Belongs to v3.7 (needs the SCM_RIGHTS→handle-passing + peer-auth spike + an adopt-vs-formalize ADR). |
+| macOS-only behavioral testing of the carried Seatbelt fixes | The fork ships macOS binaries but validates macOS via cross-target clippy + CI, not a live macOS host (established posture). |
+| WFP daemon-path-only reachability hardening / filter-leak fix | Fork-internal hardening surfaced by the audit; tracked separately, not part of the upstream-parity sync. |
+| Any operator push / live registry publish of `0.70.0` | Prepare-only (mirrors v3.1/v3.3/v3.4); live publish is a separate operator-gated step. |
+
+## v3.6 Traceability
+
+Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–111**.
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| UPST12-01 | Phase 108 | Pending |
+| NET-01 | Phase 109 | Pending |
+| NET-02 | Phase 109 | Pending |
+| NET-03 | Phase 109 | Pending |
+| PROF-01 | Phase 110 | Pending |
+| PROF-02 | Phase 110 | Pending |
+| PROF-03 | Phase 110 | Pending |
+| PROF-04 | Phase 110 | Pending |
+| CORE-01 | Phase 111 | Pending |
+| CORE-02 | Phase 111 | Pending |
+| VERIFY-01 | Phase 111 | Pending |
+| RLS-14 | Phase 111 | Pending |
 </content>

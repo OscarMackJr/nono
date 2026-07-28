@@ -1,35 +1,43 @@
 ---
 gsd_state_version: 1.0
-milestone: v3.5
-milestone_name: Trusted Signing Go-Live + First Distributed Release
-status: executing
-stopped_at: "Phase 104 Plan 03 Task 1 (automated pre-flight) COMPLETE + PASSING this session (2026-07-03): root-propagation pre-check ABSENT (thumbprint 991D364E97882715B80ED978F53E1F35DC2F07C2 NOT in live Trusted Root CTL, 554 certs checked, exit 1); release-readiness gate PASS (exit 0); publish-selectors neutralization PASS (exit 0). Tasks 2+3 (poll-until-green smoke dispatch + irreversible v0.66.1 tag push) BLOCKED at operator checkpoint on the external, time-bound Microsoft root-propagation blocker — no code change here can resolve it. Awaiting operator: re-run pre-check when root propagates → GREEN smoke → tag push."
-last_updated: "2026-07-03T22:40:42.808Z"
-last_activity: 2026-07-03
+milestone: v3.6
+milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
+status: planning
+stopped_at: "v3.6 UPST12 opened 2026-07-28 (parallel to held v3.5). Requirements + roadmap authored additively (phases 108-111, 12 reqs: UPST12-01, NET-01..03, PROF-01..04, CORE-01/02, VERIFY-01, RLS-14). Phase dirs 108-111 created. NOT YET PLANNED. Next: /gsd:plan-phase 108 (UPST12 divergence audit v0.66.0..v0.69.0). tool-sandbox subsystem explicitly EXCLUDED -> deferred to v3.7."
+parallel_milestone: v3.5
+parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
+parallel_milestone_status: held-on-external-azure-block
+parallel_stopped_at: "v3.5 HELD 2026-07-28. Phase 104 Plan 03 Tasks 2+3 (poll-until-green smoke dispatch + irreversible v0.66.1 tag push) BLOCKED at operator checkpoint on the external, time-bound Microsoft root-propagation blocker (thumbprint 991D364E97882715B80ED978F53E1F35DC2F07C2 NOT in live Trusted Root CTL as of 2026-07-03) — no code change resolves it. Phases 101-105 dirs intact under .planning/phases/. Resume: re-run root pre-check when propagated -> GREEN smoke -> tag push. Phases 106/107 not yet built."
+last_updated: "2026-07-28T00:00:00.000Z"
+last_activity: 2026-07-28
 progress:
   total_phases: 4
-  completed_phases: 3
-  total_plans: 15
-  completed_plans: 14
-  percent: 93
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
-# Project State: nono — v3.5 Trusted Signing Go-Live + First Distributed Release
+# Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
 
 ## Project Reference
 
-See: `.planning/PROJECT.md` (v3.5 milestone active 2026-07-02; v3.4 SHIPPED + archived, tag `v3.4` local. Phases 98-100 archived to `milestones/v3.4-ROADMAP.md`). Roadmap: `.planning/ROADMAP.md` (Phases 101-107, 10/10 requirements mapped). Requirements: `.planning/REQUIREMENTS.md` (defined below). Phase numbering continues 100 → 101+ (no reset).
+See: `.planning/PROJECT.md` (v3.6 opened 2026-07-28, parallel-active with HELD v3.5). Roadmap: `.planning/ROADMAP.md` (v3.6 = Phases 108-111, 12 requirements mapped; v3.5 = Phases 101-107, held). Requirements: `.planning/REQUIREMENTS.md` (v3.6 section appended below the v3.5 section). Phase numbering continues: v3.5 owns 101-107 → v3.6 owns **108-111** (no reset).
 
-**Core Value:** Windows security must be as structurally impossible and feature-complete as Unix platforms — and, for v3.5, actually *distributable*: a publicly-trusted-signed release that runs out-of-the-box on a clean host.
+**Core Value (v3.6):** Keep the fork current with upstream `nolabs-ai/nono` without regressing the Windows security model or the ADR-86 policy-free-library boundary — a routine drain-then-sync (mirrors v3.1/v3.3/v3.4).
 
-**Current Focus:** Phase 104 — smoke-green-cut-the-trusted-signed-release
+**Current Focus:** Phase 108 — UPST12 Divergence Audit (v0.66.0..v0.69.0). tool-sandbox subsystem EXCLUDED → v3.7.
+
+## Parallel Milestone (HELD): v3.5 — Trusted Signing Go-Live
+
+**HELD 2026-07-28** on the external Azure Trusted-Signing root-propagation checkpoint (Phase 104 operator-in-loop — NOT an engineering block). v3.5 phases 101-105 remain live under `.planning/phases/`; 106/107 not yet built. Resumable from git + the go-live cookbook (`.planning/quick/260630-trusted-signing-golive/AZURE-TRUSTED-SIGNING-GOLIVE-COOKBOOK.md`). See `parallel_stopped_at` in frontmatter. v3.6 runs in parallel meanwhile — `phases.clear` was deliberately NOT run so v3.5's working set is intact.
 
 ## Current Position
 
-Phase: 104 (smoke-green-cut-the-trusted-signed-release) — EXECUTING
-Plan: 3 of 3
-Status: Plan 02 (publish-crates neutralization + regression guard + root pre-check + doc correction) complete; ready to execute Plan 03 (operator checkpoint)
-Last activity: 2026-07-27 - Completed quick task 260727-jkn: mapped macOS 0.69 parity-gap phases/milestones (v3.6 UPST12 + v3.7 Tool-Sandbox Parity)
+Phase: 108 (UPST12 Divergence Audit) — NOT STARTED (defining plan)
+Plan: —
+Status: v3.6 requirements + roadmap authored (phases 108-111); phase dirs created; ready for `/gsd:plan-phase 108`
+Last activity: 2026-07-28 — v3.6 UPST12 milestone opened (parallel to held v3.5)
 
 ## Performance Metrics
 

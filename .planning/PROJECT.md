@@ -111,7 +111,28 @@ v2.5 closed the host-blocked v2.4 carry-forwards via Windows-coded + CI-executed
 
 </details>
 
-## Current Milestone: v3.5 — Trusted Signing Go-Live + First Distributed Release
+## Current Milestone: v3.6 — UPST12: Upstream Sync v0.66.0 → v0.69.0 (parallel-active)
+
+**Opened 2026-07-28, running in parallel with v3.5** (which is HELD on the external Azure Trusted-Signing root-propagation block — engineering proceeds on v3.6 meanwhile; operator decision 2026-07-28). v3.5 owns phases 101–107 and remains open; v3.6 owns **phases 108–111**.
+
+**Goal:** Keep the fork current with upstream `nolabs-ai/nono` — absorb the cross-platform delta from `v0.66.0..v0.69.0` without regressing the Windows security model or the ADR-86 policy-free-library boundary — then leapfrog all 6 crates + both binding repos to `0.70.0` (prepare-only). Routine drain-then-sync (mirrors v3.1/v3.3/v3.4).
+
+**Target features:**
+- **UPST12 divergence audit** — per-commit ledger for `v0.66.0..v0.69.0`; classify (adopt/adapt/skip/split) with `windows-touch` flags + ADR review; diff-inspect re-export surfaces; explicitly DEFER the 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) → v3.7.
+- **Proxy/network absorb** — `deny_domain` (#1374), SPIFFE/SPIRE (#1272), SigV4 encoded-URI (#1430) + sibling-route cross-deny (#1437); verify HTTP-2/forward-proxy/`no_proxy` non-regressed; rebuild bindings.
+- **Profile/policy absorb** — `platform_overrides` (#1371/#1380) + migrate the fork's `windows_low_il_broker`/`windows_interpreters` flags into it; `$VAR`/`@git` tokens (#1296/#1298); port-range schema (#1398) with a WFP-native emitter; bun/mise presets (#1305/#1387).
+- **macOS/core carry + resource CLI** — carry `macos.rs` port-range emitter (#1398), `~/.cache` (#1378), libdispatch thread cap (#1424); align `--memory`/`--max-processes` (#1269/#1403) onto the fork's existing Job Object impl.
+- **Fork-invariant verify + release leapfrog** — both cross-target clippy gates + `make ci` GREEN; leapfrog 6 crates + 2 binding repos to `0.70.0`, prepare-only.
+
+**Key context / decisions:**
+- **tool-sandbox is OUT of this milestone.** Upstream's `tool-sandbox/` subsystem (PR #1105, v0.65.0) was never absorbed by the fork — a standing structural divergence, not a version lag. It gets a dedicated **v3.7 Windows Tool-Sandbox Parity** milestone (adopt-vs-formalize ADR + `platform/windows.rs` driver). This sync deliberately fences off its refinements.
+- **Parallel-milestone bookkeeping** — STATE.md tracks both v3.5 (held) and v3.6 (active); `phases.clear` was NOT run (v3.5's 101–105 dirs are intact). Scope source: quick `260727-jkn` (`260727-jkn-PLAN.md`).
+- **Release scope = PREPARE ONLY** — `0.70.0` is collision-free above upstream 0.69.0; the actual push/publish is a separate operator-gated step. Repo PUBLIC; no `build_notes/`/`.gsd/` staged.
+- **Phase numbering continues** — v3.5 owns 101–107 → v3.6 starts at **Phase 108** (no `--reset-phase-numbers`).
+
+## Milestone (parallel, HELD): v3.5 — Trusted Signing Go-Live + First Distributed Release
+
+> **HELD 2026-07-28** on the external Azure Trusted-Signing root-propagation checkpoint (Phase 104, operator-in-loop — not an engineering block). Remains open and resumable from git + the go-live cookbook; v3.6 runs in parallel meanwhile.
 
 **Goal:** Take nono from the v3.4 prepare-only `0.66.1` pipeline to a genuinely distributed release — resolve the Azure Trusted Signing verify-gate `UnknownError`, cut the first publicly-trusted-signed release, publish `0.66.1` live to all three registries, and prove out-of-the-box clean-host behavior on a fresh Azure Win11 VM.
 

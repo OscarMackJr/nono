@@ -1,15 +1,19 @@
 ---
-milestone: v3.5
-milestone_name: Trusted Signing Go-Live + First Distributed Release
+milestone: v3.6
+milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: active
-updated: 2026-07-02
+parallel_milestone: v3.5
+parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
+parallel_milestone_status: held-on-external-azure-block
+updated: 2026-07-28
 ---
 
 # Roadmap: nono
 
 ## Milestones
 
-- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02)
+- 🔄 **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-111 (active 2026-07-28, parallel to v3.5)
+- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02, HELD on external Azure block)
 - ✅ **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (shipped 2026-07-02) — [archive](milestones/v3.4-ROADMAP.md)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
 - ✅ **v3.2 Signed Policy Overrides (ZT-Infra Attestation)** — Phases 91-93 (shipped 2026-06-23) — [archive](milestones/v3.2-ROADMAP.md)
@@ -22,7 +26,19 @@ updated: 2026-07-02
 ## Phases
 
 <details open>
-<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — ACTIVE</summary>
+<summary>🔄 v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-111) — ACTIVE (parallel to v3.5)</summary>
+
+Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parallel** with the operator-blocked v3.5. Absorb the cross-platform delta from `nolabs-ai/nono` `v0.66.0..v0.69.0` (v0.67.0/.1, v0.68.0, v0.69.0) — proxy/network (`deny_domain`, SPIFFE/SPIRE, SigV4 + sibling-route fixes), profile/policy (`platform_overrides` + migrate the fork's `windows_*` flags into it, `$VAR`/`@git` tokens, port-range schema with a WFP-native emitter, bun/mise presets), macOS Seatbelt carry, and resource-CLI alignment onto the existing Job Object impl — WITHOUT regressing the Windows security model or the ADR-86 boundary, then leapfrog all 6 crates + both binding repos to **`0.70.0`** (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed — a standing structural divergence deferred to the dedicated **v3.7 Windows Tool-Sandbox Parity** milestone). Scope source: quick `260727-jkn`.
+
+- [ ] **Phase 108: UPST12 Divergence Audit** — 0/? plans
+- [ ] **Phase 109: Proxy/Network Absorb** — 0/? plans
+- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/? plans
+- [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
+
+</details>
+
+<details open>
+<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — ACTIVE (HELD on external Azure block)</summary>
 
 Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode verify-gate and resolve the Azure Trusted Signing `UnknownError`, rename the fork's published package identities to fork-owned `nono-sandbox` names, stand up ephemeral Azure Win11 VM IaC + new clean-host gates, cut the first publicly-trusted-signed `0.66.1` release, publish it live to crates.io/PyPI/npm, drain both host-gated clean-host UAT todos on the real VM, then retire the POC signing path. Hard dependency spine: verify-gate hardening (101) gates the release cut (104); the rename (102) and the Azure IaC+gates (103) are parallelizable with 101/104; live publish (105) needs both the rename and a real release; clean-host UAT (106) needs the real release (not the live publish); close-out (107) is strictly gated on clean-host UAT PASS, never merely on a green release.
 
@@ -192,6 +208,46 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [ ] 105-04-PLAN.md — Verification tooling: pre-checkpoint registry-availability/scope re-check + SC4 isolated post-publish resolve wrapper
 - [ ] 105-05-PLAN.md — Operator checkpoint (Wave 2): pre-publish gate, live publish (crates.io/PyPI/npm), post-publish resolve verification
 
+### Phase 108: UPST12 Divergence Audit
+**Goal**: An authoritative per-commit divergence ledger for upstream `v0.66.0..v0.69.0` exists, so the absorb phases (109–111) have a classified, ADR-reviewed work-list — with the tool-sandbox subsystem's refinements provably fenced off to v3.7.
+**Depends on**: Nothing (first phase of v3.6; parallel to v3.5)
+**Requirements**: UPST12-01
+**Success Criteria** (what must be TRUE):
+  1. `108-DIVERGENCE-LEDGER.md` classifies every substantive commit in `v0.66.0..v0.69.0` (adopt / adapt / skip / split) with a `windows-touch` flag and an ADR-review verdict per cluster.
+  2. Re-export/public-surface diffs are inspected (not just `git diff --name-only`), per the "cluster isolation can be empirically false" lesson.
+  3. The 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) are explicitly recorded **DEFERRED→v3.7** with the reason (base subsystem absent).
+  4. The ledger maps each will-sync cluster onto Phase 109/110/111 and flags any high-conflict item for an ADR (mirrors v3.4 #1225 handling).
+
+### Phase 109: Proxy/Network Absorb
+**Goal**: The v0.67–v0.69 proxy/network features are absorbed into the fork's proxy without regressing its fork-divergent TLS-interception + allowlist model, with the bindings rebuilt.
+**Depends on**: Phase 108 (ledger dispositions)
+**Requirements**: NET-01, NET-02, NET-03
+**Success Criteria** (what must be TRUE):
+  1. `deny_domain` (#1374) is wired into the proxy filter + profile schema and composes with `allow_domain` without weakening default-deny.
+  2. SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed and configurable via profile.
+  3. The SigV4 encoded-URI fix (#1430) and sibling-route cross-deny fix (#1437) are absorbed; HTTP/2, `HTTP_PROXY` forward-proxy, and `no_proxy` bypass are verified non-regressed.
+  4. `maturin build` (nono-py) and `napi build` (nono-ts) are green after the nono-proxy struct changes.
+
+### Phase 110: Profile/Policy Absorb + platform_overrides
+**Goal**: The fork gains upstream's per-OS profile-patch model and the v0.67–v0.68 profile/policy features, and retires its top-level `windows_*` flag sprawl into `platform_overrides.windows`.
+**Depends on**: Phase 108 (ledger dispositions)
+**Requirements**: PROF-01, PROF-02, PROF-03, PROF-04
+**Success Criteria** (what must be TRUE):
+  1. `platform_overrides` (#1371) is absorbed, preserved through `extends` resolution (#1380), and the fork's `windows_low_il_broker`/`windows_interpreters` flags are migrated into `platform_overrides.windows` with back-compat aliases (existing profiles still load).
+  2. `$VAR` (#1296) and `@git:*` (#1298) token expansion works in profile filesystem paths.
+  3. The port-range profile schema (#1398) is absorbed with a **WFP-native** remote-port-range emitter on Windows and discrete-`Vec<u16>` back-compat.
+  4. The `bun` (#1305) and `mise` (#1387) runtime presets are present and resolvable.
+
+### Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog
+**Goal**: The macOS/core carry and resource-CLI alignment land, the whole sync is proven non-regressing under both cross-target clippy gates, and the tree leapfrogs to a prepare-only `0.70.0`.
+**Depends on**: Phase 109 + Phase 110 (all absorb work landed)
+**Requirements**: CORE-01, CORE-02, VERIFY-01, RLS-14
+**Success Criteria** (what must be TRUE):
+  1. macOS/core carry lands as-is for cross-target parity — `macos.rs` port-range emitter (#1398), `~/.cache` (#1378), `MAX_CRYPTO_THREADS`=12 (#1424).
+  2. The `--memory`/`--max-processes` CLI surface (#1269/#1403) is aligned onto the fork's existing Job Object impl with no new enforcement and no regression to `--cpu-percent`/`--timeout`.
+  3. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally; a fork-invariant pass confirms the Windows security model + ADR-86 boundary are unregressed.
+  4. All 6 workspace crates + path-dep pins + both binding repos leapfrog to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected drift, and the prepare-only release gate is GREEN (no operator push).
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -219,3 +275,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 105. Live Multi-Registry Publish | v3.5 | 0/5 | Not started | - |
 | 106. Azure VM Clean-Host UAT | v3.5 | 0/? | Not started | - |
 | 107. Close-Out | v3.5 | 0/? | Not started | - |
+| 108. UPST12 Divergence Audit | v3.6 | 0/? | Not started | - |
+| 109. Proxy/Network Absorb | v3.6 | 0/? | Not started | - |
+| 110. Profile/Policy Absorb + platform_overrides | v3.6 | 0/? | Not started | - |
+| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 0/? | Not started | - |
