@@ -107,7 +107,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 ## v3.6 Requirements
 
 ### UPST12 Divergence Audit (UPST12)
-- [ ] **UPST12-01**: An authoritative `108-DIVERGENCE-LEDGER.md` for upstream `v0.66.0..v0.69.0` exists — every substantive commit classified (adopt / adapt / skip / split) with a `windows-touch` flag and ADR-review verdict; re-export surfaces diff-inspected (not just `--name-only`, per the cluster-isolation-can-be-empirically-false lesson); and the 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) explicitly recorded DEFERRED→v3.7.
+- [x] **UPST12-01**: An authoritative `108-DIVERGENCE-LEDGER.md` for upstream `v0.66.0..v0.69.0` exists — every substantive commit classified (adopt / adapt / skip / split) with a `windows-touch` flag and ADR-review verdict; re-export surfaces diff-inspected (not just `--name-only`, per the cluster-isolation-can-be-empirically-false lesson); and the 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) explicitly recorded DEFERRED→v3.7.
 
 ### Proxy / Network Absorb (NET)
 - [ ] **NET-01**: `deny_domain` deny-list network filtering (#1374) is absorbed into the proxy filter + profile schema, composing correctly with the fork's existing `allow_domain` allowlist model without weakening default-deny.
@@ -144,7 +144,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–111
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| UPST12-01 | Phase 108 | Pending |
+| UPST12-01 | Phase 108 | Complete |
 | NET-01 | Phase 109 | Pending |
 | NET-02 | Phase 109 | Pending |
 | NET-03 | Phase 109 | Pending |
