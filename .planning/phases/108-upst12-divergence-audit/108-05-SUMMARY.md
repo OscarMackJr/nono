@@ -132,3 +132,16 @@ None - no external service configuration required.
 ---
 *Phase: 108-upst12-divergence-audit*
 *Completed: 2026-07-29*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/108-upst12-divergence-audit/108-05-SUMMARY.md`
+- FOUND: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER.md`
+- FOUND commit `6539030b` (Cluster Summary TBD finalization)
+- FOUND commit `ac6eefe1` (Task 1: carve-out re-touch check + security rollup)
+- FOUND commit `351e35be` (Task 2: requirement coverage gap + Phase 112 proposal)
+- FOUND commit `72b1a4b0` (Task 3: Headline + Completeness Verification)
+- FOUND commit `71bba956` (SUMMARY.md + REQUIREMENTS.md UPST12-01 mark-complete)
+- `git diff --stat -- .planning/ROADMAP.md .planning/STATE.md` → empty (confirmed untouched)
+- Scoped `TBD` grep on the Cluster Summary section → 0
+- `108-DIVERGENCE-LEDGER.md` line count: 1642 (grew from 1178 at plan start to 1642)
