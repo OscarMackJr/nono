@@ -480,3 +480,41 @@ followed by 8 additional CODE-bucket commits with no NET/PROF/CORE/tool-sandbox-
   "proposed Phase 112") is exactly the kind of unmapped cluster D-19 anticipates. This ledger
   records it; the roadmap amendment proposal itself is Plan 108-05's deliverable, subject to
   operator approval before Phase 109 planning begins.
+
+---
+
+## NET Cluster — Per-Commit Table (Plan 108-03)
+
+Hand-verified per D-21 (read the actual `git show <sha>` diff, not the commit subject) against
+`NET-01`/`NET-02`/`NET-03` (`.planning/REQUIREMENTS.md`). Re-export scan command run per row:
+`git show <sha> | grep '^+' | grep -E '^\+\s*(pub use|pub mod|extern crate|pub\(crate\))'`.
+`git show <sha> | grep -c 'cfg(target_os = "windows")\|cfg(windows)'` confirms windows-touch for
+every row below returned **0** — the NET cluster (proxy/`nono-proxy` crate) is not
+Windows-cfg-gated anywhere in this window; all 12 rows are `windows-touch: no`.
+
+**Row count check:** 12 rows below == NET cluster `commit_count` (12) from Plan 108-01's Cluster
+Summary. No additional commits found by re-running the re-sweep (`git log --no-merges --oneline
+$RANGE -- crates/nono-proxy/src/ crates/nono-cli/src/network_policy.rs` reproduces the same 12
+plus the tool-sandbox-filed `d5803b99`/`d4927f95`, which stay out of this table per the
+Cross-reference note above).
+
+| sha | subject | files-changed | windows-touch | security-relevant | requirement-mapping | disposition | re-export scan |
+|-----|---------|----------------|:---:|:---:|:---:|-----------|-----------------|
+| `3b207eeb884bd71b0fc10f0123fa89fffe9f7955` | feat(proxy): add deny_domain to block domains through the proxy (#1374) | 15 files (cli.rs, launch_runtime.rs, main.rs, network_policy.rs, profile/mod.rs, profile_runtime.rs, proxy_command.rs, proxy_runtime.rs, sandbox_prepare.rs, nono-proxy/config.rs, filter.rs, server.rs, nono/net_filter.rs, +2 docs), 311+/26- | no | yes | **NET-01** | see ADR-108 (`proj/ADR-108-deny-domain-posture.md`) — ADAPT | `pub(crate) deny_domain: Vec<String>` field ×4 (intra-CLI/proxy structs); no cross-crate `pub mod`/`pub use` |
+| `c831dade422f2bdf37d7429af0423cafa0a60c06` | feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272) | 33 files (`.github/workflows/spire.yml`, `nono-proxy/src/{auth,spiffe,route,reverse,credential,oauth2,server,config}.rs`, `tls_intercept/{h2_forward,handle}.rs`, `tests/spiffe_{run,integration}.rs`, `nono-cli/src/network_policy.rs`+`profile/mod.rs`+`proxy_runtime.rs`, `nono/src/{audit.rs,undo/types.rs}`, docs/scripts/testdata), 4354+/545- | no | yes | **NET-02** | adopt | `pub mod auth;` `pub mod spiffe;` (new intra-`nono-proxy` modules) + several `pub(crate)` helper fns (`filter_headers_multi`, `is_loopback_host_port`, `add_ca_file_to_store`); no re-export crossing into `nono` core or `nono-cli` |
+| `6fb7ecbf36e5d18760d8084b7f4900e93582004c` | bug: Fix SigV4 URI generation errors for uri's that have encoded characters in them (#1430) | 1 file (`nono-proxy/src/aws/sign.rs`), 16+/4- | no | yes | **NET-03** | adopt | Clean — diff confined to `aws/sign.rs` internal URI-encoding logic; no new `pub` items |
+| `23d93fc96abf795d672c712e9c1834a8f97aa0aa` | fix(proxy): don't cross-deny sibling routes sharing an upstream (#1437) | 1 file (`nono-proxy/src/tls_intercept/handle.rs`), 87+/0- | no | yes | **NET-03** | adopt | Clean — hand-verified: diff modifies `select_intercept_route`'s `EndpointPolicyOutcome::Deny` arm to treat a non-explicit default-deny as "route does not apply" instead of a terminal 403, exactly the sibling-route cross-deny logic NET-03 names; adds a regression test, no new `pub` surface |
+| `1619275caa32b7b96e3eee56c33c71dfce777bbf` | feat: add profile-declared no_proxy bypass support (#1415) | 17 files (schema.json, profile-authoring-guide.md, launch_runtime.rs, main.rs, profile/{mod,cmd,runtime}.rs, proxy_runtime.rs, sandbox_prepare.rs, nono-proxy/{config,filter,route,server}.rs, tls_intercept/handle.rs, +3 docs), 2065+/99- | no | yes | **NET-03** | adopt | `pub(crate) no_proxy: Vec<String>` field ×3 + `pub(crate) fn` helpers (`validate_no_proxy_allow_domain_conflicts`, `no_proxy_host_pattern_matches`, `strip_no_proxy_port`, `normalise_no_proxy_host_pattern`, `normalise_no_proxy_env_entry`, `parse_host_ip_literal`, `is_proxy_denied_metadata_ip`, `extract_host_port`, `format_host_port`) — all intra-crate `pub(crate)`, no cross-crate re-export |
+| `726ac1f1b5fd7b6de2d86b9fccf1d72660d3e32a` | feat(proxy): support plain HTTP forward-proxying via HTTP_PROXY (#1335) | 1 file (`nono-proxy/src/server.rs`), 815+/5- | no | yes | **NET-03** | adopt | Clean — single-file `server.rs` addition, no new `pub` items in the diff |
+| `c344efb006365ba596b20b843f29fabdbbdc847e` | fix(why): respect proxy domain filter in --profile and --self host queries (#1372) | 2 files (`execution_runtime.rs`, `query_ext.rs`), 131+/13- | no | yes | none | adopt | Clean — hand-verified: diagnostic-command bugfix (`nono why --profile`/`--self`) making the `why` reporter consult the same `HostFilter`/`network_policy` resolution the proxy already enforces; does not itself implement any NET-01/02/03-named mechanism, so mapped `none` rather than force-mapped to NET-01 |
+| `4192bfa58101d0ef9737b60243a39695fc1e0fa8` | fix(proxy): skip credential_capture entries with missing helper binaries (#1368) | 1 file (`nono-cli/src/proxy_runtime.rs`), 263+/16- | no | yes | none | adopt | Clean — includes a portable path-separator security fix (`resolve_capture_command` previously checked only the native `MAIN_SEPARATOR`, letting a relative command containing the non-native separator bypass bare-command validation on Windows); credential_capture plumbing, not a NET-01/02/03-named item |
+| `261bbd68d984f58c5b7376143fdacbeaffef1ccc` | fix(tests): raise credential-capture test timeout to reduce macOS CI flakiness | 1 file (`nono-cli/src/proxy_runtime.rs`), 1+/1- | no | no | none | adopt | Clean — test-only timeout constant change |
+| `3672ea10c7d45b340bc389e1d5cf0a26dfa5db34` | fix(tests): share stdin-manipulation lock between capture_helper stdin tests (#1327) | 1 file (`nono-cli/src/proxy_runtime.rs`), 7+/5- | no | no | none | adopt | Clean — test-only lock-sharing fix |
+| `8255a27a1d8bedf878a7c8c67f9007ca592962d1` | refactor load_with_diagnostics to be async (#1287) | 4 files (`credential.rs`, `oauth2.rs`, `server.rs`, `tls_intercept/h2_forward.rs`), 67+/51- | no | no | none | adopt | Clean — mechanical `fn` → `async fn` signature conversion (`pub fn` becomes `pub async fn`, not a new `pub` item), no behavior change per commit message |
+| `7d23bba683036789163385afa7f5c2f5888886a5` | fix(proxy): separate stdin and stderr inheritance for credential helpers (#1300) | 5 files (schema.json, profile-authoring-guide.md, profile/mod.rs, proxy_runtime.rs, credential-injection.mdx), 190+/6- | no | yes | none | adopt | Clean — hand-verified: fixes a terminal-keypress-theft security bug (credential helpers inheriting stdin unintentionally) by splitting `interaction.stdio` into separate `stdio`(stderr)/`stdin` schema keys; not a NET-01/02/03-named item |
+
+**NET disposition summary:** 1 ADAPT (`3b207eeb` #1374, per ADR-108) + 11 adopt. All 12 rows map
+to exactly one of `NET-01`/`NET-02`/`NET-03`/`none` (5 map `none` — diagnostic/test/refactor/
+credential-plumbing commits that ride alongside the network absorb but do not themselves
+implement a named NET-0X mechanism). Zero blank cells. `windows-touch: no` for all 12 (grep-
+confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)` hits in any of the 12 diffs).
