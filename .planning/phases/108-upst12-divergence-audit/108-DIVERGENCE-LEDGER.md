@@ -12,19 +12,46 @@ date: 2026-07-29
 
 ## Headline
 
-100 non-merge commits in window `d817ed53..59bdace7` (upstream `v0.66.0..v0.69.0`, tags
-`v0.67.0`, `v0.67.1`, `v0.68.0`, `v0.69.0`), plus 4 merge commits (excluded from all counts
-below per D-15/task instructions). This plan populates the Reproduction block, the full
-CODE/DEPS/CI/DOCS accounting, and a 5-cluster Cluster Summary skeleton. Dispositions,
-windows-touch, and security-relevant flags in the Cluster Summary are left as literal `TBD` —
-Plans 108-03/108-04/108-05 fill those in.
+**This ledger is complete (finalized by Plan 108-05).** 100 non-merge commits in window
+`d817ed53..59bdace7` (upstream `v0.66.0..v0.69.0`, tags `v0.67.0`, `v0.67.1`, `v0.68.0`,
+`v0.69.0`), plus 4 merge commits (excluded from all counts below per D-15). Every commit is
+classified into exactly one of 9 non-overlapping buckets/clusters:
 
-**Bucket totals (measured live 2026-07-29, this plan): CODE 62 / DEPS 19 / CI 11 / DOCS 8 = 100.**
-This **disagrees** with CONTEXT.md's recorded hypothesis of **CODE 68 / DEPS 15 / CI 11 / DOCS 6**
-(same 100 total, same CI count, different CODE/DEPS/DOCS split). Per D-04/D-21 this disagreement
-is exactly the outcome re-measurement exists to catch — see "Discrepancy vs. CONTEXT.md
-Hypothesis" under Full Commit Accounting for the reconciliation and the exact rule that produces
-each split.
+| bucket/cluster | count | disposition tally |
+|----------------|------:|--------------------|
+| NET | 12 | 11 adopt + 1 adapt (`3b207eeb` #1374 `deny_domain`, per `proj/ADR-108-deny-domain-posture.md`) |
+| PROF | 8 | 8 adopt |
+| CORE | 4 | 2 adopt + 2 adapt |
+| tool-sandbox-pure | 9 | 9 DEFERRED->v3.7 |
+| tool-sandbox-split | 11 | 11 DEFERRED->v3.7 (module-scoped portions); non-module absorb-worthy residue routed to PROF-02/PROF-03/CORE-residual |
+| security-residual-and-misc | 18 | 18 DEFERRED->proposed Phase 112 pending operator approval |
+| DEPS | 19 | 19 individually reviewed (16 routine + 3 release-cut; 1 priority-absorb flag: `373a67ae` closes live RUSTSEC-2026-0204) |
+| CI | 11 | 7 portable + 4 fork-specific-conflict |
+| DOCS | 8 | 4 needs-doc-follow-up + 1 needs-doc-follow-up-deferred-to-v3.7 + 3 safe-to-ignore |
+| **Total** | **100** | overall: adopt 21 (11 NET + 8 PROF + 2 CORE) / adapt 3 (1 NET + 2 CORE) / DEFERRED->v3.7 20 (9 tool-sandbox-pure + 11 tool-sandbox-split) / DEFERRED->proposed-Phase-112 18 / individually-reviewed-non-CODE 38 (19 DEPS + 11 CI + 8 DOCS, each dispositioned in its own bucket, not adopt/adapt/skip/split). Arithmetic: 21+3+20+18+38 = 100. |
+
+**Requirement Coverage Gap:** 27 non-tool-sandbox CODE commits map to none of v3.6's 12
+requirements — ROADMAP.md Phase 108 SC4 is unsatisfiable as originally written. See
+"Requirement Coverage Gap (D-18/D-19)" immediately below for the exact count, the full SHA list,
+and the proposed **Phase 112 "Security + Residual Sync"** roadmap amendment (operator-approval
+gated, not applied to ROADMAP.md by this ledger).
+
+**Tool-sandbox subsystem:** the full 20-commit 3-path-union surface (9 pure + 11 split) is
+recorded per D-09 so v3.7 (Windows Tool-Sandbox Parity) inherits the real work-list rather than
+the 7-PR-level approximation; all 7 named refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/
+#1417) are explicitly DEFERRED->v3.7 (4 as pure-table rows, 3 as split commits whose
+module-scoped portions defer — see "tool-sandbox-pure and tool-sandbox-split" below).
+
+**`deny_domain` (#1374) posture:** settled ADAPT in the standalone
+`proj/ADR-108-deny-domain-posture.md` (D-10/D-11/D-12) — an additional deny layer only, evaluated
+before the allowlist; this ledger cross-references it rather than duplicating the analysis.
+
+**Bucket totals (CODE/DEPS/CI/DOCS coarse view, measured live 2026-07-29):
+CODE 62 / DEPS 19 / CI 11 / DOCS 8 = 100.** This **disagrees** with CONTEXT.md's recorded
+hypothesis of **CODE 68 / DEPS 15 / CI 11 / DOCS 6** (same 100 total, same CI count, different
+CODE/DEPS/DOCS split). Per D-04/D-21 this disagreement is exactly the outcome re-measurement
+exists to catch — see "Discrepancy vs. CONTEXT.md Hypothesis" under Full Commit Accounting for
+the reconciliation and the exact rule that produces each split.
 
 **Tool-sandbox surface:** 20 commits (live-reconfirmed, matches CONTEXT.md D-05/D-09 exactly).
 **D-06 re-measurement finding:** the directory-only set (`tool-sandbox/`) is **18** commits, not
@@ -1525,3 +1552,91 @@ all 10 D-18-named SHAs appear in this rollup.
 D-18-named SHAs (`0ecc476b`, `9b692e07`, `3c59c62e`, `d033c63111472711e242f4067eb4be04aeaf618a`,
 `a3243907`, `f943fb5a`, `d84b4818`, `ac5ccd70`, `2663e990`, `a5a441c25769ecec663aed1d7038ab2b8814d43f`)
 appear verbatim above. 28 ≥ 10 — acceptance threshold met.
+
+---
+
+## Completeness Verification
+
+**Per-cluster/bucket arithmetic (finest non-overlapping partition of all 100 commits, 9
+buckets):**
+
+```
+NET 12 + PROF 8 + CORE 4 + tool-sandbox-pure 9 + tool-sandbox-split 11 +
+security-residual-and-misc 18 + DEPS 19 + CI 11 + DOCS 8 = 100
+```
+
+`12 + 8 + 4 + 9 + 11 + 18 + 19 + 11 + 8 = 100`. ✓ (The coarser CODE/DEPS/CI/DOCS bucket view in
+the Full Commit Accounting section — CODE 62 = NET+PROF+CORE+tool-sandbox-pure+tool-sandbox-split+
+security-residual-and-misc = 12+8+4+9+11+18 = 62 — is a rollup of this same finest partition, not
+an independent count; the two views are reconciled, not duplicated.)
+
+**Unique-SHA dedup pass:** every SHA appearing as a **primary row** (the commit each of the 9
+finest-partition tables above is directly enumerating) was extracted, sorted, and deduplicated,
+then cross-checked against a fresh `git log --no-merges --format='%H' $RANGE | sort` of the pinned
+window:
+
+```bash
+RANGE="d817ed53663c6bba4669ee7a5bfb41b35971fd1b..59bdace7e905c05c127f480dc6d2a8c3a3331392"
+git log --no-merges --format='%H' $RANGE | sort > git_shas.txt   # 100 lines
+# (100 primary-row SHAs from the 9 finest-partition tables, sorted+deduped) > ledger_shas.txt
+comm -23 git_shas.txt ledger_shas.txt   # in git log but not ledger  -> empty
+comm -13 git_shas.txt ledger_shas.txt   # in ledger but not git log  -> empty
+sort -u ledger_shas.txt | wc -l          # -> 100
+```
+
+**Result: 100 unique primary-row SHAs, exact 1:1 match against the git log's 100 non-merge commits
+in the window. Zero missing, zero extra, zero duplicate primary rows.** Cross-reference mentions
+(carve-out re-touch HIT lines, the Security-Relevant Rollup's `source cluster` column, the
+Requirement Coverage Gap's SHA lists, the CODE/DEPS/CI/DOCS coarse bucket tables reproducing the
+same 62/19/11/8 rows in a different grouping) are *not* counted as additional primary rows — per
+this task's own defect definition, only the same SHA appearing as a primary row in two different
+**cluster** tables would be a defect, and none was found.
+
+**Prior-plan arithmetic discrepancy caught by this sweep (recorded, not silently fixed):** Plan
+108-03's NET cluster summary prose states "5 map `none`" (actual: 6) and its PROF cluster summary
+prose states "4 rows map `none`" (actual: 3) — see "Requirement Coverage Gap (D-18/D-19)" above
+for the full detail. Both are one-off counting errors in that plan's own summary sentence, not in
+its table data; the errors happen to cancel in the combined total (9 either way), so no downstream
+total was corrupted by them, but they are genuine defects worth flagging for anyone revisiting
+108-03.
+
+### ROADMAP.md Phase 108 Success Criteria — final disposition
+
+1. **SC1** ("classifies every substantive commit adopt/adapt/skip/split with a windows-touch flag
+   and an ADR-review verdict per cluster") — **satisfied.** All 5 CODE-bucket clusters (NET, PROF,
+   CORE, tool-sandbox-surface, security-residual-and-misc) carry a finalized `disposition`,
+   `windows-touch`, and `security-relevant` cell in the Cluster Summary table (zero `TBD`
+   remaining, per Plan 108-05's first task — see "Cluster Summary" + "Cluster Summary Rollup
+   Support Notes" above). The `deny_domain` ADR-review verdict lives in
+   `proj/ADR-108-deny-domain-posture.md` (D-10/D-11/D-12); every other cluster's disposition
+   verdict is recorded per-commit in the NET/PROF/CORE tables (Plan 108-03) and the
+   tool-sandbox-pure/split + security-residual-and-misc rollups (Plans 108-04/108-05).
+2. **SC2** ("Re-export/public-surface diffs are inspected (not just `git diff --name-only`)") —
+   **satisfied.** Every NET/PROF/CORE row carries an explicit "re-export scan" cell (Plan 108-03,
+   hand-verified `pub mod`/`pub use`/`extern crate` greps). The tool-sandbox-split residue table
+   (Plan 108-04) diff-verifies every absorb-marked row's actual mechanism, not just its touched
+   path. The highest-risk cross-crate surface in this window (`8a4237f2`'s `bindings/c/src/sandbox.rs`
+   touch) got a dedicated re-export scan finding "Clean — 1-line call-site rename, zero
+   `pub mod`/`pub use`." `e6d26871`'s `pub mod resource; pub use resource::ResourceLimits;` addition
+   to `crates/nono/src/lib.rs` was flagged as a genuine cross-crate re-export in the Threat Flags
+   table (not a false negative).
+3. **SC3** ("The 7 tool-sandbox refinement PRs ... explicitly recorded DEFERRED->v3.7") —
+   **satisfied.** All 7 named PRs (#1280, #1322, #1325, #1384, #1394, #1413, #1417) are
+   DEFERRED->v3.7 in "tool-sandbox-pure and tool-sandbox-split" above — 4 as pure-table rows
+   (#1280, #1325, #1394, #1413) and 3 as split commits whose module-scoped portions are marked
+   DEFERRED->v3.7 in a dedicated supplementary table (#1322, #1384, #1417), with their non-module
+   residue separately accounted for rather than blanket-marked pure.
+4. **SC4** ("the ledger maps each will-sync cluster onto Phase 109/110/111") — **not satisfied as
+   originally written; this is the corrected outcome CONTEXT.md D-19 anticipates, not a gap left
+   open by omission.** 27 non-tool-sandbox CODE commits (the entire security-residual-and-misc
+   cluster plus 9 ride-along NET/PROF commits) map to none of Phase 109/110/111's requirements.
+   The corrected SC (per ROADMAP.md's own D-19 annotation) is satisfied instead: the gap is
+   surfaced with an exact count (27, hand-verified per D-21 — see "Requirement Coverage Gap
+   (D-18/D-19)" above), the unmapped clusters/commits are named, and a **Phase 112 "Security +
+   Residual Sync"** roadmap amendment is proposed in writing with an explicit operator-approval
+   gate before Phase 109 planning begins. `.planning/ROADMAP.md` is unedited by this ledger —
+   confirmed by `git diff --stat -- .planning/ROADMAP.md` showing zero changes throughout Plan
+   108-05's execution.
+
+**Ledger closed.** All 5 plans in Phase 108 (108-01 through 108-05) have now contributed to this
+document; no further plan is expected to append to `108-DIVERGENCE-LEDGER.md`.
