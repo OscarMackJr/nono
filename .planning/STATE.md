@@ -12,10 +12,10 @@ last_updated: "2026-07-29T00:00:00.000Z"
 last_activity: 2026-07-29
 progress:
   total_phases: 4
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 5
+  percent: 25
 ---
 
 # Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
@@ -257,7 +257,7 @@ Then: **v3.6 Phase 108 context gathered** — `108-CONTEXT.md` + `108-DISCUSSION
 
 Then: **v3.6 Phase 108 PLANNED** — 5 plans across 4 waves (`de6998e9`), plan-checker returned NEEDS REVISION (2 blockers / 2 warnings), revision applied and verified (`19c6abbb`). Blockers were two corrupted commit SHAs (`d033c63c`/`a5a44107` — resolve to nothing; corrected to full 40-char `d033c631…`/`a5a441c2…`) and a Cluster Summary whose `TBD` disposition/windows-touch/security-relevant cells no plan ever finalized (breaking ROADMAP SC1's per-cluster rollup). Post-revision sweep: **all 89 distinct hex tokens across the 5 plans resolve to real commits**; XML tags balanced; tree clean. ROADMAP.md carries the corrected SC4 text citing D-19 but **no Phase 112 checklist row or detail section** — the amendment remains a proposal, operator-gated as required.
 
-Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger foundation (`8cf5ed92`/`97450936`), `108-02` ADR-108 (`81255cc5`/`76ae7b10`), `108-03` NET/PROF/CORE tables (`fee56801`…`cc3549b3`), `108-04` tool-sandbox + DEPS/CI/DOCS (`43a00d2e`…`d95c8010`). Ledger is **1178 lines, 141 distinct SHAs all resolving**. `108-05` (final: TBD finalization + carve-out re-touch + D-18/D-19 gap report + Phase 112 proposal) **did not run** — killed by a transient API 500 before writing anything; tree verified clean, ledger unchanged at 1178 lines, 7 `TBD` cells still open, ROADMAP/STATE untouched. Safe to re-run `108-05` from scratch.
+Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger foundation (`8cf5ed92`/`97450936`), `108-02` ADR-108 (`81255cc5`/`76ae7b10`), `108-03` NET/PROF/CORE tables (`fee56801`…`cc3549b3`), `108-04` tool-sandbox + DEPS/CI/DOCS (`43a00d2e`…`d95c8010`). Ledger is **1178 lines, 141 distinct SHAs all resolving**. `108-05` closeout (`6539030b`…`11e2f1ad`) after a first attempt died on a transient API 500 having written nothing. **Ledger final: 1642 lines, 176 distinct SHAs all resolving, all 100 window commits partitioned exactly once across 9 buckets, zero `TBD` cells.** Dispositions: adopt 21 / adapt 3 / DEFERRED→v3.7 20 / DEFERRED→proposed-Phase-112 18 + noise. Verifier re-derived the partition, SHA subjects, residue accounting, and carve-out checks from live git independently — `status: passed`, 8/8.
 
 **Findings so far that outlive this phase:**
 - **LIVE VULN:** `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) is in the fork's `Cargo.lock`; its fix `373a67ae` (#1369) sits unabsorbed in this window's DEPS bucket. Independently confirmed. Priority absorb.
@@ -271,7 +271,14 @@ Resume file: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER
 
 ## Operator Next Steps
 
-**v3.6 (active):** Phase 108 **EXECUTING — 4 of 5 plans complete**. Resume by re-running the final plan `108-05` (see Session Continuity for the exact state). **Operator gate at the end:** `108-05` produces a Phase 112 (Security + Residual Sync) roadmap-amendment *proposal* — it is forbidden from editing ROADMAP.md, and Phase 109 planning must not begin until you approve that amendment (D-19).
+**v3.6 (active):** Phase 108 **COMPLETE — 5/5 plans, verification `status: passed` (8/8 must-haves)**.
+
+⛔ **BLOCKING OPERATOR GATE before `/gsd:plan-phase 109`:** the ledger reports an exact, hand-verified **27 non-tool-sandbox CODE commits mapping to none of v3.6's 12 requirements**, and proposes a new **Phase 112 "Security + Residual Sync"** (11 draft requirement IDs) to absorb them. That amendment is **written but deliberately NOT applied** — `ROADMAP.md` has zero Phase 112 rows, by design (D-19). **Approve, modify, or reject the amendment before planning Phase 109.** See `108-DIVERGENCE-LEDGER.md` §"Proposed Phase 112: Security + Residual Sync".
+
+**Three findings that must reach their downstream phase:**
+1. **LIVE VULN (act soon):** `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) is in the fork's `Cargo.lock`; the exact fix `373a67ae` (#1369) is unabsorbed in this window's DEPS bucket. One cherry-pick. Independently confirmed twice.
+2. **ADR-86 flag → Phase 111:** `e6d26871` (#1269) adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the policy-free core `crates/nono/src/lib.rs`. Boundary review required before absorb.
+3. **Phase 110 complication:** PROF-02's absorb target `capability_ext.rs` calls `tool_sandbox::dynamic_providers::expand_dynamic_tokens` — a DEFERRED module. Verified in `d4927f95`'s diff.
 
 **v3.5 (parallel, now unblocked):** resume Phase 104 Plan 03. Task 2's root pre-check is moot (see above) — go straight to confirming the smoke is green, then the operator-authorized `v0.66.1` tag push. Phase 105's 5 plans execute immediately after.
 

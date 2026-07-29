@@ -30,7 +30,7 @@ updated: 2026-07-28
 
 Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parallel** with the operator-blocked v3.5. Absorb the cross-platform delta from `nolabs-ai/nono` `v0.66.0..v0.69.0` (v0.67.0/.1, v0.68.0, v0.69.0) — proxy/network (`deny_domain`, SPIFFE/SPIRE, SigV4 + sibling-route fixes), profile/policy (`platform_overrides` + migrate the fork's `windows_*` flags into it, `$VAR`/`@git` tokens, port-range schema with a WFP-native emitter, bun/mise presets), macOS Seatbelt carry, and resource-CLI alignment onto the existing Job Object impl — WITHOUT regressing the Windows security model or the ADR-86 boundary, then leapfrog all 6 crates + both binding repos to **`0.70.0`** (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed — a standing structural divergence deferred to the dedicated **v3.7 Windows Tool-Sandbox Parity** milestone). Scope source: quick `260727-jkn`.
 
-- [ ] **Phase 108: UPST12 Divergence Audit** — 0/5 plans
+- [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [ ] **Phase 109: Proxy/Network Absorb** — 0/? plans
 - [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/? plans
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
@@ -218,11 +218,11 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. The 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) are explicitly recorded **DEFERRED→v3.7** with the reason (base subsystem absent).
   4. **[CONTEXT.md D-19]** As originally written ("the ledger maps each will-sync cluster onto Phase 109/110/111"), this SC is unsatisfiable — live measurement found ~28 commits mapping to none of v3.6's 12 requirements. The corrected SC: the ledger surfaces this gap with an exact count, names the unmapped clusters, and proposes a **Phase 112 (Security + Residual Sync)** roadmap amendment — gated on explicit operator approval before Phase 109 planning begins.
 **Plans**: 5 plans
-- [ ] 108-01-PLAN.md — Ledger reproduction, full 100-commit CODE/DEPS/CI/DOCS accounting, Cluster Summary taxonomy skeleton
-- [ ] 108-02-PLAN.md — ADR-108: deny_domain (#1374) posture — settles ADAPT per D-12
-- [ ] 108-03-PLAN.md — NET/PROF/CORE per-commit tables, hand-verified requirement mapping + re-export scans
-- [ ] 108-04-PLAN.md — tool-sandbox 20-commit surface (pure/split residue accounting) + DEPS/CI/DOCS clusters
-- [ ] 108-05-PLAN.md — Carve-out re-touch check, D-18/D-19 requirement-coverage gap + Phase 112 proposal, ledger completeness sweep
+- [x] 108-01-PLAN.md — Ledger reproduction, full 100-commit CODE/DEPS/CI/DOCS accounting, Cluster Summary taxonomy skeleton
+- [x] 108-02-PLAN.md — ADR-108: deny_domain (#1374) posture — settles ADAPT per D-12
+- [x] 108-03-PLAN.md — NET/PROF/CORE per-commit tables, hand-verified requirement mapping + re-export scans
+- [x] 108-04-PLAN.md — tool-sandbox 20-commit surface (pure/split residue accounting) + DEPS/CI/DOCS clusters
+- [x] 108-05-PLAN.md — Carve-out re-touch check, D-18/D-19 requirement-coverage gap + Phase 112 proposal, ledger completeness sweep
 
 ### Phase 109: Proxy/Network Absorb
 **Goal**: The v0.67–v0.69 proxy/network features are absorbed into the fork's proxy without regressing its fork-divergent TLS-interception + allowlist model, with the bindings rebuilt.
