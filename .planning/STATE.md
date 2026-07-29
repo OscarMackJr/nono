@@ -255,13 +255,15 @@ Stopped at: **v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Az
 
 Then: **v3.6 Phase 108 context gathered** — `108-CONTEXT.md` + `108-DISCUSSION-LOG.md` written (commit `85874c01`), 23 decisions (D-01..D-23) across 4 gray areas. Live scouting contradicted several milestone planning assumptions: the window is **100 non-merge commits** (not the `260727-jkn` map's "~40"), **20** commits touch the tool-sandbox surface (not the 7 PRs named in REQUIREMENTS) with **12 entangled**, `deny_domain` #1374 touches core `net_filter.rs`, and **~28 code commits map to no v3.6 requirement** (several security-relevant). **Phase 108's SC4 is unsatisfiable as written** — the audit will report the gap and propose a new **Phase 112 (Security + Residual Sync)**, gated on operator approval before Phase 109 planning.
 
+Then: **v3.6 Phase 108 PLANNED** — 5 plans across 4 waves (`de6998e9`), plan-checker returned NEEDS REVISION (2 blockers / 2 warnings), revision applied and verified (`19c6abbb`). Blockers were two corrupted commit SHAs (`d033c63c`/`a5a44107` — resolve to nothing; corrected to full 40-char `d033c631…`/`a5a441c2…`) and a Cluster Summary whose `TBD` disposition/windows-touch/security-relevant cells no plan ever finalized (breaking ROADMAP SC1's per-cluster rollup). Post-revision sweep: **all 89 distinct hex tokens across the 5 plans resolve to real commits**; XML tags balanced; tree clean. ROADMAP.md carries the corrected SC4 text citing D-19 but **no Phase 112 checklist row or detail section** — the amendment remains a proposal, operator-gated as required.
+
 Resume file: `.planning/phases/108-upst12-divergence-audit/108-CONTEXT.md` (v3.6). The phase's `.continue-here.md` predates this session; CONTEXT.md supersedes it.
 
 **Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 
 ## Operator Next Steps
 
-**v3.6 (active):** `/gsd:plan-phase 108` — context is gathered (`108-CONTEXT.md`, 23 decisions). The phase produces `108-DIVERGENCE-LEDGER.md` for `v0.66.0..v0.69.0` **plus** `proj/ADR-108-deny-domain-posture.md`. Plan against the CONTEXT decisions, not the raw ROADMAP: SC4 is known-unsatisfiable (D-19) and the tool-sandbox deferral surface is 20 commits, not 7 PRs (D-09). The `deny_domain` stance is **settled** — ADAPT, deny-layer-only, never an allowlist substitute (D-12).
+**v3.6 (active):** `/gsd:execute-phase 108` — planned and checker-verified. 5 plans / 4 waves; wave 1 runs `108-01` (ledger skeleton) and `108-02` (ADR-108) in parallel on disjoint files, then `108-03`→`108-04`→`108-05` serialize on the shared ledger. **Operator gate at the end:** `108-05` produces a Phase 112 (Security + Residual Sync) roadmap-amendment *proposal* covering the ~28 unmapped commits — it is forbidden from editing ROADMAP.md, and Phase 109 planning must not begin until you approve that amendment (D-19).
 
 **v3.5 (parallel, now unblocked):** resume Phase 104 Plan 03. Task 2's root pre-check is moot (see above) — go straight to confirming the smoke is green, then the operator-authorized `v0.66.1` tag push. Phase 105's 5 plans execute immediately after.
 
