@@ -20,8 +20,35 @@ rebuild both language bindings.
 | `3b207eeb` `deny_domain` (#1374) | NET-01 | 311 | 26 | 15 | **ADAPT** — settled by `proj/ADR-108-deny-domain-posture.md` |
 | `1619275c` profile-declared `no_proxy` (#1415) | NET-03 | 2065 | 99 | 17 | adopt w/ validation intact (D-05) |
 | `726ac1f1` `HTTP_PROXY` forward-proxy (#1335) | NET-03 | 815 | 5 | 1 | adopt |
-| `23d93fc9` sibling-route cross-deny (#1437) | NET-03 | 87 | 0 | 1 | adopt |
-| `6fb7ecbf` SigV4 encoded-URI (#1430) | NET-03 | 16 | 4 | 1 | adopt |
+| `23d93fc9` sibling-route cross-deny (#1437) | NET-03 | 87 | 0 | 1 | ~~adopt~~ → **N/A, target file absent** |
+| `6fb7ecbf` SigV4 encoded-URI (#1430) | NET-03 | 16 | 4 | 1 | ~~adopt~~ → **N/A, target file absent** |
+
+> **CORRECTED 2026-07-29 during Phase 109 planning.** `6fb7ecbf` and `23d93fc9` **cannot be absorbed
+> as code changes** — their target files do not exist in the fork:
+>
+> | Upstream target | Fork |
+> |---|---|
+> | `crates/nono-proxy/src/aws/sign.rs` | **ABSENT** — no `aws/` directory; SigV4 exists only as config surface (`config.rs` `aws_auth` types), the signing impl is a placeholder |
+> | `crates/nono-proxy/src/tls_intercept/handle.rs` | **ABSENT** — no `tls_intercept/` directory |
+>
+> Fork `nono-proxy/src` is: `audit config connect credential diagnostic error external filter lib
+> oauth2 pool reverse route server token`.
+>
+> **Root cause — a FOURTH instance of the D-11 failure mode, this time mine.** The `<canonical_refs>`
+> and disposition rows below were written from the ledger's file lists, which describe **upstream's
+> tree, not the fork's**. An upstream commit touching `X` says nothing about whether the fork has `X`.
+> The Phase 108 ledger's `adopt` disposition for these two rows is likewise wrong and should be
+> corrected to `won't-sync (target subsystem absent)` — the same disposition the tool-sandbox
+> refinements got, and for the same reason.
+>
+> **Consequence: Phase 109 is 3 real absorbs, not 5.** Plan `109-05` Task 1 records this as a
+> reviewable finding (`109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`) rather than silently dropping the
+> items or claiming a code change that did not happen. NET-03's ROADMAP success criterion names both
+> fixes and needs reconciling against this finding.
+>
+> **Generalized rule (extends D-11):** before dispositioning an upstream commit `adopt`, confirm the
+> fork actually *has* the file being patched. Presence in the ledger's file list is not presence in
+> the fork.
 
 ~3.3k insertions total. Work-list authority: `108-DIVERGENCE-LEDGER.md` §"NET Cluster — Per-Commit
 Table". The **6 other NET-cluster commits** (`c344efb0`, `4192bfa5`, `261bbd68`, `3672ea10`,
@@ -36,8 +63,7 @@ Table". The **6 other NET-cluster commits** (`c344efb0`, `4192bfa5`, `261bbd68`,
 
 - **D-01: NET-02 (SPIFFE/SPIRE, `c831dade`) is SPLIT OUT into a new Phase 113.** Measured at **4354
   insertions / 545 deletions / 33 files** — 57% of the original Phase 109 by volume. It is a
-  *refactor of fork-divergent code*, not an addition: `reverse.rs` +545, `tls_intercept/handle.rs`
-  +286, `route.rs` +348, `credential.rs` +243, `oauth2.rs` +290. It also crosses into the core
+  *refactor of fork-divergent code*, not an addition: `reverse.rs` +545, `route.rs` +348, `credential.rs` +243, `oauth2.rs` +290 (note: its `tls_intercept/handle.rs` +286 would **create** that file — the fork has no `tls_intercept/` directory — so ADR-113 should treat that portion as new-subsystem introduction, not a rewrite of fork code). It also crosses into the core
   library, expands `Cargo.lock` by ~633 lines, and touches `supervisor_linux.rs` (mandatory
   cross-target clippy). Bundling it meant one conflict in the SPIFFE refactor would block four
   unrelated small fixes. **Roadmap amendment applied 2026-07-29** — Phase 113 exists, NET-02
@@ -152,7 +178,7 @@ Table". The **6 other NET-cluster commits** (`c344efb0`, `4192bfa5`, `261bbd68`,
 - `crates/nono/src/net_filter.rs` — `HostFilter`, `deny_hosts`, `DENY_HOSTS`, `strict`, `FilterResult::Deny`.
 - `crates/nono-proxy/src/server.rs` — `no_proxy_hosts` (cf. :53), the D-07 collision site; also where `726ac1f1` lands.
 - `crates/nono-proxy/src/{config.rs,route.rs,filter.rs}` — touched by `#1415`.
-- `crates/nono-proxy/src/tls_intercept/handle.rs` — touched by `23d93fc9`.
+- ~~`crates/nono-proxy/src/tls_intercept/handle.rs` — touched by `23d93fc9`.~~ **ABSENT from the fork — see the corrected scope table above. This entry was written from upstream's file list and is wrong.**
 
 ### Scope source (historical, now superseded on three counts)
 - `.planning/quick/260727-jkn-map-macos-0-69-parity-gap-phases-for-the/260727-jkn-PLAN.md` — **treat with caution** (D-10/D-11).
