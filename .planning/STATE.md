@@ -6,7 +6,7 @@ status: planning
 stopped_at: "v3.6 UPST12 opened 2026-07-28 (parallel to held v3.5). Requirements + roadmap authored additively (phases 108-111, 12 reqs: UPST12-01, NET-01..03, PROF-01..04, CORE-01/02, VERIFY-01, RLS-14). Phase dirs 108-111 created. NOT YET PLANNED. Next: /gsd:plan-phase 108 (UPST12 divergence audit v0.66.0..v0.69.0). tool-sandbox subsystem explicitly EXCLUDED -> deferred to v3.7."
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
-parallel_milestone_status: paused-on-operator-authorization
+parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
 parallel_stopped_at: "v3.5 PAUSED at Phase 104 Plan 03 Task 2/3. The prior external Azure block is RESOLVED (verified live 2026-07-29): root cause was NOT root-CTL propagation but profileType=PrivateTrustCIPolicy on NonoCertProfile; a new PublicTrust profile NonoPublicTrust was created and TRUSTED_SIGNING_PROFILE repointed to it 2026-07-04T02:28Z, after which smoke run 28692172728 completed SUCCESS (Status=Valid, real public chain). The check-trusted-signing-root.ps1 pre-check is therefore MOOT — do not gate on it. Remaining gate is solely operator authorization for the irreversible v0.66.1 tag push (tag NOT pushed; `git tag --list v0.66*` shows only upstream v0.66.0). Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
 last_updated: "2026-07-29T00:00:00.000Z"
 last_activity: 2026-07-29
@@ -249,9 +249,13 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-29 (resume + state reconciliation)
-Stopped at: v3.6 Phase 108 not yet planned (milestone-boundary pause, clean tree). This session re-verified the v3.5 Azure blocker against live state and found it RESOLVED since 2026-07-04 — corrected `parallel_milestone_status`, the parallel-milestone section, and 3 stale Blockers entries. No source files touched.
-Resume file: `.planning/phases/108-upst12-divergence-audit/.continue-here.md` (v3.6) — still accurate apart from its own blocker caveat, which this reconciliation settles.
+Last session: 2026-07-29 (resume → state reconciliation → v3.5 Phase 104 Plan 03 attempt)
+
+Stopped at: **v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence this session: (1) reconciled the stale "held-on-external-azure-block" status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B → run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.**
+
+Resume file: `.planning/phases/108-upst12-divergence-audit/.continue-here.md` (v3.6, unaffected and still accurate).
+
+**Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 
 ## Operator Next Steps
 
