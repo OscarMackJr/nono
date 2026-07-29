@@ -518,3 +518,106 @@ to exactly one of `NET-01`/`NET-02`/`NET-03`/`none` (5 map `none` — diagnostic
 credential-plumbing commits that ride alongside the network absorb but do not themselves
 implement a named NET-0X mechanism). Zero blank cells. `windows-touch: no` for all 12 (grep-
 confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)` hits in any of the 12 diffs).
+
+---
+
+## PROF Cluster — Per-Commit Table (Plan 108-03)
+
+**Row-count reconciliation note:** Task 2's action text names 5 PROF commits for full-row
+treatment (`ae1c513e`, `719975cf`, `2cbaa9a0`, `b620ed8e`, `f016b2d5`) plus the 2 tool-sandbox
+pointer rows (`d5803b99`, `d4927f95`) — 7 rows. Plan 108-01's own Cluster Summary, however,
+already established **8** confirmed PROF-cluster members (the 5 above plus `0374e454`,
+`9ef5918169`, `f58c7c2242`). Per this phase's own re-verification discipline (D-04/D-21 —
+"record the disagreement explicitly rather than silently adopting either"), omitting 3
+already-confirmed cluster members from the per-commit table would leave them with no
+hand-verified requirement mapping, contradicting this plan's own must-have truth ("every
+NET/PROF/CORE cluster commit has a hand-verified requirement mapping"). Resolution: **all 8**
+Cluster-Summary-confirmed PROF commits are given full rows below, plus the 2 required pointer
+rows — **10 rows total**, not 7. This is recorded as a plan/data discrepancy (Rule 1 — a table
+that silently drops established cluster members is a correctness bug), not a silent deviation.
+
+Hand-verified per D-21 against `PROF-01`/`PROF-02`/`PROF-03`/`PROF-04`
+(`.planning/REQUIREMENTS.md`). Re-export scan command: `git show <sha> | grep '^+' | grep -E
+'^\+\s*(pub use|pub mod|extern crate|pub\(crate\))'`.
+
+**`ae1c513e` windows-touch evidence (cited, per Task 2 requirement):** `git show ae1c513e | grep
+-in windows` returns 5 hits, including `+    pub windows: Option<Box<PlatformOverride>>,` (new
+struct field) and `+            crate::platform::Os::Windows => self.windows,` (runtime
+platform-match arm) — this is the exact field the fork's `windows_low_il_broker`/
+`windows_interpreters` migration (PROF-01) will populate. No `cfg(target_os = "windows")`/
+`cfg(windows)` compile-time gate exists in the diff (0 hits) — the Windows-relevance is a
+runtime `Os::Windows` match arm on a cross-platform enum, not a cfg-gated code path. **Windows-
+touch: yes**, on the strength of this cited grep evidence, not asserted without it.
+
+**`719975cf` windows-touch evidence:** `git show 719975cf | grep -in windows` returns 6 hits,
+including `+            windows: merge_platform_override_slot(b.windows, c.windows),` (the
+extends-merge logic PROF-01 requires to preserve `platform_overrides` through inheritance) and
+two test assertions (`po.windows.is_some()`, `windows: Some(Box::new(...))`). **Windows-touch:
+yes**, cited.
+
+| sha | subject | files-changed | windows-touch | security-relevant | requirement-mapping | disposition | re-export scan |
+|-----|---------|----------------|:---:|:---:|:---:|-----------|-----------------|
+| `ae1c513e6ed1f1a0628dbb690c3f1c984fb7a225` | feat(profile): add platform_overrides field for per-OS profile patches (#1371) | 3 files (profile-authoring-guide.md, policy.rs, profile/mod.rs), 242+/0- | **yes** (see evidence above) | yes | **PROF-01** | adopt | Clean — new `pub struct PlatformOverrides`/`PlatformOverride` and `pub platform_overrides` field are all intra-`nono-cli`; no cross-crate `pub mod`/`pub use` |
+| `719975cf03ea303f835061089279eb6c50245ccf` | fix(profile): preserve platform_overrides through extends resolution (#1380) | 1 file (profile/mod.rs), 294+/1- | **yes** (see evidence above) | yes | **PROF-01** | adopt | Clean — single-file `profile/mod.rs` change to `merge_profiles`/`merge_platform_override_slot`; no new `pub` surface |
+| `2cbaa9a017b14ddc45219474b6eebf94727787ef` | feat(profile): expand $VAR tokens from process env in profile paths and capture commands (#1296) | 5 files (capability_ext.rs, policy.rs, proxy_runtime.rs, wiring.rs, credential-injection.mdx), 215+/68- | no | yes | **PROF-02** | adopt | `pub(crate) fn substitute_vars<E>(...)`, `pub(crate) fn expand_env_vars(s: &str) -> String` — intra-CLI, no cross-crate re-export |
+| `b620ed8e4572359afa4ed9cff4d803c8e9064f26` | feat(policy): add bun runtime preset (#1305) | 2 files (policy.json, manifest_roundtrip.rs), 30+/0- | no | yes | **PROF-04** | adopt | Clean — pure `data/policy.json` embedded-policy addition + test; no Rust `pub` surface change |
+| `f016b2d56dcbe4aad2bb322acd7574d38b5c13f7` | mise policy (#1387) | 2 files (policy.json, manifest_roundtrip.rs), 31+/0- | no | yes | **PROF-04** | adopt | Clean — same shape as `b620ed8e` |
+| `0374e454b9424e8b77c46fe0948a4e109d37b8da` | fix(profile): omit inheritable Option fields when None on save (#1400)(#1402) | 1 file (profile/mod.rs), 47+/7- | no | no | none | adopt | Clean — hand-verified: fixes `Profile` struct save serialization for 7 `Option` fields (`environment`, `command_policies`, `open_urls`, `allow_launch_services`, `allow_gpu`, `allow_parent_of_protected`, `binary`), explicitly "matching `platform_overrides` (which already had it)" per the commit message — adjacent to the `ae1c513e` struct but does not itself implement `platform_overrides`; mapped `none` rather than force-mapped to PROF-01, though Phase 110 should land it alongside PROF-01 for round-trip correctness (Rule 2 candidate) |
+| `9ef5918169d719821aaec757a9eea715c3e8c44d` | docs(cli/profile): simplify credential provider def doc comment | 1 file (credential_provider.rs), 1+/3- | no | no | none | adopt | Clean — pure doc-comment trim, no logic change |
+| `f58c7c2242d3790f9c390d4bf0dd808ba1261c77` | feat(profile): support CLI profile extends (#1320) | 9 files (CHANGELOG.md, profile-authoring-guide.md, cli.rs, command_runtime.rs, learn.rs, profile/mod.rs, profile_runtime.rs, why_runtime.rs, flags.mdx), 418+/30- | no | yes | none | adopt | Clean — hand-verified: adds a **CLI** `--extends <PROFILE>` flag (prepends to the JSON `extends` list); NOT the profile-schema `extends` field itself, which the fork already carries independently (fork commit `91c3b1a0`, "feat: profile inheritance via `extends` field (#203)", predates this window — confirmed via `git log -S "pub extends: Option<Vec<String>>"`). No conflict: different surface (CLI flag vs. JSON field), composes with the fork's existing JSON-extends resolution path. The authoring guide itself flags "Inherited grants can widen sandbox permissions" — security-relevant, but implements no PROF-0X-named mechanism, so mapped `none` |
+
+**Tool-sandbox-entangled PROF pointer rows** (Task 2 — cross-reference only, no duplicated
+analysis; full split/residue accounting is Plan 108-04's job per D-05):
+
+| sha | subject | requirement-mapping | disposition |
+|-----|---------|----------------------|--------------|
+| `d5803b994b416ad07a73907143ca169c408917f3` | feat: add port range support to sandbox profiles (#1398) | **PROF-03** | see tool-sandbox-split section (Plan 108-04) — entangled with tool-sandbox module set per D-05 |
+| `d4927f95a37863cf0ba534b054e28f48f002ad21` | feat(profile): expand @git:* dynamic tokens in top-level filesystem paths (#1298) | **PROF-02** | see tool-sandbox-split section (Plan 108-04) — entangled with tool-sandbox module set per D-05 |
+
+**PROF disposition summary:** 10 rows total (8 full + 2 pointer), all adopt (no adapt/skip/split
+needed for the 8 full-analysis commits — none of them touch a fork carve-out surface). 4 rows map
+`none` (`0374e454`, `9ef5918169`, `f58c7c2242` — adjacent/ergonomic commits with no PROF-0X-named
+mechanism of their own). 2 rows (`ae1c513e`, `719975cf`) are `windows-touch: yes` on cited
+`Os::Windows` runtime-match evidence, not a `cfg(windows)` compile gate. Zero blank cells.
+
+---
+
+## CORE Cluster — Per-Commit Table (Plan 108-03)
+
+Hand-verified per D-21 against `CORE-01`/`CORE-02` (`.planning/REQUIREMENTS.md`). All 4 rows
+below == CORE cluster `commit_count` (4) from Plan 108-01's Cluster Summary — no additional
+commits found by re-running `git log --no-merges --oneline $RANGE -- crates/nono/src/sandbox/
+macos.rs crates/nono-cli/src/resource_cgroup.rs` (the latter file is new in this window, created
+by `e6d26871`).
+
+**Windows-relevance finding (all 4 rows):** `git show <sha> | grep -in windows` returns **zero**
+hits for all 4 CORE commits — none of `ca888108`/`099237da`/`e6d26871`/`34c2c975` mention Windows
+anywhere in their diffs, not even in doc comments. `e6d26871` (#1269, resource limiting) and
+`34c2c975` (#1403, `--max-processes`) implement their enforcement entirely via
+`crates/nono-cli/src/resource_cgroup.rs` (Linux cgroup v2) with no Windows Job Object
+counterpart authored upstream at all. This confirms CORE-02's framing ("reconciled with the
+fork's existing kernel-enforced Job Object implementation") is not an adopt-then-verify task —
+Phase 111 is authoring the Windows reconciliation from a zero-Windows-precedent starting point,
+not adapting an upstream Windows code path.
+
+| sha | subject | files-changed | windows-touch | security-relevant | requirement-mapping | disposition | re-export scan |
+|-----|---------|----------------|:---:|:---:|:---:|-----------|-----------------|
+| `ca888108fe5983be866e8d1a6eccf96edc2a8dd5` | fix: missing ~/.cache on macOS (#1378) | 6 files (policy.json, learn.rs, macos_trust.rs, proxy_command.rs, nono-proxy/server.rs, tls_intercept/ca.rs), 12+/12- | no | yes | **CORE-01** | adopt | Clean — corrects an existing `~/.cache`-adjacent macOS path reference; no new `pub` items |
+| `099237da94d33752ca5617db3f4902a216f9f84c` | fix(exec): raise MAX_CRYPTO_THREADS to 12 for macOS libdispatch workqueue threads (#1424) | 1 file (exec_strategy.rs), 7+/4- | no | no | **CORE-01** | adopt | Clean — single-constant tuning change, no security-boundary implication |
+| `e6d26871f0498e7dc7a867e67af5c6136b84f91c` | feat: resource limiting (#1269) | 23 files (cli.rs, command_runtime.rs, exec_strategy.rs, main.rs, output.rs, profile_cmd.rs, `resource_cgroup.rs` [new], sandbox_prepare.rs, sandbox_state.rs, supervised_runtime.rs, nono/capability.rs, lib.rs, `manifest.rs` [new], manifest_convert.rs, `resource/mod.rs` [new], state.rs, +schema/docs), 2517+/14- | no | yes | **CORE-02** | adapt | **`pub mod resource;` + `pub use resource::ResourceLimits;` added to `crates/nono/src/lib.rs`** — a new cross-crate re-export from the core library's public API surface (not intra-crate `pub(crate)` like every other row in this ledger). Flagged below under Threat Flags — Phase 111 must confirm this re-export is policy-free mechanism (ADR-86-compliant) before adopting verbatim. |
+| `34c2c975d649844923cf1515be94de624c689c6c` | feat(resources): cap sandbox process count with --max-processes (#1403) | 15 files (cli.rs, command_runtime.rs, output.rs, resource_cgroup.rs, sandbox_prepare.rs, sandbox_state.rs, supervised_runtime.rs, nono/schema, capability.rs, manifest.rs, manifest_convert.rs, resource/mod.rs, state.rs, +docs), 1251+/181- | no | yes | **CORE-02** | adapt | Clean — extends the `resource` module `e6d26871` created; no additional `pub mod`/`pub use` beyond what `e6d26871` already added |
+
+**CORE disposition summary:** 2 adopt (`ca888108`, `099237da` — macOS-only carry, no fork
+Windows counterpart to reconcile) + 2 adapt (`e6d26871`, `34c2c975` — CORE-02 explicitly requires
+reconciling with the fork's existing Job Object mechanism, not verbatim adoption). All 4 rows map
+to `CORE-01`/`CORE-02`, zero `none`, zero blank cells. `windows-touch: no` for all 4 (zero
+Windows mentions of any kind, per the finding above — a materially different result from the
+PROF cluster's `Os::Windows`-runtime-match findings).
+
+---
+
+## Threat Flags
+
+| Flag | File | Description |
+|------|------|--------------|
+| threat_flag: cross-crate-reexport | `crates/nono/src/lib.rs` (via `e6d26871`, CORE-02) | Upstream's resource-limiting feature adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the core `nono` library's public API — the first CORE-cluster commit in this window to cross the library/CLI boundary rather than stay `pub(crate)`/CLI-internal. Not itself a threat_model item in `108-03-PLAN.md` (that threat_model covers ledger-classification tampering, not library-boundary re-exports) but flagged here per the SUMMARY template's mandatory threat-surface scan: Phase 111 must confirm `ResourceLimits` is caller-supplied mechanism (ADR-86-compliant), not embedded policy, before absorbing verbatim. |
