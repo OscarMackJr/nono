@@ -257,13 +257,21 @@ Then: **v3.6 Phase 108 context gathered** — `108-CONTEXT.md` + `108-DISCUSSION
 
 Then: **v3.6 Phase 108 PLANNED** — 5 plans across 4 waves (`de6998e9`), plan-checker returned NEEDS REVISION (2 blockers / 2 warnings), revision applied and verified (`19c6abbb`). Blockers were two corrupted commit SHAs (`d033c63c`/`a5a44107` — resolve to nothing; corrected to full 40-char `d033c631…`/`a5a441c2…`) and a Cluster Summary whose `TBD` disposition/windows-touch/security-relevant cells no plan ever finalized (breaking ROADMAP SC1's per-cluster rollup). Post-revision sweep: **all 89 distinct hex tokens across the 5 plans resolve to real commits**; XML tags balanced; tree clean. ROADMAP.md carries the corrected SC4 text citing D-19 but **no Phase 112 checklist row or detail section** — the amendment remains a proposal, operator-gated as required.
 
-Resume file: `.planning/phases/108-upst12-divergence-audit/108-CONTEXT.md` (v3.6). The phase's `.continue-here.md` predates this session; CONTEXT.md supersedes it.
+Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger foundation (`8cf5ed92`/`97450936`), `108-02` ADR-108 (`81255cc5`/`76ae7b10`), `108-03` NET/PROF/CORE tables (`fee56801`…`cc3549b3`), `108-04` tool-sandbox + DEPS/CI/DOCS (`43a00d2e`…`d95c8010`). Ledger is **1178 lines, 141 distinct SHAs all resolving**. `108-05` (final: TBD finalization + carve-out re-touch + D-18/D-19 gap report + Phase 112 proposal) **did not run** — killed by a transient API 500 before writing anything; tree verified clean, ledger unchanged at 1178 lines, 7 `TBD` cells still open, ROADMAP/STATE untouched. Safe to re-run `108-05` from scratch.
+
+**Findings so far that outlive this phase:**
+- **LIVE VULN:** `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) is in the fork's `Cargo.lock`; its fix `373a67ae` (#1369) sits unabsorbed in this window's DEPS bucket. Independently confirmed. Priority absorb.
+- **ADR-86 threat flag:** `e6d26871` (#1269) adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the policy-free core `crates/nono/src/lib.rs`. Needs boundary review before Phase 111 absorbs it.
+- **Phase 110 complication:** PROF-02's absorb target `capability_ext.rs` calls into the DEFERRED `tool_sandbox::dynamic_providers`.
+- Two CONTEXT decisions corrected mid-execution by re-measurement (D-04 bucket split, D-06 directory-vs-union) — see `1332b657`.
+
+Resume file: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER.md` (v3.6). The phase's `.continue-here.md` and `.planning/HANDOFF.json` both predate this session and are superseded.
 
 **Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 
 ## Operator Next Steps
 
-**v3.6 (active):** `/gsd:execute-phase 108` — planned and checker-verified. 5 plans / 4 waves; wave 1 runs `108-01` (ledger skeleton) and `108-02` (ADR-108) in parallel on disjoint files, then `108-03`→`108-04`→`108-05` serialize on the shared ledger. **Operator gate at the end:** `108-05` produces a Phase 112 (Security + Residual Sync) roadmap-amendment *proposal* covering the ~28 unmapped commits — it is forbidden from editing ROADMAP.md, and Phase 109 planning must not begin until you approve that amendment (D-19).
+**v3.6 (active):** Phase 108 **EXECUTING — 4 of 5 plans complete**. Resume by re-running the final plan `108-05` (see Session Continuity for the exact state). **Operator gate at the end:** `108-05` produces a Phase 112 (Security + Residual Sync) roadmap-amendment *proposal* — it is forbidden from editing ROADMAP.md, and Phase 109 planning must not begin until you approve that amendment (D-19).
 
 **v3.5 (parallel, now unblocked):** resume Phase 104 Plan 03. Task 2's root pre-check is moot (see above) — go straight to confirming the smoke is green, then the operator-authorized `v0.66.1` tag push. Phase 105's 5 plans execute immediately after.
 
