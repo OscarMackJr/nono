@@ -44,12 +44,23 @@ copy forward blindly):**
 
 | Measure | Value |
 |---|---|
-| Non-merge commits in window | **100** |
-| — CODE (touches source) | 68 |
-| — DEPS (only `Cargo.toml`/`Cargo.lock`) | 15 |
-| — CI (only `.github/`, `Makefile`, `scripts/`) | 11 |
-| — DOCS (only `docs/`, `CHANGELOG`, `*.md`/`*.mdx`) | 6 |
-| Commits touching the tool-sandbox surface | 20 (8 pure, **12 entangled**) |
+| Non-merge commits in window | **100** ✓ confirmed by Plan 108-01 |
+| — CODE (touches source) | ~~68~~ → **62** (superseded, see below) |
+| — DEPS (only `Cargo.toml`/`Cargo.lock`) | ~~15~~ → **19** |
+| — CI (only `.github/`, `Makefile`, `scripts/`) | 11 ✓ confirmed |
+| — DOCS (only `docs/`, `CHANGELOG`, `*.md`/`*.mdx`) | ~~6~~ → **8** |
+| Commits touching the tool-sandbox surface (3-path union) | 20 (source-dir-only is **18** — see D-06 correction) |
+
+> **SUPERSEDED 2026-07-29 by Plan 108-01's re-measurement** — exactly what D-04/D-21
+> mandated re-measurement to catch. The window total (100) and CI count (11) are
+> confirmed; the CODE/DEPS/DOCS split is not. Nine commits fail the strict
+> "touches `src/`" / "ONLY `<pattern>`" bucket tests (4 release-cuts mixing `CHANGELOG.md`
+> with `Cargo.toml`/`Cargo.lock`; 2 policy commits touching `data/policy.json` + `tests/`;
+> 1 test-only; 2 community-health mixing `.github/ISSUE_TEMPLATE/` with `.md`). The
+> hypothesis below implicitly folded all 9 into CODE (59+9=68); the ledger classifies each
+> by dominant semantic content (4→DEPS, 3→CODE, 2→DOCS) and states that rule explicitly so
+> it is reproducible. **`108-DIVERGENCE-LEDGER.md` is authoritative; the numbers below are
+> the superseded hypothesis, retained so the delta stays visible.**
 | Non-tool-sandbox code commits mapping to NO v3.6 requirement | **~28** (approximate — D-19 requires hand-verification) |
 
 For scale: v3.4's UPST11 window was 14 substantive + 6 noise = 20 commits. This window is
@@ -69,10 +80,32 @@ roughly **3.4× the substantive volume** and the largest since UPST9.
   `crates/nono-cli/src/lineage_cgroup.rs`. All three are **absent from the fork** (verified
   2026-07-29; `command_policies` exists only in
   `crates/nono-cli/data/profile-authoring-guide.md`, zero `.rs` wiring).
-  The ledger MUST record the measurement that the union of these three equals the
-  directory-only set (**true for this window — 20 either way**), and the **next sync MUST
-  re-measure rather than inherit that equality**. It holds by coincidence, not by rule:
-  `command_policy.rs` already lives outside the directory.
+  > **CORRECTED 2026-07-29 during Phase 108 execution (Plan 108-01).** This decision
+  > originally claimed "the union of these three equals the directory-only set — true for
+  > this window, 20 either way." **That measurement was wrong.** It came from a
+  > substring-anywhere glob (`-- '*tool-sandbox*'`) that matched
+  > `docs/cli/features/tool-sandbox.mdx`, a documentation file, not just the source
+  > directory. Re-measured correctly:
+  >
+  > | Test | Count |
+  > |---|---|
+  > | substring `tool-sandbox` anywhere (the flawed original test) | 20 |
+  > | actual source dir `crates/nono-cli/src/tool-sandbox/` | **18** |
+  > | union with `command_policy.rs` + `lineage_cgroup.rs` | **20** |
+  >
+  > Commits `5a7447d3` and `ebd51cbb` touch the subsystem **only** through
+  > `command_policy.rs`; their sole "tool-sandbox" path is the docs file. A
+  > directory-only filter drops both.
+  >
+  > **The decision below is unchanged and now better supported.** The explicit module set
+  > is not belt-and-braces that happens to be redundant this window — it is **load-bearing
+  > today**. Do not let a future sync conclude "directory-only is sufficient, it was
+  > measured equal."
+
+  The ledger MUST record the measured relationship between the directory-only set and the
+  3-path union (**18 vs 20 for this window — NOT equal**), and the **next sync MUST
+  re-measure rather than inherit any equality claim**. `command_policy.rs` lives outside
+  the directory and already carries commits the directory misses.
 - **D-07:** **Per-commit residue accounting** is mandatory for every `split` and `defer`
   commit: the ledger lists *every* path in the commit and marks each
   `absorb` / `defer` / `noise`. **A path appearing in no bucket is a ledger defect.** This
