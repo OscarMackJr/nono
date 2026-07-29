@@ -1240,3 +1240,198 @@ figures, which is the correct baseline — comparing against the stale 15/11/6 h
 have reintroduced exactly the kind of hypothesis-vs-measurement error D-04/D-21 exist to prevent.
 **Result: no reclassification needed; DEPS/CI/DOCS table row counts match the ledger's own
 authoritative totals with zero disagreement.**
+
+---
+
+## Carve-out Re-touch Check (D-22/D-23)
+
+Per D-22 (carried forward from Phase 94 D-04/D-05, expanded in 98 D-07): for each of the 7
+accumulated fork carve-out surfaces named in `108-05-PLAN.md`'s `interfaces` block, run
+`git log --no-merges --oneline <window> -- <exact-path(s)>` and record the literal command plus
+its literal output. **A zero-hit result is recorded explicitly as "clean — no re-touch in
+window" — silence is never treated as evidence.** `RANGE` below is the pinned window
+`d817ed53663c6bba4669ee7a5bfb41b35971fd1b..59bdace7e905c05c127f480dc6d2a8c3a3331392`.
+
+### 1. CR-02 (audit bypass invariant) — `crates/nono/src/audit.rs`
+
+```bash
+git log --no-merges --oneline $RANGE -- crates/nono/src/audit.rs
+```
+```
+c831dade feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272)
+```
+**HIT (1 commit)** — `c831dade422f2bdf37d7429af0423cafa0a60c06` is already classified in the
+**NET cluster per-commit table** (Plan 108-03), dispositioned `adopt`/`NET-02`. That row's own
+re-export scan (hand-verified) found only intra-`nono-proxy` `pub mod auth;`/`pub mod spiffe;` and
+`pub(crate)` helpers touching `audit.rs`/`undo/types.rs` — no CR-02 audit-bypass-invariant
+regression identified. Not re-analyzed here; routed to its existing table.
+
+### 2. CR-01 (FFI `clear_last_call_state`) — `bindings/c/src/{lib,diagnostic,capability_set,fs_capability,sandbox,state,query}.rs`
+
+```bash
+git log --no-merges --oneline $RANGE -- bindings/c/src/lib.rs bindings/c/src/diagnostic.rs \
+  bindings/c/src/capability_set.rs bindings/c/src/fs_capability.rs bindings/c/src/sandbox.rs \
+  bindings/c/src/state.rs bindings/c/src/query.rs
+```
+```
+8a4237f2 refactor(seccomp): introduce SeccompPolicy struct and client-driven selection (#1283)
+```
+**HIT (1 commit)** — `8a4237f2ee0dc33bc1e5afdd39c0db8ca6f5ed38` is already classified in the
+**tool-sandbox-split residue table** (Plan 108-04). Its `bindings/c/src/sandbox.rs` row is
+diff-verified there as a 1-line call-site rename (`nono::Sandbox::apply` → `apply_auto`) with an
+explicit re-export scan result of "Clean" (zero `pub mod`/`pub use`/`extern crate`, 4 intra-`nono-cli`
+`pub(crate)` hits only). No CR-01 regression. Not re-analyzed here.
+
+### 3. Proxy fork-preserve surface — `crates/nono-proxy/src/{route,connect,reverse,server}.rs`, `crates/nono-cli/src/proxy_runtime.rs`
+
+```bash
+git log --no-merges --oneline $RANGE -- crates/nono-proxy/src/route.rs crates/nono-proxy/src/connect.rs \
+  crates/nono-proxy/src/reverse.rs crates/nono-proxy/src/server.rs crates/nono-cli/src/proxy_runtime.rs
+```
+```
+1619275c feat: add profile-declared no_proxy bypass support (#1415)
+c831dade feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272)
+ca888108 fix: missing ~/.cache on macOS (#1378)
+726ac1f1 feat(proxy): support plain HTTP forward-proxying via HTTP_PROXY (#1335)
+1f54f4ae fix(command-policy): resolve command_policies binaries once, in parallel, with caching (#1373)
+3b207eeb feat(proxy): add deny_domain to block domains through the proxy (#1374)
+4192bfa5 fix(proxy): skip credential_capture entries with missing helper binaries (#1368)
+7c20dc75 fix(tool-sandbox): resolve command policy paths against the live cwd (#1339)
+d033c631 test(oauth): consume provider stdin in header fixture
+9b692e07 feat(oauth): add declarative sandboxed OAuth capture
+2663e990 feat(cli): add standalone `nono proxy` command (#1261)
+261bbd68 fix(tests): raise credential-capture test timeout to reduce macOS CI flakiness
+3672ea10 fix(tests): share stdin-manipulation lock between capture_helper stdin tests (#1327)
+2cbaa9a0 feat(profile): expand $VAR tokens from process env in profile paths and capture commands (#1296)
+a3243907 feat(gpu): harden NVIDIA procfs mediation (#1284)
+8255a27a refactor load_with_diagnostics to be async (#1287)
+7d23bba6 fix(proxy): separate stdin and stderr inheritance for credential helpers (#1300)
+8a4237f2 refactor(seccomp): introduce SeccompPolicy struct and client-driven selection (#1283)
+```
+**HIT (18 commits)** — every SHA above is already classified in an existing table; none is
+un-routed:
+- **NET cluster (Plan 108-03):** `c831dade`, `3b207eeb`, `1619275c`, `726ac1f1`, `4192bfa5`,
+  `261bbd68`, `3672ea10`, `8255a27a`, `7d23bba6`
+- **CORE cluster (Plan 108-03):** `ca888108`
+- **PROF cluster (Plan 108-03):** `2cbaa9a0`
+- **tool-sandbox-split (Plan 108-04):** `1f54f4ae`, `7c20dc75`, `8a4237f2`
+- **security-residual-and-misc (Plan 108-01, D-18-named anchors):** `d033c631`, `9b692e07`,
+  `2663e990`, `a3243907`
+
+### 4. Endpoint-policy surface (Phase 95) — `crates/nono-cli/src/network_policy.rs`, `crates/nono-proxy/src/{config,credential,route,server}.rs`
+
+```bash
+git log --no-merges --oneline $RANGE -- crates/nono-cli/src/network_policy.rs \
+  crates/nono-proxy/src/config.rs crates/nono-proxy/src/credential.rs \
+  crates/nono-proxy/src/route.rs crates/nono-proxy/src/server.rs
+```
+```
+1619275c feat: add profile-declared no_proxy bypass support (#1415)
+c831dade feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272)
+ca888108 fix: missing ~/.cache on macOS (#1378)
+726ac1f1 feat(proxy): support plain HTTP forward-proxying via HTTP_PROXY (#1335)
+3b207eeb feat(proxy): add deny_domain to block domains through the proxy (#1374)
+9b692e07 feat(oauth): add declarative sandboxed OAuth capture
+2663e990 feat(cli): add standalone `nono proxy` command (#1261)
+0ecc476b feat: implement aws authentication for the MiTM proxy  (#1195)
+8255a27a refactor load_with_diagnostics to be async (#1287)
+```
+**HIT (9 commits)** — all already routed: **NET cluster** (`1619275c`, `c831dade`, `726ac1f1`,
+`3b207eeb`, `8255a27a`); **CORE cluster** (`ca888108`); **security-residual-and-misc**
+(`9b692e07`, `2663e990`, `0ecc476b` — the last two D-18-named anchors).
+
+### 5. `linux.rs` restored invariants — `crates/nono/src/sandbox/linux.rs`
+
+```bash
+git log --no-merges --oneline $RANGE -- crates/nono/src/sandbox/linux.rs
+```
+```
+d5803b99 feat: add port range support to sandbox profiles (#1398)
+d84b4818 fix(sandbox): grant Refer in execute-restriction layer on Linux (#1397)
+ea334d2b fix(linux): use u64 for fs_type_unsupported to fix musl build (#1332)
+a3243907 feat(gpu): harden NVIDIA procfs mediation (#1284)
+8a4237f2 refactor(seccomp): introduce SeccompPolicy struct and client-driven selection (#1283)
+```
+**HIT (5 commits)** — `d5803b99`, `ea334d2b`, `8a4237f2` are already classified in
+**tool-sandbox-split** (Plan 108-04; all 3 are D-05-named worked examples with dedicated finding
+notes). `d84b4818`, `a3243907` are D-18-named anchors in **security-residual-and-misc**
+(Plan 108-01).
+
+### 6. ADR-86 Windows denial-rendering carve-out — `crates/nono-cli/src/exec_strategy_windows/`
+
+```bash
+git log --no-merges --oneline $RANGE -- crates/nono-cli/src/exec_strategy_windows/
+```
+```
+(no output)
+```
+**clean — no re-touch in window.** No upstream commit in this sync touches the fork's D-02
+Windows denial-rendering carve-out (`proj/ADR-86-library-boundary-convergence.md`).
+
+### 7. v3.2 signed-override surface (Rust core side) — `crates/nono/src/audit.rs` (`PolicyOverrideApplied` + EventIDs 10006-10010)
+
+```bash
+git log --no-merges --oneline $RANGE -- crates/nono/src/audit.rs
+```
+```
+c831dade feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272)
+```
+**HIT (1 commit)** — the identical result to surface #1 (CR-02) above, since both carve-outs live
+in the same file. Already routed to the **NET cluster** (Plan 108-03) per surface #1's analysis;
+not re-analyzed twice.
+
+### Carve-out re-touch summary
+
+All 7 surfaces have an explicit stated result: 6 HIT (with every named SHA cross-referenced to an
+existing table by section name, none un-routed) + 1 clean ("no re-touch in window" —
+`exec_strategy_windows/`). Zero surfaces are left without a stated result.
+
+---
+
+## Security-Relevant Rollup (D-20)
+
+Consolidated table of every row flagged `security-relevant=yes` in Plan 108-03's NET/PROF/CORE
+per-commit tables, plus the 10 D-18-named anchor SHAs from the security-residual-and-misc cluster
+(Plan 108-01). **Note on method:** the 10 D-18-named SHAs are not individually flagged with an
+explicit `security-relevant=yes` *cell* in any 108-03/108-04 table — `108-CONTEXT.md` D-18 itself
+designates them security-relevant, and Plan 108-01's security-residual-and-misc table records that
+designation via its "anchor: named (D-18)" column rather than a `security-relevant` column. This
+task treats the D-18 naming as equivalent evidence and includes all 10 here — omitting them because
+they use a differently-labeled source column would fail this plan's own explicit must-have that
+all 10 D-18-named SHAs appear in this rollup.
+
+| sha | subject | source cluster | requirement-mapping |
+|-----|---------|-----------------|----------------------|
+| `3b207eeb884bd71b0fc10f0123fa89fffe9f7955` | feat(proxy): add deny_domain to block domains through the proxy (#1374) | NET | NET-01 |
+| `c831dade422f2bdf37d7429af0423cafa0a60c06` | feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272) | NET | NET-02 |
+| `6fb7ecbf36e5d18760d8084b7f4900e93582004c` | bug: Fix SigV4 URI generation errors (#1430) | NET | NET-03 |
+| `23d93fc96abf795d672c712e9c1834a8f97aa0aa` | fix(proxy): don't cross-deny sibling routes sharing an upstream (#1437) | NET | NET-03 |
+| `1619275caa32b7b96e3eee56c33c71dfce777bbf` | feat: add profile-declared no_proxy bypass support (#1415) | NET | NET-03 |
+| `726ac1f1b5fd7b6de2d86b9fccf1d72660d3e32a` | feat(proxy): support plain HTTP forward-proxying via HTTP_PROXY (#1335) | NET | NET-03 |
+| `c344efb006365ba596b20b843f29fabdbbdc847e` | fix(why): respect proxy domain filter in --profile and --self host queries (#1372) | NET | none |
+| `4192bfa58101d0ef9737b60243a39695fc1e0fa8` | fix(proxy): skip credential_capture entries with missing helper binaries (#1368) | NET | none |
+| `7d23bba683036789163385afa7f5c2f5888886a5` | fix(proxy): separate stdin and stderr inheritance for credential helpers (#1300) | NET | none |
+| `ae1c513e6ed1f1a0628dbb690c3f1c984fb7a225` | feat(profile): add platform_overrides field for per-OS profile patches (#1371) | PROF | PROF-01 |
+| `719975cf03ea303f835061089279eb6c50245ccf` | fix(profile): preserve platform_overrides through extends resolution (#1380) | PROF | PROF-01 |
+| `2cbaa9a017b14ddc45219474b6eebf94727787ef` | feat(profile): expand $VAR tokens from process env (#1296) | PROF | PROF-02 |
+| `b620ed8e4572359afa4ed9cff4d803c8e9064f26` | feat(policy): add bun runtime preset (#1305) | PROF | PROF-04 |
+| `f016b2d56dcbe4aad2bb322acd7574d38b5c13f7` | mise policy (#1387) | PROF | PROF-04 |
+| `f58c7c2242d3790f9c390d4bf0dd808ba1261c77` | feat(profile): support CLI profile extends (#1320) | PROF | none |
+| `ca888108fe5983be866e8d1a6eccf96edc2a8dd5` | fix: missing ~/.cache on macOS (#1378) | CORE | CORE-01 |
+| `e6d26871f0498e7dc7a867e67af5c6136b84f91c` | feat: resource limiting (#1269) | CORE | CORE-02 |
+| `34c2c975d649844923cf1515be94de624c689c6c` | feat(resources): cap sandbox process count with --max-processes (#1403) | CORE | CORE-02 |
+| `0ecc476bf0db3c9509bcc2bd8efae43832c764b8` | feat: implement aws authentication for the MiTM proxy (#1195) | security-residual-and-misc (D-18 named) | none |
+| `9b692e07ee4dd156d85588b12b63691778d9e9be` | feat(oauth): add declarative sandboxed OAuth capture | security-residual-and-misc (D-18 named) | none |
+| `3c59c62e7ddcc2d3a1f1c161bd039b5f2b0b5f7b` | fix(oauth): harden capture security boundaries | security-residual-and-misc (D-18 named) | none |
+| `d033c63111472711e242f4067eb4be04aeaf618a` | test(oauth): consume provider stdin in header fixture | security-residual-and-misc (D-18 named) | none |
+| `a32439074a61eea21eb374a91fdbcebb91b0afe6` | feat(gpu): harden NVIDIA procfs mediation (#1284) | security-residual-and-misc (D-18 named) | none |
+| `f943fb5a0721352e85d92ef48e3e4d5b36747486` | fix(trust): add predicate field to distinguish nono trust policies from foreign JSON (#1333) | security-residual-and-misc (D-18 named) | none |
+| `d84b4818f824b7660d1a4d95ec2e56f322b6fa63` | fix(sandbox): grant Refer in execute-restriction layer on Linux (#1397) | security-residual-and-misc (D-18 named) | none |
+| `ac5ccd70712782f4a97c54916ee18b03c650f56f` | fix(sandbox): keep orphaned descendants in supervisor ancestry for seccomp-notify mediation (#1401) | security-residual-and-misc (D-18 named) | none |
+| `2663e9900fe1317cec0949c18b7a0e6b39321602` | feat(cli): add standalone nono proxy command (#1261) | security-residual-and-misc (D-18 named) | none |
+| `a5a441c25769ecec663aed1d7038ab2b8814d43f` | fix(profile): empty allow_vars no longer strips all env vars (#1204) | security-residual-and-misc (D-18 named) | none |
+
+**Rollup row count: 28** (9 NET + 6 PROF + 3 CORE + 10 security-residual-and-misc anchors). All 10
+D-18-named SHAs (`0ecc476b`, `9b692e07`, `3c59c62e`, `d033c63111472711e242f4067eb4be04aeaf618a`,
+`a3243907`, `f943fb5a`, `d84b4818`, `ac5ccd70`, `2663e990`, `a5a441c25769ecec663aed1d7038ab2b8814d43f`)
+appear verbatim above. 28 ≥ 10 — acceptance threshold met.
