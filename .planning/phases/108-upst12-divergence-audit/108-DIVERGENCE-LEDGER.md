@@ -33,6 +33,96 @@ Re-measurement" below.
 
 ---
 
+## Requirement Coverage Gap (D-18/D-19)
+
+**Exact hand-verified count (D-21 — not the crude keyword-matcher estimate CONTEXT.md records):
+27 non-tool-sandbox CODE-bucket commits map to none of v3.6's 12 requirements**
+(`UPST12-01`/`NET-01..03`/`PROF-01..04`/`CORE-01..02`/`VERIFY-01`/`RLS-14`, per
+`.planning/REQUIREMENTS.md`'s v3.6 Traceability table). This count is compiled by summing every
+`requirement-mapping = none` row across the NET/PROF/CORE per-commit tables (Plan 108-03) plus the
+entire security-residual-and-misc cluster (Plan 108-01), **excluding** the tool-sandbox-surface
+cluster's own 18 unmapped commits — those are a *different*, already-resolved gap (D-09
+DEFERRED→v3.7, not an oversight):
+
+| source | unmapped (`none`) count | SHAs |
+|--------|--------------------------|------|
+| NET cluster (Plan 108-03) | 6 | `c344efb0`, `4192bfa5`, `261bbd68`, `3672ea10`, `8255a27a`, `7d23bba6` |
+| PROF cluster (Plan 108-03) | 3 | `0374e454`, `9ef5918169`, `f58c7c2242` |
+| CORE cluster (Plan 108-03) | 0 | (none — all 4 CORE commits map to CORE-01/CORE-02) |
+| security-residual-and-misc (Plan 108-01) | 18 | the 10 D-18-named anchors + 8 additional (see cluster table) |
+| **Total** | **27** | |
+
+**Completeness-sweep finding (recorded, not silently corrected — see Completeness Verification
+below):** the NET per-commit table's own summary prose (Plan 108-03) states "5 map `none`" but the
+table itself contains **6** `none` rows (listed above) — a one-off undercount in that plan's own
+arithmetic. The PROF per-commit table's summary prose similarly states "4 rows map `none`" but the
+table contains **3** `none` rows (listed above) — a one-off overcount. The two errors cancel
+(5+4=9, 6+3=9), so neither previously invalidated a downstream total, but each is a genuine
+arithmetic defect in its source plan's prose, caught here by the D-21 hand-recount this task
+performs rather than trusting either plan's stated tally. The **27** figure above uses the
+corrected per-table counts (6 + 3), not the plans' stated prose (5 + 4) — both arrive at the same
+combined total (9) either way, so the final gap count (27) is unaffected, but the discrepancy
+itself is a finding worth flagging for whoever revisits Plans 108-03/108-04.
+
+All 10 D-18-named SHAs from `108-CONTEXT.md` appear in the 27-commit gap list above, inside the
+security-residual-and-misc row: `0ecc476bf0db3c9509bcc2bd8efae43832c764b8`,
+`9b692e07ee4dd156d85588b12b63691778d9e9be`, `3c59c62e7ddcc2d3a1f1c161bd039b5f2b0b5f7b`,
+`d033c63111472711e242f4067eb4be04aeaf618a`, `a32439074a61eea21eb374a91fdbcebb91b0afe6`,
+`f943fb5a0721352e85d92ef48e3e4d5b36747486`, `d84b4818f824b7660d1a4d95ec2e56f322b6fa63`,
+`ac5ccd70712782f4a97c54916ee18b03c650f56f`, `2663e9900fe1317cec0949c18b7a0e6b39321602`,
+`a5a441c25769ecec663aed1d7038ab2b8814d43f` — all with `security-relevant=yes` per the D-20 rollup
+above.
+
+**ROADMAP.md Phase 108 SC4 ("the ledger maps each will-sync cluster onto Phase 109/110/111")
+cannot be satisfied as written -- 27 commits map to none of v3.6's 12 requirements. This is a
+legitimate audit finding, not a phase failure.**
+
+### Proposed Phase 112: Security + Residual Sync
+
+**Goal:** Absorb the security-relevant and residual commits from the v0.66.0..v0.69.0 window that
+no existing v3.6 phase covers, without mixing security review into a release-cut phase — mirrors
+the v3.1 Phase 87 precedent.
+
+**Depends on:** Phase 108 (this ledger's security-residual-and-misc cluster + Requirement Coverage
+Gap section as the work-list)
+
+**Draft requirement-ID list** (one per distinct theme in the 27-commit gap list; at minimum one ID
+per D-18-named security theme, plus additional IDs for the non-security residual themes found by
+this task's own review):
+
+- SEC-01: AWS SigV4 authentication for the MiTM proxy (#1195, `0ecc476b`)
+- SEC-02: Declarative sandboxed OAuth capture (`9b692e07`) + capture-boundary hardening (`3c59c62e`) + stdin fixture test (`d033c631`)
+- SEC-03: NVIDIA procfs mediation hardening (#1284, `a3243907`)
+- SEC-04: Trust-policy `predicate` field to distinguish nono trust policies from foreign JSON (#1333, `f943fb5a`)
+- SEC-05: Linux execute-restriction `Refer` grant (#1397, `d84b4818`)
+- SEC-06: Seccomp supervisor-ancestry for orphaned descendants (#1401, `ac5ccd70`)
+- SEC-07: Standalone `nono proxy` command (#1261, `2663e990`)
+- SEC-08: `allow_vars` empty-list env-strip fix (#1204, `a5a441c25769ecec663aed1d7038ab2b8814d43f`)
+- SEC-09: Credential-broker non-shim-entry guard relaxation (#1301, `f6f027511f7899f1735f1188747086696e40412e` — found security-relevant during this task's Cluster Summary rollup, not itself a D-18-named anchor)
+- RES-01: Registry/update-check header residual (#1405/#1383/#1386/#1341/#1340 — `f050643479`, `7fe0c8283810`, `0158d52f0a`, `762eb05bd3d`)
+- RES-02: PTY-teardown + test-infra residual (#1258, `503045801a`; test-only `4cc0af2c52`/`9840a16f35`)
+
+**Draft Success Criteria** (ROADMAP.md phase-detail style):
+  1. All 10 D-18-named security-relevant commits (SEC-01..SEC-08 above) are absorbed with a
+     fork-invariant review distinct from any release-cut phase, mirroring the v3.1 Phase 87
+     separation of security review from feature absorb.
+  2. The registry/update-check header residual (RES-01) and PTY-teardown/test-infra residual
+     (RES-02) are individually reviewed and absorbed or explicitly skipped with reasoning, not
+     silently dropped.
+  3. `373a67ae65fdb94898b49469d562a263ba2083ee` (#1369, crossbeam-epoch 0.9.18→0.9.20) is
+     prioritized ahead of routine DEPS-cluster absorb — it is the direct fix for the live
+     RUSTSEC-2026-0204 vulnerability the fork's `Cargo.lock` currently carries (see DEPS Cluster
+     cargo-audit cross-reference above).
+  4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and
+     `make ci` are GREEN locally after the Phase 112 absorb, consistent with VERIFY-01's framing
+     in Phase 111.
+
+**This proposal requires operator approval before Phase 109 planning begins -- Phase 108 does not
+apply this amendment to ROADMAP.md.** No edit to `.planning/ROADMAP.md` was made by this task (see
+Completeness Verification's SC4 statement below for the diff-empty confirmation).
+
+---
+
 ## Reproduction
 
 ```bash
