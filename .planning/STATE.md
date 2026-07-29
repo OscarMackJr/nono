@@ -253,13 +253,15 @@ Last session: 2026-07-29 (resume → state reconciliation → v3.5 Phase 104 Pla
 
 Stopped at: **v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence this session: (1) reconciled the stale "held-on-external-azure-block" status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B → run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.**
 
-Resume file: `.planning/phases/108-upst12-divergence-audit/.continue-here.md` (v3.6, unaffected and still accurate).
+Then: **v3.6 Phase 108 context gathered** — `108-CONTEXT.md` + `108-DISCUSSION-LOG.md` written (commit `85874c01`), 23 decisions (D-01..D-23) across 4 gray areas. Live scouting contradicted several milestone planning assumptions: the window is **100 non-merge commits** (not the `260727-jkn` map's "~40"), **20** commits touch the tool-sandbox surface (not the 7 PRs named in REQUIREMENTS) with **12 entangled**, `deny_domain` #1374 touches core `net_filter.rs`, and **~28 code commits map to no v3.6 requirement** (several security-relevant). **Phase 108's SC4 is unsatisfiable as written** — the audit will report the gap and propose a new **Phase 112 (Security + Residual Sync)**, gated on operator approval before Phase 109 planning.
+
+Resume file: `.planning/phases/108-upst12-divergence-audit/108-CONTEXT.md` (v3.6). The phase's `.continue-here.md` predates this session; CONTEXT.md supersedes it.
 
 **Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 
 ## Operator Next Steps
 
-**v3.6 (active):** `/gsd:plan-phase 108` — author `108-DIVERGENCE-LEDGER.md` for upstream `v0.66.0..v0.69.0`, recording the 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) as DEFERRED→v3.7. Consider `/gsd:discuss-phase 108` first to settle the `deny_domain` (NET-01) policy stance — adding upstream's deny-list model to a deliberately allowlist-only fork is a policy decision, not a feature port.
+**v3.6 (active):** `/gsd:plan-phase 108` — context is gathered (`108-CONTEXT.md`, 23 decisions). The phase produces `108-DIVERGENCE-LEDGER.md` for `v0.66.0..v0.69.0` **plus** `proj/ADR-108-deny-domain-posture.md`. Plan against the CONTEXT decisions, not the raw ROADMAP: SC4 is known-unsatisfiable (D-19) and the tool-sandbox deferral surface is 20 commits, not 7 PRs (D-09). The `deny_domain` stance is **settled** — ADAPT, deny-layer-only, never an allowlist substitute (D-12).
 
 **v3.5 (parallel, now unblocked):** resume Phase 104 Plan 03. Task 2's root pre-check is moot (see above) — go straight to confirming the smoke is green, then the operator-authorized `v0.66.1` tag push. Phase 105's 5 plans execute immediately after.
 
