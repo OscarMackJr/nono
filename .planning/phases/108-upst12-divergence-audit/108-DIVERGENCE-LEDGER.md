@@ -350,19 +350,83 @@ unreliable in both directions, not just the "chore that touches source" directio
 ## Cluster Summary
 
 Every CODE-bucket SHA (62 total) is assigned to exactly one of 5 clusters. `disposition`,
-`windows-touch`, and `security-relevant` are literal `TBD` placeholders in this plan — Plans
-108-03/108-04/108-05 fill them in per-commit/per-cluster.
+`windows-touch`, and `security-relevant` are **finalized below (Plan 108-05)** — rolled up from
+the per-commit tables in Plans 108-03/108-04, plus a grep-verified `cfg(windows)` check and a
+reasoned security-relevant classification for the two clusters (tool-sandbox-surface,
+security-residual-and-misc) whose 108-04/108-01 per-commit tables did not carry an explicit
+windows-touch/security-relevant column. Full derivation and per-commit support data for those two
+clusters is in "Cluster Summary Rollup Support Notes" immediately below the table. All prior
+placeholder cells in this table have now been replaced with finalized values.
 
 **Arithmetic check:** NET 12 + PROF 8 + CORE 4 + tool-sandbox-surface 20 +
 security-residual-and-misc 18 = **62 = CODE bucket total** (verified above).
 
 | cluster_id | theme | commit_count | disposition | windows-touch | security-relevant | phase-target |
 |------------|-------|--------------|-------------|----------------|--------------------|---------------|
-| NET | proxy/network (deny_domain, SPIFFE, SigV4, sibling-route, no_proxy, HTTP_PROXY, credential-capture plumbing) | 12 | TBD — Plan 108-03/04/05 | TBD | TBD | 109 |
-| PROF | profile/policy (platform_overrides, extends, $VAR tokens, bun/mise presets, inheritable-field save) | 8 | TBD — Plan 108-03/04/05 | TBD | TBD | 110 |
-| CORE | macOS/resource-CLI (~/.cache fix, MAX_CRYPTO_THREADS, resource limiting, --max-processes) | 4 | TBD — Plan 108-03/04/05 | TBD | TBD | 111 |
-| tool-sandbox-surface | tool-sandbox subsystem (D-05/D-06 3-path union; NOT subdivided pure/split here — Plan 108-04's job) | 20 | TBD — Plan 108-03/04/05 | TBD | TBD | v3.7 DEFERRED (per-commit split in Plan 108-04) |
-| security-residual-and-misc | security-relevant + unrouted residual commits with no v3.6 requirement home (D-18) | 18 | TBD — Plan 108-03/04/05 | TBD | TBD | proposed Phase 112 pending operator approval |
+| NET | proxy/network (deny_domain, SPIFFE, SigV4, sibling-route, no_proxy, HTTP_PROXY, credential-capture plumbing) | 12 | will-sync (12/12 commits — 11 adopt + 1 adapt: `3b207eeb` #1374 `deny_domain`, per ADR-108) | no (0/12 — grep-confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)` hits, per Plan 108-03's NET table) | yes (9/12, per Plan 108-03's NET table security-relevant column) | 109 |
+| PROF | profile/policy (platform_overrides, extends, $VAR tokens, bun/mise presets, inheritable-field save) | 8 | will-sync (8/8 commits, all adopt) | yes (2/8 — `ae1c513e`, `719975cf`; cited runtime `Os::Windows` match-arm evidence in Plan 108-03's PROF table, not a `cfg(windows)` compile gate) | yes (6/8, per Plan 108-03's PROF table security-relevant column) | 110 |
+| CORE | macOS/resource-CLI (~/.cache fix, MAX_CRYPTO_THREADS, resource limiting, --max-processes) | 4 | split (2/4 adopt — macOS-only carry, no fork Windows counterpart to reconcile; 2/4 adapt — CORE-02 requires reconciling with the fork's existing Job Object mechanism) | no (0/4 — zero Windows mentions of any kind in any of the 4 diffs, per Plan 108-03's CORE table finding) | yes (3/4, per Plan 108-03's CORE table security-relevant column) | 111 |
+| tool-sandbox-surface | tool-sandbox subsystem (D-05/D-06 3-path union; per-commit pure/split residue accounting in Plan 108-04) | 20 | DEFERRED->v3.7 (20/20 commits — 9/20 pure fully deferred; 11/20 split, module-set-scoped paths deferred while non-module absorb-worthy residue is routed to PROF-02/PROF-03/CORE-cluster-residual per the Plan 108-04 residue tables; 2 of the 20 — `d5803b99` PROF-03, `d4927f95` PROF-02 — carry an actual v3.6 requirement mapping via that residue routing even though the commit itself stays DEFERRED->v3.7) | no (0/20 — Plan 108-05 grep-verified: zero `cfg(target_os = "windows")`/`cfg(windows)` hits across all 20 diffs; one incidental case-insensitive `windows` string match in `42161620` is `.windows(N)`, Rust's slice-windowing method, a false positive — see Rollup Support Notes) | yes (16/20 — Plan 108-05 reasoned classification per commit, see Rollup Support Notes below; the 4 remaining are build/CLI/config fixes with no sandbox-boundary implication) | v3.7 DEFERRED (per-commit split in Plan 108-04) |
+| security-residual-and-misc | security-relevant + unrouted residual commits with no v3.6 requirement home (D-18) | 18 | DEFERRED->proposed Phase 112 (18/18 commits pending operator approval — no adopt/adapt/skip/split disposition assigned since no v3.6 requirement maps to this cluster; see Requirement Coverage Gap section) | no (0/18 — Plan 108-05 grep-verified, zero `cfg(target_os = "windows")`/`cfg(windows)` hits across all 18 diffs) | yes (11/18 — the 10 D-18-named anchors + `f6f027511f` #1301 credential-guard relaxation; the remaining 7/18 are registry/update-check/test-only residual commits with no security-boundary implication — see Rollup Support Notes) | proposed Phase 112 pending operator approval |
+
+### Cluster Summary Rollup Support Notes
+
+**NET/PROF/CORE rollups** are a direct roll-up of Plan 108-03's per-commit `windows-touch` and
+`security-relevant` columns (counted directly from the tables in "NET/PROF/CORE Cluster — Per-Commit
+Table" above) — no new verification was needed for these 3 clusters. All prior placeholder cells
+in those 3 rows are now replaced with finalized values.
+
+**tool-sandbox-surface and security-residual-and-misc** did not receive an explicit per-commit
+`windows-touch`/`security-relevant` column in Plans 108-01/108-04 (those tables carry
+disposition/PR#/residue markers instead, per D-07's own accounting scheme). Plan 108-05 closes this
+gap as follows, so the Cluster Summary row above is traceable rather than asserted:
+
+**windows-touch, both clusters (38 commits total):** every SHA in both clusters was re-run through
+`git show <sha> | grep -icE 'cfg\(target_os = "windows"\)|cfg\(windows\)'`; **all 38 returned 0.**
+A secondary case-insensitive `grep -ic windows` sweep (looking for any Windows mention at all, cfg
+or otherwise — the same style of check Plan 108-03 used for the CORE cluster) found exactly one
+hit, in `42161620ec68da9c4b09b2283e6584ecbf51d3a2` (tool-sandbox-pure): `shim_args.windows(expected_args.len())`
+— Rust's `[T]::windows(size)` slice-iteration method, not an OS reference. Confirmed a false
+positive by reading the line in context. **Result: windows-touch: no for all 20 tool-sandbox-surface
+commits and all 18 security-residual-and-misc commits.**
+
+**security-relevant, tool-sandbox-surface (20 commits) — reasoned per-commit classification:**
+
+| sha | subject | security-relevant | rationale |
+|-----|---------|:---:|-----------|
+| `a519ee62` | attribute daemonized callers to their command (#1417) | yes | policy-enforcement attribution for daemonized command execution |
+| `cafc39eb` | allow exec in writable grant-dirs under command policies (#1391) | yes | widens an exec grant under sandbox command policy |
+| `d5803b99` | port range support (#1398) | yes | new kernel-enforced network capability (D-05 worked example) |
+| `ab93cf44` | preserve argv[0] for symlink-dispatched commands (#1413) | yes | symlink-dispatch exec-identity handling inside the sandbox |
+| `bf7ea3cb` | grant env-shebang scripts their re-exec interpreter (#1394) | yes | sandbox exec grant for re-exec'd interpreters |
+| `72a98830` | per-command exec_paths for multi-call binaries (#1384) | yes | exec-path allow-listing mechanism |
+| `1f54f4ae` | resolve command_policies binaries once, parallel+cached (#1373) | no | performance/caching fix, no policy-boundary change |
+| `7c20dc75` | resolve command policy paths against the live cwd (#1339) | yes | path-resolution correctness bug that affects which policy matches |
+| `42161620` | match intercept args after global options (#1344) | no | CLI argument-parsing bug fix |
+| `eb2d61a7` | add exec intercept action (#1322, named) | yes | new interception/mediation mechanism |
+| `5a7447d3` | strip untrusted unsafe_macos_seatbelt_rules before emission | yes | sanitizes untrusted input before Seatbelt-profile emission (injection risk) |
+| `ebd51cbb` | warn on unsafe_macos_seatbelt_rules nested in sandboxes | yes | same untrusted-Seatbelt-rule theme as `5a7447d3` |
+| `e2c87fd5` | per-command unsafe_macos_seatbelt_rules escape hatch | yes | introduces a sandbox escape-hatch mechanism |
+| `052b8374` | per-intercept sandbox override | yes | sandbox-override mechanism |
+| `ea334d2b` | musl build fix (#1332, D-05 worked example) | no | build-target compatibility fix, no security-boundary change |
+| `d4927f95` | @git:* dynamic tokens in filesystem paths (#1298, D-05 worked example) | yes | path-expansion into filesystem grants — can widen access |
+| `676a042f` | ack frame before SCM_RIGHTS send (#1325, named) | yes | file-descriptor-passing (SCM_RIGHTS) correctness/security |
+| `199bb266` | add git worktree tokens (#1280, named) | yes | same path-expansion theme as `d4927f95` |
+| `de8a54b2` | run git config from repo root (#1313) | no | git-config-resolution correctness fix, not a sandbox-boundary change |
+| `8a4237f2` | SeccompPolicy struct refactor (#1283, D-05 worked example) | yes | sandbox-enforcement-selection mechanism (highest cross-crate surface in this window) |
+
+Tally: 16 yes, 4 no (`1f54f4ae`, `42161620`, `ea334d2b`, `de8a54b2`) = 20. ✓
+
+**security-relevant, security-residual-and-misc (18 commits):** the 10 D-18-named anchors are
+security-relevant by construction (D-18 explicitly names them as the security-relevant subset).
+Of the 8 "additional" residual commits, one was hand-checked and found security-relevant:
+`f6f027511f7899f1735f1188747086696e40412e` (#1301, "allow env_credentials + command_policies on
+non-shim entry") removes a hard guard that previously blocked brokered-credential injection
+outside a policy shim — diff-verified (`git show f6f027511f`) to touch the credential-broker
+nonce-injection path directly. The remaining 7 additional commits (`f050643479` registry-namespace
+migration, `7fe0c8283810`/`0158d52f0a`/`762eb05bd3d` registry/update-check diagnostic headers,
+`503045801a` PTY-teardown bug fix, `4cc0af2c52`/`9840a16f35` test-only) have no sandbox/credential/
+network-boundary implication. Tally: 11 yes (10 named + `f6f027511f`), 7 no = 18. ✓
 
 ### NET cluster commits (12)
 
