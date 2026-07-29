@@ -621,3 +621,409 @@ PROF cluster's `Os::Windows`-runtime-match findings).
 | Flag | File | Description |
 |------|------|--------------|
 | threat_flag: cross-crate-reexport | `crates/nono/src/lib.rs` (via `e6d26871`, CORE-02) | Upstream's resource-limiting feature adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the core `nono` library's public API — the first CORE-cluster commit in this window to cross the library/CLI boundary rather than stay `pub(crate)`/CLI-internal. Not itself a threat_model item in `108-03-PLAN.md` (that threat_model covers ledger-classification tampering, not library-boundary re-exports) but flagged here per the SUMMARY template's mandatory threat-surface scan: Phase 111 must confirm `ResourceLimits` is caller-supplied mechanism (ADR-86-compliant), not embedded policy, before absorbing verbatim. |
+
+---
+
+## tool-sandbox-pure and tool-sandbox-split (Plan 108-04, Task 1)
+
+**Method:** for each of the 20 SHAs in the D-06 3-path union (`crates/nono-cli/src/tool-sandbox/`,
+`crates/nono-cli/src/command_policy.rs`, `crates/nono-cli/src/lineage_cgroup.rs`), the definitive
+touched-path list was pulled via `git show --name-only --format='' <sha>`. A commit is **pure** if
+every touched path is inside the module set OR is non-production (`docs/`,
+`crates/nono-cli/data/`, `crates/nono-cli/tests/`). A commit is **split** if it touches the module
+set **and** at least one other production source path (anything under `crates/*/src/` or
+`bindings/c/src/` outside the module set). This reproduces the plan's own `interfaces` block
+methodology exactly (re-run independently in this task, not copied from the plan).
+
+### Pure/entangled count reconciliation
+
+CONTEXT.md D-05 states "The 12 commits touching both tool-sandbox and other code get a split
+verdict" — an aggregate estimate implying 8 pure by subtraction (20 − 12 = 8), **with no
+per-commit enumeration recorded to diff against**. This task's exhaustive, independently-run
+per-path classification (command output captured above the per-commit tables below) finds exactly
+**9 pure / 11 split** — one fewer split commit than D-05's "12" figure. This **exactly matches**
+the plan's own "Planner-found" reconnaissance hypothesis recorded in `108-04-PLAN.md`'s
+`interfaces` block (9 pure / 11 entangled, commit-for-commit identical to the SHAs found here),
+which itself already flagged disagreement with CONTEXT's "8/12" figure as something this task must
+resolve, not silently inherit.
+
+Because CONTEXT.md D-05 gives no SHA-level breakdown for its "12", the exact commit responsible
+for the 12-vs-11 gap cannot be attributed with certainty from CONTEXT.md's own text. The most
+plausible candidate, based on touched-path shape, is
+**`e2c87fd5e82b1dd7c1cf9a70d9632f2b0310afb4`** (feat(tool-sandbox): per-command
+`unsafe_macos_seatbelt_rules` escape hatch): it touches 5 paths —
+`crates/nono-cli/data/nono-profile.schema.json`, `crates/nono-cli/src/command_policy.rs`,
+`crates/nono-cli/src/tool-sandbox/platform/macos.rs`, `crates/nono-cli/tests/schema_shape.rs`,
+`docs/cli/features/tool-sandbox.mdx` — of which **two** (the schema JSON and the Rust test file)
+are non-module "other" paths. A coarse "touches tool-sandbox plus more than one other file"
+heuristic (the kind of quick eyeball pass that would produce an unenumerated aggregate like "12"
+during a discussion) would plausibly flag this as entangled/split. Hand-verification shows both
+extra paths are non-production per this task's own rule (a JSON schema file under
+`crates/nono-cli/data/` and a Rust test file under `crates/nono-cli/tests/`, neither
+`crates/*/src/` nor `bindings/c/src/`), so it classifies **pure**.
+
+**Resolved count: 9 pure / 11 split (sum = 20). This table set is authoritative; CONTEXT.md D-05's
+"12" is superseded** — exactly the outcome D-04/D-21 re-verification exists to catch, consistent
+with every other hypothesis-vs-measurement reconciliation already recorded in this ledger (108-01's
+CODE/DEPS/DOCS split, 108-03's PROF row-count).
+
+### `## tool-sandbox-pure` (9 commits)
+
+Every touched path is inside the D-06 module set or is non-production (`docs/`,
+`crates/nono-cli/data/`, `crates/nono-cli/tests/`). Named refinement PRs are marked explicitly.
+
+| sha | subject | PR# | disposition |
+|-----|---------|-----|--------------|
+| `cafc39eb3104e789cee2b663dc04b8aa7ef0062a` | fix(sandbox): allow exec in writable grant-dirs under command policies | #1391 | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `ab93cf44e5706b49b1aa5f8ecc1b3b59f29596f8` | fix(tool-sandbox): preserve argv[0] for symlink-dispatched commands | **#1413 (named)** | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `bf7ea3cb7faa241de13fe549152e28333b1f0068` | fix(tool-sandbox): grant env-shebang scripts their re-exec interpreter | **#1394 (named)** | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `42161620ec68da9c4b09b2283e6584ecbf51d3a2` | fix(cli): match intercept args after global options | #1344 | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `e2c87fd5e82b1dd7c1cf9a70d9632f2b0310afb4` | feat(tool-sandbox): per-command unsafe_macos_seatbelt_rules escape hatch | (none) | DEFERRED->v3.7 (base subsystem absent — D-06) — see reconciliation note above (candidate for the 8-vs-9 discrepancy) |
+| `052b8374d2381ca4efdc6a51d9eee54d292a54da` | feat(tool-sandbox): per-intercept sandbox override | (none) | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `676a042f3c1e3877f1d1770abd19b0fea0345750` | fix(tool-sandbox): ack frame before SCM_RIGHTS send to prevent EMSGSIZE on macOS | **#1325 (named)** | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `199bb26699661e8a36de141adc4767617e0a1036` | feat(tool-sandbox): add git worktree tokens; fold include-files into @git:config-files | **#1280 (named)** | DEFERRED->v3.7 (base subsystem absent — D-06) |
+| `de8a54b25c3c26f68f6d51f768be904cee0d0c41` | fix(dynamic-providers): run git config from repo root to honour hasconfig: includeIf | #1313 | DEFERRED->v3.7 (base subsystem absent — D-06) |
+
+**Named-PR coverage in this table: 4 of 7** (#1280, #1325, #1394, #1413). The remaining 3 named PRs
+(#1322, #1384, #1417) are **split** commits, not pure — see the note immediately below and their
+full residue tables in `## tool-sandbox-split`.
+
+**Named refinement PRs that are split, not pure — explicit DEFERRED->v3.7 marking for their
+module-scoped content:**
+
+| PR# | sha | disposition |
+|-----|-----|--------------|
+| **#1322** | `eb2d61a7abc5a354b8f8085b782cd11afa6babb8` | DEFERRED->v3.7 for its tool-sandbox-module-scoped rows (base subsystem absent — D-06); commit is `split`, not `pure` — see residue table below |
+| **#1384** | `72a988309974f426f0da8f507a4f05df9738ce92` | DEFERRED->v3.7 for its tool-sandbox-module-scoped rows (base subsystem absent — D-06); commit is `split`, not `pure` — see residue table below |
+| **#1417** | `a519ee62e6d571330caa6a9a7d033fb10bff5939` | DEFERRED->v3.7 for its tool-sandbox-module-scoped rows (base subsystem absent — D-06); commit is `split`, not `pure` — see residue table below |
+
+All 7 named refinement PRs (#1280, #1322, #1325, #1384, #1394, #1413, #1417) are now accounted for
+with an explicit DEFERRED->v3.7 disposition — 4 as fully-pure commits, 3 as split commits whose
+module-set-scoped paths are deferred while their non-module paths are separately accounted for
+below. Recording all 3 split PRs as blanket-pure (which the plan's literal acceptance-criteria
+phrasing might suggest) would itself have been the exact "blanket defer" anti-pattern D-05
+forbids — silently hiding that #1417/#1322/#1384 also carry absorbable-or-wiring content.
+
+### `## tool-sandbox-split` (11 commits — full D-07 residue accounting)
+
+For each split commit: every touched path from `git show --name-only --format='' <sha>` is listed
+with a marker of exactly `absorb` / `defer` / `noise`. Row count per commit is spot-checked against
+`git show --name-only --format='' <sha> | wc -l`.
+
+---
+
+#### `a519ee62e6d571330caa6a9a7d033fb10bff5939` — #1417 fix(tool-sandbox): attribute daemonized callers to their command (10 paths)
+
+**Finding:** structurally `split` (touches `main.rs`/`profile/mod.rs`/`resource_cgroup.rs`,
+production paths outside the module set), but on inspection **zero** of those non-module paths
+carry independently-absorbable content — `main.rs` only registers `mod lineage_cgroup;` behind
+`#[cfg(target_os = "linux")]`, `profile/mod.rs` only adds unit tests for the new
+`daemon_pid_source` field merging through `platform_overrides`, and `resource_cgroup.rs` only
+widens 3 functions from private to `pub(crate)` so `lineage_cgroup.rs` can call them. All three are
+wiring for the deferred `lineage_cgroup.rs`/`command_policy.rs` feature, not standalone value. This
+differs from the 4 D-05-named worked examples, which is exactly why D-05 calls those 4 out by name
+as the commits proving unsafe deferral — not every split commit has genuine absorb content.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/data/nono-profile.schema.json` | noise | schema data file |
+| `crates/nono-cli/src/command_policy.rs` | defer | module set |
+| `crates/nono-cli/src/lineage_cgroup.rs` | defer | module set |
+| `crates/nono-cli/src/main.rs` | defer | wiring-only: `#[cfg(target_os = "linux")] mod lineage_cgroup;` registration, no independent value without the deferred module |
+| `crates/nono-cli/src/profile/mod.rs` | defer | wiring-only: unit tests for `daemon_pid_source` field merge (a `command_policy.rs`/tool-sandbox concept) |
+| `crates/nono-cli/src/resource_cgroup.rs` | defer | wiring-only: 3 fns widened `fn`→`pub(crate) fn` solely so `lineage_cgroup.rs` can call them; no behavior change of its own |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set |
+| `crates/nono-cli/tests/schema_shape.rs` | noise | test file |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs file |
+
+Row count: 3 noise + 7 defer + 0 absorb = 10 = touched-path count (10). ✓
+
+---
+
+#### `d5803b994b416ad07a73907143ca169c408917f3` — #1398 feat: add port range support to sandbox profiles (17 paths) — **D-05 worked example (PROF-03)**
+
+**Finding:** genuinely split with substantial absorb content. The commit message states ranges
+"expand to individual rules on both platforms — Seatbelt rules on macOS, Landlock NetPort objects
+on Linux," implemented entirely in `crates/nono/src/sandbox/linux.rs`/`sandbox/macos.rs` +
+`crates/nono/src/capability.rs` (the port-range `CapabilitySet` mechanism) + CLI plumbing
+(`profile/mod.rs`, `profile_cmd.rs`, `profile_runtime.rs`, `capability_ext.rs`, `exec_strategy.rs`,
+`exec_strategy/supervisor_linux.rs`, `output.rs`, `supervised_runtime.rs`,
+`manifest_convert.rs`, `capability-manifest.schema.json`) — none of that is tool-sandbox-specific;
+it is a general profile network-config feature (**PROF-03**). Only the 3 `tool-sandbox/*` files
+(how a per-command sandbox would *consume* the new range grants) are module-set / deferred.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/data/profile-authoring-guide.md` | noise | docs/data |
+| `crates/nono-cli/src/capability_ext.rs` | absorb | **PROF-03** — port-range CLI/profile plumbing |
+| `crates/nono-cli/src/exec_strategy.rs` | absorb | **PROF-03** |
+| `crates/nono-cli/src/exec_strategy/supervisor_linux.rs` | absorb | **PROF-03** |
+| `crates/nono-cli/src/output.rs` | absorb | **PROF-03** |
+| `crates/nono-cli/src/profile/mod.rs` | absorb | **PROF-03** |
+| `crates/nono-cli/src/profile_cmd.rs` | absorb | **PROF-03** |
+| `crates/nono-cli/src/profile_runtime.rs` | absorb | **PROF-03** |
+| `crates/nono-cli/src/supervised_runtime.rs` | absorb | **PROF-03** |
+| `crates/nono/schema/capability-manifest.schema.json` | absorb | **PROF-03** — manifest schema for the new port-range capability shape |
+| `crates/nono/src/capability.rs` | absorb | **PROF-03** — core `CapabilitySet` port-range type |
+| `crates/nono/src/manifest_convert.rs` | absorb | **PROF-03** |
+| `crates/nono/src/sandbox/linux.rs` | absorb | **PROF-03** — Landlock `NetPort` object emission (kernel-enforced) |
+| `crates/nono/src/sandbox/macos.rs` | absorb | **PROF-03** — Seatbelt rule emission |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set — per-command consumption of range grants |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/protocol.rs` | defer | module set |
+
+Row count: 1 noise + 13 absorb + 3 defer = 17 = touched-path count (17). ✓ At least one
+`absorb`-marked row present (13, in fact) — satisfies the D-05 worked-example requirement.
+
+---
+
+#### `72a988309974f426f0da8f507a4f05df9738ce92` — #1384 (named) feat(tool-sandbox): add per-command exec_paths for multi-call binaries (4 paths)
+
+**Finding:** the `profile/mod.rs` touch is unit-test-only (two new tests asserting
+`platform_overrides`-declared `exec_paths` merge into a command's sandbox) — testing a
+tool-sandbox-only field, no independent value.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_policy.rs` | defer | module set |
+| `crates/nono-cli/src/profile/mod.rs` | defer | wiring-only: unit tests for `exec_paths` merge through `platform_overrides`, a `command_policy.rs` concept |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs file |
+
+Row count: 1 noise + 3 defer + 0 absorb = 4 = touched-path count (4). ✓
+
+---
+
+#### `1f54f4ae91870de02c1fabfda554278d49c99bd9` — #1373 fix(command-policy): resolve command_policies binaries once, in parallel, with caching (10 paths)
+
+**Finding:** all 6 non-module files are small (1-8 line) call-site wiring for the new
+`command_policy::ResolvedCommandBinaries` caching type (e.g. `profile_runtime.rs` threads a
+`resolved_command_binaries: Option<crate::command_policy::ResolvedCommandBinaries>` field through
+`PreparedProfile` purely so tool-sandbox plan-building can reuse it) — no independent value absent
+`command_policy.rs`.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_policy.rs` | defer | module set |
+| `crates/nono-cli/src/execution_runtime.rs` | defer | wiring-only, 2-line call-site (verified via diff) |
+| `crates/nono-cli/src/launch_runtime.rs` | defer | wiring-only, 4-line call-site |
+| `crates/nono-cli/src/main.rs` | defer | wiring-only, 2-line call-site |
+| `crates/nono-cli/src/profile_runtime.rs` | defer | wiring-only: threads `ResolvedCommandBinaries` (a `command_policy.rs` type) through `PreparedProfile` (verified via diff) |
+| `crates/nono-cli/src/proxy_runtime.rs` | defer | wiring-only, 1-line call-site |
+| `crates/nono-cli/src/sandbox_prepare.rs` | defer | wiring-only, 8-line call-site |
+| `crates/nono-cli/src/tool-sandbox/mod.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set |
+
+Row count: 10 defer, 0 noise, 0 absorb = touched-path count (10). ✓
+
+---
+
+#### `7c20dc75f4f155d64601719437980a0e232c8bd8` — #1339 fix(tool-sandbox): resolve command policy paths against the live cwd (10 paths)
+
+**Finding:** same shape as `1f54f4ae` — all 6 non-module files are 1-7 line call-site wiring
+(module registration / passthrough plumbing) for the cwd-resolution fix, which lives entirely in
+`tool-sandbox/dynamic_providers.rs` and `tool-sandbox/platform/{linux,macos}.rs`.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_runtime.rs` | defer | wiring-only, 2-line call-site |
+| `crates/nono-cli/src/execution_runtime.rs` | defer | wiring-only, 3-line call-site |
+| `crates/nono-cli/src/launch_runtime.rs` | defer | wiring-only, 5-line call-site |
+| `crates/nono-cli/src/main.rs` | defer | wiring-only, 2-line call-site |
+| `crates/nono-cli/src/proxy_runtime.rs` | defer | wiring-only, 1-line call-site |
+| `crates/nono-cli/src/sandbox_prepare.rs` | defer | wiring-only, 7-line call-site |
+| `crates/nono-cli/src/tool-sandbox/dynamic_providers.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/mod.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set |
+
+Row count: 10 defer, 0 noise, 0 absorb = touched-path count (10). ✓
+
+---
+
+#### `eb2d61a7abc5a354b8f8085b782cd11afa6babb8` — #1322 (named) feat(tool-sandbox): add exec intercept action (8 paths)
+
+**Finding:** touches **`crates/nono-cli/src/policy.rs`** (the fork's general CLI policy-resolver
+file — distinct from `crates/nono-cli/src/tool-sandbox/policy.rs`, which is also touched in the
+same commit). Diff-verified: adds `expand_env_vars_strict`, a strict `$VAR`-expansion helper
+alongside the already-adopted `expand_env_vars`/`substitute_vars` (PROF-02, `2cbaa9a0` in the PROF
+cluster table). Its **sole caller in this commit** is `resolve_exec_helper` in
+`tool-sandbox/policy.rs` — no caller outside the deferred exec-intercept feature — so it is
+wiring for the deferred subsystem, not independently absorbable value, despite living in a
+non-module file.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/data/nono-profile.schema.json` | noise | schema data file |
+| `crates/nono-cli/src/command_policy.rs` | defer | module set |
+| `crates/nono-cli/src/policy.rs` | defer | adds `expand_env_vars_strict`; sole caller is `tool-sandbox/policy.rs::resolve_exec_helper` (verified via diff) — wiring for the deferred exec-intercept action, not standalone |
+| `crates/nono-cli/src/tool-sandbox/env.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/policy.rs` | defer | module set |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs file |
+
+Row count: 2 noise + 6 defer + 0 absorb = touched-path count (8). ✓
+
+---
+
+#### `5a7447d3ed30835bd9bd647b7812ee18ea80a155` — fix(tool-sandbox): strip untrusted unsafe_macos_seatbelt_rules before emission (4 paths)
+
+**Finding:** this is one of the 2 commits the D-06 re-measurement shows a directory-only
+(`tool-sandbox/`) filter would silently drop — its only tool-sandbox-named path is the docs file;
+its module-set membership comes solely from `command_policy.rs`. Diff-verified:
+`command_runtime.rs` adds `strip_untrusted_unsafe_seatbelt_rules`, whose only call site (added in
+the same commit) is `sandbox_prepare.rs`; both exist purely to call into
+`crate::command_policy::nested_unsafe_seatbelt_rules` (module set).
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_policy.rs` | defer | module set |
+| `crates/nono-cli/src/command_runtime.rs` | defer | wiring-only: `strip_untrusted_unsafe_seatbelt_rules`, calls `command_policy::nested_unsafe_seatbelt_rules` (verified via diff) |
+| `crates/nono-cli/src/sandbox_prepare.rs` | defer | wiring-only: sole call site for the function above |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs file — **this is the ONLY tool-sandbox-named path; directory-only filter would drop this commit entirely (D-06)** |
+
+Row count: 1 noise + 3 defer + 0 absorb = touched-path count (4). ✓
+
+---
+
+#### `ebd51cbb9546aec872136301249d048074a05e38` — fix(tool-sandbox): warn on unsafe_macos_seatbelt_rules nested in command/intercept sandboxes (3 paths)
+
+**Finding:** the second D-06 directory-only-filter-drop commit (see `5a7447d3` above — same shape).
+Diff-verified: `profile_save_runtime.rs` changes call
+`crate::command_policy::nested_unsafe_seatbelt_rules` in 3 places to extend existing warning/patch-
+preview logic; no independent value absent `command_policy.rs`.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_policy.rs` | defer | module set |
+| `crates/nono-cli/src/profile_save_runtime.rs` | defer | wiring-only: calls `command_policy::nested_unsafe_seatbelt_rules` (verified via diff), no independent logic |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs file — **this is the ONLY tool-sandbox-named path; directory-only filter would drop this commit entirely (D-06)** |
+
+Row count: 1 noise + 2 defer + 0 absorb = touched-path count (3). ✓
+
+---
+
+#### `ea334d2bbdcb332c3a1c4164843667b0d2153cb1` — #1332 fix(linux): use u64 for fs_type_unsupported to fix musl build (3 paths) — **D-05 worked example**
+
+**Finding:** genuinely split with independent absorb content. Diff-verified: the substantive fix
+is entirely in `crates/nono/src/sandbox/linux.rs` (`V9FS_MAGIC`/`fs_type_unsupported` retyped
+`libc::c_long` → `u64` to fix an Alpine/musl build break — musl defines `statfs::f_type` as `u64`
+vs glibc's `c_long`), a portable Landlock-detection fix with **zero tool-sandbox dependency** and
+no requirement ID (it is a build-target compatibility fix, not a feature). The
+`.github/workflows/ci.yml` hunk only adds a musl CI matrix leg + `musl-tools` package — CI-cluster
+noise for this task's purposes (its CI-cluster disposition is handled in Task 2, cross-referenced,
+not double-counted).
+
+| path | marker | note |
+|------|--------|------|
+| `.github/workflows/ci.yml` | noise | CI matrix leg + `musl-tools` install; own disposition lives in the CI Cluster table (Task 2) — **not** double-counted as a CI-bucket commit since this SHA is itself CODE-bucket/tool-sandbox-split |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `crates/nono/src/sandbox/linux.rs` | absorb | musl build fix — portable, no requirement ID; `V9FS_MAGIC`/`fs_type_unsupported` `c_long`→`u64` retype (verified via diff) |
+
+Row count: 1 noise + 1 defer + 1 absorb = touched-path count (3). ✓ At least one `absorb`-marked
+row present — satisfies the D-05 worked-example requirement.
+
+---
+
+#### `d4927f95a37863cf0ba534b054e28f48f002ad21` — #1298 feat(profile): expand @git:* dynamic tokens in top-level filesystem paths (5 paths) — **D-05 worked example (PROF-02)**
+
+**Finding:** genuinely split, but with a load-bearing cross-dependency worth flagging explicitly.
+`capability_ext.rs` is where the top-level `filesystem.allow`/`read`/`write` fields gain `@git:*`
+token expansion (**PROF-02** — already has a pointer row in the PROF cluster table from Plan
+108-03). Diff-verified: the fix works by calling
+`crate::tool_sandbox::dynamic_providers::expand_dynamic_tokens` — a function that lives in
+`tool-sandbox/dynamic_providers.rs`, itself part of the deferred module set. **This means PROF-02's
+absorb work in Phase 110 cannot be a clean lift of `capability_ext.rs` alone** — it depends on
+`expand_dynamic_tokens` existing, which today only exists inside the deferred tool-sandbox
+subsystem. Phase 110 must either port a minimal standalone `expand_dynamic_tokens` (not the full
+tool-sandbox module) or explicitly scope PROF-02 down to exclude `@git:*` top-level expansion until
+the tool-sandbox subsystem lands in v3.7. This is exactly the kind of coupling D-07 residue
+accounting exists to surface — a naive `absorb → PROF-02` marking without this note would silently
+promise Phase 110 a self-contained cherry-pick that in fact is not self-contained.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/capability_ext.rs` | absorb | **PROF-02** — BUT calls `tool_sandbox::dynamic_providers::expand_dynamic_tokens` (deferred module); see cross-dependency note above, Phase 110 must resolve before treating this as a clean absorb |
+| `crates/nono-cli/src/tool-sandbox/dynamic_providers.rs` | defer | module set — defines `expand_dynamic_tokens`, the function `capability_ext.rs` above depends on |
+| `crates/nono-cli/src/tool-sandbox/mod.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set |
+
+Row count: 0 noise + 1 absorb + 4 defer = touched-path count (5). ✓ At least one `absorb`-marked
+row present — satisfies the D-05 worked-example requirement.
+
+---
+
+#### `8a4237f2ee0dc33bc1e5afdd39c0db8ca6f5ed38` — #1283 refactor(seccomp): introduce SeccompPolicy struct and client-driven selection (21 paths) — **D-05 worked example**
+
+**Finding:** genuinely split, largest and highest-risk residue table in this window — 18 files
+incl. `bindings/c/src/sandbox.rs`, the highest-risk cross-crate public-surface boundary in this
+audit. The refactor is a general Linux seccomp/sandbox-enforcement-selection mechanism
+(`SeccompPolicy` struct, `apply_auto`/`apply_landlock`/`apply_external` entry points, new
+`--sandbox-policy` CLI flag) — **not tool-sandbox-specific**; the commit message states "Update all
+in-tree consumers (nono-ffi C bindings, tool-sandbox, exec_strategy, doctests) to use the new entry
+points," meaning `tool-sandbox/platform/{linux,macos}.rs` are mere consumer updates, not the
+mechanism itself. No existing CORE-0X requirement ID names this seccomp-policy-selection mechanism
+directly; it is filed as a **CORE-cluster / Phase 111 residual item** (same disposition class as
+the security-residual-and-misc cluster, pending requirement-ID confirmation at absorb time) rather
+than force-mapped to CORE-01/02.
+
+**Re-export scan (SC2, mandatory for `bindings/c/src/sandbox.rs`):**
+`git show 8a4237f2ee0dc33bc1e5afdd39c0db8ca6f5ed38 | grep '^+' | grep -E '^\+\s*(pub use|pub mod|extern crate|pub\(crate\))'`
+returns **only 4 `pub(crate)` hits, zero `pub mod`/`pub use`/`extern crate`**:
+`pub(crate) sandbox_policy: crate::profile::LinuxSandboxPolicy,` (×2, on different structs),
+`pub(crate) fn from_prepared(`, `pub(crate) sandbox_policy: profile::LinuxSandboxPolicy,` — all
+intra-`nono-cli` fields/fns, **zero cross-crate re-exports anywhere in this 18-file diff**. The
+`bindings/c/src/sandbox.rs` hunk itself is a 1-line call-site rename
+(`nono::Sandbox::apply` → `nono::Sandbox::apply_auto`), diff-verified, no new `pub` item in that
+file. **Finding: Clean.**
+
+| path | marker | note |
+|------|--------|------|
+| `bindings/c/src/sandbox.rs` | absorb | CORE-cluster/Phase-111 residual (seccomp-policy-selection mechanism). **Re-export scan: Clean** — 1-line call-site rename only, zero `pub mod`/`pub use` (see scan above) |
+| `crates/nono-cli/src/cli.rs` | absorb | CORE-cluster/Phase-111 residual — new `--sandbox-policy` flag |
+| `crates/nono-cli/src/command_runtime.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/exec_strategy.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/exec_strategy/supervisor_linux.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/execution_runtime.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/launch_runtime.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/main.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/profile/mod.rs` | absorb | CORE-cluster/Phase-111 residual — `LinuxSandboxPolicy` profile-schema field |
+| `crates/nono-cli/src/profile_runtime.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/proxy_runtime.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/sandbox_prepare.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/supervised_runtime.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set — mere consumer update per commit message |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set — mere consumer update |
+| `crates/nono/README.md` | noise | docs (`.md`) |
+| `crates/nono/src/lib.rs` | absorb | CORE-cluster/Phase-111 residual — doctest-comment-only change (`Sandbox::apply`→`apply_auto`), no new `pub` item (verified via diff) |
+| `crates/nono/src/sandbox/linux.rs` | absorb | CORE-cluster/Phase-111 residual — `apply_auto`/`apply_landlock`/`apply_external` entry points |
+| `crates/nono/src/sandbox/mod.rs` | absorb | CORE-cluster/Phase-111 residual |
+| `docs/cli/usage/flags.mdx` | noise | docs |
+| `issues/sandbox-policy-split.md` | noise | design-rationale doc, not source (`.md`, outside `src/`) |
+
+Row count: 3 noise + 2 defer + 16 absorb = touched-path count (21). ✓ At least one `absorb`-marked
+row present — satisfies the D-05 worked-example requirement.
+
+---
+
+### tool-sandbox-split summary
+
+11 split commits, 95 total touched-path rows across their residue tables (10+17+4+10+10+8+4+3+3+5+21
+= 95), zero unbucketed paths (every commit's residue-table row count spot-checked equal to its
+`git show --name-only --format='' <sha> | wc -l` output above). 4 of the 11 (`d5803b99`,
+`ea334d2b`, `d4927f95`, `8a4237f2`) are the D-05-named worked examples and each carries at least one
+`absorb`-marked row; the other 7 split commits (`a519ee62`, `72a98830`, `1f54f4ae`, `7c20dc75`,
+`eb2d61a7`, `5a7447d3`, `ebd51cbb`) are structurally split (touch a production path outside the
+module set) but carry **zero** absorb-worthy content on inspection — every non-module path in
+those 7 is small wiring (module registration, field threading, or a helper whose only caller is
+inside the deferred subsystem). This asymmetry is itself a finding: D-05's forbidden "blanket
+defer" anti-pattern is about silently dropping the *rare* commits with genuine absorb content, not
+a claim that most split commits carry absorb content — 7 of 11 do not, and recording that
+explicitly (rather than omitting the "why" and just marking `defer`) is what keeps this table
+audit-safe.
+
+**tool-sandbox arithmetic check: 9 pure + 11 split = 20 = full tool-sandbox surface.** ✓
