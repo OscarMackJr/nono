@@ -272,7 +272,9 @@ Resume file: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER
 
 ## Operator Next Steps
 
-**v3.6 (active):** Phase 108 **COMPLETE — 5/5 plans, verification `status: passed` (8/8 must-haves)**.
+**v3.6 (active):** Phase 109 context gathered — run `/gsd:plan-phase 109`. Scope is **NET-01 + NET-03, 5 commits, ~3.3k insertions** (NET-02/SPIFFE split out to the new Phase 113). Milestone is now **phases 108-113**.
+
+Phase 108 **COMPLETE — 5/5 plans, verification `status: passed` (8/8 must-haves)**.
 
 ⛔ **BLOCKING OPERATOR GATE before `/gsd:plan-phase 109`:** the ledger reports an exact, hand-verified **27 non-tool-sandbox CODE commits mapping to none of v3.6's 12 requirements**, and proposes a new **Phase 112 "Security + Residual Sync"** (11 draft requirement IDs) to absorb them. That amendment is **written but deliberately NOT applied** — `ROADMAP.md` has zero Phase 112 rows, by design (D-19). **Approve, modify, or reject the amendment before planning Phase 109.** See `108-DIVERGENCE-LEDGER.md` §"Proposed Phase 112: Security + Residual Sync".
 

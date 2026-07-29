@@ -12,7 +12,7 @@ updated: 2026-07-28
 
 ## Milestones
 
-- 🔄 **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-112 (active 2026-07-28, parallel to v3.5)
+- 🔄 **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-113 (active 2026-07-28, parallel to v3.5)
 - 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02, HELD on external Azure block)
 - ✅ **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (shipped 2026-07-02) — [archive](milestones/v3.4-ROADMAP.md)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
@@ -26,7 +26,7 @@ updated: 2026-07-28
 ## Phases
 
 <details open>
-<summary>🔄 v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-112) — ACTIVE (parallel to v3.5)</summary>
+<summary>🔄 v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-113) — ACTIVE (parallel to v3.5)</summary>
 
 Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parallel** with the operator-blocked v3.5. Absorb the cross-platform delta from `nolabs-ai/nono` `v0.66.0..v0.69.0` (v0.67.0/.1, v0.68.0, v0.69.0) — proxy/network (`deny_domain`, SPIFFE/SPIRE, SigV4 + sibling-route fixes), profile/policy (`platform_overrides` + migrate the fork's `windows_*` flags into it, `$VAR`/`@git` tokens, port-range schema with a WFP-native emitter, bun/mise presets), macOS Seatbelt carry, and resource-CLI alignment onto the existing Job Object impl — WITHOUT regressing the Windows security model or the ADR-86 boundary, then leapfrog all 6 crates + both binding repos to **`0.70.0`** (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed — a standing structural divergence deferred to the dedicated **v3.7 Windows Tool-Sandbox Parity** milestone). Scope source: quick `260727-jkn`.
 
@@ -35,6 +35,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/? plans
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
+- [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
 
 </details>
 
@@ -228,10 +229,10 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 ### Phase 109: Proxy/Network Absorb
 **Goal**: The v0.67–v0.69 proxy/network features are absorbed into the fork's proxy without regressing its fork-divergent TLS-interception + allowlist model, with the bindings rebuilt.
 **Depends on**: Phase 108 (ledger dispositions)
-**Requirements**: NET-01, NET-02, NET-03
+**Requirements**: NET-01, NET-03
 **Success Criteria** (what must be TRUE):
   1. `deny_domain` (#1374) is wired into the proxy filter + profile schema and composes with `allow_domain` without weakening default-deny.
-  2. SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed and configurable via profile.
+  2. *(moved to Phase 113 — see below.)* ~~SPIFFE/SPIRE workload-identity auth for upstream routes (#1272)~~
   3. The SigV4 encoded-URI fix (#1430) and sibling-route cross-deny fix (#1437) are absorbed; HTTP/2, `HTTP_PROXY` forward-proxy, and `no_proxy` bypass are verified non-regressed.
   4. `maturin build` (nono-py) and `napi build` (nono-ts) are green after the nono-proxy struct changes.
 
@@ -265,6 +266,17 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. The registry/update-check header residual (RES-01) and the PTY-teardown/test-infra residual (RES-02) are each individually reviewed and either absorbed or explicitly skipped with recorded reasoning — never silently dropped.
   3. `373a67ae` (#1369, `crossbeam-epoch` 0.9.18→0.9.20) is prioritized ahead of routine DEPS-cluster absorb — it is the direct fix for the live RUSTSEC-2026-0204 advisory the fork's `Cargo.lock` currently carries. *(If already closed by an out-of-band quick task, record that and confirm `cargo audit` is clean rather than re-absorbing.)*
   4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally after the absorb, consistent with VERIFY-01's framing in Phase 111.
+
+### Phase 113: SPIFFE/SPIRE Workload Identity
+**Goal**: Upstream's SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed under its own ADR-gated review, without regressing the fork's divergent TLS-interception model or the ADR-86 policy-free-library boundary.
+**Depends on**: Phase 109 (shares `nono-proxy` files — `server.rs`, `route.rs`, `credential.rs`, `oauth2.rs`, `tls_intercept/*`; 109 lands first and 113 rebases onto it)
+**Requirements**: NET-02
+**Origin**: Split out of Phase 109 on 2026-07-29 by operator decision during `/gsd:discuss-phase 109`. Measurement: `c831dade` is **4354 insertions / 545 deletions / 33 files** — 57% of the original Phase 109 by volume — and is a refactor of fork-divergent code, not an addition.
+**Success Criteria** (what must be TRUE):
+  1. A standalone `proj/ADR-113-spiffe-disposition.md` settles adopt-vs-adapt-vs-defer, weighing: the ADR-86 core-library crossing, the 545-deletion rewrite of the fork's divergent `tls_intercept`/`reverse.rs`, and the ~633-line `Cargo.lock` dependency-surface expansion on a security tool.
+  2. SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed per the ADR's disposition and is configurable via profile.
+  3. The ADR-86 boundary is confirmed non-regressed: the core-library additions (`crates/nono/src/undo/types.rs`, `crates/nono/src/audit.rs`) are shown to be audit/telemetry data types carrying no policy or enforcement logic — the reading recorded in `109-CONTEXT.md` — or the absorb is adapted to make that true.
+  4. Cross-target clippy is GREEN (`c831dade` touches `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, a cfg-gated Unix surface — the gate is mandatory, no PARTIAL→CI), and `maturin build` + `napi build` are green after the `nono-proxy` struct changes.
 
 ## Progress
 
