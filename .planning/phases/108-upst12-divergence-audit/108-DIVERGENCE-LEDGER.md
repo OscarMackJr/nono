@@ -667,7 +667,7 @@ extra paths are non-production per this task's own rule (a JSON schema file unde
 with every other hypothesis-vs-measurement reconciliation already recorded in this ledger (108-01's
 CODE/DEPS/DOCS split, 108-03's PROF row-count).
 
-### `## tool-sandbox-pure` (9 commits)
+## tool-sandbox-pure (9 commits)
 
 Every touched path is inside the D-06 module set or is non-production (`docs/`,
 `crates/nono-cli/data/`, `crates/nono-cli/tests/`). Named refinement PRs are marked explicitly.
@@ -704,7 +704,7 @@ below. Recording all 3 split PRs as blanket-pure (which the plan's literal accep
 phrasing might suggest) would itself have been the exact "blanket defer" anti-pattern D-05
 forbids — silently hiding that #1417/#1322/#1384 also carry absorbable-or-wiring content.
 
-### `## tool-sandbox-split` (11 commits — full D-07 residue accounting)
+## tool-sandbox-split (11 commits — full D-07 residue accounting)
 
 For each split commit: every touched path from `git show --name-only --format='' <sha>` is listed
 with a marker of exactly `absorb` / `defer` / `noise`. Row count per commit is spot-checked against
@@ -1027,3 +1027,152 @@ explicitly (rather than omitting the "why" and just marking `defer`) is what kee
 audit-safe.
 
 **tool-sandbox arithmetic check: 9 pure + 11 split = 20 = full tool-sandbox surface.** ✓
+
+---
+
+## DEPS, CI, and DOCS Clusters (Plan 108-04, Task 2)
+
+Source SHA lists: Plan 108-01's "Full Commit Accounting" DEPS (19)/CI (11)/DOCS (8) bucket tables
+(reproduced above). Each is individually reviewed per D-15/D-16/D-17 — none blanket-adopted or
+blanket-skipped.
+
+### `cargo audit` invocation and cross-reference (D-16)
+
+`cargo-audit` is installed in this environment (`cargo-audit-audit 0.22.1`). Ran verbatim against
+the fork's current `Cargo.lock`:
+
+```
+cargo audit
+# Scanning Cargo.lock for vulnerabilities (567 crate dependencies)
+# -> 1 vulnerability found, 5 allowed warnings found
+```
+
+**6 findings total, verbatim:**
+
+| Crate | Version | ID | Kind | Solution |
+|-------|---------|----|----|----------|
+| `crossbeam-epoch` | 0.9.18 | RUSTSEC-2026-0204 | vulnerability (error) | Upgrade to >=0.9.20 |
+| `async-std` | 1.13.2 | RUSTSEC-2025-0052 | unmaintained (warning) | — |
+| `fxhash` | 0.2.1 | RUSTSEC-2025-0057 | unmaintained (warning) | — |
+| `paste` | 1.0.15 | RUSTSEC-2024-0436 | unmaintained (warning) | — |
+| `rustls-pemfile` | 2.2.0 | RUSTSEC-2025-0134 | unmaintained (warning) | — |
+| `anyhow` | 1.0.102 | RUSTSEC-2026-0190 | unsound (warning) | — |
+
+**Cross-reference against the 19 DEPS-bucket commits: 1 direct hit.** `373a67ae65fdb94898b49469d562a263ba2083ee`
+(#1369, `chore(deps): bump crossbeam-epoch from 0.9.18 to 0.9.20`) is the **exact fix** for
+RUSTSEC-2026-0204 (`Solution: Upgrade to >=0.9.20`) — this DEPS-bucket commit is **not yet
+absorbed** into the fork, and the fork's own `Cargo.lock` currently carries `crossbeam-epoch
+0.9.18`, the vulnerable version, live today. This is precisely the scenario D-16 exists to catch:
+a dependency bump nearly classified as routine "noise" that in fact closes a live RUSTSEC advisory
+the fork currently ships with. **Flagged for priority absorption in whichever phase lands the DEPS
+cluster (currently unassigned — see D-19 gap note).** The other 5 findings (`async-std`, `fxhash`,
+`paste`, `rustls-pemfile`, `anyhow`) do not correspond to any crate bumped by a DEPS-bucket commit
+in this window — they are pre-existing transitive dependencies (`async-std`/`fxhash` via
+`httpmock`/`tracing-etw` respectively — dev-only or Windows-ETW-only deps; `rustls-pemfile` via
+`nono-sandbox-proxy`; `anyhow` via a long `wit-parser`/`sigstore` transitive chain) not touched by
+this window's upstream sync at all, so they are out of scope for this ledger and are recorded here
+only for completeness, not as DEPS-bucket findings.
+
+## DEPS Cluster (19 commits)
+
+| sha | subject | Cargo.toml/Cargo.lock delta summary | cargo-audit-flag |
+|-----|---------|--------------------------------------|-------------------|
+| `59bdace7e905c05c127f480dc6d2a8c3a3331392` | chore: release v0.69.0 | version bump v0.68.0->v0.69.0 across all 4 crate `Cargo.toml`s + `Cargo.lock` regen | none |
+| `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea` | chore: release v0.68.0 (#1418) | version bump v0.67.1->v0.68.0 across all 4 crate `Cargo.toml`s + `Cargo.lock` regen | none |
+| `ce3d6724ed172226b17ec2ec1a22ea4b21fb7858` | chore(deps): bump sigstore-trust-root 0.9.0->0.11.0 (#1410) | bumps `sigstore-trust-root` 0.9.0 -> 0.11.0 | none (not in the 6-finding list) |
+| `2f7a6747b8e12e71838cd22def743dc1bd789cef` | chore(deps): bump bytes 1.12.0->1.12.1 (#1408) | bumps `bytes` 1.12.0 -> 1.12.1 | none |
+| `b6e7ec43474ca57d075f19c8ca318690719ef185` | chore(deps): bump regex 1.12.4->1.13.0 (#1406) | bumps `regex` 1.12.4 -> 1.13.0 | none |
+| `bc947b0bdb8d693a704c3cf9af6d098c2aa12805` | chore(deps): bump sigstore-sign 0.10.0->0.11.0 (#1407) | bumps `sigstore-sign` 0.10.0 -> 0.11.0 | none |
+| `373a67ae65fdb94898b49469d562a263ba2083ee` | chore(deps): bump crossbeam-epoch 0.9.18->0.9.20 (#1369) | bumps `crossbeam-epoch` 0.9.18 -> 0.9.20 | **RUSTSEC-2026-0204 — fork's Cargo.lock currently carries the vulnerable 0.9.18; this commit is the fix. See cross-reference above.** |
+| `0bfb5c54621d933e28ff4c2800a0f2629ff648de` | chore(deps): bump clap_complete 4.6.5->4.6.7 (#1360) | bumps `clap_complete` 4.6.5 -> 4.6.7 | none |
+| `0f2f635bcd547b52b8e86632c5b2ad753bb147c3` | chore(deps): bump ignore 0.4.26->0.4.27 (#1363) | bumps `ignore` 0.4.26 -> 0.4.27 | none — `ignore` itself has no advisory; note `ignore`'s own transitive `crossbeam-deque`->`crossbeam-epoch` chain is a *different* edge than the direct `373a67ae` bump, both ultimately need `crossbeam-epoch` >=0.9.20 to fully clear the lockfile |
+| `3cff37337ea60f1c5a10ebd335676575dd0ecd10` | chore(deps): bump time 0.3.52->0.3.53 (#1358) | bumps `time` 0.3.52 -> 0.3.53 | none |
+| `b59477a56e47e91539ebfcadf4d374e26a66f3fa` | chore(deps): bump rand 0.10.1->0.10.2 (#1362) | bumps `rand` 0.10.1 -> 0.10.2 | none |
+| `18bbb5eb1fbbe1167c1eef8f99d748b40a65715e` | chore(deps): bump sigstore-sign 0.8.0->0.10.0 (#1361) | bumps `sigstore-sign` 0.8.0 -> 0.10.0 | none |
+| `6118b79aeda1365da213d85457b4d3cf1201d575` | chore: release v0.67.1 (#1353) | version bump v0.67.0->v0.67.1 across all 4 crate `Cargo.toml`s + `Cargo.lock` regen | none |
+| `19b43f300b9d2e257e161b808440f0573abfd422` | chore: release v0.67.0 (#1350) | version bump v0.66.0->v0.67.0 across all 4 crate `Cargo.toml`s + `Cargo.lock` regen | none |
+| `2af5495cda0fc0067360c4b99ffdebc8e3c68755` | chore(deps): bump h2 0.4.14->0.4.15 (#1312) | bumps `h2` 0.4.14 -> 0.4.15 | none |
+| `cf7a40392a0011e22c4d11bdaf4b16add46a9e55` | chore(deps): bump webpki-roots 1.0.7->1.0.8 (#1311) | bumps `webpki-roots` 1.0.7 -> 1.0.8 | none |
+| `d8187fb17c44869bdd4bd9670f0070320f7c10f4` | chore(deps): bump rustls 0.23.40->0.23.41 (#1310) | bumps `rustls` 0.23.40 -> 0.23.41 | none (distinct from the unrelated `rustls-pemfile` unmaintained warning above) |
+| `b8f00cefd811ff3b950314963c85f4456df0206c` | chore(deps): bump time 0.3.49->0.3.51 (#1307) | bumps `time` 0.3.49 -> 0.3.51 | none |
+| `4b889c953f2473f5a39a69126fc17eacc50c000e` | chore(deps): bump jsonschema 0.46.5->0.46.6 (#1306) | bumps `jsonschema` 0.46.5 -> 0.46.6 | none |
+
+**DEPS disposition summary:** 19/19 individually reviewed (not blanket-adopted). 16 are routine
+semver-compatible bumps with no advisory hit. 3 are release-cut commits (version-bump-only,
+already captured under D-16's own "own cluster" framing, not noise). 1
+(`373a67ae`) is a **priority absorb** — the direct fix for a live RUSTSEC advisory in the fork's
+current `Cargo.lock`.
+
+## CI Cluster (11 commits)
+
+Fork's `.github/workflows/` inventory checked directly (`ls`) for each commit's touched
+workflow file(s) before assigning adapt-reasoning, per D-17 (never adopt verbatim without
+checking the fork's actual file).
+
+| sha | subject | adapt-reasoning |
+|-----|---------|------------------|
+| `bffe8134ee4b68752dc1b2ef514a8ae58f3b6123` | chore(deps): bump docker/setup-buildx-action 4.1.0->4.2.0 (#1359) | **portable** — fork's `image-build.yml` exists and currently pins `docker/setup-buildx-action@...#v4.0.0`, older than upstream's bump target; routine mechanical action-version bump |
+| `cbe9bdc28f842157c95cbb6ff2983ab0797bda32` | chore(deps): bump docker/login-action 4.2.0->4.4.0 (#1357) | **portable** — fork pins `docker/login-action@...#v4.1.0`, older; routine bump |
+| `2485430a0ac821bffda784a5cea8590f2fca5efb` | chore(deps): bump nolabs-ai/agent-sign 0.0.11->0.1.0 (#1355) | **fork-specific conflict** — verified: fork's `sign-instruction-files.yml` pins `always-further/agent-sign@...#v0.0.8`, a **different action reference** (pre-relocation org, per Phase-94 remote-relocation precedent) at a different version scheme entirely. Verbatim adoption would point at an action the fork's workflow doesn't reference — ADR-100-style bot/action-identity mismatch, not a mechanical bump |
+| `168efa2bac7f0dedddcb43a089e15f1022dc0f17` | chore(deps): bump docker/setup-qemu-action 4.1.0->4.2.0 (#1354) | **portable** — fork pins `docker/setup-qemu-action@...#v4.0.0`, older; routine bump |
+| `3fc3743dd1d551a91f54f075f683a30b32d7d67a` | chore(deps): bump docker/build-push-action 7.2.0->7.3.0 (#1356) | **portable** — fork pins `docker/build-push-action@...#v7.0.0`, older; routine bump |
+| `002fe4986e9b03c61d0a90d78bbd535108a9b698` | fix(release): strip ./ prefix from SHA256SUMS.txt entries (#1352) | **portable** (moot for current fork structure) — verified: fork's `release.yml` already emits `sha256sum *.tar.gz > SHA256SUMS.txt` (bare filenames, no `./` prefix) via a different, already-diverged per-artifact-type generation block (tar.gz/zip/msi/exe/trusted_root.json — the fork's own Windows-artifact structure); the specific `./`-prefix bug this commit fixes does not reproduce in the fork's current script, but the underlying `sha256sum -- <globs>` pattern (avoiding SC2035) is worth carrying forward if the fork's structure is ever consolidated |
+| `a0a279079bba8057085d45503dee681a51db99f6` | chore(deps): bump actions/attest 4.1.0->4.1.1 (#1309) | **fork-specific conflict** — verified: fork has no `attest-release.yml` and zero `actions/attest` references anywhere in `.github/workflows/`; the fork uses Azure Trusted Signing + Sigstore (`sigstore-sign`/`sigstore-verify`) for release provenance instead of GitHub's native artifact-attestation action. Not applicable, not merely skippable-as-noise |
+| `ade1bb128b2e2d28054bfe62aa44abd0cf52b416` | chore(deps): bump actions/cache 5.0.5->6.1.0 (#1308) | **portable** — verified: fork's `ci.yml` uses `actions/cache@...#v5` in 8 separate steps; bumping the pinned major version to v6.1.0 is a routine mechanical upgrade with no fork-specific dependency |
+| `40080d04991cc28cd9f99d409dd42b2c4bcbe45b` | chore(ci): remove homebrew bump workflow (#1294) | **fork-specific conflict** — verified: fork has no standalone `homebrew-bump.yml` to remove; the fork's homebrew publishing is an inline `update-homebrew-core` job inside `release.yml` using `mislav/bump-homebrew-formula-action`, architecturally distinct from what upstream removed. Not applicable |
+| `92ef76ffa5fd5ead3bbaf19ac5a928a48b63ae03` | ci: run actionlint (#1273) | **portable** — verified: fork has `ci.yml`/`image-build.yml`/`release.yml`, all 3 files this commit touches; adds an additive `actionlint` linting job, no removal or fork-specific-workflow dependency in the diff |
+| `4fd9144525c4b748bd78a5c861678957ac5c776b` | chore(ci): refine automation workflow (#1292) | **fork-specific conflict** — verified: renames `label-new-issues.yml` (which the fork DOES have) into a 237-line `project-automation.yml` that polls a `nolabs-ai` org GitHub Projects v2 board via GraphQL, gated on a `PROJECTS_TOKEN` secret the fork does not provision. Upstream community/triage infrastructure, not portable without re-scoping to a fork-owned board |
+
+**`ea334d2b` (musl build fix) is NOT in this table** — verified: it is a tool-sandbox-split
+**CODE**-bucket commit (its own touched-path list includes `crates/nono-cli/src/tool-sandbox/
+platform/linux.rs` and `crates/nono/src/sandbox/linux.rs`, both under `crates/*/src/`), already
+fully accounted for in `## tool-sandbox-split` above (its `.github/workflows/ci.yml` hunk is noted
+there as CI-cluster-adjacent noise, not double-counted as a CI-bucket commit).
+
+**CI disposition summary:** 11/11 individually reviewed. 7 portable (4 docker/* action bumps +
+actions/cache bump + actionlint + the SHA256SUMS fix, moot-but-harmless). 4 fork-specific conflict
+(agent-sign org mismatch, actions/attest not used, homebrew mechanism architecturally different,
+Projects-v2 board automation tied to upstream's own org). This validates D-17's "adapt-by-default,
+never verbatim, never blanket-skip" framing precisely: portable commits (7) outnumber
+fork-specific-conflicting ones (4), so a blanket-skip-all-CI rule would have missed 7 legitimate,
+low-risk version bumps and one useful linting addition.
+
+## DOCS Cluster (8 commits)
+
+Fork's docs tree (`docs/cli/features/`, `docs/cli/clients/`) and root community-health files
+checked directly for each commit's target file(s) before assigning a reconcile-note.
+
+| sha | subject | reconcile-note |
+|-----|---------|------------------|
+| `55fd3825c4ea9471a207313f74aa71e6e4a96014` | docs(profiles): fix codeblock (#1426) | needs-doc-follow-up — verified: fork carries `docs/cli/features/profiles-groups.mdx`, likely inherited the same codeblock formatting bug (fork's copy predates this fix); low-risk cosmetic doc fix worth applying in whichever phase reconciles docs |
+| `99b8fa4fbe7da26c332e69e53f44fd84c39b4eb9` | docs(codex): clarify codex docs around the optional login-shell hardening (#1381) | needs-doc-follow-up — verified: fork carries `docs/cli/clients/codex.mdx` |
+| `d74063335e8584f9667496e25967e1c87e1d38e1` | fix: use permanent community link across project (#1349) | safe-to-ignore — verified: fork has none of the touched files (`CONTRIBUTING.md`, `MAINTAINERS.md`, `README.md`-community-link-section, `docs/docs.json`, `.github/ISSUE_TEMPLATE/config.yml`); fork does not carry a community-governance file set at all |
+| `2f547703517d0c5436f57aad341a3a51af18e116` | docs: add community health files (#1348) | safe-to-ignore — verified: fork has none of `CODE_OF_CONDUCT.md`/`CONTRIBUTING.md`/`CONTRIBUTORS.md`/`GOVERNANCE.md`/`MAINTAINERS.md`; the fork is solo-maintained, not community-governed like upstream |
+| `73952cd4e1762a835b47b5f4c23c7abd030fb0f9` | docs(readme): explain tool sandboxing for agents (#1342) | needs-doc-follow-up, **deferred** — this documents the tool-sandbox subsystem itself (`command_policies` JSON example, "Sandboxed Tool Execution" link); adopting it now into the fork's `README.md` would describe a feature the fork does not have until v3.7 (D-06/D-09 — tool-sandbox subsystem absent). Hold until the v3.7 Windows Tool-Sandbox Parity milestone lands, then reconcile alongside it |
+| `2375aeb6adb81d1d896336328cf61e04b2a4b19e` | docs(profiles): clarify predefined vs user profiles scope (#1331) | needs-doc-follow-up — verified: fork carries `docs/cli/features/profiles-groups.mdx` (same file as `55fd3825` above) |
+| `63c9589fa30f0244c542c026faf27d517aaa9b39` | docs(credential-injection): document AWS SigV4 proxy signing (#1329) | needs-doc-follow-up — verified: fork carries `docs/cli/features/credential-injection.mdx`, **and** the fork already adopted the code this documents (`6fb7ecbf`, SigV4 URI-encoding fix, NET cluster, Plan 108-03 — dispositioned `adopt`); this doc should land alongside NET absorb in Phase 109, not independently |
+| `da3a90f247bf80ffe8bcc470154e83f764033803` | docs(nogent): add nogent markdown file (#1288) | safe-to-ignore — verified: fork has no `NOGENT.md`; this is upstream's own GitHub-App-onboarding document ("Once this is in place, we can add the repo to the GitHub App"), not relevant to the fork's separate identity/tooling |
+
+**DOCS disposition summary:** 8/8 individually reviewed. 4 needs-doc-follow-up (2 for
+`profiles-groups.mdx`, 1 for `codex.mdx`, 1 for `credential-injection.mdx` — the last explicitly
+tied to Phase 109's NET absorb). 1 needs-doc-follow-up-but-deferred (README tool-sandboxing
+section, held for v3.7). 3 safe-to-ignore (community-health files + NOGENT.md the fork does not
+carry and does not need, being solo-maintained rather than community-governed).
+
+## Bucket-Count Reconciliation
+
+**DEPS: 19 rows. CI: 11 rows. DOCS: 8 rows. Sum: 38 = the non-CODE-bucket total from Plan 108-01's
+Full Commit Accounting (DEPS 19 + CI 11 + DOCS 8 = 38, out of the ledger's 100-commit total).**
+
+This task's own per-commit review (checking every commit against the fork's *actual* current
+`.github/workflows/`/`docs/`/root files, not just the commit subject) reproduces Plan 108-01's
+bucket totals **exactly** — zero commits moved buckets. Note the plan's Task 2 action text cites
+"Plan 108-01's recorded bucket counts (15/11/6)" as the comparison baseline; that figure is
+**CONTEXT.md's original, already-superseded hypothesis** (see 108-01's own "Discrepancy vs.
+CONTEXT.md Hypothesis" section), not Plan 108-01's actual measured/authoritative ledger numbers
+(DEPS 19 / CI 11 / DOCS 8, recorded in the "Bucket totals" line of the Headline section and the
+per-bucket table headers above). This task reconciles against the **authoritative** 19/11/8
+figures, which is the correct baseline — comparing against the stale 15/11/6 hypothesis here would
+have reintroduced exactly the kind of hypothesis-vs-measurement error D-04/D-21 exist to prevent.
+**Result: no reclassification needed; DEPS/CI/DOCS table row counts match the ledger's own
+authoritative totals with zero disagreement.**
