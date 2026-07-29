@@ -183,3 +183,13 @@ environment (`cargo-audit-audit 0.22.1`).
 ---
 *Phase: 108-upst12-divergence-audit*
 *Completed: 2026-07-29*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/108-upst12-divergence-audit/108-04-SUMMARY.md`
+- FOUND: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER.md`
+- FOUND commit: `43a00d2e` (Task 1 - tool-sandbox-pure/split residue accounting)
+- FOUND commit: `57689099` (Task 2 - DEPS/CI/DOCS cluster tables + cargo-audit)
+- FOUND commit: `9b91c514` (SUMMARY.md)
+- Verified: no `.planning/STATE.md` or `.planning/ROADMAP.md` modifications in any of this
+  plan's 3 commits.
