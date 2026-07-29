@@ -124,6 +124,21 @@ Phase numbering continues from Phase 100 → Phase 101+.
 - [ ] **CORE-01**: The macOS Seatbelt/core carry lands as-is for cross-target parity — `macos.rs` port-range emitter (#1398), `~/.cache` grant (#1378), and `MAX_CRYPTO_THREADS`=12 libdispatch tuning (#1424).
 - [ ] **CORE-02**: The upstream resource-limit CLI surface (`--memory` / `--max-processes`, #1269/#1403) is reconciled with the fork's existing kernel-enforced Job Object implementation — flag names/semantics aligned, no new enforcement, no regression to `--cpu-percent`/`--timeout`.
 
+### Security + Residual Sync (SEC / RES) — Phase 112
+> **Added 2026-07-29** by operator approval of the Phase 108 ledger's D-18/D-19 coverage-gap amendment. Phase 108 measured **27 hand-verified CODE commits** in the `v0.66.0..v0.69.0` window mapping to none of v3.6's original 12 requirements. Work-list: `108-DIVERGENCE-LEDGER.md` §"Requirement Coverage Gap" + the `security-residual-and-misc` cluster.
+
+- [ ] **SEC-01**: AWS SigV4 authentication for the MiTM proxy (#1195, `0ecc476b`) is absorbed.
+- [ ] **SEC-02**: Declarative sandboxed OAuth capture (`9b692e07`), capture-boundary hardening (`3c59c62e`), and the stdin fixture test (`d033c631`) are absorbed.
+- [ ] **SEC-03**: NVIDIA procfs mediation hardening (#1284, `a3243907`) is absorbed without regressing the fork's own GPU tests.
+- [ ] **SEC-04**: The trust-policy `predicate` field distinguishing nono trust policies from foreign JSON (#1333, `f943fb5a`) is absorbed.
+- [ ] **SEC-05**: The Linux execute-restriction `Refer` grant (#1397, `d84b4818`) is absorbed; cross-target clippy GREEN.
+- [ ] **SEC-06**: Seccomp supervisor-ancestry for orphaned descendants (#1401, `ac5ccd70`) is absorbed.
+- [ ] **SEC-07**: The standalone `nono proxy` command (#1261, `2663e990`) is absorbed.
+- [ ] **SEC-08**: The `allow_vars` empty-list env-strip fix (#1204, `a5a441c2`) is absorbed.
+- [ ] **SEC-09**: The credential-broker non-shim-entry guard relaxation (#1301, `f6f02751`) is absorbed. *(Found security-relevant during Phase 108's Cluster Summary rollup — not a D-18-named anchor.)*
+- [ ] **RES-01**: The registry/update-check header residual (#1405/#1383/#1386/#1341/#1340) is individually reviewed and absorbed or explicitly skipped with reasoning.
+- [ ] **RES-02**: The PTY-teardown (#1258) + test-infra residual is individually reviewed and absorbed or explicitly skipped with reasoning.
+
 ### Fork-Invariant Verify + Release (VERIFY / RLS)
 - [ ] **VERIFY-01**: Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` (clippy+fmt+tests) are GREEN locally, and a fork-invariant pass confirms the Windows security model + ADR-86 boundary are non-regressed.
 - [ ] **RLS-14**: All 6 workspace crates + internal path-dep pins + both binding repos (`../nono-py`, `../nono-ts`) are leapfrogged to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected third-party drift, and the prepare-only release gate is GREEN — no operator push.
@@ -140,7 +155,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 ## v3.6 Traceability
 
-Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–111**.
+Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–112**.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
@@ -156,4 +171,15 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–111
 | CORE-02 | Phase 111 | Pending |
 | VERIFY-01 | Phase 111 | Pending |
 | RLS-14 | Phase 111 | Pending |
+| SEC-01 | Phase 112 | Pending |
+| SEC-02 | Phase 112 | Pending |
+| SEC-03 | Phase 112 | Pending |
+| SEC-04 | Phase 112 | Pending |
+| SEC-05 | Phase 112 | Pending |
+| SEC-06 | Phase 112 | Pending |
+| SEC-07 | Phase 112 | Pending |
+| SEC-08 | Phase 112 | Pending |
+| SEC-09 | Phase 112 | Pending |
+| RES-01 | Phase 112 | Pending |
+| RES-02 | Phase 112 | Pending |
 </content>
