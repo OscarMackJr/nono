@@ -121,7 +121,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 - [ ] **PROF-04**: The `bun` (#1305) and `mise` (#1387) runtime presets are absorbed.
 
 ### macOS / Core Carry + Resource CLI (CORE)
-- [ ] **CORE-01**: The macOS Seatbelt/core carry lands as-is for cross-target parity — `macos.rs` port-range emitter (#1398), `~/.cache` grant (#1378), and `MAX_CRYPTO_THREADS`=12 libdispatch tuning (#1424).
+- [ ] **CORE-01**: The macOS Seatbelt/core carry lands as-is for cross-target parity — `~/.cache` grant (#1378) and `MAX_CRYPTO_THREADS`=12 libdispatch tuning (#1424). **AMENDED 2026-07-30:** the `macos.rs` port-range emitter (#1398) is REMOVED from this requirement — Phase 110 absorbs commit `d5803b99` in full (schema + `capability.rs` + both Unix emitters + the WFP-native Windows emitter) so the port-range feature is coherent and testable in one phase. Phase 111 must not re-absorb it.
 - [ ] **CORE-02**: The upstream resource-limit CLI surface (`--memory` / `--max-processes`, #1269/#1403) is reconciled with the fork's existing kernel-enforced Job Object implementation — flag names/semantics aligned, no new enforcement, no regression to `--cpu-percent`/`--timeout`.
 
 ### Security + Residual Sync (SEC / RES) — Phase 112

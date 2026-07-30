@@ -272,7 +272,9 @@ Resume file: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER
 
 ## Operator Next Steps
 
-**v3.6 (active):** Phase 109 **COMPLETE — 5/5 plans, verification `status: passed` (9/9 must-haves)**. Milestone is **phases 108-113**; next is `/gsd:plan-phase 110`.
+**v3.6 (active):** Phase 110 context gathered — run `/gsd:plan-phase 110`. PROF-01..04, 7 commits. Milestone is **phases 108-113**; 108 and 109 complete.
+
+Key decisions: `expand_dynamic_tokens` is PORTED into a fork-owned module (PROF-02's `@git:*` import is `cfg`-gated to a `tool_sandbox` path the fork lacks — Windows absorbs cleanly, but the Unix arm would fail cross-target clippy); `d5803b99` (#1398) is absorbed WHOLE by Phase 110, and **Phase 111's CORE-01 has had its #1398 claim REMOVED** (amendment applied); the Windows port-range emitter uses WFP-native ranges with no unrolling and gets its own threat model — it is fork-original enforcement code, upstream built only macOS/Linux; `windows_*` flag migration accepts both forms with `platform_overrides.windows` winning, no deprecation warning yet.
 
 Delivered: `deny_domain` (#1374) per ADR-108 ADAPT with the fail-closed guard at **both** entry points; profile-declared `no_proxy` (#1415) with all **six** D-06 overlap validators wired across direct / `extends`-inherited / group-expanded paths; `HTTP_PROXY` forward-proxy (#1335) enforcing the same `check_host` trust boundary as CONNECT. Tests: `nono-sandbox-proxy` **218/0** (from a 192/0 baseline, +26); `nono-sandbox-cli` 1411 passed / 11 failed (pre-existing environmental, unchanged). Both cross-target clippy gates GREEN. `cargo audit` clean.
 

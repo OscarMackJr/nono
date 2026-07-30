@@ -257,7 +257,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Depends on**: Phase 109 + Phase 110 (all absorb work landed)
 **Requirements**: CORE-01, CORE-02, VERIFY-01, RLS-14
 **Success Criteria** (what must be TRUE):
-  1. macOS/core carry lands as-is for cross-target parity — `macos.rs` port-range emitter (#1398), `~/.cache` (#1378), `MAX_CRYPTO_THREADS`=12 (#1424).
+  1. macOS/core carry lands as-is for cross-target parity — `~/.cache` (#1378) and `MAX_CRYPTO_THREADS`=12 (#1424). **(#1398's `macos.rs` port-range emitter REMOVED from this criterion 2026-07-30 — Phase 110 absorbs commit `d5803b99` whole, including both Unix emitters, so the port-range feature lands coherently in one place. Do not re-absorb it here.)**
   2. The `--memory`/`--max-processes` CLI surface (#1269/#1403) is aligned onto the fork's existing Job Object impl with no new enforcement and no regression to `--cpu-percent`/`--timeout`.
   3. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally; a fork-invariant pass confirms the Windows security model + ADR-86 boundary are unregressed.
   4. All 6 workspace crates + path-dep pins + both binding repos leapfrog to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected drift, and the prepare-only release gate is GREEN (no operator push).
