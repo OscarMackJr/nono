@@ -130,3 +130,9 @@ None - no external service configuration required.
 ---
 *Phase: 110-profile-policy-absorb-platform-overrides*
 *Completed: 2026-07-30*
+
+## Self-Check: PASSED
+
+All 6 modified source files + SUMMARY.md + deferred-items.md confirmed present on disk. All 5
+commit hashes (`a0bf9076`, `0c747739`, `5d0c8e34`, `2102f538`, `a6ac7d46`) confirmed present in
+`git log --oneline --all`.
