@@ -1561,7 +1561,8 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
         || !net.open_port.is_empty()
         || !net.listen_port.is_empty()
         || net.upstream_proxy.is_some()
-        || !net.upstream_bypass.is_empty();
+        || !net.upstream_bypass.is_empty()
+        || !net.no_proxy.is_empty();
 
     if has_net {
         println!();
@@ -1628,6 +1629,13 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
                 "    {}: {}",
                 theme::fg("upstream_bypass", t.subtext),
                 net.upstream_bypass.join(", ")
+            );
+        }
+        if !net.no_proxy.is_empty() {
+            println!(
+                "    {}: {}",
+                theme::fg("no_proxy", t.subtext),
+                net.no_proxy.join(", ")
             );
         }
     }
@@ -1816,6 +1824,7 @@ fn profile_to_json(
         "listen_port": profile.network.listen_port,
         "upstream_proxy": profile.network.upstream_proxy,
         "upstream_bypass": profile.network.upstream_bypass,
+        "no_proxy": profile.network.no_proxy,
     });
 
     // Workdir — emit via serde_json::to_value so the existing
@@ -2101,6 +2110,7 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
             &p1.network.upstream_bypass,
             &p2.network.upstream_bypass,
         ),
+        ("no_proxy", &p1.network.no_proxy, &p2.network.no_proxy),
     ]);
 
     let port1: Vec<String> = p1.network.open_port.iter().map(|p| p.to_string()).collect();
@@ -2639,6 +2649,7 @@ fn diff_to_json(name1: &str, name2: &str, p1: &Profile, p2: &Profile) -> Result<
                 &p1.network.upstream_bypass,
                 &p2.network.upstream_bypass,
             ),
+            "no_proxy": diff_vec(&p1.network.no_proxy, &p2.network.no_proxy),
             "custom_credentials": diff_custom_credentials_json(
                 &p1.network.custom_credentials,
                 &p2.network.custom_credentials,

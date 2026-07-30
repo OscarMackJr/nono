@@ -20,6 +20,13 @@ pub(crate) struct EffectiveProxySettings {
     /// group-expanded. Expansion happens in `build_proxy_config_from_flags`
     /// via `network_policy::expand_proxy_deny`.
     pub(crate) deny_domain: Vec<String>,
+    /// Raw `no_proxy` entries from `profile.network.no_proxy`. Profile-only
+    /// (no `--no-proxy` CLI flag). D-06's overlap validators
+    /// (`validate_proxy_launch_no_proxy_conflicts`,
+    /// `validate_expanded_proxy_no_proxy_conflicts`) run against these in
+    /// `build_proxy_config_from_flags`, before and after `allow_domain`
+    /// group-name expansion respectively.
+    pub(crate) no_proxy: Vec<String>,
     pub(crate) credentials: Vec<String>,
 }
 
@@ -123,6 +130,7 @@ pub(crate) fn prepare_proxy_launch_options(
     let network_profile = effective_proxy.network_profile;
     let allow_domain = effective_proxy.allow_domain;
     let deny_domain = effective_proxy.deny_domain;
+    let no_proxy = effective_proxy.no_proxy;
     let credentials = effective_proxy.credentials;
     let allow_bind_ports = merge_dedup_ports(&prepared.listen_ports, &args.allow_bind);
 
@@ -206,6 +214,7 @@ pub(crate) fn prepare_proxy_launch_options(
         network_profile,
         allow_domain,
         deny_domain,
+        no_proxy,
         credentials,
         custom_credentials: prepared.custom_credentials.clone(),
         upstream_proxy,
@@ -230,6 +239,7 @@ pub(crate) fn resolve_effective_proxy_settings(
             network_profile: None,
             allow_domain: Vec::new(),
             deny_domain: Vec::new(),
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
         };
     }
@@ -249,6 +259,9 @@ pub(crate) fn resolve_effective_proxy_settings(
     // build_proxy_config_from_flags via network_policy::expand_proxy_deny.
     let mut deny_domain = prepared.deny_domain.clone();
     deny_domain.extend(args.deny_proxy.iter().cloned());
+    // no_proxy is profile-only — there is no `--no-proxy` CLI flag, so this
+    // is a straight clone (no merge step).
+    let no_proxy = prepared.no_proxy.clone();
     let mut credentials = prepared.credentials.clone();
     credentials.extend(args.proxy_credential.clone());
 
@@ -256,6 +269,7 @@ pub(crate) fn resolve_effective_proxy_settings(
         network_profile,
         allow_domain,
         deny_domain,
+        no_proxy,
         credentials,
     }
 }
@@ -268,9 +282,71 @@ pub(crate) fn merge_dedup_ports(a: &[u16], b: &[u16]) -> Vec<u16> {
     ports
 }
 
+/// D-06 (#1415) / T-109-08 sibling: reject a `no_proxy` entry that overlaps a
+/// LITERAL (pre-group-expansion) `allow_domain` entry on `ProxyLaunchOptions`.
+///
+/// This is the CLI-flag-layer counterpart to `profile::validate_profile_no_proxy`
+/// — it runs on the fully-merged (profile + CLI) `ProxyLaunchOptions`, catching
+/// overlaps that only appear after `--allow-domain`/profile merge. It does NOT
+/// see allow_domain group names expanded to their member hosts — that is
+/// `validate_expanded_proxy_no_proxy_conflicts`'s job, run later once
+/// `network_policy::partition_allow_domain` has expanded them.
+///
+/// Uses `nono_proxy::config::no_proxy_entry_overlaps_host_pattern` (Plan
+/// 109-02's proxy-crate validator) so this check's overlap semantics stay
+/// identical to the proxy-crate's own runtime overlap check.
+fn validate_proxy_launch_no_proxy_conflicts(proxy: &ProxyLaunchOptions) -> Result<()> {
+    for no_proxy_entry in &proxy.no_proxy {
+        for allow in &proxy.allow_domain {
+            let host = allow.domain();
+            if nono_proxy::config::no_proxy_entry_overlaps_host_pattern(no_proxy_entry, host) {
+                return Err(NonoError::ConfigParse(format!(
+                    "no_proxy entry '{no_proxy_entry}' overlaps allow_domain entry '{host}' — \
+                     a no_proxy bypass cannot cover a host explicitly allowed through the proxy \
+                     (D-06)."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// D-06 (#1415) / T-109-09: reject a `no_proxy` entry that overlaps a host
+/// reachable only AFTER `allow_domain` group-name expansion
+/// (`network_policy::partition_allow_domain`).
+///
+/// `validate_proxy_launch_no_proxy_conflicts` only sees literal `allow_domain`
+/// strings/group names as declared — a `no_proxy` entry naming a host that is
+/// merely a MEMBER of an allowed group (not the group name itself) would
+/// silently slip through that check. This validator runs against
+/// `plain_hosts` — the already-expanded host list — closing that gap.
+fn validate_expanded_proxy_no_proxy_conflicts(
+    no_proxy: &[String],
+    plain_hosts: &[String],
+) -> Result<()> {
+    for no_proxy_entry in no_proxy {
+        for host in plain_hosts {
+            if nono_proxy::config::no_proxy_entry_overlaps_host_pattern(no_proxy_entry, host) {
+                return Err(NonoError::ConfigParse(format!(
+                    "no_proxy entry '{no_proxy_entry}' overlaps allow_domain host '{host}' \
+                     (reached via network-policy group-name expansion) — a no_proxy bypass \
+                     cannot cover a host explicitly allowed through the proxy (D-06)."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn build_proxy_config_from_flags(
     proxy: &ProxyLaunchOptions,
 ) -> Result<nono_proxy::config::ProxyConfig> {
+    // D-06 (#1415): reject a no_proxy entry that overlaps a literal
+    // (pre-group-expansion) allow_domain entry before doing any further
+    // work. The group-expanded overlap check (`validate_expanded_proxy_no_proxy_conflicts`)
+    // runs later, once `plain_hosts` is available.
+    validate_proxy_launch_no_proxy_conflicts(proxy)?;
+
     let net_policy_json = crate::config::embedded::embedded_network_policy_json();
     let net_policy = network_policy::load_network_policy(net_policy_json)?;
 
@@ -313,6 +389,13 @@ pub(crate) fn build_proxy_config_from_flags(
     }
     resolved.routes.extend(endpoint_routes);
 
+    // D-06 (#1415) / T-109-09: reject a no_proxy entry that overlaps a host
+    // reachable only after allow_domain group-name expansion. Must run AFTER
+    // `plain_hosts` is fully assembled (including endpoint-route upstream
+    // hosts pushed in above) — the pre-expansion check above only sees
+    // literal allow_domain strings/group names, not their expanded members.
+    validate_expanded_proxy_no_proxy_conflicts(&proxy.no_proxy, &plain_hosts)?;
+
     // Expand deny_domain entries (group-name expansion, else literal
     // hostname) the same way allow_domain is expanded above.
     let denied_hosts = network_policy::expand_proxy_deny(&net_policy, &proxy.deny_domain);
@@ -325,6 +408,14 @@ pub(crate) fn build_proxy_config_from_flags(
     // decision.
     proxy_config.strict_filter = proxy.strict_filter || proxy_config.strict_filter;
     proxy_config.enable_h2 = proxy.enable_h2;
+    // D-06: profile-declared no_proxy entries (already overlap-validated
+    // above) flow into ProxyConfig.no_proxy, where server.rs's
+    // push_no_proxy_entry pipeline (Plan 109-02) emits them into the
+    // generated NO_PROXY/no_proxy env var and re-validates them (grammar +
+    // allowed-host overlap) fail-closed before any ProxyHandle is
+    // constructed. Without this assignment, a validated no_proxy entry
+    // would never actually reach the running proxy.
+    proxy_config.no_proxy = proxy.no_proxy.clone();
 
     // Apply per-service endpoint restrictions from `--allow-endpoint` args.
     // Runs before domain-endpoint routes are merged so the prefix lookup
@@ -545,6 +636,7 @@ mod tests {
             network_profile: None,
             allow_domain: vec![endpoint_entry.clone()],
             deny_domain: Vec::new(),
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
@@ -597,6 +689,73 @@ mod tests {
         // Allowlist is non-empty, so the ADR-108 (b) deny-only strict-selection
         // must NOT force strict_filter on here.
         assert!(!config.strict_filter);
+    }
+
+    // ========================================================================
+    // Plan 109-03 / D-06 (#1415): no_proxy CLI-flag-layer overlap validators
+    // ========================================================================
+
+    /// D-06: a no_proxy entry that matches a LITERAL allow_domain entry
+    /// (pre-group-expansion) is rejected by validate_proxy_launch_no_proxy_conflicts,
+    /// called at the very start of build_proxy_config_from_flags.
+    #[test]
+    fn build_proxy_config_rejects_literal_no_proxy_allow_domain_overlap() {
+        let proxy = ProxyLaunchOptions {
+            active: true,
+            allow_domain: vec![AllowDomainEntry::Plain("good.com".to_string())],
+            no_proxy: vec!["good.com".to_string()],
+            ..ProxyLaunchOptions::default()
+        };
+        let err = build_proxy_config_from_flags(&proxy)
+            .expect_err("literal no_proxy/allow_domain overlap must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no_proxy") && msg.contains("good.com"),
+            "error should name the overlapping no_proxy entry and host: {msg}"
+        );
+    }
+
+    /// D-06 non-negotiable regression test (verbatim name, upstream 1619275c):
+    /// a no_proxy entry that overlaps a host reachable ONLY through
+    /// allow_domain group-name expansion (not the literal group name string
+    /// itself) is still rejected. "llm_apis" is a real group in the embedded
+    /// network policy that expands to (among others) api.openai.com — the
+    /// literal string "llm_apis" never appears in no_proxy, so a
+    /// pre-expansion-only check (validate_proxy_launch_no_proxy_conflicts)
+    /// would silently miss this overlap. This proves
+    /// validate_expanded_proxy_no_proxy_conflicts runs AFTER
+    /// network_policy::partition_allow_domain's group expansion.
+    #[test]
+    fn test_build_proxy_config_rejects_group_expanded_no_proxy_overlap() {
+        let proxy = ProxyLaunchOptions {
+            active: true,
+            allow_domain: vec![AllowDomainEntry::Plain("llm_apis".to_string())],
+            no_proxy: vec!["api.openai.com".to_string()],
+            ..ProxyLaunchOptions::default()
+        };
+        let err = build_proxy_config_from_flags(&proxy)
+            .expect_err("no_proxy entry overlapping a group-expanded host must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no_proxy") && msg.contains("api.openai.com"),
+            "error should name the overlapping no_proxy entry and expanded host: {msg}"
+        );
+    }
+
+    /// A non-overlapping no_proxy/allow_domain(-group) pair builds
+    /// successfully and the no_proxy entries flow through to
+    /// `ProxyConfig.no_proxy` (D-06: without this assignment, a validated
+    /// no_proxy entry would never actually reach the running proxy).
+    #[test]
+    fn build_proxy_config_propagates_non_overlapping_no_proxy() {
+        let proxy = ProxyLaunchOptions {
+            active: true,
+            allow_domain: vec![AllowDomainEntry::Plain("llm_apis".to_string())],
+            no_proxy: vec!["internal-only".to_string()],
+            ..ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
+        assert_eq!(config.no_proxy, vec!["internal-only".to_string()]);
     }
 
     /// `strict_filter: true` must propagate to `ProxyConfig.strict_filter`.
@@ -687,6 +846,7 @@ mod tests {
             network_profile: None,
             allow_domain: vec![],
             deny_domain: Vec::new(),
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: custom_creds,
             upstream_proxy: None,
@@ -739,6 +899,7 @@ mod tests {
             network_profile: None,
             allow_domain: vec![AllowDomainEntry::Plain("good.com".to_string())],
             deny_domain: vec!["evil.com".to_string()],
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
@@ -812,6 +973,7 @@ mod tests {
             network_profile: None,
             allow_domain: Vec::new(),
             deny_domain: Vec::new(),
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
@@ -938,6 +1100,7 @@ mod tests {
             network_profile: None,
             allow_domain: vec![],
             deny_domain: Vec::new(),
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: custom_creds,
             upstream_proxy: None,

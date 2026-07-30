@@ -107,6 +107,12 @@ pub(crate) struct ProxyLaunchOptions {
     /// `would_activate` doc comment in `proxy_runtime.rs` (ADR-108
     /// Consequence (c)).
     pub(crate) deny_domain: Vec<String>,
+    /// Raw `no_proxy` entries from `profile.network.no_proxy` (no CLI flag).
+    /// Validated in `proxy_runtime::build_proxy_config_from_flags` — both
+    /// against `allow_domain`'s literal entries (`validate_proxy_launch_no_proxy_conflicts`)
+    /// and against the group-name-expanded host list
+    /// (`validate_expanded_proxy_no_proxy_conflicts`) — before proxy activation (D-06).
+    pub(crate) no_proxy: Vec<String>,
     pub(crate) credentials: Vec<String>,
     pub(crate) custom_credentials: HashMap<String, profile::CustomCredentialDef>,
     pub(crate) upstream_proxy: Option<String>,

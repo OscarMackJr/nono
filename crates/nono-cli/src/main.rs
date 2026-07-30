@@ -328,6 +328,9 @@ mod tests {
                 "docs.python.org".to_string(),
             )],
             deny_domain: Vec::new(),
+            // Non-empty so this test also proves --allow-net clears a
+            // profile-declared no_proxy (mirrors the deny_domain assertion).
+            no_proxy: vec!["internal-tool".to_string()],
             credentials: vec!["github".to_string()],
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
@@ -368,6 +371,7 @@ mod tests {
                 network_profile: None,
                 allow_domain: Vec::new(),
                 deny_domain: Vec::new(),
+                no_proxy: Vec::new(),
                 credentials: Vec::new(),
             }
         );
@@ -391,6 +395,9 @@ mod tests {
                 "docs.python.org".to_string(),
             )],
             deny_domain: Vec::new(),
+            // Profile-only (no CLI flag to merge) — proves the straight
+            // clone-through in resolve_effective_proxy_settings.
+            no_proxy: vec!["internal-tool".to_string()],
             credentials: vec!["github".to_string()],
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
@@ -434,6 +441,7 @@ mod tests {
                     crate::profile::AllowDomainEntry::Plain("example.com".to_string()),
                 ],
                 deny_domain: Vec::new(),
+                no_proxy: vec!["internal-tool".to_string()],
                 credentials: vec!["github".to_string(), "openai".to_string()],
             }
         );

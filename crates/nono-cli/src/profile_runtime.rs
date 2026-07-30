@@ -18,6 +18,11 @@ pub(crate) struct PreparedProfile {
     pub(crate) allow_domain: Vec<crate::profile::AllowDomainEntry>,
     /// Raw `deny_domain` entries from `profile.network.deny_domain`.
     pub(crate) deny_domain: Vec<String>,
+    /// Raw `no_proxy` entries from `profile.network.no_proxy`. Profile-only
+    /// (no `--no-proxy` CLI flag exists) — carried straight through to
+    /// `EffectiveProxySettings`/`ProxyLaunchOptions` for the D-06 overlap
+    /// validators in `proxy_runtime.rs`.
+    pub(crate) no_proxy: Vec<String>,
     pub(crate) credentials: Vec<String>,
     pub(crate) custom_credentials: HashMap<String, profile::CustomCredentialDef>,
     pub(crate) upstream_proxy: Option<String>,
@@ -663,6 +668,10 @@ pub(crate) fn prepare_profile_with_context(
         deny_domain: loaded_profile
             .as_ref()
             .map(|profile| profile.network.deny_domain.clone())
+            .unwrap_or_default(),
+        no_proxy: loaded_profile
+            .as_ref()
+            .map(|profile| profile.network.no_proxy.clone())
             .unwrap_or_default(),
         credentials: loaded_profile
             .as_ref()

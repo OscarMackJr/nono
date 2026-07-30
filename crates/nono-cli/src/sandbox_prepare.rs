@@ -74,6 +74,11 @@ pub(crate) struct PreparedSandbox {
     /// none). CLI `--deny-domain` is merged in later via
     /// `proxy_runtime::resolve_effective_proxy_settings`.
     pub(crate) deny_domain: Vec<String>,
+    /// Raw `no_proxy` entries from the loaded profile (manifest path has
+    /// none — the manifest schema has no `no_proxy` key). Profile-only, no
+    /// CLI flag; carried through to `EffectiveProxySettings`/
+    /// `ProxyLaunchOptions` for the D-06 overlap validators.
+    pub(crate) no_proxy: Vec<String>,
     pub(crate) credentials: Vec<String>,
     pub(crate) custom_credentials: HashMap<String, profile::CustomCredentialDef>,
     pub(crate) upstream_proxy: Option<String>,
@@ -481,6 +486,9 @@ pub(crate) fn prepare_sandbox_with_context(
                 // Manifest schema has no deny_domain key today — manifest
                 // path always has an empty deny list.
                 deny_domain: Vec::new(),
+                // Manifest schema has no no_proxy key today — manifest path
+                // always has an empty no_proxy list.
+                no_proxy: Vec::new(),
                 credentials,
                 custom_credentials: HashMap::new(),
                 upstream_proxy: None,
@@ -538,6 +546,7 @@ pub(crate) fn prepare_sandbox_with_context(
         network_profile: profile_network_profile,
         allow_domain: profile_allow_domain,
         deny_domain: profile_deny_domain,
+        no_proxy: profile_no_proxy,
         credentials: profile_credentials,
         custom_credentials: profile_custom_credentials,
         upstream_proxy: profile_upstream_proxy,
@@ -795,6 +804,7 @@ pub(crate) fn prepare_sandbox_with_context(
             network_profile: profile_network_profile,
             allow_domain: profile_allow_domain,
             deny_domain: profile_deny_domain,
+            no_proxy: profile_no_proxy,
             credentials: profile_credentials,
             custom_credentials: profile_custom_credentials,
             upstream_proxy: profile_upstream_proxy,
@@ -881,6 +891,7 @@ mod tests {
             network_profile: None,
             allow_domain: Vec::new(),
             deny_domain: Vec::new(),
+            no_proxy: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
