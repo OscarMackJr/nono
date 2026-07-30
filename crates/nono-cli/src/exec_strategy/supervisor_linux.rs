@@ -1495,14 +1495,17 @@ mod tests {
             SockaddrInfo, UnixSocketKind, SYS_BIND, SYS_CONNECT, SYS_SENDMMSG, SYS_SENDMSG,
             SYS_SENDTO,
         };
-        use nono::supervisor::{ApprovalDecision, ApprovalRequest};
+        use nono::supervisor::{ApprovalDecision, CapabilityRequest};
         use nono::{ApprovalBackend, UnixSocketCapability, UnixSocketMode};
         use std::os::unix::net::UnixListener;
         use std::path::{Path, PathBuf};
 
         struct DenyAllBackend;
         impl ApprovalBackend for DenyAllBackend {
-            fn request_approval(&self, _req: &ApprovalRequest) -> nono::Result<ApprovalDecision> {
+            fn request_capability(
+                &self,
+                _req: &CapabilityRequest,
+            ) -> nono::Result<ApprovalDecision> {
                 Ok(ApprovalDecision::Denied {
                     reason: "test".to_string(),
                 })
@@ -1537,7 +1540,6 @@ mod tests {
                 proxy_bind_port_ranges: Vec::new(),
                 unix_socket_allowlist,
                 linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
-                tool_sandbox_runtime: None,
             }
         }
 
