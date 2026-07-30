@@ -487,6 +487,11 @@
           "items": { "type": "string" },
           "description": "Domains to deny through the proxy, evaluated before the allowlist. Composes with (never weakens) allow_domain. A deny-only profile (no allow_domain) is rejected at parse time (ADR-108: fork divergence from upstream's auto-activating default-allow semantics for deny-only configs)."
         },
+        "no_proxy": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Additional client-side proxy bypass entries appended to generated NO_PROXY/no_proxy in proxy mode. This does not grant network access; direct connections still require matching sandbox permissions. Entries must be host patterns only: safe single-label local aliases, canonical IP literals, *.<domain> wildcard suffixes, or .<domain> suffix patterns. Bare multi-label domains, protected metadata suffix tokens, full URLs, credentials, ports, paths, comma-separated lists, and catch-all * are rejected."
+        },
         "proxy_allow": {
           "type": "array",
           "items": { "type": "string" },

@@ -1541,6 +1541,44 @@ fn validate_profile_aipc_tokens(profile: &Profile) -> Result<()> {
     Ok(())
 }
 
+/// D-06 (#1415): reject a `no_proxy` entry that overlaps an `allow_domain`
+/// entry. `no_proxy` is a declared proxy-bypass surface in a default-deny
+/// tool — an entry overlapping an explicitly allowed host would silently
+/// defeat filtering for that host, which is a genuine security regression,
+/// not a convenience trade-off.
+///
+/// Called from BOTH `parse_profile_bytes` and `parse_profile_file` (catches
+/// the direct, same-file overlap case at raw-parse time) AND from
+/// `finalize_profile` (catches the `extends`-inherited case, since
+/// `finalize_profile` always receives the fully `resolve_extends`-merged
+/// profile — see `load_from_file`). A guard placed only at raw-parse time
+/// would miss a child profile's `no_proxy` overlapping a base profile's
+/// `allow_domain`, since each file is validated independently before the
+/// merge; a guard placed only in `finalize_profile` would still catch that
+/// case, but running it at all three sites matches the placement of the
+/// other profile-level validators and fails as early as possible for the
+/// common (non-`extends`) case.
+///
+/// Uses `nono_proxy::config::no_proxy_entry_overlaps_host_pattern` (Plan
+/// 109-02's proxy-crate validator) so the profile-parse-time overlap
+/// semantics stay identical to the proxy-crate's own runtime overlap check.
+fn validate_profile_no_proxy(profile: &Profile) -> Result<()> {
+    for no_proxy_entry in &profile.network.no_proxy {
+        for allow in &profile.network.allow_domain {
+            let host = allow.domain();
+            if nono_proxy::config::no_proxy_entry_overlaps_host_pattern(no_proxy_entry, host) {
+                return Err(NonoError::ProfileParse(format!(
+                    "network.no_proxy entry '{no_proxy_entry}' overlaps network.allow_domain \
+                     entry '{host}' — a no_proxy bypass cannot cover a host explicitly allowed \
+                     through the proxy (D-06). Remove the no_proxy entry, or remove the \
+                     overlapping allow_domain entry, including any inherited via `extends`."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Profile {
     /// Resolve the per-handle-type AIPC allowlist by UNIONing the hard-coded
     /// supervisor defaults (D-05) with the profile widening tokens (D-06).
@@ -1694,6 +1732,17 @@ pub struct NetworkConfig {
     /// variant.
     #[serde(default)]
     pub deny_domain: Vec<String>,
+    /// Additional client-side proxy bypass entries appended to the generated
+    /// `NO_PROXY`/`no_proxy` env var in proxy mode. Does NOT grant network
+    /// access on its own — direct connections still require matching sandbox
+    /// permissions. A `no_proxy` entry overlapping `allow_domain` (directly,
+    /// via `extends` inheritance, or via group-name expansion) is a hard
+    /// parse-time error (D-06): it would silently defeat filtering for a host
+    /// the profile explicitly allowlisted through the proxy. See
+    /// `validate_profile_no_proxy` / `proxy_runtime::validate_proxy_launch_no_proxy_conflicts`
+    /// / `proxy_runtime::validate_expanded_proxy_no_proxy_conflicts`.
+    #[serde(default)]
+    pub no_proxy: Vec<String>,
     /// Credential services to enable via reverse proxy.
     /// Canonical profile key: `credentials` (legacy `proxy_credentials` accepted).
     ///
@@ -2832,6 +2881,14 @@ pub(crate) fn load_raw_profile_from_path(path: &Path) -> Result<Profile> {
 /// Resolve inheritance and apply implicit default-group merging for a raw profile.
 pub(crate) fn finalize_profile(mut profile: Profile) -> Result<Profile> {
     merge_implicit_default_groups(&mut profile)?;
+    // D-06: re-run the no_proxy/allow_domain overlap check on the fully
+    // extends-merged profile. `parse_profile_file`/`parse_profile_bytes`
+    // only see one file's own fields at a time, so a child's no_proxy
+    // overlapping a BASE profile's allow_domain (inherited via `extends`)
+    // is invisible until after resolve_extends has merged the chain — which
+    // has already happened by the time finalize_profile receives `profile`
+    // (see `load_from_file`).
+    validate_profile_no_proxy(&profile)?;
     Ok(profile)
 }
 
@@ -2933,6 +2990,10 @@ pub(crate) fn parse_profile_bytes(bytes: &[u8]) -> Result<Profile> {
     validate_profile_custom_credentials(&profile)?;
     validate_env_credential_keys(&profile)?;
     validate_profile_aipc_tokens(&profile)?;
+    // D-06: direct (same-file) no_proxy/allow_domain overlap check. The
+    // extends-inherited case is caught later, in finalize_profile, once the
+    // base chain is merged.
+    validate_profile_no_proxy(&profile)?;
     // Validate environment.set_vars keys (reserved/invalid keys are fatal)
     if let Some(env_config) = profile.environment.as_ref() {
         if !env_config.set_vars.is_empty() {
@@ -2995,6 +3056,11 @@ fn parse_profile_file(path: &Path) -> Result<Profile> {
     // request. Reuses Profile::resolve_aipc_allowlist's per-type from_token
     // parsers.
     validate_profile_aipc_tokens(&profile)?;
+
+    // D-06: direct (same-file) no_proxy/allow_domain overlap check. The
+    // extends-inherited case is caught later, in finalize_profile, once the
+    // base chain is merged.
+    validate_profile_no_proxy(&profile)?;
 
     // Validate environment.set_vars keys (reserved/invalid keys are fatal)
     if let Some(env_config) = profile.environment.as_ref() {
@@ -3295,6 +3361,7 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 &child.network.allow_domain,
             ),
             deny_domain: dedup_append(&base.network.deny_domain, &child.network.deny_domain),
+            no_proxy: dedup_append(&base.network.no_proxy, &child.network.no_proxy),
             open_port: dedup_append(&base.network.open_port, &child.network.open_port),
             listen_port: dedup_append(&base.network.listen_port, &child.network.listen_port),
             connect_port: dedup_append(&base.network.connect_port, &child.network.connect_port),
@@ -5282,6 +5349,7 @@ mod tests {
                 network_profile: InheritableValue::Set("base-net".to_string()),
                 allow_domain: vec![AllowDomainEntry::Plain("base.example.com".to_string())],
                 deny_domain: Vec::new(),
+                no_proxy: Vec::new(),
                 open_port: vec![3000],
                 listen_port: vec![4000],
                 connect_port: vec![],
@@ -5375,6 +5443,7 @@ mod tests {
                 network_profile: InheritableValue::Inherit,
                 allow_domain: vec![AllowDomainEntry::Plain("child.example.com".to_string())],
                 deny_domain: Vec::new(),
+                no_proxy: Vec::new(),
                 open_port: vec![3000, 5000],
                 listen_port: vec![4000, 6000],
                 connect_port: vec![],
@@ -8476,6 +8545,116 @@ mod allow_domain_tests {
         assert_eq!(
             merged.network.deny_domain,
             vec!["base-evil.com".to_string(), "child-evil.com".to_string()]
+        );
+    }
+
+    // ========================================================================
+    // Plan 109-03 / D-06 (#1415): no_proxy field, merge, and overlap validation
+    // ========================================================================
+
+    /// #1415 / D-06: NetworkConfig.no_proxy is a plain Vec<String>, mirroring
+    /// deny_domain's shape (no AllowDomainEntry/endpoint-rule variant).
+    #[test]
+    fn network_config_no_proxy_field_deserializes() {
+        let json = r#"{"allow_domain":["good.com"],"no_proxy":["internal-tool","10.0.0.5"]}"#;
+        let config: NetworkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.allow_domain.len(), 1);
+        assert_eq!(
+            config.no_proxy,
+            vec!["internal-tool".to_string(), "10.0.0.5".to_string()]
+        );
+    }
+
+    #[test]
+    fn network_config_no_proxy_defaults_empty() {
+        let json = r#"{"allow_domain":["good.com"]}"#;
+        let config: NetworkConfig = serde_json::from_str(json).unwrap();
+        assert!(config.no_proxy.is_empty());
+    }
+
+    /// no_proxy merges via dedup_append (union, order-preserving), mirroring
+    /// deny_domain/open_port/listen_port/upstream_bypass — not the
+    /// endpoint-aware merge_allow_domain used for allow_domain.
+    #[test]
+    fn merge_profiles_dedup_appends_no_proxy() {
+        let base = Profile {
+            network: NetworkConfig {
+                no_proxy: vec!["base-internal".to_string()],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let child = Profile {
+            network: NetworkConfig {
+                no_proxy: vec!["child-internal".to_string()],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let merged = merge_profiles(base, child);
+        assert_eq!(
+            merged.network.no_proxy,
+            vec!["base-internal".to_string(), "child-internal".to_string()]
+        );
+    }
+
+    /// D-06 non-negotiable regression test (verbatim name, upstream 1619275c):
+    /// a profile declaring a no_proxy entry that overlaps its OWN allow_domain
+    /// entry is rejected at parse time via validate_profile_no_proxy, wired
+    /// into parse_profile_bytes.
+    #[test]
+    fn test_network_no_proxy_rejects_allow_domain_overlap() {
+        let json =
+            r#"{"network":{"allow_domain":["api.example.com"],"no_proxy":["api.example.com"]}}"#;
+        let err = parse_profile_bytes(json.as_bytes())
+            .expect_err("no_proxy overlapping allow_domain must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no_proxy") && msg.contains("api.example.com"),
+            "error should name the overlapping no_proxy entry and host: {msg}"
+        );
+    }
+
+    /// A non-overlapping no_proxy/allow_domain pair loads successfully.
+    #[test]
+    fn test_network_no_proxy_non_overlapping_allow_domain_is_valid() {
+        let json =
+            r#"{"network":{"allow_domain":["api.example.com"],"no_proxy":["internal-only"]}}"#;
+        let profile =
+            parse_profile_bytes(json.as_bytes()).expect("non-overlapping no_proxy must parse");
+        assert_eq!(profile.network.no_proxy, vec!["internal-only".to_string()]);
+    }
+
+    /// D-06 non-negotiable regression test (verbatim name, upstream 1619275c):
+    /// a CHILD profile's no_proxy entry overlapping a BASE profile's
+    /// allow_domain entry (reached only through `extends` inheritance) is
+    /// still rejected — the overlap check must run on the fully-merged
+    /// profile (finalize_profile), not just each file's own unmerged fields.
+    #[test]
+    fn test_finalize_profile_rejects_inherited_no_proxy_allow_domain_overlap() {
+        let base = Profile {
+            network: NetworkConfig {
+                allow_domain: vec![AllowDomainEntry::Plain("api.example.com".to_string())],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let child = Profile {
+            network: NetworkConfig {
+                no_proxy: vec!["api.example.com".to_string()],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        // Each half is independently valid (no overlap visible within either
+        // file alone) — only the merged profile exposes the conflict.
+        let merged = merge_profiles(base, child);
+        let err = finalize_profile(merged)
+            .expect_err("inherited allow_domain overlap must be rejected on the merged profile");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no_proxy") && msg.contains("api.example.com"),
+            "error should name the overlapping no_proxy entry and host: {msg}"
         );
     }
 }
