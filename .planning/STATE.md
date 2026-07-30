@@ -2,20 +2,20 @@
 gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
-status: planning
-stopped_at: "v3.6 UPST12 opened 2026-07-28 (parallel to held v3.5). Requirements + roadmap authored additively (phases 108-111, 12 reqs: UPST12-01, NET-01..03, PROF-01..04, CORE-01/02, VERIFY-01, RLS-14). Phase dirs 108-111 created. NOT YET PLANNED. Next: /gsd:plan-phase 108 (UPST12 divergence audit v0.66.0..v0.69.0). tool-sandbox subsystem explicitly EXCLUDED -> deferred to v3.7."
+status: executing
+stopped_at: "v3.6 Phase 110 (Profile/Policy Absorb + platform_overrides) **PLANNED** 2026-07-30 — 8 plans across 4 waves, plan-checker `VERIFICATION PASSED` on iteration 2. Phases 108 (divergence audit) and 109 (proxy/network absorb) are COMPLETE. Next: `/gsd:plan-phase 111` or `/gsd:execute-phase 110`. Phase 110 planning produced one operator decision recorded as **D-08a** in `110-CONTEXT.md`: D-08's `platform_overrides.windows`-WINS rule is NARROWED — `windows_low_il_broker`/`windows_interpreters` keep Phase 51's fail-secure OR/union semantics (an override may tighten, never loosen), so `merge_profiles_or_semantics_base_true_child_false` at `profile/mod.rs:8142` stays green and unmodified. STILL OPEN from Phase 108: the proposed **Phase 112 'Security + Residual Sync'** amendment (27 unmapped non-tool-sandbox code commits, 11 draft req IDs) is written but deliberately NOT applied — ROADMAP.md has zero Phase 112 rows pending operator approve/modify/reject. Also still open: LIVE VULN `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204), fix `373a67ae` (#1369) unabsorbed. tool-sandbox subsystem remains EXCLUDED -> v3.7."
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
-parallel_stopped_at: "v3.5 PAUSED at Phase 104 Plan 03 Task 2/3. The prior external Azure block is RESOLVED (verified live 2026-07-29): root cause was NOT root-CTL propagation but profileType=PrivateTrustCIPolicy on NonoCertProfile; a new PublicTrust profile NonoPublicTrust was created and TRUSTED_SIGNING_PROFILE repointed to it 2026-07-04T02:28Z, after which smoke run 28692172728 completed SUCCESS (Status=Valid, real public chain). The check-trusted-signing-root.ps1 pre-check is therefore MOOT — do not gate on it. Remaining gate is solely operator authorization for the irreversible v0.66.1 tag push (tag NOT pushed; `git tag --list v0.66*` shows only upstream v0.66.0). Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
-last_updated: "2026-07-29T00:00:00.000Z"
-last_activity: 2026-07-29
+parallel_stopped_at: "**v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence: (1) reconciled the stale 'held-on-external-azure-block' status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B -> run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.** Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
+last_updated: "2026-07-30T12:57:53.651Z"
+last_activity: 2026-07-30 -- Phase 110 planning complete
 progress:
   total_phases: 4
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 25
+  completed_phases: 2
+  total_plans: 18
+  completed_plans: 10
+  percent: 56
 ---
 
 # Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
@@ -41,6 +41,7 @@ See: `.planning/PROJECT.md` (v3.6 opened 2026-07-28, parallel-active with HELD v
 Root cause was never CTL propagation: `NonoCertProfile` was `profileType = PrivateTrustCIPolicy` (a WDAC/code-integrity private hierarchy that chains to `Microsoft Enterprise ID Root CA 2021` and is *by design* never in the public CTL), despite the portal labelling it PublicTrust. Fix applied 2026-07-04: a **new** profile `NonoPublicTrust` (`profileType = PublicTrust`) against the **public** identity validation `20cb70d3-2d17-4fdb-9121-963628df6b63` (the private `25e8c70f…` was rejected with *"PublicTrust certificate requires Public identity validation"*), then `TRUSTED_SIGNING_PROFILE` repointed. Smoke then went GREEN: `Status=Valid`, issuer `CN=Microsoft ID Verified CS EOC CA 03` (real public root), signer `CN=TWG Global`. Full detail: memory `azure_trusted_signing_golive`.
 
 **Consequences for resuming v3.5:**
+
 - `scripts/azure/check-trusted-signing-root.ps1` (the root-CTL pre-check) is **moot** — it probes the *private* root's thumbprint `991D364E…`, which will never appear in the public CTL and is no longer the chain in use. Do NOT gate Plan 104-03 Task 2 on it.
 - The **only** remaining gate on Plan 104-03 is operator authorization for the irreversible `v0.66.1` tag push.
 - Phase 105 (live multi-registry publish) is **fully planned** — 5 PLAN files, 0 SUMMARYs — and unblocks the moment the tag lands.
@@ -50,10 +51,10 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 
 ## Current Position
 
-Phase: 108 (UPST12 Divergence Audit) — NOT STARTED (defining plan)
-Plan: —
-Status: v3.6 requirements + roadmap authored (phases 108-111); phase dirs created; ready for `/gsd:plan-phase 108`
-Last activity: 2026-07-28 — v3.6 UPST12 milestone opened (parallel to held v3.5)
+Phase: 110 (Profile/Policy Absorb + platform_overrides) — PLANNED, not yet executed
+Plan: 8 plans across 4 waves (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Status: Ready to execute
+Last activity: 2026-07-30 -- Phase 110 planning complete (plan-checker VERIFICATION PASSED, iteration 2)
 
 ## Performance Metrics
 
@@ -261,6 +262,7 @@ Then: **v3.6 Phase 108 PLANNED** — 5 plans across 4 waves (`de6998e9`), plan-c
 Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger foundation (`8cf5ed92`/`97450936`), `108-02` ADR-108 (`81255cc5`/`76ae7b10`), `108-03` NET/PROF/CORE tables (`fee56801`…`cc3549b3`), `108-04` tool-sandbox + DEPS/CI/DOCS (`43a00d2e`…`d95c8010`). Ledger is **1178 lines, 141 distinct SHAs all resolving**. `108-05` closeout (`6539030b`…`11e2f1ad`) after a first attempt died on a transient API 500 having written nothing. **Ledger final: 1642 lines, 176 distinct SHAs all resolving, all 100 window commits partitioned exactly once across 9 buckets, zero `TBD` cells.** Dispositions: adopt 21 / adapt 3 / DEFERRED→v3.7 20 / DEFERRED→proposed-Phase-112 18 + noise. Verifier re-derived the partition, SHA subjects, residue accounting, and carve-out checks from live git independently — `status: passed`, 8/8.
 
 **Findings so far that outlive this phase:**
+
 - **LIVE VULN:** `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) is in the fork's `Cargo.lock`; its fix `373a67ae` (#1369) sits unabsorbed in this window's DEPS bucket. Independently confirmed. Priority absorb.
 - **ADR-86 threat flag:** `e6d26871` (#1269) adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the policy-free core `crates/nono/src/lib.rs`. Needs boundary review before Phase 111 absorbs it.
 - **Phase 110 complication:** PROF-02's absorb target `capability_ext.rs` calls into the DEFERRED `tool_sandbox::dynamic_providers`.
@@ -281,6 +283,7 @@ Delivered: `deny_domain` (#1374) per ADR-108 ADAPT with the fail-closed guard at
 **SC4 vindicated D-09:** `../nono-py` failed to compile (`E0063: missing fields denied_hosts and no_proxy`) — struct drift caught only by building. Fixed + DCO-committed there (`e24c1ff`).
 
 📋 **Two operator amendments pending (non-blocking, both proposed-not-applied in `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`):**
+
 1. `108-DIVERGENCE-LEDGER.md` dispositions `6fb7ecbf`/`23d93fc9` as `adopt` — should become `won't-sync (target subsystem absent)`. Neither `crates/nono-proxy/src/aws/` nor `.../tls_intercept/` exists in the fork.
 2. `REQUIREMENTS.md` NET-03 claims "#1430 and #1437 are absorbed" — contradicted by the verified N/A finding.
 
@@ -289,6 +292,7 @@ Phase 108 **COMPLETE — 5/5 plans, verification `status: passed` (8/8 must-have
 ⛔ **BLOCKING OPERATOR GATE before `/gsd:plan-phase 109`:** the ledger reports an exact, hand-verified **27 non-tool-sandbox CODE commits mapping to none of v3.6's 12 requirements**, and proposes a new **Phase 112 "Security + Residual Sync"** (11 draft requirement IDs) to absorb them. That amendment is **written but deliberately NOT applied** — `ROADMAP.md` has zero Phase 112 rows, by design (D-19). **Approve, modify, or reject the amendment before planning Phase 109.** See `108-DIVERGENCE-LEDGER.md` §"Proposed Phase 112: Security + Residual Sync".
 
 **Three findings that must reach their downstream phase:**
+
 1. **LIVE VULN (act soon):** `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) is in the fork's `Cargo.lock`; the exact fix `373a67ae` (#1369) is unabsorbed in this window's DEPS bucket. One cherry-pick. Independently confirmed twice.
 2. **ADR-86 flag → Phase 111:** `e6d26871` (#1269) adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the policy-free core `crates/nono/src/lib.rs`. Boundary review required before absorb.
 3. **Phase 110 complication:** PROF-02's absorb target `capability_ext.rs` calls `tool_sandbox::dynamic_providers::expand_dynamic_tokens` — a DEFERRED module. Verified in `d4927f95`'s diff.

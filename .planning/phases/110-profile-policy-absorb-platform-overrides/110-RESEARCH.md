@@ -44,6 +44,12 @@
 **PROF-01 — `platform_overrides` and the flag migration**
 - **D-08:** back-compat contract — BOTH forms accepted, `platform_overrides.windows` WINS, no
   deprecation warning this milestone.
+- **D-08a (AMENDED 2026-07-30, operator decision — NARROWS D-08):** "wins" does NOT apply to the
+  two security-opt-in flags. `windows_low_il_broker`/`windows_interpreters` keep their existing
+  fail-secure OR/union semantics (`merge_profiles`, Phase 51/T-51A-02) — an override may tighten
+  but never silently loosen. No new precedence code for those two flags; the existing
+  `merge_profiles_or_semantics_base_true_child_false` test stays green and unmodified. See
+  Phase 110 CONTEXT.md D-08a for the full rationale and Plan 110-01 for the implementing task.
 - **D-09:** the migration must cover BOTH declaration sites. `windows_low_il_broker` and
   `windows_interpreters` are declared at `crates/nono-cli/src/profile/mod.rs:2391/2398` and again
   at ~2468-2475 (a second struct with its own serde handling). Migrating only one site leaves a
@@ -556,7 +562,11 @@ mechanism. The `windows_low_il_broker`/`windows_interpreters` top-level flags ar
 **If this table is empty:** N/A — see entries above. All three are low-to-medium risk and none
 block planning; they are flagged for the planner's awareness, not as blocking unknowns.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Both questions below were open at research time and are now resolved by the phase's plan set
+(confirmed by the plan-checker 2026-07-30; see `110-VALIDATION.md`'s Per-Requirement Verification
+Map for the closing test references).
 
 1. **Should the general Windows WFP path (`compile_network_policy`) or the daemon-only path
    (`agent_daemon/launch.rs::wfp_filter_add`) be the primary integration point for SC3, or both?**
@@ -569,6 +579,10 @@ block planning; they are flagged for the planner's awareness, not as blocking un
      satisfy "WFP-native remote-port-range emitter on Windows" as literally stated); treat daemon-path
      range support as optional/discretionary follow-on unless CONTEXT.md's `platform_overrides.windows`
      or a future decision explicitly calls for agent-launch port ranges.
+   - **RESOLVED:** Plan 110-06 builds the general (non-daemon) `compile_network_policy` →
+     `prepare_network_enforcement` → `nono-wfp-service.rs` path as the SC3 deliverable, per the
+     recommendation above. Daemon-path range support was not added and remains optional follow-on
+     work, consistent with this research's recommendation.
 
 2. **Does `nono-profile.schema.json` need a companion round-trip test for user-authored (not
    built-in) profiles using the new fields, or is schema-conformance of the 2 new built-in
@@ -585,6 +599,11 @@ block planning; they are flagged for the planner's awareness, not as blocking un
      top-level field (`platform_overrides`, `open_port_range`, `listen_port_range`) mirroring the
      existing ad-hoc-JSON test pattern already present in the file, rather than relying solely on the
      built-in-profiles iteration test.
+   - **RESOLVED:** Plan 110-01 Task 3 adds a hand-written schema-validation-plus-resolution test for
+     `platform_overrides` (a profile using BOTH `platform_overrides` and existing fields validates via
+     `validate_against_schema()`); Plan 110-04 Task 1 adds the analogous test for `open_port_range`/
+     `listen_port_range`. Both are distinct from, and in addition to, the built-in-profiles iteration
+     test, per the recommendation above.
 
 ## Environment Availability
 
@@ -613,7 +632,7 @@ access) has a documented, already-used fallback (pure-function unit testing of s
 ### Phase Requirements → Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| PROF-01 | `platform_overrides` parses, applies for current-OS block only, survives `extends` resolution, `windows_low_il_broker`/`windows_interpreters` both forms accepted with new-form-wins precedence | unit | `cargo test -p nono-cli profile::mod::tests -- platform_overrides` | ✅ Wave A (port upstream's own `platform_overrides_*` test suite from `ae1c513e`/`719975cf`, ~10 tests, directly reusable) |
+| PROF-01 | `platform_overrides` parses, applies for current-OS block only, survives `extends` resolution, `windows_low_il_broker`/`windows_interpreters` both forms accepted with fail-secure OR/union semantics preserved (D-08a) | unit | `cargo test -p nono-cli profile::mod::tests -- platform_overrides` | ✅ Wave A (port upstream's own `platform_overrides_*` test suite from `ae1c513e`/`719975cf`, ~10 tests, directly reusable; plus D-08a's distinguishing OR-semantics test) |
 | PROF-02a | `$VAR` expands from process env in `filesystem.allow`/`read`/`write`/etc. | unit | `cargo test -p nono-cli capability_ext::tests -- expand_env_var` | ✅ Wave B (port `test_profile_fs_allow_expands_env_var` from `2cbaa9a0`) |
 | PROF-02b | `@git:*` tokens expand in top-level filesystem lists on all 3 platforms (cfg-gated fallback on non-Unix) | unit | `cargo test -p nono-cli -- dynamic_tokens` (name per planner's module choice) | ✅ Wave B (port `dynamic_providers.rs`'s existing ~35-test suite wholesale) |
 | PROF-03a | `merge_port_ranges` correctness (empty/no-overlap/overlap/adjacent/contained/unsorted/3-way) | unit | `cargo test -p nono capability::tests -- merge_port_ranges` | ✅ Wave C (port upstream's 6 tests verbatim) |
@@ -665,6 +684,7 @@ access) has a documented, already-used fallback (pure-function unit testing of s
 | `@git:*` token resolution shelling out to `git` with attacker-influenced `workdir` | Tampering / Information Disclosure | Upstream's `parse_paths_from_stdout` already restricts git-config-derived paths to `global`/`system` scopes only, explicitly dropping `local`/`worktree` scope entries (a hostile per-repo `.git/config` cannot inject a path) — this restriction is already tested (`git_read_paths_excludes_per_repo_local_config_overrides`) and must be preserved unmodified when porting. |
 | A WFP range filter accidentally matching a wider port span than intended due to `valueLow`/`valueHigh` ordering | Elevation of Privilege | `FWP_RANGE0.valueLow`/`valueHigh` must be constructed from the already-validated `(start, end)` tuple where `start <= end` is enforced upstream of the WFP layer (both in `capability.rs`'s `allow_localhost_port_range` zero-start check and `profile_runtime.rs`'s `start > end` rejection) — do not re-derive ordering inside the WFP service; trust the already-validated tuple. |
 | macOS Seatbelt policy-compiler crash (SIGILL) from an oversized unrolled rule set | Denial of Service (self-inflicted, local) | Preserve `MACOS_PORT_RANGE_LIMIT` (2^14) exactly as upstream defines it, with the SIGILL rationale kept in the doc comment (per CONTEXT.md `<specifics>` — "a bare magic number invites removal"). |
+| A `platform_overrides.windows` block silently disabling a security opt-in (`windows_low_il_broker`) or removing an interpreter grant (`windows_interpreters`) the base profile enabled | Elevation of Privilege | D-08a: these two flags deliberately keep fail-secure OR/union merge semantics (not new-form-wins); an override can only ADD/tighten, never disable/remove — Phase 51's `merge_profiles_or_semantics_base_true_child_false` regression test stays green and unmodified, and Plan 110-01 adds a dedicated distinguishing test. |
 
 ## Sources
 
@@ -692,7 +712,7 @@ access) has a documented, already-used fallback (pure-function unit testing of s
 - `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER.md` §"PROF Cluster —
   Per-Commit Table" — work-list authority, cross-checked against the live commits.
 - `.planning/phases/110-profile-policy-absorb-platform-overrides/110-CONTEXT.md` — locked decisions
-  D-01 through D-14, cross-verified against code.
+  D-01 through D-14 (plus D-08a, added in revision), cross-verified against code.
 
 ### Secondary (MEDIUM confidence)
 - `.planning/phases/108-upst12-divergence-audit/108-CONTEXT.md` — D-05/D-06/D-07 tool-sandbox
