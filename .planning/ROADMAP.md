@@ -32,7 +32,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
-- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 2/8 plans
+- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 5/8 plans complete, 1 partial (110-06: Tasks 1-2 done, Task 3 live-kernel checkpoint pending operator action)
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
@@ -258,7 +258,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 110-03-PLAN.md — CapabilitySet port-range mechanism + macOS/Linux Unix emitters (PROF-03 library+Unix)
 - [x] 110-04-PLAN.md — NetworkConfig open_port_range/listen_port_range + profile_runtime.rs validation (PROF-03 schema)
 - [x] 110-05-PLAN.md — capability_ext.rs profile-pathway wiring + manifest-pathway conversion (PROF-03 wiring)
-- [ ] 110-06-PLAN.md — Windows WFP-native remote-port-range emitter, fork-original (PROF-03 Windows)
+- [ ] 110-06-PLAN.md — Windows WFP-native remote-port-range emitter, fork-original (PROF-03 Windows) — **PARTIAL, NOT complete**: Tasks 1-2 complete (`ff10f52f`/`ca8b3f25`/`8fe69f43`), Task 3 `checkpoint:human-verify` (PROF-03e, live-kernel `FwpmFilterAdd0` proof) PENDING operator action on an Administrator-elevated session; see `110-06-SUMMARY.md`
 - [ ] 110-07-PLAN.md — bun/mise runtime presets + resolvability tests (PROF-04)
 - [ ] 110-08-PLAN.md — Phase gate: cross-target clippy + make ci + binding rebuild + fork-invariant verify
 
@@ -323,5 +323,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 107. Close-Out | v3.5 | 0/? | Not started | - |
 | 108. UPST12 Divergence Audit | v3.6 | 0/? | Not started | - |
 | 109. Proxy/Network Absorb | v3.6 | 0/? | Not started | - |
-| 110. Profile/Policy Absorb + platform_overrides | v3.6 | 5/8 | In Progress|  |
+| 110. Profile/Policy Absorb + platform_overrides | v3.6 | 5/8 | In Progress (110-06 PARTIAL: Tasks 1-2 done, Task 3 checkpoint pending) |  |
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 0/? | Not started | - |
