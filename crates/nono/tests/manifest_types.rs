@@ -194,6 +194,42 @@ fn convert_network_ports() {
 }
 
 #[test]
+fn convert_network_localhost_range() {
+    let json = r#"{
+        "version": "0.1.0",
+        "network": {
+            "mode": "unrestricted",
+            "ports": {
+                "localhost_range": [[4000, 4010]]
+            }
+        }
+    }"#;
+    let manifest = CapabilityManifest::from_json(json).expect("parse");
+    let caps = CapabilitySet::try_from(&manifest).expect("convert");
+    assert_eq!(caps.localhost_port_ranges(), &[(4000, 4010)]);
+}
+
+#[test]
+fn convert_network_localhost_range_rejects_start_greater_than_end() {
+    let json = r#"{
+        "version": "0.1.0",
+        "network": {
+            "mode": "unrestricted",
+            "ports": {
+                "localhost_range": [[4010, 4000]]
+            }
+        }
+    }"#;
+    let manifest = CapabilityManifest::from_json(json).expect("parse");
+    let result = CapabilitySet::try_from(&manifest);
+    let err = result.expect_err("start > end should be rejected");
+    assert!(
+        err.to_string().contains("start must be <= end"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn convert_process_modes() {
     let json = r#"{
         "version": "0.1.0",

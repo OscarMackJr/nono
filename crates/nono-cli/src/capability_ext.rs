@@ -1060,6 +1060,13 @@ impl CapabilitySetExt for CapabilitySet {
             caps.add_localhost_port(*port);
         }
 
+        // Localhost IPC port ranges from profile. Already validated
+        // (start<=end, macOS cumulative cap) by profile_runtime.rs's
+        // prepare_profile_with_context before this point is ever reached.
+        for &[start, end] in &profile.network.open_port_range {
+            caps.add_localhost_port_range(start, end)?;
+        }
+
         // Outbound TCP connect port allowlist from profile (Linux Landlock V4+ only)
         #[cfg(target_os = "macos")]
         if !profile.network.connect_port.is_empty() {
@@ -2798,6 +2805,27 @@ mod tests {
 
         let (caps, _) = from_profile_locked(&profile, workdir.path(), &args).expect("build caps");
         assert_eq!(caps.tcp_connect_ports(), &[443, 5432]);
+    }
+
+    #[test]
+    fn test_from_profile_open_port_range_populates_localhost_port_ranges() {
+        let dir = tempdir().expect("tmpdir");
+        let profile_path = dir.path().join("open-port-range-profile.json");
+        std::fs::write(
+            &profile_path,
+            r#"{
+                "meta": { "name": "open-port-range-profile" },
+                "network": { "open_port_range": [[3000, 3010]] }
+            }"#,
+        )
+        .expect("write profile");
+        let profile = crate::profile::load_profile_from_path(&profile_path).expect("load profile");
+
+        let workdir = tempdir().expect("workdir");
+        let args = sandbox_args();
+
+        let (caps, _) = from_profile_locked(&profile, workdir.path(), &args).expect("build caps");
+        assert_eq!(caps.localhost_port_ranges(), &[(3000, 3010)]);
     }
 
     #[cfg(target_os = "macos")]
