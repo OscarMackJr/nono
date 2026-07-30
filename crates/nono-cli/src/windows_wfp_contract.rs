@@ -13,6 +13,10 @@ pub struct WfpRuntimeActivationRequest {
     pub tcp_connect_ports: Vec<u16>,
     pub tcp_bind_ports: Vec<u16>,
     pub localhost_ports: Vec<u16>,
+    /// Loopback-only port ranges (inclusive, `start <= end`), expressed
+    /// natively via WFP's `FWP_MATCH_RANGE` condition — one filter object per
+    /// range entry, never unrolled into per-port entries.
+    pub localhost_port_ranges: Vec<(u16, u16)>,
     pub target_program_path: Option<String>,
     pub session_sid: Option<String>,
     pub outbound_rule_name: Option<String>,

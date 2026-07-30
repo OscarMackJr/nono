@@ -521,6 +521,10 @@ pub(super) fn build_wfp_runtime_activation_request(
         tcp_connect_ports: policy.tcp_connect_ports.clone(),
         tcp_bind_ports,
         localhost_ports,
+        // Proxy-mode's port is a discrete single port with no range analog;
+        // this is a straight clone-through, not mirroring the localhost_ports
+        // mutation above.
+        localhost_port_ranges: policy.localhost_port_ranges.clone(),
         target_program_path: None,
         outbound_rule_name: None,
         inbound_rule_name: None,
@@ -1787,6 +1791,7 @@ mod tests {
             tcp_connect_ports: vec![],
             tcp_bind_ports: vec![],
             localhost_ports: vec![],
+            localhost_port_ranges: vec![],
             unsupported: vec![],
             preferred_backend: nono::WindowsNetworkBackendKind::Wfp,
             active_backend: nono::WindowsNetworkBackendKind::Wfp,

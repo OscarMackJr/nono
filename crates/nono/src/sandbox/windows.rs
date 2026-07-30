@@ -346,10 +346,14 @@ pub fn compile_network_policy(caps: &CapabilitySet) -> WindowsNetworkPolicy {
     let mut localhost_ports = caps.localhost_ports().to_vec();
     localhost_ports.sort_unstable();
     localhost_ports.dedup();
+    // Ranges need interval merging, not duplicate removal — do NOT reuse the
+    // plain sort_unstable()/dedup() pattern above for this field.
+    let localhost_port_ranges = crate::capability::merge_port_ranges(caps.localhost_port_ranges());
     let requires_backend = !matches!(mode, WindowsNetworkPolicyMode::AllowAll)
         || !tcp_connect_ports.is_empty()
         || !tcp_bind_ports.is_empty()
-        || !localhost_ports.is_empty();
+        || !localhost_ports.is_empty()
+        || !localhost_port_ranges.is_empty();
     let preferred_backend = if requires_backend {
         WindowsNetworkBackendKind::Wfp
     } else {
@@ -362,6 +366,7 @@ pub fn compile_network_policy(caps: &CapabilitySet) -> WindowsNetworkPolicy {
         tcp_connect_ports,
         tcp_bind_ports,
         localhost_ports,
+        localhost_port_ranges,
         unsupported,
         preferred_backend,
         active_backend,
@@ -3508,6 +3513,36 @@ mod tests {
         assert_eq!(policy.localhost_ports, vec![3000]);
         assert_eq!(policy.preferred_backend, WindowsNetworkBackendKind::Wfp);
         assert_eq!(policy.active_backend, WindowsNetworkBackendKind::Wfp);
+    }
+
+    #[test]
+    fn compile_network_policy_carries_port_ranges_into_wfp_policy() {
+        let mut caps = CapabilitySet::new().set_network_mode(NetworkMode::Blocked);
+        caps.add_localhost_port_range(3000, 3999)
+            .expect("valid port range");
+
+        let policy = compile_network_policy(&caps);
+        assert_eq!(policy.mode, WindowsNetworkPolicyMode::Blocked);
+        assert!(
+            policy.unsupported.is_empty(),
+            "port ranges should be fully supported"
+        );
+        assert!(policy.is_fully_supported());
+        assert_eq!(policy.localhost_port_ranges, vec![(3000, 3999)]);
+        assert_eq!(policy.preferred_backend, WindowsNetworkBackendKind::Wfp);
+        assert_eq!(policy.active_backend, WindowsNetworkBackendKind::Wfp);
+    }
+
+    #[test]
+    fn compile_network_policy_merges_overlapping_port_ranges() {
+        let mut caps = CapabilitySet::new().set_network_mode(NetworkMode::Blocked);
+        caps.add_localhost_port_range(1000, 2000)
+            .expect("valid port range");
+        caps.add_localhost_port_range(1500, 2500)
+            .expect("valid port range");
+
+        let policy = compile_network_policy(&caps);
+        assert_eq!(policy.localhost_port_ranges, vec![(1000, 2500)]);
     }
 
     #[test]

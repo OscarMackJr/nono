@@ -462,6 +462,8 @@ mod windows_impl {
             // Loopback proxy listener port: the ONLY outbound path permitted for this SID.
             // All other outbound is kernel-blocked by WFP (SC-3 dual-layer deny, D-02).
             localhost_ports: vec![proxy_port],
+            // This daemon-only launch path never grants port ranges; no range analog exists here.
+            localhost_port_ranges: vec![],
             // session_sid activates the SID-keyed per-agent filter path in
             // nono-wfp-service::install_wfp_policy_filters (validated SID → SD → WFP).
             // target_program_path is unused by the service when session_sid is Some.
@@ -528,6 +530,7 @@ mod windows_impl {
             tcp_connect_ports: vec![],
             tcp_bind_ports: vec![],
             localhost_ports: vec![],
+            localhost_port_ranges: vec![],
             target_program_path: None,
             session_sid: Some(package_sid.to_string()),
             outbound_rule_name: Some(format!("nono-agent-{tenant_id}")),
@@ -1726,6 +1729,7 @@ mod tests {
             tcp_connect_ports: vec![],
             tcp_bind_ports: vec![],
             localhost_ports: vec![proxy_port],
+            localhost_port_ranges: vec![],
             target_program_path: None,
             session_sid: Some(package_sid.to_string()),
             outbound_rule_name: Some(format!("nono-agent-{tenant_id}")),
@@ -1798,6 +1802,7 @@ mod tests {
                 tcp_connect_ports: vec![],
                 tcp_bind_ports: vec![],
                 localhost_ports: vec![proxy_port],
+                localhost_port_ranges: vec![],
                 target_program_path: None,
                 session_sid: Some("S-1-15-2-test".to_string()),
                 outbound_rule_name: Some("nono-agent-test".to_string()),
@@ -1843,6 +1848,7 @@ mod tests {
             tcp_connect_ports: vec![],
             tcp_bind_ports: vec![],
             localhost_ports: vec![proxy_port],
+            localhost_port_ranges: vec![],
             target_program_path: None,
             session_sid: Some(package_sid.to_string()),
             outbound_rule_name: Some(format!("nono-agent-{tenant_id}")),

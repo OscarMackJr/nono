@@ -391,6 +391,12 @@ pub struct WindowsNetworkPolicy {
     pub tcp_bind_ports: Vec<u16>,
     /// Loopback-only ports allowed for both connect and bind paths.
     pub localhost_ports: Vec<u16>,
+    /// Loopback-only port ranges (inclusive, `start <= end`) allowed for both
+    /// connect and bind paths. Expressed natively via WFP's `FWP_MATCH_RANGE`
+    /// condition (one filter object per range) — unlike macOS/Linux, Windows
+    /// never unrolls a range into per-port entries and needs no cumulative
+    /// port-count cap.
+    pub localhost_port_ranges: Vec<(u16, u16)>,
     /// Network capability shapes that are intentionally not in the first
     /// enforceable subset.
     pub unsupported: Vec<WindowsUnsupportedNetworkIssue>,
