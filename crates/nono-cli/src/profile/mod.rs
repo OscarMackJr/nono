@@ -9164,7 +9164,10 @@ mod platform_overrides_tests {
             .expect("platform_overrides must be Some");
         assert!(po.macos.is_some(), "macos slot must be declared");
         assert!(po.linux.is_some(), "linux slot must be declared");
-        assert!(po.windows.is_none(), "windows slot must stay None (undeclared)");
+        assert!(
+            po.windows.is_none(),
+            "windows slot must stay None (undeclared)"
+        );
         assert_eq!(
             po.macos.as_ref().unwrap().0.filesystem.allow,
             vec!["/mac/only".to_string()]
@@ -9254,10 +9257,7 @@ mod platform_overrides_tests {
     #[test]
     fn platform_overrides_valid_set_vars_merged_and_accepted() {
         let mut set_vars = std::collections::HashMap::new();
-        set_vars.insert(
-            "MY_OVERRIDE_VAR".to_string(),
-            "from-override".to_string(),
-        );
+        set_vars.insert("MY_OVERRIDE_VAR".to_string(), "from-override".to_string());
         let patch = Profile {
             environment: Some(EnvironmentConfig {
                 set_vars,
@@ -9402,7 +9402,10 @@ mod platform_overrides_tests {
         .expect("the current-platform slot must be Some after merging two same-slot overrides");
         assert_eq!(
             slot.0.filesystem.allow,
-            vec!["/from/base/slot".to_string(), "/from/child/slot".to_string()],
+            vec![
+                "/from/base/slot".to_string(),
+                "/from/child/slot".to_string()
+            ],
             "same-OS-key override merge must dedup-append, not clobber"
         );
     }
@@ -9560,5 +9563,4 @@ mod platform_overrides_tests {
              must pass schema validation",
         );
     }
-
 }
