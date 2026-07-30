@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: executing
-stopped_at: "v3.6 Phase 110 (Profile/Policy Absorb + platform_overrides) **EXECUTING** 2026-07-30 — 8 plans across 4 waves; `workflow.use_worktrees=false` so all plans run sequentially on the main working tree. Plan 110-06 (Windows WFP port-range emitter) is `autonomous: false` — a `checkpoint:human-verify` for the live-kernel `FwpmFilterAdd0` arm. Phases 108 (divergence audit) and 109 (proxy/network absorb) are COMPLETE. Phase 110 planning produced one operator decision recorded as **D-08a** in `110-CONTEXT.md`: D-08's `platform_overrides.windows`-WINS rule is NARROWED — `windows_low_il_broker`/`windows_interpreters` keep Phase 51's fail-secure OR/union semantics (an override may tighten, never loosen), so `merge_profiles_or_semantics_base_true_child_false` at `profile/mod.rs:8142` stays green and unmodified. STILL OPEN from Phase 108: the proposed **Phase 112 'Security + Residual Sync'** amendment (27 unmapped non-tool-sandbox code commits, 11 draft req IDs) is written but deliberately NOT applied — ROADMAP.md has zero Phase 112 rows pending operator approve/modify/reject. LIVE VULN `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) closed out-of-band by quick 260729-nh4. tool-sandbox subsystem remains EXCLUDED -> v3.7."
+stopped_at: "v3.6 Phase 110 Plan 01 (platform_overrides + extends preservation) COMPLETE 2026-07-30 — PlatformOverrides/PlatformOverride types ported (ae1c513e/719975cf), apply_platform_overrides wired as the first step of finalize_profile, D-10 deep-merge via merge_platform_overrides survives extends resolution, D-08a fail-secure OR/union semantics for windows_low_il_broker/windows_interpreters preserved verbatim (Phase 51's merge_profiles_or_semantics_base_true_child_false confirmed unmodified+passing). 14 new tests, both cross-target clippy gates clean. Next: Plan 110-02 (Wave 1)."
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
 parallel_stopped_at: "**v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence: (1) reconciled the stale 'held-on-external-azure-block' status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B -> run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.** Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
-last_updated: "2026-07-30T13:25:47.252Z"
-last_activity: 2026-07-30 -- Phase 110 execution started
+last_updated: "2026-07-30T13:48:05.307Z"
+last_activity: 2026-07-30 -- Phase 110 Plan 01 complete
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 18
-  completed_plans: 10
-  percent: 56
+  completed_plans: 11
+  percent: 61
 ---
 
 # Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
@@ -52,9 +52,9 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 ## Current Position
 
 Phase: 110 (Profile/Policy Absorb + platform_overrides) — EXECUTING
-Plan: 1 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
-Status: Executing Phase 110 — sequential (use_worktrees=false)
-Last activity: 2026-07-30 -- Phase 110 execution started
+Plan: 2 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Status: Ready to execute
+Last activity: 2026-07-30
 
 ## Performance Metrics
 
@@ -82,8 +82,16 @@ Last activity: 2026-07-30 -- Phase 110 execution started
 | Phase 103 P03 | 2min | 2 tasks | 0 files |
 | Phase 104 P01 | 3min | 2 tasks | 2 files |
 | Phase 104 P02 | 24min | 3 tasks | 5 files |
+| Phase 110 P01 | 20min | 3 tasks | 3 files |
 
 ## Accumulated Context
+
+### Key Decisions (v3.6 roadmap — Phase 110)
+
+| Decision | Phase | Rationale |
+|----------|-------|-----------|
+| D-08a preserved verbatim: windows_low_il_broker/windows_interpreters keep Phase 51/71 fail-secure OR/union merge_profiles semantics under platform_overrides.windows | 110-01 | apply_platform_overrides reuses merge_profiles unmodified — an override may tighten (add) but never silently loosen (disable/remove) either flag; Phase 51's merge_profiles_or_semantics_base_true_child_false test confirmed unmodified and passing |
+| 4th Profile-shape exhaustive-literal site discovered beyond the plan's named 3: policy.rs::ProfileDef::to_raw_profile | 110-01 | Compiler-caught (E0063) immediately on first build after adding the platform_overrides field; fixed the same way environment: None was handled there previously (built-in policy.json profiles don't declare the field yet) |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
@@ -251,9 +259,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-29 (resume → state reconciliation → v3.5 Phase 104 Plan 03 attempt)
+Last session: 2026-07-30T13:48:05.291Z
 
-Stopped at: **v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence this session: (1) reconciled the stale "held-on-external-azure-block" status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B → run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.**
+Stopped at: **v3.6 Phase 110 Plan 01 COMPLETE (2026-07-30)** — `platform_overrides` per-OS profile-patch model (`ae1c513e`/`719975cf`) ported: `PlatformOverrides`/`PlatformOverride` types + custom nested-rejection `Deserialize`, `apply_platform_overrides` wired as the first step of `finalize_profile`, `merge_platform_overrides`/`merge_platform_override_slot` D-10 deep-merge (survives `extends` resolution intact), post-merge re-validation of custom_credentials/env_credentials/set_vars, and a `platform_overrides` schema property. D-08a preserved verbatim — `windows_low_il_broker`/`windows_interpreters` keep Phase 51/71 fail-secure OR/union `merge_profiles` semantics; `merge_profiles_or_semantics_base_true_child_false` confirmed unmodified+passing. 14 new tests (`platform_overrides_tests`), both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean, `cargo fmt --all -- --check` clean. Commits `d44b5647`/`9872afa6`/`e8ce3a63`. See `110-01-SUMMARY.md`. Next: Plan 110-02 (Wave 1).
 
 Then: **v3.6 Phase 108 context gathered** — `108-CONTEXT.md` + `108-DISCUSSION-LOG.md` written (commit `85874c01`), 23 decisions (D-01..D-23) across 4 gray areas. Live scouting contradicted several milestone planning assumptions: the window is **100 non-merge commits** (not the `260727-jkn` map's "~40"), **20** commits touch the tool-sandbox surface (not the 7 PRs named in REQUIREMENTS) with **12 entangled**, `deny_domain` #1374 touches core `net_filter.rs`, and **~28 code commits map to no v3.6 requirement** (several security-relevant). **Phase 108's SC4 is unsatisfiable as written** — the audit will report the gap and propose a new **Phase 112 (Security + Residual Sync)**, gated on operator approval before Phase 109 planning.
 
@@ -268,7 +276,7 @@ Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger fo
 - **Phase 110 complication:** PROF-02's absorb target `capability_ext.rs` calls into the DEFERRED `tool_sandbox::dynamic_providers`.
 - Two CONTEXT decisions corrected mid-execution by re-measurement (D-04 bucket split, D-06 directory-vs-union) — see `1332b657`.
 
-Resume file: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER.md` (v3.6). The phase's `.continue-here.md` and `.planning/HANDOFF.json` both predate this session and are superseded.
+Resume file: `.planning/phases/110-profile-policy-absorb-platform-overrides/110-02-PLAN.md` (next plan in Wave 1)
 
 **Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 
