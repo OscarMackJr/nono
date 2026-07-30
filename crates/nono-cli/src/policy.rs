@@ -221,6 +221,11 @@ impl ProfileDef {
             // Built-in policy.json profiles use strict parent-of-protected
             // checking; individual user profiles can opt in via the field.
             allow_parent_of_protected: None,
+            // Phase 110 Plan 01 (PROF-01): built-in policy.json profiles don't
+            // declare platform_overrides today; the field is plumbed for
+            // struct-literal completeness (same pattern as `environment: None`
+            // above).
+            platform_overrides: None,
             // Phase 51 D-03: forward windows_low_il_broker from policy.json.
             // Only the claude-code built-in profile sets this to true.
             windows_low_il_broker: self.windows_low_il_broker,

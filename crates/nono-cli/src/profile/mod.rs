@@ -2380,6 +2380,18 @@ pub struct Profile {
     /// first-class capability.
     #[serde(default)]
     pub unsafe_macos_seatbelt_rules: Vec<String>,
+    /// Phase 110 (PROF-01, upstream `ae1c513e`/`719975cf`): per-OS profile
+    /// patches. Only the block matching the current OS is merged in by
+    /// `apply_platform_overrides` (called as the first step of
+    /// `finalize_profile`, after `extends` resolution). Survives `extends`
+    /// resolution intact (D-10) because `merge_profiles` deep-merges this
+    /// field via `merge_platform_overrides` rather than nulling it out.
+    /// D-08: when a setting appears both as a top-level `windows_*` flag and
+    /// under `platform_overrides.windows`, the new form wins for ordinary
+    /// settings — EXCEPT `windows_low_il_broker`/`windows_interpreters`
+    /// (D-08a), which keep fail-secure OR/union semantics unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform_overrides: Option<PlatformOverrides>,
     /// Windows-only. When true, routes non-PTY supervised launches through
     /// `WindowsTokenArm::BrokerLaunchNoPty` instead of `WriteRestricted`.
     /// Preserves mandatory-label NO_WRITE_UP write-deny while removing the
@@ -2464,6 +2476,12 @@ struct ProfileDeserialize {
     capabilities: CapabilitiesConfig,
     #[serde(default)]
     unsafe_macos_seatbelt_rules: Vec<String>,
+    /// Phase 110 (PROF-01): see `Profile::platform_overrides` doc-comment.
+    /// `deny_unknown_fields` on `ProfileDeserialize` requires this entry for
+    /// round-tripping — omitting it would cause a deserialization error for
+    /// any profile JSON containing `platform_overrides`.
+    #[serde(default)]
+    platform_overrides: Option<PlatformOverrides>,
     #[serde(default)]
     windows_low_il_broker: bool,
     /// Windows-only. See `Profile::windows_interpreters` doc-comment.
@@ -2515,6 +2533,10 @@ impl From<ProfileDeserialize> for Profile {
             skipdirs: raw.skipdirs,
             capabilities: raw.capabilities,
             unsafe_macos_seatbelt_rules: raw.unsafe_macos_seatbelt_rules,
+            // Phase 110 Plan 01 (D-09): forward platform_overrides verbatim.
+            // Exhaustively enumerated here so rustc's struct-literal
+            // completeness check catches any future field additions.
+            platform_overrides: raw.platform_overrides,
             windows_low_il_broker: raw.windows_low_il_broker,
             // Phase 71 Plan 01 (D-02): forward windows_interpreters verbatim.
             // Deserializes on all platforms; consumed by validate_launch_paths
@@ -2544,6 +2566,77 @@ impl<'de> Deserialize<'de> for Profile {
     {
         let raw = ProfileDeserialize::deserialize(deserializer)?;
         Ok(raw.into())
+    }
+}
+
+// ============================================================================
+// Phase 110 (PROF-01): platform_overrides — per-OS profile patches
+// ============================================================================
+//
+// Ported near-verbatim from upstream `ae1c513e` (#1371) + `719975cf` (#1380).
+// D-08a (fork amendment, operator decision 2026-07-30): `windows_low_il_broker`
+// and `windows_interpreters` deliberately keep their existing fail-secure
+// OR/union `merge_profiles` semantics (Phase 51/T-51A-02) when reached via a
+// `platform_overrides.windows` block — an override may tighten (add) but
+// never silently loosen (disable/remove) either flag. No special-case code
+// is added here for those two fields; `apply_platform_overrides` merges the
+// override in as an ordinary `merge_profiles` "child", so the existing
+// per-field merge rules (including the OR/union ones) apply unchanged.
+
+/// Per-OS profile patch container. Only the block matching the current OS is
+/// merged into the resolved profile.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatformOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub macos: Option<Box<PlatformOverride>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linux: Option<Box<PlatformOverride>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows: Option<Box<PlatformOverride>>,
+}
+
+impl PlatformOverrides {
+    /// Select the override block matching the current host OS, if any.
+    fn for_current_platform(self) -> Option<Box<PlatformOverride>> {
+        match crate::platform::current().os {
+            crate::platform::Os::Macos => self.macos,
+            crate::platform::Os::Linux => self.linux,
+            crate::platform::Os::Windows => self.windows,
+            crate::platform::Os::Unknown(_) => None,
+        }
+    }
+}
+
+/// A single per-OS profile patch. Wraps a full `Profile` so any existing
+/// profile field is reachable inside a `platform_overrides.<os>` block with
+/// no new precedence code required — it is merged in via the ordinary
+/// `merge_profiles` "child" path.
+///
+/// Nested `extends` and nested `platform_overrides` are rejected at parse
+/// time (T-110-02): allowing either would let a second inheritance system
+/// form inside the override, or let an override silently vanish/recurse in
+/// ways `merge_platform_overrides` does not account for.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlatformOverride(pub Profile);
+
+impl<'de> Deserialize<'de> for PlatformOverride {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let profile = Profile::deserialize(deserializer)?;
+        if profile.extends.is_some() {
+            return Err(serde::de::Error::custom(
+                "extends is not allowed inside platform_overrides",
+            ));
+        }
+        if profile.platform_overrides.is_some() {
+            return Err(serde::de::Error::custom(
+                "platform_overrides cannot be nested",
+            ));
+        }
+        Ok(PlatformOverride(profile))
     }
 }
 
@@ -3262,6 +3355,7 @@ fn load_base_profile_raw(
 fn merge_profiles(base: Profile, child: Profile) -> Profile {
     Profile {
         extends: None,
+        platform_overrides: None,
         meta: child.meta,
         security: SecurityConfig {
             groups: dedup_append(&base.security.groups, &child.security.groups),
@@ -5388,6 +5482,7 @@ mod tests {
             skipdirs: vec!["vendor".to_string()],
             capabilities: CapabilitiesConfig::default(),
             unsafe_macos_seatbelt_rules: Vec::new(),
+            platform_overrides: None,
             windows_low_il_broker: false,
             windows_interpreters: Vec::new(),
             session_hooks: SessionHooks::default(),
@@ -5482,6 +5577,7 @@ mod tests {
             skipdirs: vec!["dist".to_string()],
             capabilities: CapabilitiesConfig::default(),
             unsafe_macos_seatbelt_rules: Vec::new(),
+            platform_overrides: None,
             windows_low_il_broker: false,
             windows_interpreters: Vec::new(),
             session_hooks: SessionHooks::default(),

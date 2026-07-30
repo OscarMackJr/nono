@@ -127,6 +127,28 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Extra arguments appended to the child command at launch. Supports variable expansion (e.g. $NONO_PACKAGES). Expansion + resolution land in Plan 22-03 (PKG)."
+    },
+    "platform_overrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Phase 110 (PROF-01): per-OS profile patches. Only the block matching the current OS is merged in. Each of macos/linux/windows accepts the same shape as a full profile (minus extends and platform_overrides, which are rejected inside an override block). Nested schema fidelity is intentionally loose here (additionalProperties: true per slot) — full validation of the inner profile shape happens via the normal Profile deserializer at parse time.",
+      "properties": {
+        "macos": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Profile patch applied only when running on macOS."
+        },
+        "linux": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Profile patch applied only when running on Linux."
+        },
+        "windows": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Profile patch applied only when running on Windows."
+        }
+      }
     }
   },
   "$defs": {
