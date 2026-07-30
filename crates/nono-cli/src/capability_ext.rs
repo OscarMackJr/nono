@@ -3344,4 +3344,136 @@ mod tests {
         assert_eq!(socks[0].mode, UnixSocketMode::ConnectBind);
         assert_eq!(socks[0].scope, SocketScope::DirSubtree);
     }
+
+    // PROF-02 end-to-end proofs (Phase 110 Plan 02 Task 3): both ported
+    // verbatim from upstream (2cbaa9a0 / d4927f95), proving $VAR and
+    // @git:* both resolve through the real `CapabilitySet::from_profile`
+    // path at the 8 wired fs.* call sites.
+
+    #[test]
+    fn test_profile_fs_allow_expands_env_var() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let _env = crate::test_env::EnvVarGuard::set_all(&[(
+            "_TEST_CAPS_ALLOW_DIR",
+            dir.path().to_str().expect("utf-8 path"),
+        )]);
+        let profile = profile_with_fs_field("allow", "$_TEST_CAPS_ALLOW_DIR");
+        // Call from_profile directly — we already hold ENV_LOCK; from_profile_locked
+        // would try to acquire it again, deadlocking on the non-reentrant mutex.
+        let PreparedCaps { caps, .. } =
+            CapabilitySet::from_profile(&profile, dir.path(), &sandbox_args())
+                .expect("from_profile");
+        let fs_matches: Vec<_> = caps
+            .fs_capabilities()
+            .iter()
+            .filter(|c| {
+                c.source == CapabilitySource::Profile
+                    && c.resolved == dir.path().canonicalize().expect("canonicalize")
+            })
+            .collect();
+        assert_eq!(
+            fs_matches.len(),
+            1,
+            "$VAR in fs.allow should expand to the real path"
+        );
+        assert_eq!(fs_matches[0].access, AccessMode::ReadWrite);
+    }
+
+    // @git:* dynamic-token expansion is Unix-only by design (D-01): on
+    // non-Unix targets, `expand_dynamic_tokens` is the no-op passthrough
+    // fallback (see the cfg-gated fn near the top of this file), so this
+    // token would resolve as a literal, non-existent relative path rather
+    // than the main repo's `.git` dir. Gate the test to match the feature's
+    // actual platform scope.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn test_from_profile_filesystem_allow_expands_git_dynamic_token() {
+        let tmp = tempfile::TempDir::new_in(
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        )
+        .expect("tmpdir");
+        let main_repo = tmp.path().join("main");
+        std::fs::create_dir_all(&main_repo).expect("create main");
+
+        // git init + initial commit so worktree add works
+        let main_repo_str = main_repo.to_str().expect("main_repo utf8");
+        std::process::Command::new("git")
+            .args(["init", main_repo_str])
+            .output()
+            .expect("git init");
+        std::process::Command::new("git")
+            .args([
+                "-C",
+                main_repo_str,
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
+            .output()
+            .expect("git commit");
+
+        // git worktree add
+        let wt = tmp.path().join("linked");
+        let wt_str = wt.to_str().expect("wt utf8");
+        std::process::Command::new("git")
+            .args(["-C", main_repo_str, "worktree", "add", wt_str, "HEAD"])
+            .output()
+            .expect("git worktree add");
+
+        // Build a profile with @git:common-dir in filesystem.allow.
+        // In a linked worktree, @git:common-dir resolves to the absolute path of the
+        // main repo's .git directory — verifying that dynamic tokens are expanded in
+        // the top-level filesystem grant, not just in per-command sandboxes.
+        let profile_dir = tmp.path().join("profile");
+        std::fs::create_dir_all(&profile_dir).expect("create profile dir");
+        let profile_path = profile_dir.join("test.json");
+        std::fs::write(
+            &profile_path,
+            r#"{"meta":{"name":"test"},"filesystem":{"allow":["@git:common-dir"]}}"#,
+        )
+        .expect("write profile");
+
+        let profile = crate::profile::load_profile_from_path(&profile_path).expect("load profile");
+        let args = sandbox_args();
+
+        // from_profile receives &wt as workdir; @git:common-dir resolves via that
+        // path, not the process cwd — this is the scenario upstream flagged.
+        let (caps, _) = CapabilitySet::from_profile(&profile, &wt, &args)
+            .map(
+                |PreparedCaps {
+                     caps,
+                     needs_unlink_overrides,
+                     ..
+                 }| (caps, needs_unlink_overrides),
+            )
+            .expect("from_profile should succeed");
+
+        let expected_git_dir = main_repo
+            .join(".git")
+            .canonicalize()
+            .expect("canonicalize .git");
+        assert!(
+            caps.fs_capabilities().iter().any(|c| {
+                !c.is_file
+                    && c.access == nono::AccessMode::ReadWrite
+                    && c.resolved == expected_git_dir
+            }),
+            "@git:common-dir in filesystem.allow should grant ReadWrite on the main .git dir {:?}; \
+             caps = {:?}",
+            expected_git_dir,
+            caps.fs_capabilities()
+                .iter()
+                .map(|c| (&c.resolved, c.access))
+                .collect::<Vec<_>>()
+        );
+    }
 }

@@ -35,10 +35,7 @@
 // `#[cfg(test)]` suite, which does exercise every item) is therefore legitimately unreachable
 // from production code, not neglected code — same idiom as `session.rs`'s
 // `#![cfg_attr(target_os = "windows", allow(dead_code))]`.
-#![cfg_attr(
-    not(any(target_os = "linux", target_os = "macos")),
-    allow(dead_code)
-)]
+#![cfg_attr(not(any(target_os = "linux", target_os = "macos")), allow(dead_code))]
 
 use nono::{NonoError, Result};
 
@@ -785,7 +782,8 @@ global\tfile:/home/u/.gitconfig\tcore.attributesFile=/home/u/.gitattributes
         {
             let mut f = std::fs::File::create(&cfg).expect("create main");
             writeln!(f, "[user]\n\tname = Test").expect("write user");
-            writeln!(f, "[include]\n\tpath = {}", git_config_path_value(&work)).expect("write include");
+            writeln!(f, "[include]\n\tpath = {}", git_config_path_value(&work))
+                .expect("write include");
         }
 
         let paths = git::read_paths_with_global(&cfg).expect("git config");
