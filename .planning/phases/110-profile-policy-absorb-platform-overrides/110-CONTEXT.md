@@ -97,6 +97,28 @@ belong to **Phase 112**. NET work is done (Phase 109). SPIFFE is Phase 113.
   `platform_overrides.windows`, the new form takes precedence. Deprecation signalling is deliberately
   deferred until the new form is proven — adding a warning now would fire on every existing profile.
 
+- **D-08a (AMENDED 2026-07-30, operator decision — NARROWS D-08): "wins" does NOT apply to the two
+  security-opt-in flags. Fail-secure OR/union semantics are preserved.**
+  Raised by the plan-checker and verified against live code: `merge_profiles` merges
+  `windows_low_il_broker` with **OR** semantics at `crates/nono-cli/src/profile/mod.rs:3494`
+  (`base.windows_low_il_broker || child.windows_low_il_broker`), added deliberately in **Phase 51
+  (T-51A-02)** so a child profile cannot silently *disable* a security opt-in its base enabled. The
+  mitigation is guarded by an existing test, `merge_profiles_or_semantics_base_true_child_false`
+  (`profile/mod.rs:8140-8156`). `windows_interpreters` is a `Vec` merged by dedup-append (union), the
+  same class of one-way-tightening semantics.
+  **Resolution:** `platform_overrides.windows` wins for ordinary settings, but these two flags keep
+  OR/union — **an override may tighten, never loosen.** No new precedence code; Phase 51's test stays
+  green and MUST NOT be edited.
+  **Consequence to make explicit, not incidental:** `windows_low_il_broker: false` inside a
+  `platform_overrides.windows` block over a base `true` is a **silent no-op**. Because silent no-ops
+  are this milestone's recurring bug class (D-10, D-11), the plan must add a test pinning
+  `true(top-level) + false(override) → true` as *intended fail-secure behavior* — that is the only
+  case which distinguishes OR from child-wins, and the originally-planned D-08 tests
+  (`false+true→true`, `absent+true→true`) cannot tell them apart.
+  **Rationale:** CLAUDE.md — "Fail Secure… never silently degrade to a less secure state" and "when in
+  doubt, choose the more restrictive option." Honoring D-08 literally here would reopen exactly what
+  T-51A-02 closed.
+
 - **D-09: the migration must cover BOTH declaration sites.** `windows_low_il_broker` and
   `windows_interpreters` are declared at `crates/nono-cli/src/profile/mod.rs:2391/2398` **and again
   at ~2468–2475** (a second struct with its own serde handling — note the existing doc comment about
