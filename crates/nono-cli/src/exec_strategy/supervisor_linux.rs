@@ -642,14 +642,21 @@ pub(super) fn decide_network_notification(
             }
         }
         SYS_BIND => {
-            // Allow bind only on configured bind ports
-            if config.proxy_bind_ports.contains(&sockaddr.port) {
-                debug!("Proxy seccomp: allowing bind on port {}", sockaddr.port);
+            // Allow bind on configured bind ports OR inside a configured bind
+            // port range (union semantics: either source grants the bind).
+            let port = sockaddr.port;
+            let allowed = config.proxy_bind_ports.contains(&port)
+                || config
+                    .proxy_bind_port_ranges
+                    .iter()
+                    .any(|&(s, e)| port >= s && port <= e);
+            if allowed {
+                debug!("Proxy seccomp: allowing bind on port {}", port);
                 NetworkDecision::Allow
             } else {
                 debug!(
-                    "Proxy seccomp: denying bind on port {} (allowed: {:?})",
-                    sockaddr.port, config.proxy_bind_ports
+                    "Proxy seccomp: denying bind on port {} (allowed ports: {:?}, allowed ranges: {:?})",
+                    port, config.proxy_bind_ports, config.proxy_bind_port_ranges
                 );
                 NetworkDecision::Deny
             }
@@ -1527,10 +1534,25 @@ mod tests {
                 allow_launch_services_active: false,
                 proxy_port,
                 proxy_bind_ports,
+                proxy_bind_port_ranges: Vec::new(),
                 unix_socket_allowlist,
                 linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
                 tool_sandbox_runtime: None,
             }
+        }
+
+        /// Like [`make_config`], but also accepts `proxy_bind_port_ranges` for
+        /// range-based bind-allowance tests.
+        fn make_config_with_ranges<'a>(
+            backend: &'a DenyAllBackend,
+            proxy_port: u16,
+            proxy_bind_ports: Vec<u16>,
+            proxy_bind_port_ranges: Vec<(u16, u16)>,
+            unix_socket_allowlist: &'a [UnixSocketCapability],
+        ) -> SupervisorConfig<'a> {
+            let mut config = make_config(backend, proxy_port, proxy_bind_ports, unix_socket_allowlist);
+            config.proxy_bind_port_ranges = proxy_bind_port_ranges;
+            config
         }
 
         fn unix_pathname(path: &Path) -> SockaddrInfo {
@@ -1790,6 +1812,58 @@ mod tests {
         fn af_inet_bind_on_disallowed_port_denied() {
             let backend = DenyAllBackend;
             let config = make_config(&backend, 0, vec![3000], &[]);
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(4000), &config),
+                NetworkDecision::Deny
+            );
+        }
+
+        /// A port strictly inside a configured `proxy_bind_port_ranges` entry
+        /// must be allowed, even with an empty discrete `proxy_bind_ports`.
+        #[test]
+        fn bind_within_port_range_is_allowed() {
+            let backend = DenyAllBackend;
+            let config = make_config_with_ranges(&backend, 0, Vec::new(), vec![(3000, 3010)], &[]);
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(3005), &config),
+                NetworkDecision::Allow
+            );
+        }
+
+        /// A port one below the range start, and one above the range end,
+        /// must both stay denied.
+        #[test]
+        fn bind_outside_port_range_is_denied() {
+            let backend = DenyAllBackend;
+            let config = make_config_with_ranges(&backend, 0, Vec::new(), vec![(3000, 3010)], &[]);
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(2999), &config),
+                NetworkDecision::Deny
+            );
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(3011), &config),
+                NetworkDecision::Deny
+            );
+        }
+
+        /// Union semantics: a port allowed via EITHER the discrete list OR a
+        /// range must be allowed.
+        #[test]
+        fn bind_allowed_by_individual_port_or_range() {
+            let backend = DenyAllBackend;
+            let config =
+                make_config_with_ranges(&backend, 0, vec![9090], vec![(3000, 3010)], &[]);
+            // Allowed via the discrete list.
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(9090), &config),
+                NetworkDecision::Allow
+            );
+            // Allowed via the range.
+            assert_eq!(
+                decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(3007), &config),
+                NetworkDecision::Allow
+            );
+            // Neither list nor range covers this port.
             assert_eq!(
                 decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(4000), &config),
                 NetworkDecision::Deny

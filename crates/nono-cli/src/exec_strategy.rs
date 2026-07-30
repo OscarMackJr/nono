@@ -411,6 +411,11 @@ pub struct SupervisorConfig<'a> {
     /// Bind ports allowed for seccomp proxy-only fallback.
     #[cfg(target_os = "linux")]
     pub proxy_bind_ports: Vec<u16>,
+    /// Inclusive bind port ranges allowed for seccomp proxy-only fallback,
+    /// additive to `proxy_bind_ports` (union semantics: a port allowed via
+    /// EITHER the discrete list OR a range is allowed).
+    #[cfg(target_os = "linux")]
+    pub proxy_bind_port_ranges: Vec<(u16, u16)>,
     /// Pathname AF_UNIX socket grants allowed for seccomp proxy-only fallback.
     #[cfg(target_os = "linux")]
     pub unix_socket_allowlist: &'a [nono::UnixSocketCapability],
@@ -4905,6 +4910,8 @@ mod tests {
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
             #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
+            #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
@@ -5065,6 +5072,8 @@ mod tests {
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
             #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
+            #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
@@ -5221,6 +5230,8 @@ mod tests {
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
             #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
+            #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
@@ -5304,6 +5315,8 @@ mod tests {
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
             #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
+            #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
@@ -5343,6 +5356,8 @@ mod tests {
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
             #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
+            #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
@@ -5380,6 +5395,8 @@ mod tests {
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
             #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
+            #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
@@ -5400,6 +5417,8 @@ mod tests {
             proxy_port: 0,
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
+            #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
             #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
@@ -5442,6 +5461,8 @@ mod tests {
             proxy_port: 0,
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
+            #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
             #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
@@ -5587,6 +5608,8 @@ mod tests {
             proxy_port: 0,
             #[cfg(target_os = "linux")]
             proxy_bind_ports: Vec::new(),
+            #[cfg(target_os = "linux")]
+            proxy_bind_port_ranges: Vec::new(),
             #[cfg(target_os = "linux")]
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]

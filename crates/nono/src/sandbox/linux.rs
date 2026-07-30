@@ -1,6 +1,8 @@
 //! Linux sandbox implementation using Landlock LSM
 
-use crate::capability::{AccessMode, CapabilitySet, IpcMode, NetworkMode, SignalMode};
+use crate::capability::{
+    merge_port_ranges, AccessMode, CapabilitySet, IpcMode, NetworkMode, SignalMode,
+};
 use crate::error::{NonoError, Result};
 use crate::sandbox::SupportInfo;
 use landlock::{
@@ -882,6 +884,38 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
                             port, e
                         ))
                     })?;
+            }
+
+            // Add localhost IPC port RANGE rules (connect + bind per port),
+            // additive to the discrete-port loop above. landlock v0.4.4's
+            // NetPort::new takes only a single u16 (no native range rule
+            // type exists — confirmed by reading the vendored crate source),
+            // so this is a genuine per-port unroll with NO artificial cap
+            // (unlike macOS's Seatbelt backend, Landlock has no equivalent
+            // crash mode at high rule counts).
+            for (start, end) in merge_port_ranges(caps.localhost_port_ranges()) {
+                debug!(
+                    "Adding localhost TCP rules for port range {}..={}",
+                    start, end
+                );
+                for port in start..=end {
+                    ruleset = ruleset
+                        .add_rule(NetPort::new(port, AccessNet::ConnectTcp))
+                        .map_err(|e| {
+                            NonoError::SandboxInit(format!(
+                                "Cannot add TCP connect rule for localhost port range {}..={}: {}",
+                                start, end, e
+                            ))
+                        })?;
+                    ruleset = ruleset
+                        .add_rule(NetPort::new(port, AccessNet::BindTcp))
+                        .map_err(|e| {
+                            NonoError::SandboxInit(format!(
+                                "Cannot add TCP bind rule for localhost port range {}..={}: {}",
+                                start, end, e
+                            ))
+                        })?;
+                }
             }
         }
     }
@@ -3949,6 +3983,175 @@ mod tests {
         let err = apply_with_abi(&caps, &detected).expect_err("port 0 wildcard must be rejected");
         let msg = format!("{err}");
         assert!(msg.contains("macOS-only"), "unexpected error: {msg}");
+    }
+
+    /// Attempt an `AF_INET` `bind(2)` to `127.0.0.1:port`, returning whether it
+    /// succeeded. Used both to find free ports (unrestricted, pre-fork) and to
+    /// probe Landlock enforcement (post-`apply_with_abi`, inside a forked child).
+    #[cfg(target_os = "linux")]
+    fn tcp_bind_allowed(port: u16) -> bool {
+        let sock = unsafe { libc::socket(libc::AF_INET, libc::SOCK_STREAM, 0) };
+        if sock < 0 {
+            return false;
+        }
+        let mut addr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+        addr.sin_family = libc::AF_INET as u16;
+        addr.sin_port = port.to_be();
+        addr.sin_addr.s_addr = u32::from_be_bytes([127, 0, 0, 1]).to_be();
+        let result = unsafe {
+            libc::bind(
+                sock,
+                (&addr as *const libc::sockaddr_in).cast(),
+                std::mem::size_of::<libc::sockaddr_in>() as u32,
+            )
+        };
+        unsafe { libc::close(sock) };
+        result == 0
+    }
+
+    /// Best-effort: find a 3-port-wide window of currently-free localhost TCP
+    /// ports (via the kernel's own ephemeral-port allocator as a starting
+    /// hint), for use as a `localhost_port_ranges` test fixture. Not a hard
+    /// guarantee under concurrent test execution — consistent with this
+    /// file's existing "pick an ephemeral port, skip on failure" philosophy.
+    #[cfg(target_os = "linux")]
+    fn find_contiguous_free_ports() -> Option<u16> {
+        for _ in 0..20 {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").ok()?;
+            let base = listener.local_addr().ok()?.port();
+            drop(listener);
+            if base <= 1 || base > u16::MAX - 2 {
+                continue;
+            }
+            if tcp_bind_allowed(base) && tcp_bind_allowed(base + 1) && tcp_bind_allowed(base + 2) {
+                return Some(base);
+            }
+        }
+        None
+    }
+
+    /// Wave-0 gap PROF-03c: a `localhost_port_ranges` entry must add a
+    /// Landlock `BindTcp`/`ConnectTcp` rule for EVERY port in the range
+    /// (boundary + at least one interior port), while a port just outside the
+    /// range stays denied. `landlock` v0.4.4's `NetPort::new` takes a single
+    /// `u16` — there is no batch/range API to assert against directly — so
+    /// this asserts via the ruleset's resulting sandbox behavior (`bind()`
+    /// outcome in a forked child), matching this file's existing
+    /// `apply_with_abi()`-in-a-forked-child test pattern (the irreversible
+    /// `restrict_self()` inside `apply_with_abi` must never run in the parent
+    /// test process).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_port_range_expands_landlock_bind_rules_for_every_port() {
+        let detected = match detect_abi() {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        if !detected.has_network() {
+            // Pre-V4 kernel: Landlock can't filter ports natively at all;
+            // range expansion is meaningless without native NetPort support.
+            return;
+        }
+
+        let Some(start) = find_contiguous_free_ports() else {
+            return; // Couldn't find 3 contiguous free ports; skip rather than flake.
+        };
+        let interior = start + 1;
+        let end = start + 2;
+        let outside = start - 1;
+
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_localhost_port_range(start, end)
+            .expect("valid range");
+
+        let mut report_pipe = [0i32; 2];
+        let pipe_result = unsafe { libc::pipe(report_pipe.as_mut_ptr()) };
+        assert_eq!(pipe_result, 0, "pipe() failed");
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork() failed");
+
+        if pid == 0 {
+            unsafe { libc::close(report_pipe[0]) };
+
+            let payload: [u8; 4] = if apply_with_abi(&caps, &detected).is_err() {
+                [9, 9, 9, 9] // sentinel: apply failed unexpectedly
+            } else {
+                [
+                    u8::from(tcp_bind_allowed(start)),
+                    u8::from(tcp_bind_allowed(interior)),
+                    u8::from(tcp_bind_allowed(end)),
+                    u8::from(!tcp_bind_allowed(outside)),
+                ]
+            };
+
+            unsafe {
+                libc::write(report_pipe[1], payload.as_ptr().cast(), payload.len());
+                libc::close(report_pipe[1]);
+                libc::_exit(0);
+            }
+        }
+
+        unsafe { libc::close(report_pipe[1]) };
+        let mut buf = [0u8; 4];
+        let n = unsafe {
+            libc::read(
+                report_pipe[0],
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+            )
+        };
+        unsafe { libc::close(report_pipe[0]) };
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+
+        assert_eq!(n, 4, "expected 4 bytes from child");
+        assert_ne!(buf, [9, 9, 9, 9], "apply_with_abi failed unexpectedly in child");
+        assert_eq!(buf[0], 1, "range start port must be bindable");
+        assert_eq!(buf[1], 1, "interior range port must be bindable");
+        assert_eq!(buf[2], 1, "range end port must be bindable");
+        assert_eq!(buf[3], 1, "port just outside the range must be denied");
+    }
+
+    /// D-05/D-06: unlike macOS's Seatbelt backend (capped at
+    /// `MACOS_PORT_RANGE_LIMIT`, 2^14), Landlock has no equivalent crash mode
+    /// at high rule counts, so a range far wider than that cap must still
+    /// apply without error.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_port_range_no_artificial_cap_on_large_range() {
+        let detected = match detect_abi() {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        if !detected.has_network() {
+            return;
+        }
+
+        // 20,001 ports — wider than macOS's 16,384-port cumulative cap.
+        let mut caps = CapabilitySet::new().block_network();
+        caps.add_localhost_port_range(20000, 40000)
+            .expect("valid range");
+
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork() failed");
+
+        if pid == 0 {
+            let exit_code = match apply_with_abi(&caps, &detected) {
+                Ok(_) => 0,
+                Err(_) => 1,
+            };
+            unsafe { libc::_exit(exit_code) };
+        }
+
+        let mut status = 0;
+        unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert!(libc::WIFEXITED(status));
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "Landlock must accept a >16,384-port range with no cap (unlike macOS)"
+        );
     }
 
     #[test]
