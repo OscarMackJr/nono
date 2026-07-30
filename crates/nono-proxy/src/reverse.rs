@@ -563,7 +563,11 @@ fn filter_headers(header_bytes: &[u8], cred_header: &str) -> Vec<(String, String
 }
 
 /// Extract Content-Length value from raw headers.
-fn extract_content_length(header_bytes: &[u8]) -> Option<usize> {
+///
+/// `pub(crate)`: reused by the forward-proxy path (`server::handle_forward_http`,
+/// #1335) so both paths parse Content-Length identically instead of
+/// duplicating this logic.
+pub(crate) fn extract_content_length(header_bytes: &[u8]) -> Option<usize> {
     let header_str = std::str::from_utf8(header_bytes).ok()?;
     for line in header_str.lines() {
         if line.to_lowercase().starts_with("content-length:") {
@@ -668,7 +672,11 @@ async fn connect_upstream_tls(
 }
 
 /// Connect to one of the pre-resolved socket addresses with timeout.
-async fn connect_to_resolved(addrs: &[SocketAddr], host: &str) -> Result<TcpStream> {
+///
+/// `pub(crate)`: reused by the forward-proxy path (`server::handle_forward_http`,
+/// #1335) as its plain-TCP (no-TLS) upstream connect — the DNS-rebinding-safe
+/// connect-to-resolved-addresses mechanism is identical for both paths.
+pub(crate) async fn connect_to_resolved(addrs: &[SocketAddr], host: &str) -> Result<TcpStream> {
     let mut last_err = None;
     for addr in addrs {
         match tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
@@ -694,7 +702,10 @@ async fn connect_to_resolved(addrs: &[SocketAddr], host: &str) -> Result<TcpStre
 /// Looks for the "HTTP/x.y NNN" pattern in the first line. Returns 502
 /// if the response doesn't contain a valid status line (upstream sent
 /// garbage or incomplete data).
-fn parse_response_status(data: &[u8]) -> u16 {
+/// `pub(crate)`: reused by the forward-proxy path (`server::handle_forward_http`,
+/// #1335) to parse the upstream status code for its audit event, identically
+/// to how the reverse-proxy path parses it here.
+pub(crate) fn parse_response_status(data: &[u8]) -> u16 {
     // Find the end of the first line (or use full data if no newline)
     let line_end = data
         .iter()

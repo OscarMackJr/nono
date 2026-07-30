@@ -21,11 +21,17 @@ use rustls::ClientConfig;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
+use url::Url;
 use zeroize::Zeroizing;
+
+/// Maximum forward-proxy request body size (16 MiB), mirroring
+/// `reverse::MAX_REQUEST_BODY`. Prevents DoS from a malicious Content-Length
+/// on the plain-HTTP forward path (#1335).
+const MAX_FORWARD_BODY: usize = 16 * 1024 * 1024;
 
 /// Maximum total size of HTTP headers (64 KiB). Prevents OOM from
 /// malicious clients sending unbounded header data.
@@ -730,6 +736,372 @@ async fn accept_loop(
     }
 }
 
+/// Parse host and port from a non-CONNECT request line's absolute-form
+/// target (e.g. `GET http://host:port/path HTTP/1.1`).
+///
+/// Ported from upstream `726ac1f1` (#1335). Not previously present in this
+/// fork's `server.rs` (verified absent before this plan — no prior caller
+/// needed it, since absolute-form requests fell through to a flat 400).
+/// Used by `handle_forward_http` to resolve the target for both the
+/// host-filter check and audit records.
+fn parse_non_connect_target(line: &str) -> Result<(String, u16)> {
+    let mut parts = line.split_whitespace();
+    let _method = parts.next();
+    let url = parts
+        .next()
+        .ok_or_else(|| ProxyError::HttpParse(format!("malformed request line: {}", line)))?;
+    let parsed = Url::parse(url)
+        .map_err(|e| ProxyError::HttpParse(format!("invalid URL in request: {}: {}", url, e)))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| ProxyError::HttpParse(format!("no host in URL: {}", url)))?
+        .to_string();
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    Ok((host, port))
+}
+
+/// Request-target form of a non-CONNECT proxy request line, used to
+/// discriminate forward-proxy (absolute-form) requests from reverse-proxy
+/// (origin-form) ones.
+///
+/// A forward-proxy client (one honoring `HTTP_PROXY`) sends the *absolute*
+/// URL in the request line: `GET http://example.com/path HTTP/1.1`. A
+/// reverse-proxy client sends *origin-form*: `GET /service/path HTTP/1.1`.
+/// Discriminating on the target's form (not the method) is what lets nono
+/// act as a drop-in `HTTP_PROXY` target without disturbing the existing
+/// origin-form reverse-proxy routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestTargetForm {
+    /// Absolute-form `http://…` — plain HTTP forward proxy.
+    AbsoluteHttp,
+    /// Absolute-form `https://…` — must be tunneled via CONNECT, not forwarded.
+    AbsoluteHttps,
+    /// Origin-form (`/path`) or anything else — reverse-proxy / inline path.
+    Origin,
+}
+
+/// Classify the request-target of a non-CONNECT request line.
+///
+/// Only the scheme prefix of the request target is inspected. The check is
+/// ASCII-case-insensitive per RFC 3986 (schemes are case-insensitive) and
+/// deliberately conservative: anything that is not an `http://` or `https://`
+/// absolute URL is treated as origin-form so existing reverse-proxy and
+/// inline flows are completely unaffected.
+fn classify_request_target(line: &str) -> RequestTargetForm {
+    // Request line: METHOD SP request-target SP HTTP-version
+    let Some(target) = line.split_whitespace().nth(1) else {
+        return RequestTargetForm::Origin;
+    };
+    // Case-insensitive scheme match without allocating a lowercase copy of
+    // the whole (possibly long) URL.
+    let lower_starts_with = |s: &str, prefix: &str| {
+        s.len() >= prefix.len()
+            && s.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+    };
+    if lower_starts_with(target, "http://") {
+        RequestTargetForm::AbsoluteHttp
+    } else if lower_starts_with(target, "https://") {
+        RequestTargetForm::AbsoluteHttps
+    } else {
+        RequestTargetForm::Origin
+    }
+}
+
+/// Rewrite an absolute-form request line into origin-form for forwarding.
+///
+/// `GET http://host/p?q HTTP/1.1` -> `GET /p?q HTTP/1.1`
+/// `GET http://host HTTP/1.1`     -> `GET /`      (empty path becomes `/`)
+///
+/// The method and HTTP-version tokens are preserved verbatim. Returns the
+/// rewritten first line (with trailing CRLF) so it can be prepended to the
+/// forwarded header block.
+fn rewrite_absolute_to_origin_form(line: &str) -> Result<String> {
+    let mut parts = line.split_whitespace();
+    let method = parts
+        .next()
+        .ok_or_else(|| ProxyError::HttpParse(format!("malformed request line: {}", line)))?;
+    let target = parts
+        .next()
+        .ok_or_else(|| ProxyError::HttpParse(format!("malformed request line: {}", line)))?;
+    // Preserve the version if present; default to HTTP/1.1 otherwise.
+    let version = parts.next().unwrap_or("HTTP/1.1");
+
+    let parsed = Url::parse(target)
+        .map_err(|e| ProxyError::HttpParse(format!("invalid URL in request: {}: {}", target, e)))?;
+
+    let mut origin = parsed.path().to_string();
+    if origin.is_empty() {
+        origin.push('/');
+    }
+    if let Some(query) = parsed.query() {
+        origin.push('?');
+        origin.push_str(query);
+    }
+
+    // Defence in depth: the method/version tokens come from the client's
+    // request line and are echoed into the forwarded request line, which is
+    // itself a protocol-formatting boundary. `Url` already rejects control
+    // characters in the target, but strip CR/LF from the surrounding tokens
+    // so a crafted method/version can never split the forwarded request.
+    let sanitise = |s: &str| s.replace(['\r', '\n'], "");
+    Ok(format!(
+        "{} {} {}\r\n",
+        sanitise(method),
+        origin,
+        sanitise(version)
+    ))
+}
+
+/// Strip hop-by-hop proxy headers (`Proxy-Connection`, `Proxy-Authorization`)
+/// from a raw header block before forwarding upstream.
+///
+/// These headers are meaningful only on the client<->proxy hop and must never
+/// be forwarded: `Proxy-Authorization` carries the session token, and
+/// `Proxy-Connection` is a non-standard hop-by-hop hint. Other headers
+/// (including `Host`) are preserved verbatim so the forwarded request matches
+/// what the client sent.
+fn strip_proxy_headers(header_bytes: &[u8]) -> Vec<u8> {
+    let header_str = match std::str::from_utf8(header_bytes) {
+        Ok(s) => s,
+        // Non-UTF-8 headers: forward unchanged rather than corrupt the block.
+        // The upstream will reject malformed headers itself.
+        Err(_) => return header_bytes.to_vec(),
+    };
+    let mut out = Vec::with_capacity(header_bytes.len());
+    for line in header_str.split_inclusive("\r\n") {
+        let name = line.split(':').next().unwrap_or("").trim();
+        if name.eq_ignore_ascii_case("proxy-connection")
+            || name.eq_ignore_ascii_case("proxy-authorization")
+        {
+            continue;
+        }
+        out.extend_from_slice(line.as_bytes());
+    }
+    out
+}
+
+/// Handle an absolute-form `http://` forward-proxy request.
+///
+/// This is the plain-HTTP counterpart to the CONNECT tunnel: a client that
+/// honors `HTTP_PROXY` sends `GET http://host/path HTTP/1.1` for cleartext
+/// HTTP, and nono forwards it after applying the same trust boundary the
+/// tunnel path uses (session-token auth + host filter).
+///
+/// Steps:
+/// 1. Enforce `Proxy-Authorization` (same session-token gate as CONNECT /
+///    reverse). On failure: 407 + audit denial, matching the reverse path's
+///    no-credential branch.
+/// 2. Parse host+port from the absolute URL and run the host filter. On deny:
+///    403 + `HostDenied` audit event, mirroring the no-routes inline `else`.
+/// 3. Rewrite the request line to origin-form and strip hop-by-hop proxy
+///    headers, then forward directly to the DNS-rebinding-safe resolved
+///    addresses `check_host` already returned.
+///
+/// SAFETY / SECURITY: this path intentionally does NOT restrict itself to
+/// loopback-only upstreams. Upstream nono (`726ac1f1`) documents this as not
+/// calling a `validate_http_upstream_target` loopback-only guard; this fork's
+/// `reverse.rs` has no function by that name (the reverse-proxy path here
+/// accepts any route-configured upstream without a loopback restriction), but
+/// the underlying rationale still applies and is preserved: a general forward
+/// proxy exists precisely to reach arbitrary ALLOWED `http://` hosts on
+/// behalf of the agent, unlike a reverse-proxy route (operator-configured,
+/// where an accidental non-local plain-HTTP upstream would be a
+/// credential-leak footgun). Here the host filter (`check_host`) is the
+/// sufficient and authoritative trust boundary: it applies the allowlist and
+/// the cloud-metadata / link-local SSRF guards, and returns the exact
+/// resolved addresses this function then connects to. Do NOT add a
+/// loopback-only restriction to this path — that would defeat its purpose.
+async fn handle_forward_http(
+    first_line: &str,
+    stream: &mut tokio::net::TcpStream,
+    header_bytes: &[u8],
+    buffered: &[u8],
+    state: &ProxyState,
+) -> Result<()> {
+    // 1. Proxy-Authorization gate — identical to the reverse-proxy
+    //    no-credential branch: 407 on missing/invalid auth, with an audit
+    //    denial recording the authentication failure. No auth bypass.
+    if let Err(e) = token::validate_proxy_auth(header_bytes, &state.session_token) {
+        // Parse the target host for the audit record where possible; fall
+        // back to a placeholder so a malformed line still audits.
+        let (host, port) =
+            parse_non_connect_target(first_line).unwrap_or_else(|_| ("unknown".to_string(), 0));
+        audit::log_denied(
+            Some(&state.audit_log),
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+                auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::AuthenticationFailed),
+                ..audit::EventContext::default()
+            },
+            &host,
+            port,
+            &e.to_string(),
+        );
+        let response = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"nono\"\r\nContent-Length: 0\r\n\r\n";
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    // 2. Parse host+port and run the host filter (DNS resolution + SSRF guard).
+    let (host, port) = parse_non_connect_target(first_line)?;
+    let check = state.filter.check_host(&host, port).await?;
+    if !check.result.is_allowed() {
+        let reason = check.result.reason();
+        audit::log_denied(
+            Some(&state.audit_log),
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+                ..audit::EventContext::default()
+            },
+            &host,
+            port,
+            &reason,
+        );
+        let sanitised = reason.replace(['\r', '\n'], " ");
+        let response = format!("HTTP/1.1 403 Forbidden: {}\r\n\r\n", sanitised);
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
+    // 3. Build the origin-form request: rewritten request line + proxy-header
+    //    -stripped header block, then read the body honoring Content-Length.
+    //    `filtered_headers` already retains any client-sent Content-Length
+    //    verbatim (strip_proxy_headers only removes Proxy-Connection and
+    //    Proxy-Authorization), so no Content-Length is re-added here.
+    let origin_line = rewrite_absolute_to_origin_form(first_line)?;
+    let inbound_path = origin_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .to_string();
+    let method = first_line
+        .split_whitespace()
+        .next()
+        .unwrap_or("GET")
+        .to_string();
+
+    let filtered_headers = strip_proxy_headers(header_bytes);
+
+    let content_length = reverse::extract_content_length(header_bytes);
+    let body = if let Some(len) = content_length {
+        if len > MAX_FORWARD_BODY {
+            let response = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+        let mut buf = Vec::with_capacity(len);
+        let pre = buffered.len().min(len);
+        buf.extend_from_slice(&buffered[..pre]);
+        let remaining = len - pre;
+        if remaining > 0 {
+            let mut rest = vec![0u8; remaining];
+            stream.read_exact(&mut rest).await?;
+            buf.extend_from_slice(&rest);
+        }
+        buf
+    } else {
+        Vec::new()
+    };
+
+    let mut request_bytes =
+        Vec::with_capacity(origin_line.len() + filtered_headers.len() + body.len() + 2);
+    request_bytes.extend_from_slice(origin_line.as_bytes());
+    request_bytes.extend_from_slice(&filtered_headers);
+    request_bytes.extend_from_slice(b"\r\n");
+    if !body.is_empty() {
+        request_bytes.extend_from_slice(&body);
+    }
+
+    // 4. Connect directly to the resolved addresses (DNS-rebinding-safe) and
+    //    forward. Fork scope note: upstream `726ac1f1` additionally chains
+    //    through an external/enterprise proxy via a `forward.rs`/
+    //    `UpstreamSpec`/`UpstreamStrategy` abstraction this fork does not
+    //    have (verified absent — the same class of miss the plan's
+    //    execution_notes flagged for `<interfaces>` blocks in this
+    //    milestone). External-proxy chaining for this specific forward-http
+    //    path is out of scope here; the security-critical part — connecting
+    //    only to the DNS-rebinding-safe resolved addresses `check_host`
+    //    returned, never re-resolving the hostname — is fully implemented.
+    let mut upstream = match reverse::connect_to_resolved(&check.resolved_addrs, &host).await {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("forward-http upstream connection failed: {}", e);
+            audit::log_denied(
+                Some(&state.audit_log),
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
+                    ),
+                    ..audit::EventContext::default()
+                },
+                &host,
+                port,
+                &e.to_string(),
+            );
+            let response = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
+    };
+
+    upstream.write_all(&request_bytes).await?;
+    upstream.flush().await?;
+
+    // Stream the response back to the client without buffering, tracking the
+    // upstream status code for the audit record (mirrors the reverse-proxy
+    // streaming loop in reverse.rs).
+    let mut response_buf = [0u8; 8192];
+    let mut status_code: u16 = 502;
+    let mut first_chunk = true;
+
+    loop {
+        let n = match upstream.read(&mut response_buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                debug!("forward-http upstream read error: {}", e);
+                break;
+            }
+        };
+
+        if first_chunk {
+            status_code = reverse::parse_response_status(&response_buf[..n]);
+            first_chunk = false;
+        }
+
+        stream.write_all(&response_buf[..n]).await?;
+        stream.flush().await?;
+    }
+
+    // The forward path is transparent pass-through: no managed credential is
+    // ever consulted or injected, so the audit record positively asserts
+    // managed_credential_active = false (not merely omitted) — this is the
+    // T-109-12 mitigation the plan's threat model requires.
+    audit::log_l7_request(
+        Some(&state.audit_log),
+        audit::ProxyMode::Reverse,
+        &audit::EventContext {
+            auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+            auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Succeeded),
+            managed_credential_active: Some(false),
+            ..audit::EventContext::default()
+        },
+        &audit::L7RequestInfo {
+            host: &host,
+            port,
+            method: &method,
+            path: &inbound_path,
+            status: status_code,
+        },
+    );
+
+    Ok(())
+}
+
 /// Handle a single client connection.
 ///
 /// Reads the first HTTP line to determine the proxy mode:
@@ -926,6 +1298,69 @@ mod tests {
 
         // Shutdown
         handle.shutdown();
+    }
+
+    // ========================================================================
+    // Forward-proxy (absolute-form http://) tests — issue #1334 (#1335)
+    // ========================================================================
+
+    #[test]
+    fn classify_request_target_detects_absolute_and_origin_forms() {
+        assert_eq!(
+            classify_request_target("GET http://example.com/path HTTP/1.1"),
+            RequestTargetForm::AbsoluteHttp
+        );
+        // Scheme match is case-insensitive.
+        assert_eq!(
+            classify_request_target("GET HTTP://example.com/ HTTP/1.1"),
+            RequestTargetForm::AbsoluteHttp
+        );
+        assert_eq!(
+            classify_request_target("CONNECT https://example.com/ HTTP/1.1"),
+            RequestTargetForm::AbsoluteHttps
+        );
+        assert_eq!(
+            classify_request_target("GET /openai/v1/chat HTTP/1.1"),
+            RequestTargetForm::Origin
+        );
+        // Malformed / empty lines are treated as origin-form (unaffected).
+        assert_eq!(classify_request_target("GET"), RequestTargetForm::Origin);
+        assert_eq!(classify_request_target(""), RequestTargetForm::Origin);
+    }
+
+    #[test]
+    fn rewrite_absolute_to_origin_form_produces_origin_line() {
+        assert_eq!(
+            rewrite_absolute_to_origin_form("GET http://host.example/p/q?a=1 HTTP/1.1").unwrap(),
+            "GET /p/q?a=1 HTTP/1.1\r\n"
+        );
+        // Bare authority with no path becomes "/".
+        assert_eq!(
+            rewrite_absolute_to_origin_form("GET http://host.example HTTP/1.1").unwrap(),
+            "GET / HTTP/1.1\r\n"
+        );
+        // Method and version are preserved verbatim.
+        assert_eq!(
+            rewrite_absolute_to_origin_form("POST http://host.example:8080/x HTTP/1.0").unwrap(),
+            "POST /x HTTP/1.0\r\n"
+        );
+    }
+
+    #[test]
+    fn strip_proxy_headers_removes_proxy_hop_by_hop_only() {
+        let headers = b"Host: example.com\r\nProxy-Connection: keep-alive\r\nProxy-Authorization: Basic abc\r\nAccept: */*\r\n";
+        let stripped = strip_proxy_headers(headers);
+        let s = String::from_utf8(stripped).unwrap();
+        assert!(s.contains("Host: example.com"));
+        assert!(s.contains("Accept: */*"));
+        assert!(
+            !s.to_lowercase().contains("proxy-connection"),
+            "Proxy-Connection must be stripped, got: {s:?}"
+        );
+        assert!(
+            !s.to_lowercase().contains("proxy-authorization"),
+            "Proxy-Authorization must be stripped, got: {s:?}"
+        );
     }
 
     // Fork divergence: test_intercept_lifecycle_end_to_end,

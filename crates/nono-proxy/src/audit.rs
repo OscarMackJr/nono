@@ -230,6 +230,68 @@ pub fn log_denied(
     );
 }
 
+/// Target details for `log_l7_request`, grouped into a struct to keep the
+/// function under clippy's `too_many_arguments` threshold.
+#[derive(Debug, Clone, Copy)]
+pub struct L7RequestInfo<'a> {
+    pub host: &'a str,
+    pub port: u16,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub status: u16,
+}
+
+/// Log an L7 (application-layer) proxy request result: a request that was
+/// forwarded to an upstream and produced an observed response status.
+///
+/// Distinct from `log_allowed` (no `status`/`path`) and `log_reverse_proxy`
+/// (no `managed_credential_active`, and `route_id`/`target` are both the
+/// service name rather than the actual upstream host). Added for the
+/// forward-proxy path (`server::handle_forward_http`, #1335), which needs to
+/// audit `target = host`, `status`, `method`, `path`, and
+/// `managed_credential_active = Some(false)` together — the forward path is
+/// a transparent pass-through, so its audit record must positively assert
+/// no managed credential was active, not merely omit the field.
+pub fn log_l7_request(
+    audit_log: Option<&SharedAuditLog>,
+    mode: ProxyMode,
+    ctx: &EventContext<'_>,
+    info: &L7RequestInfo<'_>,
+) {
+    info!(
+        target: "nono_proxy::audit",
+        mode = %mode,
+        host = info.host,
+        port = info.port,
+        method = info.method,
+        path = info.path,
+        status = info.status,
+        decision = "allow",
+        "proxy L7 request forwarded"
+    );
+
+    push_event(
+        audit_log,
+        NetworkAuditEvent {
+            timestamp_unix_ms: now_unix_millis(),
+            mode: map_mode(mode),
+            decision: NetworkAuditDecision::Allow,
+            route_id: ctx.route_id.map(str::to_string),
+            auth_mechanism: ctx.auth_mechanism.clone(),
+            auth_outcome: ctx.auth_outcome.clone(),
+            managed_credential_active: ctx.managed_credential_active,
+            injection_mode: ctx.injection_mode.clone(),
+            denial_category: None,
+            target: info.host.to_string(),
+            port: Some(info.port),
+            method: Some(info.method.to_string()),
+            path: Some(info.path.to_string()),
+            status: Some(info.status),
+            reason: None,
+        },
+    );
+}
+
 /// Log a reverse proxy request with service info.
 pub fn log_reverse_proxy(
     audit_log: Option<&SharedAuditLog>,
