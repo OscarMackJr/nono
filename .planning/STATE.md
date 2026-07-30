@@ -3,19 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: executing
-stopped_at: "**v3.6 Phase 110 Plan 03 COMPLETE (2026-07-30)** — `CapabilitySet` port-range mechanism (`MACOS_PORT_RANGE_LIMIT`, `merge_port_ranges`, `localhost_port_ranges` field/builders, ported from upstream `d5803b99`) plus both Unix sandbox-backend emitters: macOS Seatbelt unrolls ranges into per-port rules under a cumulative 16,384-port cap (checked before any profile string is built, SIGILL rationale preserved), Linux Landlock unrolls with NO cap (confirmed via the vendored `landlock-0.4.4` source that no native range rule type exists). Linux seccomp proxy-only fallback (`supervisor_linux.rs`) gained `proxy_bind_port_ranges` union-semantics bind allowance. Fixed a missing `#[cfg(target_os = \"linux\")]` guard on 9 test-fixture literals (caught by the mandatory apple-darwin cross-target clippy `--all-targets` gate). Both mandatory cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean; Linux `cross test` additionally executed and passed both new `sandbox::linux` port-range tests. Discovered (not fixed, out of scope) a pre-existing dormant compile break in `supervisor_linux.rs`'s `mod tests::network_decision` predating this plan (traced to commit `1a804977`), documented in `deferred-items.md`. Commits `a0bf9076`/`0c747739`/`5d0c8e34`/`2102f538`/`a6ac7d46`. See `110-03-SUMMARY.md`. Next: Wave 2 (Plans 110-04/05/06, parallel)."
-parallel_milestone: v3.5
-parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
-parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
-parallel_stopped_at: "**v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence: (1) reconciled the stale 'held-on-external-azure-block' status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B -> run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.** Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
-last_updated: "2026-07-30T15:29:54.754Z"
-last_activity: 2026-07-30 -- Phase 110 Plan 03 complete
+stopped_at: Completed 110-04-PLAN.md
+last_updated: "2026-07-30T19:20:19.712Z"
+last_activity: 2026-07-30
 progress:
-  total_phases: 4
-  completed_phases: 2
-  total_plans: 18
-  completed_plans: 13
-  percent: 72
+  total_phases: 9
+  completed_phases: 5
+  total_plans: 38
+  completed_plans: 28
+  percent: 74
 ---
 
 # Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
@@ -52,7 +48,7 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 ## Current Position
 
 Phase: 110 (Profile/Policy Absorb + platform_overrides) — EXECUTING
-Plan: 4 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Plan: 5 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
 Status: Ready to execute
 Last activity: 2026-07-30
 
@@ -85,6 +81,7 @@ Last activity: 2026-07-30
 | Phase 110 P01 | 20min | 3 tasks | 3 files |
 | Phase 110 P02 | 30min | 3 tasks | 4 files |
 | Phase 110 P03 | 55min | 3 tasks | 6 files |
+| Phase 110 P04 | 45min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -101,6 +98,9 @@ Last activity: 2026-07-30
 | SupervisorConfig.proxy_bind_port_ranges added as a Linux-only cfg-gated sibling field to proxy_bind_ports, paired into all 9 exhaustive test-fixture literals (self-consistent count-gate: 9 == 9) | 110-03 | Rule 1 auto-fix mid-task: the first mechanical insertion omitted the #[cfg(target_os = "linux")] guard, caught by the mandatory cargo-zigbuild clippy --all-targets apple-darwin gate (E0560 on 8 sites) before the task commit landed |
 | Pre-existing, unrelated compile break in supervisor_linux.rs's mod tests::network_decision (stale ApprovalRequest/request_approval shape, traced to commit 1a804977) documented in deferred-items.md, not fixed | 110-03 | Out of scope per Scope Boundary — discovered only via `cross test` (beyond the plan's mandated `cross clippy` gate); blocks execution (not compilation) of this plan's 3 new supervisor_linux tests on Linux, while the production code is proven via clean cross clippy on both mandatory targets |
 | `requirements.mark-complete PROF-03` deliberately NOT run despite PLAN.md frontmatter listing `requirements: [PROF-03]` — reverted the SDK's auto-flip via `git checkout -- .planning/REQUIREMENTS.md` | 110-03 | Plans 110-03/04/05/06 ALL declare `requirements: [PROF-03]` (confirmed by grepping all 4 PLAN.md frontmatters) — PROF-03 is a single requirement split across 4 sub-plans; this plan only satisfies the library+Unix-emitter mechanism half (per its own objective text), NOT the profile schema (110-04), capability_ext.rs/manifest wiring (110-05), or Windows WFP emitter (110-06). Flipping PROF-03 to Complete now would misrepresent phase progress until all 4 land. |
+| NetworkConfig.open_port_range/listen_port_range added (Vec<[u16; 2]> array-of-pairs), wired through merge_profiles' 3rd exhaustive-literal site (dedup_append) and a fork-only nono-profile.schema.json companion edit (upstream never touched this strict-schema file) | 110-04 | Closes Pitfall 4 / T-110-12: without the schema edit, a profile using the new fields would serde-parse but fail validate_against_schema() |
+| validate_port_ranges/build_listen_ports/check_macos_port_range_cap extracted as standalone fns above prepare_profile_with_context (not inlined in the Ok(PreparedProfile{...}) literal as the plan's interfaces section sketched); check_macos_port_range_cap gated #[cfg(any(target_os = "macos", test))] instead of a plain macOS-only gate | 110-04 | prepare_profile_with_context requires a full on-disk profile load to exercise, making direct unit testing of just the range-validation logic impractical; the cfg gate gives the "exceeds the macOS limit" error path direct unit coverage on this Windows dev host, per the plan's own allowance for an OS-independent test |
+| `requirements.mark-complete PROF-03` again deliberately NOT run for 110-04 (same rationale as 110-03) — PROF-03 stays split across 110-03/04/05/06 | 110-04 | This plan satisfies the profile-schema + profile_runtime.rs validation half only; capability_ext.rs/manifest wiring (110-05) and the Windows WFP emitter (110-06) remain before open_port_range reaches a sandbox capability end-to-end |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
@@ -268,9 +268,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-30T15:29:54.733Z
+Last session: 2026-07-30T19:20:19.698Z
 
-Stopped at: **v3.6 Phase 110 Plan 03 COMPLETE (2026-07-30)** — `CapabilitySet` port-range mechanism (`MACOS_PORT_RANGE_LIMIT`, `merge_port_ranges`, `localhost_port_ranges` field/builders, ported from upstream `d5803b99`) plus both Unix sandbox-backend emitters: macOS Seatbelt unrolls ranges into per-port rules under a cumulative 16,384-port cap (checked before any profile string is built, SIGILL rationale preserved verbatim), Linux Landlock unrolls with NO cap (confirmed via the vendored `landlock-0.4.4` source at `net.rs:109` that no native range rule type exists — closes the previously-UNVERIFIED question from `110-PATTERNS.md`/`110-RESEARCH.md`). Linux seccomp proxy-only fallback (`supervisor_linux.rs`) gained `proxy_bind_port_ranges` (union semantics with the existing discrete `proxy_bind_ports` list). Rule 1 auto-fix: a missing `#[cfg(target_os = "linux")]` guard on 9 new test-fixture literals (caught by the mandatory apple-darwin cross-target clippy `--all-targets` gate, E0560 on 8 sites) was fixed before the task commit landed. Both mandatory cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean; Linux `cross test` additionally executed and passed both new `sandbox::linux` port-range tests (Wave-0 gap PROF-03c closed). Discovered but NOT fixed (out of scope, documented in `deferred-items.md`): a pre-existing dormant compile break in `supervisor_linux.rs`'s `mod tests::network_decision` predating this plan entirely (traced via `git log -L`/`git stash` to commit `1a804977`, 2026-06-26), which blocks execution (not compilation-via-clippy) of this plan's 3 new `supervisor_linux` tests on Linux. Commits `a0bf9076`/`0c747739`/`5d0c8e34`/`2102f538`/`a6ac7d46`. See `110-03-SUMMARY.md`. Next: Wave 2 (Plans 110-04/05/06, parallel — profile schema, capability_ext.rs/manifest wiring, Windows WFP emitter).
+Stopped at: Completed 110-04-PLAN.md
 
 Previously: **v3.6 Phase 110 Plan 01 COMPLETE (2026-07-30)** — `platform_overrides` per-OS profile-patch model (`ae1c513e`/`719975cf`) ported: `PlatformOverrides`/`PlatformOverride` types + custom nested-rejection `Deserialize`, `apply_platform_overrides` wired as the first step of `finalize_profile`, `merge_platform_overrides`/`merge_platform_override_slot` D-10 deep-merge (survives `extends` resolution intact), post-merge re-validation of custom_credentials/env_credentials/set_vars, and a `platform_overrides` schema property. D-08a preserved verbatim — `windows_low_il_broker`/`windows_interpreters` keep Phase 51/71 fail-secure OR/union `merge_profiles` semantics; `merge_profiles_or_semantics_base_true_child_false` confirmed unmodified+passing. 14 new tests (`platform_overrides_tests`), both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean, `cargo fmt --all -- --check` clean. Commits `d44b5647`/`9872afa6`/`e8ce3a63`. See `110-01-SUMMARY.md`.
 
