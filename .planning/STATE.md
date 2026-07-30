@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: executing
-stopped_at: "**v3.6 Phase 110 Plan 02 COMPLETE (2026-07-30)** — `$VAR` process-env expansion (`2cbaa9a0`/#1296, `policy::substitute_vars`/`expand_env_vars`) and ported `@git:*` dynamic-token expansion (`d4927f95`/#1298, new fork-owned `crates/nono-cli/src/dynamic_tokens.rs`, 32 ported tests) wired at exactly the 8 upstream-identified `capability_ext.rs` fs.* call sites via a new `expand_profile_path` wrapper. Fixed 2 real Windows-specific git-quoting bugs surfaced by actually running the ported suite on this Windows host (C-quoted `--show-origin` paths; ini-value backslash escaping). Both PROF-02 end-to-end tests pass (env-var all platforms; `@git:*` gated Unix-only per D-01). Both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean. Commits `d1290f61`/`2e7c1412`/`bb9360b1`. See `110-02-SUMMARY.md`. Next: Plan 110-03 (Wave 1, PROF-03 library+Unix emitters)."
+stopped_at: "**v3.6 Phase 110 Plan 03 COMPLETE (2026-07-30)** — `CapabilitySet` port-range mechanism (`MACOS_PORT_RANGE_LIMIT`, `merge_port_ranges`, `localhost_port_ranges` field/builders, ported from upstream `d5803b99`) plus both Unix sandbox-backend emitters: macOS Seatbelt unrolls ranges into per-port rules under a cumulative 16,384-port cap (checked before any profile string is built, SIGILL rationale preserved), Linux Landlock unrolls with NO cap (confirmed via the vendored `landlock-0.4.4` source that no native range rule type exists). Linux seccomp proxy-only fallback (`supervisor_linux.rs`) gained `proxy_bind_port_ranges` union-semantics bind allowance. Fixed a missing `#[cfg(target_os = \"linux\")]` guard on 9 test-fixture literals (caught by the mandatory apple-darwin cross-target clippy `--all-targets` gate). Both mandatory cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean; Linux `cross test` additionally executed and passed both new `sandbox::linux` port-range tests. Discovered (not fixed, out of scope) a pre-existing dormant compile break in `supervisor_linux.rs`'s `mod tests::network_decision` predating this plan (traced to commit `1a804977`), documented in `deferred-items.md`. Commits `a0bf9076`/`0c747739`/`5d0c8e34`/`2102f538`/`a6ac7d46`. See `110-03-SUMMARY.md`. Next: Wave 2 (Plans 110-04/05/06, parallel)."
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
 parallel_stopped_at: "**v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence: (1) reconciled the stale 'held-on-external-azure-block' status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B -> run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.** Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
-last_updated: "2026-07-30T14:20:00.000Z"
-last_activity: 2026-07-30 -- Phase 110 Plan 02 complete
+last_updated: "2026-07-30T15:29:54.754Z"
+last_activity: 2026-07-30 -- Phase 110 Plan 03 complete
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 18
-  completed_plans: 12
-  percent: 67
+  completed_plans: 13
+  percent: 72
 ---
 
 # Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
@@ -52,7 +52,7 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 ## Current Position
 
 Phase: 110 (Profile/Policy Absorb + platform_overrides) — EXECUTING
-Plan: 3 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Plan: 4 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
 Status: Ready to execute
 Last activity: 2026-07-30
 
@@ -84,6 +84,7 @@ Last activity: 2026-07-30
 | Phase 104 P02 | 24min | 3 tasks | 5 files |
 | Phase 110 P01 | 20min | 3 tasks | 3 files |
 | Phase 110 P02 | 30min | 3 tasks | 4 files |
+| Phase 110 P03 | 55min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -95,6 +96,11 @@ Last activity: 2026-07-30
 | 4th Profile-shape exhaustive-literal site discovered beyond the plan's named 3: policy.rs::ProfileDef::to_raw_profile | 110-01 | Compiler-caught (E0063) immediately on first build after adding the platform_overrides field; fixed the same way environment: None was handled there previously (built-in policy.json profiles don't declare the field yet) |
 | Fixed two real Windows-specific git-quoting bugs in the ported @git:* module (dynamic_tokens.rs): git --show-origin C-quotes backslash-containing origin paths; git-config ini values need doubled backslashes when hand-writing fixture files | 110-02 | This Windows dev host actually runs the ported 32-test suite; upstream never exercised this code on Windows, and the module is meant to become the v3.7 canonical implementation (D-02) — treated as real bugs, not test-skips |
 | @git:* end-to-end test gated #[cfg(any(linux, macos))]; dynamic_tokens.rs given a module-level #![cfg_attr(not(any(linux, macos)), allow(dead_code))] | 110-02 | @git:* expansion is Unix-only by design (D-01) — the non-Unix fallback is an intentional no-op, so the ported git-worktree test would validate the wrong behavior on Windows; the dead_code allow mirrors the existing session.rs:1 idiom for a module only consumed from one cfg arm elsewhere in the crate |
+| landlock v0.4.4 confirmed (vendored source, net.rs:109) to have no native range rule type — Linux emitter unrolls per-port with no cap, matching upstream d5803b99 exactly | 110-03 | Resolves the previously-UNVERIFIED question in 110-PATTERNS.md/110-RESEARCH.md by reading the actual vendored crate source rather than assuming |
+| macOS cumulative-cap check computed and errored BEFORE any profile string is built, preserving the sandbox_init() SIGILL rationale (~17,770 rules) verbatim in both the error message and a code comment | 110-03 | Avoids wasted profile-string construction on the error path; keeps the crash rationale discoverable (CONTEXT.md: "a bare magic number invites removal") |
+| SupervisorConfig.proxy_bind_port_ranges added as a Linux-only cfg-gated sibling field to proxy_bind_ports, paired into all 9 exhaustive test-fixture literals (self-consistent count-gate: 9 == 9) | 110-03 | Rule 1 auto-fix mid-task: the first mechanical insertion omitted the #[cfg(target_os = "linux")] guard, caught by the mandatory cargo-zigbuild clippy --all-targets apple-darwin gate (E0560 on 8 sites) before the task commit landed |
+| Pre-existing, unrelated compile break in supervisor_linux.rs's mod tests::network_decision (stale ApprovalRequest/request_approval shape, traced to commit 1a804977) documented in deferred-items.md, not fixed | 110-03 | Out of scope per Scope Boundary — discovered only via `cross test` (beyond the plan's mandated `cross clippy` gate); blocks execution (not compilation) of this plan's 3 new supervisor_linux tests on Linux, while the production code is proven via clean cross clippy on both mandatory targets |
+| `requirements.mark-complete PROF-03` deliberately NOT run despite PLAN.md frontmatter listing `requirements: [PROF-03]` — reverted the SDK's auto-flip via `git checkout -- .planning/REQUIREMENTS.md` | 110-03 | Plans 110-03/04/05/06 ALL declare `requirements: [PROF-03]` (confirmed by grepping all 4 PLAN.md frontmatters) — PROF-03 is a single requirement split across 4 sub-plans; this plan only satisfies the library+Unix-emitter mechanism half (per its own objective text), NOT the profile schema (110-04), capability_ext.rs/manifest wiring (110-05), or Windows WFP emitter (110-06). Flipping PROF-03 to Complete now would misrepresent phase progress until all 4 land. |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
@@ -262,9 +268,9 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-30T14:20:00.000Z
+Last session: 2026-07-30T15:29:54.733Z
 
-Stopped at: **v3.6 Phase 110 Plan 02 COMPLETE (2026-07-30)** — `$VAR` process-env expansion (`2cbaa9a0`/#1296) and ported `@git:*` dynamic-token expansion (`d4927f95`/#1298, new fork-owned `crates/nono-cli/src/dynamic_tokens.rs`, 32 ported tests) wired at the 8 upstream-identified `capability_ext.rs` fs.* call sites. Fixed 2 real Windows-specific git-quoting bugs (C-quoted `--show-origin` paths; ini-value backslash escaping) surfaced by actually running the ported suite on this Windows host. Both PROF-02 end-to-end tests pass; both cross-target clippy gates clean. Commits `d1290f61`/`2e7c1412`/`bb9360b1`. See `110-02-SUMMARY.md`. Next: Plan 110-03 (Wave 1, PROF-03 CapabilitySet port-range mechanism + macOS/Linux Unix emitters).
+Stopped at: **v3.6 Phase 110 Plan 03 COMPLETE (2026-07-30)** — `CapabilitySet` port-range mechanism (`MACOS_PORT_RANGE_LIMIT`, `merge_port_ranges`, `localhost_port_ranges` field/builders, ported from upstream `d5803b99`) plus both Unix sandbox-backend emitters: macOS Seatbelt unrolls ranges into per-port rules under a cumulative 16,384-port cap (checked before any profile string is built, SIGILL rationale preserved verbatim), Linux Landlock unrolls with NO cap (confirmed via the vendored `landlock-0.4.4` source at `net.rs:109` that no native range rule type exists — closes the previously-UNVERIFIED question from `110-PATTERNS.md`/`110-RESEARCH.md`). Linux seccomp proxy-only fallback (`supervisor_linux.rs`) gained `proxy_bind_port_ranges` (union semantics with the existing discrete `proxy_bind_ports` list). Rule 1 auto-fix: a missing `#[cfg(target_os = "linux")]` guard on 9 new test-fixture literals (caught by the mandatory apple-darwin cross-target clippy `--all-targets` gate, E0560 on 8 sites) was fixed before the task commit landed. Both mandatory cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean; Linux `cross test` additionally executed and passed both new `sandbox::linux` port-range tests (Wave-0 gap PROF-03c closed). Discovered but NOT fixed (out of scope, documented in `deferred-items.md`): a pre-existing dormant compile break in `supervisor_linux.rs`'s `mod tests::network_decision` predating this plan entirely (traced via `git log -L`/`git stash` to commit `1a804977`, 2026-06-26), which blocks execution (not compilation-via-clippy) of this plan's 3 new `supervisor_linux` tests on Linux. Commits `a0bf9076`/`0c747739`/`5d0c8e34`/`2102f538`/`a6ac7d46`. See `110-03-SUMMARY.md`. Next: Wave 2 (Plans 110-04/05/06, parallel — profile schema, capability_ext.rs/manifest wiring, Windows WFP emitter).
 
 Previously: **v3.6 Phase 110 Plan 01 COMPLETE (2026-07-30)** — `platform_overrides` per-OS profile-patch model (`ae1c513e`/`719975cf`) ported: `PlatformOverrides`/`PlatformOverride` types + custom nested-rejection `Deserialize`, `apply_platform_overrides` wired as the first step of `finalize_profile`, `merge_platform_overrides`/`merge_platform_override_slot` D-10 deep-merge (survives `extends` resolution intact), post-merge re-validation of custom_credentials/env_credentials/set_vars, and a `platform_overrides` schema property. D-08a preserved verbatim — `windows_low_il_broker`/`windows_interpreters` keep Phase 51/71 fail-secure OR/union `merge_profiles` semantics; `merge_profiles_or_semantics_base_true_child_false` confirmed unmodified+passing. 14 new tests (`platform_overrides_tests`), both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean, `cargo fmt --all -- --check` clean. Commits `d44b5647`/`9872afa6`/`e8ce3a63`. See `110-01-SUMMARY.md`.
 
@@ -280,8 +286,9 @@ Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger fo
 - **ADR-86 threat flag:** `e6d26871` (#1269) adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the policy-free core `crates/nono/src/lib.rs`. Needs boundary review before Phase 111 absorbs it.
 - **Phase 110 complication (RESOLVED by Plan 110-02):** PROF-02's absorb target `capability_ext.rs` called into upstream's DEFERRED `tool_sandbox::dynamic_providers`; resolved per D-01/D-02 by porting `expand_dynamic_tokens` into a new fork-owned `crates/nono-cli/src/dynamic_tokens.rs` module instead, with its own v3.7 reconciliation note.
 - Two CONTEXT decisions corrected mid-execution by re-measurement (D-04 bucket split, D-06 directory-vs-union) — see `1332b657`.
+- **New (Plan 110-03):** `supervisor_linux.rs`'s `mod tests::network_decision` has a pre-existing, dormant Linux-only compile break unrelated to PROF-03 (stale `ApprovalRequest`/`request_approval` shape predating a trait rename, plus a nonexistent `tool_sandbox_runtime` field reference), traced to commit `1a804977` (Phase 96, 2026-06-26). Documented in `.planning/phases/110-profile-policy-absorb-platform-overrides/deferred-items.md`; needs a fix before that test module can execute on Linux (`cross test`), though it does NOT block the mandatory `cross clippy` gate (which doesn't compile `#[cfg(test)]` code).
 
-Resume file: `.planning/phases/110-profile-policy-absorb-platform-overrides/110-03-PLAN.md` (next plan in Wave 1)
+Resume file: None
 
 **Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 

@@ -121,6 +121,17 @@ None — this plan implements the mitigations already named in its own `<threat_
 
 None - no external service configuration required.
 
+## Requirement Tracking Note
+
+`PROF-03` is intentionally **NOT** marked complete in `REQUIREMENTS.md` despite this plan's frontmatter
+listing `requirements: [PROF-03]`. Plans 110-03/04/05/06 all declare the same requirement ID (confirmed
+by grepping all 4 `PLAN.md` frontmatters) — PROF-03 is a single requirement split across 4 sub-plans.
+This plan satisfies only the library + Unix-emitter mechanism half; the profile schema (110-04),
+`capability_ext.rs`/manifest wiring (110-05), and Windows WFP emitter (110-06) remain. The SDK's
+`requirements.mark-complete PROF-03` call was run per the standard `state_updates` protocol, flipped
+the checkbox, and was then reverted (`git checkout -- .planning/REQUIREMENTS.md`) to avoid
+misrepresenting phase progress. PROF-03 should be marked complete only after 110-06 lands.
+
 ## Next Phase Readiness
 
 - `CapabilitySet.localhost_port_ranges()` is ready for plan 110-04 (profile schema `NetworkConfig.open_port_range`/`listen_port_range`) and 110-05 (`capability_ext.rs`/manifest layer wiring) to drive it — the mechanism and both Unix emitters are proven end-to-end.
