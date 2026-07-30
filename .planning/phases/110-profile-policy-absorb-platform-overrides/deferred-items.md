@@ -1,5 +1,25 @@
 # Deferred Items — Phase 110
 
+> **Wave-1 boundary resolution (orchestrator, 2026-07-30).** Both items below were
+> CLOSED at the wave-1/wave-2 boundary rather than carried to the phase gate:
+>
+> - **Plan 02's rustfmt item** → closed by `b7abf218` (`cargo fmt --all`; the 4 diffs in
+>   `profile/mod.rs` were the only ones in the workspace).
+> - **Plan 03's `supervisor_linux.rs` item** → closed by `17992adb`, on an explicit
+>   operator decision to fix it before Wave 2 rather than defer. `ApprovalRequest` →
+>   `CapabilityRequest`, `request_approval` → `request_capability` (matching the real
+>   trait at `crates/nono/src/supervisor/mod.rs:120`), and the phantom
+>   `tool_sandbox_runtime: None` line removed — that identifier was confirmed to appear
+>   nowhere else in the workspace, so it was pure Phase-96 leftover referencing the
+>   v3.7-excluded tool-sandbox subsystem, not a field anyone had dropped.
+>   `cross test … exec_strategy::supervisor_linux` now runs **48/48 green**, including
+>   Plan 03's three previously-unverified range tests
+>   (`bind_within_port_range_is_allowed`, `bind_outside_port_range_is_denied`,
+>   `bind_allowed_by_individual_port_or_range`). `cross clippy --workspace
+>   --target x86_64-unknown-linux-gnu --all-targets -- -D warnings` exits 0.
+>
+> The original entries are retained below as the diagnostic record.
+
 ## Plan 02
 
 - **`crates/nono-cli/src/profile/mod.rs` has 4 pre-existing `cargo fmt --check` diffs**
