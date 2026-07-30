@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: executing
-stopped_at: "v3.6 Phase 110 (Profile/Policy Absorb + platform_overrides) **PLANNED** 2026-07-30 — 8 plans across 4 waves, plan-checker `VERIFICATION PASSED` on iteration 2. Phases 108 (divergence audit) and 109 (proxy/network absorb) are COMPLETE. Next: `/gsd:plan-phase 111` or `/gsd:execute-phase 110`. Phase 110 planning produced one operator decision recorded as **D-08a** in `110-CONTEXT.md`: D-08's `platform_overrides.windows`-WINS rule is NARROWED — `windows_low_il_broker`/`windows_interpreters` keep Phase 51's fail-secure OR/union semantics (an override may tighten, never loosen), so `merge_profiles_or_semantics_base_true_child_false` at `profile/mod.rs:8142` stays green and unmodified. STILL OPEN from Phase 108: the proposed **Phase 112 'Security + Residual Sync'** amendment (27 unmapped non-tool-sandbox code commits, 11 draft req IDs) is written but deliberately NOT applied — ROADMAP.md has zero Phase 112 rows pending operator approve/modify/reject. Also still open: LIVE VULN `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204), fix `373a67ae` (#1369) unabsorbed. tool-sandbox subsystem remains EXCLUDED -> v3.7."
+stopped_at: "v3.6 Phase 110 (Profile/Policy Absorb + platform_overrides) **EXECUTING** 2026-07-30 — 8 plans across 4 waves; `workflow.use_worktrees=false` so all plans run sequentially on the main working tree. Plan 110-06 (Windows WFP port-range emitter) is `autonomous: false` — a `checkpoint:human-verify` for the live-kernel `FwpmFilterAdd0` arm. Phases 108 (divergence audit) and 109 (proxy/network absorb) are COMPLETE. Phase 110 planning produced one operator decision recorded as **D-08a** in `110-CONTEXT.md`: D-08's `platform_overrides.windows`-WINS rule is NARROWED — `windows_low_il_broker`/`windows_interpreters` keep Phase 51's fail-secure OR/union semantics (an override may tighten, never loosen), so `merge_profiles_or_semantics_base_true_child_false` at `profile/mod.rs:8142` stays green and unmodified. STILL OPEN from Phase 108: the proposed **Phase 112 'Security + Residual Sync'** amendment (27 unmapped non-tool-sandbox code commits, 11 draft req IDs) is written but deliberately NOT applied — ROADMAP.md has zero Phase 112 rows pending operator approve/modify/reject. LIVE VULN `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) closed out-of-band by quick 260729-nh4. tool-sandbox subsystem remains EXCLUDED -> v3.7."
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
 parallel_stopped_at: "**v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence: (1) reconciled the stale 'held-on-external-azure-block' status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B -> run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.** Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
-last_updated: "2026-07-30T12:57:53.651Z"
-last_activity: 2026-07-30 -- Phase 110 planning complete
+last_updated: "2026-07-30T13:25:47.252Z"
+last_activity: 2026-07-30 -- Phase 110 execution started
 progress:
   total_phases: 4
   completed_phases: 2
@@ -26,7 +26,7 @@ See: `.planning/PROJECT.md` (v3.6 opened 2026-07-28, parallel-active with HELD v
 
 **Core Value (v3.6):** Keep the fork current with upstream `nolabs-ai/nono` without regressing the Windows security model or the ADR-86 policy-free-library boundary — a routine drain-then-sync (mirrors v3.1/v3.3/v3.4).
 
-**Current Focus:** Phase 108 — UPST12 Divergence Audit (v0.66.0..v0.69.0). tool-sandbox subsystem EXCLUDED → v3.7.
+**Current Focus:** Phase 110 — Profile/Policy Absorb + `platform_overrides` (PROF-01..04). tool-sandbox subsystem EXCLUDED → v3.7.
 
 ## Parallel Milestone (PAUSED): v3.5 — Trusted Signing Go-Live
 
@@ -51,10 +51,10 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 
 ## Current Position
 
-Phase: 110 (Profile/Policy Absorb + platform_overrides) — PLANNED, not yet executed
-Plan: 8 plans across 4 waves (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
-Status: Ready to execute
-Last activity: 2026-07-30 -- Phase 110 planning complete (plan-checker VERIFICATION PASSED, iteration 2)
+Phase: 110 (Profile/Policy Absorb + platform_overrides) — EXECUTING
+Plan: 1 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Status: Executing Phase 110 — sequential (use_worktrees=false)
+Last activity: 2026-07-30 -- Phase 110 execution started
 
 ## Performance Metrics
 
