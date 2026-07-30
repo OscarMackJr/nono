@@ -48,9 +48,22 @@ pub struct ProxyHandle {
     /// Routes whose credentials were unavailable are excluded so we
     /// don't inject phantom tokens that shadow valid external credentials.
     loaded_routes: std::collections::HashSet<String>,
-    /// Non-credential allowed hosts that should bypass the proxy (NO_PROXY).
-    /// Computed at startup: `allowed_hosts` minus credential upstream hosts.
+    /// Client-side proxy bypass entries appended after loopback defaults.
+    /// Computed at startup from direct-connect bypasses and profile-declared
+    /// `no_proxy` entries, excluding route upstreams.
     no_proxy_hosts: Vec<String>,
+    /// When true, loopback must not appear in `NO_PROXY` because a managed
+    /// credential route targets a loopback upstream host. This fork does not
+    /// yet detect that condition (no loopback-credential-route mechanism has
+    /// been absorbed) so `start()` always sets this `false`; the field
+    /// exists so `env_vars()` carries the same semantics upstream does and
+    /// so a future absorb can wire detection without another env_vars()
+    /// rewrite.
+    managed_loopback_upstream: bool,
+    /// Canonical nono-owned bypass patterns for wrappers/SDKs that need to
+    /// translate profile intent to non-env proxy surfaces such as Java
+    /// `http.nonProxyHosts`. Emitted as `NONO_NO_PROXY`.
+    canonical_no_proxy_hosts: Vec<String>,
     /// Startup diagnostics from credential loading (empty in this fork — no
     /// load_with_diagnostics integration yet).
     diagnostics: Vec<crate::diagnostic::ProxyDiagnostic>,
@@ -114,33 +127,37 @@ impl ProxyHandle {
     pub fn env_vars(&self) -> Vec<(String, String)> {
         let proxy_url = format!("http://nono:{}@127.0.0.1:{}", &*self.token, self.port);
 
-        // Build NO_PROXY: always include loopback, plus non-credential
-        // allowed hosts. Credential upstreams are excluded so their traffic
-        // goes through the reverse proxy for L7 filtering + injection.
-        let mut no_proxy_parts = vec!["localhost".to_string(), "127.0.0.1".to_string()];
+        // Build NO_PROXY: include loopback unless a managed credential route
+        // targets a loopback upstream (those must traverse the proxy). Add
+        // startup-filtered bypass entries via the push_no_proxy_entry
+        // pipeline (D-07: replaces the static
+        // `vec!["localhost", "127.0.0.1"]` seed — see
+        // no_proxy_pipeline_preserves_localhost_and_loopback_bypass for the
+        // regression proof that localhost/127.0.0.1 still reach NO_PROXY).
+        let mut no_proxy_parts = Vec::new();
+        let mut canonical_no_proxy_parts = Vec::new();
+        push_no_proxy_entry(&mut no_proxy_parts, "localhost");
+        push_no_proxy_entry(&mut no_proxy_parts, "127.0.0.1");
+        push_canonical_no_proxy_entry(&mut canonical_no_proxy_parts, "localhost");
+        push_canonical_no_proxy_entry(&mut canonical_no_proxy_parts, "127.0.0.1");
+        if self.managed_loopback_upstream {
+            no_proxy_parts.clear();
+            canonical_no_proxy_parts.clear();
+        }
         for host in &self.no_proxy_hosts {
-            // Strip port for NO_PROXY (most HTTP clients match on hostname).
-            // Handle IPv6 brackets: "[::1]:443" → "[::1]", "host:443" → "host"
-            let hostname = if host.contains("]:") {
-                // IPv6 with port: split at "]:port"
-                host.rsplit_once("]:")
-                    .map(|(h, _)| format!("{}]", h))
-                    .unwrap_or_else(|| host.clone())
-            } else {
-                host.rsplit_once(':')
-                    .and_then(|(h, p)| p.parse::<u16>().ok().map(|_| h.to_string()))
-                    .unwrap_or_else(|| host.clone())
-            };
-            if !no_proxy_parts.contains(&hostname.to_string()) {
-                no_proxy_parts.push(hostname.to_string());
-            }
+            push_no_proxy_entry(&mut no_proxy_parts, host);
+        }
+        for host in &self.canonical_no_proxy_hosts {
+            push_canonical_no_proxy_entry(&mut canonical_no_proxy_parts, host);
         }
         let no_proxy = no_proxy_parts.join(",");
+        let nono_no_proxy = canonical_no_proxy_parts.join(",");
 
         let mut vars = vec![
             ("HTTP_PROXY".to_string(), proxy_url.clone()),
             ("HTTPS_PROXY".to_string(), proxy_url.clone()),
             ("NO_PROXY".to_string(), no_proxy.clone()),
+            ("NONO_NO_PROXY".to_string(), nono_no_proxy),
             ("NONO_PROXY_TOKEN".to_string(), self.token.to_string()),
         ];
 
@@ -205,6 +222,235 @@ impl ProxyHandle {
     }
 }
 
+// ============================================================================
+// no_proxy (#1415, D-06/D-07) — push-based NO_PROXY/NONO_NO_PROXY pipeline,
+// route-conflict guards, and startup validation. Ported from upstream
+// 1619275c and adapted to this fork's simpler `ProxyHandle`/`RouteStore`
+// shape (no TLS intercept, no SPIFFE, no async RouteStore::load).
+// ============================================================================
+
+/// Append `entry` to `entries` (normalised, deduped) for the client-facing
+/// `NO_PROXY`/`no_proxy` env vars.
+fn push_no_proxy_entry(entries: &mut Vec<String>, entry: &str) {
+    let env_entry = crate::config::normalise_no_proxy_env_entry(entry);
+    let normalised = crate::config::normalise_no_proxy_host_pattern(&env_entry);
+    if !entries
+        .iter()
+        .any(|existing| crate::config::normalise_no_proxy_host_pattern(existing) == normalised)
+    {
+        entries.push(env_entry);
+    }
+}
+
+/// Append `entry` to `entries` (normalised, deduped) for the nono-owned
+/// `NONO_NO_PROXY` env var consumed by wrappers/SDKs that need a canonical
+/// (non-CSV, non-`.`-prefixed) bypass pattern representation.
+fn push_canonical_no_proxy_entry(entries: &mut Vec<String>, entry: &str) {
+    let canonical = canonical_no_proxy_entry(entry);
+    let normalised = crate::config::normalise_no_proxy_host_pattern(&canonical);
+    if !entries
+        .iter()
+        .any(|existing| crate::config::normalise_no_proxy_host_pattern(existing) == normalised)
+    {
+        entries.push(canonical);
+    }
+}
+
+fn canonical_no_proxy_entry(entry: &str) -> String {
+    let host = crate::config::strip_no_proxy_port(entry);
+    let normalised = host.trim().to_ascii_lowercase();
+    if let Some(suffix) = normalised.strip_prefix("*.") {
+        format!("*.{suffix}")
+    } else {
+        crate::config::normalise_no_proxy_env_entry(&normalised)
+    }
+}
+
+/// Validate a smart-derived (direct-connect-port) NO_PROXY candidate before
+/// it is emitted. Smart entries are inferred from the sandbox's own
+/// direct-connect grants, not operator-authored, but must still satisfy the
+/// same grammar as a profile `no_proxy` entry — a wildcard allowlist host
+/// (e.g. `*.example.com` in `allowed_hosts`) cannot be turned into a NO_PROXY
+/// bypass without silently broadening it to a bare-domain suffix match.
+fn smart_no_proxy_entry(host: &str) -> Option<String> {
+    let entry = crate::config::strip_no_proxy_port(host);
+    if entry.trim().to_ascii_lowercase().starts_with("*.") {
+        debug!(
+            "Skipping smart no_proxy entry {:?}: wildcard allowlist entries cannot be emitted without broadening to a bare-domain NO_PROXY bypass",
+            host
+        );
+        return None;
+    }
+    if crate::config::validate_no_proxy_entry(&entry).is_ok() {
+        Some(crate::config::normalise_no_proxy_env_entry(&entry))
+    } else {
+        debug!(
+            "Skipping smart no_proxy entry {:?}: unsafe or ambiguous NO_PROXY bypass semantics",
+            host
+        );
+        None
+    }
+}
+
+/// Merge smart-derived and profile-declared no_proxy entries into the final
+/// `NO_PROXY` bypass list, dropping any entry that overlaps a route upstream
+/// (route traffic must stay on the proxy path for L7 filtering / credential
+/// injection — a route entry here would be a bypass of that protection).
+fn merge_no_proxy_hosts(
+    smart_no_proxy_hosts: &[String],
+    profile_no_proxy: &[String],
+    route_hosts: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut merged = Vec::new();
+    for entry in smart_no_proxy_hosts {
+        if no_proxy_entry_matches_any_route(entry, route_hosts) {
+            debug!(
+                "Skipping smart no_proxy entry {:?}: it matches a proxy route upstream",
+                entry
+            );
+            continue;
+        }
+        push_no_proxy_entry(&mut merged, entry);
+    }
+
+    for entry in profile_no_proxy {
+        if no_proxy_entry_matches_any_route(entry, route_hosts) {
+            debug!(
+                "Skipping no_proxy entry {:?}: it matches a proxy route upstream",
+                entry
+            );
+            continue;
+        }
+        push_no_proxy_entry(&mut merged, entry);
+    }
+
+    merged
+}
+
+/// Canonical-form counterpart to `merge_no_proxy_hosts`, feeding
+/// `NONO_NO_PROXY`.
+fn merge_canonical_no_proxy_hosts(
+    smart_no_proxy_hosts: &[String],
+    profile_no_proxy: &[String],
+    route_hosts: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    let mut merged = Vec::new();
+    for entry in smart_no_proxy_hosts {
+        if no_proxy_entry_matches_any_route(entry, route_hosts) {
+            continue;
+        }
+        push_canonical_no_proxy_entry(&mut merged, entry);
+    }
+
+    for entry in profile_no_proxy {
+        if no_proxy_entry_matches_any_route(entry, route_hosts) {
+            continue;
+        }
+        push_canonical_no_proxy_entry(&mut merged, entry);
+    }
+
+    merged
+}
+
+/// Validate `config.no_proxy` before any `ProxyHandle` is constructed:
+/// every entry must be a well-formed host pattern (D-06
+/// `validate_no_proxy_entry`) and must not overlap `allowed_hosts` (a
+/// no_proxy entry overlapping an allowed host would let a client silently
+/// skip the proxy filter for traffic the operator explicitly allowlisted).
+#[must_use = "no_proxy proxy config validation result must be handled"]
+fn validate_no_proxy_config(config: &ProxyConfig) -> Result<()> {
+    for entry in &config.no_proxy {
+        crate::config::validate_no_proxy_entry(entry).map_err(|err| match err {
+            ProxyError::Config(message) => {
+                ProxyError::Config(format!("invalid no_proxy entry '{entry}': {message}"))
+            }
+            other => other,
+        })?;
+    }
+    validate_no_proxy_allowed_host_conflicts(&config.no_proxy, &config.allowed_hosts)
+}
+
+/// Reject any `no_proxy` entry that overlaps a configured route upstream:
+/// route traffic must go through the proxy for L7 filtering and/or
+/// credential injection, so bypassing it is never valid regardless of what
+/// the operator intended.
+#[must_use = "no_proxy route conflict validation result must be handled"]
+fn validate_no_proxy_route_conflicts(
+    no_proxy: &[String],
+    route_hosts: &std::collections::HashSet<String>,
+) -> Result<()> {
+    for no_proxy_entry in no_proxy {
+        for route_host in route_hosts {
+            if no_proxy_entry_matches_route(no_proxy_entry, route_host) {
+                return Err(ProxyError::Config(format!(
+                    "no_proxy entry '{no_proxy_entry}' conflicts with route upstream '{route_host}': configured route traffic must go through the proxy, not bypass it"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Reject any `no_proxy` entry that overlaps an `allowed_hosts` entry (D-06):
+/// without this guard a `no_proxy` value could silently defeat the
+/// allow_domain filter, which is exactly the security regression D-06 exists
+/// to prevent.
+#[must_use = "no_proxy allowed_host conflict validation result must be handled"]
+fn validate_no_proxy_allowed_host_conflicts(
+    no_proxy: &[String],
+    allowed_hosts: &[String],
+) -> Result<()> {
+    for no_proxy_entry in no_proxy {
+        for allowed_host in allowed_hosts {
+            if crate::config::no_proxy_entry_overlaps_host_pattern(no_proxy_entry, allowed_host) {
+                return Err(ProxyError::Config(format!(
+                    "no_proxy entry '{no_proxy_entry}' conflicts with allowed_host '{allowed_host}': proxy-allowed traffic must go through the proxy filter, not bypass it"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn no_proxy_entry_matches_any_route(
+    entry: &str,
+    route_hosts: &std::collections::HashSet<String>,
+) -> bool {
+    route_hosts
+        .iter()
+        .any(|route_host| no_proxy_entry_matches_route(entry, route_host))
+}
+
+fn no_proxy_entry_matches_route(entry: &str, route_host_port: &str) -> bool {
+    let Some(route_host) = route_host_from_host_port(route_host_port) else {
+        return true;
+    };
+    crate::config::no_proxy_entry_overlaps_host_pattern(entry, route_host)
+}
+
+/// Extract the host portion from a pre-normalised `host:port` string
+/// (`route_store.route_upstream_hosts()` output). Returns `None` on a
+/// malformed `host:port` — callers treat that as "matches everything" (fail
+/// closed: an unparseable route host must not be silently excluded from
+/// route-conflict protection).
+fn route_host_from_host_port(route_host_port: &str) -> Option<&str> {
+    if let Some(rest) = route_host_port.strip_prefix('[') {
+        let end = rest.find(']')?;
+        let host_end = end.checked_add(2)?;
+        let port = route_host_port[host_end..].strip_prefix(':')?;
+        if port.parse::<u16>().is_err() {
+            return None;
+        }
+        return Some(&route_host_port[..host_end]);
+    }
+
+    let (host, port) = route_host_port.rsplit_once(':')?;
+    if host.is_empty() || host.contains(':') || port.parse::<u16>().is_err() {
+        return None;
+    }
+    Some(host)
+}
+
 /// Shared state for the proxy server.
 struct ProxyState {
     filter: ProxyFilter,
@@ -242,6 +488,12 @@ struct ProxyState {
 /// Returns a `ProxyHandle` with the assigned port and session token.
 /// The server runs until the handle is dropped or `shutdown()` is called.
 pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
+    // D-06: validate config.no_proxy (grammar + allowed_hosts overlap)
+    // before doing any other startup work — an invalid or bypass-widening
+    // no_proxy list must fail the whole proxy, not just be silently dropped
+    // or partially applied.
+    validate_no_proxy_config(&config)?;
+
     // Generate session token
     let session_token = token::generate_session_token()?;
 
@@ -263,12 +515,16 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     info!("Proxy server listening on {}", local_addr);
 
     // Load route-level configuration (upstream, L7 filtering, custom TLS CA)
-    // for ALL routes, regardless of credential presence.
+    // for ALL routes, regardless of credential presence. This happens before
+    // the no_proxy/route-conflict check below so a route/no_proxy conflict
+    // fails configuration instead of being silently omitted.
     let route_store = if config.routes.is_empty() {
         RouteStore::empty()
     } else {
         RouteStore::load(&config.routes)?
     };
+    let route_hosts = route_store.route_upstream_hosts();
+    validate_no_proxy_route_conflicts(&config.no_proxy, &route_hosts)?;
 
     // Load credentials for reverse proxy routes (only routes with credential_key)
     let credential_store = if config.routes.is_empty() {
@@ -326,7 +582,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let audit_log = audit::new_audit_log();
 
-    // Compute NO_PROXY hosts: allowed_hosts that can be reached via
+    // Compute smart NO_PROXY hosts: allowed_hosts that can be reached via
     // direct TCP connections (i.e. their port is in direct_connect_ports).
     // Hosts without a direct TCP grant MUST go through the proxy —
     // adding them to NO_PROXY would cause clients to attempt direct
@@ -337,13 +593,13 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     //
     // On macOS this MUST be empty regardless: Seatbelt's ProxyOnly mode
     // blocks ALL direct outbound. See #580.
-    let no_proxy_hosts: Vec<String> = if cfg!(target_os = "macos") {
+    let smart_no_proxy_hosts: Vec<String> = if cfg!(target_os = "macos") {
         Vec::new()
     } else {
         config
             .allowed_hosts
             .iter()
-            .filter(|host| {
+            .filter_map(|host| {
                 let normalised = {
                     let h = host.to_lowercase();
                     if h.starts_with('[') {
@@ -363,7 +619,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
                 // like "*.api.example.com:443" correctly exclude matching allowed_hosts.
                 // Upstream 08ca19a8 (#1243): updated from HashSet::contains exact match.
                 if route_store.is_route_upstream(&normalised) {
-                    return false;
+                    return None;
                 }
                 // Only bypass the proxy if the sandbox grants direct
                 // TCP on this host's port (via --allow-connect-port).
@@ -371,14 +627,27 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
                     .rsplit_once(':')
                     .and_then(|(_, p)| p.parse::<u16>().ok())
                     .unwrap_or(443);
-                config.direct_connect_ports.contains(&port)
+                if config.direct_connect_ports.contains(&port) {
+                    smart_no_proxy_entry(host)
+                } else {
+                    None
+                }
             })
-            .cloned()
             .collect()
     };
 
+    // No credential-loopback-route detection is absorbed in this fork yet
+    // (see the ProxyHandle.managed_loopback_upstream doc comment) — always
+    // false here.
+    let managed_loopback_upstream = false;
+
+    let no_proxy_hosts =
+        merge_no_proxy_hosts(&smart_no_proxy_hosts, &config.no_proxy, &route_hosts);
+    let canonical_no_proxy_hosts =
+        merge_canonical_no_proxy_hosts(&smart_no_proxy_hosts, &config.no_proxy, &route_hosts);
+
     if !no_proxy_hosts.is_empty() {
-        debug!("Smart NO_PROXY bypass hosts: {:?}", no_proxy_hosts);
+        debug!("NO_PROXY bypass hosts: {:?}", no_proxy_hosts);
     }
 
     let state = Arc::new(ProxyState {
@@ -407,6 +676,8 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
         shutdown_tx,
         loaded_routes,
         no_proxy_hosts,
+        managed_loopback_upstream,
+        canonical_no_proxy_hosts,
         diagnostics: vec![],
     })
 }
@@ -739,6 +1010,8 @@ mod tests {
             shutdown_tx,
             loaded_routes: ["openai".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
         let config = ProxyConfig {
@@ -793,6 +1066,8 @@ mod tests {
             shutdown_tx,
             loaded_routes: ["openai".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
         let config = ProxyConfig {
@@ -852,6 +1127,8 @@ mod tests {
             // Only "openai" was loaded; "github" credential was unavailable
             loaded_routes: ["openai".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
         let config = ProxyConfig {
@@ -930,6 +1207,8 @@ mod tests {
             shutdown_tx,
             loaded_routes: std::collections::HashSet::new(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
 
@@ -1019,6 +1298,8 @@ mod tests {
             shutdown_tx: shutdown_tx.clone(),
             loaded_routes: ["anthropic".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
         let config_no_env_var = ProxyConfig {
@@ -1059,6 +1340,8 @@ mod tests {
             shutdown_tx: shutdown_tx2,
             loaded_routes: ["anthropic".to_string()].into_iter().collect(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
         let config_fixed = ProxyConfig {
@@ -1103,6 +1386,8 @@ mod tests {
                 "nats.internal:4222".to_string(),
                 "opencode.internal:4096".to_string(),
             ],
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
 
@@ -1132,6 +1417,8 @@ mod tests {
             shutdown_tx,
             loaded_routes: std::collections::HashSet::new(),
             no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
         };
 
@@ -1141,6 +1428,192 @@ mod tests {
             no_proxy.1, "localhost,127.0.0.1",
             "NO_PROXY should only contain loopback when no bypass hosts"
         );
+    }
+
+    // ========================================================================
+    // #1415 (D-06/D-07) — push_no_proxy_entry pipeline regression coverage
+    // ========================================================================
+
+    /// D-07 regression proof: `#1415` replaces the fork's static
+    /// `vec!["localhost", "127.0.0.1"]` NO_PROXY seed with the
+    /// `push_no_proxy_entry` pipeline. This test proves that replacement did
+    /// not silently drop the fork's pre-existing loopback-bypass behavior —
+    /// with no profile-declared `no_proxy` entries and
+    /// `managed_loopback_upstream: false`, both `localhost` and `127.0.0.1`
+    /// must still appear in the child's `NO_PROXY` env var.
+    #[test]
+    fn no_proxy_pipeline_preserves_localhost_and_loopback_bypass() {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let handle = ProxyHandle {
+            port: 12345,
+            token: Zeroizing::new("test_token".to_string()),
+            audit_log: audit::new_audit_log(),
+            shutdown_tx,
+            loaded_routes: std::collections::HashSet::new(),
+            no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
+        };
+
+        let vars = handle.env_vars();
+        let no_proxy = vars.iter().find(|(k, _)| k == "NO_PROXY").unwrap();
+        let entries: Vec<&str> = no_proxy.1.split(',').collect();
+        assert!(
+            entries.contains(&"localhost"),
+            "localhost must survive the push_no_proxy_entry pipeline replacement (D-07): {}",
+            no_proxy.1
+        );
+        assert!(
+            entries.contains(&"127.0.0.1"),
+            "127.0.0.1 must survive the push_no_proxy_entry pipeline replacement (D-07): {}",
+            no_proxy.1
+        );
+
+        // lowercase `no_proxy` variant must carry the same value.
+        let no_proxy_lower = vars.iter().find(|(k, _)| k == "no_proxy").unwrap();
+        assert_eq!(no_proxy_lower.1, no_proxy.1);
+    }
+
+    /// Existing behavior must not regress: when a managed credential route
+    /// targets a loopback upstream, loopback must be ABSENT from `NO_PROXY`
+    /// so that traffic still traverses the proxy (for L7 filtering /
+    /// credential injection) instead of connecting directly.
+    #[test]
+    fn no_proxy_pipeline_clears_loopback_when_managed_loopback_upstream() {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let handle = ProxyHandle {
+            port: 12345,
+            token: Zeroizing::new("test_token".to_string()),
+            audit_log: audit::new_audit_log(),
+            shutdown_tx,
+            loaded_routes: std::collections::HashSet::new(),
+            no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: true,
+            canonical_no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
+        };
+
+        let vars = handle.env_vars();
+        let no_proxy = vars.iter().find(|(k, _)| k == "NO_PROXY").unwrap();
+        assert!(
+            no_proxy.1.is_empty(),
+            "NO_PROXY must be empty when managed_loopback_upstream is true: {}",
+            no_proxy.1
+        );
+    }
+
+    /// A no_proxy entry that survives the D-06 validators (Task 1) is
+    /// appended to `NO_PROXY` via `push_no_proxy_entry`, and `NONO_NO_PROXY`
+    /// (the canonical form) is present alongside `NO_PROXY` in the child env.
+    #[test]
+    fn no_proxy_pipeline_appends_validated_entry_and_emits_canonical_var() {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let handle = ProxyHandle {
+            port: 12345,
+            token: Zeroizing::new("test_token".to_string()),
+            audit_log: audit::new_audit_log(),
+            shutdown_tx,
+            loaded_routes: std::collections::HashSet::new(),
+            no_proxy_hosts: vec!["redis".to_string()],
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: vec!["redis".to_string()],
+            diagnostics: vec![],
+        };
+
+        let vars = handle.env_vars();
+        let no_proxy = vars.iter().find(|(k, _)| k == "NO_PROXY").unwrap();
+        assert!(
+            no_proxy.1.split(',').any(|h| h == "redis"),
+            "validated no_proxy entry must be appended to NO_PROXY via push_no_proxy_entry: {}",
+            no_proxy.1
+        );
+
+        let nono_no_proxy = vars
+            .iter()
+            .find(|(k, _)| k == "NONO_NO_PROXY")
+            .expect("NONO_NO_PROXY must be present alongside NO_PROXY");
+        assert!(
+            nono_no_proxy.1.split(',').any(|h| h == "redis"),
+            "canonical no_proxy var must also carry the validated entry: {}",
+            nono_no_proxy.1
+        );
+    }
+
+    /// D-06 fail-closed proof: `start()` must reject a config whose
+    /// `no_proxy` entry does not satisfy `validate_no_proxy_entry`'s
+    /// grammar, before any listener is bound or `ProxyHandle` constructed.
+    #[tokio::test]
+    async fn start_rejects_no_proxy_entry_with_invalid_grammar() {
+        let config = ProxyConfig {
+            no_proxy: vec!["evil.com/path".to_string()],
+            ..Default::default()
+        };
+        match start(config).await {
+            Err(ProxyError::Config(_)) => {}
+            Err(other) => panic!("expected ProxyError::Config, got: {other:?}"),
+            Ok(handle) => {
+                handle.shutdown();
+                panic!("start() must reject a malformed no_proxy entry, not succeed");
+            }
+        }
+    }
+
+    /// D-06 fail-closed proof: `start()` must reject a `no_proxy` entry that
+    /// overlaps `allowed_hosts` — without this guard the entry would
+    /// silently defeat the allow_domain filter for the overlapping host.
+    #[tokio::test]
+    async fn start_rejects_no_proxy_entry_overlapping_allowed_host() {
+        let config = ProxyConfig {
+            allowed_hosts: vec!["api.example.com".to_string()],
+            no_proxy: vec!["*.example.com".to_string()],
+            ..Default::default()
+        };
+        match start(config).await {
+            Err(ProxyError::Config(_)) => {}
+            Err(other) => panic!("expected ProxyError::Config, got: {other:?}"),
+            Ok(handle) => {
+                handle.shutdown();
+                panic!("start() must reject a no_proxy entry that overlaps an allowed_hosts entry");
+            }
+        }
+    }
+
+    /// D-06 fail-closed proof: `start()` must reject a `no_proxy` entry that
+    /// overlaps a configured route upstream — route traffic must go through
+    /// the proxy for L7 filtering / credential injection, so a bypass here
+    /// is never valid.
+    #[tokio::test]
+    async fn start_rejects_no_proxy_entry_conflicting_with_route_upstream() {
+        let config = ProxyConfig {
+            no_proxy: vec!["*.openai.com".to_string()],
+            routes: vec![crate::config::RouteConfig {
+                prefix: "openai".to_string(),
+                upstream: "https://api.openai.com".to_string(),
+                credential_key: Some("openai".to_string()),
+                inject_mode: crate::config::InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+                endpoint_policy: None,
+            }],
+            ..Default::default()
+        };
+        match start(config).await {
+            Err(ProxyError::Config(_)) => {}
+            Err(other) => panic!("expected ProxyError::Config, got: {other:?}"),
+            Ok(handle) => {
+                handle.shutdown();
+                panic!("start() must reject a no_proxy entry that conflicts with a route upstream");
+            }
+        }
     }
 
     #[tokio::test]
@@ -1170,8 +1643,22 @@ mod tests {
         // When direct_connect_ports includes port 443, allowed_hosts on
         // that port SHOULD appear in NO_PROXY (direct TCP is permitted).
         // macOS always returns empty NO_PROXY (Seatbelt blocks all direct outbound).
+        //
+        // #1415 (D-06) tightened smart-derived NO_PROXY entries to go
+        // through the same `validate_no_proxy_entry` grammar as
+        // operator-declared entries: a bare multi-label domain like
+        // "github.com" is now filtered out as ambiguous (common HTTP
+        // clients treat bare NO_PROXY domains as suffix matches), so this
+        // test uses an IP literal — which the grammar accepts unambiguously
+        // — to prove the "matching connect port bypasses the proxy"
+        // mechanism still works post-absorb. See
+        // `test_smart_no_proxy_entry_filters_ambiguous_bare_domains` for the
+        // direct grammar-tightening coverage.
         let config = ProxyConfig {
-            allowed_hosts: vec!["github.com".to_string(), "server.internal:4222".to_string()],
+            allowed_hosts: vec![
+                "203.0.113.5".to_string(),
+                "server.internal:4222".to_string(),
+            ],
             direct_connect_ports: vec![443],
             ..Default::default()
         };
@@ -1180,8 +1667,8 @@ mod tests {
         let vars = handle.env_vars();
         let no_proxy = vars.iter().find(|(k, _)| k == "NO_PROXY").unwrap();
         assert!(
-            no_proxy.1.contains("github.com"),
-            "host on port 443 should be in NO_PROXY when 443 is in direct_connect_ports"
+            no_proxy.1.contains("203.0.113.5"),
+            "IP-literal host on port 443 should be in NO_PROXY when 443 is in direct_connect_ports"
         );
         assert!(
             !no_proxy.1.contains("server.internal"),
@@ -1189,6 +1676,25 @@ mod tests {
         );
 
         handle.shutdown();
+    }
+
+    /// #1415 (D-06): smart-derived NO_PROXY candidates go through the same
+    /// `validate_no_proxy_entry` grammar as operator-declared entries. Bare
+    /// multi-label domains are filtered as ambiguous; single-label aliases,
+    /// IP literals, and bracketed IPv6 literals survive; wildcard-prefixed
+    /// entries are always filtered (a smart entry cannot safely widen to a
+    /// bare-domain suffix bypass).
+    #[test]
+    fn test_smart_no_proxy_entry_filters_ambiguous_bare_domains() {
+        assert_eq!(smart_no_proxy_entry("github.com"), None);
+        assert_eq!(smart_no_proxy_entry("api.github.com:443"), None);
+        assert_eq!(smart_no_proxy_entry("redis"), Some("redis".to_string()));
+        assert_eq!(
+            smart_no_proxy_entry("127.0.0.1"),
+            Some("127.0.0.1".to_string())
+        );
+        assert_eq!(smart_no_proxy_entry("[::1]:443"), Some("::1".to_string()));
+        assert_eq!(smart_no_proxy_entry("*.internal.example:443"), None);
     }
 
     /// Regression test: when `strict_filter` is true and `allowed_hosts` is
