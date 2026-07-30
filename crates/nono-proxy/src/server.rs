@@ -1260,6 +1260,22 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
             )
             .await
         }
+    } else if classify_request_target(first_line) == RequestTargetForm::AbsoluteHttp {
+        // Absolute-form `http://…` request from an HTTP_PROXY-honoring client.
+        // Forward it as a plain-HTTP forward proxy (see handle_forward_http).
+        // This branch is checked BEFORE the origin-form reverse-proxy path so
+        // that absolute-form URLs never reach parse_service_prefix (which
+        // would misread the scheme as a service name — see issue #1334).
+        handle_forward_http(first_line, &mut stream, &header_bytes, &buffered, state).await
+    } else if classify_request_target(first_line) == RequestTargetForm::AbsoluteHttps {
+        // Absolute-form `https://…` cannot be forwarded as cleartext: the
+        // proxy would have to originate TLS to the upstream on the client's
+        // behalf, which no standard HTTP_PROXY client expects. Such clients
+        // use CONNECT for HTTPS. Reject with explicit guidance rather than a
+        // confusing 502.
+        let response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 62\r\n\r\nhttps forward-proxying is not supported; use CONNECT for https";
+        stream.write_all(response.as_bytes()).await?;
+        Ok(())
     } else if !state.route_store.is_empty() {
         // Non-CONNECT request with routes configured -> reverse proxy
         let ctx = reverse::ReverseProxyCtx {
@@ -1361,6 +1377,405 @@ mod tests {
             !s.to_lowercase().contains("proxy-authorization"),
             "Proxy-Authorization must be stripped, got: {s:?}"
         );
+    }
+
+    /// Spawn a one-shot local HTTP/1.1 origin server that echoes the received
+    /// request line back in the body and returns 200. Returns its address and
+    /// a receiver that yields the raw request bytes it saw.
+    async fn spawn_echo_origin() -> (std::net::SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let mut buf = [0u8; 4096];
+                let n = sock.read(&mut buf).await.unwrap_or(0);
+                let received = String::from_utf8_lossy(&buf[..n]).to_string();
+                let body = "ok";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = sock.write_all(response.as_bytes()).await;
+                let _ = sock.flush().await;
+                let _ = tx.send(received);
+            }
+        });
+        (addr, rx)
+    }
+
+    /// Absolute-form http:// to an ALLOWED host is forwarded and returns the
+    /// upstream status. Also asserts the upstream saw an origin-form request
+    /// line with the proxy headers stripped.
+    #[tokio::test]
+    async fn forward_http_allowed_host_is_forwarded() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let (origin_addr, origin_rx) = spawn_echo_origin().await;
+
+        let config = ProxyConfig {
+            allowed_hosts: vec!["127.0.0.1".to_string()],
+            ..ProxyConfig::default()
+        };
+        let handle = start(config).await.unwrap();
+        let token = handle.token.to_string();
+
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port))
+            .await
+            .unwrap();
+        let creds = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(format!("nono:{}", token))
+        };
+        let request = format!(
+            "GET http://127.0.0.1:{}/hello?x=1 HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nProxy-Connection: keep-alive\r\nProxy-Authorization: Basic {}\r\nAccept: */*\r\n\r\n",
+            origin_addr.port(),
+            origin_addr.port(),
+            creds
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 200"),
+            "expected upstream 200 status, got: {}",
+            response_str
+        );
+
+        // The upstream must have seen an origin-form request line with the
+        // proxy headers stripped.
+        let received = origin_rx.await.unwrap();
+        assert!(
+            received.starts_with("GET /hello?x=1 HTTP/1.1"),
+            "upstream should see origin-form request line, got: {received:?}"
+        );
+        assert!(
+            !received.to_lowercase().contains("proxy-connection"),
+            "Proxy-Connection must not reach upstream: {received:?}"
+        );
+        assert!(
+            !received.to_lowercase().contains("proxy-authorization"),
+            "Proxy-Authorization must not reach upstream: {received:?}"
+        );
+        assert!(
+            received.contains("Accept: */*"),
+            "non-proxy headers must be preserved: {received:?}"
+        );
+
+        // An L7 audit event should have been recorded for the allowed request.
+        let events = handle.drain_audit_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Allow
+                    && e.target == "127.0.0.1"
+                    && e.status == Some(200)),
+            "expected an allow L7 audit event, got: {events:?}"
+        );
+
+        handle.shutdown();
+    }
+
+    /// The forward path is a TRANSPARENT proxy: it must never inject a managed
+    /// credential, even when credential-injecting routes are configured.
+    /// Credential injection is reserved for the reverse path (HTTPS or
+    /// http-loopback upstreams).
+    ///
+    /// The configured route carries an UNRESOLVABLE credential key. If the
+    /// forward path ever attempted injection it would fail credential
+    /// resolution and return 503 (the reverse path's missing-credential
+    /// behavior) — so a 200 with the client's own Authorization header intact
+    /// proves the forward path bypasses routing/injection entirely. We also
+    /// assert the audit event reports `managed_credential_active = false`.
+    #[tokio::test]
+    async fn forward_http_does_not_inject_managed_credential() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let (origin_addr, origin_rx) = spawn_echo_origin().await;
+
+        // A credential-injecting route whose key cannot resolve. The forward
+        // path must ignore it entirely rather than fail resolving it.
+        let config = ProxyConfig {
+            allowed_hosts: vec!["127.0.0.1".to_string()],
+            routes: vec![crate::config::RouteConfig {
+                prefix: "svc".to_string(),
+                upstream: "https://api.example.com".to_string(),
+                credential_key: Some("env://NONO_TEST_TOTALLY_MISSING".to_string()),
+                inject_mode: Default::default(),
+                inject_header: "Authorization".to_string(),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                endpoint_policy: None,
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+            }],
+            ..ProxyConfig::default()
+        };
+        let handle = start(config).await.unwrap();
+        let token = handle.token.to_string();
+
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port))
+            .await
+            .unwrap();
+        let creds = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(format!("nono:{}", token))
+        };
+        // The client sends its own Authorization header. A transparent proxy
+        // forwards it unchanged.
+        let request = format!(
+            "GET http://127.0.0.1:{}/data HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nProxy-Authorization: Basic {}\r\nAuthorization: Bearer client-token\r\n\r\n",
+            origin_addr.port(),
+            origin_addr.port(),
+            creds
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        // 200 (not 503) proves no credential resolution/injection was attempted.
+        assert!(
+            response_str.starts_with("HTTP/1.1 200"),
+            "expected upstream 200 (no injection attempt), got: {}",
+            response_str
+        );
+
+        let received = origin_rx.await.unwrap();
+        // The client's own credential must survive verbatim, unmodified.
+        assert!(
+            received.contains("Authorization: Bearer client-token"),
+            "client Authorization must be forwarded verbatim: {received:?}"
+        );
+
+        // The audit event must record that no managed credential was active.
+        let events = handle.drain_audit_events();
+        let l7 = events
+            .iter()
+            .find(|e| e.status == Some(200))
+            .expect("expected an L7 audit event for the forwarded request");
+        assert_eq!(
+            l7.managed_credential_active,
+            Some(false),
+            "forward path must audit managed_credential_active=false: {l7:?}"
+        );
+
+        handle.shutdown();
+    }
+
+    /// Absolute-form http:// to a DENIED host returns 403 with an audit denial.
+    #[tokio::test]
+    async fn forward_http_denied_host_returns_403_and_audits() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        // Allowlist a different host so 127.0.0.1 is denied.
+        let config = ProxyConfig {
+            allowed_hosts: vec!["example.com".to_string()],
+            ..ProxyConfig::default()
+        };
+        let handle = start(config).await.unwrap();
+        let token = handle.token.to_string();
+
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port))
+            .await
+            .unwrap();
+        let creds = {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode(format!("nono:{}", token))
+        };
+        let request = format!(
+            "GET http://denied.example.org/secret HTTP/1.1\r\nHost: denied.example.org\r\nProxy-Authorization: Basic {}\r\n\r\n",
+            creds
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "expected 403 for denied host, got: {}",
+            response_str
+        );
+
+        let events = handle.drain_audit_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.target == "denied.example.org"
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::HostDenied)),
+            "expected a HostDenied audit event, got: {events:?}"
+        );
+
+        handle.shutdown();
+    }
+
+    /// Absolute-form https:// is rejected with guidance to use CONNECT.
+    #[tokio::test]
+    async fn forward_https_absolute_form_is_rejected_with_connect_guidance() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let config = ProxyConfig {
+            allowed_hosts: vec!["example.com".to_string()],
+            ..ProxyConfig::default()
+        };
+        let handle = start(config).await.unwrap();
+
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port))
+            .await
+            .unwrap();
+        let request = b"GET https://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n";
+        stream.write_all(request).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 400"),
+            "expected 400 for absolute-form https, got: {}",
+            response_str
+        );
+        assert!(
+            response_str.to_lowercase().contains("connect"),
+            "response should direct the client to use CONNECT, got: {}",
+            response_str
+        );
+
+        handle.shutdown();
+    }
+
+    /// Missing/invalid Proxy-Authorization with the strict filter active is
+    /// rejected with 407 (matching the reverse-proxy no-credential branch).
+    #[tokio::test]
+    async fn forward_http_missing_proxy_auth_is_rejected_407() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let config = ProxyConfig {
+            allowed_hosts: vec!["127.0.0.1".to_string()],
+            ..ProxyConfig::default()
+        };
+        let handle = start(config).await.unwrap();
+
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port))
+            .await
+            .unwrap();
+        // No Proxy-Authorization header at all.
+        let request = b"GET http://127.0.0.1:9/hello HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n";
+        stream.write_all(request).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 407"),
+            "expected 407 for missing proxy auth, got: {}",
+            response_str
+        );
+
+        let events = handle.drain_audit_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::AuthenticationFailed)),
+            "expected an AuthenticationFailed audit event, got: {events:?}"
+        );
+
+        handle.shutdown();
+    }
+
+    /// Regression guard: origin-form requests with routes configured still
+    /// route to the reverse proxy (unaffected by the forward-proxy dispatch).
+    ///
+    /// Fork adaptation of upstream's assertion: upstream's `CredentialStore`
+    /// returns a request-time 503 when a route's `credential_key` fails to
+    /// resolve. This fork's `CredentialStore` resolves credentials once at
+    /// startup and silently excludes routes whose credential could not be
+    /// loaded (`ProxyHandle.loaded_routes`, documented in this file) rather
+    /// than surfacing a 503 per-request — so the route falls back to
+    /// `handle_reverse_proxy`'s no-credential branch (session-token-only L7
+    /// filtering via `Proxy-Authorization`), which this request omits,
+    /// yielding 407. The regression this test actually guards — that an
+    /// origin-form request reaches the REVERSE handler, not the new
+    /// forward-http path — is proven positively by the audit event's
+    /// `route_id = Some("openai")`: only `handle_reverse_proxy`'s audit calls
+    /// ever set `route_id`; `handle_forward_http` never does.
+    #[tokio::test]
+    async fn origin_form_request_still_routes_to_reverse_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let config = ProxyConfig {
+            routes: vec![crate::config::RouteConfig {
+                prefix: "openai".to_string(),
+                upstream: "https://api.openai.com".to_string(),
+                credential_key: Some("env://NONO_TEST_TOTALLY_MISSING".to_string()),
+                inject_mode: Default::default(),
+                inject_header: "Authorization".to_string(),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                endpoint_policy: None,
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+            }],
+            ..Default::default()
+        };
+        let handle = start(config).await.unwrap();
+
+        let mut stream = TcpStream::connect(("127.0.0.1", handle.port))
+            .await
+            .unwrap();
+        let request = b"GET /openai/v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer whatever\r\n\r\n";
+        stream.write_all(request).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        // Any structured HTTP answer (not a dropped socket / raw forward
+        // failure) proves *a* handler answered; the audit event below proves
+        // it was specifically the reverse handler.
+        assert!(
+            response_str.starts_with("HTTP/1.1 407"),
+            "origin-form request must reach the reverse proxy (407 for this fork's \
+             unresolved-credential-falls-back-to-no-credential-L7-auth behavior), \
+             got: {}",
+            response_str
+        );
+
+        let events = handle.drain_audit_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.mode == nono::undo::NetworkAuditMode::Reverse
+                    && e.route_id.as_deref() == Some("openai")),
+            "expected a Reverse-mode audit event with route_id=openai — proves the \
+             reverse handler, not handle_forward_http, handled this request \
+             (handle_forward_http never sets route_id), got: {events:?}"
+        );
+
+        handle.shutdown();
     }
 
     // Fork divergence: test_intercept_lifecycle_end_to_end,
