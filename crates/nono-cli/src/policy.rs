@@ -293,6 +293,77 @@ pub(crate) fn expand_path(path_str: &str) -> Result<PathBuf> {
     Ok(PathBuf::from(expanded))
 }
 
+/// Scan `s` for bare `$IDENTIFIER` tokens and replace each with the result of
+/// `lookup(name)`. `var_start` gates which characters may begin an identifier
+/// immediately after `$`; once started, subsequent characters are restricted
+/// to `[A-Za-z0-9_]`. `${VAR}`-braced forms and a lone trailing `$` pass
+/// through unchanged (ported from upstream `2cbaa9a0`, #1296).
+///
+/// Generic over the lookup closure's error type so callers can plug in a
+/// fallible or infallible variable source (e.g. process-env lookup, which is
+/// infallible, vs. a future caller that might need a `Result`-returning
+/// source).
+pub(crate) fn substitute_vars<E>(
+    s: &str,
+    var_start: impl Fn(char) -> bool,
+    lookup: impl Fn(&str) -> std::result::Result<Option<String>, E>,
+) -> std::result::Result<String, E> {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.char_indices().peekable();
+
+    while let Some((_, c)) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+
+        match chars.peek().copied() {
+            Some((_, next_c)) if var_start(next_c) => {
+                let mut name = String::new();
+                while let Some((_, nc)) = chars.peek().copied() {
+                    if nc.is_ascii_alphanumeric() || nc == '_' {
+                        name.push(nc);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                match lookup(&name)? {
+                    Some(value) => out.push_str(&value),
+                    None => {
+                        out.push('$');
+                        out.push_str(&name);
+                    }
+                }
+            }
+            _ => {
+                // `${VAR}` braced form and a lone trailing `$` both pass
+                // through unchanged — only the bare `$IDENTIFIER` form is
+                // expanded here.
+                out.push('$');
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// Expand bare `$VAR` tokens in `s` against the current process environment.
+/// Unset variables are left unexpanded (the literal `$VAR` text passes
+/// through), matching upstream `2cbaa9a0`'s fail-open-to-literal behavior for
+/// profile path templates (the built-in `$HOME`/`$WORKDIR`/etc. expansion in
+/// `profile::expand_vars` runs afterward and still applies).
+pub(crate) fn expand_env_vars(s: &str) -> String {
+    substitute_vars(
+        s,
+        |nc| nc.is_ascii_alphanumeric() || nc == '_',
+        |name| -> std::result::Result<Option<String>, std::convert::Infallible> {
+            Ok(std::env::var(name).ok())
+        },
+    )
+    .unwrap_or_else(|e| match e {})
+}
+
 /// Check whether a path resides inside the Nix store (`/nix/store`).
 ///
 /// The Nix store is immutable by design — its contents are content-addressed

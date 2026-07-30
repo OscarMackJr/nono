@@ -29,6 +29,17 @@
 //!
 //! Adapted from the kipz/nono `develop` branch `profile::dynamic_providers`.
 
+// Only the Unix (linux/macos) arm of `capability_ext.rs`'s cfg split imports and calls into
+// this module's production code (D-01) — the non-Unix arm uses a local no-op fallback that
+// never references these items. On a non-Unix build this whole module (outside its own
+// `#[cfg(test)]` suite, which does exercise every item) is therefore legitimately unreachable
+// from production code, not neglected code — same idiom as `session.rs`'s
+// `#![cfg_attr(target_os = "windows", allow(dead_code))]`.
+#![cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code)
+)]
+
 use nono::{NonoError, Result};
 
 /// Parse a profile path entry as a dynamic-provider token.

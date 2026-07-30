@@ -14,6 +14,30 @@ use nono::{
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
+// PROF-02b (Phase 110 Plan 02, D-01/D-02): `@git:*` dynamic-token expansion is
+// only meaningful on platforms where the fork-owned `dynamic_tokens` module's
+// git-config introspection runs; on non-Unix targets there is no dynamic-token
+// feature at all, so entries pass through unchanged (matches upstream's own
+// documented non-Unix behavior for this cfg split).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::dynamic_tokens::expand_dynamic_tokens;
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn expand_dynamic_tokens(entries: &[String], _workdir: Option<&Path>) -> Result<Vec<String>> {
+    Ok(entries.to_vec())
+}
+
+/// Expand a profile path template: arbitrary `$VAR` tokens from the process
+/// environment are resolved first, then built-in nono vars (`$HOME`,
+/// `$WORKDIR`, `$TMPDIR`, `$XDG_*`, etc.) are applied via `expand_vars`.
+/// Named distinctly from `crate::policy::expand_path` (different module,
+/// different signature, different purpose — see Phase 110 Plan 02 Pitfall 1)
+/// to avoid a same-name footgun.
+fn expand_profile_path(template: &str, workdir: &Path) -> Result<PathBuf> {
+    let after_env = policy::expand_env_vars(template);
+    expand_vars(&after_env, workdir)
+}
+
 /// Try to create a directory capability, warning and skipping on PathNotFound.
 /// Propagates all other errors.
 fn try_new_dir(path: &Path, access: AccessMode, label: &str) -> Result<Option<FsCapability>> {
@@ -689,8 +713,9 @@ impl CapabilitySetExt for CapabilitySet {
         let fs = &profile.filesystem;
 
         // Directories with read+write access
-        for path_template in &fs.allow {
-            let path = expand_vars(path_template, workdir)?;
+        let allow_expanded = expand_dynamic_tokens(&fs.allow, Some(workdir))?;
+        for path_template in &allow_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             validate_requested_dir(
                 &path,
                 "Profile",
@@ -705,8 +730,9 @@ impl CapabilitySetExt for CapabilitySet {
         }
 
         // Read-only filesystem entries (directory or file)
-        for path_template in &fs.read {
-            let path = expand_vars(path_template, workdir)?;
+        let read_expanded = expand_dynamic_tokens(&fs.read, Some(workdir))?;
+        for path_template in &read_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             let label = format!("Profile path '{}' does not exist, skipping", path_template);
 
             let reads_file = std::fs::metadata(&path)
@@ -738,8 +764,9 @@ impl CapabilitySetExt for CapabilitySet {
         }
 
         // Directories with write-only access
-        for path_template in &fs.write {
-            let path = expand_vars(path_template, workdir)?;
+        let write_expanded = expand_dynamic_tokens(&fs.write, Some(workdir))?;
+        for path_template in &write_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             validate_requested_dir(
                 &path,
                 "Profile",
@@ -754,8 +781,9 @@ impl CapabilitySetExt for CapabilitySet {
         }
 
         // Single files with read+write access
-        for path_template in &fs.allow_file {
-            let path = expand_vars(path_template, workdir)?;
+        let allow_file_expanded = expand_dynamic_tokens(&fs.allow_file, Some(workdir))?;
+        for path_template in &allow_file_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             let label = format!("Profile file '{}' does not exist, skipping", path_template);
             if let Some(mut cap) =
                 try_new_profile_exact_path(&path, AccessMode::ReadWrite, &label, &protected_roots)?
@@ -769,8 +797,9 @@ impl CapabilitySetExt for CapabilitySet {
         }
 
         // Single files with read-only access
-        for path_template in &fs.read_file {
-            let path = expand_vars(path_template, workdir)?;
+        let read_file_expanded = expand_dynamic_tokens(&fs.read_file, Some(workdir))?;
+        for path_template in &read_file_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             let label = format!("Profile file '{}' does not exist, skipping", path_template);
             if let Some(mut cap) =
                 try_new_profile_exact_path(&path, AccessMode::Read, &label, &protected_roots)?
@@ -781,8 +810,9 @@ impl CapabilitySetExt for CapabilitySet {
         }
 
         // Single files with write-only access
-        for path_template in &fs.write_file {
-            let path = expand_vars(path_template, workdir)?;
+        let write_file_expanded = expand_dynamic_tokens(&fs.write_file, Some(workdir))?;
+        for path_template in &write_file_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             let label = format!("Profile file '{}' does not exist, skipping", path_template);
             if let Some(mut cap) =
                 try_new_profile_exact_path(&path, AccessMode::Write, &label, &protected_roots)?
@@ -1001,8 +1031,10 @@ impl CapabilitySetExt for CapabilitySet {
         // allow/read/write entries are already applied above — these branches
         // apply the remaining deny and deny-command surfaces.
         // Fork-side note: field is `profile.policy.add_deny_access` per Phase 36-01b rename.
-        for path_template in &profile.policy.add_deny_access {
-            let path = expand_vars(path_template, workdir)?;
+        let add_deny_access_expanded =
+            expand_dynamic_tokens(&profile.policy.add_deny_access, Some(workdir))?;
+        for path_template in &add_deny_access_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             let path_str = path.to_str().ok_or_else(|| {
                 NonoError::ConfigParse(format!(
                     "Profile policy deny path contains non-UTF-8 bytes: {}",
@@ -1093,8 +1125,10 @@ impl CapabilitySetExt for CapabilitySet {
         // skipped here to preserve platform-specific built-in profiles whose
         // grants are intentionally absent on other OSes.
         let mut profile_overrides = Vec::with_capacity(profile.policy.bypass_protection.len());
-        for path_template in &profile.policy.bypass_protection {
-            let path = expand_vars(path_template, workdir)?;
+        let bypass_protection_expanded =
+            expand_dynamic_tokens(&profile.policy.bypass_protection, Some(workdir))?;
+        for path_template in &bypass_protection_expanded {
+            let path = expand_profile_path(path_template, workdir)?;
             if path.exists() {
                 profile_overrides.push(path);
             }
