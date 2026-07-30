@@ -28,6 +28,7 @@ mod deprecated_policy;
 mod deprecated_schema;
 mod diagnostic;
 mod diagnostic_formatter;
+mod dynamic_tokens;
 mod exec_identity;
 #[cfg(target_os = "windows")]
 mod exec_identity_windows;
