@@ -2973,6 +2973,27 @@ pub(crate) fn load_raw_profile_from_path(path: &Path) -> Result<Profile> {
 
 /// Resolve inheritance and apply implicit default-group merging for a raw profile.
 pub(crate) fn finalize_profile(mut profile: Profile) -> Result<Profile> {
+    // Phase 110 Plan 01 (PROF-01, D-10): apply the current-OS
+    // `platform_overrides` block FIRST, before any other finalize step. This
+    // must run before `merge_implicit_default_groups` so implicit groups see
+    // the fully-merged profile, not the pre-override one.
+    profile = apply_platform_overrides(profile)?;
+    // Phase 110 Plan 01 (PROF-01, `719975cf` #1380): re-run the validators
+    // that only saw pre-merge values. `apply_platform_overrides` can
+    // introduce custom_credentials/env_credentials/set_vars entries that
+    // `parse_profile_file`/`parse_profile_bytes` never saw (they validate
+    // before `extends`/`platform_overrides` resolution), so skipping this
+    // re-validation would let an override-introduced invalid entry bypass
+    // validation entirely (T-110-03).
+    validate_profile_custom_credentials(&profile)?;
+    validate_env_credential_keys(&profile)?;
+    if let Some(env_config) = profile.environment.as_ref() {
+        if !env_config.set_vars.is_empty() {
+            if let Some(err) = crate::exec_strategy::validate_set_vars(&env_config.set_vars) {
+                return Err(NonoError::ProfileParse(err));
+            }
+        }
+    }
     merge_implicit_default_groups(&mut profile)?;
     // D-06: re-run the no_proxy/allow_domain overlap check on the fully
     // extends-merged profile. `parse_profile_file`/`parse_profile_bytes`
@@ -3352,10 +3373,75 @@ fn load_base_profile_raw(
 ///
 /// The child's values take precedence for scalar fields. Collection fields
 /// are appended and deduplicated. The `extends` field is consumed (set to `None`).
+/// Apply the current-OS `platform_overrides` block to `profile`, if present.
+///
+/// Merges the matching override in as a `merge_profiles` "child" — the SAME
+/// function every other inheritance step in this file uses — so an override
+/// can only add/tighten via the existing child-wins/dedup-append/deny-union
+/// rules, never silently replace (T-110-01). Ported verbatim from upstream
+/// `ae1c513e` (#1371).
+fn apply_platform_overrides(mut profile: Profile) -> Result<Profile> {
+    let Some(mut override_profile) = profile
+        .platform_overrides
+        .take()
+        .and_then(PlatformOverrides::for_current_platform)
+        .map(|o| o.0)
+    else {
+        return Ok(profile);
+    };
+    override_profile.meta = profile.meta.clone();
+    Ok(merge_profiles(profile, override_profile))
+}
+
+/// Deep-merge two `platform_overrides` blocks (D-10, upstream `719975cf`
+/// #1380). This is the fix that lets `platform_overrides` survive `extends`
+/// resolution intact: `merge_profiles` calls this instead of nulling the
+/// field out, so a base profile's override block is preserved (and
+/// deep-merged with any child-declared override for the same OS slot) all
+/// the way through to `finalize_profile`, which is the only place the field
+/// is actually consumed.
+fn merge_platform_overrides(
+    base: Option<PlatformOverrides>,
+    child: Option<PlatformOverrides>,
+) -> Option<PlatformOverrides> {
+    match (base, child) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(c)) => Some(c),
+        (Some(b), Some(c)) => Some(PlatformOverrides {
+            macos: merge_platform_override_slot(b.macos, c.macos),
+            linux: merge_platform_override_slot(b.linux, c.linux),
+            windows: merge_platform_override_slot(b.windows, c.windows),
+        }),
+    }
+}
+
+/// Deep-merge a single per-OS override slot (D-10, upstream `719975cf`).
+/// When both base and child declare an override for the SAME OS, the two are
+/// merged (not one replacing the other) via the ordinary `merge_profiles`
+/// rules.
+fn merge_platform_override_slot(
+    base: Option<Box<PlatformOverride>>,
+    child: Option<Box<PlatformOverride>>,
+) -> Option<Box<PlatformOverride>> {
+    match (base, child) {
+        (None, None) => None,
+        (Some(b), None) => Some(b),
+        (None, Some(c)) => Some(c),
+        (Some(b), Some(c)) => Some(Box::new(PlatformOverride(merge_profiles(b.0, c.0)))),
+    }
+}
+
 fn merge_profiles(base: Profile, child: Profile) -> Profile {
     Profile {
         extends: None,
-        platform_overrides: None,
+        // Phase 110 Plan 01 (PROF-01, D-10): deep-merge rather than null out,
+        // so a base profile's platform_overrides survives `extends`
+        // resolution into a child that does not itself declare an override.
+        platform_overrides: merge_platform_overrides(
+            base.platform_overrides,
+            child.platform_overrides,
+        ),
         meta: child.meta,
         security: SecurityConfig {
             groups: dedup_append(&base.security.groups, &child.security.groups),
