@@ -551,6 +551,98 @@ fn expand_profile_set_vars(
     Ok(Some(expanded))
 }
 
+/// Convert a `Vec<[u16; 2]>` profile-schema range list into the `(u16, u16)`
+/// tuple shape `nono::capability::merge_port_ranges` expects.
+fn to_range_tuples(ranges: &[[u16; 2]]) -> Vec<(u16, u16)> {
+    ranges.iter().map(|&[start, end]| (start, end)).collect()
+}
+
+/// PROF-03 (110-04): validate `open_port_range`/`listen_port_range` at
+/// profile-prepare time, before any sandbox capability is constructed
+/// (T-110-10 / T-110-11).
+///
+/// 1. Rejects any `[start, end]` entry (in either field) where `start > end`.
+/// 2. On macOS only, re-checks the combined `open_port_range` +
+///    `listen_port_range` port count against
+///    `nono::capability::MACOS_PORT_RANGE_LIMIT` — a deliberate
+///    defense-in-depth duplicate of the sandbox-layer check in
+///    `nono::sandbox::macos::generate_profile`, giving an earlier, clearer
+///    error before the sandbox layer is even reached.
+fn validate_port_ranges(profile: &profile::Profile) -> crate::Result<()> {
+    for (label, ranges) in [
+        ("open_port_range", &profile.network.open_port_range),
+        ("listen_port_range", &profile.network.listen_port_range),
+    ] {
+        for &[start, end] in ranges {
+            if start > end {
+                return Err(nono::NonoError::ProfileParse(format!(
+                    "{label} entry [{start}, {end}] is invalid: start must be <= end"
+                )));
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    check_macos_port_range_cap(profile)?;
+
+    Ok(())
+}
+
+/// Pure, platform-independent helper (unit-testable on every host) backing
+/// the macOS-only cumulative cap pre-check in [`validate_port_ranges`]. Only
+/// invoked in production code under `#[cfg(target_os = "macos")]` — Linux
+/// has no such restriction (D-05) — but kept callable under `#[cfg(test)]`
+/// on every platform so the "exceeds the macOS limit" error path has direct
+/// unit coverage regardless of which OS runs the test suite.
+#[cfg(any(target_os = "macos", test))]
+fn check_macos_port_range_cap(profile: &profile::Profile) -> crate::Result<()> {
+    let merged_open =
+        nono::capability::merge_port_ranges(&to_range_tuples(&profile.network.open_port_range));
+    let merged_listen =
+        nono::capability::merge_port_ranges(&to_range_tuples(&profile.network.listen_port_range));
+    let total_range_ports: u32 = merged_open
+        .iter()
+        .chain(merged_listen.iter())
+        .map(|&(s, e)| (e as u32).saturating_sub(s as u32).saturating_add(1))
+        .fold(0u32, |acc, n| acc.saturating_add(n));
+    if total_range_ports > nono::capability::MACOS_PORT_RANGE_LIMIT {
+        return Err(nono::NonoError::ProfileParse(format!(
+            "combined open_port_range + listen_port_range ranges expand to {} unique \
+             ports, which exceeds the macOS limit of {} (sandbox_init crashes above \
+             ~17,770 rules); use smaller or fewer ranges",
+            total_range_ports,
+            nono::capability::MACOS_PORT_RANGE_LIMIT
+        )));
+    }
+    Ok(())
+}
+
+/// Build the discrete `listen_ports` carry-through for `PreparedProfile`:
+/// the existing discrete `network.listen_port` values, plus every port
+/// unrolled from each merged `network.listen_port_range` entry.
+///
+/// `open_port_range` does NOT get this treatment — it flows to
+/// `CapabilitySet.localhost_port_ranges()` via `capability_ext.rs` instead
+/// (plan 110-05's scope), matching upstream's own design where only
+/// `open_port_range` reaches `CapabilitySet` as a range (confirmed via
+/// `git show d5803b99 -- crates/nono-cli/src/profile_runtime.rs`).
+fn build_listen_ports(profile: &profile::Profile) -> crate::Result<Vec<u16>> {
+    let mut ports = profile.network.listen_port.clone();
+    let merged_ranges =
+        nono::capability::merge_port_ranges(&to_range_tuples(&profile.network.listen_port_range));
+    for (start, end) in merged_ranges {
+        if start == 0 {
+            return Err(nono::NonoError::ConfigParse(
+                "listen_port_range entry starting at 0 is invalid; port 0 has no defined \
+                 meaning in a range"
+                    .to_string(),
+            ));
+        }
+        ports.extend(start..=end);
+    }
+    Ok(ports)
+}
+
 /// Prepare the profile-derived configuration for sandbox execution.
 ///
 /// Phase 37 D-12: takes a [`profile::ResolveContext`] so callers in the
@@ -629,6 +721,14 @@ pub(crate) fn prepare_profile_with_context(
         None
     };
 
+    // PROF-03 (110-04): validate open_port_range/listen_port_range at
+    // profile-prepare time, before any sandbox capability is constructed.
+    // This gives operators a clear, early parse-time error instead of a
+    // late sandbox-apply-time failure (T-110-10 / T-110-11).
+    if let Some(profile) = loaded_profile.as_ref() {
+        validate_port_ranges(profile)?;
+    }
+
     Ok(PreparedProfile {
         capability_elevation: loaded_profile
             .as_ref()
@@ -688,10 +788,10 @@ pub(crate) fn prepare_profile_with_context(
             .as_ref()
             .map(|profile| profile.network.upstream_bypass.clone())
             .unwrap_or_default(),
-        listen_ports: loaded_profile
-            .as_ref()
-            .map(|profile| profile.network.listen_port.clone())
-            .unwrap_or_default(),
+        listen_ports: match loaded_profile.as_ref() {
+            Some(profile) => build_listen_ports(profile)?,
+            None => Vec::new(),
+        },
         open_url_origins: loaded_profile
             .as_ref()
             .and_then(|profile| profile.open_urls.as_ref())
@@ -1091,6 +1191,131 @@ mod tests {
         let err = result.expect_err("locked pack without trust bundle must fail verification");
         assert!(
             err.to_string().contains("missing .nono-trust.bundle"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// PROF-03 (110-04): a reversed `open_port_range` entry (`start > end`)
+    /// is rejected by `validate_port_ranges` with an error naming
+    /// "open_port_range" and "start must be <= end".
+    #[test]
+    fn validate_port_ranges_rejects_reversed_open_port_range() {
+        let profile = Profile {
+            network: crate::profile::NetworkConfig {
+                open_port_range: vec![[100, 50]],
+                ..crate::profile::NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let err = super::validate_port_ranges(&profile)
+            .expect_err("reversed open_port_range must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("open_port_range"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("start must be <= end"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    /// Same as above, for `listen_port_range`.
+    #[test]
+    fn validate_port_ranges_rejects_reversed_listen_port_range() {
+        let profile = Profile {
+            network: crate::profile::NetworkConfig {
+                listen_port_range: vec![[9000, 8000]],
+                ..crate::profile::NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let err = super::validate_port_ranges(&profile)
+            .expect_err("reversed listen_port_range must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("listen_port_range"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("start must be <= end"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    /// PROF-03 / T-110-11: a profile whose combined `open_port_range` +
+    /// `listen_port_range` port count exceeds
+    /// `nono::capability::MACOS_PORT_RANGE_LIMIT` is rejected by the
+    /// macOS-only cumulative cap pre-check. Exercised directly (not gated
+    /// to `#[cfg(target_os = "macos")]`) via the platform-independent
+    /// `check_macos_port_range_cap` helper, per the plan's own allowance for
+    /// "an OS-independent test exercising the pre-check function directly".
+    #[test]
+    fn check_macos_port_range_cap_rejects_over_limit_combined_ranges() {
+        // A single range whose port count exceeds MACOS_PORT_RANGE_LIMIT
+        // (16,384): 0..=65535 is the full u16 space, i.e. 65,536 ports.
+        let profile = Profile {
+            network: crate::profile::NetworkConfig {
+                open_port_range: vec![[0, 65535]],
+                ..crate::profile::NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let err = super::check_macos_port_range_cap(&profile)
+            .expect_err("over-limit combined port range must be rejected");
+        assert!(
+            err.to_string().contains("exceeds the macOS limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// A profile whose combined ranges stay AT the limit (exactly
+    /// `MACOS_PORT_RANGE_LIMIT` ports) is accepted (boundary case, not
+    /// off-by-one rejected).
+    #[test]
+    fn check_macos_port_range_cap_accepts_exactly_at_limit() {
+        let limit_minus_one = (nono::capability::MACOS_PORT_RANGE_LIMIT - 1) as u16;
+        let profile = Profile {
+            network: crate::profile::NetworkConfig {
+                open_port_range: vec![[0, limit_minus_one]],
+                ..crate::profile::NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        super::check_macos_port_range_cap(&profile)
+            .expect("exactly-at-limit combined port range must be accepted");
+    }
+
+    /// PROF-03: `PreparedProfile.listen_ports` contains every port unrolled
+    /// from a `listen_port_range` entry (e.g. 9000..=9002 all present),
+    /// alongside any discrete `listen_port` values already present.
+    #[test]
+    fn build_listen_ports_unrolls_range_alongside_discrete_ports() {
+        let profile = Profile {
+            network: crate::profile::NetworkConfig {
+                listen_port: vec![4000],
+                listen_port_range: vec![[9000, 9002]],
+                ..crate::profile::NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let ports = super::build_listen_ports(&profile).expect("must build listen_ports");
+        assert!(ports.contains(&4000), "discrete listen_port must survive");
+        assert!(ports.contains(&9000));
+        assert!(ports.contains(&9001));
+        assert!(ports.contains(&9002));
+    }
+
+    /// PROF-03: a `listen_port_range` entry starting at 0 is rejected — port
+    /// 0 has no defined meaning in a range (unlike the discrete `open_port`
+    /// field, where 0 means macOS `localhost:*` wildcard).
+    #[test]
+    fn build_listen_ports_rejects_range_starting_at_zero() {
+        let profile = Profile {
+            network: crate::profile::NetworkConfig {
+                listen_port_range: vec![[0, 10]],
+                ..crate::profile::NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let err = super::build_listen_ports(&profile)
+            .expect_err("listen_port_range starting at 0 must be rejected");
+        assert!(
+            err.to_string().contains("starting at 0"),
             "unexpected error: {err}"
         );
     }
