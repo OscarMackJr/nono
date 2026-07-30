@@ -9084,3 +9084,481 @@ mod d08_deviation_tests {
         );
     }
 }
+
+/// Phase 110 Plan 01 (PROF-01): tests for `platform_overrides` — the per-OS
+/// profile-patch model ported from upstream `ae1c513e` (#1371) +
+/// `719975cf` (#1380), and its D-08a fail-secure interaction with the
+/// existing `windows_low_il_broker`/`windows_interpreters` OR/union merge
+/// semantics (Phase 51/T-51A-02).
+///
+/// Host-portable by construction: every test that needs to hit the "current
+/// platform" override slot uses `override_for_current_platform` (keyed off
+/// `crate::platform::current_os_name()`) instead of hardcoding "windows" or
+/// "macos"/"linux", so the whole module passes identically on Linux, macOS,
+/// and Windows CI/dev hosts (D-12).
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod platform_overrides_tests {
+    use super::*;
+
+    /// Wrap `patch` in a `PlatformOverrides` whose slot matches the platform
+    /// this test binary is actually running on, so tests exercise
+    /// `for_current_platform` regardless of host OS.
+    fn override_for_current_platform(patch: Profile) -> PlatformOverrides {
+        let boxed = Some(Box::new(PlatformOverride(patch)));
+        match crate::platform::current_os_name() {
+            "macos" => PlatformOverrides {
+                macos: boxed,
+                ..PlatformOverrides::default()
+            },
+            "linux" => PlatformOverrides {
+                linux: boxed,
+                ..PlatformOverrides::default()
+            },
+            "windows" => PlatformOverrides {
+                windows: boxed,
+                ..PlatformOverrides::default()
+            },
+            other => panic!("unsupported test platform: {other}"),
+        }
+    }
+
+    /// Local copy of the `mod tests` schema-validation helper (that one is
+    /// private to its own module) — validates a JSON string against the
+    /// embedded profile schema.
+    fn validate_against_schema(json_str: &str) -> std::result::Result<(), String> {
+        let schema_str = crate::config::embedded::embedded_profile_schema();
+        let schema: serde_json::Value =
+            serde_json::from_str(schema_str).expect("schema is valid JSON");
+        let instance: serde_json::Value =
+            serde_json::from_str(json_str).expect("instance is valid JSON");
+        let validator = jsonschema::validator_for(&schema).expect("schema compiles");
+        let errors: Vec<_> = validator.iter_errors(&instance).collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors
+                .iter()
+                .map(|e| format!("{} at {}", e, e.instance_path()))
+                .collect::<Vec<_>>()
+                .join("; "))
+        }
+    }
+
+    /// Ported from `ae1c513e`: a profile declaring `platform_overrides.macos`
+    /// and `.linux` parses, and only the declared entries are `Some` —
+    /// `.windows` (undeclared) stays `None`.
+    #[test]
+    fn platform_overrides_parses_and_serializes() {
+        let json = r#"{
+            "meta": { "name": "po-parse-test" },
+            "platform_overrides": {
+                "macos": { "filesystem": { "allow": ["/mac/only"] } },
+                "linux": { "filesystem": { "allow": ["/linux/only"] } }
+            }
+        }"#;
+        let profile: Profile = serde_json::from_str(json).expect("parse profile");
+        let po = profile
+            .platform_overrides
+            .as_ref()
+            .expect("platform_overrides must be Some");
+        assert!(po.macos.is_some(), "macos slot must be declared");
+        assert!(po.linux.is_some(), "linux slot must be declared");
+        assert!(po.windows.is_none(), "windows slot must stay None (undeclared)");
+        assert_eq!(
+            po.macos.as_ref().unwrap().0.filesystem.allow,
+            vec!["/mac/only".to_string()]
+        );
+
+        // Round-trip: serialize back out and confirm the declared slots
+        // survive while the undeclared `windows` slot is omitted
+        // (skip_serializing_if = "Option::is_none").
+        let value = serde_json::to_value(&profile).expect("serialize profile");
+        let po_value = &value["platform_overrides"];
+        assert!(po_value.get("macos").is_some());
+        assert!(po_value.get("linux").is_some());
+        assert!(
+            po_value.get("windows").is_none(),
+            "undeclared windows slot must not be serialized"
+        );
+    }
+
+    /// T-110-02: nested `extends` inside an override block is a parse error.
+    #[test]
+    fn platform_overrides_rejects_nested_extends() {
+        let json = r#"{
+            "meta": { "name": "po-nested-extends-test" },
+            "platform_overrides": {
+                "linux": { "extends": "some-base" }
+            }
+        }"#;
+        let err = serde_json::from_str::<Profile>(json)
+            .expect_err("nested extends inside platform_overrides must be rejected");
+        assert!(
+            err.to_string().contains("extends"),
+            "error must mention extends: {err}"
+        );
+    }
+
+    /// T-110-02: nested `platform_overrides` inside an override block is a
+    /// parse error.
+    #[test]
+    fn platform_overrides_rejects_nested_platform_overrides() {
+        let json = r#"{
+            "meta": { "name": "po-nested-po-test" },
+            "platform_overrides": {
+                "linux": { "platform_overrides": { "linux": {} } }
+            }
+        }"#;
+        let err = serde_json::from_str::<Profile>(json)
+            .expect_err("nested platform_overrides must be rejected");
+        assert!(
+            err.to_string().contains("platform_overrides"),
+            "error must mention platform_overrides: {err}"
+        );
+    }
+
+    /// An override for the CURRENT platform adds a filesystem read path that
+    /// appears in the finalized profile.
+    #[test]
+    fn platform_overrides_merge_adds_filesystem_paths() {
+        let patch = Profile {
+            filesystem: FilesystemConfig {
+                allow: vec!["/from/override".to_string()],
+                ..FilesystemConfig::default()
+            },
+            ..Profile::default()
+        };
+        let mut profile = Profile::default();
+        profile.meta.name = "po-merge-test".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let result = apply_platform_overrides(profile)
+            .expect("apply_platform_overrides must succeed for a valid override");
+        assert!(
+            result
+                .filesystem
+                .allow
+                .contains(&"/from/override".to_string()),
+            "the current-platform override's filesystem.allow entry must be merged in"
+        );
+        assert!(
+            result.platform_overrides.is_none(),
+            "platform_overrides must be consumed (taken) once applied"
+        );
+    }
+
+    /// `719975cf`: a valid `set_vars` entry declared only inside an override
+    /// survives `finalize_profile` and is present in the finalized profile's
+    /// environment.
+    #[test]
+    fn platform_overrides_valid_set_vars_merged_and_accepted() {
+        let mut set_vars = std::collections::HashMap::new();
+        set_vars.insert(
+            "MY_OVERRIDE_VAR".to_string(),
+            "from-override".to_string(),
+        );
+        let patch = Profile {
+            environment: Some(EnvironmentConfig {
+                set_vars,
+                ..EnvironmentConfig::default()
+            }),
+            ..Profile::default()
+        };
+        let mut profile = Profile::default();
+        profile.meta.name = "po-set-vars-valid-test".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let finalized = finalize_profile(profile)
+            .expect("finalize_profile must accept a valid override-introduced set_vars entry");
+        assert_eq!(
+            finalized
+                .environment
+                .as_ref()
+                .and_then(|e| e.set_vars.get("MY_OVERRIDE_VAR")),
+            Some(&"from-override".to_string()),
+            "override-introduced set_vars entry must survive to the finalized profile"
+        );
+    }
+
+    /// `719975cf` (T-110-03): an invalid/reserved `set_vars` key (`PATH`)
+    /// declared only inside an override is rejected by `finalize_profile`,
+    /// proving the post-merge re-validation actually runs (not just the
+    /// pre-merge validators, which never see override-introduced values).
+    #[test]
+    fn platform_overrides_set_vars_validated_after_merge() {
+        let mut set_vars = std::collections::HashMap::new();
+        set_vars.insert("PATH".to_string(), "/should/be/rejected".to_string());
+        let patch = Profile {
+            environment: Some(EnvironmentConfig {
+                set_vars,
+                ..EnvironmentConfig::default()
+            }),
+            ..Profile::default()
+        };
+        let mut profile = Profile::default();
+        profile.meta.name = "po-set-vars-invalid-test".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let err = finalize_profile(profile).expect_err(
+            "an override-introduced reserved set_vars key (PATH) must be rejected by \
+             finalize_profile's post-merge re-validation",
+        );
+        assert!(
+            err.to_string().contains("PATH"),
+            "error must name the rejected key: {err}"
+        );
+    }
+
+    /// D-10 core regression test: a BASE profile's `platform_overrides`
+    /// survives `extends` resolution into a child that does not itself
+    /// declare an override, and is then consumed (becomes `None`) only
+    /// after `finalize_profile` applies it.
+    #[test]
+    fn platform_overrides_on_base_survive_extends_resolution() {
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let base_path = dir.path().join("po-base.json");
+        let child_path = dir.path().join("po-child.json");
+
+        let os_key = crate::platform::current_os_name();
+        std::fs::write(
+            &base_path,
+            format!(
+                r#"{{
+                    "meta": {{ "name": "po-base" }},
+                    "platform_overrides": {{
+                        "{os_key}": {{ "filesystem": {{ "allow": ["/from/base/override"] }} }}
+                    }}
+                }}"#
+            ),
+        )
+        .expect("write base profile");
+        std::fs::write(
+            &child_path,
+            r#"{
+                "meta": { "name": "po-child" },
+                "extends": "po-base"
+            }"#,
+        )
+        .expect("write child profile");
+
+        // Pre-finalize: resolve_extends alone (via load_from_file) must
+        // preserve the base's platform_overrides intact — this is the exact
+        // seam D-10 fixes (upstream ae1c513e without 719975cf's fix would
+        // silently drop it here).
+        let resolved = load_from_file(&child_path).expect("resolve extends");
+        assert!(
+            resolved.platform_overrides.is_some(),
+            "the base profile's platform_overrides must survive extends resolution \
+             into a child that does not itself declare an override (D-10)"
+        );
+
+        // Full load (resolve_extends + finalize_profile) must both apply the
+        // override AND consume the field.
+        let finalized = load_profile_from_path(&child_path).expect("load profile");
+        assert!(
+            finalized
+                .filesystem
+                .allow
+                .contains(&"/from/base/override".to_string()),
+            "the base's platform_overrides entry must be applied to the finalized profile"
+        );
+        assert!(
+            finalized.platform_overrides.is_none(),
+            "platform_overrides must be consumed (None) only after finalize_profile applies it"
+        );
+    }
+
+    /// D-10: merging a base override and a child override for the SAME OS
+    /// key deep-merges (dedup-append on filesystem.allow) rather than one
+    /// replacing the other.
+    #[test]
+    fn platform_overrides_same_os_key_deep_merges_not_clobbers() {
+        let base_patch = Profile {
+            filesystem: FilesystemConfig {
+                allow: vec!["/from/base/slot".to_string()],
+                ..FilesystemConfig::default()
+            },
+            ..Profile::default()
+        };
+        let child_patch = Profile {
+            filesystem: FilesystemConfig {
+                allow: vec!["/from/child/slot".to_string()],
+                ..FilesystemConfig::default()
+            },
+            ..Profile::default()
+        };
+        let base_po = override_for_current_platform(base_patch);
+        let child_po = override_for_current_platform(child_patch);
+
+        let merged = merge_platform_overrides(Some(base_po), Some(child_po))
+            .expect("merging two Some(PlatformOverrides) must produce Some");
+        let slot = match crate::platform::current_os_name() {
+            "macos" => merged.macos,
+            "linux" => merged.linux,
+            "windows" => merged.windows,
+            other => panic!("unsupported test platform: {other}"),
+        }
+        .expect("the current-platform slot must be Some after merging two same-slot overrides");
+        assert_eq!(
+            slot.0.filesystem.allow,
+            vec!["/from/base/slot".to_string(), "/from/child/slot".to_string()],
+            "same-OS-key override merge must dedup-append, not clobber"
+        );
+    }
+
+    /// D-10: merging base-only and child-only overrides for DIFFERENT OS
+    /// slots preserves both.
+    #[test]
+    fn platform_overrides_merge_per_os_key_child_wins() {
+        let base_po = PlatformOverrides {
+            macos: Some(Box::new(PlatformOverride(Profile::default()))),
+            ..PlatformOverrides::default()
+        };
+        let child_po = PlatformOverrides {
+            linux: Some(Box::new(PlatformOverride(Profile::default()))),
+            ..PlatformOverrides::default()
+        };
+
+        let merged = merge_platform_overrides(Some(base_po), Some(child_po))
+            .expect("merging two Some(PlatformOverrides) must produce Some");
+        assert!(
+            merged.macos.is_some(),
+            "base-only macos slot must be preserved"
+        );
+        assert!(
+            merged.linux.is_some(),
+            "child-only linux slot must be preserved"
+        );
+        assert!(
+            merged.windows.is_none(),
+            "neither side declared windows — must stay None"
+        );
+    }
+
+    /// D-08 back-compat proof: a profile setting ONLY the top-level
+    /// `windows_low_il_broker: true` (no `platform_overrides`) resolves
+    /// `windows_low_il_broker == true` after `finalize_profile`.
+    #[test]
+    fn platform_overrides_top_level_windows_low_il_broker_still_resolves_true() {
+        let mut profile = Profile {
+            windows_low_il_broker: true,
+            ..Profile::default()
+        };
+        profile.meta.name = "po-d08-top-level-test".to_string();
+        let finalized = finalize_profile(profile).expect("finalize must succeed");
+        assert!(
+            finalized.windows_low_il_broker,
+            "top-level windows_low_il_broker=true (no platform_overrides) must still \
+             resolve true after finalize_profile (D-08 back-compat)"
+        );
+    }
+
+    /// D-08 back-compat proof: a profile setting ONLY
+    /// `platform_overrides.<current-os>.windows_low_il_broker: true` (top-level
+    /// flag absent/false) resolves `windows_low_il_broker == true` after
+    /// `finalize_profile` — the new form is reachable and has real effect.
+    #[test]
+    fn platform_overrides_new_form_windows_low_il_broker_resolves_true() {
+        let patch = Profile {
+            windows_low_il_broker: true,
+            ..Profile::default()
+        };
+        let mut profile = Profile::default();
+        profile.meta.name = "po-d08-new-form-test".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let finalized = finalize_profile(profile).expect("finalize must succeed");
+        assert!(
+            finalized.windows_low_il_broker,
+            "platform_overrides.<os>.windows_low_il_broker=true must resolve true \
+             after finalize_profile (D-08: new form is reachable)"
+        );
+    }
+
+    /// D-08a distinguishing proof (REQUIRED — this is the fix for the
+    /// checker BLOCKER): a profile setting the top-level
+    /// `windows_low_il_broker: true` AND
+    /// `platform_overrides.<current-os>.windows_low_il_broker: false`
+    /// resolves `windows_low_il_broker == true` after `finalize_profile`.
+    ///
+    /// This is the ONLY input shape that distinguishes fail-secure OR/union
+    /// semantics from new-form-wins semantics — the two D-08 tests above
+    /// cannot tell them apart, since both produce `true` under either
+    /// semantics. `true` here is INTENDED fail-secure behavior per D-08a,
+    /// NOT a bug: a `platform_overrides.windows` override can never silently
+    /// disable a security opt-in the base profile enabled.
+    #[test]
+    fn platform_overrides_windows_low_il_broker_or_semantics_top_level_true_override_false_stays_true(
+    ) {
+        let patch = Profile {
+            windows_low_il_broker: false,
+            ..Profile::default()
+        };
+        let mut profile = Profile {
+            windows_low_il_broker: true,
+            ..Profile::default()
+        };
+        profile.meta.name = "po-d08a-or-semantics-test".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let finalized = finalize_profile(profile).expect("finalize must succeed");
+        assert!(
+            finalized.windows_low_il_broker,
+            "D-08a: top-level windows_low_il_broker=true + \
+             platform_overrides.<os>.windows_low_il_broker=false must stay true \
+             (fail-secure OR semantics — an override may tighten, never loosen)"
+        );
+    }
+
+    /// D-08a `windows_interpreters` union proof (cheap to add, same
+    /// tighten-only class as the broker flag): a profile setting a top-level
+    /// `windows_interpreters` list AND a
+    /// `platform_overrides.<current-os>.windows_interpreters` list resolves
+    /// to the UNION of both (dedup-append) after `finalize_profile` — an
+    /// override cannot REMOVE an interpreter the base already granted.
+    #[test]
+    fn platform_overrides_windows_interpreters_union_not_replace() {
+        let patch = Profile {
+            windows_interpreters: vec!["node.exe".to_string()],
+            ..Profile::default()
+        };
+        let mut profile = Profile {
+            windows_interpreters: vec!["python.exe".to_string()],
+            ..Profile::default()
+        };
+        profile.meta.name = "po-d08a-interpreters-union-test".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let finalized = finalize_profile(profile).expect("finalize must succeed");
+        assert_eq!(
+            finalized.windows_interpreters,
+            vec!["python.exe".to_string(), "node.exe".to_string()],
+            "D-08a: windows_interpreters must be the union (dedup-append) of the \
+             top-level list and the platform_overrides.<os> list, never a replace"
+        );
+    }
+
+    /// D-10 Wave-0 gap closure (`110-VALIDATION.md`): a profile using BOTH
+    /// `platform_overrides` and an existing field (`open_port`) validates
+    /// successfully against `nono-profile.schema.json` via the fork's
+    /// existing `validate_against_schema()` — proving the Task 1 schema edit
+    /// is accepted, not merely a JSON key nobody exercises.
+    #[test]
+    fn platform_overrides_validates_against_schema_alongside_existing_fields() {
+        let json = r#"{
+            "meta": { "name": "po-schema-test" },
+            "network": { "open_port": [3000] },
+            "platform_overrides": {
+                "windows": { "windows_low_il_broker": true },
+                "linux": { "filesystem": { "allow": ["/linux/only"] } },
+                "macos": { "filesystem": { "allow": ["/mac/only"] } }
+            }
+        }"#;
+        validate_against_schema(json).expect(
+            "a profile using both platform_overrides and existing fields (open_port) \
+             must pass schema validation",
+        );
+    }
+
+}
