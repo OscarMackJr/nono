@@ -529,8 +529,9 @@ mod windows_impl {
                 FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6, FWPM_SESSION0, FWPM_SUBLAYER0,
                 FWP_ACTION_BLOCK, FWP_ACTION_PERMIT, FWP_BYTE_BLOB, FWP_BYTE_BLOB_TYPE,
                 FWP_CONDITION_FLAG_IS_LOOPBACK, FWP_CONDITION_VALUE0, FWP_CONDITION_VALUE0_0,
-                FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET, FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT16,
-                FWP_UINT32, FWP_UINT64, FWP_VALUE0, FWP_VALUE0_0,
+                FWP_MATCH_EQUAL, FWP_MATCH_FLAGS_ALL_SET, FWP_MATCH_RANGE, FWP_RANGE0,
+                FWP_RANGE_TYPE, FWP_SECURITY_DESCRIPTOR_TYPE, FWP_UINT16, FWP_UINT32, FWP_UINT64,
+                FWP_VALUE0, FWP_VALUE0_0,
             },
             Security::{
                 Authorization::{
@@ -1089,6 +1090,14 @@ mod windows_impl {
     enum PortCondition {
         Remote(u16),
         Local(u16),
+        /// Inclusive remote (outbound) port range, expressed natively via a
+        /// single `FWP_MATCH_RANGE` condition — never unrolled per-port
+        /// (D-06). `(start, end)` is trusted as-received; validation happens
+        /// upstream (capability.rs/profile_runtime.rs/manifest_convert.rs),
+        /// not in this service (T-110-15).
+        RemoteRange(u16, u16),
+        /// Inclusive local (inbound/bind) port range; see `RemoteRange`.
+        LocalRange(u16, u16),
     }
 
     #[cfg(target_os = "windows")]
@@ -1225,9 +1234,27 @@ mod windows_impl {
                     });
                 }
 
+                // One PolicyFilterSpec PER RANGE ENTRY (never per port) - the
+                // entire point of D-06: WFP expresses a range natively via a
+                // single FWP_MATCH_RANGE condition, unlike macOS's forced
+                // per-port unroll.
+                for &(start, end) in &request.localhost_port_ranges {
+                    specs.push(PolicyFilterSpec {
+                        key: deterministic_filter_key(
+                            base,
+                            &format!("{}-localhost-connect-range-{start}-{end}", layer.label),
+                        ),
+                        layer_key: layer.key,
+                        action: FilterAction::Permit,
+                        port: Some(PortCondition::RemoteRange(start, end)),
+                        loopback_only: true,
+                    });
+                }
+
                 let needs_outbound_block = request.network_mode != "allow-all"
                     || !request.tcp_connect_ports.is_empty()
-                    || !request.localhost_ports.is_empty();
+                    || !request.localhost_ports.is_empty()
+                    || !request.localhost_port_ranges.is_empty();
                 if needs_outbound_block {
                     specs.push(PolicyFilterSpec {
                         key: deterministic_filter_key(base, layer.label),
@@ -1263,9 +1290,25 @@ mod windows_impl {
                     });
                 }
 
+                // One PolicyFilterSpec PER RANGE ENTRY (never per port); see the
+                // matching outbound RemoteRange loop above (D-06).
+                for &(start, end) in &request.localhost_port_ranges {
+                    specs.push(PolicyFilterSpec {
+                        key: deterministic_filter_key(
+                            base,
+                            &format!("{}-localhost-bind-range-{start}-{end}", layer.label),
+                        ),
+                        layer_key: layer.key,
+                        action: FilterAction::Permit,
+                        port: Some(PortCondition::LocalRange(start, end)),
+                        loopback_only: true,
+                    });
+                }
+
                 let needs_inbound_block = request.network_mode != "allow-all"
                     || !request.tcp_bind_ports.is_empty()
-                    || !request.localhost_ports.is_empty();
+                    || !request.localhost_ports.is_empty()
+                    || !request.localhost_port_ranges.is_empty();
                 if needs_inbound_block {
                     specs.push(PolicyFilterSpec {
                         key: deterministic_filter_key(base, layer.label),
@@ -1426,6 +1469,15 @@ mod windows_impl {
             size: 0,
             data: null_mut(),
         };
+        // Declared alongside sd_blob (function-scope, same outlives-the-call
+        // idiom) so a &mut range raw-pointer coercion for a RemoteRange/
+        // LocalRange FWP_MATCH_RANGE condition remains valid through the
+        // FwpmFilterAdd0 call below. Left uninitialized (no wasted zeroed()
+        // write) until the RemoteRange/LocalRange match arm below assigns it;
+        // Rust's definite-assignment analysis proves every read (`&mut range`)
+        // is preceded by that assignment along every reachable path, so this
+        // compiles without an `unused_assignments` warning.
+        let mut range: FWP_RANGE0;
         let mut conditions = Vec::with_capacity(3);
 
         if !security_descriptor.is_null() {
@@ -1459,18 +1511,52 @@ mod windows_impl {
         }
 
         if let Some(port) = spec.port {
-            let (field_key, value) = match port {
-                PortCondition::Remote(value) => (FWPM_CONDITION_IP_REMOTE_PORT, value),
-                PortCondition::Local(value) => (FWPM_CONDITION_IP_LOCAL_PORT, value),
-            };
-            conditions.push(FWPM_FILTER_CONDITION0 {
-                fieldKey: field_key,
-                matchType: FWP_MATCH_EQUAL,
-                conditionValue: FWP_CONDITION_VALUE0 {
-                    r#type: FWP_UINT16,
-                    Anonymous: FWP_CONDITION_VALUE0_0 { uint16: value },
-                },
-            });
+            match port {
+                PortCondition::Remote(value) | PortCondition::Local(value) => {
+                    let field_key = match port {
+                        PortCondition::Remote(_) => FWPM_CONDITION_IP_REMOTE_PORT,
+                        _ => FWPM_CONDITION_IP_LOCAL_PORT,
+                    };
+                    conditions.push(FWPM_FILTER_CONDITION0 {
+                        fieldKey: field_key,
+                        matchType: FWP_MATCH_EQUAL,
+                        conditionValue: FWP_CONDITION_VALUE0 {
+                            r#type: FWP_UINT16,
+                            Anonymous: FWP_CONDITION_VALUE0_0 { uint16: value },
+                        },
+                    });
+                }
+                PortCondition::RemoteRange(start, end) | PortCondition::LocalRange(start, end) => {
+                    // T-110-16: trust the already-validated (start, end) tuple
+                    // as received - no reordering/re-check here. Validation
+                    // happened upstream (capability.rs/profile_runtime.rs/
+                    // manifest_convert.rs) before this IPC request was built.
+                    let field_key = match port {
+                        PortCondition::RemoteRange(..) => FWPM_CONDITION_IP_REMOTE_PORT,
+                        _ => FWPM_CONDITION_IP_LOCAL_PORT,
+                    };
+                    range = FWP_RANGE0 {
+                        valueLow: FWP_VALUE0 {
+                            r#type: FWP_UINT16,
+                            Anonymous: FWP_VALUE0_0 { uint16: start },
+                        },
+                        valueHigh: FWP_VALUE0 {
+                            r#type: FWP_UINT16,
+                            Anonymous: FWP_VALUE0_0 { uint16: end },
+                        },
+                    };
+                    conditions.push(FWPM_FILTER_CONDITION0 {
+                        fieldKey: field_key,
+                        matchType: FWP_MATCH_RANGE,
+                        conditionValue: FWP_CONDITION_VALUE0 {
+                            r#type: FWP_RANGE_TYPE,
+                            Anonymous: FWP_CONDITION_VALUE0_0 {
+                                rangeValue: &mut range,
+                            },
+                        },
+                    });
+                }
+            }
         }
         if spec.loopback_only {
             conditions.push(FWPM_FILTER_CONDITION0 {
@@ -1949,6 +2035,103 @@ mod windows_impl {
                     && spec.port.is_none()
                     && !spec.loopback_only
             }));
+        }
+
+        #[cfg(target_os = "windows")]
+        #[test]
+        fn port_range_only_request_produces_one_spec_per_range_per_applicable_layer_not_per_port() {
+            // A 1000-wide range (3000..=3999): if this ever regressed to a per-port
+            // unroll (macOS-style), it would produce 1000 outbound + 1000 inbound
+            // specs instead of 2 + 2 (one per applicable layer). This is the core
+            // D-06 assertion.
+            let request = WfpRuntimeActivationRequest {
+                localhost_ports: vec![],
+                localhost_port_ranges: vec![(3000, 3999)],
+                ..sample_request()
+            };
+            let specs = build_policy_filter_specs(&request, "nono-out", "nono-in");
+
+            let outbound_range_specs: Vec<_> = specs
+                .iter()
+                .filter(|spec| matches!(spec.port, Some(PortCondition::RemoteRange(3000, 3999))))
+                .collect();
+            assert_eq!(
+                outbound_range_specs.len(),
+                2,
+                "exactly one RemoteRange spec per applicable outbound layer (connect-v4/v6), never one-per-port"
+            );
+            assert!(outbound_range_specs
+                .iter()
+                .all(|spec| spec.loopback_only && matches!(spec.action, FilterAction::Permit)));
+
+            let inbound_range_specs: Vec<_> = specs
+                .iter()
+                .filter(|spec| matches!(spec.port, Some(PortCondition::LocalRange(3000, 3999))))
+                .collect();
+            assert_eq!(
+                inbound_range_specs.len(),
+                2,
+                "exactly one LocalRange spec per applicable inbound layer (recv-accept-v4/v6), never one-per-port"
+            );
+            assert!(inbound_range_specs
+                .iter()
+                .all(|spec| spec.loopback_only && matches!(spec.action, FilterAction::Permit)));
+        }
+
+        #[cfg(target_os = "windows")]
+        #[test]
+        fn port_range_alone_triggers_block_fallback_even_in_allow_all_mode() {
+            let request = WfpRuntimeActivationRequest {
+                request_kind: "activate_allow_all_mode".to_string(),
+                network_mode: "allow-all".to_string(),
+                tcp_connect_ports: vec![],
+                tcp_bind_ports: vec![],
+                localhost_ports: vec![],
+                localhost_port_ranges: vec![(5000, 5010)],
+                ..sample_request()
+            };
+            let specs = build_policy_filter_specs(&request, "nono-out", "nono-in");
+
+            let block_specs: Vec<_> = specs
+                .iter()
+                .filter(|spec| matches!(spec.action, FilterAction::Block) && spec.port.is_none())
+                .collect();
+            assert_eq!(
+                block_specs.len(),
+                4,
+                "needs_outbound_block/needs_inbound_block must recognize localhost_port_ranges \
+                 alone as 'network is scoped', one block-fallback filter per layer (connect-v4/v6, \
+                 recv-accept-v4/v6)"
+            );
+        }
+
+        #[cfg(target_os = "windows")]
+        #[test]
+        fn discrete_port_and_range_coexist_in_same_request_without_regression() {
+            let request = WfpRuntimeActivationRequest {
+                localhost_ports: vec![9090],
+                localhost_port_ranges: vec![(3000, 3999)],
+                ..sample_request()
+            };
+            let specs = build_policy_filter_specs(&request, "nono-out", "nono-in");
+
+            // The discrete port still produces the existing FWP_MATCH_EQUAL-mapped
+            // Remote/Local variant, unregressed by the new range handling.
+            assert!(specs.iter().any(|spec| {
+                matches!(spec.port, Some(PortCondition::Remote(9090))) && spec.loopback_only
+            }));
+            assert!(specs.iter().any(|spec| {
+                matches!(spec.port, Some(PortCondition::Local(9090))) && spec.loopback_only
+            }));
+
+            // The range produces the new RemoteRange/LocalRange variant (never
+            // unrolled into 1000 discrete Remote/Local(3000..=3999) specs).
+            assert!(specs
+                .iter()
+                .any(|spec| matches!(spec.port, Some(PortCondition::RemoteRange(3000, 3999)))));
+            assert!(specs
+                .iter()
+                .any(|spec| matches!(spec.port, Some(PortCondition::LocalRange(3000, 3999)))));
         }
 
         #[cfg(target_os = "windows")]
