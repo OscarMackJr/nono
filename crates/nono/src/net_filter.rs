@@ -214,9 +214,9 @@ impl HostFilter {
     /// # Check Order
     ///
     /// 1. Deny hosts (exact match against cloud metadata hostnames and any
-    ///    caller-supplied exact deny entries from `with_denied_hosts`)
-    /// 1b. Deny suffixes (wildcard match against caller-supplied deny
-    ///    entries from `with_denied_hosts`) — deny always wins over allow
+    ///    caller-supplied exact deny entries from `with_denied_hosts`), then
+    ///    deny suffixes (wildcard match against caller-supplied deny entries)
+    ///    — deny always wins over allow
     /// 2. Link-local IP check (resolved IPs in 169.254.0.0/16 or fe80::/10)
     /// 3. Allowlist (exact host match, then wildcard subdomain match)
     /// 4. Default deny (if not in allowlist and allowlist is non-empty)
