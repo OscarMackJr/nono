@@ -539,6 +539,16 @@
           "items": { "type": "integer" },
           "description": "Localhost TCP IPC (connect+bind). Port 0: macOS only (localhost:* outbound); Linux needs explicit ports."
         },
+        "open_port_range": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "Inclusive port ranges ([start, end] pairs) for bidirectional localhost TCP IPC. macOS enforces a combined 16,384-port cap across all ranges; Linux has no such restriction."
+        },
         "port_allow": {
           "type": "array",
           "items": { "type": "integer" },
@@ -553,6 +563,16 @@
           "type": "array",
           "items": { "type": "integer" },
           "description": "TCP ports the sandboxed child may listen on."
+        },
+        "listen_port_range": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "description": "Inclusive port ranges ([start, end] pairs) for TCP listen (bind only)."
         },
         "custom_credentials": {
           "type": "object",

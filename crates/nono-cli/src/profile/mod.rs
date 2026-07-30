@@ -1765,10 +1765,22 @@ pub struct NetworkConfig {
         alias = "allow_port"
     )]
     pub open_port: Vec<u16>,
+    /// Inclusive port ranges for bidirectional localhost TCP IPC (connect + bind).
+    /// Multiple ranges are supported. Example: [[3000, 3010], [8000, 8100]].
+    /// Each port becomes an individual rule — larger ranges take longer to apply at startup.
+    /// macOS enforces a combined limit of 16,384 unique ports across all ranges (2^14);
+    /// Linux has no such restriction. Overlapping ranges are merged before applying rules.
+    #[serde(default)]
+    pub open_port_range: Vec<[u16; 2]>,
     /// TCP ports the sandboxed child may listen on.
     /// Equivalent to `--listen-port` CLI flag.
     #[serde(default)]
     pub listen_port: Vec<u16>,
+    /// Inclusive port ranges for TCP listen (bind only). Same platform behaviour as
+    /// open_port_range for the bind side; no outbound connect rules are added.
+    /// Overlapping ranges are merged before applying rules.
+    #[serde(default)]
+    pub listen_port_range: Vec<[u16; 2]>,
     /// Outbound TCP connect ports (allowlist). Linux Landlock V4+ only.
     /// Equivalent to `--allow-connect-port` CLI flag.
     #[serde(default)]
@@ -3543,7 +3555,15 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
             deny_domain: dedup_append(&base.network.deny_domain, &child.network.deny_domain),
             no_proxy: dedup_append(&base.network.no_proxy, &child.network.no_proxy),
             open_port: dedup_append(&base.network.open_port, &child.network.open_port),
+            open_port_range: dedup_append(
+                &base.network.open_port_range,
+                &child.network.open_port_range,
+            ),
             listen_port: dedup_append(&base.network.listen_port, &child.network.listen_port),
+            listen_port_range: dedup_append(
+                &base.network.listen_port_range,
+                &child.network.listen_port_range,
+            ),
             connect_port: dedup_append(&base.network.connect_port, &child.network.connect_port),
             // Child `Some([])` overrides parent credentials to empty (disables proxy).
             // Child `None` inherits parent credentials. Child `Some([...])` merges with parent.
@@ -5531,7 +5551,9 @@ mod tests {
                 deny_domain: Vec::new(),
                 no_proxy: Vec::new(),
                 open_port: vec![3000],
+                open_port_range: vec![],
                 listen_port: vec![4000],
+                listen_port_range: vec![],
                 connect_port: vec![],
                 credentials: Some(vec!["base_cred".to_string()]),
                 custom_credentials: HashMap::new(),
@@ -5626,7 +5648,9 @@ mod tests {
                 deny_domain: Vec::new(),
                 no_proxy: Vec::new(),
                 open_port: vec![3000, 5000],
+                open_port_range: vec![],
                 listen_port: vec![4000, 6000],
+                listen_port_range: vec![],
                 connect_port: vec![],
                 credentials: None,
                 custom_credentials: HashMap::new(),
@@ -9561,6 +9585,73 @@ mod platform_overrides_tests {
         validate_against_schema(json).expect(
             "a profile using both platform_overrides and existing fields (open_port) \
              must pass schema validation",
+        );
+    }
+
+    /// Wave-0 gap closure (`110-VALIDATION.md`): a profile using
+    /// `open_port_range`/`listen_port_range` validates successfully against
+    /// `nono-profile.schema.json` via the fork's existing
+    /// `validate_against_schema()` — proving the Task 1 schema edit is
+    /// accepted, not merely a JSON key that only `serde` happens to parse
+    /// (Pitfall 4 / T-110-12).
+    #[test]
+    fn port_ranges_validate_against_schema() {
+        let json = r#"{
+            "meta": { "name": "port-range-schema-test" },
+            "network": {
+                "open_port_range": [[3000, 3010]],
+                "listen_port_range": [[8000, 8010]]
+            }
+        }"#;
+        validate_against_schema(json).expect(
+            "a profile using open_port_range/listen_port_range must pass schema validation",
+        );
+    }
+
+    /// A profile JSON with `open_port_range`/`listen_port_range` parses
+    /// successfully via serde and the values round-trip onto `NetworkConfig`.
+    #[test]
+    fn port_ranges_parse_from_json() {
+        let json = r#"{
+            "meta": { "name": "port-range-parse-test" },
+            "network": {
+                "open_port_range": [[3000, 3010]],
+                "listen_port_range": [[8000, 8010]]
+            }
+        }"#;
+        let profile: Profile = serde_json::from_str(json).expect("must parse");
+        assert_eq!(profile.network.open_port_range, vec![[3000, 3010]]);
+        assert_eq!(profile.network.listen_port_range, vec![[8000, 8010]]);
+    }
+
+    /// `merge_profiles` unions `open_port_range`/`listen_port_range` from
+    /// base+child (dedup_append semantics), same as `open_port`/`listen_port`.
+    #[test]
+    fn merge_profiles_unions_port_ranges() {
+        let base = Profile {
+            network: NetworkConfig {
+                open_port_range: vec![[3000, 3010]],
+                listen_port_range: vec![[8000, 8010]],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let child = Profile {
+            network: NetworkConfig {
+                open_port_range: vec![[4000, 4010]],
+                listen_port_range: vec![[9000, 9010]],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let merged = merge_profiles(base, child);
+        assert_eq!(
+            merged.network.open_port_range,
+            vec![[3000, 3010], [4000, 4010]]
+        );
+        assert_eq!(
+            merged.network.listen_port_range,
+            vec![[8000, 8010], [9000, 9010]]
         );
     }
 }
