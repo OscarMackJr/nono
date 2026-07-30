@@ -145,3 +145,7 @@ None - no external service configuration required.
 ---
 *Phase: 110-profile-policy-absorb-platform-overrides*
 *Completed: 2026-07-30*
+
+## Self-Check: PASSED
+
+All created/modified files (`dynamic_tokens.rs`, `policy.rs`, `capability_ext.rs`, `main.rs`, `deferred-items.md`) confirmed present on disk; all 4 task/plan-metadata commit hashes (`d1290f61`, `2e7c1412`, `bb9360b1`, `1af3dabc`) confirmed present in `git log --oneline --all`.

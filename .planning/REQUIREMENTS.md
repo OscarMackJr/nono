@@ -116,7 +116,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 ### Profile / Policy Absorb (PROF)
 - [x] **PROF-01**: `platform_overrides` per-OS profile patching (#1371) is absorbed and preserved through `extends` resolution (#1380); the fork's `windows_low_il_broker` and `windows_interpreters` top-level flags are migrated into `platform_overrides.windows` with back-compat aliases.
-- [ ] **PROF-02**: `$VAR` process-env token expansion (#1296) and `@git:*` dynamic token expansion (#1298) in profile filesystem paths are absorbed.
+- [x] **PROF-02**: `$VAR` process-env token expansion (#1296) and `@git:*` dynamic token expansion (#1298) in profile filesystem paths are absorbed.
 - [ ] **PROF-03**: The port-range profile schema (#1398) is absorbed with a WFP-native remote-port-range emitter on Windows and discrete-list back-compat.
 - [ ] **PROF-04**: The `bun` (#1305) and `mise` (#1387) runtime presets are absorbed.
 
@@ -164,7 +164,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–113
 | NET-02 | Phase 113 | Pending |
 | NET-03 | Phase 109 | Pending |
 | PROF-01 | Phase 110 | Complete |
-| PROF-02 | Phase 110 | Pending |
+| PROF-02 | Phase 110 | Complete |
 | PROF-03 | Phase 110 | Pending |
 | PROF-04 | Phase 110 | Pending |
 | CORE-01 | Phase 111 | Pending |

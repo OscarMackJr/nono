@@ -3,19 +3,19 @@ gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: executing
-stopped_at: "v3.6 Phase 110 Plan 01 (platform_overrides + extends preservation) COMPLETE 2026-07-30 — PlatformOverrides/PlatformOverride types ported (ae1c513e/719975cf), apply_platform_overrides wired as the first step of finalize_profile, D-10 deep-merge via merge_platform_overrides survives extends resolution, D-08a fail-secure OR/union semantics for windows_low_il_broker/windows_interpreters preserved verbatim (Phase 51's merge_profiles_or_semantics_base_true_child_false confirmed unmodified+passing). 14 new tests, both cross-target clippy gates clean. Next: Plan 110-02 (Wave 1)."
+stopped_at: "**v3.6 Phase 110 Plan 02 COMPLETE (2026-07-30)** — `$VAR` process-env expansion (`2cbaa9a0`/#1296, `policy::substitute_vars`/`expand_env_vars`) and ported `@git:*` dynamic-token expansion (`d4927f95`/#1298, new fork-owned `crates/nono-cli/src/dynamic_tokens.rs`, 32 ported tests) wired at exactly the 8 upstream-identified `capability_ext.rs` fs.* call sites via a new `expand_profile_path` wrapper. Fixed 2 real Windows-specific git-quoting bugs surfaced by actually running the ported suite on this Windows host (C-quoted `--show-origin` paths; ini-value backslash escaping). Both PROF-02 end-to-end tests pass (env-var all platforms; `@git:*` gated Unix-only per D-01). Both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean. Commits `d1290f61`/`2e7c1412`/`bb9360b1`. See `110-02-SUMMARY.md`. Next: Plan 110-03 (Wave 1, PROF-03 library+Unix emitters)."
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
 parallel_stopped_at: "**v3.5 Phase 104 Plan 03 Task 2 FAILED (RED, diagnosed) — a NEW Azure blocker.** Sequence: (1) reconciled the stale 'held-on-external-azure-block' status after verifying the 2026-07-04 fix was real; (2) amended `104-03-PLAN.md` to retire the moot root-CTL pre-check gate (commit `8fb99f01`); (3) ran Task 1 pre-flight — release-readiness PASS, publish-selector PASS; (4) dispatched a fresh smoke run per Pitfall 104-B -> run `30460949560` **failed at Sign with HTTP 403**, a different step than any prior failure. Config and RBAC verified correct via ARM; the lead is a **lapsed identity validation** (cert rotation stopped 2026-07-15; newest 3-day cert expired 2026-07-18; none minted in 14 days). Needs an Azure Portal check the corporate host cannot perform. Evidence: `104-03-SMOKE-403-FINDING.md` (commit `28d950d2`). **Tag `v0.66.1` NOT pushed — correctly blocked.** Phases 101-105 dirs intact; Phase 105 fully planned (5 plans, 0 summaries) and waiting behind the tag. Phases 106/107 not yet built."
-last_updated: "2026-07-30T13:48:05.307Z"
-last_activity: 2026-07-30 -- Phase 110 Plan 01 complete
+last_updated: "2026-07-30T14:20:00.000Z"
+last_activity: 2026-07-30 -- Phase 110 Plan 02 complete
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 18
-  completed_plans: 11
-  percent: 61
+  completed_plans: 12
+  percent: 67
 ---
 
 # Project State: nono — v3.6 UPST12 Upstream Sync (v0.66.0 → v0.69.0) — parallel to held v3.5
@@ -52,7 +52,7 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 ## Current Position
 
 Phase: 110 (Profile/Policy Absorb + platform_overrides) — EXECUTING
-Plan: 2 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Plan: 3 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
 Status: Ready to execute
 Last activity: 2026-07-30
 
@@ -83,6 +83,7 @@ Last activity: 2026-07-30
 | Phase 104 P01 | 3min | 2 tasks | 2 files |
 | Phase 104 P02 | 24min | 3 tasks | 5 files |
 | Phase 110 P01 | 20min | 3 tasks | 3 files |
+| Phase 110 P02 | 30min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,8 @@ Last activity: 2026-07-30
 |----------|-------|-----------|
 | D-08a preserved verbatim: windows_low_il_broker/windows_interpreters keep Phase 51/71 fail-secure OR/union merge_profiles semantics under platform_overrides.windows | 110-01 | apply_platform_overrides reuses merge_profiles unmodified — an override may tighten (add) but never silently loosen (disable/remove) either flag; Phase 51's merge_profiles_or_semantics_base_true_child_false test confirmed unmodified and passing |
 | 4th Profile-shape exhaustive-literal site discovered beyond the plan's named 3: policy.rs::ProfileDef::to_raw_profile | 110-01 | Compiler-caught (E0063) immediately on first build after adding the platform_overrides field; fixed the same way environment: None was handled there previously (built-in policy.json profiles don't declare the field yet) |
+| Fixed two real Windows-specific git-quoting bugs in the ported @git:* module (dynamic_tokens.rs): git --show-origin C-quotes backslash-containing origin paths; git-config ini values need doubled backslashes when hand-writing fixture files | 110-02 | This Windows dev host actually runs the ported 32-test suite; upstream never exercised this code on Windows, and the module is meant to become the v3.7 canonical implementation (D-02) — treated as real bugs, not test-skips |
+| @git:* end-to-end test gated #[cfg(any(linux, macos))]; dynamic_tokens.rs given a module-level #![cfg_attr(not(any(linux, macos)), allow(dead_code))] | 110-02 | @git:* expansion is Unix-only by design (D-01) — the non-Unix fallback is an intentional no-op, so the ported git-worktree test would validate the wrong behavior on Windows; the dead_code allow mirrors the existing session.rs:1 idiom for a module only consumed from one cfg arm elsewhere in the crate |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
@@ -259,9 +262,11 @@ Items acknowledged and deferred at **v3.4 close (2026-07-02)** — `gsd-sdk quer
 
 ## Session Continuity
 
-Last session: 2026-07-30T13:48:05.291Z
+Last session: 2026-07-30T14:20:00.000Z
 
-Stopped at: **v3.6 Phase 110 Plan 01 COMPLETE (2026-07-30)** — `platform_overrides` per-OS profile-patch model (`ae1c513e`/`719975cf`) ported: `PlatformOverrides`/`PlatformOverride` types + custom nested-rejection `Deserialize`, `apply_platform_overrides` wired as the first step of `finalize_profile`, `merge_platform_overrides`/`merge_platform_override_slot` D-10 deep-merge (survives `extends` resolution intact), post-merge re-validation of custom_credentials/env_credentials/set_vars, and a `platform_overrides` schema property. D-08a preserved verbatim — `windows_low_il_broker`/`windows_interpreters` keep Phase 51/71 fail-secure OR/union `merge_profiles` semantics; `merge_profiles_or_semantics_base_true_child_false` confirmed unmodified+passing. 14 new tests (`platform_overrides_tests`), both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean, `cargo fmt --all -- --check` clean. Commits `d44b5647`/`9872afa6`/`e8ce3a63`. See `110-01-SUMMARY.md`. Next: Plan 110-02 (Wave 1).
+Stopped at: **v3.6 Phase 110 Plan 02 COMPLETE (2026-07-30)** — `$VAR` process-env expansion (`2cbaa9a0`/#1296) and ported `@git:*` dynamic-token expansion (`d4927f95`/#1298, new fork-owned `crates/nono-cli/src/dynamic_tokens.rs`, 32 ported tests) wired at the 8 upstream-identified `capability_ext.rs` fs.* call sites. Fixed 2 real Windows-specific git-quoting bugs (C-quoted `--show-origin` paths; ini-value backslash escaping) surfaced by actually running the ported suite on this Windows host. Both PROF-02 end-to-end tests pass; both cross-target clippy gates clean. Commits `d1290f61`/`2e7c1412`/`bb9360b1`. See `110-02-SUMMARY.md`. Next: Plan 110-03 (Wave 1, PROF-03 CapabilitySet port-range mechanism + macOS/Linux Unix emitters).
+
+Previously: **v3.6 Phase 110 Plan 01 COMPLETE (2026-07-30)** — `platform_overrides` per-OS profile-patch model (`ae1c513e`/`719975cf`) ported: `PlatformOverrides`/`PlatformOverride` types + custom nested-rejection `Deserialize`, `apply_platform_overrides` wired as the first step of `finalize_profile`, `merge_platform_overrides`/`merge_platform_override_slot` D-10 deep-merge (survives `extends` resolution intact), post-merge re-validation of custom_credentials/env_credentials/set_vars, and a `platform_overrides` schema property. D-08a preserved verbatim — `windows_low_il_broker`/`windows_interpreters` keep Phase 51/71 fail-secure OR/union `merge_profiles` semantics; `merge_profiles_or_semantics_base_true_child_false` confirmed unmodified+passing. 14 new tests (`platform_overrides_tests`), both cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) clean, `cargo fmt --all -- --check` clean. Commits `d44b5647`/`9872afa6`/`e8ce3a63`. See `110-01-SUMMARY.md`.
 
 Then: **v3.6 Phase 108 context gathered** — `108-CONTEXT.md` + `108-DISCUSSION-LOG.md` written (commit `85874c01`), 23 decisions (D-01..D-23) across 4 gray areas. Live scouting contradicted several milestone planning assumptions: the window is **100 non-merge commits** (not the `260727-jkn` map's "~40"), **20** commits touch the tool-sandbox surface (not the 7 PRs named in REQUIREMENTS) with **12 entangled**, `deny_domain` #1374 touches core `net_filter.rs`, and **~28 code commits map to no v3.6 requirement** (several security-relevant). **Phase 108's SC4 is unsatisfiable as written** — the audit will report the gap and propose a new **Phase 112 (Security + Residual Sync)**, gated on operator approval before Phase 109 planning.
 
@@ -273,10 +278,10 @@ Then: **v3.6 Phase 108 EXECUTION — 4 of 5 plans complete.** `108-01` ledger fo
 
 - **LIVE VULN:** `crossbeam-epoch 0.9.18` (RUSTSEC-2026-0204) is in the fork's `Cargo.lock`; its fix `373a67ae` (#1369) sits unabsorbed in this window's DEPS bucket. Independently confirmed. Priority absorb.
 - **ADR-86 threat flag:** `e6d26871` (#1269) adds `pub mod resource;` + `pub use resource::ResourceLimits;` to the policy-free core `crates/nono/src/lib.rs`. Needs boundary review before Phase 111 absorbs it.
-- **Phase 110 complication:** PROF-02's absorb target `capability_ext.rs` calls into the DEFERRED `tool_sandbox::dynamic_providers`.
+- **Phase 110 complication (RESOLVED by Plan 110-02):** PROF-02's absorb target `capability_ext.rs` called into upstream's DEFERRED `tool_sandbox::dynamic_providers`; resolved per D-01/D-02 by porting `expand_dynamic_tokens` into a new fork-owned `crates/nono-cli/src/dynamic_tokens.rs` module instead, with its own v3.7 reconciliation note.
 - Two CONTEXT decisions corrected mid-execution by re-measurement (D-04 bucket split, D-06 directory-vs-union) — see `1332b657`.
 
-Resume file: `.planning/phases/110-profile-policy-absorb-platform-overrides/110-02-PLAN.md` (next plan in Wave 1)
+Resume file: `.planning/phases/110-profile-policy-absorb-platform-overrides/110-03-PLAN.md` (next plan in Wave 1)
 
 **Note on tracking:** SDK `state.begin-phase` / `roadmap.update-plan-progress` were deliberately NOT run for Phase 104 — `init.execute-phase` reports `milestone_version: v3.6`, so an SDK write would have clobbered v3.6's Current Position while v3.5 runs parallel. STATE.md stays hand-maintained for both milestones.
 

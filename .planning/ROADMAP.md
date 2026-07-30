@@ -32,7 +32,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
-- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/8 plans
+- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 2/8 plans
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
@@ -254,7 +254,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 **Plans**: 8 plans
 - [x] 110-01-PLAN.md — platform_overrides field + extends preservation + windows_low_il_broker/windows_interpreters back-compat proof (PROF-01)
-- [ ] 110-02-PLAN.md — $VAR process-env expansion + ported @git:* dynamic tokens (PROF-02)
+- [x] 110-02-PLAN.md — $VAR process-env expansion + ported @git:* dynamic tokens (PROF-02)
 - [ ] 110-03-PLAN.md — CapabilitySet port-range mechanism + macOS/Linux Unix emitters (PROF-03 library+Unix)
 - [ ] 110-04-PLAN.md — NetworkConfig open_port_range/listen_port_range + profile_runtime.rs validation (PROF-03 schema)
 - [ ] 110-05-PLAN.md — capability_ext.rs profile-pathway wiring + manifest-pathway conversion (PROF-03 wiring)
@@ -323,5 +323,5 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 107. Close-Out | v3.5 | 0/? | Not started | - |
 | 108. UPST12 Divergence Audit | v3.6 | 0/? | Not started | - |
 | 109. Proxy/Network Absorb | v3.6 | 0/? | Not started | - |
-| 110. Profile/Policy Absorb + platform_overrides | v3.6 | 1/8 | In Progress|  |
+| 110. Profile/Policy Absorb + platform_overrides | v3.6 | 2/8 | In Progress|  |
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 0/? | Not started | - |
