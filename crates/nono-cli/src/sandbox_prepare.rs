@@ -70,6 +70,10 @@ pub(crate) struct PreparedSandbox {
     pub(crate) rollback_exclude_globs: Vec<String>,
     pub(crate) network_profile: Option<String>,
     pub(crate) allow_domain: Vec<crate::profile::AllowDomainEntry>,
+    /// Raw `deny_domain` entries from the loaded profile (manifest path has
+    /// none). CLI `--deny-domain` is merged in later via
+    /// `proxy_runtime::resolve_effective_proxy_settings`.
+    pub(crate) deny_domain: Vec<String>,
     pub(crate) credentials: Vec<String>,
     pub(crate) custom_credentials: HashMap<String, profile::CustomCredentialDef>,
     pub(crate) upstream_proxy: Option<String>,
@@ -172,6 +176,7 @@ fn has_proxy_intent(args: &SandboxArgs, prepared: &PreparedSandbox) -> bool {
         || !prepared.custom_credentials.is_empty()
         || prepared.network_profile.is_some()
         || !prepared.allow_domain.is_empty()
+        || !prepared.deny_domain.is_empty()
         || prepared.upstream_proxy.is_some()
 }
 
@@ -432,6 +437,9 @@ pub(crate) fn prepare_sandbox_with_context(
                 rollback_exclude_globs,
                 network_profile: None,
                 allow_domain,
+                // Manifest schema has no deny_domain key today — manifest
+                // path always has an empty deny list.
+                deny_domain: Vec::new(),
                 credentials,
                 custom_credentials: HashMap::new(),
                 upstream_proxy: None,
@@ -488,6 +496,7 @@ pub(crate) fn prepare_sandbox_with_context(
         rollback_exclude_globs: profile_rollback_globs,
         network_profile: profile_network_profile,
         allow_domain: profile_allow_domain,
+        deny_domain: profile_deny_domain,
         credentials: profile_credentials,
         custom_credentials: profile_custom_credentials,
         upstream_proxy: profile_upstream_proxy,
@@ -521,6 +530,8 @@ pub(crate) fn prepare_sandbox_with_context(
         silent,
     );
     print_allow_domain_port_warnings(&args.allow_proxy, "--allow-domain", silent);
+    print_allow_domain_port_warnings(&profile_deny_domain, "profile deny_domain", silent);
+    print_allow_domain_port_warnings(&args.deny_proxy, "--deny-domain", silent);
 
     #[cfg(target_os = "linux")]
     if args.profile.as_deref() == Some("claude-code") {
@@ -742,6 +753,7 @@ pub(crate) fn prepare_sandbox_with_context(
             rollback_exclude_globs: profile_rollback_globs,
             network_profile: profile_network_profile,
             allow_domain: profile_allow_domain,
+            deny_domain: profile_deny_domain,
             credentials: profile_credentials,
             custom_credentials: profile_custom_credentials,
             upstream_proxy: profile_upstream_proxy,
@@ -827,6 +839,7 @@ mod tests {
             rollback_exclude_globs: Vec::new(),
             network_profile: None,
             allow_domain: Vec::new(),
+            deny_domain: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,

@@ -1687,6 +1687,13 @@ pub struct NetworkConfig {
         alias = "allow_proxy"
     )]
     pub allow_domain: Vec<AllowDomainEntry>,
+    /// Domains to deny through the proxy, evaluated before the allowlist.
+    /// Composes with (never weakens) `allow_domain` — a deny-only profile
+    /// (no `allow_domain`) is a hard error at parse time (ADR-108 / D-05).
+    /// Simple string array; unlike `allow_domain` this has no endpoint-rule
+    /// variant.
+    #[serde(default)]
+    pub deny_domain: Vec<String>,
     /// Credential services to enable via reverse proxy.
     /// Canonical profile key: `credentials` (legacy `proxy_credentials` accepted).
     ///
@@ -3287,6 +3294,7 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 &base.network.allow_domain,
                 &child.network.allow_domain,
             ),
+            deny_domain: dedup_append(&base.network.deny_domain, &child.network.deny_domain),
             open_port: dedup_append(&base.network.open_port, &child.network.open_port),
             listen_port: dedup_append(&base.network.listen_port, &child.network.listen_port),
             connect_port: dedup_append(&base.network.connect_port, &child.network.connect_port),
@@ -5273,6 +5281,7 @@ mod tests {
                 block: false,
                 network_profile: InheritableValue::Set("base-net".to_string()),
                 allow_domain: vec![AllowDomainEntry::Plain("base.example.com".to_string())],
+                deny_domain: Vec::new(),
                 open_port: vec![3000],
                 listen_port: vec![4000],
                 connect_port: vec![],
@@ -5365,6 +5374,7 @@ mod tests {
                 block: false,
                 network_profile: InheritableValue::Inherit,
                 allow_domain: vec![AllowDomainEntry::Plain("child.example.com".to_string())],
+                deny_domain: Vec::new(),
                 open_port: vec![3000, 5000],
                 listen_port: vec![4000, 6000],
                 connect_port: vec![],
@@ -8420,6 +8430,52 @@ mod allow_domain_tests {
             AllowDomainEntry::WithEndpoints { domain, .. } => assert_eq!(domain, "api.github.com"),
             AllowDomainEntry::Plain(_) => panic!("expected WithEndpoints"),
         }
+    }
+
+    /// #1374 / ADR-108: NetworkConfig.deny_domain is a plain Vec<String> —
+    /// unlike allow_domain, it has no AllowDomainEntry/endpoint-rule variant.
+    #[test]
+    fn network_config_deny_domain_field_deserializes() {
+        let json = r#"{"allow_domain":["good.com"],"deny_domain":["evil.com","*.ads.example.com"]}"#;
+        let config: NetworkConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.allow_domain.len(), 1);
+        assert_eq!(
+            config.deny_domain,
+            vec!["evil.com".to_string(), "*.ads.example.com".to_string()]
+        );
+    }
+
+    #[test]
+    fn network_config_deny_domain_defaults_empty() {
+        let json = r#"{"allow_domain":["good.com"]}"#;
+        let config: NetworkConfig = serde_json::from_str(json).unwrap();
+        assert!(config.deny_domain.is_empty());
+    }
+
+    /// deny_domain merges via dedup_append (union, order-preserving),
+    /// mirroring how open_port/listen_port/upstream_bypass merge — not the
+    /// endpoint-aware merge_allow_domain used for allow_domain.
+    #[test]
+    fn merge_profiles_dedup_appends_deny_domain() {
+        let base = Profile {
+            network: NetworkConfig {
+                deny_domain: vec!["base-evil.com".to_string()],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let child = Profile {
+            network: NetworkConfig {
+                deny_domain: vec!["child-evil.com".to_string()],
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let merged = merge_profiles(base, child);
+        assert_eq!(
+            merged.network.deny_domain,
+            vec!["base-evil.com".to_string(), "child-evil.com".to_string()]
+        );
     }
 }
 

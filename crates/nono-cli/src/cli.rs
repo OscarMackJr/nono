@@ -1980,6 +1980,20 @@ pub struct SandboxArgs {
     )]
     pub allow_proxy: Vec<String>,
 
+    /// Deny a domain through the proxy (repeatable). Evaluated before the
+    /// allowlist — composes with (never weakens) `--allow-domain`. A
+    /// deny-only invocation (no `--allow-domain`/profile `allow_domain`) is
+    /// rejected at parse time (ADR-108 / fork divergence from upstream's
+    /// auto-activating default-allow semantics).
+    #[arg(
+        long = "deny-domain",
+        conflicts_with = "allow_net",
+        env = "NONO_DENY_DOMAIN",
+        value_name = "DOMAIN",
+        help_heading = "NETWORK"
+    )]
+    pub deny_proxy: Vec<String>,
+
     /// Allow the sandboxed child to listen on a TCP port (repeatable)
     #[arg(
         long = "listen-port",
@@ -2191,7 +2205,7 @@ pub struct SandboxArgs {
             "allow_unix_socket_dir", "allow_unix_socket_dir_bind",
             "allow_unix_socket_subtree", "allow_unix_socket_subtree_bind",
             "profile", "bypass_protection", "allow_cwd",
-            "block_net", "allow_net", "network_profile", "allow_proxy",
+            "block_net", "allow_net", "network_profile", "allow_proxy", "deny_proxy",
             "allow_bind", "allow_port", "allow_connect_port", "external_proxy", "proxy_port",
             "proxy_credential", "allow_endpoint", "env_credential", "env_credential_map",
             "allow_command", "block_command", "allow_launch_services", "allow_http2",
@@ -2227,6 +2241,7 @@ impl SandboxArgs {
     pub fn has_proxy_flags(&self) -> bool {
         self.network_profile.is_some()
             || !self.allow_proxy.is_empty()
+            || !self.deny_proxy.is_empty()
             || !self.proxy_credential.is_empty()
             || self.external_proxy.is_some()
     }
@@ -2554,6 +2569,7 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             allow_net: false,
             network_profile: None,
             allow_proxy: Vec::new(),
+            deny_proxy: Vec::new(),
             allow_bind: args.allow_bind,
             allow_port: args.allow_port,
             allow_connect_port: args.allow_connect_port,
@@ -4954,6 +4970,46 @@ mod tests {
         assert!(
             result.is_err(),
             "--allow-net and --allow-domain should conflict"
+        );
+    }
+
+    #[test]
+    fn test_allow_net_conflicts_with_deny_domain() {
+        let result = Cli::try_parse_from([
+            "nono",
+            "run",
+            "--allow",
+            ".",
+            "--allow-net",
+            "--deny-domain",
+            "evil.com",
+            "echo",
+        ]);
+        assert!(
+            result.is_err(),
+            "--allow-net and --deny-domain should conflict"
+        );
+    }
+
+    /// T-109-16 regression: `--config` (capability manifest mode) must reject
+    /// `--deny-domain`, mirroring the existing `--config` + `--allow-domain`
+    /// rejection. Without this, `deny_domain` would silently have zero
+    /// enforcement effect — the manifest branch of `prepare_sandbox_with_context`
+    /// never reads `args.deny_proxy` (same as it never reads `args.allow_proxy`).
+    #[test]
+    fn config_and_deny_domain_are_rejected_together() {
+        let result = Cli::try_parse_from([
+            "nono",
+            "run",
+            "--config",
+            "manifest.json",
+            "--deny-domain",
+            "evil.com",
+            "echo",
+        ]);
+        assert!(
+            result.is_err(),
+            "--config and --deny-domain should conflict (mirrors --config + --allow-domain)"
         );
     }
 

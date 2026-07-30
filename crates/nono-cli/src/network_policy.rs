@@ -287,8 +287,19 @@ pub fn resolve_credentials(
 /// Build a complete `ProxyConfig` from a resolved network policy.
 ///
 /// Combines resolved hosts/suffixes with credential routes and optional
-/// CLI overrides (extra hosts).
-pub fn build_proxy_config(resolved: &ResolvedNetworkPolicy, extra_hosts: &[String]) -> ProxyConfig {
+/// CLI overrides (extra hosts), plus caller-supplied deny entries.
+///
+/// ADR-108 Consequence (b), defense-in-depth: whenever `denied_hosts` is
+/// non-empty and the resolved allowlist is empty, `strict_filter` is set so
+/// the returned config fails closed instead of falling back to allow-all.
+/// This is a second, independent layer alongside the parse-time hard-error
+/// guard in `sandbox_prepare.rs::validate_deny_domain_requires_allow_domain`
+/// (D-05) — neither alone is a single point of failure (T-109-01).
+pub fn build_proxy_config(
+    resolved: &ResolvedNetworkPolicy,
+    extra_hosts: &[String],
+    denied_hosts: &[String],
+) -> ProxyConfig {
     let mut allowed_hosts = resolved.hosts.clone();
     // Convert suffixes to wildcard format for the proxy filter
     for suffix in &resolved.suffixes {
@@ -299,11 +310,23 @@ pub fn build_proxy_config(resolved: &ResolvedNetworkPolicy, extra_hosts: &[Strin
         };
         allowed_hosts.push(wildcard);
     }
-    // Add CLI override hosts
+
+    // Add CLI override hosts (this fork also routes plain --allow-domain /
+    // profile allow_domain entries through `extra_hosts` — see
+    // `proxy_runtime::build_proxy_config_from_flags` — so the allowlist is
+    // only fully assembled once these are merged in).
     allowed_hosts.extend(extra_hosts.iter().cloned());
+
+    // ADR-108 Consequence (b): compute strict-selection AFTER the full
+    // allowlist (resolved policy + extra_hosts) is assembled, so a
+    // deny-only *effective* configuration fails closed while a config that
+    // pairs deny_domain with any allow_domain source is unaffected.
+    let strict_filter = !denied_hosts.is_empty() && allowed_hosts.is_empty();
 
     ProxyConfig {
         allowed_hosts,
+        denied_hosts: denied_hosts.to_vec(),
+        strict_filter,
         routes: resolved.routes.clone(),
         ..Default::default()
     }
@@ -313,6 +336,35 @@ pub fn build_proxy_config(resolved: &ResolvedNetworkPolicy, extra_hosts: &[Strin
 /// network policy, expand it to the group's hosts and suffixes. Otherwise
 /// treat it as a literal hostname.
 pub fn expand_proxy_allow(policy: &NetworkPolicy, entries: &[String]) -> Vec<String> {
+    let mut result = Vec::new();
+    for entry in entries {
+        if let Some(group) = policy.groups.get(entry.as_str()) {
+            result.extend(group.hosts.clone());
+            for suffix in &group.suffixes {
+                let wildcard = if suffix.starts_with('.') {
+                    format!("*{}", suffix)
+                } else {
+                    format!("*.{}", suffix)
+                };
+                result.push(wildcard);
+            }
+        } else {
+            // Strip optional :port suffix — the proxy host filter matches
+            // hostnames only, even if user input includes host:port syntax.
+            let host = entry
+                .rsplit_once(':')
+                .and_then(|(h, p)| p.parse::<u16>().ok().map(|_| h))
+                .unwrap_or(entry.as_str());
+            result.push(host.to_string());
+        }
+    }
+    result
+}
+
+/// Expand `--deny-domain` entries: if an entry matches a group name in the
+/// network policy, expand it to the group's hosts and suffixes. Otherwise
+/// treat it as a literal hostname. Mirrors `expand_proxy_allow` exactly.
+pub fn expand_proxy_deny(policy: &NetworkPolicy, entries: &[String]) -> Vec<String> {
     let mut result = Vec::new();
     for entry in entries {
         if let Some(group) = policy.groups.get(entry.as_str()) {
@@ -699,7 +751,7 @@ mod tests {
             routes: vec![],
             profile_credentials: vec![],
         };
-        let config = build_proxy_config(&resolved, &["extra.example.com".to_string()]);
+        let config = build_proxy_config(&resolved, &["extra.example.com".to_string()], &[]);
         assert!(config.allowed_hosts.contains(&"api.openai.com".to_string()));
         assert!(config
             .allowed_hosts
@@ -707,6 +759,42 @@ mod tests {
         assert!(config
             .allowed_hosts
             .contains(&"extra.example.com".to_string()));
+        assert!(config.denied_hosts.is_empty());
+        assert!(!config.strict_filter);
+    }
+
+    #[test]
+    fn test_build_proxy_config_propagates_denied_hosts() {
+        let resolved = ResolvedNetworkPolicy {
+            hosts: vec!["api.openai.com".to_string()],
+            suffixes: vec![],
+            routes: vec![],
+            profile_credentials: vec![],
+        };
+        let config = build_proxy_config(&resolved, &[], &["evil.com".to_string()]);
+        assert!(config.denied_hosts.contains(&"evil.com".to_string()));
+        // Allowlist is non-empty (api.openai.com), so strict_filter must NOT
+        // be forced on by the deny-only defense-in-depth rule.
+        assert!(!config.strict_filter);
+    }
+
+    /// ADR-108 Consequence (b) / T-109-01: a deny-only resolved policy
+    /// (empty allowlist, non-empty denied_hosts) must set strict_filter so
+    /// the proxy fails closed instead of falling back to allow-all.
+    #[test]
+    fn test_build_proxy_config_deny_only_sets_strict_filter() {
+        let resolved = ResolvedNetworkPolicy {
+            hosts: vec![],
+            suffixes: vec![],
+            routes: vec![],
+            profile_credentials: vec![],
+        };
+        let config = build_proxy_config(&resolved, &[], &["evil.com".to_string()]);
+        assert!(
+            config.strict_filter,
+            "deny-only config (no allow_domain) must set strict_filter (ADR-108 (b))"
+        );
+        assert!(config.denied_hosts.contains(&"evil.com".to_string()));
     }
 
     #[test]

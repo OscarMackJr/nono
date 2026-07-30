@@ -472,6 +472,22 @@ nono run --allow-cwd --allow-domain api.openai.com --allow-domain api.anthropic.
 nono run --allow-cwd --network-profile minimal --allow-domain custom-api.example.com -- my-agent
 ```
 
+#### `--deny-domain`
+
+Deny a domain through the proxy, evaluated before the allowlist. Can be specified multiple times. Composes with (never weakens) `--allow-domain`.
+
+Unlike upstream `nono`, `--deny-domain` does NOT activate proxy mode on its own and does NOT fall back to "allow everything except these domains." A deny-only invocation — `--deny-domain` with no `--allow-domain` and no other proxy-activating flag — is rejected at parse time with a guiding error, because that shape almost always comes from a user expecting upstream's auto-activating default-allow semantics. This is a deliberate fork divergence, documented in this fork's internal ADR set.
+
+```bash
+# Allow a network profile's hosts, but deny one specific host within it
+nono run --allow-cwd --network-profile developer --deny-domain telemetry.example.com -- my-agent
+
+# Wildcard suffix: denies subdomains but not the bare apex
+nono run --allow-cwd --allow-domain api.example.com --deny-domain '*.ads.example.com' -- my-agent
+```
+
+`--config` (capability manifest mode) rejects `--deny-domain`, mirroring the existing `--config` + `--allow-domain` rejection — the manifest schema has no `deny_domain` key.
+
 #### `--credential`
 
 Enable credential injection for a named service via the reverse proxy. The service must be either a built-in service (`openai`, `anthropic`, `gemini`, `google-ai`) or defined as a custom credential in your profile. Credentials are loaded from the system keyring under the `nono` service name, from 1Password when `credential_key` is an `op://` URI, from Apple Passwords on macOS when `credential_key` is an `apple-password://` URI, from a file when `credential_key` is a `file://` URI, or from the host environment when `credential_key` is an `env://` URI.
@@ -1616,6 +1632,7 @@ CLI flags always take precedence over environment variables.
 | `--profile` | `NONO_PROFILE` | `NONO_PROFILE=developer` |
 | `--network-profile` | `NONO_NETWORK_PROFILE` | `NONO_NETWORK_PROFILE=claude-code` |
 | `--allow-domain` | `NONO_ALLOW_DOMAIN` | `NONO_ALLOW_DOMAIN=api.openai.com` |
+| `--deny-domain` | `NONO_DENY_DOMAIN` | `NONO_DENY_DOMAIN=telemetry.example.com` |
 | `--credential` | `NONO_CREDENTIAL` | `NONO_CREDENTIAL=openai` |
 | `--env-credential` | `NONO_ENV_CREDENTIAL` | `NONO_ENV_CREDENTIAL=key1,key2` |
 | `--capability-elevation` | `NONO_CAPABILITY_ELEVATION` | `NONO_CAPABILITY_ELEVATION=true` |

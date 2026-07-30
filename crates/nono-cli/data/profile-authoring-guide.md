@@ -276,6 +276,7 @@ All path fields support variable expansion (see Section 6).
 | `block`                 | boolean                           | `false`  | Block all network access. |
 | `network_profile`       | string or null                    | inherit  | Name from `network-policy.json` for proxy filtering. Set to `null` to clear inherited value. |
 | `allow_domain`          | array of string or object         | `[]`     | Additional domains to allow through the proxy. Entries can be plain strings (CONNECT tunnel) or objects with endpoint rules (TLS-intercepted L7 filtering). Aliases: `proxy_allow`, `allow_proxy`. |
+| `deny_domain`           | array of string                   | `[]`     | Domains to deny through the proxy, evaluated before `allow_domain`. Composes with (never weakens) the allowlist — a deny-only profile (no `allow_domain`) is rejected at parse time rather than silently falling back to allow-everything-except-these-domains (fork divergence from upstream, ADR-108). Supports wildcard suffixes (`*.ads.example.com`). |
 | `credentials`           | array of string                   | `[]`     | Credential services to enable via reverse proxy. Alias: `proxy_credentials`. |
 | `open_port`             | array of integer                  | `[]`     | Localhost TCP IPC. Aliases: `port_allow`, `allow_port`. Port **0**: macOS only (`localhost:*` outbound); Linux: explicit ports. |
 | `listen_port`           | array of integer                  | `[]`     | TCP ports the sandboxed child may listen on. |

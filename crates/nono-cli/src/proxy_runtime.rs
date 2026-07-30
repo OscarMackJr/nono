@@ -16,6 +16,10 @@ pub(crate) struct ActiveProxyRuntime {
 pub(crate) struct EffectiveProxySettings {
     pub(crate) network_profile: Option<String>,
     pub(crate) allow_domain: Vec<AllowDomainEntry>,
+    /// Raw `deny_domain` entries (profile + `--deny-domain`), not yet
+    /// group-expanded. Expansion happens in `build_proxy_config_from_flags`
+    /// via `network_policy::expand_proxy_deny`.
+    pub(crate) deny_domain: Vec<String>,
     pub(crate) credentials: Vec<String>,
 }
 
@@ -118,6 +122,7 @@ pub(crate) fn prepare_proxy_launch_options(
     let effective_proxy = resolve_effective_proxy_settings(args, prepared);
     let network_profile = effective_proxy.network_profile;
     let allow_domain = effective_proxy.allow_domain;
+    let deny_domain = effective_proxy.deny_domain;
     let credentials = effective_proxy.credentials;
     let allow_bind_ports = merge_dedup_ports(&prepared.listen_ports, &args.allow_bind);
 
@@ -187,6 +192,7 @@ pub(crate) fn prepare_proxy_launch_options(
         active,
         network_profile,
         allow_domain,
+        deny_domain,
         credentials,
         custom_credentials: prepared.custom_credentials.clone(),
         upstream_proxy,
@@ -210,6 +216,7 @@ pub(crate) fn resolve_effective_proxy_settings(
         return EffectiveProxySettings {
             network_profile: None,
             allow_domain: Vec::new(),
+            deny_domain: Vec::new(),
             credentials: Vec::new(),
         };
     }
@@ -224,12 +231,18 @@ pub(crate) fn resolve_effective_proxy_settings(
     // because they arrive as raw strings from the command line.
     let mut allow_domain: Vec<AllowDomainEntry> = prepared.allow_domain.clone();
     allow_domain.extend(args.allow_proxy.iter().map(|s| parse_allow_domain_arg(s)));
+    // deny_domain mirrors allow_domain's merge (profile entries + CLI flag),
+    // but stays a flat Vec<String> — group-name expansion happens later in
+    // build_proxy_config_from_flags via network_policy::expand_proxy_deny.
+    let mut deny_domain = prepared.deny_domain.clone();
+    deny_domain.extend(args.deny_proxy.iter().cloned());
     let mut credentials = prepared.credentials.clone();
     credentials.extend(args.proxy_credential.clone());
 
     EffectiveProxySettings {
         network_profile,
         allow_domain,
+        deny_domain,
         credentials,
     }
 }
@@ -286,8 +299,17 @@ pub(crate) fn build_proxy_config_from_flags(
         }
     }
     resolved.routes.extend(endpoint_routes);
-    let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts);
-    proxy_config.strict_filter = proxy.strict_filter;
+
+    // Expand deny_domain entries (group-name expansion, else literal
+    // hostname) the same way allow_domain is expanded above.
+    let denied_hosts = network_policy::expand_proxy_deny(&net_policy, &proxy.deny_domain);
+
+    let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts, &denied_hosts);
+    // OR, not overwrite: build_proxy_config already applied ADR-108
+    // Consequence (b)'s deny-only strict-selection; proxy.strict_filter
+    // (block-net / profile network.block) must widen, never narrow, that
+    // decision.
+    proxy_config.strict_filter = proxy.strict_filter || proxy_config.strict_filter;
     proxy_config.enable_h2 = proxy.enable_h2;
 
     // Apply per-service endpoint restrictions from `--allow-endpoint` args.
@@ -508,6 +530,7 @@ mod tests {
             rollback_exclude_globs: Vec::new(),
             network_profile: None,
             allow_domain: vec![endpoint_entry.clone()],
+            deny_domain: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: std::collections::HashMap::new(),
             upstream_proxy: None,
@@ -541,6 +564,25 @@ mod tests {
             effective.allow_domain[0], endpoint_entry,
             "WithEndpoints entry must survive end-to-end without being flattened to Plain"
         );
+    }
+
+    /// #1374 / ADR-108: deny_domain composes with allow_domain end-to-end
+    /// through build_proxy_config_from_flags into ProxyConfig.denied_hosts,
+    /// without clearing or replacing the allowlist.
+    #[test]
+    fn build_proxy_config_propagates_deny_domain_with_allow_domain() {
+        let proxy = ProxyLaunchOptions {
+            active: true,
+            allow_domain: vec![AllowDomainEntry::Plain("good.com".to_string())],
+            deny_domain: vec!["evil.com".to_string()],
+            ..ProxyLaunchOptions::default()
+        };
+        let config = build_proxy_config_from_flags(&proxy).expect("build_proxy_config_from_flags");
+        assert!(config.allowed_hosts.contains(&"good.com".to_string()));
+        assert!(config.denied_hosts.contains(&"evil.com".to_string()));
+        // Allowlist is non-empty, so the ADR-108 (b) deny-only strict-selection
+        // must NOT force strict_filter on here.
+        assert!(!config.strict_filter);
     }
 
     /// `strict_filter: true` must propagate to `ProxyConfig.strict_filter`.
@@ -630,6 +672,7 @@ mod tests {
             rollback_exclude_globs: Vec::new(),
             network_profile: None,
             allow_domain: vec![],
+            deny_domain: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: custom_creds,
             upstream_proxy: None,
@@ -755,6 +798,7 @@ mod tests {
             rollback_exclude_globs: Vec::new(),
             network_profile: None,
             allow_domain: vec![],
+            deny_domain: Vec::new(),
             credentials: Vec::new(),
             custom_credentials: custom_creds,
             upstream_proxy: None,

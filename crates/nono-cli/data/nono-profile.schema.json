@@ -482,6 +482,11 @@
           "items": { "oneOf": [ { "type": "string" }, { "$ref": "#/$defs/AllowDomainWithEndpoints" } ] },
           "description": "Additional domains to allow through the proxy on top of the network profile hosts."
         },
+        "deny_domain": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Domains to deny through the proxy, evaluated before the allowlist. Composes with (never weakens) allow_domain. A deny-only profile (no allow_domain) is rejected at parse time (ADR-108: fork divergence from upstream's auto-activating default-allow semantics for deny-only configs)."
+        },
         "proxy_allow": {
           "type": "array",
           "items": { "type": "string" },
