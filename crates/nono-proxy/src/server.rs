@@ -279,13 +279,17 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     let loaded_routes = credential_store.loaded_prefixes();
 
     // Build filter. Strict mode treats an empty allowlist as deny-all.
+    // `with_denied_hosts` layers caller-supplied deny entries (deny_domain,
+    // ADR-108) on top — deny is always evaluated before the allowlist and
+    // never activates the proxy or widens it on its own.
     let filter = if config.strict_filter {
         ProxyFilter::new_strict(&config.allowed_hosts)
     } else if config.allowed_hosts.is_empty() {
         ProxyFilter::allow_all()
     } else {
         ProxyFilter::new(&config.allowed_hosts)
-    };
+    }
+    .with_denied_hosts(&config.denied_hosts);
 
     // Build shared TLS connector (root cert store is expensive to construct).
     // Use the ring provider explicitly to avoid ambiguity when multiple

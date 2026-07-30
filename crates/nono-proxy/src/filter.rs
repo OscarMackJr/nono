@@ -52,6 +52,19 @@ impl ProxyFilter {
         }
     }
 
+    /// Add caller-supplied deny entries to this filter, evaluated before the
+    /// allowlist (ADR-108: adapt, deny-layer-only — never an allowlist
+    /// substitute). No-ops when `denied` is empty. Chains to
+    /// `HostFilter::with_denied_hosts`.
+    #[must_use]
+    pub fn with_denied_hosts(mut self, denied: &[String]) -> Self {
+        if denied.is_empty() {
+            return self;
+        }
+        self.inner = self.inner.with_denied_hosts(denied);
+        self
+    }
+
     /// Check a host against the filter with async DNS resolution.
     ///
     /// Resolves the hostname to IP addresses, then checks all resolved IPs
@@ -144,5 +157,37 @@ mod tests {
         let link_local = vec![IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))];
         let result = filter.check_host_with_ips("evil.com", &link_local);
         assert!(!result.is_allowed());
+    }
+
+    // ========================================================================
+    // #1374 deny_domain (ADR-108) — ProxyFilter::with_denied_hosts
+    // ========================================================================
+
+    #[test]
+    fn test_proxy_filter_with_denied_hosts() {
+        let filter = ProxyFilter::allow_all().with_denied_hosts(&["evil.com".to_string()]);
+        let public_ip = vec![IpAddr::V4(Ipv4Addr::new(104, 18, 7, 96))];
+
+        let result = filter.check_host_with_ips("evil.com", &public_ip);
+        assert!(!result.is_allowed());
+
+        let other = filter.check_host_with_ips("good.com", &public_ip);
+        assert!(other.is_allowed());
+    }
+
+    #[test]
+    fn test_proxy_filter_with_denied_hosts_wildcard() {
+        let filter =
+            ProxyFilter::allow_all().with_denied_hosts(&["*.ads.example.com".to_string()]);
+        let public_ip = vec![IpAddr::V4(Ipv4Addr::new(104, 18, 7, 96))];
+
+        let subdomain = filter.check_host_with_ips("tracker.ads.example.com", &public_ip);
+        assert!(!subdomain.is_allowed());
+
+        let apex = filter.check_host_with_ips("ads.example.com", &public_ip);
+        assert!(
+            apex.is_allowed(),
+            "ads.example.com must NOT be denied by *.ads.example.com (bare apex)"
+        );
     }
 }

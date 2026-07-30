@@ -114,8 +114,13 @@ pub struct HostFilter {
     allowed_hosts: Vec<String>,
     /// Allowed wildcard suffixes (e.g., ".googleapis.com", lowercased)
     allowed_suffixes: Vec<String>,
-    /// Hostnames that are always denied
+    /// Hostnames that are always denied (cloud metadata + caller-supplied
+    /// exact entries from `with_denied_hosts`)
     deny_hosts: Vec<String>,
+    /// Caller-supplied wildcard deny suffixes (e.g. ".ads.example.com",
+    /// lowercased) from `with_denied_hosts`. Evaluated before the
+    /// allowlist — deny always wins over allow (ADR-108).
+    deny_suffixes: Vec<String>,
     /// When true, an empty allowlist denies instead of allowing.
     strict: bool,
 }
@@ -146,6 +151,7 @@ impl HostFilter {
             allowed_hosts: exact,
             allowed_suffixes: suffixes,
             deny_hosts: DENY_HOSTS.iter().map(|s| s.to_lowercase()).collect(),
+            deny_suffixes: Vec::new(),
             strict: false,
         }
     }
@@ -167,8 +173,35 @@ impl HostFilter {
             allowed_hosts: Vec::new(),
             allowed_suffixes: Vec::new(),
             deny_hosts: DENY_HOSTS.iter().map(|s| s.to_lowercase()).collect(),
+            deny_suffixes: Vec::new(),
             strict: false,
         }
+    }
+
+    /// Add caller-supplied deny entries to this filter, evaluated before the
+    /// allowlist. Additive to the cloud-metadata `deny_hosts` population set
+    /// at construction — never replaces it (ADR-108: adapt, deny-layer-only).
+    ///
+    /// Entries starting with `*` are treated as wildcard subdomain patterns
+    /// (e.g. `*.ads.example.com` matches `tracker.ads.example.com` but not
+    /// the bare apex `ads.example.com`). All other entries are exact
+    /// hostname matches. Matching is case-insensitive.
+    ///
+    /// This mechanism is caller-supplied (no hardcoded policy), keeping the
+    /// library policy-free per ADR-86; the decision of *when* to select a
+    /// fail-closed filter for a deny-only configuration is CLI-side policy
+    /// (see `nono-cli::network_policy::build_proxy_config`).
+    #[must_use]
+    pub fn with_denied_hosts(mut self, denied: &[String]) -> Self {
+        for host in denied {
+            let lower = host.to_lowercase();
+            if let Some(suffix) = lower.strip_prefix('*') {
+                self.deny_suffixes.push(suffix.to_string());
+            } else {
+                self.deny_hosts.push(lower);
+            }
+        }
+        self
     }
 
     /// Check a host against the filter.
@@ -180,7 +213,10 @@ impl HostFilter {
     ///
     /// # Check Order
     ///
-    /// 1. Deny hosts (exact match against cloud metadata hostnames)
+    /// 1. Deny hosts (exact match against cloud metadata hostnames and any
+    ///    caller-supplied exact deny entries from `with_denied_hosts`)
+    /// 1b. Deny suffixes (wildcard match against caller-supplied deny
+    ///    entries from `with_denied_hosts`) — deny always wins over allow
     /// 2. Link-local IP check (resolved IPs in 169.254.0.0/16 or fe80::/10)
     /// 3. Allowlist (exact host match, then wildcard subdomain match)
     /// 4. Default deny (if not in allowlist and allowlist is non-empty)
@@ -193,6 +229,17 @@ impl HostFilter {
             return FilterResult::DenyHost {
                 host: host.to_string(),
             };
+        }
+
+        // 1b. Check deny suffixes (wildcard match). Deny always wins over
+        // allow — evaluated before the allowlist and before the link-local
+        // check, matching upstream 3b207eeb's ordering (ADR-108).
+        for suffix in &self.deny_suffixes {
+            if lower_host.ends_with(suffix.as_str()) && lower_host.len() > suffix.len() {
+                return FilterResult::DenyHost {
+                    host: host.to_string(),
+                };
+            }
         }
 
         // 2. Check resolved IPs for link-local addresses (cloud metadata protection)
@@ -474,6 +521,60 @@ mod tests {
         let filter = HostFilter::new(&[]);
         let result = filter.check_host("example.com", &public_ip());
         assert!(matches!(result, FilterResult::Allow));
+    }
+
+    // ========================================================================
+    // #1374 deny_domain (ADR-108: adapt, deny-layer-only) — with_denied_hosts
+    // ========================================================================
+
+    #[test]
+    fn test_user_deny_host_exact() {
+        let filter = HostFilter::allow_all().with_denied_hosts(&["evil.com".to_string()]);
+        let result = filter.check_host("evil.com", &public_ip());
+        assert!(!result.is_allowed());
+        assert!(matches!(result, FilterResult::DenyHost { .. }));
+    }
+
+    #[test]
+    fn test_user_deny_host_does_not_affect_others() {
+        let filter = HostFilter::allow_all().with_denied_hosts(&["evil.com".to_string()]);
+        let result = filter.check_host("good.com", &public_ip());
+        assert!(result.is_allowed());
+    }
+
+    #[test]
+    fn test_user_deny_host_wildcard() {
+        let filter =
+            HostFilter::allow_all().with_denied_hosts(&["*.ads.example.com".to_string()]);
+
+        let subdomain = filter.check_host("tracker.ads.example.com", &public_ip());
+        assert!(!subdomain.is_allowed());
+        assert!(matches!(subdomain, FilterResult::DenyHost { .. }));
+
+        // Bare apex must NOT match the wildcard deny entry.
+        let apex = filter.check_host("ads.example.com", &public_ip());
+        assert!(
+            apex.is_allowed(),
+            "ads.example.com must NOT be denied by *.ads.example.com (bare apex)"
+        );
+    }
+
+    #[test]
+    fn test_user_deny_beats_allowlist() {
+        // evil.com is both explicitly allowed AND explicitly denied — deny wins.
+        let filter =
+            HostFilter::new(&["evil.com".to_string()]).with_denied_hosts(&["evil.com".to_string()]);
+        let result = filter.check_host("evil.com", &public_ip());
+        assert!(!result.is_allowed());
+        assert!(matches!(result, FilterResult::DenyHost { .. }));
+    }
+
+    #[test]
+    fn test_user_deny_case_insensitive() {
+        let filter = HostFilter::allow_all().with_denied_hosts(&["EVIL.COM".to_string()]);
+        let result = filter.check_host("evil.com", &public_ip());
+        assert!(!result.is_allowed());
+        assert!(matches!(result, FilterResult::DenyHost { .. }));
     }
 
     /// EGRESS-03 named contract: four-case DNS-component reject matrix.

@@ -44,6 +44,14 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub strict_filter: bool,
 
+    /// Caller-supplied hosts to deny through the proxy (exact match +
+    /// wildcards), evaluated before the allowlist. Additive to the
+    /// hardcoded cloud-metadata deny list — never an allowlist substitute
+    /// (ADR-108: `deny_domain` is adapt, deny-layer-only). Empty = no
+    /// additional deny entries.
+    #[serde(default)]
+    pub denied_hosts: Vec<String>,
+
     /// Reverse proxy credential routes.
     #[serde(default)]
     pub routes: Vec<RouteConfig>,
@@ -80,6 +88,7 @@ impl Default for ProxyConfig {
             bind_port: 0,
             allowed_hosts: Vec::new(),
             strict_filter: false,
+            denied_hosts: Vec::new(),
             routes: Vec::new(),
             external_proxy: None,
             direct_connect_ports: Vec::new(),
