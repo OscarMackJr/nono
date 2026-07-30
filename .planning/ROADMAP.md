@@ -32,7 +32,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
-- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/? plans
+- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/8 plans
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
@@ -251,6 +251,16 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. `$VAR` (#1296) and `@git:*` (#1298) token expansion works in profile filesystem paths.
   3. The port-range profile schema (#1398) is absorbed with a **WFP-native** remote-port-range emitter on Windows and discrete-`Vec<u16>` back-compat.
   4. The `bun` (#1305) and `mise` (#1387) runtime presets are present and resolvable.
+
+**Plans**: 8 plans
+- [ ] 110-01-PLAN.md — platform_overrides field + extends preservation + windows_low_il_broker/windows_interpreters back-compat proof (PROF-01)
+- [ ] 110-02-PLAN.md — $VAR process-env expansion + ported @git:* dynamic tokens (PROF-02)
+- [ ] 110-03-PLAN.md — CapabilitySet port-range mechanism + macOS/Linux Unix emitters (PROF-03 library+Unix)
+- [ ] 110-04-PLAN.md — NetworkConfig open_port_range/listen_port_range + profile_runtime.rs validation (PROF-03 schema)
+- [ ] 110-05-PLAN.md — capability_ext.rs profile-pathway wiring + manifest-pathway conversion (PROF-03 wiring)
+- [ ] 110-06-PLAN.md — Windows WFP-native remote-port-range emitter, fork-original (PROF-03 Windows)
+- [ ] 110-07-PLAN.md — bun/mise runtime presets + resolvability tests (PROF-04)
+- [ ] 110-08-PLAN.md — Phase gate: cross-target clippy + make ci + binding rebuild + fork-invariant verify
 
 ### Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog
 **Goal**: The macOS/core carry and resource-CLI alignment land, the whole sync is proven non-regressing under both cross-target clippy gates, and the tree leapfrogs to a prepare-only `0.70.0`.
