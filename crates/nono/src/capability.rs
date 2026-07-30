@@ -857,6 +857,51 @@ impl std::fmt::Display for NetworkMode {
     }
 }
 
+/// Cumulative cap on the number of individual ports a macOS Seatbelt profile
+/// may expand `localhost_port_ranges` into (2^14 = 16,384).
+///
+/// `sandbox_init()` empirically SIGILLs once a compiled Seatbelt profile
+/// contains roughly ~17,770 individual rules (each range-expanded port
+/// becomes its own `(allow network-outbound (remote tcp "localhost:N"))`
+/// rule). This limit is checked BEFORE any profile string is built, giving
+/// headroom below that crash threshold. It is macOS-specific: Linux
+/// (Landlock) has no equivalent crash mode and accepts the full 16-bit port
+/// space uncapped, and Windows (WFP) expresses ranges natively via
+/// `FWP_MATCH_RANGE` without per-port unrolling. Do not propagate this
+/// constant to either of those backends (D-06).
+pub const MACOS_PORT_RANGE_LIMIT: u32 = 1 << 14;
+
+/// Merge overlapping and adjacent `(start, end)` port ranges into a minimal,
+/// sorted set of non-overlapping ranges.
+///
+/// Two ranges are merged if they overlap OR are adjacent (e.g. `(3000,3005)`
+/// and `(3006,3010)` merge into `(3000,3010)`, checked via
+/// `cur_end.saturating_add(1)` to avoid overflow at `u16::MAX`). Input order
+/// does not matter; output is sorted by start port.
+#[must_use]
+pub fn merge_port_ranges(ranges: &[(u16, u16)]) -> Vec<(u16, u16)> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let mut sorted = ranges.to_vec();
+    sorted.sort_unstable_by_key(|&(s, _)| s);
+    let mut merged: Vec<(u16, u16)> = Vec::with_capacity(sorted.len());
+    let (mut cur_start, mut cur_end) = sorted[0];
+    for &(start, end) in &sorted[1..] {
+        if start <= cur_end.saturating_add(1) {
+            if end > cur_end {
+                cur_end = end;
+            }
+        } else {
+            merged.push((cur_start, cur_end));
+            cur_start = start;
+            cur_end = end;
+        }
+    }
+    merged.push((cur_start, cur_end));
+    merged
+}
+
 /// The complete set of capabilities granted to the sandbox
 ///
 /// Use the builder pattern to construct a capability set:
@@ -892,6 +937,14 @@ pub struct CapabilitySet {
     /// by destination IP. Use with `--block-net` or proxy mode to ensure
     /// only localhost is reachable.
     localhost_ports: Vec<u16>,
+    /// Inclusive localhost TCP port ranges, additive to `localhost_ports`.
+    ///
+    /// Same semantics as `localhost_ports` (bidirectional connect+bind,
+    /// applies regardless of `NetworkMode`) but expressed as `(start, end)`
+    /// tuples for wide ranges (e.g. ephemeral dev-server ports 3000-3999)
+    /// without enumerating every discrete port. Merged via
+    /// [`merge_port_ranges`] before any platform expands them into rules.
+    localhost_port_ranges: Vec<(u16, u16)>,
     /// Commands explicitly allowed (overrides blocklists - for CLI use)
     allowed_commands: Vec<String>,
     /// Additional commands to block (extends blocklists - for CLI use)
@@ -1102,6 +1155,23 @@ impl CapabilitySet {
         self
     }
 
+    /// Allow bidirectional localhost TCP on an inclusive port range (builder
+    /// pattern), additive to [`Self::allow_localhost_port`].
+    ///
+    /// Returns an error if `start == 0` — port `0` has no defined meaning in
+    /// a range (the wildcard-outbound semantics of `allow_localhost_port(0)`
+    /// stay exclusive to the discrete-port API).
+    pub fn allow_localhost_port_range(mut self, start: u16, end: u16) -> Result<Self> {
+        if start == 0 {
+            return Err(NonoError::ConfigParse(
+                "port range starting at 0 is invalid; port 0 has no defined meaning in a range"
+                    .to_string(),
+            ));
+        }
+        self.localhost_port_ranges.push((start, end));
+        Ok(self)
+    }
+
     /// Allow TCP connect to standard HTTPS ports (443, 8443)
     ///
     /// Convenience method. Linux Landlock V4+ only.
@@ -1273,6 +1343,19 @@ impl CapabilitySet {
         self.localhost_ports.push(port);
     }
 
+    /// In-place equivalent of [`Self::allow_localhost_port_range`] for
+    /// mutable contexts. Rejects `start == 0` with a `ConfigParse` error.
+    pub fn add_localhost_port_range(&mut self, start: u16, end: u16) -> Result<()> {
+        if start == 0 {
+            return Err(NonoError::ConfigParse(
+                "port range starting at 0 is invalid; port 0 has no defined meaning in a range"
+                    .to_string(),
+            ));
+        }
+        self.localhost_port_ranges.push((start, end));
+        Ok(())
+    }
+
     /// Set sandbox extensions state
     pub fn set_extensions_enabled(&mut self, enabled: bool) {
         self.extensions_enabled = enabled;
@@ -1427,6 +1510,12 @@ impl CapabilitySet {
     #[must_use]
     pub fn localhost_ports(&self) -> &[u16] {
         &self.localhost_ports
+    }
+
+    /// Get localhost IPC port ranges (additive to [`Self::localhost_ports`]).
+    #[must_use]
+    pub fn localhost_port_ranges(&self) -> &[(u16, u16)] {
+        &self.localhost_port_ranges
     }
 
     /// Check if sandbox extensions are enabled for runtime capability expansion
@@ -2802,6 +2891,83 @@ mod tests {
         caps.add_localhost_port(8080);
         caps.add_localhost_port(9090);
         assert_eq!(caps.localhost_ports(), &[8080, 9090]);
+    }
+
+    #[test]
+    fn test_localhost_port_range_builder() {
+        let caps = CapabilitySet::new()
+            .allow_localhost_port_range(3000, 3005)
+            .expect("valid range")
+            .allow_localhost_port_range(9000, 9010)
+            .expect("valid range");
+        assert_eq!(caps.localhost_port_ranges(), &[(3000, 3005), (9000, 9010)]);
+    }
+
+    #[test]
+    fn test_localhost_port_range_mutable() {
+        let mut caps = CapabilitySet::new();
+        caps.add_localhost_port_range(4000, 4010)
+            .expect("valid range");
+        caps.add_localhost_port_range(5000, 5100)
+            .expect("valid range");
+        assert_eq!(caps.localhost_port_ranges(), &[(4000, 4010), (5000, 5100)]);
+    }
+
+    #[test]
+    fn test_localhost_port_range_rejects_zero_start() {
+        let err = CapabilitySet::new()
+            .allow_localhost_port_range(0, 100)
+            .expect_err("start == 0 must be rejected");
+        assert!(matches!(err, NonoError::ConfigParse(_)));
+
+        let mut caps = CapabilitySet::new();
+        let err = caps
+            .add_localhost_port_range(0, 100)
+            .expect_err("start == 0 must be rejected (mutable)");
+        assert!(matches!(err, NonoError::ConfigParse(_)));
+    }
+
+    #[test]
+    fn test_merge_port_ranges_empty() {
+        assert_eq!(merge_port_ranges(&[]), Vec::<(u16, u16)>::new());
+    }
+
+    #[test]
+    fn test_merge_port_ranges_no_overlap() {
+        let merged = merge_port_ranges(&[(1000, 1010), (2000, 2010)]);
+        assert_eq!(merged, vec![(1000, 1010), (2000, 2010)]);
+    }
+
+    #[test]
+    fn test_merge_port_ranges_overlapping() {
+        let merged = merge_port_ranges(&[(1000, 1010), (1005, 1020)]);
+        assert_eq!(merged, vec![(1000, 1020)]);
+    }
+
+    #[test]
+    fn test_merge_port_ranges_adjacent() {
+        let merged = merge_port_ranges(&[(1000, 1010), (1011, 1020)]);
+        assert_eq!(merged, vec![(1000, 1020)]);
+    }
+
+    #[test]
+    fn test_merge_port_ranges_contained() {
+        let merged = merge_port_ranges(&[(1000, 2000), (1200, 1300)]);
+        assert_eq!(merged, vec![(1000, 2000)]);
+    }
+
+    #[test]
+    fn test_merge_port_ranges_unsorted_input() {
+        let merged = merge_port_ranges(&[(2000, 2010), (1000, 1010)]);
+        assert_eq!(merged, vec![(1000, 1010), (2000, 2010)]);
+    }
+
+    #[test]
+    fn test_merge_port_ranges_three_overlap() {
+        // Transitive-overlap chain: (1000,1010) + (1010,1020) + (1015,1030)
+        // must all collapse into a single merged range.
+        let merged = merge_port_ranges(&[(1000, 1010), (1010, 1020), (1015, 1030)]);
+        assert_eq!(merged, vec![(1000, 1030)]);
     }
 
     #[test]
