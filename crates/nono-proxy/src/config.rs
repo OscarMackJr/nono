@@ -67,6 +67,21 @@ pub struct ProxyConfig {
     #[serde(default)]
     pub direct_connect_ports: Vec<u16>,
 
+    /// Additional client-side proxy bypass entries to append to generated
+    /// NO_PROXY/no_proxy values.
+    ///
+    /// These entries are host patterns only. They do not grant network access;
+    /// they only tell standard HTTP clients not to use the local nono proxy for
+    /// matching destinations — the underlying sandbox permission (Landlock /
+    /// Seatbelt) is unaffected. Route upstreams that require L7 filtering or
+    /// credential injection are rejected at proxy startup if they overlap an
+    /// entry here (`validate_no_proxy_route_conflicts`), and entries that
+    /// overlap `allowed_hosts` are rejected too
+    /// (`validate_no_proxy_allowed_host_conflicts`) — `no_proxy` is a bypass
+    /// surface in a default-deny tool and must never silently widen it.
+    #[serde(default)]
+    pub no_proxy: Vec<String>,
+
     /// Maximum concurrent connections (0 = unlimited).
     #[serde(default)]
     pub max_connections: usize,
@@ -92,6 +107,7 @@ impl Default for ProxyConfig {
             routes: Vec::new(),
             external_proxy: None,
             direct_connect_ports: Vec::new(),
+            no_proxy: Vec::new(),
             max_connections: 256,
             enable_h2: false,
         }
@@ -100,6 +116,376 @@ impl Default for ProxyConfig {
 
 fn default_bind_addr() -> IpAddr {
     IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+}
+
+// ============================================================================
+// no_proxy (#1415, D-06) — validators for the profile-declared client-side
+// bypass surface. Ported from upstream 1619275c, adapted to this fork's
+// `crate::error::{ProxyError, Result}` idiom. NON-NEGOTIABLE (109-CONTEXT.md
+// D-06): `no_proxy` punches holes in the proxy — without these validators an
+// entry overlapping `allow_domain` would silently defeat filtering.
+// ============================================================================
+
+/// Validate a client-side NO_PROXY entry.
+///
+/// Accepts single-label local aliases, IP literals, `*.example.com` wildcard
+/// suffixes, and `.example.com` suffix patterns. Bare multi-label domains are
+/// rejected because common clients treat them as suffix matches. Full URLs,
+/// credentials, ports, path/query/fragment-bearing values, comma-separated
+/// lists, and catch-all `*` are rejected so profile values cannot silently
+/// broaden proxy bypass behavior.
+///
+/// # Errors
+///
+/// Returns a human-readable validation error if `entry` is not a host pattern.
+#[must_use = "the no_proxy validation result must be handled"]
+pub fn validate_no_proxy_entry(entry: &str) -> crate::error::Result<()> {
+    if entry.is_empty() {
+        return Err(no_proxy_config_error("entry must not be empty"));
+    }
+    if entry.trim() != entry {
+        return Err(no_proxy_config_error(
+            "entry must not contain leading or trailing whitespace",
+        ));
+    }
+    if entry
+        .chars()
+        .any(|c| c.is_control() || c.is_ascii_whitespace())
+    {
+        return Err(no_proxy_config_error(
+            "entry must not contain whitespace or control characters",
+        ));
+    }
+    if entry.contains(',') {
+        return Err(no_proxy_config_error(
+            "entry must be a single host pattern, not a comma-separated list",
+        ));
+    }
+    if entry.contains("://") {
+        return Err(no_proxy_config_error("entry must not include a URL scheme"));
+    }
+    if entry.contains('@') {
+        return Err(no_proxy_config_error("entry must not include credentials"));
+    }
+    if entry.contains('/') || entry.contains('?') || entry.contains('#') {
+        return Err(no_proxy_config_error(
+            "entry must not include a path, query, or fragment",
+        ));
+    }
+
+    if entry.contains('[') || entry.contains(']') {
+        if !entry.starts_with('[') || !entry.ends_with(']') {
+            return Err(no_proxy_config_error(
+                "brackets are only allowed around IPv6 literals",
+            ));
+        }
+        let Some(host) = entry
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+        else {
+            return Err(no_proxy_config_error(
+                "brackets are only allowed around IPv6 literals",
+            ));
+        };
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err(no_proxy_config_error(
+                "bracketed entry must be an IPv6 literal",
+            ));
+        }
+    } else if has_host_port_separator(entry) {
+        return Err(no_proxy_config_error("entry must not include a port"));
+    }
+
+    validate_no_proxy_host_pattern(entry)
+}
+
+fn no_proxy_config_error(message: impl Into<String>) -> crate::error::ProxyError {
+    crate::error::ProxyError::Config(message.into())
+}
+
+fn has_host_port_separator(entry: &str) -> bool {
+    entry
+        .rsplit_once(':')
+        .is_some_and(|(host, port)| !host.contains(':') && !port.is_empty())
+}
+
+pub(crate) fn no_proxy_host_pattern_matches(pattern: &str, host: &str) -> bool {
+    let pattern = normalise_no_proxy_host(pattern);
+    let host = normalise_no_proxy_host(host);
+    if pattern == host {
+        return true;
+    }
+
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        return host
+            .strip_suffix(suffix)
+            .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1);
+    }
+
+    if let Some(suffix) = pattern.strip_prefix('.') {
+        return host == suffix || host.ends_with(&format!(".{suffix}"));
+    }
+
+    false
+}
+
+/// Return true when a client-side NO_PROXY-style entry could overlap a proxy
+/// allow/route host pattern.
+///
+/// The grammar and overlap semantics live in `nono-proxy` because this crate
+/// owns proxy env generation, route protection, and startup fail-safe checks.
+/// CLI profile validation calls this helper for parse-time UX but the proxy
+/// still enforces the same semantics at startup.
+#[must_use]
+pub fn no_proxy_entry_overlaps_host_pattern(no_proxy_entry: &str, host_pattern: &str) -> bool {
+    let entry_host = strip_no_proxy_port(no_proxy_entry);
+    let host_pattern = strip_no_proxy_port(host_pattern);
+    if entry_host.is_empty() || host_pattern.is_empty() {
+        return true;
+    }
+
+    if no_proxy_host_pattern_matches(&entry_host, &host_pattern) {
+        return true;
+    }
+    if bare_single_label_suffix_overlaps_host(&entry_host, &host_pattern) {
+        return true;
+    }
+
+    let Some(entry_suffix) = no_proxy_suffix_for_overlap(&entry_host) else {
+        return false;
+    };
+
+    if let Some(host_suffix) = host_pattern
+        .strip_prefix("*.")
+        .map(normalise_no_proxy_host_pattern)
+    {
+        if host_suffix.is_empty() {
+            return true;
+        }
+        return domain_suffixes_overlap(&entry_suffix, &host_suffix);
+    }
+
+    let host = normalise_no_proxy_host_pattern(&host_pattern);
+    host == entry_suffix || host.ends_with(&format!(".{entry_suffix}"))
+}
+
+/// Flags a bare single-label suffix entry (e.g. `"com"`, `"internal"`) as
+/// overlapping essentially every host under it.
+///
+/// This is the maintainer-feedback-driven guard from upstream's "Address
+/// no_proxy maintainer feedback" step (109-CONTEXT.md D-06): without it, a
+/// short bare-label `no_proxy` entry like `"internal"` would not be
+/// recognized as overlapping `metadata.google.internal`, letting an operator
+/// accidentally punch a hole in cloud-metadata SSRF protection via a
+/// plausible-looking short entry.
+fn bare_single_label_suffix_overlaps_host(entry: &str, host_pattern: &str) -> bool {
+    let entry = normalise_no_proxy_host(entry);
+    if entry.is_empty() || entry.contains('.') || entry.contains(':') || entry.contains('*') {
+        return false;
+    }
+
+    let host = normalise_host_pattern_for_suffix_overlap(host_pattern);
+    host == entry || host.ends_with(&format!(".{entry}"))
+}
+
+fn normalise_host_pattern_for_suffix_overlap(host_pattern: &str) -> String {
+    let normalised = normalise_no_proxy_host(host_pattern);
+    normalised
+        .strip_prefix("*.")
+        .or_else(|| normalised.strip_prefix('.'))
+        .unwrap_or(&normalised)
+        .to_string()
+}
+
+pub(crate) fn strip_no_proxy_port(entry: &str) -> String {
+    if let Some(rest) = entry.strip_prefix('[') {
+        if let Some((host, remainder)) = rest.split_once(']') {
+            if let Some(port) = remainder.strip_prefix(':') {
+                if port.parse::<u16>().is_ok() {
+                    return format!("[{host}]");
+                }
+            }
+        }
+        return entry.to_string();
+    }
+
+    if entry.parse::<std::net::Ipv6Addr>().is_ok() {
+        return entry.to_string();
+    }
+
+    entry
+        .rsplit_once(':')
+        .and_then(|(host, port)| {
+            if host.contains(':') {
+                return None;
+            }
+            port.parse::<u16>().ok().map(|_| host.to_string())
+        })
+        .unwrap_or_else(|| entry.to_string())
+}
+
+fn no_proxy_suffix_for_overlap(entry: &str) -> Option<String> {
+    let normalised = normalise_no_proxy_host_pattern(entry);
+    let explicit_suffix = entry.starts_with('.') || normalised.starts_with("*.");
+    let suffix = normalised.strip_prefix("*.").unwrap_or(&normalised);
+    if suffix.is_empty() || suffix.parse::<std::net::IpAddr>().is_ok() {
+        return None;
+    }
+    if explicit_suffix || suffix.contains('.') {
+        Some(suffix.to_string())
+    } else {
+        None
+    }
+}
+
+fn domain_suffixes_overlap(left: &str, right: &str) -> bool {
+    left == right || left.ends_with(&format!(".{right}")) || right.ends_with(&format!(".{left}"))
+}
+
+pub(crate) fn normalise_no_proxy_host_pattern(pattern: &str) -> String {
+    let normalised = normalise_no_proxy_host(pattern);
+    normalised
+        .strip_prefix('.')
+        .unwrap_or(&normalised)
+        .to_string()
+}
+
+pub(crate) fn normalise_no_proxy_env_entry(entry: &str) -> String {
+    let host = strip_no_proxy_port(entry);
+    let normalised = normalise_no_proxy_host(&host);
+    if let Some(suffix) = normalised.strip_prefix("*.") {
+        format!(".{suffix}")
+    } else {
+        normalised
+    }
+}
+
+#[must_use = "no_proxy host pattern validation result must be handled"]
+fn validate_no_proxy_host_pattern(pattern: &str) -> crate::error::Result<()> {
+    if pattern.is_empty() {
+        return Err(no_proxy_config_error("entry host must not be empty"));
+    }
+    if pattern == "*" {
+        return Err(no_proxy_config_error("catch-all '*' is not allowed"));
+    }
+
+    let host = if let Some(suffix) = pattern.strip_prefix("*.") {
+        if suffix.is_empty() {
+            return Err(no_proxy_config_error(
+                "wildcard entry must include a suffix",
+            ));
+        }
+        if suffix.contains('*') {
+            return Err(no_proxy_config_error(
+                "wildcards are only allowed as a leading '*.'",
+            ));
+        }
+        suffix
+    } else if let Some(suffix) = pattern.strip_prefix('.') {
+        if suffix.is_empty() {
+            return Err(no_proxy_config_error("suffix entry must include a domain"));
+        }
+        if suffix.contains('*') {
+            return Err(no_proxy_config_error(
+                "wildcards are only allowed as a leading '*.'",
+            ));
+        }
+        suffix
+    } else {
+        if pattern.contains('*') {
+            return Err(no_proxy_config_error(
+                "wildcards are only allowed as a leading '*.'",
+            ));
+        }
+        pattern
+    };
+
+    let host = normalise_no_proxy_host(host);
+    if host.is_empty() || host.starts_with('.') || host.ends_with('.') || host.contains("..") {
+        return Err(no_proxy_config_error(
+            "entry host must be a non-empty hostname or IP literal",
+        ));
+    }
+    if no_proxy_pattern_overlaps_always_denied_host(pattern) {
+        return Err(no_proxy_config_error(
+            "entry overlaps a proxy-denied metadata host",
+        ));
+    }
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if is_proxy_denied_metadata_ip(&ip) {
+            return Err(no_proxy_config_error(
+                "entry overlaps a proxy-denied metadata IP",
+            ));
+        }
+        if is_link_local_ip(&ip) {
+            return Err(no_proxy_config_error(
+                "entry must not bypass link-local or cloud metadata IP ranges",
+            ));
+        }
+        return Ok(());
+    }
+    if normalise_no_proxy_host(pattern) == host && host.contains('.') {
+        return Err(no_proxy_config_error(
+            "bare multi-label domains are not allowed; use an explicit leading-dot or '*.' suffix pattern",
+        ));
+    }
+    if host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Ok(());
+    }
+
+    Err(no_proxy_config_error(
+        "entry host contains invalid characters",
+    ))
+}
+
+/// Hosts that must never be reachable via a `no_proxy` bypass, regardless of
+/// what the operator configures — mirrors the proxy `HostFilter`'s
+/// non-overridable cloud-metadata deny list at the client-bypass boundary.
+const ALWAYS_DENIED_HOSTS: &[&str] = &[
+    "169.254.169.254",
+    "fd00:ec2::254",
+    "metadata.google.internal",
+    "metadata.azure.internal",
+];
+
+pub(crate) fn parse_host_ip_literal(host: &str) -> Option<IpAddr> {
+    normalise_no_proxy_host(host).parse::<IpAddr>().ok()
+}
+
+pub(crate) fn is_proxy_denied_metadata_ip(ip: &IpAddr) -> bool {
+    ALWAYS_DENIED_HOSTS
+        .iter()
+        .filter_map(|host| host.parse::<IpAddr>().ok())
+        .any(|denied| denied == *ip)
+}
+
+// Mirrors the proxy HostFilter's non-overridable metadata deny list at the
+// client-bypass boundary: NO_PROXY must not let clients skip that filter.
+fn no_proxy_pattern_overlaps_always_denied_host(pattern: &str) -> bool {
+    ALWAYS_DENIED_HOSTS
+        .iter()
+        .any(|denied| no_proxy_entry_overlaps_host_pattern(pattern, denied))
+}
+
+fn is_link_local_ip(ip: &IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => v4.octets()[0] == 169 && v4.octets()[1] == 254,
+        IpAddr::V6(v6) => {
+            if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                return true;
+            }
+            v6.to_ipv4_mapped()
+                .is_some_and(|v4| v4.octets()[0] == 169 && v4.octets()[1] == 254)
+        }
+    }
+}
+
+fn normalise_no_proxy_host(host: &str) -> String {
+    let lower = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    lower.parse::<IpAddr>().map_or(lower, |ip| ip.to_string())
 }
 
 /// Configuration for a reverse proxy credential route.
@@ -704,17 +1090,147 @@ mod tests {
         assert!(config.allowed_hosts.is_empty());
         assert!(config.routes.is_empty());
         assert!(config.external_proxy.is_none());
+        assert!(config.no_proxy.is_empty());
     }
 
     #[test]
     fn test_config_serialization() {
         let config = ProxyConfig {
             allowed_hosts: vec!["api.openai.com".to_string()],
+            no_proxy: vec!["redis".to_string()],
             ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: ProxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.allowed_hosts, vec!["api.openai.com"]);
+        assert_eq!(deserialized.no_proxy, vec!["redis"]);
+    }
+
+    // ========================================================================
+    // no_proxy (#1415, D-06) — validator tests
+    // ========================================================================
+
+    #[test]
+    fn test_validate_no_proxy_entry_accepts_host_patterns() {
+        for entry in [
+            "redis",
+            "*.internal.example",
+            "*.internal.example.com",
+            ".dev.local",
+            ".svc.cluster.local",
+            "127.0.0.1",
+            "::1",
+            "[::1]",
+        ] {
+            assert!(
+                validate_no_proxy_entry(entry).is_ok(),
+                "no_proxy entry {entry:?} should be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_no_proxy_entry_rejects_non_host_values() {
+        for entry in [
+            "",
+            " https://dev.local",
+            "https://dev.local",
+            "user@dev.local",
+            "user:pass@evil.com",
+            "dev.local/path",
+            "evil.com/path",
+            "dev.local?debug=true",
+            "dev.local,other.local",
+            "dev.local",
+            "api.openai.com",
+            "API.OPENAI.COM",
+            "*",
+            "*corp",
+            "api.example.com:443",
+            "169.254.169.254",
+            "169.254.1.2",
+            "internal",
+            "fd00:ec2::254",
+            "fd00:0ec2::254",
+            "fd00:ec2:0:0:0:0:0:254",
+            "[fd00:ec2::254]",
+            "[fd00:0ec2::254]",
+            "[fe80::1]",
+            "metadata.google.internal",
+            ".google.internal",
+            "[::1]:8443",
+            "[dev.local]",
+            "dev.local]",
+        ] {
+            assert!(
+                validate_no_proxy_entry(entry).is_err(),
+                "no_proxy entry {entry:?} should be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_proxy_host_pattern_matches_only_explicit_suffix_semantics() {
+        assert!(!no_proxy_host_pattern_matches(
+            "openai.com",
+            "api.openai.com"
+        ));
+        assert!(!no_proxy_host_pattern_matches("com", "api.openai.com"));
+        assert!(no_proxy_host_pattern_matches(
+            ".openai.com",
+            "api.openai.com"
+        ));
+        assert!(no_proxy_host_pattern_matches(
+            "*.openai.com",
+            "api.openai.com"
+        ));
+        assert!(!no_proxy_host_pattern_matches("*.openai.com", "openai.com"));
+        assert!(no_proxy_host_pattern_matches("[0:0:0:0:0:0:0:1]", "::1"));
+        assert!(no_proxy_host_pattern_matches("0:0:0:0:0:0:0:1", "[::1]"));
+        assert!(!no_proxy_host_pattern_matches(
+            "evilopenai.com",
+            "api.openai.com"
+        ));
+    }
+
+    /// D-06: `no_proxy_entry_overlaps_host_pattern("*.example.com",
+    /// "api.example.com")` and the negative case
+    /// `no_proxy_entry_overlaps_host_pattern("other.com", "api.example.com")`
+    /// — the two overlap-detection examples named in the plan's <behavior>.
+    #[test]
+    fn test_no_proxy_entry_overlaps_host_pattern_wildcard_and_non_overlap() {
+        assert!(
+            no_proxy_entry_overlaps_host_pattern("*.example.com", "api.example.com"),
+            "a wildcard no_proxy entry must overlap a matching allow_domain host"
+        );
+        assert!(
+            !no_proxy_entry_overlaps_host_pattern("other.com", "api.example.com"),
+            "an unrelated no_proxy entry must not overlap an unrelated allow_domain host"
+        );
+    }
+
+    #[test]
+    fn test_no_proxy_overlap_models_common_client_bare_suffixes_for_protected_hosts() {
+        // bare_single_label_suffix_overlaps_host: a bare single-label suffix
+        // (e.g. "internal", "254") must be flagged as overlapping every host
+        // under it, not accepted as a narrow exact-host bypass (D-06,
+        // "Address no_proxy maintainer feedback").
+        assert!(no_proxy_entry_overlaps_host_pattern(
+            "internal",
+            "metadata.google.internal"
+        ));
+        assert!(no_proxy_entry_overlaps_host_pattern(
+            "254",
+            "169.254.169.254"
+        ));
+        assert!(no_proxy_entry_overlaps_host_pattern(
+            "internal",
+            "api.internal"
+        ));
+        assert!(!no_proxy_entry_overlaps_host_pattern(
+            "redis",
+            "metadata.google.internal"
+        ));
     }
 
     #[test]

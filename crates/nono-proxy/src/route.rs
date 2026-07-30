@@ -28,7 +28,8 @@ pub struct LoadedRoute {
 
     /// Pre-normalised `host:port` extracted from `upstream` at load time.
     /// Used for O(1) lookups in `is_route_upstream()` without per-request
-    /// URL parsing. `None` if the upstream URL cannot be parsed.
+    /// URL parsing. `RouteStore::load` rejects routes where this cannot be
+    /// parsed so route-protection checks never silently drop an upstream.
     pub upstream_host_port: Option<String>,
 
     /// Pre-compiled L7 endpoint rules for method+path filtering.
@@ -123,13 +124,18 @@ impl RouteStore {
                 None => (None, None, None),
             };
 
-            let upstream_host_port = extract_host_port(&route.upstream);
+            let upstream_host_port = extract_host_port(&route.upstream).map_err(|err| {
+                ProxyError::Config(format!(
+                    "route '{}': invalid upstream '{}': {}",
+                    normalized_prefix, route.upstream, err
+                ))
+            })?;
 
             loaded.insert(
                 normalized_prefix,
                 LoadedRoute {
                     upstream: route.upstream.clone(),
-                    upstream_host_port,
+                    upstream_host_port: Some(upstream_host_port),
                     endpoint_rules,
                     endpoint_policy,
                     tls_connector,
@@ -200,17 +206,32 @@ impl RouteStore {
 /// Extract and normalise `host:port` from a URL string.
 ///
 /// Defaults to port 443 for `https://` and 80 for `http://` when no
-/// explicit port is present. Returns `None` if the URL cannot be parsed.
-fn extract_host_port(url: &str) -> Option<String> {
-    let parsed = url::Url::parse(url).ok()?;
-    let host = parsed.host_str()?;
+/// explicit port is present.
+///
+/// # Errors
+///
+/// Returns a human-readable error if the URL cannot be parsed, has no host,
+/// or uses a scheme other than `http`/`https`. `RouteStore::load` propagates
+/// this as a hard startup error rather than silently dropping the upstream
+/// (an unparseable route upstream must not be invisible to no_proxy/route
+/// conflict checks — 109-CONTEXT.md D-06/D-07).
+#[must_use = "route upstream host:port extraction result must be handled"]
+pub(crate) fn extract_host_port(url: &str) -> std::result::Result<String, String> {
+    let parsed = url::Url::parse(url).map_err(|err| format!("URL parse error: {err}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "upstream URL must include a host".to_string())?;
     let default_port = match parsed.scheme() {
         "https" => 443,
         "http" => 80,
-        _ => return None,
+        scheme => {
+            return Err(format!(
+                "unsupported upstream scheme '{scheme}' (expected http or https)"
+            ));
+        }
     };
     let port = parsed.port().unwrap_or(default_port);
-    Some(format!("{}:{}", host.to_lowercase(), port))
+    Ok(format!("{}:{}", host.to_lowercase(), port))
 }
 
 /// Check whether `pattern` (a pre-normalised `host:port` string) matches
@@ -516,7 +537,7 @@ mod tests {
     fn test_extract_host_port_preserves_wildcard_host() {
         assert_eq!(
             extract_host_port("https://*.dev.example.net"),
-            Some("*.dev.example.net:443".to_string())
+            Ok("*.dev.example.net:443".to_string())
         );
     }
 
@@ -524,7 +545,7 @@ mod tests {
     fn test_extract_host_port_https() {
         assert_eq!(
             extract_host_port("https://api.openai.com"),
-            Some("api.openai.com:443".to_string())
+            Ok("api.openai.com:443".to_string())
         );
     }
 
@@ -532,7 +553,7 @@ mod tests {
     fn test_extract_host_port_with_port() {
         assert_eq!(
             extract_host_port("https://api.example.com:8443"),
-            Some("api.example.com:8443".to_string())
+            Ok("api.example.com:8443".to_string())
         );
     }
 
@@ -540,7 +561,7 @@ mod tests {
     fn test_extract_host_port_http() {
         assert_eq!(
             extract_host_port("http://internal-service"),
-            Some("internal-service:80".to_string())
+            Ok("internal-service:80".to_string())
         );
     }
 
@@ -548,8 +569,46 @@ mod tests {
     fn test_extract_host_port_normalises_case() {
         assert_eq!(
             extract_host_port("https://API.Example.COM"),
-            Some("api.example.com:443".to_string())
+            Ok("api.example.com:443".to_string())
         );
+    }
+
+    /// D-06/D-07: `RouteStore::load` must fail closed on an unparseable or
+    /// unsupported route upstream instead of silently storing `None` for
+    /// `upstream_host_port` — a silently-dropped upstream would be invisible
+    /// to `validate_no_proxy_route_conflicts` and the no_proxy bypass could
+    /// slip past route protection.
+    #[test]
+    fn test_load_routes_rejects_malformed_or_unsupported_upstreams() {
+        for upstream in [
+            "not a url",
+            "ftp://api.openai.com",
+            "https://",
+            "https://api.openai.com:notaport",
+        ] {
+            let routes = vec![RouteConfig {
+                prefix: "bad".to_string(),
+                upstream: upstream.to_string(),
+                credential_key: None,
+                inject_mode: Default::default(),
+                inject_header: "Authorization".to_string(),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+                endpoint_policy: None,
+            }];
+
+            assert!(
+                RouteStore::load(&routes).is_err(),
+                "route upstream {upstream:?} must fail closed at load time"
+            );
+        }
     }
 
     #[test]
