@@ -4106,7 +4106,11 @@ mod tests {
         unsafe { libc::waitpid(pid, &mut status, 0) };
 
         assert_eq!(n, 4, "expected 4 bytes from child");
-        assert_ne!(buf, [9, 9, 9, 9], "apply_with_abi failed unexpectedly in child");
+        assert_ne!(
+            buf,
+            [9, 9, 9, 9],
+            "apply_with_abi failed unexpectedly in child"
+        );
         assert_eq!(buf[0], 1, "range start port must be bindable");
         assert_eq!(buf[1], 1, "interior range port must be bindable");
         assert_eq!(buf[2], 1, "range end port must be bindable");

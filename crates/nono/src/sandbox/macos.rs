@@ -5,7 +5,9 @@
 //! - Adding system paths (e.g., /usr, /lib, /System/Library) if executables need to run
 //! - Implementing any security policy (sensitive path blocking, etc.)
 
-use crate::capability::{merge_port_ranges, AccessMode, CapabilitySet, NetworkMode, MACOS_PORT_RANGE_LIMIT};
+use crate::capability::{
+    merge_port_ranges, AccessMode, CapabilitySet, NetworkMode, MACOS_PORT_RANGE_LIMIT,
+};
 use crate::error::{NonoError, Result};
 use crate::sandbox::SupportInfo;
 use std::ffi::{CStr, CString};
@@ -806,7 +808,11 @@ fn generate_profile(caps: &CapabilitySet) -> Result<String> {
                 "(allow network-outbound (remote tcp \"localhost:{}\"))\n",
                 port
             ));
-            push_localhost_tcp_outbound_seatbelt_rules(&mut profile, localhost_ports, &merged_ranges);
+            push_localhost_tcp_outbound_seatbelt_rules(
+                &mut profile,
+                localhost_ports,
+                &merged_ranges,
+            );
             // Scope system-socket for TCP (required for connect/bind to proxy).
             profile.push_str(
                 "(allow system-socket (socket-domain AF_INET) (socket-type SOCK_STREAM))\n",

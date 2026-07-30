@@ -1550,7 +1550,8 @@ mod tests {
             proxy_bind_port_ranges: Vec<(u16, u16)>,
             unix_socket_allowlist: &'a [UnixSocketCapability],
         ) -> SupervisorConfig<'a> {
-            let mut config = make_config(backend, proxy_port, proxy_bind_ports, unix_socket_allowlist);
+            let mut config =
+                make_config(backend, proxy_port, proxy_bind_ports, unix_socket_allowlist);
             config.proxy_bind_port_ranges = proxy_bind_port_ranges;
             config
         }
@@ -1851,8 +1852,7 @@ mod tests {
         #[test]
         fn bind_allowed_by_individual_port_or_range() {
             let backend = DenyAllBackend;
-            let config =
-                make_config_with_ranges(&backend, 0, vec![9090], vec![(3000, 3010)], &[]);
+            let config = make_config_with_ranges(&backend, 0, vec![9090], vec![(3000, 3010)], &[]);
             // Allowed via the discrete list.
             assert_eq!(
                 decide_network_notification(test_pid(), SYS_BIND, &inet_loopback(9090), &config),
