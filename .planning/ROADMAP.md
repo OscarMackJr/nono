@@ -31,7 +31,7 @@ updated: 2026-07-28
 Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parallel** with the operator-blocked v3.5. Absorb the cross-platform delta from `nolabs-ai/nono` `v0.66.0..v0.69.0` (v0.67.0/.1, v0.68.0, v0.69.0) — proxy/network (`deny_domain`, SPIFFE/SPIRE, SigV4 + sibling-route fixes), profile/policy (`platform_overrides` + migrate the fork's `windows_*` flags into it, `$VAR`/`@git` tokens, port-range schema with a WFP-native emitter, bun/mise presets), macOS Seatbelt carry, and resource-CLI alignment onto the existing Job Object impl — WITHOUT regressing the Windows security model or the ADR-86 boundary, then leapfrog all 6 crates + both binding repos to **`0.70.0`** (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed — a standing structural divergence deferred to the dedicated **v3.7 Windows Tool-Sandbox Parity** milestone). Scope source: quick `260727-jkn`.
 
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
-- [ ] **Phase 109: Proxy/Network Absorb** — 0/5 plans
+- [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
 - [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 0/? plans
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
@@ -236,11 +236,11 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. The SigV4 encoded-URI fix (#1430) and sibling-route cross-deny fix (#1437) are absorbed; HTTP/2, `HTTP_PROXY` forward-proxy, and `no_proxy` bypass are verified non-regressed.
   4. `maturin build` (nono-py) and `napi build` (nono-ts) are green after the nono-proxy struct changes.
 **Plans**: 5 plans
-- [ ] 109-01-PLAN.md — deny_domain (NET-01): library deny-suffix mechanism, CLI plumbing, D-04/D-05 fail-closed guard at both entry points
-- [ ] 109-02-PLAN.md — no_proxy (NET-03) proxy-crate mechanism: D-06 validators + D-07 localhost/127.0.0.1 regression proof
-- [ ] 109-03-PLAN.md — no_proxy (NET-03) CLI-crate wiring: profile schema + validate_profile_no_proxy + launch-time/group-expanded conflict validators
-- [ ] 109-04-PLAN.md — HTTP_PROXY forward-proxy (#1335, NET-03): classify_request_target/handle_forward_http absolute-form dispatch
-- [ ] 109-05-PLAN.md — Verification: N/A finding for #1430/#1437 (target subsystems absent from fork), cross-target clippy confirmation, binding rebuild (D-09/SC4)
+- [x] 109-01-PLAN.md — deny_domain (NET-01): library deny-suffix mechanism, CLI plumbing, D-04/D-05 fail-closed guard at both entry points
+- [x] 109-02-PLAN.md — no_proxy (NET-03) proxy-crate mechanism: D-06 validators + D-07 localhost/127.0.0.1 regression proof
+- [x] 109-03-PLAN.md — no_proxy (NET-03) CLI-crate wiring: profile schema + validate_profile_no_proxy + launch-time/group-expanded conflict validators
+- [x] 109-04-PLAN.md — HTTP_PROXY forward-proxy (#1335, NET-03): classify_request_target/handle_forward_http absolute-form dispatch
+- [x] 109-05-PLAN.md — Verification: N/A finding for #1430/#1437 (target subsystems absent from fork), cross-target clippy confirmation, binding rebuild (D-09/SC4)
 
 ### Phase 110: Profile/Policy Absorb + platform_overrides
 **Goal**: The fork gains upstream's per-OS profile-patch model and the v0.67–v0.68 profile/policy features, and retires its top-level `windows_*` flag sprawl into `platform_overrides.windows`.

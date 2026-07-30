@@ -272,13 +272,15 @@ Resume file: `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER
 
 ## Operator Next Steps
 
-**v3.6 (active):** Phase 109 **PLANNED + checker-verified** — run `/gsd:execute-phase 109`. 5 plans / 4 waves. Milestone is **phases 108-113**.
+**v3.6 (active):** Phase 109 **COMPLETE — 5/5 plans, verification `status: passed` (9/9 must-haves)**. Milestone is **phases 108-113**; next is `/gsd:plan-phase 110`.
 
-Scope corrected during planning to **3 real absorbs**, not 5: `6fb7ecbf` (#1430 SigV4) and `23d93fc9` (#1437 sibling-route) target files the fork does not have (`crates/nono-proxy/src/aws/`, `crates/nono-proxy/src/tls_intercept/` — neither directory exists). Plan `109-05` records this as a finding rather than faking an absorb.
+Delivered: `deny_domain` (#1374) per ADR-108 ADAPT with the fail-closed guard at **both** entry points; profile-declared `no_proxy` (#1415) with all **six** D-06 overlap validators wired across direct / `extends`-inherited / group-expanded paths; `HTTP_PROXY` forward-proxy (#1335) enforcing the same `check_host` trust boundary as CONNECT. Tests: `nono-sandbox-proxy` **218/0** (from a 192/0 baseline, +26); `nono-sandbox-cli` 1411 passed / 11 failed (pre-existing environmental, unchanged). Both cross-target clippy gates GREEN. `cargo audit` clean.
 
-📋 **Pending operator amendment (non-blocking):** `REQUIREMENTS.md` NET-03 states "#1430 and #1437 are absorbed" — false once this phase runs. `109-05` will surface a correction proposal; it deliberately does not edit REQUIREMENTS.md itself. Also worth correcting: the Phase 108 ledger dispositions those two commits `adopt`, which should become `won't-sync (target subsystem absent)`.
+**SC4 vindicated D-09:** `../nono-py` failed to compile (`E0063: missing fields denied_hosts and no_proxy`) — struct drift caught only by building. Fixed + DCO-committed there (`e24c1ff`).
 
-Checker caught one security-shaped blocker, now fixed: `--deny-domain` was silently ignored under `--config` (manifest mode already rejects `--allow-domain` because it ignores CLI domain flags; the new flag didn't mirror that conflict). Fix added `deny_proxy` to `conflicts_with_all` plus the `has_proxy_flags`/`has_proxy_intent`/port-warning mirrors — same asymmetry class.
+📋 **Two operator amendments pending (non-blocking, both proposed-not-applied in `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`):**
+1. `108-DIVERGENCE-LEDGER.md` dispositions `6fb7ecbf`/`23d93fc9` as `adopt` — should become `won't-sync (target subsystem absent)`. Neither `crates/nono-proxy/src/aws/` nor `.../tls_intercept/` exists in the fork.
+2. `REQUIREMENTS.md` NET-03 claims "#1430 and #1437 are absorbed" — contradicted by the verified N/A finding.
 
 Phase 108 **COMPLETE — 5/5 plans, verification `status: passed` (8/8 must-haves)**.
 
