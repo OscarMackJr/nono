@@ -479,6 +479,12 @@ pub(super) fn describe_windows_network_runtime_target(
     if !policy.localhost_ports.is_empty() {
         restrictions.push(format!("localhost ports {:?}", policy.localhost_ports));
     }
+    if !policy.localhost_port_ranges.is_empty() {
+        restrictions.push(format!(
+            "localhost port ranges {:?}",
+            policy.localhost_port_ranges
+        ));
+    }
 
     if restrictions.is_empty() {
         base
@@ -1796,6 +1802,19 @@ mod tests {
             preferred_backend: nono::WindowsNetworkBackendKind::Wfp,
             active_backend: nono::WindowsNetworkBackendKind::Wfp,
         }
+    }
+
+    #[test]
+    fn describe_windows_network_runtime_target_surfaces_localhost_port_ranges() {
+        let mut policy = make_blocked_policy();
+        policy.localhost_port_ranges = vec![(3000, 3999)];
+        let description = describe_windows_network_runtime_target(&policy);
+        assert!(
+            description.contains("localhost port ranges"),
+            "diagnostic runtime-target description must surface localhost_port_ranges, \
+             not just discrete localhost_ports, to avoid a silent operator-visibility gap: {description}"
+        );
+        assert!(description.contains("(3000, 3999)"));
     }
 
     fn make_test_probe_config() -> WfpProbeConfig {
