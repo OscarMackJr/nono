@@ -4,7 +4,8 @@ use crate::cli::RunArgs;
 use crate::config;
 use crate::proxy_runtime::prepare_proxy_launch_options;
 use crate::sandbox_prepare::{
-    print_allow_launch_services_warning, validate_block_net_conflicts, PreparedSandbox,
+    print_allow_launch_services_warning, validate_block_net_conflicts,
+    validate_deny_domain_requires_allow_domain, PreparedSandbox,
 };
 use crate::{
     exec_strategy, instruction_deny, profile, session, trust_scan, DETACHED_SESSION_ID_ENV,
@@ -365,6 +366,11 @@ pub(crate) fn prepare_run_launch_plan(
     let mut prepared =
         crate::sandbox_prepare::prepare_sandbox_with_context(&args, silent, &resolve_ctx)?;
     validate_block_net_conflicts(&args, &prepared)?;
+    // D-04: mandatory second call site alongside command_runtime.rs's
+    // dry-run branch — this is the real (non-dry-run) `nono run` launch
+    // path. Runs before `prepare_proxy_launch_options` (called later in
+    // this function) can ever be reached with a deny-only configuration.
+    validate_deny_domain_requires_allow_domain(&args, &prepared)?;
     validate_rollback_destination(run_args.rollback_dest.as_ref(), &prepared)?;
 
     if prepared.allow_launch_services_active {

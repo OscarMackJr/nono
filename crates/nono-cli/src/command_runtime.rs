@@ -8,7 +8,7 @@ use crate::launch_runtime::{
 use crate::output;
 use crate::sandbox_prepare::{
     prepare_sandbox, print_allow_launch_services_warning, validate_block_net_conflicts,
-    validate_external_proxy_bypass,
+    validate_deny_domain_requires_allow_domain, validate_external_proxy_bypass,
 };
 use crate::theme;
 #[cfg(target_os = "windows")]
@@ -147,6 +147,12 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
         let prepared =
             crate::sandbox_prepare::prepare_sandbox_with_context(&args, silent, &resolve_ctx)?;
         validate_block_net_conflicts(&args, &prepared)?;
+        // D-04: fail-closed guard for a deny-only deny_domain/--deny-domain
+        // configuration (D-05). Must run before prepare_proxy_launch_options
+        // is ever reached — a guard on only one of the two `nono run` call
+        // sites (this dry-run branch and launch_runtime.rs's real launch
+        // path) is a bypass, not a guard.
+        validate_deny_domain_requires_allow_domain(&args, &prepared)?;
         validate_external_proxy_bypass(&args, &prepared)?;
         if !prepared.secrets.is_empty() && !silent {
             eprintln!(

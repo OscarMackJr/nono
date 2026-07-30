@@ -177,8 +177,7 @@ mod tests {
 
     #[test]
     fn test_proxy_filter_with_denied_hosts_wildcard() {
-        let filter =
-            ProxyFilter::allow_all().with_denied_hosts(&["*.ads.example.com".to_string()]);
+        let filter = ProxyFilter::allow_all().with_denied_hosts(&["*.ads.example.com".to_string()]);
         let public_ip = vec![IpAddr::V4(Ipv4Addr::new(104, 18, 7, 96))];
 
         let subdomain = filter.check_host_with_ips("tracker.ads.example.com", &public_ip);

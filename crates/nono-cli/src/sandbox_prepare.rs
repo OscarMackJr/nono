@@ -269,6 +269,47 @@ pub(crate) fn validate_block_net_conflicts(
     Ok(())
 }
 
+/// Validate that `deny_domain`/`--deny-domain` is never used without at
+/// least one `allow_domain`/`--allow-domain` entry (D-04/D-05).
+///
+/// Mirrors `validate_block_net_conflicts`'s shape exactly — a CLI-side,
+/// fail-closed guard called from both `nono run` entry points
+/// (`command_runtime.rs`'s dry-run branch and `launch_runtime.rs`'s real
+/// launch path). **A guard on only one of the two call sites is a bypass,
+/// not a guard** (D-04).
+///
+/// Per ADR-108 / CONTEXT.md D-05, a deny-only configuration is a HARD ERROR
+/// at parse time — never a silent fallback to strict/allow-all. Upstream's
+/// `deny_domain` auto-activates the proxy with default-allow semantics
+/// ("allow everything except these domains"); this fork deliberately
+/// rejects that trigger. A user who reaches this error almost certainly
+/// expected upstream's behavior and needs to be told explicitly that this
+/// fork requires at least one `allow_domain` entry (or `--block-net` if the
+/// actual intent was "deny everything").
+pub(crate) fn validate_deny_domain_requires_allow_domain(
+    args: &SandboxArgs,
+    prepared: &PreparedSandbox,
+) -> Result<()> {
+    let has_deny = !args.deny_proxy.is_empty() || !prepared.deny_domain.is_empty();
+    let has_allow = !args.allow_proxy.is_empty() || !prepared.allow_domain.is_empty();
+
+    if has_deny && !has_allow {
+        return Err(NonoError::ConfigParse(
+            "deny_domain / --deny-domain requires at least one allow_domain / \
+             --allow-domain entry. This fork deliberately diverges from upstream \
+             nono here: upstream's deny_domain silently auto-activates the proxy \
+             with default-allow semantics (\"allow everything except these \
+             domains\"), which would leave every host you did not think to \
+             name reachable. Add at least one --allow-domain (or profile \
+             allow_domain) entry, or use --block-net instead if the intent \
+             was to deny all outbound network access."
+                .to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn maybe_enable_macos_launch_services(
     caps: &mut CapabilitySet,
@@ -990,5 +1031,68 @@ mod tests {
         };
         let prepared = empty_prepared();
         assert!(validate_block_net_conflicts(&args, &prepared).is_ok());
+    }
+
+    // ========================================================================
+    // D-04/D-05: validate_deny_domain_requires_allow_domain
+    // ========================================================================
+
+    #[test]
+    fn deny_domain_without_allow_domain_errors() {
+        let args = SandboxArgs {
+            deny_proxy: vec!["evil.com".to_string()],
+            ..Default::default()
+        };
+        let prepared = empty_prepared();
+        let err = validate_deny_domain_requires_allow_domain(&args, &prepared)
+            .expect_err("deny-only (no allow_domain) must be a hard error (D-05)");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("deny_domain") || msg.contains("--deny-domain"),
+            "error should name deny_domain/--deny-domain: {msg}"
+        );
+        assert!(
+            msg.contains("diverges from upstream") || msg.contains("upstream"),
+            "error must explain the fork's divergence from upstream (D-05): {msg}"
+        );
+    }
+
+    #[test]
+    fn deny_domain_with_allow_domain_is_valid() {
+        let args = SandboxArgs {
+            deny_proxy: vec!["evil.com".to_string()],
+            allow_proxy: vec!["good.com".to_string()],
+            ..Default::default()
+        };
+        let prepared = empty_prepared();
+        assert!(validate_deny_domain_requires_allow_domain(&args, &prepared).is_ok());
+    }
+
+    #[test]
+    fn deny_domain_from_profile_without_allow_domain_errors() {
+        let args = SandboxArgs::default();
+        let mut prepared = empty_prepared();
+        prepared.deny_domain = vec!["evil.com".to_string()];
+        let err = validate_deny_domain_requires_allow_domain(&args, &prepared)
+            .expect_err("profile deny_domain with no allow_domain must be a hard error (D-05)");
+        assert!(err.to_string().contains("upstream"));
+    }
+
+    #[test]
+    fn deny_domain_from_profile_with_allow_domain_from_profile_is_valid() {
+        let args = SandboxArgs::default();
+        let mut prepared = empty_prepared();
+        prepared.deny_domain = vec!["evil.com".to_string()];
+        prepared.allow_domain = vec![crate::profile::AllowDomainEntry::Plain(
+            "good.com".to_string(),
+        )];
+        assert!(validate_deny_domain_requires_allow_domain(&args, &prepared).is_ok());
+    }
+
+    #[test]
+    fn no_deny_domain_is_always_valid() {
+        let args = SandboxArgs::default();
+        let prepared = empty_prepared();
+        assert!(validate_deny_domain_requires_allow_domain(&args, &prepared).is_ok());
     }
 }

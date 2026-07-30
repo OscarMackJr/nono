@@ -145,6 +145,19 @@ pub(crate) fn prepare_proxy_launch_options(
     };
 
     // Determine whether any proxy-activating configuration is present.
+    //
+    // ADR-108 Consequence (c): `deny_domain` is DELIBERATELY excluded from
+    // this OR-chain — unlike `allow_domain`, which IS a term. Upstream's
+    // `deny_domain` activates the proxy on its own ("allow everything
+    // except these domains"); this fork rejects that trigger. A
+    // deny+allow_domain configuration still activates via the
+    // `!allow_domain.is_empty()` term above. This is safe only because
+    // `sandbox_prepare::validate_deny_domain_requires_allow_domain` (D-04)
+    // runs upstream of this function on BOTH `nono run` call sites
+    // (command_runtime.rs's dry-run branch and launch_runtime.rs's real
+    // launch path) and rejects every deny-only state before it can reach
+    // `would_activate` — so a bare `deny_domain` can never appear here
+    // without a paired `allow_domain`.
     let would_activate = !credentials.is_empty()
         || network_profile.is_some()
         || !allow_domain.is_empty()
@@ -304,7 +317,8 @@ pub(crate) fn build_proxy_config_from_flags(
     // hostname) the same way allow_domain is expanded above.
     let denied_hosts = network_policy::expand_proxy_deny(&net_policy, &proxy.deny_domain);
 
-    let mut proxy_config = network_policy::build_proxy_config(&resolved, &plain_hosts, &denied_hosts);
+    let mut proxy_config =
+        network_policy::build_proxy_config(&resolved, &plain_hosts, &denied_hosts);
     // OR, not overwrite: build_proxy_config already applied ADR-108
     // Consequence (b)'s deny-only strict-selection; proxy.strict_filter
     // (block-net / profile network.block) must widen, never narrow, that
@@ -704,6 +718,131 @@ mod tests {
         assert!(
             intent.is_proxy_active(),
             "proxy must activate when only custom_credentials is set (#1197/D-07)"
+        );
+    }
+
+    /// ADR-108 Consequence (c) / T-109-17: a config with BOTH deny_domain
+    /// AND allow_domain non-empty produces `NetworkIntent::ProxyFiltered`
+    /// with `active: true` — activation comes from the `!allow_domain.is_empty()`
+    /// term in `would_activate`, never from `deny_domain`'s mere presence
+    /// (which is deliberately excluded from that OR-chain).
+    #[test]
+    fn deny_domain_with_allow_domain_activates_proxy() {
+        use crate::cli::SandboxArgs;
+        use nono::CapabilitySet;
+
+        let prepared = crate::sandbox_prepare::PreparedSandbox {
+            caps: CapabilitySet::new(),
+            secrets: Vec::new(),
+            rollback_exclude_patterns: Vec::new(),
+            rollback_exclude_globs: Vec::new(),
+            network_profile: None,
+            allow_domain: vec![AllowDomainEntry::Plain("good.com".to_string())],
+            deny_domain: vec!["evil.com".to_string()],
+            credentials: Vec::new(),
+            custom_credentials: std::collections::HashMap::new(),
+            upstream_proxy: None,
+            upstream_bypass: Vec::new(),
+            listen_ports: Vec::new(),
+            capability_elevation: false,
+            #[cfg(target_os = "linux")]
+            wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::default(),
+            #[cfg(target_os = "linux")]
+            af_unix_mediation: crate::profile::LinuxAfUnixMediation::default(),
+            allow_launch_services_active: false,
+            open_url_origins: Vec::new(),
+            open_url_allow_localhost: false,
+            bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
+            allowed_env_vars: None,
+            denied_env_vars: None,
+            set_vars: None,
+            profile_network_block: false,
+            loaded_profile: None,
+            session_hooks: crate::profile::SessionHooks::default(),
+            allow_http2_requested: false,
+        };
+
+        let args = SandboxArgs {
+            deny_proxy: vec!["extra-evil.com".to_string()],
+            ..SandboxArgs::default()
+        };
+        let intent = prepare_proxy_launch_options(&args, &prepared, true)
+            .expect("prepare_proxy_launch_options");
+        assert!(
+            intent.is_proxy_active(),
+            "proxy must activate for a deny+allow_domain config, via the allow_domain term \
+             (ADR-108 Consequence (c) / T-109-17)"
+        );
+        let opts = intent
+            .proxy_options()
+            .expect("intent must be ProxyFiltered");
+        assert!(
+            opts.deny_domain.contains(&"evil.com".to_string())
+                && opts.deny_domain.contains(&"extra-evil.com".to_string()),
+            "deny_domain must carry both profile and CLI entries through into ProxyLaunchOptions"
+        );
+    }
+
+    /// ADR-108 Consequence (c) / D-04 ordering: a deny-only state (no
+    /// allow_domain) must never reach `prepare_proxy_launch_options` at all
+    /// — `validate_deny_domain_requires_allow_domain` rejects it first on
+    /// both `nono run` call sites. This test documents that ordering
+    /// directly: the validator call precedes the `prepare_proxy_launch_options`
+    /// / proxy-preparation call in both `command_runtime.rs`'s dry-run
+    /// branch and `launch_runtime.rs::prepare_run_launch_plan` (source-order
+    /// verified by the acceptance-criteria grep in 109-01-PLAN.md), and here
+    /// we assert the validator itself actually rejects the deny-only state
+    /// that would otherwise reach this function.
+    #[test]
+    fn deny_only_state_is_rejected_before_reaching_prepare_proxy_launch_options() {
+        use crate::cli::SandboxArgs;
+        use crate::sandbox_prepare::validate_deny_domain_requires_allow_domain;
+
+        let args = SandboxArgs {
+            deny_proxy: vec!["evil.com".to_string()],
+            ..SandboxArgs::default()
+        };
+        let prepared = crate::sandbox_prepare::PreparedSandbox {
+            caps: nono::CapabilitySet::new(),
+            secrets: Vec::new(),
+            rollback_exclude_patterns: Vec::new(),
+            rollback_exclude_globs: Vec::new(),
+            network_profile: None,
+            allow_domain: Vec::new(),
+            deny_domain: Vec::new(),
+            credentials: Vec::new(),
+            custom_credentials: std::collections::HashMap::new(),
+            upstream_proxy: None,
+            upstream_bypass: Vec::new(),
+            listen_ports: Vec::new(),
+            capability_elevation: false,
+            #[cfg(target_os = "linux")]
+            wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::default(),
+            #[cfg(target_os = "linux")]
+            af_unix_mediation: crate::profile::LinuxAfUnixMediation::default(),
+            allow_launch_services_active: false,
+            open_url_origins: Vec::new(),
+            open_url_allow_localhost: false,
+            bypass_protection_paths: Vec::new(),
+            ignored_denial_paths: Vec::new(),
+            suppressed_system_service_operations: Vec::new(),
+            allowed_env_vars: None,
+            denied_env_vars: None,
+            set_vars: None,
+            profile_network_block: false,
+            loaded_profile: None,
+            session_hooks: crate::profile::SessionHooks::default(),
+            allow_http2_requested: false,
+        };
+
+        // The guard rejects this state before either nono-run call site
+        // would reach prepare_proxy_launch_options.
+        assert!(
+            validate_deny_domain_requires_allow_domain(&args, &prepared).is_err(),
+            "deny-only state must be rejected by the D-04 guard before it can reach \
+             prepare_proxy_launch_options / would_activate"
         );
     }
 

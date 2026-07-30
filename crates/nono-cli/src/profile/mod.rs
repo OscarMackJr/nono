@@ -8436,7 +8436,8 @@ mod allow_domain_tests {
     /// unlike allow_domain, it has no AllowDomainEntry/endpoint-rule variant.
     #[test]
     fn network_config_deny_domain_field_deserializes() {
-        let json = r#"{"allow_domain":["good.com"],"deny_domain":["evil.com","*.ads.example.com"]}"#;
+        let json =
+            r#"{"allow_domain":["good.com"],"deny_domain":["evil.com","*.ads.example.com"]}"#;
         let config: NetworkConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.allow_domain.len(), 1);
         assert_eq!(

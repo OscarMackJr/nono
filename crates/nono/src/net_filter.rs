@@ -544,8 +544,7 @@ mod tests {
 
     #[test]
     fn test_user_deny_host_wildcard() {
-        let filter =
-            HostFilter::allow_all().with_denied_hosts(&["*.ads.example.com".to_string()]);
+        let filter = HostFilter::allow_all().with_denied_hosts(&["*.ads.example.com".to_string()]);
 
         let subdomain = filter.check_host("tracker.ads.example.com", &public_ip());
         assert!(!subdomain.is_allowed());
