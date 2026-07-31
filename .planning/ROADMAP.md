@@ -32,7 +32,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
-- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 5/8 plans complete, 1 partial (110-06: Tasks 1-2 done, Task 3 live-kernel checkpoint pending operator action)
+- [ ] **Phase 110: Profile/Policy Absorb + platform_overrides** — 6/8 plans complete (110-08 phase-gate verification done, all cross-target/binding/fork-invariant checks GREEN), 1 partial (110-06: Tasks 1-2 done, Task 3 live-kernel checkpoint pending operator action) — phase NOT closed
 - [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
@@ -260,7 +260,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 110-05-PLAN.md — capability_ext.rs profile-pathway wiring + manifest-pathway conversion (PROF-03 wiring)
 - [ ] 110-06-PLAN.md — Windows WFP-native remote-port-range emitter, fork-original (PROF-03 Windows) — **PARTIAL, NOT complete**: Tasks 1-2 complete (`ff10f52f`/`ca8b3f25`/`8fe69f43`), Task 3 `checkpoint:human-verify` (PROF-03e, live-kernel `FwpmFilterAdd0` proof) PENDING operator action on an Administrator-elevated session; see `110-06-SUMMARY.md`
 - [x] 110-07-PLAN.md — bun/mise runtime presets + resolvability tests (PROF-04)
-- [ ] 110-08-PLAN.md — Phase gate: cross-target clippy + make ci + binding rebuild + fork-invariant verify
+- [x] 110-08-PLAN.md — Phase gate: cross-target clippy + make ci + binding rebuild + fork-invariant verify — both cross-target gates GREEN live, both sibling bindings green, SC3/ADR-86 confirmed, all 4 Wave-0 gaps closed; see `110-08-SUMMARY.md`. **Phase gate itself is GREEN, but the phase is still not closed — 110-06 Task 3's checkpoint remains pending.**
 
 ### Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog
 **Goal**: The macOS/core carry and resource-CLI alignment land, the whole sync is proven non-regressing under both cross-target clippy gates, and the tree leapfrogs to a prepare-only `0.70.0`.
