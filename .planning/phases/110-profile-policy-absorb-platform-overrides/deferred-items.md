@@ -68,3 +68,59 @@
   `tool_sandbox_runtime: None` line from `make_config`'s literal (or add the field to
   `SupervisorConfig` if it was meant to exist — needs an intentional decision, not a blind
   auto-fix).
+
+## Plan 08
+
+Discovered while running `cargo test --workspace --no-fail-fast` for the phase-gate's
+`make ci` constituent (Task 1). All three items below are confirmed pre-existing and
+**unrelated to any file touched by any 110-0X plan** — verified via `git log --oneline --all
+-- <file>` returning zero `110-0X` commits for each file named below. None were fixed here
+per Scope Boundary (none intersect this phase's `files_modified`). They were not visible in
+any prior phase-gate run because `cargo test --workspace` (default fail-fast) always aborted
+earlier, at the pre-existing `-p nono-sandbox-cli --bin nono` failure (11 tests, documented
+baseline) — `--no-fail-fast` was needed to see past it for the first time in this project's
+history of phase-gate verifications.
+
+- **`crates/nono-cli/tests/audit_attestation.rs` — 2 failures, hardcoded Unix path.**
+  `audit_verify_reports_signed_attestation_with_pinned_public_key` and
+  `rollback_signed_session_verifies_from_audit_dir_bundle` both spawn the sandboxed child
+  command via a hardcoded `"/bin/pwd"` literal (lines 147, 209) with no `#[cfg(windows)]`
+  fallback — `/bin/pwd` does not exist on Windows, so `nono` fails with `Command execution
+  failed: /bin/pwd: cannot find binary path` before the test's actual assertion is ever
+  reached. Reproduced standalone (`cargo test -p nono-sandbox-cli --test audit_attestation
+  -- --test-threads=1`, clean process state, 2/2 fail identically both times). `git log
+  --oneline --all -- crates/nono-cli/tests/audit_attestation.rs` shows no `110-0X` commit.
+  Fix shape: a `#[cfg(windows)]` alternate command (e.g. `cmd /c cd`, matching the pattern
+  already used elsewhere in this test suite per the file's own historical comment about
+  cross-platform `pwd` substitutes) — needs an intentional decision, not a blind auto-fix.
+- **`crates/nono-cli/tests/env_vars.rs` — 10 failures, live `windows_run_*` integration
+  tests.** All 10 failing tests spawn a real `nono run` child and assert on its exit
+  code/stdout; failures include exit-code mismatches (e.g. expected `Some(7)`, got
+  `Some(1)`) and unexpanded Windows env-var placeholders (`CARGO_HOME=!CARGO_HOME!`
+  appearing literally instead of expanded). Full list: `windows_run_allow_all_network_probe_connects`,
+  `windows_run_blocks_live_block_net_without_enforcement`, `windows_run_executes_basic_command`,
+  `windows_run_filters_dangerous_env_vars_and_keeps_safe_ones`,
+  `windows_run_filters_host_toolchain_home_vars_without_runtime_dir`,
+  `windows_run_ignores_unverified_localappdata_override_when_runtime_root_is_verified`,
+  `windows_run_live_default_profile_executes_command`, `windows_run_propagates_child_exit_code`,
+  `windows_run_smoke_validates_stdout_stderr_and_exit_code`,
+  `windows_run_supervised_blocks_runtime_capability_elevation_with_actionable_diagnostic`.
+  This test binary took 986s (16+ min) for 62 tests — anomalously slow, suggesting host-state
+  contention (the binary's own log output shows `label guard: path has pre-existing
+  mandatory-label ACE; skipping apply + revert` against real host paths like
+  `C:\Users\OMack\.local\bin`, meaning some prior session left non-default mandatory-label
+  ACEs on real system paths this test binary probes). `git log --oneline --all -- crates/nono-cli/tests/env_vars.rs`
+  shows no `110-0X` commit. Not re-diagnosed further (would require an isolated/clean host
+  state and is orthogonal to any file this phase touches) — left as a host-environment
+  finding for whoever next investigates Windows live-execution test flakiness.
+- **`crates/nono-cli/tests/resl_nix_async_signal_safety.rs` — 1 failure, stale
+  text-signature-match test.** `cr_01_no_format_macro_in_post_fork_child_branch` does a raw
+  source-text search in `exec_strategy.rs` for the literal string
+  `fn clear_close_on_exec(fd: i32) -> std::io::Result<()>`; the real, current signature (line
+  3817 of `exec_strategy.rs`) is `fn clear_close_on_exec(fd: i32) -> Result<()>` (the crate's
+  own `Result` type alias, not the spelled-out `std::io::Result`). Purely a stale assertion
+  string, unrelated to any actual regression — the function itself is unchanged in behavior.
+  `git log --oneline --all -- crates/nono-cli/tests/resl_nix_async_signal_safety.rs` shows no
+  `110-0X` commit, and `git log --oneline -- crates/nono-cli/src/exec_strategy.rs` confirms no
+  `110-0X` commit touches that file either. Fix shape: update the expected literal in the test
+  to match the current `Result<()>` alias spelling.
