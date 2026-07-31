@@ -138,3 +138,12 @@ assertion in `resl_nix_async_signal_safety.rs`.
 ---
 *Phase: 110-profile-policy-absorb-platform-overrides*
 *Completed: 2026-07-30*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/110-profile-policy-absorb-platform-overrides/110-08-VERIFICATION-NOTES.md`
+- FOUND: `.planning/phases/110-profile-policy-absorb-platform-overrides/110-08-SUMMARY.md`
+- FOUND: `.planning/phases/110-profile-policy-absorb-platform-overrides/deferred-items.md`
+- FOUND commit `b8c9de96` (Task 1: cross-target clippy + CI suite evidence)
+- FOUND commit `aa7def31` (Task 2: binding rebuild + fork-invariant review evidence)
+- FOUND commit `b8e2d790` (plan summary)
