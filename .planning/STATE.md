@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v3.6
 milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 status: executing
-stopped_at: "**v3.6 Phase 110 Plan 05 COMPLETE (2026-07-30)** — `open_port_range` wired end-to-end to `CapabilitySet.localhost_port_ranges()` through both the profile pathway (`capability_ext.rs::CapabilitySet::from_profile`, a 3-line sibling loop next to `open_port` calling `add_localhost_port_range(start, end)?`, already validated by 110-04's `profile_runtime.rs`) and the independent manifest pathway (`manifest_convert.rs::TryFrom<&CapabilityManifest>`, consuming a NEW `PortConfig.localhost_range` typify-source schema property, with its OWN start<=end and macOS cumulative-cap validation since a `--config` launch never touches `profile_runtime.rs`). `profile_cmd.rs`'s `cmd_show` and `resolve_to_manifest`, plus `output.rs`'s `print_capabilities`, gained display support for the new fields. Both mandatory cross-target clippy gates (linux-gnu via `cross`, apple-darwin via `cargo-zigbuild`) ran clean; `cross test` additionally executed (not just compiled) both new manifest-pathway tests on real Linux (18/18 pass). Commits `4d635305`/`07a45e22`. See `110-05-SUMMARY.md`. Next: remaining Wave 2 plan (110-06 Windows WFP-native range emitter), then Wave 3 (110-07) and the phase-gate plan (110-08)."
-last_updated: "2026-07-30T21:45:10.075Z"
-last_activity: 2026-07-30
+stopped_at: "**v3.6 Phase 110 Plan 07 COMPLETE (2026-07-30).** Absorbed upstream `bun` (#1305) and `mise` (#1387) runtime presets into `policy.json`: `bun_runtime`/`mise_manager` groups with real tool paths, `bun-dev`/`mise-dev` profiles using the fork's `security.groups` array shape (not upstream's `groups.include` object), and the two `~/.bunfig.toml`/`~/.config/bun/bunfig.toml` paths added to the existing `deny_credentials` group's `deny.access` list (the fork has no `deny.read` key — plan prose corrected to match the real `DenyOps` struct). `AVAILABLE_GROUPS` in `manifest_roundtrip.rs` extended; two new dedicated tests prove `bun-dev`/`mise-dev` resolve by name via `load_profile()` and carry their group (D-11 closure) — distinct from the pre-existing schema-only iteration test. `cargo test -p nono-sandbox-cli --bin nono test_schema_validates_builtin_profiles_in_policy_json` / `-- bun_dev mise_dev` / `--test manifest_roundtrip` all pass; full `--bin nono` suite shows only the documented 11 pre-existing baseline failures; clippy clean; fmt clean. **PROF-04 is now fully satisfied — the last of Phase 110's 4 requirements.** Commits `2a8867fd`/`35569d63`/`f9713c86`. See `110-07-SUMMARY.md`. **Phase 110 is still NOT complete**: Plan 06 remains PARTIAL (Task 3 `checkpoint:human-verify` for live-kernel FwpmFilterAdd0 proof still pending operator elevation — out of this plan's scope, do not resolve). Next: operator action on 110-06's checkpoint, then the phase-gate plan 110-08."
+last_updated: "2026-07-31T00:42:20.050Z"
+last_activity: 2026-07-31
 progress:
   total_phases: 4
   completed_phases: 2
   total_plans: 18
-  completed_plans: 15
-  percent: 83
+  completed_plans: 16
+  percent: 89
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
@@ -52,9 +52,9 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 ## Current Position
 
 Phase: 110 (Profile/Policy Absorb + platform_overrides) — EXECUTING
-Plan: 6 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
-Status: Plan 06 Tasks 1-2 complete (library/IPC wiring + WFP filter-spec construction); Task 3 is an unresolved `checkpoint:human-verify` (PROF-03e, live-kernel FwpmFilterAdd0 proof) requiring Administrator elevation this dev session does not have. **Plan 06 is NOT complete; PROF-03 is NOT marked complete.** See `110-06-SUMMARY.md` "Pending Checkpoint" section for exact operator steps.
-Last activity: 2026-07-30 -- Phase 110 Plan 06 Tasks 1-2 complete, Task 3 checkpoint pending operator action
+Plan: 7 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
+Status: Plan 07 COMPLETE (PROF-04 satisfied). Plan 06 remains PARTIAL — its Task 3 `checkpoint:human-verify` (PROF-03e, live-kernel FwpmFilterAdd0 proof) is still pending operator elevation and is out of scope for 110-07. Next: operator resolves 110-06's checkpoint, then the phase-gate plan 110-08.
+Last activity: 2026-07-31 -- Phase 110 Plan 07 complete (bun-dev/mise-dev absorbed and proven resolvable)
 
 ## Performance Metrics
 
@@ -88,6 +88,7 @@ Last activity: 2026-07-30 -- Phase 110 Plan 06 Tasks 1-2 complete, Task 3 checkp
 | Phase 110 P04 | 45min | 2 tasks | 3 files |
 | Phase 110 P05 | 50min | 2 tasks | 6 files |
 | Phase 110 P06 (PARTIAL: Tasks 1-2 of 3; Task 3 checkpoint pending) | 75min | 2 of 3 tasks | 6 files |
+| Phase 110 P07 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -114,6 +115,7 @@ Last activity: 2026-07-30 -- Phase 110 Plan 06 Tasks 1-2 complete, Task 3 checkp
 | Scope extended to 2 files not named in the plan's `<interfaces>` (`exec_strategy_windows/network.rs`'s `make_blocked_policy` test fixture; `agent_daemon/launch.rs`'s 5 `WfpRuntimeActivationRequest` construction sites) | 110-06 | Rule 3 auto-fix: neither `WindowsNetworkPolicy` nor `WfpRuntimeActivationRequest` derives `Default`, so `cargo build --workspace --all-targets` (Task 1's own acceptance criterion) would not pass without updating every site — another instance of this milestone's D-14 "verify by behavior, not name" finding |
 | `describe_windows_network_runtime_target` extended to surface `localhost_port_ranges` in the WFP-activation diagnostic string | 110-06 | Rule 2 auto-fix: same D-11 "schema key present but invisible to operator" gap this milestone repeatedly catches, this time in a diagnostic string rather than a profile-display surface |
 | **Plan 06 is INCOMPLETE — Task 3 (`checkpoint:human-verify`, PROF-03e live-kernel proof) unresolved; `requirements.mark-complete PROF-03` NOT run** | 110-06 | `FwpmFilterAdd0` cannot be exercised from this non-elevated, non-Administrator dev session; Tasks 1-2 (library/IPC wiring + unit-tested filter-spec construction) are committed and fully verified, but the live-kernel enforcement proof requires operator action per `110-06-SUMMARY.md`'s "Pending Checkpoint" section |
+| bun-dev/mise-dev absorbed with `~/.bunfig.toml`/`~/.config/bun/bunfig.toml` added to `deny_credentials`' `deny.access` list, not `deny.read` (which does not exist in the fork's `DenyOps` struct); both new profiles proven resolvable-by-name via dedicated `load_profile()` tests (D-11 closure), distinct from the pre-existing schema-only iteration test | 110-07 | Plan prose said `deny.read`, but `crates/nono-cli/src/policy.rs`'s `DenyOps` only has `access`/`unlink`/`unlink_override_for_user_writable`/`commands` at group level; every existing group (including `deny_credentials` itself) uses `deny.access` for this purpose, and the plan's own acceptance criteria only check for the `bunfig.toml` substring inside the `deny_credentials` block, not a specific sub-key name. **PROF-04 now fully satisfied — the last of Phase 110's 4 requirements.** |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
