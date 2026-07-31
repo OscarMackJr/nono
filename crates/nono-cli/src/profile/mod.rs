@@ -8402,6 +8402,35 @@ mod windows_low_il_broker_tests {
         );
     }
 
+    /// D-11 (Phase 110-07): `bun-dev` must be RESOLVABLE by name, not merely
+    /// schema-valid JSON — this is distinct from
+    /// `test_schema_validates_builtin_profiles_in_policy_json`, which only proves
+    /// schema conformance and never loads the profile.
+    #[test]
+    fn bun_dev_builtin_profile_resolves_and_carries_bun_runtime_group() {
+        let profile = load_profile("bun-dev").expect("bun-dev profile must load");
+        assert!(
+            profile.security.groups.contains(&"bun_runtime".to_string()),
+            "bun-dev built-in profile must carry the bun_runtime group, got: {:?}",
+            profile.security.groups
+        );
+    }
+
+    /// D-11 (Phase 110-07): `mise-dev` must be RESOLVABLE by name, not merely
+    /// schema-valid JSON — same rationale as `bun_dev_builtin_profile_resolves_and_carries_bun_runtime_group`.
+    #[test]
+    fn mise_dev_builtin_profile_resolves_and_carries_mise_manager_group() {
+        let profile = load_profile("mise-dev").expect("mise-dev profile must load");
+        assert!(
+            profile
+                .security
+                .groups
+                .contains(&"mise_manager".to_string()),
+            "mise-dev built-in profile must carry the mise_manager group, got: {:?}",
+            profile.security.groups
+        );
+    }
+
     // -------------------------------------------------------------------------
     // target_binary field tests (C7 upstream 9398a139)
     // -------------------------------------------------------------------------

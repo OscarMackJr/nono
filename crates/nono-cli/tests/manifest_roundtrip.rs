@@ -717,6 +717,8 @@ const AVAILABLE_GROUPS: &[&str] = &[
     "rust_runtime",
     "user_tools",
     "unlink_protection",
+    "bun_runtime",
+    "mise_manager",
 ];
 
 /// Workdir access variants (must match profile schema enum).
