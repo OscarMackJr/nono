@@ -19,7 +19,7 @@ classified into exactly one of 9 non-overlapping buckets/clusters:
 
 | bucket/cluster | count | disposition tally |
 |----------------|------:|--------------------|
-| NET | 12 | 11 adopt + 1 adapt (`3b207eeb` #1374 `deny_domain`, per `proj/ADR-108-deny-domain-posture.md`) |
+| NET | 12 | 9 adopt + 1 adapt + 2 won't-sync (target subsystem absent) (`3b207eeb` #1374 `deny_domain`, per `proj/ADR-108-deny-domain-posture.md`) |
 | PROF | 8 | 8 adopt |
 | CORE | 4 | 2 adopt + 2 adapt |
 | tool-sandbox-pure | 9 | 9 DEFERRED->v3.7 |
@@ -28,7 +28,7 @@ classified into exactly one of 9 non-overlapping buckets/clusters:
 | DEPS | 19 | 19 individually reviewed (16 routine + 3 release-cut; 1 priority-absorb flag: `373a67ae` closes live RUSTSEC-2026-0204) |
 | CI | 11 | 7 portable + 4 fork-specific-conflict |
 | DOCS | 8 | 4 needs-doc-follow-up + 1 needs-doc-follow-up-deferred-to-v3.7 + 3 safe-to-ignore |
-| **Total** | **100** | overall: adopt 21 (11 NET + 8 PROF + 2 CORE) / adapt 3 (1 NET + 2 CORE) / DEFERRED->v3.7 20 (9 tool-sandbox-pure + 11 tool-sandbox-split) / DEFERRED->proposed-Phase-112 18 / individually-reviewed-non-CODE 38 (19 DEPS + 11 CI + 8 DOCS, each dispositioned in its own bucket, not adopt/adapt/skip/split). Arithmetic: 21+3+20+18+38 = 100. |
+| **Total** | **100** | overall: adopt 19 (9 NET + 8 PROF + 2 CORE) / adapt 3 (1 NET + 2 CORE) / won't-sync (target subsystem absent) 2 (2 NET) / DEFERRED->v3.7 20 (9 tool-sandbox-pure + 11 tool-sandbox-split) / DEFERRED->proposed-Phase-112 18 / individually-reviewed-non-CODE 38 (19 DEPS + 11 CI + 8 DOCS, each dispositioned in its own bucket, not adopt/adapt/skip/split). Arithmetic: 19+3+2+20+18+38 = 100. |
 
 **Requirement Coverage Gap:** 27 non-tool-sandbox CODE commits map to none of v3.6's 12
 requirements — ROADMAP.md Phase 108 SC4 is unsatisfiable as originally written. See
@@ -480,7 +480,7 @@ security-residual-and-misc 18 = **62 = CODE bucket total** (verified above).
 
 | cluster_id | theme | commit_count | disposition | windows-touch | security-relevant | phase-target |
 |------------|-------|--------------|-------------|----------------|--------------------|---------------|
-| NET | proxy/network (deny_domain, SPIFFE, SigV4, sibling-route, no_proxy, HTTP_PROXY, credential-capture plumbing) | 12 | will-sync (12/12 commits — 11 adopt + 1 adapt: `3b207eeb` #1374 `deny_domain`, per ADR-108) | no (0/12 — grep-confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)` hits, per Plan 108-03's NET table) | yes (9/12, per Plan 108-03's NET table security-relevant column) | 109 |
+| NET | proxy/network (deny_domain, SPIFFE, SigV4, sibling-route, no_proxy, HTTP_PROXY, credential-capture plumbing) | 12 | 10/12 will-sync (9 adopt + 1 adapt: `3b207eeb` #1374 `deny_domain`, per ADR-108) + 2/12 won't-sync (target subsystem absent): `6fb7ecbf` #1430, `23d93fc9` #1437, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md` | no (0/12 — grep-confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)` hits, per Plan 108-03's NET table) | yes (9/12, per Plan 108-03's NET table security-relevant column) | 109 |
 | PROF | profile/policy (platform_overrides, extends, $VAR tokens, bun/mise presets, inheritable-field save) | 8 | will-sync (8/8 commits, all adopt) | yes (2/8 — `ae1c513e`, `719975cf`; cited runtime `Os::Windows` match-arm evidence in Plan 108-03's PROF table, not a `cfg(windows)` compile gate) | yes (6/8, per Plan 108-03's PROF table security-relevant column) | 110 |
 | CORE | macOS/resource-CLI (~/.cache fix, MAX_CRYPTO_THREADS, resource limiting, --max-processes) | 4 | split (2/4 adopt — macOS-only carry, no fork Windows counterpart to reconcile; 2/4 adapt — CORE-02 requires reconciling with the fork's existing Job Object mechanism) | no (0/4 — zero Windows mentions of any kind in any of the 4 diffs, per Plan 108-03's CORE table finding) | yes (3/4, per Plan 108-03's CORE table security-relevant column) | 111 |
 | tool-sandbox-surface | tool-sandbox subsystem (D-05/D-06 3-path union; per-commit pure/split residue accounting in Plan 108-04) | 20 | DEFERRED->v3.7 (20/20 commits — 9/20 pure fully deferred; 11/20 split, module-set-scoped paths deferred while non-module absorb-worthy residue is routed to PROF-02/PROF-03/CORE-cluster-residual per the Plan 108-04 residue tables; 2 of the 20 — `d5803b99` PROF-03, `d4927f95` PROF-02 — carry an actual v3.6 requirement mapping via that residue routing even though the commit itself stays DEFERRED->v3.7) | no (0/20 — Plan 108-05 grep-verified: zero `cfg(target_os = "windows")`/`cfg(windows)` hits across all 20 diffs; one incidental case-insensitive `windows` string match in `42161620` is `.windows(N)`, Rust's slice-windowing method, a false positive — see Rollup Support Notes) | yes (16/20 — Plan 108-05 reasoned classification per commit, see Rollup Support Notes below; the 4 remaining are build/CLI/config fixes with no sandbox-boundary implication) | v3.7 DEFERRED (per-commit split in Plan 108-04) |
@@ -683,8 +683,8 @@ Cross-reference note above).
 |-----|---------|----------------|:---:|:---:|:---:|-----------|-----------------|
 | `3b207eeb884bd71b0fc10f0123fa89fffe9f7955` | feat(proxy): add deny_domain to block domains through the proxy (#1374) | 15 files (cli.rs, launch_runtime.rs, main.rs, network_policy.rs, profile/mod.rs, profile_runtime.rs, proxy_command.rs, proxy_runtime.rs, sandbox_prepare.rs, nono-proxy/config.rs, filter.rs, server.rs, nono/net_filter.rs, +2 docs), 311+/26- | no | yes | **NET-01** | see ADR-108 (`proj/ADR-108-deny-domain-posture.md`) — ADAPT | `pub(crate) deny_domain: Vec<String>` field ×4 (intra-CLI/proxy structs); no cross-crate `pub mod`/`pub use` |
 | `c831dade422f2bdf37d7429af0423cafa0a60c06` | feat(proxy): add SPIFFE/SPIRE workload identity auth for upstream routes (#1272) | 33 files (`.github/workflows/spire.yml`, `nono-proxy/src/{auth,spiffe,route,reverse,credential,oauth2,server,config}.rs`, `tls_intercept/{h2_forward,handle}.rs`, `tests/spiffe_{run,integration}.rs`, `nono-cli/src/network_policy.rs`+`profile/mod.rs`+`proxy_runtime.rs`, `nono/src/{audit.rs,undo/types.rs}`, docs/scripts/testdata), 4354+/545- | no | yes | **NET-02** | adopt | `pub mod auth;` `pub mod spiffe;` (new intra-`nono-proxy` modules) + several `pub(crate)` helper fns (`filter_headers_multi`, `is_loopback_host_port`, `add_ca_file_to_store`); no re-export crossing into `nono` core or `nono-cli` |
-| `6fb7ecbf36e5d18760d8084b7f4900e93582004c` | bug: Fix SigV4 URI generation errors for uri's that have encoded characters in them (#1430) | 1 file (`nono-proxy/src/aws/sign.rs`), 16+/4- | no | yes | **NET-03** | adopt | Clean — diff confined to `aws/sign.rs` internal URI-encoding logic; no new `pub` items |
-| `23d93fc96abf795d672c712e9c1834a8f97aa0aa` | fix(proxy): don't cross-deny sibling routes sharing an upstream (#1437) | 1 file (`nono-proxy/src/tls_intercept/handle.rs`), 87+/0- | no | yes | **NET-03** | adopt | Clean — hand-verified: diff modifies `select_intercept_route`'s `EndpointPolicyOutcome::Deny` arm to treat a non-explicit default-deny as "route does not apply" instead of a terminal 403, exactly the sibling-route cross-deny logic NET-03 names; adds a regression test, no new `pub` surface |
+| `6fb7ecbf36e5d18760d8084b7f4900e93582004c` | bug: Fix SigV4 URI generation errors for uri's that have encoded characters in them (#1430) | 1 file (`nono-proxy/src/aws/sign.rs`), 16+/4- | no | yes | **NET-03** | won't-sync (target subsystem absent) | Target file `aws/sign.rs` is absent from the fork's tree, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md` (Phase 109 re-verification, 2026-07-29) |
+| `23d93fc96abf795d672c712e9c1834a8f97aa0aa` | fix(proxy): don't cross-deny sibling routes sharing an upstream (#1437) | 1 file (`nono-proxy/src/tls_intercept/handle.rs`), 87+/0- | no | yes | **NET-03** | won't-sync (target subsystem absent) | Target file `tls_intercept/handle.rs` is absent from the fork's tree, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md` (Phase 109 re-verification, 2026-07-29) |
 | `1619275caa32b7b96e3eee56c33c71dfce777bbf` | feat: add profile-declared no_proxy bypass support (#1415) | 17 files (schema.json, profile-authoring-guide.md, launch_runtime.rs, main.rs, profile/{mod,cmd,runtime}.rs, proxy_runtime.rs, sandbox_prepare.rs, nono-proxy/{config,filter,route,server}.rs, tls_intercept/handle.rs, +3 docs), 2065+/99- | no | yes | **NET-03** | adopt | `pub(crate) no_proxy: Vec<String>` field ×3 + `pub(crate) fn` helpers (`validate_no_proxy_allow_domain_conflicts`, `no_proxy_host_pattern_matches`, `strip_no_proxy_port`, `normalise_no_proxy_host_pattern`, `normalise_no_proxy_env_entry`, `parse_host_ip_literal`, `is_proxy_denied_metadata_ip`, `extract_host_port`, `format_host_port`) — all intra-crate `pub(crate)`, no cross-crate re-export |
 | `726ac1f1b5fd7b6de2d86b9fccf1d72660d3e32a` | feat(proxy): support plain HTTP forward-proxying via HTTP_PROXY (#1335) | 1 file (`nono-proxy/src/server.rs`), 815+/5- | no | yes | **NET-03** | adopt | Clean — single-file `server.rs` addition, no new `pub` items in the diff |
 | `c344efb006365ba596b20b843f29fabdbbdc847e` | fix(why): respect proxy domain filter in --profile and --self host queries (#1372) | 2 files (`execution_runtime.rs`, `query_ext.rs`), 131+/13- | no | yes | none | adopt | Clean — hand-verified: diagnostic-command bugfix (`nono why --profile`/`--self`) making the `why` reporter consult the same `HostFilter`/`network_policy` resolution the proxy already enforces; does not itself implement any NET-01/02/03-named mechanism, so mapped `none` rather than force-mapped to NET-01 |
@@ -694,11 +694,12 @@ Cross-reference note above).
 | `8255a27a1d8bedf878a7c8c67f9007ca592962d1` | refactor load_with_diagnostics to be async (#1287) | 4 files (`credential.rs`, `oauth2.rs`, `server.rs`, `tls_intercept/h2_forward.rs`), 67+/51- | no | no | none | adopt | Clean — mechanical `fn` → `async fn` signature conversion (`pub fn` becomes `pub async fn`, not a new `pub` item), no behavior change per commit message |
 | `7d23bba683036789163385afa7f5c2f5888886a5` | fix(proxy): separate stdin and stderr inheritance for credential helpers (#1300) | 5 files (schema.json, profile-authoring-guide.md, profile/mod.rs, proxy_runtime.rs, credential-injection.mdx), 190+/6- | no | yes | none | adopt | Clean — hand-verified: fixes a terminal-keypress-theft security bug (credential helpers inheriting stdin unintentionally) by splitting `interaction.stdio` into separate `stdio`(stderr)/`stdin` schema keys; not a NET-01/02/03-named item |
 
-**NET disposition summary:** 1 ADAPT (`3b207eeb` #1374, per ADR-108) + 11 adopt. All 12 rows map
-to exactly one of `NET-01`/`NET-02`/`NET-03`/`none` (5 map `none` — diagnostic/test/refactor/
-credential-plumbing commits that ride alongside the network absorb but do not themselves
-implement a named NET-0X mechanism). Zero blank cells. `windows-touch: no` for all 12 (grep-
-confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)` hits in any of the 12 diffs).
+**NET disposition summary:** 1 ADAPT (`3b207eeb` #1374, per ADR-108) + 9 adopt + 2 won't-sync
+(target subsystem absent) = 12. All 12 rows map to exactly one of `NET-01`/`NET-02`/`NET-03`/`none`
+(5 map `none` — diagnostic/test/refactor/credential-plumbing commits that ride alongside the
+network absorb but do not themselves implement a named NET-0X mechanism). Zero blank cells.
+`windows-touch: no` for all 12 (grep-confirmed, zero `cfg(target_os = "windows")`/`cfg(windows)`
+hits in any of the 12 diffs).
 
 ---
 
@@ -1331,14 +1332,14 @@ checked directly for each commit's target file(s) before assigning a reconcile-n
 | `2f547703517d0c5436f57aad341a3a51af18e116` | docs: add community health files (#1348) | safe-to-ignore — verified: fork has none of `CODE_OF_CONDUCT.md`/`CONTRIBUTING.md`/`CONTRIBUTORS.md`/`GOVERNANCE.md`/`MAINTAINERS.md`; the fork is solo-maintained, not community-governed like upstream |
 | `73952cd4e1762a835b47b5f4c23c7abd030fb0f9` | docs(readme): explain tool sandboxing for agents (#1342) | needs-doc-follow-up, **deferred** — this documents the tool-sandbox subsystem itself (`command_policies` JSON example, "Sandboxed Tool Execution" link); adopting it now into the fork's `README.md` would describe a feature the fork does not have until v3.7 (D-06/D-09 — tool-sandbox subsystem absent). Hold until the v3.7 Windows Tool-Sandbox Parity milestone lands, then reconcile alongside it |
 | `2375aeb6adb81d1d896336328cf61e04b2a4b19e` | docs(profiles): clarify predefined vs user profiles scope (#1331) | needs-doc-follow-up — verified: fork carries `docs/cli/features/profiles-groups.mdx` (same file as `55fd3825` above) |
-| `63c9589fa30f0244c542c026faf27d517aaa9b39` | docs(credential-injection): document AWS SigV4 proxy signing (#1329) | needs-doc-follow-up — verified: fork carries `docs/cli/features/credential-injection.mdx`, **and** the fork already adopted the code this documents (`6fb7ecbf`, SigV4 URI-encoding fix, NET cluster, Plan 108-03 — dispositioned `adopt`); this doc should land alongside NET absorb in Phase 109, not independently |
+| `63c9589fa30f0244c542c026faf27d517aaa9b39` | docs(credential-injection): document AWS SigV4 proxy signing (#1329) | needs-doc-follow-up, **deferred** — verified: fork carries `docs/cli/features/credential-injection.mdx`, but `6fb7ecbf` (SigV4 URI-encoding fix, NET cluster) is now dispositioned `won't-sync (target subsystem absent)` — the fork has no `aws/sign.rs` SigV4-signing implementation for this doc to describe (per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`). Hold this doc unless/until full AWS SigV4 signing is ever built in a future phase, then reconcile alongside it |
 | `da3a90f247bf80ffe8bcc470154e83f764033803` | docs(nogent): add nogent markdown file (#1288) | safe-to-ignore — verified: fork has no `NOGENT.md`; this is upstream's own GitHub-App-onboarding document ("Once this is in place, we can add the repo to the GitHub App"), not relevant to the fork's separate identity/tooling |
 
-**DOCS disposition summary:** 8/8 individually reviewed. 4 needs-doc-follow-up (2 for
-`profiles-groups.mdx`, 1 for `codex.mdx`, 1 for `credential-injection.mdx` — the last explicitly
-tied to Phase 109's NET absorb). 1 needs-doc-follow-up-but-deferred (README tool-sandboxing
-section, held for v3.7). 3 safe-to-ignore (community-health files + NOGENT.md the fork does not
-carry and does not need, being solo-maintained rather than community-governed).
+**DOCS disposition summary:** 8/8 individually reviewed. 3 needs-doc-follow-up (2 for
+`profiles-groups.mdx`, 1 for `codex.mdx`). 2 needs-doc-follow-up-but-deferred (README
+tool-sandboxing section, held for v3.7; and `credential-injection.mdx`'s AWS SigV4 doc, held
+pending a future AWS SigV4 signing phase). 3 safe-to-ignore (community-health files + NOGENT.md
+the fork does not carry and does not need, being solo-maintained rather than community-governed).
 
 ## Bucket-Count Reconciliation
 
