@@ -233,7 +233,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Success Criteria** (what must be TRUE):
   1. `deny_domain` (#1374) is wired into the proxy filter + profile schema and composes with `allow_domain` without weakening default-deny.
   2. *(moved to Phase 113 — see below.)* ~~SPIFFE/SPIRE workload-identity auth for upstream routes (#1272)~~
-  3. The SigV4 encoded-URI fix (#1430) and sibling-route cross-deny fix (#1437) are absorbed; HTTP/2, `HTTP_PROXY` forward-proxy, and `no_proxy` bypass are verified non-regressed.
+  3. The SigV4 encoded-URI fix (#1430) and sibling-route cross-deny fix (#1437) are confirmed non-applicable — both target upstream subsystems (`aws/sign.rs`, `tls_intercept/handle.rs`) absent from the fork's architecture, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`; `no_proxy` bypass and `HTTP_PROXY` forward-proxy are verified non-regressed.
   4. `maturin build` (nono-py) and `napi build` (nono-ts) are green after the nono-proxy struct changes.
 **Plans**: 5 plans
 - [x] 109-01-PLAN.md — deny_domain (NET-01): library deny-suffix mechanism, CLI plumbing, D-04/D-05 fail-closed guard at both entry points

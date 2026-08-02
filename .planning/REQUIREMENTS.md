@@ -112,7 +112,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 ### Proxy / Network Absorb (NET)
 - [ ] **NET-01**: `deny_domain` deny-list network filtering (#1374) is absorbed into the proxy filter + profile schema, composing correctly with the fork's existing `allow_domain` allowlist model without weakening default-deny.
 - [ ] **NET-02**: SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed. **→ MOVED to Phase 113 (2026-07-29)**: `c831dade` measured 4354 ins / 545 del / 33 files (57% of the original Phase 109), crosses the ADR-86 boundary, rewrites fork-divergent `tls_intercept`/`reverse.rs`, and expands the dependency surface by ~633 lockfile lines — it gets its own ADR-gated phase.
-- [ ] **NET-03**: The SigV4 encoded-URI generation fix (#1430) and the sibling-route cross-deny fix (#1437) are absorbed; HTTP/2 injection, `HTTP_PROXY` forward-proxy, and `no_proxy` bypass are verified non-regressed; `maturin` + `napi` binding builds are green.
+- [ ] **NET-03**: The SigV4 encoded-URI generation fix (#1430) and the sibling-route cross-deny fix (#1437) are confirmed non-applicable — both target upstream subsystems (`aws/sign.rs` full SigV4 signing, `tls_intercept/handle.rs` multi-route TLS-intercept dispatch) absent from the fork's architecture, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`; `no_proxy` bypass and `HTTP_PROXY` forward-proxy are verified non-regressed; `maturin` + `napi` binding builds are green.
 
 ### Profile / Policy Absorb (PROF)
 - [x] **PROF-01**: `platform_overrides` per-OS profile patching (#1371) is absorbed and preserved through `extends` resolution (#1380); the fork's `windows_low_il_broker` and `windows_interpreters` top-level flags are migrated into `platform_overrides.windows` with back-compat aliases.

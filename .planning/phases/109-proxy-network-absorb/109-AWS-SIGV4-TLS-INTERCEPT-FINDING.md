@@ -3,6 +3,19 @@
 **Written:** 2026-07-29 (Plan 109-05, Task 1)
 **Status:** Verified N/A — target subsystem absent from the fork
 
+**APPLIED 2026-08-02 (quick task `260802-e9u`):** Both proposed corrections below were reviewed and
+approved by the operator, then applied. (1) The "Second correction proposal: Phase 108 ledger
+disposition" section's proposed row corrections were applied to `108-DIVERGENCE-LEDGER.md`
+(6fb7ecbf/23d93fc9 now read `won't-sync (target subsystem absent)` in every disposition-bearing
+location, with dependent counts/summaries/totals corrected to match). (2) The "REQUIREMENTS.md
+NET-03 correction proposal" section's proposed wording was applied verbatim to `REQUIREMENTS.md`
+NET-03. `ROADMAP.md` Phase 109 SC3 received the matching correction (not separately proposed
+below, but identical in substance since it made the same false "absorbed" claim). The proposed
+wording's dropped "HTTP/2 injection" clause (see the note following the proposed wording below)
+was dropped per explicit operator approval — it is restorable verbatim if the operator later wants
+a distinct HTTP/2-injection check. The original "proposed" prose in both sections below is left
+intact as the reasoning record for why each correction was made.
+
 ## Summary
 
 `6fb7ecbf` (#1430, SigV4 encoded-URI generation fix) and `23d93fc9` (#1437, sibling-route
