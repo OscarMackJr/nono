@@ -118,6 +118,36 @@ cargo build --workspace --release
 sc.exe query nono-wfp-service
 ```
 
+### 1.1 Verify WHICH binary SCM has registered — do not skip this
+
+`--install-wfp-service` is a no-op if the service already exists, so an install from a previous
+MSI can keep answering the pipe indefinitely. Check the registered path:
+
+```powershell
+sc.exe qc nono-wfp-service | Select-String BINARY_PATH_NAME
+```
+
+It **must** point at your `target\release\nono-wfp-service.exe`. If it points anywhere else
+(`C:\Program Files\nono\...`), re-register:
+
+```powershell
+sc.exe stop nono-wfp-service
+sc.exe delete nono-wfp-service
+.\target\release\nono.exe setup --install-wfp-service --start-wfp-service
+sc.exe qc nono-wfp-service | Select-String BINARY_PATH_NAME    # re-confirm
+```
+
+Note `cargo build --workspace --release` builds the service, but `cargo build --bin nono` does
+**not** — it is easy to end up with a fresh `nono.exe` and a months-old `nono-wfp-service.exe`.
+
+> **Why this step exists.** On 2026-08-04 the registered service was a 2026-07-06 build under
+> `C:\Program Files\nono\`, predating Phase 110-06. It accepted the request (protocol version
+> matched), serde silently dropped the unknown `localhost_port_ranges` field, it built zero filter
+> specs, installed nothing, and returned `enforced-pending-cleanup`. The run exited 0 with no
+> enforcement whatsoever. Three separate captures were misread before the service identity was
+> checked. Both defects are now fixed (protocol bumped to 2; the CLI rejects a zero filter count),
+> so a stale service fails closed — but verify the path anyway.
+
 If a stale `nono-agentd.exe` holds a file lock during the build, kill it first
 (`Get-Process nono-agentd -ErrorAction SilentlyContinue | Stop-Process -Force`) — this bit Plan 06
 already.
@@ -204,7 +234,20 @@ cd C:\Users\OMack\nono
 
 Leave it sitting at `Press any key to continue . . .`. The filters are live for exactly this long.
 
-**Window B — Administrator** (`netsh wfp` requires elevation to enumerate):
+**Window B — Administrator, BEFORE starting Window A.** Establish a baseline: an absolute filter
+count cannot distinguish a filter this run installed from one an earlier run leaked.
+
+```powershell
+netsh wfp show filters file=$env:TEMP\wfp-baseline.xml | Out-Null
+[xml]$b = Get-Content $env:TEMP\wfp-baseline.xml
+$bn = $b.wfpdiag.filters.item | Where-Object { $_.displayData.name -eq 'nono Network Policy Filter' }
+"BASELINE (no run active): $($bn.Count)   -- expect 0"
+```
+
+A non-zero baseline is itself a finding (leaked cleanup). Clear it with
+`nono-wfp-service.exe --purge-wfp-objects` before continuing, and record that it was needed.
+
+**Window B — Administrator, during the run** (`netsh wfp` requires elevation to enumerate):
 
 ```powershell
 netsh wfp show filters file=C:\Users\OMack\AppData\Local\Temp\wfp-filters.xml
@@ -220,7 +263,9 @@ $nono = $x.wfpdiag.filters.item | Where-Object { $_.displayData.name -eq 'nono N
 
 ### Pass criteria
 
-- [ ] Total `nono Network Policy Filter` objects = **8**, not 48 — proves no per-port unroll (D-06)
+- [ ] Baseline was **0** (or was purged to 0) before the run started
+- [ ] Total `nono Network Policy Filter` objects = **baseline + 8**, not baseline + 48 — proves no
+      per-port unroll (D-06)
 - [ ] `FWP_MATCH_RANGE` conditions = **4** (2 × `IP_REMOTE_PORT`, 2 × `IP_LOCAL_PORT`)
 - [ ] Each range condition's `valueLow`/`valueHigh` read **49200** / **49210**
 - [ ] Every filter's `subLayerKey` resolves to `nono Network Policy Sublayer`
