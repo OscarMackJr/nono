@@ -327,7 +327,8 @@
       "allow": {
         "readwrite": [
           "~/Library/Caches",
-          "~/Library/Logs"
+          "~/Library/Logs",
+          "~/.cache"
         ],
         "read": [
           "~/Library/Preferences"

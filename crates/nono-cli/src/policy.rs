@@ -1740,6 +1740,29 @@ mod tests {
     }
 
     #[test]
+    fn test_user_caches_macos_includes_dot_cache() {
+        let policy = load_embedded_policy().expect("embedded policy");
+
+        let user_caches_macos = policy
+            .groups
+            .get("user_caches_macos")
+            .expect("user_caches_macos group missing");
+        assert_eq!(user_caches_macos.platform.as_deref(), Some("macos"));
+        let user_caches_macos_paths = &user_caches_macos
+            .allow
+            .as_ref()
+            .expect("user_caches_macos allow missing")
+            .readwrite;
+        // Upstream #1378 (ca888108): some macOS tools (uv, Corepack) write to
+        // ~/.cache despite the platform convention being ~/Library/Caches.
+        // The pre-existing entries remain asserted as a regression guard
+        // proving this is an additive fix, not a replacement.
+        assert!(user_caches_macos_paths.contains(&"~/.cache".to_string()));
+        assert!(user_caches_macos_paths.contains(&"~/Library/Caches".to_string()));
+        assert!(user_caches_macos_paths.contains(&"~/Library/Logs".to_string()));
+    }
+
+    #[test]
     fn test_embedded_claude_code_platform_groups_filter_by_os() {
         let policy = load_embedded_policy().expect("embedded policy");
         let mut caps = CapabilitySet::new();
