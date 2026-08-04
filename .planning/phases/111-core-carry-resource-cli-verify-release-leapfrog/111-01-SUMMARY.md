@@ -96,3 +96,12 @@ None - no external service configuration required.
 ---
 *Phase: 111-core-carry-resource-cli-verify-release-leapfrog*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono-cli/data/policy.json
+- FOUND: crates/nono-cli/src/policy.rs
+- FOUND: crates/nono-cli/src/exec_strategy.rs
+- FOUND: .planning/phases/111-core-carry-resource-cli-verify-release-leapfrog/111-01-SUMMARY.md
+- FOUND: commit 1d0c8eb5 (Task 1)
+- FOUND: commit 74146367 (Task 2)
