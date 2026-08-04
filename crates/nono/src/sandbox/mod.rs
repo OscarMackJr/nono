@@ -446,11 +446,21 @@ impl WindowsNetworkPolicy {
         )
     }
 
+    /// Whether this policy carries any port-scoped rule.
+    ///
+    /// Must stay in sync with `compile_network_policy`'s `requires_backend`
+    /// predicate (`sandbox/windows.rs`): both answer "does this policy need a
+    /// WFP backend?", and a field counted by one but not the other makes
+    /// `select_network_backend` fall through to its catch-all and fail closed
+    /// on a policy that is actually enforceable. `localhost_port_ranges` was
+    /// added to `requires_backend` in Phase 110-06 but omitted here, which
+    /// stranded allow-all + `open_port_range` profiles.
     #[must_use]
     pub fn has_port_rules(&self) -> bool {
         !self.tcp_connect_ports.is_empty()
             || !self.tcp_bind_ports.is_empty()
             || !self.localhost_ports.is_empty()
+            || !self.localhost_port_ranges.is_empty()
     }
 }
 

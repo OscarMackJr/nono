@@ -198,3 +198,45 @@ fn compile_network_policy_localhost_port_appears_in_policy() {
         "Policy with port caps should report has_port_rules() == true"
     );
 }
+
+/// Regression: an allow-all policy carrying ONLY a localhost port range must
+/// report `has_port_rules() == true`.
+///
+/// `compile_network_policy`'s `requires_backend` predicate counts
+/// `localhost_port_ranges`, so such a policy compiles to `active_backend = Wfp`.
+/// When `has_port_rules()` omitted the same field, `select_network_backend`
+/// matched no arm for `(AllowAll, Wfp)` and fell through to its catch-all,
+/// failing closed with "does not have an applicable active backend" — so a
+/// profile with only `open_port_range` could never reach the WFP service, while
+/// the discrete `open_port` equivalent worked. The two predicates must agree.
+///
+/// Runs in all Windows CI without administrator privileges.
+#[test]
+fn allow_all_policy_with_only_a_port_range_has_port_rules() {
+    let mut caps = nono::CapabilitySet::new();
+    caps.add_localhost_port_range(49200, 49210)
+        .expect("valid port range");
+
+    let policy = nono::Sandbox::windows_network_policy(&caps);
+
+    assert!(
+        policy.localhost_ports.is_empty(),
+        "precondition: no discrete localhost ports, only a range"
+    );
+    assert_eq!(
+        policy.localhost_port_ranges,
+        vec![(49200, 49210)],
+        "range should survive policy compilation"
+    );
+    assert_eq!(
+        policy.active_backend,
+        nono::WindowsNetworkBackendKind::Wfp,
+        "requires_backend counts localhost_port_ranges, so the WFP backend is selected"
+    );
+    assert!(
+        policy.has_port_rules(),
+        "has_port_rules() must agree with requires_backend and count \
+         localhost_port_ranges, otherwise select_network_backend fails closed \
+         on an enforceable allow-all + open_port_range policy"
+    );
+}
