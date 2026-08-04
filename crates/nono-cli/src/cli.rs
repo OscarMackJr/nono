@@ -2780,7 +2780,16 @@ pub struct RunArgs {
 
     /// Cap the sandboxed agent tree's total memory. Accepts `512M`, `1G`, `256K`,
     /// or raw bytes. Kernel-enforced job-wide on Windows via `JobMemoryLimit`.
-    /// On Linux/macOS: accepted with a warning pending cross-platform follow-up.
+    /// On Linux: kernel-enforced, fail-closed, via cgroup v2 `memory.max` (requires
+    /// cgroup v2 + systemd delegation; the whole launch fails closed with a clear
+    /// hint if delegation is absent — the limit is never silently skipped).
+    /// On macOS: best-effort via `setrlimit(RLIMIT_AS, ...)`. `RLIMIT_AS` bounds
+    /// virtual address space, not RSS, so a process with sparse or shared mappings
+    /// can still exceed the limit in physical memory even when the call succeeds.
+    /// The `setrlimit` call itself can also fail outright (observed as `EINVAL` on
+    /// Apple Silicon, where dyld pre-maps virtual address space before `main()`
+    /// runs) — when it fails, the limit is NOT applied and execution continues
+    /// with only a stderr warning.
     /// See REQUIREMENTS.md § RESL-02.
     #[arg(
         long,
@@ -2793,7 +2802,9 @@ pub struct RunArgs {
     /// Kill the sandboxed agent tree after this wall-clock duration.
     /// Accepts `30s`, `5m`, `1h`, `1d`, or raw seconds. Enforced by supervisor-side
     /// timer + `TerminateJobObject` on Windows (see REQUIREMENTS.md § RESL-03).
-    /// On Linux/macOS: accepted with a warning pending cross-platform follow-up.
+    /// On Linux and macOS: enforced via a supervisor-side `Instant` deadline plus
+    /// `kill(-pgrp, SIGKILL)` (process-group kill), requiring a best-effort,
+    /// non-fatal `setpgid(0,0)` from the child post-fork.
     #[arg(
         long,
         value_name = "DURATION",
@@ -2804,7 +2815,11 @@ pub struct RunArgs {
 
     /// Cap the number of active processes in the sandboxed agent tree.
     /// Kernel-enforced on Windows via `ActiveProcessLimit`. Range: 1..=65535.
-    /// On Linux/macOS: accepted with a warning pending cross-platform follow-up.
+    /// On Linux: kernel-enforced, fail-closed, via cgroup v2 `pids.max`.
+    /// On macOS: kernel-enforced via `RLIMIT_NPROC = baseline_uid_count + N`,
+    /// fail-closed on `setrlimit` failure, but UID-wide rather than
+    /// descendant-tree-scoped (unlike Linux) — other processes owned by the same
+    /// UID share the same budget.
     /// See REQUIREMENTS.md § RESL-04.
     #[arg(
         long,
