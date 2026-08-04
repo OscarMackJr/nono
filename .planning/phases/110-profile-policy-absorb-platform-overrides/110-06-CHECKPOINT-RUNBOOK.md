@@ -137,8 +137,12 @@ Test-Path \\.\pipe\nono-wfp-control   # expect True
 
 ## 2. Author the test profile (any shell)
 
+The user profile directory on Windows is **`%APPDATA%\nono\profiles`**
+(`profile/mod.rs:3856` → `package.rs:315`), *not* `~/.nono/profiles`. A profile written elsewhere
+fails with `nono: Profile not found: <name>`.
+
 ```powershell
-$profileDir = "$env:USERPROFILE\.nono\profiles"
+$profileDir = Join-Path $env:APPDATA 'nono\profiles'
 New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
 
 # Shape A — allow-all + range. The originally-specified shape; works as of 7c7a189c.
@@ -149,7 +153,7 @@ New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
     "open_port_range": [[49200, 49210]]
   }
 }
-'@ | Set-Content -Encoding utf8 "$profileDir\portrange-probe.json"
+'@ | Set-Content -Encoding utf8 (Join-Path $profileDir 'portrange-probe.json')
 
 # Shape B — block-all except the range. Stronger confinement semantic.
 @'
@@ -160,7 +164,7 @@ New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
     "open_port_range": [[49200, 49210]]
   }
 }
-'@ | Set-Content -Encoding utf8 "$profileDir\portrange-probe-blocked.json"
+'@ | Set-Content -Encoding utf8 (Join-Path $profileDir 'portrange-probe-blocked.json')
 ```
 
 Both shapes emit the same `FWP_MATCH_RANGE` permits — `build_policy_filter_specs`'s
@@ -175,8 +179,17 @@ service needed:
 .\target\release\nono.exe profile show portrange-probe
 ```
 
-Expect the port range to appear in the rendered output (Plan 110-05 added display support; Plan
-110-06 added it to the WFP diagnostic string too).
+Expect:
+
+```
+  Network:
+    open_port_range: 49200..=49210
+```
+
+> This step is itself a fix (`ea26b5b2`). `cmd_show`'s `has_net` gate did not list
+> `open_port_range`/`listen_port_range`, so a range-only profile printed **no Network section at
+> all** and the Plan 110-05 renderer was unreachable. Same predicate-out-of-sync-with-feature shape
+> as § 0.2, one level up in the display gate. Verified live after the fix.
 
 ---
 
