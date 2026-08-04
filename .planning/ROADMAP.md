@@ -33,7 +33,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
 - [x] **Phase 110: Profile/Policy Absorb + platform_overrides** — 8/8 plans, all 4 requirements complete; 110-06's live-kernel checkpoint (PROF-03e) resolved 2026-08-04
-- [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/? plans
+- [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/6 plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
 
@@ -272,6 +272,14 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally; a fork-invariant pass confirms the Windows security model + ADR-86 boundary are unregressed.
   4. All 6 workspace crates + path-dep pins + both binding repos leapfrog to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected drift, and the prepare-only release gate is GREEN (no operator push).
 
+**Plans**: 6 plans
+- [ ] 111-01-PLAN.md — CORE-01: macOS `~/.cache` policy grant (#1378) + `MAX_CRYPTO_THREADS` 7→12 (#1424), each with a new Wave-0 by-value test
+- [ ] 111-02-PLAN.md — CORE-02: correct the stale Unix resource-limit help text in `cli.rs` + `docs/cli/usage/flags.mdx` (D-04/D-05/D-06)
+- [ ] 111-03-PLAN.md — D-01/D-02/D-03: `proj/ADR-111-resource-limits-boundary.md` + standing-divergence addendum in `108-DIVERGENCE-LEDGER.md`
+- [ ] 111-04-PLAN.md — VERIFY-01: both cross-target clippy gates + `make ci` substitution + 24-name baseline diff + D-09 fork-invariant assertions + binding rebuild, over the combined 108-111 surface
+- [ ] 111-05-PLAN.md — RLS-14 (in-repo half): bump the 6 workspace crates + path-dep pins to `0.70.0`, regenerate Cargo.lock, correct `release-readiness.ps1`/`release-dry-run.ps1`'s hardcoded version strings
+- [ ] 111-06-PLAN.md — RLS-14 (sibling half): bump `../nono-py` + `../nono-ts` to `0.70.0`, rebuild both, confirm the prepare-only `release-dry-run.ps1` gate GREEN
+
 ### Phase 112: Security + Residual Sync
 **Goal**: The security-relevant and residual commits from the `v0.66.0..v0.69.0` window that no other v3.6 phase covers are absorbed under a fork-invariant review kept separate from any release-cut phase — mirrors the v3.1 Phase 87 precedent.
 **Depends on**: Phase 108 (the ledger's `security-residual-and-misc` cluster + Requirement Coverage Gap section are the work-list)
@@ -324,4 +332,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 108. UPST12 Divergence Audit | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 109. Proxy/Network Absorb | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 110. Profile/Policy Absorb + platform_overrides | v3.6 | 8/8 | Complete | 2026-08-04 |
-| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 0/? | Not started | - |
+| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 0/6 | Not started | - |
