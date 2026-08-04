@@ -29,9 +29,15 @@ The non-elevated `runas` in project memory (`wfp_confined_egress_and_daemon_gate
 The service is a registered Windows service (`nono-wfp-service`, started with `--service-mode`),
 not a foreground exe you launch by hand. Use `nono setup` (§ 1).
 
-### 0.2 A profile with *only* `open_port_range` currently fails closed — it never reaches the kernel
+### 0.2 A profile with *only* `open_port_range` failed closed — FIXED 2026-08-04 (`7c7a189c`)
 
-`crates/nono/src/sandbox/mod.rs:450`:
+> **Resolved.** `has_port_rules()` now counts `localhost_port_ranges`, so the allow-all +
+> `open_port_range` profile the checkpoint originally specified works as written. The
+> `"block": true` workaround below is **no longer required** — § 2 now offers both shapes.
+> Both cross-target clippy gates were re-run green for the fix. The analysis is kept for the
+> record.
+
+Prior behaviour, `crates/nono/src/sandbox/mod.rs:450`:
 
 ```rust
 pub fn has_port_rules(&self) -> bool {
@@ -63,16 +69,18 @@ The service side is *not* the problem — `bin/nono-wfp-service.rs:1254` already
 CLI-side gate is missing the range check. The discrete-port equivalent (`open_port`) works today, so
 the asymmetry is an omission, not a design choice.
 
-**Two ways forward:**
+**Fix applied** (`7c7a189c`): `localhost_port_ranges` added to the disjunction, plus a doc comment
+on the method recording that it must stay in sync with `requires_backend`, plus a regression test
+(`allow_all_policy_with_only_a_port_range_has_port_rules` in
+`crates/nono-cli/tests/wfp_port_integration.rs`).
 
-- **(A) Run the checkpoint today** using `"block": true` alongside `open_port_range` (§ 2). This
-  takes the `(Blocked, Wfp)` arm at `network.rs:1514`, installs the identical `FWP_MATCH_RANGE`
-  filters, and is arguably the stronger proof (block-all-except-range).
-- **(B) Fix `has_port_rules()` first** (one line + a test), then run § 2 with the allow-all profile
-  as originally specified. This changes library behaviour and requires re-running the Phase 110
-  gate (both cross-target clippy gates + binding rebuilds) — not a drive-by edit.
+The same commit also aligns the second call site — `network.rs:1626`'s
+`AllowAll && !has_port_rules()` early-returns `Ok(None)`, i.e. *no enforcement at all*. That path was
+unreachable because `select_network_backend` errors first, but the two predicates must not disagree.
 
-This runbook uses **(A)**. Option (B) should be tracked as its own task regardless.
+No binding rebuild was required: `WindowsNetworkPolicy` is `#[cfg(target_os = "windows")]` and the
+change is to a method body, not a struct shape — neither `../nono-py` nor `../nono-ts` can observe it
+(consistent with Plan 110-08's finding for `localhost_port_ranges` itself).
 
 ### 0.3 "exactly ONE filter object" is the wrong count
 
@@ -133,18 +141,32 @@ Test-Path \\.\pipe\nono-wfp-control   # expect True
 $profileDir = "$env:USERPROFILE\.nono\profiles"
 New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
 
+# Shape A — allow-all + range. The originally-specified shape; works as of 7c7a189c.
 @'
 {
   "meta": { "name": "portrange-probe" },
+  "network": {
+    "open_port_range": [[49200, 49210]]
+  }
+}
+'@ | Set-Content -Encoding utf8 "$profileDir\portrange-probe.json"
+
+# Shape B — block-all except the range. Stronger confinement semantic.
+@'
+{
+  "meta": { "name": "portrange-probe-blocked" },
   "network": {
     "block": true,
     "open_port_range": [[49200, 49210]]
   }
 }
-'@ | Set-Content -Encoding utf8 "$profileDir\portrange-probe.json"
+'@ | Set-Content -Encoding utf8 "$profileDir\portrange-probe-blocked.json"
 ```
 
-`"block": true` is the § 0.2 workaround. Drop it once `has_port_rules()` is fixed.
+Both shapes emit the same `FWP_MATCH_RANGE` permits — `build_policy_filter_specs`'s
+`needs_outbound_block`/`needs_inbound_block` predicates (`nono-wfp-service.rs:1254`/`:1308`) already
+add the block-all filter when ranges are present, even in allow-all mode. **Run Shape A** for the
+literal PROF-03e proof; Shape B is a worthwhile second pass.
 
 Sanity-check the profile parses and the range survives into the capability set — no elevation, no
 service needed:
@@ -257,6 +279,6 @@ requirements.mark-complete PROF-03
 
 …and flip the Phase 110 checklist box in `ROADMAP.md` plus the `110-06-PLAN.md` line.
 
-If §3 shows 48 filters, or §0.2's `UnsupportedPlatform` error appears despite `"block": true`,
+If §3 shows 48 filters, or §0.2's `UnsupportedPlatform` error reappears despite the `7c7a189c` fix,
 record the observed output verbatim — a diagnosed RED closes the checkpoint honestly and is a
 successful execution.
