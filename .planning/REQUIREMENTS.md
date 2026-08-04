@@ -122,7 +122,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 ### macOS / Core Carry + Resource CLI (CORE)
 - [x] **CORE-01**: The macOS Seatbelt/core carry lands as-is for cross-target parity — `~/.cache` grant (#1378) and `MAX_CRYPTO_THREADS`=12 libdispatch tuning (#1424). **AMENDED 2026-07-30:** the `macos.rs` port-range emitter (#1398) is REMOVED from this requirement — Phase 110 absorbs commit `d5803b99` in full (schema + `capability.rs` + both Unix emitters + the WFP-native Windows emitter) so the port-range feature is coherent and testable in one phase. Phase 111 must not re-absorb it.
-- [ ] **CORE-02**: The upstream resource-limit CLI surface (`--memory` / `--max-processes`, #1269/#1403) is reconciled with the fork's existing kernel-enforced Job Object implementation — flag names/semantics aligned, no new enforcement, no regression to `--cpu-percent`/`--timeout`.
+- [x] **CORE-02**: The upstream resource-limit CLI surface (`--memory` / `--max-processes`, #1269/#1403) is reconciled with the fork's existing kernel-enforced Job Object implementation — flag names/semantics aligned, no new enforcement, no regression to `--cpu-percent`/`--timeout`. Split across two plans (Phase 110's PROF-03 precedent): **111-02** corrected the stale `cli.rs`/`docs/cli/usage/flags.mdx` help text falsely claiming Linux/macOS enforcement was pending; **111-03** settled the D-01 ADAPT-not-adopt disposition in `proj/ADR-111-resource-limits-boundary.md` and recorded the standing divergence in `108-DIVERGENCE-LEDGER.md`. No new enforcement; D-04 flag surface frozen (no rename needed — upstream spells all four flags identically).
 
 ### Security + Residual Sync (SEC / RES) — Phase 112
 > **Added 2026-07-29** by operator approval of the Phase 108 ledger's D-18/D-19 coverage-gap amendment. Phase 108 measured **27 hand-verified CODE commits** in the `v0.66.0..v0.69.0` window mapping to none of v3.6's original 12 requirements. Work-list: `108-DIVERGENCE-LEDGER.md` §"Requirement Coverage Gap" + the `security-residual-and-misc` cluster.
@@ -168,7 +168,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–113
 | PROF-03 | Phase 110 | Complete |
 | PROF-04 | Phase 110 | Complete |
 | CORE-01 | Phase 111 | Complete |
-| CORE-02 | Phase 111 | Pending |
+| CORE-02 | Phase 111 | Complete |
 | VERIFY-01 | Phase 111 | Pending |
 | RLS-14 | Phase 111 | Pending |
 | SEC-01 | Phase 112 | Pending |
