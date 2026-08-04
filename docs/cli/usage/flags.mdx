@@ -1231,11 +1231,11 @@ Profiles can set this via `capability_elevation` in their security config. The C
 
 ### Resource Limits
 
-These flags cap CPU, memory, and process resources for the sandboxed agent tree. On Windows they are kernel-enforced through Job Objects (REQUIREMENTS.md § RESL-01..RESL-03). On Linux/macOS they are accepted with a warning pending cross-platform follow-up.
+These flags cap CPU, memory, and process resources for the sandboxed agent tree. On Windows they are kernel-enforced through Job Objects (REQUIREMENTS.md § RESL-01..RESL-03). On Linux they are kernel-enforced, fail-closed, via cgroup v2 (requires cgroup v2 + systemd delegation; the whole launch fails closed with a clear hint if delegation is absent — no limit is ever silently skipped). On macOS, enforcement is per-flag: `--cpu-percent` is rejected at parse time, `--memory` is best-effort, and `--max-processes` is kernel-enforced but UID-wide — see each flag below.
 
 #### `--cpu-percent`
 
-Cap the sandboxed agent tree's CPU usage as a percentage of one logical CPU (1..=99). Kernel-enforced on Windows via `CpuRateControlInformation`. On Linux/macOS the value is accepted with a warning pending cross-platform follow-up.
+Cap the sandboxed agent tree's CPU usage as a percentage of one logical CPU (1..=99). Kernel-enforced on Windows via `CpuRateControlInformation`. On Linux, kernel-enforced, fail-closed, via cgroup v2 `cpu.max`. On macOS the flag is rejected at parse time — no per-process CPU-quota equivalent exists on macOS.
 
 ```bash
 # Limit a build to ~50% of one core
@@ -1244,7 +1244,7 @@ nono run --cpu-percent 50 --allow-cwd -- cargo test
 
 #### `--memory`
 
-Cap the sandboxed agent tree's total memory. Accepts size suffixes (`512M`, `1G`, `256K`, `2T`) or raw bytes. Kernel-enforced job-wide on Windows via `JobMemoryLimit`. On Linux/macOS the value is accepted with a warning pending cross-platform follow-up. See REQUIREMENTS.md § RESL-02.
+Cap the sandboxed agent tree's total memory. Accepts size suffixes (`512M`, `1G`, `256K`, `2T`) or raw bytes. Kernel-enforced job-wide on Windows via `JobMemoryLimit`. On Linux, kernel-enforced, fail-closed, via cgroup v2 `memory.max`. On macOS the limit is **best-effort** via `setrlimit(RLIMIT_AS, ...)`: `RLIMIT_AS` bounds virtual address space, not RSS, so a process with sparse or shared mappings can still exceed the limit in physical memory even when the call succeeds — and the `setrlimit` call itself can fail outright (observed as `EINVAL` on Apple Silicon, where dyld pre-maps virtual address space before `main()` runs), in which case the limit is **not** applied and execution continues with only a stderr warning. See REQUIREMENTS.md § RESL-02.
 
 ```bash
 # Cap memory at 2 GiB
@@ -1256,7 +1256,7 @@ nono run --memory 1048576 --allow-cwd -- my-agent
 
 #### `--max-processes`
 
-Cap the number of active processes in the sandboxed agent tree. Range: 1..=65535. Kernel-enforced on Windows via `ActiveProcessLimit`. On Linux/macOS the value is accepted with a warning pending cross-platform follow-up.
+Cap the number of active processes in the sandboxed agent tree. Range: 1..=65535. Kernel-enforced on Windows via `ActiveProcessLimit`. On Linux, kernel-enforced, fail-closed, via cgroup v2 `pids.max`. On macOS, kernel-enforced via `RLIMIT_NPROC = baseline_uid_count + N`, fail-closed on `setrlimit` failure, but UID-wide rather than descendant-tree-scoped (unlike Linux) — other processes owned by the same UID share the same budget.
 
 ```bash
 # Hard-cap a noisy build at 32 processes
