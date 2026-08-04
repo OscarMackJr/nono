@@ -230,18 +230,51 @@ mod windows_impl {
     /// Returns the per-filter outcome list for the caller to log.
     #[cfg(target_os = "windows")]
     fn purge_nono_filters(engine: &WfpEngine) -> Vec<(SweepOutcome, String, String)> {
+        // Enumerate each enforcement layer explicitly and concatenate the
+        // outcomes. Driving this from `build_wfp_layer_specs()` — the same list
+        // `build_policy_filter_specs` installs into — means a layer can never be
+        // added to enforcement without also being swept.
+        let mut outcomes = Vec::new();
+        for layer in build_wfp_layer_specs() {
+            outcomes.extend(purge_nono_filters_in_layer(engine, layer.key, layer.label));
+        }
+        outcomes
+    }
+
+    /// Enumerate and delete nono-owned filters in ONE layer.
+    ///
+    /// `FWPM_FILTER_ENUM_TEMPLATE0.layerKey` is a `GUID` **by value**, not a
+    /// pointer (verified against the vendored windows-sys 0.59 bindings), so a
+    /// zeroed template enumerates against the all-zero GUID rather than meaning
+    /// "all layers". That, plus `FWP_FILTER_ENUM_FULLY_CONTAINED` combined with
+    /// an empty condition array, gave the previous implementation two
+    /// independent ways to enumerate nothing — filters accumulated and neither
+    /// the startup sweep nor `--purge-wfp-objects` could ever remove them.
+    /// Observed live 2026-08-04: 4 orphaned block filters in
+    /// `NONO_SUBLAYER_GUID` survived both paths.
+    ///
+    /// Enumerating per-layer with `FWP_FILTER_ENUM_OVERLAPPING` avoids both
+    /// hazards. The sublayer check inside the loop is retained so filters in
+    /// sublayers we do not own are never touched.
+    #[cfg(target_os = "windows")]
+    fn purge_nono_filters_in_layer(
+        engine: &WfpEngine,
+        layer_key: GUID,
+        layer_label: &str,
+    ) -> Vec<(SweepOutcome, String, String)> {
         use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::{
             FwpmFilterCreateEnumHandle0, FwpmFilterDestroyEnumHandle0, FwpmFilterEnum0,
-            FWPM_FILTER_ENUM_TEMPLATE0,
+            FWPM_FILTER_ENUM_TEMPLATE0, FWP_FILTER_ENUM_OVERLAPPING,
         };
 
-        // Build a filter enumeration template. We enumerate all filters (no layer
-        // restriction) and filter by sublayer key during the loop to avoid touching
-        // objects in sublayers we do not own.
         let mut template: FWPM_FILTER_ENUM_TEMPLATE0 = zeroed();
         template.actionMask = 0xFFFF_FFFF;
-        // enumType 0 = FWP_FILTER_ENUM_FULLY_CONTAINED (only non-boot-time filters)
-        template.enumType = 0;
+        template.layerKey = layer_key;
+        // OVERLAPPING, not FULLY_CONTAINED: with zero conditions supplied,
+        // fully-contained matching cannot be relied on to return filters that
+        // themselves carry conditions — and every nono filter carries at least
+        // an ALE_USER_ID or ALE_APP_ID condition.
+        template.enumType = FWP_FILTER_ENUM_OVERLAPPING;
 
         let mut enum_handle: HANDLE = std::ptr::null_mut();
         // SAFETY: engine handle is valid; template is initialized POD.
@@ -252,8 +285,8 @@ mod windows_impl {
                 EventLogLevel::Warning,
                 EVENT_ID_SWEEP_FAILED,
                 &format!(
-                    "purge_nono_filters: could not create filter enum handle (win32 0x{:08x})",
-                    enum_status
+                    "purge_nono_filters: could not create filter enum handle for layer {} (win32 0x{:08x})",
+                    layer_label, enum_status
                 ),
             );
             return Vec::new();
@@ -386,21 +419,27 @@ mod windows_impl {
             }
         };
 
-        // Check whether our sublayer is registered. If absent, there are no nono
-        // filters to sweep — emit a clean summary and return early.
+        // The sublayer's presence is logged as context but is deliberately NOT a
+        // precondition for sweeping. It used to short-circuit the whole sweep,
+        // which meant any filter that outlived a sublayer delete became
+        // permanently unreachable: the sweep skipped it forever on the grounds
+        // that "there is nothing to sweep". The enumeration below is cheap and
+        // already refuses to touch sublayers we do not own, so always run it.
         //
         // SAFETY: engine handle is valid; NONO_SUBLAYER_GUID is a static const;
         // we pass null for the output pointer because we only care about existence.
         let sublayer_status =
             unsafe { FwpmSubLayerGetByKey0(engine.0, &NONO_SUBLAYER_GUID, std::ptr::null_mut()) };
         if sublayer_status != 0 {
-            let summary = build_sweep_summary(&[]);
             log_sweep_event(
                 EventLogLevel::Information,
                 EVENT_ID_SWEEP_COMPLETE,
-                &summary,
+                &format!(
+                    "startup sweep: nono sublayer not registered (win32 0x{:08x}); \
+                     sweeping for orphaned filters anyway",
+                    sublayer_status
+                ),
             );
-            return Vec::new();
         }
 
         let outcomes = purge_nono_filters(&engine);
@@ -2247,6 +2286,39 @@ mod windows_impl {
                 "PIPE_SDDL must grant access to Interactive Users or Built-in Users \
                  so non-elevated supervised nono runs can reach the WFP service pipe"
             );
+        }
+
+        /// Regression: the purge must sweep every layer enforcement installs into.
+        ///
+        /// The sweep enumerates per-layer (a zeroed `FWPM_FILTER_ENUM_TEMPLATE0`
+        /// enumerates the all-zero GUID, not "all layers", because `layerKey` is
+        /// a GUID by value). That makes the layer list load-bearing: a layer
+        /// added to `build_policy_filter_specs` but missed by the sweep would
+        /// leak filters that nothing can ever remove. Both now read the same
+        /// list, and this test fails if they are ever decoupled.
+        #[cfg(target_os = "windows")]
+        #[test]
+        fn purge_covers_every_layer_enforcement_installs_into() {
+            let request = WfpRuntimeActivationRequest {
+                network_mode: "blocked".to_string(),
+                ..sample_request()
+            };
+            let specs = build_policy_filter_specs(&request, "out", "in");
+            assert!(!specs.is_empty(), "precondition: blocked mode yields specs");
+
+            let swept: Vec<GUID> = build_wfp_layer_specs().iter().map(|l| l.key).collect();
+            for spec in &specs {
+                assert!(
+                    swept.iter().any(|k| {
+                        k.data1 == spec.layer_key.data1
+                            && k.data2 == spec.layer_key.data2
+                            && k.data3 == spec.layer_key.data3
+                            && k.data4 == spec.layer_key.data4
+                    }),
+                    "enforcement installs a filter into a layer the purge never enumerates, \
+                     so filters in that layer can never be swept"
+                );
+            }
         }
 
         // Task 1 (62-11): verify the PURGE_WFP_OBJECTS_ARG constant and
