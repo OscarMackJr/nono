@@ -88,9 +88,12 @@ kernel rather than only in the unit-tested spec-construction function.
    absolute count cannot distinguish a fresh filter from a leaked one, and reading one absolute
    count is exactly what produced three misreadings earlier in the session.
 
-3. **Cleanup not re-measured after the fix.** The post-run capture that would confirm this run's
-   own 8 filters are torn down was not taken after Defect 4's fix landed. Worth one more elevated
-   capture.
+3. ~~**Cleanup not re-measured after the fix.**~~ **CLOSED 2026-08-04.** After Defect 4's fix and a
+   rebuilt service, `--purge-wfp-objects` returned exit 0 and the filter count went to **0** — the
+   four orphans (ids 211023-211026) that had survived every prior purge attempt were removed,
+   confirming Defect 4's diagnosis live. A subsequent run's filters were also gone at idle, so
+   per-run teardown works. The full lifecycle is therefore **0 → 8 → 0**, and limitation 2's
+   non-zero baseline no longer applies to any future run.
 
 ---
 
@@ -117,11 +120,11 @@ driven from `build_wfp_layer_specs()` so the sweep list and the enforcement list
 plus removal of the sublayer-absent early return. Guarded by
 `purge_covers_every_layer_enforcement_installs_into`.
 
-**NOT yet verified live.** The root cause is a reasoned reading of the vendored windows-sys 0.59
-bindings (`layerKey: GUID` by value, confirmed) plus WFP enumeration semantics; the operator's
-`--purge-wfp-objects` output was never captured, so the failing enumeration was never observed
-directly. Live confirmation = re-run `--purge-wfp-objects` with the rebuilt service and check the
-4 orphans (ids 211023-211026) disappear.
+**VERIFIED LIVE 2026-08-04.** With the rebuilt service, `--purge-wfp-objects` exited 0 and the
+nono filter count dropped from 4 to **0** — the same four orphans (ids 211023-211026) that had
+survived every prior purge attempt, including one run minutes earlier against the pre-fix binary.
+The diagnosis (zeroed `layerKey` enumerating the all-zero GUID rather than "all layers") is
+therefore confirmed by behaviour, not only by reading the bindings.
 
 ---
 
