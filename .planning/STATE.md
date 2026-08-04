@@ -15,8 +15,8 @@ progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 24
-  completed_plans: 18
-  percent: 75
+  completed_plans: 19
+  percent: 79
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
@@ -56,9 +56,9 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 
 ## Current Position
 
-Phase: 111 (Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog) — **PLANNED 2026-08-04, ready to execute**
-Plan: 0 of 6 (Wave 1: 111-01/02/03 · Wave 2: 111-04 · Wave 3: 111-05 · Wave 4: 111-06)
-Status: Ready to execute. Research + 6 plans + plan-checker VERIFICATION PASSED (0 blockers; 3 non-blocking warnings applied pre-commit). All 4 requirements and all 10 locked decisions traced to plans. `111-VALIDATION.md` approved, `nyquist_compliant: true`, task map bound to real task IDs. Next: `/gsd:execute-phase 111`.
+Phase: 111 (Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog) — **EXECUTING**
+Plan: 1 of 6 (Wave 1: 111-01 COMPLETE · 111-02/03 pending · Wave 2: 111-04 · Wave 3: 111-05 · Wave 4: 111-06)
+Status: Plan 111-01 (CORE-01) complete — both upstream carries absorbed (`~/.cache` policy grant #1378, `MAX_CRYPTO_THREADS` 7→12 #1424), both new Wave-0 tests passing (the crypto-threads test confirmed live via `cross test` on linux-gnu since `exec_strategy.rs` is Windows-excluded), both mandatory cross-target clippy gates GREEN. Commits `1d0c8eb5`/`74146367`/`7cd4569a`/`3010312f`. See `111-01-SUMMARY.md`. Next: `111-02` (CORE-02 help-text correction) or `111-03` (ADR-111 + ledger addendum), both Wave 1 parallel plans.
 
 PRIOR position — Phase: 110 (Profile/Policy Absorb + platform_overrides) — **COMPLETE 2026-08-04**
 Plan: 8 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
@@ -102,6 +102,7 @@ Last activity: 2026-08-04 -- Phase 111 PLANNED (research + 6 plans + checker PAS
 | Phase 110 P06 (Tasks 1-2 2026-07-30; Task 3 checkpoint resolved 2026-08-04) | 75min + ~3h checkpoint | 3 of 3 tasks | 6 files + 4 defect fixes |
 | Phase 110 P07 | 20min | 2 tasks | 3 files |
 | Phase 110 P08 | 36min | 2 tasks | 2 files (both repos: 0 files, verification-only) |
+| Phase 111 P01 | 35min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -133,6 +134,8 @@ Last activity: 2026-08-04 -- Phase 111 PLANNED (research + 6 plans + checker PAS
 | `requirements.mark-complete PROF-03` again deliberately NOT run for 110-08 (same rationale as 110-03/04/05/06); Phase 110 ROADMAP checklist box NOT flipped | 110-08 | This plan is phase-gate verification only — it proves 110-01..07 together satisfy the phase's non-Windows-kernel success criteria, but Plan 110-06's Task 3 (`checkpoint:human-verify`, PROF-03e live-kernel `FwpmFilterAdd0` proof) remains unresolved pending Administrator-elevated operator action; flipping PROF-03/Phase 110 now would misrepresent the phase as closed |
 | `cargo test --workspace` documented as non-green on this host with full honest accounting: 11 failures match the documented pre-existing baseline exactly; `--no-fail-fast` (needed to see past the first failing binary for the first time in this project's phase-gate history) surfaced 13 MORE failures across `audit_attestation.rs`/`env_vars.rs`/`resl_nix_async_signal_safety.rs`, all confirmed pre-existing and unrelated to any 110-0X commit via `git log --oneline --all` per file, none fixed (Scope Boundary), logged to `deferred-items.md` § Plan 08 | 110-08 | Plan Rule 5 mandates no fabricated GREEN; a truthful RED with full root-cause tracing is a successful execution. Root causes: hardcoded Unix `/bin/pwd` literal with no Windows fallback (`audit_attestation.rs`); live `windows_run_*` exit-code/env-expansion failures correlated with pre-existing host-state mandatory-label ACE contamination on real paths (`env_vars.rs`); a stale text-signature-match test expecting `std::io::Result<()>` where the source now spells the type via the crate's own `Result` alias (`resl_nix_async_signal_safety.rs`) |
 | Plan's own interfaces-section claim corrected: 110-05 does touch `crates/nono/src/manifest_convert.rs` (not `crates/nono-cli/` only as the plan states), confirmed to be pure input validation not policy | 110-08 | `git show 4d635305 -- crates/nono/src/manifest_convert.rs` shows a `start<=end` bounds check + `#[cfg(target_os = "macos")]`-gated cumulative-port cap check, structurally identical to pre-existing validation in the same `impl TryFrom<&CapabilityManifest> for CapabilitySet` block — matches STATE.md's own 110-05 decision entry (dual-pathway design, ADR-86 intact); ADR-86 boundary CONFIRMED unregressed |
+| Hand-edited `policy.json`'s single relevant line instead of `git cherry-pick ca888108` (#1378) | 111-01 | 4 of the upstream commit's 6 touched files don't exist under those names/paths in this fork (`macos_trust.rs`, `proxy_command.rs`, `tls_intercept/ca.rs`) or are unrelated clippy cosmetics (`learn.rs`) — a cherry-pick would fail or corrupt; matches `111-RESEARCH.md`'s pre-identified finding |
+| `max_crypto_threads_raised_to_12` verified live via `cross test --target x86_64-unknown-linux-gnu`, not the plan's literal native `cargo test` command | 111-01 | `exec_strategy.rs` is `#[cfg(not(target_os = "windows"))]` (Windows uses `exec_strategy_windows/mod.rs`) — the native Windows filtered test run reports "0 tests" for this filter, which is expected-but-silent; the cross-target run gives a genuine `ok. 1 passed` beyond what clippy alone would confirm |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
