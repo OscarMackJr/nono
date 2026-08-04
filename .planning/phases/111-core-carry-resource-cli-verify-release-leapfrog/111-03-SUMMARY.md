@@ -100,3 +100,11 @@ None - no external service configuration required.
 ---
 *Phase: 111-core-carry-resource-cli-verify-release-leapfrog*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+- FOUND: `proj/ADR-111-resource-limits-boundary.md`
+- FOUND: `.planning/phases/111-core-carry-resource-cli-verify-release-leapfrog/111-03-SUMMARY.md`
+- FOUND: commit `10194152` (Task 1)
+- FOUND: commit `6bf65687` (Task 2)
+- FOUND: commit `a56fbfb4` (SUMMARY + REQUIREMENTS metadata commit)
