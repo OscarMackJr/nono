@@ -1640,4 +1640,42 @@ total was corrupted by them, but they are genuine defects worth flagging for any
    108-05's execution.
 
 **Ledger closed.** All 5 plans in Phase 108 (108-01 through 108-05) have now contributed to this
-document; no further plan is expected to append to `108-DIVERGENCE-LEDGER.md`.
+document; no further plan is expected to append to `108-DIVERGENCE-LEDGER.md` — **except the one
+deliberate, locked exception recorded immediately below** (Phase 111 CONTEXT.md D-02).
+
+---
+
+## Phase 111 Standing Divergence Addendum
+
+Despite the "Ledger closed" declaration above, CONTEXT.md's Phase 111 D-02 directs one explicit
+exception: record the CORE cluster's `adapt`-dispositioned resource-limiting commits as a
+**standing divergence**, so the next upstream sync auditor who encounters them finds a documented
+decision instead of re-litigating this one from scratch.
+
+**Commits:** `e6d26871f0498e7dc7a867e67af5c6136b84f91c` (#1269, "feat: resource limiting") and its
+sibling `34c2c975d649844923cf1515be94de624c689c6c` (#1403, "feat(resources): cap sandbox process
+count with --max-processes") — both already listed above in "CORE Cluster — Per-Commit Table"
+with disposition `adapt`, and both flagged there under "Threat Flags" as
+`threat_flag: cross-crate-reexport` against `crates/nono/src/lib.rs`.
+
+**Disposition: STANDING DIVERGENCE.** The fork **ADAPTS** (does not **ADOPT**) upstream's
+core-module relocation, per `proj/ADR-111-resource-limits-boundary.md`'s Decision:
+`crates/nono/src/lib.rs` will never gain `pub mod resource;` or `pub use
+resource::ResourceLimits;`. All resource-limit code — flag parsing, per-platform dispatch, and
+enforcement (Job Object on Windows, cgroup v2 on Linux, `RLIMIT_AS`+`RLIMIT_NPROC` on macOS) —
+stays `nono-cli`-side, unchanged from its pre-Phase-111 shape. Only flag names/help text/semantics
+are aligned with upstream where they already match (no rename was needed — see ADR-111 D-04).
+Every future upstream sync touching the `resource` module in `nolabs-ai/nono`'s core `nono` crate
+must **re-affirm this decision by citing `proj/ADR-111-resource-limits-boundary.md`**, rather than
+treat the module's absence from the fork's `crates/nono/src/lib.rs` as an unabsorbed gap to close.
+
+**Distinguished from the `tool-sandbox-surface` cluster's `DEFERRED->v3.7` treatment
+(above, "Cluster Summary" table):** that cluster's 20 commits are a **deferral** — explicitly
+routed to a **named future phase** (v3.7 Windows Tool-Sandbox Parity) that is expected to pick the
+work back up, adopt or formalize it, and close the gap. This CORE-cluster divergence is different
+in kind: it is a **permanent** decision with **no future phase this hands off to**. There is no
+v3.7-style "come back and finish the absorb" expectation attached to `e6d26871`/`34c2c975` — the
+fork's own implementation already exceeds upstream's in enforcement completeness, and the ADR's
+Decision is final unless a future ADR explicitly reopens it. A future sync auditor should treat
+this row the way they would treat Decision 3 of `proj/ADR-86-library-boundary-convergence.md` (the
+Windows denial-path carve-out): a durable, standing architectural choice, not an open TODO.
