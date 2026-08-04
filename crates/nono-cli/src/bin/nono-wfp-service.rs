@@ -824,6 +824,7 @@ mod windows_impl {
                 "unsupported WFP runtime activation protocol version {}; expected {}",
                 request.protocol_version, WFP_RUNTIME_PROTOCOL_VERSION
             ),
+            installed_filter_count: None,
         }
     }
 
@@ -838,6 +839,7 @@ mod windows_impl {
                 "unsupported WFP runtime activation request kind `{}` for {}",
                 request_kind, runtime_target
             ),
+            installed_filter_count: None,
         }
     }
 
@@ -852,12 +854,14 @@ mod windows_impl {
             protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
             status: "prerequisites-missing".to_string(),
             details,
+            installed_filter_count: None,
         }
     }
 
     fn build_enforced_pending_cleanup_response(
         request: &WfpRuntimeActivationRequest,
         details: String,
+        installed_filter_count: usize,
     ) -> WfpRuntimeActivationResponse {
         WfpRuntimeActivationResponse {
         protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
@@ -866,6 +870,7 @@ mod windows_impl {
             "request {} for {} installed target-attached network-policy enforcement and requires cleanup after launch: {}",
             request.request_kind, request.runtime_target, details
         ),
+        installed_filter_count: Some(u32::try_from(installed_filter_count).unwrap_or(u32::MAX)),
     }
     }
 
@@ -880,6 +885,7 @@ mod windows_impl {
                 "request {} for {} removed target-attached network-policy enforcement: {}",
                 request.request_kind, request.runtime_target, details
             ),
+            installed_filter_count: None,
         }
     }
 
@@ -894,6 +900,7 @@ mod windows_impl {
                 "request {} for {} could not remove target-attached network-policy enforcement: {}",
                 request.request_kind, request.runtime_target, details
             ),
+            installed_filter_count: None,
         }
     }
 
@@ -908,6 +915,7 @@ mod windows_impl {
                 "request {} for {} could not install the backend-owned network-policy probe: {}",
                 request.request_kind, request.runtime_target, details
             ),
+            installed_filter_count: None,
         }
     }
 
@@ -1652,7 +1660,7 @@ mod windows_impl {
         target_program: &std::path::Path,
         outbound_rule: &str,
         inbound_rule: &str,
-    ) -> Result<String, String> {
+    ) -> Result<(usize, String), String> {
         let engine = open_wfp_engine()?;
 
         // Determine if we are using SID-based or AppID-based filtering.
@@ -1681,13 +1689,16 @@ mod windows_impl {
             target_program.display().to_string()
         };
 
-        Ok(format!(
+        Ok((
+            specs.len(),
+            format!(
         "installed {} WFP network-policy filters for {} using outbound rule base {} and inbound rule base {}",
         specs.len(),
         target_desc,
         outbound_rule,
         inbound_rule
-    ))
+    ),
+        ))
     }
 
     #[cfg(target_os = "windows")]
@@ -1756,7 +1767,9 @@ mod windows_impl {
                 &outbound_rule,
                 &inbound_rule,
             ) {
-                Ok(details) => build_enforced_pending_cleanup_response(request, details),
+                Ok((installed, details)) => {
+                    build_enforced_pending_cleanup_response(request, details, installed)
+                }
                 Err(err) => build_filtering_probe_failed_response(request, err),
             }
         }
@@ -1937,7 +1950,7 @@ mod windows_impl {
         fn runtime_activation_probe_fails_closed() {
             let request = sample_request();
             let response =
-                build_enforced_pending_cleanup_response(&request, "placeholder".to_string());
+                build_enforced_pending_cleanup_response(&request, "placeholder".to_string(), 4);
             assert_eq!(response.status, "enforced-pending-cleanup");
             assert!(response.details.contains("blocked Windows network access"));
         }
@@ -1971,7 +1984,13 @@ mod windows_impl {
             request.protocol_version = WFP_RUNTIME_PROTOCOL_VERSION + 1;
             let response = build_protocol_mismatch_response(&request);
             assert_eq!(response.status, "protocol-mismatch");
-            assert!(response.details.contains("expected 1"));
+            // Assert against the constant, not a literal: the claim under test
+            // is "the message names the version we expect", which must survive
+            // every protocol bump. A hardcoded literal here would turn each
+            // bump into an unrelated test failure.
+            assert!(response
+                .details
+                .contains(&format!("expected {WFP_RUNTIME_PROTOCOL_VERSION}")));
         }
 
         #[test]

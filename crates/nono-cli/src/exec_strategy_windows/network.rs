@@ -1716,15 +1716,29 @@ where
                             probe_output.response.details
                         )),
                     ),
-                    WfpRuntimeActivationProbeStatus::EnforcedPendingCleanup => Ok(Some(
-                        NetworkEnforcementGuard::WfpServiceManaged {
+                    WfpRuntimeActivationProbeStatus::EnforcedPendingCleanup => {
+                        // Defence in depth against a service that reports success
+                        // while enforcing nothing. Reaching this point means the
+                        // "no enforcement needed" early-return above did NOT fire,
+                        // so the policy is either non-allow-all or carries port
+                        // rules -- and every such policy yields at least one filter
+                        // spec (a permit, a block-all, or both). A reported zero
+                        // therefore means the service understood less of the
+                        // request than we sent it, which is exactly what a stale
+                        // service binary does with a field it does not know.
+                        // Trusting the status alone is a fail-open.
+                        assert_wfp_activation_installed_filters(
+                            policy,
+                            &probe_output.response.installed_filter_count,
+                        )?;
+                        Ok(Some(NetworkEnforcementGuard::WfpServiceManaged {
                             policy: Box::new(policy.clone()),
                             probe_config: probe_config.clone(),
                             target_program: config.resolved_program.to_path_buf(),
                             inbound_rule,
                             outbound_rule,
-                        },
-                    )),
+                        }))
+                    }
                     WfpRuntimeActivationProbeStatus::CleanupSucceeded => Err(
                         NonoError::SandboxInit(
                             "Windows WFP activation returned cleanup success during install; this is an unexpected protocol state.".to_string(),
@@ -1742,6 +1756,46 @@ where
                 describe_wfp_runtime_activation_failure(policy, probe_config, status),
             ))
         }
+    }
+}
+
+/// Fail closed unless the WFP service reports having installed at least one
+/// filter object.
+///
+/// Callers reach this only after activation returned `enforced-pending-cleanup`
+/// for a policy that genuinely requires enforcement, so `Some(0)` and `None` are
+/// both failures:
+///
+/// - `Some(0)` — the service ran, understood the request kind, and installed
+///   nothing. The July-2026 service did this for `allow-all` + `open_port_range`
+///   because it predated `localhost_port_ranges` and serde dropped the field.
+/// - `None` — the service omitted the field entirely, i.e. it predates protocol
+///   version 2. The version check should already have rejected it; if it did
+///   not, refuse rather than assume.
+fn assert_wfp_activation_installed_filters(
+    policy: &nono::WindowsNetworkPolicy,
+    installed_filter_count: &Option<u32>,
+) -> Result<()> {
+    match installed_filter_count {
+        Some(count) if *count > 0 => Ok(()),
+        Some(_) => Err(NonoError::UnsupportedPlatform(format!(
+            "Windows WFP service reported successful activation for {} but installed ZERO filter \
+             objects, so nothing is enforced. This usually means the running \
+             `nono-wfp-service.exe` is older than this build and silently ignored part of the \
+             request. Check `sc.exe qc nono-wfp-service` and re-register the service against the \
+             current binary via `nono setup --install-wfp-service`. This request remains \
+             fail-closed ({}).",
+            describe_windows_network_runtime_target(policy),
+            policy.backend_summary()
+        ))),
+        None => Err(NonoError::UnsupportedPlatform(format!(
+            "Windows WFP service did not report an installed filter count for {}, which means it \
+             predates protocol version {}. Re-register the service against the current binary via \
+             `nono setup --install-wfp-service`. This request remains fail-closed ({}).",
+            describe_windows_network_runtime_target(policy),
+            WFP_RUNTIME_PROTOCOL_VERSION,
+            policy.backend_summary()
+        ))),
     }
 }
 
@@ -1815,6 +1869,45 @@ mod tests {
              not just discrete localhost_ports, to avoid a silent operator-visibility gap: {description}"
         );
         assert!(description.contains("(3000, 3999)"));
+    }
+
+    /// Regression: a service that reports `enforced-pending-cleanup` while
+    /// installing zero filters must fail closed, not launch unenforced.
+    ///
+    /// Observed live on 2026-08-04: the registered `nono-wfp-service` was a
+    /// 2026-07-06 build (from `C:\Program Files\nono\`) that predated
+    /// `localhost_port_ranges`. Serde dropped the unknown field, so for an
+    /// `allow-all` + `open_port_range` policy the service built zero filter
+    /// specs, installed nothing, and still answered
+    /// `enforced-pending-cleanup`. The run exited 0 with no enforcement — a
+    /// fail-open on a codebase whose stated rule is "never silently degrade".
+    #[test]
+    fn zero_installed_filters_fails_closed_even_when_service_reports_success() {
+        let mut policy = make_blocked_policy();
+        policy.mode = nono::WindowsNetworkPolicyMode::AllowAll;
+        policy.localhost_port_ranges = vec![(49200, 49210)];
+
+        let err = assert_wfp_activation_installed_filters(&policy, &Some(0))
+            .expect_err("zero installed filters must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("ZERO filter objects"),
+            "error must state plainly that nothing was enforced: {msg}"
+        );
+        assert!(
+            msg.contains("nono setup --install-wfp-service"),
+            "error must tell the operator how to re-register the service: {msg}"
+        );
+
+        let err = assert_wfp_activation_installed_filters(&policy, &None)
+            .expect_err("a service that omits the count predates protocol v2 and must be rejected");
+        assert!(
+            err.to_string().contains("protocol version"),
+            "missing count must be reported as version skew: {err}"
+        );
+
+        assert_wfp_activation_installed_filters(&policy, &Some(8))
+            .expect("a service reporting real filters must be accepted");
     }
 
     fn make_test_probe_config() -> WfpProbeConfig {
@@ -2022,6 +2115,7 @@ mod tests {
                     protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
                     status: "enforced-pending-cleanup".to_string(),
                     details: "WFP filters installed".to_string(),
+                    installed_filter_count: Some(4),
                 },
                 stderr: String::new(),
             })
@@ -2089,6 +2183,7 @@ mod tests {
                     protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
                     status: "prerequisites-missing".to_string(),
                     details: "Service not available".to_string(),
+                    installed_filter_count: None,
                 },
                 stderr: String::new(),
             })
@@ -2244,6 +2339,7 @@ mod tests {
                     protocol_version: WFP_RUNTIME_PROTOCOL_VERSION,
                     status: "enforced-pending-cleanup".to_string(),
                     details: "WFP filters installed".to_string(),
+                    installed_filter_count: Some(4),
                 },
                 stderr: String::new(),
             })
