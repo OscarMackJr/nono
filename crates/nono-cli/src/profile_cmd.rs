@@ -1394,6 +1394,28 @@ pub(crate) fn cmd_patch(args: ProfilePatchArgs) -> Result<()> {
 // nono profile show
 // ---------------------------------------------------------------------------
 
+/// Whether `nono profile show` should emit a `Network:` section at all.
+///
+/// Must list every field the section's body can render. A field that the body
+/// prints but this predicate ignores is invisible to the operator: the
+/// renderer for it becomes unreachable for any profile that sets *only* that
+/// field. `open_port_range`/`listen_port_range` were added to the body in
+/// Phase 110-05 but omitted here, so a range-only profile showed no network
+/// section whatsoever.
+fn network_section_has_content(net: &profile::NetworkConfig) -> bool {
+    net.block
+        || net.resolved_network_profile().is_some()
+        || !net.allow_domain.is_empty()
+        || !net.resolved_credentials().is_empty()
+        || !net.open_port.is_empty()
+        || !net.open_port_range.is_empty()
+        || !net.listen_port.is_empty()
+        || !net.listen_port_range.is_empty()
+        || net.upstream_proxy.is_some()
+        || !net.upstream_bypass.is_empty()
+        || !net.no_proxy.is_empty()
+}
+
 pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
     let raw_extends = profile::load_profile_extends(&args.profile);
     let profile = profile::load_profile(&args.profile)?;
@@ -1554,15 +1576,7 @@ pub(crate) fn cmd_show(args: ProfileShowArgs) -> Result<()> {
 
     // Network
     let net = &profile.network;
-    let has_net = net.block
-        || net.resolved_network_profile().is_some()
-        || !net.allow_domain.is_empty()
-        || !net.resolved_credentials().is_empty()
-        || !net.open_port.is_empty()
-        || !net.listen_port.is_empty()
-        || net.upstream_proxy.is_some()
-        || !net.upstream_bypass.is_empty()
-        || !net.no_proxy.is_empty();
+    let has_net = network_section_has_content(net);
 
     if has_net {
         println!();
@@ -3557,6 +3571,38 @@ mod tests {
         assert!(
             !text.contains("nono policy "),
             "profile-authoring-guide.md references deprecated 'nono policy ' commands — update to 'nono profile '",
+        );
+    }
+
+    /// Regression: a profile whose ONLY network setting is a port range must
+    /// still render a `Network:` section.
+    ///
+    /// `cmd_show`'s body has printed `open_port_range`/`listen_port_range`
+    /// since Phase 110-05, but the `has_net` gate did not list them — so for a
+    /// range-only profile the section was skipped entirely and the range was
+    /// invisible to the operator, the same "schema key present but invisible"
+    /// gap this milestone has caught repeatedly.
+    #[test]
+    fn network_section_shows_for_a_range_only_profile() {
+        let mut net = profile::NetworkConfig::default();
+        assert!(
+            !network_section_has_content(&net),
+            "precondition: a default NetworkConfig has nothing to render"
+        );
+
+        net.open_port_range = vec![[49200, 49210]];
+        assert!(
+            network_section_has_content(&net),
+            "open_port_range alone must open the Network section, or its renderer is unreachable"
+        );
+
+        let net = profile::NetworkConfig {
+            listen_port_range: vec![[8000, 8010]],
+            ..Default::default()
+        };
+        assert!(
+            network_section_has_content(&net),
+            "listen_port_range alone must open the Network section too"
         );
     }
 
