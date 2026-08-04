@@ -274,7 +274,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 
 **Plans**: 6 plans
 - [x] 111-01-PLAN.md — CORE-01: macOS `~/.cache` policy grant (#1378) + `MAX_CRYPTO_THREADS` 7→12 (#1424), each with a new Wave-0 by-value test
-- [ ] 111-02-PLAN.md — CORE-02: correct the stale Unix resource-limit help text in `cli.rs` + `docs/cli/usage/flags.mdx` (D-04/D-05/D-06)
+- [x] 111-02-PLAN.md — CORE-02: correct the stale Unix resource-limit help text in `cli.rs` + `docs/cli/usage/flags.mdx` (D-04/D-05/D-06)
 - [ ] 111-03-PLAN.md — D-01/D-02/D-03: `proj/ADR-111-resource-limits-boundary.md` + standing-divergence addendum in `108-DIVERGENCE-LEDGER.md`
 - [ ] 111-04-PLAN.md — VERIFY-01: both cross-target clippy gates + `make ci` substitution + 24-name baseline diff + D-09 fork-invariant assertions + binding rebuild, over the combined 108-111 surface
 - [ ] 111-05-PLAN.md — RLS-14 (in-repo half): bump the 6 workspace crates + path-dep pins to `0.70.0`, regenerate Cargo.lock, correct `release-readiness.ps1`/`release-dry-run.ps1`'s hardcoded version strings
@@ -332,4 +332,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 108. UPST12 Divergence Audit | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 109. Proxy/Network Absorb | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 110. Profile/Policy Absorb + platform_overrides | v3.6 | 8/8 | Complete | 2026-08-04 |
-| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 1/6 | In Progress|  |
+| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 2/6 | In Progress|  |

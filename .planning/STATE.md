@@ -57,8 +57,10 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 ## Current Position
 
 Phase: 111 (Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog) — **EXECUTING**
-Plan: 1 of 6 (Wave 1: 111-01 COMPLETE · 111-02/03 pending · Wave 2: 111-04 · Wave 3: 111-05 · Wave 4: 111-06)
-Status: Plan 111-01 (CORE-01) complete — both upstream carries absorbed (`~/.cache` policy grant #1378, `MAX_CRYPTO_THREADS` 7→12 #1424), both new Wave-0 tests passing (the crypto-threads test confirmed live via `cross test` on linux-gnu since `exec_strategy.rs` is Windows-excluded), both mandatory cross-target clippy gates GREEN. Commits `1d0c8eb5`/`74146367`/`7cd4569a`/`3010312f`. See `111-01-SUMMARY.md`. Next: `111-02` (CORE-02 help-text correction) or `111-03` (ADR-111 + ledger addendum), both Wave 1 parallel plans.
+Plan: 2 of 6 (Wave 1: 111-01 COMPLETE · 111-02 COMPLETE · 111-03 pending · Wave 2: 111-04 · Wave 3: 111-05 · Wave 4: 111-06)
+Status: Plan 111-01 (CORE-01) complete — both upstream carries absorbed (`~/.cache` policy grant #1378, `MAX_CRYPTO_THREADS` 7→12 #1424), both new Wave-0 tests passing (the crypto-threads test confirmed live via `cross test` on linux-gnu since `exec_strategy.rs` is Windows-excluded), both mandatory cross-target clippy gates GREEN. Commits `1d0c8eb5`/`74146367`/`7cd4569a`/`3010312f`. See `111-01-SUMMARY.md`.
+
+Plan 111-02 (CORE-02, half) complete — corrected the false "accepted with a warning pending cross-platform follow-up" claim for `--memory`/`--timeout`/`--max-processes` in `crates/nono-cli/src/cli.rs` and `docs/cli/usage/flags.mdx`, derived from live reads of all three enforcement backends (Linux cgroup v2 fail-closed, macOS best-effort `RLIMIT_AS` with possible silent `EINVAL`, macOS UID-wide fail-closed `RLIMIT_NPROC`, Windows Job Object unchanged). D-04 flag-freeze confirmed (no upstream rename/re-range). Found docs/cli/usage/flags.mdx's `--cpu-percent` entry was also stale (unlike cli.rs's accurate one) — corrected under Rule 1. Zero test changes needed (no test asserts on help strings); existing regression guards pass unmodified. Both cross-target clippy gates re-confirmed GREEN. `requirements.mark-complete CORE-02` deliberately NOT run — CORE-02 is split across 111-02 (help-text) and 111-03 (ADR-111 + ledger addendum), complete only after both land. Commits `f378d68b`/`5d7761a1`/`224d2dd0`/`ae1c7e57`. See `111-02-SUMMARY.md`. Next: `111-03` (ADR-111 + ledger addendum, the other Wave 1 parallel plan).
 
 PRIOR position — Phase: 110 (Profile/Policy Absorb + platform_overrides) — **COMPLETE 2026-08-04**
 Plan: 8 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
@@ -103,6 +105,7 @@ Last activity: 2026-08-04 -- Phase 111 PLANNED (research + 6 plans + checker PAS
 | Phase 110 P07 | 20min | 2 tasks | 3 files |
 | Phase 110 P08 | 36min | 2 tasks | 2 files (both repos: 0 files, verification-only) |
 | Phase 111 P01 | 35min | 2 tasks | 3 files |
+| Phase 111 P02 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -136,6 +139,8 @@ Last activity: 2026-08-04 -- Phase 111 PLANNED (research + 6 plans + checker PAS
 | Plan's own interfaces-section claim corrected: 110-05 does touch `crates/nono/src/manifest_convert.rs` (not `crates/nono-cli/` only as the plan states), confirmed to be pure input validation not policy | 110-08 | `git show 4d635305 -- crates/nono/src/manifest_convert.rs` shows a `start<=end` bounds check + `#[cfg(target_os = "macos")]`-gated cumulative-port cap check, structurally identical to pre-existing validation in the same `impl TryFrom<&CapabilityManifest> for CapabilitySet` block — matches STATE.md's own 110-05 decision entry (dual-pathway design, ADR-86 intact); ADR-86 boundary CONFIRMED unregressed |
 | Hand-edited `policy.json`'s single relevant line instead of `git cherry-pick ca888108` (#1378) | 111-01 | 4 of the upstream commit's 6 touched files don't exist under those names/paths in this fork (`macos_trust.rs`, `proxy_command.rs`, `tls_intercept/ca.rs`) or are unrelated clippy cosmetics (`learn.rs`) — a cherry-pick would fail or corrupt; matches `111-RESEARCH.md`'s pre-identified finding |
 | `max_crypto_threads_raised_to_12` verified live via `cross test --target x86_64-unknown-linux-gnu`, not the plan's literal native `cargo test` command | 111-01 | `exec_strategy.rs` is `#[cfg(not(target_os = "windows"))]` (Windows uses `exec_strategy_windows/mod.rs`) — the native Windows filtered test run reports "0 tests" for this filter, which is expected-but-silent; the cross-target run gives a genuine `ok. 1 passed` beyond what clippy alone would confirm |
+| `docs/cli/usage/flags.mdx`'s `--cpu-percent` entry corrected too, beyond the plan's literal action text | 111-02 | The plan characterized the docs-site `--cpu-percent` entry as "already correct" (mirroring `cli.rs`'s genuinely-accurate `--cpu-percent` doc comment), but the actual file content also carried the stale "accepted with a warning pending cross-platform follow-up" claim — the plan's own acceptance criteria required zero remaining occurrences of that substring anywhere in the file, so it was corrected under Rule 1 |
+| `requirements.mark-complete CORE-02` deliberately NOT run for 111-02 | 111-02 | CORE-02 is split across 111-02 (help-text correction, this plan) and 111-03 (ADR-111 + 108-ledger standing-divergence addendum, the other Wave 1 parallel plan) — same split-requirement pattern as Phase 110's PROF-03 across 4 sub-plans; flipping now would misrepresent CORE-02 as fully satisfied |
 
 ### Key Decisions (v3.3 roadmap — historical)
 
