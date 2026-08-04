@@ -110,3 +110,12 @@ None blocking. The single deviation (docs-site `--cpu-percent` entry also being 
 
 ## User Setup Required
 None — doc-comment and docs-site text changes only, no new dependencies, environment variables, or manual steps.
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono-cli/src/cli.rs
+- FOUND: docs/cli/usage/flags.mdx
+- FOUND: .planning/phases/111-core-carry-resource-cli-verify-release-leapfrog/111-02-SUMMARY.md
+- FOUND: f378d68b (Task 1 commit)
+- FOUND: 5d7761a1 (Task 2 commit)
+- FOUND: 224d2dd0 (SUMMARY commit)
