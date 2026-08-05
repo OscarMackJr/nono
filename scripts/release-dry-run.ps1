@@ -16,10 +16,13 @@
 
     PRE_PUBLISH_REGISTRY_BLOCKED: cargo publish --dry-run resolves all dependencies
     against the live crates.io index at package time.  For downstream workspace crates
-    (nono-proxy, nono-cli) this will fail with "failed to select a
-    version for nono = ^0.70.0" until nono 0.70.0 has been published.  This is an
-    EXPECTED pre-publish state, not a packaging error.  The status is surfaced
-    transparently so the operator can re-run after publishing the base crate.
+    (nono-sandbox-proxy, nono-sandbox-cli) this will fail until nono-sandbox 0.70.0 has been
+    published.  Because nono-sandbox is a fork-owned name (Phase 102/103 rename) never
+    published to crates.io under any version, cargo reports "no matching package named"
+    rather than the "failed to select a version for the requirement" text a pre-existing,
+    already-published package would produce at an unavailable version.  Both phrasings are
+    treated as the same EXPECTED pre-publish state, not a packaging error.  The status is
+    surfaced transparently so the operator can re-run after publishing the base crate.
 
 .NOTES
     SAFETY INVARIANTS (enforced by design):
@@ -82,13 +85,20 @@ try {
         } else {
             $outStr = $output | Out-String
             # Detect pre-publish registry-resolution block: downstream crates depend on
-            # nono = ^0.70.0 which does not exist on crates.io until after nono is published.
-            # This is an expected pre-publish state, NOT a packaging error.
-            # Pattern matched per-line; distinctive phrase appears in the error message.
-            if ($outStr -match 'failed to select a version for the requirement') {
+            # nono-sandbox ^0.70.0 which does not exist on crates.io until after nono-sandbox
+            # is published. This is an expected pre-publish state, NOT a packaging error.
+            # Two distinct cargo error phrasings are both valid signals for this state:
+            #   - "failed to select a version for the requirement" — the package NAME exists
+            #     on the index (e.g. a pre-rename upstream-published name) but not at the
+            #     required version.
+            #   - "no matching package named" — the package name itself has never been
+            #     published under any version (true for the fork-owned nono-sandbox* names
+            #     since the Phase 102/103 rename — cargo cannot even find the index entry).
+            if ($outStr -match 'failed to select a version for the requirement' -or `
+                $outStr -match 'no matching package named') {
                 Write-Host "  PRE_PUBLISH_REGISTRY_BLOCKED" -ForegroundColor Yellow
                 Add-Result "crates.$crate" "PRE_PUBLISH_REGISTRY_BLOCKED" `
-                    "nono ^0.70.0 not yet on crates.io; re-run after publishing nono"
+                    "nono-sandbox ^0.70.0 not yet on crates.io; re-run after publishing nono-sandbox"
             } else {
                 Write-Host "  FAILED (exit $exitCode)" -ForegroundColor Red
                 Write-Host ($outStr)
