@@ -623,6 +623,39 @@ re-measurement above shows a directory-only filter would silently drop.
 | de8a54b25c3c26f68f6d51f768be904cee0d0c41 | fix(dynamic-providers): run git config from repo root to honour hasconfig: includeIf (#1313) |
 | 8a4237f2ee0dc33bc1e5afdd39c0db8ca6f5ed38 | refactor(seccomp): introduce SeccompPolicy struct and client-driven selection (#1283) |
 
+### SEC-09 Carry-Forward Note (Phase 112, D-01)
+
+**Filed:** 2026-08-05 (Phase 112, Plan 112-08 close-out; premise re-confirmed live in Plan 112-01
+and `112-DISPOSITION-TABLE.md`).
+
+Upstream `f6f027511f7899f1735f1188747086696e40412e` (#1301, "fix(execution-runtime): allow
+env_credentials + command_policies on non-shim entry") relaxes a guard block in
+`execution_runtime.rs` gated on `tool_sandbox_runtime.is_some() && !loaded_secrets.is_empty() &&
+tool_sandbox_initial_shim.is_none()` — removing the restriction so `env_credentials`/
+`command_policies` become usable even when the initial process is not the tool-sandbox shim entry
+point.
+
+**This fork does not currently have that guard to relax.**
+`grep -rn "command_policies\|tool_sandbox_runtime\|tool_sandbox_initial_shim"
+crates/nono-cli/src/execution_runtime.rs` returns 0 hits (re-confirmed live 2026-08-05, Plan
+112-01) because the fork never absorbed the base `tool_sandbox_runtime`/`command_policies`
+subsystem (PR #1105, v0.65.0) — the entire tool-sandbox-surface cluster immediately above (20
+commits) is the standing divergence deferred to the **v3.7 Windows Tool-Sandbox Parity**
+milestone.
+
+**Obligation for whichever future plan absorbs the tool-sandbox base subsystem:** when
+`tool_sandbox_runtime`/`command_policies` are eventually absorbed into this fork, the fork MUST
+consciously decide whether to bring `f6f02751`'s relaxed non-shim-entry posture along with it, or
+preserve a stricter guard equivalent to upstream's pre-`f6f02751` behavior. This is **not an
+automatic inheritance** — absorbing the base subsystem at its current (post-`f6f02751`) upstream
+state would silently adopt the relaxed posture without a fork-side security review ever having
+happened. A future v3.7 planner reading this cluster's work-list should treat `f6f02751` as a
+named line item requiring its own disposition call, not a hunk that rides along for free with the
+base absorb.
+
+**Disposition (Phase 112): won't-sync (target subsystem absent) — LOCKED per CONTEXT.md D-01.** No
+code change. This note is the deliverable.
+
 ### security-residual-and-misc cluster commits (18)
 
 The 10 named security-relevant anchor SHAs from `108-CONTEXT.md` D-18 appear first (verbatim),
@@ -1679,3 +1712,126 @@ fork's own implementation already exceeds upstream's in enforcement completeness
 Decision is final unless a future ADR explicitly reopens it. A future sync auditor should treat
 this row the way they would treat Decision 3 of `proj/ADR-86-library-boundary-convergence.md` (the
 Windows denial-path carve-out): a durable, standing architectural choice, not an open TODO.
+
+---
+
+## Phase 112 Security + Residual Sync Addendum
+
+Despite the "Ledger closed" declaration above (and despite the Phase 111 Standing Divergence
+Addendum immediately preceding this one, which is itself an explicit exception to that
+declaration), Phase 112 CONTEXT.md's D-05 directs a second, likewise-locked exception: record all
+18 `security-residual-and-misc` cluster dispositions as they actually **landed** — not as
+`112-DISPOSITION-TABLE.md`'s pre-execution plan text framed them — so a future upstream-sync
+auditor inherits the executed reality, not the plan.
+
+**Scope:** the 18-commit `security-residual-and-misc` cluster listed above (10 named D-18 anchors
++ `f6f02751` (SEC-09) + 4 RES-01 + 3 RES-02 = 18, per D-08's closed arithmetic — every row below
+appears exactly once; no invented remainder bucket).
+
+### 18-SHA Final Disposition (as executed, Phase 112 close-out 2026-08-05)
+
+| SHA (short) | Req | Table's planned disposition (`112-DISPOSITION-TABLE.md`) | **Disposition as shipped** | Evidence |
+|---|---|---|---|---|
+| `0ecc476b` | SEC-01 | won't-sync, HIGH confidence | **won't-sync (target subsystem absent) — CONFIRMED** | `112-AWS-SIGV4-PROXY-AUTH-FINDING.md`; `aws/`/`tls_intercept/` absent from `crates/nono-proxy/src/`; fork's own prior D-15 501-stub guard (`reverse.rs:260-268`) unchanged |
+| `9b692e07` | SEC-02a | deferred -> Phase 114 (ROADMAP Amendment framing) | **deferred -> Phase 114 — CONFIRMED** | `112-OAUTH-CAPTURE-DISPOSITION.md`; `oauth_capture/`, `forward.rs`, `tls_intercept/*` absent; `forward.rs`'s `ResponseRewrite` hook confirmed as the load-bearing anti-real-token-leak mechanism a reduced-scope absorb would drop; carve-out authority: ROADMAP Amendment (2026-08-05), `### Phase 114: OAuth Capture Absorb (SEC-02)` |
+| `3c59c62e` | SEC-02b | deferred -> Phase 114 | **deferred -> Phase 114 — CONFIRMED** | rides SEC-02a's disposition (security-hardening follow-up touching the same absent subsystem); `112-OAUTH-CAPTURE-DISPOSITION.md` §1d |
+| `d033c631` | SEC-02c | deferred -> Phase 114 | **deferred -> Phase 114 — CONFIRMED** | rides SEC-02a's disposition (test fixture for SEC-02a's provider stdin handling); `112-OAUTH-CAPTURE-DISPOSITION.md` §1d |
+| `a3243907` | SEC-03 | **adopt, HIGH confidence** | **ADAPT — DIVERGED FROM PLAN** | `112-02-SUMMARY.md`: symbol-level forensics (not the table's file-presence check) proved `a3243907` depends on the unabsorbed antecedent `fa21a004`/`8a4237f2` (#1283, "introduce SeccompPolicy struct and client-driven selection", 21 files) — zero grep hits for `SeccompPolicy`/`LinuxSandboxPolicy`/`apply_landlock`/`apply_auto`/`apply_external`/`TcpNetworkEnforcement` anywhere in the pre-absorb fork tree. Implemented the security-hardening intent (procfs read-only mediation + fatal seccomp-notify failures + new `apply_seccomp`/`apply_seccomp_with_abi`/`apply_external` API) against the fork's existing simpler `apply()`/`apply_with_abi()` architecture. `fa21a004`/`8a4237f2`'s 21-file `LinuxSandboxPolicy` CLI-policy-selection feature remains a **standing, unabsorbed gap** after Phase 112 closes — already independently flagged above ("tool-sandbox-surface cluster commits (20)" table) as a CORE-cluster/Phase-111 residual, never picked up by Phase 111; not this plan's to close. |
+| `f943fb5a` | SEC-04 | adopt, HIGH confidence | **adopt — CONFIRMED** | `112-03-SUMMARY.md`: ported verbatim, additive `predicate`/`TRUST_POLICY_PREDICATE` discriminator, `TRUST_POLICY_VERSION` deprecated not removed |
+| `d84b4818` | SEC-05 | adopt, HIGH confidence | **adopt — CONFIRMED** | `112-05-SUMMARY.md`: symbol-level re-verification confirmed every referenced symbol present with matching signatures; `restrict_execute()` gains bare `Refer` on `/`, gated `abi.has_refer()`; live-tested via `cross test` |
+| `ac5ccd70` | SEC-06 | adapt | **adapt — CONFIRMED** | `112-06-SUMMARY.md`: upstream's `tool_sandbox_runtime.is_some() \|\| seccomp_policy.child_requires_dumpable()` gate symbols absent; reused the fork's existing `linux_child_requires_dumpable()` predicate; `PR_SET_CHILD_SUBREAPER` + `reap_reparented_orphans()` ported, RED/GREEN TDD-verified live via `cross test` |
+| `2663e990` | SEC-07 | adopt | **adopt (adapted API) — CONFIRMED, plus additional Rule-2 hardening** | `112-07-SUMMARY.md`: `nono proxy` standalone subcommand built on the fork's real `ProxyLaunchOptions`/`build_proxy_config_from_flags` API (upstream's Intent-struct imports absent); see "New Information" below for the `require_auth`/`strict_connect_auth` fix this plan additionally delivered |
+| `a5a441c2` | SEC-08 | won't-sync-verbatim / adapt-with-fail-closed-preservation, ADR-112-flagged | **won't-sync/PRESERVE — CONFIRMED, ADR written** | `112-03-SUMMARY.md`; `proj/ADR-112-allow-vars-fail-closed-preserved.md`: upstream's `Option<Vec<String>>` reinterpretation would flip an omitted `allow_vars` from "strip all" (fork's fail-closed default, D-20/Plan 34-08a) to "allow everything" — rejected outright, zero source-code change (`git diff -- crates/nono-cli/src/profile_runtime.rs` empty) |
+| `f6f02751` | SEC-09 | won't-sync (target subsystem absent), LOCKED per D-01 | **won't-sync + carry-forward filed — CONFIRMED** | premise re-verified live (`grep` returns 0 hits for `command_policies`/`tool_sandbox_runtime`/`tool_sandbox_initial_shim` in `execution_runtime.rs`); carry-forward note filed above in this ledger's tool-sandbox-surface cluster section ("SEC-09 Carry-Forward Note") |
+| `f0506434` | RES-01 | skip, with recorded reasoning | **skip — CONFIRMED** | `112-OAUTH-CAPTURE-DISPOSITION.md` Part 2; HKLM machine-policy-spine collision; flagged-but-out-of-scope `always-further/*` pack-registry-namespace UX staleness (16 grep hits) noted, not acted on |
+| `7fe0c828` | RES-01 | skip, with recorded reasoning | **skip — CONFIRMED** | same HKLM-spine collision rationale; `X-Nono-Pull-Reason` telemetry header, no fork-side gap |
+| `0158d52f` | RES-01 | skip, with recorded reasoning | **skip — CONFIRMED** | same rationale; installation-context headers, upstream-service-facing only |
+| `762eb05b` | RES-01 | skip, with recorded reasoning | **skip — CONFIRMED** | same rationale, plus `release.yml`'s heavy Trusted-Signing (v3.5) customization makes a verbatim upstream hunk out-of-proportion regression risk |
+| `503045801a` | RES-02 | adopt | **adopt — CONFIRMED** | `112-04-SUMMARY.md`: `CprReplyParse`/`discard_late_terminal_input()` ported verbatim, wired only into the final `release_terminal_for_prompt` teardown path; 38/38 `pty_proxy` tests pass live via `cross test` |
+| `4cc0af2c52` | RES-02 | "adapt with caution, or skip", MEDIUM confidence | **SKIP — DIVERGED FROM PLAN (narrowed, not reversed)** | `112-04-SUMMARY.md`: symbol-level re-verification found the target helper `socket_test_dir()` absent from `crates/nono/src/supervisor/socket.rs` AND from `open_url_runtime.rs`; the commit's third file (`tests/url_open_integration.rs`) does not exist in the fork at all. The fork's `socket.rs` tests use `SupervisorSocket::pair()` (anonymous `socketpair()`, no filesystem path) — no SUN_LEN-limited tempdir choice remains to switch. Recorded via a comment-only disposition-amendment note (`git diff --stat` confirms zero functional change). |
+| `9840a16f35` | RES-02 | adopt, HIGH confidence | **adopt (adapted, not verbatim) — CONFIRMED, disposition narrowed** | `112-04-SUMMARY.md`: `NONO_NO_SAVE_PROMPT=1` ported as-is; the denial-marker assertion was rebuilt around the bare socket path rather than upstream's literal `"send {path}"` string, because this fork's `diagnostic/formatter.rs` never emits that marker (it renders a block header + one denied-path line instead) — a verbatim port would have made the tightened assertion vacuously pass |
+
+**Arithmetic check (D-08):** 10 named anchors (`0ecc476b`, `9b692e07`, `3c59c62e`, `d033c631`,
+`a3243907`, `f943fb5a`, `d84b4818`, `ac5ccd70`, `2663e990`, `a5a441c2`) + 1 SEC-09 (`f6f02751`) +
+4 RES-01 (`f0506434`, `7fe0c828`, `0158d52f`, `762eb05b`) + 3 RES-02 (`503045801a`, `4cc0af2c52`,
+`9840a16f35`) = **18**, matching this cluster's itemization above exactly. Every SHA appears in
+the table exactly once; no remainder bucket.
+
+### Divergences between the planned disposition table and what shipped
+
+`112-DISPOSITION-TABLE.md` (Wave 1's finalized-but-pre-execution disposition table) called 3 of
+the 18 rows correctly at the ADOPT/SKIP level but incorrectly at the ADAPT-vs-confidence level.
+Recorded here because the corrected reasoning — not the table's original text — is what a future
+auditor should trust:
+
+1. **SEC-03 (`a3243907`) — table said "adopt, HIGH confidence"; shipped as ADAPT.** The table's
+   confidence was derived from file-presence evidence (`ls`/`Read` confirming every target file
+   exists) — not symbol-level verification of whether the specific types/functions the diff's
+   context lines assume already exist. `112-02`'s Task 1 `read_first` step found zero grep hits
+   for `SeccompPolicy`/`LinuxSandboxPolicy`/`apply_landlock`/`apply_auto`/`apply_external`
+   anywhere in the fork, tracing the gap to the unabsorbed antecedent commits `fa21a004`/
+   `8a4237f2` (#1283) — already independently flagged in this ledger's tool-sandbox-surface
+   cluster table (above) as a "CORE-cluster/Phase-111 residual," never picked up by Phase 111.
+   This 21-file refactor remains a **standing, unabsorbed gap** after Phase 112 closes — flagged
+   for whichever future plan eventually absorbs it.
+2. **RES-02/`4cc0af2c52` — table said "adapt with caution, or skip" (MEDIUM confidence); shipped
+   as SKIP.** `112-04`'s symbol-level re-verification found the target helper `socket_test_dir()`
+   does not exist anywhere in the fork, and the commit's third file does not exist at all —
+   narrower than "risky to adapt," the target is simply absent.
+3. **RES-02/`9840a16f35` — table said "adopt, HIGH confidence" (implying a near-verbatim port);
+   shipped as adopt-but-adapted.** Upstream's `"send {path}"` denial marker string is never
+   emitted by this fork's diagnostic formatter (`crates/nono-cli/src/diagnostic/formatter.rs`
+   renders a block-header-plus-per-line format instead); a verbatim port would have made the
+   tightened test assertion vacuously pass. `112-04` rebuilt the assertion around the bare socket
+   path instead.
+
+**Methodological lesson (recorded for future UPST-sync planning):**
+`112-DISPOSITION-TABLE.md`'s confidence column was derived from file-presence evidence (`ls`/
+`git show --stat`), not symbol-level verification (`grep` for the specific types/functions/fields
+the diff's own context lines assume already exist) — and was wrong in 2 of the 3 dispositions this
+addendum re-checked at symbol level during execution (SEC-03, RES-02/`4cc0af2c52`; the third,
+RES-02/`9840a16f35`, was directionally correct but needed a fork-specific adaptation the table
+didn't anticipate). Future UPST-sync Wave-1 reality-check passes should require symbol-level
+verification (grep for the diff's referenced types/functions/struct-fields, not just `ls`/
+file-presence) before assigning a HIGH-confidence "adopt" call — `112-02`, `112-04`, `112-05`, and
+`112-06` each independently re-ran this check this phase (`112-05`'s SUMMARY documents running the
+same check and confirming the table's call WAS correct for SEC-05, in contrast to SEC-03/
+RES-02-`4cc0af2c52` where the same check found a real gap).
+
+### New information generated during Phase 112 execution (not upstream-sync items)
+
+**Pre-existing fork security defect closed by SEC-07 (`112-07`, not an upstream sync item):**
+before this plan, `nono-proxy` had no `--no-auth` / auth-disable concept at all. `reverse.rs`'s two
+auth checks were unconditionally fatal (correct only for the sandboxed-run-only world), and
+`connect.rs`'s CONNECT-tunnel auth check was unconditionally lenient (never rejecting, by design
+for the OS-sandbox-is-the-trust-boundary sandboxed path) — a genuine session-token-boundary bypass
+for a **standalone, non-loopback `nono proxy`** server with no OS sandbox behind it: an
+unauthenticated client could tunnel arbitrary traffic through CONNECT regardless of the advertised
+session token. Closed via `ProxyConfig.require_auth` (default `true`, matches pre-existing
+sandboxed-run behavior) and `ProxyConfig.strict_connect_auth` (default `false`, i.e. every
+standalone invocation except explicit `--no-auth` sets it `true` and CONNECT auth becomes fatal —
+407). Both defaults preserve `nono run`/`shell`/`wrap`'s behavior byte-for-byte (confirmed:
+218/218 pre-existing `nono-sandbox-proxy` unit tests pass unchanged). See `112-07-SUMMARY.md`'s
+"Security Note" section for the full trace.
+
+### Disposition class summary (this addendum)
+
+- **won't-sync (target subsystem absent):** SEC-01, SEC-09 (2)
+- **won't-sync/PRESERVE (ADR-112, zero code change):** SEC-08 (1)
+- **deferred -> Phase 114 (evidence captured, no verdict made):** SEC-02a/b/c (3)
+- **adopt:** SEC-04, SEC-05, RES-02/`503045801a`, RES-02/`9840a16f35` (4)
+- **adopt (adapted API/marker):** SEC-07 (1)
+- **adapt:** SEC-03, SEC-06 (2)
+- **skip, with recorded reasoning:** RES-01 x4, RES-02/`4cc0af2c52` (5)
+
+2 + 1 + 3 + 4 + 1 + 2 + 5 = **18**, matching the 18-SHA table above and D-08's closed arithmetic.
+
+**Distinguished from the Phase 111 Standing Divergence Addendum above:** that addendum records ONE
+permanent architectural decision (CORE-cluster resource-limiting stays `nono-cli`-side, no future
+phase hands off to it). This addendum instead closes out an entire phase's disposition work across
+18 independently-adjudicated commits — three disposition classes of which (SEC-01/SEC-09
+won't-sync, SEC-08 PRESERVE, SEC-02a/b/c deferred) are themselves durable/standing in the same
+sense as the Phase 111 entry, while the remaining 13 (SEC-03..07, RES-01 x4, RES-02 x3) represent
+completed, code-landed absorb/adapt/skip work with no further action owed. SEC-09's entry
+additionally carries a live future obligation — see "SEC-09 Carry-Forward Note" in the
+tool-sandbox-surface cluster section above (not repeated here).
