@@ -43,7 +43,29 @@ findings:
   warning: 12
   info: 5
   total: 21
+resolved:
+  critical: 4
+  warning: 0
+  info: 0
+  total: 4
+open:
+  critical: 0
+  warning: 12
+  info: 5
+  total: 17
 status: issues_found
+fix_pass:
+  date: 2026-08-05
+  scope: critical_only
+  commits:
+    - "916d3bd7 fix(112): thread profile deny layer, no_proxy and block into nono proxy (CR-01)"
+    - "892d2e01 fix(112): stop predicate-less trust policies from disabling enforcement (CR-02)"
+    - "585f2743 fix(112): drain queued network notifications on the orphan-reaper exit path (CR-03)"
+    - "20f9a1cd fix(112): make SeccompOpts::external_tcp() fail closed on a declared network policy (CR-04)"
+  gates:
+    linux_clippy: green
+    darwin_clippy: green
+    fmt_check: clean
 ---
 
 # Phase 112: Code Review Report
@@ -88,6 +110,17 @@ access. Never silently degrade", "Configuration load failures must be fatal", an
 library applies ONLY what's in `CapabilitySet`".
 
 ## Critical Issues
+
+> **Fix pass 2026-08-05 — all four Critical findings RESOLVED.** Scoped to
+> Criticals only by operator decision; the 12 Warnings and 5 Info findings below
+> remain OPEN and untouched. Per-finding resolutions are recorded inline under
+> each finding. Verification: `cross clippy --workspace --all-targets --target
+> x86_64-unknown-linux-gnu` GREEN, `cargo-zigbuild clippy --workspace
+> --all-targets --target x86_64-apple-darwin` GREEN, `cargo fmt --all --check`
+> clean, `nono-sandbox` 887/887 and `nono-sandbox-proxy` 218/218 pass,
+> `nono-sandbox-cli` 1484 pass with the same 11 pre-existing
+> environment-specific failures present at the phase base (verified by
+> stash-and-rerun) — no new failures.
 
 ### CR-01: `nono proxy` silently discards the profile's deny layer, `no_proxy`, and `network.block`
 
@@ -155,6 +188,31 @@ Ok(ProxyLaunchOptions {
 
 Until the flags exist, at minimum **fail closed**: reject `--profile` whose
 `network.deny_domain`/`no_proxy`/`block` are non-default rather than silently dropping them.
+
+**RESOLVED** — commit `916d3bd7`, files `crates/nono-cli/src/proxy_command.rs`,
+`crates/nono-cli/src/cli.rs`.
+
+Fixed as suggested (the full thread-through, not the fallback reject):
+
+- `build_launch_options` now merges `net.deny_domain`, `net.no_proxy` and
+  `net.block` (→ `strict_filter`) from the profile, matching `nono run`'s
+  `resolve_effective_proxy_settings` + `prepare_proxy_launch_options`.
+- Added `--deny-domain` to `ProxyArgs` (`env = "NONO_DENY_DOMAIN"`), mirroring
+  the `nono run` flag, so the deny layer is reachable without a profile.
+- Added the D-04/D-05 deny-only guard as a hard parse-time error, mirroring
+  `sandbox_prepare::validate_deny_domain_requires_allow_domain`. It fires for
+  deny entries from either source (CLI flag or profile).
+- The bare-`nono proxy` open-forwarding-proxy consequence was **not** changed
+  behaviourally — deny-by-default would make the standalone command unusable
+  and is a design change beyond this finding. Mitigated instead with a loud
+  stderr warning in `print_connection_info` whenever the effective config has
+  an empty allowlist and no strict-filter selection, i.e. exactly when the
+  proxy forwards to any host. Residual noted here deliberately.
+
+Regression tests (5, in `proxy_command.rs`): all three previously-dropped
+fields reach `ProxyLaunchOptions`; CLI flag composes with profile deny entries;
+the deny-only guard fires from the CLI path and from the profile path; and a
+plain profile does not spuriously gain a deny layer or strict filtering.
 
 ---
 
@@ -239,6 +297,51 @@ let project_policy = crate::trust_scan::load_nono_policy(&cwd_policy)?
 Also tighten `TrustPolicy::validate_version()` to require `predicate.is_some()` so the
 library and CLI agree on what a valid policy is.
 
+**RESOLVED** — commit `892d2e01`, files `crates/nono-cli/src/trust_scan.rs`,
+`crates/nono-cli/src/trust_cmd.rs`.
+
+Fixed with the **legacy-migration** variant of the suggested fix (the review's
+own `trust_scan.rs` snippet), not the hard-error-on-absent-predicate variant.
+Rationale: no released version ever wrote a `predicate` field, so hard-erroring
+on its absence would brick every trust policy in the field on upgrade. The
+absent-predicate case is now resolved by **content**: a file that deserializes
+as a `TrustPolicy` is a legacy pre-predicate nono policy and is accepted with a
+migration warning; only a file that *also* fails `TrustPolicy` deserialization
+is genuinely foreign and skipped. This keeps the foreign-file ergonomics
+(AWS IAM et al. share the filename) while removing the fail-open path. Either
+way the operator's user-level policy is never discarded — that was the
+non-negotiable part.
+
+Per-downgrade disposition:
+
+1. **User policy never consulted** — fixed. `trust_cmd::load_trust_policy`'s
+   auto-discovery branch no longer early-returns; project and user policies are
+   loaded independently and combined in a single `(user, project)` match. A
+   project file can no longer short-circuit user-policy loading regardless of
+   its content.
+2. **Every pre-existing policy trips this** — fixed by the legacy acceptance
+   above. No migration step is required of operators.
+3. **Predicate-less user policy dropped** — fixed by the same legacy
+   acceptance: such a policy now loads as `Some(..)` and merges normally.
+
+Two additional fail-open shapes closed while restructuring the same match
+(overlaps WR-11, which remains open for its second, error-message half):
+a *present* but unrecognised predicate string is now a hard error rather than a
+silent skip (matching `run_sign_policy` and the explicit `--policy` path), and a
+non-string `predicate` is a hard error rather than collapsing into the absent
+case via `as_str()`.
+
+`TrustPolicy::validate_version()` was deliberately **not** tightened to require
+`predicate.is_some()`. Doing so would reject exactly the legacy policies this
+fix exists to keep loading, since `load_policy_from_str` calls it. Library and
+CLI now agree: predicate-less is valid (legacy), wrong-predicate is not.
+
+Regression tests (5, in `trust_scan.rs`): legacy acceptance; foreign-file skip;
+unrecognised-predicate rejection; non-string-predicate rejection; and an
+end-to-end `load_scan_policy` case asserting the operator's `Deny` enforcement
+and `includes` survive a legacy project policy — i.e. the attack scenario in
+this finding is directly covered.
+
 ---
 
 ### CR-03: `reap_reparented_orphans` early-return skips the final network-notification drain, silently losing denial records
@@ -291,6 +394,31 @@ if let Some(status) = reap_reparented_orphans(child) {
     return Ok((status, denials, ipc_denials));
 }
 ```
+
+**RESOLVED** — commit `585f2743`, file `crates/nono-cli/src/exec_strategy.rs`.
+
+Fixed exactly as suggested: `drain_pending_network_notifications(...)` is now
+called before the reaper path's `return`, matching the `Ok(status)` and
+`ECHILD` arms below it. The shared-exit-path factoring the review suggested as
+an option was not done — three call sites of a five-argument drain is not yet
+worth an extracted helper, and keeping the diff to an added call keeps the
+change reviewable.
+
+The reviewer's analysis was confirmed against the source: `reap_reparented_orphans`
+is the only call site (`exec_strategy.rs:3454`), it runs before
+`waitpid(child, WNOHANG)`, and it reaps via `waitpid(-1, WNOHANG)` which
+consumes any terminated direct child including the tracked primary.
+
+Not unit-tested: the call site is inside the Linux supervisor loop and
+exercising it requires a real fork plus a live seccomp-notify fd. The fix is a
+straight lift of a call already present on the two sibling exit paths in the
+same `match`. Compile-verified for the target that actually builds this code
+via `cross check -p nono-sandbox-cli --bins --target x86_64-unknown-linux-gnu`.
+
+Note (not fixed, out of scope): the loop's `break` paths fall through to
+`wait_for_child(child)` at the end of the function, which also returns without
+draining. That is pre-existing behaviour on the abnormal-teardown path, not
+introduced by this phase, and is left for a follow-up.
 
 ---
 
@@ -355,7 +483,64 @@ fn apply_with_abi_inner(...) -> Result<SeccompNetFallback> {
 And either delete `apply_external()` or have it record something observable
 (e.g. into `SandboxState`) so the doc comment becomes true.
 
+**RESOLVED** — commit `20f9a1cd`, files `crates/nono/src/sandbox/linux.rs`,
+`crates/nono/src/sandbox/mod.rs`.
+
+The zero-caller claim was independently re-verified across the whole workspace
+including `bindings/c/`: the only hits for `apply_seccomp`,
+`apply_seccomp_with_abi`, `apply_external` and `SeccompOpts` are the
+declaration sites, the `lib.rs`/`mod.rs` re-exports, and one unit test
+asserting `handles_tcp()`. Confirmed dead.
+
+**Gated rather than deleted.** `112-02-PLAN.md`'s must_haves literally require
+`Sandbox::apply_seccomp`/`apply_seccomp_with_abi`/`apply_external` to exist as
+public library entry points (T-112-06 covers the `apply_external` doc
+correction), so removing the surface would violate the phase's own acceptance
+criteria. Removal should be re-proposed as a scoped decision if the API still
+has no consumer by the next milestone.
+
+Fix, per bullet:
+
+- **Silently ignores `CapabilitySet`'s network mode** — new
+  `validate_external_tcp_delegation()` runs at the top of
+  `apply_with_abi_inner` (before any kernel state is touched) and returns
+  `NonoError::SandboxInit` whenever `caps` declares a network policy: any
+  `network_mode` other than `AllowAll`, or any entry in `tcp_connect_ports`,
+  `tcp_bind_ports` or `localhost_ports`. The library can no longer apply
+  *less* than what is in the `CapabilitySet`.
+- **`SeccompNetFallback::None` ambiguity** — resolved without adding the
+  suggested `ExternalTcp` variant. With the guard in place, `external_tcp()`
+  is only ever accepted when there was no network policy to enforce, so
+  `None` is truthful on that path too and no caller can be misled. Avoiding a
+  new public enum variant also avoids breaking every exhaustive `match` in
+  downstream consumers (`nono-py`/`nono-ts`), which is a live hazard for this
+  fork.
+- **Skips the `open_port 0` fail-closed validation** — the `handle_tcp &&`
+  gate added to that check has been removed, so it applies on every Linux
+  path again.
+- **`apply_external()` doc describes behaviour that does not exist** — the
+  doc comments on both `linux::apply_external` and the `Sandbox::` wrapper no
+  longer claim "Returns an error if the marker cannot be recorded"; they state
+  that the function records no state, is infallible, and carries `Result` only
+  for signature symmetry. `apply_external()` was left in place (see gating
+  rationale above) rather than made to record into `SandboxState`, which would
+  have added a new observable API with still no consumer.
+- **Dead/untested code** — the surface now has 5 tests (accepted no-policy
+  shape, `BlockAll`, `ProxyOnly`, each of the three port lists, and rejection
+  through the public `apply_seccomp_with_abi` entry point), replacing the
+  single `handles_tcp()` assertion.
+
+Verified on `x86_64-unknown-linux-gnu` via `cross test -p nono-sandbox` — this
+module is `#[cfg(target_os = "linux")]` and invisible to a Windows-host build.
+
 ## Warnings
+
+> The 12 Warnings and 5 Info findings below are **OPEN**. The 2026-08-05 fix
+> pass was scoped to Critical findings only. WR-11 was partially overtaken by
+> the CR-02 fix (its parser-differential half — non-string and unrecognised
+> `predicate` values — is now handled); its second half, the misleading
+> `"failed to parse {path}"` message for well-formed foreign JSON, is still
+> open.
 
 ### WR-01: `waitpid(-1)` can steal the exit status of unrelated `std::process::Child` handles
 
@@ -773,3 +958,6 @@ substring over all of stderr.
 _Reviewed: 2026-08-05_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+
+_Critical fix pass: 2026-08-05 — CR-01, CR-02, CR-03, CR-04 resolved in commits_
+_`916d3bd7`, `892d2e01`, `585f2743`, `20f9a1cd`. 12 Warnings + 5 Info remain open._

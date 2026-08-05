@@ -189,6 +189,28 @@ To get the public key in base64 format for a manual policy:
 nono trust export-key --id default
 ```
 
+### predicate
+
+The `predicate` field identifies the file as a nono trust policy. `trust-policy.json`
+is a common filename — AWS IAM and other tools use it too — so nono checks this
+field before attempting a full parse, and skips files that are not nono policies.
+
+Handling is deliberately asymmetric:
+
+- **Correct predicate** — loaded normally.
+- **Missing predicate** — nono falls back to parsing the file as a trust policy.
+  If it parses, it is treated as a **legacy** (pre-`predicate`) policy: it loads
+  normally and prints a one-time migration warning. If it does not parse, it is
+  a foreign file and is skipped. Policies written by nono releases before the
+  `predicate` field was introduced therefore keep working; add the field, or run
+  `nono trust init --force`, to silence the warning.
+- **Wrong or non-string predicate** — a hard error. nono refuses to run rather
+  than continue with trust enforcement silently disabled.
+
+A project-level `trust-policy.json` never suppresses your user-level policy. The
+two are loaded independently and merged, with the strictest enforcement winning,
+regardless of what the project file contains.
+
 ### includes
 
 Glob patterns identifying files under attestation. Any file matching these patterns is subject to verification.
