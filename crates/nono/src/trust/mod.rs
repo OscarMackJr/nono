@@ -63,7 +63,7 @@ pub use signing::{
 };
 pub use types::{
     BlockedPublisher, Blocklist, BlocklistEntry, Enforcement, IncludePatterns, Publisher,
-    SignerIdentity, TrustPolicy, VerificationOutcome, VerificationResult, TRUST_POLICY_VERSION,
+    SignerIdentity, TrustPolicy, VerificationOutcome, VerificationResult, TRUST_POLICY_PREDICATE,
 };
 
 // Phase 32 D-32-15 #2: Test-only helper that loads a frozen TUF root

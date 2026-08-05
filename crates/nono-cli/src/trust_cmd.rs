@@ -138,7 +138,7 @@ fn run_init(args: TrustInitArgs) -> Result<()> {
     };
 
     let policy = serde_json::json!({
-        "version": 1,
+        "predicate": nono::trust::TRUST_POLICY_PREDICATE,
         "includes": patterns,
         "publishers": publishers,
         "blocklist": {
@@ -749,8 +749,13 @@ fn run_sign_policy(args: TrustSignPolicyArgs) -> Result<()> {
         }
     };
 
-    // Validate the policy file is well-formed before signing.
-    trust::load_policy_from_file(&policy_path)?;
+    // Validate the policy file is a well-formed nono trust policy before signing.
+    crate::trust_scan::load_nono_policy(&policy_path)?.ok_or_else(|| {
+        nono::NonoError::TrustPolicy(format!(
+            "{} is not a nono trust policy (missing or unrecognised predicate)",
+            policy_path.display()
+        ))
+    })?;
 
     let bundle_json = trust::sign_policy_file(&policy_path, &key_pair, &key_id)?;
     trust::write_bundle(&policy_path, &bundle_json)?;
@@ -1570,7 +1575,12 @@ pub(crate) fn reconstruct_key_pair(pkcs8_bytes: &[u8]) -> Result<trust::KeyPair>
 fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy> {
     if let Some(path) = explicit_path {
         verify_policy_if_exists(path)?;
-        return trust::load_policy_from_file(path);
+        return crate::trust_scan::load_nono_policy(path)?.ok_or_else(|| {
+            nono::NonoError::TrustPolicy(format!(
+                "{} is not a nono trust policy (missing or unrecognised predicate)",
+                path.display()
+            ))
+        });
     }
 
     // Auto-discover: check CWD then user config dir
@@ -1578,13 +1588,17 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
     let cwd_policy = cwd.join("trust-policy.json");
     if cwd_policy.exists() {
         verify_policy_if_exists(&cwd_policy)?;
-        let project_policy = trust::load_policy_from_file(&cwd_policy)?;
+        let project_policy = match crate::trust_scan::load_nono_policy(&cwd_policy)? {
+            Some(policy) => policy,
+            None => return Ok(trust::TrustPolicy::default()),
+        };
         // Try to load user-level policy and merge
         if let Some(user_policy_path) = user_trust_policy_path() {
             if user_policy_path.exists() {
                 verify_policy_if_exists(&user_policy_path)?;
-                let user_policy = trust::load_policy_from_file(&user_policy_path)?;
-                return trust::merge_policies(&[user_policy, project_policy]);
+                if let Some(user_policy) = crate::trust_scan::load_nono_policy(&user_policy_path)? {
+                    return trust::merge_policies(&[user_policy, project_policy]);
+                }
             }
         }
         let user_path = user_trust_policy_path()
@@ -1614,7 +1628,9 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
     if let Some(user_path) = user_trust_policy_path() {
         if user_path.exists() {
             verify_policy_if_exists(&user_path)?;
-            return trust::load_policy_from_file(&user_path);
+            if let Some(policy) = crate::trust_scan::load_nono_policy(&user_path)? {
+                return Ok(policy);
+            }
         }
     }
 
