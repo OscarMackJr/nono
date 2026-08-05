@@ -253,3 +253,75 @@ subset of the documented 24-name baseline — zero new failures, honestly diffed
 Resource-flag regression guards all pass.
 
 ---
+
+## Task 3 — Sibling binding rebuilds + this record
+
+Both run at the CURRENT (pre-RLS-14) version, `0.66.1` — this task validates struct/API
+compatibility, not version numbers. Plan 111-06 handles the version bump later.
+
+### `maturin build` in `../nono-py`
+
+Exit code: **0**
+```
+📦 Including license file `LICENSE`
+🍹 Building a mixed python/rust project
+🐍 Found CPython 3.12 at C:\Users\OMack\AppData\Local\Programs\Python\Python312\python.exe
+🔗 Found pyo3 bindings
+📡 Using build options features from pyproject.toml
+   Compiling nono-sandbox v0.66.1 (C:\Users\OMack\Nono\crates\nono)
+   Compiling nono-sandbox-proxy v0.66.1 (C:\Users\OMack\Nono\crates\nono-proxy)
+   Compiling nono-py v0.66.1 (C:\Users\OMack\nono-py)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 34s
+📦 Built wheel for CPython 3.12 to C:\Users\OMack\nono-py\target\wheels\nono_sandbox-0.66.1-cp312-cp312-win_amd64.whl
+```
+**No fix required** — clean on the first attempt, matching the 110-08 precedent. CORE-01
+(`policy.json` grant + private `MAX_CRYPTO_THREADS` constant) and CORE-02 (CLI-only help
+text) touch no `pub` struct field either binding constructs.
+
+### `npx napi build --platform --release` in `../nono-ts`
+
+Exit code: **0**
+```
+   Compiling nono-node v0.66.1 (C:\Users\OMack\nono-ts)
+   Compiling nono-sandbox v0.66.1 (C:\Users\OMack\Nono\crates\nono)
+    Finished `release` profile [optimized] target(s) in 2m 36s
+```
+**No fix required** — clean on the first attempt.
+
+Neither sibling repo required a fix. Both binding rebuilds confirmed green at the pre-bump
+version.
+
+---
+
+## Summary
+
+| Gate | Result |
+|---|---|
+| linux-gnu cross clippy (combined 108-111 surface) | GREEN (exit 0) |
+| apple-darwin cargo-zigbuild clippy (combined 108-111 surface) | GREEN (exit 0) |
+| D-01 (`no pub mod resource;`) | CONFIRMED still holding |
+| ADR-86 Windows carve-out (`exec_strategy_windows/`) | CONFIRMED structurally unregressed since `c5c8c5fc` |
+| `cargo clippy --workspace --all-targets --all-features` (native, supplementary) | GREEN (exit 0) |
+| `cargo fmt --all -- --check` | GREEN (exit 0) |
+| `cargo audit` | GREEN (exit 0, 6 pre-existing allowed advisory warnings, 0 vulnerabilities) |
+| `cargo test -p nono-sandbox` | GREEN (9/9) |
+| `cargo test -p nono-sandbox-cli --bin nono` | RED — 11/11 matches documented baseline exactly |
+| `cargo test -p nono-ffi` | GREEN (49/49) |
+| `cargo test --workspace --no-fail-fast` | RED — 17-name failing set, confirmed strict SUBSET of documented 24-name baseline, zero new names |
+| D-09 assertion-3 resource-flag regression guards | GREEN (4/4) |
+| `maturin build` (`../nono-py`) | GREEN (exit 0), no fix needed |
+| `napi build --platform --release` (`../nono-ts`) | GREEN (exit 0), no fix needed |
+
+**This record supersedes `110-08-VERIFICATION-NOTES.md` per D-09.** That record predates
+four defect-fix commits landed 2026-08-04 (`7c7a189c` `has_port_rules()` omission,
+`ea26b5b2` `cmd_show`'s missing `Network:` section, `6d7ef719` version-skew fail-open,
+`4aec1944` broken filter-sweep enumeration — closing PROF-03e's live-kernel checkpoint) and
+Phase 111's own CORE-01/CORE-02 changes. `has_port_rules()` shipped broken straight through
+the 110-08 certification, which is exactly why D-09 mandates this pass cover the combined
+108-111 surface honestly rather than merely Phase 111's own small diff. Both cross-target
+clippy gates and both binding rebuilds have now been re-run fresh against the tree
+containing all of Phase 110's fixes plus Phase 111's Wave 1 changes, and are confirmed
+GREEN. VERIFY-01 is satisfied: the Windows security model and the ADR-86 policy-free-library
+boundary are both confirmed unregressed over the honest combined surface, and every
+pre-existing test failure is traced to a name already present in the documented baseline —
+no new regression, no fabricated GREEN.
