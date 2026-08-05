@@ -245,3 +245,119 @@ fn filesystem_deny_blocks_unix_socket_connect_on_macos() {
         "connect must not complete\nstdout: {stdout}\nstderr: {stderr}",
     );
 }
+
+/// Yama `ptrace_scope`, or `None` if it can't be read (non-Yama kernel).
+#[cfg(target_os = "linux")]
+fn yama_ptrace_scope() -> Option<i32> {
+    fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+/// Regression test for the AF_UNIX-pathname orphan `connect()` bug (Phase 112
+/// SEC-06, upstream `ac5ccd70` / #1401): a double-forked grandchild reparents
+/// to pid 1, and pre-fix the supervisor could no longer read its
+/// `/proc/<pid>/mem` to classify the syscall (the read is ancestry-gated under
+/// Yama `ptrace_scope=1`), so its allowed TCP connect was denied with `EPERM`.
+/// The child-subreaper fix (`PR_SET_CHILD_SUBREAPER` + `reap_reparented_orphans`
+/// in `crates/nono-cli/src/exec_strategy.rs`) keeps such descendants in the
+/// supervisor's ancestry. Only manifests under `ptrace_scope >= 1`.
+///
+/// Ported from upstream `ac5ccd70` verbatim; no fork config-field-name
+/// adaptation was needed (`linux.af_unix_mediation`/`network.block` match this
+/// fork's existing profile schema exactly, confirmed against the two
+/// pre-existing `af_unix_mediation_pathname_*` tests above).
+#[test]
+#[cfg(target_os = "linux")]
+fn af_unix_mediation_pathname_allows_orphaned_child_tcp_connect() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    match yama_ptrace_scope() {
+        Some(0) => eprintln!(
+            "note: ptrace_scope=0, the orphan-reparent regression is not exercised \
+             (read succeeds regardless); asserting the positive path only"
+        ),
+        Some(n) => eprintln!("ptrace_scope={n}: regression is exercised"),
+        None => eprintln!("note: could not read ptrace_scope (non-Yama kernel?)"),
+    }
+
+    let (_tmp, home, workspace) = setup_isolated_home("af-unix-orphan");
+
+    // Live loopback listener so an authorized connect completes locally without
+    // egress (the handshake lands in the backlog; no accept() needed).
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback listener");
+    let port = listener.local_addr().expect("local_addr").port();
+
+    let profile_path = home.join("af-unix-orphan.json");
+    fs::write(
+        &profile_path,
+        r#"{"meta":{"name":"af-unix-orphan"},"workdir":{"access":"readwrite"},"network":{"block":false},"linux":{"af_unix_mediation":"pathname"}}"#,
+    )
+    .expect("write profile");
+
+    // Foreground connect (always in the supervisor's ancestry) then a
+    // double-forked orphan that reparents to pid 1 before it connects.
+    let py_script = format!(
+        r#"
+import os, socket
+PORT = {port}
+def attempt():
+    s = socket.socket(); s.settimeout(3)
+    try:
+        s.connect(("127.0.0.1", PORT)); return "OK"
+    except OSError as e:
+        return "errno=%d" % (e.errno,)
+    finally:
+        s.close()
+print("foreground " + attempt(), flush=True)
+r, w = os.pipe()
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        import time; time.sleep(0.5)  # let the intermediate exit -> reparent to pid 1
+        os.write(w, ("orphan " + attempt()).encode()); os._exit(0)
+    os._exit(0)
+os.close(w)
+print(os.read(r, 200).decode(), flush=True)
+"#
+    );
+
+    let output = run_nono(
+        &[
+            "run",
+            "--profile",
+            &profile_path.to_string_lossy(),
+            "--",
+            "python3",
+            "-c",
+            &py_script,
+        ],
+        &home,
+        &workspace,
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Sanity: foreground connect is authorized and completes.
+    assert!(
+        stdout.contains("foreground OK"),
+        "foreground connect should be authorized and complete\nstdout: {stdout}\nstderr: {stderr}",
+    );
+
+    // The fix: the orphaned grandchild's connect is authorized too (pre-fix it
+    // was "orphan errno=1" under ptrace_scope>=1).
+    assert!(
+        stdout.contains("orphan OK"),
+        "orphaned grandchild connect must be authorized (was EPERM before the \
+         child-subreaper fix)\nstdout: {stdout}\nstderr: {stderr}",
+    );
+
+    // Fingerprint of the ancestry-gated /proc/<pid>/mem read failing.
+    assert!(
+        !stderr.contains("Failed to read sockaddr"),
+        "supervisor failed to classify the orphan's connect (ancestry lost)\nstderr: {stderr}",
+    );
+}
