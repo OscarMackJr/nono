@@ -161,3 +161,11 @@ None — no external service configuration, no new runtime dependencies added to
 ---
 *Phase: 112-security-residual-sync*
 *Completed: 2026-08-05*
+
+## Self-Check: PASSED
+
+Created/modified files confirmed present on disk: `crates/nono-cli/src/proxy_command.rs`,
+`crates/nono-cli/tests/proxy_command_run.rs`,
+`.planning/phases/112-security-residual-sync/112-07-SUMMARY.md`. Task commits
+`00d45c67` (Task 1), `14ed22e5` (Task 2), `ad8132e7` (Task 3), and `d83f9842`
+(this SUMMARY) all confirmed present in `git log --oneline --all`.

@@ -299,7 +299,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 112-04-PLAN.md — RES-02: PTY late-CPR-reply teardown drain (adopt) + socket.rs /tmp switch (skip) + test-infra tightening (adopt)
 - [x] 112-05-PLAN.md — SEC-05: Landlock Refer grant in the execute-restriction layer
 - [x] 112-06-PLAN.md — SEC-06: seccomp-notify supervisor-ancestry orphan reaping (adapted)
-- [ ] 112-07-PLAN.md — SEC-07: standalone `nono proxy` command, adapted to the fork's ProxyLaunchOptions API
+- [x] 112-07-PLAN.md — SEC-07: standalone `nono proxy` command, adapted to the fork's ProxyLaunchOptions API
 - [ ] 112-08-PLAN.md — D-05 ledger addendum (all 18 dispositions) + SEC-09 carry-forward note + combined-surface verification + REQUIREMENTS/ROADMAP reconciliation
 
 
