@@ -716,16 +716,18 @@ impl Sandbox {
 
     /// Declare that TCP network enforcement is handled externally (Linux).
     ///
-    /// This is intentionally a no-op marker. It must not be used as the whole
-    /// `nono run` sandbox; filesystem/process sandboxing is applied
-    /// separately via [`Sandbox::apply_seccomp`] /
-    /// [`Sandbox::apply_seccomp_with_abi`] with
-    /// [`linux::SeccompOpts::external_tcp`].
+    /// This is intentionally a no-op marker: it installs no kernel policy and
+    /// records no state anywhere. It must not be used as the whole `nono run`
+    /// sandbox; filesystem/process sandboxing is applied separately via
+    /// [`Sandbox::apply_seccomp`] / [`Sandbox::apply_seccomp_with_abi`] with
+    /// [`linux::SeccompOpts::external_tcp`], which additionally refuses any
+    /// `CapabilitySet` that declares a network policy so nothing is silently
+    /// dropped.
     ///
     /// # Errors
     ///
-    /// Returns an error if the marker cannot be recorded (never fails today;
-    /// signature matches the other `apply_*` entry points for consistency).
+    /// Infallible — the `Result` return type exists only so the signature
+    /// matches the other `apply_*` entry points. It never returns `Err`.
     #[cfg(target_os = "linux")]
     pub fn apply_external() -> Result<()> {
         linux::apply_external()

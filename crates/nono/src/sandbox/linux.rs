@@ -717,13 +717,23 @@ fn apply_with_abi_inner(
     abi: &DetectedAbi,
     handle_tcp: bool,
 ) -> Result<SeccompNetFallback> {
+    // Fail secure before anything is applied: delegating TCP enforcement
+    // externally must never silently discard a network policy the caller
+    // declared on the CapabilitySet.
+    if !handle_tcp {
+        validate_external_tcp_delegation(caps)?;
+    }
+
     let target_abi = abi.abi;
     info!("Using Landlock ABI {:?}", target_abi);
     let scopes = requested_scopes(caps, abi)?;
 
-    if handle_tcp
-        && !matches!(caps.network_mode(), NetworkMode::AllowAll)
-        && caps.localhost_ports().contains(&0)
+    // NOT gated on `handle_tcp`: `open_port 0` is a hard error on Linux
+    // regardless of who enforces TCP egress, and gating it would let the
+    // external-TCP path accept a configuration every other path rejects.
+    // (Unreachable for `handle_tcp == false` in practice — the guard above
+    // has already rejected any restrictive network mode.)
+    if !matches!(caps.network_mode(), NetworkMode::AllowAll) && caps.localhost_ports().contains(&0)
     {
         return Err(NonoError::SandboxInit(
             "open_port 0 (localhost TCP wildcard) is macOS-only; on Linux use explicit ports or a network profile."
@@ -1160,6 +1170,16 @@ impl SeccompOpts {
     /// Apply Landlock filesystem/process sandboxing, but skip nono-managed
     /// TCP network enforcement because the deployment enforces egress
     /// externally.
+    ///
+    /// # Precondition
+    ///
+    /// The `CapabilitySet` passed alongside this option must declare **no**
+    /// network policy — `NetworkMode::AllowAll` with empty
+    /// `tcp_connect_ports`, `tcp_bind_ports` and `localhost_ports`. Combining
+    /// it with a restrictive network mode is a hard error
+    /// ([`NonoError::SandboxInit`]) rather than a silent downgrade: the
+    /// library applies only what is in the `CapabilitySet`, and it must never
+    /// apply *less*. See [`validate_external_tcp_delegation`].
     #[must_use]
     pub fn external_tcp() -> Self {
         Self { handle_tcp: false }
@@ -1174,6 +1194,49 @@ impl Default for SeccompOpts {
     fn default() -> Self {
         Self::network_fallback()
     }
+}
+
+/// Fail-secure precondition for [`SeccompOpts::external_tcp`].
+///
+/// With `handle_tcp == false` no `handle_access(AccessNet)` is installed, no
+/// `NetPort` rules are added, and no seccomp network fallback is installed.
+/// If the caller's `CapabilitySet` declared a restrictive network policy,
+/// that policy would simply be discarded — the library would apply *less*
+/// than what is in the `CapabilitySet`, contradicting its core invariant —
+/// and the call would still return `SeccompNetFallback::None`, the same
+/// discriminant that everywhere else means "Landlock is enforcing the
+/// network, no fallback needed". A caller branching on the return value
+/// could not tell "enforced by Landlock" from "not enforced at all".
+///
+/// Rejecting the combination outright keeps `SeccompNetFallback::None`
+/// truthful: `external_tcp()` is only accepted when there was no network
+/// policy to enforce in the first place.
+///
+/// # Errors
+///
+/// Returns [`NonoError::SandboxInit`] if `caps` declares any network policy:
+/// a `network_mode` other than [`NetworkMode::AllowAll`], or any entry in
+/// `tcp_connect_ports`, `tcp_bind_ports` or `localhost_ports`.
+fn validate_external_tcp_delegation(caps: &CapabilitySet) -> Result<()> {
+    let declares_network_policy = !matches!(caps.network_mode(), NetworkMode::AllowAll)
+        || !caps.tcp_connect_ports().is_empty()
+        || !caps.tcp_bind_ports().is_empty()
+        || !caps.localhost_ports().is_empty();
+
+    if declares_network_policy {
+        return Err(NonoError::SandboxInit(
+            "SeccompOpts::external_tcp() cannot be combined with a CapabilitySet that \
+             declares a network policy (network_mode, tcp_connect_ports, tcp_bind_ports \
+             or localhost_ports): the declared policy would be silently dropped and the \
+             call would still report SeccompNetFallback::None. Use \
+             SeccompOpts::network_fallback() to have nono enforce it, or clear the \
+             network policy from the CapabilitySet if TCP egress really is enforced \
+             externally."
+                .to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Apply Landlock filesystem/process sandboxing and use seccomp for TCP
@@ -1200,12 +1263,18 @@ pub fn apply_seccomp_with_abi(
 
 /// Declare that TCP network enforcement is managed externally.
 ///
-/// This function intentionally installs no kernel policy. It exists only as
-/// an explicit marker for callers that have already applied the normal
+/// This function intentionally installs no kernel policy and records no
+/// state. It emits an `info!` log line and returns `Ok(())`; it exists only
+/// as an explicit marker for callers that have already applied the normal
 /// filesystem and process sandbox (via [`apply_seccomp`] /
 /// [`apply_seccomp_with_abi`] with [`SeccompOpts::external_tcp`]) and are
 /// delegating TCP egress lockdown to infrastructure. It must not be used as
 /// the whole `nono run` sandbox on its own.
+///
+/// # Errors
+///
+/// Infallible — the `Result` return type exists only so the signature
+/// matches the other `apply_*` entry points. It never returns `Err`.
 pub fn apply_external() -> Result<()> {
     info!("TCP network enforcement delegated externally");
     Ok(())
@@ -4346,6 +4415,78 @@ mod tests {
         assert!(SeccompOpts::network_fallback().handles_tcp());
         assert!(SeccompOpts::default().handles_tcp());
         assert!(!SeccompOpts::external_tcp().handles_tcp());
+    }
+
+    // -----------------------------------------------------------------------
+    // CR-04: external_tcp() must not silently drop a declared network policy
+    // -----------------------------------------------------------------------
+
+    /// A capability set with no network policy at all is the only shape
+    /// `external_tcp()` accepts — and for that shape nono has nothing to
+    /// enforce, so `SeccompNetFallback::None` stays truthful.
+    #[test]
+    fn external_tcp_delegation_allows_capability_set_without_network_policy() {
+        assert!(validate_external_tcp_delegation(&CapabilitySet::new()).is_ok());
+    }
+
+    /// CR-04: `BlockAll` declares "deny all outbound". Delegating TCP
+    /// externally used to force `needs_network_handling` to false, install no
+    /// Landlock `AccessNet` and no seccomp fallback, and still return
+    /// `SeccompNetFallback::None` — the discriminant that elsewhere means
+    /// "Landlock is enforcing the network". Now a hard error.
+    #[test]
+    fn external_tcp_delegation_rejects_block_all() {
+        let caps = CapabilitySet::new().block_network();
+        let err = validate_external_tcp_delegation(&caps)
+            .expect_err("BlockAll must not be silently dropped");
+        assert!(
+            err.to_string().contains("external_tcp"),
+            "error must name the offending option: {err}"
+        );
+    }
+
+    /// CR-04: `ProxyOnly` is equally a declared policy.
+    #[test]
+    fn external_tcp_delegation_rejects_proxy_only() {
+        let caps = CapabilitySet::new().proxy_only(8080);
+        assert!(
+            validate_external_tcp_delegation(&caps).is_err(),
+            "ProxyOnly must not be silently dropped"
+        );
+    }
+
+    /// CR-04: port grants are a declared network policy even when the mode is
+    /// `AllowAll` — `needs_network_handling` keys off them too, so dropping
+    /// them silently is the same defect.
+    #[test]
+    fn external_tcp_delegation_rejects_declared_ports() {
+        let mut connect = CapabilitySet::new();
+        connect.add_tcp_connect_port(443);
+        assert!(validate_external_tcp_delegation(&connect).is_err());
+
+        let mut bind = CapabilitySet::new();
+        bind.add_tcp_bind_port(8080);
+        assert!(validate_external_tcp_delegation(&bind).is_err());
+
+        let mut localhost = CapabilitySet::new();
+        localhost.add_localhost_port(3000);
+        assert!(validate_external_tcp_delegation(&localhost).is_err());
+    }
+
+    /// CR-04: the guard runs inside `apply_with_abi_inner`, so the public
+    /// entry point rejects the combination before touching the kernel. The
+    /// error must surface without any sandbox being applied to this test
+    /// process — which is why this asserts on the `Err` path only.
+    #[test]
+    fn apply_seccomp_with_abi_rejects_external_tcp_with_restrictive_caps() {
+        let caps = CapabilitySet::new().block_network();
+        let abi = DetectedAbi::new(ABI::V1);
+        let err = apply_seccomp_with_abi(&caps, &abi, SeccompOpts::external_tcp())
+            .expect_err("restrictive caps + external_tcp must be rejected before applying");
+        assert!(
+            err.to_string().contains("external_tcp"),
+            "error must name the offending option: {err}"
+        );
     }
 
     #[test]
