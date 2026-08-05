@@ -27,7 +27,15 @@ Suggested fix shape: scope the match to the expected package name, e.g.
 Note: the gate is genuinely GREEN today for the correct reason; this is a latent false-negative
 risk on a future run, not a current false pass.
 
-result: [pending]
+result: RESOLVED 2026-08-05 (commit 5cf5e121). Operator elected "fix now". Match scoped to the
+fork-owned `nono-sandbox` name family; anything else falls through to the FAIL branch. Gate re-run
+confirms the verdict is unchanged: `PASS: Hard failures: 0. Blocked: 2 (pre-publish). Skipped: 1.`
+exit 0.
+
+Residual note (pre-existing, NOT introduced by phase 111): the sibling first pattern
+`failed to select a version for the requirement` remains unscoped and carries the same class of
+false-negative risk. It predates this phase and was left unchanged; scope it the same way if ever
+revisited.
 
 ### 2. WR-01 (Warning) — MAX_CRYPTO_THREADS widened on Linux for a macOS-only rationale
 
@@ -51,10 +59,14 @@ result: [pending]
 ## Summary
 
 total: 3
-passed: 0
+passed: 1
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
+
+CR-01 (Critical) resolved in commit 5cf5e121. WR-01 and WR-02 remain open by operator decision —
+both are Warning-severity accuracy/tuning items on `exec_strategy.rs` and `cli.rs`, and addressing
+them requires re-running both cross-target clippy gates.
 
 ## Gaps
