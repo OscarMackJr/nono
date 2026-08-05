@@ -140,7 +140,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 - [ ] **RES-02**: The PTY-teardown (#1258) + test-infra residual is individually reviewed and absorbed or explicitly skipped with reasoning.
 
 ### Fork-Invariant Verify + Release (VERIFY / RLS)
-- [ ] **VERIFY-01**: Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` (clippy+fmt+tests) are GREEN locally, and a fork-invariant pass confirms the Windows security model + ADR-86 boundary are non-regressed.
+- [x] **VERIFY-01**: Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` (clippy+fmt+tests) are GREEN locally, and a fork-invariant pass confirms the Windows security model + ADR-86 boundary are non-regressed.
 - [ ] **RLS-14**: All 6 workspace crates + internal path-dep pins + both binding repos (`../nono-py`, `../nono-ts`) are leapfrogged to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected third-party drift, and the prepare-only release gate is GREEN — no operator push.
 
 ## v3.6 Out of Scope
@@ -169,7 +169,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–113
 | PROF-04 | Phase 110 | Complete |
 | CORE-01 | Phase 111 | Complete |
 | CORE-02 | Phase 111 | Complete |
-| VERIFY-01 | Phase 111 | Pending |
+| VERIFY-01 | Phase 111 | Complete |
 | RLS-14 | Phase 111 | Pending |
 | SEC-01 | Phase 112 | Pending |
 | SEC-02 | Phase 112 | Pending |
