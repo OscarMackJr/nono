@@ -68,9 +68,25 @@ pub(crate) fn run_proxy(args: ProxyArgs, silent: bool) -> Result<()> {
 /// `nono run` equivalent). `active: true` unconditionally — unlike `nono
 /// run`, where proxy activation is inferred from whether any proxy-shaped
 /// flag was passed, `nono proxy` is an explicit standalone invocation.
+///
+/// Every security-relevant field of the profile's `network` block is
+/// honoured here: dropping `deny_domain`, `no_proxy`, or `block` would make
+/// `nono proxy --profile X` strictly weaker than `nono run --profile X` for
+/// the same profile, which is a silent downgrade rather than a documented
+/// difference.
+///
+/// # Errors
+///
+/// Returns `NonoError::ConfigParse` when the effective config is deny-only
+/// (D-04/D-05 parity with `nono run`), when `--upstream-bypass` is given
+/// without an upstream proxy, or when an `--allow-endpoint` argument is
+/// malformed.
 fn build_launch_options(args: &ProxyArgs) -> Result<ProxyLaunchOptions> {
     let mut network_profile = args.network_profile.clone();
     let mut allow_domain: Vec<AllowDomainEntry> = Vec::new();
+    let mut deny_domain: Vec<String> = Vec::new();
+    let mut no_proxy: Vec<String> = Vec::new();
+    let mut profile_network_block = false;
     let mut credentials: Vec<String> = Vec::new();
     let mut custom_credentials: HashMap<String, profile::CustomCredentialDef> = HashMap::new();
     let mut upstream_proxy = args.external_proxy.clone();
@@ -84,6 +100,15 @@ fn build_launch_options(args: &ProxyArgs) -> Result<ProxyLaunchOptions> {
             network_profile = net.resolved_network_profile().map(ToString::to_string);
         }
         allow_domain.extend(net.allow_domain.clone());
+        // CR-01 fix: the profile's deny layer, `no_proxy` bypass list, and
+        // `network.block` were previously dropped on the floor here, turning
+        // a deny-scoped or fully-blocked profile into an allow-all
+        // forwarding proxy. All three now flow through exactly as they do on
+        // the `nono run` path (`proxy_runtime::resolve_effective_proxy_settings`
+        // + `prepare_proxy_launch_options`).
+        deny_domain.extend(net.deny_domain.clone());
+        no_proxy.extend(net.no_proxy.clone());
+        profile_network_block = net.block;
         credentials.extend(net.resolved_credentials().iter().cloned());
         custom_credentials.extend(net.custom_credentials.clone());
         if upstream_proxy.is_none() {
@@ -100,7 +125,28 @@ fn build_launch_options(args: &ProxyArgs) -> Result<ProxyLaunchOptions> {
             .iter()
             .map(|s| proxy_runtime::parse_allow_domain_arg(s)),
     );
+    // deny_domain mirrors allow_domain's merge direction (profile entries
+    // first, then the CLI flag), matching `nono run`'s
+    // `prepare_proxy_launch_options`.
+    deny_domain.extend(args.deny_proxy.iter().cloned());
     credentials.extend(args.proxy_credential.iter().cloned());
+
+    // D-04/D-05 parity with `nono run`'s
+    // `sandbox_prepare::validate_deny_domain_requires_allow_domain`: a
+    // deny-only effective config is a hard error at parse time, never a
+    // silent fallback to default-allow. A guard on only one of the two
+    // commands is a bypass, not a guard.
+    if !deny_domain.is_empty() && allow_domain.is_empty() {
+        return Err(NonoError::ConfigParse(
+            "deny_domain / --deny-domain requires at least one allow_domain / \
+             --allow-domain entry. This fork deliberately diverges from upstream \
+             nono here: upstream's deny_domain silently applies default-allow \
+             semantics (\"allow everything except these domains\"), which would \
+             leave every host you did not think to name reachable. Add at least \
+             one --allow-domain (or profile allow_domain) entry."
+                .to_string(),
+        ));
+    }
 
     // Fails fast on the first malformed --allow-endpoint argument (service
     // missing, path missing leading '/') — same fail-closed behavior as
@@ -126,8 +172,8 @@ fn build_launch_options(args: &ProxyArgs) -> Result<ProxyLaunchOptions> {
         active: true,
         network_profile,
         allow_domain,
-        deny_domain: Vec::new(),
-        no_proxy: Vec::new(),
+        deny_domain,
+        no_proxy,
         credentials,
         custom_credentials,
         upstream_proxy,
@@ -141,7 +187,10 @@ fn build_launch_options(args: &ProxyArgs) -> Result<ProxyLaunchOptions> {
         open_url_origins: Vec::new(),
         open_url_allow_localhost: false,
         allow_launch_services_active: false,
-        strict_filter: false,
+        // Profile `network.block` means "deny any host not explicitly
+        // allowed" once a proxy is active; forcing this to `false`
+        // downgraded a blocked profile to an allow-all forwarding proxy.
+        strict_filter: profile_network_block,
         enable_h2,
         endpoint_restrictions,
     })
@@ -215,6 +264,18 @@ fn print_connection_info(
         );
     }
 
+    // CR-01: an empty allowlist with no strict-filter selection means
+    // `ProxyConfig.allowed_hosts` falls back to "allow all hosts (except the
+    // deny list)". That is a legitimate standalone-proxy configuration, but
+    // it is not a filtering boundary and must never be mistaken for one.
+    if config.allowed_hosts.is_empty() && !config.strict_filter {
+        eprintln!(
+            "  [nono] WARNING: no allow-domain filter is active — this proxy forwards to \
+             ANY host. Pass --allow-domain (or --profile with network.allow_domain) to \
+             filter egress."
+        );
+    }
+
     let route_rows = handle.route_diagnostics(config);
     if !route_rows.is_empty() {
         eprintln!("  [nono] routes:");
@@ -230,4 +291,167 @@ fn print_connection_info(
 
     eprintln!();
     eprintln!("  [nono] press Ctrl-C to stop");
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    /// A `ProxyArgs` with every field at its clap default, so each test can
+    /// vary exactly the one input it is about.
+    fn base_args() -> ProxyArgs {
+        ProxyArgs {
+            listen: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            port: 0,
+            no_auth: false,
+            max_connections: 256,
+            profile: None,
+            network_profile: None,
+            allow_proxy: Vec::new(),
+            deny_proxy: Vec::new(),
+            external_proxy: None,
+            external_proxy_bypass: Vec::new(),
+            allow_http2: false,
+            proxy_credential: Vec::new(),
+            allow_endpoint: Vec::new(),
+            verbose: 0,
+        }
+    }
+
+    fn write_profile(dir: &std::path::Path, network_json: &str) -> String {
+        let path = dir.join("proxy-cmd-test.json");
+        std::fs::write(
+            &path,
+            format!(
+                r#"{{
+                    "meta": {{ "name": "proxy-cmd-test" }},
+                    "network": {network_json}
+                }}"#
+            ),
+        )
+        .unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    /// CR-01 regression: `nono proxy --profile X` must carry the profile's
+    /// `deny_domain`, `no_proxy`, and `network.block` into
+    /// `ProxyLaunchOptions`. Before the fix these three were hardcoded to
+    /// empty/false, so a deny-scoped or fully-blocked profile silently
+    /// became an allow-all forwarding proxy.
+    #[test]
+    fn profile_deny_layer_no_proxy_and_block_reach_launch_options() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_path = write_profile(
+            dir.path(),
+            r#"{
+                "block": true,
+                "allow_domain": ["*.corp.com"],
+                "deny_domain": ["secrets.corp.com"],
+                "no_proxy": ["internal-only.example"]
+            }"#,
+        );
+
+        let mut args = base_args();
+        args.profile = Some(profile_path);
+
+        let opts = build_launch_options(&args).expect("profile must load");
+
+        assert!(
+            opts.deny_domain.contains(&"secrets.corp.com".to_string()),
+            "profile deny_domain must reach ProxyLaunchOptions: {:?}",
+            opts.deny_domain
+        );
+        assert!(
+            opts.no_proxy.contains(&"internal-only.example".to_string()),
+            "profile no_proxy must reach ProxyLaunchOptions: {:?}",
+            opts.no_proxy
+        );
+        assert!(
+            opts.strict_filter,
+            "profile network.block must set strict_filter on ProxyLaunchOptions"
+        );
+        assert!(
+            !opts.allow_domain.is_empty(),
+            "profile allow_domain must still be merged"
+        );
+    }
+
+    /// CR-01: the `--deny-domain` flag exists on `nono proxy` and composes
+    /// with the profile's deny entries rather than replacing them.
+    #[test]
+    fn cli_deny_domain_flag_composes_with_profile_deny_domain() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_path = write_profile(
+            dir.path(),
+            r#"{
+                "allow_domain": ["*.corp.com"],
+                "deny_domain": ["secrets.corp.com"]
+            }"#,
+        );
+
+        let mut args = base_args();
+        args.profile = Some(profile_path);
+        args.deny_proxy = vec!["extra-evil.corp.com".to_string()];
+
+        let opts = build_launch_options(&args).expect("profile must load");
+
+        assert!(opts.deny_domain.contains(&"secrets.corp.com".to_string()));
+        assert!(opts
+            .deny_domain
+            .contains(&"extra-evil.corp.com".to_string()));
+    }
+
+    /// CR-01 / D-04 parity: a deny-only effective config is a hard error on
+    /// `nono proxy` exactly as it is on `nono run`. A guard on only one of
+    /// the two commands is a bypass, not a guard.
+    #[test]
+    fn cli_deny_domain_without_allow_domain_is_rejected() {
+        let mut args = base_args();
+        args.deny_proxy = vec!["evil.com".to_string()];
+
+        let err = build_launch_options(&args)
+            .expect_err("deny-only config must be rejected at parse time");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("deny_domain") || msg.contains("--deny-domain"),
+            "error must name deny_domain/--deny-domain: {msg}"
+        );
+    }
+
+    /// CR-01 / D-04 parity: the same guard fires when the deny entries come
+    /// from a profile rather than the CLI flag.
+    #[test]
+    fn profile_deny_domain_without_allow_domain_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_path = write_profile(dir.path(), r#"{ "deny_domain": ["evil.com"] }"#);
+
+        let mut args = base_args();
+        args.profile = Some(profile_path);
+
+        let err = build_launch_options(&args)
+            .expect_err("profile deny-only config must be rejected at parse time");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("deny_domain") || msg.contains("--deny-domain"),
+            "error must name deny_domain/--deny-domain: {msg}"
+        );
+    }
+
+    /// A profile with no network deny layer and no `block` must not
+    /// spuriously enable strict filtering (guards against over-correcting
+    /// CR-01 into a behavior change for ordinary profiles).
+    #[test]
+    fn plain_profile_leaves_deny_layer_empty_and_strict_filter_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_path = write_profile(dir.path(), r#"{ "allow_domain": ["github.com"] }"#);
+
+        let mut args = base_args();
+        args.profile = Some(profile_path);
+
+        let opts = build_launch_options(&args).expect("profile must load");
+        assert!(opts.deny_domain.is_empty());
+        assert!(opts.no_proxy.is_empty());
+        assert!(!opts.strict_filter);
+    }
 }

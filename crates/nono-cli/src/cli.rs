@@ -2398,6 +2398,21 @@ pub struct ProxyArgs {
     )]
     pub allow_proxy: Vec<String>,
 
+    /// Deny a domain through the proxy (repeatable). Evaluated before the
+    /// allowlist — composes with (never weakens) `--allow-domain`. A
+    /// deny-only invocation (no `--allow-domain`/profile `allow_domain`) is
+    /// rejected at parse time (ADR-108 / fork divergence from upstream's
+    /// auto-activating default-allow semantics). Mirrors the `nono run`
+    /// flag of the same name so a profile's deny layer is honoured
+    /// identically on both commands.
+    #[arg(
+        long = "deny-domain",
+        env = "NONO_DENY_DOMAIN",
+        value_name = "DOMAIN",
+        help_heading = "NETWORK"
+    )]
+    pub deny_proxy: Vec<String>,
+
     /// Chain outbound traffic through an upstream proxy (host:port)
     #[arg(
         long = "upstream-proxy",
