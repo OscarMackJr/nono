@@ -1041,6 +1041,37 @@ pub fn execute_supervised(
     // Clear any stale forwarding target before forking.
     clear_signal_forwarding_target();
 
+    // Become a child-subreaper whenever the supervisor may need to read a
+    // descendant's /proc/<pid>/mem for seccomp-notify mediation (network/
+    // AF_UNIX/openat/proc-comm classification, gated by the same predicate as
+    // PR_SET_DUMPABLE below). That read is ancestry-gated by ptrace_may_access
+    // under Yama ptrace_scope=1, so a descendant that daemonizes and reparents
+    // to pid 1 leaves our ancestry and gets its connect()/bind()/openat()
+    // denied with EPERM even for otherwise-allowed traffic. Subreaping keeps
+    // it in our ancestry; `reap_reparented_orphans` (in the Linux supervisor
+    // loop) prevents such descendants from lingering as zombies.
+    //
+    // Upstream ac5ccd70 (#1401) gates this on
+    // `tool_sandbox_runtime.is_some() || seccomp_policy.child_requires_dumpable()`.
+    // This fork has neither `tool_sandbox_runtime` (standing divergence, v3.7)
+    // nor a `SeccompPolicy` struct (unabsorbed fa21a004/8a4237f2, #1283) — reuse
+    // the fork's existing `linux_child_requires_dumpable` predicate instead,
+    // dropping the `tool_sandbox_runtime` disjunct entirely (D-01/SEC-09).
+    #[cfg(target_os = "linux")]
+    if linux_child_requires_dumpable(
+        config.capability_elevation,
+        config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname(),
+        config.proc_comm_notify,
+    ) {
+        let ret = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
+        if ret != 0 {
+            return Err(NonoError::SandboxInit(format!(
+                "Failed to set PR_SET_CHILD_SUBREAPER for supervisor: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+    }
+
     // SAFETY: fork() is safe here because we validated threading context.
     // Child will call Sandbox::apply() which allocates, but this is safe
     // because the child is single-threaded (validated above).
@@ -3185,6 +3216,34 @@ fn run_supervisor_loop(
     Ok((status, denials))
 }
 
+/// Reap descendants that reparented onto this supervisor (a child-subreaper),
+/// so short-lived detached processes don't linger as zombies for the session.
+///
+/// `waitpid(-1, WNOHANG)` returns only terminated children, so a live child is
+/// never consumed. If the primary `child` is reaped here, its status is
+/// returned rather than dropped.
+#[cfg(target_os = "linux")]
+fn reap_reparented_orphans(child: Pid) -> Option<WaitStatus> {
+    loop {
+        match waitpid(Some(Pid::from_raw(-1)), Some(WaitPidFlag::WNOHANG)) {
+            Ok(status @ (WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _))) => {
+                if pid == child {
+                    return Some(status);
+                }
+                debug!("Reaped reparented orphan {}", pid);
+            }
+            // Nothing reapable now; no WUNTRACED/WCONTINUED, so ignore stop/continue.
+            Ok(_) => return None,
+            Err(nix::errno::Errno::EINTR) => continue,
+            Err(nix::errno::Errno::ECHILD) => return None,
+            Err(e) => {
+                debug!("waitpid(-1) during orphan reap failed: {}", e);
+                return None;
+            }
+        }
+    }
+}
+
 /// Supervisor IPC event loop for capability expansion (Linux).
 ///
 /// Multiplexes between:
@@ -3389,6 +3448,12 @@ fn run_supervisor_loop(
             in_band_detach_requested,
         );
         handle_pty_suspension(pty.as_deref_mut(), child);
+
+        // Drain reparented orphans; if the primary child was among them,
+        // surface its status directly.
+        if let Some(status) = reap_reparented_orphans(child) {
+            return Ok((status, denials, ipc_denials));
+        }
 
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
             Ok(WaitStatus::StillAlive) => {
@@ -4553,6 +4618,65 @@ mod tests {
         // Phase 112 SEC-03: proc_comm_notify alone also requires dumpable
         // (matches upstream a3243907's extended `child_requires_dumpable`).
         assert!(linux_child_requires_dumpable(false, false, true));
+    }
+
+    /// Phase 112 SEC-06 (ac5ccd70, #1401): `reap_reparented_orphans` must reap
+    /// any exited direct child that is NOT the tracked primary `child` (logging
+    /// and looping past it), while returning `Some(status)` only for the exit
+    /// of the tracked `child` itself.
+    ///
+    /// This does not require actually setting `PR_SET_CHILD_SUBREAPER` /
+    /// exercising real reparenting: `waitpid(-1, WNOHANG)` reaps any of the
+    /// calling process's own direct children regardless of ancestry depth, so
+    /// forking two direct children from the test process is sufficient to
+    /// exercise the "reap a non-tracked pid, then reap the tracked pid" path.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reap_reparented_orphans_reaps_non_primary_and_returns_status_for_primary() {
+        // Orphan: exits immediately with a distinct code.
+        let orphan = match unsafe { fork() } {
+            Ok(ForkResult::Child) => {
+                // SAFETY: minimal async-signal-safe child; no allocation.
+                unsafe { libc::_exit(7) };
+            }
+            Ok(ForkResult::Parent { child }) => child,
+            Err(e) => panic!("fork failed (orphan): {e}"),
+        };
+
+        // Primary: sleeps briefly so it is still alive when the orphan is reaped.
+        let primary = match unsafe { fork() } {
+            Ok(ForkResult::Child) => {
+                std::thread::sleep(Duration::from_millis(200));
+                // SAFETY: minimal async-signal-safe child; no allocation after sleep.
+                unsafe { libc::_exit(42) };
+            }
+            Ok(ForkResult::Parent { child }) => child,
+            Err(e) => panic!("fork failed (primary): {e}"),
+        };
+
+        assert_ne!(orphan, primary, "fork() must produce distinct child pids");
+
+        // Give the orphan time to exit while the primary is still sleeping.
+        std::thread::sleep(Duration::from_millis(50));
+
+        // First call: only the orphan is reapable yet. It must be drained
+        // (logged, looped past) without being mistaken for the primary child.
+        let first = reap_reparented_orphans(primary);
+        assert!(
+            first.is_none(),
+            "orphan reap must not be reported as the primary child's status: {first:?}"
+        );
+
+        // Wait out the remainder of the primary's sleep, then reap it.
+        std::thread::sleep(Duration::from_millis(250));
+        let second = reap_reparented_orphans(primary);
+        match second {
+            Some(WaitStatus::Exited(pid, code)) => {
+                assert_eq!(pid, primary, "reaped pid must be the tracked primary child");
+                assert_eq!(code, 42, "primary child's exit code must be surfaced");
+            }
+            other => panic!("expected primary child's exit status, got {other:?}"),
+        }
     }
 
     #[test]
