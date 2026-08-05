@@ -536,6 +536,23 @@ impl Drop for SupervisorSocket {
     }
 }
 
+// RES-02 disposition (Phase 112 Plan 04, upstream `4cc0af2c52`, "use /tmp for
+// socket test dirs to stay under SUN_LEN limit"): explicitly SKIPPED, not
+// silently dropped. Symbol-level re-check against this fork found the
+// upstream commit's actual target — a `socket_test_dir()` helper switching
+// between a `target/`-relative tempdir and `/tmp` — does not exist anywhere
+// in this file (nor in `crates/nono-cli/src/open_url_runtime.rs`, the
+// commit's other target, whose test module the fork never carried; the
+// commit's third file, `crates/nono-cli/tests/url_open_integration.rs`, is
+// entirely absent from the fork). This fork's tests below use
+// `SupervisorSocket::pair()` (`socketpair()`, no filesystem path) instead of
+// a path-bound listener, so there is no SUN_LEN-limited tempdir choice here
+// to switch. RESEARCH.md's Assumption A2 (whether `/tmp` is Seatbelt-safe
+// on macOS the way `/var/folders` is not) remains unverified either way —
+// this project validates macOS only via cross-target clippy + CI, never a
+// live host — but it is moot for this file specifically, since there is no
+// code path left to apply the switch to. See
+// .planning/phases/112-security-residual-sync/112-04-SUMMARY.md.
 #[cfg(test)]
 #[allow(deprecated)]
 mod tests {
