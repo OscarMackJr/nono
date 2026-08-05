@@ -325,3 +325,56 @@ GREEN. VERIFY-01 is satisfied: the Windows security model and the ADR-86 policy-
 boundary are both confirmed unregressed over the honest combined surface, and every
 pre-existing test failure is traced to a name already present in the documented baseline —
 no new regression, no fabricated GREEN.
+
+---
+
+## Addendum — Orchestrator-observed 20-name run (independent second sweep, same session)
+
+While Plan 111-04's executor was running its sweep, the phase orchestrator ran an
+**independent** `cargo test --workspace --no-fail-fast` on the same tree. That run produced
+**20** failing names, not 17. The extra 3 are **outside the documented 24-name baseline**:
+
+```
+test_init_creates_valid_profile              crates/nono-cli/tests/profile_cmd.rs
+test_init_rejects_existing_file_without_force  crates/nono-cli/tests/profile_cmd.rs
+test_schema_output_to_file                   crates/nono-cli/tests/profile_cmd.rs
+```
+
+Recorded here because the Task 2 conclusion above ("zero new failure names outside the
+documented 24-name list") was true **of that executor's run**, but is not stable run-to-run.
+A future executor that observes these 3 names must not mistake them for a regression.
+
+**Diagnosed, not hand-waved.** Observed failure text:
+
+```
+thread 'test_init_creates_valid_profile' panicked at crates\nono-cli\tests\profile_cmd.rs:39:5:
+expected exit 0, stderr: nono: Profile parse error: Profile file already exists:
+C:\Users\OMack\AppData\Local\Temp\nono-test-profile-init\test-agent.json
+Use --force to overwrite
+```
+
+Re-run in isolation immediately afterwards:
+
+```
+$ cargo test -p nono-sandbox-cli --test profile_cmd
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+```
+
+**Root cause: pre-existing test-isolation defect, NOT a code regression.**
+`crates/nono-cli/tests/profile_cmd.rs` scaffolds into a **fixed, shared** temp path
+(`%TEMP%\nono-test-profile-init`) rather than a unique `tempfile::TempDir`. Under
+`--workspace` parallel execution these tests race each other (and the `--bin nono`
+`profile_cmd::tests` unit tests) over that one directory, so whichever loses the race sees a
+leftover `test-agent.json` and fails "already exists". 10/10 pass when the binary runs alone.
+This is the same root-cause family as the documented baseline's own
+`profile_cmd::tests::test_init_allowed_when_pack_has_same_short_name` (stale `my-agent.json`)
+— a shared-fixture flake, already present before Phase 108.
+
+Not fixed here (out of scope for a verification-only plan). Follow-up shape if ever taken up:
+switch `profile_cmd.rs` to `tempfile::TempDir` so each test gets a unique directory.
+
+**Effect on the VERIFY-01 verdict: none.** Neither `profile_cmd.rs` nor the profile-init code
+path is touched by Phase 108-111 (`git log --oneline -- crates/nono-cli/tests/profile_cmd.rs`
+shows no 108/109/110/111 commit). The combined-surface certification above stands; this
+addendum only widens the documented baseline from 24 to a 27-name known-flake universe so the
+next sweep is diffed against reality.
