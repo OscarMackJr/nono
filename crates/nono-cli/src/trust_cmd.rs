@@ -1586,56 +1586,56 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
     // Auto-discover: check CWD then user config dir
     let cwd = std::env::current_dir().map_err(nono::NonoError::Io)?;
     let cwd_policy = cwd.join("trust-policy.json");
-    if cwd_policy.exists() {
+    // The project-level policy is loaded independently of the user-level one.
+    // It must never short-circuit user-policy loading: a project file that is
+    // not a recognisable nono policy is attacker-controllable input, and
+    // returning early on it discarded the operator's global publishers,
+    // blocklist and enforcement scope entirely.
+    let project_policy = if cwd_policy.exists() {
         verify_policy_if_exists(&cwd_policy)?;
-        let project_policy = match crate::trust_scan::load_nono_policy(&cwd_policy)? {
-            Some(policy) => policy,
-            None => return Ok(trust::TrustPolicy::default()),
-        };
-        // Try to load user-level policy and merge
-        if let Some(user_policy_path) = user_trust_policy_path() {
-            if user_policy_path.exists() {
-                verify_policy_if_exists(&user_policy_path)?;
-                if let Some(user_policy) = crate::trust_scan::load_nono_policy(&user_policy_path)? {
-                    return trust::merge_policies(&[user_policy, project_policy]);
-                }
-            }
-        }
-        let user_path = user_trust_policy_path()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(crate::profile::display_trust_policy_path);
-        eprintln!(
-            "  {}",
-            "Warning: project-level trust-policy.json found but no user-level policy exists."
-                .yellow()
-        );
-        eprintln!(
-            "  {}",
-            "A user-level policy defines who you trust across all projects (publishers, enforcement, blocklist)."
-                .yellow()
-        );
-        eprintln!(
-            "  {}",
-            format!(
-                "Run 'nono trust init --user' to create one, then 'nono trust sign-policy {user_path}' to sign it."
-            )
-            .yellow()
-        );
-        return Ok(project_policy);
-    }
+        crate::trust_scan::load_nono_policy(&cwd_policy)?
+    } else {
+        None
+    };
 
-    // User-level only
-    if let Some(user_path) = user_trust_policy_path() {
-        if user_path.exists() {
-            verify_policy_if_exists(&user_path)?;
-            if let Some(policy) = crate::trust_scan::load_nono_policy(&user_path)? {
-                return Ok(policy);
-            }
+    let user_policy = match user_trust_policy_path() {
+        Some(user_policy_path) if user_policy_path.exists() => {
+            verify_policy_if_exists(&user_policy_path)?;
+            crate::trust_scan::load_nono_policy(&user_policy_path)?
         }
-    }
+        _ => None,
+    };
 
-    // No policy found — return a default empty policy
-    Ok(trust::TrustPolicy::default())
+    match (user_policy, project_policy) {
+        // Strictest enforcement wins; publishers and blocklists are unioned.
+        (Some(user), Some(project)) => trust::merge_policies(&[user, project]),
+        (Some(user), None) => Ok(user),
+        (None, Some(project)) => {
+            let user_path = user_trust_policy_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(crate::profile::display_trust_policy_path);
+            eprintln!(
+                "  {}",
+                "Warning: project-level trust-policy.json found but no user-level policy exists."
+                    .yellow()
+            );
+            eprintln!(
+                "  {}",
+                "A user-level policy defines who you trust across all projects (publishers, enforcement, blocklist)."
+                    .yellow()
+            );
+            eprintln!(
+                "  {}",
+                format!(
+                    "Run 'nono trust init --user' to create one, then 'nono trust sign-policy {user_path}' to sign it."
+                )
+                .yellow()
+            );
+            Ok(project)
+        }
+        // No policy found — return a default empty policy.
+        (None, None) => Ok(trust::TrustPolicy::default()),
+    }
 }
 
 /// Verify the trust policy signature if a `.bundle` sidecar exists.

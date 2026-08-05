@@ -14,65 +14,118 @@ use nono::trust::{self, Enforcement, TrustPolicy, VerificationOutcome, Verificat
 use nono::Result;
 use std::path::{Path, PathBuf};
 
-/// Load a trust policy from `path`, returning `None` if the file exists but
-/// lacks the nono predicate field (i.e. is a foreign JSON file).
+/// Strip control characters from an untrusted string before printing it.
+///
+/// Predicate values come from a file nono does not control and could carry
+/// terminal escape sequences.
+fn sanitize_untrusted(value: &str) -> String {
+    value.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Load a trust policy from `path`, returning `None` only when the file is
+/// genuinely not a nono trust policy (foreign JSON that shares the filename).
 ///
 /// `trust-policy.json` is a common filename — AWS IAM and other tools use it
-/// too. Without this discriminator check, nono would attempt a full parse of
-/// any such file and crash with a confusing schema error. This peeks at the
-/// raw JSON's `predicate` field before attempting full deserialization.
+/// too. Without a discriminator check, nono would attempt a full parse of any
+/// such file and fail with a confusing schema error. This peeks at the raw
+/// JSON's `predicate` field before attempting full deserialization.
+///
+/// # Predicate-less policies are legacy, not foreign
+///
+/// The `predicate` field is new. Every `trust-policy.json` written by any
+/// prior nono release lacks it, and there is no migration step. Treating
+/// "no predicate" as "not a nono policy" therefore silently disabled trust
+/// enforcement for every existing deployment on upgrade, and — worse — let
+/// an untrusted repository neutralize the operator's user-level policy just
+/// by shipping a predicate-less `trust-policy.json` (attacker-controlled
+/// input deciding whether the operator's policy applies at all).
+///
+/// So the absent-predicate case is resolved by *content*, not by the missing
+/// field: a file that deserializes as a `TrustPolicy` is a legacy nono policy
+/// and is accepted with a migration warning; only a file that also fails
+/// `TrustPolicy` deserialization is genuinely foreign and skipped. This keeps
+/// the foreign-file ergonomics the discriminator was introduced for while
+/// removing the fail-open upgrade path.
+///
+/// A `predicate` that is *present* has no legacy excuse, so an unrecognised
+/// value — or a non-string value — is a hard error rather than a silent skip,
+/// matching `run_sign_policy` and the explicit `--policy` path.
 ///
 /// # Errors
 ///
 /// Returns `NonoError::Io` if the file cannot be read, or
-/// `NonoError::TrustPolicy` if the JSON is malformed or a recognised nono
-/// policy fails to deserialize.
+/// `NonoError::TrustPolicy` if the JSON is malformed, the `predicate` field is
+/// present but unrecognised or not a string, or a recognised nono policy fails
+/// to deserialize.
 pub(crate) fn load_nono_policy(path: &Path) -> Result<Option<TrustPolicy>> {
     let content = std::fs::read_to_string(path).map_err(nono::NonoError::Io)?;
 
-    // Check for the predicate field before attempting full deserialization.
-    // Foreign JSON files (e.g. AWS IAM policies) share the filename but lack
-    // the predicate, and may also be missing required nono fields —
-    // attempting a full parse would produce a confusing error rather than a
-    // clean skip.
     let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
         nono::NonoError::TrustPolicy(format!("failed to parse {}: {e}", path.display()))
     })?;
 
-    match raw.get("predicate").and_then(|v| v.as_str()) {
+    match raw.get("predicate") {
+        // Current-format nono policy.
+        Some(serde_json::Value::String(p)) if p == nono::trust::TRUST_POLICY_PREDICATE => {}
+
+        // Present but wrong. Never a legacy policy, so fail closed rather
+        // than silently continuing without trust enforcement.
+        Some(serde_json::Value::String(other)) => {
+            return Err(nono::NonoError::TrustPolicy(format!(
+                "{}: unrecognised trust policy predicate '{}' (expected '{}'). \
+                 Refusing to run with trust enforcement silently disabled — \
+                 remove the file or recreate it with 'nono trust init --force'.",
+                path.display(),
+                sanitize_untrusted(other),
+                nono::trust::TRUST_POLICY_PREDICATE
+            )));
+        }
+
+        // Present but not a string. `as_str()` used to collapse this into the
+        // absent case, which made `{"predicate": 1}` indistinguishable from a
+        // file with no predicate at all.
+        Some(_) => {
+            return Err(nono::NonoError::TrustPolicy(format!(
+                "{}: 'predicate' must be a string (expected '{}')",
+                path.display(),
+                nono::trust::TRUST_POLICY_PREDICATE
+            )));
+        }
+
+        // Absent: decide by content, not by the missing field.
         None => {
-            eprintln!(
-                "  {}",
-                format!(
-                    "Warning: {} has no predicate field — skipping. \
-                     This is probably not a nono trust policy. \
-                     If it is, add `\"predicate\": \"{}\"` as the first field \
-                     or recreate it with 'nono trust init --force'.",
-                    path.display(),
-                    nono::trust::TRUST_POLICY_PREDICATE,
-                )
-                .yellow()
-            );
-            return Ok(None);
+            return match trust::load_policy_from_str(&content) {
+                Ok(policy) => {
+                    eprintln!(
+                        "  {}",
+                        format!(
+                            "Warning: {} has no predicate field. Loading it as a legacy \
+                             (pre-predicate) nono trust policy. Add \
+                             `\"predicate\": \"{}\"` as the first field, or recreate it \
+                             with 'nono trust init --force', to silence this warning.",
+                            path.display(),
+                            nono::trust::TRUST_POLICY_PREDICATE,
+                        )
+                        .yellow()
+                    );
+                    Ok(Some(policy))
+                }
+                // Not a nono policy in any format — a foreign file that
+                // happens to share the filename. Skip it, as intended.
+                Err(_) => {
+                    eprintln!(
+                        "  {}",
+                        format!(
+                            "Warning: {} is not a nono trust policy (no predicate field and \
+                             it does not parse as a policy) — skipping.",
+                            path.display(),
+                        )
+                        .yellow()
+                    );
+                    Ok(None)
+                }
+            };
         }
-        Some(p) if p != nono::trust::TRUST_POLICY_PREDICATE => {
-            // Strip control characters before printing — the predicate comes
-            // from an untrusted file and could contain terminal escape
-            // sequences.
-            let safe = p.chars().filter(|c| !c.is_control()).collect::<String>();
-            eprintln!(
-                "  {}",
-                format!(
-                    "Warning: {} has an unrecognised predicate '{}' — skipping. Expected '{}'.",
-                    path.display(),
-                    safe,
-                    nono::trust::TRUST_POLICY_PREDICATE
-                )
-                .yellow()
-            );
-            return Ok(None);
-        }
-        Some(_) => {}
     }
 
     let policy = trust::load_policy_from_str(&content)?;
@@ -1452,6 +1505,161 @@ mod tests {
 
         let policy = load_scan_policy(scan_dir.path(), false, &[]).unwrap();
         assert!(policy.includes.contains(&include_pattern.to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // CR-02 regression: predicate discriminator must not fail open
+    // -----------------------------------------------------------------------
+
+    /// Serialize a policy with `predicate` omitted, i.e. exactly the shape
+    /// every nono release before the predicate field wrote.
+    fn write_legacy_policy(path: &std::path::Path, includes: &[&str], enforcement: Enforcement) {
+        let policy = TrustPolicy {
+            predicate: None,
+            version: Some(1),
+            includes: includes.iter().map(|s| s.to_string()).collect(),
+            enforcement,
+            ..TrustPolicy::default()
+        };
+        let json = serde_json::to_string(&policy).unwrap();
+        assert!(
+            !json.contains("predicate"),
+            "test fixture must not emit a predicate field: {json}"
+        );
+        std::fs::write(path, json).unwrap();
+    }
+
+    /// CR-02: a predicate-less policy written by a prior nono release is a
+    /// LEGACY policy, not a foreign file. Skipping it silently disabled trust
+    /// enforcement for every existing deployment on upgrade.
+    #[test]
+    fn load_nono_policy_accepts_legacy_predicate_less_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        write_legacy_policy(&path, &["CLAUDE.md"], Enforcement::Deny);
+
+        let loaded = load_nono_policy(&path)
+            .expect("a legacy nono policy must load, not error")
+            .expect("a legacy nono policy must not be skipped as foreign");
+
+        assert_eq!(loaded.includes, vec!["CLAUDE.md".to_string()]);
+        assert_eq!(loaded.enforcement, Enforcement::Deny);
+    }
+
+    /// CR-02: the foreign-file ergonomics the discriminator exists for are
+    /// preserved — a file that shares the name but is not a policy in any
+    /// format is still skipped rather than erroring.
+    #[test]
+    fn load_nono_policy_skips_foreign_json_without_predicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        // AWS IAM-shaped: same filename, entirely different schema.
+        std::fs::write(
+            &path,
+            r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow"}]}"#,
+        )
+        .unwrap();
+
+        assert!(
+            load_nono_policy(&path).unwrap().is_none(),
+            "foreign JSON must still be skipped"
+        );
+    }
+
+    /// CR-02: a predicate that is present but unrecognised has no legacy
+    /// excuse. Skipping it let attacker-controlled file content decide
+    /// whether trust enforcement applied at all, so it is now fatal.
+    #[test]
+    fn load_nono_policy_rejects_unrecognised_predicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(
+            &path,
+            r#"{"predicate":"https://evil.example/not-nono","includes":[],
+                "publishers":[],"blocklist":{"digests":[],"publishers":[]},
+                "enforcement":"deny"}"#,
+        )
+        .unwrap();
+
+        let err = load_nono_policy(&path).expect_err("unrecognised predicate must be fatal");
+        assert!(
+            err.to_string()
+                .contains("unrecognised trust policy predicate"),
+            "error must name the unrecognised predicate: {err}"
+        );
+    }
+
+    /// CR-02 / parser differential: `predicate` present but not a string used
+    /// to collapse into the "absent" case via `as_str()`, making
+    /// `{"predicate": 1}` indistinguishable from a file with no predicate.
+    #[test]
+    fn load_nono_policy_rejects_non_string_predicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(
+            &path,
+            r#"{"predicate":1,"includes":[],"publishers":[],
+                "blocklist":{"digests":[],"publishers":[]},"enforcement":"deny"}"#,
+        )
+        .unwrap();
+
+        let err = load_nono_policy(&path).expect_err("non-string predicate must be fatal");
+        assert!(
+            err.to_string().contains("must be a string"),
+            "error must explain the type mismatch: {err}"
+        );
+    }
+
+    /// CR-02 end-to-end on the scan path: a project directory shipping a
+    /// legacy predicate-less `trust-policy.json` must NOT cause the
+    /// operator's user-level policy to be discarded. `merge_policies` takes
+    /// the strictest enforcement, so the merged result keeps `Deny`.
+    #[test]
+    fn load_scan_policy_merges_user_policy_with_legacy_project_policy() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("cfg");
+        std::fs::create_dir_all(cfg_dir.join("nono")).unwrap();
+        // APPDATA wins on Windows, XDG_CONFIG_HOME elsewhere — set both so the
+        // user-config dir resolves into the temp tree on every platform.
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", cfg_dir.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", cfg_dir.to_str().unwrap()),
+        ]);
+
+        let user_policy_path =
+            crate::trust_cmd::user_trust_policy_path().expect("user policy path resolves");
+        std::fs::create_dir_all(
+            user_policy_path
+                .parent()
+                .expect("user policy path has a parent"),
+        )
+        .unwrap();
+        write_test_policy(&user_policy_path, &["OPERATOR.md"], Enforcement::Deny);
+
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        write_legacy_policy(
+            &project_dir.join("trust-policy.json"),
+            &["PROJECT.md"],
+            Enforcement::Audit,
+        );
+
+        let effective = load_scan_policy(&project_dir, true, &[]).expect("policies must load");
+
+        assert_eq!(
+            effective.enforcement,
+            Enforcement::Deny,
+            "the operator's strictest enforcement must survive a legacy project policy"
+        );
+        assert!(
+            effective.includes.contains(&"OPERATOR.md".to_string()),
+            "the user-level policy's includes must not be discarded: {:?}",
+            effective.includes
+        );
     }
 
     #[test]
