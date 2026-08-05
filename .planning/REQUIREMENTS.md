@@ -129,7 +129,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 - [ ] **SEC-01**: AWS SigV4 authentication for the MiTM proxy (#1195, `0ecc476b`) is absorbed.
 - [ ] **SEC-02**: Declarative sandboxed OAuth capture (`9b692e07`), capture-boundary hardening (`3c59c62e`), and the stdin fixture test (`d033c631`) are absorbed.
-- [ ] **SEC-03**: NVIDIA procfs mediation hardening (#1284, `a3243907`) is absorbed without regressing the fork's own GPU tests.
+- [x] **SEC-03**: NVIDIA procfs mediation hardening (#1284, `a3243907`) is absorbed without regressing the fork's own GPU tests.
 - [ ] **SEC-04**: The trust-policy `predicate` field distinguishing nono trust policies from foreign JSON (#1333, `f943fb5a`) is absorbed.
 - [ ] **SEC-05**: The Linux execute-restriction `Refer` grant (#1397, `d84b4818`) is absorbed; cross-target clippy GREEN.
 - [ ] **SEC-06**: Seccomp supervisor-ancestry for orphaned descendants (#1401, `ac5ccd70`) is absorbed.
@@ -173,7 +173,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–114
 | RLS-14 | Phase 111 | Complete |
 | SEC-01 | Phase 112 | Pending |
 | SEC-02 | Phase 112 | Pending |
-| SEC-03 | Phase 112 | Pending |
+| SEC-03 | Phase 112 | Complete |
 | SEC-04 | Phase 112 | Pending |
 | SEC-05 | Phase 112 | Pending |
 | SEC-06 | Phase 112 | Pending |
