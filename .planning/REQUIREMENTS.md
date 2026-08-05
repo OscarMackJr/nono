@@ -130,11 +130,11 @@ Phase numbering continues from Phase 100 → Phase 101+.
 - [ ] **SEC-01**: AWS SigV4 authentication for the MiTM proxy (#1195, `0ecc476b`) is absorbed.
 - [ ] **SEC-02**: Declarative sandboxed OAuth capture (`9b692e07`), capture-boundary hardening (`3c59c62e`), and the stdin fixture test (`d033c631`) are absorbed.
 - [x] **SEC-03**: NVIDIA procfs mediation hardening (#1284, `a3243907`) is absorbed without regressing the fork's own GPU tests.
-- [ ] **SEC-04**: The trust-policy `predicate` field distinguishing nono trust policies from foreign JSON (#1333, `f943fb5a`) is absorbed.
+- [x] **SEC-04**: The trust-policy `predicate` field distinguishing nono trust policies from foreign JSON (#1333, `f943fb5a`) is absorbed.
 - [ ] **SEC-05**: The Linux execute-restriction `Refer` grant (#1397, `d84b4818`) is absorbed; cross-target clippy GREEN.
 - [ ] **SEC-06**: Seccomp supervisor-ancestry for orphaned descendants (#1401, `ac5ccd70`) is absorbed.
 - [ ] **SEC-07**: The standalone `nono proxy` command (#1261, `2663e990`) is absorbed.
-- [ ] **SEC-08**: The `allow_vars` empty-list env-strip fix (#1204, `a5a441c2`) is absorbed.
+- [ ] **SEC-08**: The `allow_vars` empty-list env-strip fix (#1204, `a5a441c2`) is absorbed. **RESOLVED 2026-08-05, not absorbed:** per D-05's contingent ADR-112 escalation trigger, upstream's fix reverses the fork's own deliberate fail-closed default (Plan 34-08a/D-20) — adopting it verbatim would reopen an env-var-leak class the fork already closed. Decision recorded in `proj/ADR-112-allow-vars-fail-closed-preserved.md`: PRESERVE, zero source-code change. Checkbox intentionally left unflipped (matches the SEC-01/SEC-09 won't-sync convention — resolved-but-not-literally-absorbed items are reconciled at the Phase 112 gate, `112-08`).
 - [ ] **SEC-09**: The credential-broker non-shim-entry guard relaxation (#1301, `f6f02751`) is absorbed. *(Found security-relevant during Phase 108's Cluster Summary rollup — not a D-18-named anchor.)*
 - [ ] **RES-01**: The registry/update-check header residual (#1405/#1383/#1386/#1341/#1340) is individually reviewed and absorbed or explicitly skipped with reasoning.
 - [ ] **RES-02**: The PTY-teardown (#1258) + test-infra residual is individually reviewed and absorbed or explicitly skipped with reasoning.
@@ -174,7 +174,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–114
 | SEC-01 | Phase 112 | Pending |
 | SEC-02 | Phase 112 | Pending |
 | SEC-03 | Phase 112 | Complete |
-| SEC-04 | Phase 112 | Pending |
+| SEC-04 | Phase 112 | Complete |
 | SEC-05 | Phase 112 | Pending |
 | SEC-06 | Phase 112 | Pending |
 | SEC-07 | Phase 112 | Pending |
