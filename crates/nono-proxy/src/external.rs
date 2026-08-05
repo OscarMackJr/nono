@@ -84,46 +84,54 @@ impl BypassMatcher {
     }
 }
 
+/// Shared context for [`handle_external_proxy`].
+///
+/// Bundled into a struct (Phase 112 SEC-07) purely to keep the function's
+/// argument count under clippy's `too_many_arguments` threshold after adding
+/// `require_auth` — no behavioral significance beyond that.
+pub struct ExternalProxyCtx<'a> {
+    pub filter: &'a ProxyFilter,
+    pub session_token: &'a Zeroizing<String>,
+    pub audit_log: Option<&'a audit::SharedAuditLog>,
+    /// When `false` (standalone `nono proxy --no-auth`), the session-token
+    /// check is skipped entirely. The sandboxed `run`/`shell`/`wrap` path
+    /// and the default standalone invocation pass `true`, preserving this
+    /// fork's pre-existing (always-authenticated) behavior byte-for-byte.
+    /// Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261).
+    pub require_auth: bool,
+}
+
 /// Handle a CONNECT request by chaining it to an external proxy.
 ///
-/// 1. Validate session token (unless `require_auth` is false)
+/// 1. Validate session token (unless `ctx.require_auth` is false)
 /// 2. Check host against cloud metadata deny list
 /// 3. Connect to enterprise proxy
 /// 4. Send CONNECT to enterprise proxy (with optional Proxy-Authorization)
 /// 5. Wait for enterprise proxy 200
 /// 6. Bidirectional tunnel: agent <-> enterprise proxy <-> upstream
-///
-/// `require_auth` (Phase 112 SEC-07, adapted from upstream `2663e990` #1261):
-/// when `false` (standalone `nono proxy --no-auth`), the session-token check
-/// is skipped entirely. The sandboxed `run`/`shell`/`wrap` path and the
-/// default standalone invocation pass `true`, preserving this fork's
-/// pre-existing (always-authenticated) behavior byte-for-byte.
 pub async fn handle_external_proxy(
     first_line: &str,
     stream: &mut TcpStream,
     remaining_header: &[u8],
-    filter: &ProxyFilter,
-    session_token: &Zeroizing<String>,
+    ctx: &ExternalProxyCtx<'_>,
     external_config: &ExternalProxyConfig,
-    audit_log: Option<&audit::SharedAuditLog>,
-    require_auth: bool,
 ) -> Result<()> {
     // Parse CONNECT target
     let (host, port) = parse_connect_target(first_line)?;
     debug!("External proxy CONNECT to {}:{}", host, port);
 
     // Validate session token
-    if require_auth {
-        validate_proxy_auth(remaining_header, session_token)?;
+    if ctx.require_auth {
+        validate_proxy_auth(remaining_header, ctx.session_token)?;
     }
 
     // Check cloud metadata deny list.
     // Cloud metadata endpoints are always blocked even through enterprise proxies.
-    let check = filter.check_host(&host, port).await?;
+    let check = ctx.filter.check_host(&host, port).await?;
     if !check.result.is_allowed() {
         let reason = check.result.reason();
         audit::log_denied(
-            audit_log,
+            ctx.audit_log,
             audit::ProxyMode::External,
             &audit::EventContext::default(),
             &host,
@@ -187,7 +195,7 @@ pub async fn handle_external_proxy(
     let status = parse_status_code(&response_line)?;
     if status != 200 {
         audit::log_denied(
-            audit_log,
+            ctx.audit_log,
             audit::ProxyMode::External,
             &audit::EventContext::default(),
             &host,
@@ -223,7 +231,7 @@ pub async fn handle_external_proxy(
     // Send 200 to agent
     send_response(stream, 200, "Connection Established").await?;
     audit::log_allowed(
-        audit_log,
+        ctx.audit_log,
         audit::ProxyMode::External,
         &audit::EventContext::default(),
         &host,

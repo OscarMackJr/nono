@@ -1224,15 +1224,18 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
         };
 
         if let Some(ext_config) = use_external {
+            let ext_ctx = external::ExternalProxyCtx {
+                filter: &state.filter,
+                session_token: &state.session_token,
+                audit_log: Some(&state.audit_log),
+                require_auth: state.config.require_auth,
+            };
             external::handle_external_proxy(
                 first_line,
                 &mut stream,
                 &header_bytes,
-                &state.filter,
-                &state.session_token,
+                &ext_ctx,
                 ext_config,
-                Some(&state.audit_log),
-                state.config.require_auth,
             )
             .await
         } else if state.config.external_proxy.is_some() {
