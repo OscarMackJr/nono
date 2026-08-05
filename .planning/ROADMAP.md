@@ -34,7 +34,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
 - [x] **Phase 110: Profile/Policy Absorb + platform_overrides** — 8/8 plans, all 4 requirements complete; 110-06's live-kernel checkpoint (PROF-03e) resolved 2026-08-04
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
-- [ ] **Phase 112: Security + Residual Sync** — 0/? plans
+- [ ] **Phase 112: Security + Residual Sync** — 0/8 plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
 
 </details>
@@ -290,6 +290,16 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. The registry/update-check header residual (RES-01) and the PTY-teardown/test-infra residual (RES-02) are each individually reviewed and either absorbed or explicitly skipped with recorded reasoning — never silently dropped.
   3. `373a67ae` (#1369, `crossbeam-epoch` 0.9.18→0.9.20) is prioritized ahead of routine DEPS-cluster absorb — it is the direct fix for the live RUSTSEC-2026-0204 advisory the fork's `Cargo.lock` currently carries. *(If already closed by an out-of-band quick task, record that and confirm `cargo audit` is clean rather than re-absorbing.)*
   4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally after the absorb, consistent with VERIFY-01's framing in Phase 111.
+**Plans**: 8 plans
+- [ ] 112-01-PLAN.md — Wave 1 reality-check finalization (D-02) + SEC-01 won't-sync finding + SEC-02a/b/c go/no-go decision + RES-01 skip docs + D-07 confirmation
+- [ ] 112-02-PLAN.md — SEC-03: NVIDIA procfs mediation hardening + Sandbox::apply_seccomp/apply_seccomp_with_abi Linux API refactor
+- [ ] 112-03-PLAN.md — SEC-04: trust-policy predicate discriminator + SEC-08: ADR-112 preserving the fork's fail-closed allow_vars default
+- [ ] 112-04-PLAN.md — RES-02: PTY late-CPR-reply teardown drain (adopt) + socket.rs /tmp switch (skip) + test-infra tightening (adopt)
+- [ ] 112-05-PLAN.md — SEC-05: Landlock Refer grant in the execute-restriction layer
+- [ ] 112-06-PLAN.md — SEC-06: seccomp-notify supervisor-ancestry orphan reaping (adapted)
+- [ ] 112-07-PLAN.md — SEC-07: standalone `nono proxy` command, adapted to the fork's ProxyLaunchOptions API
+- [ ] 112-08-PLAN.md — D-05 ledger addendum (all 18 dispositions) + SEC-09 carry-forward note + combined-surface verification + REQUIREMENTS/ROADMAP reconciliation
+
 
 ### Phase 113: SPIFFE/SPIRE Workload Identity
 **Goal**: Upstream's SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed under its own ADR-gated review, without regressing the fork's divergent TLS-interception model or the ADR-86 policy-free-library boundary.
