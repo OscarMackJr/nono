@@ -23,8 +23,8 @@ progress:
   total_phases: 4
   completed_phases: 4
   total_plans: 24
-  completed_plans: 23
-  percent: 96
+  completed_plans: 24
+  percent: 100
 parallel_milestone: v3.5
 parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
 parallel_milestone_status: blocked-on-azure-403-lapsed-identity-validation
@@ -64,7 +64,7 @@ v3.5 phases 101-105 remain live under `.planning/phases/`; `phases.clear` was de
 
 ## Current Position
 
-Phase: 111 (Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog) — **COMPLETE (CLOSED 2026-08-04)**
+Phase: 111 (Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog) — **COMPLETE (EXECUTED + VERIFIED + CLOSED 2026-08-05)**
 Plan: 6 of 6 (Wave 1: 111-01 COMPLETE · 111-02 COMPLETE · 111-03 COMPLETE · Wave 2: 111-04 COMPLETE · Wave 3: 111-05 COMPLETE · Wave 4: 111-06 COMPLETE — all 4 waves fully closed)
 Status: Plan 111-01 (CORE-01) complete — both upstream carries absorbed (`~/.cache` policy grant #1378, `MAX_CRYPTO_THREADS` 7→12 #1424), both new Wave-0 tests passing (the crypto-threads test confirmed live via `cross test` on linux-gnu since `exec_strategy.rs` is Windows-excluded), both mandatory cross-target clippy gates GREEN. Commits `1d0c8eb5`/`74146367`/`7cd4569a`/`3010312f`. See `111-01-SUMMARY.md`.
 
@@ -81,7 +81,11 @@ Plan 111-06 (RLS-14, sibling-repo half) complete — bumped `../nono-py` and `..
 PRIOR position — Phase: 110 (Profile/Policy Absorb + platform_overrides) — **COMPLETE 2026-08-04**
 Plan: 8 of 8 (Wave 1: 110-01/02/03 · Wave 2: 110-04/05/06 · Wave 3: 110-07 · Wave 4: 110-08)
 Status: CLOSED. All 4 requirements (PROF-01..04) complete. Plan 06's Task 3 `checkpoint:human-verify` (PROF-03e) resolved live on an Administrator-elevated session — `0 -> 8 -> 0` filter lifecycle with 4 `FWP_MATCH_RANGE` conditions at `49200..49210`, one per layer, `ALE_USER_ID`-scoped to the child. Behavioural inside/outside connect probe NOT RUN (`0xC0000142`); closure accepted on the filter-table proof, which is what Task 3's own wording specifies. 4 defects found and fixed while running the checkpoint (`7c7a189c`, `ea26b5b2`, `6d7ef719`, `4aec1944`), 3 proven live; both cross-target clippy gates re-ran GREEN on every one.
-Next phase: **112** (after 111 executes). Phase 111 is now **PLANNED** — CONTEXT.md (`829ec3cb`), RESEARCH.md, VALIDATION.md, and 6 PLAN files all committed 2026-08-04; next step is `/gsd:execute-phase 111`. Phases 112 (Security + Residual, carries the live `crossbeam-epoch` RUSTSEC-2026-0204 fix) and 113 (SPIFFE) are on the ROADMAP but unbuilt.
+Next phase: **112**. Phase 111 is **EXECUTED and CLOSED 2026-08-05** — all 6 plans complete, all 4 requirements (CORE-01, CORE-02, VERIFY-01, RLS-14) Complete, verifier scored 5/5 must-haves. v3.6 now stands at 24/24 plans across phases 108-111; the milestone is NOT complete — phases 112 (Security + Residual, carries the live `crossbeam-epoch` RUSTSEC-2026-0204 fix) and 113 (SPIFFE) are on the ROADMAP but unbuilt. Next step is `/gsd:plan-phase 112`.
+
+**Phase 111 close-out artifacts:** `111-VERIFICATION.md` (status `human_needed`, 5/5 must-haves verified), `111-REVIEW.md` (1 Critical + 2 Warning + 3 Info), `111-HUMAN-UAT.md` (CR-01 RESOLVED in `5cf5e121`; WR-01 and WR-02 remain OPEN by operator decision). WR-01: `MAX_CRYPTO_THREADS` 7->12 applies to Linux as well as macOS though upstream #1424's rationale is macOS-only. WR-02: the corrected `--timeout` help text describes macOS's `setpgid`+`kill(-pgrp)` as if it applied to Linux, which actually uses `cgroup.kill`. Both are Warning-severity accuracy items; fixing them requires re-running both cross-target clippy gates.
+
+**SDK HAZARD RE-CONFIRMED 2026-08-05:** `gsd-sdk query phase.complete 111` returned `is_last_phase: true` (wrong — 112/113 are unbuilt), then set `status: milestone_complete`, computed `percent: 125`, and flattened this Current Position block to "Plan: Not started". Reverted via `git checkout -- .planning/STATE.md` and hand-corrected. The `parallel_milestone` v3.5 block survived this time, but the standing rule holds: never let SDK state writers touch this file; commit STATE.md before running any phase/state verb so the revert is available.
 
 **Phase 111 locked decisions (see `111-CONTEXT.md`):** D-01 **ADAPT not adopt** for upstream's core `resource` module (`e6d26871`/#1269) — the fork keeps resource limits CLI-side because its implementation is *more* complete than upstream's (kernel-enforced on all 3 platforms: Job Object / cgroup v2 / `RLIMIT_AS`+`RLIMIT_NPROC`) while upstream's core module carries no enforcement; D-02 record it as a **standing divergence** in the 108 ledger (tool-sandbox precedent); D-03 write `proj/ADR-111-resource-limits-boundary.md`; D-04 fork flag names **frozen**, upstream differences get an alias never a rename (Phase 110-01 precedent); D-05/D-06 **correct the stale Unix help text** — `cli.rs` falsely claims `--memory`/`--timeout`/`--max-processes` are unenforced on Linux/macOS when both enforce, but the rewrite must respect the macOS `RLIMIT_AS`=address-space-not-RSS caveat; D-07 **PREPARE-ONLY** (no `0.70.0` tag push — must not entangle with v3.5's still-blocked `v0.66.1`); D-08 bump `../nono-py` + `../nono-ts` in-phase (v3.4 lesson: binding drift is caught only by `maturin`/`napi` build); D-09 VERIFY-01 covers the **combined 108-111 surface** because `110-08` predates the 4 fixes of 2026-08-04 and `has_port_rules()` shipped broken straight through it; D-10 both cross-target clippy gates mandatory-local.
 Last activity: 2026-08-04 -- Phase 111 PLANNED (research + 6 plans + checker PASSED, 0 blockers); CONTEXT.md captured and Phase 110 CLOSED earlier same day
