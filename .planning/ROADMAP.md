@@ -293,7 +293,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. `373a67ae` (#1369, `crossbeam-epoch` 0.9.18→0.9.20) is prioritized ahead of routine DEPS-cluster absorb — it is the direct fix for the live RUSTSEC-2026-0204 advisory the fork's `Cargo.lock` currently carries. *(If already closed by an out-of-band quick task, record that and confirm `cargo audit` is clean rather than re-absorbing.)*
   4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally after the absorb, consistent with VERIFY-01's framing in Phase 111.
 **Plans**: 8 plans
-- [ ] 112-01-PLAN.md — Wave 1 reality-check finalization (D-02) + SEC-01 won't-sync finding + SEC-02a/b/c go/no-go decision + RES-01 skip docs + D-07 confirmation
+- [x] 112-01-PLAN.md — Wave 1 reality-check finalization (D-02) + SEC-01 won't-sync finding + SEC-02a/b/c reality-check evidence + deferred-to-Phase-114 disposition (not a go/no-go decision, per the Amendment above) + RES-01 skip docs + D-07 confirmation
 - [ ] 112-02-PLAN.md — SEC-03: NVIDIA procfs mediation hardening + Sandbox::apply_seccomp/apply_seccomp_with_abi Linux API refactor
 - [ ] 112-03-PLAN.md — SEC-04: trust-policy predicate discriminator + SEC-08: ADR-112 preserving the fork's fail-closed allow_vars default
 - [ ] 112-04-PLAN.md — RES-02: PTY late-CPR-reply teardown drain (adopt) + socket.rs /tmp switch (skip) + test-infra tightening (adopt)
