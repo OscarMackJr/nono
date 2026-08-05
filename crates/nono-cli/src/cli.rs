@@ -248,6 +248,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   why        Check why a path or network operation would be allowed or denied
   classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
   health     Print a read-only fleet deployment health report (JSON-capable)
+  proxy      Run the network filtering / credential proxy as a standalone server
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         Inspect the unsupported Windows session-management surface
@@ -551,6 +552,7 @@ const ROOT_HELP_TEMPLATE: &str = "\
   why        Check why a path or network operation would be allowed or denied
   classify   Classify a PID's AI_AGENT marker (structural, NON-authoritative)
   health     Print a read-only fleet deployment health report (JSON-capable)
+  proxy      Run the network filtering / credential proxy as a standalone server
 
 \x1b[1mSESSION MANAGEMENT\x1b[0m
   ps         List running or detached sandbox sessions
@@ -800,6 +802,24 @@ pub enum Commands {
   regardless of exit code so SCCM/Intune compliance scripts can parse it.
 ")]
     Health(HealthArgs),
+
+    /// Run the network filtering / credential proxy as a standalone server
+    #[command(help_template = "\
+{about}
+
+\x1b[1mUSAGE\x1b[0m
+  nono proxy [flags]
+
+{all-args}
+{after-help}")]
+    #[command(after_help = "\x1b[1mEXAMPLES\x1b[0m
+  nono proxy                                   # Ephemeral port, token auth, prints connection info
+  nono proxy --port 8080                       # Fixed port
+  nono proxy --port 8080 --no-auth             # Open loopback proxy (no token required)
+  nono proxy --allow-domain github.com         # Allowlist a host
+  nono proxy --profile my-profile              # Load network settings from a profile
+")]
+    Proxy(Box<ProxyArgs>),
 
     // ── Daemon & agent management ────────────────────────────────────────
     /// Manage the nono-agentd persistent daemon (per-user multi-tenant agent service)
@@ -2294,6 +2314,140 @@ impl SandboxArgs {
             // sandbox backends (Landlock / Seatbelt).
         }
     }
+}
+
+/// Arguments for the standalone `nono proxy` command.
+///
+/// Runs the network-filtering / credential-injection proxy as a foreground
+/// server (no sandboxed child). Proxy settings can be loaded from a profile
+/// (`--profile`) and extended with explicit flags. Flag names mirror the
+/// `NETWORK` / `CREDENTIALS` flags on `nono run` (`SandboxArgs`) so the two
+/// commands stay consistent.
+///
+/// Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261): upstream's
+/// `ProxyArgs` also exposes `--pass` (custom password instead of a random
+/// session token) and `--proxy-ca-cert`/`--proxy-ca-key` (CA reuse for TLS
+/// interception). Both are deliberately omitted here: this fork's
+/// `nono_proxy::token` module only supports randomly generated session
+/// tokens, and this fork has no `tls_intercept` module (see
+/// `apply_tls_intercept_config` — confirmed absent, not ported). Neither
+/// omission weakens the auth or filtering boundary; both are QoL flags with
+/// safe fallbacks (a generated token, and no CA-reuse-across-runs).
+#[derive(Parser, Debug, Clone)]
+pub struct ProxyArgs {
+    /// Address the proxy listens on (loopback only unless --no-auth is omitted)
+    #[arg(
+        long,
+        value_name = "ADDR",
+        default_value = "127.0.0.1",
+        help_heading = "PROXY"
+    )]
+    pub listen: std::net::IpAddr,
+
+    /// Port to listen on (0 = OS-assigned ephemeral port)
+    #[arg(long, value_name = "PORT", default_value_t = 0, help_heading = "PROXY")]
+    pub port: u16,
+
+    /// Disable session-token auth: accept every request on the bind address.
+    /// Refused for non-loopback bind addresses. Use with care.
+    #[arg(long, help_heading = "PROXY")]
+    pub no_auth: bool,
+
+    /// Maximum concurrent client connections (0 = unlimited). Raise this when
+    /// driving highly parallel clients such as `docker pull`, which opens many
+    /// simultaneous tunnels and can exhaust the default limit.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 256,
+        env = "NONO_PROXY_MAX_CONNECTIONS",
+        help_heading = "PROXY"
+    )]
+    pub max_connections: usize,
+
+    /// Use a profile by name or file path (loads its network/credential settings)
+    #[arg(
+        long,
+        short = 'p',
+        value_name = "NAME_OR_PATH",
+        env = "NONO_PROFILE",
+        help_heading = "PROXY"
+    )]
+    pub profile: Option<String>,
+
+    // ── Network ──────────────────────────────────────────────────────────
+    /// Enable proxy filtering with a named network profile
+    #[arg(
+        long,
+        value_name = "PROFILE",
+        env = "NONO_NETWORK_PROFILE",
+        help_heading = "NETWORK"
+    )]
+    pub network_profile: Option<String>,
+
+    /// Add a domain to the proxy allowlist (repeatable).
+    /// Plain hostname for unrestricted access, or a URL with a path glob
+    /// to restrict to specific endpoints (e.g., https://github.com/org/**)
+    #[arg(
+        long = "allow-domain",
+        alias = "allow-proxy",
+        alias = "proxy-allow",
+        env = "NONO_ALLOW_DOMAIN",
+        value_name = "DOMAIN_OR_URL",
+        help_heading = "NETWORK"
+    )]
+    pub allow_proxy: Vec<String>,
+
+    /// Chain outbound traffic through an upstream proxy (host:port)
+    #[arg(
+        long = "upstream-proxy",
+        alias = "external-proxy",
+        value_name = "HOST:PORT",
+        env = "NONO_UPSTREAM_PROXY",
+        help_heading = "NETWORK"
+    )]
+    pub external_proxy: Option<String>,
+
+    /// Route these domains direct instead of through the upstream proxy
+    #[arg(
+        long = "upstream-bypass",
+        alias = "external-proxy-bypass",
+        value_name = "DOMAIN",
+        env = "NONO_UPSTREAM_BYPASS",
+        value_delimiter = ',',
+        help_heading = "NETWORK"
+    )]
+    pub external_proxy_bypass: Vec<String>,
+
+    /// Allow HTTP/2 multiplexing for upstream proxy connections.
+    #[arg(long, help_heading = "NETWORK")]
+    pub allow_http2: bool,
+
+    // ── Credentials ──────────────────────────────────────────────────────
+    /// Inject credentials via reverse proxy for a service (repeatable)
+    #[arg(
+        long = "credential",
+        alias = "proxy-credential",
+        env = "NONO_CREDENTIAL",
+        value_name = "SERVICE",
+        help_heading = "CREDENTIALS"
+    )]
+    pub proxy_credential: Vec<String>,
+
+    /// Restrict a credential service to specific HTTP method+path patterns (repeatable).
+    /// Format: "SERVICE:METHOD:/path/pattern" (e.g., "github:GET:/repos/*/issues")
+    /// Use "*" for any method: "github:*:/repos/*/issues"
+    #[arg(
+        long = "allow-endpoint",
+        value_name = "SERVICE:METHOD:PATH",
+        help_heading = "CREDENTIALS"
+    )]
+    pub allow_endpoint: Vec<String>,
+
+    // ── Options ──────────────────────────────────────────────────────────
+    /// Enable verbose output (-v info, -vv debug, -vvv trace)
+    #[arg(long, short = 'v', action = clap::ArgAction::Count, help_heading = "OPTIONS")]
+    pub verbose: u8,
 }
 
 #[derive(Parser, Debug, Clone, Default)]
@@ -5562,6 +5716,8 @@ mod tests {
         "classify",
         // Phase 82 DEPLOY-06: read-only fleet deployment health diagnostic.
         "health",
+        // Phase 112 SEC-07: standalone network filtering / credential proxy server.
+        "proxy",
         "ps",
         "stop",
         "detach",

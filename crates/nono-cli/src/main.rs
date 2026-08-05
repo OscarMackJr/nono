@@ -81,6 +81,7 @@ mod profile_runtime;
 #[cfg(not(target_os = "windows"))]
 mod profile_save_runtime;
 mod protected_paths;
+mod proxy_command;
 mod proxy_runtime;
 #[cfg(not(target_os = "windows"))]
 mod pty_proxy;

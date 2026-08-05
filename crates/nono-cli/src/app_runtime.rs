@@ -13,6 +13,7 @@ use crate::open_url_runtime::run_open_url_helper;
 use crate::output;
 use crate::package_cmd;
 use crate::profile_cmd;
+use crate::proxy_command;
 use crate::rollback_commands;
 use crate::session_commands;
 use crate::setup;
@@ -83,6 +84,10 @@ fn dispatch_command(
                 Ok(())
             })
         }
+        // Phase 112 SEC-07: standalone network filtering / credential proxy server.
+        Commands::Proxy(args) => run_command_with_update(update_handle, silent, || {
+            proxy_command::run_proxy(*args, silent)
+        }),
         // Phase 74 D-05: daemon lifecycle and agent management verbs.
         // Thin clients over nono-agentd; daemon verbs drive the per-user SCM
         // service; agent verbs are fail-secure when the daemon is not running.

@@ -277,6 +277,9 @@ fn cli_verbosity(cli: &Cli) -> u8 {
         Commands::Shell(args) => args.sandbox.verbose,
         Commands::Wrap(args) => args.sandbox.verbose,
         Commands::Setup(args) => args.verbose,
+        // Phase 112 SEC-07: ProxyArgs carries its own `verbose` field (not part
+        // of the catch-all arm below, matching Setup/Shell/Wrap's shape).
+        Commands::Proxy(args) => args.verbose,
         Commands::Why(_)
         | Commands::Classify(_)
         | Commands::Rollback(_)
