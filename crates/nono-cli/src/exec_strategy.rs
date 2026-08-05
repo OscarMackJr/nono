@@ -3451,7 +3451,25 @@ fn run_supervisor_loop(
 
         // Drain reparented orphans; if the primary child was among them,
         // surface its status directly.
+        //
+        // `reap_reparented_orphans` calls `waitpid(-1, WNOHANG)`, which reaps
+        // ANY terminated direct child — including the tracked primary. Because
+        // it runs before the `waitpid(child, WNOHANG)` below, the primary's
+        // exit is observed HERE on the normal exit path, not at the `Ok(status)`
+        // arm further down. Returning without draining therefore dropped the
+        // network seccomp-notify events still queued at child exit on every
+        // Linux supervised run with an active `proxy_notify_raw_fd` — i.e. the
+        // end-of-run network denial records that feed the denial diagnostic
+        // footer and the audit/session denial record. Drain before returning,
+        // exactly as the `Ok(status)` and `ECHILD` arms below already do.
         if let Some(status) = reap_reparented_orphans(child) {
+            drain_pending_network_notifications(
+                proxy_notify_raw_fd,
+                config,
+                &mut rate_limiter,
+                &mut denials,
+                &mut ipc_denials,
+            );
             return Ok((status, denials, ipc_denials));
         }
 
