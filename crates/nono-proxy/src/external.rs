@@ -86,12 +86,18 @@ impl BypassMatcher {
 
 /// Handle a CONNECT request by chaining it to an external proxy.
 ///
-/// 1. Validate session token
+/// 1. Validate session token (unless `require_auth` is false)
 /// 2. Check host against cloud metadata deny list
 /// 3. Connect to enterprise proxy
 /// 4. Send CONNECT to enterprise proxy (with optional Proxy-Authorization)
 /// 5. Wait for enterprise proxy 200
 /// 6. Bidirectional tunnel: agent <-> enterprise proxy <-> upstream
+///
+/// `require_auth` (Phase 112 SEC-07, adapted from upstream `2663e990` #1261):
+/// when `false` (standalone `nono proxy --no-auth`), the session-token check
+/// is skipped entirely. The sandboxed `run`/`shell`/`wrap` path and the
+/// default standalone invocation pass `true`, preserving this fork's
+/// pre-existing (always-authenticated) behavior byte-for-byte.
 pub async fn handle_external_proxy(
     first_line: &str,
     stream: &mut TcpStream,
@@ -100,13 +106,16 @@ pub async fn handle_external_proxy(
     session_token: &Zeroizing<String>,
     external_config: &ExternalProxyConfig,
     audit_log: Option<&audit::SharedAuditLog>,
+    require_auth: bool,
 ) -> Result<()> {
     // Parse CONNECT target
     let (host, port) = parse_connect_target(first_line)?;
     debug!("External proxy CONNECT to {}:{}", host, port);
 
     // Validate session token
-    validate_proxy_auth(remaining_header, session_token)?;
+    if require_auth {
+        validate_proxy_auth(remaining_header, session_token)?;
+    }
 
     // Check cloud metadata deny list.
     // Cloud metadata endpoints are always blocked even through enterprise proxies.

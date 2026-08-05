@@ -61,6 +61,14 @@ pub struct ReverseProxyCtx<'a> {
     pub upstream_pool: &'a crate::pool::UpstreamPool,
     /// Shared network audit sink for session metadata capture
     pub audit_log: Option<&'a audit::SharedAuditLog>,
+    /// When `false`, the session-token / phantom-token auth checks below are
+    /// skipped entirely — every request is forwarded unauthenticated.
+    /// Set by the standalone `nono proxy --no-auth` command; the sandboxed
+    /// `run`/`shell`/`wrap` path and the default standalone invocation leave
+    /// this `true`, matching this fork's pre-existing (always-authenticated)
+    /// behavior byte-for-byte.
+    /// Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261).
+    pub require_auth: bool,
 }
 
 /// Handle a non-CONNECT HTTP request (reverse proxy mode).
@@ -199,61 +207,70 @@ pub async fn handle_reverse_proxy(
     // Authenticate the request. Every reverse proxy request must prove
     // possession of the session token, regardless of whether a credential
     // is configured — this is the localhost auth boundary.
-    if let Some(cred) = cred {
-        // Credential route: validate phantom token from the service's auth
-        // header (mode-dependent: header, url_path, query_param, basic_auth).
-        if let Err(e) = validate_phantom_token_for_mode(
-            &cred.inject_mode,
-            remaining_header,
-            &upstream_path,
-            &cred.header_name,
-            cred.path_pattern.as_deref(),
-            cred.query_param_name.as_deref(),
-            ctx.session_token,
-        ) {
-            audit::log_denied(
-                ctx.audit_log,
-                audit::ProxyMode::Reverse,
-                &audit::EventContext {
-                    route_id: Some(&service),
-                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
-                    managed_credential_active: Some(true),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                    ),
-                    ..Default::default()
-                },
-                &service,
-                0,
-                &e.to_string(),
-            );
-            send_error(stream, 401, "Unauthorized").await?;
-            return Ok(());
-        }
-    } else {
-        // No-credential route (L7 filtering only): validate session token
-        // via Proxy-Authorization header. This is the same auth path that
-        // CONNECT tunnels use — the token arrives via HTTPS_PROXY userinfo.
-        if let Err(e) = token::validate_proxy_auth(remaining_header, ctx.session_token) {
-            audit::log_denied(
-                ctx.audit_log,
-                audit::ProxyMode::Reverse,
-                &audit::EventContext {
-                    route_id: Some(&service),
-                    auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
-                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
-                    managed_credential_active: Some(false),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                    ),
-                    ..Default::default()
-                },
-                &service,
-                0,
-                &e.to_string(),
-            );
-            send_error(stream, 407, "Proxy Authentication Required").await?;
-            return Ok(());
+    //
+    // Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261): skipped
+    // entirely when `ctx.require_auth` is false (standalone
+    // `nono proxy --no-auth`). The sandboxed run/shell/wrap path and the
+    // default standalone invocation always pass `require_auth: true`.
+    if ctx.require_auth {
+        if let Some(cred) = cred {
+            // Credential route: validate phantom token from the service's auth
+            // header (mode-dependent: header, url_path, query_param, basic_auth).
+            if let Err(e) = validate_phantom_token_for_mode(
+                &cred.inject_mode,
+                remaining_header,
+                &upstream_path,
+                &cred.header_name,
+                cred.path_pattern.as_deref(),
+                cred.query_param_name.as_deref(),
+                ctx.session_token,
+            ) {
+                audit::log_denied(
+                    ctx.audit_log,
+                    audit::ProxyMode::Reverse,
+                    &audit::EventContext {
+                        route_id: Some(&service),
+                        auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                        managed_credential_active: Some(true),
+                        denial_category: Some(
+                            nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                        ),
+                        ..Default::default()
+                    },
+                    &service,
+                    0,
+                    &e.to_string(),
+                );
+                send_error(stream, 401, "Unauthorized").await?;
+                return Ok(());
+            }
+        } else {
+            // No-credential route (L7 filtering only): validate session token
+            // via Proxy-Authorization header. This is the same auth path that
+            // CONNECT tunnels use — the token arrives via HTTPS_PROXY userinfo.
+            if let Err(e) = token::validate_proxy_auth(remaining_header, ctx.session_token) {
+                audit::log_denied(
+                    ctx.audit_log,
+                    audit::ProxyMode::Reverse,
+                    &audit::EventContext {
+                        route_id: Some(&service),
+                        auth_mechanism: Some(
+                            nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization,
+                        ),
+                        auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                        managed_credential_active: Some(false),
+                        denial_category: Some(
+                            nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                        ),
+                        ..Default::default()
+                    },
+                    &service,
+                    0,
+                    &e.to_string(),
+                );
+                send_error(stream, 407, "Proxy Authentication Required").await?;
+                return Ok(());
+            }
         }
     }
 
@@ -1417,6 +1434,7 @@ mod tests {
             default_tls_config: &tls_config_arc,
             upstream_pool: &upstream_pool,
             audit_log: Some(&audit_log),
+            require_auth: true,
         };
 
         // Bind a loopback listener so we have a real TcpStream pair (handle_reverse_proxy

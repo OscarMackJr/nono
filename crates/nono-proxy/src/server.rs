@@ -1232,6 +1232,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                 &state.session_token,
                 ext_config,
                 Some(&state.audit_log),
+                state.config.require_auth,
             )
             .await
         } else if state.config.external_proxy.is_some() {
@@ -1239,7 +1240,11 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
             // routing direct. Without this, bypassed hosts would inherit
             // connect::handle_connect()'s lenient auth (which tolerates
             // missing Proxy-Authorization for Node.js undici compat).
-            token::validate_proxy_auth(&header_bytes, &state.session_token)?;
+            // Phase 112 SEC-07: skipped entirely when require_auth is false
+            // (standalone `nono proxy --no-auth`).
+            if state.config.require_auth {
+                token::validate_proxy_auth(&header_bytes, &state.session_token)?;
+            }
             connect::handle_connect(
                 first_line,
                 &mut stream,
@@ -1247,6 +1252,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                 &state.session_token,
                 &header_bytes,
                 Some(&state.audit_log),
+                state.config.require_auth && state.config.strict_connect_auth,
             )
             .await
         } else {
@@ -1257,6 +1263,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                 &state.session_token,
                 &header_bytes,
                 Some(&state.audit_log),
+                state.config.require_auth && state.config.strict_connect_auth,
             )
             .await
         }
@@ -1287,6 +1294,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
             default_tls_config: &state.default_tls_config,
             upstream_pool: &state.upstream_pool,
             audit_log: Some(&state.audit_log),
+            require_auth: state.config.require_auth,
         };
         reverse::handle_reverse_proxy(first_line, &mut stream, &header_bytes, &ctx, &buffered).await
     } else {

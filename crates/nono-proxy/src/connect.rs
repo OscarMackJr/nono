@@ -28,6 +28,14 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// `first_line` is the already-read CONNECT line (e.g., "CONNECT api.openai.com:443 HTTP/1.1").
 /// `stream` is the raw TCP stream from the client.
+///
+/// `strict_auth` (Phase 112 SEC-07, adapted from upstream `2663e990` #1261):
+/// when `true`, a missing/invalid `Proxy-Authorization` header is rejected
+/// with `407` before any DNS/filter/upstream work. When `false` (the
+/// sandboxed `run`/`shell`/`wrap` path's existing behavior), the check is
+/// non-fatal — Node.js undici doesn't send Proxy-Authorization from URL
+/// userinfo for CONNECT requests, and the OS sandbox is the trust boundary
+/// there instead.
 pub async fn handle_connect(
     first_line: &str,
     stream: &mut TcpStream,
@@ -35,15 +43,36 @@ pub async fn handle_connect(
     session_token: &Zeroizing<String>,
     remaining_header: &[u8],
     audit_log: Option<&audit::SharedAuditLog>,
+    strict_auth: bool,
 ) -> Result<()> {
     // Parse host:port from CONNECT line
     let (host, port) = parse_connect_target(first_line)?;
     debug!("CONNECT request to {}:{}", host, port);
 
     // Validate session token from Proxy-Authorization header.
-    // Non-fatal for CONNECT: Node.js undici doesn't send Proxy-Authorization
-    // from URL userinfo for CONNECT requests.
     if let Err(e) = validate_proxy_auth(remaining_header, session_token) {
+        if strict_auth {
+            debug!("CONNECT auth rejected (strict mode): {}", e);
+            audit::log_denied(
+                audit_log,
+                audit::ProxyMode::Connect,
+                &audit::EventContext {
+                    auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                    ),
+                    ..Default::default()
+                },
+                &host,
+                port,
+                &e.to_string(),
+            );
+            send_response(stream, 407, "Proxy Authentication Required").await?;
+            return Ok(());
+        }
+        // Non-fatal for CONNECT: Node.js undici doesn't send Proxy-Authorization
+        // from URL userinfo for CONNECT requests.
         debug!("CONNECT auth skipped: {}", e);
     }
 
@@ -473,6 +502,7 @@ mod tests {
             &session_token,
             remaining_header,
             Some(&log),
+            false,
         )
         .await;
 

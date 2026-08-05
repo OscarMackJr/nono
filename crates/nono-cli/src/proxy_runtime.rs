@@ -43,7 +43,10 @@ pub(crate) struct EffectiveProxySettings {
 ///
 /// Upstream-commit: 75b2265 (adapted: guard URL parse behind explicit http/https scheme check
 /// to avoid mangling `host:port` entries — CR-02 fix)
-fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
+/// Phase 112 SEC-07: made `pub(crate)` (was private) so `proxy_command.rs`
+/// can reuse it verbatim when constructing `ProxyLaunchOptions` from
+/// `ProxyArgs` — matches upstream `2663e990`'s own `pub(crate)` promotion.
+pub(crate) fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
     let looks_like_url = input.starts_with("http://") || input.starts_with("https://");
     if looks_like_url {
         if let Ok(parsed) = url::Url::parse(input) {
@@ -78,7 +81,10 @@ fn parse_allow_domain_arg(input: &str) -> AllowDomainEntry {
 ///   `/repos/*/issues`)
 ///
 /// Upstream 46bcfbb9 (#1127): absorbed; returns `Result` for fail-fast error reporting.
-fn parse_allow_endpoint_arg(
+///
+/// Phase 112 SEC-07: made `pub(crate)` (was private) so `proxy_command.rs`
+/// can reuse it — matches upstream `2663e990`'s own `pub(crate)` promotion.
+pub(crate) fn parse_allow_endpoint_arg(
     entry: &str,
 ) -> nono::Result<(String, nono_proxy::config::EndpointRule)> {
     let err = || {

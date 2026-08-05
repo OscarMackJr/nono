@@ -94,6 +94,35 @@ pub struct ProxyConfig {
     /// Equivalent to the `--allow-http2` CLI flag.
     #[serde(default)]
     pub enable_h2: bool,
+
+    /// When `false`, every request on the bind address is accepted without
+    /// validating the session token / credential phantom-token — the
+    /// reverse-proxy (credential-injection and no-credential L7-filtering)
+    /// auth checks are skipped entirely.
+    ///
+    /// Set by the standalone `nono proxy --no-auth` command. The sandboxed
+    /// `run`/`shell`/`wrap` path and the default standalone invocation leave
+    /// this `true`, matching this fork's pre-existing (always-authenticated)
+    /// reverse-proxy behavior byte-for-byte.
+    /// Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261).
+    #[serde(default = "default_require_auth")]
+    pub require_auth: bool,
+
+    /// When `true`, an HTTP CONNECT tunnel with a missing/invalid
+    /// `Proxy-Authorization` header is rejected with `407` before any
+    /// DNS/filter/upstream work, instead of being tunnelled through with
+    /// only a debug log.
+    ///
+    /// The sandboxed `run`/`shell`/`wrap` path's existing lenient CONNECT
+    /// behavior (this flag `false`, the default) tolerates clients — e.g.
+    /// Node.js undici — that don't echo URL-userinfo credentials as
+    /// `Proxy-Authorization` on CONNECT, relying on the OS sandbox as the
+    /// trust boundary instead. The standalone `nono proxy` command sets this
+    /// `true` unless `--no-auth`, since it has no OS sandbox behind it and
+    /// the session token is the only auth boundary for external tools.
+    /// Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261).
+    #[serde(default)]
+    pub strict_connect_auth: bool,
 }
 
 impl Default for ProxyConfig {
@@ -110,8 +139,14 @@ impl Default for ProxyConfig {
             no_proxy: Vec::new(),
             max_connections: 256,
             enable_h2: false,
+            require_auth: true,
+            strict_connect_auth: false,
         }
     }
+}
+
+fn default_require_auth() -> bool {
+    true
 }
 
 fn default_bind_addr() -> IpAddr {
