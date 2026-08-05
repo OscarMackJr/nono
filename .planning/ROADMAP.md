@@ -34,7 +34,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
 - [x] **Phase 110: Profile/Policy Absorb + platform_overrides** — 8/8 plans, all 4 requirements complete; 110-06's live-kernel checkpoint (PROF-03e) resolved 2026-08-04
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
-- [ ] **Phase 112: Security + Residual Sync** — 0/8 plans
+- [x] **Phase 112: Security + Residual Sync** — 8/8 plans (SEC-02 explicitly carved out to Phase 114)
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
 - [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 0/? plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment)
 
@@ -300,7 +300,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 112-05-PLAN.md — SEC-05: Landlock Refer grant in the execute-restriction layer
 - [x] 112-06-PLAN.md — SEC-06: seccomp-notify supervisor-ancestry orphan reaping (adapted)
 - [x] 112-07-PLAN.md — SEC-07: standalone `nono proxy` command, adapted to the fork's ProxyLaunchOptions API
-- [ ] 112-08-PLAN.md — D-05 ledger addendum (all 18 dispositions) + SEC-09 carry-forward note + combined-surface verification + REQUIREMENTS/ROADMAP reconciliation
+- [x] 112-08-PLAN.md — D-05 ledger addendum (all 18 dispositions) + SEC-09 carry-forward note + combined-surface verification + REQUIREMENTS/ROADMAP reconciliation
 
 
 ### Phase 113: SPIFFE/SPIRE Workload Identity
@@ -356,3 +356,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 109. Proxy/Network Absorb | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 110. Profile/Policy Absorb + platform_overrides | v3.6 | 8/8 | Complete | 2026-08-04 |
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 6/6 | Complete   | 2026-08-05 |
+| 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
