@@ -342,6 +342,8 @@ mod tests {
             wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::Error,
             #[cfg(target_os = "linux")]
             af_unix_mediation: crate::profile::LinuxAfUnixMediation::Off,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
             allow_launch_services_active: false,
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,
@@ -409,6 +411,8 @@ mod tests {
             wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::Error,
             #[cfg(target_os = "linux")]
             af_unix_mediation: crate::profile::LinuxAfUnixMediation::Off,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
             allow_launch_services_active: false,
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,

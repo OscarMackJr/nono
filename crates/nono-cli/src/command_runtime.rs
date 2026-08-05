@@ -280,6 +280,8 @@ pub(crate) fn run_shell(args: ShellArgs, silent: bool) -> Result<()> {
             wsl2_proxy_policy: prepared.wsl2_proxy_policy,
             #[cfg(target_os = "linux")]
             af_unix_mediation: prepared.af_unix_mediation,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: prepared.proc_comm_notify,
             bypass_protection_paths: prepared.bypass_protection_paths,
             ignored_denial_paths: prepared.ignored_denial_paths,
             suppressed_system_service_operations: prepared.suppressed_system_service_operations,
@@ -362,6 +364,18 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
         return Err(NonoError::ConfigParse(
             "nono wrap does not support linux.af_unix_mediation = \"pathname\" because direct \
              exec cannot run the seccomp supervisor. Use `nono run` instead."
+                .to_string(),
+        ));
+    }
+
+    // Phase 112 SEC-03 (adapted from upstream a3243907, #1284): NVIDIA GPU
+    // thread-name mediation requires the seccomp-notify supervisor, which
+    // `nono wrap`'s Direct-strategy exec model does not run.
+    #[cfg(target_os = "linux")]
+    if prepared.proc_comm_notify {
+        return Err(NonoError::ConfigParse(
+            "nono wrap does not support NVIDIA GPU thread-name mediation because direct \
+             exec cannot run the seccomp supervisor. Use `nono run --allow-gpu` instead."
                 .to_string(),
         ));
     }

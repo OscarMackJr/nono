@@ -384,6 +384,8 @@ pub(crate) fn execute_supervised_runtime(ctx: SupervisedRuntimeContext<'_>) -> R
         } else {
             exec_strategy::LinuxNetworkNotifyMode::AfUnixOnly
         },
+        #[cfg(target_os = "linux")]
+        proc_comm_notify: config.proc_comm_notify,
     };
     #[cfg(target_os = "windows")]
     let supervisor_cfg = exec_strategy::SupervisorConfig {

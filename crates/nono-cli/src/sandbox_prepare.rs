@@ -89,6 +89,18 @@ pub(crate) struct PreparedSandbox {
     pub(crate) wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy,
     #[cfg(target_os = "linux")]
     pub(crate) af_unix_mediation: crate::profile::LinuxAfUnixMediation,
+    /// Phase 112 SEC-03 (adapted from upstream a3243907, #1284): true when
+    /// NVIDIA GPU support needs supervisor-mediated writes to
+    /// `/proc/<tgid>/task/<tid>/comm` for driver thread naming. Mirrors the
+    /// same `--allow-gpu` predicate used to set `CapabilitySet::gpu()`
+    /// (`capability_ext.rs`), since this fork does not track per-device
+    /// NVIDIA-presence separately from the GPU capability flag at the CLI
+    /// layer — the supervisor's proc-comm fast path is scoped tightly to
+    /// the child's own tgid, so enabling it whenever `--allow-gpu` is
+    /// requested is safe even when no NVIDIA hardware is actually present
+    /// (the path simply never matches).
+    #[cfg(target_os = "linux")]
+    pub(crate) proc_comm_notify: bool,
     pub(crate) allow_launch_services_active: bool,
     pub(crate) open_url_origins: Vec<String>,
     pub(crate) open_url_allow_localhost: bool,
@@ -499,6 +511,9 @@ pub(crate) fn prepare_sandbox_with_context(
                 wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::default(),
                 #[cfg(target_os = "linux")]
                 af_unix_mediation: crate::profile::LinuxAfUnixMediation::default(),
+                // Manifest path has no --allow-gpu CLI flag; no GPU mediation.
+                #[cfg(target_os = "linux")]
+                proc_comm_notify: false,
                 allow_launch_services_active: false,
                 open_url_origins: Vec::new(),
                 open_url_allow_localhost: false,
@@ -815,6 +830,11 @@ pub(crate) fn prepare_sandbox_with_context(
             wsl2_proxy_policy,
             #[cfg(target_os = "linux")]
             af_unix_mediation,
+            // Phase 112 SEC-03 (adapted from upstream a3243907, #1284):
+            // mirrors the same `--allow-gpu` predicate used to set
+            // `CapabilitySet::gpu()` in capability_ext.rs.
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: args.allow_gpu,
             allow_launch_services_active,
             open_url_origins,
             open_url_allow_localhost,
@@ -902,6 +922,8 @@ mod tests {
             wsl2_proxy_policy: profile::Wsl2ProxyPolicy::default(),
             #[cfg(target_os = "linux")]
             af_unix_mediation: profile::LinuxAfUnixMediation::default(),
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
             allow_launch_services_active: false,
             open_url_origins: Vec::new(),
             open_url_allow_localhost: false,

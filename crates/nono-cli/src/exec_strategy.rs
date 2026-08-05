@@ -340,6 +340,15 @@ pub struct ExecConfig<'a> {
     /// Linux pathname AF_UNIX mediation requested by profile.
     #[cfg(target_os = "linux")]
     pub af_unix_mediation: crate::profile::LinuxAfUnixMediation,
+    /// Phase 112 SEC-03 (adapted from upstream a3243907, #1284): true when
+    /// NVIDIA GPU support needs supervisor-mediated writes to
+    /// `/proc/<tgid>/task/<tid>/comm` for driver thread naming. When set,
+    /// the child installs the openat seccomp-notify filter (same as
+    /// `capability_elevation`) and the supervisor's notification handler
+    /// mediates exactly that one procfs path, validated against the
+    /// child's own tgid.
+    #[cfg(target_os = "linux")]
+    pub proc_comm_notify: bool,
     /// Allow-list of environment variable names. When set, only variables
     /// matching an exact name or prefix pattern (e.g. `"AWS_*"`) are
     /// passed to the child. Nono-injected credentials always bypass this.
@@ -425,6 +434,13 @@ pub struct SupervisorConfig<'a> {
     /// Linux connect/bind seccomp notify policy mode.
     #[cfg(target_os = "linux")]
     pub linux_network_notify_mode: LinuxNetworkNotifyMode,
+    /// Phase 112 SEC-03 (adapted from upstream a3243907, #1284): true when
+    /// NVIDIA GPU thread-name mediation is active. The supervisor's
+    /// seccomp-notify handler mediates writable opens of
+    /// `/proc/<tgid>/task/<tid>/comm`, validated against the notifying
+    /// child's own tgid, when this is set.
+    #[cfg(target_os = "linux")]
+    pub proc_comm_notify: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -442,8 +458,12 @@ fn should_install_macos_open_shim(supervisor: Option<&SupervisorConfig<'_>>) -> 
 }
 
 #[cfg(target_os = "linux")]
-const fn linux_child_requires_dumpable(capability_elevation: bool, network_notify: bool) -> bool {
-    capability_elevation || network_notify
+const fn linux_child_requires_dumpable(
+    capability_elevation: bool,
+    network_notify: bool,
+    proc_comm_notify: bool,
+) -> bool {
+    capability_elevation || network_notify || proc_comm_notify
 }
 
 /// What send-family (sendto/sendmsg/sendmmsg) seccomp filter the child should install.
@@ -756,6 +776,7 @@ pub fn execute_supervised(
         && (config.capability_elevation
             || config.seccomp_proxy_fallback
             || config.af_unix_mediation.is_pathname()
+            || config.proc_comm_notify
             || trust_interceptor.is_some());
 
     #[cfg(not(target_os = "linux"))]
@@ -1279,29 +1300,43 @@ pub fn execute_supervised(
                 }
             }
 
-            // On Linux with capability elevation: install seccomp-notify filter
+            // On Linux with capability elevation (or NVIDIA GPU proc-comm
+            // mediation, Phase 112 SEC-03): install seccomp-notify filter
             // AFTER Landlock. The kernel evaluates seccomp before LSM hooks
             // regardless of installation order, so the security properties are
             // identical. All openat/openat2 from exec'd child are routed to
             // the supervisor, which can inject fds for approved paths.
-            // Without elevation, seccomp is not installed — the child runs
-            // with static Landlock capabilities only.
+            // Without elevation or proc-comm mediation, seccomp is not
+            // installed — the child runs with static Landlock capabilities only.
             //
             // On WSL2, seccomp user notification returns EBUSY because WSL2's
             // init already claims the notify listener. The main.rs guards should
             // have disabled these flags, but we check again as defense in depth.
+            //
+            // Phase 112 SEC-03 (adapted from upstream a3243907, #1284): a
+            // required openat seccomp-notify install/handoff failure is now a
+            // fatal sandbox-initialization error (child exits 126) rather than
+            // a silent warn-and-continue. Silently degrading here would mean
+            // the supervisor believes capability elevation / GPU proc-comm
+            // mediation is active when it is not, which is a fail-open gap.
+            #[cfg(target_os = "linux")]
+            let needs_openat_notify = config.capability_elevation || config.proc_comm_notify;
             #[cfg(target_os = "linux")]
             {
-                if config.capability_elevation && nono::sandbox::is_wsl2() {
-                    let msg = b"nono: WSL2 detected, skipping seccomp-notify (capability elevation unavailable)\n";
+                if needs_openat_notify && nono::sandbox::is_wsl2() {
+                    // CR-01: static byte string in post-fork child.
+                    const MSG_WSL2_NOTIFY: &[u8] =
+                        b"nono: WSL2 detected, seccomp-notify required but unavailable\n";
+                    // SAFETY: write and _exit are async-signal-safe.
                     unsafe {
                         libc::write(
                             libc::STDERR_FILENO,
-                            msg.as_ptr().cast::<libc::c_void>(),
-                            msg.len(),
+                            MSG_WSL2_NOTIFY.as_ptr().cast::<libc::c_void>(),
+                            MSG_WSL2_NOTIFY.len(),
                         );
+                        libc::_exit(126);
                     }
-                } else if config.capability_elevation {
+                } else if needs_openat_notify {
                     if let Some(fd) = child_sock_fd {
                         match nono::sandbox::install_seccomp_notify() {
                             Ok(notify_fd) => {
@@ -1324,20 +1359,32 @@ pub fn execute_supervised(
                                 }
                             }
                             Err(_e) => {
-                                // seccomp not available -- proceed without transparent expansion
                                 // CR-01: static byte string in post-fork child.
                                 const MSG_SECCOMP_FAIL: &[u8] =
-                                    b"nono: seccomp-notify not available, expansion disabled\n";
-                                // SAFETY: write is async-signal-safe; this is a non-fatal
-                                // warning (no _exit).
+                                    b"nono: seccomp-notify required but unavailable\n";
+                                // SAFETY: write and _exit are async-signal-safe.
                                 unsafe {
                                     libc::write(
                                         libc::STDERR_FILENO,
                                         MSG_SECCOMP_FAIL.as_ptr().cast::<libc::c_void>(),
                                         MSG_SECCOMP_FAIL.len(),
                                     );
+                                    libc::_exit(126);
                                 }
                             }
+                        }
+                    } else {
+                        // CR-01: static byte string in post-fork child.
+                        const MSG_NO_SOCK: &[u8] =
+                            b"nono: seccomp-notify required but supervisor socket is unavailable\n";
+                        // SAFETY: write and _exit are async-signal-safe.
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_NO_SOCK.as_ptr().cast::<libc::c_void>(),
+                                MSG_NO_SOCK.len(),
+                            );
+                            libc::_exit(126);
                         }
                     }
                 }
@@ -1370,13 +1417,20 @@ pub fn execute_supervised(
                     config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname();
                 let mut proxy_notify_fd_keep: Option<std::os::fd::OwnedFd> = None;
                 if install_network_notify && nono::sandbox::is_wsl2() {
-                    let msg = b"nono: WSL2 detected, skipping seccomp proxy filter (proxy network filtering unavailable)\n";
+                    // Phase 112 SEC-03 (adapted from upstream a3243907, #1284):
+                    // required network seccomp-notify setup failures are now
+                    // fatal rather than a silent skip.
+                    // CR-01: static byte string in post-fork child.
+                    const MSG_WSL2_PROXY: &[u8] =
+                        b"nono: WSL2 detected, seccomp network notify required but unavailable\n";
+                    // SAFETY: write and _exit are async-signal-safe.
                     unsafe {
                         libc::write(
                             libc::STDERR_FILENO,
-                            msg.as_ptr().cast::<libc::c_void>(),
-                            msg.len(),
+                            MSG_WSL2_PROXY.as_ptr().cast::<libc::c_void>(),
+                            MSG_WSL2_PROXY.len(),
                         );
+                        libc::_exit(126);
                     }
                 } else if install_network_notify {
                     if let Some(fd) = child_sock_fd {
@@ -1476,6 +1530,22 @@ pub fn execute_supervised(
                                 }
                             }
                         }
+                    } else {
+                        // Phase 112 SEC-03 (adapted from upstream a3243907, #1284):
+                        // network seccomp-notify was required but no supervisor
+                        // socket exists to hand the notify fd through — fatal.
+                        // CR-01: static byte string in post-fork child.
+                        const MSG_NET_NO_SOCK: &[u8] =
+                            b"nono: seccomp network notify required but supervisor socket is unavailable\n";
+                        // SAFETY: write and _exit are async-signal-safe.
+                        unsafe {
+                            libc::write(
+                                libc::STDERR_FILENO,
+                                MSG_NET_NO_SOCK.as_ptr().cast::<libc::c_void>(),
+                                MSG_NET_NO_SOCK.len(),
+                            );
+                            libc::_exit(126);
+                        }
                     }
                 }
 
@@ -1524,6 +1594,7 @@ pub fn execute_supervised(
                 if !linux_child_requires_dumpable(
                     config.capability_elevation,
                     config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname(),
+                    config.proc_comm_notify,
                 ) {
                     use nix::sys::prctl;
 
@@ -1677,12 +1748,22 @@ pub fn execute_supervised(
                 }
             }
 
-            // On Linux with capability elevation: receive the seccomp notify fd
-            // from the child. The child installed a seccomp-notify filter and
-            // sent the fd via SCM_RIGHTS on the supervisor socket.
-            // Only attempt recv when elevation is active (child sends the fd).
+            // On Linux with capability elevation or NVIDIA GPU proc-comm
+            // mediation (Phase 112 SEC-03): receive the required seccomp
+            // notify fd from the child. The child installed a seccomp-notify
+            // filter and sent the fd via SCM_RIGHTS on the supervisor socket.
+            // Only attempt recv when elevation/proc-comm mediation is active
+            // (child sends the fd).
+            //
+            // If the child cannot provide the fd, this is a sandbox
+            // initialization failure rather than a degraded mode: silently
+            // continuing would mean the supervisor believes capability
+            // elevation / GPU proc-comm mediation is active when it is not
+            // (adapted from upstream a3243907, #1284).
             #[cfg(target_os = "linux")]
-            let seccomp_notify_fd: Option<OwnedFd> = if config.capability_elevation {
+            let seccomp_notify_fd: Option<OwnedFd> = if config.capability_elevation
+                || config.proc_comm_notify
+            {
                 if let Some(ref sup_sock) = supervisor_sock {
                     match sup_sock.recv_fd() {
                         Ok(fd) => {
@@ -1690,12 +1771,21 @@ pub fn execute_supervised(
                             Some(fd)
                         }
                         Err(e) => {
-                            warn!("Failed to receive seccomp notify fd: {}", e);
-                            None
+                            let _ = signal::kill(child, Signal::SIGKILL);
+                            let _ = waitpid(child, None);
+                            return Err(NonoError::SandboxInit(format!(
+                                "Failed to receive required seccomp notify fd from child: {}",
+                                e
+                            )));
                         }
                     }
                 } else {
-                    None
+                    let _ = signal::kill(child, Signal::SIGKILL);
+                    let _ = waitpid(child, None);
+                    return Err(NonoError::SandboxInit(
+                        "Seccomp notify is required but no supervisor socket was created"
+                            .to_string(),
+                    ));
                 }
             } else {
                 None
@@ -1743,24 +1833,31 @@ pub fn execute_supervised(
                                     Some(fd)
                                 }
                                 Err(e) => {
-                                    warn!(
-                                        "Failed to acquire proxy seccomp notify fd via pidfd_getfd: {}",
+                                    let _ = signal::kill(child, Signal::SIGKILL);
+                                    let _ = waitpid(child, None);
+                                    return Err(NonoError::SandboxInit(format!(
+                                        "Failed to acquire required network seccomp notify fd from child: {}",
                                         e
-                                    );
-                                    None
+                                    )));
                                 }
                             }
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to receive proxy seccomp notify fd number from child: {}",
+                            let _ = signal::kill(child, Signal::SIGKILL);
+                            let _ = waitpid(child, None);
+                            return Err(NonoError::SandboxInit(format!(
+                                "Failed to receive required network seccomp notify fd number from child: {}",
                                 e
-                            );
-                            None
+                            )));
                         }
                     }
                 } else {
-                    None
+                    let _ = signal::kill(child, Signal::SIGKILL);
+                    let _ = waitpid(child, None);
+                    return Err(NonoError::SandboxInit(
+                        "Network seccomp notify is required but no supervisor socket was created"
+                            .to_string(),
+                    ));
                 }
             } else {
                 None
@@ -4450,10 +4547,13 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_linux_child_requires_dumpable_only_for_seccomp_driven_features() {
-        assert!(!linux_child_requires_dumpable(false, false));
-        assert!(linux_child_requires_dumpable(true, false));
-        assert!(linux_child_requires_dumpable(false, true));
-        assert!(linux_child_requires_dumpable(true, true));
+        assert!(!linux_child_requires_dumpable(false, false, false));
+        assert!(linux_child_requires_dumpable(true, false, false));
+        assert!(linux_child_requires_dumpable(false, true, false));
+        assert!(linux_child_requires_dumpable(true, true, false));
+        // Phase 112 SEC-03: proc_comm_notify alone also requires dumpable
+        // (matches upstream a3243907's extended `child_requires_dumpable`).
+        assert!(linux_child_requires_dumpable(false, false, true));
     }
 
     #[test]
@@ -4923,6 +5023,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         // Fork a child that closes its socket end and exits immediately.
@@ -5085,6 +5187,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         let t0 = Instant::now();
@@ -5243,6 +5347,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         match unsafe { fork() } {
@@ -5328,6 +5434,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         // Allowed origin: validation passes
@@ -5369,6 +5477,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         let result = validate_url("file:///etc/passwd", &config);
@@ -5408,6 +5518,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
         let config_deny = SupervisorConfig {
             protected_roots: &[],
@@ -5431,6 +5543,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         // Localhost denied when not allowed
@@ -5475,6 +5589,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         let long_url = format!("https://example.com/{}", "a".repeat(MAX_URL_LENGTH));
@@ -5622,6 +5738,8 @@ mod tests {
             unix_socket_allowlist: &[],
             #[cfg(target_os = "linux")]
             linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
         };
 
         assert!(

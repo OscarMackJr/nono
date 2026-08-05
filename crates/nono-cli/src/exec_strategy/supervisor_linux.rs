@@ -99,6 +99,67 @@ fn read_tgid(tid: u32) -> u32 {
         .unwrap_or(tid)
 }
 
+/// Returns true when `path` matches `/proc/<tgid>/task/<tid>/comm` and the
+/// tgid component equals `expected_tgid`.
+///
+/// Phase 112 SEC-03 (adapted from upstream a3243907, #1284). NVIDIA driver
+/// 570+ writes thread names through this exact procfs path; the Landlock
+/// grant for `/proc/self/task` is read-only (see
+/// `nono/src/sandbox/linux.rs::collect_linux_gpu_paths`), so a write here
+/// only succeeds through this validated supervisor fast path.
+fn is_proc_task_comm_for_tgid(path: &std::path::Path, expected_tgid: u32) -> bool {
+    let mut it = path.components();
+    let parse_u32 = |c: Option<std::path::Component<'_>>| -> Option<u32> {
+        if let Some(std::path::Component::Normal(s)) = c {
+            s.to_str()
+                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|s| s.parse().ok())
+        } else {
+            None
+        }
+    };
+
+    matches!(it.next(), Some(std::path::Component::RootDir))
+        && matches!(it.next(), Some(std::path::Component::Normal(s)) if s == "proc")
+        && parse_u32(it.next()) == Some(expected_tgid)
+        && matches!(it.next(), Some(std::path::Component::Normal(s)) if s == "task")
+        && parse_u32(it.next()).is_some()
+        && matches!(it.next(), Some(std::path::Component::Normal(s)) if s == "comm")
+        && it.next().is_none()
+}
+
+/// Phase 112 SEC-03: the proc-comm fast path only handles write-capable
+/// opens (`Write`/`ReadWrite`, including `O_RDWR`). Read-only opens fall
+/// through to the normal initial-capability-set fast path, which already
+/// grants read access to `/proc/self/task`.
+fn proc_comm_notify_allows_access(access: AccessMode) -> bool {
+    matches!(access, AccessMode::Write | AccessMode::ReadWrite)
+}
+
+/// Open the validated `/proc/<tgid>/task/<tid>/comm` path for the requested
+/// write-capable access mode, in the unsandboxed supervisor context.
+fn open_proc_comm_for_access(
+    path: &std::path::Path,
+    access: AccessMode,
+) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    match access {
+        AccessMode::Write => {
+            options.write(true);
+        }
+        AccessMode::ReadWrite => {
+            options.read(true).write(true);
+        }
+        AccessMode::Read => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "proc comm notify handles write-capable opens only",
+            ));
+        }
+    }
+    options.open(path)
+}
+
 /// Handle a seccomp notification on Linux.
 ///
 /// Flow:
@@ -283,6 +344,43 @@ pub(super) fn handle_seccomp_notification(
             },
         );
         let _ = deny_notif(notify_fd, notif.id);
+        return Ok(());
+    }
+
+    // Phase 112 SEC-03 (adapted from upstream a3243907, #1284): NVIDIA
+    // driver 570+ writes thread names through
+    // /proc/<tgid>/task/<tid>/comm. Landlock keeps /proc/self/task
+    // read-only (see `nono/src/sandbox/linux.rs::collect_linux_gpu_paths`);
+    // when proc_comm_notify is active, the supervisor opens this one
+    // validated procfs target (checked against the notifying child's own
+    // tgid) and injects the writable fd.
+    if config.proc_comm_notify
+        && proc_comm_notify_allows_access(access)
+        && is_proc_task_comm_for_tgid(&canonicalized, notifying_tgid)
+    {
+        match open_proc_comm_for_access(&canonicalized, access) {
+            Ok(file) => {
+                if notif_id_valid(notify_fd, notif.id)?
+                    && let Err(e) = inject_fd(notify_fd, notif.id, file.as_raw_fd())
+                {
+                    debug!(
+                        "inject_fd failed for proc comm path {}: {}",
+                        canonicalized.display(),
+                        e
+                    );
+                    let _ = deny_notif(notify_fd, notif.id);
+                }
+            }
+            Err(e) => {
+                debug!(
+                    "Failed to open proc comm path {} for writing: {}",
+                    canonicalized.display(),
+                    e
+                );
+                let _ =
+                    respond_notif_errno(notify_fd, notif.id, e.raw_os_error().unwrap_or(libc::EIO));
+            }
+        }
         return Ok(());
     }
 

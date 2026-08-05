@@ -473,6 +473,19 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         ));
     }
 
+    // Phase 112 SEC-03 (adapted from upstream a3243907, #1284): NVIDIA GPU
+    // thread-name mediation (proc_comm_notify) also requires seccomp user
+    // notification, which is unavailable under WSL2.
+    #[cfg(target_os = "linux")]
+    if flags.proc_comm_notify && nono::sandbox::is_wsl2() {
+        return Err(NonoError::SandboxInit(
+            "WSL2: NVIDIA GPU thread-name mediation requires seccomp user notification, \
+             but WSL2 reports EBUSY for seccomp notify listeners. Disable --allow-gpu or run \
+             on native Linux."
+                .to_string(),
+        ));
+    }
+
     // ignored_denial_paths and suppressed_system_service_operations are now
     // carried through flags.ignored_denial_paths and
     // flags.suppressed_system_service_operations (populated from PreparedSandbox
@@ -518,6 +531,8 @@ pub(crate) fn execute_sandboxed(plan: LaunchPlan) -> Result<()> {
         seccomp_proxy_fallback,
         #[cfg(target_os = "linux")]
         af_unix_mediation: flags.af_unix_mediation,
+        #[cfg(target_os = "linux")]
+        proc_comm_notify: flags.proc_comm_notify,
         allowed_env_vars: flags.allowed_env_vars,
         denied_env_vars: flags.denied_env_vars,
         set_vars: flags.set_vars.unwrap_or_default(),

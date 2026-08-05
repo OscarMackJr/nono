@@ -256,6 +256,12 @@ pub(crate) struct ExecutionFlags {
     pub(crate) wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy,
     #[cfg(target_os = "linux")]
     pub(crate) af_unix_mediation: crate::profile::LinuxAfUnixMediation,
+    /// Phase 112 SEC-03 (adapted from upstream a3243907, #1284): true when
+    /// NVIDIA GPU support needs supervisor-mediated writes to
+    /// `/proc/<tgid>/task/<tid>/comm`. Forwarded from
+    /// `PreparedSandbox.proc_comm_notify`.
+    #[cfg(target_os = "linux")]
+    pub(crate) proc_comm_notify: bool,
     pub(crate) bypass_protection_paths: Vec<PathBuf>,
     pub(crate) ignored_denial_paths: Vec<PathBuf>,
     pub(crate) suppressed_system_service_operations: Vec<String>,
@@ -314,6 +320,8 @@ impl ExecutionFlags {
             wsl2_proxy_policy: crate::profile::Wsl2ProxyPolicy::Error,
             #[cfg(target_os = "linux")]
             af_unix_mediation: crate::profile::LinuxAfUnixMediation::Off,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: false,
             bypass_protection_paths: Vec::new(),
             ignored_denial_paths: Vec::new(),
             suppressed_system_service_operations: Vec::new(),
@@ -460,6 +468,8 @@ pub(crate) fn prepare_run_launch_plan(
             wsl2_proxy_policy: prepared.wsl2_proxy_policy,
             #[cfg(target_os = "linux")]
             af_unix_mediation: prepared.af_unix_mediation,
+            #[cfg(target_os = "linux")]
+            proc_comm_notify: prepared.proc_comm_notify,
             bypass_protection_paths: prepared.bypass_protection_paths,
             ignored_denial_paths: prepared.ignored_denial_paths,
             suppressed_system_service_operations: prepared.suppressed_system_service_operations,
