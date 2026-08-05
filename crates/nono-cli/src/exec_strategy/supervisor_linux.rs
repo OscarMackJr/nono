@@ -360,15 +360,17 @@ pub(super) fn handle_seccomp_notification(
     {
         match open_proc_comm_for_access(&canonicalized, access) {
             Ok(file) => {
-                if notif_id_valid(notify_fd, notif.id)?
-                    && let Err(e) = inject_fd(notify_fd, notif.id, file.as_raw_fd())
-                {
-                    debug!(
-                        "inject_fd failed for proc comm path {}: {}",
-                        canonicalized.display(),
-                        e
-                    );
-                    let _ = deny_notif(notify_fd, notif.id);
+                // Nested `if` (not an `if ... && let ...` let-chain) — let-chains
+                // require Rust 2024 and this workspace is edition 2021.
+                if notif_id_valid(notify_fd, notif.id)? {
+                    if let Err(e) = inject_fd(notify_fd, notif.id, file.as_raw_fd()) {
+                        debug!(
+                            "inject_fd failed for proc comm path {}: {}",
+                            canonicalized.display(),
+                            e
+                        );
+                        let _ = deny_notif(notify_fd, notif.id);
+                    }
                 }
             }
             Err(e) => {
@@ -1638,6 +1640,7 @@ mod tests {
                 proxy_bind_port_ranges: Vec::new(),
                 unix_socket_allowlist,
                 linux_network_notify_mode: LinuxNetworkNotifyMode::ProxyOnly,
+                proc_comm_notify: false,
             }
         }
 

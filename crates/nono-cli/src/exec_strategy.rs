@@ -1761,35 +1761,34 @@ pub fn execute_supervised(
             // elevation / GPU proc-comm mediation is active when it is not
             // (adapted from upstream a3243907, #1284).
             #[cfg(target_os = "linux")]
-            let seccomp_notify_fd: Option<OwnedFd> = if config.capability_elevation
-                || config.proc_comm_notify
-            {
-                if let Some(ref sup_sock) = supervisor_sock {
-                    match sup_sock.recv_fd() {
-                        Ok(fd) => {
-                            debug!("Received seccomp notify fd from child");
-                            Some(fd)
+            let seccomp_notify_fd: Option<OwnedFd> =
+                if config.capability_elevation || config.proc_comm_notify {
+                    if let Some(ref sup_sock) = supervisor_sock {
+                        match sup_sock.recv_fd() {
+                            Ok(fd) => {
+                                debug!("Received seccomp notify fd from child");
+                                Some(fd)
+                            }
+                            Err(e) => {
+                                let _ = signal::kill(child, Signal::SIGKILL);
+                                let _ = waitpid(child, None);
+                                return Err(NonoError::SandboxInit(format!(
+                                    "Failed to receive required seccomp notify fd from child: {}",
+                                    e
+                                )));
+                            }
                         }
-                        Err(e) => {
-                            let _ = signal::kill(child, Signal::SIGKILL);
-                            let _ = waitpid(child, None);
-                            return Err(NonoError::SandboxInit(format!(
-                                "Failed to receive required seccomp notify fd from child: {}",
-                                e
-                            )));
-                        }
+                    } else {
+                        let _ = signal::kill(child, Signal::SIGKILL);
+                        let _ = waitpid(child, None);
+                        return Err(NonoError::SandboxInit(
+                            "Seccomp notify is required but no supervisor socket was created"
+                                .to_string(),
+                        ));
                     }
                 } else {
-                    let _ = signal::kill(child, Signal::SIGKILL);
-                    let _ = waitpid(child, None);
-                    return Err(NonoError::SandboxInit(
-                        "Seccomp notify is required but no supervisor socket was created"
-                            .to_string(),
-                    ));
-                }
-            } else {
-                None
-            };
+                    None
+                };
 
             // On Linux: if the parent determined seccomp proxy fallback is needed,
             // receive the proxy notify fd number from the child and acquire the
