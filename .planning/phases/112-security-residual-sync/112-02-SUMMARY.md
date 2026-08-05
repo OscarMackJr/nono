@@ -61,9 +61,9 @@ completed: 2026-08-05
 
 ## Performance
 
-- **Duration:** ~3h10min (includes ~35min of live diff-forensics that discovered the architectural entanglement, plus ~20min of Docker/zig cross-target gate wall-clock time)
+- **Duration:** ~5h (includes ~35min of live diff-forensics that discovered the architectural entanglement, plus ~4h of Docker/zig cross-target gate wall-clock time across the canonical + supplementary `--all-targets` re-runs, most of it idle wait on `cross`'s containerized compiles, not active work)
 - **Started:** 2026-08-05T15:00:00Z (approx.)
-- **Completed:** 2026-08-05T18:10:00Z (approx.)
+- **Completed:** 2026-08-05T20:00:00Z (approx.)
 - **Tasks:** 3/3 completed (adapted scope — see Deviations)
 - **Files modified:** 12 (3 library, 9 CLI)
 
@@ -72,7 +72,7 @@ completed: 2026-08-05
 - Hardened NVIDIA GPU procfs mediation: `/proc/self/task` Landlock grant is now `AccessMode::Read` (was `ReadWrite`); writes to `/proc/<tgid>/task/<tid>/comm` route through a new supervisor seccomp-notify fast path (`is_proc_task_comm_for_tgid`/`proc_comm_notify_allows_access`/`open_proc_comm_for_access` in `supervisor_linux.rs`) that validates the target path against the notifying child's own tgid before injecting a writable fd.
 - Made required openat AND network seccomp-notify setup/fd-handoff failures fatal `NonoError::SandboxInit` errors on both the child side (`exit(126)` instead of warn-and-continue) and the supervisor side (kill child + return `Err` instead of `warn!`+`None`) — closes a fail-open gap where the supervisor previously believed capability elevation or GPU mediation was active when the child had silently run without it.
 - Threaded `proc_comm_notify: bool` end-to-end through `PreparedSandbox -> ExecutionFlags -> ExecConfig -> SupervisorConfig`, mirroring the fork's existing `capability_elevation`/`af_unix_mediation` flat-field pattern; `nono wrap` now rejects `proc_comm_notify` (Direct-strategy exec cannot run the seccomp supervisor), matching the existing `af_unix_mediation` rejection.
-- Both mandatory cross-target clippy gates ran GREEN (linux-gnu via `cross clippy`, exit 0, 14m57s; apple-darwin via `cargo-zigbuild clippy`, exit 0, 44s), `cargo fmt --all --check` clean, and `cross test` confirmed all 3 new/extended unit tests pass live on Linux plus the pre-existing `test_from_args_allow_gpu_sets_capability_on_unix` Unix-only CLI wiring test.
+- Both mandatory cross-target clippy gates ran GREEN, in both their canonical form (linux-gnu via `cross clippy`, exit 0, 14m57s; apple-darwin via `cargo-zigbuild clippy`, exit 0, 44s) and a supplementary `--all-targets` re-run of each (linux-gnu exit 0, 52m45s; apple-darwin exit 0, 2m04s) added after `cross test` caught a real gap the canonical (non-`--all-targets`) clippy invocation structurally cannot see (clippy's default target set is lib+bins, not `#[cfg(test)]` code). `cargo fmt --all --check` clean; `cross test` confirmed all 3 new/extended unit tests pass live on Linux plus the pre-existing `test_from_args_allow_gpu_sets_capability_on_unix` Unix-only CLI wiring test (both before and after the Task-3-discovered fix below).
 
 ## Task Commits
 
@@ -80,8 +80,9 @@ Each task was committed atomically:
 
 1. **Task 1: Library-side GPU procfs hardening + apply_seccomp API** - `2495f633` (feat)
 2. **Task 2: CLI-side call-site updates for proc_comm_notify + fatal seccomp-notify hardening** - `85c88cd8` (feat)
+3. **Task 3 (verification): fix a real E0063 compile error `cross test` caught in `supervisor_linux.rs`'s test-only `make_config()` helper (missing `proc_comm_notify` field)** - `f1c35475` (fix)
 
-_Task 3 (cross-target verification) produced no additional source commit — it is documentation-and-verification-only per the plan's own task shape; results are recorded in this SUMMARY and in the Self-Check section below. No plan-metadata-only commit was created separately; this SUMMARY's own commit serves as the final metadata commit._
+_Task 3 is primarily documentation-and-verification per the plan's own task shape, but it surfaced a real, mandatory-to-fix bug (see Deviation 4) — hence the one source commit above. No plan-metadata-only commit was created separately; this SUMMARY's own commit serves as the final metadata commit._
 
 ## Files Created/Modified
 - `crates/nono/src/sandbox/linux.rs` - `apply_with_abi_inner(handle_tcp)` refactor, `SeccompOpts`/`apply_seccomp`/`apply_seccomp_with_abi`/`apply_external`, `/proc/self/task` Read-only grant, `landlock_network_active` bug fix, 2 new tests
@@ -128,9 +129,17 @@ See `key-decisions` in frontmatter for the full list. Summary: this plan impleme
 - **Verification:** `cargo fmt --all --check` exits 0 after the fix; cross-target clippy (which also compiles the code) confirmed clean afterward.
 - **Committed in:** `85c88cd8`
 
+**4. [Rule 1 - Bug] Missed a 10th `SupervisorConfig` test-fixture construction site (E0063 missing field)**
+- **Found during:** Task 3's `cross test -p nono-sandbox-cli -- test_from_args_allow_gpu_sets_capability_on_unix` run — the canonical (non-`--all-targets`) `cross clippy` gate does NOT compile `#[cfg(test)]` code by default (clippy's default target set is lib+bins), so this compile error was invisible to both mandatory clippy gates and only surfaced when the test profile was actually built.
+- **Issue:** Task 2's CLI wiring added `proc_comm_notify` to `SupervisorConfig` and bulk-fixed 9 test-fixture construction sites in `exec_strategy.rs` (grep-anchored on `linux_network_notify_mode:`) plus the 1 production site in `supervised_runtime.rs` — but missed a 10th construction site: `supervisor_linux.rs`'s own `#[cfg(test)] mod tests { fn make_config(...) -> SupervisorConfig }` helper, which lives in a different file than the other 9 and was not caught by the same grep pass because it wasn't re-run against `supervisor_linux.rs` specifically. `cargo test -p nono-sandbox-cli -- test_from_args_windows_sandbox_state_invariant_with_vs_without_allow_gpu` (the Windows-testable half of the plan's `<verification>` pair) had already passed on Windows host earlier — that test doesn't touch `supervisor_linux.rs`'s test module, so it gave a false sense of completeness.
+- **Fix:** Added `proc_comm_notify: false,` to `make_config()`. `make_config_with_ranges()` calls `make_config()` internally, so no second fix was needed there.
+- **Files modified:** `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`
+- **Verification:** `cross test -p nono-sandbox-cli -- test_from_args_allow_gpu_sets_capability_on_unix` exits 0 after the fix; re-ran BOTH mandatory cross-target clippy gates with `--all-targets` added (supplementary, beyond the checklist's canonical command) specifically to close this exact gap class going forward — both exit 0 (linux-gnu 52m45s, apple-darwin 2m04s).
+- **Committed in:** `f1c35475`
+
 ---
 
-**Total deviations:** 3 auto-fixed (1 architectural-adapt resolved without a checkpoint per ADR-111 precedent + evident bounded scope, 1 latent bug, 1 edition-compat fix)
+**Total deviations:** 4 auto-fixed (1 architectural-adapt resolved without a checkpoint per ADR-111 precedent + evident bounded scope, 2 latent bugs, 1 edition-compat fix)
 **Impact on plan:** The architectural deviation changes HOW SEC-03 was delivered (adapt vs. the disposition table's literal "adopt") but not WHAT was delivered — every `must_haves` truth in the plan frontmatter is satisfied. No unauthorized scope creep: the antecedent `fa21a004`/`8a4237f2` refactor (21 files) was explicitly NOT absorbed, staying a documented standing gap rather than silently ballooning this plan's scope.
 
 ## Issues Encountered
@@ -155,5 +164,7 @@ None - no external service configuration required. No new dependencies (`Cargo.t
 ## Self-Check: PASSED
 
 Created file `112-02-SUMMARY.md` confirmed present on disk; task commits `2495f633`
-(library), `85c88cd8` (CLI), and `3fd4f29c` (this summary) confirmed present in
-`git log`.
+(library), `85c88cd8` (CLI), `f1c35475` (Task 3 fix), and `3fd4f29c`/`4fa9489a` (this
+summary) confirmed present in `git log`. Both mandatory cross-target clippy gates
+(canonical AND supplementary `--all-targets` forms) and `cross test` re-confirmed
+GREEN after `f1c35475` landed.
