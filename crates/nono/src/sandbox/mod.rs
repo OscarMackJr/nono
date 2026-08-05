@@ -45,6 +45,11 @@ pub use linux::{
     SYS_CONNECT, SYS_OPENAT, SYS_OPENAT2, SYS_SENDMMSG, SYS_SENDMSG, SYS_SENDTO,
 };
 
+// Re-export the Linux TCP-network-enforcement options type for
+// `Sandbox::apply_seccomp`/`apply_seccomp_with_abi` (Phase 112 SEC-03).
+#[cfg(target_os = "linux")]
+pub use linux::SeccompOpts;
+
 /// Level of sandbox support on this platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportStatus {
@@ -673,6 +678,57 @@ impl Sandbox {
     #[must_use = "sandbox application result should be checked"]
     pub fn apply(caps: &CapabilitySet) -> Result<linux::SeccompNetFallback> {
         linux::apply(caps)
+    }
+
+    /// Apply Landlock filesystem/process sandboxing and seccomp TCP network
+    /// fallback according to `opts` (Linux), auto-detecting ABI.
+    ///
+    /// Filesystem/process sandboxing is always Landlock-enforced. `opts`
+    /// controls only nono-managed TCP network fallback/delegation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sandbox initialization fails.
+    #[cfg(target_os = "linux")]
+    #[must_use = "sandbox application result should be checked"]
+    pub fn apply_seccomp(
+        caps: &CapabilitySet,
+        opts: linux::SeccompOpts,
+    ) -> Result<linux::SeccompNetFallback> {
+        linux::apply_seccomp(caps, opts)
+    }
+
+    /// Apply Landlock filesystem/process sandboxing and seccomp TCP network
+    /// fallback with a pre-detected ABI (Linux).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sandbox initialization fails.
+    #[cfg(target_os = "linux")]
+    #[must_use = "sandbox application result should be checked"]
+    pub fn apply_seccomp_with_abi(
+        caps: &CapabilitySet,
+        abi: &DetectedAbi,
+        opts: linux::SeccompOpts,
+    ) -> Result<linux::SeccompNetFallback> {
+        linux::apply_seccomp_with_abi(caps, abi, opts)
+    }
+
+    /// Declare that TCP network enforcement is handled externally (Linux).
+    ///
+    /// This is intentionally a no-op marker. It must not be used as the whole
+    /// `nono run` sandbox; filesystem/process sandboxing is applied
+    /// separately via [`Sandbox::apply_seccomp`] /
+    /// [`Sandbox::apply_seccomp_with_abi`] with
+    /// [`linux::SeccompOpts::external_tcp`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the marker cannot be recorded (never fails today;
+    /// signature matches the other `apply_*` entry points for consistency).
+    #[cfg(target_os = "linux")]
+    pub fn apply_external() -> Result<()> {
+        linux::apply_external()
     }
 
     /// Apply the sandbox with the given capabilities (macOS).

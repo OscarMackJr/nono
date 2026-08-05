@@ -100,7 +100,9 @@ pub use sandbox::windows::{
 // (classify returns NotAnAgent on non-Windows; insert works everywhere).
 pub use agent::{AgentClassification, AgentRegistry};
 #[cfg(target_os = "linux")]
-pub use sandbox::{detect_abi, is_wsl2, landlock_scope_policy, DetectedAbi, LandlockScopePolicy};
+pub use sandbox::{
+    detect_abi, is_wsl2, landlock_scope_policy, DetectedAbi, LandlockScopePolicy, SeccompOpts,
+};
 pub use sandbox::{PreviewRuntimeStatus, Sandbox, SupportInfo, SupportStatus};
 #[cfg(target_os = "windows")]
 pub use sandbox::{

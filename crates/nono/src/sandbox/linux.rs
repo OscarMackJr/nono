@@ -517,8 +517,14 @@ fn is_nvidia_compute_device(name: &str) -> bool {
 /// - `/proc/driver/nvidia` (r, dir) — NVIDIA procfs (when NVIDIA present)
 /// - `/proc/driver/nvidia-uvm` (r, dir) — UVM procfs (when NVIDIA present)
 /// - `/proc/self` (r, dir) — /proc/self/maps, /proc/self/status, etc.
-/// - `/proc/self/task` (rw, dir) — driver writes /proc/self/task/<tid>/comm
-///   for thread names; EACCES here manifests as CUDA Error 304
+/// - `/proc/self/task` (r, dir) — NVIDIA driver 570+ enumerates task
+///   entries and writes to `/proc/self/task/<tid>/comm` during thread
+///   startup to set thread names. The write is mediated by the seccomp-
+///   notify supervisor's proc-comm fast path (Phase 112 SEC-03, adapted
+///   from upstream a3243907 — see `grant matches expected tgid` check in
+///   `nono-cli/src/exec_strategy/supervisor_linux.rs`) so the broader task
+///   subtree stays read-only. EACCES on the mediated write path surfaces
+///   as CUDA Error 304 if the supervisor mediation is not active.
 /// - `/usr/share/vulkan` (r, dir) — Vulkan ICD manifests
 /// - `/etc/vulkan` (r, dir) — Vulkan ICD manifests (alt location)
 /// - `/sys/class/drm` (r, dir) — GPU-specific sysfs (scoped to drm subtree
@@ -595,9 +601,14 @@ fn collect_linux_gpu_paths() -> (Vec<(std::path::PathBuf, AccessMode, bool)>, bo
 
     // NVIDIA procfs paths — only granted when NVIDIA devices are present
     // (pure DRM/AMD/WSL setups don't need them). Upstream 4df0a8e: CUDA
-    // init reads /proc/driver/nvidia and /proc/driver/nvidia-uvm, and
-    // the driver writes /proc/self/task/<tid>/comm for thread names.
-    // EACCES on that write surfaces as CUDA Error 304.
+    // init reads /proc/driver/nvidia and /proc/driver/nvidia-uvm.
+    //
+    // Phase 112 SEC-03 (adapted from upstream a3243907, #1284): the driver
+    // writes /proc/self/task/<tid>/comm for thread names, but this Landlock
+    // grant is now READ-ONLY. The write is mediated by the seccomp-notify
+    // supervisor's proc-comm fast path (validated against the child's own
+    // tgid before the supervisor injects a writable fd) rather than a
+    // blanket ReadWrite Landlock grant on the whole task subtree.
     if nvidia_present {
         for name in ["nvidia", "nvidia-uvm"] {
             let path = PathBuf::from("/proc/driver").join(name);
@@ -605,14 +616,12 @@ fn collect_linux_gpu_paths() -> (Vec<(std::path::PathBuf, AccessMode, bool)>, bo
                 out.push((path, AccessMode::Read, false));
             }
         }
-        // /proc/self read; /proc/self/task rw. These are guaranteed on
-        // Linux so we include them unconditionally when NVIDIA is present.
+        // /proc/self read; /proc/self/task read-only. These are guaranteed
+        // on Linux so we include them unconditionally when NVIDIA is
+        // present. Comm writes go through supervisor fd injection instead
+        // of a Landlock write grant (see module doc above).
         out.push((PathBuf::from("/proc/self"), AccessMode::Read, false));
-        out.push((
-            PathBuf::from("/proc/self/task"),
-            AccessMode::ReadWrite,
-            false,
-        ));
+        out.push((PathBuf::from("/proc/self/task"), AccessMode::Read, false));
     }
 
     // Vulkan ICD manifests + GPU sysfs — read-only, scoped narrowly.
@@ -691,11 +700,30 @@ pub fn apply(caps: &CapabilitySet) -> Result<SeccompNetFallback> {
 /// an ABI higher than the kernel supports, `handle_access()` will fail rather
 /// than silently dropping flags.
 pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<SeccompNetFallback> {
+    apply_with_abi_inner(caps, abi, true)
+}
+
+/// Internal implementation shared by [`apply_with_abi`] and
+/// [`apply_seccomp_with_abi`].
+///
+/// `handle_tcp`: when `false`, TCP network enforcement (Landlock `AccessNet`
+/// and/or the seccomp fallback) is skipped entirely — filesystem/process
+/// sandboxing is still fully applied. Used by [`apply_external`]'s caller
+/// contract (Phase 112 SEC-03, adapted from upstream a3243907 #1284): the
+/// deployment has already applied the normal sandbox via this path and is
+/// separately delegating TCP egress lockdown to infrastructure.
+fn apply_with_abi_inner(
+    caps: &CapabilitySet,
+    abi: &DetectedAbi,
+    handle_tcp: bool,
+) -> Result<SeccompNetFallback> {
     let target_abi = abi.abi;
     info!("Using Landlock ABI {:?}", target_abi);
     let scopes = requested_scopes(caps, abi)?;
 
-    if !matches!(caps.network_mode(), NetworkMode::AllowAll) && caps.localhost_ports().contains(&0)
+    if handle_tcp
+        && !matches!(caps.network_mode(), NetworkMode::AllowAll)
+        && caps.localhost_ports().contains(&0)
     {
         return Err(NonoError::SandboxInit(
             "open_port 0 (localhost TCP wildcard) is macOS-only; on Linux use explicit ports or a network profile."
@@ -718,17 +746,22 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
         .map_err(|e| NonoError::SandboxInit(format!("Failed to handle fs access: {}", e)))?
         .set_compatibility(CompatLevel::BestEffort);
 
-    // Determine if we need network handling (any mode besides AllowAll)
-    let needs_network_handling = !matches!(caps.network_mode(), NetworkMode::AllowAll)
-        || !caps.tcp_connect_ports().is_empty()
-        || !caps.tcp_bind_ports().is_empty();
+    // Determine if we need network handling (any mode besides AllowAll).
+    // When `handle_tcp` is false, TCP network enforcement is delegated
+    // externally, so no network handling is installed regardless of caps.
+    let needs_network_handling = handle_tcp
+        && (!matches!(caps.network_mode(), NetworkMode::AllowAll)
+            || !caps.tcp_connect_ports().is_empty()
+            || !caps.tcp_bind_ports().is_empty());
 
     let mut seccomp_net_fallback = SeccompNetFallback::None;
+    let mut landlock_network_active = false;
 
     let ruleset_builder = if needs_network_handling {
         let handled_net = AccessNet::from_all(target_abi);
         if !handled_net.is_empty() {
             debug!("Handling network access: {:?}", handled_net);
+            landlock_network_active = true;
             ruleset_builder
                 .set_compatibility(CompatLevel::HardRequirement)
                 .handle_access(handled_net)
@@ -775,6 +808,11 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
             }
         }
     } else {
+        if !handle_tcp {
+            info!(
+                "TCP network enforcement delegated externally; applying filesystem and process sandbox only"
+            );
+        }
         ruleset_builder
     };
 
@@ -810,10 +848,13 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
         .create()
         .map_err(|e| NonoError::SandboxInit(format!("Failed to create ruleset: {}", e)))?;
 
-    // Add Landlock network port rules ONLY when Landlock is handling networking.
-    // When a seccomp fallback is active (BlockAll or ProxyOnly), the ruleset was
-    // created without handle_access(AccessNet), so adding NetPort rules would fail.
-    if matches!(seccomp_net_fallback, SeccompNetFallback::None) {
+    // Add Landlock network port rules ONLY when Landlock is actually handling
+    // networking (ruleset was created with handle_access(AccessNet)). When a
+    // seccomp fallback is active (BlockAll or ProxyOnly), OR when TCP network
+    // enforcement is skipped entirely (handle_tcp == false, Phase 112 SEC-03),
+    // the ruleset was created without handle_access(AccessNet), so adding
+    // NetPort rules would fail.
+    if landlock_network_active {
         // Add per-port TCP connect rules (ProxyOnly port + explicit tcp_connect_ports)
         if let NetworkMode::ProxyOnly { port, bind_ports } = caps.network_mode() {
             debug!("Adding ProxyOnly TCP connect rule for port {}", port);
@@ -1090,6 +1131,84 @@ pub fn apply_with_abi(caps: &CapabilitySet, abi: &DetectedAbi) -> Result<Seccomp
     // installs it post-fork via install_seccomp_proxy_filter().
 
     Ok(seccomp_net_fallback)
+}
+
+/// Options for [`apply_seccomp`] / [`apply_seccomp_with_abi`].
+///
+/// Phase 112 SEC-03 (adapted from upstream a3243907, #1284). Upstream's
+/// original commit builds this on top of a `LinuxSandboxPolicy`/`SeccompPolicy`
+/// CLI-wide policy-selection refactor (`fa21a004`/`8a4237f2`, #1283) that this
+/// fork has not absorbed (tracked as a standing CORE-cluster/Phase-111
+/// residual — see `108-DIVERGENCE-LEDGER.md`). This type intentionally only
+/// exposes the narrower TCP-network-handling toggle this phase's threat
+/// model requires, not the full multi-mode policy enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SeccompOpts {
+    handle_tcp: bool,
+}
+
+impl SeccompOpts {
+    /// Apply Landlock filesystem/process sandboxing and use seccomp as the
+    /// network fallback when Landlock lacks TCP filtering support. This is
+    /// the default and matches the existing [`apply`]/[`apply_with_abi`]
+    /// behavior.
+    #[must_use]
+    pub fn network_fallback() -> Self {
+        Self { handle_tcp: true }
+    }
+
+    /// Apply Landlock filesystem/process sandboxing, but skip nono-managed
+    /// TCP network enforcement because the deployment enforces egress
+    /// externally.
+    #[must_use]
+    pub fn external_tcp() -> Self {
+        Self { handle_tcp: false }
+    }
+
+    fn handles_tcp(self) -> bool {
+        self.handle_tcp
+    }
+}
+
+impl Default for SeccompOpts {
+    fn default() -> Self {
+        Self::network_fallback()
+    }
+}
+
+/// Apply Landlock filesystem/process sandboxing and use seccomp for TCP
+/// network fallback according to `opts`, auto-detecting ABI.
+///
+/// This is not a seccomp-only sandbox. Filesystem and process isolation
+/// always remain Landlock-enforced; `opts` controls only nono-managed TCP
+/// network handling when Landlock networking is unavailable or intentionally
+/// delegated externally.
+pub fn apply_seccomp(caps: &CapabilitySet, opts: SeccompOpts) -> Result<SeccompNetFallback> {
+    let detected = detect_abi()?;
+    apply_seccomp_with_abi(caps, &detected, opts)
+}
+
+/// Apply Landlock filesystem/process sandboxing and seccomp-controlled TCP
+/// handling with a pre-detected ABI.
+pub fn apply_seccomp_with_abi(
+    caps: &CapabilitySet,
+    abi: &DetectedAbi,
+    opts: SeccompOpts,
+) -> Result<SeccompNetFallback> {
+    apply_with_abi_inner(caps, abi, opts.handles_tcp())
+}
+
+/// Declare that TCP network enforcement is managed externally.
+///
+/// This function intentionally installs no kernel policy. It exists only as
+/// an explicit marker for callers that have already applied the normal
+/// filesystem and process sandbox (via [`apply_seccomp`] /
+/// [`apply_seccomp_with_abi`] with [`SeccompOpts::external_tcp`]) and are
+/// delegating TCP egress lockdown to infrastructure. It must not be used as
+/// the whole `nono run` sandbox on its own.
+pub fn apply_external() -> Result<()> {
+    info!("TCP network enforcement delegated externally");
+    Ok(())
 }
 
 /// Apply a second Landlock layer that restricts execute access to the given paths.
@@ -4192,6 +4311,19 @@ mod tests {
     }
 
     #[test]
+    fn test_seccomp_opts_external_tcp_disables_only_tcp_handling() {
+        // Phase 112 SEC-03 (adapted from upstream a3243907's
+        // `test_seccomp_opts_external_tcp_disables_only_tcp_handling`, adapted
+        // to this fork's simplified 2-variant `handle_tcp: bool` model rather
+        // than upstream's 3-way `TcpNetworkEnforcement` enum, since this fork
+        // never absorbed the antecedent `LinuxSandboxPolicy`/`SeccompPolicy`
+        // refactor (fa21a004/8a4237f2, #1283) that enum depends on).
+        assert!(SeccompOpts::network_fallback().handles_tcp());
+        assert!(SeccompOpts::default().handles_tcp());
+        assert!(!SeccompOpts::external_tcp().handles_tcp());
+    }
+
+    #[test]
     fn test_legacy_can_use_seccomp_block_fallback() {
         // BlockAll => true
         assert!(can_use_seccomp_network_block_fallback(
@@ -5150,6 +5282,29 @@ mod tests {
             assert!(
                 !has_procfs_self,
                 "procfs self grant must NOT appear without NVIDIA device"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_collect_linux_gpu_paths_proc_self_task_stays_read_only() {
+        // Phase 112 SEC-03 (adapted from upstream a3243907, #1284):
+        // /proc/self/task must be granted Read only, never ReadWrite. NVIDIA
+        // driver 570+'s comm write is mediated by the seccomp-notify
+        // supervisor's proc-comm fast path (see
+        // `nono-cli/src/exec_strategy/supervisor_linux.rs`), not by a
+        // blanket Landlock ReadWrite grant on the whole task subtree.
+        let (paths, nvidia_present) = collect_linux_gpu_paths();
+        if nvidia_present {
+            let proc_self_task = paths
+                .iter()
+                .find(|(p, _, _)| p == std::path::Path::new("/proc/self/task"))
+                .expect("/proc/self/task must be granted when NVIDIA is present");
+            assert_eq!(
+                proc_self_task.1,
+                AccessMode::Read,
+                "/proc/self/task must stay read-only; comm writes are supervisor-mediated"
             );
         }
     }
