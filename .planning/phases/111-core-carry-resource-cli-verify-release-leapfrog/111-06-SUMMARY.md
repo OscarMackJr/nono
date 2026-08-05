@@ -132,3 +132,11 @@ None - no external service configuration required. No live registry credentials 
 ---
 *Phase: 111-core-carry-resource-cli-verify-release-leapfrog*
 *Completed: 2026-08-04*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/111-core-carry-resource-cli-verify-release-leapfrog/111-06-SUMMARY.md`
+- FOUND: `c24b20b` (`../nono-py` repo)
+- FOUND: `6406096` (`../nono-ts` repo)
+- FOUND: `be3d0ecc` (this repo)
+- FOUND: `684e97d1` (this repo)

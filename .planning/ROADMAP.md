@@ -33,7 +33,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 108: UPST12 Divergence Audit** — 5/5 plans
 - [x] **Phase 109: Proxy/Network Absorb** — 5/5 plans
 - [x] **Phase 110: Profile/Policy Absorb + platform_overrides** — 8/8 plans, all 4 requirements complete; 110-06's live-kernel checkpoint (PROF-03e) resolved 2026-08-04
-- [ ] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 0/6 plans
+- [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/? plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
 
@@ -278,7 +278,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 111-03-PLAN.md — D-01/D-02/D-03: `proj/ADR-111-resource-limits-boundary.md` + standing-divergence addendum in `108-DIVERGENCE-LEDGER.md`
 - [x] 111-04-PLAN.md — VERIFY-01: both cross-target clippy gates + `make ci` substitution + 24-name baseline diff + D-09 fork-invariant assertions + binding rebuild, over the combined 108-111 surface
 - [x] 111-05-PLAN.md — RLS-14 (in-repo half): bump the 6 workspace crates + path-dep pins to `0.70.0`, regenerate Cargo.lock, correct `release-readiness.ps1`/`release-dry-run.ps1`'s hardcoded version strings
-- [ ] 111-06-PLAN.md — RLS-14 (sibling half): bump `../nono-py` + `../nono-ts` to `0.70.0`, rebuild both, confirm the prepare-only `release-dry-run.ps1` gate GREEN
+- [x] 111-06-PLAN.md — RLS-14 (sibling half): bump `../nono-py` + `../nono-ts` to `0.70.0`, rebuild both, confirm the prepare-only `release-dry-run.ps1` gate GREEN
 
 ### Phase 112: Security + Residual Sync
 **Goal**: The security-relevant and residual commits from the `v0.66.0..v0.69.0` window that no other v3.6 phase covers are absorbed under a fork-invariant review kept separate from any release-cut phase — mirrors the v3.1 Phase 87 precedent.
@@ -332,4 +332,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 108. UPST12 Divergence Audit | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 109. Proxy/Network Absorb | v3.6 | 5/5 | Complete | 2026-07-29 |
 | 110. Profile/Policy Absorb + platform_overrides | v3.6 | 8/8 | Complete | 2026-08-04 |
-| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 5/6 | In Progress|  |
+| 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 6/6 | Complete   | 2026-08-05 |
