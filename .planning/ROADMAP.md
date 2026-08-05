@@ -12,7 +12,7 @@ updated: 2026-07-28
 
 ## Milestones
 
-- 🔄 **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-113 (active 2026-07-28, parallel to v3.5)
+- 🔄 **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-114 (active 2026-07-28, parallel to v3.5)
 - 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02, HELD on external Azure block)
 - ✅ **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (shipped 2026-07-02) — [archive](milestones/v3.4-ROADMAP.md)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
@@ -26,7 +26,7 @@ updated: 2026-07-28
 ## Phases
 
 <details open>
-<summary>🔄 v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-113) — ACTIVE (parallel to v3.5)</summary>
+<summary>🔄 v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-114) — ACTIVE (parallel to v3.5)</summary>
 
 Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parallel** with the operator-blocked v3.5. Absorb the cross-platform delta from `nolabs-ai/nono` `v0.66.0..v0.69.0` (v0.67.0/.1, v0.68.0, v0.69.0) — proxy/network (`deny_domain`, SPIFFE/SPIRE, SigV4 + sibling-route fixes), profile/policy (`platform_overrides` + migrate the fork's `windows_*` flags into it, `$VAR`/`@git` tokens, port-range schema with a WFP-native emitter, bun/mise presets), macOS Seatbelt carry, and resource-CLI alignment onto the existing Job Object impl — WITHOUT regressing the Windows security model or the ADR-86 boundary, then leapfrog all 6 crates + both binding repos to **`0.70.0`** (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed — a standing structural divergence deferred to the dedicated **v3.7 Windows Tool-Sandbox Parity** milestone). Scope source: quick `260727-jkn`.
 
@@ -36,6 +36,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [ ] **Phase 112: Security + Residual Sync** — 0/8 plans
 - [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/? plans
+- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 0/? plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment)
 
 </details>
 

@@ -155,7 +155,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 ## v3.6 Traceability
 
-Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–113**.
+Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–114**.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
