@@ -91,11 +91,18 @@ try {
             #   - "failed to select a version for the requirement" — the package NAME exists
             #     on the index (e.g. a pre-rename upstream-published name) but not at the
             #     required version.
-            #   - "no matching package named" — the package name itself has never been
-            #     published under any version (true for the fork-owned nono-sandbox* names
+            #   - "no matching package named `nono-sandbox" — the package name itself has never
+            #     been published under any version (true for the fork-owned nono-sandbox* names
             #     since the Phase 102/103 rename — cargo cannot even find the index entry).
+            #
+            # The second pattern is SCOPED to the fork-owned `nono-sandbox` name family on
+            # purpose (111 CR-01). An unanchored 'no matching package named' would also swallow
+            # a genuine packaging defect — a typo'd dependency, a yanked crate, a bad version
+            # bump — reclassifying it as an expected pre-publish block and letting this gate
+            # exit 0 immediately ahead of an irreversible crates.io publish. Only the absence of
+            # our own not-yet-published crates is an expected state; anything else is a FAIL.
             if ($outStr -match 'failed to select a version for the requirement' -or `
-                $outStr -match 'no matching package named') {
+                $outStr -match 'no matching package named `nono-sandbox') {
                 Write-Host "  PRE_PUBLISH_REGISTRY_BLOCKED" -ForegroundColor Yellow
                 Add-Result "crates.$crate" "PRE_PUBLISH_REGISTRY_BLOCKED" `
                     "nono-sandbox ^0.70.0 not yet on crates.io; re-run after publishing nono-sandbox"
