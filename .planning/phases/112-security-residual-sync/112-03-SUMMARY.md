@@ -122,6 +122,10 @@ None - no external service configuration required.
 
 **Cross-target gate applicability:** This plan's files (`crates/nono/src/trust/{types,policy,mod}.rs`, `crates/nono-cli/src/{trust_cmd,trust_scan}.rs`) contain no `#[cfg(target_os = "linux")]`, `#[cfg(target_os = "macos")]`, or `#[cfg(any(target_os = "linux", target_os = "macos"))]` blocks, and are not under `exec_strategy/` or `bindings/c/src/`. Per `CLAUDE.md`'s cross-target clippy rule, the mandatory `cross clippy`/`cargo-zigbuild clippy` gates do not apply to this plan's changes (`trust_scan.rs` does contain pre-existing, untouched `#[cfg(unix)]`/`#[cfg(windows)]` test-helper blocks for path-safety tests — none of this plan's edits are near or touch those blocks). The Windows-host `cargo clippy --workspace --all-targets` run above is a supplementary sanity check, not a substitute for the mandatory gate — it was run because it is fast and free, not because it satisfies the CLAUDE.md requirement.
 
+## Self-Check: PASSED
+
+All claimed files exist on disk; all claimed commit hashes (`62d9e050`, `9cdef2f5`, `296b0a04`) resolve via `git log --oneline --all`.
+
 ---
 *Phase: 112-security-residual-sync*
 *Completed: 2026-08-05*
