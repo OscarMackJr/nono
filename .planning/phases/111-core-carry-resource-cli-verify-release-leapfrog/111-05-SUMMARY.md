@@ -120,3 +120,7 @@ None - no external service configuration required.
 ---
 *Phase: 111-core-carry-resource-cli-verify-release-leapfrog*
 *Completed: 2026-08-05*
+
+## Self-Check: PASSED
+
+All 9 modified files confirmed present on disk. All 3 commits (`502403ba`, `d1c0ad58`, `29729b46`) confirmed present in `git log --oneline --all`.
