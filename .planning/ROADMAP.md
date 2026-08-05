@@ -296,7 +296,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 112-01-PLAN.md — Wave 1 reality-check finalization (D-02) + SEC-01 won't-sync finding + SEC-02a/b/c reality-check evidence + deferred-to-Phase-114 disposition (not a go/no-go decision, per the Amendment above) + RES-01 skip docs + D-07 confirmation
 - [x] 112-02-PLAN.md — SEC-03: NVIDIA procfs mediation hardening + Sandbox::apply_seccomp/apply_seccomp_with_abi Linux API refactor
 - [x] 112-03-PLAN.md — SEC-04: trust-policy predicate discriminator + SEC-08: ADR-112 preserving the fork's fail-closed allow_vars default
-- [ ] 112-04-PLAN.md — RES-02: PTY late-CPR-reply teardown drain (adopt) + socket.rs /tmp switch (skip) + test-infra tightening (adopt)
+- [x] 112-04-PLAN.md — RES-02: PTY late-CPR-reply teardown drain (adopt) + socket.rs /tmp switch (skip) + test-infra tightening (adopt)
 - [ ] 112-05-PLAN.md — SEC-05: Landlock Refer grant in the execute-restriction layer
 - [ ] 112-06-PLAN.md — SEC-06: seccomp-notify supervisor-ancestry orphan reaping (adapted)
 - [ ] 112-07-PLAN.md — SEC-07: standalone `nono proxy` command, adapted to the fork's ProxyLaunchOptions API
