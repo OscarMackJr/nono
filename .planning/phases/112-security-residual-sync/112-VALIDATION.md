@@ -1,10 +1,11 @@
 ---
 phase: 112
 slug: security-residual-sync
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-05
+approved: 2026-08-05
 ---
 
 # Phase 112 — Validation Strategy
@@ -58,7 +59,7 @@ failure*; a stopped Docker daemon or absent tool does NOT qualify.
 | SEC-08 | `allow_vars` **fail-closed** semantics preserved (anti-regression guard) | unit | `cargo test -p nono-sandbox-cli --lib -- empty_allow_vars_fails_closed` | ✅ `crates/nono-cli/src/profile_runtime.rs:989` — **run BEFORE and AFTER any SEC-08 change** | ⬜ pending |
 | SEC-09 | Carry-forward note into the v3.7 tool-sandbox work-list | manual-only | N/A — documentation deliverable | N/A | ⬜ pending |
 | SEC-01 | Won't-sync finding document (mirrors `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`) | manual-only | N/A — finding document deliverable | N/A | ⬜ pending |
-| SEC-02a/b/c | Disposition go/no-go (Open Question 1) then adapt-or-defer | unit (scope TBD) | Deferred until the reality-check task resolves adapt-vs-defer | N/A pending disposition | ⬜ pending |
+| SEC-02a/b/c | ~~Disposition go/no-go then adapt-or-defer~~ **CARVED OUT to Phase 114** (ROADMAP Amendment 2026-08-05) | manual-only | N/A in Phase 112 — the only 112-side deliverable is the reality-check evidence + deferred disposition row in the D-05 ledger addendum | N/A | ⬜ pending |
 | RES-01 (×4) | Skip-with-recorded-reasoning (skip-biased, D-03) | manual-only | N/A unless a task diff-proves applicability | N/A | ⬜ pending |
 | RES-02 `503045801a` | Late CPR-reply teardown drain | unit (new) | New unit test around `discard_late_terminal_input()` / `CprReplyParse` | ❌ **Wave 0** | ⬜ pending |
 | RES-02 `9840a16f` | Denial-marker assertion tightening | integration | `cargo test -p nono-sandbox-cli --test socket_access_run -- af_unix_mediation_pathname_allows_connect_to_listed_socket` | ✅ | ⬜ pending |
@@ -110,12 +111,12 @@ regression signal. Any name already in the set reappearing is expected host nois
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an automated verify command or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all ❌ MISSING references above
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 90s for targeted filters
-- [ ] Both cross-target clippy gates GREEN (ROADMAP SC4)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have an automated verify command or a Wave 0 dependency
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all ❌ MISSING references above — the 4 gaps (SEC-05 ported regression test, SEC-06 orphan-reap test, SEC-07 dispatch tests, RES-02 CPR-drain test) are each authored inside their own plan before being relied on for verification
+- [x] No watch-mode flags
+- [x] Feedback latency < 90s for targeted filters
+- [ ] Both cross-target clippy gates GREEN (ROADMAP SC4) — *verified at execution, not plan time*
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-08-05 (gsd-plan-checker Dimension-8 review of all 8 plans; `wave_0_complete` stays false until the 4 Wave-0 tests are actually authored during execution)
