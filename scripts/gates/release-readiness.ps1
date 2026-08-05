@@ -73,8 +73,8 @@ function Invoke-Gate {
         $failedChecks = [System.Collections.Generic.List[string]]::new()
         $detail       = [ordered]@{}
 
-        $targetVersion       = '0.66.1'
-        $upstreamHighest     = '0.66.0'
+        $targetVersion       = '0.70.0'
+        $upstreamHighest     = '0.69.0'
         # Publish-set crates renamed to fork-owned names in Phase 102 (PUB-01):
         # nono->nono-sandbox, nono-cli->nono-sandbox-cli, nono-proxy->nono-sandbox-proxy.
         # The other three keep their original package names (not in the publish set).
@@ -88,7 +88,7 @@ function Invoke-Gate {
         )
 
         # -----------------------------------------------------------------------
-        # ASSERTION (a): cargo metadata reports all version-family crates at 0.66.1
+        # ASSERTION (a): cargo metadata reports all version-family crates at 0.70.0
         # -----------------------------------------------------------------------
         Push-Location $repoRoot
         try {
@@ -163,7 +163,7 @@ function Invoke-Gate {
         }
 
         # -----------------------------------------------------------------------
-        # ASSERTION (c): leapfrog — 0.66.1 is strictly greater than upstream 0.66.0
+        # ASSERTION (c): leapfrog — 0.70.0 is strictly greater than upstream 0.69.0
         # -----------------------------------------------------------------------
         $releaseVer  = [Version]$targetVersion
         $upstreamVer = [Version]$upstreamHighest
