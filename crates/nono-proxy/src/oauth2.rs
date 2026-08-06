@@ -220,17 +220,7 @@ async fn exchange_token(
         ProxyError::OAuth2Exchange(format!("invalid token_url '{}': {}", config.token_url, e))
     })?;
 
-    let scheme = parsed.scheme();
-    let is_https = match scheme {
-        "https" => true,
-        "http" => false,
-        other => {
-            return Err(ProxyError::OAuth2Exchange(format!(
-                "unsupported scheme '{}' in token_url",
-                other
-            )));
-        }
-    };
+    let is_https = validate_token_url_scheme(&parsed, &config.token_url)?;
 
     let host = parsed
         .host_str()
@@ -270,46 +260,9 @@ async fn exchange_token(
         body.as_str()
     ));
 
-    // ── TCP + optional TLS ───────────────────────────────────────────────
-    let addr = format!("{}:{}", host, port);
-
-    let response_bytes = tokio::time::timeout(EXCHANGE_TIMEOUT, async {
-        let tcp = TcpStream::connect(&addr)
-            .await
-            .map_err(|e| ProxyError::OAuth2Exchange(format!("TCP connect to {}: {}", addr, e)))?;
-
-        if is_https {
-            let server_name =
-                rustls::pki_types::ServerName::try_from(host.clone()).map_err(|_| {
-                    ProxyError::OAuth2Exchange(format!("invalid TLS server name: {}", host))
-                })?;
-
-            let mut tls = tls_connector.connect(server_name, tcp).await.map_err(|e| {
-                ProxyError::OAuth2Exchange(format!("TLS handshake with {}: {}", host, e))
-            })?;
-
-            tls.write_all(request.as_bytes())
-                .await
-                .map_err(|e| ProxyError::OAuth2Exchange(format!("write to {}: {}", host, e)))?;
-            tls.flush()
-                .await
-                .map_err(|e| ProxyError::OAuth2Exchange(format!("flush to {}: {}", host, e)))?;
-
-            read_http_response(&mut tls).await
-        } else {
-            let mut tcp = tcp;
-            tcp.write_all(request.as_bytes())
-                .await
-                .map_err(|e| ProxyError::OAuth2Exchange(format!("write to {}: {}", host, e)))?;
-            tcp.flush()
-                .await
-                .map_err(|e| ProxyError::OAuth2Exchange(format!("flush to {}: {}", host, e)))?;
-
-            read_http_response(&mut tcp).await
-        }
-    })
-    .await
-    .map_err(|_| ProxyError::OAuth2Exchange(format!("token exchange with {} timed out", addr)))??;
+    // ── TCP + optional TLS + HTTP exchange ───────────────────────────────
+    let response_bytes =
+        connect_and_send(&host, port, is_https, request.as_bytes(), tls_connector).await?;
 
     // ── Parse HTTP response ──────────────────────────────────────────────
     let response_str = String::from_utf8(response_bytes).map_err(|_| {
@@ -340,6 +293,91 @@ async fn exchange_token(
 
     let json_body = &response_str[body_start..];
     parse_token_response(json_body)
+}
+
+/// Validate a token endpoint URL's scheme.
+///
+/// HTTPS is always allowed. HTTP is only permitted for loopback addresses
+/// (testing / local mock servers) — sending a client_secret or a JWT-SVID
+/// assertion over plaintext HTTP to a non-loopback host would expose the
+/// credential on the network. Any other scheme is rejected.
+///
+/// Returns `Ok(true)` for `https`, `Ok(false)` for loopback `http`.
+fn validate_token_url_scheme(parsed: &url::Url, token_url: &str) -> Result<bool> {
+    match parsed.scheme() {
+        "https" => Ok(true),
+        "http" => {
+            let is_loopback = parsed.host_str().is_some_and(|h| {
+                h == "localhost"
+                    || h.parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            });
+            if is_loopback {
+                Ok(false)
+            } else {
+                Err(ProxyError::OAuth2Exchange(format!(
+                    "token_url '{}' must use https:// (http:// is only permitted for loopback addresses)",
+                    token_url
+                )))
+            }
+        }
+        other => Err(ProxyError::OAuth2Exchange(format!(
+            "unsupported scheme '{}' in token_url",
+            other
+        ))),
+    }
+}
+
+/// Connect to `host:port` (TLS if `is_https`), send `request`, and read the
+/// full response body. Shared by [`exchange_token`] (`client_credentials`)
+/// and [`exchange_jwt_assertion`] (RFC 7523 `jwt-bearer`) so the TCP/TLS
+/// connection setup is defined exactly once.
+async fn connect_and_send(
+    host: &str,
+    port: u16,
+    is_https: bool,
+    request: &[u8],
+    tls_connector: &TlsConnector,
+) -> Result<Vec<u8>> {
+    let addr = format!("{}:{}", host, port);
+
+    tokio::time::timeout(EXCHANGE_TIMEOUT, async {
+        let tcp = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| ProxyError::OAuth2Exchange(format!("TCP connect to {}: {}", addr, e)))?;
+
+        if is_https {
+            let server_name =
+                rustls::pki_types::ServerName::try_from(host.to_string()).map_err(|_| {
+                    ProxyError::OAuth2Exchange(format!("invalid TLS server name: {}", host))
+                })?;
+
+            let mut tls = tls_connector.connect(server_name, tcp).await.map_err(|e| {
+                ProxyError::OAuth2Exchange(format!("TLS handshake with {}: {}", host, e))
+            })?;
+
+            tls.write_all(request)
+                .await
+                .map_err(|e| ProxyError::OAuth2Exchange(format!("write to {}: {}", host, e)))?;
+            tls.flush()
+                .await
+                .map_err(|e| ProxyError::OAuth2Exchange(format!("flush to {}: {}", host, e)))?;
+
+            read_http_response(&mut tls).await
+        } else {
+            let mut tcp = tcp;
+            tcp.write_all(request)
+                .await
+                .map_err(|e| ProxyError::OAuth2Exchange(format!("write to {}: {}", host, e)))?;
+            tcp.flush()
+                .await
+                .map_err(|e| ProxyError::OAuth2Exchange(format!("flush to {}: {}", host, e)))?;
+
+            read_http_response(&mut tcp).await
+        }
+    })
+    .await
+    .map_err(|_| ProxyError::OAuth2Exchange(format!("token exchange with {} timed out", addr)))?
 }
 
 /// Read a full HTTP response from a stream up to [`MAX_TOKEN_RESPONSE`] bytes.
@@ -421,6 +459,249 @@ fn parse_token_response(json: &str) -> Result<(Zeroizing<String>, Duration)> {
         Zeroizing::new(access_token.to_string()),
         Duration::from_secs(expires_in_secs),
     ))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// SPIFFE JWT-bearer client assertion (RFC 7523) token cache
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Like [`TokenCache`] but exchanges a SPIFFE JWT-SVID as the OAuth2
+/// `client_assertion` (RFC 7523 `urn:ietf:params:oauth:grant-type:jwt-bearer`
+/// grant) instead of a `client_id`/`client_secret` pair.
+///
+/// OD-1 scope note: this is the narrow SPIFFE-scoped slice of the jwt-bearer
+/// flow only. The general (non-SPIFFE) `client_credentials` route-wiring
+/// layer (`CredentialStore.oauth2_routes`/`OAuth2Route`/`get_oauth2()`) that
+/// upstream's `credential.rs` hunk assumes as pre-existing context traces to
+/// unabsorbed `b1ecbc02` and is explicitly NOT built here.
+pub struct SpiffeAssertionTokenCache {
+    token: Arc<RwLock<CachedToken>>,
+    jwt_source: Arc<crate::spiffe::SpiffeJwtSource>,
+    token_url: String,
+    assertion_audience: Vec<String>,
+    extra_params: Vec<(String, String)>,
+    tls_connector: TlsConnector,
+    pub workload_spiffe_id: String,
+}
+
+/// Custom Debug that redacts nothing secret (there is nothing secret in this
+/// struct's non-token fields) but avoids deriving Debug on `jwt_source`
+/// (`SpiffeJwtSource` already has its own redacted `Debug`) and keeps the
+/// output stable, mirroring [`TokenCache`]'s redaction idiom.
+impl std::fmt::Debug for SpiffeAssertionTokenCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SpiffeAssertionTokenCache")
+            .field("token_url", &self.token_url)
+            .finish()
+    }
+}
+
+impl SpiffeAssertionTokenCache {
+    /// Create a new cache and perform the **initial** jwt-bearer token
+    /// exchange. Unlike [`TokenCache::new`], this is a plain `async fn` —
+    /// callers already run inside an async context (`CredentialStore::load`
+    /// is itself async under D-04), so no `Handle::block_on` bridging is
+    /// needed here.
+    pub async fn new(
+        token_url: String,
+        jwt_source: Arc<crate::spiffe::SpiffeJwtSource>,
+        assertion_audience: Vec<String>,
+        extra_params: Vec<(String, String)>,
+        tls_connector: TlsConnector,
+    ) -> Result<Self> {
+        let (access_token, expires_in, workload_spiffe_id) = exchange_jwt_assertion(
+            &token_url,
+            &jwt_source,
+            &assertion_audience,
+            &extra_params,
+            &tls_connector,
+        )
+        .await?;
+
+        debug!(
+            "OAuth2 jwt-bearer initial token acquired for {}, expires in {}s",
+            workload_spiffe_id,
+            expires_in.as_secs()
+        );
+
+        Ok(Self {
+            token: Arc::new(RwLock::new(CachedToken {
+                access_token,
+                expires_at: Instant::now() + expires_in,
+            })),
+            jwt_source,
+            token_url,
+            assertion_audience,
+            extra_params,
+            tls_connector,
+            workload_spiffe_id,
+        })
+    }
+
+    /// Return a valid access token, refreshing if needed.
+    ///
+    /// Unlike [`TokenCache::get_or_refresh`], this can fail: if the SVID
+    /// fetch itself fails (workload identity is gone — SPIRE agent down,
+    /// socket unreachable, SVID expired with no refresh possible), the
+    /// error is propagated rather than masked by a stale-token fallback
+    /// (T-113-10). Only a failure of the *token exchange* step (network or
+    /// IdP-side, the SVID fetch having succeeded) falls back to a stale
+    /// token, matching [`TokenCache::get_or_refresh`]'s existing
+    /// graceful-degradation behavior for that failure class.
+    pub async fn get_or_refresh(&self) -> Result<Zeroizing<String>> {
+        {
+            let guard = self.token.read().await;
+            if Instant::now() + Duration::from_secs(EXPIRY_BUFFER_SECS) < guard.expires_at {
+                return Ok(guard.access_token.clone());
+            }
+        }
+
+        let mut guard = self.token.write().await;
+        // Double-check after acquiring write lock (another task may have refreshed).
+        if Instant::now() + Duration::from_secs(EXPIRY_BUFFER_SECS) < guard.expires_at {
+            return Ok(guard.access_token.clone());
+        }
+
+        match exchange_jwt_assertion(
+            &self.token_url,
+            &self.jwt_source,
+            &self.assertion_audience,
+            &self.extra_params,
+            &self.tls_connector,
+        )
+        .await
+        {
+            Ok((new_token, expires_in, _)) => {
+                debug!(
+                    "OAuth2 jwt-bearer token refreshed, expires in {}s",
+                    expires_in.as_secs()
+                );
+                guard.access_token = new_token;
+                guard.expires_at = Instant::now() + expires_in;
+                Ok(guard.access_token.clone())
+            }
+            // SVID fetch failed - workload identity is gone; fail the
+            // request (do not serve stale) per T-113-10.
+            Err(e @ ProxyError::Credential(_)) => Err(e),
+            // Token exchange failed (network/auth) - use stale token if
+            // available, matching TokenCache::get_or_refresh's existing
+            // graceful-degradation idiom for the SAME class of failure.
+            Err(e) => {
+                warn!(
+                    "OAuth2 jwt-bearer token refresh failed, returning stale token: {}",
+                    e
+                );
+                Ok(guard.access_token.clone())
+            }
+        }
+    }
+}
+
+/// Perform a single RFC 7523 jwt-bearer token exchange, using a freshly
+/// fetched SPIFFE JWT-SVID as the `client_assertion`.
+///
+/// Returns `(access_token, expires_in_duration, workload_spiffe_id)`.
+async fn exchange_jwt_assertion(
+    token_url: &str,
+    jwt_source: &crate::spiffe::SpiffeJwtSource,
+    audience: &[String],
+    extra_params: &[(String, String)],
+    tls_connector: &TlsConnector,
+) -> Result<(Zeroizing<String>, Duration, String)> {
+    // Fetches (and internally caches/refreshes) the JWT-SVID from the SPIRE
+    // Workload API. A failure here is a `ProxyError::Credential` — this is
+    // the "workload identity is gone" case `get_or_refresh` fails closed on.
+    let (assertion, spiffe_id) = jwt_source.fetch_token(audience).await?;
+
+    // ── Build form body (URL-encoded per T-113-08) ───────────────────────
+    let mut body = Zeroizing::new(format!(
+        "grant_type={}&client_assertion_type={}&assertion={}",
+        urlencoding::encode("urn:ietf:params:oauth:grant-type:jwt-bearer"),
+        urlencoding::encode("urn:ietf:params:oauth:client-assertion-type:jwt-bearer"),
+        urlencoding::encode(assertion.as_str()),
+    ));
+    for (k, v) in extra_params {
+        body.push_str(&format!(
+            "&{}={}",
+            urlencoding::encode(k),
+            urlencoding::encode(v)
+        ));
+    }
+
+    let parsed = url::Url::parse(token_url).map_err(|e| {
+        ProxyError::OAuth2Exchange(format!("invalid token_url '{}': {}", token_url, e))
+    })?;
+
+    // Reuses the same HTTPS-or-loopback validation as exchange_token (T-113-09).
+    let is_https = validate_token_url_scheme(&parsed, token_url)?;
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| {
+            ProxyError::OAuth2Exchange(format!("missing host in token_url '{}'", token_url))
+        })?
+        .to_string();
+
+    let default_port: u16 = if is_https { 443 } else { 80 };
+    let port = parsed.port().unwrap_or(default_port);
+    let path = if parsed.path().is_empty() {
+        "/"
+    } else {
+        parsed.path()
+    };
+    let path_with_query = match parsed.query() {
+        Some(q) => format!("{}?{}", path, q),
+        None => path.to_string(),
+    };
+
+    let request = Zeroizing::new(format!(
+        "POST {} HTTP/1.1\r\n\
+         Host: {}\r\n\
+         Content-Type: application/x-www-form-urlencoded\r\n\
+         Content-Length: {}\r\n\
+         Accept: application/json\r\n\
+         Connection: close\r\n\
+         \r\n\
+         {}",
+        path_with_query,
+        host,
+        body.len(),
+        body.as_str()
+    ));
+
+    // Reuses the same connect + send + read chain as exchange_token.
+    let response_bytes =
+        connect_and_send(&host, port, is_https, request.as_bytes(), tls_connector).await?;
+
+    let response_str = String::from_utf8(response_bytes).map_err(|_| {
+        ProxyError::OAuth2Exchange("token endpoint returned non-UTF-8 response".to_string())
+    })?;
+
+    let body_start = response_str
+        .find("\r\n\r\n")
+        .map(|i| i + 4)
+        .or_else(|| response_str.find("\n\n").map(|i| i + 2))
+        .ok_or_else(|| {
+            ProxyError::OAuth2Exchange(
+                "malformed HTTP response: no header/body separator".to_string(),
+            )
+        })?;
+
+    let status_line = response_str.lines().next().unwrap_or("");
+    let status_code = parse_status_code(status_line);
+    if !(200..300).contains(&status_code) {
+        let body_preview: String = response_str[body_start..].chars().take(200).collect();
+        return Err(ProxyError::OAuth2Exchange(format!(
+            "token endpoint returned HTTP {}: {}",
+            status_code, body_preview
+        )));
+    }
+
+    // Reuses the same JSON-parse helper as exchange_token; wraps its result
+    // with spiffe_id as the 3rd tuple element.
+    let json_body = &response_str[body_start..];
+    let (access_token, expires_in) = parse_token_response(json_body)?;
+    Ok((access_token, expires_in, spiffe_id))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -569,5 +850,67 @@ mod tests {
             config,
             tls_connector,
         }
+    }
+
+    // ── validate_token_url_scheme (shared by exchange_token and
+    //    exchange_jwt_assertion — Task 1 acceptance criterion) ────────────
+    //
+    // exchange_jwt_assertion cannot be exercised directly in a unit test:
+    // it fetches the JWT-SVID via `jwt_source.fetch_token()` BEFORE
+    // validating the token_url scheme (matching upstream c831dade's exact
+    // ordering), and `SpiffeJwtSource` has no test-only constructor that
+    // bypasses a live SPIRE Workload API connection (see spiffe.rs's own
+    // `test_jwt_source_fails_closed_on_missing_socket`). These tests
+    // exercise `validate_token_url_scheme` directly instead — the exact
+    // function both `exchange_token` and `exchange_jwt_assertion` delegate
+    // to for this check, so the rejection behavior under test is identical.
+
+    #[test]
+    fn test_validate_token_url_scheme_accepts_https() {
+        let url = url::Url::parse("https://auth.example.com/oauth/token").unwrap();
+        let is_https = validate_token_url_scheme(&url, "https://auth.example.com/oauth/token")
+            .expect("https should be accepted");
+        assert!(is_https);
+    }
+
+    #[test]
+    fn test_validate_token_url_scheme_accepts_loopback_http() {
+        // Matches exchange_token's existing loopback check exactly (verbatim
+        // from upstream c831dade): `localhost` and IPv4 loopback are covered.
+        // IPv6 `[::1]` is NOT special-cased by that check (Url::host_str()
+        // returns the bracketed form for IPv6 hosts, which does not parse as
+        // an IpAddr) — an inherited limitation from upstream's own logic,
+        // not something this plan's absorb introduces or is scoped to fix.
+        for token_url in ["http://localhost:8080/token", "http://127.0.0.1:8080/token"] {
+            let url = url::Url::parse(token_url).unwrap();
+            let is_https = validate_token_url_scheme(&url, token_url).unwrap_or_else(|e| {
+                panic!("loopback http should be accepted for {token_url}: {e}")
+            });
+            assert!(!is_https);
+        }
+    }
+
+    #[test]
+    fn test_validate_token_url_scheme_rejects_non_loopback_http() {
+        let token_url = "http://auth.example.com/oauth/token";
+        let url = url::Url::parse(token_url).unwrap();
+        let err = validate_token_url_scheme(&url, token_url).unwrap_err();
+        match err {
+            ProxyError::OAuth2Exchange(msg) => {
+                assert!(
+                    msg.contains("https://"),
+                    "error should explain https:// is required: {msg}"
+                );
+            }
+            other => panic!("expected ProxyError::OAuth2Exchange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_validate_token_url_scheme_rejects_other_scheme() {
+        let token_url = "ftp://auth.example.com/oauth/token";
+        let url = url::Url::parse(token_url).unwrap();
+        let err = validate_token_url_scheme(&url, token_url).unwrap_err();
+        assert!(matches!(err, ProxyError::OAuth2Exchange(_)));
     }
 }
