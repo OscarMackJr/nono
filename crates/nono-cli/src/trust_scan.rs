@@ -22,6 +22,57 @@ fn sanitize_untrusted(value: &str) -> String {
     value.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// Which level a `trust-policy.json` was discovered at.
+///
+/// This is a *policy* judgement — "a file the operator placed is theirs; a
+/// file merely found in an untrusted working directory might belong to some
+/// other tool" — so it lives here in `nono-cli` rather than in the
+/// policy-free core crate (ADR-86, CLAUDE.md § Library vs CLI Boundary).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PolicyLevel {
+    /// The operator's own policy: the user-level config-dir file, or a path
+    /// named explicitly on the command line.
+    ///
+    /// Nothing but nono writes to those locations, so "this file is not
+    /// mine, skip it" is never a valid conclusion there. Every failure to
+    /// load one is a configuration load failure and is therefore fatal, per
+    /// CLAUDE.md: *"Configuration load failures must be fatal. If security
+    /// lists fail to load, abort."*
+    Trusted,
+    /// A `trust-policy.json` auto-discovered in the working directory.
+    ///
+    /// Its content is attacker-controllable, and `trust-policy.json` is a
+    /// filename other tools use too (AWS IAM policies, in-toto/SLSA
+    /// attestation statements). A genuinely foreign file here is skipped —
+    /// but only on *positive* evidence that it is foreign, never merely
+    /// because it failed to parse.
+    Project,
+}
+
+/// JSON object keys that only a nono trust policy carries.
+///
+/// Presence of any of these is positive evidence that the document *is* a
+/// nono policy, which makes a load failure a schema defect (fatal) rather
+/// than a foreign file (skippable).
+///
+/// `files` is deliberately excluded: it is far too generic a key to
+/// discriminate a nono policy from an arbitrary JSON config, and including
+/// it would re-open the repo-content-triggered denial of service that
+/// WR-14 is about.
+const NONO_POLICY_KEYS: &[&str] = &[
+    "includes",
+    "instruction_patterns",
+    "publishers",
+    "blocklist",
+    "enforcement",
+];
+
+/// Return whether a parsed JSON document is nono-policy-shaped.
+fn object_looks_like_nono_policy(raw: &serde_json::Value) -> bool {
+    raw.as_object()
+        .is_some_and(|obj| NONO_POLICY_KEYS.iter().any(|key| obj.contains_key(*key)))
+}
+
 /// Load a trust policy from `path`, returning `None` only when the file is
 /// genuinely not a nono trust policy (foreign JSON that shares the filename).
 ///
@@ -42,10 +93,31 @@ fn sanitize_untrusted(value: &str) -> String {
 ///
 /// So the absent-predicate case is resolved by *content*, not by the missing
 /// field: a file that deserializes as a `TrustPolicy` is a legacy nono policy
-/// and is accepted with a migration warning; only a file that also fails
-/// `TrustPolicy` deserialization is genuinely foreign and skipped. This keeps
-/// the foreign-file ergonomics the discriminator was introduced for while
-/// removing the fail-open upgrade path.
+/// and is accepted with a migration warning.
+///
+/// # A load failure is never silently downgraded to "foreign file"
+///
+/// Failing to deserialize is *not* on its own evidence that a file is
+/// foreign. Two very different states produce the same `Err`:
+///
+/// 1. a genuinely foreign JSON document (AWS IAM et al.) — correctly skipped;
+/// 2. a real nono trust policy with a schema defect (a typo'd `enforcement`
+///    value, a missing `blocklist` block, more than `MAX_INCLUDES` entries)
+///    — which must never be skipped.
+///
+/// Skipping case 2 is a fail-open: the caller falls back to
+/// `TrustPolicy::default()`, whose empty `includes` means *zero* files are
+/// ever selected for verification, while stderr claims the file "is not a
+/// nono trust policy" — misdirecting the operator away from the schema error
+/// the code already computed and threw away.
+///
+/// The two are therefore disambiguated structurally before deciding, and the
+/// deserialization error is always surfaced:
+///
+/// - at [`PolicyLevel::Trusted`], any load failure is fatal unconditionally;
+/// - at [`PolicyLevel::Project`], a load failure is fatal when the document
+///   is nono-policy-shaped ([`NONO_POLICY_KEYS`]), and skipped otherwise —
+///   with the underlying error included in the warning either way.
 ///
 /// A `predicate` that is *present* has no legacy excuse, so an unrecognised
 /// value — or a non-string value — is a hard error rather than a silent skip,
@@ -55,9 +127,9 @@ fn sanitize_untrusted(value: &str) -> String {
 ///
 /// Returns `NonoError::Io` if the file cannot be read, or
 /// `NonoError::TrustPolicy` if the JSON is malformed, the `predicate` field is
-/// present but unrecognised or not a string, or a recognised nono policy fails
-/// to deserialize.
-pub(crate) fn load_nono_policy(path: &Path) -> Result<Option<TrustPolicy>> {
+/// present but unrecognised or not a string, or a nono trust policy fails to
+/// deserialize.
+pub(crate) fn load_nono_policy(path: &Path, level: PolicyLevel) -> Result<Option<TrustPolicy>> {
     let content = std::fs::read_to_string(path).map_err(nono::NonoError::Io)?;
 
     let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
@@ -93,43 +165,69 @@ pub(crate) fn load_nono_policy(path: &Path) -> Result<Option<TrustPolicy>> {
         }
 
         // Absent: decide by content, not by the missing field.
-        None => {
-            return match trust::load_policy_from_str(&content) {
-                Ok(policy) => {
-                    eprintln!(
-                        "  {}",
-                        format!(
-                            "Warning: {} has no predicate field. Loading it as a legacy \
-                             (pre-predicate) nono trust policy. Add \
-                             `\"predicate\": \"{}\"` as the first field, or recreate it \
-                             with 'nono trust init --force', to silence this warning.",
-                            path.display(),
-                            nono::trust::TRUST_POLICY_PREDICATE,
-                        )
-                        .yellow()
-                    );
-                    Ok(Some(policy))
-                }
-                // Not a nono policy in any format — a foreign file that
-                // happens to share the filename. Skip it, as intended.
-                Err(_) => {
-                    eprintln!(
-                        "  {}",
-                        format!(
-                            "Warning: {} is not a nono trust policy (no predicate field and \
-                             it does not parse as a policy) — skipping.",
-                            path.display(),
-                        )
-                        .yellow()
-                    );
-                    Ok(None)
-                }
-            };
-        }
+        None => return load_predicate_less(path, &content, &raw, level),
     }
 
     let policy = trust::load_policy_from_str(&content)?;
     Ok(Some(policy))
+}
+
+/// Resolve a `trust-policy.json` that carries no `predicate` field.
+///
+/// See [`load_nono_policy`] for why the deserialization error is never
+/// discarded and why the foreign-vs-defective distinction is made
+/// structurally rather than by "it didn't parse".
+fn load_predicate_less(
+    path: &Path,
+    content: &str,
+    raw: &serde_json::Value,
+    level: PolicyLevel,
+) -> Result<Option<TrustPolicy>> {
+    match trust::load_policy_from_str(content) {
+        Ok(policy) => {
+            eprintln!(
+                "  {}",
+                format!(
+                    "Warning: {} has no predicate field. Loading it as a legacy \
+                     (pre-predicate) nono trust policy. Add \
+                     `\"predicate\": \"{}\"` as the first field, or recreate it \
+                     with 'nono trust init --force', to silence this warning.",
+                    path.display(),
+                    nono::trust::TRUST_POLICY_PREDICATE,
+                )
+                .yellow()
+            );
+            Ok(Some(policy))
+        }
+        Err(e) => {
+            // The error text can quote content from a file nono does not
+            // control (serde echoes unknown enum variants verbatim), so it
+            // is sanitized before it reaches a terminal.
+            let detail = sanitize_untrusted(&e.to_string());
+
+            if level == PolicyLevel::Trusted || object_looks_like_nono_policy(raw) {
+                return Err(nono::NonoError::TrustPolicy(format!(
+                    "{}: this is a nono trust policy but it failed to load: {detail}. \
+                     Refusing to run with trust enforcement silently disabled — fix the \
+                     file, or recreate it with 'nono trust init --force'.",
+                    path.display()
+                )));
+            }
+
+            // Not a nono policy in any format — a foreign file that happens
+            // to share the filename. Skip it, as intended, but say why.
+            eprintln!(
+                "  {}",
+                format!(
+                    "Warning: {} is not a nono trust policy (no predicate field, and it \
+                     does not parse as one: {detail}) — skipping.",
+                    path.display(),
+                )
+                .yellow()
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Load the trust policy for scanning, auto-discovering from the given root and user config.
@@ -157,7 +255,7 @@ pub fn load_scan_policy(
 
     let project = project_policy_path
         .as_deref()
-        .map(load_nono_policy)
+        .map(|p| load_nono_policy(p, PolicyLevel::Project))
         .transpose()?
         .flatten();
 
@@ -165,7 +263,7 @@ pub fn load_scan_policy(
     let user_policy_path = user_path.as_ref().filter(|path| path.exists());
 
     let user = user_policy_path
-        .map(|p| load_nono_policy(p.as_path()))
+        .map(|p| load_nono_policy(p.as_path(), PolicyLevel::Trusted))
         .transpose()?
         .flatten();
 
@@ -1538,7 +1636,7 @@ mod tests {
         let path = dir.path().join("trust-policy.json");
         write_legacy_policy(&path, &["CLAUDE.md"], Enforcement::Deny);
 
-        let loaded = load_nono_policy(&path)
+        let loaded = load_nono_policy(&path, PolicyLevel::Project)
             .expect("a legacy nono policy must load, not error")
             .expect("a legacy nono policy must not be skipped as foreign");
 
@@ -1561,7 +1659,9 @@ mod tests {
         .unwrap();
 
         assert!(
-            load_nono_policy(&path).unwrap().is_none(),
+            load_nono_policy(&path, PolicyLevel::Project)
+                .unwrap()
+                .is_none(),
             "foreign JSON must still be skipped"
         );
     }
@@ -1581,7 +1681,8 @@ mod tests {
         )
         .unwrap();
 
-        let err = load_nono_policy(&path).expect_err("unrecognised predicate must be fatal");
+        let err = load_nono_policy(&path, PolicyLevel::Project)
+            .expect_err("unrecognised predicate must be fatal");
         assert!(
             err.to_string()
                 .contains("unrecognised trust policy predicate"),
@@ -1603,10 +1704,117 @@ mod tests {
         )
         .unwrap();
 
-        let err = load_nono_policy(&path).expect_err("non-string predicate must be fatal");
+        let err = load_nono_policy(&path, PolicyLevel::Project)
+            .expect_err("non-string predicate must be fatal");
         assert!(
             err.to_string().contains("must be a string"),
             "error must explain the type mismatch: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // CR-06 regression: a load failure is never silently downgraded to
+    // "foreign file, skipping"
+    // -----------------------------------------------------------------------
+
+    /// A predicate-less document that is unmistakably nono-shaped but has a
+    /// schema defect (`"enforcement": "denied"` — the enum is
+    /// `audit`/`warn`/`deny`). Before CR-06 the `Err(_)` arm discarded the
+    /// deserialization error and reported this as "not a nono trust policy",
+    /// yielding `TrustPolicy::default()` — empty `includes`, so zero files
+    /// are ever verified. That is a fail-open.
+    const NONO_SHAPED_BUT_BROKEN: &str = r#"{
+        "includes": ["CLAUDE.md"],
+        "publishers": [],
+        "blocklist": { "digests": [], "publishers": [] },
+        "enforcement": "denied"
+    }"#;
+
+    /// CR-06: a nono-shaped policy that fails to deserialize is a
+    /// configuration load failure, and those are fatal — even at project
+    /// level, where a genuinely foreign file would still be skipped.
+    #[test]
+    fn load_nono_policy_rejects_nono_shaped_policy_that_fails_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(&path, NONO_SHAPED_BUT_BROKEN).unwrap();
+
+        let err = load_nono_policy(&path, PolicyLevel::Project)
+            .expect_err("a nono-shaped policy that fails to load must be fatal, not skipped");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to load"),
+            "error must say the policy failed to load: {msg}"
+        );
+        assert!(
+            msg.contains("enforcement"),
+            "the discarded deserialization error must be surfaced to the operator: {msg}"
+        );
+    }
+
+    /// CR-06: the operator's own policy is never skipped. Even a file that
+    /// carries zero nono-shaped keys — the exact shape that IS skipped at
+    /// project level — aborts when it sits at a `Trusted` level, because
+    /// nothing but nono writes there and "not mine" is not a valid
+    /// conclusion. CLAUDE.md: "Configuration load failures must be fatal."
+    #[test]
+    fn load_nono_policy_user_level_failure_is_always_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        // AWS IAM-shaped: skipped at project level (asserted above), fatal here.
+        std::fs::write(
+            &path,
+            r#"{"Version":"2012-10-17","Statement":[{"Effect":"Allow"}]}"#,
+        )
+        .unwrap();
+
+        assert!(
+            load_nono_policy(&path, PolicyLevel::Project)
+                .unwrap()
+                .is_none(),
+            "control: this shape is skipped at project level"
+        );
+        assert!(
+            load_nono_policy(&path, PolicyLevel::Trusted).is_err(),
+            "the operator's own policy must never be silently skipped"
+        );
+    }
+
+    /// CR-06 end-to-end: a broken user-level policy must abort the run
+    /// rather than resolve to `TrustPolicy::default()` (zero includes = no
+    /// file is ever verified) with a stderr line blaming the wrong thing.
+    #[test]
+    fn load_scan_policy_aborts_on_broken_user_policy() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("cfg");
+        std::fs::create_dir_all(cfg_dir.join("nono")).unwrap();
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", cfg_dir.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", cfg_dir.to_str().unwrap()),
+        ]);
+
+        let user_policy_path =
+            crate::trust_cmd::user_trust_policy_path().expect("user policy path resolves");
+        std::fs::create_dir_all(
+            user_policy_path
+                .parent()
+                .expect("user policy path has a parent"),
+        )
+        .unwrap();
+        std::fs::write(&user_policy_path, NONO_SHAPED_BUT_BROKEN).unwrap();
+
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let err = load_scan_policy(&project_dir, true, &[])
+            .expect_err("a broken user-level policy must abort the run");
+        assert!(
+            err.to_string().contains("failed to load"),
+            "the abort must name the load failure: {err}"
         );
     }
 

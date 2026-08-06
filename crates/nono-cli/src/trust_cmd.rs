@@ -750,12 +750,13 @@ fn run_sign_policy(args: TrustSignPolicyArgs) -> Result<()> {
     };
 
     // Validate the policy file is a well-formed nono trust policy before signing.
-    crate::trust_scan::load_nono_policy(&policy_path)?.ok_or_else(|| {
-        nono::NonoError::TrustPolicy(format!(
-            "{} is not a nono trust policy (missing or unrecognised predicate)",
-            policy_path.display()
-        ))
-    })?;
+    crate::trust_scan::load_nono_policy(&policy_path, crate::trust_scan::PolicyLevel::Trusted)?
+        .ok_or_else(|| {
+            nono::NonoError::TrustPolicy(format!(
+                "{} is not a nono trust policy (missing or unrecognised predicate)",
+                policy_path.display()
+            ))
+        })?;
 
     let bundle_json = trust::sign_policy_file(&policy_path, &key_pair, &key_id)?;
     trust::write_bundle(&policy_path, &bundle_json)?;
@@ -1575,12 +1576,13 @@ pub(crate) fn reconstruct_key_pair(pkcs8_bytes: &[u8]) -> Result<trust::KeyPair>
 fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy> {
     if let Some(path) = explicit_path {
         verify_policy_if_exists(path)?;
-        return crate::trust_scan::load_nono_policy(path)?.ok_or_else(|| {
-            nono::NonoError::TrustPolicy(format!(
-                "{} is not a nono trust policy (missing or unrecognised predicate)",
-                path.display()
-            ))
-        });
+        return crate::trust_scan::load_nono_policy(path, crate::trust_scan::PolicyLevel::Trusted)?
+            .ok_or_else(|| {
+                nono::NonoError::TrustPolicy(format!(
+                    "{} is not a nono trust policy (missing or unrecognised predicate)",
+                    path.display()
+                ))
+            });
     }
 
     // Auto-discover: check CWD then user config dir
@@ -1593,7 +1595,7 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
     // blocklist and enforcement scope entirely.
     let project_policy = if cwd_policy.exists() {
         verify_policy_if_exists(&cwd_policy)?;
-        crate::trust_scan::load_nono_policy(&cwd_policy)?
+        crate::trust_scan::load_nono_policy(&cwd_policy, crate::trust_scan::PolicyLevel::Project)?
     } else {
         None
     };
@@ -1601,7 +1603,10 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
     let user_policy = match user_trust_policy_path() {
         Some(user_policy_path) if user_policy_path.exists() => {
             verify_policy_if_exists(&user_policy_path)?;
-            crate::trust_scan::load_nono_policy(&user_policy_path)?
+            crate::trust_scan::load_nono_policy(
+                &user_policy_path,
+                crate::trust_scan::PolicyLevel::Trusted,
+            )?
         }
         _ => None,
     };

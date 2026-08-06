@@ -287,6 +287,31 @@ None => {
 At minimum, include `{e}` in the "not a nono trust policy" warning so the operator can
 see the schema error.
 
+**Resolution (Group A fix pass):** FIXED.
+
+`load_nono_policy` now takes a `PolicyLevel` (`Trusted` | `Project`) — a policy
+judgement, so it lives in `nono-cli`, not the policy-free core crate (ADR-86). The
+`Err(_)` arm is gone; the predicate-less path is factored into `load_predicate_less`,
+which never discards the deserialization error:
+
+- `PolicyLevel::Trusted` (user config-dir policy, or a path named explicitly with
+  `--policy` / `sign-policy`) — **any** load failure is fatal, unconditionally.
+  Nothing but nono writes to those locations, so "not mine, skip it" is never a valid
+  conclusion. CLAUDE.md: *"Configuration load failures must be fatal."*
+- `PolicyLevel::Project` (auto-discovered in the working directory) — fatal when the
+  document is nono-policy-shaped (`NONO_POLICY_KEYS` = `includes`,
+  `instruction_patterns`, `publishers`, `blocklist`, `enforcement`), skipped otherwise.
+  `files` was deliberately **excluded** from that key set: it is too generic to
+  discriminate a nono policy from an arbitrary config, and including it would re-open
+  WR-14's repo-content-triggered DoS.
+- Either way the underlying error is surfaced, run through `sanitize_untrusted` first
+  (serde echoes unknown enum variants verbatim from a file nono does not control).
+
+Regression tests added in `trust_scan.rs`:
+`load_nono_policy_rejects_nono_shaped_policy_that_fails_to_load`,
+`load_nono_policy_user_level_failure_is_always_fatal`,
+`load_scan_policy_aborts_on_broken_user_policy`.
+
 ## Warnings
 
 ### WR-13 (new): `handle_forward_http` ignores `require_auth` — `--no-auth` does not apply to plain-HTTP forward proxying
