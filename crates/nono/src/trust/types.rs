@@ -30,8 +30,35 @@ pub const TRUST_POLICY_PREDICATE: &str = "https://nono.sh/attestation/trust-poli
 /// Trust policy for file verification.
 ///
 /// Loaded from `trust-policy.json` files at embedded, user, and project levels.
-/// Multiple policies are merged: publishers and blocklist entries are unioned,
-/// enforcement uses the strictest level.
+/// Multiple policies are merged: blocklist entries, include patterns and
+/// explicit files are unioned, enforcement uses the strictest level, and
+/// publishers are unioned across trust-anchor layers only. See
+/// [`crate::trust::policy`] for the composition rules.
+///
+/// # Compatibility
+///
+/// Two fields changed shape in 0.66.0, which is a **breaking change for
+/// external struct-literal construction** — including the out-of-tree
+/// bindings `nono-py` and `nono-ts`, which must be rebuilt against this
+/// shape:
+///
+/// - `version` changed from `u32` to `Option<u32>` and is now inert.
+/// - `predicate: Option<String>` was added.
+///
+/// Both are `#[serde(default)]`, so *deserialization* of existing
+/// `trust-policy.json` files is unaffected; only Rust code that names every
+/// field in a struct literal breaks. Prefer struct-update syntax, which is
+/// stable across future field additions:
+///
+/// ```
+/// use nono::trust::TrustPolicy;
+///
+/// let policy = TrustPolicy {
+///     includes: vec!["CLAUDE.md".to_string()],
+///     ..TrustPolicy::default()
+/// };
+/// assert!(policy.has_nono_predicate());
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrustPolicy {
     /// Predicate URI identifying this file as a nono trust policy.

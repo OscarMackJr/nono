@@ -750,6 +750,34 @@ historically broken on exactly this kind of core-crate struct drift.
 release, note the `TrustPolicy` field changes in the changelog, and rebuild
 `nono-py`/`nono-ts` against the new shape.
 
+**Resolution (Group A fix pass):** FIXED as recommended — shim made real, signatures
+left alone.
+
+`crates/nono/src/trust/mod.rs` now carries
+`#[allow(deprecated)] pub use types::TRUST_POLICY_VERSION;`, so the deprecation is
+observable from `nono::trust::TRUST_POLICY_VERSION` and downstream consumers get a
+release of warning instead of a silent removal. The `#[allow]` suppresses the warning
+at the re-export only; every downstream *use* site still warns.
+
+`TrustPolicy.version: u32 → Option<u32>` and the new `predicate: Option<String>` were
+**deliberately not reverted.** Reverting `predicate` would undo the CR-02 discriminator
+this whole phase is built on, and reverting `version` would resurrect a field the
+predicate URI replaced. Per the fix guidance, the shim was made to work rather than the
+signature changed. The consequence is flagged instead of hidden:
+
+- A `# Compatibility` section on `TrustPolicy`'s doc states both field changes, notes
+  that both are `#[serde(default)]` (so *deserialization* of existing
+  `trust-policy.json` files is unaffected — only Rust struct-literal construction
+  breaks), and shows struct-update syntax as the migration. It carries a doc test.
+- `CHANGELOG.md` gains an `## [Unreleased]` section under
+  "Changed (breaking, core `nono` crate — affects `nono-py` / `nono-ts` / `bindings/c`)".
+
+**Carried consequence for the operator:** `../nono-py` and `../nono-ts` are separate
+repos and out of this pass's scope. They must be rebuilt against the new `TrustPolicy`
+shape before the next binding release — this is precisely the core-crate struct drift
+that MEMORY records as historically breaking them, and only `maturin build` /
+`napi build` in those repos will catch it.
+
 ---
 
 ### WR-12 (carried forward): the standalone proxy discards its entire network audit buffer

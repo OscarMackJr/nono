@@ -68,6 +68,16 @@ pub use types::{
     SignerIdentity, TrustPolicy, VerificationOutcome, VerificationResult, TRUST_POLICY_PREDICATE,
 };
 
+// `types` is a private module, so a `#[deprecated]` attribute on an item
+// inside it is unobservable from outside the crate unless the item is also
+// re-exported: without this line `TRUST_POLICY_VERSION` was *removed*, not
+// deprecated, and no downstream consumer could ever see the warning that was
+// supposed to give them a release to migrate. `#[allow(deprecated)]` silences
+// the warning at the re-export itself while still emitting it at every
+// downstream use site. Remove alongside the constant in v1.0.0.
+#[allow(deprecated)]
+pub use types::TRUST_POLICY_VERSION;
+
 // Phase 32 D-32-15 #2: Test-only helper that loads a frozen TUF root
 // fixture from the crate's tests/fixtures/ directory. Production code
 // calls bundle::load_production_trusted_root() (which reads the user's

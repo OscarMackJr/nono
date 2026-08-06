@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed (breaking, core `nono` crate — affects `nono-py` / `nono-ts` / `bindings/c`)
+
+- **`trust::TrustPolicy` field shapes changed in 0.66.0.** `version` went from `u32` to
+  `Option<u32>` (and is now inert — versioning is encoded in
+  `trust::TRUST_POLICY_PREDICATE`), and a new `predicate: Option<String>` field was added.
+  Both carry `#[serde(default)]`, so **deserialization of existing `trust-policy.json`
+  files is unaffected**; only Rust code that names every field in a struct literal breaks.
+  Use struct-update syntax (`TrustPolicy { includes, ..TrustPolicy::default() }`) instead.
+  The out-of-tree bindings `nono-py` and `nono-ts` must be rebuilt against this shape.
+- **`trust::TRUST_POLICY_VERSION` is deprecated, not removed.** It was marked
+  `#[deprecated(since = "0.66.0")]` but lived in the private `types` module and was never
+  re-exported, so the deprecation was unobservable downstream — the constant had in effect
+  been removed without notice. It is now re-exported from `nono::trust` so consumers get a
+  release of warning before it is deleted in v1.0.0.
+
+### Added
+
+- `trust::PolicyLayer` / `trust::merge_policy_layers` — policy composition with per-layer
+  trust-anchor provenance. `merge_policies` is unchanged and remains available; it treats
+  every input as a trust anchor.
+
 ## [0.62.2] - v2.9 (2026-06-06)
 
 ### Fixed
