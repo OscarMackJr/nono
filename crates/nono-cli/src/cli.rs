@@ -2335,7 +2335,8 @@ impl SandboxArgs {
 /// safe fallbacks (a generated token, and no CA-reuse-across-runs).
 #[derive(Parser, Debug, Clone)]
 pub struct ProxyArgs {
-    /// Address the proxy listens on (loopback only unless --no-auth is omitted)
+    /// Address the proxy listens on. A non-loopback address requires
+    /// --allow-remote, and --no-auth requires a loopback address.
     #[arg(
         long,
         value_name = "ADDR",
@@ -2352,6 +2353,17 @@ pub struct ProxyArgs {
     /// Refused for non-loopback bind addresses. Use with care.
     #[arg(long, help_heading = "PROXY")]
     pub no_auth: bool,
+
+    /// Permit a non-loopback --listen address.
+    ///
+    /// The proxy speaks plain HTTP with no TLS: the session token crosses the
+    /// network in every `Proxy-Authorization` header, and any client that
+    /// presents it can drive credential-injection routes and obtain real
+    /// upstream secrets. There is no per-source-IP restriction and no
+    /// failed-auth lockout. Binding beyond loopback is therefore an explicit,
+    /// deliberate choice rather than a default.
+    #[arg(long, help_heading = "PROXY")]
+    pub allow_remote: bool,
 
     /// Maximum concurrent client connections (0 = unlimited). Raise this when
     /// driving highly parallel clients such as `docker pull`, which opens many

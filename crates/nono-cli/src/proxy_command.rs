@@ -41,6 +41,23 @@ pub(crate) fn run_proxy(args: ProxyArgs, silent: bool) -> Result<()> {
         )));
     }
 
+    // WR-05: binding beyond loopback must be a deliberate choice, not a
+    // consequence of typing an address. The proxy speaks plain HTTP: the
+    // session token crosses the network in every `Proxy-Authorization`
+    // header, credential-injection routes mint real upstream secrets for
+    // whoever presents it, and there is no TLS, no per-source-IP restriction
+    // and no failed-auth lockout behind it.
+    if !args.listen.is_loopback() && !args.allow_remote {
+        return Err(NonoError::ConfigParse(format!(
+            "--listen {} is not a loopback address. The proxy speaks plain HTTP with no \
+             TLS: the session token crosses the network in every Proxy-Authorization \
+             header, and any client presenting it can drive credential-injection routes \
+             and obtain real upstream secrets. Pass --allow-remote to accept that \
+             exposure deliberately, or bind a loopback address.",
+            args.listen
+        )));
+    }
+
     let launch_options = build_launch_options(&args)?;
     let mut proxy_config = proxy_runtime::build_proxy_config_from_flags(&launch_options)?;
     // Fields not modeled on `ProxyLaunchOptions` (the sandboxed `run` path
@@ -264,6 +281,34 @@ fn print_connection_info(
         );
     }
 
+    // WR-05: a non-loopback bind is opt-in (--allow-remote), but the operator
+    // still needs the exposure spelled out at the point of use, and needs to
+    // know which credential routes are now mintable by anyone holding the
+    // token that just crossed the network in cleartext.
+    if !config.bind_addr.is_loopback() {
+        eprintln!(
+            "  [nono] WARNING: bound to a non-loopback address. This proxy speaks plain \
+             HTTP with no TLS — the session token above traverses the network in every \
+             Proxy-Authorization header, and there is no per-source-IP restriction and \
+             no failed-auth lockout."
+        );
+        let credential_routes: Vec<&str> = config
+            .routes
+            .iter()
+            .filter(|route| route.credential_key.is_some())
+            .map(|route| route.prefix.as_str())
+            .collect();
+        if !credential_routes.is_empty() {
+            eprintln!(
+                "  [nono] WARNING: {} credential-injection route(s) are reachable from the \
+                 network (/{}). Anyone who obtains the session token can mint real \
+                 upstream credentials through them.",
+                credential_routes.len(),
+                credential_routes.join(", /")
+            );
+        }
+    }
+
     // CR-01: an empty allowlist with no strict-filter selection means
     // `ProxyConfig.allowed_hosts` falls back to "allow all hosts (except the
     // deny list)". That is a legitimate standalone-proxy configuration, but
@@ -305,6 +350,7 @@ mod tests {
             listen: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
             port: 0,
             no_auth: false,
+            allow_remote: false,
             max_connections: 256,
             profile: None,
             network_profile: None,
@@ -435,6 +481,40 @@ mod tests {
         assert!(
             msg.contains("deny_domain") || msg.contains("--deny-domain"),
             "error must name deny_domain/--deny-domain: {msg}"
+        );
+    }
+
+    /// WR-05: a non-loopback `--listen` exposes the session token and every
+    /// credential-injection route over plaintext HTTP. It now requires an
+    /// explicit `--allow-remote` opt-in.
+    #[test]
+    fn non_loopback_listen_requires_allow_remote() {
+        let mut args = base_args();
+        args.listen = std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+
+        let err = run_proxy(args, true).expect_err("a non-loopback bind must be opt-in");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--allow-remote"),
+            "error must point at the opt-in flag: {msg}"
+        );
+    }
+
+    /// WR-05: `--no-auth` stays refused for non-loopback binds even with
+    /// `--allow-remote`. The two guards are independent — `--allow-remote`
+    /// accepts plaintext exposure of an authenticated proxy, not an open one.
+    #[test]
+    fn allow_remote_does_not_unlock_no_auth_off_loopback() {
+        let mut args = base_args();
+        args.listen = std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+        args.allow_remote = true;
+        args.no_auth = true;
+
+        let err = run_proxy(args, true).expect_err("--no-auth off loopback must stay refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--no-auth"),
+            "error must name --no-auth: {msg}"
         );
     }
 

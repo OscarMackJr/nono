@@ -657,6 +657,32 @@ logs by default.
 reword the help (see IN-03), and gate credential-injection routes off (or warn loudly)
 when `bind_addr` is not loopback.
 
+**Resolution (Group A fix pass):** FIXED — all three parts.
+
+1. `--allow-remote` added to `ProxyArgs`. `run_proxy` rejects a non-loopback `--listen`
+   without it, naming the exposure (plain HTTP, token in every
+   `Proxy-Authorization`, credential routes minting real upstream secrets, no TLS, no
+   per-source-IP restriction, no failed-auth lockout). It is independent of the
+   `--no-auth` guard, which still fires first: `--allow-remote` accepts plaintext
+   exposure of an *authenticated* proxy, never an open one.
+2. `--listen`'s help text rewritten — this also closes **IN-03**'s self-contradictory
+   double negative, since WR-05's own fix called for it: *"Address the proxy listens
+   on. A non-loopback address requires --allow-remote, and --no-auth requires a
+   loopback address."*
+3. `print_connection_info` warns loudly on a non-loopback bind and, separately,
+   enumerates the credential-injection route prefixes that are now network-reachable.
+   Routes are warned about rather than disabled: silently dropping them would break a
+   deliberately opted-in configuration in a way the operator could not see.
+
+`NONO_PROXY_TOKEN=<token>` on stderr is retained — it is the point of the command — but
+the new non-loopback warning is printed directly after it so the CI-log exposure is
+visible in context.
+
+Regression tests: unit `non_loopback_listen_requires_allow_remote`,
+`allow_remote_does_not_unlock_no_auth_off_loopback`; integration
+`test_proxy_non_loopback_listen_requires_allow_remote` in
+`tests/proxy_command_run.rs`.
+
 ---
 
 ### WR-06 (carried forward): `--allow-gpu` makes seccomp user-notification mandatory and fatal on every host

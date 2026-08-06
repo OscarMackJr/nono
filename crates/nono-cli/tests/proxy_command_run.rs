@@ -55,3 +55,26 @@ fn test_proxy_no_auth_with_non_loopback_listen_is_rejected() {
         "expected the fail-secure guard message in stderr, got:\n{stderr}"
     );
 }
+
+/// WR-05: even with auth enabled, a non-loopback `--listen` puts the session
+/// token and every credential-injection route on the wire in cleartext. It
+/// now requires an explicit `--allow-remote` opt-in. Rejected before any
+/// launch-option construction or server startup, so this test is fast.
+#[test]
+fn test_proxy_non_loopback_listen_requires_allow_remote() {
+    let output = nono_bin()
+        .args(["proxy", "--listen", "8.8.8.8"])
+        .output()
+        .expect("failed to run nono");
+
+    assert!(
+        !output.status.success(),
+        "expected non-zero exit for non-loopback --listen without --allow-remote, got: {:?}",
+        output.status
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--allow-remote"),
+        "expected the guard to name the opt-in flag, got:\n{stderr}"
+    );
+}
