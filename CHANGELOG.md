@@ -22,6 +22,25 @@
 - `trust::PolicyLayer` / `trust::merge_policy_layers` — policy composition with per-layer
   trust-anchor provenance. `merge_policies` is unchanged and remains available; it treats
   every input as a trust anchor.
+- `sandbox::nvidia_devices_present()` (Linux) — reports whether the host has NVIDIA compute
+  devices, so clients can decide whether a run actually needs NVIDIA `comm` mediation. It is
+  a hardware-presence fact, deliberately uncached (devfs entries can appear after process
+  start via module load or `nvidia-modprobe`).
+
+### Changed (`--allow-gpu` on Linux)
+
+- **`--allow-gpu` no longer forces seccomp user-notification on hosts without NVIDIA
+  hardware.** NVIDIA thread-name (`comm`) mediation is now requested only when NVIDIA
+  compute devices are actually present, matching the `/proc/driver/nvidia*` and
+  `/proc/self/task` Landlock grants, which were already hardware-gated. Previously the flag
+  alone made seccomp-notify mandatory *and* fatal, so `--allow-gpu` hard-failed on WSL2, on
+  AMD/Intel DRM-render-node hosts, and in containers without `CAP_SYS_ADMIN`. Where NVIDIA
+  hardware *is* present, mediation remains mandatory and a setup failure remains fatal.
+- **`nono wrap --allow-gpu` is not supported on Linux hosts with NVIDIA compute devices.**
+  `--allow-gpu` grants `/proc/self/task` read-only and routes the driver's thread-name
+  writes through the seccomp-notify supervisor, which `nono wrap`'s direct-exec model does
+  not run. Use `nono run --allow-gpu`. On hosts without NVIDIA devices, `nono wrap
+  --allow-gpu` works as before.
 
 ## [0.62.2] - v2.9 (2026-06-06)
 

@@ -831,10 +831,26 @@ pub(crate) fn prepare_sandbox_with_context(
             #[cfg(target_os = "linux")]
             af_unix_mediation,
             // Phase 112 SEC-03 (adapted from upstream a3243907, #1284):
-            // mirrors the same `--allow-gpu` predicate used to set
-            // `CapabilitySet::gpu()` in capability_ext.rs.
+            // gates on the same `--allow-gpu` predicate used to set
+            // `CapabilitySet::gpu()` in capability_ext.rs, AND on NVIDIA
+            // hardware actually being present.
+            //
+            // WR-06: the flag alone is the wrong predicate. `comm` mediation
+            // exists to service the NVIDIA driver's thread-name writes under
+            // the read-only `/proc/self/task` Landlock grant, and that grant
+            // is itself only added when `nvidia_present` (see
+            // `collect_linux_gpu_paths`). Requiring seccomp user-notification
+            // on hosts with no NVIDIA device made `--allow-gpu` a hard error
+            // on WSL2, on AMD/Intel DRM-render-node hosts, and in containers
+            // without CAP_SYS_ADMIN — mediating a write that can never occur.
+            //
+            // This does NOT weaken the property the phase established: where
+            // NVIDIA hardware IS present, mediation stays mandatory and a
+            // setup failure stays fatal. It narrows *when* that requirement
+            // applies, from "the operator typed a flag" to "the run will
+            // actually touch the mediated path".
             #[cfg(target_os = "linux")]
-            proc_comm_notify: args.allow_gpu,
+            proc_comm_notify: args.allow_gpu && nono::sandbox::nvidia_devices_present(),
             allow_launch_services_active,
             open_url_origins,
             open_url_allow_localhost,

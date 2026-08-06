@@ -371,11 +371,18 @@ pub(crate) fn run_wrap(wrap_args: WrapArgs, silent: bool) -> Result<()> {
     // Phase 112 SEC-03 (adapted from upstream a3243907, #1284): NVIDIA GPU
     // thread-name mediation requires the seccomp-notify supervisor, which
     // `nono wrap`'s Direct-strategy exec model does not run.
+    //
+    // WR-06: `proc_comm_notify` is now gated on NVIDIA hardware being present,
+    // so this only rejects `nono wrap --allow-gpu` on hosts that actually have
+    // NVIDIA compute devices. On WSL2, AMD/Intel DRM-render-node hosts and
+    // NVIDIA-less containers, `nono wrap --allow-gpu` works as before.
     #[cfg(target_os = "linux")]
     if prepared.proc_comm_notify {
         return Err(NonoError::ConfigParse(
             "nono wrap does not support NVIDIA GPU thread-name mediation because direct \
-             exec cannot run the seccomp supervisor. Use `nono run --allow-gpu` instead."
+             exec cannot run the seccomp supervisor. This host has NVIDIA compute devices, \
+             so --allow-gpu grants /proc/self/task read-only and routes the driver's \
+             thread-name writes through the supervisor. Use `nono run --allow-gpu` instead."
                 .to_string(),
         ));
     }

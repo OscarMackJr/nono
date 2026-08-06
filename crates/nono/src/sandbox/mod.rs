@@ -33,6 +33,12 @@ pub use linux::{
 #[cfg(target_os = "linux")]
 pub use linux::is_wsl2;
 
+// Re-export Linux NVIDIA hardware-presence detection. Clients use this to
+// decide whether a run actually needs NVIDIA `comm` mediation (Phase 112
+// WR-06); the library itself takes no view on that.
+#[cfg(target_os = "linux")]
+pub use linux::nvidia_devices_present;
+
 // Re-export Linux seccomp-notify primitives for supervisor use
 #[cfg(target_os = "linux")]
 pub use linux::{

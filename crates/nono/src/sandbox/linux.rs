@@ -635,6 +635,30 @@ fn collect_linux_gpu_paths() -> (Vec<(std::path::PathBuf, AccessMode, bool)>, bo
     (out, nvidia_present)
 }
 
+/// Whether this host has NVIDIA compute devices, i.e. whether granting
+/// `CapabilitySet::gpu()` would pull in the `/proc/driver/nvidia*` and
+/// `/proc/self/task` grants that the driver's thread-name writes depend on.
+///
+/// This is a **hardware-presence fact about the host**, not a policy decision:
+/// it reports what `collect_linux_gpu_paths` found, and takes no view on what a
+/// caller should do about it. Clients (nono-cli) own the policy — see
+/// `sandbox_prepare`, which uses this to decide whether NVIDIA `comm` mediation
+/// is required for a run, rather than making seccomp user-notification
+/// mandatory on every host that merely passes `--allow-gpu` (Phase 112 WR-06).
+///
+/// Deliberately **not** cached: unlike `is_wsl2()`, GPU devfs entries can
+/// appear after process start (driver module load, `nvidia-modprobe` creating
+/// `/dev/nvidia*` on first use, a container gaining a device). A stale `false`
+/// here would silently disable the mediation the run needs.
+///
+/// Always `false` on non-Linux.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn nvidia_devices_present() -> bool {
+    let (_paths, nvidia_present) = collect_linux_gpu_paths();
+    nvidia_present
+}
+
 /// Determine which Landlock scopes must be enabled for these capabilities.
 ///
 /// `SignalMode::AllowSameSandbox` has an exact Landlock mapping.
