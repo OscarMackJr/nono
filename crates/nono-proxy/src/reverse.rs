@@ -18,7 +18,7 @@ use crate::audit;
 use crate::auth::UpstreamAuthMaterial;
 use crate::config::EndpointPolicyOutcome;
 use crate::config::InjectMode;
-use crate::credential::{CredentialStore, LoadedCredential};
+use crate::credential::{CredentialStore, LoadedCredential, SpiffeAssertionRoute};
 use crate::error::{ProxyError, Result};
 use crate::filter::ProxyFilter;
 use crate::route::{LoadedRoute, RouteStore};
@@ -201,20 +201,18 @@ pub async fn handle_reverse_proxy(
         }
     }
 
-    // SPIFFE dispatch (Phase 113, Plan 113-06). A route with a direct
-    // SPIFFE JWT-SVID auth source (`route.spiffe`, D-04, live
-    // `ManagedUpstreamAuth` connected at `RouteStore::load` time) is
-    // handled by a dedicated handler built against this fork's own
-    // upstream-connect primitives (`parse_upstream_url`/
-    // `connect_upstream_tls`, below) — NOT upstream's absent `crate::forward`
-    // module, whose spec/strategy/request-forwarding types this fork does
-    // not host (D-01). Checked before the static_cred/no-credential
-    // branches below so a SPIFFE-declared route never falls through to
-    // keystore-based lookup.
-    //
-    // (The RFC 7523 jwt-bearer OAuth2 `client_assertion` SPIFFE flow —
-    // `credential_store.get_spiffe_assertion()` — dispatches from this same
-    // point; landed in Plan 113-06's second task.)
+    // SPIFFE dispatch (Phase 113, Plan 113-06). Two independent SPIFFE-backed
+    // auth sources exist and are mutually exclusive per route:
+    //   1. `route.spiffe` — direct JWT-SVID bearer injection (D-04, live
+    //      `ManagedUpstreamAuth` connected at `RouteStore::load` time).
+    //   2. `route.oauth2.client_assertion` — RFC 7523 jwt-bearer exchange
+    //      (Plan 113-03, `CredentialStore.spiffe_assertion_routes`).
+    // Both handlers are rewrites against this fork's OWN upstream-connect
+    // primitives (`parse_upstream_url`/`connect_upstream_tls`, below) — NOT
+    // upstream's absent `crate::forward` module, whose spec/strategy/
+    // request-forwarding types this fork does not host (D-01). Checked
+    // before the static_cred/no-credential branches below so a
+    // SPIFFE-declared route never falls through to keystore-based lookup.
     if route.has_spiffe_source() {
         return handle_spiffe_route(
             first_line,
@@ -225,6 +223,19 @@ pub async fn handle_reverse_proxy(
             &service,
             &upstream_path,
             route,
+        )
+        .await;
+    }
+    if let Some(spiffe_assertion) = ctx.credential_store.get_spiffe_assertion(&service) {
+        return handle_spiffe_assertion_credential(
+            first_line,
+            stream,
+            remaining_header,
+            ctx,
+            buffered_body,
+            &service,
+            &upstream_path,
+            spiffe_assertion,
         )
         .await;
     }
@@ -788,6 +799,272 @@ async fn handle_spiffe_route(
             managed_credential_active: Some(true),
             injection_mode: managed_auth.audit_injection_mode(),
             spiffe_context: Some(material.spiffe_audit_context()),
+            ..Default::default()
+        },
+        &audit::L7RequestInfo {
+            host: &upstream_host,
+            port: upstream_port,
+            method: &method,
+            path: upstream_path,
+            status: status_code,
+        },
+    );
+
+    Ok(())
+}
+
+/// Handle a request to a route authenticated via the RFC 7523 jwt-bearer
+/// OAuth2 `client_assertion` flow (D-01/OD-1,
+/// `credential_store.spiffe_assertion_routes`, Plan 113-03). Mirrors
+/// `handle_spiffe_route`'s structure exactly, substituting credential
+/// acquisition with `spiffe_assertion.cache.get_or_refresh()` (an exchanged
+/// OAuth2 access token, not a raw JWT-SVID) and building its own SPIFFE
+/// audit context inline rather than via `UpstreamAuthMaterial::
+/// spiffe_audit_context()` — the assertion-cache path has no
+/// `ManagedUpstreamAuth`/`UpstreamAuthMaterial` in its chain at all (Plan
+/// 113-03's design: it goes straight from `SpiffeAssertionTokenCache` to an
+/// injected header).
+///
+/// Fails closed (503 + `ManagedCredentialUnavailable`) on exchange failure —
+/// never forwards unauthenticated (T-113-17).
+#[allow(clippy::too_many_arguments)]
+async fn handle_spiffe_assertion_credential(
+    first_line: &str,
+    stream: &mut TcpStream,
+    remaining_header: &[u8],
+    ctx: &ReverseProxyCtx<'_>,
+    buffered_body: &[u8],
+    service: &str,
+    upstream_path: &str,
+    spiffe_assertion: &SpiffeAssertionRoute,
+) -> Result<()> {
+    let (method, _path, version) = parse_request_line(first_line)?;
+
+    // Auth gate — IDENTICAL call to handle_spiffe_route's / the
+    // no-credential branch's session-token check.
+    if ctx.require_auth {
+        if let Err(e) = token::validate_proxy_auth(remaining_header, ctx.session_token) {
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(service),
+                    auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                    managed_credential_active: Some(false),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                    ),
+                    ..Default::default()
+                },
+                service,
+                0,
+                &e.to_string(),
+            );
+            send_error(stream, 407, "Proxy Authentication Required").await?;
+            return Ok(());
+        }
+    }
+
+    // Acquire (or refresh) the exchanged OAuth2 access token. Fails closed
+    // on an SVID-fetch failure (workload identity gone, T-113-10/T-113-17) —
+    // `get_or_refresh()` only falls back to a stale token for a
+    // network/IdP-side exchange failure, never for a lost workload identity.
+    let access_token = match spiffe_assertion.cache.get_or_refresh().await {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(
+                "SPIFFE OAuth2 assertion exchange failed for service '{}': {}",
+                service, e
+            );
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(service),
+                    auth_mechanism: Some(
+                        nono::undo::NetworkAuditAuthMechanism::SpiffeOAuthAssertion,
+                    ),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
+                    ),
+                    managed_credential_active: Some(false),
+                    ..Default::default()
+                },
+                service,
+                0,
+                &e.to_string(),
+            );
+            send_error(stream, 503, "Service Unavailable").await?;
+            return Ok(());
+        }
+    };
+
+    // No path transformation — the exchanged access token is always
+    // header-injected (Bearer), mirroring the OAuth2 injection mode.
+    let upstream_url = format!(
+        "{}{}",
+        spiffe_assertion.upstream.trim_end_matches('/'),
+        upstream_path
+    );
+    debug!(
+        "Forwarding to upstream (SPIFFE OAuth2 assertion): {} {}",
+        method, upstream_url
+    );
+
+    let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
+
+    let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
+    if !check.result.is_allowed() {
+        let reason = check.result.reason();
+        warn!("Upstream host denied by filter: {}", reason);
+        send_error(stream, 403, "Forbidden").await?;
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(service),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+                ..Default::default()
+            },
+            service,
+            0,
+            &reason,
+        );
+        return Ok(());
+    }
+
+    // Strip the client's own copy of the injection header — the exchanged
+    // access token is injected fresh below.
+    let filtered_headers = filter_headers(remaining_header, &spiffe_assertion.inject_header);
+    let content_length = extract_content_length(remaining_header);
+
+    let body = if let Some(len) = content_length {
+        if len > MAX_REQUEST_BODY {
+            send_error(stream, 413, "Payload Too Large").await?;
+            return Ok(());
+        }
+        let mut buf = Vec::with_capacity(len);
+        let pre = buffered_body.len().min(len);
+        buf.extend_from_slice(&buffered_body[..pre]);
+        let remaining = len - pre;
+        if remaining > 0 {
+            let mut rest = vec![0u8; remaining];
+            stream.read_exact(&mut rest).await?;
+            buf.extend_from_slice(&rest);
+        }
+        buf
+    } else {
+        Vec::new()
+    };
+
+    // SpiffeAssertionRoute carries no per-route TLS connector (no `tls_ca`
+    // support for this flow yet) — always the shared default connector.
+    let upstream_result = connect_upstream_tls(
+        &upstream_host,
+        upstream_port,
+        &check.resolved_addrs,
+        ctx.tls_connector,
+    )
+    .await;
+    let mut tls_stream = match upstream_result {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Upstream connection failed: {}", e);
+            send_error(stream, 502, "Bad Gateway").await?;
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(service),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
+                    ),
+                    ..Default::default()
+                },
+                service,
+                0,
+                &e.to_string(),
+            );
+            return Ok(());
+        }
+    };
+
+    let mut request = Zeroizing::new(format!(
+        "{} {} {}\r\nHost: {}\r\n",
+        method, upstream_path_full, version, upstream_host
+    ));
+
+    request.push_str(&format!(
+        "{}: Bearer {}\r\n",
+        spiffe_assertion.inject_header,
+        access_token.as_str()
+    ));
+
+    for (name, value) in &filtered_headers {
+        request.push_str(&format!("{}: {}\r\n", name, value));
+    }
+
+    if !body.is_empty() {
+        request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    request.push_str("\r\n");
+
+    tls_stream.write_all(request.as_bytes()).await?;
+    if !body.is_empty() {
+        tls_stream.write_all(&body).await?;
+    }
+    tls_stream.flush().await?;
+
+    let mut response_buf = [0u8; 8192];
+    let mut status_code: u16 = 502;
+    let mut first_chunk = true;
+
+    loop {
+        let n = match tls_stream.read(&mut response_buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                debug!("Upstream read error: {}", e);
+                break;
+            }
+        };
+
+        if first_chunk {
+            status_code = parse_response_status(&response_buf[..n]);
+            first_chunk = false;
+        }
+
+        stream.write_all(&response_buf[..n]).await?;
+        stream.flush().await?;
+    }
+
+    // The assertion-cache path has no ManagedUpstreamAuth/UpstreamAuthMaterial
+    // chain (Plan 113-03) — build the SpiffeAuditContext inline rather than
+    // via UpstreamAuthMaterial::spiffe_audit_context(), which is specific to
+    // the BearerToken variant handle_spiffe_route's chain produces. The
+    // exchanged access token never appears in this record (T-113-16); nor
+    // does the raw JWT-SVID the exchange consumed.
+    let workload_spiffe_id = spiffe_assertion.cache.workload_spiffe_id.clone();
+    let trust_domain = crate::auth::extract_trust_domain(&workload_spiffe_id);
+
+    audit::log_l7_request(
+        ctx.audit_log,
+        audit::ProxyMode::Reverse,
+        &audit::EventContext {
+            route_id: Some(service),
+            auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::SpiffeOAuthAssertion),
+            auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Succeeded),
+            managed_credential_active: Some(true),
+            injection_mode: Some(nono::undo::NetworkAuditInjectionMode::OAuth2),
+            spiffe_context: Some(nono::undo::SpiffeAuditContext {
+                workload_spiffe_id,
+                trust_domain,
+                svid_type: "jwt".to_string(),
+                source: "spire-workload-api".to_string(),
+                upstream_spiffe_id: None,
+                delegation: None,
+            }),
             ..Default::default()
         },
         &audit::L7RequestInfo {
