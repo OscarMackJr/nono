@@ -3228,11 +3228,70 @@ fn run_supervisor_loop(
 /// Reap descendants that reparented onto this supervisor (a child-subreaper),
 /// so short-lived detached processes don't linger as zombies for the session.
 ///
-/// `waitpid(-1, WNOHANG)` returns only terminated children, so a live child is
-/// never consumed. If the primary `child` is reaped here, its status is
-/// returned rather than dropped.
+/// Only terminated children are consumed, so a live child is never affected.
+/// If the primary `child` is reaped here, its status is returned rather than
+/// dropped.
+///
+/// # Why this is not a bare `waitpid(-1)` (WR-01)
+///
+/// `waitpid(-1, WNOHANG)` is process-global: it reaps *any* terminated direct
+/// child, including one whose exit status another part of this same process is
+/// about to collect through a `std::process::Child` (session hooks, for
+/// example). Stealing that status makes libstd's later `wait()` /
+/// `wait_with_output()` fail with `ECHILD` — a spurious failure for a
+/// subprocess that actually succeeded — and frees the pid for recycling while a
+/// live handle still refers to it. The CR-03 fix made this more consequential,
+/// not less, by establishing this reaper as the primary exit-detection path.
+///
+/// So when anything is registered in [`crate::owned_children`], reap by
+/// explicit pid instead, skipping registered pids. The registry mutex is held
+/// for the whole (non-blocking) pass, and `spawn_owned` holds it across the
+/// spawn, so a child can never exist unregistered while this runs.
+///
+/// The fast path — nothing registered, hence nothing to protect — keeps the
+/// cheap process-global wait.
 #[cfg(target_os = "linux")]
 fn reap_reparented_orphans(child: Pid) -> Option<WaitStatus> {
+    let owned = crate::owned_children::lock_owned_pids();
+    if owned.is_empty() {
+        return reap_any_terminated_child(child);
+    }
+
+    let mut primary_status = None;
+    for pid in direct_child_pids() {
+        if owned.contains(&pid) {
+            continue;
+        }
+        let target = Pid::from_raw(pid);
+        loop {
+            match waitpid(target, Some(WaitPidFlag::WNOHANG)) {
+                Ok(
+                    status @ (WaitStatus::Exited(reaped, _) | WaitStatus::Signaled(reaped, _, _)),
+                ) => {
+                    if reaped == child {
+                        primary_status = Some(status);
+                    } else {
+                        debug!("Reaped reparented orphan {}", reaped);
+                    }
+                }
+                // Still alive, or stopped/continued (not requested, so not
+                // reported): nothing to consume for this pid.
+                Ok(_) => {}
+                Err(nix::errno::Errno::EINTR) => continue,
+                // Already gone, or never ours (the /proc snapshot raced).
+                Err(nix::errno::Errno::ECHILD) => {}
+                Err(e) => debug!("waitpid({}) during orphan reap failed: {}", pid, e),
+            }
+            break;
+        }
+    }
+    primary_status
+}
+
+/// `waitpid(-1, WNOHANG)` drain. Safe only when no in-process
+/// `std::process::Child` handle is outstanding — see `reap_reparented_orphans`.
+#[cfg(target_os = "linux")]
+fn reap_any_terminated_child(child: Pid) -> Option<WaitStatus> {
     loop {
         match waitpid(Some(Pid::from_raw(-1)), Some(WaitPidFlag::WNOHANG)) {
             Ok(status @ (WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _, _))) => {
@@ -3251,6 +3310,42 @@ fn reap_reparented_orphans(child: Pid) -> Option<WaitStatus> {
             }
         }
     }
+}
+
+/// Direct children of this process, as reported by
+/// `/proc/self/task/<tid>/children`.
+///
+/// The union over every thread is required: a task reparented onto a
+/// subreaper is attached to whichever of its threads the kernel picked, not
+/// necessarily the group leader. Zombies are listed, which is exactly what we
+/// need to reap.
+///
+/// Returns an empty list when `/proc` is unavailable or the kernel was built
+/// without `CONFIG_PROC_CHILDREN`. That is fail-safe rather than fail-open:
+/// nothing is reaped this pass (orphans linger as zombies for the session, as
+/// they did before subreaping existed), and no status is stolen. It only
+/// applies while an owned child is outstanding — otherwise the caller takes
+/// the `waitpid(-1)` fast path.
+#[cfg(target_os = "linux")]
+fn direct_child_pids() -> Vec<i32> {
+    let mut pids = Vec::new();
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        debug!("Could not enumerate /proc/self/task; skipping orphan reap pass");
+        return pids;
+    };
+    for task in tasks.flatten() {
+        let Ok(contents) = std::fs::read_to_string(task.path().join("children")) else {
+            continue;
+        };
+        pids.extend(
+            contents
+                .split_ascii_whitespace()
+                .filter_map(|tok| tok.parse::<i32>().ok()),
+        );
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    pids
 }
 
 /// Supervisor IPC event loop for capability expansion (Linux).

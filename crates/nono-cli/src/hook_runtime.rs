@@ -395,7 +395,14 @@ fn read_env_file(path: &Path) -> Result<Vec<(String, String)>> {
 /// A worker thread owns the `Child` so the main thread can `recv_timeout`
 /// without polling. On timeout the whole process group is killed.
 fn run_hook(cmd: &mut Command, timeout_secs: Option<u64>) -> Result<HookOutput> {
-    let child = cmd.spawn().map_err(|e| {
+    // WR-01: spawn through the owned-children registry. On timeout this
+    // function returns while the worker thread below is still blocked in
+    // `wait_with_output()`, so the hook's pid can outlive this call and overlap
+    // a supervised run. The Linux supervisor is a child-subreaper and drains
+    // reparented orphans; without the registration its `waitpid` pass would be
+    // free to consume the hook's exit status out from under libstd, turning a
+    // successful hook into a spurious `ECHILD` failure.
+    let child = crate::owned_children::spawn_owned(cmd).map_err(|e| {
         NonoError::CommandExecution(std::io::Error::other(format!("Failed to spawn hook: {e}")))
     })?;
     let pid = child.id();
@@ -430,11 +437,11 @@ fn run_hook(cmd: &mut Command, timeout_secs: Option<u64>) -> Result<HookOutput> 
 }
 
 /// Kill a process group by leader PID.
-fn kill_process_group(pid: u32) {
+fn kill_process_group(pid: i32) {
     use nix::sys::signal::{killpg, Signal};
     use nix::unistd::Pid;
 
-    let pgid = Pid::from_raw(pid as i32);
+    let pgid = Pid::from_raw(pid);
     let _ = killpg(pgid, Signal::SIGTERM);
     thread::sleep(Duration::from_millis(100));
     let _ = killpg(pgid, Signal::SIGKILL);

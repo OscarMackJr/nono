@@ -69,6 +69,11 @@ mod override_audit_emit;
 // approver/KMS-signing pipeline (CLI-01).  Performs NO crypto and NO live check (D-07);
 // only gathers scope paths/domains/repo_context/reason and emits a JSON bundle + nonce.
 mod override_request;
+// Phase 112 WR-01: registry of child pids owned by an in-process
+// `std::process::Child`, so the Linux supervisor's orphan reaper never steals
+// their exit status out from under libstd.
+#[cfg(unix)]
+mod owned_children;
 mod pack_update_hint;
 mod package;
 mod package_cmd;
