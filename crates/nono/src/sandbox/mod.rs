@@ -968,11 +968,17 @@ impl Sandbox {
 
     /// Stack a second Landlock layer that restricts execute to the given paths (Linux only).
     ///
-    /// Must be called after `apply()`. See [`linux::restrict_execute`] for semantics.
+    /// Must be called after `apply()` / `apply_with_abi()`. That ordering is a
+    /// **hard, enforced precondition**, not a convention: the layer grants bare
+    /// `Refer` on `/` so it does not break renames the base layer permits, which
+    /// means that on its own it restricts no rename or link anywhere. Calling it
+    /// without a base layer returns `Err` (Phase 112 WR-08). See
+    /// [`linux::restrict_execute`] for the full semantics.
     ///
     /// # Errors
     ///
-    /// Returns an error if the restriction cannot be applied.
+    /// Returns an error if no base nono Landlock layer is active in this
+    /// process, or if the restriction cannot be applied.
     #[cfg(target_os = "linux")]
     pub fn restrict_execute(paths: &[impl AsRef<std::path::Path>]) -> Result<()> {
         linux::restrict_execute(paths)

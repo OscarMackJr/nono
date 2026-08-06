@@ -83,6 +83,25 @@ impl DetectedAbi {
         !Scope::from_all(self.abi).is_empty()
     }
 
+    /// Return the ABI as a small non-zero ordinal (`V1` -> 1, ... `V6` -> 6).
+    ///
+    /// Used to record which ABI a Landlock layer was built against in a
+    /// process-global atomic, where `0` is reserved for "no layer" (WR-08).
+    /// Unknown/future ABIs map to `u8::MAX` so an ordering comparison against a
+    /// known version still behaves monotonically.
+    #[must_use]
+    pub fn abi_ordinal(&self) -> u8 {
+        match self.abi {
+            ABI::V1 => 1,
+            ABI::V2 => 2,
+            ABI::V3 => 3,
+            ABI::V4 => 4,
+            ABI::V5 => 5,
+            ABI::V6 => 6,
+            _ => u8::MAX,
+        }
+    }
+
     /// Return a human-readable version string (e.g., "V4").
     #[must_use]
     pub fn version_string(&self) -> &'static str {
@@ -1151,6 +1170,16 @@ fn apply_with_abi_inner(
         }
     }
 
+    // WR-08: record that a base nono Landlock layer is now live in this
+    // process, together with the ABI it was built against. `restrict_execute()`
+    // grants bare `Refer` on `/` and is only a genuine restriction layer
+    // because a base layer with narrow `Refer` rules intersects with it;
+    // standalone it silently restricts no rename or link anywhere while
+    // presenting as a restriction layer. Recorded here — the single funnel
+    // every `apply*` entry point goes through, and only past the `NotEnforced`
+    // rejection — so the precondition can be enforced rather than documented.
+    note_base_landlock_layer(abi);
+
     if matches!(seccomp_net_fallback, SeccompNetFallback::BlockAll) {
         install_seccomp_block_network().map_err(|e| {
             NonoError::SandboxInit(format!(
@@ -1304,6 +1333,34 @@ pub fn apply_external() -> Result<()> {
     Ok(())
 }
 
+/// Tracks whether a base nono Landlock layer has been installed in this
+/// process, and at which ABI (WR-08).
+///
+/// `0` means "no base layer". Any other value is `DetectedAbi::abi_ordinal()`
+/// of the layer `apply_with_abi_inner` installed. A plain `AtomicU8` is enough:
+/// the value is written once per process (post-`fork` the child re-applies its
+/// own layer, and a `fork`ed child correctly inherits both the parent's Landlock
+/// domain and this flag), and it is only ever read on the same process's
+/// `restrict_execute()` path.
+#[cfg(target_os = "linux")]
+static BASE_LANDLOCK_LAYER_ABI: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// Record that `apply_with_abi_inner` installed a base Landlock layer.
+#[cfg(target_os = "linux")]
+fn note_base_landlock_layer(abi: &DetectedAbi) {
+    BASE_LANDLOCK_LAYER_ABI.store(abi.abi_ordinal(), std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The ABI ordinal of the base Landlock layer installed in this process, or
+/// `None` if `apply()` / `apply_with_abi()` has not run here.
+#[cfg(target_os = "linux")]
+fn base_landlock_layer_abi() -> Option<u8> {
+    match BASE_LANDLOCK_LAYER_ABI.load(std::sync::atomic::Ordering::SeqCst) {
+        0 => None,
+        ordinal => Some(ordinal),
+    }
+}
+
 /// Apply a second Landlock layer that restricts execute access to the given paths.
 ///
 /// Landlock rulesets stack: each `restrict_self()` call adds an immutable layer.
@@ -1314,12 +1371,55 @@ pub fn apply_external() -> Result<()> {
 ///
 /// Also grants bare `Refer` on `/` — Landlock requires it in every layer
 /// for rename/link, so omitting it here silently breaks renames the main
-/// ruleset already permits. Bare `Refer` alone can't widen access.
+/// ruleset already permits. Bare `Refer` alone can't widen access: Landlock
+/// layers intersect and are strictly allow-list, so a later layer can never
+/// re-grant what an earlier one withheld.
 ///
-/// Call this after `apply()` / `apply_with_abi()` to lock down which binaries
-/// an already-sandboxed process can exec.
+/// # Ordering precondition (enforced, not merely documented — WR-08)
+///
+/// A base nono Landlock layer must already be active in this process. The
+/// `Refer`-on-`/` grant above means this layer, taken alone, restricts no
+/// rename or link *anywhere* — it would present as a restriction layer while
+/// restricting nothing. It is only a real restriction because the base layer's
+/// own narrow `Refer` rules intersect with it.
+///
+/// Calling this without `Sandbox::apply()` / `apply_with_abi()` having
+/// succeeded first therefore returns `Err` rather than installing a layer whose
+/// contract it cannot honour. Per CLAUDE.md, an unsatisfiable security
+/// precondition fails closed instead of degrading silently.
+///
+/// If the base layer was built against an ABI without `Refer` (V1) while this
+/// kernel reports `Refer` support, the mismatch is logged: this layer's `Refer`
+/// handling then has no counterpart to intersect with. That is not an error —
+/// it still cannot widen anything — but it is worth seeing in a trace.
+///
+/// # Errors
+///
+/// Returns `Err` when no base Landlock layer is active in this process, when
+/// the kernel's Landlock ABI is below V3 (no `Execute` support), or when
+/// ruleset construction / `restrict_self()` fails.
 pub fn restrict_execute(paths: &[impl AsRef<Path>]) -> Result<()> {
+    let Some(base_abi_ordinal) = base_landlock_layer_abi() else {
+        return Err(NonoError::SandboxInit(
+            "Tool Sandbox execute restriction requires a base nono Landlock layer to be \
+             active in this process first: this layer grants bare Refer on / so that \
+             renames the base layer permits are not silently broken, and it is only a \
+             real rename/link restriction because the base layer's narrow Refer rules \
+             intersect with it. Applied standalone it would restrict no rename or link \
+             anywhere while presenting as a restriction layer. Call Sandbox::apply() or \
+             Sandbox::apply_with_abi() before restrict_execute()."
+                .to_string(),
+        ));
+    };
+
     let abi = detect_abi()?;
+    if abi.has_refer() && base_abi_ordinal < DetectedAbi::new(ABI::V2).abi_ordinal() {
+        warn!(
+            "Tool Sandbox execute restriction: base Landlock layer was built against an ABI \
+             without Refer, so this layer's Refer handling has nothing to intersect with and \
+             imposes no rename/link restriction"
+        );
+    }
     if !abi.has_execute() {
         return Err(NonoError::SandboxInit(format!(
             "Tool Sandbox  execute restriction requires Landlock ABI V3+; detected {}",
@@ -5447,6 +5547,62 @@ mod tests {
                 "collect_linux_gpu_paths returned non-existent {path:?}"
             );
         }
+    }
+
+    /// WR-08: `restrict_execute()` must refuse to install a layer when no base
+    /// nono Landlock layer is active in this process.
+    ///
+    /// Runs in a forked child so the process-global base-layer marker cannot be
+    /// contaminated by another test in this binary that applies a sandbox.
+    /// (`apply()` is irreversible, so every test that calls it already forks —
+    /// but the marker is set on the *parent* only if one of them did not, and
+    /// forking makes this test independent of that either way.)
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn restrict_execute_refuses_to_run_without_a_base_landlock_layer() {
+        let Ok(detected) = detect_abi() else {
+            return;
+        };
+        if !detected.has_execute() {
+            return;
+        }
+
+        // SAFETY: FFI call to `fork(2)`. A child is needed because the
+        // base-layer marker is process-global and `apply()` is irreversible;
+        // the child branch touches only already-resident code and exits via
+        // `libc::_exit`, so no async-signal-unsafe teardown runs post-fork.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork() failed");
+
+        if pid == 0 {
+            // No `apply()` in this child: `restrict_execute` must fail closed.
+            let code = match restrict_execute(&["/usr/bin"]) {
+                Ok(()) => 1,
+                Err(e) if e.to_string().contains("base nono Landlock layer") => 0,
+                Err(_) => 2,
+            };
+            // SAFETY: `_exit(2)` performs no atexit/stdio teardown, which is
+            // the only async-signal-safe way to leave a forked child.
+            unsafe { libc::_exit(code) };
+        }
+
+        let mut status: i32 = 0;
+        // SAFETY: `pid` is the direct child forked above (this branch only runs
+        // in the parent, where it is `> 0`), and `&mut status` is a live,
+        // exclusively borrowed `i32` — the only pointer the kernel writes.
+        let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
+        assert_eq!(waited, pid, "waitpid() failed");
+        assert!(
+            libc::WIFEXITED(status),
+            "child did not exit normally: status={status}"
+        );
+        assert_eq!(
+            libc::WEXITSTATUS(status),
+            0,
+            "restrict_execute() must fail closed without a base Landlock layer \
+             (exit 1 = it succeeded and installed a layer that restricts no \
+             rename/link anywhere; exit 2 = it failed for a different reason)"
+        );
     }
 
     #[cfg(target_os = "linux")]

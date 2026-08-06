@@ -27,6 +27,17 @@
   a hardware-presence fact, deliberately uncached (devfs entries can appear after process
   start via module load or `nvidia-modprobe`).
 
+### Changed (behaviour, core `nono` crate)
+
+- **`sandbox::restrict_execute()` (Linux) now enforces its ordering precondition.** It has
+  always documented "call this after `apply()`", but nothing checked it. The layer grants
+  bare `Refer` on `/` — required so it does not break renames the base layer permits — which
+  means that standalone it restricts no rename or link anywhere while presenting as a
+  restriction layer. It now returns `Err` when no base nono Landlock layer is active in the
+  calling process. It cannot widen access either way (Landlock layers intersect and are
+  strictly allow-list), so this is a truthfulness fix, not a privilege fix. Also adds
+  `DetectedAbi::abi_ordinal()`.
+
 ### Changed (`--allow-gpu` on Linux)
 
 - **`--allow-gpu` no longer forces seccomp user-notification on hosts without NVIDIA
