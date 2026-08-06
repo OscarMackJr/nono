@@ -68,11 +68,13 @@ open:
   critical: 0
   warning: 0
   info: 7
-status: info_only
+status: issues_found
 status_note: >-
   All 2 Critical and all 14 Warning findings are fixed and committed. The 7
   Info findings remain open by operator decision — this fix pass was scoped to
-  Critical + Warning only. `info_only` means "nothing open above Info".
+  Critical + Warning only. `status` stays on the `clean|issues_found|skipped`
+  enum that GSD tooling parses; it is `issues_found` solely because those 7 Info
+  items are still open. Nothing above Info severity remains open.
 ---
 
 # Phase 112: Code Review Report (Pass 2 — adversarial re-review)
