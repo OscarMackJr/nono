@@ -13,7 +13,7 @@ use crate::config::{ClientAssertionConfig, InjectMode, RouteConfig};
 use crate::diagnostic::ProxyDiagnostic;
 use crate::error::{ProxyError, Result};
 use base64::Engine;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio_rustls::TlsConnector;
 use tracing::{debug, warn};
@@ -160,6 +160,23 @@ pub struct CredentialStore {
     /// Map from route prefix to a SPIFFE-JWT-SVID-backed OAuth2 jwt-bearer
     /// assertion route (RFC 7523, NET-02/OD-1). See [`SpiffeAssertionRoute`].
     spiffe_assertion_routes: HashMap<String, SpiffeAssertionRoute>,
+    /// Route prefixes that declare a direct `route.spiffe` (JWT-SVID bearer)
+    /// auth source (WR-01).
+    ///
+    /// This is a sibling of `spiffe_assertion_routes` for the OTHER SPIFFE
+    /// flow added by this phase: direct JWT-SVID injection, dispatched
+    /// entirely via `RouteStore`/`LoadedRoute.managed_auth` (`route.rs`'s
+    /// D-04 branch), never through this store. `CredentialStore::load`
+    /// never connects to the SPIRE Workload API or exchanges anything for
+    /// these routes — it only records that the route's config *declares*
+    /// the auth source, mirroring the "declared vs connected" split
+    /// `route.rs::LoadedRoute::declares_spiffe`'s doc comment already
+    /// documents for that store. Before this field existed, a route
+    /// configured with only `spiffe: Some(..)` was invisible to
+    /// `loaded_prefixes()`, which made `credential_env_vars()` skip its
+    /// phantom API-key env var and `route_diagnostics()` misreport
+    /// `"cred: none"` for a route with a live, working managed credential.
+    declared_spiffe_routes: HashSet<String>,
 }
 
 impl CredentialStore {
@@ -186,6 +203,7 @@ impl CredentialStore {
         let mut credentials = HashMap::new();
         let mut aws_routes = HashMap::new();
         let mut spiffe_assertion_routes = HashMap::new();
+        let mut declared_spiffe_routes = HashSet::new();
         // Lazily built: only routes with `oauth2.client_assertion` need a TLS
         // connector, so proxies with none of those never pay this cost.
         let mut assertion_tls_connector: Option<TlsConnector> = None;
@@ -195,6 +213,17 @@ impl CredentialStore {
             // the bare service name returned by parse_service_prefix() in
             // the reverse proxy path (e.g., "/anthropic" -> "anthropic").
             let normalized_prefix = route.prefix.trim_matches('/').to_string();
+
+            // WR-01: record every route that declares a direct `route.spiffe`
+            // (JWT-SVID bearer) auth source, independent of whichever branch
+            // below (or none) also applies to this route. This does NOT
+            // connect to the SPIRE Workload API or exchange anything — the
+            // live SVID fetch happens entirely in `RouteStore`/
+            // `LoadedRoute.managed_auth` (`route.rs`'s D-04 branch). Only the
+            // prefix string is recorded here, never a token or SVID.
+            if route.spiffe.is_some() {
+                declared_spiffe_routes.insert(normalized_prefix.clone());
+            }
 
             if let Some(ref key) = route.credential_key {
                 debug!(
@@ -359,6 +388,7 @@ impl CredentialStore {
             credentials,
             aws_routes,
             spiffe_assertion_routes,
+            declared_spiffe_routes,
         })
     }
 
@@ -369,6 +399,7 @@ impl CredentialStore {
             credentials: HashMap::new(),
             aws_routes: HashMap::new(),
             spiffe_assertion_routes: HashMap::new(),
+            declared_spiffe_routes: HashSet::new(),
         }
     }
 
@@ -410,30 +441,47 @@ impl CredentialStore {
         self.spiffe_assertion_routes.get(prefix)
     }
 
-    /// Check if any credentials (static, AWS, or SPIFFE OAuth2 assertion) are loaded.
+    /// Check if any credentials (static, AWS, SPIFFE OAuth2 assertion, or
+    /// declared direct-SPIFFE) are loaded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.credentials.is_empty()
             && self.aws_routes.is_empty()
             && self.spiffe_assertion_routes.is_empty()
+            && self.declared_spiffe_routes.is_empty()
     }
 
-    /// Number of loaded credentials (static + AWS + SPIFFE OAuth2 assertion).
+    /// Number of loaded credentials (static + AWS + SPIFFE OAuth2 assertion +
+    /// declared direct-SPIFFE).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.credentials.len() + self.aws_routes.len() + self.spiffe_assertion_routes.len()
+        self.credentials.len()
+            + self.aws_routes.len()
+            + self.spiffe_assertion_routes.len()
+            + self.declared_spiffe_routes.len()
     }
 
     /// Returns the set of route prefixes that have loaded credentials
-    /// (static keystore, AWS routes, and SPIFFE OAuth2 assertion routes).
+    /// (static keystore, AWS routes, SPIFFE OAuth2 assertion routes, and
+    /// routes that declare a direct `route.spiffe` auth source — WR-01).
     #[must_use]
     pub fn loaded_prefixes(&self) -> std::collections::HashSet<String> {
         self.credentials
             .keys()
             .chain(self.aws_routes.keys())
             .chain(self.spiffe_assertion_routes.keys())
+            .chain(self.declared_spiffe_routes.iter())
             .cloned()
             .collect()
+    }
+
+    /// Returns the set of route prefixes that declare a direct
+    /// `route.spiffe` (JWT-SVID bearer) auth source (WR-01). See
+    /// `declared_spiffe_routes`'s doc comment for why this is a distinct,
+    /// non-connecting subset of `loaded_prefixes()`.
+    #[must_use]
+    pub fn declared_spiffe_prefixes(&self) -> &HashSet<String> {
+        &self.declared_spiffe_routes
     }
 
     /// Insert a pre-built credential directly into the store for testing.
@@ -795,5 +843,117 @@ mod tests {
     fn test_get_spiffe_assertion_none_when_unconfigured() {
         let store = CredentialStore::empty();
         assert!(store.get_spiffe_assertion("anything").is_none());
+    }
+
+    // ── WR-01: direct `route.spiffe` (JWT) routes must be visible to
+    //    `CredentialStore::loaded_prefixes()` ─────────────────────────────
+
+    /// A route configured with ONLY `route.spiffe` (no `credential_key`,
+    /// `aws_auth`, or `oauth2`) — the direct JWT-SVID bearer flow dispatched
+    /// via `RouteStore`/`LoadedRoute.managed_auth` (`route.rs`'s D-04
+    /// branch) — must still register its prefix in `loaded_prefixes()` and
+    /// `declared_spiffe_prefixes()`. Before the WR-01 fix, `CredentialStore
+    /// ::load`'s per-route dispatch had no branch for `route.spiffe.is_some
+    /// ()`, so this prefix was invisible to `loaded_prefixes()`, which made
+    /// `server.rs::credential_env_vars()` skip the phantom API-key env var
+    /// and `server.rs::route_diagnostics()` misreport `"cred: none"` for a
+    /// route that actually has a live, working managed credential.
+    ///
+    /// `CredentialStore::load` only ever inspects `route.spiffe.is_some()`
+    /// for this — it never connects to the SPIRE Workload API (that connect
+    /// lives entirely in `RouteStore::load`, a separate call site), so this
+    /// test needs no live SPIRE agent despite the socket path below being
+    /// unreachable.
+    #[tokio::test]
+    async fn test_load_route_spiffe_only_is_visible_in_loaded_prefixes() {
+        let routes = vec![RouteConfig {
+            spiffe: Some(crate::config::SpiffeAuthConfig::Jwt {
+                workload_api_socket: "/tmp/nono-test-nonexistent-spire-agent-wr01.sock".to_string(),
+                audience: vec!["inventory.internal.example".to_string()],
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                svid_hint: None,
+            }),
+            prefix: "inventory".to_string(),
+            upstream: "https://inventory.internal.example".to_string(),
+            credential_key: None,
+            inject_mode: InjectMode::Header,
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            endpoint_policy: None,
+        }];
+
+        let store = CredentialStore::load(&routes).await.expect(
+            "declaring route.spiffe alone must not fail CredentialStore::load — \
+             no live Workload API connect happens in this store for the direct \
+             JWT bearer flow",
+        );
+
+        assert!(
+            store.loaded_prefixes().contains("inventory"),
+            "WR-01: a route.spiffe-only route must appear in loaded_prefixes()"
+        );
+        assert!(
+            store.declared_spiffe_prefixes().contains("inventory"),
+            "the prefix must also be visible via the dedicated declared_spiffe_prefixes() accessor"
+        );
+        assert!(!store.is_empty());
+        assert_eq!(store.len(), 1);
+
+        // Security: only the prefix string is ever recorded for this route —
+        // no static credential, AWS route, or SPIFFE OAuth2 assertion route
+        // is synthesized, and no real SVID/token is stored anywhere in this
+        // struct.
+        assert!(
+            store.get("inventory").is_none(),
+            "no static LoadedCredential must be synthesized for a route.spiffe route"
+        );
+        assert!(store.get_aws("inventory").is_none());
+        assert!(
+            store.get_spiffe_assertion("inventory").is_none(),
+            "route.spiffe is the direct JWT bearer flow, not the RFC 7523 \
+             oauth2.client_assertion flow — the two must not be conflated"
+        );
+    }
+
+    /// A route with no `spiffe`, `credential_key`, `aws_auth`, or `oauth2`
+    /// field must NOT appear in `declared_spiffe_prefixes()` — the new
+    /// WR-01 branch must not accidentally widen to match unrelated routes.
+    #[tokio::test]
+    async fn test_load_route_without_spiffe_absent_from_declared_spiffe_prefixes() {
+        let routes = vec![RouteConfig {
+            spiffe: None,
+            prefix: "plain".to_string(),
+            upstream: "https://plain.example.com".to_string(),
+            credential_key: None,
+            inject_mode: InjectMode::Header,
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            endpoint_policy: None,
+        }];
+
+        let store = CredentialStore::load(&routes)
+            .await
+            .expect("credential load");
+
+        assert!(!store.declared_spiffe_prefixes().contains("plain"));
+        assert!(!store.loaded_prefixes().contains("plain"));
+        assert!(store.is_empty());
     }
 }

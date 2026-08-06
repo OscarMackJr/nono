@@ -53,7 +53,23 @@ pub struct ProxyHandle {
     /// Route prefixes that have credentials actually loaded.
     /// Routes whose credentials were unavailable are excluded so we
     /// don't inject phantom tokens that shadow valid external credentials.
+    ///
+    /// WR-01 fix: this also includes prefixes whose only credential is a
+    /// direct `route.spiffe` (JWT-SVID) source. That flow is dispatched
+    /// entirely via `RouteStore`/`LoadedRoute.managed_auth` (see
+    /// `route.rs`'s D-04 doc comment), never through `CredentialStore`, so
+    /// `credential_store.loaded_prefixes()` alone would omit it — see
+    /// `spiffe_routes` below for the subset used to distinguish it in
+    /// diagnostics.
     loaded_routes: std::collections::HashSet<String>,
+    /// Subset of `loaded_routes` whose credential is a live managed
+    /// SPIFFE/SPIRE source (`route.spiffe`) rather than a static
+    /// keystore/AWS/OAuth2 credential. Used only by `route_diagnostics()`
+    /// to report a distinct `"cred: spiffe"` status instead of conflating
+    /// it with a static `"cred: ok"` credential or misreporting
+    /// `"cred: none"` (WR-01). Never contains a real SVID/token — only the
+    /// route's prefix string, same as `loaded_routes`.
+    spiffe_routes: std::collections::HashSet<String>,
     /// Client-side proxy bypass entries appended after loopback defaults.
     /// Computed at startup from direct-connect bypasses and profile-declared
     /// `no_proxy` entries, excluding route upstreams.
@@ -98,7 +114,14 @@ impl ProxyHandle {
         let mut rows = Vec::with_capacity(config.routes.len());
         for route in &config.routes {
             let prefix = route.prefix.trim_matches('/').to_string();
-            let cred_status = if self.loaded_routes.contains(&prefix) {
+            let cred_status = if self.spiffe_routes.contains(&prefix) {
+                // WR-01: a direct `route.spiffe` route has a live, working
+                // managed credential (a fresh SVID fetched per request), but
+                // it is not a static keystore/AWS/OAuth2 credential — report
+                // it distinctly rather than folding it into "cred: ok" or
+                // falling through to the misleading "cred: none".
+                "cred: spiffe"
+            } else if self.loaded_routes.contains(&prefix) {
                 "cred: ok"
             } else if route.credential_key.is_some() {
                 "cred: missing"
@@ -581,7 +604,14 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     } else {
         CredentialStore::load(&config.routes).await?
     };
+    // WR-01: `loaded_prefixes()` now includes routes that declare a direct
+    // `route.spiffe` (JWT-SVID) auth source alongside static/AWS/OAuth2
+    // credentials — see `CredentialStore::declared_spiffe_routes`'s doc
+    // comment. `spiffe_routes` is the distinct subset used only by
+    // `route_diagnostics()` to report `"cred: spiffe"` instead of folding
+    // it into the generic `"cred: ok"` static-credential status.
     let loaded_routes = credential_store.loaded_prefixes();
+    let spiffe_routes = credential_store.declared_spiffe_prefixes().clone();
 
     // Build filter. Strict mode treats an empty allowlist as deny-all.
     // `with_denied_hosts` layers caller-supplied deny entries (deny_domain,
@@ -725,6 +755,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
         audit_log,
         shutdown_tx,
         loaded_routes,
+        spiffe_routes,
         no_proxy_hosts,
         managed_loopback_upstream,
         canonical_no_proxy_hosts,
@@ -2022,6 +2053,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -2079,6 +2111,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -2123,6 +2156,103 @@ mod tests {
         );
     }
 
+    // ── WR-01: direct `route.spiffe` (JWT) routes must not be invisible to
+    //    `credential_env_vars()` / `route_diagnostics()` ────────────────────
+
+    /// A route whose only credential is a direct `route.spiffe` (JWT-SVID)
+    /// source — visible to `ProxyHandle` via `loaded_routes`/`spiffe_routes`
+    /// (both populated from `CredentialStore::loaded_prefixes()`/
+    /// `declared_spiffe_prefixes()` in `start()`) — must:
+    /// 1. Still get its phantom API-key env var from `credential_env_vars()`
+    ///    (the route is "loaded" even though no static credential exists).
+    /// 2. Report a distinct `"cred: spiffe"` status from `route_diagnostics()`,
+    ///    not the misleading `"cred: none"` (pre-fix) or the generic
+    ///    `"cred: ok"` used for static credentials.
+    ///
+    /// Constructs `ProxyHandle` directly (mirroring the other tests in this
+    /// module) rather than calling `start()`, since `start()` would drive
+    /// `RouteStore::load()`'s live SPIRE Workload API connect for a real
+    /// `route.spiffe` route — this test needs no live SPIRE agent.
+    #[test]
+    fn test_route_spiffe_visible_in_env_vars_and_diagnostics() {
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let handle = ProxyHandle {
+            port: 12345,
+            token: Zeroizing::new("test_token".to_string()),
+            audit_log: audit::new_audit_log(),
+            shutdown_tx,
+            loaded_routes: ["inventory".to_string()].into_iter().collect(),
+            spiffe_routes: ["inventory".to_string()].into_iter().collect(),
+            no_proxy_hosts: Vec::new(),
+            managed_loopback_upstream: false,
+            canonical_no_proxy_hosts: Vec::new(),
+            diagnostics: vec![],
+        };
+        let config = ProxyConfig {
+            routes: vec![crate::config::RouteConfig {
+                spiffe: Some(crate::config::SpiffeAuthConfig::Jwt {
+                    workload_api_socket: "/tmp/nono-test-nonexistent-spire-agent-wr01-server.sock"
+                        .to_string(),
+                    audience: vec!["inventory.internal.example".to_string()],
+                    inject_header: "Authorization".to_string(),
+                    credential_format: None,
+                    svid_hint: None,
+                }),
+                prefix: "inventory".to_string(),
+                upstream: "https://inventory.internal.example".to_string(),
+                credential_key: None,
+                inject_mode: crate::config::InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: Some("INVENTORY_API_KEY".to_string()),
+                endpoint_rules: vec![],
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+                endpoint_policy: None,
+            }],
+            ..Default::default()
+        };
+
+        // 1. credential_env_vars() must emit BOTH the base URL and the
+        //    phantom API-key env var — pre-fix, only BASE_URL was emitted
+        //    because `loaded_routes` (sourced from `CredentialStore::
+        //    loaded_prefixes()`) omitted a route.spiffe-only prefix.
+        let vars = handle.credential_env_vars(&config);
+        assert!(
+            vars.iter().any(|(k, _)| k == "INVENTORY_BASE_URL"),
+            "BASE_URL must always be set for a declared route: {vars:?}"
+        );
+        let api_key_var = vars.iter().find(|(k, _)| k == "INVENTORY_API_KEY");
+        assert!(
+            api_key_var.is_some(),
+            "WR-01: a route.spiffe route must still get its phantom API-key env var: {vars:?}"
+        );
+        // The phantom value is the session token, never a real SVID/secret.
+        assert_eq!(api_key_var.unwrap().1, "test_token");
+
+        // 2. route_diagnostics() must report a distinct "cred: spiffe"
+        //    status — not "cred: none" (the pre-fix bug) and not "cred: ok"
+        //    (which would conflate it with a static credential).
+        let rows = handle.route_diagnostics(&config);
+        let (_, summary) = rows
+            .iter()
+            .find(|(prefix, _)| prefix == "inventory")
+            .expect("inventory route must appear in route_diagnostics()");
+        assert!(
+            summary.contains("cred: spiffe"),
+            "WR-01: route_diagnostics() must report \"cred: spiffe\" for a \
+             direct-SPIFFE route, got: {summary}"
+        );
+        assert!(
+            !summary.contains("cred: none"),
+            "must not misreport a live managed credential as \"cred: none\": {summary}"
+        );
+    }
+
     #[test]
     fn test_proxy_credential_env_vars_skips_unloaded_routes() {
         // When a credential is unavailable (e.g., GITHUB_TOKEN not set),
@@ -2141,6 +2271,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
         let config = ProxyConfig {
             routes: vec![
@@ -2223,6 +2354,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
 
         // Test leading slash
@@ -2316,6 +2448,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
         let config_no_env_var = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -2359,6 +2492,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
         let config_fixed = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
@@ -2406,6 +2540,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
 
         let vars = handle.env_vars();
@@ -2437,6 +2572,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
 
         let vars = handle.env_vars();
@@ -2471,6 +2607,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
 
         let vars = handle.env_vars();
@@ -2509,6 +2646,7 @@ mod tests {
             managed_loopback_upstream: true,
             canonical_no_proxy_hosts: Vec::new(),
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
 
         let vars = handle.env_vars();
@@ -2536,6 +2674,7 @@ mod tests {
             managed_loopback_upstream: false,
             canonical_no_proxy_hosts: vec!["redis".to_string()],
             diagnostics: vec![],
+            spiffe_routes: std::collections::HashSet::new(),
         };
 
         let vars = handle.env_vars();

@@ -267,6 +267,55 @@ the sole enforcement point and library consumers must replicate the check.
 
 ---
 
+## Resolution (2026-08-06, operator-directed fix pass)
+
+**WR-01: RESOLVED.** `CredentialStore` (`crates/nono-proxy/src/credential.rs`)
+now tracks a `declared_spiffe_routes: HashSet<String>` field, populated in
+`CredentialStore::load`'s per-route loop by an unconditional
+`if route.spiffe.is_some() { declared_spiffe_routes.insert(normalized_prefix.clone()); }`
+check that runs independently of the existing `credential_key`/`aws_auth`/
+`oauth2` dispatch chain — a sibling of `spiffe_assertion_routes`'s existing
+role for the RFC 7523 jwt-bearer flow. This performs no live Workload API
+connect or token exchange (that stays entirely in `RouteStore::load`,
+`route.rs`'s D-04 branch); it only records that the route's config
+*declares* the auth source, so only a prefix string is ever added — never a
+token or SVID.
+
+`CredentialStore::loaded_prefixes()`, `is_empty()`, and `len()` were extended
+to include this set, and a new `declared_spiffe_prefixes()` accessor was
+added for callers that need to distinguish it from static/AWS/OAuth2-assertion
+credentials. `server.rs::start()` now derives `ProxyHandle.spiffe_routes` from
+`credential_store.declared_spiffe_prefixes()` (in addition to the existing
+`loaded_routes` from `loaded_prefixes()`), and `route_diagnostics()` reports
+`"cred: spiffe"` for prefixes in that set instead of falling through to the
+misleading `"cred: none"` or conflating it with the static-credential
+`"cred: ok"`. `credential_env_vars()` needed no direct change — it already
+gates the phantom API-key env var on `loaded_routes.contains(prefix)`, which
+now includes direct-SPIFFE routes automatically.
+
+Added test coverage (no live SPIRE agent required, since `CredentialStore
+::load` never connects for this flow): `credential::tests::
+test_load_route_spiffe_only_is_visible_in_loaded_prefixes`,
+`credential::tests::test_load_route_without_spiffe_absent_from_declared_spiffe_prefixes`,
+and `server::tests::test_route_spiffe_visible_in_env_vars_and_diagnostics`
+(the last covers both `credential_env_vars()` and `route_diagnostics()`
+against a `ProxyHandle` constructed directly, mirroring this file's existing
+test pattern).
+
+Verified: `cargo test -p nono-sandbox-proxy --lib` — 245 passed (242 baseline
++ 3 new), 0 failed. Native `cargo clippy --workspace --all-targets -- -D
+warnings -D clippy::unwrap_used` — 0 errors. `cargo fmt --all --check` —
+clean. Both mandatory cross-target clippy gates (`cross` linux-gnu,
+`cargo-zigbuild` apple-darwin) re-run — see the fix commit / plan artifacts
+for the recorded result.
+
+**WR-02, WR-03, IN-01, IN-02, IN-03: left OPEN by explicit operator decision**
+(2026-08-06). Not modified in this pass. These remain tracked as named
+residuals of Phase 113 pending a future fix pass or operator disposition.
+
+---
+
 _Reviewed: 2026-08-06T00:00:00Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
+_WR-01 fix applied: 2026-08-06 (operator-directed; WR-02/WR-03/Info items left OPEN)_
