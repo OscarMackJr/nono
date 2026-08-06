@@ -6,7 +6,7 @@
 #   make check        Run clippy and format check
 #   make release      Build release binaries
 
-.PHONY: all build build-lib build-cli build-ffi build-arm64 test test-lib test-cli test-ffi check clippy fmt clean install audit help test-windows-harness test-windows-smoke test-windows-integration test-windows-security check-upstream-drift
+.PHONY: all build build-lib build-cli build-ffi build-arm64 test test-lib test-cli test-ffi check clippy fmt clean install audit help test-windows-harness test-windows-smoke test-windows-integration test-windows-security check-upstream-drift test-spiffe
 
 # Default target
 all: build
@@ -66,6 +66,18 @@ test-windows-security:
 
 test-doc:
 	cargo test --doc
+
+# SPIFFE/SPIRE workload-identity live integration suite (NET-02, Phase 113).
+# Downloads SPIRE 1.9.6 if needed, stands up a local server+agent, registers
+# the test workload entry, then runs the SPIRE_AGENT_SOCKET-gated tests in
+# crates/nono-proxy/tests/spiffe_integration.rs and (Linux only)
+# crates/nono-cli/tests/spiffe_run.rs. See scripts/spire-test.sh for details
+# and requirements (curl, tar, cargo). Not runnable on this project's Windows
+# dev host (no SPIRE releases target Windows) — exercised for real by
+# .github/workflows/spire.yml's Linux CI lane, or a Linux/macOS host running
+# this target directly.
+test-spiffe:
+	bash scripts/spire-test.sh
 
 # Maintainer tooling
 #
@@ -161,6 +173,7 @@ help:
 	@echo "  make test-cli       Run CLI tests only"
 	@echo "  make test-ffi       Run C FFI tests only"
 	@echo "  make test-doc       Run doc tests only"
+	@echo "  make test-spiffe    Run SPIFFE/SPIRE live integration suite (needs SPIRE, Linux/macOS)"
 	@echo "  make test-windows-harness      Run Windows build, smoke, integration, and security suites"
 	@echo "  make test-windows-smoke        Run Windows smoke suite"
 	@echo "  make test-windows-integration  Run Windows integration suite"

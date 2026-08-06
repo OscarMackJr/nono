@@ -1,0 +1,100 @@
+name: SPIRE
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  spiffe:
+    name: Integration (Linux)
+    if: ${{ !startsWith(github.head_ref, 'dependabot/github_actions/') }}
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to this fork's own actions/checkout SHA (matches every job in
+      # .github/workflows/ci.yml), not upstream c831dade's 9c091bb2.../v7.0.0 —
+      # 113-PATTERNS.md Pattern Assignment 7's pin-consistency note.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        # Pinned to this fork's own actions/cache SHA (matches ci.yml), not
+        # upstream's 27d5ce7f.../v5 — same pin-consistency rationale as
+        # actions/checkout above; both SHAs claim tag v5 but are different
+        # commits, so the fork's own currently-active pin wins.
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-spire-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-spire-
+            ${{ runner.os }}-cargo-
+
+      - name: Download SPIRE
+        run: |
+          set -euo pipefail
+          VERSION="1.9.6"
+          TARBALL="spire-${VERSION}-linux-amd64-musl.tar.gz"
+          curl -fsSL "https://github.com/spiffe/spire/releases/download/v${VERSION}/${TARBALL}" -o /tmp/spire.tar.gz
+          mkdir -p /tmp/spire-bin
+          tar -xzf /tmp/spire.tar.gz -C /tmp/spire-bin --strip-components=1
+          echo "/tmp/spire-bin/bin" >> "$GITHUB_PATH"
+
+      - name: Start SPIRE server
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/nono-test-spire/data/server
+          spire-server run -config testdata/spire/server.conf &
+          for _ in $(seq 1 30); do [ -S /tmp/nono-test-spire/server.sock ] && break; sleep 0.5; done
+          [ -S /tmp/nono-test-spire/server.sock ] || { echo "SPIRE server did not start"; exit 1; }
+
+      - name: Start SPIRE agent
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/nono-test-spire/data/agent
+          RAW=$(spire-server token generate -socketPath /tmp/nono-test-spire/server.sock -spiffeID spiffe://test.nono/agent)
+          TOKEN=$(echo "$RAW" | grep -oP '(?<=Token: )\S+')
+          echo "::add-mask::$TOKEN"
+          spire-agent run -config testdata/spire/agent.conf -joinToken "$TOKEN" &
+          for _ in $(seq 1 30); do [ -S /tmp/nono-test-spire/agent.sock ] && break; sleep 0.5; done
+          [ -S /tmp/nono-test-spire/agent.sock ] || { echo "SPIRE agent did not start"; exit 1; }
+
+      - name: Register workload entry
+        run: |
+          set -euo pipefail
+          spire-server entry create -socketPath /tmp/nono-test-spire/server.sock \
+            -spiffeID "spiffe://test.nono/nono-proxy" -parentID "spiffe://test.nono/agent" \
+            -selector "unix:uid:$(id -u)"
+          for _ in $(seq 1 20); do
+            spire-agent api fetch jwt -socketPath /tmp/nono-test-spire/agent.sock -audience warmup 2>/dev/null | grep -q "spiffe://" && break
+            sleep 0.5
+          done
+
+      - name: Run SPIFFE proxy-level integration tests
+        env:
+          SPIRE_AGENT_SOCKET: /tmp/nono-test-spire/agent.sock
+          SPIRE_TRUST_DOMAIN: test.nono
+          SPIRE_WORKLOAD_SPIFFE_ID: spiffe://test.nono/nono-proxy
+        run: cargo test -p nono-sandbox-proxy --test spiffe_integration -- --nocapture
+
+      - name: Run SPIFFE binary-level integration tests
+        env:
+          SPIRE_AGENT_SOCKET: /tmp/nono-test-spire/agent.sock
+          SPIRE_TRUST_DOMAIN: test.nono
+          SPIRE_WORKLOAD_SPIFFE_ID: spiffe://test.nono/nono-proxy
+        run: cargo test -p nono-sandbox-cli --test spiffe_run -- --nocapture
