@@ -862,6 +862,28 @@ losing denial telemetry is unacceptable in a security tool.
 **Fix:** unchanged — at minimum emit drained events through `tracing` at `info!` on the
 `nono_security` target, and offer `--audit-log <PATH>`.
 
+**Resolution (Group A fix pass):** FIXED — both halves.
+
+`let _ = handle.drain_audit_events();` is replaced by `AuditSink`:
+
+- Every drained event is emitted with `tracing::info!(target: "nono_security", …)` and
+  a full structured field set (mode, decision, target host, port, method, path, status,
+  route id, auth mechanism/outcome, denial category, managed-credential/injection state,
+  reason). That target is the fork's existing security-telemetry channel, so `-v`,
+  `--log-file` and the Windows ETW layer all pick it up with no extra wiring.
+- `--audit-log <PATH>` (env `NONO_PROXY_AUDIT_LOG`) additionally appends each event as
+  newline-delimited JSON. The file is opened **before the listener binds**, and a path
+  that cannot be appended to is a hard error — an operator who asked for an audit log
+  must never get a running proxy that silently is not writing one.
+
+Draining still happens on the 30 s tick (the buffer must not fill), and now also **once
+more after the loop exits**, so the events immediately preceding shutdown — the window
+in which a denial is most worth having — are not lost.
+
+Regression tests: `audit_sink_open_fails_closed_on_unwritable_path`,
+`audit_sink_appends_events_as_json_lines`,
+`audit_sink_without_path_is_a_tracing_only_sink`.
+
 ## Info
 
 ### IN-01 (carried forward): `--no-auth` on loopback is still an open proxy for every local user

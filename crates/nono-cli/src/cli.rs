@@ -2354,6 +2354,22 @@ pub struct ProxyArgs {
     #[arg(long, help_heading = "PROXY")]
     pub no_auth: bool,
 
+    /// Append every network audit event to PATH as newline-delimited JSON.
+    ///
+    /// `nono proxy` is by construction the only enforcement boundary in its
+    /// mode — there is no OS sandbox behind it — so its allow/deny decisions,
+    /// authentication failures and credential-route usage are the whole
+    /// audit trail. Events are always emitted to the `nono_security` tracing
+    /// target; this flag additionally persists them. A path that cannot be
+    /// opened for appending is a hard error before the proxy binds.
+    #[arg(
+        long,
+        value_name = "PATH",
+        env = "NONO_PROXY_AUDIT_LOG",
+        help_heading = "PROXY"
+    )]
+    pub audit_log: Option<std::path::PathBuf>,
+
     /// Permit a non-loopback --listen address.
     ///
     /// The proxy speaks plain HTTP with no TLS: the session token crosses the

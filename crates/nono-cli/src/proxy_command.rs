@@ -4,9 +4,15 @@
 //! server with no sandboxed child. Prints the connection details (bound
 //! port, session token or `--no-auth` notice, route diagnostics) and then
 //! blocks until Ctrl-C, periodically draining the in-memory network audit
-//! buffer (nothing else consumes it on this path — only the sandboxed
-//! rollback path drains it, and this command performs no rollback audit
-//! recording).
+//! buffer.
+//!
+//! WR-12: drained events are emitted to the `nono_security` tracing target
+//! and, with `--audit-log PATH`, appended as newline-delimited JSON. This
+//! mode has no OS sandbox behind it — the proxy IS the enforcement boundary —
+//! so its allow/deny decisions, authentication failures and credential-route
+//! usage are the whole audit trail. They used to be drained and dropped
+//! because nothing else consumed them on this path, which left the one mode
+//! with no kernel enforcement with zero auditability.
 //!
 //! Phase 112 SEC-07 (adapted from upstream `2663e990`, #1261): upstream's
 //! `proxy_command.rs` constructs several credential/domain/endpoint/TLS/
@@ -225,10 +231,17 @@ async fn run_until_shutdown(
 
     print_connection_info(&args, &handle, &proxy_config, silent);
 
-    // Nothing else consumes the in-memory network audit buffer on this
-    // standalone path — only the sandboxed rollback path drains it, and this
-    // command performs no rollback audit recording. Left undrained, the
-    // buffer fills to its cap and logs a WARN on every subsequent request.
+    // WR-12: the in-memory network audit buffer used to be drained and
+    // dropped on the floor. `nono proxy` is by construction the *only*
+    // enforcement boundary in its mode — there is no OS sandbox behind it —
+    // so allow/deny decisions, authentication failures and credential-route
+    // usage are the entire audit trail for this mode, and discarding them
+    // left the one mode with no kernel enforcement with zero auditability.
+    // Draining is still required (left undrained the buffer fills to its cap
+    // and logs a WARN on every subsequent request), but the events now go
+    // somewhere.
+    let mut audit_sink = AuditSink::open(args.audit_log.as_deref())?;
+
     let mut audit_drain = tokio::time::interval(Duration::from_secs(30));
     audit_drain.tick().await; // first tick fires immediately; nothing to drain yet.
     loop {
@@ -240,13 +253,111 @@ async fn run_until_shutdown(
                 break;
             }
             _ = audit_drain.tick() => {
-                let _ = handle.drain_audit_events();
+                audit_sink.emit(handle.drain_audit_events());
             }
         }
     }
 
+    // Drain once more on the way out: the events produced since the last tick
+    // are the ones immediately preceding shutdown, which is exactly when a
+    // denial is most worth having.
+    audit_sink.emit(handle.drain_audit_events());
+
     handle.shutdown();
     Ok(())
+}
+
+/// Destination for drained network audit events.
+///
+/// Always emits to the `nono_security` tracing target (so `-v`, `--log-file`
+/// and the Windows ETW layer all see them), and additionally appends
+/// newline-delimited JSON when `--audit-log PATH` was given.
+struct AuditSink {
+    file: Option<std::fs::File>,
+    path: Option<std::path::PathBuf>,
+}
+
+impl AuditSink {
+    /// Open the sink, failing before the proxy accepts traffic if the
+    /// requested audit log cannot be appended to.
+    ///
+    /// Fail-closed: an operator who asked for an audit log must not get a
+    /// running proxy that silently is not writing one.
+    fn open(path: Option<&std::path::Path>) -> Result<Self> {
+        let Some(path) = path else {
+            return Ok(Self {
+                file: None,
+                path: None,
+            });
+        };
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| {
+                NonoError::ConfigParse(format!(
+                    "cannot open --audit-log {} for appending: {e}",
+                    path.display()
+                ))
+            })?;
+
+        Ok(Self {
+            file: Some(file),
+            path: Some(path.to_path_buf()),
+        })
+    }
+
+    fn emit(&mut self, events: Vec<nono::undo::NetworkAuditEvent>) {
+        use std::io::Write;
+
+        for event in &events {
+            tracing::info!(
+                target: "nono_security",
+                timestamp_unix_ms = event.timestamp_unix_ms,
+                mode = ?event.mode,
+                decision = ?event.decision,
+                target_host = %event.target,
+                port = ?event.port,
+                method = ?event.method,
+                path = ?event.path,
+                status = ?event.status,
+                route_id = ?event.route_id,
+                auth_mechanism = ?event.auth_mechanism,
+                auth_outcome = ?event.auth_outcome,
+                denial_category = ?event.denial_category,
+                managed_credential_active = ?event.managed_credential_active,
+                injection_mode = ?event.injection_mode,
+                reason = ?event.reason,
+                "proxy network audit event"
+            );
+        }
+
+        let (Some(file), Some(path)) = (self.file.as_mut(), self.path.as_ref()) else {
+            return;
+        };
+
+        for event in &events {
+            // A serialization failure here would mean a malformed event, not
+            // a malformed log — report it and keep the remaining events
+            // rather than losing the whole batch.
+            let line = match serde_json::to_string(event) {
+                Ok(line) => line,
+                Err(e) => {
+                    tracing::error!("failed to serialize a network audit event: {e}");
+                    continue;
+                }
+            };
+            if let Err(e) = writeln!(file, "{line}") {
+                tracing::error!("failed to append to --audit-log {}: {e}", path.display());
+                return;
+            }
+        }
+
+        if let Err(e) = file.flush() {
+            tracing::error!("failed to flush --audit-log {}: {e}", path.display());
+        }
+    }
 }
 
 fn print_connection_info(
@@ -351,6 +462,7 @@ mod tests {
             port: 0,
             no_auth: false,
             allow_remote: false,
+            audit_log: None,
             max_connections: 256,
             profile: None,
             network_profile: None,
@@ -516,6 +628,62 @@ mod tests {
             msg.contains("--no-auth"),
             "error must name --no-auth: {msg}"
         );
+    }
+
+    /// WR-12: an operator who asked for an audit log must never get a
+    /// running proxy that silently is not writing one. The sink is opened
+    /// before the listener binds.
+    #[test]
+    fn audit_sink_open_fails_closed_on_unwritable_path() {
+        let dir = tempfile::tempdir().unwrap();
+        // A path whose parent does not exist cannot be created.
+        let unwritable = dir.path().join("no-such-dir").join("audit.jsonl");
+        assert!(AuditSink::open(Some(&unwritable)).is_err());
+    }
+
+    /// WR-12: drained events must reach the audit log as newline-delimited
+    /// JSON instead of being dropped on the floor.
+    #[test]
+    fn audit_sink_appends_events_as_json_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("audit.jsonl");
+        let mut sink = AuditSink::open(Some(&log_path)).expect("sink must open");
+
+        let event = nono::undo::NetworkAuditEvent {
+            timestamp_unix_ms: 1,
+            mode: nono::undo::NetworkAuditMode::Connect,
+            decision: nono::undo::NetworkAuditDecision::Deny,
+            route_id: None,
+            auth_mechanism: None,
+            auth_outcome: None,
+            managed_credential_active: None,
+            injection_mode: None,
+            denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+            target: "blocked.example".to_string(),
+            port: Some(443),
+            method: None,
+            path: None,
+            status: None,
+            reason: Some("host not in allowlist".to_string()),
+        };
+        sink.emit(vec![event]);
+
+        let written = std::fs::read_to_string(&log_path).expect("audit log must exist");
+        let mut lines = written.lines();
+        let first = lines.next().expect("one event must have been appended");
+        assert!(lines.next().is_none(), "exactly one line expected");
+
+        let parsed: serde_json::Value = serde_json::from_str(first).expect("each line is JSON");
+        assert_eq!(parsed["target"], "blocked.example");
+        assert_eq!(parsed["reason"], "host not in allowlist");
+    }
+
+    /// Without `--audit-log` the sink is still constructible and emitting is
+    /// a no-op on disk (events still reach the `nono_security` target).
+    #[test]
+    fn audit_sink_without_path_is_a_tracing_only_sink() {
+        let mut sink = AuditSink::open(None).expect("sink must open");
+        sink.emit(Vec::new());
     }
 
     /// A profile with no network deny layer and no `block` must not
