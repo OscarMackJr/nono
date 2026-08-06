@@ -510,6 +510,19 @@ struct ProxyState {
     /// Matcher for hosts that bypass the external proxy and route direct.
     /// Built once at startup from `ExternalProxyConfig.bypass_hosts`.
     bypass_matcher: external::BypassMatcher,
+    /// Actual bound port (OS-assigned when `config.bind_port` is 0), i.e.
+    /// `ProxyHandle.port`'s server-side twin. Used by `handle_forward_http`
+    /// to detect requests whose absolute-form target is the proxy's own
+    /// bound port on a loopback host (a self-request — e.g. an SDK base URL
+    /// like `OPENAI_BASE_URL=http://127.0.0.1:{port}/openai` sent through an
+    /// `HTTP_PROXY`-aware client). Matches upstream `c831dade`'s
+    /// `ProxyState.bound_port` field (113-RESEARCH.md's Symbol-Level
+    /// Disposition Table); this fork's self-request handling is
+    /// observability-only (see the call site) rather than upstream's
+    /// re-route-to-`handle_reverse_proxy` behavior, since this fork has no
+    /// `ReverseProxyCtx.approval_backends`/`credential_capture_backend`
+    /// fields for that call shape to build against.
+    bound_port: u16,
 }
 
 /// Start the proxy server.
@@ -698,6 +711,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
         active_connections: AtomicUsize::new(0),
         audit_log: Arc::clone(&audit_log),
         bypass_matcher,
+        bound_port: port,
     });
 
     // Spawn accept loop as a task within the current runtime.
@@ -994,6 +1008,29 @@ async fn handle_forward_http(
 
     // 2. Parse host+port and run the host filter (DNS resolution + SSRF guard).
     let (host, port) = parse_non_connect_target(first_line)?;
+
+    // Self-request detection: absolute-form URL targeting the proxy's own
+    // bound port on a loopback host (e.g. an SDK configured with
+    // `OPENAI_BASE_URL=http://127.0.0.1:{proxy_port}/openai` sent via an
+    // `HTTP_PROXY`-aware client — matches upstream `c831dade`'s
+    // `ProxyState.bound_port` self-request check). Upstream re-routes this
+    // case to `handle_reverse_proxy` for credential injection; this fork's
+    // `ReverseProxyCtx` has no equivalent call shape to build against
+    // out-of-scope for this plan (see `ProxyState.bound_port`'s doc
+    // comment), so this is observability-only: the request is logged and
+    // still forwarded transparently, unchanged from this function's
+    // existing "no credential injection" transparent pass-through contract
+    // (T-109-12) — no new denial or re-routing semantics are introduced.
+    if port == state.bound_port
+        && (host == "127.0.0.1" || host == "localhost" || host == "[::1]" || host == "::1")
+    {
+        debug!(
+            "forward-http: absolute-form request targets the proxy's own bound port ({}) — \
+             self-request, forwarding transparently (no route re-routing in this fork)",
+            state.bound_port
+        );
+    }
+
     let check = state.filter.check_host(&host, port).await?;
     if !check.result.is_allowed() {
         let reason = check.result.reason();
@@ -2770,5 +2807,78 @@ mod tests {
         );
 
         handle.shutdown();
+    }
+
+    // ========================================================================
+    // D-04/D-03 (113-CONTEXT.md, Plan 113-05): async RouteStore::load
+    // call-site behavior + the fail-closed guard on non-SPIFFE-implementing
+    // dispatch paths.
+    // ========================================================================
+
+    /// D-04 fail-closed proof at the `nono_proxy::server::start` call site
+    /// (the production caller of `RouteStore::load`, distinct from
+    /// `route.rs`'s own `test_load_spiffe_route_unreachable_socket_fails_whole_load`
+    /// which exercises `RouteStore::load` directly): a SPIFFE-declared route
+    /// pointing at an unreachable Workload API socket must make `start()`
+    /// itself return `Err` — not panic, not hang, not silently start with a
+    /// broken route — within `SpiffeJwtSource::connect`'s own bounded
+    /// `initial_sync_timeout` (10s), proving the two new `.await`s
+    /// (`RouteStore::load(&config.routes).await?`,
+    /// `CredentialStore::load(&config.routes).await?`) propagate a real
+    /// connect failure end-to-end rather than the async conversion having
+    /// silently swallowed it.
+    #[tokio::test]
+    async fn start_fails_closed_on_unreachable_spiffe_socket() {
+        use crate::config::SpiffeAuthConfig;
+
+        let config = ProxyConfig {
+            routes: vec![crate::config::RouteConfig {
+                spiffe: Some(SpiffeAuthConfig::Jwt {
+                    workload_api_socket: "/tmp/nono-test-113-05-nonexistent-spire-agent.sock"
+                        .to_string(),
+                    audience: vec!["test-audience".to_string()],
+                    inject_header: "Authorization".to_string(),
+                    credential_format: None,
+                    svid_hint: None,
+                }),
+                prefix: "spiffe-svc".to_string(),
+                upstream: "https://spiffe-upstream.invalid".to_string(),
+                credential_key: None,
+                inject_mode: Default::default(),
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+                endpoint_policy: None,
+            }],
+            ..Default::default()
+        };
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), start(config)).await;
+
+        match result {
+            Err(_) => panic!(
+                "start() must not hang on an unreachable SPIFFE Workload API socket — timed \
+                 out waiting for a bounded-time Err"
+            ),
+            Ok(Ok(handle)) => {
+                handle.shutdown();
+                panic!(
+                    "start() must fail closed (Err) on an unreachable SPIFFE Workload API \
+                     socket, not succeed"
+                );
+            }
+            Ok(Err(_)) => {
+                // Expected: RouteStore::load propagates the connect failure
+                // and start() returns Err — no listener left bound, no
+                // partially-initialized ProxyHandle escapes.
+            }
+        }
     }
 }
