@@ -245,6 +245,10 @@ pub fn resolve_credentials(
                 // actual token-exchange client; here we just preserve the config.
                 oauth2: cred.auth.clone(),
                 aws_auth: cred.aws_auth.clone(),
+                // NET-02 (Phase 113): forward SPIFFE auth from CustomCredentialDef
+                // through to RouteConfig so a profile-declared spiffe route
+                // actually reaches the proxy (not a blanket None).
+                spiffe: cred.spiffe.clone(),
                 endpoint_policy: None,
             });
         } else if let Some(cred) = policy.credentials.get(name) {
@@ -275,6 +279,7 @@ pub fn resolve_credentials(
                 tls_ca: None, // Built-in credentials don't support custom CAs
                 oauth2: None, // PROF-03 (Plan 22-01): Task 6 will wire oauth2
                 aws_auth: None,
+                spiffe: None, // Built-in credentials don't support SPIFFE
                 endpoint_policy: None,
             });
         }
@@ -461,6 +466,7 @@ pub fn partition_allow_domain(
                         tls_ca: None,
                         oauth2: None,
                         aws_auth: None,
+                        spiffe: None, // allow-domain-derived routes never carry credential auth
                         endpoint_policy: None,
                         // NOTE: upstream also sets proxy/tls_client_cert/tls_client_key
                         // — these fields are ABSENT from the fork's RouteConfig (Phase 34
@@ -602,6 +608,7 @@ mod tests {
         custom.insert(
             "telegram".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.telegram.org".to_string(),
                 credential_key: Some("telegram_bot_token".to_string()),
                 auth: None,
@@ -640,6 +647,7 @@ mod tests {
         custom.insert(
             "openai".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://my-proxy.example.com/openai".to_string(),
                 credential_key: Some("my_openai_key".to_string()),
                 auth: None,
@@ -674,6 +682,7 @@ mod tests {
         custom.insert(
             "telegram".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.telegram.org".to_string(),
                 credential_key: Some("telegram_bot_token".to_string()),
                 auth: None,
@@ -718,6 +727,7 @@ mod tests {
         custom.insert(
             "local".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "http://localhost:8080/api".to_string(),
                 credential_key: Some("local_api_key".to_string()),
                 auth: None,
@@ -834,6 +844,7 @@ mod tests {
         custom.insert(
             "local".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "http://127.1.2.3:8080/api".to_string(),
                 credential_key: Some("local_api_key".to_string()),
                 auth: None,
@@ -865,6 +876,7 @@ mod tests {
         custom.insert(
             "local".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "http://0.0.0.0:3000/api".to_string(),
                 credential_key: Some("local_api_key".to_string()),
                 auth: None,
@@ -896,6 +908,7 @@ mod tests {
         custom.insert(
             "test".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("api_key".to_string()),
                 auth: None,
@@ -932,6 +945,7 @@ mod tests {
         custom.insert(
             "openai".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.openai.com/v1".to_string(),
                 credential_key: Some("op://Development/OpenAI/credential".to_string()),
                 auth: None,
@@ -1062,6 +1076,7 @@ mod tests {
         custom.insert(
             "evil".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("safe_key".to_string()),
                 auth: None,
@@ -1143,9 +1158,12 @@ mod tests {
         custom.insert(
             "my_api".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: None,
                 auth: Some(OAuth2Config {
+                    client_assertion: None,
+                    extra_params: std::collections::HashMap::new(),
                     token_url: "https://auth.example.com/oauth/token".to_string(),
                     client_id: "my-client".to_string(),
                     client_secret: "env://CLIENT_SECRET".to_string(),
@@ -1194,6 +1212,7 @@ mod tests {
         custom.insert(
             "standard".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("my_key".to_string()),
                 auth: None,

@@ -1028,6 +1028,11 @@ pub struct CustomCredentialDef {
     /// credential chain). Mutually exclusive with `credential_key` and `auth`.
     #[serde(default)]
     pub aws_auth: Option<nono_proxy::config::AwsAuthConfig>,
+
+    /// SPIFFE/SPIRE Workload API auth. Mutually exclusive with
+    /// `credential_key`, `auth`, and `aws_auth`.
+    #[serde(default)]
+    pub spiffe: Option<nono_proxy::config::SpiffeAuthConfig>,
 }
 
 fn default_inject_header() -> String {
@@ -5039,6 +5044,7 @@ mod tests {
 
     fn header_cred_builder() -> CustomCredentialDef {
         CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("api_key".to_string()),
             auth: None,
@@ -5217,6 +5223,7 @@ mod tests {
     #[test]
     fn test_validate_url_path_mode_valid() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5237,6 +5244,7 @@ mod tests {
     #[test]
     fn test_validate_url_path_mode_missing_pattern() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5259,6 +5267,7 @@ mod tests {
     #[test]
     fn test_validate_url_path_mode_pattern_without_placeholder() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5281,6 +5290,7 @@ mod tests {
     #[test]
     fn test_validate_url_path_mode_with_replacement() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5301,6 +5311,7 @@ mod tests {
     #[test]
     fn test_validate_url_path_mode_replacement_without_placeholder() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5323,6 +5334,7 @@ mod tests {
     #[test]
     fn test_validate_query_param_mode_valid() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
@@ -5343,6 +5355,7 @@ mod tests {
     #[test]
     fn test_validate_query_param_mode_missing_param_name() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
@@ -5365,6 +5378,7 @@ mod tests {
     #[test]
     fn test_validate_query_param_mode_empty_param_name() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
@@ -5387,6 +5401,7 @@ mod tests {
     #[test]
     fn test_validate_basic_auth_mode_valid() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("example_basic_auth".to_string()),
             auth: None,
@@ -5792,6 +5807,7 @@ mod tests {
         base.network.custom_credentials.insert(
             "svc_a".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://a.example.com".to_string(),
                 credential_key: Some("key_a".to_string()),
                 auth: None,
@@ -5812,6 +5828,7 @@ mod tests {
         child.network.custom_credentials.insert(
             "svc_b".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://b.example.com".to_string(),
                 credential_key: Some("key_b".to_string()),
                 auth: None,
@@ -5950,6 +5967,7 @@ mod tests {
         base.network.custom_credentials.insert(
             "svc_shared".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://base.example.com".to_string(),
                 credential_key: Some("key_base".to_string()),
                 auth: None,
@@ -5970,6 +5988,7 @@ mod tests {
         child.network.custom_credentials.insert(
             "svc_shared".to_string(),
             CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://child.example.com".to_string(),
                 credential_key: Some("key_child".to_string()),
                 auth: None,
@@ -7234,6 +7253,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_file_uri_accepted() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/api-token".to_string()),
             auth: None,
@@ -7257,6 +7277,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_file_uri_requires_env_var() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/api-token".to_string()),
             auth: None,
@@ -7283,6 +7304,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_file_uri_invalid_rejected() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file://relative/path".to_string()),
             auth: None,
@@ -7309,6 +7331,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_file_uri_traversal_rejected() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/../../../etc/shadow".to_string()),
             auth: None,
@@ -7367,6 +7390,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_env_uri_accepted() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://MY_API_TOKEN".to_string()),
             auth: None,
@@ -7387,6 +7411,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_env_uri_dangerous_var_rejected() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://LD_PRELOAD".to_string()),
             auth: None,
@@ -7886,6 +7911,8 @@ mod tests {
         // the existing validate_upstream_url HTTPS-or-loopback gate provides
         // semantic equivalence to upstream's PolicyError-style enforcement.
         let auth = OAuth2Config {
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
             token_url: "http://auth.attacker.example.com/oauth/token".to_string(),
             client_id: "client".to_string(),
             client_secret: "env://SECRET".to_string(),
@@ -7904,6 +7931,8 @@ mod tests {
     fn oauth2_http_loopback_token_url_allowed() {
         // Loopback HTTP is the documented exception for local dev/test.
         let auth = OAuth2Config {
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
             token_url: "http://127.0.0.1:8080/oauth/token".to_string(),
             client_id: "client".to_string(),
             client_secret: "env://SECRET".to_string(),
@@ -7915,6 +7944,8 @@ mod tests {
     #[test]
     fn oauth2_empty_client_id_rejected() {
         let auth = OAuth2Config {
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
             token_url: "https://auth.example.com/oauth/token".to_string(),
             client_id: String::new(),
             client_secret: "env://SECRET".to_string(),
@@ -7927,6 +7958,8 @@ mod tests {
     #[test]
     fn oauth2_empty_client_secret_rejected() {
         let auth = OAuth2Config {
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
             token_url: "https://auth.example.com/oauth/token".to_string(),
             client_id: "id".to_string(),
             client_secret: String::new(),
@@ -7939,9 +7972,12 @@ mod tests {
     #[test]
     fn custom_credential_credential_key_and_auth_mutually_exclusive() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("api_key".to_string()),
             auth: Some(OAuth2Config {
+                client_assertion: None,
+                extra_params: std::collections::HashMap::new(),
                 token_url: "https://auth.example.com/oauth/token".to_string(),
                 client_id: "id".to_string(),
                 client_secret: "env://S".to_string(),
@@ -7965,6 +8001,7 @@ mod tests {
     #[test]
     fn custom_credential_neither_key_nor_auth_rejected() {
         let cred = CustomCredentialDef {
+            spiffe: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: None,
             auth: None,

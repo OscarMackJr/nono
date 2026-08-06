@@ -830,6 +830,7 @@ mod tests {
         custom_creds.insert(
             "my_api".to_string(),
             crate::profile::CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("my_api_key".to_string()),
                 auth: None,
@@ -1090,6 +1091,7 @@ mod tests {
         custom_creds.insert(
             "my_api".to_string(),
             crate::profile::CustomCredentialDef {
+                spiffe: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("my_api_key".to_string()),
                 auth: None,
