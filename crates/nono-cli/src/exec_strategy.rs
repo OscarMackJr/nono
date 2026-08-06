@@ -3298,6 +3298,39 @@ fn run_supervisor_loop(
     let mut sock_fd_active = true;
     let startup_deadline = startup_timeout.map(|cfg| (Instant::now() + cfg.timeout, cfg));
 
+    // Every exit from this function must first drain the notifications still
+    // queued on the proxy seccomp-notify fd, or the end-of-run network denial
+    // records that feed the denial diagnostic footer and the audit/session
+    // denial record are silently dropped (CR-03). Routing every early `return`
+    // through one macro (and draining once more before the trailing blocking
+    // wait, which is where both `break` paths land) makes that invariant
+    // visible at each exit rather than relying on independent copies of the
+    // drain call staying in sync — the CR-03 fix added the drain to one path
+    // and three siblings kept returning undrained (WR-15).
+    //
+    // The drain runs BEFORE `$status` is evaluated. That ordering matters for
+    // the two exits whose status expression is a blocking `wait_for_child`:
+    // draining first responds to any notification the child is currently
+    // parked on, so the subsequent wait cannot deadlock against a child
+    // blocked in a seccomp notification that nobody is left to answer.
+    macro_rules! drained_return {
+        ($status:expr) => {{
+            drain_pending_network_notifications(
+                proxy_notify_raw_fd,
+                config,
+                &mut rate_limiter,
+                &mut denials,
+                &mut ipc_denials,
+            );
+            return Ok(($status, denials, ipc_denials));
+        }};
+    }
+
+    // WR-15-SUPERVISOR-EXITS-START — DO NOT REMOVE.
+    // The regression test `every_supervisor_loop_exit_drains_network_notifications`
+    // (tests/resl_supervisor_drain.rs) scans from this sentinel to the matching
+    // closing sentinel and rejects any bare `return Ok((` — every early exit
+    // must go through `drained_return!`.
     loop {
         let mut pfds: Vec<libc::pollfd> = vec![libc::pollfd {
             fd: if sock_fd_active { sock_fd } else { -1 },
@@ -3472,14 +3505,7 @@ fn run_supervisor_loop(
         // footer and the audit/session denial record. Drain before returning,
         // exactly as the `Ok(status)` and `ECHILD` arms below already do.
         if let Some(status) = reap_reparented_orphans(child) {
-            drain_pending_network_notifications(
-                proxy_notify_raw_fd,
-                config,
-                &mut rate_limiter,
-                &mut denials,
-                &mut ipc_denials,
-            );
-            return Ok((status, denials, ipc_denials));
+            drained_return!(status);
         }
 
         match waitpid(child, Some(WaitPidFlag::WNOHANG)) {
@@ -3495,7 +3521,11 @@ fn run_supervisor_loop(
                         );
                         *killed_by_timeout = true;
                         let _ = signal::kill(child, Signal::SIGKILL);
-                        return Ok((wait_for_child(child)?, denials, ipc_denials));
+                        // nono just SIGKILLed the child *because it
+                        // misbehaved* — this is precisely the run whose queued
+                        // network denials are most worth recording, so this
+                        // exit must drain like every other (WR-15).
+                        drained_return!(wait_for_child(child)?);
                     }
                 }
                 continue;
@@ -3508,27 +3538,11 @@ fn run_supervisor_loop(
                 debug!("Child continued, keeping supervisor alive");
                 continue;
             }
-            Ok(status) => {
-                drain_pending_network_notifications(
-                    proxy_notify_raw_fd,
-                    config,
-                    &mut rate_limiter,
-                    &mut denials,
-                    &mut ipc_denials,
-                );
-                return Ok((status, denials, ipc_denials));
-            }
+            Ok(status) => drained_return!(status),
             Err(nix::errno::Errno::EINTR) => continue,
             Err(nix::errno::Errno::ECHILD) => {
                 warn!("Child already reaped in supervisor loop");
-                drain_pending_network_notifications(
-                    proxy_notify_raw_fd,
-                    config,
-                    &mut rate_limiter,
-                    &mut denials,
-                    &mut ipc_denials,
-                );
-                return Ok((WaitStatus::Exited(child, 1), denials, ipc_denials));
+                drained_return!(WaitStatus::Exited(child, 1));
             }
             Err(e) => {
                 return Err(NonoError::SandboxInit(format!(
@@ -3539,8 +3553,20 @@ fn run_supervisor_loop(
         }
     }
 
+    // Both `break` paths (PTY poll teardown and a non-EINTR `poll()` error)
+    // land here. Drain before the blocking wait, not after: the child may be
+    // parked on a network notification that nobody is left to answer, and its
+    // queued denials would otherwise be discarded with the notify fd (WR-15).
+    drain_pending_network_notifications(
+        proxy_notify_raw_fd,
+        config,
+        &mut rate_limiter,
+        &mut denials,
+        &mut ipc_denials,
+    );
     let status = wait_for_child(child)?;
     Ok((status, denials, ipc_denials))
+    // WR-15-SUPERVISOR-EXITS-END — DO NOT REMOVE.
 }
 
 #[cfg(target_os = "linux")]
