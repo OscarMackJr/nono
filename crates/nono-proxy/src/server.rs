@@ -231,8 +231,11 @@ impl ProxyHandle {
 // ============================================================================
 // no_proxy (#1415, D-06/D-07) — push-based NO_PROXY/NONO_NO_PROXY pipeline,
 // route-conflict guards, and startup validation. Ported from upstream
-// 1619275c and adapted to this fork's simpler `ProxyHandle`/`RouteStore`
-// shape (no TLS intercept, no SPIFFE, no async RouteStore::load).
+// 1619275c and adapted to this fork's `ProxyHandle`/`RouteStore` shape (no
+// TLS intercept — see ADR-113/D-01 — but now with SPIFFE-route support and
+// async `RouteStore::load`, absorbed in Phase 113 per 113-CONTEXT.md D-04,
+// which overturns the "no SPIFFE, no async RouteStore::load" clauses this
+// comment previously asserted).
 // ============================================================================
 
 /// Append `entry` to `entries` (normalised, deduped) for the client-facing
@@ -554,7 +557,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     let route_store = if config.routes.is_empty() {
         RouteStore::empty()
     } else {
-        RouteStore::load(&config.routes)?
+        RouteStore::load(&config.routes).await?
     };
     let route_hosts = route_store.route_upstream_hosts();
     validate_no_proxy_route_conflicts(&config.no_proxy, &route_hosts)?;

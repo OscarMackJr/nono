@@ -61,6 +61,32 @@ pub struct LoadedRoute {
     /// human-readable label in pool statistics. `None` for routes using the
     /// default TLS config.
     pub tls_config_key: Option<String>,
+
+    /// Live, connected SPIFFE credential source for this route, when
+    /// `route.spiffe` is declared (D-04). `reverse.rs`'s credential-injection
+    /// dispatch (Plan 113-06) calls `.acquire()` on this to fetch a fresh
+    /// JWT-SVID per request. `None` for routes with no `spiffe` field.
+    pub managed_auth: Option<Arc<crate::auth::ManagedUpstreamAuth>>,
+
+    /// Whether this route declared a `spiffe` auth source at load time,
+    /// independent of whether the live connect succeeded (a failed connect
+    /// aborts the whole `RouteStore::load` call per D-04, so by the time any
+    /// `RouteStore` exists this always equals `managed_auth.is_some()`).
+    /// Kept as a separate field so `has_spiffe_source()` is unit-testable
+    /// without constructing a real `SpiffeJwtSource` (which has no test-only
+    /// constructor bypassing a live Workload API connection).
+    pub declares_spiffe: bool,
+}
+
+impl LoadedRoute {
+    /// Whether this route requires a live SPIFFE/SPIRE-issued credential.
+    /// Cheap, always-correct, and answerable without a live SPIRE agent —
+    /// the D-01 proof surface Plan 113-05's D-03 guard and this phase's ADR
+    /// both depend on.
+    #[must_use]
+    pub fn has_spiffe_source(&self) -> bool {
+        self.declares_spiffe
+    }
 }
 
 impl std::fmt::Debug for LoadedRoute {
@@ -72,6 +98,7 @@ impl std::fmt::Debug for LoadedRoute {
             .field("endpoint_policy", &self.endpoint_policy)
             .field("has_custom_tls_ca", &self.tls_connector.is_some())
             .field("tls_config_key", &self.tls_config_key)
+            .field("declares_spiffe", &self.declares_spiffe)
             .finish()
     }
 }
@@ -92,7 +119,15 @@ impl RouteStore {
     /// Each route's endpoint rules are compiled at startup so the hot path
     /// does a regex match, not a glob compile. Routes with a `tls_ca` field
     /// get a per-route TLS connector built from the custom CA certificate.
-    pub fn load(routes: &[RouteConfig]) -> Result<Self> {
+    ///
+    /// D-04: a route with `spiffe: Some(SpiffeAuthConfig::Jwt {..})` connects
+    /// to the SPIRE Workload API at load time. The connect awaits ONLY inside
+    /// this per-route branch, so a profile with zero `spiffe` routes never
+    /// touches the Workload API and this fn's `async` costs nothing for
+    /// non-SPIFFE deployments. An unreachable Workload API socket fails the
+    /// WHOLE call closed (`?`-propagated `Err`), never a per-route skip — see
+    /// this plan's threat register T-113-11.
+    pub async fn load(routes: &[RouteConfig]) -> Result<Self> {
         let mut loaded = HashMap::new();
 
         for route in routes {
@@ -131,6 +166,42 @@ impl RouteStore {
                 ))
             })?;
 
+            // D-04/D-03: the ONLY place a live Workload API connect happens for the
+            // plain-injection flow (the oauth2.client_assertion flow's connect lives
+            // in credential.rs::CredentialStore::load, Plan 113-03 — deliberately a
+            // separate call site for a separate config).
+            let (managed_auth, declares_spiffe) = match &route.spiffe {
+                Some(crate::config::SpiffeAuthConfig::Jwt {
+                    workload_api_socket,
+                    audience,
+                    inject_header,
+                    credential_format,
+                    svid_hint,
+                }) => {
+                    let source = crate::spiffe::SpiffeJwtSource::connect(
+                        workload_api_socket,
+                        audience.clone(),
+                        inject_header.clone(),
+                        credential_format.clone(),
+                        svid_hint.as_deref(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        ProxyError::Config(format!(
+                            "route '{}': SPIFFE JWT source failed to connect: {e}",
+                            normalized_prefix
+                        ))
+                    })?; // D-04/D-03: fails closed — the WHOLE proxy startup aborts, not a per-route skip.
+                    (
+                        Some(Arc::new(crate::auth::ManagedUpstreamAuth::SpiffeJwt(
+                            Arc::new(source),
+                        ))),
+                        true,
+                    )
+                }
+                None => (None, false),
+            };
+
             loaded.insert(
                 normalized_prefix,
                 LoadedRoute {
@@ -141,6 +212,8 @@ impl RouteStore {
                     tls_connector,
                     tls_client_config,
                     tls_config_key,
+                    managed_auth,
+                    declares_spiffe,
                 },
             );
         }
@@ -200,6 +273,24 @@ impl RouteStore {
             .values()
             .filter_map(|route| route.upstream_host_port.clone())
             .collect()
+    }
+
+    /// Check whether `host_port` (e.g. `"api.openai.com:443"`) matches a
+    /// loaded route that ALSO declares a SPIFFE auth source
+    /// (`has_spiffe_source()`). Mirrors `is_route_upstream`'s exact matching
+    /// logic, additionally requiring the SPIFFE condition — this is the
+    /// cheap, unit-testable proof surface D-01's ADR obligation and Plan
+    /// 113-05's D-03 request-time guard both need.
+    #[must_use]
+    pub fn spiffe_declared_for_upstream(&self, host_port: &str) -> bool {
+        let normalised = host_port.to_lowercase();
+        self.routes.values().any(|route| {
+            route.has_spiffe_source()
+                && route
+                    .upstream_host_port
+                    .as_ref()
+                    .is_some_and(|hp| host_port_matches(hp, &normalised))
+        })
     }
 }
 
@@ -393,8 +484,8 @@ mod tests {
         assert!(store.get("openai").is_none());
     }
 
-    #[test]
-    fn test_load_routes_without_credentials() {
+    #[tokio::test]
+    async fn test_load_routes_without_credentials() {
         // Routes without credential_key should still be loaded into RouteStore
         let routes = vec![RouteConfig {
             spiffe: None,
@@ -424,7 +515,7 @@ mod tests {
             endpoint_policy: None,
         }];
 
-        let store = RouteStore::load(&routes).unwrap();
+        let store = RouteStore::load(&routes).await.unwrap();
         assert_eq!(store.len(), 1);
 
         let route = store.get("openai").unwrap();
@@ -438,8 +529,8 @@ mod tests {
             .is_allowed("DELETE", "/v1/files/file-123"));
     }
 
-    #[test]
-    fn test_load_routes_normalises_prefix() {
+    #[tokio::test]
+    async fn test_load_routes_normalises_prefix() {
         let routes = vec![RouteConfig {
             spiffe: None,
             prefix: "/anthropic/".to_string(),
@@ -459,13 +550,13 @@ mod tests {
             endpoint_policy: None,
         }];
 
-        let store = RouteStore::load(&routes).unwrap();
+        let store = RouteStore::load(&routes).await.unwrap();
         assert!(store.get("anthropic").is_some());
         assert!(store.get("/anthropic/").is_none());
     }
 
-    #[test]
-    fn test_is_route_upstream() {
+    #[tokio::test]
+    async fn test_is_route_upstream() {
         let routes = vec![RouteConfig {
             spiffe: None,
             prefix: "openai".to_string(),
@@ -485,13 +576,13 @@ mod tests {
             endpoint_policy: None,
         }];
 
-        let store = RouteStore::load(&routes).unwrap();
+        let store = RouteStore::load(&routes).await.unwrap();
         assert!(store.is_route_upstream("api.openai.com:443"));
         assert!(!store.is_route_upstream("github.com:443"));
     }
 
-    #[test]
-    fn test_route_upstream_hosts() {
+    #[tokio::test]
+    async fn test_route_upstream_hosts() {
         let routes = vec![
             RouteConfig {
                 spiffe: None,
@@ -531,7 +622,7 @@ mod tests {
             },
         ];
 
-        let store = RouteStore::load(&routes).unwrap();
+        let store = RouteStore::load(&routes).await.unwrap();
         let hosts = store.route_upstream_hosts();
         assert!(hosts.contains("api.openai.com:443"));
         assert!(hosts.contains("api.anthropic.com:443"));
@@ -583,8 +674,8 @@ mod tests {
     /// `upstream_host_port` — a silently-dropped upstream would be invisible
     /// to `validate_no_proxy_route_conflicts` and the no_proxy bypass could
     /// slip past route protection.
-    #[test]
-    fn test_load_routes_rejects_malformed_or_unsupported_upstreams() {
+    #[tokio::test]
+    async fn test_load_routes_rejects_malformed_or_unsupported_upstreams() {
         for upstream in [
             "not a url",
             "ftp://api.openai.com",
@@ -611,7 +702,7 @@ mod tests {
             }];
 
             assert!(
-                RouteStore::load(&routes).is_err(),
+                RouteStore::load(&routes).await.is_err(),
                 "route upstream {upstream:?} must fail closed at load time"
             );
         }
@@ -619,9 +710,10 @@ mod tests {
 
     #[test]
     fn test_loaded_route_debug() {
-        // Fork: LoadedRoute has upstream, upstream_host_port, endpoint_rules, tls_connector.
-        // Upstream fields (requires_intercept, requires_managed_credential,
-        // managed_auth_mechanism, managed_injection_mode) are not present in the fork.
+        // Fork: LoadedRoute has upstream, upstream_host_port, endpoint_rules, tls_connector,
+        // and (Phase 113) managed_auth/declares_spiffe. Upstream fields
+        // (requires_intercept, requires_managed_credential, managed_auth_mechanism,
+        // managed_injection_mode) are not present in the fork.
         let route = LoadedRoute {
             upstream: "https://api.openai.com".to_string(),
             upstream_host_port: Some("api.openai.com:443".to_string()),
@@ -630,10 +722,14 @@ mod tests {
             tls_connector: None,
             tls_client_config: None,
             tls_config_key: None,
+            managed_auth: None,
+            declares_spiffe: false,
         };
         let debug_output = format!("{:?}", route);
         assert!(debug_output.contains("api.openai.com"));
         assert!(debug_output.contains("has_custom_tls_ca"));
+        assert!(debug_output.contains("declares_spiffe"));
+        assert!(!route.has_spiffe_source());
     }
 
     // Fork divergence: tests for requires_intercept, requires_managed_credential,
@@ -742,8 +838,8 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     /// same upstream host but different prefix keys occupy disjoint HashMap slots.
     /// Neither lookup returns the other. The upstream host-ordered selection abstraction
     /// is not imported (D-10 lock).
-    #[test]
-    fn allow_domain_endpoint_route_does_not_shadow_credential_route() {
+    #[tokio::test]
+    async fn allow_domain_endpoint_route_does_not_shadow_credential_route() {
         // (a) Credential route — key "openai", upstream api.openai.com
         let credential_route = RouteConfig {
             spiffe: None,
@@ -789,7 +885,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         };
 
         let routes = vec![credential_route, endpoint_route];
-        let store = RouteStore::load(&routes).unwrap();
+        let store = RouteStore::load(&routes).await.unwrap();
 
         // Both routes are present under their respective disjoint keys.
         assert_eq!(store.len(), 2);
@@ -930,5 +1026,110 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             "*.dev.example.net:443",
             "api.admin.other.net:443"
         ));
+    }
+
+    /// D-04/D-03/T-113-11: a `spiffe`-declared route pointed at an unreachable
+    /// Workload API socket must fail the WHOLE `RouteStore::load` call closed,
+    /// not merely skip that one route. Mirrors `spiffe.rs`'s own
+    /// `test_jwt_source_fails_closed_on_missing_socket` unreachable-socket
+    /// convention.
+    #[tokio::test]
+    async fn test_load_spiffe_route_unreachable_socket_fails_whole_load() {
+        use crate::config::SpiffeAuthConfig;
+
+        let routes = vec![RouteConfig {
+            spiffe: Some(SpiffeAuthConfig::Jwt {
+                workload_api_socket: "/tmp/nono-test-nonexistent-spire-agent.sock".to_string(),
+                audience: vec!["test-audience".to_string()],
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                svid_hint: None,
+            }),
+            prefix: "spiffe-svc".to_string(),
+            upstream: "https://api.example.com".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            endpoint_policy: None,
+        }];
+
+        let result = RouteStore::load(&routes).await;
+        assert!(
+            result.is_err(),
+            "a spiffe route with an unreachable Workload API socket must fail the whole load() call closed"
+        );
+    }
+
+    /// A route with no `spiffe` field loads exactly as before (zero behavior
+    /// change for non-SPIFFE profiles) and `has_spiffe_source()` returns `false`.
+    #[tokio::test]
+    async fn test_load_routes_without_spiffe_has_no_spiffe_source() {
+        let routes = vec![RouteConfig {
+            spiffe: None,
+            prefix: "openai".to_string(),
+            upstream: "https://api.openai.com".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: Some("Bearer {}".to_string()),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            endpoint_policy: None,
+        }];
+
+        let store = RouteStore::load(&routes).await.unwrap();
+        let route = store.get("openai").unwrap();
+        assert!(!route.has_spiffe_source());
+        assert!(route.managed_auth.is_none());
+    }
+
+    /// `RouteStore::spiffe_declared_for_upstream("host:port")` returns `true`
+    /// iff some loaded route's `upstream_host_port` matches AND that route's
+    /// `has_spiffe_source()` is `true`. Uses a plain (non-spiffe) route to
+    /// prove the negative case, since exercising the positive case requires
+    /// a live SPIRE Workload API connection (covered by the unreachable-socket
+    /// test above for the fail-closed half of this same code path).
+    #[tokio::test]
+    async fn test_spiffe_declared_for_upstream_false_for_non_spiffe_route() {
+        let routes = vec![RouteConfig {
+            spiffe: None,
+            prefix: "openai".to_string(),
+            upstream: "https://api.openai.com".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: Some("Bearer {}".to_string()),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            endpoint_policy: None,
+        }];
+
+        let store = RouteStore::load(&routes).await.unwrap();
+        // The route's own upstream is loaded but declares no spiffe source,
+        // so spiffe_declared_for_upstream must be false for it.
+        assert!(!store.spiffe_declared_for_upstream("api.openai.com:443"));
+        // An unrelated host:port is also false.
+        assert!(!store.spiffe_declared_for_upstream("github.com:443"));
     }
 }

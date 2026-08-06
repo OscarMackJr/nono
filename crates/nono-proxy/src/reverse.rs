@@ -1404,7 +1404,7 @@ mod tests {
             endpoint_policy: None,
         }];
 
-        let route_store = RouteStore::load(&routes).unwrap();
+        let route_store = RouteStore::load(&routes).await.unwrap();
         let credential_store = CredentialStore::empty();
         let session_token = Zeroizing::new("test-session-token".to_string());
         let filter = ProxyFilter::allow_all();
