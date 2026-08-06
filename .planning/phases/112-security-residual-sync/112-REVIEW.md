@@ -626,6 +626,20 @@ if !config.require_auth && !config.bind_addr.is_loopback() {
 }
 ```
 
+**Resolution (Group A fix pass):** FIXED as recommended.
+
+`validate_auth_bind_pairing(&config)` is now the **first** statement in
+`nono_proxy::server::start`, ahead of `validate_no_proxy_config` and before any
+listener is bound. The CLI guard in `run_proxy` is retained — it gives a better
+message at argument-parse time — but the invariant now also lives at the enforcement
+boundary, so a `ProxyConfig` arriving by deserialization or from an external embedder
+of the published `nono-proxy` crate cannot stand up an unauthenticated,
+network-reachable proxy with credential-injection routes attached.
+
+Regression tests: `start_rejects_no_auth_on_non_loopback_bind`, plus
+`start_allows_no_auth_on_loopback_and_auth_on_any_bind` to guard against
+over-reaching into the two shapes that must stay permitted.
+
 ---
 
 ### WR-05 (carried forward): non-loopback `--listen` exposes the session token and injected credentials over plaintext HTTP

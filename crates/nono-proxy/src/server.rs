@@ -358,6 +358,29 @@ fn merge_canonical_no_proxy_hosts(
     merged
 }
 
+/// Reject `require_auth = false` paired with a non-loopback `bind_addr`.
+///
+/// WR-04 / defense in depth. `nono proxy`'s CLI guard already refuses
+/// `--no-auth` with a non-loopback `--listen`, but that guard is one caller
+/// away from the enforcement boundary. `ProxyConfig` is `Deserialize`
+/// (`require_auth` via `default_require_auth`, `strict_connect_auth` via
+/// `#[serde(default)]`), so *any* config deserialization — and any external
+/// embedder of the published `nono-proxy` crate — could previously stand up
+/// an unauthenticated proxy reachable from other hosts, with
+/// credential-injection routes attached. The invariant belongs where it is
+/// enforced, not only where it is currently configured.
+#[must_use = "auth/bind pairing validation result must be handled"]
+fn validate_auth_bind_pairing(config: &ProxyConfig) -> Result<()> {
+    if !config.require_auth && !config.bind_addr.is_loopback() {
+        return Err(ProxyError::Config(format!(
+            "require_auth=false requires a loopback bind_addr (got {}); refusing to start \
+             an open proxy reachable from other hosts",
+            config.bind_addr
+        )));
+    }
+    Ok(())
+}
+
 /// Validate `config.no_proxy` before any `ProxyHandle` is constructed:
 /// every entry must be a well-formed host pattern (D-06
 /// `validate_no_proxy_entry`) and must not overlap `allowed_hosts` (a
@@ -494,6 +517,10 @@ struct ProxyState {
 /// Returns a `ProxyHandle` with the assigned port and session token.
 /// The server runs until the handle is dropped or `shutdown()` is called.
 pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
+    // WR-04: an unauthenticated proxy must never be reachable from another
+    // host. Checked first, before anything is bound.
+    validate_auth_bind_pairing(&config)?;
+
     // D-06: validate config.no_proxy (grammar + allowed_hosts overlap)
     // before doing any other startup work — an invalid or bypass-widening
     // no_proxy list must fail the whole proxy, not just be silently dropped
@@ -2417,6 +2444,55 @@ mod tests {
             "canonical no_proxy var must also carry the validated entry: {}",
             nono_no_proxy.1
         );
+    }
+
+    /// WR-04 defense in depth: `start()` itself must refuse an
+    /// unauthenticated proxy on a non-loopback bind address, not rely on
+    /// `nono proxy`'s CLI guard. `ProxyConfig` is `Deserialize` and the crate
+    /// is published, so the invariant has to live at the enforcement
+    /// boundary.
+    #[tokio::test]
+    async fn start_rejects_no_auth_on_non_loopback_bind() {
+        let config = ProxyConfig {
+            bind_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            bind_port: 0,
+            require_auth: false,
+            ..Default::default()
+        };
+        match start(config).await {
+            Err(ProxyError::Config(msg)) => {
+                assert!(
+                    msg.contains("loopback"),
+                    "error must name the loopback requirement: {msg}"
+                );
+            }
+            Err(other) => panic!("expected ProxyError::Config, got: {other:?}"),
+            Ok(handle) => {
+                handle.shutdown();
+                panic!("start() must refuse an open proxy reachable from other hosts");
+            }
+        }
+    }
+
+    /// The guard must not over-reach: `--no-auth` on loopback, and an
+    /// authenticated non-loopback bind, both remain permitted.
+    #[tokio::test]
+    async fn start_allows_no_auth_on_loopback_and_auth_on_any_bind() {
+        let loopback_no_auth = ProxyConfig {
+            bind_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            bind_port: 0,
+            require_auth: false,
+            ..Default::default()
+        };
+        assert!(validate_auth_bind_pairing(&loopback_no_auth).is_ok());
+
+        let remote_with_auth = ProxyConfig {
+            bind_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            bind_port: 0,
+            require_auth: true,
+            ..Default::default()
+        };
+        assert!(validate_auth_bind_pairing(&remote_with_auth).is_ok());
     }
 
     /// Drive one absolute-form `http://` forward-proxy request with no
