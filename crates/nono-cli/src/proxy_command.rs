@@ -244,9 +244,22 @@ async fn run_until_shutdown(
 
     let mut audit_drain = tokio::time::interval(Duration::from_secs(30));
     audit_drain.tick().await; // first tick fires immediately; nothing to drain yet.
+
+    // WR-09: bind the Ctrl-C future ONCE. Constructing
+    // `tokio::signal::ctrl_c()` inside the `select!` created a fresh listener
+    // on every loop iteration, so a SIGINT delivered after the previous
+    // future was dropped and before the new one registered was not observed —
+    // and because tokio has already replaced the default SIGINT disposition,
+    // the process did not die either, leaving the user to press Ctrl-C again.
+    // The window reopened on every 30 s tick. Pinning the future keeps a
+    // single registration alive for the whole loop. It is only polled until
+    // it resolves, at which point we break.
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+
     loop {
         tokio::select! {
-            signal = tokio::signal::ctrl_c() => {
+            signal = &mut ctrl_c => {
                 if let Err(e) = signal {
                     tracing::warn!("failed to install Ctrl-C handler: {e}");
                 }

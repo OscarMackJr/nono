@@ -779,6 +779,26 @@ either. The user must press Ctrl-C again. The window recurs on every 30 s tick.
 **Fix:** unchanged — bind the stream once outside the loop
 (`tokio::signal::unix::signal(SignalKind::interrupt())`, or `tokio::pin!` the future).
 
+**Resolution (Group A fix pass):** FIXED via `tokio::pin!`.
+
+```rust
+let ctrl_c = tokio::signal::ctrl_c();
+tokio::pin!(ctrl_c);
+loop {
+    tokio::select! {
+        signal = &mut ctrl_c => { … break; }
+        _ = audit_drain.tick() => { audit_sink.emit(handle.drain_audit_events()); }
+    }
+}
+```
+
+The future is constructed once, so the listener registers once and stays registered
+across every iteration — the window closes. The pinned form was chosen over
+`tokio::signal::unix::signal(SignalKind::interrupt())` because it is cross-platform: the
+`unix` variant would need a `#[cfg]` split against `tokio::signal::windows`, and this
+command is not Unix-only. The future is only polled until it resolves, at which point
+the loop breaks, so it is never polled after completion.
+
 ---
 
 ### WR-10 (carried forward): breaking public-API changes to the core `nono` crate with an inert deprecation shim
