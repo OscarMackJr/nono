@@ -1612,8 +1612,15 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
     };
 
     match (user_policy, project_policy) {
-        // Strictest enforcement wins; publishers and blocklists are unioned.
-        (Some(user), Some(project)) => trust::merge_policies(&[user, project]),
+        // Strictest enforcement wins; blocklists, includes and explicit files
+        // are unioned. Publishers are NOT: the trust anchor set is
+        // user-authoritative, so the project layer is narrowing-only (CR-05).
+        // Must match `trust_scan::load_scan_policy` exactly — a guard on only
+        // one of the two merge sites is a bypass, not a guard.
+        (Some(user), Some(project)) => trust::merge_policy_layers(&[
+            trust::PolicyLayer::trust_anchor(&user),
+            crate::trust_scan::project_policy_layer(&project),
+        ]),
         (Some(user), None) => Ok(user),
         (None, Some(project)) => {
             let user_path = user_trust_policy_path()
@@ -1636,7 +1643,9 @@ fn load_trust_policy(explicit_path: Option<&Path>) -> Result<trust::TrustPolicy>
                 )
                 .yellow()
             );
-            Ok(project)
+            // Uniform rule (CR-05): a project-level policy never contributes
+            // trust anchors, including when no user-level policy exists.
+            trust::merge_policy_layers(&[crate::trust_scan::project_policy_layer(&project)])
         }
         // No policy found — return a default empty policy.
         (None, None) => Ok(trust::TrustPolicy::default()),

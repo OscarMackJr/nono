@@ -25,7 +25,9 @@
 //!
 //! - Blocklist checked before any cryptographic verification (fast reject)
 //! - Enforcement modes: `Deny` (hard block), `Warn` (log + allow), `Audit` (silent allow + log)
-//! - Project-level policy cannot weaken user-level enforcement
+//! - Project-level policy cannot weaken user-level enforcement, and — when merged
+//!   via [`policy::merge_policy_layers`] as a [`policy::PolicyLayer::narrowing_only`]
+//!   layer, which is what `nono-cli` does — cannot contribute trust anchors either
 //! - No TOFU: files must have valid signatures from trusted publishers on first encounter
 
 pub mod base64;
@@ -54,7 +56,7 @@ pub use dsse::{
 };
 pub use policy::{
     evaluate_file, find_included_files, find_included_files_with_skip_dirs, load_policy_from_file,
-    load_policy_from_str, merge_policies,
+    load_policy_from_str, merge_policies, merge_policy_layers, PolicyLayer,
 };
 pub use signing::{
     export_public_key, generate_signing_key, key_id_hex, public_key_id_hex, sign_bytes, sign_files,

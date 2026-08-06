@@ -7,13 +7,37 @@
 //! # Policy Composition
 //!
 //! Multiple `trust-policy.json` files are merged with additive-only semantics:
-//! - Publishers: union (all publishers from all levels)
-//! - Blocklist digests: union (all blocked digests from all levels)
+//! - Include patterns: union (all patterns from all layers)
+//! - Explicit file paths: union
+//! - Blocklist digests: union (all blocked digests from all layers)
 //! - Blocked publishers: union
-//! - Include patterns: union (all patterns from all levels)
 //! - Enforcement: strictest wins (deny > warn > audit)
+//! - Publishers: union across the layers marked as trust anchors only
 //!
-//! Project-level policy cannot weaken user-level or embedded policy.
+//! Every field except `publishers` is monotonically *narrowing*. Contributing
+//! an include pattern or an explicit file path can only cause more files to be
+//! verified; contributing a blocklist entry can only cause more digests or
+//! signers to be rejected; and enforcement is strictest-wins. No layer can
+//! weaken another by contributing to any of them.
+//!
+//! `publishers` is the sole exception, because it is the **trust anchor set**.
+//! Adding an entry to it *widens* the policy: a new publisher is a new signer
+//! whose signatures will be accepted, and [`Publisher`]`::public_key` lets that
+//! entry carry its own verification key inline rather than resolving one from
+//! the system keystore. A layer must therefore be declared a trust anchor
+//! ([`PolicyLayer::trust_anchor`]) before its publishers are merged;
+//! [`PolicyLayer::narrowing_only`] layers can narrow the effective policy but
+//! never contribute signers to it.
+//!
+//! [`merge_policies`] treats **every** input as a trust anchor, so it is only
+//! safe for levels the caller already trusts (embedded + user). A caller that
+//! merges an untrusted level — a project-level `trust-policy.json` shipped by
+//! the repository being run against — must use [`merge_policy_layers`] and
+//! mark that level [`PolicyLayer::narrowing_only`].
+//!
+//! Which level is which is a security-policy judgement and is decided by the
+//! caller (`nono-cli`), not here: this module supplies only the mechanism.
+//! See `proj/ADR-86-library-boundary-convergence.md`.
 
 use crate::error::{NonoError, Result};
 
@@ -48,26 +72,104 @@ pub fn load_policy_from_file<P: AsRef<Path>>(path: P) -> Result<TrustPolicy> {
     load_policy_from_str(&content)
 }
 
-/// Merge multiple trust policies into a single effective policy.
+/// One policy level participating in a merge, together with whether it is
+/// allowed to contribute trust anchors.
 ///
-/// Policies are merged in order (first = lowest priority, last = highest).
-/// All merging is additive-only:
-/// - Publishers, blocklist entries, blocked publishers, and include
-///   patterns are unioned (deduplicated by identity)
-/// - Enforcement uses the strictest level across all policies
+/// This is the mechanism half of policy composition. The library takes no view
+/// on which level is which — the caller declares, per layer, whether that
+/// layer's `publishers` may enter the effective trust anchor set. See the
+/// module documentation for why `publishers` is the only widening field.
+#[derive(Debug, Clone, Copy)]
+pub struct PolicyLayer<'a> {
+    policy: &'a TrustPolicy,
+    contributes_publishers: bool,
+}
+
+impl<'a> PolicyLayer<'a> {
+    /// A layer that defines trust anchors: its `publishers` are merged into
+    /// the effective policy alongside everything else.
+    #[must_use]
+    pub fn trust_anchor(policy: &'a TrustPolicy) -> Self {
+        Self {
+            policy,
+            contributes_publishers: true,
+        }
+    }
+
+    /// A layer that may only *narrow* the effective policy.
+    ///
+    /// Its include patterns, explicit files, blocklist entries and enforcement
+    /// level are merged as usual; its `publishers` are ignored entirely, so it
+    /// cannot nominate a signer (nor smuggle one in via an inline
+    /// [`Publisher::public_key`]).
+    #[must_use]
+    pub fn narrowing_only(policy: &'a TrustPolicy) -> Self {
+        Self {
+            policy,
+            contributes_publishers: false,
+        }
+    }
+
+    /// The publishers this layer declared that a merge will discard.
+    ///
+    /// Empty for a [`trust_anchor`](Self::trust_anchor) layer. Callers use
+    /// this to tell the operator that a policy file's `publishers` block had
+    /// no effect, rather than dropping it silently.
+    #[must_use]
+    pub fn dropped_publishers(&self) -> &[Publisher] {
+        if self.contributes_publishers {
+            &[]
+        } else {
+            &self.policy.publishers
+        }
+    }
+}
+
+/// Merge multiple trust policies into a single effective policy, treating
+/// **every** policy as a trust anchor.
+///
+/// Policies are merged in order (first = highest priority for
+/// first-occurrence-wins deduplication).
+///
+/// # Security
+///
+/// Every input is treated as authoritative for `publishers`, so this function
+/// must only be given levels the caller already trusts (embedded + user). To
+/// merge an untrusted level — a project-level `trust-policy.json` supplied by
+/// the repository being run against — use [`merge_policy_layers`] and mark
+/// that level [`PolicyLayer::narrowing_only`].
 ///
 /// # Errors
 ///
 /// Returns `NonoError::TrustPolicy` if no policies are provided.
 pub fn merge_policies(policies: &[TrustPolicy]) -> Result<TrustPolicy> {
-    if policies.is_empty() {
+    let layers: Vec<PolicyLayer<'_>> = policies.iter().map(PolicyLayer::trust_anchor).collect();
+    merge_policy_layers(&layers)
+}
+
+/// Merge policy layers into a single effective policy, honouring each layer's
+/// trust-anchor declaration.
+///
+/// Layers are merged in order (first = highest priority for
+/// first-occurrence-wins deduplication). All merging is additive-only:
+/// - Blocklist entries, blocked publishers, include patterns and explicit
+///   files are unioned (deduplicated by identity)
+/// - Enforcement uses the strictest level across all layers
+/// - Publishers are unioned across [`PolicyLayer::trust_anchor`] layers only;
+///   a [`PolicyLayer::narrowing_only`] layer's publishers are discarded
+///
+/// # Errors
+///
+/// Returns `NonoError::TrustPolicy` if no layers are provided.
+pub fn merge_policy_layers(layers: &[PolicyLayer<'_>]) -> Result<TrustPolicy> {
+    if layers.is_empty() {
         return Err(NonoError::TrustPolicy(
             "no trust policies to merge".to_string(),
         ));
     }
 
-    for policy in policies {
-        policy.validate_version()?;
+    for layer in layers {
+        layer.policy.validate_version()?;
     }
 
     let mut merged_patterns: Vec<String> = Vec::new();
@@ -87,7 +189,9 @@ pub fn merge_policies(policies: &[TrustPolicy]) -> Result<TrustPolicy> {
 
     let mut strictest_enforcement = Enforcement::Audit;
 
-    for policy in policies {
+    for layer in layers {
+        let policy = layer.policy;
+
         // Merge include patterns (deduplicate by pattern string)
         for pattern in &policy.includes {
             if seen_patterns.insert(pattern.clone()) {
@@ -103,17 +207,32 @@ pub fn merge_policies(policies: &[TrustPolicy]) -> Result<TrustPolicy> {
         }
 
         // Merge publishers (deduplicate by name, first-occurrence wins).
-        // Callers pass policies in precedence order (user-level first),
-        // so user publishers take priority over project publishers.
-        for publisher in &policy.publishers {
-            if !seen_publisher_names.insert(publisher.name.clone()) {
-                tracing::debug!(
-                    "trust policy merge: publisher '{}' appears in multiple policies, using the user-level definition for verification",
-                    publisher.name
-                );
-            } else {
-                merged_publishers.push(publisher.clone());
+        // Callers pass layers in precedence order (user-level first), so user
+        // publishers take priority over any other layer's.
+        //
+        // Publishers are the trust anchor set and are the one field where
+        // merging *widens* the policy, so a layer that was not declared a
+        // trust anchor contributes none of them. Dedup-by-name protected an
+        // already-known publisher name but let a narrowing-only layer add a
+        // brand-new signer outright — including one carrying its own inline
+        // `public_key`, which `verify_keyed_crypto` prefers over the system
+        // keystore.
+        if layer.contributes_publishers {
+            for publisher in &policy.publishers {
+                if !seen_publisher_names.insert(publisher.name.clone()) {
+                    tracing::debug!(
+                        "trust policy merge: publisher '{}' appears in multiple policies, using the highest-precedence definition for verification",
+                        publisher.name
+                    );
+                } else {
+                    merged_publishers.push(publisher.clone());
+                }
             }
+        } else if !policy.publishers.is_empty() {
+            tracing::debug!(
+                "trust policy merge: discarding {} publisher(s) from a narrowing-only policy layer",
+                policy.publishers.len()
+            );
         }
 
         // Merge blocklist digests (deduplicate by sha256)
@@ -654,6 +773,132 @@ mod tests {
         let project = make_policy(Enforcement::Audit, vec![], vec![]);
         let merged = merge_policies(&[user, project]).unwrap();
         assert_eq!(merged.enforcement, Enforcement::Deny);
+    }
+
+    // -----------------------------------------------------------------------
+    // CR-05 regression: a narrowing-only layer cannot contribute trust anchors
+    // -----------------------------------------------------------------------
+
+    /// CR-05: a project-level policy could previously *add* a publisher to the
+    /// effective trust anchor set. Dedup-by-name protected an already-known
+    /// name but accepted a brand-new one outright, so a repository could
+    /// nominate itself as a trusted signer under the operator's policy.
+    #[test]
+    fn narrowing_only_layer_cannot_add_a_publisher() {
+        let user = make_policy(
+            Enforcement::Deny,
+            vec![keyed_publisher("operator", "operator-key")],
+            vec![],
+        );
+        let project = make_policy(
+            Enforcement::Deny,
+            vec![keyed_publisher("attacker", "attacker-key")],
+            vec![],
+        );
+
+        let merged = merge_policy_layers(&[
+            PolicyLayer::trust_anchor(&user),
+            PolicyLayer::narrowing_only(&project),
+        ])
+        .unwrap();
+
+        assert_eq!(merged.publishers.len(), 1);
+        assert_eq!(merged.publishers[0].name, "operator");
+        assert!(
+            !merged.publishers.iter().any(|p| p.name == "attacker"),
+            "a narrowing-only layer must not contribute a trust anchor: {:?}",
+            merged.publishers
+        );
+    }
+
+    /// CR-05: the inline `public_key` escalation specifically. A project
+    /// publisher carrying its own base64 SPKI is the strongest form of the
+    /// bug, because `trust_scan::verify_keyed_crypto` prefers an inline key
+    /// over the system keystore. It must never reach the merged policy.
+    #[test]
+    fn narrowing_only_layer_cannot_smuggle_an_inline_public_key() {
+        let user = make_policy(Enforcement::Deny, vec![], vec![]);
+        let mut attacker = keyed_publisher("attacker", "evil");
+        attacker.public_key = Some("QUFBQUFBQUFBQUFB".to_string());
+        let project = make_policy(Enforcement::Deny, vec![attacker], vec![]);
+
+        let merged = merge_policy_layers(&[
+            PolicyLayer::trust_anchor(&user),
+            PolicyLayer::narrowing_only(&project),
+        ])
+        .unwrap();
+
+        assert!(
+            merged.publishers.is_empty(),
+            "no publisher may survive from a narrowing-only layer: {:?}",
+            merged.publishers
+        );
+    }
+
+    /// CR-05: a narrowing-only layer must still be able to *narrow* — that is
+    /// the whole point of merging it. Guards against over-correcting into
+    /// "ignore project policies entirely".
+    #[test]
+    fn narrowing_only_layer_still_narrows() {
+        let user = make_policy(Enforcement::Audit, vec![], vec![]);
+        let mut project = make_policy(Enforcement::Deny, vec![], vec![]);
+        project.includes = vec!["PROJECT.md".to_string()];
+        project.files = vec!["docs/AGENT.md".to_string()];
+        project.blocklist.digests.push(BlocklistEntry {
+            sha256: "cafe".to_string(),
+            description: "known bad".to_string(),
+            added: "2026-01-01".to_string(),
+        });
+
+        let merged = merge_policy_layers(&[
+            PolicyLayer::trust_anchor(&user),
+            PolicyLayer::narrowing_only(&project),
+        ])
+        .unwrap();
+
+        assert_eq!(merged.enforcement, Enforcement::Deny);
+        assert!(merged.includes.contains(&"PROJECT.md".to_string()));
+        assert!(merged.files.contains(&"docs/AGENT.md".to_string()));
+        assert_eq!(merged.blocklist.digests.len(), 1);
+    }
+
+    /// The dropped set is reported so callers can warn instead of silently
+    /// discarding an operator-visible block of the policy file.
+    #[test]
+    fn dropped_publishers_reports_the_discarded_set() {
+        let policy = make_policy(
+            Enforcement::Deny,
+            vec![keyed_publisher("attacker", "evil")],
+            vec![],
+        );
+
+        assert_eq!(
+            PolicyLayer::narrowing_only(&policy)
+                .dropped_publishers()
+                .len(),
+            1
+        );
+        assert!(PolicyLayer::trust_anchor(&policy)
+            .dropped_publishers()
+            .is_empty());
+    }
+
+    /// `merge_policies` keeps its documented all-trust-anchor behaviour, so
+    /// embedded+user composition is unchanged.
+    #[test]
+    fn merge_policies_still_treats_every_input_as_a_trust_anchor() {
+        let embedded = make_policy(
+            Enforcement::Audit,
+            vec![keyed_publisher("embedded", "k1")],
+            vec![],
+        );
+        let user = make_policy(
+            Enforcement::Audit,
+            vec![keyed_publisher("user", "k2")],
+            vec![],
+        );
+        let merged = merge_policies(&[embedded, user]).unwrap();
+        assert_eq!(merged.publishers.len(), 2);
     }
 
     #[test]

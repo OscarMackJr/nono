@@ -230,6 +230,43 @@ fn load_predicate_less(
     }
 }
 
+/// Build the policy layer for a project-level (repository-supplied)
+/// `trust-policy.json`, warning about anything the layer discards.
+///
+/// **The trust anchor set is user-authoritative.** A project-level policy is
+/// supplied by the repository nono is being run against, so it is untrusted
+/// input. It may *narrow* the effective policy — more include patterns, more
+/// explicit files, more blocklist entries, stricter enforcement — but it may
+/// never contribute a `publishers` entry, because that would let a repository
+/// nominate itself as a trusted signer for its own instruction files
+/// (including via an inline `public_key`, which `verify_keyed_crypto` prefers
+/// over the system keystore).
+///
+/// This is the security-policy half of the decision; the mechanism that
+/// enforces it is `nono::trust::PolicyLayer` (ADR-86 — the core crate stays
+/// policy-free and takes no view on which level is which).
+pub(crate) fn project_policy_layer(project: &TrustPolicy) -> trust::PolicyLayer<'_> {
+    let layer = trust::PolicyLayer::narrowing_only(project);
+    let dropped = layer.dropped_publishers();
+    if !dropped.is_empty() {
+        let names: Vec<&str> = dropped.iter().map(|p| p.name.as_str()).collect();
+        eprintln!(
+            "  {}",
+            format!(
+                "Warning: ignoring {} publisher(s) declared by the project-level \
+                 trust-policy.json ({}). The trust anchor set is defined by your \
+                 user-level policy only — a repository cannot nominate its own \
+                 signer. Add the publisher to your user-level policy if you \
+                 intend to trust it.",
+                dropped.len(),
+                sanitize_untrusted(&names.join(", "))
+            )
+            .yellow()
+        );
+    }
+    layer
+}
+
 /// Load the trust policy for scanning, auto-discovering from the given root and user config.
 ///
 /// Checks `root` for `trust-policy.json`, then user config dir, merging if both
@@ -268,7 +305,10 @@ pub fn load_scan_policy(
         .flatten();
 
     let effective = match (user, project) {
-        (Some(u), Some(p)) => trust::merge_policies(&[u, p]),
+        (Some(u), Some(p)) => trust::merge_policy_layers(&[
+            trust::PolicyLayer::trust_anchor(&u),
+            project_policy_layer(&p),
+        ]),
         (Some(u), None) => Ok(u),
         (None, Some(p)) => {
             eprintln!(
@@ -290,7 +330,13 @@ pub fn load_scan_policy(
                 format!("Create a signed policy at {policy_path} to enforce verification.")
                     .yellow()
             );
-            Ok(p)
+            // The rule is uniform: a project-level policy never contributes
+            // trust anchors. Making it conditional on "…unless there is no
+            // user-level policy" would itself be exploitable — an attacker
+            // on a machine that has no user policy yet would get to
+            // self-nominate, which is exactly the state a fresh install and
+            // the message printed just above describe.
+            trust::merge_policy_layers(&[project_policy_layer(&p)])
         }
         (None, None) => Ok(TrustPolicy::default()),
     }?;
@@ -1709,6 +1755,130 @@ mod tests {
         assert!(
             err.to_string().contains("must be a string"),
             "error must explain the type mismatch: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // CR-05 regression: a project policy cannot nominate a trusted signer
+    // -----------------------------------------------------------------------
+
+    /// Write a policy carrying a keyed publisher with an inline `public_key`
+    /// — the strongest form of the CR-05 escalation, since
+    /// `verify_keyed_crypto` prefers an inline key over the system keystore.
+    fn write_policy_with_publisher(
+        path: &std::path::Path,
+        publisher_name: &str,
+        enforcement: Enforcement,
+    ) {
+        let policy = TrustPolicy {
+            includes: vec!["CLAUDE.md".to_string()],
+            publishers: vec![nono::trust::Publisher {
+                name: publisher_name.to_string(),
+                issuer: None,
+                repository: None,
+                workflow: None,
+                ref_pattern: None,
+                key_id: Some(format!("{publisher_name}-key")),
+                public_key: Some("QUFBQUFBQUFBQUFB".to_string()),
+            }],
+            enforcement,
+            ..TrustPolicy::default()
+        };
+        std::fs::write(path, serde_json::to_string(&policy).unwrap()).unwrap();
+    }
+
+    /// CR-05 end-to-end on the `nono run` scan path: a repository that ships
+    /// a `trust-policy.json` naming its own publisher must NOT get that
+    /// publisher into the effective trust anchor set. Before the fix,
+    /// `merge_policies` unioned publishers and dedup-by-name only protected
+    /// names the operator had already declared, so a brand-new name was
+    /// accepted outright.
+    #[test]
+    fn load_scan_policy_drops_project_level_publishers() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("cfg");
+        std::fs::create_dir_all(cfg_dir.join("nono")).unwrap();
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", cfg_dir.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", cfg_dir.to_str().unwrap()),
+        ]);
+
+        let user_policy_path =
+            crate::trust_cmd::user_trust_policy_path().expect("user policy path resolves");
+        std::fs::create_dir_all(
+            user_policy_path
+                .parent()
+                .expect("user policy path has a parent"),
+        )
+        .unwrap();
+        write_policy_with_publisher(&user_policy_path, "operator", Enforcement::Deny);
+
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        write_policy_with_publisher(
+            &project_dir.join("trust-policy.json"),
+            "attacker",
+            Enforcement::Deny,
+        );
+
+        let effective = load_scan_policy(&project_dir, true, &[]).expect("policies must load");
+
+        let names: Vec<&str> = effective
+            .publishers
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert!(
+            names.contains(&"operator"),
+            "the operator's own publisher must survive: {names:?}"
+        );
+        assert!(
+            !names.contains(&"attacker"),
+            "a project-level policy must not add a trusted signer: {names:?}"
+        );
+    }
+
+    /// CR-05: the rule is uniform. With no user-level policy at all, a
+    /// project policy still contributes no trust anchors — a conditional rule
+    /// ("project publishers count only when there is no user policy") is
+    /// itself exploitable on a fresh machine.
+    #[test]
+    fn load_scan_policy_drops_project_publishers_without_user_policy() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("cfg");
+        std::fs::create_dir_all(cfg_dir.join("nono")).unwrap();
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", cfg_dir.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", cfg_dir.to_str().unwrap()),
+        ]);
+
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        write_policy_with_publisher(
+            &project_dir.join("trust-policy.json"),
+            "attacker",
+            Enforcement::Deny,
+        );
+
+        let effective = load_scan_policy(&project_dir, true, &[]).expect("policies must load");
+
+        assert!(
+            effective.publishers.is_empty(),
+            "an unanchored project policy must contribute no signers: {:?}",
+            effective.publishers
+        );
+        assert!(
+            effective.includes.contains(&"CLAUDE.md".to_string()),
+            "it must still be able to narrow: {:?}",
+            effective.includes
         );
     }
 

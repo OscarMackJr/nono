@@ -216,6 +216,52 @@ pub fn merge_policies_scoped(user: &TrustPolicy, project: &TrustPolicy) -> Resul
 and warn loudly when a project policy declares publishers that were dropped. Separately,
 ignore `Publisher.public_key` when the publisher came from a project-level policy.
 
+**Resolution (Group A fix pass):** FIXED — level-aware merge, not removal of the union.
+
+Core crate gains the *mechanism* only (ADR-86 — `crates/nono/` stays policy-free and
+takes no view on which level is which):
+
+- `PolicyLayer<'a>` with `trust_anchor(&p)` / `narrowing_only(&p)` constructors and a
+  `dropped_publishers()` accessor so callers can warn instead of discarding silently.
+- `merge_policy_layers(&[PolicyLayer])` — publishers are unioned across
+  `trust_anchor` layers only; everything else merges exactly as before.
+- `merge_policies(&[TrustPolicy])` is kept as a thin wrapper that maps every input to
+  `trust_anchor`, so the existing public API is **unchanged** for `bindings/c`,
+  `nono-py` and `nono-ts`. Its doc now states the precondition explicitly.
+
+`nono-cli` owns the *decision*. `trust_scan::project_policy_layer()` is the single
+place that says "a project-level `trust-policy.json` is narrowing-only", and it emits
+the operator warning naming the dropped publishers (sanitized). Both merge sites —
+`trust_scan::load_scan_policy` and `trust_cmd::load_trust_policy` — go through it; a
+guard on only one of the two would be a bypass.
+
+**The rule is uniform, including the `(None, Some(project))` arm.** A project policy
+contributes no trust anchors even when no user-level policy exists. Making it
+conditional ("project publishers count only when unanchored") would itself be
+exploitable — an attacker targeting a fresh machine that has no user policy yet would
+get to self-nominate, which is exactly the state that arm already prints a warning
+about. **Behaviour change:** a repository that previously self-verified its own
+instruction files via a project-only policy under `enforcement: deny` will now see
+`UntrustedPublisher` and be blocked, with a warning pointing at the user-level policy.
+That is deliberate and fail-secure, per CLAUDE.md's "when in doubt, choose the more
+restrictive option."
+
+`Publisher.public_key` smuggling is closed as a consequence: a project publisher never
+reaches the merged policy, so `verify_keyed_crypto` can never resolve an inline
+attacker-supplied key from one.
+
+The module doc at `crates/nono/src/trust/policy.rs:16` was rewritten to be TRUE of the
+code: it now states which fields are monotonically narrowing, that `publishers` is the
+sole widening field because it is the trust anchor set, and that `merge_policies`
+treats every input as an anchor and is therefore only safe for already-trusted levels.
+
+Regression tests — core: `narrowing_only_layer_cannot_add_a_publisher`,
+`narrowing_only_layer_cannot_smuggle_an_inline_public_key`,
+`narrowing_only_layer_still_narrows`, `dropped_publishers_reports_the_discarded_set`,
+`merge_policies_still_treats_every_input_as_a_trust_anchor`. CLI end-to-end:
+`load_scan_policy_drops_project_level_publishers`,
+`load_scan_policy_drops_project_publishers_without_user_policy`.
+
 ---
 
 ### CR-06: Legacy trust-policy acceptance swallows the parse error — a malformed policy silently disables enforcement
