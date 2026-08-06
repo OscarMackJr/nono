@@ -35,7 +35,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 110: Profile/Policy Absorb + platform_overrides** — 8/8 plans, all 4 requirements complete; 110-06's live-kernel checkpoint (PROF-03e) resolved 2026-08-04
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [x] **Phase 112: Security + Residual Sync** — 8/8 plans (SEC-02 explicitly carved out to Phase 114)
-- [ ] **Phase 113: SPIFFE/SPIRE Workload Identity** — 0/8 plans
+- [x] **Phase 113: SPIFFE/SPIRE Workload Identity** — 8/8 plans
 - [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 0/? plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment)
 
 </details>
@@ -314,14 +314,14 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. The ADR-86 boundary is confirmed non-regressed: the core-library additions (`crates/nono/src/undo/types.rs`, `crates/nono/src/audit.rs`) are shown to be audit/telemetry data types carrying no policy or enforcement logic — the reading recorded in `109-CONTEXT.md` — or the absorb is adapted to make that true.
   4. Cross-target clippy is GREEN (`c831dade` touches `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, a cfg-gated Unix surface — the gate is mandatory, no PARTIAL→CI), and `maturin build` + `napi build` are green after the `nono-proxy` struct changes.
 **Plans**: 8 plans
-- [ ] 113-01-PLAN.md — Core SPIFFE audit vocabulary (D-08/SC3) + new spiffe.rs/auth.rs modules
-- [ ] 113-02-PLAN.md — config.rs schema types + workspace literal fixup + SC2 profile/schema surface + socket isolation
-- [ ] 113-03-PLAN.md — oauth2.rs + credential.rs: SPIFFE-scoped OAuth2 assertion machinery (OD-1)
-- [ ] 113-04-PLAN.md — route.rs: managed_auth/has_spiffe_source, async RouteStore::load (D-04), OD-2 comment fix
-- [ ] 113-05-PLAN.md — server.rs: async load call sites, D-03 fail-closed guard, stale comment rewrite
-- [ ] 113-06-PLAN.md — reverse.rs: handle_spiffe_route + handle_spiffe_assertion_credential
-- [ ] 113-07-PLAN.md — Test infrastructure: spiffe_integration.rs/spiffe_run.rs, D-07 skip reporting, spire.yml CI lane
-- [ ] 113-08-PLAN.md — ADR-113 + D-02 ledger note + D-05 dependency review + binding rebuilds + cross-target gates
+- [x] 113-01-PLAN.md — Core SPIFFE audit vocabulary (D-08/SC3) + new spiffe.rs/auth.rs modules
+- [x] 113-02-PLAN.md — config.rs schema types + workspace literal fixup + SC2 profile/schema surface + socket isolation
+- [x] 113-03-PLAN.md — oauth2.rs + credential.rs: SPIFFE-scoped OAuth2 assertion machinery (OD-1)
+- [x] 113-04-PLAN.md — route.rs: managed_auth/has_spiffe_source, async RouteStore::load (D-04), OD-2 comment fix
+- [x] 113-05-PLAN.md — server.rs: async load call sites, D-03 fail-closed guard, stale comment rewrite
+- [x] 113-06-PLAN.md — reverse.rs: handle_spiffe_route + handle_spiffe_assertion_credential
+- [x] 113-07-PLAN.md — Test infrastructure: spiffe_integration.rs/spiffe_run.rs, D-07 skip reporting, spire.yml CI lane
+- [x] 113-08-PLAN.md — ADR-113 + D-02 ledger note + D-05 dependency review + binding rebuilds + cross-target gates
 
 ### Phase 114: OAuth Capture Absorb (SEC-02)
 **Goal**: Upstream's OAuth-capture surface (`9b692e07` / `3c59c62e` / `d033c631`) is absorbed or formally declined under its own disposition review, with the guarantee that real OAuth tokens never reach the sandboxed client preserved as a hard precondition — no reduced-scope half-feature ships.
@@ -366,3 +366,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 110. Profile/Policy Absorb + platform_overrides | v3.6 | 8/8 | Complete | 2026-08-04 |
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 6/6 | Complete   | 2026-08-05 |
 | 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
+| 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |

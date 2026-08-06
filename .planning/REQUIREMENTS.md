@@ -111,7 +111,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 ### Proxy / Network Absorb (NET)
 - [ ] **NET-01**: `deny_domain` deny-list network filtering (#1374) is absorbed into the proxy filter + profile schema, composing correctly with the fork's existing `allow_domain` allowlist model without weakening default-deny.
-- [ ] **NET-02**: SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed. **→ MOVED to Phase 113 (2026-07-29)**: `c831dade` measured 4354 ins / 545 del / 33 files (57% of the original Phase 109), crosses the ADR-86 boundary, rewrites fork-divergent `tls_intercept`/`reverse.rs`, and expands the dependency surface by ~633 lockfile lines — it gets its own ADR-gated phase.
+- [x] **NET-02**: SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed. **Complete (Phase 113, 2026-08-06)**: `c831dade` absorbed as ADAPT-DOWN per `proj/ADR-113-spiffe-disposition.md` — direct JWT-SVID bearer injection (`handle_spiffe_route`) and RFC 7523 jwt-bearer OAuth2 assertion (`handle_spiffe_assertion_credential`) both landed in `reverse.rs`, configurable via profile (`RouteConfig.spiffe`/`CustomCredentialDef.spiffe`), fail-closed on every non-SPIFFE-implementing proxy path (D-03) and on an unreachable SPIRE Workload API socket (D-04). ADR-86 boundary confirmed non-regressed (D-08/SC3, one named concept-leak caveat). Both cross-target clippy gates GREEN, both sibling bindings (`../nono-py`, `../nono-ts`) rebuild green. 6 of 8 SPIFFE tests SKIP locally (no local SPIRE agent, compensated by the new `spire.yml` CI lane) and `handle_spiffe_assertion_credential`'s successful-forward path remains untested anywhere — both named residuals in the ADR, not silently closed.
 - [ ] **NET-03**: The SigV4 encoded-URI generation fix (#1430) and the sibling-route cross-deny fix (#1437) are confirmed non-applicable — both target upstream subsystems (`aws/sign.rs` full SigV4 signing, `tls_intercept/handle.rs` multi-route TLS-intercept dispatch) absent from the fork's architecture, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`; `no_proxy` bypass and `HTTP_PROXY` forward-proxy are verified non-regressed; `maturin` + `napi` binding builds are green.
 
 ### Profile / Policy Absorb (PROF)
@@ -161,7 +161,7 @@ Phase numbering continues (v3.5 owns 101–107) → v3.6 owns **Phases 108–114
 |-------------|-------|--------|
 | UPST12-01 | Phase 108 | Complete |
 | NET-01 | Phase 109 | Pending |
-| NET-02 | Phase 113 | Pending |
+| NET-02 | Phase 113 | Complete |
 | NET-03 | Phase 109 | Pending |
 | PROF-01 | Phase 110 | Complete |
 | PROF-02 | Phase 110 | Complete |
