@@ -274,7 +274,8 @@ pub struct SpiffeDelegationContext {
 }
 
 /// SPIFFE audit context attached to a network audit event when a request
-/// used SPIFFE/SPIRE workload-identity auth.
+/// used SPIFFE/SPIRE workload-identity auth. Threaded into
+/// `NetworkAuditEvent::spiffe_context`.
 ///
 /// Pure data — records what happened (workload identity, trust domain,
 /// delegation chain), applies no enforcement or policy evaluation. See
