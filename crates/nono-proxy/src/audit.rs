@@ -7,6 +7,7 @@
 use nono::undo::{
     NetworkAuditAuthMechanism, NetworkAuditAuthOutcome, NetworkAuditDecision,
     NetworkAuditDenialCategory, NetworkAuditEvent, NetworkAuditInjectionMode, NetworkAuditMode,
+    SpiffeAuditContext,
 };
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -44,6 +45,7 @@ pub struct EventContext<'a> {
     pub managed_credential_active: Option<bool>,
     pub injection_mode: Option<NetworkAuditInjectionMode>,
     pub denial_category: Option<NetworkAuditDenialCategory>,
+    pub spiffe_context: Option<SpiffeAuditContext>,
 }
 
 impl std::fmt::Display for ProxyMode {
@@ -162,6 +164,7 @@ pub fn log_allowed(
             managed_credential_active: ctx.managed_credential_active,
             injection_mode: ctx.injection_mode.clone(),
             denial_category: None,
+            spiffe_context: ctx.spiffe_context.clone(),
             target: host.to_string(),
             port: Some(port),
             method: Some(method.to_string()),
@@ -220,6 +223,7 @@ pub fn log_denied(
             managed_credential_active: ctx.managed_credential_active,
             injection_mode: ctx.injection_mode.clone(),
             denial_category: ctx.denial_category.clone(),
+            spiffe_context: ctx.spiffe_context.clone(),
             target: host.to_string(),
             port: Some(port),
             method: None,
@@ -282,6 +286,7 @@ pub fn log_l7_request(
             managed_credential_active: ctx.managed_credential_active,
             injection_mode: ctx.injection_mode.clone(),
             denial_category: None,
+            spiffe_context: ctx.spiffe_context.clone(),
             target: info.host.to_string(),
             port: Some(info.port),
             method: Some(info.method.to_string()),
@@ -322,6 +327,7 @@ pub fn log_reverse_proxy(
             managed_credential_active: None,
             injection_mode: None,
             denial_category: None,
+            spiffe_context: None,
             target: service.to_string(),
             port: None,
             method: Some(method.to_string()),
