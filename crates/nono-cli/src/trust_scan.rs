@@ -73,6 +73,47 @@ fn object_looks_like_nono_policy(raw: &serde_json::Value) -> bool {
         .is_some_and(|obj| NONO_POLICY_KEYS.iter().any(|key| obj.contains_key(*key)))
 }
 
+/// Return whether raw file text is nono-policy-shaped.
+///
+/// Used only when the file does not parse as JSON at all (a BOM, an embedded
+/// JSONC comment, a trailing comma), where there is no object to inspect but a
+/// real nono policy would still carry its key names verbatim.
+fn text_looks_like_nono_policy(content: &str) -> bool {
+    NONO_POLICY_KEYS
+        .iter()
+        .any(|key| content.contains(&format!("\"{key}\"")))
+}
+
+/// Decide what to do about a `trust-policy.json` that could not be loaded.
+///
+/// `nono_shaped` must be *positive* evidence that the file is a nono policy —
+/// never merely "it failed to parse". See [`load_nono_policy`].
+fn reject_or_skip(
+    path: &Path,
+    level: PolicyLevel,
+    nono_shaped: bool,
+    reason: &str,
+) -> Result<Option<TrustPolicy>> {
+    if level == PolicyLevel::Trusted || nono_shaped {
+        return Err(nono::NonoError::TrustPolicy(format!(
+            "{}: this is a nono trust policy but it failed to load: {reason}. \
+             Refusing to run with trust enforcement silently disabled — fix the \
+             file, or recreate it with 'nono trust init --force'.",
+            path.display()
+        )));
+    }
+
+    eprintln!(
+        "  {}",
+        format!(
+            "Warning: {} is not a nono trust policy ({reason}) — skipping.",
+            path.display(),
+        )
+        .yellow()
+    );
+    Ok(None)
+}
+
 /// Load a trust policy from `path`, returning `None` only when the file is
 /// genuinely not a nono trust policy (foreign JSON that shares the filename).
 ///
@@ -120,48 +161,85 @@ fn object_looks_like_nono_policy(raw: &serde_json::Value) -> bool {
 ///   with the underlying error included in the warning either way.
 ///
 /// A `predicate` that is *present* has no legacy excuse, so an unrecognised
-/// value — or a non-string value — is a hard error rather than a silent skip,
-/// matching `run_sign_policy` and the explicit `--policy` path.
+/// value — or a non-string value — is a load failure rather than a legacy
+/// acceptance. It is still routed through the same
+/// nono-shaped-or-skip decision, because "is trust enforcement active?" and
+/// "is this file mine?" are different questions:
+///
+/// - Fail-closed is right for the first. A nono policy that cannot be loaded
+///   must abort, never silently stop applying.
+/// - Fail-closed is *wrong* for the second, which has a correct third answer
+///   (skip). in-toto / SLSA attestation statements carry a `predicate` field
+///   whose value is an object — that is the canonical shape the whole
+///   `predicateType`/`predicate` convention comes from. Treating one as a
+///   broken nono policy let any repository abort every `nono run` in its
+///   directory just by committing a `trust-policy.json`.
 ///
 /// # Errors
 ///
 /// Returns `NonoError::Io` if the file cannot be read, or
-/// `NonoError::TrustPolicy` if the JSON is malformed, the `predicate` field is
-/// present but unrecognised or not a string, or a nono trust policy fails to
-/// deserialize.
+/// `NonoError::TrustPolicy` when a nono trust policy fails to load: malformed
+/// JSON, a `predicate` that is present but unrecognised or not a string, or a
+/// schema defect — at [`PolicyLevel::Trusted`] unconditionally, and at
+/// [`PolicyLevel::Project`] when the document is nono-policy-shaped.
 pub(crate) fn load_nono_policy(path: &Path, level: PolicyLevel) -> Result<Option<TrustPolicy>> {
     let content = std::fs::read_to_string(path).map_err(nono::NonoError::Io)?;
 
-    let raw: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-        nono::NonoError::TrustPolicy(format!("failed to parse {}: {e}", path.display()))
-    })?;
+    let raw: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(raw) => raw,
+        Err(e) => {
+            // Not JSON at all. A nono policy always is, so absent nono key
+            // names in the raw text this is a foreign file (JSONC/JSON5
+            // config, or anything else that merely shares the filename) —
+            // not grounds to abort the run.
+            return reject_or_skip(
+                path,
+                level,
+                text_looks_like_nono_policy(&content),
+                &format!(
+                    "it is not valid JSON: {}",
+                    sanitize_untrusted(&e.to_string())
+                ),
+            );
+        }
+    };
+
+    let nono_shaped = object_looks_like_nono_policy(&raw);
 
     match raw.get("predicate") {
         // Current-format nono policy.
         Some(serde_json::Value::String(p)) if p == nono::trust::TRUST_POLICY_PREDICATE => {}
 
-        // Present but wrong. Never a legacy policy, so fail closed rather
-        // than silently continuing without trust enforcement.
+        // Present but wrong. Never a legacy policy, so a nono-shaped file
+        // fails closed rather than silently continuing without enforcement.
         Some(serde_json::Value::String(other)) => {
-            return Err(nono::NonoError::TrustPolicy(format!(
-                "{}: unrecognised trust policy predicate '{}' (expected '{}'). \
-                 Refusing to run with trust enforcement silently disabled — \
-                 remove the file or recreate it with 'nono trust init --force'.",
-                path.display(),
-                sanitize_untrusted(other),
-                nono::trust::TRUST_POLICY_PREDICATE
-            )));
+            return reject_or_skip(
+                path,
+                level,
+                nono_shaped,
+                &format!(
+                    "unrecognised trust policy predicate '{}' (expected '{}')",
+                    sanitize_untrusted(other),
+                    nono::trust::TRUST_POLICY_PREDICATE
+                ),
+            );
         }
 
         // Present but not a string. `as_str()` used to collapse this into the
         // absent case, which made `{"predicate": 1}` indistinguishable from a
-        // file with no predicate at all.
+        // file with no predicate at all — but an object-valued `predicate` is
+        // the in-toto / SLSA attestation shape, so a file that carries no
+        // nono-policy key alongside it is foreign, not broken.
         Some(_) => {
-            return Err(nono::NonoError::TrustPolicy(format!(
-                "{}: 'predicate' must be a string (expected '{}')",
-                path.display(),
-                nono::trust::TRUST_POLICY_PREDICATE
-            )));
+            return reject_or_skip(
+                path,
+                level,
+                nono_shaped,
+                &format!(
+                    "'predicate' must be a string (expected '{}')",
+                    nono::trust::TRUST_POLICY_PREDICATE
+                ),
+            );
         }
 
         // Absent: decide by content, not by the missing field.
@@ -204,28 +282,12 @@ fn load_predicate_less(
             // control (serde echoes unknown enum variants verbatim), so it
             // is sanitized before it reaches a terminal.
             let detail = sanitize_untrusted(&e.to_string());
-
-            if level == PolicyLevel::Trusted || object_looks_like_nono_policy(raw) {
-                return Err(nono::NonoError::TrustPolicy(format!(
-                    "{}: this is a nono trust policy but it failed to load: {detail}. \
-                     Refusing to run with trust enforcement silently disabled — fix the \
-                     file, or recreate it with 'nono trust init --force'.",
-                    path.display()
-                )));
-            }
-
-            // Not a nono policy in any format — a foreign file that happens
-            // to share the filename. Skip it, as intended, but say why.
-            eprintln!(
-                "  {}",
-                format!(
-                    "Warning: {} is not a nono trust policy (no predicate field, and it \
-                     does not parse as one: {detail}) — skipping.",
-                    path.display(),
-                )
-                .yellow()
-            );
-            Ok(None)
+            reject_or_skip(
+                path,
+                level,
+                object_looks_like_nono_policy(raw),
+                &format!("no predicate field, and it does not deserialize as one: {detail}"),
+            )
         }
     }
 }
@@ -1986,6 +2048,112 @@ mod tests {
             err.to_string().contains("failed to load"),
             "the abort must name the load failure: {err}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // WR-14 regression: repo content must not be able to abort `nono run`
+    // -----------------------------------------------------------------------
+
+    /// An in-toto / SLSA attestation statement. `predicate` is an *object* —
+    /// the canonical shape the whole `predicateType`/`predicate` convention
+    /// comes from, and not exotic in a repo that already uses Sigstore.
+    const IN_TOTO_STATEMENT: &str = r#"{
+        "_type": "https://in-toto.io/Statement/v1",
+        "subject": [{ "name": "artifact", "digest": { "sha256": "abcd" } }],
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "predicate": { "buildDefinition": { "buildType": "https://example/build" } }
+    }"#;
+
+    /// WR-14: an in-toto attestation named `trust-policy.json` must be
+    /// skipped, not turned into a hard abort of every `nono run` in that
+    /// directory. Fail-closed is right for "is trust enforcement active?"; it
+    /// is wrong for "is this file mine?", which has a correct third answer.
+    #[test]
+    fn load_nono_policy_skips_in_toto_attestation_at_project_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(&path, IN_TOTO_STATEMENT).unwrap();
+
+        assert!(
+            load_nono_policy(&path, PolicyLevel::Project)
+                .expect("a foreign attestation must not abort the run")
+                .is_none(),
+            "an in-toto statement is a foreign file, not a broken nono policy"
+        );
+    }
+
+    /// WR-14 must not weaken CR-06: the same foreign shape at the operator's
+    /// own policy location is still fatal.
+    #[test]
+    fn load_nono_policy_in_toto_attestation_is_fatal_at_user_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(&path, IN_TOTO_STATEMENT).unwrap();
+
+        assert!(load_nono_policy(&path, PolicyLevel::Trusted).is_err());
+    }
+
+    /// WR-14: JSON that does not parse at all (here JSONC comments) is a
+    /// foreign config, not a reason to refuse to start.
+    #[test]
+    fn load_nono_policy_skips_unparseable_foreign_json_at_project_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(
+            &path,
+            "// tool config, not a nono policy\n{ \"role\": \"arn:aws:iam::1:role/x\" }\n",
+        )
+        .unwrap();
+
+        assert!(load_nono_policy(&path, PolicyLevel::Project)
+            .expect("unparseable foreign JSON must not abort the run")
+            .is_none());
+    }
+
+    /// WR-14 must not weaken CR-06 on the malformed-JSON path either: a
+    /// document that carries nono policy keys but does not parse (here a
+    /// leading BOM) is a broken nono policy, and those are fatal.
+    #[test]
+    fn load_nono_policy_rejects_unparseable_nono_shaped_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("trust-policy.json");
+        std::fs::write(
+            &path,
+            "\u{feff}{\"includes\":[\"CLAUDE.md\"],\"publishers\":[],\
+             \"blocklist\":{\"digests\":[],\"publishers\":[]},\"enforcement\":\"deny\"}",
+        )
+        .unwrap();
+
+        let err = load_nono_policy(&path, PolicyLevel::Project)
+            .expect_err("a nono-shaped document that will not parse must be fatal");
+        assert!(
+            err.to_string().contains("not valid JSON"),
+            "the parse failure must be surfaced: {err}"
+        );
+    }
+
+    /// WR-14 end-to-end: dropping an in-toto attestation into the working
+    /// directory must not stop `nono run` from starting.
+    #[test]
+    fn load_scan_policy_tolerates_in_toto_attestation_in_working_dir() {
+        let _guard = match crate::test_env::ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_dir = dir.path().join("cfg");
+        std::fs::create_dir_all(cfg_dir.join("nono")).unwrap();
+        let _env = crate::test_env::EnvVarGuard::set_all(&[
+            ("APPDATA", cfg_dir.to_str().unwrap()),
+            ("XDG_CONFIG_HOME", cfg_dir.to_str().unwrap()),
+        ]);
+
+        let project_dir = dir.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(project_dir.join("trust-policy.json"), IN_TOTO_STATEMENT).unwrap();
+
+        load_scan_policy(&project_dir, true, &[])
+            .expect("repo content must not be able to abort the run");
     }
 
     /// CR-02 end-to-end on the scan path: a project directory shipping a

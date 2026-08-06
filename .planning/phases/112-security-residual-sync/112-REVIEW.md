@@ -441,6 +441,41 @@ Some(v) if !v.is_string() => { /* fall through to the `None` content-based arm *
 and downgrade the malformed-JSON case at `:63-65` to a warn-and-skip unless the content
 is nono-shaped (see CR-06's `looks_like_nono` helper — the two findings share one fix).
 
+**Resolution (Group A fix pass):** FIXED, on top of the CR-06 structure.
+
+All three previously-unconditional hard errors now route through one decision point,
+`reject_or_skip(path, level, nono_shaped, reason)`:
+
+| shape | `Project` level | `Trusted` level |
+|---|---|---|
+| non-string `predicate` (in-toto/SLSA object) | skip if not nono-shaped | fatal |
+| unrecognised string `predicate` | skip if not nono-shaped | fatal |
+| does not parse as JSON at all (BOM, JSONC comment) | skip if not nono-shaped | fatal |
+
+`nono_shaped` is `object_looks_like_nono_policy` for the two parsed cases and the new
+`text_looks_like_nono_policy` (raw-text key-name scan) for the unparseable case, where
+there is no object to inspect.
+
+This resolves the CR-06/WR-14 tension explicitly: **"is trust enforcement active?" and
+"is this file mine?" are different questions.** Fail-closed is right for the first — a
+nono policy that cannot load aborts, never silently stops applying. It is wrong for the
+second, which has a correct third answer (skip), and refusing to give that answer is
+what turned any repository's `trust-policy.json` into a hard abort of every `nono run`
+in its directory.
+
+Note the asymmetry the CR-02 fix created is gone in *both* directions: a wrong
+predicate is no longer unconditionally fatal, and a missing predicate plus a broken
+schema is no longer silently skipped.
+
+Regression tests: `load_nono_policy_skips_in_toto_attestation_at_project_level`,
+`load_nono_policy_in_toto_attestation_is_fatal_at_user_level`,
+`load_nono_policy_skips_unparseable_foreign_json_at_project_level`,
+`load_nono_policy_rejects_unparseable_nono_shaped_json`,
+`load_scan_policy_tolerates_in_toto_attestation_in_working_dir`. The pre-existing
+`load_nono_policy_rejects_non_string_predicate` and
+`load_nono_policy_rejects_unrecognised_predicate` still pass unchanged — their
+fixtures are nono-shaped, so they remain fatal.
+
 ---
 
 ### WR-15 (new): three supervisor exit paths still return without draining queued network notifications
