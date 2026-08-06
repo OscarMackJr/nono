@@ -1147,10 +1147,27 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
         )));
     }
 
-    // At least one of credential_key, auth, or aws_auth must be set.
-    if cred.credential_key.is_none() && cred.auth.is_none() && cred.aws_auth.is_none() {
+    // NET-02 (Phase 113): spiffe is mutually exclusive with every other auth
+    // mechanism on the same custom credential.
+    if cred.spiffe.is_some()
+        && (cred.credential_key.is_some() || cred.auth.is_some() || cred.aws_auth.is_some())
+    {
         return Err(NonoError::ProfileParse(format!(
-            "custom credential '{}' must have either 'credential_key', 'auth', or 'aws_auth' set",
+            "custom credential '{}' has 'spiffe' set together with 'credential_key', 'auth' \
+             (oauth2), or 'aws_auth'; spiffe is mutually exclusive with all other auth fields",
+            name
+        )));
+    }
+
+    // At least one of credential_key, auth, aws_auth, or spiffe must be set.
+    if cred.credential_key.is_none()
+        && cred.auth.is_none()
+        && cred.aws_auth.is_none()
+        && cred.spiffe.is_none()
+    {
+        return Err(NonoError::ProfileParse(format!(
+            "custom credential '{}' must have either 'credential_key', 'auth', 'aws_auth', or \
+             'spiffe' set",
             name
         )));
     }
@@ -1165,6 +1182,15 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
     // Validate aws_auth if present.
     if let Some(ref aws) = cred.aws_auth {
         validate_aws_auth(name, aws)?;
+    }
+
+    // NET-02 (Phase 113): validate spiffe's inject_header the same way
+    // credential_key-based header-mode routes are validated.
+    if let Some(nono_proxy::config::SpiffeAuthConfig::Jwt {
+        ref inject_header, ..
+    }) = cred.spiffe
+    {
+        validate_header_name(name, inject_header)?;
     }
 
     // Validate credential_key only when set (Optional from PROF-03 onward).
@@ -1248,6 +1274,35 @@ fn validate_oauth2_auth(name: &str, auth: &OAuth2Config) -> Result<()> {
     // token_url: HTTPS or loopback HTTP (fail-closed against MITM downgrade).
     validate_upstream_url(&auth.token_url, &format!("{}/auth.token_url", name))?;
 
+    // NET-02 (Phase 113): a RFC 7523 client_assertion (currently only a SPIFFE
+    // JWT-SVID) is an alternative to client_id/client_secret — validate its
+    // own required subfields instead of requiring the plain-credential pair.
+    if let Some(ref assertion) = auth.client_assertion {
+        match assertion {
+            nono_proxy::config::ClientAssertionConfig::SpiffeJwt {
+                workload_api_socket,
+                audience,
+                ..
+            } => {
+                if workload_api_socket.is_empty() {
+                    return Err(NonoError::ProfileParse(format!(
+                        "auth.client_assertion.workload_api_socket for custom credential '{}' \
+                         cannot be empty",
+                        name
+                    )));
+                }
+                if audience.is_empty() {
+                    return Err(NonoError::ProfileParse(format!(
+                        "auth.client_assertion.audience for custom credential '{}' cannot be \
+                         empty",
+                        name
+                    )));
+                }
+            }
+        }
+        return Ok(());
+    }
+
     if auth.client_id.is_empty() {
         return Err(NonoError::ProfileParse(format!(
             "auth.client_id for custom credential '{}' cannot be empty",
@@ -1325,22 +1380,31 @@ fn validate_aws_auth(name: &str, aws: &nono_proxy::config::AwsAuthConfig) -> Res
     Ok(())
 }
 
-/// Validate header injection mode fields.
-fn validate_header_mode(name: &str, cred: &CustomCredentialDef) -> Result<()> {
-    // Validate inject_header (RFC 7230 token)
-    if cred.inject_header.is_empty() {
+/// Validate an HTTP header name (RFC 7230 token) used for credential
+/// injection. Extracted from `validate_header_mode` (Phase 113 / NET-02) so
+/// `spiffe` routes can reuse the same check without going through the
+/// `credential_key`-specific validation path.
+fn validate_header_name(cred_name: &str, header: &str) -> Result<()> {
+    if header.is_empty() {
         return Err(NonoError::ProfileParse(format!(
             "inject_header for custom credential '{}' cannot be empty",
-            name
+            cred_name
         )));
     }
-    if !cred.inject_header.chars().all(is_http_token_char) {
+    if !header.chars().all(is_http_token_char) {
         return Err(NonoError::ProfileParse(format!(
             "inject_header '{}' for custom credential '{}' contains invalid characters; \
              header names must be valid HTTP tokens (alphanumeric and !#$%&'*+-.^_`|~)",
-            cred.inject_header, name
+            header, cred_name
         )));
     }
+    Ok(())
+}
+
+/// Validate header injection mode fields.
+fn validate_header_mode(name: &str, cred: &CustomCredentialDef) -> Result<()> {
+    // Validate inject_header (RFC 7230 token)
+    validate_header_name(name, &cred.inject_header)?;
 
     // Validate effective credential_format (no CRLF injection)
     let effective_format = nono_proxy::config::resolved_credential_format(
@@ -5067,6 +5131,108 @@ mod tests {
         assert!(validate_custom_credential("test", &cred).is_ok());
     }
 
+    // ============================================================================
+    // NET-02 (Phase 113) — spiffe mutual-exclusion / at-least-one validation
+    // ============================================================================
+
+    fn spiffe_cred_builder() -> CustomCredentialDef {
+        let mut cred = header_cred_builder();
+        cred.credential_key = None;
+        cred.spiffe = Some(nono_proxy::config::SpiffeAuthConfig::Jwt {
+            workload_api_socket: "/run/spire/sockets/agent.sock".to_string(),
+            audience: vec!["inventory.internal.example".to_string()],
+            inject_header: "Authorization".to_string(),
+            credential_format: Some("Bearer {}".to_string()),
+            svid_hint: None,
+        });
+        cred
+    }
+
+    #[test]
+    fn test_validate_custom_credential_spiffe() {
+        let cred = spiffe_cred_builder();
+        assert!(validate_custom_credential("test", &cred).is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_credential_spiffe_with_credential_key_rejected() {
+        let mut cred = spiffe_cred_builder();
+        cred.credential_key = Some("api_key".to_string());
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("spiffe + credential_key should be rejected");
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_validate_custom_credential_spiffe_with_aws_auth_rejected() {
+        let mut cred = spiffe_cred_builder();
+        cred.aws_auth = Some(nono_proxy::config::AwsAuthConfig::default());
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("spiffe + aws_auth should be rejected");
+        assert!(err.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn test_validate_custom_credential_none_of_credential_key_auth_aws_auth_spiffe_rejected() {
+        let mut cred = spiffe_cred_builder();
+        cred.spiffe = None;
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("no auth mechanism set should be rejected");
+        assert!(err.to_string().contains("credential_key"));
+        assert!(err.to_string().contains("spiffe"));
+    }
+
+    #[test]
+    fn test_validate_custom_credential_spiffe_empty_inject_header_rejected() {
+        let mut cred = spiffe_cred_builder();
+        cred.spiffe = Some(nono_proxy::config::SpiffeAuthConfig::Jwt {
+            workload_api_socket: "/run/spire/sockets/agent.sock".to_string(),
+            audience: vec!["inventory.internal.example".to_string()],
+            inject_header: "".to_string(),
+            credential_format: None,
+            svid_hint: None,
+        });
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("empty spiffe inject_header should be rejected");
+        assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn test_validate_oauth2_auth_client_assertion_valid() {
+        let mut cred = header_cred_builder();
+        cred.credential_key = None;
+        cred.auth = Some(OAuth2Config {
+            token_url: "https://auth.example.com/oauth/token".to_string(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            scope: String::new(),
+            client_assertion: Some(nono_proxy::config::ClientAssertionConfig::SpiffeJwt {
+                workload_api_socket: "/run/spire/sockets/agent.sock".to_string(),
+                audience: vec!["auth.example.com".to_string()],
+                svid_hint: None,
+            }),
+            extra_params: std::collections::HashMap::new(),
+        });
+        assert!(validate_custom_credential("test", &cred).is_ok());
+    }
+
+    #[test]
+    fn test_validate_oauth2_auth_neither_client_assertion_nor_client_id_secret_rejected() {
+        let mut cred = header_cred_builder();
+        cred.credential_key = None;
+        cred.auth = Some(OAuth2Config {
+            token_url: "https://auth.example.com/oauth/token".to_string(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            scope: String::new(),
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
+        });
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("no client_assertion and empty client_id should be rejected");
+        assert!(err.to_string().contains("client_id"));
+    }
+
     #[test]
     fn test_validate_custom_credential_http_loopback_allowed() {
         let mut cred = header_cred_builder();
@@ -7221,6 +7387,86 @@ mod tests {
         // accepted per D-36-B3 indefinite alias acceptance.
         validate_against_schema(json)
             .expect("full profile with canonical bypass_protection should pass schema validation");
+    }
+
+    // ============================================================================
+    // NET-02 (Phase 113) — SPIFFE schema validation (SC2)
+    // ============================================================================
+
+    #[test]
+    fn test_schema_validates_spiffe_custom_credential() {
+        let json = r#"{
+            "meta": { "name": "spiffe-test" },
+            "network": {
+                "custom_credentials": {
+                    "inventory": {
+                        "upstream": "https://inventory.internal.example",
+                        "spiffe": {
+                            "type": "jwt",
+                            "workload_api_socket": "/run/spire/agent.sock",
+                            "audience": ["x"]
+                        }
+                    }
+                }
+            }
+        }"#;
+        validate_against_schema(json)
+            .expect("custom credential with a valid spiffe block should pass schema validation");
+    }
+
+    #[test]
+    fn test_schema_rejects_spiffe_missing_workload_api_socket() {
+        let json = r#"{
+            "meta": { "name": "spiffe-invalid" },
+            "network": {
+                "custom_credentials": {
+                    "inventory": {
+                        "upstream": "https://inventory.internal.example",
+                        "spiffe": {
+                            "type": "jwt",
+                            "audience": ["x"]
+                        }
+                    }
+                }
+            }
+        }"#;
+        let result = validate_against_schema(json);
+        assert!(
+            result.is_err(),
+            "spiffe block missing workload_api_socket should fail schema validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_validates_oauth2_client_assertion() {
+        let json = r#"{
+            "meta": { "name": "oauth2-assertion-test" },
+            "network": {
+                "custom_credentials": {
+                    "vendor": {
+                        "upstream": "https://vendor.internal.example",
+                        "auth": {
+                            "token_url": "https://auth.example.com/oauth/token",
+                            "client_assertion": {
+                                "type": "spiffe_jwt",
+                                "workload_api_socket": "/run/spire/agent.sock",
+                                "audience": ["auth.example.com"]
+                            }
+                        }
+                    }
+                }
+            }
+        }"#;
+        validate_against_schema(json).expect(
+            "oauth2 auth with client_assertion and no client_id/client_secret should pass schema validation",
+        );
+    }
+
+    #[test]
+    fn test_schema_self_is_valid_json() {
+        let schema_str = crate::config::embedded::embedded_profile_schema();
+        serde_json::from_str::<serde_json::Value>(schema_str)
+            .expect("nono-profile.schema.json must be syntactically valid JSON");
     }
 
     #[test]

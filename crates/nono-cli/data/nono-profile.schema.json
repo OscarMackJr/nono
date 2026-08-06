@@ -642,6 +642,13 @@
           ],
           "description": "AWS SigV4 signing configuration. When present, the proxy signs outbound requests with AWS credentials. Mutually exclusive with `credential_key` and `auth`."
         },
+        "spiffe": {
+          "oneOf": [
+            { "$ref": "#/$defs/SpiffeAuthConfig" },
+            { "type": "null" }
+          ],
+          "description": "SPIFFE/SPIRE Workload API auth (NET-02, Phase 113). When present, the proxy fetches a JWT-SVID from the local SPIRE Workload API and injects it as a bearer token. Mutually exclusive with `credential_key`, `auth`, and `aws_auth`."
+        },
         "inject_mode": {
           "$ref": "#/$defs/InjectMode",
           "description": "Credential injection mode. Determines how the credential is inserted into outbound requests.",
@@ -706,9 +713,9 @@
     },
     "OAuth2Config": {
       "type": "object",
-      "description": "PROF-03 (Phase 22) OAuth2 client_credentials configuration. Plan 22-01 lands the deserialize wiring + fail-closed validation; Plan 22-04 (OAUTH) implements the actual token-exchange client. token_url MUST be HTTPS (http only for loopback) per fail-secure principle (T-22-01-02 BLOCKING).",
+      "description": "PROF-03 (Phase 22) OAuth2 client_credentials configuration. Plan 22-01 lands the deserialize wiring + fail-closed validation; Plan 22-04 (OAUTH) implements the actual token-exchange client. token_url MUST be HTTPS (http only for loopback) per fail-secure principle (T-22-01-02 BLOCKING). NET-02 (Phase 113): `client_id`/`client_secret` are no longer required when `client_assertion` (RFC 7523 JWT-bearer) is set instead.",
       "additionalProperties": false,
-      "required": ["token_url", "client_id", "client_secret"],
+      "required": ["token_url"],
       "properties": {
         "token_url": {
           "type": "string",
@@ -716,16 +723,101 @@
         },
         "client_id": {
           "type": "string",
-          "description": "OAuth2 client ID. Plain value or credential reference. Must not be empty."
+          "description": "OAuth2 client ID. Plain value or credential reference. Must not be empty unless `client_assertion` is set instead.",
+          "default": ""
         },
         "client_secret": {
           "type": "string",
-          "description": "OAuth2 client secret. May be a plain value, env://VAR, file:///path, op://… (1Password), apple-password://…, or keyring://service/account URI. Resolved through nono::keystore::load_secret at proxy startup."
+          "description": "OAuth2 client secret. May be a plain value, env://VAR, file:///path, op://… (1Password), apple-password://…, or keyring://service/account URI. Resolved through nono::keystore::load_secret at proxy startup. Must not be empty unless `client_assertion` is set instead.",
+          "default": ""
         },
         "scope": {
           "type": "string",
           "description": "OAuth2 scopes (space-separated). Empty string = no scope parameter sent.",
           "default": ""
+        },
+        "client_assertion": {
+          "oneOf": [
+            { "$ref": "#/$defs/ClientAssertionConfig" },
+            { "type": "null" }
+          ],
+          "description": "NET-02 (Phase 113): RFC 7523 JWT-bearer client assertion, as an alternative to `client_id`/`client_secret`. Mutually exclusive with them at the validation layer."
+        },
+        "extra_params": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description": "Extra form-encoded parameters sent with the token request.",
+          "default": {}
+        }
+      }
+    },
+    "SpiffeAuthConfig": {
+      "type": "object",
+      "description": "NET-02 (Phase 113) SPIFFE/SPIRE Workload API auth for a credential route. The proxy fetches a JWT-SVID from the local SPIRE Workload API (via a Unix domain socket) and injects it as a bearer token (or custom header). The sandboxed child never sees the socket directly — see `enforce_spiffe_socket_isolation()` in nono-cli.",
+      "additionalProperties": false,
+      "required": ["type", "workload_api_socket", "audience"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["jwt"],
+          "description": "Discriminator. Currently only \"jwt\" (JWT-SVID) is supported."
+        },
+        "workload_api_socket": {
+          "type": "string",
+          "description": "Path to the SPIRE Workload API Unix domain socket (e.g., \"/run/spire/sockets/agent.sock\")."
+        },
+        "audience": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Audience values the requested JWT-SVID must be scoped to."
+        },
+        "inject_header": {
+          "type": "string",
+          "description": "HTTP header the fetched token is injected into.",
+          "default": "Authorization"
+        },
+        "credential_format": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ],
+          "description": "Template with {} for the token (e.g., \"Bearer {}\"). If omitted, defaults follow the same Authorization-vs-other-header rule as `credential_format` elsewhere in this schema."
+        },
+        "svid_hint": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ],
+          "description": "Optional hint narrowing which SVID to select when multiple are available."
+        }
+      }
+    },
+    "ClientAssertionConfig": {
+      "type": "object",
+      "description": "NET-02 (Phase 113) RFC 7523 JWT-bearer client assertion source, as an alternative to plain OAuth2 `client_id`/`client_secret`. Currently the only source is a SPIFFE/SPIRE JWT-SVID.",
+      "additionalProperties": false,
+      "required": ["type", "workload_api_socket", "audience"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["spiffe_jwt"],
+          "description": "Discriminator. Currently only \"spiffe_jwt\" is supported."
+        },
+        "workload_api_socket": {
+          "type": "string",
+          "description": "Path to the SPIRE Workload API Unix domain socket."
+        },
+        "audience": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Audience values the requested JWT-SVID must be scoped to."
+        },
+        "svid_hint": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ],
+          "description": "Optional hint narrowing which SVID to select when multiple are available."
         }
       }
     },

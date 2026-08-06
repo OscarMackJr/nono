@@ -3,7 +3,9 @@ use crate::launch_runtime::{NetworkIntent, ProxyLaunchOptions};
 use crate::network_policy;
 use crate::profile::AllowDomainEntry;
 use crate::sandbox_prepare::{validate_external_proxy_bypass, PreparedSandbox};
-use nono::{CapabilitySet, NonoError, Result};
+use nono::{CapabilitySet, NonoError, Result, UnixSocketOp};
+use std::path::{Path, PathBuf};
+use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
@@ -458,6 +460,113 @@ pub(crate) fn build_proxy_config_from_flags(
     Ok(proxy_config)
 }
 
+/// Canonicalize a path (resolving symlinks such as `/var` -> `/private/var`
+/// on macOS), falling back to the original, unresolved path if it (or a
+/// parent directory) does not yet exist. Mirrors the canonicalize-or-fall-back
+/// idiom `policy.rs::add_deny_access_rules` uses for socket paths that may
+/// not exist at policy-computation time.
+fn try_canonicalize(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Collect every SPIRE Workload API socket path a resolved route set
+/// configures — both the direct `RouteConfig.spiffe` auth path and the
+/// `oauth2.client_assertion` (RFC 7523 SPIFFE-JWT-bearer) alternative. Both
+/// shapes cause the proxy to open a connection to the local SPIRE agent
+/// socket on the sandboxed child's behalf, so both need isolation.
+fn collect_spiffe_socket_paths(routes: &[nono_proxy::config::RouteConfig]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for route in routes {
+        if let Some(nono_proxy::config::SpiffeAuthConfig::Jwt {
+            ref workload_api_socket,
+            ..
+        }) = route.spiffe
+        {
+            paths.push(PathBuf::from(workload_api_socket));
+        }
+        if let Some(ref oauth2) = route.oauth2 {
+            if let Some(nono_proxy::config::ClientAssertionConfig::SpiffeJwt {
+                ref workload_api_socket,
+                ..
+            }) = oauth2.client_assertion
+            {
+                paths.push(PathBuf::from(workload_api_socket));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Deny the sandboxed child direct access to every configured SPIRE Workload
+/// API socket path (NET-02, Phase 113; T-113-04). The proxy — not the
+/// sandboxed child — holds the workload identity; the entire point of the
+/// SPIFFE feature is that the child can never self-issue SVIDs by reaching
+/// the agent socket directly.
+///
+/// - **Linux:** deny-by-omission. Landlock is strictly allow-list-only (see
+///   CLAUDE.md's Linux platform note), so simply never issuing a
+///   `unix_socket` grant for this path is a structural, not incidental,
+///   isolation guarantee.
+/// - **macOS:** an explicit Seatbelt `(deny network-outbound (path ...))`
+///   rule, mirroring `policy.rs::add_deny_access_rules`'s existing Unix-socket
+///   deny pattern — `connect(2)` on an AF_UNIX socket is enforced by
+///   Seatbelt as network-outbound, not as a file operation, so a file-only
+///   deny would not stop it.
+/// - **Windows:** logged as a residual-risk no-op, not silently assumed
+///   protected — AppContainer's default-deny behavior for unlisted
+///   Unix-domain-socket paths was not independently verified this phase
+///   (113-RESEARCH.md's Security Domain note; T-113-05, accepted residual
+///   risk, confirmed/closed in a later phase's final verification pass).
+///
+/// Hard-errors (`NonoError`, never `warn!`) if the profile's OWN
+/// `unix_socket` capability grants already cover the exact socket path —
+/// that is a real conflict the operator must resolve explicitly, not
+/// something this function may silently paper over or downgrade to a log
+/// line (CLAUDE.md "Fail Secure").
+pub(crate) fn enforce_spiffe_socket_isolation(
+    caps: &mut CapabilitySet,
+    routes: &[nono_proxy::config::RouteConfig],
+) -> Result<()> {
+    let socket_paths = collect_spiffe_socket_paths(routes);
+    if socket_paths.is_empty() {
+        return Ok(());
+    }
+
+    for socket_path in &socket_paths {
+        let canonical = try_canonicalize(socket_path);
+
+        if caps.unix_socket_allowed(&canonical, UnixSocketOp::Connect) {
+            return Err(NonoError::ConfigParse(format!(
+                "profile grants direct unix_socket access to '{}', which is also configured as \
+                 a SPIFFE Workload API socket; the sandboxed child must never reach the SPIRE \
+                 agent socket directly. Remove the conflicting unix_socket grant, or remove the \
+                 spiffe/client_assertion route that uses this socket.",
+                canonical.display()
+            )));
+        }
+
+        if cfg!(target_os = "macos") {
+            let utf8_path = crate::policy::path_to_utf8(&canonical)?;
+            let escaped = crate::policy::escape_seatbelt_path(utf8_path)?;
+            caps.add_platform_rule(format!("(deny network-outbound (path \"{}\"))", escaped))?;
+        } else {
+            // Linux: deny-by-omission is structural (Landlock allow-list-only,
+            // no unix_socket grant issued). Windows: residual risk, not a
+            // proven deny — see the doc comment above.
+            debug!(
+                "SPIFFE Workload API socket '{}' isolated from the sandboxed child by \
+                 deny-by-omission (no unix_socket grant issued; Windows AppContainer coverage \
+                 not independently verified — see T-113-05)",
+                canonical.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Start the proxy runtime based on the resolved `NetworkIntent`.
 ///
 /// Upstream 72bcfd66 (#1225): signature changed from `&ProxyLaunchOptions` to `&NetworkIntent`;
@@ -480,6 +589,12 @@ pub(crate) fn start_proxy_runtime(
 
     let mut proxy_config = build_proxy_config_from_flags(proxy)?;
     proxy_config.direct_connect_ports = caps.tcp_connect_ports().to_vec();
+    // NET-02 (Phase 113, T-113-04): isolate every configured SPIRE Workload
+    // API socket from the sandboxed child BEFORE the proxy (which needs to
+    // reach that same socket) starts. Fails the launch (fail-secure) rather
+    // than starting a proxy the child could bypass by connecting to the
+    // agent socket itself.
+    enforce_spiffe_socket_isolation(caps, &proxy_config.routes)?;
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -1275,6 +1390,91 @@ mod tests {
         assert!(
             result.is_err(),
             "--allow-endpoint for a service without --credential must error"
+        );
+    }
+
+    // ========================================================================
+    // NET-02 (Phase 113, T-113-04) — enforce_spiffe_socket_isolation
+    // ========================================================================
+
+    fn spiffe_route(socket: &str) -> nono_proxy::config::RouteConfig {
+        nono_proxy::config::RouteConfig {
+            prefix: "inventory".to_string(),
+            upstream: "https://inventory.internal.example".to_string(),
+            credential_key: None,
+            inject_mode: nono_proxy::config::InjectMode::Header,
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            spiffe: Some(nono_proxy::config::SpiffeAuthConfig::Jwt {
+                workload_api_socket: socket.to_string(),
+                audience: vec!["inventory.internal.example".to_string()],
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                svid_hint: None,
+            }),
+            endpoint_policy: None,
+        }
+    }
+
+    #[test]
+    fn test_enforce_spiffe_socket_isolation_noop_when_no_spiffe_routes() {
+        let mut caps = CapabilitySet::new();
+        let routes: Vec<nono_proxy::config::RouteConfig> = Vec::new();
+        assert!(enforce_spiffe_socket_isolation(&mut caps, &routes).is_ok());
+        assert!(caps.unix_socket_capabilities().is_empty());
+        assert!(caps.platform_rules().is_empty());
+    }
+
+    #[test]
+    fn test_enforce_spiffe_socket_isolation_never_grants_the_socket() {
+        let mut caps = CapabilitySet::new();
+        let routes = vec![spiffe_route("/run/spire/sockets/agent.sock")];
+        assert!(enforce_spiffe_socket_isolation(&mut caps, &routes).is_ok());
+        // Deny-by-omission: no unix_socket capability was added for the
+        // SPIRE agent socket, so the sandboxed child has no grant path to it.
+        assert!(
+            !caps.unix_socket_allowed(
+                Path::new("/run/spire/sockets/agent.sock"),
+                UnixSocketOp::Connect
+            ),
+            "the SPIRE agent socket must never be reachable through a granted capability"
+        );
+    }
+
+    #[test]
+    fn test_enforce_spiffe_socket_isolation_hard_errors_on_conflicting_grant() {
+        let mut caps = CapabilitySet::new();
+        // Simulate a profile that (incorrectly) also grants direct unix_socket
+        // access to the same path used as a SPIRE Workload API socket. Use a
+        // path that exists on every CI/dev host so `UnixSocketCapability::new_file`
+        // (which requires the path to exist for Connect mode) succeeds.
+        let existing_file = std::env::current_exe().expect("current_exe");
+        let cap =
+            nono::UnixSocketCapability::new_file(&existing_file, nono::UnixSocketMode::Connect)
+                .expect("build unix socket capability");
+        caps.add_unix_socket(cap);
+
+        let socket_str = existing_file.to_string_lossy().into_owned();
+        let routes = vec![spiffe_route(&socket_str)];
+
+        let result = enforce_spiffe_socket_isolation(&mut caps, &routes);
+        assert!(
+            result.is_err(),
+            "a conflicting explicit unix_socket grant must hard-error, not silently degrade"
+        );
+        let err = result.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("conflict") || err.contains("unix_socket"),
+            "error should explain the conflict, got: {}",
+            err
         );
     }
 }
