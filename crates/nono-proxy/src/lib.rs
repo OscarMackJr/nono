@@ -18,6 +18,7 @@
 //! child can only reach `localhost:<port>` via `NetworkMode::ProxyOnly`.
 
 pub mod audit;
+mod auth;
 pub mod config;
 pub mod connect;
 pub mod credential;
@@ -30,6 +31,7 @@ pub mod pool;
 pub mod reverse;
 pub mod route;
 pub mod server;
+mod spiffe;
 pub mod token;
 
 pub use config::ProxyConfig;
