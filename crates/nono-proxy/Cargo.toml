@@ -11,6 +11,23 @@ description = "Network filtering proxy for the nono sandbox"
 keywords = ["sandbox", "security", "proxy", "network"]
 categories = ["network-programming", "web-programming"]
 
+# [lib] name pinned to "nono_proxy" (Rule 3 auto-fix, Plan 113-07 — mirrors the
+# identical fix already applied to crates/nono/Cargo.toml in Phase 102's
+# fork-owned rename). Without an explicit [lib] section, Cargo derives the
+# default library crate name from [package] name with hyphens converted to
+# underscores -- i.e. "nono_sandbox_proxy". That default is invisible to
+# external consumers (nono-cli resolves the extern crate name "nono_proxy"
+# from its OWN dependency-table key `nono-proxy = { package = "nono-sandbox-proxy" }`,
+# independent of this producer's [lib] name), but it DOES break this crate's
+# own first integration-test file (crates/nono-proxy/tests/spiffe_integration.rs,
+# Plan 113-07), which links against the library via the implicit default lib
+# name and uses bare `use nono_proxy::...` imports (matching upstream
+# `c831dade`'s own test file). Pinning [lib] name here keeps those in-crate
+# imports byte-for-byte unchanged, with zero effect on the package= consumer
+# mechanism nono-cli already uses.
+[lib]
+name = "nono_proxy"
+
 [features]
 default = ["system-keyring"]
 # Enables OS system keyring access (macOS Keychain / Linux Secret Service).

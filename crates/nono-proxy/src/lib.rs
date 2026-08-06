@@ -31,7 +31,17 @@ pub mod pool;
 pub mod reverse;
 pub mod route;
 pub mod server;
-mod spiffe;
+/// SPIFFE/SPIRE Workload API credential sources.
+///
+/// Made `pub` (upstream `c831dade`/#1272 has `pub mod spiffe;` too) so
+/// `crates/nono-proxy/tests/spiffe_integration.rs` (Plan 113-07) can construct
+/// `SpiffeJwtSource` directly and call `delegation_from_jwt` for its
+/// `SPIRE_AGENT_SOCKET`-gated live tests — an external integration-test binary
+/// cannot see a private (`mod`) module. `SpiffeJwtSource::connect` already
+/// fails closed on an unreachable socket and its `Debug` impl is redacted
+/// (`spiffe.rs`), so widening this to `pub` adds a construction surface, not a
+/// secret-disclosure one.
+pub mod spiffe;
 pub mod token;
 
 pub use config::ProxyConfig;
