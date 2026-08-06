@@ -396,6 +396,25 @@ if state.config.require_auth {
 or, if forward-HTTP is deliberately always authenticated, say so in a comment *and* in
 `--no-auth`'s help text.
 
+**Resolution (Group A fix pass):** FIXED — the gate was added, not the comment.
+
+`handle_forward_http`'s `Proxy-Authorization` check is now wrapped in
+`if state.config.require_auth { ... }`, matching the five sibling paths and making
+`--no-auth`'s and `ProxyConfig.require_auth`'s documented contract true for
+absolute-form `http://` requests. The alternative (documenting forward-HTTP as always
+authenticated) was rejected: it would leave `--no-auth` functionally broken for plain
+HTTP while working for CONNECT, which is a surprising split with no security benefit —
+the failure direction was already fail-closed, so nothing was being protected by the
+inconsistency.
+
+`require_auth = false` remains constrained to loopback bind addresses (CLI guard, and
+after WR-04 at the proxy layer too), so this path is never reachable unauthenticated
+from another host.
+
+Regression tests in `server.rs`: `forward_http_requires_auth_by_default` (control — 407
+still returned when `require_auth` is true) and `forward_http_honours_no_auth`. The
+pre-existing `forward_http_missing_proxy_auth_is_rejected_407` still passes.
+
 ---
 
 ### WR-14 (new): a foreign or malformed `trust-policy.json` in the working directory now aborts every `nono run` in that directory

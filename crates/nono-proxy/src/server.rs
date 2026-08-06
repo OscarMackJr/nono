@@ -921,27 +921,45 @@ async fn handle_forward_http(
     // 1. Proxy-Authorization gate — identical to the reverse-proxy
     //    no-credential branch: 407 on missing/invalid auth, with an audit
     //    denial recording the authentication failure. No auth bypass.
-    if let Err(e) = token::validate_proxy_auth(header_bytes, &state.session_token) {
-        // Parse the target host for the audit record where possible; fall
-        // back to a placeholder so a malformed line still audits.
-        let (host, port) =
-            parse_non_connect_target(first_line).unwrap_or_else(|_| ("unknown".to_string(), 0));
-        audit::log_denied(
-            Some(&state.audit_log),
-            audit::ProxyMode::Reverse,
-            &audit::EventContext {
-                auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
-                auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::AuthenticationFailed),
-                ..audit::EventContext::default()
-            },
-            &host,
-            port,
-            &e.to_string(),
-        );
-        let response = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"nono\"\r\nContent-Length: 0\r\n\r\n";
-        stream.write_all(response.as_bytes()).await?;
-        return Ok(());
+    //
+    //    WR-13: gated on `require_auth`, matching every other request path in
+    //    `handle_connection` (external chain, external bypass, both CONNECT
+    //    arms, reverse proxy) and matching what `--no-auth` and
+    //    `ProxyConfig.require_auth` both document — "every request on the
+    //    bind address is accepted without validating the session token".
+    //    Validating unconditionally here made that documentation false for
+    //    absolute-form `http://` requests only. The old behaviour failed
+    //    closed, so this was never an exploit, but one path silently
+    //    disagreeing with five others invites a future "fix" that deletes the
+    //    check outright without noticing it is load-bearing whenever
+    //    `require_auth` is true. `require_auth = false` is itself constrained
+    //    to loopback bind addresses, so this path is never reachable from
+    //    another host unauthenticated.
+    if state.config.require_auth {
+        if let Err(e) = token::validate_proxy_auth(header_bytes, &state.session_token) {
+            // Parse the target host for the audit record where possible; fall
+            // back to a placeholder so a malformed line still audits.
+            let (host, port) =
+                parse_non_connect_target(first_line).unwrap_or_else(|_| ("unknown".to_string(), 0));
+            audit::log_denied(
+                Some(&state.audit_log),
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                    ),
+                    ..audit::EventContext::default()
+                },
+                &host,
+                port,
+                &e.to_string(),
+            );
+            let response = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"nono\"\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(response.as_bytes()).await?;
+            return Ok(());
+        }
     }
 
     // 2. Parse host+port and run the host filter (DNS resolution + SSRF guard).
@@ -2398,6 +2416,68 @@ mod tests {
             nono_no_proxy.1.split(',').any(|h| h == "redis"),
             "canonical no_proxy var must also carry the validated entry: {}",
             nono_no_proxy.1
+        );
+    }
+
+    /// Drive one absolute-form `http://` forward-proxy request with no
+    /// `Proxy-Authorization` header and return whatever the proxy wrote back
+    /// (possibly nothing, if it closed the connection).
+    async fn forward_http_reply_without_auth(require_auth: bool) -> String {
+        use tokio::io::AsyncReadExt;
+
+        let config = ProxyConfig {
+            bind_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            bind_port: 0,
+            require_auth,
+            ..Default::default()
+        };
+        let handle = match start(config).await {
+            Ok(handle) => handle,
+            Err(e) => panic!("proxy must start: {e:?}"),
+        };
+
+        let mut stream = match tokio::net::TcpStream::connect(("127.0.0.1", handle.port)).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                handle.shutdown();
+                panic!("must connect to the proxy: {e}");
+            }
+        };
+        let request = b"GET http://nono-wr13.invalid/ HTTP/1.1\r\nHost: nono-wr13.invalid\r\n\r\n";
+        if let Err(e) = stream.write_all(request).await {
+            handle.shutdown();
+            panic!("must write the request: {e}");
+        }
+
+        let mut buf = vec![0u8; 512];
+        let n = stream.read(&mut buf).await.unwrap_or(0);
+        handle.shutdown();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    /// WR-13 control: with auth required (the default, and every sandboxed
+    /// `run`/`shell`/`wrap` invocation), an unauthenticated forward-proxy
+    /// request is still rejected with 407.
+    #[tokio::test]
+    async fn forward_http_requires_auth_by_default() {
+        let reply = forward_http_reply_without_auth(true).await;
+        assert!(
+            reply.contains("407"),
+            "forward-HTTP must still 407 when require_auth is true: {reply:?}"
+        );
+    }
+
+    /// WR-13: `handle_forward_http` validated `Proxy-Authorization`
+    /// unconditionally, so `--no-auth` — documented as "every request on the
+    /// bind address is accepted without validating the session token" — did
+    /// not apply to absolute-form `http://` forward-proxied requests. It is
+    /// now gated on `require_auth`, like the other five request paths.
+    #[tokio::test]
+    async fn forward_http_honours_no_auth() {
+        let reply = forward_http_reply_without_auth(false).await;
+        assert!(
+            !reply.contains("407"),
+            "require_auth=false must not 407 a forward-HTTP request: {reply:?}"
         );
     }
 
