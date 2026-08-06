@@ -711,9 +711,11 @@ mod tests {
     #[test]
     fn test_loaded_route_debug() {
         // Fork: LoadedRoute has upstream, upstream_host_port, endpoint_rules, tls_connector,
-        // and (Phase 113) managed_auth/declares_spiffe. Upstream fields
-        // (requires_intercept, requires_managed_credential, managed_auth_mechanism,
-        // managed_injection_mode) are not present in the fork.
+        // and (Phase 113) managed_auth/declares_spiffe. Upstream's general
+        // requires_intercept/managed_auth_mechanism/managed_injection_mode
+        // fields and the managed-credential requirement predicate are still not
+        // present — see OD-2 comment below for the corrected attribution
+        // (b1ecbc02, not tls_intercept).
         let route = LoadedRoute {
             upstream: "https://api.openai.com".to_string(),
             upstream_host_port: Some("api.openai.com:443".to_string()),
@@ -732,13 +734,35 @@ mod tests {
         assert!(!route.has_spiffe_source());
     }
 
-    // Fork divergence: tests for requires_intercept, requires_managed_credential,
-    // managed_auth_mechanism, managed_injection_mode, lookup_by_upstream,
-    // lookup_all_by_upstream, has_intercept_route, missing_managed_credential,
-    // NetworkAuditAuthMechanism, NetworkAuditInjectionMode, and mTLS
-    // (tls_client_cert/tls_client_key) are not ported. These fields and methods
-    // belong to the upstream tls_intercept module not present in this fork.
-    // Deferred to a future plan that ports the intercept surface.
+    // Fork divergence: tests for requires_intercept, the managed-credential
+    // requirement predicate, managed_auth_mechanism, managed_injection_mode,
+    // lookup_by_upstream, the all-routes-by-upstream lookup, the
+    // intercept-route-presence check, and missing_managed_credential are not
+    // ported (OD-1 — see below), and mTLS (tls_client_cert/tls_client_key) is
+    // not ported (separate, unrelated gap, see the mTLS note further below).
+    //
+    // OD-2 correction (Phase 113, 113-RESEARCH.md "Decision Conflicts" item 3):
+    // these fields/methods do NOT belong to any tls_intercept module — this fork
+    // has no `tls_intercept/` module at all (D-01), so there is nothing there for
+    // them to belong to. `git log --all -S"handle_oauth2_credential" --
+    // crates/nono-proxy/src/reverse.rs` on the `upstream` remote traces the real
+    // ancestor to commit b1ecbc02 (`git describe` = v0.38.0-3-gb1ecbc02,
+    // "feat(profile): support OAuth2 auth config in custom_credentials"),
+    // predating and entirely unrelated to tls_intercept. b1ecbc02's machinery is
+    // upstream's GENERAL (non-SPIFFE) OAuth2 client_credentials route-wiring
+    // layer. Phase 113 (this phase) deliberately declines to backport it — see
+    // OD-1 in 113-CONTEXT.md and `proj/ADR-113-spiffe-disposition.md` — as an
+    // explicit, named scope boundary, not a silent gap inherited from an absent
+    // module. This phase instead adds only the minimal SPIFFE-specific surface
+    // this file's own dispatch needs (`LoadedRoute.managed_auth`,
+    // `has_spiffe_source()`, `RouteStore::spiffe_declared_for_upstream()`).
+    //
+    // NetworkAuditAuthMechanism/NetworkAuditInjectionMode are now PARTIALLY
+    // present: the SPIFFE-specific variants (SpiffeJwtBearer/SpiffeJwt) landed in
+    // Plan 113-01 and are used by `auth.rs`'s ManagedUpstreamAuth. The general
+    // OAuth2/mTLS variants from b1ecbc02 remain absent, consistent with the OD-1
+    // boundary above — this is not a stale "not present" claim carried forward
+    // unexamined.
 
     /// Self-signed CA for testing. Generated with:
     /// openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
