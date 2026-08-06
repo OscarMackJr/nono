@@ -672,6 +672,7 @@ mod tests {
             managed_credential_active: None,
             injection_mode: None,
             denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+            spiffe_context: None,
             target: "blocked.example".to_string(),
             port: Some(443),
             method: None,

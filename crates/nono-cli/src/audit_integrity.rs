@@ -158,6 +158,7 @@ mod tests {
                 managed_credential_active: None,
                 injection_mode: None,
                 denial_category: None,
+                spiffe_context: None,
                 target: "api.example.com".to_string(),
                 port: Some(443),
                 method: Some("POST".to_string()),

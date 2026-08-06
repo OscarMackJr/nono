@@ -1258,6 +1258,7 @@ fn record_network_audit_denial(
         managed_credential_active: None,
         injection_mode: None,
         denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+        spiffe_context: None,
         target,
         port: if sockaddr.port == 0 {
             None

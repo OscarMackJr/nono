@@ -209,6 +209,10 @@ pub enum NetworkAuditAuthMechanism {
     PhantomPath,
     /// Phantom token carried in a query parameter
     PhantomQuery,
+    /// SPIFFE JWT-SVID presented as a bearer token
+    SpiffeJwtBearer,
+    /// OAuth2 jwt-bearer assertion (RFC 7523) signed with a SPIFFE JWT-SVID
+    SpiffeOAuthAssertion,
 }
 
 /// Outcome of proxy-side authentication or phantom-token validation.
@@ -230,6 +234,8 @@ pub enum NetworkAuditInjectionMode {
     QueryParam,
     BasicAuth,
     OAuth2,
+    /// SPIFFE JWT-SVID injected as a bearer token
+    SpiffeJwt,
 }
 
 /// Structured category for denied proxy events.
@@ -244,6 +250,51 @@ pub enum NetworkAuditDenialCategory {
     UpstreamConnectFailed,
     ConnectBypassesL7,
     ExternalProxyRejected,
+    /// Route declared SPIFFE-authenticated but arrived on a proxy path with
+    /// no SPIFFE implementation (D-03 fail-closed guard; the guard itself
+    /// lands in Plan 113-05 — this variant is added ahead of need so that
+    /// plan does not require a second edit to this enum).
+    SpiffeUnsupportedPath,
+}
+
+/// SPIFFE delegation-chain context recovered from a JWT-SVID's `act` claim.
+///
+/// Pure data — records what the token asserted, applies no policy. See
+/// `crate::undo::SpiffeAuditContext` for the parent audit record this nests
+/// inside.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpiffeDelegationContext {
+    /// SPIFFE ID of the workload that authorized this delegation (the `act.sub` claim)
+    pub authorized_by: String,
+    /// SPIFFE ID of the workload the token was issued on behalf of, when present
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on_behalf_of: Option<String>,
+    /// Number of nested `act` claims observed (delegation-chain depth)
+    pub chain_depth: u32,
+}
+
+/// SPIFFE audit context attached to a network audit event when a request
+/// used SPIFFE/SPIRE workload-identity auth.
+///
+/// Pure data — records what happened (workload identity, trust domain,
+/// delegation chain), applies no enforcement or policy evaluation. See
+/// ADR-86 / D-08 (113-CONTEXT.md).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpiffeAuditContext {
+    /// SPIFFE ID of the workload that presented the credential
+    pub workload_spiffe_id: String,
+    /// Trust domain portion of `workload_spiffe_id`
+    pub trust_domain: String,
+    /// SVID type (currently always "jwt")
+    pub svid_type: String,
+    /// Where the credential was obtained (for example, "spire-workload-api")
+    pub source: String,
+    /// SPIFFE ID of the upstream service the credential was presented to, when known
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_spiffe_id: Option<String>,
+    /// Delegation-chain context recovered from the token's `act` claim, when present
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegation: Option<SpiffeDelegationContext>,
 }
 
 /// A single network audit event captured by the proxy.
@@ -275,6 +326,9 @@ pub struct NetworkAuditEvent {
     /// Structured denial category when the request was denied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub denial_category: Option<NetworkAuditDenialCategory>,
+    /// SPIFFE audit context, when the request used SPIFFE/SPIRE workload-identity auth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spiffe_context: Option<SpiffeAuditContext>,
     /// Hostname or logical service target (for reverse proxy events)
     pub target: String,
     /// Port when available (CONNECT/external), otherwise None
