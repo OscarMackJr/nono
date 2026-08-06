@@ -155,15 +155,19 @@ mod tests {
         );
     }
 
+    /// A failed spawn must surface the error rather than half-register.
+    ///
+    /// Deliberately does NOT assert on the size of the registry: this binary
+    /// runs its tests in parallel and the hook-runtime tests spawn through the
+    /// same process-global registry, so any count taken here is racy. That a
+    /// failed spawn registers nothing is structural instead — `cmd.spawn()?`
+    /// short-circuits before `child.id()` is ever read.
     #[test]
-    fn a_failed_spawn_registers_nothing() {
-        let before = lock_owned_pids().len();
+    fn a_failed_spawn_returns_the_error() {
         let mut cmd = Command::new("/nonexistent/nono-owned-children-test-binary");
-        assert!(spawn_owned(&mut cmd).is_err());
-        assert_eq!(
-            lock_owned_pids().len(),
-            before,
-            "a failed spawn must not leave a registration behind"
+        assert!(
+            spawn_owned(&mut cmd).is_err(),
+            "spawning a nonexistent binary must fail rather than yield a handle"
         );
     }
 }
