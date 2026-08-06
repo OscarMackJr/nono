@@ -656,6 +656,70 @@ base absorb.
 **Disposition (Phase 112): won't-sync (target subsystem absent) — LOCKED per CONTEXT.md D-01.** No
 code change. This note is the deliverable.
 
+### SPIFFE Carry-Forward Note (Phase 113, D-02)
+
+**Filed:** 2026-08-06 (Phase 113, Plan 113-08 close-out; premise re-confirmed live via direct
+`grep`/`git log -S` reads during Plans 113-01 through 113-08).
+
+Upstream `c831dade422f2bdf37d7429af0423cafa0a60c06` (#1272, "feat(proxy): add SPIFFE/SPIRE
+workload identity auth for upstream routes") includes two `tls_intercept/` hunks —
+`h2_forward.rs` (+192) and `handle.rs` (+286), 478 lines total — implementing
+`handle_spiffe_intercept_request`, a SPIFFE-authenticated request handler for TLS-intercepted
+streams, parallel to (not a prerequisite of) the reverse-proxy SPIFFE handlers this fork built in
+`reverse.rs`.
+
+**This fork does not currently have a `tls_intercept/` module for that handler to land on.**
+`grep -rn "mod tls_intercept|struct.*TlsIntercept|fn.*tls_intercept" crates/nono-proxy/src/`
+returns 0 hits (re-confirmed live 2026-08-06, Plan 113-08) — no TLS-interception subsystem exists
+anywhere in this fork's proxy. `proj/ADR-113-spiffe-disposition.md` (D-01) records the full
+positive proof that dropping these two hunks does not leave any *reachable* fork route type
+silently unauthenticated, since the fork cannot reach a TLS-intercepted request path at all today.
+
+**Obligation for whichever future plan introduces a `tls_intercept/` module:** when TLS
+interception is eventually absorbed into this fork (the fork's own `ProxyHandle::intercept_ca_path()`
+returning `None` unconditionally, per `112-07`, is the standing marker that this has not yet
+happened), the fork MUST consciously decide whether to bring `c831dade`'s
+`handle_spiffe_intercept_request` SPIFFE-authentication path along with it, or whether the
+reverse-proxy SPIFFE handlers this phase built (`handle_spiffe_route`,
+`handle_spiffe_assertion_credential` in `reverse.rs`) already provide sufficient coverage for
+whatever request shapes the new TLS-intercept module exposes. This is **not an automatic
+inheritance** — absorbing a `tls_intercept/` module without re-examining this decision risks either
+silently re-introducing an unauthenticated SPIFFE-declared-route gap on the newly-reachable
+intercepted-TLS path, or duplicating enforcement logic that already exists in `reverse.rs`. A
+future planner reading this cluster's work-list should treat `c831dade`'s `tls_intercept/` hunks as
+a named line item requiring its own disposition call against the reverse-proxy SPIFFE handlers'
+actual shape at that time, not a hunk that rides along for free.
+
+**A second, newly-identified divergence surfaced by this phase's research, not previously recorded
+in any ledger cluster:** upstream commit `b1ecbc02` ("feat(profile): support OAuth2 auth config in
+custom_credentials", `git describe` = `v0.38.0-3-gb1ecbc02`, 974 lines / 8 files, landed shortly
+after upstream `v0.38.0` — well before this milestone's `v0.66.0..v0.69.0` sync window and never
+referenced by any prior Phase 108 cluster). `113-RESEARCH.md`'s symbol-level verification found
+that `c831dade`'s `handle_spiffe_assertion_credential`/`handle_spiffe_route` machinery references
+`CredentialStore.oauth2_routes`/`get_oauth2()`/`struct OAuth2Route`,
+`LoadedRoute.requires_managed_credential`/`.managed_auth_mechanism`/`.managed_injection_mode`/
+`.missing_managed_credential()`, and `crate::forward` (`UpstreamSpec`/`UpstreamStrategy`/
+`forward_request`) — a general (non-SPIFFE) OAuth2 `client_credentials` route-wiring layer that
+traces to `b1ecbc02`, not to any commit in this milestone's window, and has never been absorbed
+into this fork. Phase 113 built a SPIFFE-only slice of equivalent functionality
+(`CredentialStore.spiffe_assertion_routes`/`get_spiffe_assertion()`,
+`LoadedRoute.managed_auth`/`has_spiffe_source()`) without absorbing `b1ecbc02`'s general layer —
+see `proj/ADR-113-spiffe-disposition.md`'s OD-1 section for the full disposition and rationale
+(mirroring `proj/ADR-111-resource-limits-boundary.md`'s "reject the core-module absorb" shape).
+
+**Obligation for whichever future plan absorbs `b1ecbc02` proper:** that plan must read
+`proj/ADR-113-spiffe-disposition.md`'s OD-1 section before designing the general
+`client_credentials` route-wiring layer, to understand that Phase 113's SPIFFE-scoped symbols
+(`spiffe_assertion_routes`, `get_spiffe_assertion()`, `managed_auth`, `has_spiffe_source()`) were
+built independently and must not be silently renamed, removed, or restructured by an absorb that
+assumes it is starting from a clean slate.
+
+**Disposition (Phase 113): ADAPT-DOWN for the `tls_intercept/` hunks (won't-sync, target module
+absent) — LOCKED per `113-CONTEXT.md` D-01; scope-boundary decline for `b1ecbc02`'s general
+OAuth2-route-wiring layer — LOCKED per `113-CONTEXT.md`'s discretionary OD-1 grant, recorded
+permanently in `proj/ADR-113-spiffe-disposition.md`.** No code change for either. This note and
+the ADR are the deliverables.
+
 ### security-residual-and-misc cluster commits (18)
 
 The 10 named security-relevant anchor SHAs from `108-CONTEXT.md` D-18 appear first (verbatim),
