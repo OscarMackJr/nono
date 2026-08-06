@@ -54,7 +54,25 @@ carried_forward:
 closed_this_pass:
   critical: 4
   warning: 1
-status: issues_found
+fix_pass:
+  scope: critical_and_warning
+  groups: 2
+  group_a: trust + proxy (CR-05, CR-06, WR-04, WR-05, WR-09, WR-10, WR-12, WR-13, WR-14)
+  group_b: supervisor + PTY + linux-sandbox (WR-01, WR-02, WR-03, WR-06, WR-07, WR-08, WR-15)
+  fixed:
+    critical: 2
+    warning: 14
+    info: 0
+  skipped: 0
+open:
+  critical: 0
+  warning: 0
+  info: 7
+status: info_only
+status_note: >-
+  All 2 Critical and all 14 Warning findings are fixed and committed. The 7
+  Info findings remain open by operator decision — this fix pass was scoped to
+  Critical + Warning only. `info_only` means "nothing open above Info".
 ---
 
 # Phase 112: Code Review Report (Pass 2 — adversarial re-review)
@@ -541,6 +559,32 @@ macro_rules! drained_return {
 Use it at all four `return` sites, and drain once more before the trailing
 `wait_for_child(child)?` at `:3533` so the `break` paths are covered too.
 
+**Resolution (Group B fix pass):** FIXED exactly as recommended — `3ec4e536`.
+
+A local `drained_return!` macro now wraps all four early exits (orphan reaper,
+startup-timeout SIGKILL, normal `Ok(status)`, `ECHILD`), and an explicit drain
+precedes the trailing `wait_for_child(child)?` that both `break` paths land on.
+
+One detail the suggested macro left open: **the drain runs before `$status` is
+evaluated, not after.** Two of the exits have a blocking `wait_for_child` as
+their status expression. Draining first answers any notification the child is
+currently parked on, so the subsequent wait cannot deadlock against a child
+blocked in a seccomp notification that nobody is left to handle. Draining after
+the wait would also find nothing: once the target dies the kernel discards its
+pending notifications.
+
+The startup-timeout return is the one that mattered, and it is fixed: the drain
+runs immediately after the `SIGKILL`, so the denials of the run nono just killed
+*because it misbehaved* are recorded rather than dropped.
+
+Regression: `crates/nono-cli/tests/resl_supervisor_drain.rs`, sentinel-scoped
+(`WR-15-SUPERVISOR-EXITS-START`/`-END`) source scan following the existing
+`cr_01_no_format_macro_in_post_fork_child_branch` precedent. It rejects any bare
+`return Ok((` in the loop body, requires at least four `drained_return!` exits,
+and asserts the trailing wait is drain-preceded. A runtime test would need a live
+Landlock+seccomp supervised child, which no CI host here reliably provides — and
+the Windows dev host cannot compile the file at all.
+
 ---
 
 ### WR-01 (carried forward): `waitpid(-1)` can steal the exit status of unrelated `std::process::Child` handles
@@ -567,6 +611,55 @@ fn reap_reparented_orphans(child: Pid, tracked: &HashSet<Pid>) -> Option<WaitSta
 }
 ```
 
+**Resolution (Group B fix pass):** FIXED — `ba546e16` (+ test de-flake `254998fd`).
+
+The suggested signature is not implementable as written: `waitpid(-1)` has
+already consumed the status by the time it returns, so "skip and do not consume"
+is not a choice the caller gets. The fix inverts it — make ownership known
+*before* the reap, and stop using the process-global wait when anything is owned.
+
+- New `crates/nono-cli/src/owned_children.rs` (unix). `spawn_owned()` holds the
+  registry mutex **across `Command::spawn()`** and the insert, so a child can
+  never exist unregistered; `OwnedChild` deregisters on `Drop`.
+- `reap_reparented_orphans` takes the same mutex for its whole non-blocking
+  pass. Empty registry → unchanged `waitpid(-1)` fast path (nothing to protect,
+  and it is cheapest). Non-empty → reap by explicit pid, enumerating
+  `/proc/self/task/<tid>/children` **unioned over every thread** (a task
+  reparented onto a subreaper attaches to whichever thread the kernel picked,
+  not necessarily the group leader) and skipping registered pids.
+- `hook_runtime::run_hook` — the site the finding names — spawns through the
+  registry. `kill_process_group` took `u32`; it now takes `i32` to match.
+
+Fail-safe rather than fail-open: if `/proc` is unreadable or the kernel lacks
+`CONFIG_PROC_CHILDREN`, the enumeration is empty, so nothing is reaped that pass
+and no status is stolen. That degradation only applies while an owned child is
+outstanding.
+
+**Residual risk, stated plainly.** The registry protects only pids spawned
+through `spawn_owned`. Anything that reaps internally without going through it —
+`Command::output()`, `Command::status()`, `tokio::process` — is still
+steal-able. Audit of the Linux supervised-run path found no such site live
+concurrently with `run_supervisor_loop`: `dynamic_tokens`' `git` calls run at
+capability-build time (before the run); `pack_update_hint` deliberately abandons
+its handle (it *wants* reaping); `startup_runtime`'s detached-session `Child`
+lives in the launching parent, not the supervising process; `sandbox_log` is
+macOS-only; `supervisor_linux`'s spawns are `#[cfg(test)]`. Converting the rest
+of the codebase pre-emptively was judged over-reach for a Warning. The invariant
+is documented at the top of `owned_children.rs`: **anything that spawns a
+subprocess and intends to wait for it itself must go through `spawn_owned`.**
+
+Note the named victim is narrower in this fork than the finding assumes: the
+fork's D-01 fail-closed divergence means `execute_before_hook` returns `Err` on
+timeout and aborts the session, so the leaked `wait_with_output()` thread does
+not in practice overlap a supervised run today. The registration is still the
+right fix — that is a policy accident, not a structural guarantee.
+
+Regression tests in `owned_children.rs`:
+`spawned_pid_is_registered_until_the_handle_is_dropped`,
+`dropping_without_waiting_still_deregisters`, `a_failed_spawn_returns_the_error`.
+The pre-existing `reap_reparented_orphans_reaps_non_primary_and_returns_status_for_primary`
+still passes (it exercises the empty-registry fast path).
+
 ---
 
 ### WR-02 (carried forward): `discard_late_terminal_input` consumes and discards a byte of real user type-ahead
@@ -581,6 +674,43 @@ loss as expected behaviour (`b"xRy"` in, `b"Ry"` out).
 
 **Fix:** unchanged — `MSG_PEEK` before consuming, or bail out unless the first readable
 byte is `ESC`.
+
+**Resolution (Group B fix pass):** FIXED — `0148f28e`, together with WR-03 (same
+function; fixing WR-03 alone makes this byte loss *more* likely, so they were
+done as a set).
+
+**Neither suggested fix is implementable.** `MSG_PEEK` requires a socket and the
+fd is a tty (`ENOTSOCK`). "Bail out unless the first readable byte is `ESC`"
+requires knowing the byte before reading it, and a tty offers no non-destructive
+peek — `FIONREAD` gives a count, not content, and `TIOCSTI` pushback is
+privileged on modern kernels and is a well-known injection vector nono will not
+use. So the grammar genuinely cannot be tested before the byte is gone.
+
+The fix therefore removes the *speculation* instead. New `CprQueryTracker` on
+`PtyProxy` counts the `ESC[6n` / `ESC[?6n` queries the child forwarded to the
+terminal that have not been answered — incremented in `proxy_master_to_client`,
+decremented in `proxy_client_to_master`, both byte-at-a-time state machines so a
+sequence may straddle two 4 KiB relay reads. `discard_late_terminal_input` takes
+`replies_outstanding` and returns without touching the input queue when it is
+zero. Nothing is owed → everything queued is the user's → do not read it.
+
+**Residual, deliberately accepted and now asserted so it stays bounded:** when a
+reply *is* owed and the user wins the race between the (`tcdrain`-ed) query and
+the terminal's answer, the leading typed byte is still consumed — exactly one
+byte, never a scan onward for a stray `R`. That window is microseconds wide, and
+the alternative is pasting `3;1R` into the user's next shell prompt, which is the
+bug this function exists to fix.
+
+**The `xRy` test was corrected, not preserved.**
+`discard_late_terminal_input_preserves_type_ahead_with_no_reply` fed `b"xRy"` and
+asserted `b"Ry"` — it encoded the defect as expected behaviour. It is now
+`discard_late_terminal_input_leaves_type_ahead_alone_when_no_reply_is_owed` and
+asserts the whole `b"xRy"` survives. A companion,
+`discard_late_terminal_input_consumes_at_most_one_byte_when_a_reply_is_owed`,
+keeps the old assertion but re-scoped to the reply-owed case so the residual
+stays visible and bounded. Plus three `CprQueryTracker` tests: counts only
+unanswered queries, matches the `ESC[?6n` private-marker form and spans reads,
+ignores unrelated sequences and never underflows.
 
 ---
 
@@ -597,6 +727,19 @@ this code exists to fix.
 
 **Fix:** unchanged — `continue` on EINTR (the deadline still bounds the loop), `break`
 only on a real error or timeout.
+
+**Resolution (Group B fix pass):** FIXED as recommended — `0148f28e`, in the same
+commit as WR-02.
+
+`if ready <= 0 ... break` was split. A negative return now checks
+`ErrorKind::Interrupted` and `continue`s; only a real error breaks. `ready == 0`
+(timeout) and a non-`POLLIN` wake (e.g. `POLLHUP`) still break, which is correct
+— there is nothing more to consume. The deadline bounds the loop, so a signal
+storm cannot make it spin past `max_wait`.
+
+Fixed together with WR-02 on purpose: making the drain persist through EINTR
+without also gating it on an outstanding reply would have increased the number of
+type-ahead bytes eaten.
 
 ---
 
@@ -712,6 +855,38 @@ computes `nvidia_present` and gates the procfs grants on it (`linux.rs:612`), bu
 proc_comm_notify: args.allow_gpu && nono::sandbox::nvidia_devices_present(),
 ```
 
+**Resolution (Group B fix pass):** FIXED exactly as recommended — `d6154377`.
+
+`sandbox_prepare.rs` now sets
+`proc_comm_notify: args.allow_gpu && nono::sandbox::nvidia_devices_present()`.
+
+**This is not a revert of the security property 112-02 established.** Where
+NVIDIA hardware *is* present, `comm` mediation stays mandatory and a
+seccomp-notify setup failure stays fatal — that was the real fail-open and it
+remains closed. What narrows is *when* the requirement applies: from "the
+operator typed a flag" to "the run will actually touch the mediated path".
+`--allow-gpu` works again on WSL2, on AMD/Intel DRM-render-node hosts and in
+containers without `CAP_SYS_ADMIN`, where mediation was being demanded for a
+write that can never occur.
+
+`nono::sandbox::nvidia_devices_present()` is new, alongside the existing
+`is_wsl2()`. ADR-86 holds: it reports what the host has and takes no view on what
+to do about it — the decision lives in `sandbox_prepare`, CLI-side. It is
+deliberately **uncached**, unlike `is_wsl2()`: GPU devfs entries can appear after
+process start (module load, `nvidia-modprobe` creating `/dev/nvidia*` on first
+use, a container gaining a device), and a stale `false` would silently disable
+mediation a run needs.
+
+**`/proc/self/task` downgrade to `Read`, checked as asked.** No regression on the
+non-supervisor path: the whole procfs block in `collect_linux_gpu_paths` is
+inside `if nvidia_present`, so on a host without NVIDIA devices `/proc/self/task`
+is not granted at all and its access mode is unobservable. On a host *with*
+NVIDIA devices the downgrade is real and `nono wrap --allow-gpu` is genuinely
+unsupported — direct exec runs no supervisor to inject the writable fd. That is
+the phase's deliberate least-privilege trade, so the `nono wrap` error message
+now says which host condition triggered it, and CHANGELOG records both behaviour
+changes under `### Changed (--allow-gpu on Linux)` as the finding asked.
+
 ---
 
 ### WR-07 (carried forward): new `unsafe` blocks lack the mandated `// SAFETY:` comments
@@ -735,6 +910,24 @@ Both files carry `// SAFETY:` comments on neighbouring blocks (`exec_strategy.rs
 
 **Fix:** unchanged — add the justifications.
 
+**Resolution (Group B fix pass):** FIXED — `1075a5de`. No behaviour change.
+
+Real justifications, not placeholders:
+
+- `exec_strategy.rs` `prctl(PR_SET_CHILD_SUBREAPER)` — integer-only `prctl`
+  operation (`arg3..arg5` must be zero), so no pointer is dereferenced and the
+  kernel writes nothing on our behalf; made pre-`fork()` while single-threaded;
+  mutates only this process's own subreaper flag; return value checked, so a
+  pre-3.4 kernel's `EINVAL` fails closed rather than being ignored.
+- `sandbox/linux.rs` test `fork()` — a separate process is required because
+  Landlock restrictions are irreversible for the calling thread group, so
+  applying them in the harness would poison every later test in the binary; the
+  child branch stays on already-resident code and terminates via `libc::_exit`,
+  which runs no atexit handlers and does not flush parent-locked stdio buffers.
+- A third block the finding did not name, the same test's `libc::waitpid`, was
+  covered too: the pid is the direct child just forked, and the only pointer the
+  kernel writes through is a live, exclusively borrowed `i32`.
+
 ---
 
 ### WR-08 (carried forward): `restrict_execute()`'s `Refer`-on-`/` grant is safe only because of an unenforced ordering precondition
@@ -753,6 +946,41 @@ while presenting as a restriction layer.
 
 **Fix:** unchanged — take the prior `DetectedAbi`/`RulesetStatus` as a parameter, or
 document it as a hard precondition and assert a prior nono layer is active.
+
+**Resolution (Group B fix pass):** FIXED — `d0ae2353`. Enforced structurally, not
+documented.
+
+The parameter option was rejected: `restrict_execute` is `pub` and re-exported,
+so widening its signature would break external callers to fix an invariant the
+library can verify itself. Instead:
+
+- `apply_with_abi_inner` — the single funnel every `apply*` entry point goes
+  through — records the installed layer's ABI in a process-global atomic, placed
+  **after** the `RulesetStatus::NotEnforced` rejection so a rejected apply never
+  sets the marker. `PartiallyEnforced` counts: `restrict_self()` returned `Ok`, so
+  a layer *is* installed.
+- `restrict_execute()` returns `Err` when no base layer is recorded, and the
+  message names exactly why the layer would otherwise be vacuous.
+- The ABI sub-case the finding raises is handled too: a base layer built against
+  an ABI without `Refer` (V1) on a kernel that reports `Refer` now logs at
+  `warn!` — this layer's `Refer` handling then has nothing to intersect with. Not
+  an error, because it still cannot widen.
+
+`DetectedAbi::abi_ordinal()` was added for the `0 == no layer` encoding
+(`V1..V6` → `1..6`, unknown → `u8::MAX` so ordering comparisons stay monotonic).
+
+**No deny-within-allow is assumed.** Landlock stays strictly allow-list and layers
+intersect, so this cannot and does not widen access — which is also why the
+finding is a truthfulness defect rather than a privilege one: standalone, the
+layer under-delivers its stated contract instead of over-granting. The fix stops
+it presenting as a restriction layer when it restricts nothing.
+
+Regression: `restrict_execute_refuses_to_run_without_a_base_landlock_layer` runs
+in a forked child so the process-global marker cannot be contaminated by another
+test in the binary, and distinguishes "succeeded anyway" (exit 1) from "failed for
+a different reason" (exit 2). `test_restrict_execute_does_not_break_rename_into_new_subdir`
+is the positive control and still passes. `Sandbox::restrict_execute`'s doc and
+CHANGELOG both record the new `Err` case for downstream consumers.
 
 ---
 
@@ -1170,3 +1398,57 @@ _`892d2e01`, `585f2743`, `20f9a1cd`._
 _Pass 2 (this document): CR-01/CR-03/CR-04 confirmed fixed; CR-02 partially fixed._
 _WR-11 closed. 11 Warnings + 5 Info carried forward. New: CR-05, CR-06, WR-13, WR-14,_
 _WR-15, IN-06, IN-07._
+
+---
+
+## Pass 2 fix pass — final state
+
+Scoped by the operator to **Critical + Warning only**; Info was deliberately left
+open. Run as two groups against disjoint file sets, each finding its own commit
+with DCO sign-off.
+
+| | Findings | Fixed | Skipped | Open |
+|---|---|---|---|---|
+| Critical | 2 | 2 | 0 | **0** |
+| Warning | 14 | 14 | 0 | **0** |
+| Info | 7 | 0 | — | 7 (out of scope) |
+| **Total** | **23** | **16** | **0** | **7** |
+
+**Group A — trust + proxy (9):** CR-06 `a0f93651`, CR-05 `1d91ceff`,
+WR-14 `cca0b00e`, WR-10 `98b8e552`, WR-13 `f7710ccd`, WR-04 `22073bc9`,
+WR-05 `5e855018`, WR-12 `db962bb2`, WR-09 `ac1b50bf`.
+
+**Group B — supervisor + PTY + linux-sandbox (7):** WR-07 `1075a5de`,
+WR-15 `3ec4e536`, WR-01 `ba546e16` (+ test de-flake `254998fd`),
+WR-02 & WR-03 `0148f28e`, WR-06 `d6154377`, WR-08 `d0ae2353`.
+
+Nothing was skipped and no finding was judged not-a-defect. Two findings were
+fixed by a different mechanism than the review suggested, because the suggested
+mechanism was not implementable — both are argued in place: **WR-01** (`waitpid`
+has already consumed the status, so "skip and do not consume" is not available →
+ownership registry + pid-targeted reaping) and **WR-02** (`MSG_PEEK` needs a
+socket and `TIOCSTI` is privileged, so a tty cannot be peeked → gate the drain on
+an actually-outstanding CPR query). WR-01 carries a documented residual: the
+registry protects only pids spawned through `spawn_owned`, and converting every
+`Command::output()` site pre-emptively was judged over-reach. WR-02 carries a
+bounded residual asserted by a test: at most one byte, and only when a reply is
+genuinely owed.
+
+**Verification (Group B).** Both mandatory cross-target gates GREEN with
+`--all-targets`:
+`cross clippy --workspace --all-targets --target x86_64-unknown-linux-gnu -- -D warnings -D clippy::unwrap_used`
+and
+`cargo-zigbuild clippy --workspace --all-targets --target x86_64-apple-darwin -- -D warnings -D clippy::unwrap_used`
+(`SDKROOT` unset). `cargo fmt --all --check` clean. Tests run under
+`cross test --target x86_64-unknown-linux-gnu` — the touched files are
+Windows-excluded, so the host cannot execute them at all: `sandbox::linux` 100
+passed (incl. the new WR-08 negative test and its positive control),
+`pty_proxy::tests` 42 passed, `owned_children` 3 passed, `hook_runtime` 15
+passed, `reap_reparented_orphans` 1 passed, `resl_supervisor_drain` 2 passed.
+
+**Not evidence, recorded so it is not mistaken for evidence:** the local `cross`
+container has no `python3`, so every test in
+`crates/nono-cli/tests/socket_access_run.rs` takes a skip path and reports `ok`
+in ~0.01s. It proves nothing about IN-05 or anything else.
+
+_Fix pass: 2026-08-06 — Claude (gsd-code-fixer)_
