@@ -1009,6 +1009,42 @@ async fn handle_forward_http(
     // 2. Parse host+port and run the host filter (DNS resolution + SSRF guard).
     let (host, port) = parse_non_connect_target(first_line)?;
 
+    // D-03 (113-CONTEXT.md): this forward-HTTP path has no SPIFFE
+    // implementation of its own — the fork carries no `tls_intercept`
+    // module (D-01), so there is nowhere for a JWT-SVID to be fetched or
+    // injected on this code path. A request whose absolute-form target
+    // matches a SPIFFE-declared route's upstream must never be silently
+    // forwarded unauthenticated here, since that would bypass the route's
+    // only auth mechanism entirely. Unconditional — NOT gated on
+    // `state.config.require_auth` (mirroring the WR-13 guard's structural
+    // shape above but for an orthogonal condition): a SPIFFE-declared
+    // route's auth requirement does not depend on whether session-token
+    // auth happens to be enabled for this proxy instance.
+    let host_port = format!("{}:{}", host, port);
+    if state.route_store.spiffe_declared_for_upstream(&host_port) {
+        warn!(
+            "Blocked forward-HTTP request to SPIFFE-declared route upstream {} — this path has \
+             no SPIFFE implementation (D-01); use the reverse-proxy path instead",
+            host_port
+        );
+        audit::log_denied(
+            Some(&state.audit_log),
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                denial_category: Some(
+                    nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath,
+                ),
+                ..audit::EventContext::default()
+            },
+            &host,
+            port,
+            "SPIFFE-declared route upstream: forward-HTTP path has no SPIFFE implementation",
+        );
+        let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
     // Self-request detection: absolute-form URL targeting the proxy's own
     // bound port on a loopback host (e.g. an SDK configured with
     // `OPENAI_BASE_URL=http://127.0.0.1:{proxy_port}/openai` sent via an
@@ -1236,6 +1272,20 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
         // through the reverse proxy path so L7 path filtering and
         // credential injection are enforced. A CONNECT tunnel would
         // bypass both (raw TLS pipe, proxy never sees HTTP method/path).
+        //
+        // D-03 (113-CONTEXT.md): this check is also the fail-closed guard
+        // for all three CONNECT dispatch arms below (external-proxy chain,
+        // bypass-route direct, non-bypass) — it runs unconditionally,
+        // before `use_external` is even computed and before any
+        // `require_auth`/`strict_connect_auth` check, using the exact same
+        // `first_line`-derived authority every arm's own
+        // `parse_connect_target` would parse (`connect.rs::parse_connect_target`
+        // — verified identical `parts[1]` derivation). A SPIFFE-declared
+        // route's upstream is therefore already unreachable via any CONNECT
+        // arm by the time dispatch happens; the `spiffe_declared_for_upstream`
+        // sub-check below only refines the audit `denial_category` so a
+        // SPIFFE-route denial is distinguishable from a plain route-upstream
+        // CONNECT-bypass denial, it does not add new deny surface.
         if !state.route_store.is_empty() {
             if let Some(authority) = first_line.split_whitespace().nth(1) {
                 // Normalise authority to host:port. Handle IPv6 brackets:
@@ -1257,6 +1307,18 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                         .rsplit_once(':')
                         .map(|(h, p)| (h, p.parse::<u16>().unwrap_or(443)))
                         .unwrap_or((&host_port, 443));
+                    let is_spiffe_route =
+                        state.route_store.spiffe_declared_for_upstream(&host_port);
+                    let denial_category = if is_spiffe_route {
+                        nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath
+                    } else {
+                        nono::undo::NetworkAuditDenialCategory::ConnectBypassesL7
+                    };
+                    let denial_reason = if is_spiffe_route {
+                        "SPIFFE-declared route upstream: CONNECT path has no SPIFFE implementation"
+                    } else {
+                        "route upstream: CONNECT bypasses L7 filtering"
+                    };
                     warn!(
                         "Blocked CONNECT to route upstream {} — use reverse proxy path instead",
                         authority
@@ -1265,14 +1327,12 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                         Some(&state.audit_log),
                         audit::ProxyMode::Connect,
                         &audit::EventContext {
-                            denial_category: Some(
-                                nono::undo::NetworkAuditDenialCategory::ConnectBypassesL7,
-                            ),
+                            denial_category: Some(denial_category),
                             ..Default::default()
                         },
                         host,
                         port,
-                        "route upstream: CONNECT bypasses L7 filtering",
+                        denial_reason,
                     );
                     let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
                     stream.write_all(response.as_bytes()).await?;
@@ -2880,5 +2940,189 @@ mod tests {
                 // partially-initialized ProxyHandle escapes.
             }
         }
+    }
+
+    /// Test helper (D-03, Plan 113-05): spins up a live listener + dispatch
+    /// loop directly against a caller-supplied `RouteStore`, bypassing
+    /// `start()`'s `RouteStore::load()` call — the only way to exercise a
+    /// `declares_spiffe: true` route's dispatch-time behavior end-to-end
+    /// without a live SPIRE Workload API (`RouteStore::load` would
+    /// otherwise await a real connect for any `spiffe`-declared route, see
+    /// `start_fails_closed_on_unreachable_spiffe_socket` above). Mirrors
+    /// `start()`'s TLS/pool/audit-log construction so the dispatch code
+    /// under test runs against a `ProxyState` shaped identically to
+    /// production.
+    async fn spawn_state_for_d03_dispatch_test(
+        config: ProxyConfig,
+        route_store: RouteStore,
+    ) -> (std::net::SocketAddr, audit::SharedAuditLog) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let session_token = token::generate_session_token().unwrap();
+        let filter = ProxyFilter::allow_all();
+        let root_store = route::build_base_root_store();
+        let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+        let tls_config_arc: Arc<rustls::ClientConfig> = Arc::new(tls_config);
+        let tls_connector = tokio_rustls::TlsConnector::from(Arc::clone(&tls_config_arc));
+        let upstream_pool =
+            crate::pool::UpstreamPool::new(Arc::clone(&tls_config_arc), config.enable_h2);
+        let bypass_matcher = config
+            .external_proxy
+            .as_ref()
+            .map(|ext| external::BypassMatcher::new(&ext.bypass_hosts))
+            .unwrap_or_else(|| external::BypassMatcher::new(&[]));
+        let audit_log = audit::new_audit_log();
+
+        let state = Arc::new(ProxyState {
+            filter,
+            session_token,
+            route_store,
+            credential_store: CredentialStore::empty(),
+            config,
+            tls_connector,
+            default_tls_config: tls_config_arc,
+            upstream_pool,
+            active_connections: AtomicUsize::new(0),
+            audit_log: Arc::clone(&audit_log),
+            bypass_matcher,
+            bound_port: addr.port(),
+        });
+
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        tokio::spawn(accept_loop(listener, state, shutdown_rx));
+
+        (addr, audit_log)
+    }
+
+    /// Test helper: a `RouteStore` with exactly one `declares_spiffe: true`
+    /// route at a known upstream `host:port`, built via
+    /// `RouteStore::from_loaded_routes` (no live SPIRE agent required).
+    fn spiffe_declared_route_store(upstream_host_port: &str) -> RouteStore {
+        let mut routes = std::collections::HashMap::new();
+        routes.insert(
+            "spiffe-svc".to_string(),
+            route::LoadedRoute {
+                upstream: format!("https://{upstream_host_port}"),
+                upstream_host_port: Some(upstream_host_port.to_string()),
+                endpoint_rules: crate::config::CompiledEndpointRules::compile(&[]).unwrap(),
+                endpoint_policy: crate::config::CompiledEndpointPolicy::compile(None, &[]).unwrap(),
+                tls_connector: None,
+                tls_client_config: None,
+                tls_config_key: None,
+                managed_auth: None,
+                declares_spiffe: true,
+            },
+        );
+        RouteStore::from_loaded_routes(routes)
+    }
+
+    /// D-03: a CONNECT tunnel targeting a SPIFFE-declared route's upstream
+    /// is denied (403) with `denial_category: SpiffeUnsupportedPath`, never
+    /// silently tunneled — on this fork's CONNECT path, which has no SPIFFE
+    /// implementation of its own (D-01). `require_auth: false` proves the
+    /// guard is unconditional: it fires even when session-token auth is
+    /// disabled (`--no-auth`), and `external_proxy` is configured to prove
+    /// the guard preempts all three CONNECT dispatch arms (external-proxy
+    /// chain, bypass-route direct, non-bypass) — it runs before any of them
+    /// are selected, using the same `first_line`-derived host:port every
+    /// arm's own `parse_connect_target` would parse.
+    #[tokio::test]
+    async fn d03_connect_denies_spiffe_declared_route_upstream() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let upstream_host_port = "spiffe-upstream.invalid:9443";
+        let route_store = spiffe_declared_route_store(upstream_host_port);
+        let config = ProxyConfig {
+            require_auth: false,
+            external_proxy: Some(crate::config::ExternalProxyConfig {
+                address: "127.0.0.1:1".to_string(),
+                auth: None,
+                bypass_hosts: vec![],
+            }),
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("CONNECT {upstream_host_port} HTTP/1.1\r\nHost: {upstream_host_port}\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "CONNECT to a SPIFFE-declared route upstream must be denied (403), \
+             even with require_auth=false and an external_proxy configured, got: {}",
+            response_str
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath)),
+            "expected a Deny audit event with denial_category=SpiffeUnsupportedPath, got: {:?}",
+            events
+        );
+    }
+
+    /// D-03: an absolute-form `http://` forward-proxy request targeting a
+    /// SPIFFE-declared route's upstream is denied (403) with
+    /// `denial_category: SpiffeUnsupportedPath`, never silently forwarded —
+    /// `handle_forward_http` has no SPIFFE implementation of its own (D-01;
+    /// this is the exact WR-13 defect shape D-03 exists to prevent, for an
+    /// orthogonal check). `require_auth: false` proves the guard is
+    /// unconditional — it fires even when session-token auth is disabled.
+    #[tokio::test]
+    async fn d03_forward_http_denies_spiffe_declared_route_upstream() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let upstream_host_port = "spiffe-upstream.invalid:9443";
+        let route_store = spiffe_declared_route_store(upstream_host_port);
+        let config = ProxyConfig {
+            require_auth: false,
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET http://{upstream_host_port}/v1/models HTTP/1.1\r\nHost: {upstream_host_port}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "forward-HTTP to a SPIFFE-declared route upstream must be denied (403), \
+             even with require_auth=false, got: {}",
+            response_str
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath)),
+            "expected a Deny audit event with denial_category=SpiffeUnsupportedPath, got: {:?}",
+            events
+        );
     }
 }

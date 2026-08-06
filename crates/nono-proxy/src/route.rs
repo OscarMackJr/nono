@@ -229,6 +229,21 @@ impl RouteStore {
         }
     }
 
+    /// Test-only constructor: build a `RouteStore` directly from pre-loaded
+    /// routes, bypassing `load()`'s live connects (SPIFFE Workload API,
+    /// per-route TLS CA loading). `RouteStore.routes` is module-private, so
+    /// without this, callers outside `route.rs` (e.g. `server.rs`'s D-03
+    /// guard tests, Plan 113-05) cannot construct a `RouteStore` containing a
+    /// `declares_spiffe: true` route without a live SPIRE agent for
+    /// `load()` to connect to — the same testability gap `LoadedRoute`'s own
+    /// `declares_spiffe` field doc comment (above) already documents for
+    /// `has_spiffe_source()`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn from_loaded_routes(routes: HashMap<String, LoadedRoute>) -> Self {
+        Self { routes }
+    }
+
     /// Get a loaded route by normalised prefix, if configured.
     #[must_use]
     pub fn get(&self, prefix: &str) -> Option<&LoadedRoute> {
