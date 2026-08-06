@@ -15,12 +15,13 @@
 //! forwarded without buffering.
 
 use crate::audit;
+use crate::auth::UpstreamAuthMaterial;
 use crate::config::EndpointPolicyOutcome;
 use crate::config::InjectMode;
 use crate::credential::{CredentialStore, LoadedCredential};
 use crate::error::{ProxyError, Result};
 use crate::filter::ProxyFilter;
-use crate::route::RouteStore;
+use crate::route::{LoadedRoute, RouteStore};
 use crate::token;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -198,6 +199,34 @@ pub async fn handle_reverse_proxy(
             send_error(stream, 403, "Forbidden").await?;
             return Ok(());
         }
+    }
+
+    // SPIFFE dispatch (Phase 113, Plan 113-06). A route with a direct
+    // SPIFFE JWT-SVID auth source (`route.spiffe`, D-04, live
+    // `ManagedUpstreamAuth` connected at `RouteStore::load` time) is
+    // handled by a dedicated handler built against this fork's own
+    // upstream-connect primitives (`parse_upstream_url`/
+    // `connect_upstream_tls`, below) — NOT upstream's absent `crate::forward`
+    // module, whose spec/strategy/request-forwarding types this fork does
+    // not host (D-01). Checked before the static_cred/no-credential
+    // branches below so a SPIFFE-declared route never falls through to
+    // keystore-based lookup.
+    //
+    // (The RFC 7523 jwt-bearer OAuth2 `client_assertion` SPIFFE flow —
+    // `credential_store.get_spiffe_assertion()` — dispatches from this same
+    // point; landed in Plan 113-06's second task.)
+    if route.has_spiffe_source() {
+        return handle_spiffe_route(
+            first_line,
+            stream,
+            remaining_header,
+            ctx,
+            buffered_body,
+            &service,
+            &upstream_path,
+            route,
+        )
+        .await;
     }
 
     // Look up credential for service (optional — not all routes inject credentials)
@@ -464,6 +493,312 @@ pub async fn handle_reverse_proxy(
         &upstream_path,
         status_code,
     );
+    Ok(())
+}
+
+/// Handle a request to a route with a direct SPIFFE JWT-SVID auth source
+/// (`route.spiffe`, D-01/D-04). Mirrors `handle_reverse_proxy`'s static_cred
+/// flow step-by-step (auth gate -> acquire credential -> build/parse/filter/
+/// connect upstream -> inject -> forward -> audit), substituting credential
+/// acquisition with `route.managed_auth.acquire()` (a freshly fetched
+/// JWT-SVID, injected as a bearer token) and audit emission with
+/// `audit::log_l7_request` (SC2/D-08 — carries `spiffe_context`, unlike the
+/// ctx-less `log_reverse_proxy`).
+///
+/// This is a REWRITE against this fork's own `parse_upstream_url()` /
+/// `connect_upstream_tls()` upstream-connect primitives, not a port of
+/// upstream's diffed body — the absent `crate::forward` module's spec/
+/// strategy/request-forwarding types do not exist in this fork (D-01).
+///
+/// Fails closed (503 + `ManagedCredentialUnavailable`) if credential
+/// acquisition fails, or if the `has_spiffe_source()` invariant that gated
+/// dispatch to this function is somehow violated — never forwards
+/// unauthenticated (T-113-17).
+#[allow(clippy::too_many_arguments)]
+async fn handle_spiffe_route(
+    first_line: &str,
+    stream: &mut TcpStream,
+    remaining_header: &[u8],
+    ctx: &ReverseProxyCtx<'_>,
+    buffered_body: &[u8],
+    service: &str,
+    upstream_path: &str,
+    route: &LoadedRoute,
+) -> Result<()> {
+    let (method, _path, version) = parse_request_line(first_line)?;
+
+    // Auth gate — IDENTICAL call to the existing no-credential branch's
+    // session-token check (validate_proxy_auth via Proxy-Authorization).
+    // SPIFFE routes have no phantom-token-in-client-header concept: the real
+    // credential is fetched fresh per request, never supplied by the client,
+    // so there is nothing for the client to prove possession of except the
+    // session token itself (T-113-15: no bypass path — this is the SAME
+    // code the static_cred/no-credential branches call, not a duplicate).
+    if ctx.require_auth {
+        if let Err(e) = token::validate_proxy_auth(remaining_header, ctx.session_token) {
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(service),
+                    auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
+                    auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
+                    managed_credential_active: Some(false),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
+                    ),
+                    ..Default::default()
+                },
+                service,
+                0,
+                &e.to_string(),
+            );
+            send_error(stream, 407, "Proxy Authentication Required").await?;
+            return Ok(());
+        }
+    }
+
+    // Acquire a fresh JWT-SVID / bearer token. `has_spiffe_source()` (the
+    // caller's dispatch condition) guarantees `managed_auth` is `Some` for
+    // any route reaching this function per `RouteStore::load`'s invariant —
+    // but CLAUDE.md forbids `.unwrap()`/`.expect()`, so a violated invariant
+    // fails closed exactly like a genuine acquisition failure rather than
+    // panicking.
+    let Some(managed_auth) = route.managed_auth.as_ref() else {
+        warn!(
+            "handle_spiffe_route dispatched for service '{}' but managed_auth is None \
+             (has_spiffe_source() invariant violated) — failing closed",
+            service
+        );
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(service),
+                denial_category: Some(
+                    nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
+                ),
+                managed_credential_active: Some(false),
+                ..Default::default()
+            },
+            service,
+            0,
+            "managed_auth invariant violated",
+        );
+        send_error(stream, 503, "Service Unavailable").await?;
+        return Ok(());
+    };
+
+    let material = match managed_auth.acquire().await {
+        Ok(m) => m,
+        Err(e) => {
+            // Fail closed: the SPIRE agent may have gone away after startup
+            // (T-113-17) — never forward the request unauthenticated.
+            warn!(
+                "SPIFFE credential acquisition failed for service '{}': {}",
+                service, e
+            );
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(service),
+                    auth_mechanism: Some(managed_auth.audit_mechanism()),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
+                    ),
+                    managed_credential_active: Some(false),
+                    ..Default::default()
+                },
+                service,
+                0,
+                &e.to_string(),
+            );
+            send_error(stream, 503, "Service Unavailable").await?;
+            return Ok(());
+        }
+    };
+
+    let UpstreamAuthMaterial::BearerToken {
+        header,
+        token: svid_token,
+        credential_format,
+        ..
+    } = &material;
+
+    // No path transformation for SPIFFE bearer-token injection (unlike the
+    // url_path/query_param static-credential modes) — the token is always
+    // header-injected.
+    let upstream_url = format!("{}{}", route.upstream.trim_end_matches('/'), upstream_path);
+    debug!(
+        "Forwarding to upstream (SPIFFE): {} {}",
+        method, upstream_url
+    );
+
+    let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
+
+    // DNS resolve + host check via the filter — identical to the static_cred path.
+    let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
+    if !check.result.is_allowed() {
+        let reason = check.result.reason();
+        warn!("Upstream host denied by filter: {}", reason);
+        send_error(stream, 403, "Forbidden").await?;
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(service),
+                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
+                ..Default::default()
+            },
+            service,
+            0,
+            &reason,
+        );
+        return Ok(());
+    }
+
+    // Strip the client's own copy of the injection header (if any) — the
+    // real bearer token is injected fresh below and must never be shadowed
+    // or duplicated by a client-supplied value.
+    let filtered_headers = filter_headers(remaining_header, header);
+    let content_length = extract_content_length(remaining_header);
+
+    // Read request body if present, with size limit — identical to the
+    // static_cred path's body-read sequence.
+    let body = if let Some(len) = content_length {
+        if len > MAX_REQUEST_BODY {
+            send_error(stream, 413, "Payload Too Large").await?;
+            return Ok(());
+        }
+        let mut buf = Vec::with_capacity(len);
+        let pre = buffered_body.len().min(len);
+        buf.extend_from_slice(&buffered_body[..pre]);
+        let remaining = len - pre;
+        if remaining > 0 {
+            let mut rest = vec![0u8; remaining];
+            stream.read_exact(&mut rest).await?;
+            buf.extend_from_slice(&rest);
+        }
+        buf
+    } else {
+        Vec::new()
+    };
+
+    // Connect to upstream over TLS — reuses the per-route TLS connector
+    // (custom CA) if configured, otherwise the shared default connector.
+    let connector = route.tls_connector.as_ref().unwrap_or(ctx.tls_connector);
+    let upstream_result = connect_upstream_tls(
+        &upstream_host,
+        upstream_port,
+        &check.resolved_addrs,
+        connector,
+    )
+    .await;
+    let mut tls_stream = match upstream_result {
+        Ok(s) => s,
+        Err(e) => {
+            warn!("Upstream connection failed: {}", e);
+            send_error(stream, 502, "Bad Gateway").await?;
+            audit::log_denied(
+                ctx.audit_log,
+                audit::ProxyMode::Reverse,
+                &audit::EventContext {
+                    route_id: Some(service),
+                    denial_category: Some(
+                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
+                    ),
+                    ..Default::default()
+                },
+                service,
+                0,
+                &e.to_string(),
+            );
+            return Ok(());
+        }
+    };
+
+    // Build the upstream request into a Zeroizing buffer since it contains
+    // the injected credential. This ensures the token is zeroed from heap
+    // memory when the buffer is dropped.
+    let mut request = Zeroizing::new(format!(
+        "{} {} {}\r\nHost: {}\r\n",
+        method, upstream_path_full, version, upstream_host
+    ));
+
+    // Inject the freshly-fetched bearer token using the resolved credential
+    // format (mirrors inject_credential_for_mode's Header/BasicAuth arm).
+    request.push_str(&format!(
+        "{}: {}\r\n",
+        header,
+        credential_format.replace("{}", svid_token.as_str())
+    ));
+
+    for (name, value) in &filtered_headers {
+        request.push_str(&format!("{}: {}\r\n", name, value));
+    }
+
+    if !body.is_empty() {
+        request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    }
+    request.push_str("\r\n");
+
+    tls_stream.write_all(request.as_bytes()).await?;
+    if !body.is_empty() {
+        tls_stream.write_all(&body).await?;
+    }
+    tls_stream.flush().await?;
+
+    // Stream the response back to the client without buffering.
+    let mut response_buf = [0u8; 8192];
+    let mut status_code: u16 = 502;
+    let mut first_chunk = true;
+
+    loop {
+        let n = match tls_stream.read(&mut response_buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                debug!("Upstream read error: {}", e);
+                break;
+            }
+        };
+
+        if first_chunk {
+            status_code = parse_response_status(&response_buf[..n]);
+            first_chunk = false;
+        }
+
+        stream.write_all(&response_buf[..n]).await?;
+        stream.flush().await?;
+    }
+
+    // SC2/D-08: log_l7_request (NOT log_reverse_proxy — the ctx-less function
+    // kept untouched per Landmine L3), carrying structured spiffe_context.
+    // The raw token never appears in this record (T-113-16) — only identity
+    // metadata (`spiffe_audit_context()` reads workload_spiffe_id/trust_domain,
+    // never the token field).
+    audit::log_l7_request(
+        ctx.audit_log,
+        audit::ProxyMode::Reverse,
+        &audit::EventContext {
+            route_id: Some(service),
+            auth_mechanism: Some(managed_auth.audit_mechanism()),
+            auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Succeeded),
+            managed_credential_active: Some(true),
+            injection_mode: managed_auth.audit_injection_mode(),
+            spiffe_context: Some(material.spiffe_audit_context()),
+            ..Default::default()
+        },
+        &audit::L7RequestInfo {
+            host: &upstream_host,
+            port: upstream_port,
+            method: &method,
+            path: upstream_path,
+            status: status_code,
+        },
+    );
+
     Ok(())
 }
 
@@ -1485,6 +1820,130 @@ mod tests {
             event.denial_category,
             Some(NetworkAuditDenialCategory::EndpointPolicy),
             "D-09: expected EndpointPolicy denial_category; got: {:?}",
+            event.denial_category
+        );
+    }
+
+    // ============================================================================
+    // Plan 113-06 — SPIFFE dispatch: auth-gate denial before credential acquisition
+    // ============================================================================
+    //
+    // `SpiffeJwtSource`/`SpiffeAssertionTokenCache` have no test-only constructor
+    // bypassing a live SPIRE Workload API connection (documented constraint,
+    // Plans 113-03/113-04/113-05), so a full end-to-end proof of a SUCCESSFUL
+    // SPIFFE-authenticated forward is deferred to Plan 113-07's SPIRE-gated
+    // `spiffe_integration.rs` lane. This test instead proves the narrower,
+    // fully-unit-testable half of T-113-15/T-113-17: `handle_spiffe_route`'s
+    // auth gate runs and denies BEFORE any `managed_auth` access is attempted.
+    //
+    // `RouteStore::from_loaded_routes` (Plan 113-05, `#[cfg(test)] pub(crate)`)
+    // lets this test build a `declares_spiffe: true` route with `managed_auth:
+    // None` — an invariant intentionally NOT upheld here. If the auth gate were
+    // ever bypassed, the request would reach the `managed_auth: None` fail-closed
+    // branch and still be denied, but with 503, not 407 — the exact status code
+    // returned is what proves WHICH guard fired.
+
+    /// A `LoadedRoute` with `declares_spiffe: true` and `managed_auth: None`
+    /// dispatches to `handle_spiffe_route` via `has_spiffe_source()`. An
+    /// invalid/missing session token is denied 407 by the auth gate — the same
+    /// `validate_proxy_auth` call the no-credential branch already uses — before
+    /// `route.managed_auth` is ever read.
+    #[tokio::test]
+    async fn spiffe_route_denies_missing_session_token_before_credential_acquisition() {
+        use crate::config::{CompiledEndpointPolicy, CompiledEndpointRules};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+
+        let loaded_route = LoadedRoute {
+            upstream: "https://example.invalid".to_string(),
+            upstream_host_port: Some("example.invalid:443".to_string()),
+            endpoint_rules: CompiledEndpointRules::compile(&[]).unwrap(),
+            endpoint_policy: CompiledEndpointPolicy::compile(None, &[]).unwrap(),
+            tls_connector: None,
+            tls_client_config: None,
+            tls_config_key: None,
+            managed_auth: None,
+            declares_spiffe: true,
+        };
+        let mut routes = HashMap::new();
+        routes.insert("spiffesvc".to_string(), loaded_route);
+        let route_store = RouteStore::from_loaded_routes(routes);
+
+        let credential_store = CredentialStore::empty();
+        let session_token = Zeroizing::new("correct-session-token".to_string());
+        let filter = ProxyFilter::allow_all();
+
+        let root_store = crate::route::build_base_root_store();
+        let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+        let tls_config_arc = Arc::new(tls_config);
+        let tls_connector = tokio_rustls::TlsConnector::from(Arc::clone(&tls_config_arc));
+        let upstream_pool = crate::pool::UpstreamPool::new(Arc::clone(&tls_config_arc), false);
+
+        let audit_log = audit::new_audit_log();
+
+        let ctx = ReverseProxyCtx {
+            route_store: &route_store,
+            credential_store: &credential_store,
+            session_token: &session_token,
+            filter: &filter,
+            tls_connector: &tls_connector,
+            default_tls_config: &tls_config_arc,
+            upstream_pool: &upstream_pool,
+            audit_log: Some(&audit_log),
+            require_auth: true,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let (connect_result, accept_result) =
+            tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+        let mut server_stream = accept_result.unwrap().0;
+        let mut client_conn = connect_result.unwrap();
+
+        // No Proxy-Authorization header at all -> validate_proxy_auth fails.
+        let first_line = "GET /spiffesvc/v1/models HTTP/1.1";
+        let remaining_header = b"Host: example.invalid\r\n\r\n";
+
+        let _result =
+            handle_reverse_proxy(first_line, &mut server_stream, remaining_header, &ctx, &[]).await;
+
+        drop(server_stream);
+        let response = read_to_string(&mut client_conn).await;
+
+        assert!(
+            response.starts_with("HTTP/1.1 407"),
+            "expected 407 Proxy Authentication Required from the SPIFFE route's auth gate \
+             (proves the gate ran before managed_auth was ever accessed — a bypass or an \
+             invariant-violation fail-closed would both have produced a DIFFERENT status); \
+             got: {:?}",
+            response
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            !events.is_empty(),
+            "expected at least one audit event; got none"
+        );
+        let event = &events[0];
+        assert_eq!(
+            event.decision,
+            NetworkAuditDecision::Deny,
+            "expected Deny decision; got: {:?}",
+            event.decision
+        );
+        assert_eq!(
+            event.denial_category,
+            Some(NetworkAuditDenialCategory::AuthenticationFailed),
+            "expected AuthenticationFailed denial_category (auth gate, not credential \
+             acquisition); got: {:?}",
             event.denial_category
         );
     }
