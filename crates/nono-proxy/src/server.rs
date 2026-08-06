@@ -1560,6 +1560,7 @@ mod tests {
         let config = ProxyConfig {
             allowed_hosts: vec!["127.0.0.1".to_string()],
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "svc".to_string(),
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("env://NONO_TEST_TOTALLY_MISSING".to_string()),
@@ -1780,6 +1781,7 @@ mod tests {
 
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: Some("env://NONO_TEST_TOTALLY_MISSING".to_string()),
@@ -1875,6 +1877,7 @@ mod tests {
     async fn test_proxy_credential_env_vars() {
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: None,
@@ -1922,6 +1925,7 @@ mod tests {
         };
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: Some("openai_api_key".to_string()),
@@ -1978,6 +1982,7 @@ mod tests {
         };
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: Some("op://Development/OpenAI/credential".to_string()),
@@ -2040,6 +2045,7 @@ mod tests {
         let config = ProxyConfig {
             routes: vec![
                 crate::config::RouteConfig {
+                    spiffe: None,
                     prefix: "openai".to_string(),
                     upstream: "https://api.openai.com".to_string(),
                     credential_key: Some("openai_api_key".to_string()),
@@ -2057,6 +2063,7 @@ mod tests {
                     endpoint_policy: None,
                 },
                 crate::config::RouteConfig {
+                    spiffe: None,
                     prefix: "github".to_string(),
                     upstream: "https://api.github.com".to_string(),
                     credential_key: Some("env://GITHUB_TOKEN".to_string()),
@@ -2121,6 +2128,7 @@ mod tests {
         // Test leading slash
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "/anthropic".to_string(),
                 upstream: "https://api.anthropic.com".to_string(),
                 credential_key: None,
@@ -2154,6 +2162,7 @@ mod tests {
         // Test trailing slash
         let config = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "openai/".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: None,
@@ -2210,6 +2219,7 @@ mod tests {
         };
         let config_no_env_var = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "anthropic".to_string(),
                 upstream: "https://api.anthropic.com".to_string(),
                 credential_key: None,
@@ -2252,6 +2262,7 @@ mod tests {
         };
         let config_fixed = ProxyConfig {
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "anthropic".to_string(),
                 upstream: "https://api.anthropic.com".to_string(),
                 credential_key: Some("ANTHROPIC_API_KEY".to_string()),
@@ -2605,6 +2616,7 @@ mod tests {
         let config = ProxyConfig {
             no_proxy: vec!["*.openai.com".to_string()],
             routes: vec![crate::config::RouteConfig {
+                spiffe: None,
                 prefix: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: Some("openai".to_string()),

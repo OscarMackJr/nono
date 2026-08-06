@@ -397,6 +397,7 @@ mod tests {
     fn test_load_routes_without_credentials() {
         // Routes without credential_key should still be loaded into RouteStore
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "/openai".to_string(),
             upstream: "https://api.openai.com".to_string(),
             credential_key: None,
@@ -440,6 +441,7 @@ mod tests {
     #[test]
     fn test_load_routes_normalises_prefix() {
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "/anthropic/".to_string(),
             upstream: "https://api.anthropic.com".to_string(),
             credential_key: None,
@@ -465,6 +467,7 @@ mod tests {
     #[test]
     fn test_is_route_upstream() {
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "openai".to_string(),
             upstream: "https://api.openai.com".to_string(),
             credential_key: None,
@@ -491,6 +494,7 @@ mod tests {
     fn test_route_upstream_hosts() {
         let routes = vec![
             RouteConfig {
+                spiffe: None,
                 prefix: "openai".to_string(),
                 upstream: "https://api.openai.com".to_string(),
                 credential_key: None,
@@ -508,6 +512,7 @@ mod tests {
                 endpoint_policy: None,
             },
             RouteConfig {
+                spiffe: None,
                 prefix: "anthropic".to_string(),
                 upstream: "https://api.anthropic.com".to_string(),
                 credential_key: None,
@@ -587,6 +592,7 @@ mod tests {
             "https://api.openai.com:notaport",
         ] {
             let routes = vec![RouteConfig {
+                spiffe: None,
                 prefix: "bad".to_string(),
                 upstream: upstream.to_string(),
                 credential_key: None,
@@ -740,6 +746,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     fn allow_domain_endpoint_route_does_not_shadow_credential_route() {
         // (a) Credential route — key "openai", upstream api.openai.com
         let credential_route = RouteConfig {
+            spiffe: None,
             prefix: "openai".to_string(),
             upstream: "https://api.openai.com".to_string(),
             credential_key: Some("openai".to_string()),
@@ -760,6 +767,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         // (b) allow_domain endpoint route — key "_ep_api.openai.com", SAME upstream host
         //     (this is the upstream shadow trigger: same host, different prefix namespace)
         let endpoint_route = RouteConfig {
+            spiffe: None,
             prefix: "_ep_api.openai.com".to_string(),
             upstream: "https://api.openai.com".to_string(),
             credential_key: None,

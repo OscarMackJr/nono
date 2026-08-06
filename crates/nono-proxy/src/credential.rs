@@ -437,6 +437,7 @@ mod tests {
     #[test]
     fn test_load_no_credential_routes() {
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "/test".to_string(),
             upstream: "https://example.com".to_string(),
             credential_key: None,
@@ -498,6 +499,7 @@ mod tests {
         // RouteConfig uses fork struct (no proxy/tls_client_cert/tls_client_key fields).
         let _guard = TestEnvGuard::set("NONO_PROXY_TEST_LITELLM_TOKEN", "sk-litellm-test");
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "litellm".to_string(),
             upstream: "https://litellm".to_string(),
             credential_key: Some("env://NONO_PROXY_TEST_LITELLM_TOKEN".to_string()),
@@ -527,6 +529,7 @@ mod tests {
         // Fork adaptation: uses inline env guard; RouteConfig uses fork struct.
         let _guard = TestEnvGuard::set("NONO_PROXY_TEST_API_KEY", "secret-key");
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "api".to_string(),
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://NONO_PROXY_TEST_API_KEY".to_string()),

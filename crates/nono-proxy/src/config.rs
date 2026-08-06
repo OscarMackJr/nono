@@ -616,6 +616,11 @@ pub struct RouteConfig {
     #[serde(default)]
     pub aws_auth: Option<AwsAuthConfig>,
 
+    /// SPIFFE/SPIRE workload identity auth. Mutually exclusive with
+    /// `credential_key`, `oauth2`, and `aws_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spiffe: Option<SpiffeAuthConfig>,
+
     /// Optional L7 endpoint policy with explicit allow/deny/approve routes.
     ///
     /// When omitted, `endpoint_rules` preserves the legacy behavior:
@@ -623,6 +628,33 @@ pub struct RouteConfig {
     /// rules allowed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint_policy: Option<EndpointPolicyConfig>,
+}
+
+/// SPIFFE/SPIRE Workload API auth for a credential route.
+///
+/// When present, the proxy fetches a JWT-SVID from the local SPIRE Workload
+/// API (via a Unix domain socket) and injects it as a bearer token on
+/// outbound requests. The sandboxed child never sees the socket directly —
+/// see `enforce_spiffe_socket_isolation()` in `nono-cli`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SpiffeAuthConfig {
+    /// Fetch a JWT-SVID and inject it as a bearer token (or custom header).
+    Jwt {
+        /// Path to the SPIRE Workload API Unix domain socket.
+        workload_api_socket: String,
+        /// Audience values the requested JWT-SVID must be scoped to.
+        audience: Vec<String>,
+        /// HTTP header the fetched token is injected into (default: `Authorization`).
+        #[serde(default = "default_inject_header")]
+        inject_header: String,
+        /// How the injected header value is built (`{}` is replaced by the token).
+        #[serde(default)]
+        credential_format: Option<String>,
+        /// Optional hint narrowing which SVID to select when multiple are available.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        svid_hint: Option<String>,
+    },
 }
 
 /// An HTTP method+path access rule for reverse proxy endpoint filtering.
@@ -1054,13 +1086,43 @@ pub struct OAuth2Config {
     /// load time per REQ-PROF-03 acceptance #2.
     pub token_url: String,
     /// Client ID — plain value or credential reference (env://, file://, op://).
+    /// Empty (and `#[serde(default)]`) when `client_assertion` is used instead.
+    #[serde(default)]
     pub client_id: String,
     /// Client secret — credential reference (env://, file://, op://, keyring://).
     /// Resolved through `nono::keystore::load_secret` for `keyring://` URIs.
+    /// Empty (and `#[serde(default)]`) when `client_assertion` is used instead.
+    #[serde(default)]
     pub client_secret: String,
     /// OAuth2 scopes (space-separated). Empty = no scope parameter sent.
     #[serde(default)]
     pub scope: String,
+    /// RFC 7523 JWT-bearer client assertion, as an alternative to
+    /// `client_id`/`client_secret`. Mutually exclusive with them at the
+    /// validation layer (`nono-cli::profile::validate_oauth2_auth`).
+    #[serde(default)]
+    pub client_assertion: Option<ClientAssertionConfig>,
+    /// Extra form-encoded parameters sent with the token request.
+    #[serde(default)]
+    pub extra_params: std::collections::HashMap<String, String>,
+}
+
+/// A `client_assertion` alternative to plain OAuth2 `client_id`/`client_secret`,
+/// per RFC 7523 (JWT Bearer Token grant). Currently the only source is a
+/// SPIFFE/SPIRE JWT-SVID.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientAssertionConfig {
+    /// Use a SPIFFE JWT-SVID as the RFC 7523 client assertion.
+    SpiffeJwt {
+        /// Path to the SPIRE Workload API Unix domain socket.
+        workload_api_socket: String,
+        /// Audience values the requested JWT-SVID must be scoped to.
+        audience: Vec<String>,
+        /// Optional hint narrowing which SVID to select when multiple are available.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        svid_hint: Option<String>,
+    },
 }
 
 /// Custom Debug that redacts secrets — mirrors the proxy-side
@@ -1078,6 +1140,8 @@ impl std::fmt::Debug for OAuth2Config {
             .field("client_id", &"[REDACTED]")
             .field("client_secret", &"[REDACTED]")
             .field("scope", &self.scope)
+            .field("client_assertion", &self.client_assertion)
+            .field("extra_params", &"[REDACTED]")
             .finish()
     }
 }
@@ -1139,6 +1203,44 @@ mod tests {
         let deserialized: ProxyConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.allowed_hosts, vec!["api.openai.com"]);
         assert_eq!(deserialized.no_proxy, vec!["redis"]);
+    }
+
+    // ========================================================================
+    // SPIFFE/SPIRE workload identity (NET-02, Phase 113) — serde round-trip
+    // ========================================================================
+
+    #[test]
+    fn test_spiffe_jwt_config_roundtrip() {
+        let json = r#"{
+            "prefix": "inventory",
+            "upstream": "https://inventory.internal.example",
+            "spiffe": {
+                "type": "jwt",
+                "workload_api_socket": "/run/spire/sockets/agent.sock",
+                "audience": ["inventory.internal.example"],
+                "inject_header": "Authorization",
+                "credential_format": "Bearer {}"
+            }
+        }"#;
+        let route: RouteConfig = serde_json::from_str(json).unwrap();
+        let SpiffeAuthConfig::Jwt {
+            workload_api_socket,
+            audience,
+            inject_header,
+            credential_format,
+            ..
+        } = route.spiffe.unwrap();
+        assert_eq!(workload_api_socket, "/run/spire/sockets/agent.sock");
+        assert_eq!(audience, vec!["inventory.internal.example"]);
+        assert_eq!(inject_header, "Authorization");
+        assert_eq!(credential_format.as_deref(), Some("Bearer {}"));
+    }
+
+    #[test]
+    fn test_spiffe_absent_by_default() {
+        let json = r#"{"prefix": "openai", "upstream": "https://api.openai.com"}"#;
+        let route: RouteConfig = serde_json::from_str(json).unwrap();
+        assert!(route.spiffe.is_none());
     }
 
     // ========================================================================
@@ -1306,6 +1408,8 @@ mod tests {
             client_id: "literal-client-id".to_string(),
             client_secret: "very-secret-value".to_string(),
             scope: "read write".to_string(),
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
         };
         let debug_output = format!("{config:?}");
         assert!(

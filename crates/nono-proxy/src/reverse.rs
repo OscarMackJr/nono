@@ -1383,6 +1383,7 @@ mod tests {
         // Build a RouteStore with one route: service prefix "testservice", allowing
         // only GET /v1/models. Any other path is endpoint-denied.
         let routes = vec![RouteConfig {
+            spiffe: None,
             prefix: "testservice".to_string(),
             upstream: "https://example.invalid".to_string(),
             credential_key: None,
