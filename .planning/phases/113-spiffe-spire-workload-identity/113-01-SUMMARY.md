@@ -163,3 +163,10 @@ None - no external service configuration required. (SPIRE agent socket connectiv
 ---
 *Phase: 113-spiffe-spire-workload-identity*
 *Completed: 2026-08-06*
+
+## Self-Check: PASSED
+
+All 6 claimed created/modified files confirmed present on disk (`spiffe.rs`, `auth.rs`,
+`undo/types.rs`, `nono-proxy/audit.rs`, `nono-proxy/Cargo.toml`, this SUMMARY.md). All 5
+claimed commit hashes (`0be83636`, `4f6f1c97`, `d5240d59`, `8e78f487`, `1587735f`) confirmed
+present in `git log --oneline --all`.
