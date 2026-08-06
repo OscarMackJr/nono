@@ -9,11 +9,13 @@
 //! is handled by [`crate::route::RouteStore`], which loads independently of
 //! credentials. This module handles only credential-specific concerns.
 
-use crate::config::{InjectMode, RouteConfig};
+use crate::config::{ClientAssertionConfig, InjectMode, RouteConfig};
 use crate::diagnostic::ProxyDiagnostic;
 use crate::error::{ProxyError, Result};
 use base64::Engine;
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio_rustls::TlsConnector;
 use tracing::{debug, warn};
 use zeroize::Zeroizing;
 
@@ -78,6 +80,29 @@ impl std::fmt::Debug for LoadedCredential {
     }
 }
 
+/// A route authenticated via the RFC 7523 jwt-bearer OAuth2 `client_assertion`
+/// flow: a SPIFFE JWT-SVID is exchanged for an access token at `oauth2.token_url`,
+/// and that access token (not the raw SVID) is injected into upstream requests.
+///
+/// OD-1 scope note: this is the narrow SPIFFE-scoped slice of the jwt-bearer
+/// flow only. The general (non-SPIFFE) `client_credentials` route-wiring
+/// layer that upstream's diff builds alongside this one — a parallel map,
+/// route struct, and accessor for plain client_id/client_secret exchange —
+/// is explicitly NOT built here: it traces to unabsorbed `b1ecbc02` and is
+/// out of this plan's scope. See OD-1 in `113-03-PLAN.md` for the full
+/// disposition.
+#[derive(Debug)]
+pub struct SpiffeAssertionRoute {
+    /// Cached, auto-refreshing OAuth2 access token, backed by a JWT-SVID
+    /// assertion fetched from the SPIRE Workload API.
+    pub cache: crate::oauth2::SpiffeAssertionTokenCache,
+    /// Upstream URL to forward to, mirroring [`RouteConfig::upstream`].
+    pub upstream: String,
+    /// HTTP header name the exchanged access token is injected under,
+    /// mirroring [`RouteConfig::inject_header`].
+    pub inject_header: String,
+}
+
 /// Credential store for all configured routes.
 ///
 /// # Credential-match policy (D-20 replay of upstream f77e0e3)
@@ -132,6 +157,9 @@ pub struct CredentialStore {
     /// SigV4 signing is implemented; value is () because no runtime state
     /// is needed yet).
     aws_routes: HashMap<String, ()>,
+    /// Map from route prefix to a SPIFFE-JWT-SVID-backed OAuth2 jwt-bearer
+    /// assertion route (RFC 7523, NET-02/OD-1). See [`SpiffeAssertionRoute`].
+    spiffe_assertion_routes: HashMap<String, SpiffeAssertionRoute>,
 }
 
 impl CredentialStore {
@@ -145,9 +173,22 @@ impl CredentialStore {
     /// Returns an error only for hard failures (config parse errors,
     /// non-UTF-8 values). Missing or inaccessible credentials are logged
     /// as warnings and the route is skipped.
-    pub fn load(routes: &[RouteConfig]) -> Result<Self> {
+    ///
+    /// # Async (D-04)
+    ///
+    /// Async because a route with `oauth2.client_assertion` (SPIFFE jwt-bearer,
+    /// NET-02/OD-1) requires an awaited `SpiffeJwtSource::connect()` to the
+    /// SPIRE Workload API and an awaited initial `SpiffeAssertionTokenCache::new()`
+    /// token exchange. That connect sits inside this per-route branch only — a
+    /// profile with no `client_assertion` routes never touches the Workload API
+    /// and gains no live-SPIRE startup dependency.
+    pub async fn load(routes: &[RouteConfig]) -> Result<Self> {
         let mut credentials = HashMap::new();
         let mut aws_routes = HashMap::new();
+        let mut spiffe_assertion_routes = HashMap::new();
+        // Lazily built: only routes with `oauth2.client_assertion` need a TLS
+        // connector, so proxies with none of those never pay this cost.
+        let mut assertion_tls_connector: Option<TlsConnector> = None;
 
         for route in routes {
             // Normalize prefix: strip leading/trailing slashes so it matches
@@ -223,12 +264,101 @@ impl CredentialStore {
                 // real AwsRoute struct will replace it when SigV4 signing is
                 // implemented.
                 aws_routes.insert(normalized_prefix.clone(), ());
+            } else if let Some(ref oauth2) = route.oauth2 {
+                // SPIFFE OAuth2 jwt-bearer client_assertion path (RFC 7523,
+                // NET-02/OD-1). Plain client_credentials (`oauth2.client_id`/
+                // `client_secret`, no `client_assertion`) is intentionally
+                // left untouched here — that flow's general route-wiring
+                // layer (a parallel map/struct/accessor for non-SPIFFE
+                // exchange) traces to unabsorbed b1ecbc02 and is declined
+                // per OD-1; see SpiffeAssertionRoute's doc comment.
+                if let Some(ClientAssertionConfig::SpiffeJwt {
+                    workload_api_socket,
+                    audience,
+                    svid_hint,
+                }) = &oauth2.client_assertion
+                {
+                    debug!(
+                        "Loading SPIFFE OAuth2 jwt-bearer assertion route for prefix: {}",
+                        normalized_prefix
+                    );
+
+                    // A single connect/exchange failure must skip only THIS
+                    // route, not abort the whole CredentialStore::load — the
+                    // fork's existing per-route-skip idiom (see the
+                    // credential_key branch above), not upstream's
+                    // whole-proxy-abort for this specific sub-case.
+                    let jwt_source = match crate::spiffe::SpiffeJwtSource::connect(
+                        workload_api_socket,
+                        audience.clone(),
+                        "Authorization".to_string(),
+                        None,
+                        svid_hint.as_deref(),
+                    )
+                    .await
+                    {
+                        Ok(source) => source,
+                        Err(e) => {
+                            warn!(
+                                "SPIFFE Workload API unreachable for OAuth2 jwt-bearer route '{}': {}. \
+                                 Requests on this route will be denied until the SPIRE agent is reachable.",
+                                normalized_prefix, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    let connector = match &assertion_tls_connector {
+                        Some(c) => c.clone(),
+                        None => {
+                            let c = build_default_tls_connector()?;
+                            assertion_tls_connector = Some(c.clone());
+                            c
+                        }
+                    };
+
+                    let extra_params: Vec<(String, String)> = oauth2
+                        .extra_params
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect();
+
+                    match crate::oauth2::SpiffeAssertionTokenCache::new(
+                        oauth2.token_url.clone(),
+                        Arc::new(jwt_source),
+                        audience.clone(),
+                        extra_params,
+                        connector,
+                    )
+                    .await
+                    {
+                        Ok(cache) => {
+                            spiffe_assertion_routes.insert(
+                                normalized_prefix.clone(),
+                                SpiffeAssertionRoute {
+                                    cache,
+                                    upstream: route.upstream.clone(),
+                                    inject_header: route.inject_header.clone(),
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "SPIFFE OAuth2 jwt-bearer initial token exchange failed for route '{}': {}. \
+                                 Requests on this route will be denied until the IdP is reachable.",
+                                normalized_prefix, e
+                            );
+                            continue;
+                        }
+                    }
+                }
             }
         }
 
         Ok(Self {
             credentials,
             aws_routes,
+            spiffe_assertion_routes,
         })
     }
 
@@ -238,6 +368,7 @@ impl CredentialStore {
         Self {
             credentials: HashMap::new(),
             aws_routes: HashMap::new(),
+            spiffe_assertion_routes: HashMap::new(),
         }
     }
 
@@ -268,25 +399,39 @@ impl CredentialStore {
         self.aws_routes.get(prefix)
     }
 
-    /// Check if any credentials (static or AWS) are loaded.
+    /// Returns the SPIFFE OAuth2 jwt-bearer assertion route configured for
+    /// the given prefix, if any (RFC 7523, NET-02/OD-1).
+    ///
+    /// OD-1 scope note: there is deliberately no `get_oauth2()` accessor for
+    /// the general (non-SPIFFE) `client_credentials` case — see
+    /// [`SpiffeAssertionRoute`]'s doc comment.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.credentials.is_empty() && self.aws_routes.is_empty()
+    pub fn get_spiffe_assertion(&self, prefix: &str) -> Option<&SpiffeAssertionRoute> {
+        self.spiffe_assertion_routes.get(prefix)
     }
 
-    /// Number of loaded credentials (static + AWS).
+    /// Check if any credentials (static, AWS, or SPIFFE OAuth2 assertion) are loaded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.credentials.is_empty()
+            && self.aws_routes.is_empty()
+            && self.spiffe_assertion_routes.is_empty()
+    }
+
+    /// Number of loaded credentials (static + AWS + SPIFFE OAuth2 assertion).
     #[must_use]
     pub fn len(&self) -> usize {
-        self.credentials.len() + self.aws_routes.len()
+        self.credentials.len() + self.aws_routes.len() + self.spiffe_assertion_routes.len()
     }
 
     /// Returns the set of route prefixes that have loaded credentials
-    /// (static keystore and AWS routes).
+    /// (static keystore, AWS routes, and SPIFFE OAuth2 assertion routes).
     #[must_use]
     pub fn loaded_prefixes(&self) -> std::collections::HashSet<String> {
         self.credentials
             .keys()
             .chain(self.aws_routes.keys())
+            .chain(self.spiffe_assertion_routes.keys())
             .cloned()
             .collect()
     }
@@ -304,6 +449,25 @@ impl CredentialStore {
 /// The keyring service name used by nono for all credentials.
 /// Uses the same constant as `nono::keystore::DEFAULT_SERVICE` to ensure consistency.
 const KEYRING_SERVICE: &str = nono::keystore::DEFAULT_SERVICE;
+
+/// Build a default TLS connector (webpki roots + OS trust store) for the
+/// RFC 7523 jwt-bearer token exchange against a route's `oauth2.token_url`.
+///
+/// Reuses [`crate::route::build_base_root_store`] — the same root store
+/// construction `server.rs`'s shared connector and `route.rs`'s per-route
+/// custom-CA connector both use — rather than inventing a second root-store
+/// idiom in this file.
+fn build_default_tls_connector() -> Result<TlsConnector> {
+    let root_store = crate::route::build_base_root_store();
+    let tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| ProxyError::Config(format!("TLS config error: {}", e)))?
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
+    Ok(TlsConnector::from(Arc::new(tls_config)))
+}
 
 /// Redact a credential reference for safe display in warnings.
 ///
@@ -434,8 +598,8 @@ mod tests {
         assert!(debug_output.contains("Authorization"));
     }
 
-    #[test]
-    fn test_load_no_credential_routes() {
+    #[tokio::test]
+    async fn test_load_no_credential_routes() {
         let routes = vec![RouteConfig {
             spiffe: None,
             prefix: "/test".to_string(),
@@ -454,7 +618,7 @@ mod tests {
             aws_auth: None,
             endpoint_policy: None,
         }];
-        let store = CredentialStore::load(&routes);
+        let store = CredentialStore::load(&routes).await;
         assert!(store.is_ok());
         let store = store.unwrap_or_else(|_| CredentialStore::empty());
         assert!(store.is_empty());
@@ -492,8 +656,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_load_non_authorization_header_explicit_bearer_format() {
+    #[tokio::test]
+    async fn test_load_non_authorization_header_explicit_bearer_format() {
         // Test Case B: explicit 'Bearer {}' on custom inject header → honored exactly.
         // Fork adaptation: uses inline env guard (no nono-cli test_env dependency);
         // RouteConfig uses fork struct (no proxy/tls_client_cert/tls_client_key fields).
@@ -517,14 +681,16 @@ mod tests {
             endpoint_policy: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
-        let store = CredentialStore::load(&routes).expect("credential load");
+        let store = CredentialStore::load(&routes)
+            .await
+            .expect("credential load");
         let cred = store.get("litellm").expect("route should be loaded");
         assert_eq!(cred.header_name, "x-litellm-api-key");
         assert_eq!(cred.header_value.as_str(), "Bearer sk-litellm-test");
     }
 
-    #[test]
-    fn test_load_non_authorization_header_omitted_format_injects_bare_secret() {
+    #[tokio::test]
+    async fn test_load_non_authorization_header_omitted_format_injects_bare_secret() {
         // Test Case C: credential_format omitted on non-Authorization header → bare secret.
         // Fork adaptation: uses inline env guard; RouteConfig uses fork struct.
         let _guard = TestEnvGuard::set("NONO_PROXY_TEST_API_KEY", "secret-key");
@@ -547,8 +713,87 @@ mod tests {
             endpoint_policy: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
-        let store = CredentialStore::load(&routes).expect("credential load");
+        let store = CredentialStore::load(&routes)
+            .await
+            .expect("credential load");
         let cred = store.get("api").expect("route should be loaded");
         assert_eq!(cred.header_value.as_str(), "secret-key");
+    }
+
+    // ── SPIFFE OAuth2 jwt-bearer assertion routes (NET-02/OD-1) ────────────
+
+    /// A route with `oauth2.client_assertion` pointing at an unreachable
+    /// Workload API socket path is skipped (continue + warn), not a whole-
+    /// startup abort — `CredentialStore::load` still returns `Ok` with any
+    /// other routes loaded, and the failed route is absent from
+    /// `get_spiffe_assertion()`.
+    #[tokio::test]
+    async fn test_load_spiffe_assertion_route_unreachable_socket_skips_route_not_startup() {
+        let routes = vec![
+            RouteConfig {
+                spiffe: None,
+                prefix: "inventory".to_string(),
+                upstream: "https://inventory.internal.example".to_string(),
+                credential_key: None,
+                inject_mode: InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                oauth2: Some(crate::config::OAuth2Config {
+                    token_url: "https://idp.internal.example/oauth/token".to_string(),
+                    client_id: String::new(),
+                    client_secret: String::new(),
+                    scope: String::new(),
+                    client_assertion: Some(ClientAssertionConfig::SpiffeJwt {
+                        workload_api_socket:
+                            "/tmp/nono-test-nonexistent-spire-agent-credential.sock".to_string(),
+                        audience: vec!["inventory.internal.example".to_string()],
+                        svid_hint: None,
+                    }),
+                    extra_params: std::collections::HashMap::new(),
+                }),
+                aws_auth: None,
+                endpoint_policy: None,
+            },
+            // A second, unrelated route must still load successfully.
+            RouteConfig {
+                spiffe: None,
+                prefix: "api".to_string(),
+                upstream: "https://api.example.com".to_string(),
+                credential_key: None,
+                inject_mode: InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                oauth2: None,
+                aws_auth: None,
+                endpoint_policy: None,
+            },
+        ];
+
+        let store = CredentialStore::load(&routes)
+            .await
+            .expect("load must return Ok even when one route's SPIFFE socket is unreachable");
+
+        assert!(
+            store.get_spiffe_assertion("inventory").is_none(),
+            "the unreachable-socket route must not be registered"
+        );
+    }
+
+    #[test]
+    fn test_get_spiffe_assertion_none_when_unconfigured() {
+        let store = CredentialStore::empty();
+        assert!(store.get_spiffe_assertion("anything").is_none());
     }
 }

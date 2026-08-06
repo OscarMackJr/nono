@@ -563,7 +563,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
     let credential_store = if config.routes.is_empty() {
         CredentialStore::empty()
     } else {
-        CredentialStore::load(&config.routes)?
+        CredentialStore::load(&config.routes).await?
     };
     let loaded_routes = credential_store.loaded_prefixes();
 
