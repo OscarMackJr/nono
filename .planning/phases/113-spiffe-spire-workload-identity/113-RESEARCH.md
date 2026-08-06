@@ -531,17 +531,19 @@ The `handle_spiffe_route` adaptation should call these two functions (matching t
 
 **If this table is empty:** N/A — see rows above.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Should `route.rs:617-639`'s misattributed comment be corrected as part of THIS phase, or is that scope creep?**
    - What we know: the comment is factually wrong (attributes the gap to `tls_intercept`, actual ancestor is `b1ecbc02`) and this phase must touch `route.rs` anyway to add `managed_auth`/`has_spiffe_source()`.
    - What's unclear: whether "correct a misleading comment while editing the same file" counts as in-scope maintenance or an unrelated change needing its own justification.
    - Recommendation: correct it — the cost is one comment edit, and leaving it wrong actively misleads the next absorb (per Pitfall 3 above), which is a documented failure mode this milestone has hit repeatedly (Phase 108's D-06 substring-glob miss, 109's three "already present" misses).
+   - **RESOLVED:** see OD-2 — Plan 113-04's Task 2 corrects the comment in place, citing the real ancestor commit (`b1ecbc02`) and this phase's own ADR (`proj/ADR-113-spiffe-disposition.md`).
 
 2. **Is the SPIFFE-only OAuth2-assertion slice (declining `b1ecbc02`'s general `client_credentials` wiring) the right scope call, or should ADR-113 recommend absorbing `b1ecbc02` first as a prerequisite?**
    - What we know: `b1ecbc02` is 974 lines across 8 files, entirely outside this milestone's sync window and never audited by Phase 108. NET-02's requirement text only asks for SPIFFE.
    - What's unclear: whether declining it creates a permanently-asymmetric `CredentialStore` (SPIFFE assertion routes wired, plain OAuth2 client_credentials routes still not) that a future upstream sync will have to reconcile awkwardly.
    - Recommendation: ADR-113 should record this as a deliberate, named scope boundary (mirroring ADR-111's "reject the core-module absorb" shape) rather than silently building only what SPIFFE needs — a future planner absorbing `b1ecbc02` proper should find this ADR and understand the SPIFFE-only slice it's reconciling against.
+   - **RESOLVED:** see OD-1 — the phase implements the SPIFFE-only slice (Plans 113-03/113-04/113-06 build only `spiffe_assertion_routes`/`get_spiffe_assertion()`, declining `b1ecbc02`'s general `oauth2_routes`/`OAuth2Route`/`get_oauth2()` layer), and Plan 113-08's ADR-113 records this as a named, permanent scope boundary plus a carry-forward note in `108-DIVERGENCE-LEDGER.md`.
 
 ## Environment Availability
 
