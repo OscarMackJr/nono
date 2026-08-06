@@ -1063,6 +1063,15 @@ pub fn execute_supervised(
         config.seccomp_proxy_fallback || config.af_unix_mediation.is_pathname(),
         config.proc_comm_notify,
     ) {
+        // SAFETY: FFI call to `prctl(2)`. `PR_SET_CHILD_SUBREAPER` is an
+        // integer-only operation: `arg2` is the boolean flag and `arg3..arg5`
+        // must be zero, so no pointer is dereferenced and no memory is read or
+        // written by the kernel on our behalf. The call is made pre-`fork()`
+        // while this process is still single-threaded (validated above), it
+        // only mutates this process's own subreaper flag, and the return value
+        // is checked immediately — a failure is turned into an error rather
+        // than silently ignored. `PR_SET_CHILD_SUBREAPER` is unavailable before
+        // Linux 3.4, where `prctl` returns `EINVAL` and we fail closed.
         let ret = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) };
         if ret != 0 {
             return Err(NonoError::SandboxInit(format!(

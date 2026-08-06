@@ -5501,6 +5501,15 @@ mod tests {
         let src = root.join("_tmp/srcfile");
         std::fs::write(&src, b"x").expect("create srcfile");
 
+        // SAFETY: FFI call to `fork(2)`. A separate process is required because
+        // Landlock restrictions are irreversible for the calling thread group —
+        // applying them in the test harness would poison every later test in
+        // this binary. The child branch below is deliberately kept to
+        // already-resident code paths and terminates with `libc::_exit`, which
+        // does not run atexit handlers or flush the (potentially
+        // parent-locked) stdio buffers, so no async-signal-unsafe teardown runs
+        // in the forked child. The parent branch only `waitpid`s on the
+        // returned pid. `fork()` returns -1 on failure, which is asserted on.
         let pid = unsafe { libc::fork() };
         assert!(pid >= 0, "fork() failed");
 
@@ -5529,6 +5538,12 @@ mod tests {
         }
 
         let mut status: i32 = 0;
+        // SAFETY: FFI call to `waitpid(2)`. `pid` is the direct child just
+        // forked above (asserted `>= 0`, and this branch only runs in the
+        // parent where it is `> 0`), and `&mut status` is a live, exclusively
+        // borrowed, correctly aligned `i32` that outlives the call — the only
+        // pointer the kernel writes through. The return value is checked
+        // against `pid` below.
         let waited = unsafe { libc::waitpid(pid, &mut status, 0) };
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(waited, pid, "waitpid() failed");
