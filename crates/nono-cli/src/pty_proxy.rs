@@ -80,8 +80,9 @@ enum ReadFdOutcome {
 /// (`ESC [ <params> R`). `step` returns `false` at the terminator or the first
 /// byte that cannot belong to a reply, so type-ahead is left for the shell
 /// rather than scanned for a stray `R`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum CprReplyParse {
+    #[default]
     NeedEsc,
     NeedBracket,
     InParams,
@@ -100,6 +101,90 @@ impl CprReplyParse {
             _ => return false,
         }
         true
+    }
+}
+
+/// Tracks how many cursor-position reports (CPR) the terminal still owes us.
+///
+/// The teardown drain must never touch the terminal input queue speculatively:
+/// a read is destructive, so a byte consumed on the off-chance that a reply
+/// might be queued is a byte of the user's type-ahead thrown away (WR-02).
+/// This counter is what makes the drain conditional — it runs only when the
+/// child actually forwarded an `ESC[6n` / `ESC[?6n` query that has not yet been
+/// answered.
+///
+/// Both scanners are byte-at-a-time state machines because a sequence can
+/// straddle two 4 KiB relay reads.
+#[derive(Debug, Default)]
+struct CprQueryTracker {
+    /// Queries forwarded child -> terminal that have not been answered.
+    outstanding: usize,
+    query_scan: QueryScan,
+    reply_scan: CprReplyParse,
+}
+
+/// Incremental matcher for the CPR *query* the child sends: `ESC [ [?] 6 n`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum QueryScan {
+    /// Nothing matched yet.
+    #[default]
+    Idle,
+    /// Saw `ESC`; a `[` opens the control sequence.
+    AfterEsc,
+    /// After `ESC [`, optionally a `?` private marker, then the parameter `6`.
+    InParams,
+    /// Saw `... 6`; a following `n` completes a Device Status Report query.
+    AfterSix,
+}
+
+impl CprQueryTracker {
+    /// Feed bytes travelling child -> terminal.
+    fn observe_child_output(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.query_scan = match (self.query_scan, byte) {
+                (QueryScan::Idle, 0x1b) => QueryScan::AfterEsc,
+                (QueryScan::AfterEsc, b'[') => QueryScan::InParams,
+                // `?` is the private-parameter marker of `ESC[?6n`.
+                (QueryScan::InParams, b'?') => QueryScan::InParams,
+                (QueryScan::InParams, b'6') => QueryScan::AfterSix,
+                (QueryScan::AfterSix, b'n') => {
+                    // `saturating_add`: a child that emits billions of
+                    // unanswered queries must not wrap the counter to zero and
+                    // silently re-disable the drain.
+                    self.outstanding = self.outstanding.saturating_add(1);
+                    QueryScan::Idle
+                }
+                // A fresh ESC restarts the match rather than aborting it.
+                (_, 0x1b) => QueryScan::AfterEsc,
+                _ => QueryScan::Idle,
+            };
+        }
+    }
+
+    /// Feed bytes travelling terminal -> child. A complete CPR reply relayed to
+    /// the child settles one outstanding query.
+    fn observe_terminal_input(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if self.reply_scan.step(byte) {
+                continue;
+            }
+            // `step` returns false at the terminator *or* at a byte that breaks
+            // the grammar; only the terminator settles a query.
+            if byte == b'R' && matches!(self.reply_scan, CprReplyParse::InParams) {
+                self.outstanding = self.outstanding.saturating_sub(1);
+            }
+            // A byte that breaks the grammar may itself open a new sequence.
+            self.reply_scan = if byte == 0x1b {
+                CprReplyParse::NeedBracket
+            } else {
+                CprReplyParse::NeedEsc
+            };
+        }
+    }
+
+    /// How many replies the terminal still owes.
+    fn outstanding(&self) -> usize {
+        self.outstanding
     }
 }
 
@@ -205,6 +290,9 @@ pub struct PtyProxy {
     detach_requested: bool,
     /// Ctrl-Z suspension requested from a terminal client.
     suspension_requested: bool,
+    /// Cursor-position reports the terminal still owes the (now gone) child.
+    /// Gates the destructive teardown drain — see `CprQueryTracker`.
+    cpr: CprQueryTracker,
 }
 
 /// Open a PTY pair, inheriting the current terminal's window size.
@@ -330,6 +418,7 @@ impl PtyProxy {
             pending_detach_escape: Vec::new(),
             detach_requested: false,
             suspension_requested: false,
+            cpr: CprQueryTracker::default(),
         })
     }
 
@@ -388,7 +477,15 @@ impl PtyProxy {
         // Done here, still in raw mode, on the final teardown path only —
         // `restore_terminal()` stays non-draining so the suspend/resume and
         // temporary-prompt paths preserve type-ahead.
-        discard_late_terminal_input(libc::STDIN_FILENO, timeouts::TERMINAL_QUERY_REPLY_TIMEOUT);
+        //
+        // Gated on an actually-unanswered query (WR-02): reading the terminal
+        // is destructive, so draining on spec costs the user the first byte of
+        // their type-ahead every time nono exits.
+        discard_late_terminal_input(
+            libc::STDIN_FILENO,
+            timeouts::TERMINAL_QUERY_REPLY_TIMEOUT,
+            self.cpr.outstanding(),
+        );
         self.restore_terminal();
         // If the child's last output had no trailing newline, `\r\x1b[K` inside
         // `prepare_parent_output_area` would erase it.  Emit a newline first so
@@ -614,6 +711,10 @@ impl PtyProxy {
         };
 
         self.record_output(&buf[..n]);
+        // Note the child's cursor-position queries before they reach the
+        // terminal: the teardown drain is only allowed to touch the input
+        // queue while one is unanswered (WR-02).
+        self.cpr.observe_child_output(&buf[..n]);
 
         if let Some((write_fd, is_terminal)) = client {
             if let Err(err) = write_all_fd(write_fd, &buf[..n]) {
@@ -676,6 +777,10 @@ impl PtyProxy {
                 }
             }
         };
+
+        // A reply relayed back to the child settles the query it answers, so
+        // the teardown drain does not go looking for one that already landed.
+        self.cpr.observe_terminal_input(&buf[..n]);
 
         let forwarded = self.filter_client_input(&buf[..n]);
         if !forwarded.is_empty() {
@@ -1562,7 +1667,32 @@ fn drain_terminal_output(fd: RawFd) {
 ///
 /// MUST run while the terminal is still in raw mode, so the reply — which has no
 /// trailing newline — is readable. No-op when `fd` is not a terminal.
-fn discard_late_terminal_input(fd: RawFd, max_wait: Duration) {
+///
+/// # `replies_outstanding` (WR-02)
+///
+/// Reading from a terminal is destructive and there is no portable way to put a
+/// byte back: `MSG_PEEK` needs a socket, and `TIOCSTI` is privileged (and a
+/// well-known injection vector nono will not use). So the loop cannot test the
+/// grammar before it has already consumed the byte, and a speculative drain
+/// costs the user the first byte of their type-ahead every single time.
+///
+/// The fix is therefore to never drain speculatively. `replies_outstanding` is
+/// the number of `ESC[6n` queries the child forwarded that the terminal has not
+/// answered (tracked by [`CprQueryTracker`]); when it is zero nothing is owed
+/// and this function returns without touching the input queue at all.
+///
+/// **Residual, deliberately accepted:** when a reply *is* owed and the user
+/// manages to type in the window between the query and the terminal's answer,
+/// the leading typed byte is still consumed. That window is microseconds wide
+/// (the query is `tcdrain`ed first and terminals answer immediately), it costs
+/// at most one byte, and closing it would require the pushback primitive that
+/// does not exist. The alternative — skipping the drain — pastes `3;1R` into
+/// the user's next shell prompt, which is the bug this function exists to fix.
+fn discard_late_terminal_input(fd: RawFd, max_wait: Duration, replies_outstanding: usize) {
+    if replies_outstanding == 0 {
+        // Nothing is owed, so anything queued is the user's. Do not read it.
+        return;
+    }
     // SAFETY: `isatty` only inspects the borrowed fd and does not take ownership.
     if unsafe { libc::isatty(fd) } != 1 {
         return;
@@ -1586,9 +1716,22 @@ fn discard_late_terminal_input(fd: RawFd, max_wait: Duration) {
         };
         // SAFETY: single-fd poll over the borrowed terminal fd.
         let ready = unsafe { libc::poll(&mut pfd, 1, timeout_ms) };
-        if ready <= 0 || (pfd.revents & libc::POLLIN) == 0 {
-            // Timed out, errored, or woke for a non-readable event (e.g. HUP):
-            // there is nothing (more) to consume.
+        if ready < 0 {
+            // WR-03: retry on EINTR instead of aborting the drain. This runs on
+            // the final teardown path immediately after the child exits, when
+            // SIGCHLD (and SIGWINCH on a resize) is near-certain to interrupt
+            // the poll. Bailing out here dropped the reply on the floor and
+            // intermittently reproduced the exact `3;1R`-in-the-prompt bug this
+            // function exists to fix. The deadline still bounds the loop, so a
+            // signal storm cannot make it spin past `max_wait`.
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            break;
+        }
+        if ready == 0 || (pfd.revents & libc::POLLIN) == 0 {
+            // Timed out, or woke for a non-readable event (e.g. HUP): there is
+            // nothing (more) to consume.
             break;
         }
 
@@ -2183,7 +2326,7 @@ mod tests {
     use super::discard_late_terminal_input;
     use super::{
         read_fd_once, select_attach_replay_bytes, terminal_restore_escape, write_all_fd,
-        AttachedClient, CprReplyParse, PtyProxy, ReadFdOutcome, ScreenState,
+        AttachedClient, CprQueryTracker, CprReplyParse, PtyProxy, ReadFdOutcome, ScreenState,
         DEFAULT_DETACH_SEQUENCE,
     };
     use nix::libc;
@@ -2204,7 +2347,7 @@ mod tests {
         // query after the child has gone: the reply lands in the input queue.
         nix::unistd::write(&master, b"\x1b[3;1R").expect("write reply");
 
-        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500));
+        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500), 1);
 
         // Nothing should remain queued for the next reader (the shell).
         let mut pfd = libc::pollfd {
@@ -2237,7 +2380,7 @@ mod tests {
         // The reply, immediately followed by a byte the user typed ahead.
         nix::unistd::write(&master, b"\x1b[3;1Rx").expect("write reply + type-ahead");
 
-        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500));
+        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500), 1);
 
         // Stopping at `R` must leave the typed `x` for the shell to read.
         let mut buf = [0u8; 8];
@@ -2269,7 +2412,7 @@ mod tests {
             nix::unistd::write(m, b"1R").expect("write tail");
         });
 
-        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_secs(2));
+        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_secs(2), 1);
         writer.join().expect("writer thread");
 
         let mut pfd = libc::pollfd {
@@ -2285,19 +2428,99 @@ mod tests {
         );
     }
 
+    /// WR-02: with no cursor-position report outstanding, the drain must not
+    /// read from the terminal at all.
+    ///
+    /// This test previously fed the same `b"xRy"` and asserted `b"Ry"` — i.e.
+    /// it encoded the defect (the leading byte of the user's type-ahead being
+    /// consumed) as the expected behaviour. Reading a tty is destructive and
+    /// there is no pushback primitive, so the only correct answer is not to
+    /// read speculatively.
     #[test]
-    fn discard_late_terminal_input_preserves_type_ahead_with_no_reply() {
+    fn discard_late_terminal_input_leaves_type_ahead_alone_when_no_reply_is_owed() {
         let OpenptyResult { master, slave } = raw_mode_pty();
 
-        // No reply pending, only type-ahead. Grammar matching bails on the first
-        // non-reply byte rather than scanning ahead for a stray `R`.
+        // Nothing was queried, so everything queued belongs to the user.
         nix::unistd::write(&master, b"xRy").expect("write type-ahead");
 
-        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500));
+        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500), 0);
 
         let mut buf = [0u8; 8];
         let n = nix::unistd::read(&slave, &mut buf).expect("read leftover");
-        assert_eq!(&buf[..n], b"Ry", "non-reply type-ahead must be preserved");
+        assert_eq!(
+            &buf[..n],
+            b"xRy",
+            "no reply is outstanding, so the whole type-ahead must survive untouched"
+        );
+    }
+
+    /// WR-02 residual, asserted so it stays visible and bounded: when a reply
+    /// *is* owed and the user wins the race, exactly one byte is consumed
+    /// before the grammar bails — never a scan onward for a stray `R`.
+    #[test]
+    fn discard_late_terminal_input_consumes_at_most_one_byte_when_a_reply_is_owed() {
+        let OpenptyResult { master, slave } = raw_mode_pty();
+
+        nix::unistd::write(&master, b"xRy").expect("write type-ahead");
+
+        discard_late_terminal_input(slave.as_raw_fd(), Duration::from_millis(500), 1);
+
+        let mut buf = [0u8; 8];
+        let n = nix::unistd::read(&slave, &mut buf).expect("read leftover");
+        assert_eq!(
+            &buf[..n],
+            b"Ry",
+            "the grammar must bail at the first non-reply byte, losing only that byte"
+        );
+    }
+
+    #[test]
+    fn cpr_tracker_counts_unanswered_queries_only() {
+        let mut tracker = CprQueryTracker::default();
+        assert_eq!(
+            tracker.outstanding(),
+            0,
+            "a child that never queried is owed nothing"
+        );
+
+        tracker.observe_child_output(b"hello \x1b[6n");
+        assert_eq!(tracker.outstanding(), 1);
+
+        // The terminal answers and the reply is relayed back to the child.
+        tracker.observe_terminal_input(b"\x1b[3;1R");
+        assert_eq!(
+            tracker.outstanding(),
+            0,
+            "an answered query must not keep the drain armed"
+        );
+    }
+
+    #[test]
+    fn cpr_tracker_matches_the_private_marker_form_and_spans_reads() {
+        let mut tracker = CprQueryTracker::default();
+        // `ESC[?6n` (DECDSR) is the private-parameter form.
+        tracker.observe_child_output(b"\x1b[?6n");
+        assert_eq!(tracker.outstanding(), 1);
+
+        // A query split across two relay reads must still be matched.
+        tracker.observe_child_output(b"\x1b[");
+        tracker.observe_child_output(b"6n");
+        assert_eq!(tracker.outstanding(), 2);
+    }
+
+    #[test]
+    fn cpr_tracker_ignores_type_ahead_and_unrelated_sequences() {
+        let mut tracker = CprQueryTracker::default();
+        tracker.observe_child_output(b"\x1b[2J\x1b[0mplain text 6n");
+        assert_eq!(
+            tracker.outstanding(),
+            0,
+            "only a complete ESC[...6n query arms the drain"
+        );
+
+        // Type-ahead containing a bare `R` must not decrement below zero.
+        tracker.observe_terminal_input(b"xRy");
+        assert_eq!(tracker.outstanding(), 0);
     }
 
     /// Feed `queue` through the grammar exactly as the drain loop does and
@@ -2345,6 +2568,7 @@ mod tests {
             pending_detach_escape: Vec::new(),
             detach_requested: false,
             suspension_requested: false,
+            cpr: CprQueryTracker::default(),
         }
     }
 
