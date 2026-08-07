@@ -1039,6 +1039,37 @@ async fn handle_spiffe_assertion_credential(
     }
     tls_stream.flush().await?;
 
+    // OAuth capture (SEC-02, D-01r, T-114-18): this route's RFC 7523
+    // jwt-bearer assertion auth source must not determine whether its
+    // RESPONSE is buffered and rewritten — the same enforcement point sites
+    // 1 and 2 apply. `handle_spiffe_assertion_credential` does not take a
+    // `route: &LoadedRoute` parameter (it dispatches off
+    // `SpiffeAssertionRoute`, a `credential.rs` type, not a route), so the
+    // route's `capture` config is looked up here via `ctx.route_store`,
+    // which is already cheaply in scope and already holds an entry for
+    // this service (`RouteStore::load` inserts a `LoadedRoute` — carrying
+    // `capture`, independent of `oauth2.client_assertion` — for every
+    // configured route, not only `spiffe`-declared ones). Unconditional
+    // `return` on `Some` so a capture-declared route can never fall through
+    // into the unbuffered streaming loop below (D-06 for every other
+    // route).
+    let route_capture = ctx
+        .route_store
+        .get(service)
+        .and_then(|r| r.capture.as_ref());
+    if let Some(result) = relay_capture_if_declared(
+        &mut tls_stream,
+        stream,
+        route_capture,
+        ctx.capture_store,
+        service,
+        ctx.audit_log,
+    )
+    .await
+    {
+        return result;
+    }
+
     let mut response_buf = [0u8; 8192];
     let mut status_code: u16 = 502;
     let mut first_chunk = true;
@@ -2408,6 +2439,57 @@ mod capture_relay_tests {
             !received_str.contains("real-secret-token-value-site2"),
             "the real token must never reach the client via the SPIFFE-bearer dispatch path \
              (site 2); got: {received_str}"
+        );
+        assert!(
+            received_str.contains("leave-me-alone"),
+            "an unrelated field must be forwarded unchanged; got: {received_str}"
+        );
+    }
+
+    /// Site 3 (`handle_spiffe_assertion_credential`) proof: a route
+    /// reachable via the RFC 7523 jwt-bearer assertion-exchange dispatch
+    /// path that ALSO declares `capture` gets its response buffered and
+    /// rewritten — independent of sites 1 and 2's tests (different test
+    /// function, different route_id, different token value).
+    #[tokio::test]
+    async fn capture_rewrites_via_spiffe_assertion_site() {
+        let capture = capture_config_with_field("access_token");
+        let store = crate::capture::CapturePhantomStore::new();
+        let body: &'static [u8] =
+            br#"{"access_token":"real-secret-token-value-site3","unrelated":"leave-me-alone"}"#;
+        let upstream_response: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+
+        let (relay_result, received) = run_relay_capture_if_declared(
+            upstream_response,
+            Some(&capture),
+            &store,
+            "spiffe-assertion-svc",
+        )
+        .await;
+        let relay_result = relay_result.expect(
+            "relay_capture_if_declared must return Some(..) when capture is configured — this \
+             is exactly what handle_spiffe_assertion_credential's own call site does with \
+             ctx.route_store.get(service).and_then(|r| r.capture.as_ref())",
+        );
+        relay_result.expect("relay must succeed for a well-formed, fully-configured response");
+
+        let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+        assert!(
+            received_str.starts_with("HTTP/1.1 200"),
+            "expected 200 OK to be forwarded; got: {received_str}"
+        );
+        assert!(
+            !received_str.contains("real-secret-token-value-site3"),
+            "the real token must never reach the client via the SPIFFE-assertion dispatch path \
+             (site 3); got: {received_str}"
         );
         assert!(
             received_str.contains("leave-me-alone"),
