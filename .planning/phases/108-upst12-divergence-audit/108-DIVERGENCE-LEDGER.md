@@ -720,6 +720,51 @@ OAuth2-route-wiring layer — LOCKED per `113-CONTEXT.md`'s discretionary OD-1 g
 permanently in `proj/ADR-113-spiffe-disposition.md`.** No code change for either. This note and
 the ADR are the deliverables.
 
+### SEC-02 Carry-Forward Note (Phase 114, D-10)
+
+**Filed:** 2026-08-07 (Phase 114, Plan 114-11 close-out).
+
+Upstream `9b692e07` (SEC-02a, "feat(oauth): add declarative sandboxed OAuth capture"),
+`3c59c62e` (SEC-02b, "fix(oauth): harden capture security boundaries"), and `d033c631` (SEC-02c,
+"test(oauth): consume provider stdin in header fixture") were carved out to Phase 114 by Phase
+112 (`112-OAUTH-CAPTURE-DISPOSITION.md`) as reality-check evidence with no adopt/adapt/decline
+verdict made. Phase 114 makes that verdict: **ADAPT — a fork-native response buffer-and-rewrite
+enforcement point** (`relay_response_with_capture()`, `crates/nono-proxy/src/reverse.rs`), built
+against the fork's own `reverse.rs`/`server.rs` shape rather than importing upstream's
+`forward.rs`/`oauth_capture/` subsystem, which remains absent from the fork. Full disposition
+record: `proj/ADR-114-oauth-capture-disposition.md`.
+
+**The scope limit, stated plainly:** capture works only for OAuth token endpoints reachable as
+**configured reverse-proxy routes**. It does not cover agent-initiated flows to arbitrary hosts
+via CONNECT — those are denied outright (D-06's cross-path fail-closed guard,
+`114-07-SUMMARY.md`), not rewritten, because no buffer-and-rewrite point exists on that path.
+
+**`149abde0` ("feat(proxy): add tls interception for l7-bearing connect routes") is named here as
+the tracked divergence behind this scope limit**, mirroring how Phase 113 filed `b1ecbc02` above.
+`149abde0` is the sole commit that creates `forward.rs` and brings TLS interception into
+upstream's proxy; it is not absorbed, and the fork's no-MITM stance
+(`ProxyHandle::intercept_ca_path()` returns `None` unconditionally) is a standing decision this
+phase reaffirmed rather than reopened. TLS interception is the named condition under which
+SEC-02's scope limit could be lifted — see `proj/ADR-114-oauth-capture-disposition.md`'s "OD: The
+TLS-Interception Boundary Against `149abde0`" section for the full reasoning, including the
+corrected finding that the original blocker was response **buffering**, not response
+**visibility** (the fork's reverse proxy already had plaintext visibility into upstream responses
+for configured routes; `149abde0`/TLS interception was never required for that subset).
+
+**Obligation for whichever future plan absorbs `149abde0`:** when TLS interception is eventually
+absorbed into this fork, the fork MUST consciously decide whether to wire
+`relay_response_with_capture()` (or an equivalent) into whatever new intercepted-TLS response path
+that absorb creates, in order to lift SEC-02's scope limit for agent-initiated CONNECT flows. This
+is **not an automatic inheritance** — absorbing TLS interception without re-examining this decision
+would leave capture-declared routes' CONNECT-path guard (D-06) silently denying traffic that a
+rewrite point could otherwise have served safely. A future planner reading this note should treat
+`149abde0` as a named line item requiring its own disposition call against
+`relay_response_with_capture()`'s actual shape at that time, not a hunk that rides along for free.
+
+**Disposition (Phase 114): ADAPT — fork-native enforcement point built, real code shipped, with a
+named permanent scope limit — LOCKED per `114-CONTEXT.md` D-01r/D-10/D-11, recorded permanently in
+`proj/ADR-114-oauth-capture-disposition.md`.** This note and the ADR are the deliverables.
+
 ### security-residual-and-misc cluster commits (18)
 
 The 10 named security-relevant anchor SHAs from `108-CONTEXT.md` D-18 appear first (verbatim),
@@ -1797,9 +1842,9 @@ appears exactly once; no invented remainder bucket).
 | SHA (short) | Req | Table's planned disposition (`112-DISPOSITION-TABLE.md`) | **Disposition as shipped** | Evidence |
 |---|---|---|---|---|
 | `0ecc476b` | SEC-01 | won't-sync, HIGH confidence | **won't-sync (target subsystem absent) — CONFIRMED** | `112-AWS-SIGV4-PROXY-AUTH-FINDING.md`; `aws/`/`tls_intercept/` absent from `crates/nono-proxy/src/`; fork's own prior D-15 501-stub guard (`reverse.rs:260-268`) unchanged |
-| `9b692e07` | SEC-02a | deferred -> Phase 114 (ROADMAP Amendment framing) | **deferred -> Phase 114 — CONFIRMED** | `112-OAUTH-CAPTURE-DISPOSITION.md`; `oauth_capture/`, `forward.rs`, `tls_intercept/*` absent; `forward.rs`'s `ResponseRewrite` hook confirmed as the load-bearing anti-real-token-leak mechanism a reduced-scope absorb would drop; carve-out authority: ROADMAP Amendment (2026-08-05), `### Phase 114: OAuth Capture Absorb (SEC-02)` |
-| `3c59c62e` | SEC-02b | deferred -> Phase 114 | **deferred -> Phase 114 — CONFIRMED** | rides SEC-02a's disposition (security-hardening follow-up touching the same absent subsystem); `112-OAUTH-CAPTURE-DISPOSITION.md` §1d |
-| `d033c631` | SEC-02c | deferred -> Phase 114 | **deferred -> Phase 114 — CONFIRMED** | rides SEC-02a's disposition (test fixture for SEC-02a's provider stdin handling); `112-OAUTH-CAPTURE-DISPOSITION.md` §1d |
+| `9b692e07` | SEC-02a | deferred -> Phase 114 (ROADMAP Amendment framing) | **ADAPTED-with-scope-limit — see "SEC-02 Carry-Forward Note (Phase 114, D-10)"** | `proj/ADR-114-oauth-capture-disposition.md`; fork-native `relay_response_with_capture()` enforcement point built on `reverse.rs` (all three relay sites), superseding the `forward.rs`-hook absence `112-OAUTH-CAPTURE-DISPOSITION.md` §1c identified; scope limit: capture works only for OAuth token endpoints reachable as configured reverse-proxy routes |
+| `3c59c62e` | SEC-02b | deferred -> Phase 114 | **ADAPTED-with-scope-limit — see "SEC-02 Carry-Forward Note (Phase 114, D-10)"** | rides SEC-02a's disposition; hardening intent (fail-closed on unsafe token responses, cross-path denial) realized via `reject_unrewritten_token_fields()` (D-07 backstop) and the D-06 cross-path fail-closed guard (`114-07-SUMMARY.md`) |
+| `d033c631` | SEC-02c | deferred -> Phase 114 | **ADAPTED-with-scope-limit — see "SEC-02 Carry-Forward Note (Phase 114, D-10)"** | rides SEC-02a's disposition; test-fixture intent realized via this phase's own fork-original behavior tests (Plans 114-05/06/07), not a ported fixture |
 | `a3243907` | SEC-03 | **adopt, HIGH confidence** | **ADAPT — DIVERGED FROM PLAN** | `112-02-SUMMARY.md`: symbol-level forensics (not the table's file-presence check) proved `a3243907` depends on the unabsorbed antecedent `fa21a004`/`8a4237f2` (#1283, "introduce SeccompPolicy struct and client-driven selection", 21 files) — zero grep hits for `SeccompPolicy`/`LinuxSandboxPolicy`/`apply_landlock`/`apply_auto`/`apply_external`/`TcpNetworkEnforcement` anywhere in the pre-absorb fork tree. Implemented the security-hardening intent (procfs read-only mediation + fatal seccomp-notify failures + new `apply_seccomp`/`apply_seccomp_with_abi`/`apply_external` API) against the fork's existing simpler `apply()`/`apply_with_abi()` architecture. `fa21a004`/`8a4237f2`'s 21-file `LinuxSandboxPolicy` CLI-policy-selection feature remains a **standing, unabsorbed gap** after Phase 112 closes — already independently flagged above ("tool-sandbox-surface cluster commits (20)" table) as a CORE-cluster/Phase-111 residual, never picked up by Phase 111; not this plan's to close. |
 | `f943fb5a` | SEC-04 | adopt, HIGH confidence | **adopt — CONFIRMED** | `112-03-SUMMARY.md`: ported verbatim, additive `predicate`/`TRUST_POLICY_PREDICATE` discriminator, `TRUST_POLICY_VERSION` deprecated not removed |
 | `d84b4818` | SEC-05 | adopt, HIGH confidence | **adopt — CONFIRMED** | `112-05-SUMMARY.md`: symbol-level re-verification confirmed every referenced symbol present with matching signatures; `restrict_execute()` gains bare `Refer` on `/`, gated `abi.has_refer()`; live-tested via `cross test` |
@@ -1882,7 +1927,7 @@ standalone invocation except explicit `--no-auth` sets it `true` and CONNECT aut
 
 - **won't-sync (target subsystem absent):** SEC-01, SEC-09 (2)
 - **won't-sync/PRESERVE (ADR-112, zero code change):** SEC-08 (1)
-- **deferred -> Phase 114 (evidence captured, no verdict made):** SEC-02a/b/c (3)
+- **adapt (ADAPTED-with-scope-limit, Phase 114):** SEC-02a/b/c (3)
 - **adopt:** SEC-04, SEC-05, RES-02/`503045801a`, RES-02/`9840a16f35` (4)
 - **adopt (adapted API/marker):** SEC-07 (1)
 - **adapt:** SEC-03, SEC-06 (2)
@@ -1894,8 +1939,10 @@ standalone invocation except explicit `--no-auth` sets it `true` and CONNECT aut
 permanent architectural decision (CORE-cluster resource-limiting stays `nono-cli`-side, no future
 phase hands off to it). This addendum instead closes out an entire phase's disposition work across
 18 independently-adjudicated commits — three disposition classes of which (SEC-01/SEC-09
-won't-sync, SEC-08 PRESERVE, SEC-02a/b/c deferred) are themselves durable/standing in the same
-sense as the Phase 111 entry, while the remaining 13 (SEC-03..07, RES-01 x4, RES-02 x3) represent
-completed, code-landed absorb/adapt/skip work with no further action owed. SEC-09's entry
-additionally carries a live future obligation — see "SEC-09 Carry-Forward Note" in the
-tool-sandbox-surface cluster section above (not repeated here).
+won't-sync, SEC-08 PRESERVE) are themselves durable/standing in the same sense as the Phase 111
+entry, while the remaining 13 (SEC-03..07, RES-01 x4, RES-02 x3) represent completed, code-landed
+absorb/adapt/skip work with no further action owed. SEC-09's entry additionally carries a live
+future obligation — see "SEC-09 Carry-Forward Note" in the tool-sandbox-surface cluster section
+above (not repeated here). **SEC-02a/b/c, originally deferred here pending Phase 114's verdict, is
+now itself resolved (ADAPTED-with-scope-limit) and closed out in the "SEC-02 Carry-Forward Note
+(Phase 114, D-10)" below** — the deferral this addendum recorded in 2026-08-05 is no longer open.
