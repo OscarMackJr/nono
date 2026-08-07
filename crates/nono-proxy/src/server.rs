@@ -3180,6 +3180,7 @@ mod tests {
                 managed_auth: None,
                 declares_spiffe: true,
                 declares_capture: false,
+                capture: None,
             },
         );
         RouteStore::from_loaded_routes(routes)

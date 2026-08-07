@@ -2150,6 +2150,7 @@ mod tests {
             managed_auth: None,
             declares_spiffe: true,
             declares_capture: false,
+            capture: None,
         };
         let mut routes = HashMap::new();
         routes.insert("spiffesvc".to_string(), loaded_route);

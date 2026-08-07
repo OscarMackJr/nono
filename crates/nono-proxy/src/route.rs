@@ -88,6 +88,19 @@ pub struct LoadedRoute {
     /// `RouteStore::capture_declared_for_upstream()` (below) to deny a
     /// capture-declared route arriving via a path with no rewrite.
     pub declares_capture: bool,
+
+    /// The route's declarative capture configuration (`response_fields`,
+    /// `request_nonce_fields`, `max_response_bytes`), when `declares_capture`
+    /// is `true`; `None` otherwise. `declares_capture` alone (a bare bool)
+    /// is sufficient for the D-03/D-06-style predicates above, but
+    /// `relay_response_with_capture()` (Plan 114-05) needs the actual
+    /// per-route field list and cap override to buffer and rewrite a
+    /// response — this field carries that data through from `RouteConfig`
+    /// rather than discarding it at load time. Always `Some(_) ==
+    /// declares_capture`; kept as a separate field (not derived from
+    /// `declares_capture`) because the two were already established as
+    /// independent fields by Plan 114-03 before this plan needed the data.
+    pub capture: Option<crate::config::CaptureConfig>,
 }
 
 impl LoadedRoute {
@@ -244,6 +257,7 @@ impl RouteStore {
                     managed_auth,
                     declares_spiffe,
                     declares_capture,
+                    capture: route.capture.clone(),
                 },
             );
         }
@@ -843,6 +857,7 @@ mod tests {
             managed_auth: None,
             declares_spiffe: false,
             declares_capture: false,
+            capture: None,
         };
         let debug_output = format!("{:?}", route);
         assert!(debug_output.contains("api.openai.com"));
