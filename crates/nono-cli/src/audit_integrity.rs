@@ -159,6 +159,7 @@ mod tests {
                 injection_mode: None,
                 denial_category: None,
                 spiffe_context: None,
+                capture_context: None,
                 target: "api.example.com".to_string(),
                 port: Some(443),
                 method: Some("POST".to_string()),

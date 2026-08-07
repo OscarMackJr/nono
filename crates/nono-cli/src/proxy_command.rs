@@ -673,6 +673,7 @@ mod tests {
             injection_mode: None,
             denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
             spiffe_context: None,
+            capture_context: None,
             target: "blocked.example".to_string(),
             port: Some(443),
             method: None,
