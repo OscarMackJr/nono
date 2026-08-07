@@ -2013,6 +2013,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 

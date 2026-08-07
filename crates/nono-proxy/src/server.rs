@@ -1703,6 +1703,7 @@ mod tests {
                 query_param_name: None,
                 env_var: None,
                 endpoint_rules: vec![],
+                capture: None,
                 endpoint_policy: None,
                 tls_ca: None,
                 oauth2: None,
@@ -1924,6 +1925,7 @@ mod tests {
                 query_param_name: None,
                 env_var: None,
                 endpoint_rules: vec![],
+                capture: None,
                 endpoint_policy: None,
                 tls_ca: None,
                 oauth2: None,
@@ -2023,6 +2025,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2072,6 +2075,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2130,6 +2134,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2212,6 +2217,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2291,6 +2297,7 @@ mod tests {
                     tls_ca: None,
                     oauth2: None,
                     aws_auth: None,
+                    capture: None,
                     endpoint_policy: None,
                 },
                 crate::config::RouteConfig {
@@ -2309,6 +2316,7 @@ mod tests {
                     tls_ca: None,
                     oauth2: None,
                     aws_auth: None,
+                    capture: None,
                     endpoint_policy: None,
                 },
             ],
@@ -2375,6 +2383,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2409,6 +2418,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2467,6 +2477,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2511,6 +2522,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -2870,6 +2882,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()
@@ -3054,6 +3067,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }],
             ..Default::default()

@@ -54,6 +54,7 @@ fn make_jwt_route(socket: &str, upstream: &str) -> RouteConfig {
             credential_format: None,
             svid_hint: None,
         }),
+        capture: None,
         endpoint_policy: None,
     }
 }

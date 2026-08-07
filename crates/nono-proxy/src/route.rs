@@ -527,6 +527,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 
@@ -562,6 +563,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 
@@ -588,6 +590,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 
@@ -615,6 +618,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             },
             RouteConfig {
@@ -633,6 +637,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             },
         ];
@@ -713,6 +718,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             }];
 
@@ -896,6 +902,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         };
 
@@ -920,6 +927,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         };
 
@@ -1098,6 +1106,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 
@@ -1128,6 +1137,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 
@@ -1161,6 +1171,7 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 

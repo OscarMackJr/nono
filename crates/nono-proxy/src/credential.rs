@@ -664,6 +664,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
         let store = CredentialStore::load(&routes).await;
@@ -726,6 +727,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
@@ -758,6 +760,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
         // Fork: CredentialStore::load takes only routes (no TLS connector arg)
@@ -806,6 +809,7 @@ mod tests {
                     extra_params: std::collections::HashMap::new(),
                 }),
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             },
             // A second, unrelated route must still load successfully.
@@ -825,6 +829,7 @@ mod tests {
                 tls_ca: None,
                 oauth2: None,
                 aws_auth: None,
+                capture: None,
                 endpoint_policy: None,
             },
         ];
@@ -888,6 +893,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 
@@ -945,6 +951,7 @@ mod tests {
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            capture: None,
             endpoint_policy: None,
         }];
 

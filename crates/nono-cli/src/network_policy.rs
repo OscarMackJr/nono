@@ -249,6 +249,10 @@ pub fn resolve_credentials(
                 // through to RouteConfig so a profile-declared spiffe route
                 // actually reaches the proxy (not a blanket None).
                 spiffe: cred.spiffe.clone(),
+                // SEC-02 (Phase 114): CustomCredentialDef has no `capture` field
+                // yet — Plan 114-08 wires the real conversion. This is a
+                // deliberate stub, not a dropped capability.
+                capture: None,
                 endpoint_policy: None,
             });
         } else if let Some(cred) = policy.credentials.get(name) {
@@ -280,6 +284,7 @@ pub fn resolve_credentials(
                 oauth2: None, // PROF-03 (Plan 22-01): Task 6 will wire oauth2
                 aws_auth: None,
                 spiffe: None, // Built-in credentials don't support SPIFFE
+                capture: None,
                 endpoint_policy: None,
             });
         }
@@ -467,6 +472,7 @@ pub fn partition_allow_domain(
                         oauth2: None,
                         aws_auth: None,
                         spiffe: None, // allow-domain-derived routes never carry credential auth
+                        capture: None,
                         endpoint_policy: None,
                         // NOTE: upstream also sets proxy/tls_client_cert/tls_client_key
                         // — these fields are ABSENT from the fork's RouteConfig (Phase 34

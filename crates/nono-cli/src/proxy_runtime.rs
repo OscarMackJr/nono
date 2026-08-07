@@ -1420,6 +1420,7 @@ mod tests {
                 credential_format: None,
                 svid_hint: None,
             }),
+            capture: None,
             endpoint_policy: None,
         }
     }
