@@ -77,6 +77,15 @@ spiffe-workload = { package = "spiffe", version = "0.16", features = ["jwt-sourc
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { version = "1", features = ["test-util", "rt-multi-thread", "macros"] }
+# Hermetic self-signed cert generation for Plan 114-06 Task 3's live
+# TLS-upstream dispatch-path test (`capture_egress_resolution_reaches_upstream_on_live_dispatch_path`)
+# — the only test in this crate that drives a request through
+# `handle_reverse_proxy` all the way to a real (fake) upstream, which
+# requires a real TLS server since `connect_upstream_tls` is unconditional.
+# Already a vetted, already-resolved workspace dependency (crates/nono-cli/Cargo.toml,
+# used identically by `tests/keyless_verify.rs`'s hermetic cert fixture) —
+# not a new external dependency introduced by this plan.
+rcgen = "0.13"
 
 [lints]
 workspace = true

@@ -2518,6 +2518,7 @@ dependencies = [
  "hyper-rustls",
  "hyper-util",
  "nono-sandbox",
+ "rcgen",
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",

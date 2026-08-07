@@ -409,6 +409,24 @@ pub async fn handle_reverse_proxy(
         Vec::new()
     };
 
+    // OAuth capture egress resolution (SEC-02, D-02r, T-114-19b): closes
+    // the mint-to-resolve loop. A phantom previously minted by
+    // `relay_response_with_capture` and handed to the sandboxed client may
+    // be presented back in a later request body (e.g. a `code_verifier` or
+    // similar nonce field) — this route's own name (`service`) is the
+    // admission scope, mirroring `relay_response_with_capture`'s own
+    // `admitted_consumers: HashSet::from([route_id.to_string()])`.
+    // `resolve_capture_request_body` never errors and never denies the
+    // request: an unresolved/unadmitted phantom is left unchanged in the
+    // forwarded body and is simply rejected by the real upstream as an
+    // invalid credential (fail-closed on SUBSTITUTION only, not on the
+    // request as a whole — see `resolve_capture_request_body`'s doc
+    // comment). Shadows `body` so every downstream use (the
+    // `Content-Length` header below and `tls_stream.write_all(&body)`)
+    // automatically sees the resolved bytes with zero further changes.
+    let body =
+        resolve_capture_request_body(&body, route.capture.as_ref(), ctx.capture_store, &service);
+
     // Connect to upstream over TLS using pre-resolved addresses.
     // Use the per-route TLS connector (with custom CA) if configured,
     // otherwise fall back to the shared default connector.
@@ -1951,6 +1969,68 @@ async fn relay_capture_if_declared<R: AsyncRead + Unpin>(
     )
 }
 
+/// Request-side mirror of [`relay_response_with_capture`]'s response
+/// rewrite (SEC-02, D-02r): resolves any previously-minted phantom found
+/// at a `capture.request_nonce_fields` dot-path in `body` back to its real
+/// captured value via [`crate::capture::resolve_request_nonce_fields`],
+/// before the request is forwarded to upstream. This is the mint-to-resolve
+/// loop's production call site — before this function was wired into
+/// `handle_reverse_proxy`, `CapturePhantomStore::resolve()` had no caller
+/// outside `capture.rs`'s own tests, so a phantom handed to the sandboxed
+/// client could never actually be redeemed (T-114-19b, plan-checker
+/// blocker).
+///
+/// Returns `body` UNCHANGED (byte-for-byte) when `capture` is `None`, when
+/// `capture.request_nonce_fields` is empty, or when `body` is not valid
+/// JSON. This is the safe structural default: a capture-declared route
+/// with no configured nonce fields is unaffected, and a malformed body is
+/// forwarded as-is — matching the fork's existing behavior for every other
+/// route, never a panic, never a dropped request. Also returns `body`
+/// unchanged (skipping a needless re-serialize round-trip that could
+/// reformat whitespace/field-order) when
+/// `resolve_request_nonce_fields` resolves nothing.
+///
+/// # Fails closed on SUBSTITUTION, not on the request
+///
+/// An unresolved or unadmitted phantom is left UNCHANGED in the forwarded
+/// body — never replaced by a real token for the wrong consumer. The
+/// request still reaches upstream carrying the unresolved phantom, which
+/// upstream rejects as an invalid credential — a functional no-op, not a
+/// security gap. The phantom is shape-only (`alg: none` for JWT-shaped
+/// phantoms) and was already exposed to this same consumer in the
+/// response that minted it, so forwarding it leaks nothing new. See
+/// `capture_egress_never_substitutes_real_token_for_unadmitted_consumer`
+/// — do not read this as "the request is denied."
+///
+/// No call in this function's path ever logs, audits, or otherwise
+/// records the real resolved value.
+fn resolve_capture_request_body(
+    body: &[u8],
+    capture: Option<&crate::config::CaptureConfig>,
+    capture_store: &crate::capture::CapturePhantomStore,
+    consumer: &str,
+) -> Vec<u8> {
+    let Some(capture) = capture else {
+        return body.to_vec();
+    };
+    if capture.request_nonce_fields.is_empty() {
+        return body.to_vec();
+    }
+    let Ok(mut value) = serde_json::from_slice::<Value>(body) else {
+        return body.to_vec();
+    };
+    let resolved_count = crate::capture::resolve_request_nonce_fields(
+        &mut value,
+        &capture.request_nonce_fields,
+        capture_store,
+        consumer,
+    );
+    if resolved_count == 0 {
+        return body.to_vec();
+    }
+    serde_json::to_vec(&value).unwrap_or_else(|_| body.to_vec())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod capture_relay_tests {
@@ -2512,6 +2592,380 @@ mod capture_relay_tests {
             relay_result.is_none(),
             "relay_capture_if_declared must return None when capture is None, so the caller \
              falls through to its own streaming loop unchanged (D-06)"
+        );
+    }
+}
+
+// ============================================================================
+// Plan 114-06 Task 3 — mint-to-resolve loop closure
+// (`resolve_capture_request_body`, wired into `handle_reverse_proxy`'s real
+// outbound request-body path). SEC-02, D-02r, T-114-19b/T-114-19c.
+// ============================================================================
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod capture_egress_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use zeroize::Zeroizing;
+
+    fn capture_with_nonce_field(path: &str) -> crate::config::CaptureConfig {
+        crate::config::CaptureConfig {
+            response_fields: vec![],
+            request_nonce_fields: vec![path.to_string()],
+            max_response_bytes: None,
+        }
+    }
+
+    /// (i) A minted phantom, admitted for `consumer`, resolves to the real
+    /// captured token in the request body — the mint-to-resolve loop's
+    /// core behavior, exercised via the same pure function
+    /// `handle_reverse_proxy` calls in production.
+    #[test]
+    fn capture_egress_resolves_admitted_phantom_in_request_body() {
+        let store = crate::capture::CapturePhantomStore::new();
+        let mut admitted = HashSet::new();
+        admitted.insert("testservice".to_string());
+        let phantom = store
+            .mint(Zeroizing::new(b"real-nonce-value".to_vec()), admitted)
+            .unwrap();
+        let capture = capture_with_nonce_field("code_verifier");
+        let body = serde_json::json!({ "code_verifier": phantom, "unrelated": "leave-me-alone" })
+            .to_string()
+            .into_bytes();
+
+        let resolved = resolve_capture_request_body(&body, Some(&capture), &store, "testservice");
+        let resolved_value: Value = serde_json::from_slice(&resolved).unwrap();
+        assert_eq!(
+            resolved_value["code_verifier"],
+            serde_json::json!("real-nonce-value"),
+            "an admitted phantom must resolve to the real captured token in the outbound \
+             request body"
+        );
+        assert_eq!(
+            resolved_value["unrelated"],
+            serde_json::json!("leave-me-alone")
+        );
+    }
+
+    /// (ii) A phantom minted for a DIFFERENT consumer, or an unknown value,
+    /// is left UNCHANGED — never substituted with a real token for an
+    /// unauthorized/unknown presenter. This is fail-closed on
+    /// SUBSTITUTION, not on the request: the request is still forwarded
+    /// (see this function's doc comment); upstream rejects the
+    /// still-phantom value as an invalid credential.
+    #[test]
+    fn capture_egress_never_substitutes_real_token_for_unadmitted_consumer() {
+        let store = crate::capture::CapturePhantomStore::new();
+        let mut admitted = HashSet::new();
+        admitted.insert("testservice".to_string());
+        let phantom = store
+            .mint(Zeroizing::new(b"real-nonce-value".to_vec()), admitted)
+            .unwrap();
+        let capture = capture_with_nonce_field("code_verifier");
+
+        // Case A: consumer not admitted for this phantom.
+        let body_a = serde_json::json!({ "code_verifier": phantom.clone() })
+            .to_string()
+            .into_bytes();
+        let resolved_a =
+            resolve_capture_request_body(&body_a, Some(&capture), &store, "not-admitted");
+        let resolved_value_a: Value = serde_json::from_slice(&resolved_a).unwrap();
+        assert_eq!(
+            resolved_value_a["code_verifier"],
+            serde_json::json!(phantom),
+            "an unadmitted consumer must never receive the real token — the phantom must be \
+             forwarded unchanged"
+        );
+
+        // Case B: value is not a known phantom at all.
+        let body_b = serde_json::json!({ "code_verifier": "not-a-known-phantom" })
+            .to_string()
+            .into_bytes();
+        let resolved_b =
+            resolve_capture_request_body(&body_b, Some(&capture), &store, "testservice");
+        let resolved_value_b: Value = serde_json::from_slice(&resolved_b).unwrap();
+        assert_eq!(
+            resolved_value_b["code_verifier"],
+            serde_json::json!("not-a-known-phantom"),
+            "an unknown value must never be substituted — forwarded unchanged"
+        );
+    }
+
+    /// Structural default: `capture: None`, empty `request_nonce_fields`,
+    /// and a non-JSON body are all forwarded byte-for-byte unchanged — no
+    /// route without configured nonce fields is ever affected, and a
+    /// malformed body is never dropped or panicked on.
+    #[test]
+    fn resolve_capture_request_body_forwards_unchanged_when_not_applicable() {
+        let store = crate::capture::CapturePhantomStore::new();
+        let capture_no_fields = crate::config::CaptureConfig {
+            response_fields: vec![],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        };
+        let json_body = br#"{"code_verifier":"whatever"}"#.to_vec();
+        assert_eq!(
+            resolve_capture_request_body(&json_body, None, &store, "testservice"),
+            json_body,
+            "capture: None must forward the body unchanged"
+        );
+        assert_eq!(
+            resolve_capture_request_body(
+                &json_body,
+                Some(&capture_no_fields),
+                &store,
+                "testservice"
+            ),
+            json_body,
+            "empty request_nonce_fields must forward the body unchanged"
+        );
+        let non_json_body = b"not json at all".to_vec();
+        let capture_with_fields = capture_with_nonce_field("code_verifier");
+        assert_eq!(
+            resolve_capture_request_body(
+                &non_json_body,
+                Some(&capture_with_fields),
+                &store,
+                "testservice"
+            ),
+            non_json_body,
+            "a non-JSON body must be forwarded unchanged, never dropped or panicked on"
+        );
+    }
+
+    // ========================================================================
+    // capture_egress_resolution_reaches_upstream_on_live_dispatch_path — the
+    // end-to-end wiring proof. Drives a real request through
+    // `handle_reverse_proxy` against a real (self-signed, hermetic) TLS
+    // upstream and asserts the bytes upstream actually receives contain the
+    // REAL token, not the phantom. The two tests above prove
+    // `resolve_capture_request_body` computes correctly in isolation; this
+    // is the only test in this file that proves the wired call fires with
+    // the correct `route.capture` / `ctx.capture_store` / `consumer`
+    // arguments on a live request path — a grep proves only that the call
+    // was written.
+    //
+    // `connect_upstream_tls` is unconditional (every reverse-proxy request,
+    // capture or not, dials upstream over real TLS), and no TLS-server test
+    // fixture existed anywhere in this crate before this plan
+    // (`read_capped_response`'s own doc comment, Plan 114-05, explicitly
+    // deferred building one as "new, heavy machinery unrelated to the
+    // security property under test" for ITS narrower cap-enforcement
+    // proof). This plan's Task 3 is a different, wider claim — that the
+    // wiring fires correctly on a live dispatch path — which cannot be
+    // proven without one. `rcgen` (already a vetted, already-resolved
+    // workspace dependency via `nono-cli`) mints a hermetic self-signed
+    // cert entirely in-process; no network access, no filesystem
+    // certificate fixtures.
+    // ========================================================================
+
+    use tokio::net::TcpListener;
+
+    /// Spin up a real, hermetic TLS "upstream" on loopback: accepts exactly
+    /// one connection, reads a full HTTP/1.1 request (headers + a
+    /// Content-Length-bounded body), replies with a minimal 200 OK JSON
+    /// response, and returns the raw bytes it received (for the test to
+    /// assert against) via the returned `JoinHandle`.
+    async fn spawn_hermetic_tls_upstream() -> (
+        u16,
+        rustls::pki_types::CertificateDer<'static>,
+        tokio::task::JoinHandle<Vec<u8>>,
+    ) {
+        let key_pair = rcgen::KeyPair::generate().expect("rcgen key generation");
+        let params = rcgen::CertificateParams::new(vec!["127.0.0.1".to_string()])
+            .expect("rcgen params for IP SAN 127.0.0.1");
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("rcgen self-signed cert");
+        let cert_der = cert.der().clone();
+        let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(
+            rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+        );
+        let server_config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der.clone()], key_der)
+        .expect("hermetic self-signed server config");
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
+
+        let handle = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut tls = acceptor.accept(tcp).await.unwrap();
+
+            // Read until the headers are complete AND the Content-Length-
+            // declared body has fully arrived (or there is no body at all).
+            let mut buf = Vec::new();
+            let mut tmp = [0u8; 4096];
+            loop {
+                if let Some(marker_pos) = find_header_end(&buf) {
+                    let content_length = extract_content_length(&buf[..marker_pos]).unwrap_or(0);
+                    if buf.len() >= marker_pos + 4 + content_length {
+                        break;
+                    }
+                }
+                let n = tls.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&tmp[..n]);
+            }
+
+            let response_body = b"{\"ok\":true}";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                response_body.len(),
+                std::str::from_utf8(response_body).unwrap()
+            );
+            let _ = tls.write_all(response.as_bytes()).await;
+            let _ = tls.flush().await;
+            let _ = tls.shutdown().await;
+
+            buf
+        });
+
+        (port, cert_der, handle)
+    }
+
+    /// The end-to-end wiring proof (plan-checker warning, iteration 2):
+    /// a real request carrying a previously-minted, admitted phantom in its
+    /// JSON body flows through `handle_reverse_proxy` to a real (hermetic)
+    /// TLS upstream. Asserts the bytes upstream actually received contain
+    /// the REAL token and do NOT contain the phantom string — proving
+    /// `resolve_capture_request_body` fires with the correct
+    /// `route.capture` / `ctx.capture_store` / `consumer` arguments on this
+    /// live dispatch path, not merely that the call was written.
+    #[tokio::test]
+    async fn capture_egress_resolution_reaches_upstream_on_live_dispatch_path() {
+        let (port, cert_der, upstream_handle) = spawn_hermetic_tls_upstream().await;
+
+        // Client-side TLS trust: trust ONLY this hermetic self-signed cert.
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.add(cert_der).unwrap();
+        let client_tls_config = rustls::ClientConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+        let client_tls_config_arc = Arc::new(client_tls_config);
+        let test_tls_connector =
+            tokio_rustls::TlsConnector::from(Arc::clone(&client_tls_config_arc));
+        let upstream_pool =
+            crate::pool::UpstreamPool::new(Arc::clone(&client_tls_config_arc), false);
+
+        // Seed a phantom admitted for this route's own name ("liveservice"),
+        // mirroring `relay_response_with_capture`'s own admission scope
+        // (`admitted_consumers: HashSet::from([route_id.to_string()])`).
+        let capture_store = crate::capture::CapturePhantomStore::new();
+        let mut admitted = HashSet::new();
+        admitted.insert("liveservice".to_string());
+        let phantom = capture_store
+            .mint(Zeroizing::new(b"real-nonce-value-e2e".to_vec()), admitted)
+            .unwrap();
+        assert!(
+            !phantom.contains("real-nonce-value-e2e"),
+            "sanity: the minted phantom must not itself contain the real value"
+        );
+
+        let capture = crate::config::CaptureConfig {
+            response_fields: vec![],
+            request_nonce_fields: vec!["code_verifier".to_string()],
+            max_response_bytes: None,
+        };
+
+        let loaded_route = LoadedRoute {
+            upstream: format!("https://127.0.0.1:{port}"),
+            upstream_host_port: Some(format!("127.0.0.1:{port}")),
+            endpoint_rules: crate::config::CompiledEndpointRules::compile(&[]).unwrap(),
+            endpoint_policy: crate::config::CompiledEndpointPolicy::compile(None, &[]).unwrap(),
+            tls_connector: None,
+            tls_client_config: None,
+            tls_config_key: None,
+            managed_auth: None,
+            declares_spiffe: false,
+            declares_capture: true,
+            capture: Some(capture),
+        };
+        let mut routes = std::collections::HashMap::new();
+        routes.insert("liveservice".to_string(), loaded_route);
+        let route_store = RouteStore::from_loaded_routes(routes);
+
+        let credential_store = CredentialStore::empty();
+        let session_token = Zeroizing::new("unused-session-token".to_string());
+        let filter = ProxyFilter::allow_all();
+
+        let ctx = ReverseProxyCtx {
+            route_store: &route_store,
+            credential_store: &credential_store,
+            session_token: &session_token,
+            filter: &filter,
+            tls_connector: &test_tls_connector,
+            default_tls_config: &client_tls_config_arc,
+            upstream_pool: &upstream_pool,
+            audit_log: None,
+            capture_store: &capture_store,
+            // Skip the session-token/phantom-token auth gate entirely — this
+            // test's focus is request-body egress resolution, not the
+            // (already independently tested) auth boundary.
+            require_auth: false,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (connect_result, accept_result) =
+            tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+        let mut server_stream = accept_result.unwrap().0;
+        let mut client_conn = connect_result.unwrap();
+
+        let request_body = serde_json::json!({ "code_verifier": phantom.clone() })
+            .to_string()
+            .into_bytes();
+        let first_line = "POST /liveservice/token HTTP/1.1";
+        let remaining_header = format!(
+            "Host: 127.0.0.1:{port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            request_body.len()
+        );
+
+        let result = handle_reverse_proxy(
+            first_line,
+            &mut server_stream,
+            remaining_header.as_bytes(),
+            &ctx,
+            &request_body,
+        )
+        .await;
+        result.expect("handle_reverse_proxy must succeed for a well-formed live request");
+
+        drop(server_stream);
+        let mut client_response_buf = Vec::new();
+        client_conn
+            .read_to_end(&mut client_response_buf)
+            .await
+            .unwrap();
+
+        let upstream_received = upstream_handle
+            .await
+            .expect("hermetic upstream task must not panic");
+        let upstream_received_str =
+            String::from_utf8(upstream_received).expect("upstream must receive valid UTF-8");
+
+        assert!(
+            upstream_received_str.contains("real-nonce-value-e2e"),
+            "the REAL token must reach upstream once the admitted phantom is resolved on the \
+             live dispatch path; upstream received: {upstream_received_str}"
+        );
+        assert!(
+            !upstream_received_str.contains(&phantom),
+            "the phantom must NOT reach upstream unresolved — resolve_capture_request_body must \
+             have substituted it; upstream received: {upstream_received_str}"
         );
     }
 }
