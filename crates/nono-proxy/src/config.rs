@@ -621,6 +621,21 @@ pub struct RouteConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spiffe: Option<SpiffeAuthConfig>,
 
+    /// Declarative sandboxed OAuth capture (SEC-02, Phase 114): buffer and
+    /// rewrite response bodies on this route, replacing real OAuth tokens
+    /// with sandbox-visible phantoms before the response reaches the client.
+    ///
+    /// Unlike `credential_key`/`oauth2`/`aws_auth`/`spiffe` (all
+    /// request-direction: they inject a credential *into* outbound
+    /// requests), `capture` is response-direction — it rewrites tokens
+    /// *out of* inbound responses. This is a deliberate design decision
+    /// (the fork's phantom-token model runs the opposite direction from
+    /// capture), so `capture` composes with the request-direction auth
+    /// fields above rather than being mutually exclusive with them. Do not
+    /// "fix" this into the mutual-exclusion block by reflexive analogy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<CaptureConfig>,
+
     /// Optional L7 endpoint policy with explicit allow/deny/approve routes.
     ///
     /// When omitted, `endpoint_rules` preserves the legacy behavior:
@@ -655,6 +670,73 @@ pub enum SpiffeAuthConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         svid_hint: Option<String>,
     },
+}
+
+/// Default per-route response-buffer cap for OAuth capture (SEC-02, D-05):
+/// 256 KiB, a defensible, generous default for a JSON object holding a
+/// handful of JWTs. `RouteConfig.capture.max_response_bytes` overrides this
+/// per route, up to `CAPTURE_MAX_RESPONSE_BYTES_CEILING`.
+pub const DEFAULT_CAPTURE_MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Hard ceiling (D-05) that `max_response_bytes` may not exceed: 1 MiB.
+/// Enforced at profile-validation time (Plan 114-08), not here. Exceeding
+/// the *effective* cap at buffer-read time must fail closed — deny the
+/// response rather than release it unrewritten (Plan 114-05).
+pub const CAPTURE_MAX_RESPONSE_BYTES_CEILING: usize = 1024 * 1024;
+
+/// How a captured response field's value should be interpreted when minting
+/// a phantom for it. Mirrors upstream's
+/// `CredentialProviderResponseFieldKind` (design reference, D-07).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureResponseFieldKind {
+    /// An opaque token string — treated as an atomic secret value.
+    #[default]
+    Opaque,
+    /// A JWT — structure-aware handling (e.g. claim inspection) applies.
+    Jwt,
+}
+
+/// A single response-body field to rewrite when a capture-declared route's
+/// response is buffered. `path` is a dot-separated JSON path into the
+/// response body (e.g. `"access_token"` or `"data.token"`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureResponseField {
+    /// Dot-separated JSON path into the response body identifying the field
+    /// carrying the real token that must be rewritten to a phantom.
+    pub path: String,
+    /// How the field's value should be interpreted when minting a phantom.
+    #[serde(default)]
+    pub kind: CaptureResponseFieldKind,
+}
+
+/// Declarative sandboxed OAuth capture configuration for a route (SEC-02,
+/// D-07). When present on a `RouteConfig`, the proxy buffers this route's
+/// response (up to `max_response_bytes`, fail-closed on exceed per D-05)
+/// and rewrites `response_fields` from real tokens to sandbox-visible
+/// phantoms before the response reaches the sandboxed client.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureConfig {
+    /// Which response JSON fields carry the real token and must be
+    /// rewritten to phantoms before the response is released.
+    #[serde(default)]
+    pub response_fields: Vec<CaptureResponseField>,
+
+    /// Dot-paths in request bodies where a presented phantom must be
+    /// resolved back to the real captured value before forwarding
+    /// outbound. LIVE, consumed configuration: Plan 114-06 Task 3 wires
+    /// this into `reverse.rs`'s egress-resolution dispatch via
+    /// `capture::resolve_request_nonce_fields()`, the request-side mirror
+    /// of `rewrite_response_fields()`.
+    #[serde(default)]
+    pub request_nonce_fields: Vec<String>,
+
+    /// Per-route override of `DEFAULT_CAPTURE_MAX_RESPONSE_BYTES`. `None`
+    /// means use the default. May not exceed
+    /// `CAPTURE_MAX_RESPONSE_BYTES_CEILING` (enforced at profile-validation
+    /// time, Plan 114-08).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_response_bytes: Option<usize>,
 }
 
 /// An HTTP method+path access rule for reverse proxy endpoint filtering.
