@@ -261,6 +261,17 @@ pub enum NetworkAuditDenialCategory {
     /// the guard itself lands in Plan 114-07 — this variant is added ahead
     /// of need so that plan does not require a second edit to this enum).
     CaptureUnsupportedPath,
+    /// Route declared OAuth-capture and arrived on `relay_response_with_capture`
+    /// (the buffer-and-rewrite enforcement point itself, Plan 114-05), but
+    /// the response was denied there: buffer cap exceeded (D-05),
+    /// `Content-Encoding` present (Pitfall 2 / `3c59c62e`), a malformed or
+    /// unparseable body, or an unconfigured token-shaped field surviving
+    /// rewrite (the `reject_unrewritten_token_fields` fail-closed backstop,
+    /// D-07). Distinct from `CaptureUnsupportedPath`, which denies a
+    /// capture-declared route for arriving on the WRONG path (no rewrite
+    /// implementation at all); this variant denies on the RIGHT path
+    /// because the buffer/parse/rewrite step itself failed closed.
+    CaptureBufferOrRewriteFailed,
 }
 
 /// SPIFFE delegation-chain context recovered from a JWT-SVID's `act` claim.

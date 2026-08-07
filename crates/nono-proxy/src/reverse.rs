@@ -23,6 +23,8 @@ use crate::error::{ProxyError, Result};
 use crate::filter::ProxyFilter;
 use crate::route::{LoadedRoute, RouteStore};
 use crate::token;
+use serde_json::Value;
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -473,33 +475,29 @@ pub async fn handle_reverse_proxy(
     }
     tls_stream.flush().await?;
 
+    // OAuth capture (SEC-02, D-01r): a route with `capture` configured is
+    // buffered and rewritten by `relay_response_with_capture` instead of
+    // being streamed by the unbuffered loop below. This `if let` is the
+    // ONLY fork in control flow between the two paths and it
+    // unconditionally `return`s — a capture-declared route can never fall
+    // through into the unbuffered streaming loop (D-06: streaming remains
+    // the default for every OTHER route, unmodified). See this plan's
+    // SUMMARY.md for the control-flow re-read confirming this.
+    if let Some(capture) = &route.capture {
+        return relay_response_with_capture(
+            &mut tls_stream,
+            stream,
+            capture,
+            ctx.capture_store,
+            &service,
+            ctx.audit_log,
+        )
+        .await;
+    }
+
     // Stream the response back to the client without buffering.
     // This handles SSE (text/event-stream), chunked transfer, and regular responses.
-    let mut response_buf = [0u8; 8192];
-    let mut status_code: u16 = 502;
-    let mut first_chunk = true;
-
-    loop {
-        let n = match tls_stream.read(&mut response_buf).await {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                debug!("Upstream read error: {}", e);
-                break;
-            }
-        };
-
-        // Parse status from first chunk. The HTTP status line format is:
-        // "HTTP/1.1 200 OK\r\n..." — we need the 3-digit code after the
-        // first space. We scan up to 32 bytes (enough for any valid status line).
-        if first_chunk {
-            status_code = parse_response_status(&response_buf[..n]);
-            first_chunk = false;
-        }
-
-        stream.write_all(&response_buf[..n]).await?;
-        stream.flush().await?;
-    }
+    let status_code = relay_response_streaming(&mut tls_stream, stream).await?;
 
     audit::log_reverse_proxy(
         ctx.audit_log,
@@ -1377,6 +1375,56 @@ async fn send_error(stream: &mut TcpStream, status: u16, reason: &str) -> Result
     Ok(())
 }
 
+/// Relay an upstream response to the client byte-for-byte, unbuffered —
+/// the pre-existing behavior for every route WITHOUT `capture` configured
+/// (SSE, MCP Streamable HTTP, A2A JSON-RPC depend on this, D-06).
+/// Extracted verbatim from site 1's inline loop (zero behavior change) so
+/// it is independently testable: now that `relay_response_with_capture`
+/// exists as a second dispatch path, proving a `capture: None` route
+/// still forwards bytes as-is (no buffering, no rewrite processing) is a
+/// meaningful regression test for D-06's "streaming stays the default"
+/// property. Sites 2/3 (`handle_spiffe_route`,
+/// `handle_spiffe_assertion_credential`) keep their own separate inline
+/// copies of this same loop shape — out of this plan's scope (Plan
+/// 114-06 wires capture into those) — so this extraction deliberately
+/// does not touch them.
+///
+/// Returns the parsed HTTP status code (502 if the response never
+/// produced a valid status line — identical to the pre-extraction
+/// behavior).
+async fn relay_response_streaming<R: AsyncRead + Unpin>(
+    tls_stream: &mut R,
+    stream: &mut TcpStream,
+) -> Result<u16> {
+    let mut response_buf = [0u8; 8192];
+    let mut status_code: u16 = 502;
+    let mut first_chunk = true;
+
+    loop {
+        let n = match tls_stream.read(&mut response_buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                debug!("Upstream read error: {}", e);
+                break;
+            }
+        };
+
+        // Parse status from first chunk. The HTTP status line format is:
+        // "HTTP/1.1 200 OK\r\n..." — we need the 3-digit code after the
+        // first space. We scan up to 32 bytes (enough for any valid status line).
+        if first_chunk {
+            status_code = parse_response_status(&response_buf[..n]);
+            first_chunk = false;
+        }
+
+        stream.write_all(&response_buf[..n]).await?;
+        stream.flush().await?;
+    }
+
+    Ok(status_code)
+}
+
 // ============================================================================
 // OAuth capture: response buffer-and-rewrite (SEC-02, D-01r)
 // ============================================================================
@@ -1575,7 +1623,237 @@ pub async fn read_capped_response<R: AsyncRead + Unpin>(
     Ok(raw)
 }
 
+/// Read a dot-separated JSON path's string value out of an ALREADY
+/// REWRITTEN body, for audit purposes only — recording which phantom
+/// value was minted at a rewritten path. Never called on unrewritten
+/// data (the only caller is `relay_response_with_capture`, after
+/// `rewrite_response_fields` has already replaced the real token with a
+/// phantom at every path in `rewritten_paths`), so this can never surface
+/// a real secret to the audit log. Mirrors `capture.rs`'s private
+/// `value_at_path_mut` traversal shape but read-only and duplicated here
+/// rather than exposed from `capture.rs`, since this is audit-only
+/// plumbing, not security logic.
+fn read_capture_body_path<'a>(body: &'a Value, path: &str) -> Option<&'a str> {
+    let mut current = body;
+    for part in path.split('.') {
+        if part.is_empty() {
+            return None;
+        }
+        current = current.as_object()?.get(part)?;
+    }
+    current.as_str()
+}
+
+/// The fork-native OAuth-capture response buffer-and-rewrite enforcement
+/// point (SEC-02, D-01r/D-02r). Called ONLY for a route with `capture`
+/// configured, in place of the unbuffered streaming loop the rest of this
+/// file uses. Buffers the ENTIRE upstream response (bounded by
+/// `read_capped_response`'s cap + timeout), and only ever releases it to
+/// `stream` after every configured token field has been rewritten to a
+/// sandbox-visible phantom and the fail-closed backstop
+/// (`reject_unrewritten_token_fields`) has confirmed no unconfigured
+/// token-shaped field survived.
+///
+/// FAIL-CLOSED CONTRACT (this is the property ADR-114 cites as proof SC2
+/// is satisfied by construction): every branch below that cannot
+/// guarantee a safe, fully-rewritten body denies the response with a 502
+/// written to `stream` and returns `Ok(())` — it NEVER releases a
+/// partially-processed, unrewritten, or unparseable body, and it never
+/// panics. There is no path from this function back into the unbuffered
+/// streaming loop in `handle_reverse_proxy` (see the call site's control-
+/// flow comment and this plan's SUMMARY.md for the explicit re-read that
+/// confirms this).
+///
+/// Generic over `AsyncRead + Unpin` for the same testability reason
+/// `read_capped_response` is (see its doc comment) — the real call site's
+/// `tokio_rustls::client::TlsStream<TcpStream>` satisfies the bound
+/// unchanged.
+pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
+    tls_stream: &mut R,
+    stream: &mut TcpStream,
+    capture: &crate::config::CaptureConfig,
+    capture_store: &crate::capture::CapturePhantomStore,
+    route_id: &str,
+    audit_log: Option<&audit::SharedAuditLog>,
+) -> Result<()> {
+    let cap = capture
+        .max_response_bytes
+        .unwrap_or(crate::config::DEFAULT_CAPTURE_MAX_RESPONSE_BYTES);
+
+    let deny = move |reason: String| async move {
+        warn!(
+            "OAuth capture: denying response for route '{}': {}",
+            route_id, reason
+        );
+        audit::log_denied(
+            audit_log,
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                route_id: Some(route_id),
+                denial_category: Some(
+                    nono::undo::NetworkAuditDenialCategory::CaptureBufferOrRewriteFailed,
+                ),
+                ..Default::default()
+            },
+            route_id,
+            0,
+            &reason,
+        );
+    };
+
+    // Step 1: bounded read (D-05). Cap-exceeded, timeout, and upstream
+    // read errors are ALL denied here — never a partial or unrewritten
+    // body released.
+    let raw = match read_capped_response(tls_stream, cap, CAPTURE_READ_TIMEOUT).await {
+        Ok(raw) => raw,
+        Err(e) => {
+            deny(e.to_string()).await;
+            send_error(stream, 502, "Bad Gateway").await?;
+            return Ok(());
+        }
+    };
+
+    // Step 2: header/body split. No complete header block -> deny.
+    let Some(marker_pos) = find_header_end(&raw) else {
+        deny("no complete header block in buffered response".to_string()).await;
+        send_error(stream, 502, "Bad Gateway").await?;
+        return Ok(());
+    };
+    let body_start = marker_pos + 4;
+    let header_block = &raw[..marker_pos];
+    let raw_body = &raw[body_start..];
+
+    let status_code = parse_response_status(&raw);
+    let status_line_end = header_block
+        .iter()
+        .position(|&b| b == b'\r')
+        .unwrap_or(header_block.len());
+    let status_line =
+        std::str::from_utf8(&header_block[..status_line_end]).unwrap_or("HTTP/1.1 502 Bad Gateway");
+
+    // Step 3: Content-Encoding is denied UNCONDITIONALLY of status code
+    // (Pitfall 2 / `3c59c62e`) — a compressed body cannot be
+    // field-rewritten reliably, so it must never be forwarded from a
+    // capture-declared route, 2xx or not.
+    let header_facts = parse_capture_response_headers(header_block);
+    if header_facts.content_encoded {
+        deny(format!(
+            "Content-Encoding present on capture-declared route (status {status_code}); a \
+             compressed body cannot be field-rewritten reliably"
+        ))
+        .await;
+        send_error(stream, 502, "Bad Gateway").await?;
+        return Ok(());
+    }
+
+    // Step 4: chunked decode, if present.
+    let body_bytes: Vec<u8> = if header_facts.chunked {
+        match decode_chunked_body(raw_body) {
+            Ok(decoded) => decoded,
+            Err(e) => {
+                deny(e.to_string()).await;
+                send_error(stream, 502, "Bad Gateway").await?;
+                return Ok(());
+            }
+        }
+    } else {
+        raw_body.to_vec()
+    };
+
+    // Step 5: parse as JSON. An unparseable body on a capture-declared
+    // route cannot be safety-inspected, so it must not be forwarded.
+    let mut body: Value = match serde_json::from_slice(&body_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            deny(format!("unparseable response body: {e}")).await;
+            send_error(stream, 502, "Bad Gateway").await?;
+            return Ok(());
+        }
+    };
+
+    // Step 6: rewrite configured fields to phantoms. `admitted_consumers`
+    // is the route's own name — the minimal viable admission scope for
+    // this phase (live cross-consumer egress resolution is out of scope
+    // per this phase's ADR / scope-limit note, 114-CONTEXT.md D-10).
+    let admitted_consumers: HashSet<String> = HashSet::from([route_id.to_string()]);
+    let rewritten_paths = match crate::capture::rewrite_response_fields(
+        &mut body,
+        &capture.response_fields,
+        capture_store,
+        admitted_consumers,
+    ) {
+        Ok(paths) => paths,
+        Err(e) => {
+            deny(format!("field rewrite failed: {e}")).await;
+            send_error(stream, 502, "Bad Gateway").await?;
+            return Ok(());
+        }
+    };
+
+    // Step 7: fail-closed backstop (D-07) — an unconfigured token-shaped
+    // field surviving rewrite must never be forwarded (provider-config
+    // drift is exactly the leak this backstop exists to close).
+    if let Err(e) = crate::capture::reject_unrewritten_token_fields(&body, &rewritten_paths) {
+        deny(e.to_string()).await;
+        send_error(stream, 502, "Bad Gateway").await?;
+        return Ok(());
+    }
+
+    // Step 8: re-serialize and reassemble. Content-Length is recomputed
+    // from the ACTUAL rewritten body, never the original.
+    let rewritten_body = match serde_json::to_vec(&body) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            deny(format!("failed to re-serialize rewritten body: {e}")).await;
+            send_error(stream, 502, "Bad Gateway").await?;
+            return Ok(());
+        }
+    };
+
+    let mut response = format!("{status_line}\r\n");
+    for (name, value) in filter_headers(header_block, "") {
+        let lower = name.to_lowercase();
+        if lower == "transfer-encoding" {
+            continue;
+        }
+        response.push_str(&format!("{name}: {value}\r\n"));
+    }
+    response.push_str(&format!("Content-Length: {}\r\n\r\n", rewritten_body.len()));
+
+    stream.write_all(response.as_bytes()).await?;
+    stream.write_all(&rewritten_body).await?;
+    stream.flush().await?;
+
+    // Step 9: audit — reads back the (already-rewritten, phantom) values
+    // at each rewritten path for the audit context. Never touches
+    // unrewritten data, so it can never surface a real token.
+    let phantom_ids: Vec<String> = rewritten_paths
+        .iter()
+        .filter_map(|path| read_capture_body_path(&body, path))
+        .map(str::to_string)
+        .collect();
+    audit::log_allowed(
+        audit_log,
+        audit::ProxyMode::Reverse,
+        &audit::EventContext {
+            route_id: Some(route_id),
+            capture_context: Some(nono::undo::CaptureAuditContext {
+                route_id: route_id.to_string(),
+                rewritten_fields: rewritten_paths.clone(),
+                phantom_ids,
+            }),
+            ..Default::default()
+        },
+        route_id,
+        0,
+        "",
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod capture_relay_tests {
     use super::*;
 
@@ -1690,6 +1968,275 @@ mod capture_relay_tests {
             "a stalled upstream must be denied via timeout, not hung on forever"
         );
         drop(client);
+    }
+
+    // ========================================================================
+    // relay_response_with_capture end-to-end behavior tests (Task 3). These
+    // are the plan's 4 required VALIDATION.md behaviors, driven through the
+    // real dispatch function with an in-memory `tokio::io::duplex()` pair
+    // standing in for the upstream `tls_stream` (see `read_capped_response`'s
+    // doc comment for why: no TLS-server test fixture exists anywhere in
+    // this crate) and a real loopback `TcpStream` pair for the client-facing
+    // `stream` (mirroring the pattern this file's pre-existing
+    // `handle_reverse_proxy` tests already use for that side).
+    // ========================================================================
+
+    use tokio::net::TcpListener;
+
+    fn capture_config_with_field(path: &str) -> crate::config::CaptureConfig {
+        capture_config_with_field_and_cap(path, None)
+    }
+
+    fn capture_config_with_field_and_cap(
+        path: &str,
+        max_response_bytes: Option<usize>,
+    ) -> crate::config::CaptureConfig {
+        crate::config::CaptureConfig {
+            response_fields: vec![crate::config::CaptureResponseField {
+                path: path.to_string(),
+                kind: crate::config::CaptureResponseFieldKind::Opaque,
+            }],
+            request_nonce_fields: vec![],
+            max_response_bytes,
+        }
+    }
+
+    /// A real loopback `TcpStream` pair standing in for the client-facing
+    /// `stream` parameter — `relay_response_with_capture` requires a
+    /// concrete `&mut TcpStream` there (only the upstream side is
+    /// genericized), so this mirrors the exact pattern this file's
+    /// pre-existing `handle_reverse_proxy` tests already use.
+    async fn client_stream_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (connect_result, accept_result) =
+            tokio::join!(TcpStream::connect(addr), listener.accept());
+        (connect_result.unwrap(), accept_result.unwrap().0)
+    }
+
+    /// Drive `relay_response_with_capture` with `upstream_response_bytes`
+    /// as the raw bytes an upstream would have sent, returning everything
+    /// written to the client-facing side. Shuts down the server-side
+    /// stream's write half after the relay function returns so the
+    /// client's `read_to_end` observes EOF instead of hanging.
+    async fn run_relay_with_capture(
+        upstream_response_bytes: &'static [u8],
+        capture: &crate::config::CaptureConfig,
+        store: &crate::capture::CapturePhantomStore,
+        route_id: &str,
+    ) -> (Result<()>, Vec<u8>) {
+        let (mut upstream_client, mut upstream_server) = tokio::io::duplex(1 << 20);
+        let (mut client_stream, mut server_stream) = client_stream_pair().await;
+
+        let upstream_write = async move {
+            upstream_client
+                .write_all(upstream_response_bytes)
+                .await
+                .unwrap();
+            drop(upstream_client);
+        };
+
+        let relay = async {
+            let result = relay_response_with_capture(
+                &mut upstream_server,
+                &mut server_stream,
+                capture,
+                store,
+                route_id,
+                None,
+            )
+            .await;
+            // Close the write half so the client's read_to_end below sees
+            // EOF instead of hanging (server_stream itself stays alive
+            // until this async block's scope ends, so it never
+            // auto-closes on its own).
+            let _ = server_stream.shutdown().await;
+            result
+        };
+
+        let read_client = async {
+            let mut buf = Vec::new();
+            client_stream.read_to_end(&mut buf).await.unwrap();
+            buf
+        };
+
+        let (relay_result, received, ()) = tokio::join!(relay, read_client, upstream_write);
+        (relay_result, received)
+    }
+
+    #[tokio::test]
+    async fn capture_rewrites_configured_fields() {
+        let capture = capture_config_with_field("access_token");
+        let store = crate::capture::CapturePhantomStore::new();
+        let body: &'static [u8] =
+            br#"{"access_token":"real-secret-token-value","unrelated":"leave-me-alone"}"#;
+        let upstream_response: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+
+        let (relay_result, received) =
+            run_relay_with_capture(upstream_response, &capture, &store, "testroute").await;
+        relay_result.expect("relay must succeed for a well-formed, fully-configured response");
+
+        let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+        assert!(
+            received_str.starts_with("HTTP/1.1 200"),
+            "expected 200 OK to be forwarded; got: {received_str}"
+        );
+        assert!(
+            !received_str.contains("real-secret-token-value"),
+            "the real token must never reach the client; got: {received_str}"
+        );
+        assert!(
+            received_str.contains("leave-me-alone"),
+            "an unrelated field must be forwarded unchanged; got: {received_str}"
+        );
+        assert!(
+            received_str.to_lowercase().contains("content-length:"),
+            "Content-Length must be present and recomputed for the rewritten body; got: {received_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_fails_closed_on_unrewritten_token_field() {
+        // No response_fields configured at all — access_token is an
+        // unconfigured token-shaped field and must be denied, never
+        // forwarded, by the reject_unrewritten_token_fields backstop.
+        let capture = crate::config::CaptureConfig {
+            response_fields: vec![],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        };
+        let store = crate::capture::CapturePhantomStore::new();
+        let body: &'static [u8] = br#"{"access_token":"leaked-real-token"}"#;
+        let upstream_response: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+
+        let (relay_result, received) =
+            run_relay_with_capture(upstream_response, &capture, &store, "testroute").await;
+        relay_result.expect("relay must return Ok(()) even on a fail-closed deny");
+
+        let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+        assert!(
+            received_str.starts_with("HTTP/1.1 502"),
+            "an unconfigured token-shaped field must be denied (502); got: {received_str}"
+        );
+        assert!(
+            !received_str.contains("leaked-real-token"),
+            "the real token must never reach the client even in the deny response; got: {received_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn capture_denies_content_encoded_response() {
+        let capture = capture_config_with_field("access_token");
+        let store = crate::capture::CapturePhantomStore::new();
+
+        // Proven for BOTH a 2xx and a non-2xx status — unconditional
+        // rejection (Pitfall 2 / 3c59c62e), not narrowed to 2xx only.
+        for status_line in ["HTTP/1.1 200 OK", "HTTP/1.1 401 Unauthorized"] {
+            let upstream_response: &'static [u8] = Box::leak(
+                format!(
+                    "{status_line}\r\nContent-Encoding: gzip\r\nContent-Length: 5\r\n\r\nabcde"
+                )
+                .into_bytes()
+                .into_boxed_slice(),
+            );
+
+            let (relay_result, received) =
+                run_relay_with_capture(upstream_response, &capture, &store, "testroute").await;
+            relay_result.expect("relay must return Ok(()) even on a fail-closed deny");
+
+            let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+            assert!(
+                received_str.starts_with("HTTP/1.1 502"),
+                "Content-Encoding must be denied unconditionally of status (status line was \
+                 '{status_line}'); got: {received_str}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn capture_buffer_cap_exceeded_denies_response() {
+        let capture = capture_config_with_field_and_cap("access_token", Some(16));
+        let store = crate::capture::CapturePhantomStore::new();
+        // No Content-Length header at all — proves the cap is enforced
+        // against actual bytes read, not a Content-Length pre-check.
+        let upstream_response: &'static [u8] = b"HTTP/1.1 200 OK\r\n\r\n{\"access_token\":\"this body is definitely longer than the sixteen byte cap\"}";
+
+        let (relay_result, received) =
+            run_relay_with_capture(upstream_response, &capture, &store, "testroute").await;
+        relay_result.expect("relay must return Ok(()) even on a fail-closed deny");
+
+        let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+        assert!(
+            received_str.starts_with("HTTP/1.1 502"),
+            "a response exceeding the buffer cap must be denied, never released unrewritten; \
+             got: {received_str}"
+        );
+    }
+
+    /// D-06 regression proof: `relay_response_streaming` (the unbuffered
+    /// path used when `route.capture` is `None`) forwards bytes verbatim —
+    /// no rewrite/buffering processing — proving streaming truly stays the
+    /// default now that `relay_response_with_capture` exists as a second
+    /// dispatch path.
+    #[tokio::test]
+    async fn non_capture_route_still_streams_unbuffered() {
+        let (mut upstream_client, mut upstream_server) = tokio::io::duplex(1 << 16);
+        let (mut client_stream, mut server_stream) = client_stream_pair().await;
+
+        let body = br#"{"access_token":"this field is NOT rewritten on the streaming path"}"#;
+        let upstream_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        );
+
+        let upstream_write = async move {
+            upstream_client
+                .write_all(upstream_response.as_bytes())
+                .await
+                .unwrap();
+            drop(upstream_client);
+        };
+
+        let relay = async {
+            let status = relay_response_streaming(&mut upstream_server, &mut server_stream)
+                .await
+                .unwrap();
+            let _ = server_stream.shutdown().await;
+            status
+        };
+
+        let read_client = async {
+            let mut buf = Vec::new();
+            client_stream.read_to_end(&mut buf).await.unwrap();
+            buf
+        };
+
+        let (status, received, ()) = tokio::join!(relay, read_client, upstream_write);
+        assert_eq!(status, 200);
+        let received_str = String::from_utf8(received).unwrap();
+        // Verbatim passthrough: the real "token" value survives unchanged
+        // on the streaming path, unlike the capture path's rewrite.
+        assert!(
+            received_str.contains("this field is NOT rewritten on the streaming path"),
+            "streaming path must forward bytes verbatim, not rewrite them; got: {received_str}"
+        );
     }
 }
 
