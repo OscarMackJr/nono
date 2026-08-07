@@ -125,3 +125,9 @@ None - no external service configuration required.
 ---
 *Phase: 114-oauth-capture-absorb-sec-02*
 *Completed: 2026-08-06*
+
+## Self-Check: PASSED
+
+All modified files verified present on disk (`crates/nono-proxy/src/config.rs`,
+`crates/nono-cli/src/network_policy.rs`, this SUMMARY.md); all 3 commit hashes
+(`e2754cf1`, `c8007112`, `01ee45f`) verified present in git log.
