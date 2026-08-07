@@ -1082,6 +1082,42 @@ async fn handle_forward_http(
         return Ok(());
     }
 
+    // D-06 (114-CONTEXT.md): mirrors the SPIFFE guard immediately above —
+    // this forward-HTTP path has no buffer-and-rewrite enforcement point of
+    // its own (Plans 114-05/114-06 only wire the reverse-proxy relay sites).
+    // A request whose absolute-form target matches a capture-declared
+    // route's upstream must never be silently forwarded, since the real
+    // OAuth token would reach the sandboxed client unrewritten — exactly
+    // the WR-13 defect shape (112-REVIEW.md). Unconditional — NOT gated on
+    // `state.config.require_auth`, for the same reason as the SPIFFE guard:
+    // "this route only makes sense through the reverse-proxy path" does not
+    // depend on whether session-token auth happens to be enabled for this
+    // proxy instance.
+    if state.route_store.capture_declared_for_upstream(&host_port) {
+        warn!(
+            "Blocked forward-HTTP request to OAuth-capture-declared route upstream {} — this \
+             path has no buffer-and-rewrite enforcement point; use the reverse-proxy path instead",
+            host_port
+        );
+        audit::log_denied(
+            Some(&state.audit_log),
+            audit::ProxyMode::Reverse,
+            &audit::EventContext {
+                denial_category: Some(
+                    nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath,
+                ),
+                ..audit::EventContext::default()
+            },
+            &host,
+            port,
+            "OAuth-capture-declared route upstream: forward-HTTP path has no buffer-and-rewrite \
+             enforcement point — real token would leak unrewritten",
+        );
+        let response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
+
     // Self-request detection: absolute-form URL targeting the proxy's own
     // bound port on a loopback host (e.g. an SDK configured with
     // `OPENAI_BASE_URL=http://127.0.0.1:{proxy_port}/openai` sent via an
@@ -1346,13 +1382,31 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                         .unwrap_or((&host_port, 443));
                     let is_spiffe_route =
                         state.route_store.spiffe_declared_for_upstream(&host_port);
+                    // D-06 (114-CONTEXT.md): 114-07 adds this parallel capture
+                    // check. NO new deny surface — `is_route_upstream` above
+                    // already blocks CONNECT to every route upstream
+                    // unconditionally; this only refines which
+                    // `denial_category`/`denial_reason` the resulting audit
+                    // event carries, so a capture-route CONNECT-bypass is
+                    // distinguishable from a plain one. Precedence: SPIFFE
+                    // checked first — a route declaring BOTH `spiffe` and
+                    // `capture` should not happen given route config, but if
+                    // it ever does, the SPIFFE category has the established
+                    // precedent (Plan 113-05) and takes priority.
+                    let is_capture_route =
+                        state.route_store.capture_declared_for_upstream(&host_port);
                     let denial_category = if is_spiffe_route {
                         nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath
+                    } else if is_capture_route {
+                        nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath
                     } else {
                         nono::undo::NetworkAuditDenialCategory::ConnectBypassesL7
                     };
                     let denial_reason = if is_spiffe_route {
                         "SPIFFE-declared route upstream: CONNECT path has no SPIFFE implementation"
+                    } else if is_capture_route {
+                        "OAuth-capture-declared route upstream: CONNECT path has no \
+                         buffer-and-rewrite enforcement point — real token would leak unrewritten"
                     } else {
                         "route upstream: CONNECT bypasses L7 filtering"
                     };
@@ -3186,6 +3240,38 @@ mod tests {
         RouteStore::from_loaded_routes(routes)
     }
 
+    /// Test helper (D-06, Plan 114-07): a `RouteStore` with exactly one
+    /// `declares_capture: true` route at a known upstream `host:port`.
+    /// Unlike `spiffe_declared_route_store`, capture has zero live external
+    /// dependency, so this could also be built via `RouteStore::load()` —
+    /// `from_loaded_routes` is used anyway to mirror the SPIFFE helper's
+    /// shape exactly and to reuse the same `spawn_state_for_d03_dispatch_test`
+    /// fixture.
+    fn capture_declared_route_store(upstream_host_port: &str) -> RouteStore {
+        let mut routes = std::collections::HashMap::new();
+        routes.insert(
+            "capture-svc".to_string(),
+            route::LoadedRoute {
+                upstream: format!("https://{upstream_host_port}"),
+                upstream_host_port: Some(upstream_host_port.to_string()),
+                endpoint_rules: crate::config::CompiledEndpointRules::compile(&[]).unwrap(),
+                endpoint_policy: crate::config::CompiledEndpointPolicy::compile(None, &[]).unwrap(),
+                tls_connector: None,
+                tls_client_config: None,
+                tls_config_key: None,
+                managed_auth: None,
+                declares_spiffe: false,
+                declares_capture: true,
+                capture: Some(crate::config::CaptureConfig {
+                    response_fields: vec![],
+                    request_nonce_fields: vec![],
+                    max_response_bytes: None,
+                }),
+            },
+        );
+        RouteStore::from_loaded_routes(routes)
+    }
+
     /// D-03: a CONNECT tunnel targeting a SPIFFE-declared route's upstream
     /// is denied (403) with `denial_category: SpiffeUnsupportedPath`, never
     /// silently tunneled — on this fork's CONNECT path, which has no SPIFFE
@@ -3285,6 +3371,173 @@ mod tests {
                     && e.denial_category
                         == Some(nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath)),
             "expected a Deny audit event with denial_category=SpiffeUnsupportedPath, got: {:?}",
+            events
+        );
+    }
+
+    /// D-06 (114-CONTEXT.md): the ONE genuinely new guard this phase needs.
+    /// An absolute-form `http://` forward-proxy request targeting an
+    /// OAuth-capture-declared route's upstream is denied (403) with
+    /// `denial_category: CaptureUnsupportedPath`, never silently forwarded —
+    /// `handle_forward_http` has no buffer-and-rewrite enforcement point of
+    /// its own (only the reverse-proxy relay sites do, Plans 114-05/114-06).
+    /// `require_auth: false` proves the guard is unconditional — it fires
+    /// even when session-token auth is disabled, mirroring
+    /// `d03_forward_http_denies_spiffe_declared_route_upstream` exactly.
+    #[tokio::test]
+    async fn forward_http_denies_capture_declared_route_upstream() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let upstream_host_port = "capture-upstream.invalid:9443";
+        let route_store = capture_declared_route_store(upstream_host_port);
+        let config = ProxyConfig {
+            require_auth: false,
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET http://{upstream_host_port}/token HTTP/1.1\r\nHost: {upstream_host_port}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "forward-HTTP to a capture-declared route upstream must be denied (403), \
+             even with require_auth=false, got: {}",
+            response_str
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath)),
+            "expected a Deny audit event with denial_category=CaptureUnsupportedPath, got: {:?}",
+            events
+        );
+    }
+
+    /// D-06: a negative control proving the new capture guard doesn't
+    /// over-match. A route that declares neither `capture` nor `spiffe` must
+    /// still be forwarded normally through `handle_forward_http` — the guard
+    /// added in this plan must check `declares_capture` specifically, not
+    /// merely "some route exists at this upstream" (which would regress
+    /// `forward_http_allowed_host_is_forwarded`'s existing contract).
+    #[tokio::test]
+    async fn forward_http_non_capture_route_still_forwards() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let (origin_addr, origin_rx) = spawn_echo_origin().await;
+        let origin_host_port = format!("127.0.0.1:{}", origin_addr.port());
+
+        // A route IS configured at this exact upstream, but declares neither
+        // capture nor spiffe — this is the over-match the negative control
+        // guards against.
+        let mut routes = std::collections::HashMap::new();
+        routes.insert(
+            "plain-svc".to_string(),
+            route::LoadedRoute {
+                upstream: format!("http://{origin_host_port}"),
+                upstream_host_port: Some(origin_host_port.clone()),
+                endpoint_rules: crate::config::CompiledEndpointRules::compile(&[]).unwrap(),
+                endpoint_policy: crate::config::CompiledEndpointPolicy::compile(None, &[]).unwrap(),
+                tls_connector: None,
+                tls_client_config: None,
+                tls_config_key: None,
+                managed_auth: None,
+                declares_spiffe: false,
+                declares_capture: false,
+                capture: None,
+            },
+        );
+        let route_store = RouteStore::from_loaded_routes(routes);
+
+        let config = ProxyConfig {
+            require_auth: false,
+            ..Default::default()
+        };
+        let (addr, _audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("GET http://{origin_host_port}/hello HTTP/1.1\r\nHost: {origin_host_port}\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            !response_str.starts_with("HTTP/1.1 403"),
+            "a non-capture, non-SPIFFE route's upstream must still forward normally, got: {}",
+            response_str
+        );
+
+        // The echo origin must have actually received the request — proof
+        // the connection was forwarded, not just answered locally.
+        let received = origin_rx.await.unwrap();
+        assert!(
+            received.starts_with("GET /hello HTTP/1.1"),
+            "upstream should see the forwarded request, got: {received:?}"
+        );
+    }
+
+    /// D-06: a CONNECT tunnel targeting a capture-declared route's upstream
+    /// is denied (403) — this is the PRE-EXISTING `is_route_upstream` block
+    /// (unchanged, no new deny surface), verified here as a regression test.
+    /// The obligation this test actually proves is audit fidelity: the
+    /// resulting denial's `denial_category` is `CaptureUnsupportedPath`, not
+    /// the generic `ConnectBypassesL7` a non-capture route upstream would
+    /// get — mirrors `d03_connect_denies_spiffe_declared_route_upstream`.
+    #[tokio::test]
+    async fn connect_denies_capture_declared_route_upstream() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let upstream_host_port = "capture-upstream.invalid:9443";
+        let route_store = capture_declared_route_store(upstream_host_port);
+        let config = ProxyConfig {
+            require_auth: false,
+            external_proxy: Some(crate::config::ExternalProxyConfig {
+                address: "127.0.0.1:1".to_string(),
+                auth: None,
+                bypass_hosts: vec![],
+            }),
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request =
+            format!("CONNECT {upstream_host_port} HTTP/1.1\r\nHost: {upstream_host_port}\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "CONNECT to a capture-declared route upstream must be denied (403), \
+             even with require_auth=false and an external_proxy configured, got: {}",
+            response_str
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath)),
+            "expected a Deny audit event with denial_category=CaptureUnsupportedPath, got: {:?}",
             events
         );
     }
