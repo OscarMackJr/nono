@@ -36,7 +36,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [x] **Phase 112: Security + Residual Sync** — 8/8 plans (SEC-02 explicitly carved out to Phase 114)
 - [x] **Phase 113: SPIFFE/SPIRE Workload Identity** — 8/8 plans
-- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 10/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves); executing 2026-08-07 (Waves 1-5 complete; 114-11 phase gate in progress)
+- [x] **Phase 114: OAuth Capture Absorb (SEC-02)** — 11/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves); COMPLETE 2026-08-07 (11/11 plans; code-reviewed — 3 Criticals found and fixed, 9 Warning + 6 Info open by operator scoping)
 
 </details>
 
@@ -358,7 +358,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 114-10-PLAN.md — D-14: ../nono-py + ../nono-ts binding rebuild
 
 **Wave 6** *(blocked on Wave 5 — closure and combined verification)*
-- [ ] 114-11-PLAN.md — ADR-114 + 108-DIVERGENCE-LEDGER.md carry-forward note + REQUIREMENTS.md checkbox + combined verification
+- [x] 114-11-PLAN.md — ADR-114 + 108-DIVERGENCE-LEDGER.md carry-forward note + REQUIREMENTS.md checkbox + combined verification
 
 **Cross-cutting constraints** *(appear in 2+ plans' `must_haves`)*:
 - **D-06** (6 plans) — fail-closed on every arrival path; all three `reverse.rs` relay sites proven *independently* per the WR-13 lesson
@@ -399,4 +399,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 6/6 | Complete   | 2026-08-05 |
 | 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
 | 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |
-| 114. OAuth Capture Absorb (SEC-02) | v3.6 | 10/11 | In progress (Waves 1-5 complete) | - |
+| 114. OAuth Capture Absorb (SEC-02) | v3.6 | 11/11 | Complete | 2026-08-07 |
