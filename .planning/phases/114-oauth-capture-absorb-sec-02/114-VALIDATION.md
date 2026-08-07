@@ -1,9 +1,9 @@
 ---
 phase: 114
 slug: oauth-capture-absorb-sec-02
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: revised
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-08-06
 ---
 
@@ -66,6 +66,8 @@ See `.planning/templates/cross-target-verify-checklist.md` — single source of 
 | `handle_forward_http` denies capture-declared route upstream at request time | D-06 (**NEW guard**) | Elevation of Privilege | The one genuinely new guard; mirrors `d03_forward_http_denies_spiffe_declared_route_upstream` | unit | `cargo test -p nono-proxy forward_http_denies_capture_declared_route_upstream` | ❌ W0 | ⬜ pending |
 | Real tokens in-memory only, `Zeroizing`-wrapped, no disk persistence | D-08 | Info Disclosure | Assert no persist path / no file I/O in store | unit | `cargo test -p nono-proxy capture_store_holds_only_in_memory` | ❌ W0 | ⬜ pending |
 | Phantom resolves only for admitted consumers | Threat table | Elevation of Privilege | Per-phantom consumer scoping | unit | `cargo test -p nono-proxy capture_phantom_rejects_unadmitted_consumer` | ❌ W0 | ⬜ pending |
+| Minted phantom resolves to the real token for an admitted consumer, on a real production request-dispatch path (not just capture.rs's own unit tests) | D-02r / D-06 (revision fix) | Info Disclosure | Mint-to-resolve loop closed end-to-end — resolve_capture_request_body() wired into handle_reverse_proxy | integration | `cargo test -p nono-proxy capture_egress_resolves_admitted_phantom_in_request_body` | ❌ W0 | ⬜ pending |
+| Non-admitted or unknown phantom in a request_nonce_fields path is left unchanged (never resolved to a real token) | D-02r / D-06 (revision fix) | Elevation of Privilege | Fail closed — no fallthrough to a real token for a consumer the phantom was not admitted to | integration | `cargo test -p nono-proxy capture_egress_fails_closed_for_unadmitted_consumer_in_request_body` | ❌ W0 | ⬜ pending |
 | Capture-provider profile deserializes **AND** passes `validate_against_schema()` | D-13 | Input Validation | Round-trip; mirrors `test_schema_validates_spiffe_custom_credential` (`profile/mod.rs:7396`) | unit | `cargo test -p nono-cli test_schema_validates_capture_custom_credential` | ❌ W0 | ⬜ pending |
 | No policy/enforcement logic lands in `crates/nono/src/` | SC3 / ADR-86 | — | Any new audit context type is **pure data**, no branching | review + grep | grep-verified acceptance criterion in the plan | N/A | ⬜ pending |
 | `../nono-py` + `../nono-ts` rebuild green after `RouteConfig` gains a field | D-14 | — | **Only building catches struct drift** — report real results | build gate | `maturin build` in `../nono-py`; `napi build --platform --release` in `../nono-ts` | N/A | ⬜ pending |
@@ -87,6 +89,11 @@ See `.planning/templates/cross-target-verify-checklist.md` — single source of 
       for capture
 - [ ] `crates/nono-cli/src/profile/mod.rs` schema round-trip test — mirror
       `test_schema_validates_spiffe_custom_credential` (`mod.rs:7396-7415`)
+- [ ] `resolve_capture_request_body` tests in `reverse.rs` (Plan 114-06 Task 3, revision fix) —
+      2 cases minimum: admitted-phantom-resolves-in-request-body,
+      unadmitted-or-unknown-phantom-left-unchanged. Proves `CapturePhantomStore::resolve()` has a
+      real production call site, not only `capture.rs`'s own unit tests (the plan-checker's SC2
+      half-feature blocker).
 
 **Framework install:** none. `cargo test` is already fully configured; D-07's portable logic uses
 only crates `nono-proxy` already depends on (`base64`, `getrandom`, `url`, `serde_json`) — **no new
@@ -116,7 +123,11 @@ It already exists in this repo; do not invent a second convention.
 - [ ] Wave 0 covers all MISSING references
 - [ ] No watch-mode flags
 - [ ] Feedback latency < 120s
-- [ ] Each of the 3 `reverse.rs` relay sites proven **independently** (WR-13 lesson)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] Each of the 3 `reverse.rs` relay sites proven **independently** (WR-13 lesson)
+- [x] The mint-to-resolve loop is closed — `CapturePhantomStore::resolve()` has a grep-provable
+      production call site (Plan 114-06 Task 3), proven by 2 independent tests (admitted resolves,
+      non-admitted fails closed) — revision fix for the plan-checker's SC2 half-feature blocker
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** revised and re-approved 2026-08-07 (plan-checker iteration 1 blocker addressed —
+see `114-06-PLAN.md` Task 3, `114-11-PLAN.md` Task 1's corrected ADR-114 spec)
