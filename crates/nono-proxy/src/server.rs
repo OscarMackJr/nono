@@ -3425,6 +3425,73 @@ mod tests {
         );
     }
 
+    /// D-06's LOAD-BEARING PROPERTY, proven at the guard layer.
+    ///
+    /// `capture_declared_for_upstream()` matches HOST-ONLY, deliberately
+    /// diverging from the SPIFFE sibling's exact `host:port` matching. This
+    /// test is the reason that divergence exists: the route declares its
+    /// upstream on port 9443, but the forward-HTTP request reaches the SAME
+    /// HOST on a DIFFERENT port (443) and must STILL be denied.
+    ///
+    /// Without host-only matching this request would sail past the guard and
+    /// the real OAuth token would reach the sandboxed client unrewritten —
+    /// the exact bypass class upstream's `3c59c62e` hardening commit closed.
+    /// The property is separately unit-tested one layer down
+    /// (`route.rs::test_capture_declared_for_upstream_true_across_different_port`),
+    /// but that proves the predicate, not that the GUARD consults it; a guard
+    /// that narrowed the match to `host:port` would still pass that test while
+    /// being fail-open here.
+    ///
+    /// `require_auth: false` again proves the guard is unconditional.
+    #[tokio::test]
+    async fn forward_http_denies_capture_declared_route_upstream_on_different_port() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        // Route declares its upstream on :9443 ...
+        let declared_host_port = "capture-upstream.invalid:9443";
+        let route_store = capture_declared_route_store(declared_host_port);
+        let config = ProxyConfig {
+            require_auth: false,
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        // ... but the request reaches the same host on :443.
+        let requested_host_port = "capture-upstream.invalid:443";
+        assert_ne!(
+            declared_host_port, requested_host_port,
+            "sanity: this test is meaningless unless the ports genuinely differ"
+        );
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "GET http://{requested_host_port}/token HTTP/1.1\r\nHost: {requested_host_port}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "forward-HTTP to a capture-declared route's HOST on a DIFFERENT port must still be \
+             denied (403) — host-only matching (D-06) is what makes this fail closed; got: {}",
+            response_str
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath)),
+            "expected a Deny audit event with denial_category=CaptureUnsupportedPath, got: {:?}",
+            events
+        );
+    }
+
     /// D-06: a negative control proving the new capture guard doesn't
     /// over-match. A route that declares neither `capture` nor `spiffe` must
     /// still be forwarded normally through `handle_forward_http` — the guard
