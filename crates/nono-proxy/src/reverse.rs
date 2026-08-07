@@ -481,6 +481,18 @@ pub async fn handle_reverse_proxy(
         request.push_str(&format!("{}: {}\r\n", name, value));
     }
 
+    // CR-02 (114-REVIEW.md): a capture-declared route's response is
+    // BUFFERED, not streamed, so the proxy must know where the response
+    // ends. `read_capped_response`'s framing-based termination is the
+    // primary mechanism; asking the upstream to close afterwards is a
+    // belt-and-braces backstop that also stops a keep-alive connection
+    // being pinned for the lifetime of the buffered read. Capture routes
+    // only — every other route keeps the upstream's default connection
+    // reuse, unchanged (D-06).
+    if route.capture.is_some() {
+        request.push_str("Connection: close\r\n");
+    }
+
     // Content-Length for body
     if !body.is_empty() {
         request.push_str(&format!("Content-Length: {}\r\n", body.len()));
@@ -769,6 +781,13 @@ async fn handle_spiffe_route(
         request.push_str(&format!("{}: {}\r\n", name, value));
     }
 
+    // CR-02: see site 1's identical comment — a buffered (capture-declared)
+    // response asks the upstream to close afterwards as a backstop to
+    // `read_capped_response`'s framing-based termination.
+    if route.capture.is_some() {
+        request.push_str("Connection: close\r\n");
+    }
+
     if !body.is_empty() {
         request.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
@@ -1031,6 +1050,24 @@ async fn handle_spiffe_assertion_credential(
         }
     };
 
+    // OAuth capture (SEC-02, D-01r, T-114-18): this route's RFC 7523
+    // jwt-bearer assertion auth source must not determine whether its
+    // RESPONSE is buffered and rewritten — the same enforcement point sites
+    // 1 and 2 apply. `handle_spiffe_assertion_credential` does not take a
+    // `route: &LoadedRoute` parameter (it dispatches off
+    // `SpiffeAssertionRoute`, a `credential.rs` type, not a route), so the
+    // route's `capture` config is looked up here via `ctx.route_store`,
+    // which is already cheaply in scope and already holds an entry for
+    // this service (`RouteStore::load` inserts a `LoadedRoute` — carrying
+    // `capture`, independent of `oauth2.client_assertion` — for every
+    // configured route, not only `spiffe`-declared ones). Resolved BEFORE
+    // the request is built (CR-02) so the request can carry `Connection:
+    // close` when the response is going to be buffered.
+    let route_capture = ctx
+        .route_store
+        .get(service)
+        .and_then(|r| r.capture.as_ref());
+
     let mut request = Zeroizing::new(format!(
         "{} {} {}\r\nHost: {}\r\n",
         method, upstream_path_full, version, upstream_host
@@ -1046,6 +1083,11 @@ async fn handle_spiffe_assertion_credential(
         request.push_str(&format!("{}: {}\r\n", name, value));
     }
 
+    // CR-02: see site 1's identical comment.
+    if route_capture.is_some() {
+        request.push_str("Connection: close\r\n");
+    }
+
     if !body.is_empty() {
         request.push_str(&format!("Content-Length: {}\r\n", body.len()));
     }
@@ -1057,24 +1099,10 @@ async fn handle_spiffe_assertion_credential(
     }
     tls_stream.flush().await?;
 
-    // OAuth capture (SEC-02, D-01r, T-114-18): this route's RFC 7523
-    // jwt-bearer assertion auth source must not determine whether its
-    // RESPONSE is buffered and rewritten — the same enforcement point sites
-    // 1 and 2 apply. `handle_spiffe_assertion_credential` does not take a
-    // `route: &LoadedRoute` parameter (it dispatches off
-    // `SpiffeAssertionRoute`, a `credential.rs` type, not a route), so the
-    // route's `capture` config is looked up here via `ctx.route_store`,
-    // which is already cheaply in scope and already holds an entry for
-    // this service (`RouteStore::load` inserts a `LoadedRoute` — carrying
-    // `capture`, independent of `oauth2.client_assertion` — for every
-    // configured route, not only `spiffe`-declared ones). Unconditional
-    // `return` on `Some` so a capture-declared route can never fall through
-    // into the unbuffered streaming loop below (D-06 for every other
-    // route).
-    let route_capture = ctx
-        .route_store
-        .get(service)
-        .and_then(|r| r.capture.as_ref());
+    // Unconditional `return` on `Some` so a capture-declared route can
+    // never fall through into the unbuffered streaming loop below (D-06 for
+    // every other route). `route_capture` is resolved above, before the
+    // request build — see its comment.
     if let Some(result) = relay_capture_if_declared(
         &mut tls_stream,
         stream,
@@ -1225,12 +1253,30 @@ fn validate_phantom_token(
     Err(ProxyError::InvalidToken)
 }
 
+/// Hop-by-hop header names (RFC 9110 §7.6.1) that apply to a single
+/// transport hop and MUST NOT be forwarded across a proxy.
+///
+/// CR-02 (114-REVIEW.md): `Connection` in particular was being forwarded
+/// verbatim, so a normal client's `Connection: keep-alive` actively asked
+/// the UPSTREAM to hold the connection open — on the capture path, whose
+/// buffered read then had nothing to terminate on. Each of these describes
+/// the client<->proxy hop, never the proxy<->upstream hop.
+const HOP_BY_HOP_HEADER_PREFIXES: &[&str] = &[
+    "connection:",
+    "keep-alive:",
+    "proxy-connection:",
+    "te:",
+    "trailer:",
+    "upgrade:",
+];
+
 /// Filter headers, removing hop-by-hop and proxy-internal headers.
 ///
 /// Always strips:
 /// - `Host` (rewritten to upstream)
 /// - `Content-Length` (re-added after body is read)
 /// - `Proxy-Authorization` (hop-by-hop, contains session token)
+/// - every [`HOP_BY_HOP_HEADER_PREFIXES`] header (CR-02)
 ///
 /// When `cred_header` is non-empty, also strips that header (it contains
 /// the phantom token that must not be forwarded alongside the real credential).
@@ -1250,6 +1296,9 @@ fn filter_headers(header_bytes: &[u8], cred_header: &str) -> Vec<(String, String
         if lower.starts_with("host:")
             || lower.starts_with("content-length:")
             || lower.starts_with("proxy-authorization:")
+            || HOP_BY_HOP_HEADER_PREFIXES
+                .iter()
+                .any(|prefix| lower.starts_with(prefix))
             || (!cred_header_lower.is_empty() && lower.starts_with(&cred_header_lower))
             || line.trim().is_empty()
         {
@@ -1655,13 +1704,112 @@ pub fn parse_capture_response_headers(header_block: &[u8]) -> CaptureResponseHea
     }
 }
 
+/// Scan a chunked-transfer-encoded body prefix and report whether the
+/// whole body is present, so `read_capped_response` can stop reading at
+/// the terminal (zero-size) chunk instead of waiting for EOF (CR-02,
+/// 114-REVIEW.md).
+///
+/// Returns `true` when the body is COMPLETE **or MALFORMED**, `false` only
+/// when more bytes are genuinely needed. Treating malformed framing as
+/// "stop reading" is deliberate and fail-closed: `decode_chunked_body`
+/// will then produce the deny, whereas continuing to read would block on a
+/// keep-alive connection that is never going to send the terminator.
+///
+/// Chunk-framing semantics mirror `decode_chunked_body` exactly (including
+/// its `checked_add` overflow guards and its "a zero-size chunk header
+/// ends the body" break condition) so the two can never disagree about
+/// where the body ends. Never interpolates response bytes anywhere — it
+/// returns a bool.
+fn chunked_body_complete(body: &[u8]) -> bool {
+    let mut pos = 0usize;
+    loop {
+        let Some(line_end_rel) = body
+            .get(pos..)
+            .and_then(|rest| rest.windows(2).position(|w| w == b"\r\n"))
+        else {
+            // No complete chunk-size line yet — need more bytes.
+            return false;
+        };
+        let line_end = pos + line_end_rel;
+        let Ok(line) = std::str::from_utf8(&body[pos..line_end]) else {
+            return true; // malformed -> stop; step 4 denies
+        };
+        let size_hex = line.split(';').next().unwrap_or("").trim();
+        let Ok(size) = usize::from_str_radix(size_hex, 16) else {
+            return true; // malformed -> stop; step 4 denies
+        };
+        pos = line_end + 2;
+        if size == 0 {
+            return true; // terminal chunk reached — body is complete
+        }
+        let (Some(end), Some(end_plus_crlf)) = (
+            pos.checked_add(size),
+            pos.checked_add(size).and_then(|e| e.checked_add(2)),
+        ) else {
+            return true; // overflow -> malformed -> stop; step 4 denies
+        };
+        if end_plus_crlf > body.len() {
+            return false; // chunk data still arriving
+        }
+        if body.get(end..end_plus_crlf) != Some(b"\r\n".as_slice()) {
+            return true; // malformed -> stop; step 4 denies
+        }
+        pos = end_plus_crlf;
+    }
+}
+
+/// Decide whether a buffered response prefix is a COMPLETE HTTP message
+/// according to its own framing, so the capture path can stop reading
+/// without waiting for the upstream to close the connection (CR-02,
+/// 114-REVIEW.md).
+///
+/// Precedence follows RFC 9112 §6.3: `Transfer-Encoding: chunked` wins
+/// over `Content-Length` when both are present. When NEITHER framing is
+/// present the response is connection-close-delimited by definition, so
+/// this returns `false` and the caller falls back to reading until EOF.
+///
+/// Returns a bool — no response bytes are ever surfaced (CR-01).
+fn response_framing_complete(raw: &[u8]) -> bool {
+    let Some(marker_pos) = find_header_end(raw) else {
+        return false; // header block still arriving
+    };
+    let header_block = &raw[..marker_pos];
+    let body = &raw[marker_pos + 4..];
+
+    if parse_capture_response_headers(header_block).chunked {
+        return chunked_body_complete(body);
+    }
+    if let Some(len) = extract_content_length(header_block) {
+        return body.len() >= len;
+    }
+    false
+}
+
 /// Read an upstream response into memory, enforcing `cap` as a hard
 /// ceiling on bytes held (D-05) and `read_timeout` as a hard ceiling on
 /// time spent per read (bounds the DoS surface buffering introduces).
-/// EOF-terminated — the same idiom this file's existing (unbuffered) relay
-/// loops already use, NOT Content-Length-driven pre-computation — so this
-/// correctly bounds a chunked or connection-close-delimited response too,
-/// even when the upstream sends no `Content-Length` header at all.
+///
+/// TERMINATION (CR-02, 114-REVIEW.md): stops on the response's OWN HTTP
+/// framing — `Transfer-Encoding: chunked`'s terminal zero-size chunk, or
+/// `Content-Length` bytes of body — and falls back to reading until EOF
+/// ONLY when the response carries neither (i.e. is genuinely
+/// connection-close-delimited).
+///
+/// This previously terminated on EOF alone. Every real OAuth token
+/// endpoint (Okta, Auth0, Google, Entra, GitHub) is HTTP/1.1 with
+/// persistent connections and does not close after a response, so every
+/// capture request against a real provider blocked for the full
+/// `CAPTURE_READ_TIMEOUT` and then returned 502 — the feature did not work
+/// against any spec-compliant provider, and each attempt pinned a task, a
+/// TLS connection and up to `cap` bytes for 30 s (an amplification lever a
+/// sandboxed agent could drive in a loop). Every relay test masked this by
+/// explicitly closing the upstream write half; see
+/// `capture_relay_terminates_without_upstream_eof` for the regression
+/// test that deliberately does not.
+///
+/// Still fail-closed in every direction: `cap` and `read_timeout` are
+/// unchanged, and malformed chunk framing stops the read so the caller's
+/// decode step denies rather than the read blocking forever.
 ///
 /// Does NOT parse headers or write anything to the client — it only
 /// bounds the read. The caller is responsible for converting an `Err`
@@ -1688,6 +1836,12 @@ pub async fn read_capped_response<R: AsyncRead + Unpin>(
     let mut raw: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
     let mut buf = [0u8; 8192];
     loop {
+        // Framing-based termination is checked BEFORE each read, so a
+        // response delivered in a single read never issues a second,
+        // blocking read (CR-02).
+        if response_framing_complete(&raw) {
+            break;
+        }
         let n = match tokio::time::timeout(read_timeout, reader.read(&mut buf)).await {
             Ok(Ok(0)) => break,
             Ok(Ok(n)) => n,
@@ -2453,6 +2607,112 @@ mod capture_relay_tests {
             "a response exceeding the buffer cap must be denied, never released unrewritten; \
              got: {received_str}"
         );
+    }
+
+    /// CR-02 regression proof (114-REVIEW.md): the capture relay must
+    /// terminate on the response's OWN HTTP framing, NOT on upstream EOF.
+    ///
+    /// This is the one test in this module that deliberately does NOT close
+    /// the upstream write half. Every pre-existing relay test
+    /// (`run_relay_with_capture`, `run_relay_capture_if_declared`,
+    /// `spawn_hermetic_tls_upstream`, `non_capture_route_still_streams_unbuffered`)
+    /// forces EOF with `drop(upstream_client)` / `tls.shutdown()`, so none
+    /// of them could fail on the original defect: `read_capped_response`
+    /// looped until `Ok(0)` and nothing else terminated it. Every real
+    /// OAuth token endpoint (Okta, Auth0, Google, Entra, GitHub) is
+    /// HTTP/1.1 with persistent connections, so against a real provider
+    /// every capture request blocked for the full `CAPTURE_READ_TIMEOUT`
+    /// (30 s) and then returned 502 — the feature did not work at all.
+    ///
+    /// Both framings are proven: `Content-Length` and chunked's terminal
+    /// `0\r\n\r\n`. The whole relay is wrapped in a 5-second timeout, far
+    /// below `CAPTURE_READ_TIMEOUT`, so the test fails (rather than hangs)
+    /// if framing-based termination regresses.
+    #[tokio::test]
+    async fn capture_relay_terminates_without_upstream_eof() {
+        let json = r#"{"access_token":"real-secret-token-value","unrelated":"keep-me"}"#;
+        let content_length_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            json.len(),
+            json
+        );
+        let chunked_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+             Transfer-Encoding: chunked\r\n\r\n{:x}\r\n{}\r\n0\r\n\r\n",
+            json.len(),
+            json
+        );
+
+        for (label, upstream_response) in [
+            ("content-length", content_length_response),
+            ("chunked", chunked_response),
+        ] {
+            let capture = capture_config_with_field("access_token");
+            let store = crate::capture::CapturePhantomStore::new();
+
+            let (mut upstream_client, mut upstream_server) = tokio::io::duplex(1 << 20);
+            let (mut client_stream, mut server_stream) = client_stream_pair().await;
+
+            upstream_client
+                .write_all(upstream_response.as_bytes())
+                .await
+                .unwrap();
+            // DELIBERATELY NOT dropped/shutdown: `upstream_client` stays
+            // alive for the whole test, exactly like a keep-alive HTTP/1.1
+            // token endpoint that does not close after responding. This is
+            // the entire point of the test.
+
+            let relay = async {
+                let result = relay_response_with_capture(
+                    &mut upstream_server,
+                    &mut server_stream,
+                    &capture,
+                    &store,
+                    "testroute",
+                    None,
+                )
+                .await;
+                let _ = server_stream.shutdown().await;
+                result
+            };
+            let read_client = async {
+                let mut buf = Vec::new();
+                client_stream.read_to_end(&mut buf).await.unwrap();
+                buf
+            };
+
+            let (relay_result, received) = tokio::time::timeout(Duration::from_secs(5), async {
+                tokio::join!(relay, read_client)
+            })
+            .await
+            .unwrap_or_else(|_| {
+                panic!(
+                    "[{label}] the capture relay must terminate on HTTP framing, not on upstream \
+                     EOF — it blocked with the upstream connection still open, which is what \
+                     every real keep-alive token endpoint does"
+                )
+            });
+
+            relay_result.expect("relay must succeed for a well-formed, fully-configured response");
+            let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+            assert!(
+                received_str.starts_with("HTTP/1.1 200"),
+                "[{label}] expected the rewritten 200 to be relayed promptly; got: {received_str}"
+            );
+            assert!(
+                !received_str.contains("real-secret-token-value"),
+                "[{label}] the real token must never reach the client; got: {received_str}"
+            );
+            assert!(
+                received_str.contains("keep-me"),
+                "[{label}] unrelated fields must survive the rewrite; got: {received_str}"
+            );
+
+            // Keep the upstream write half alive to the very end of the
+            // iteration so nothing can accidentally supply the EOF this
+            // test proves is unnecessary.
+            drop(upstream_client);
+        }
     }
 
     /// CR-01 regression proof (114-REVIEW.md): NO deny branch of the
