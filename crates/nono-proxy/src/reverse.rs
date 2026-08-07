@@ -762,6 +762,27 @@ async fn handle_spiffe_route(
     }
     tls_stream.flush().await?;
 
+    // OAuth capture (SEC-02, D-01r, T-114-18): this route's SPIFFE-bearer
+    // auth source must not determine whether its RESPONSE is buffered and
+    // rewritten — the same enforcement point site 1 applies. Unconditional
+    // `return` on `Some` so a capture-declared route can never fall through
+    // into the unbuffered streaming loop below (D-06 for every other
+    // route). See `relay_capture_if_declared`'s doc comment for why this is
+    // a call to a shared function rather than inline duplication of site
+    // 1's `if let`.
+    if let Some(result) = relay_capture_if_declared(
+        &mut tls_stream,
+        stream,
+        route.capture.as_ref(),
+        ctx.capture_store,
+        service,
+        ctx.audit_log,
+    )
+    .await
+    {
+        return result;
+    }
+
     // Stream the response back to the client without buffering.
     let mut response_buf = [0u8; 8192];
     let mut status_code: u16 = 502;
@@ -1852,6 +1873,53 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
     Ok(())
 }
 
+/// Shared capture-dispatch guard used by relay sites 2 and 3
+/// (`handle_spiffe_route` / `handle_spiffe_assertion_credential`, Plan
+/// 114-06, T-114-18): when `capture` is `Some`, forwards to
+/// `relay_response_with_capture` and returns its result — the caller MUST
+/// `return` this immediately, mirroring site 1's own unconditional `return`
+/// in `handle_reverse_proxy` so a capture-declared route can never fall
+/// through into that site's own unbuffered streaming relay loop (D-06).
+/// Returns `None` when `capture` is `None`, telling the caller to proceed
+/// to its own streaming loop unchanged.
+///
+/// Extracted into its own function — rather than 3 independent copies of
+/// site 1's inline `if let` — specifically so sites 2/3's wiring is
+/// directly testable. `ManagedUpstreamAuth`/`SpiffeAssertionTokenCache`
+/// have no test-only constructor that bypasses a live SPIRE Workload API
+/// connection (Plans 113-03/04/05's documented constraint — see this
+/// file's `spiffe_route_denies_missing_session_token_before_credential_acquisition`
+/// test's own doc comment for the same constraint applied to auth-gate
+/// testing), so `handle_spiffe_route`/`handle_spiffe_assertion_credential`
+/// cannot be driven end-to-end in a unit test. This function takes only
+/// the parameters available at the exact point each site calls it —
+/// none of which require credential acquisition or an upstream
+/// connection — so the literal call each site makes in production is
+/// independently, directly testable (see
+/// `capture_rewrites_via_spiffe_route_site` and
+/// `capture_rewrites_via_spiffe_assertion_site`).
+async fn relay_capture_if_declared<R: AsyncRead + Unpin>(
+    tls_stream: &mut R,
+    stream: &mut TcpStream,
+    capture: Option<&crate::config::CaptureConfig>,
+    capture_store: &crate::capture::CapturePhantomStore,
+    route_id: &str,
+    audit_log: Option<&audit::SharedAuditLog>,
+) -> Option<Result<()>> {
+    let capture = capture?;
+    Some(
+        relay_response_with_capture(
+            tls_stream,
+            stream,
+            capture,
+            capture_store,
+            route_id,
+            audit_log,
+        )
+        .await,
+    )
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod capture_relay_tests {
@@ -2236,6 +2304,132 @@ mod capture_relay_tests {
         assert!(
             received_str.contains("this field is NOT rewritten on the streaming path"),
             "streaming path must forward bytes verbatim, not rewrite them; got: {received_str}"
+        );
+    }
+
+    // ========================================================================
+    // Plan 114-06 — relay sites 2/3 (`handle_spiffe_route` /
+    // `handle_spiffe_assertion_credential`) capture-dispatch wiring (T-114-18,
+    // WR-13). Both handlers call `relay_capture_if_declared` at the exact
+    // point these tests drive — see that function's doc comment for why a
+    // full end-to-end drive of either handler is impossible without a live
+    // SPIRE Workload API connection.
+    // ========================================================================
+
+    /// Drive `relay_capture_if_declared` exactly as `handle_spiffe_route` and
+    /// `handle_spiffe_assertion_credential` each call it at their own call
+    /// site — proving the function each site actually invokes rewrites the
+    /// response when `capture` is configured, independent of
+    /// `relay_response_with_capture`'s own already-proven behavior (114-05)
+    /// and independent of site 1's `capture_rewrites_configured_fields`.
+    async fn run_relay_capture_if_declared(
+        upstream_response_bytes: &'static [u8],
+        capture: Option<&crate::config::CaptureConfig>,
+        store: &crate::capture::CapturePhantomStore,
+        route_id: &str,
+    ) -> (Option<Result<()>>, Vec<u8>) {
+        let (mut upstream_client, mut upstream_server) = tokio::io::duplex(1 << 20);
+        let (mut client_stream, mut server_stream) = client_stream_pair().await;
+
+        let upstream_write = async move {
+            upstream_client
+                .write_all(upstream_response_bytes)
+                .await
+                .unwrap();
+            drop(upstream_client);
+        };
+
+        let relay = async {
+            let result = relay_capture_if_declared(
+                &mut upstream_server,
+                &mut server_stream,
+                capture,
+                store,
+                route_id,
+                None,
+            )
+            .await;
+            let _ = server_stream.shutdown().await;
+            result
+        };
+
+        let read_client = async {
+            let mut buf = Vec::new();
+            client_stream.read_to_end(&mut buf).await.unwrap();
+            buf
+        };
+
+        let (relay_result, received, ()) = tokio::join!(relay, read_client, upstream_write);
+        (relay_result, received)
+    }
+
+    /// Site 2 (`handle_spiffe_route`) proof: a route reachable via the
+    /// direct JWT-SVID bearer dispatch path that ALSO declares `capture`
+    /// gets its response buffered and rewritten — the real OAuth token
+    /// never reaches the sandboxed client, even though request-side auth
+    /// for this route is SPIFFE, not the static-credential path site 1
+    /// covers.
+    #[tokio::test]
+    async fn capture_rewrites_via_spiffe_route_site() {
+        let capture = capture_config_with_field("access_token");
+        let store = crate::capture::CapturePhantomStore::new();
+        let body: &'static [u8] =
+            br#"{"access_token":"real-secret-token-value-site2","unrelated":"leave-me-alone"}"#;
+        let upstream_response: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                std::str::from_utf8(body).unwrap()
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+
+        let (relay_result, received) = run_relay_capture_if_declared(
+            upstream_response,
+            Some(&capture),
+            &store,
+            "spiffe-route-svc",
+        )
+        .await;
+        let relay_result = relay_result.expect(
+            "relay_capture_if_declared must return Some(..) when capture is configured — this \
+             is exactly what handle_spiffe_route's own call site does with \
+             route.capture.as_ref()",
+        );
+        relay_result.expect("relay must succeed for a well-formed, fully-configured response");
+
+        let received_str = String::from_utf8(received).expect("response must be valid UTF-8");
+        assert!(
+            received_str.starts_with("HTTP/1.1 200"),
+            "expected 200 OK to be forwarded; got: {received_str}"
+        );
+        assert!(
+            !received_str.contains("real-secret-token-value-site2"),
+            "the real token must never reach the client via the SPIFFE-bearer dispatch path \
+             (site 2); got: {received_str}"
+        );
+        assert!(
+            received_str.contains("leave-me-alone"),
+            "an unrelated field must be forwarded unchanged; got: {received_str}"
+        );
+    }
+
+    /// Regression guard: `relay_capture_if_declared` returns `None` when the
+    /// route/service has no capture config — proving the caller (either
+    /// site 2 or site 3) correctly falls through to its own unmodified
+    /// streaming loop rather than being silently swallowed by this shared
+    /// helper. Mirrors `non_capture_route_still_streams_unbuffered`'s D-06
+    /// regression intent at this function's own level.
+    #[tokio::test]
+    async fn relay_capture_if_declared_returns_none_when_capture_absent() {
+        let store = crate::capture::CapturePhantomStore::new();
+        let (relay_result, _received) =
+            run_relay_capture_if_declared(b"unused", None, &store, "no-capture-svc").await;
+        assert!(
+            relay_result.is_none(),
+            "relay_capture_if_declared must return None when capture is None, so the caller \
+             falls through to its own streaming loop unchanged (D-06)"
         );
     }
 }
