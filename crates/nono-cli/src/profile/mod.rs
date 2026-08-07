@@ -1034,6 +1034,20 @@ pub struct CustomCredentialDef {
     /// `credential_key`, `auth`, and `aws_auth`.
     #[serde(default)]
     pub spiffe: Option<nono_proxy::config::SpiffeAuthConfig>,
+
+    /// Declarative sandboxed OAuth capture (SEC-02, Phase 114). Unlike
+    /// `credential_key`/`auth`/`aws_auth`/`spiffe` (request-direction:
+    /// inject a credential into outbound requests), `capture` is
+    /// response-direction — it rewrites real tokens out of inbound
+    /// responses before they reach the sandboxed client. This is a
+    /// deliberate design decision: `capture` composes with the
+    /// request-direction fields above rather than being mutually
+    /// exclusive with them, and a route may declare ONLY `capture` with no
+    /// other auth mechanism set (the primary use case, a bare
+    /// token-endpoint route). Do not add this field to the mutual-exclusion
+    /// checks in `validate_custom_credential()` by reflexive analogy.
+    #[serde(default)]
+    pub capture: Option<nono_proxy::config::CaptureConfig>,
 }
 
 fn default_inject_header() -> String {
@@ -1160,17 +1174,31 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
         )));
     }
 
-    // At least one of credential_key, auth, aws_auth, or spiffe must be set.
+    // At least one of credential_key, auth, aws_auth, spiffe, or capture
+    // must be set. capture is response-direction and does NOT join the
+    // mutual-exclusion checks above (see the field doc on
+    // CustomCredentialDef.capture) — a route with only capture set (no
+    // other auth mechanism) is valid, so it is included here as a valid
+    // alternative rather than as an exclusion arm.
     if cred.credential_key.is_none()
         && cred.auth.is_none()
         && cred.aws_auth.is_none()
         && cred.spiffe.is_none()
+        && cred.capture.is_none()
     {
         return Err(NonoError::ProfileParse(format!(
-            "custom credential '{}' must have either 'credential_key', 'auth', 'aws_auth', or \
-             'spiffe' set",
+            "custom credential '{}' must have either 'credential_key', 'auth', 'aws_auth', \
+             'spiffe', or 'capture' set",
             name
         )));
+    }
+
+    // SEC-02 (Phase 114): validate a declared capture config's field paths
+    // and max_response_bytes cap at profile-load time (D-12, T-114-10,
+    // T-114-11) — never silently accept a malformed or over-large capture
+    // declaration.
+    if let Some(ref capture) = cred.capture {
+        crate::profile::credential_provider::validate_capture_config(name, capture)?;
     }
 
     // PROF-03 (Phase 22): Validate OAuth2 auth if present. token_url HTTPS-only
@@ -5110,6 +5138,7 @@ mod tests {
     fn header_cred_builder() -> CustomCredentialDef {
         CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("api_key".to_string()),
             auth: None,
@@ -5196,6 +5225,76 @@ mod tests {
         let result = validate_custom_credential("test", &cred);
         let err = result.expect_err("empty spiffe inject_header should be rejected");
         assert!(err.to_string().contains("cannot be empty"));
+    }
+
+    // ============================================================================
+    // SEC-02 (Phase 114) — capture composes with, does not join, the
+    // request-direction mutual-exclusion group
+    // ============================================================================
+
+    #[test]
+    fn test_custom_credential_capture_only_is_valid() {
+        // A CustomCredentialDef with ONLY `capture` set (all four
+        // request-direction auth fields None) must validate successfully —
+        // capture is response-direction and is the primary use case: a bare
+        // token-endpoint route with no other auth mechanism.
+        let mut cred = header_cred_builder();
+        cred.credential_key = None;
+        cred.auth = None;
+        cred.aws_auth = None;
+        cred.spiffe = None;
+        cred.capture = Some(nono_proxy::config::CaptureConfig {
+            response_fields: vec![nono_proxy::config::CaptureResponseField {
+                path: "access_token".to_string(),
+                kind: nono_proxy::config::CaptureResponseFieldKind::Opaque,
+            }],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        });
+        assert!(validate_custom_credential("test", &cred).is_ok());
+    }
+
+    #[test]
+    fn test_custom_credential_none_of_credential_key_auth_aws_auth_spiffe_capture_rejected() {
+        let mut cred = spiffe_cred_builder();
+        cred.spiffe = None;
+        cred.capture = None;
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("no auth mechanism (incl. capture) set should be rejected");
+        assert!(err.to_string().contains("capture"));
+    }
+
+    #[test]
+    fn test_custom_credential_invalid_capture_field_path_rejected() {
+        let mut cred = header_cred_builder();
+        cred.capture = Some(nono_proxy::config::CaptureConfig {
+            response_fields: vec![nono_proxy::config::CaptureResponseField {
+                path: ".access_token".to_string(),
+                kind: nono_proxy::config::CaptureResponseFieldKind::Opaque,
+            }],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        });
+        let result = validate_custom_credential("test", &cred);
+        let err = result.expect_err("leading-dot capture field path should be rejected");
+        assert!(err.to_string().contains("invalid capture field path"));
+    }
+
+    #[test]
+    fn test_custom_credential_capture_composes_with_credential_key() {
+        // capture must NOT be added to any mutual-exclusion arm: a route may
+        // declare both credential_key and capture together.
+        let mut cred = header_cred_builder();
+        cred.capture = Some(nono_proxy::config::CaptureConfig {
+            response_fields: vec![nono_proxy::config::CaptureResponseField {
+                path: "access_token".to_string(),
+                kind: nono_proxy::config::CaptureResponseFieldKind::Opaque,
+            }],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        });
+        assert!(cred.credential_key.is_some());
+        assert!(validate_custom_credential("test", &cred).is_ok());
     }
 
     #[test]
@@ -5391,6 +5490,7 @@ mod tests {
     fn test_validate_url_path_mode_valid() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5412,6 +5512,7 @@ mod tests {
     fn test_validate_url_path_mode_missing_pattern() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5435,6 +5536,7 @@ mod tests {
     fn test_validate_url_path_mode_pattern_without_placeholder() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5458,6 +5560,7 @@ mod tests {
     fn test_validate_url_path_mode_with_replacement() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5479,6 +5582,7 @@ mod tests {
     fn test_validate_url_path_mode_replacement_without_placeholder() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
@@ -5502,6 +5606,7 @@ mod tests {
     fn test_validate_query_param_mode_valid() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
@@ -5523,6 +5628,7 @@ mod tests {
     fn test_validate_query_param_mode_missing_param_name() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
@@ -5546,6 +5652,7 @@ mod tests {
     fn test_validate_query_param_mode_empty_param_name() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
@@ -5569,6 +5676,7 @@ mod tests {
     fn test_validate_basic_auth_mode_valid() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("example_basic_auth".to_string()),
             auth: None,
@@ -5975,6 +6083,7 @@ mod tests {
             "svc_a".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://a.example.com".to_string(),
                 credential_key: Some("key_a".to_string()),
                 auth: None,
@@ -5996,6 +6105,7 @@ mod tests {
             "svc_b".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://b.example.com".to_string(),
                 credential_key: Some("key_b".to_string()),
                 auth: None,
@@ -6135,6 +6245,7 @@ mod tests {
             "svc_shared".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://base.example.com".to_string(),
                 credential_key: Some("key_base".to_string()),
                 auth: None,
@@ -6156,6 +6267,7 @@ mod tests {
             "svc_shared".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://child.example.com".to_string(),
                 credential_key: Some("key_child".to_string()),
                 auth: None,
@@ -7501,6 +7613,7 @@ mod tests {
     fn test_validate_custom_credential_file_uri_accepted() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/api-token".to_string()),
             auth: None,
@@ -7525,6 +7638,7 @@ mod tests {
     fn test_validate_custom_credential_file_uri_requires_env_var() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/api-token".to_string()),
             auth: None,
@@ -7552,6 +7666,7 @@ mod tests {
     fn test_validate_custom_credential_file_uri_invalid_rejected() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file://relative/path".to_string()),
             auth: None,
@@ -7579,6 +7694,7 @@ mod tests {
     fn test_validate_custom_credential_file_uri_traversal_rejected() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/../../../etc/shadow".to_string()),
             auth: None,
@@ -7638,6 +7754,7 @@ mod tests {
     fn test_validate_custom_credential_env_uri_accepted() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://MY_API_TOKEN".to_string()),
             auth: None,
@@ -7659,6 +7776,7 @@ mod tests {
     fn test_validate_custom_credential_env_uri_dangerous_var_rejected() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://LD_PRELOAD".to_string()),
             auth: None,
@@ -8220,6 +8338,7 @@ mod tests {
     fn custom_credential_credential_key_and_auth_mutually_exclusive() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("api_key".to_string()),
             auth: Some(OAuth2Config {
@@ -8249,6 +8368,7 @@ mod tests {
     fn custom_credential_neither_key_nor_auth_rejected() {
         let cred = CustomCredentialDef {
             spiffe: None,
+            capture: None,
             upstream: "https://api.example.com".to_string(),
             credential_key: None,
             auth: None,

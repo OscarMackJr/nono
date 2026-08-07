@@ -249,10 +249,11 @@ pub fn resolve_credentials(
                 // through to RouteConfig so a profile-declared spiffe route
                 // actually reaches the proxy (not a blanket None).
                 spiffe: cred.spiffe.clone(),
-                // SEC-02 (Phase 114): CustomCredentialDef has no `capture` field
-                // yet — Plan 114-08 wires the real conversion. This is a
-                // deliberate stub, not a dropped capability.
-                capture: None,
+                // SEC-02 (Phase 114): forward the profile-declared capture
+                // config from CustomCredentialDef through to RouteConfig so
+                // an operator-declared capture-only credential actually
+                // reaches the proxy (not a blanket None).
+                capture: cred.capture.clone(),
                 endpoint_policy: None,
             });
         } else if let Some(cred) = policy.credentials.get(name) {
@@ -283,8 +284,8 @@ pub fn resolve_credentials(
                 tls_ca: None, // Built-in credentials don't support custom CAs
                 oauth2: None, // PROF-03 (Plan 22-01): Task 6 will wire oauth2
                 aws_auth: None,
-                spiffe: None, // Built-in credentials don't support SPIFFE
-                capture: None,
+                spiffe: None,  // Built-in credentials don't support SPIFFE
+                capture: None, // Built-in credentials don't support capture
                 endpoint_policy: None,
             });
         }
@@ -615,6 +616,7 @@ mod tests {
             "telegram".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.telegram.org".to_string(),
                 credential_key: Some("telegram_bot_token".to_string()),
                 auth: None,
@@ -641,6 +643,58 @@ mod tests {
         );
     }
 
+    /// SEC-02 (Phase 114, Plan 08): a profile-declared `capture` config on a
+    /// custom credential must actually reach the real `RouteConfig.capture`
+    /// field — proving Plan 114-02's `capture: None,` stub was replaced with
+    /// a real conversion, not left as a dropped capability.
+    #[test]
+    fn test_resolve_credentials_custom_capture_threaded_to_route_config() {
+        use crate::profile::CustomCredentialDef;
+
+        let json = embedded_network_policy_json();
+        let policy = load_network_policy(json).unwrap();
+
+        let mut custom = HashMap::new();
+        custom.insert(
+            "oauth_provider".to_string(),
+            CustomCredentialDef {
+                spiffe: None,
+                capture: Some(nono_proxy::config::CaptureConfig {
+                    response_fields: vec![nono_proxy::config::CaptureResponseField {
+                        path: "access_token".to_string(),
+                        kind: nono_proxy::config::CaptureResponseFieldKind::Opaque,
+                    }],
+                    request_nonce_fields: vec!["refresh_token".to_string()],
+                    max_response_bytes: None,
+                }),
+                upstream: "https://oauth.example.com".to_string(),
+                credential_key: None,
+                auth: None,
+                inject_mode: InjectMode::Header,
+                inject_header: "Authorization".to_string(),
+                credential_format: None,
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: vec![],
+                tls_ca: None,
+                aws_auth: None,
+            },
+        );
+
+        let routes =
+            resolve_credentials(&policy, &["oauth_provider".to_string()], &custom).unwrap();
+        assert_eq!(routes.len(), 1);
+        let capture = routes[0]
+            .capture
+            .as_ref()
+            .expect("capture config must be threaded through to RouteConfig, not dropped");
+        assert_eq!(capture.response_fields.len(), 1);
+        assert_eq!(capture.response_fields[0].path, "access_token");
+        assert_eq!(capture.request_nonce_fields, vec!["refresh_token"]);
+    }
+
     #[test]
     fn test_resolve_credentials_custom_overrides_builtin() {
         use crate::profile::CustomCredentialDef;
@@ -654,6 +708,7 @@ mod tests {
             "openai".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://my-proxy.example.com/openai".to_string(),
                 credential_key: Some("my_openai_key".to_string()),
                 auth: None,
@@ -689,6 +744,7 @@ mod tests {
             "telegram".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.telegram.org".to_string(),
                 credential_key: Some("telegram_bot_token".to_string()),
                 auth: None,
@@ -734,6 +790,7 @@ mod tests {
             "local".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "http://localhost:8080/api".to_string(),
                 credential_key: Some("local_api_key".to_string()),
                 auth: None,
@@ -851,6 +908,7 @@ mod tests {
             "local".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "http://127.1.2.3:8080/api".to_string(),
                 credential_key: Some("local_api_key".to_string()),
                 auth: None,
@@ -883,6 +941,7 @@ mod tests {
             "local".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "http://0.0.0.0:3000/api".to_string(),
                 credential_key: Some("local_api_key".to_string()),
                 auth: None,
@@ -915,6 +974,7 @@ mod tests {
             "test".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("api_key".to_string()),
                 auth: None,
@@ -952,6 +1012,7 @@ mod tests {
             "openai".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.openai.com/v1".to_string(),
                 credential_key: Some("op://Development/OpenAI/credential".to_string()),
                 auth: None,
@@ -1083,6 +1144,7 @@ mod tests {
             "evil".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("safe_key".to_string()),
                 auth: None,
@@ -1165,6 +1227,7 @@ mod tests {
             "my_api".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: None,
                 auth: Some(OAuth2Config {
@@ -1219,6 +1282,7 @@ mod tests {
             "standard".to_string(),
             CustomCredentialDef {
                 spiffe: None,
+                capture: None,
                 upstream: "https://api.example.com".to_string(),
                 credential_key: Some("my_key".to_string()),
                 auth: None,

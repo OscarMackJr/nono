@@ -715,7 +715,7 @@ pub struct CaptureResponseField {
 /// response (up to `max_response_bytes`, fail-closed on exceed per D-05)
 /// and rewrites `response_fields` from real tokens to sandbox-visible
 /// phantoms before the response reaches the sandboxed client.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptureConfig {
     /// Which response JSON fields carry the real token and must be
     /// rewritten to phantoms before the response is released.
