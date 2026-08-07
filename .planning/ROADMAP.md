@@ -36,7 +36,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [x] **Phase 112: Security + Residual Sync** — 8/8 plans (SEC-02 explicitly carved out to Phase 114)
 - [x] **Phase 113: SPIFFE/SPIRE Workload Identity** — 8/8 plans
-- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 0/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves)
+- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 2/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves); executing 2026-08-07 (Wave 1 complete)
 
 </details>
 
@@ -338,8 +338,8 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 **Plans**: 11 plans across 6 waves
 
 **Wave 1** *(foundation — types and vocabulary; no dependencies)*
-- [ ] 114-01-PLAN.md — Core audit vocabulary (CaptureAuditContext, CaptureUnsupportedPath) + audit.rs wiring
-- [ ] 114-02-PLAN.md — CaptureConfig declarative types + RouteConfig.capture field + workspace-wide literal fixups
+- [x] 114-01-PLAN.md — Core audit vocabulary (CaptureAuditContext, CaptureUnsupportedPath) + audit.rs wiring
+- [x] 114-02-PLAN.md — CaptureConfig declarative types + RouteConfig.capture field + workspace-wide literal fixups
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 114-03-PLAN.md — route.rs declares_capture / has_capture_source / capture_declared_for_upstream (host-only match)
@@ -399,3 +399,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 6/6 | Complete   | 2026-08-05 |
 | 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
 | 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |
+| 114. OAuth Capture Absorb (SEC-02) | v3.6 | 2/11 | In progress (Wave 1 complete) | - |
