@@ -3468,8 +3468,9 @@ mod tests {
         let (addr, _audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
 
         let mut stream = TcpStream::connect(addr).await.unwrap();
-        let request =
-            format!("GET http://{origin_host_port}/hello HTTP/1.1\r\nHost: {origin_host_port}\r\n\r\n");
+        let request = format!(
+            "GET http://{origin_host_port}/hello HTTP/1.1\r\nHost: {origin_host_port}\r\n\r\n"
+        );
         stream.write_all(request.as_bytes()).await.unwrap();
 
         let mut response = Vec::new();
