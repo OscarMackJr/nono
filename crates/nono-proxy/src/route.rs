@@ -76,6 +76,18 @@ pub struct LoadedRoute {
     /// without constructing a real `SpiffeJwtSource` (which has no test-only
     /// constructor bypassing a live Workload API connection).
     pub declares_spiffe: bool,
+
+    /// Whether this route declared a `capture` (OAuth response-capture)
+    /// config at load time. Unlike `declares_spiffe`, this has NO live
+    /// external dependency to race against — it is a pure config check
+    /// (`route.capture.is_some()`) computed once at `RouteStore::load()`
+    /// time, so `has_capture_source()` is directly unit-testable without any
+    /// test-only bypass machinery. Plan 114-05/114-06 (the buffer-and-rewrite
+    /// enforcement point) consult this to decide whether to buffer a
+    /// response; Plan 114-07 (the D-06 cross-path fail-closed guard) consults
+    /// `RouteStore::capture_declared_for_upstream()` (below) to deny a
+    /// capture-declared route arriving via a path with no rewrite.
+    pub declares_capture: bool,
 }
 
 impl LoadedRoute {
@@ -86,6 +98,18 @@ impl LoadedRoute {
     #[must_use]
     pub fn has_spiffe_source(&self) -> bool {
         self.declares_spiffe
+    }
+
+    /// Whether this route declared an OAuth response-capture config
+    /// (`route.capture.is_some()` at load time). Unlike `has_spiffe_source()`,
+    /// this predicate has zero live external dependency — capture config is
+    /// pure declarative data, so this is answerable without a live SPIRE
+    /// agent, SPIRE Workload API socket, or any other connect. It is the
+    /// cheap, unit-testable proof surface Plan 114-05/114-06's buffering
+    /// decision and Plan 114-07's D-06 cross-path guard both depend on.
+    #[must_use]
+    pub fn has_capture_source(&self) -> bool {
+        self.declares_capture
     }
 }
 
@@ -99,6 +123,7 @@ impl std::fmt::Debug for LoadedRoute {
             .field("has_custom_tls_ca", &self.tls_connector.is_some())
             .field("tls_config_key", &self.tls_config_key)
             .field("declares_spiffe", &self.declares_spiffe)
+            .field("declares_capture", &self.declares_capture)
             .finish()
     }
 }
@@ -202,6 +227,10 @@ impl RouteStore {
                 None => (None, false),
             };
 
+            // Pure config check — no live connect needed (capture has zero
+            // external dependency, unlike the spiffe branch above).
+            let declares_capture = route.capture.is_some();
+
             loaded.insert(
                 normalized_prefix,
                 LoadedRoute {
@@ -214,6 +243,7 @@ impl RouteStore {
                     tls_config_key,
                     managed_auth,
                     declares_spiffe,
+                    declares_capture,
                 },
             );
         }
@@ -307,6 +337,33 @@ impl RouteStore {
                     .is_some_and(|hp| host_port_matches(hp, &normalised))
         })
     }
+
+    /// Check whether `host_port` (e.g. `"api.openai.com:9999"`) matches a
+    /// loaded route that ALSO declares an OAuth response-capture source
+    /// (`has_capture_source()`) — HOST ONLY, ignoring port.
+    ///
+    /// D-06 (`114-CONTEXT.md`): this is a DELIBERATE divergence from
+    /// `spiffe_declared_for_upstream`'s exact `host:port` matching, resolving
+    /// `114-RESEARCH.md`'s Pitfall 4 open design question explicitly rather
+    /// than leaving it for a later plan to guess. Upstream's own `3c59c62e`
+    /// hardening commit found that exact-port matching lets a capture-declared
+    /// host reachable on a *different* port slip past a fail-closed guard —
+    /// this predicate is the fail-closed cross-path guard Plan 114-07 builds
+    /// on (mirroring Phase 113's D-03), so it must be at least as broad as the
+    /// set of ports an attacker could actually reach the same host on. Do
+    /// NOT "fix" this to match the SPIFFE precedent's exact-port behavior —
+    /// narrowing it re-opens the exact bypass class `3c59c62e` closed.
+    #[must_use]
+    pub fn capture_declared_for_upstream(&self, host_port: &str) -> bool {
+        let normalised = host_port.to_lowercase();
+        self.routes.values().any(|route| {
+            route.has_capture_source()
+                && route
+                    .upstream_host_port
+                    .as_ref()
+                    .is_some_and(|hp| host_only_matches(hp, &normalised))
+        })
+    }
 }
 
 /// Extract and normalise `host:port` from a URL string.
@@ -367,6 +424,44 @@ pub(crate) fn host_port_matches(pattern: &str, target: &str) -> bool {
     };
     if pattern_port != target_port {
         return false;
+    }
+
+    let Some(suffix) = pattern_host.strip_prefix("*.") else {
+        return false;
+    };
+    target_host
+        .strip_suffix(suffix)
+        .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
+}
+
+/// Check whether `pattern` (a pre-normalised `host:port` string) matches
+/// `target` (a pre-normalised `host:port` string), IGNORING THE PORT on
+/// both sides.
+///
+/// D-06 (`114-CONTEXT.md`): a DELIBERATE divergence from `host_port_matches`,
+/// used only by `RouteStore::capture_declared_for_upstream()`. Applies the
+/// same `*.` wildcard-prefix semantics as `host_port_matches` to the host
+/// portion, with the port comparison dropped entirely:
+/// - `"api.example.com:443"` matches `"api.example.com:8443"` ✓ (same host,
+///   different port — the reason this function exists)
+/// - `"*.example.com:443"` matches `"sub.example.com:9999"` ✓ (wildcard host,
+///   port ignored)
+/// - `"api.example.com:443"` does NOT match `"other.example.com:443"` (host
+///   mismatch is still enforced)
+///
+/// Do not reuse this for anything except the capture-declared-upstream guard
+/// — every other route-matching call site in this file intentionally checks
+/// the port too.
+pub(crate) fn host_only_matches(pattern: &str, target: &str) -> bool {
+    let Some((pattern_host, _pattern_port)) = pattern.rsplit_once(':') else {
+        return false;
+    };
+    let Some((target_host, _target_port)) = target.rsplit_once(':') else {
+        return false;
+    };
+
+    if pattern_host == target_host {
+        return true;
     }
 
     let Some(suffix) = pattern_host.strip_prefix("*.") else {
@@ -747,12 +842,15 @@ mod tests {
             tls_config_key: None,
             managed_auth: None,
             declares_spiffe: false,
+            declares_capture: false,
         };
         let debug_output = format!("{:?}", route);
         assert!(debug_output.contains("api.openai.com"));
         assert!(debug_output.contains("has_custom_tls_ca"));
         assert!(debug_output.contains("declares_spiffe"));
+        assert!(debug_output.contains("declares_capture"));
         assert!(!route.has_spiffe_source());
+        assert!(!route.has_capture_source());
     }
 
     // Fork divergence: tests for requires_intercept, the managed-credential
@@ -1181,5 +1279,122 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         assert!(!store.spiffe_declared_for_upstream("api.openai.com:443"));
         // An unrelated host:port is also false.
         assert!(!store.spiffe_declared_for_upstream("github.com:443"));
+    }
+
+    // ── host_only_matches tests (D-06: host-only, port-ignoring divergence) ──
+
+    /// The whole reason `host_only_matches` exists: same host, DIFFERENT
+    /// port, still matches. `host_port_matches` would return `false` here.
+    #[test]
+    fn test_host_only_matches_same_host_different_port() {
+        assert!(host_only_matches(
+            "api.example.com:443",
+            "api.example.com:8443"
+        ));
+        // Confirm the divergence against the exact-port matcher explicitly.
+        assert!(!host_port_matches(
+            "api.example.com:443",
+            "api.example.com:8443"
+        ));
+    }
+
+    #[test]
+    fn test_host_only_matches_wildcard_host_ignores_port() {
+        assert!(host_only_matches(
+            "*.example.com:443",
+            "sub.example.com:9999"
+        ));
+    }
+
+    #[test]
+    fn test_host_only_matches_different_host_no_match() {
+        assert!(!host_only_matches(
+            "api.example.com:443",
+            "other.example.com:443"
+        ));
+    }
+
+    #[test]
+    fn test_host_only_matches_wildcard_does_not_match_apex() {
+        assert!(!host_only_matches("*.example.com:443", "example.com:9999"));
+    }
+
+    // ── capture_declared_for_upstream tests ───────────────────────────────
+
+    fn capture_route_config(prefix: &str, upstream: &str) -> RouteConfig {
+        RouteConfig {
+            spiffe: None,
+            prefix: prefix.to_string(),
+            upstream: upstream.to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: Some("Bearer {}".to_string()),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            capture: Some(crate::config::CaptureConfig {
+                response_fields: vec![],
+                request_nonce_fields: vec![],
+                max_response_bytes: None,
+            }),
+            endpoint_policy: None,
+        }
+    }
+
+    /// D-06 end-to-end proof: a capture-declared route loaded at
+    /// `api.example.com:443` is reported as capture-declared for a request
+    /// arriving on a DIFFERENT port (`:9999`) — proving the host-only
+    /// divergence holds through the full `RouteStore` integration, not just
+    /// the raw `host_only_matches` matcher in isolation.
+    #[tokio::test]
+    async fn test_capture_declared_for_upstream_true_across_different_port() {
+        let routes = vec![capture_route_config("oauth", "https://api.example.com")];
+        let store = RouteStore::load(&routes).await.unwrap();
+
+        assert!(store.get("oauth").unwrap().has_capture_source());
+        // Exact host:port also matches, obviously.
+        assert!(store.capture_declared_for_upstream("api.example.com:443"));
+        // The widening this predicate exists for: same host, different port.
+        assert!(store.capture_declared_for_upstream("api.example.com:9999"));
+    }
+
+    /// Mirrors `test_spiffe_declared_for_upstream_false_for_non_spiffe_route`'s
+    /// shape: a route with `declares_capture: false` (no `capture` config)
+    /// must never be reported as capture-declared, even on an exact
+    /// host:port match.
+    #[tokio::test]
+    async fn test_capture_declared_for_upstream_false_for_non_capture_route() {
+        let routes = vec![RouteConfig {
+            spiffe: None,
+            prefix: "openai".to_string(),
+            upstream: "https://api.openai.com".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: Some("Bearer {}".to_string()),
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            capture: None,
+            endpoint_policy: None,
+        }];
+
+        let store = RouteStore::load(&routes).await.unwrap();
+        assert!(!store.get("openai").unwrap().has_capture_source());
+        // Exact host:port match, but no capture declared — must be false.
+        assert!(!store.capture_declared_for_upstream("api.openai.com:443"));
+        // Unrelated host is also false.
+        assert!(!store.capture_declared_for_upstream("github.com:443"));
     }
 }

@@ -3171,6 +3171,7 @@ mod tests {
                 tls_config_key: None,
                 managed_auth: None,
                 declares_spiffe: true,
+                declares_capture: false,
             },
         );
         RouteStore::from_loaded_routes(routes)

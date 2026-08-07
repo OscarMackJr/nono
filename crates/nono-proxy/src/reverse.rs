@@ -2143,6 +2143,7 @@ mod tests {
             tls_config_key: None,
             managed_auth: None,
             declares_spiffe: true,
+            declares_capture: false,
         };
         let mut routes = HashMap::new();
         routes.insert("spiffesvc".to_string(), loaded_route);
