@@ -255,6 +255,12 @@ pub enum NetworkAuditDenialCategory {
     /// lands in Plan 113-05 — this variant is added ahead of need so that
     /// plan does not require a second edit to this enum).
     SpiffeUnsupportedPath,
+    /// Route declared OAuth-capture (response buffer-and-rewrite) but
+    /// arrived on a proxy path with no rewrite implementation — CONNECT,
+    /// forward-HTTP, or the external-proxy chain (D-06 fail-closed guard;
+    /// the guard itself lands in Plan 114-07 — this variant is added ahead
+    /// of need so that plan does not require a second edit to this enum).
+    CaptureUnsupportedPath,
 }
 
 /// SPIFFE delegation-chain context recovered from a JWT-SVID's `act` claim.
@@ -298,6 +304,26 @@ pub struct SpiffeAuditContext {
     pub delegation: Option<SpiffeDelegationContext>,
 }
 
+/// OAuth-capture audit context attached to a network audit event when a
+/// response-buffer-and-rewrite route rewrote captured token fields to
+/// phantoms. Threaded into `NetworkAuditEvent::capture_context`.
+///
+/// Pure data — records what happened (which route, which fields were
+/// rewritten, which phantom IDs were minted), applies no enforcement or
+/// policy evaluation. Structurally cannot carry a raw token: every field is
+/// an identifier (route name, dot-path, opaque phantom ID), never secret
+/// bytes. See ADR-86 / D-08 / D-09 (114-CONTEXT.md).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CaptureAuditContext {
+    /// Configured custom-credential/route name that declared capture
+    pub route_id: String,
+    /// Dot-paths in the response body that were rewritten to phantoms
+    pub rewritten_fields: Vec<String>,
+    /// Opaque phantom identifiers minted for this response, one per
+    /// rewritten field, same order/length as `rewritten_fields`
+    pub phantom_ids: Vec<String>,
+}
+
 /// A single network audit event captured by the proxy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkAuditEvent {
@@ -330,6 +356,10 @@ pub struct NetworkAuditEvent {
     /// SPIFFE audit context, when the request used SPIFFE/SPIRE workload-identity auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spiffe_context: Option<SpiffeAuditContext>,
+    /// OAuth-capture audit context, when the request was served by a
+    /// response-buffer-and-rewrite capture route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_context: Option<CaptureAuditContext>,
     /// Hostname or logical service target (for reverse proxy events)
     pub target: String,
     /// Port when available (CONNECT/external), otherwise None
