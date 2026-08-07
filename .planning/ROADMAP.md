@@ -335,18 +335,36 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   3. If absorbed, the ADR-86 / ADR-111 boundary is confirmed non-regressed — no policy or enforcement logic lands in the core `nono` crate.
   4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) are GREEN locally, plus `cargo fmt --all --check` and the workspace test suite diffed against the documented inherited failing baseline.
 
-**Plans**: 11 plans
+**Plans**: 11 plans across 6 waves
+
+**Wave 1** *(foundation — types and vocabulary; no dependencies)*
 - [ ] 114-01-PLAN.md — Core audit vocabulary (CaptureAuditContext, CaptureUnsupportedPath) + audit.rs wiring
 - [ ] 114-02-PLAN.md — CaptureConfig declarative types + RouteConfig.capture field + workspace-wide literal fixups
+
+**Wave 2** *(blocked on Wave 1)*
 - [ ] 114-03-PLAN.md — route.rs declares_capture / has_capture_source / capture_declared_for_upstream (host-only match)
 - [ ] 114-04-PLAN.md — capture.rs: CapturePhantomStore (mint/resolve/admit) + portable rewrite/JWT-phantom logic
-- [ ] 114-05-PLAN.md — reverse.rs shared buffer-and-rewrite helper + site-1 wiring (D-01r/D-02r/D-05 enforcement point)
-- [ ] 114-06-PLAN.md — reverse.rs sites 2+3 wiring (handle_spiffe_route, handle_spiffe_assertion_credential) + WR-13 proof
-- [ ] 114-07-PLAN.md — server.rs D-06 cross-path fail-closed guard (handle_forward_http + CONNECT audit refinement)
 - [ ] 114-08-PLAN.md — CLI declarative surface: profile/credential_provider.rs (D-12) + CustomCredentialDef.capture
+
+**Wave 3** *(blocked on Wave 2)*
+- [ ] 114-05-PLAN.md — reverse.rs shared buffer-and-rewrite helper + site-1 wiring (D-01r/D-02r/D-05 enforcement point)
 - [ ] 114-09-PLAN.md — nono-profile.schema.json CaptureConfig $defs + round-trip test (D-13)
+
+**Wave 4** *(blocked on Wave 3)*
+- [ ] 114-06-PLAN.md — reverse.rs sites 2+3 wiring (handle_spiffe_route, handle_spiffe_assertion_credential) + WR-13 proof + **Task 3: close the mint→resolve loop**
+- [ ] 114-07-PLAN.md — server.rs D-06 cross-path fail-closed guard (handle_forward_http + CONNECT audit refinement)
+
+**Wave 5** *(blocked on Wave 4 — reaches sibling repos via `..`, requires `use_worktrees=false`)*
 - [ ] 114-10-PLAN.md — D-14: ../nono-py + ../nono-ts binding rebuild
+
+**Wave 6** *(blocked on Wave 5 — closure and combined verification)*
 - [ ] 114-11-PLAN.md — ADR-114 + 108-DIVERGENCE-LEDGER.md carry-forward note + REQUIREMENTS.md checkbox + combined verification
+
+**Cross-cutting constraints** *(appear in 2+ plans' `must_haves`)*:
+- **D-06** (6 plans) — fail-closed on every arrival path; all three `reverse.rs` relay sites proven *independently* per the WR-13 lesson
+- **D-02r** (3 plans) — SC2 satisfied by construction; the mint→resolve loop must be closed end-to-end, not merely described
+- **D-07** (4 plans) — upstream logic ported as a *design reference*; plumbing rebuilt (`git apply` will not work)
+- **SC4 / D-09** — both cross-target clippy gates GREEN locally; no PARTIAL→CI fallback
 
 ## Progress
 
