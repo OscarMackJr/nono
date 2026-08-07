@@ -26,7 +26,7 @@ use crate::token;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
 use tracing::{debug, warn};
@@ -1375,6 +1375,322 @@ async fn send_error(stream: &mut TcpStream, status: u16, reason: &str) -> Result
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;
     Ok(())
+}
+
+// ============================================================================
+// OAuth capture: response buffer-and-rewrite (SEC-02, D-01r)
+// ============================================================================
+//
+// This is the fork-native enforcement point D-01r builds to replace the
+// retracted decline (114-CONTEXT.md): the reverse proxy already has
+// plaintext visibility into upstream responses (its own `tls_stream`), it
+// previously lacked only BUFFERING (responses stream in 8 KiB chunks by
+// deliberate design, D-06, for SSE / MCP Streamable HTTP / A2A JSON-RPC).
+// Every function below is used ONLY on capture-declared routes — the
+// unbuffered streaming loops elsewhere in this file are completely
+// unmodified and remain the default.
+//
+// Fail-closed contract (non-negotiable, restated at each call site below):
+// buffer cap exceeded -> deny; Content-Encoding present (any status code,
+// Pitfall 2 / `3c59c62e`) -> deny; malformed/unparseable body -> deny; an
+// unconfigured token-shaped field surviving rewrite -> deny. No branch
+// releases a partially-processed or unrewritten body.
+
+/// Per-read timeout while buffering an upstream response for OAuth-capture
+/// rewrite (D-05). Bounds the time dimension of the DoS surface buffering
+/// introduces (`read_capped_response`'s `cap` parameter bounds the memory
+/// dimension). Mirrors upstream's `UPSTREAM_REWRITE_READ_TIMEOUT` (design
+/// reference, D-07 — the constant is ported, not the surrounding
+/// `ResponseRewrite` abstraction, which this fork does not have).
+pub const CAPTURE_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Locate the `\r\n\r\n` header/body boundary in a buffered HTTP response.
+/// Returns the byte offset where the FOUR-byte `\r\n\r\n` marker itself
+/// begins (the body starts at `offset + 4`), or `None` if no complete
+/// header block is present yet.
+///
+/// `pub`, not private: with Task 3's `relay_response_with_capture` landing
+/// in this same plan's next commit, this is transiently true dead code
+/// (only `#[cfg(test)]` call sites exist between this commit and the
+/// next). `cargo clippy --lib` (no `--tests`) does not compile the `test`
+/// cfg, so a private/`pub(crate)` item with zero non-test callers is
+/// flagged `dead_code` under `-D warnings` — verified empirically:
+/// `pub(crate)` alone does NOT suppress it, only full `pub` does (rustc
+/// exempts externally-reachable API surface from this lint). Mirrors Plan
+/// 114-03's `capture_declared_for_upstream` and Plan 114-04's
+/// `rewrite_response_fields`/etc., the same not-yet-wired-in situation.
+pub fn find_header_end(raw: &[u8]) -> Option<usize> {
+    raw.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+/// Decode an HTTP/1.1 chunked-transfer-encoded body into its reassembled
+/// bytes. Never panics on malformed input (non-hex chunk-size, missing
+/// terminating CRLF, truncated chunk data, chunk-size overflow) — always
+/// returns `Err` instead, per this enforcement point's fail-closed
+/// contract. Ported from the upstream design reference cited in this
+/// plan's `<interfaces>` section (D-07), including its `checked_add` use
+/// for the chunk-size-overflow guard (CLAUDE.md's checked-arithmetic
+/// mandate for security-critical math).
+pub fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>> {
+    let mut pos = 0usize;
+    let mut out = Vec::new();
+    loop {
+        let Some(line_end_rel) = body
+            .get(pos..)
+            .and_then(|rest| rest.windows(2).position(|w| w == b"\r\n"))
+        else {
+            return Err(ProxyError::HttpParse(
+                "malformed chunked response: missing chunk-size line terminator".to_string(),
+            ));
+        };
+        let line_end = pos + line_end_rel;
+        let size_hex = std::str::from_utf8(&body[pos..line_end])
+            .map_err(|e| ProxyError::HttpParse(format!("malformed chunked response: {e}")))?
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim();
+        let size = usize::from_str_radix(size_hex, 16).map_err(|e| {
+            ProxyError::HttpParse(format!("malformed chunk size '{size_hex}': {e}"))
+        })?;
+        pos = line_end + 2;
+        if size == 0 {
+            break;
+        }
+        let end = pos.checked_add(size).ok_or_else(|| {
+            ProxyError::HttpParse("malformed chunked response: chunk size overflow".to_string())
+        })?;
+        let end_plus_crlf = end.checked_add(2).ok_or_else(|| {
+            ProxyError::HttpParse("malformed chunked response: chunk size overflow".to_string())
+        })?;
+        if end_plus_crlf > body.len() || &body[end..end_plus_crlf] != b"\r\n" {
+            return Err(ProxyError::HttpParse(
+                "malformed chunked response: missing terminating CRLF after chunk data".to_string(),
+            ));
+        }
+        out.extend_from_slice(&body[pos..end]);
+        pos = end_plus_crlf;
+    }
+    Ok(out)
+}
+
+/// Header facts relevant to OAuth-capture buffering, parsed from the raw
+/// header block of a buffered upstream response.
+pub struct CaptureResponseHeaders {
+    /// `Transfer-Encoding: chunked` was present.
+    pub chunked: bool,
+    /// A non-empty `Content-Encoding` header was present. Detection is
+    /// deliberately UNCONDITIONAL of status code — this struct has no
+    /// status field to gate on — closing the exact narrower-gate defect
+    /// class upstream's own `3c59c62e` fixed (Pitfall 2, 114-CONTEXT.md).
+    pub content_encoded: bool,
+}
+
+/// Scan a raw HTTP header block (the bytes before the `\r\n\r\n` boundary,
+/// NOT including the status line's own significance) for
+/// `Transfer-Encoding: chunked` and a non-empty `Content-Encoding` header,
+/// matched case-insensitively per HTTP header-name semantics. Pure,
+/// side-effect-free, and independently unit-tested so the
+/// content-encoding-is-unconditional property is provable without needing
+/// the full `relay_response_with_capture` dispatch (this function never
+/// looks at a status code at all).
+pub fn parse_capture_response_headers(header_block: &[u8]) -> CaptureResponseHeaders {
+    let header_str = std::str::from_utf8(header_block).unwrap_or("");
+    let mut chunked = false;
+    let mut content_encoded = false;
+    for line in header_str.lines() {
+        let lower = line.to_lowercase();
+        if let Some(value) = lower.strip_prefix("transfer-encoding:") {
+            if value.trim().contains("chunked") {
+                chunked = true;
+            }
+        } else if let Some(value) = lower.strip_prefix("content-encoding:") {
+            if !value.trim().is_empty() {
+                content_encoded = true;
+            }
+        }
+    }
+    CaptureResponseHeaders {
+        chunked,
+        content_encoded,
+    }
+}
+
+/// Read an upstream response into memory, enforcing `cap` as a hard
+/// ceiling on bytes held (D-05) and `read_timeout` as a hard ceiling on
+/// time spent per read (bounds the DoS surface buffering introduces).
+/// EOF-terminated — the same idiom this file's existing (unbuffered) relay
+/// loops already use, NOT Content-Length-driven pre-computation — so this
+/// correctly bounds a chunked or connection-close-delimited response too,
+/// even when the upstream sends no `Content-Length` header at all.
+///
+/// Does NOT parse headers or write anything to the client — it only
+/// bounds the read. The caller is responsible for converting an `Err`
+/// into an actual denial response written to the client stream; this
+/// function never writes partial data anywhere.
+///
+/// Generic over `AsyncRead + Unpin` rather than a concrete
+/// `tokio_rustls::client::TlsStream<TcpStream>`: no TLS-server test
+/// fixture exists anywhere in this crate, and building one solely for
+/// this plan's 4 required behavior tests would be new, heavy machinery
+/// unrelated to the security property under test. Genericity lets those
+/// tests drive an in-memory `tokio::io::duplex()` pair instead; the real
+/// call site's `TlsStream<TcpStream>` satisfies `AsyncRead + Unpin`
+/// unchanged, so this is a pure testability improvement with zero
+/// behavior difference at the production call site. `read_timeout` is
+/// likewise a parameter (not `CAPTURE_READ_TIMEOUT` used inline) purely so
+/// the timeout branch itself is unit-testable without a real 30-second
+/// wait; the production call site always passes `CAPTURE_READ_TIMEOUT`.
+pub async fn read_capped_response<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    cap: usize,
+    read_timeout: Duration,
+) -> Result<Zeroizing<Vec<u8>>> {
+    let mut raw: Zeroizing<Vec<u8>> = Zeroizing::new(Vec::new());
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = match tokio::time::timeout(read_timeout, reader.read(&mut buf)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                debug!("Upstream read error during OAuth capture buffering: {}", e);
+                return Err(ProxyError::HttpParse(format!(
+                    "upstream read error during OAuth capture buffering: {e}"
+                )));
+            }
+            Err(_) => {
+                return Err(ProxyError::HttpParse(
+                    "timed out reading response for OAuth capture rewrite".to_string(),
+                ));
+            }
+        };
+        raw.extend_from_slice(&buf[..n]);
+        if raw.len() > cap {
+            return Err(ProxyError::HttpParse(format!(
+                "response exceeded {cap}-byte OAuth capture buffer cap; denying rather than \
+                 releasing an unrewritten body"
+            )));
+        }
+    }
+    Ok(raw)
+}
+
+#[cfg(test)]
+mod capture_relay_tests {
+    use super::*;
+
+    #[test]
+    fn capture_find_header_end_locates_boundary() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{\"a\":1}";
+        let pos = find_header_end(raw).expect("boundary must be found");
+        assert_eq!(&raw[pos..pos + 4], b"\r\n\r\n");
+    }
+
+    #[test]
+    fn capture_find_header_end_none_when_headers_incomplete() {
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n";
+        assert!(find_header_end(raw).is_none());
+    }
+
+    #[test]
+    fn capture_decode_chunked_body_reassembles_two_chunks() {
+        let chunked = b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        let decoded = decode_chunked_body(chunked).expect("well-formed chunked body must decode");
+        assert_eq!(decoded, b"hello world");
+    }
+
+    #[test]
+    fn capture_decode_chunked_body_fails_closed_on_non_hex_chunk_size() {
+        let chunked = b"zz\r\nhello\r\n0\r\n\r\n";
+        assert!(decode_chunked_body(chunked).is_err());
+    }
+
+    #[test]
+    fn capture_decode_chunked_body_fails_closed_on_missing_terminating_crlf() {
+        // Chunk announces 5 bytes but the data + terminator are truncated —
+        // must error, never panic on out-of-bounds indexing.
+        let chunked = b"5\r\nhel";
+        assert!(decode_chunked_body(chunked).is_err());
+    }
+
+    #[test]
+    fn capture_decode_chunked_body_fails_closed_on_chunk_size_overflow() {
+        let chunked = b"ffffffffffffffff\r\nhello\r\n0\r\n\r\n";
+        assert!(decode_chunked_body(chunked).is_err());
+    }
+
+    #[test]
+    fn capture_parse_response_headers_detects_chunked() {
+        let headers = parse_capture_response_headers(b"Transfer-Encoding: chunked\r\n");
+        assert!(headers.chunked);
+        assert!(!headers.content_encoded);
+    }
+
+    /// Proves detection is UNCONDITIONAL of status code (Pitfall 2 /
+    /// `3c59c62e`): this function has no status parameter at all, so a
+    /// caller cannot narrow the check to only 2xx responses the way
+    /// upstream's own pre-`3c59c62e` code did.
+    #[test]
+    fn capture_parse_response_headers_detects_content_encoding_regardless_of_status() {
+        let headers_2xx = parse_capture_response_headers(b"Content-Encoding: gzip\r\n");
+        assert!(headers_2xx.content_encoded);
+        let headers_non_2xx_shaped_headers =
+            parse_capture_response_headers(b"content-encoding: br\r\n");
+        assert!(headers_non_2xx_shaped_headers.content_encoded);
+    }
+
+    #[test]
+    fn capture_parse_response_headers_ignores_empty_content_encoding() {
+        let headers = parse_capture_response_headers(b"Content-Encoding: \r\n");
+        assert!(!headers.content_encoded);
+    }
+
+    #[tokio::test]
+    async fn capture_read_capped_response_denies_when_cap_exceeded_with_no_content_length() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let cap = 16usize;
+        let body = b"this response body is definitely longer than sixteen bytes and carries \
+                      no Content-Length header at all";
+        let write_task = tokio::spawn(async move {
+            client.write_all(body).await.unwrap();
+            // Close the write half to simulate connection-close-delimited framing.
+            drop(client);
+        });
+        let result = read_capped_response(&mut server, cap, Duration::from_secs(5)).await;
+        assert!(
+            result.is_err(),
+            "response exceeding the cap with no Content-Length must be denied, not released"
+        );
+        write_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn capture_read_capped_response_succeeds_within_cap() {
+        let (mut client, mut server) = tokio::io::duplex(4096);
+        let write_task = tokio::spawn(async move {
+            client.write_all(b"short body").await.unwrap();
+            drop(client);
+        });
+        let result = read_capped_response(&mut server, 4096, Duration::from_secs(5)).await;
+        assert_eq!(
+            result.expect("within-cap read must succeed").as_slice(),
+            b"short body"
+        );
+        write_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn capture_read_capped_response_denies_on_timeout() {
+        // Never write anything and never close — read_capped_response must
+        // deny via the timeout branch rather than hang forever.
+        let (client, mut server) = tokio::io::duplex(64);
+        let result = read_capped_response(&mut server, 4096, Duration::from_millis(20)).await;
+        assert!(
+            result.is_err(),
+            "a stalled upstream must be denied via timeout, not hung on forever"
+        );
+        drop(client);
+    }
 }
 
 // ============================================================================
