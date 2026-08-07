@@ -19,6 +19,7 @@
 
 pub mod audit;
 mod auth;
+pub mod capture;
 pub mod config;
 pub mod connect;
 pub mod credential;
