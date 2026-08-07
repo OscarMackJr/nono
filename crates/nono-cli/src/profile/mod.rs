@@ -5,6 +5,7 @@
 //! into the binary) or user-defined (in `$XDG_CONFIG_HOME/nono/profiles/`).
 
 pub(crate) mod builtin;
+pub(crate) mod credential_provider;
 
 use nono::{NonoError, Result};
 use nono_proxy::config::EndpointRule;
