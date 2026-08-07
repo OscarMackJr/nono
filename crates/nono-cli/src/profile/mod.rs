@@ -7575,6 +7575,77 @@ mod tests {
         );
     }
 
+    // ============================================================================
+    // SEC-02 (Phase 114, D-13) — declarative OAuth capture schema validation
+    // ============================================================================
+
+    #[test]
+    fn test_schema_validates_capture_custom_credential() {
+        let json = r#"{
+            "meta": { "name": "capture-test" },
+            "network": {
+                "custom_credentials": {
+                    "oauth-provider": {
+                        "upstream": "https://oauth.internal.example",
+                        "capture": {
+                            "response_fields": [
+                                { "path": "access_token", "kind": "opaque" }
+                            ]
+                        }
+                    }
+                }
+            }
+        }"#;
+        validate_against_schema(json)
+            .expect("custom credential with a valid capture block should pass schema validation");
+    }
+
+    #[test]
+    fn test_schema_rejects_capture_empty_response_fields() {
+        let json = r#"{
+            "meta": { "name": "capture-invalid-empty" },
+            "network": {
+                "custom_credentials": {
+                    "oauth-provider": {
+                        "upstream": "https://oauth.internal.example",
+                        "capture": {
+                            "response_fields": []
+                        }
+                    }
+                }
+            }
+        }"#;
+        let result = validate_against_schema(json);
+        assert!(
+            result.is_err(),
+            "capture.response_fields present-but-empty should fail schema validation (minItems: 1, defense-in-depth alongside the Rust-level validate_capture_config check)"
+        );
+    }
+
+    #[test]
+    fn test_schema_rejects_capture_invalid_response_field_kind() {
+        let json = r#"{
+            "meta": { "name": "capture-invalid-kind" },
+            "network": {
+                "custom_credentials": {
+                    "oauth-provider": {
+                        "upstream": "https://oauth.internal.example",
+                        "capture": {
+                            "response_fields": [
+                                { "path": "access_token", "kind": "invalid_kind" }
+                            ]
+                        }
+                    }
+                }
+            }
+        }"#;
+        let result = validate_against_schema(json);
+        assert!(
+            result.is_err(),
+            "capture.response_fields[].kind with an unrecognized value should fail schema validation (enum enforcement)"
+        );
+    }
+
     #[test]
     fn test_schema_self_is_valid_json() {
         let schema_str = crate::config::embedded::embedded_profile_schema();

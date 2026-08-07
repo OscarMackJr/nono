@@ -649,6 +649,13 @@
           ],
           "description": "SPIFFE/SPIRE Workload API auth (NET-02, Phase 113). When present, the proxy fetches a JWT-SVID from the local SPIRE Workload API and injects it as a bearer token. Mutually exclusive with `credential_key`, `auth`, and `aws_auth`."
         },
+        "capture": {
+          "oneOf": [
+            { "$ref": "#/$defs/CaptureConfig" },
+            { "type": "null" }
+          ],
+          "description": "Declarative sandboxed OAuth capture (SEC-02, Phase 114, D-13). When present, the proxy buffers this route's response (up to `max_response_bytes`, fail closed on exceed) and rewrites `response_fields` from real tokens to sandbox-visible phantoms before the response reaches the sandboxed client. Unlike `credential_key`/`auth`/`aws_auth`/`spiffe` (request-direction: inject a credential into outbound requests), `capture` is response-direction — it composes with those fields rather than being mutually exclusive with them, and a route may declare ONLY `capture` with no other auth mechanism set. This schema entry hand-ports only the fields this fork actually implements (`response_fields`, `request_nonce_fields`, `max_response_bytes`); upstream's disk persistence, credential-store detection, and login-flow helper surface is deliberately NOT ported (fork scope decision — see ADR-114, D-13)."
+        },
         "inject_mode": {
           "$ref": "#/$defs/InjectMode",
           "description": "Credential injection mode. Determines how the credential is inserted into outbound requests.",
@@ -818,6 +825,51 @@
             { "type": "null" }
           ],
           "description": "Optional hint narrowing which SVID to select when multiple are available."
+        }
+      }
+    },
+    "CaptureConfig": {
+      "type": "object",
+      "description": "SEC-02 (Phase 114, D-13) declarative sandboxed OAuth capture configuration for a route. When present, the proxy buffers the route's response (up to `max_response_bytes`, fail closed on exceed) and rewrites `response_fields` from real tokens to sandbox-visible phantoms before the response reaches the sandboxed client. Hand-ported to describe ONLY what this fork implements — upstream's disk-persistence and TLS-interception configuration surface is deliberately absent (a schema advertising configuration nothing implements is itself a fail-open shape).",
+      "additionalProperties": false,
+      "properties": {
+        "response_fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/CaptureResponseField" },
+          "minItems": 1,
+          "description": "Which response JSON fields carry the real token and must be rewritten to phantoms before the response is released. Must be non-empty when `capture` is set — enforced at profile-validation time (`validate_capture_config`); this schema-level `minItems: 1` is defense-in-depth for the case where the array is present-but-empty. Omitting the property entirely also fails profile validation (empty is never a valid capture declaration).",
+          "default": []
+        },
+        "request_nonce_fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Dot-paths in request bodies where a presented phantom must be resolved back to the real captured value before forwarding outbound — the request-side mirror of `response_fields`.",
+          "default": []
+        },
+        "max_response_bytes": {
+          "oneOf": [
+            { "type": "integer", "minimum": 1 },
+            { "type": "null" }
+          ],
+          "description": "Per-route override of the default response-buffer cap (256 KiB). May not exceed the hard ceiling of 1 MiB — enforced at profile-validation time. Omit to use the default."
+        }
+      }
+    },
+    "CaptureResponseField": {
+      "type": "object",
+      "description": "SEC-02 (Phase 114) a single response-body field to rewrite when a capture-declared route's response is buffered.",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Dot-separated JSON path into the response body identifying the field carrying the real token that must be rewritten to a phantom (e.g. \"access_token\" or \"data.token\")."
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["opaque", "jwt"],
+          "description": "How the field's value should be interpreted when minting a phantom. \"opaque\" treats the value as an atomic secret string; \"jwt\" applies structure-aware handling.",
+          "default": "opaque"
         }
       }
     },
