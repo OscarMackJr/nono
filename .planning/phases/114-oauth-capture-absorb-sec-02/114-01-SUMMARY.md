@@ -116,3 +116,7 @@ None - no external service configuration required.
 ---
 *Phase: 114-oauth-capture-absorb-sec-02*
 *Completed: 2026-08-06*
+
+## Self-Check: PASSED
+
+All created/modified files verified present on disk; all 4 commit hashes (`3345468c`, `273db64f`, `3fe78d29`, `fc3e935a`) verified present in git log.
