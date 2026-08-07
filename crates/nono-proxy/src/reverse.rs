@@ -62,6 +62,10 @@ pub struct ReverseProxyCtx<'a> {
     pub upstream_pool: &'a crate::pool::UpstreamPool,
     /// Shared network audit sink for session metadata capture
     pub audit_log: Option<&'a audit::SharedAuditLog>,
+    /// Shared OAuth-capture phantom store (SEC-02, D-01r) — the single
+    /// instance every capture-declared relay site (this plan's site 1, and
+    /// Plan 114-06's sites 2/3) mints/resolves phantoms against.
+    pub capture_store: &'a crate::capture::CapturePhantomStore,
     /// When `false`, the session-token / phantom-token auth checks below are
     /// skipped entirely — every request is forwarded unauthenticated.
     /// Set by the standalone `nono proxy --no-auth` command; the sandboxed
@@ -2038,6 +2042,7 @@ mod tests {
         let upstream_pool = crate::pool::UpstreamPool::new(Arc::clone(&tls_config_arc), false);
 
         let audit_log = audit::new_audit_log();
+        let capture_store = crate::capture::CapturePhantomStore::new();
 
         let ctx = ReverseProxyCtx {
             route_store: &route_store,
@@ -2048,6 +2053,7 @@ mod tests {
             default_tls_config: &tls_config_arc,
             upstream_pool: &upstream_pool,
             audit_log: Some(&audit_log),
+            capture_store: &capture_store,
             require_auth: true,
         };
 
@@ -2166,6 +2172,7 @@ mod tests {
         let upstream_pool = crate::pool::UpstreamPool::new(Arc::clone(&tls_config_arc), false);
 
         let audit_log = audit::new_audit_log();
+        let capture_store = crate::capture::CapturePhantomStore::new();
 
         let ctx = ReverseProxyCtx {
             route_store: &route_store,
@@ -2176,6 +2183,7 @@ mod tests {
             default_tls_config: &tls_config_arc,
             upstream_pool: &upstream_pool,
             audit_log: Some(&audit_log),
+            capture_store: &capture_store,
             require_auth: true,
         };
 

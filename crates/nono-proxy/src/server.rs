@@ -530,6 +530,11 @@ struct ProxyState {
     active_connections: AtomicUsize,
     /// Shared network audit log for this proxy session.
     audit_log: audit::SharedAuditLog,
+    /// In-memory, session-scoped OAuth-capture phantom store (SEC-02,
+    /// D-01r/D-08). Always present (no `Option`) — an empty store costs
+    /// nothing when no route declares `capture`. Shared by every
+    /// capture-declared reverse-proxy relay site via `ReverseProxyCtx`.
+    capture_store: crate::capture::CapturePhantomStore,
     /// Matcher for hosts that bypass the external proxy and route direct.
     /// Built once at startup from `ExternalProxyConfig.bypass_hosts`.
     bypass_matcher: external::BypassMatcher,
@@ -740,6 +745,7 @@ pub async fn start(config: ProxyConfig) -> Result<ProxyHandle> {
         upstream_pool,
         active_connections: AtomicUsize::new(0),
         audit_log: Arc::clone(&audit_log),
+        capture_store: crate::capture::CapturePhantomStore::new(),
         bypass_matcher,
         bound_port: port,
     });
@@ -1473,6 +1479,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
             default_tls_config: &state.default_tls_config,
             upstream_pool: &state.upstream_pool,
             audit_log: Some(&state.audit_log),
+            capture_store: &state.capture_store,
             require_auth: state.config.require_auth,
         };
         reverse::handle_reverse_proxy(first_line, &mut stream, &header_bytes, &ctx, &buffered).await
@@ -3144,6 +3151,7 @@ mod tests {
             upstream_pool,
             active_connections: AtomicUsize::new(0),
             audit_log: Arc::clone(&audit_log),
+            capture_store: crate::capture::CapturePhantomStore::new(),
             bypass_matcher,
             bound_port: addr.port(),
         });
