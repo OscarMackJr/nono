@@ -36,7 +36,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [x] **Phase 112: Security + Residual Sync** — 8/8 plans (SEC-02 explicitly carved out to Phase 114)
 - [x] **Phase 113: SPIFFE/SPIRE Workload Identity** — 8/8 plans
-- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 2/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves); executing 2026-08-07 (Wave 1 complete)
+- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 10/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves); executing 2026-08-07 (Waves 1-5 complete; 114-11 phase gate in progress)
 
 </details>
 
@@ -342,20 +342,20 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [x] 114-02-PLAN.md — CaptureConfig declarative types + RouteConfig.capture field + workspace-wide literal fixups
 
 **Wave 2** *(blocked on Wave 1)*
-- [ ] 114-03-PLAN.md — route.rs declares_capture / has_capture_source / capture_declared_for_upstream (host-only match)
-- [ ] 114-04-PLAN.md — capture.rs: CapturePhantomStore (mint/resolve/admit) + portable rewrite/JWT-phantom logic
-- [ ] 114-08-PLAN.md — CLI declarative surface: profile/credential_provider.rs (D-12) + CustomCredentialDef.capture
+- [x] 114-03-PLAN.md — route.rs declares_capture / has_capture_source / capture_declared_for_upstream (host-only match)
+- [x] 114-04-PLAN.md — capture.rs: CapturePhantomStore (mint/resolve/admit) + portable rewrite/JWT-phantom logic
+- [x] 114-08-PLAN.md — CLI declarative surface: profile/credential_provider.rs (D-12) + CustomCredentialDef.capture
 
 **Wave 3** *(blocked on Wave 2)*
-- [ ] 114-05-PLAN.md — reverse.rs shared buffer-and-rewrite helper + site-1 wiring (D-01r/D-02r/D-05 enforcement point)
-- [ ] 114-09-PLAN.md — nono-profile.schema.json CaptureConfig $defs + round-trip test (D-13)
+- [x] 114-05-PLAN.md — reverse.rs shared buffer-and-rewrite helper + site-1 wiring (D-01r/D-02r/D-05 enforcement point)
+- [x] 114-09-PLAN.md — nono-profile.schema.json CaptureConfig $defs + round-trip test (D-13)
 
 **Wave 4** *(blocked on Wave 3)*
-- [ ] 114-06-PLAN.md — reverse.rs sites 2+3 wiring (handle_spiffe_route, handle_spiffe_assertion_credential) + WR-13 proof + **Task 3: close the mint→resolve loop**
-- [ ] 114-07-PLAN.md — server.rs D-06 cross-path fail-closed guard (handle_forward_http + CONNECT audit refinement)
+- [x] 114-06-PLAN.md — reverse.rs sites 2+3 wiring (handle_spiffe_route, handle_spiffe_assertion_credential) + WR-13 proof + **Task 3: close the mint→resolve loop**
+- [x] 114-07-PLAN.md — server.rs D-06 cross-path fail-closed guard (handle_forward_http + CONNECT audit refinement)
 
 **Wave 5** *(blocked on Wave 4 — reaches sibling repos via `..`, requires `use_worktrees=false`)*
-- [ ] 114-10-PLAN.md — D-14: ../nono-py + ../nono-ts binding rebuild
+- [x] 114-10-PLAN.md — D-14: ../nono-py + ../nono-ts binding rebuild
 
 **Wave 6** *(blocked on Wave 5 — closure and combined verification)*
 - [ ] 114-11-PLAN.md — ADR-114 + 108-DIVERGENCE-LEDGER.md carry-forward note + REQUIREMENTS.md checkbox + combined verification
@@ -399,4 +399,4 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 | 111. Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog | v3.6 | 6/6 | Complete   | 2026-08-05 |
 | 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
 | 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |
-| 114. OAuth Capture Absorb (SEC-02) | v3.6 | 2/11 | In progress (Wave 1 complete) | - |
+| 114. OAuth Capture Absorb (SEC-02) | v3.6 | 10/11 | In progress (Waves 1-5 complete) | - |
