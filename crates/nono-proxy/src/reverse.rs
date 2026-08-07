@@ -1549,6 +1549,18 @@ pub fn find_header_end(raw: &[u8]) -> Option<usize> {
 /// plan's `<interfaces>` section (D-07), including its `checked_add` use
 /// for the chunk-size-overflow guard (CLAUDE.md's checked-arithmetic
 /// mandate for security-critical math).
+///
+/// SECRET-HYGIENE INVARIANT (CR-01, 114-REVIEW.md): every `Err` this
+/// function returns is built from FIXED text plus byte offsets/lengths
+/// only — never from the response bytes themselves. An upstream that
+/// declares `Transfer-Encoding: chunked` and then sends an identity JSON
+/// body makes the "chunk-size line" literally the first line of that body
+/// (i.e. `{"access_token":"<REAL TOKEN>",...`); interpolating it here put
+/// a real OAuth token into `warn!` and into the on-disk audit ledger via
+/// `relay_response_with_capture`'s deny path. Offsets and lengths are safe
+/// (they carry no response content); the bytes are not, and are NEVER
+/// truncated-and-included either — a truncated token prefix is still a
+/// secret leak.
 pub fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>> {
     let mut pos = 0usize;
     let mut out = Vec::new();
@@ -1562,14 +1574,23 @@ pub fn decode_chunked_body(body: &[u8]) -> Result<Vec<u8>> {
             ));
         };
         let line_end = pos + line_end_rel;
+        let line_len = line_end.saturating_sub(pos);
         let size_hex = std::str::from_utf8(&body[pos..line_end])
-            .map_err(|e| ProxyError::HttpParse(format!("malformed chunked response: {e}")))?
+            .map_err(|_| {
+                ProxyError::HttpParse(format!(
+                    "malformed chunked response: chunk-size line at byte offset {pos} \
+                     ({line_len} bytes) is not valid UTF-8; value redacted"
+                ))
+            })?
             .split(';')
             .next()
             .unwrap_or("")
             .trim();
-        let size = usize::from_str_radix(size_hex, 16).map_err(|e| {
-            ProxyError::HttpParse(format!("malformed chunk size '{size_hex}': {e}"))
+        let size = usize::from_str_radix(size_hex, 16).map_err(|_| {
+            ProxyError::HttpParse(format!(
+                "malformed chunked response: chunk-size line at byte offset {pos} \
+                 ({line_len} bytes) is not a valid hex chunk size; value redacted"
+            ))
         })?;
         pos = line_end + 2;
         if size == 0 {
@@ -1750,7 +1771,22 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
         .max_response_bytes
         .unwrap_or(crate::config::DEFAULT_CAPTURE_MAX_RESPONSE_BYTES);
 
-    let deny = move |reason: String| async move {
+    // SECRET-HYGIENE INVARIANT (CR-01, 114-REVIEW.md): `reason` is
+    // `&'static str`, NOT `String`. This is a STRUCTURAL guarantee, not a
+    // convention — it is impossible to interpolate an upstream-derived
+    // value (a `format!` result, an `e.to_string()`, a body fragment) into
+    // a deny reason, because such a value cannot coerce to `&'static str`.
+    // The reason reaches BOTH `warn!` (the operator's log file) AND
+    // `audit::log_denied` -> `NetworkAuditEvent.reason` -> the session
+    // metadata PERSISTED ON DISK. Before this was tightened, an upstream
+    // that declared `Transfer-Encoding: chunked` and sent an identity JSON
+    // body wrote a real OAuth token into both (CR-01), falsifying D-08
+    // ("never written to disk"), `capture.rs`'s module doc, and ADR-114.
+    // Detailed, PROVABLY CONTENT-FREE diagnostics go to `debug!` at each
+    // call site below; response-derived bytes go nowhere at all.
+    //
+    // Do NOT relax this to `String` or `impl Into<String>`.
+    let deny = move |reason: &'static str| async move {
         warn!(
             "OAuth capture: denying response for route '{}': {}",
             route_id, reason
@@ -1767,7 +1803,7 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
             },
             route_id,
             0,
-            &reason,
+            reason,
         );
     };
 
@@ -1777,7 +1813,12 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
     let raw = match read_capped_response(tls_stream, cap, CAPTURE_READ_TIMEOUT).await {
         Ok(raw) => raw,
         Err(e) => {
-            deny(e.to_string()).await;
+            // Safe to log: every error `read_capped_response` produces is
+            // built from fixed text plus an `io::Error`/cap value — never
+            // from response bytes.
+            debug!("OAuth capture: buffered read failed for route '{route_id}': {e}");
+            deny("upstream response could not be buffered within the OAuth capture cap or timeout")
+                .await;
             send_error(stream, 502, "Bad Gateway").await?;
             return Ok(());
         }
@@ -1785,7 +1826,7 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
 
     // Step 2: header/body split. No complete header block -> deny.
     let Some(marker_pos) = find_header_end(&raw) else {
-        deny("no complete header block in buffered response".to_string()).await;
+        deny("no complete header block in buffered response").await;
         send_error(stream, 502, "Bad Gateway").await?;
         return Ok(());
     };
@@ -1807,10 +1848,14 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
     // capture-declared route, 2xx or not.
     let header_facts = parse_capture_response_headers(header_block);
     if header_facts.content_encoded {
-        deny(format!(
-            "Content-Encoding present on capture-declared route (status {status_code}); a \
-             compressed body cannot be field-rewritten reliably"
-        ))
+        // `status_code` is a parsed `u16`, not response bytes — safe to log.
+        debug!(
+            "OAuth capture: Content-Encoding present on route '{route_id}' (status {status_code})"
+        );
+        deny(
+            "Content-Encoding present on capture-declared route; a compressed body cannot be \
+             field-rewritten reliably",
+        )
         .await;
         send_error(stream, 502, "Bad Gateway").await?;
         return Ok(());
@@ -1821,7 +1866,11 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
         match decode_chunked_body(raw_body) {
             Ok(decoded) => decoded,
             Err(e) => {
-                deny(e.to_string()).await;
+                // Safe to log: `decode_chunked_body` guarantees every `Err`
+                // it returns carries offsets/lengths only, never response
+                // bytes (see its SECRET-HYGIENE INVARIANT).
+                debug!("OAuth capture: chunked decode failed for route '{route_id}': {e}");
+                deny("chunked response body could not be decoded").await;
                 send_error(stream, 502, "Bad Gateway").await?;
                 return Ok(());
             }
@@ -1832,10 +1881,15 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
 
     // Step 5: parse as JSON. An unparseable body on a capture-declared
     // route cannot be safety-inspected, so it must not be forwarded.
+    //
+    // CR-01: the `serde_json::Error` is deliberately DISCARDED, not logged
+    // even at `debug!` — serde_json error messages can echo fragments of
+    // the offending input, and the offending input here is a response body
+    // that may hold a real OAuth token.
     let mut body: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
-        Err(e) => {
-            deny(format!("unparseable response body: {e}")).await;
+        Err(_) => {
+            deny("response body on a capture-declared route is not parseable JSON").await;
             send_error(stream, 502, "Bad Gateway").await?;
             return Ok(());
         }
@@ -1854,7 +1908,10 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
     ) {
         Ok(paths) => paths,
         Err(e) => {
-            deny(format!("field rewrite failed: {e}")).await;
+            // Safe to log: `rewrite_response_fields` only errors on RNG
+            // failure or phantom construction — never on body content.
+            debug!("OAuth capture: field rewrite failed for route '{route_id}': {e}");
+            deny("configured capture field rewrite failed").await;
             send_error(stream, 502, "Bad Gateway").await?;
             return Ok(());
         }
@@ -1864,7 +1921,17 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
     // field surviving rewrite must never be forwarded (provider-config
     // drift is exactly the leak this backstop exists to close).
     if let Err(e) = crate::capture::reject_unrewritten_token_fields(&body, &rewritten_paths) {
-        deny(e.to_string()).await;
+        // Safe to log: `reject_unrewritten_token_fields` redacts the
+        // enclosing JSON path (CR-01) — the enclosing object KEYS are
+        // response-derived and a hostile upstream can put a real token in
+        // one. It reports the matched field name (drawn from a fixed set)
+        // and a depth only.
+        debug!("OAuth capture: fail-closed backstop tripped for route '{route_id}': {e}");
+        deny(
+            "an unconfigured token-shaped field survived rewrite on a capture-declared route; \
+             declare it in this route's capture.response_fields",
+        )
+        .await;
         send_error(stream, 502, "Bad Gateway").await?;
         return Ok(());
     }
@@ -1874,7 +1941,10 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
     let rewritten_body = match serde_json::to_vec(&body) {
         Ok(bytes) => bytes,
         Err(e) => {
-            deny(format!("failed to re-serialize rewritten body: {e}")).await;
+            // Safe to log: a serialization failure on an already-parsed,
+            // already-rewritten `Value` carries no response bytes.
+            debug!("OAuth capture: re-serialization failed for route '{route_id}': {e}");
+            deny("failed to re-serialize the rewritten response body").await;
             send_error(stream, 502, "Bad Gateway").await?;
             return Ok(());
         }
@@ -2204,6 +2274,23 @@ mod capture_relay_tests {
         store: &crate::capture::CapturePhantomStore,
         route_id: &str,
     ) -> (Result<()>, Vec<u8>) {
+        run_relay_with_capture_audited(upstream_response_bytes, capture, store, route_id, None)
+            .await
+    }
+
+    /// `run_relay_with_capture` with an optional in-memory audit log, so a
+    /// test can assert on what the relay actually WROTE to the audit
+    /// ledger — not just on what it wrote to the client (CR-01,
+    /// 114-REVIEW.md: the leak was in the audit record, which every
+    /// pre-existing relay test passed `None` for and therefore could not
+    /// see).
+    async fn run_relay_with_capture_audited(
+        upstream_response_bytes: &'static [u8],
+        capture: &crate::config::CaptureConfig,
+        store: &crate::capture::CapturePhantomStore,
+        route_id: &str,
+        audit_log: Option<&audit::SharedAuditLog>,
+    ) -> (Result<()>, Vec<u8>) {
         let (mut upstream_client, mut upstream_server) = tokio::io::duplex(1 << 20);
         let (mut client_stream, mut server_stream) = client_stream_pair().await;
 
@@ -2222,7 +2309,7 @@ mod capture_relay_tests {
                 capture,
                 store,
                 route_id,
-                None,
+                audit_log,
             )
             .await;
             // Close the write half so the client's read_to_end below sees
@@ -2366,6 +2453,143 @@ mod capture_relay_tests {
             "a response exceeding the buffer cap must be denied, never released unrewritten; \
              got: {received_str}"
         );
+    }
+
+    /// CR-01 regression proof (114-REVIEW.md): NO deny branch of the
+    /// enforcement point may put upstream-response-derived bytes into the
+    /// operator's log or the persisted audit ledger.
+    ///
+    /// The original defect: `decode_chunked_body` interpolated the raw
+    /// "chunk-size line" into its error, and `relay_response_with_capture`
+    /// forwarded that error verbatim into `deny()` -> `warn!` AND
+    /// `audit::log_denied` -> `NetworkAuditEvent.reason` -> session
+    /// metadata ON DISK. An upstream that declares `Transfer-Encoding:
+    /// chunked` but sends an identity JSON body makes the chunk-size line
+    /// literally `{"access_token":"<REAL TOKEN>"...`, so a real OAuth token
+    /// was written to disk — falsifying D-08, `capture.rs`'s module doc,
+    /// and ADR-114 Consequence 2. Because the session audit directory is
+    /// readable by the sandboxed child, that is a route for the confined
+    /// agent to read the real token back out.
+    ///
+    /// This drives three distinct deny branches (chunked decode, JSON
+    /// parse, fail-closed backstop), each with the token placed exactly
+    /// where that branch used to echo it, and asserts the token appears in
+    /// NEITHER the bytes sent to the client NOR any audit event's `reason`.
+    /// `capture_store_holds_only_in_memory` could not catch this: it
+    /// string-scans `capture.rs`, and the write happens in `reverse.rs`.
+    #[tokio::test]
+    async fn capture_deny_reason_never_contains_response_derived_bytes() {
+        const REAL_TOKEN: &str = "REAL-OAUTH-TOKEN-ce7b1a2d-MUST-NEVER-BE-LOGGED";
+
+        // (a) chunked declared, identity body sent -> the whole first line
+        //     of the JSON body becomes the "chunk-size line".
+        let chunked_lie: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
+                 {{\"access_token\":\"{REAL_TOKEN}\"}}\r\n"
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+        // (b) unparseable body -> the serde_json error path.
+        let unparseable: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\
+                 not-json {{\"access_token\":\"{REAL_TOKEN}\"}}"
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+        // (c) the token embedded in an enclosing object KEY, with an
+        //     unconfigured token-shaped field inside it -> the fail-closed
+        //     backstop's JSON-path echo.
+        let token_in_key: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n\
+                 {{\"{REAL_TOKEN}\":{{\"access_token\":\"nested\"}}}}"
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+
+        let no_fields = crate::config::CaptureConfig {
+            response_fields: vec![],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        };
+        let with_field = capture_config_with_field("access_token");
+
+        // The expected reason fragment per case is asserted too: it proves
+        // each case really reached the deny branch it was constructed for,
+        // rather than short-circuiting on some earlier branch and passing
+        // the "no token in the reason" assertion vacuously.
+        for (label, response, capture, expected_reason) in [
+            (
+                "chunked-size-line",
+                chunked_lie,
+                &with_field,
+                "chunked response body could not be decoded",
+            ),
+            (
+                "unparseable-json",
+                unparseable,
+                &with_field,
+                "is not parseable JSON",
+            ),
+            (
+                "token-in-json-key",
+                token_in_key,
+                &no_fields,
+                "unconfigured token-shaped field survived rewrite",
+            ),
+        ] {
+            let store = crate::capture::CapturePhantomStore::new();
+            let audit_log: audit::SharedAuditLog =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+            let (relay_result, received) = run_relay_with_capture_audited(
+                response,
+                capture,
+                &store,
+                "testroute",
+                Some(&audit_log),
+            )
+            .await;
+            relay_result.expect("relay must return Ok(()) even on a fail-closed deny");
+
+            let received_str = String::from_utf8_lossy(&received).to_string();
+            assert!(
+                received_str.starts_with("HTTP/1.1 502"),
+                "[{label}] this case must take a deny branch (502); got: {received_str}"
+            );
+            assert!(
+                !received_str.contains(REAL_TOKEN),
+                "[{label}] the real token must never reach the client; got: {received_str}"
+            );
+
+            let events = audit::drain_audit_events(&audit_log);
+            assert!(
+                !events.is_empty(),
+                "[{label}] the deny must have produced an audit event to assert on"
+            );
+            let mut saw_expected_branch = false;
+            for event in &events {
+                let reason = event.reason.clone().unwrap_or_default();
+                assert!(
+                    !reason.contains(REAL_TOKEN),
+                    "[{label}] the real token must never reach the persisted audit ledger's \
+                     `reason` field; got: {reason}"
+                );
+                if reason.contains(expected_reason) {
+                    saw_expected_branch = true;
+                }
+            }
+            assert!(
+                saw_expected_branch,
+                "[{label}] expected the deny to come from the branch containing \
+                 '{expected_reason}', so this case is not passing vacuously; got: {events:?}"
+            );
+        }
     }
 
     /// D-06 regression proof: `relay_response_streaming` (the unbuffered

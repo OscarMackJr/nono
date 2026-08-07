@@ -214,13 +214,24 @@ pub fn rewrite_response_fields(
 /// Returns `ProxyError::HttpParse` if an unrewritten token-shaped field is
 /// found. Returns `Ok(())` if none exists, or every one that exists is in
 /// `configured_paths`.
+///
+/// SECRET-HYGIENE INVARIANT (CR-01, 114-REVIEW.md): the returned error
+/// names the matched field (always one of the fixed
+/// [`is_sensitive_token_field`] names) and its nesting depth, and
+/// DELIBERATELY REDACTS the enclosing JSON path. The enclosing path is
+/// built from the response's own object KEYS, which a hostile or broken
+/// upstream controls — `{"<REAL TOKEN>":{"access_token":"x"}}` would
+/// otherwise put a real OAuth token into this error string, and from there
+/// into the operator's log and the on-disk audit ledger via
+/// `reverse.rs::relay_response_with_capture`'s deny path.
 pub fn reject_unrewritten_token_fields(body: &Value, configured_paths: &[String]) -> Result<()> {
-    reject_unrewritten_token_fields_inner(body, "", configured_paths)
+    reject_unrewritten_token_fields_inner(body, "", 0, configured_paths)
 }
 
 fn reject_unrewritten_token_fields_inner(
     value: &Value,
     current_path: &str,
+    depth: usize,
     configured_paths: &[String],
 ) -> Result<()> {
     match value {
@@ -235,19 +246,33 @@ fn reject_unrewritten_token_fields_inner(
                     if let Value::String(s) = val {
                         if !s.is_empty() && !configured_paths.iter().any(|p| p == &field_path) {
                             return Err(ProxyError::HttpParse(format!(
-                                "unrewritten token-shaped field '{field_path}' found in response body; declare it in this route's capture.response_fields or remove it from the response"
+                                "unrewritten token-shaped field '{key}' found at JSON nesting \
+                                 depth {depth} in the response body (enclosing path redacted — \
+                                 response-derived bytes must never reach a log or the audit \
+                                 ledger); declare its path in this route's \
+                                 capture.response_fields or remove it from the response"
                             )));
                         }
                     }
                 }
-                reject_unrewritten_token_fields_inner(val, &field_path, configured_paths)?;
+                reject_unrewritten_token_fields_inner(
+                    val,
+                    &field_path,
+                    depth.saturating_add(1),
+                    configured_paths,
+                )?;
             }
             Ok(())
         }
         Value::Array(items) => {
             for (index, item) in items.iter().enumerate() {
                 let field_path = format!("{current_path}[{index}]");
-                reject_unrewritten_token_fields_inner(item, &field_path, configured_paths)?;
+                reject_unrewritten_token_fields_inner(
+                    item,
+                    &field_path,
+                    depth.saturating_add(1),
+                    configured_paths,
+                )?;
             }
             Ok(())
         }
