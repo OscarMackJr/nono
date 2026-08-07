@@ -93,3 +93,14 @@ No blockers.
 ---
 *Phase: 114-oauth-capture-absorb-sec-02*
 *Completed: 2026-08-07*
+
+## Self-Check: PASSED
+
+All modified files verified present on disk:
+- `crates/nono-cli/data/nono-profile.schema.json` — FOUND
+- `crates/nono-cli/src/profile/mod.rs` — FOUND
+- `.planning/phases/114-oauth-capture-absorb-sec-02/114-09-SUMMARY.md` — FOUND
+
+Both commit hashes verified present in `git log`:
+- `4f4d4428` — FOUND
+- `3e5bb535` — FOUND
