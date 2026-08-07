@@ -36,7 +36,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 - [x] **Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog** — 6/6 plans
 - [x] **Phase 112: Security + Residual Sync** — 8/8 plans (SEC-02 explicitly carved out to Phase 114)
 - [x] **Phase 113: SPIFFE/SPIRE Workload Identity** — 8/8 plans
-- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 0/? plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment)
+- [ ] **Phase 114: OAuth Capture Absorb (SEC-02)** — 0/11 plans — carved out of Phase 112 by operator decision 2026-08-05 (ROADMAP Amendment); planned 2026-08-06 (11 plans, 6 waves)
 
 </details>
 
@@ -292,6 +292,7 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. The registry/update-check header residual (RES-01) and the PTY-teardown/test-infra residual (RES-02) are each individually reviewed and either absorbed or explicitly skipped with recorded reasoning — never silently dropped.
   3. `373a67ae` (#1369, `crossbeam-epoch` 0.9.18→0.9.20) is prioritized ahead of routine DEPS-cluster absorb — it is the direct fix for the live RUSTSEC-2026-0204 advisory the fork's `Cargo.lock` currently carries. *(If already closed by an out-of-band quick task, record that and confirm `cargo audit` is clean rather than re-absorbing.)*
   4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally after the absorb, consistent with VERIFY-01's framing in Phase 111.
+
 **Plans**: 8 plans
 - [x] 112-01-PLAN.md — Wave 1 reality-check finalization (D-02) + SEC-01 won't-sync finding + SEC-02a/b/c reality-check evidence + deferred-to-Phase-114 disposition (not a go/no-go decision, per the Amendment above) + RES-01 skip docs + D-07 confirmation
 - [x] 112-02-PLAN.md — SEC-03: NVIDIA procfs mediation hardening + Sandbox::apply_seccomp/apply_seccomp_with_abi Linux API refactor
@@ -333,6 +334,19 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
   2. The token-confinement property is proven, not assumed: either the `forward.rs` response-rewrite hook (or an equivalent fork-side enforcement point) is in place, or the absorb is declined with the reasoning recorded. **A reduced-scope absorb that drops the rewrite hook without an equivalent enforcement point is forbidden** — that is the specific failure this phase exists to prevent.
   3. If absorbed, the ADR-86 / ADR-111 boundary is confirmed non-regressed — no policy or enforcement logic lands in the core `nono` crate.
   4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) are GREEN locally, plus `cargo fmt --all --check` and the workspace test suite diffed against the documented inherited failing baseline.
+
+**Plans**: 11 plans
+- [ ] 114-01-PLAN.md — Core audit vocabulary (CaptureAuditContext, CaptureUnsupportedPath) + audit.rs wiring
+- [ ] 114-02-PLAN.md — CaptureConfig declarative types + RouteConfig.capture field + workspace-wide literal fixups
+- [ ] 114-03-PLAN.md — route.rs declares_capture / has_capture_source / capture_declared_for_upstream (host-only match)
+- [ ] 114-04-PLAN.md — capture.rs: CapturePhantomStore (mint/resolve/admit) + portable rewrite/JWT-phantom logic
+- [ ] 114-05-PLAN.md — reverse.rs shared buffer-and-rewrite helper + site-1 wiring (D-01r/D-02r/D-05 enforcement point)
+- [ ] 114-06-PLAN.md — reverse.rs sites 2+3 wiring (handle_spiffe_route, handle_spiffe_assertion_credential) + WR-13 proof
+- [ ] 114-07-PLAN.md — server.rs D-06 cross-path fail-closed guard (handle_forward_http + CONNECT audit refinement)
+- [ ] 114-08-PLAN.md — CLI declarative surface: profile/credential_provider.rs (D-12) + CustomCredentialDef.capture
+- [ ] 114-09-PLAN.md — nono-profile.schema.json CaptureConfig $defs + round-trip test (D-13)
+- [ ] 114-10-PLAN.md — D-14: ../nono-py + ../nono-ts binding rebuild
+- [ ] 114-11-PLAN.md — ADR-114 + 108-DIVERGENCE-LEDGER.md carry-forward note + REQUIREMENTS.md checkbox + combined verification
 
 ## Progress
 
