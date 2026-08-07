@@ -627,7 +627,7 @@ questions this research surfaces but does not resolve — they are not claims ab
 package identity or unverified library behavior (this phase adds no new packages), so they are
 tracked here as planning-discretion items rather than provenance-tagged factual claims.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where does the phantom-token store live structurally — a new `capture.rs` module, or inside
    `credential.rs`/`route.rs`?**
@@ -643,6 +643,10 @@ tracked here as planning-discretion items rather than provenance-tagged factual 
      keeps `reverse.rs` from growing past its current 2228 lines further than necessary, and gives
      the phantom-store's own unit tests (mint/resolve/admit) a natural home independent of the
      wire-protocol relay code.
+   - **RESOLVED: new `capture.rs` module, per the recommendation above — resolved by Plan
+     114-04.** `CapturePhantomStore` (mint/resolve/admit), the dot-path rewrite logic, and
+     `jwt_shaped_phantom` all live in `crates/nono-proxy/src/capture.rs`, registered via `pub mod
+     capture;` in `lib.rs`.
 
 2. **What is the exact D-05 buffer-cap value, and is it configurable?**
    - What we know: CONTEXT.md's discretion range is "~256 KiB–1 MiB"; the fork's existing
@@ -656,6 +660,11 @@ tracked here as planning-discretion items rather than provenance-tagged factual 
      default for a JSON object holding a handful of JWTs) and make it configurable via profile
      (mirrors the pattern of every other numeric limit in `config.rs`), so an operator hitting a
      legitimately larger provider response isn't forced to a code change.
+   - **RESOLVED: 256 KiB default, 1 MiB hard ceiling, configurable per-route — resolved by Plan
+     114-02.** `DEFAULT_CAPTURE_MAX_RESPONSE_BYTES = 256 * 1024` and
+     `CAPTURE_MAX_RESPONSE_BYTES_CEILING = 1024 * 1024` in `config.rs`;
+     `CaptureConfig.max_response_bytes: Option<usize>` lets an operator override the default up to
+     the ceiling, validated at profile-load time by Plan 114-08.
 
 3. **Does `handle_forward_http`'s existing 4th relay loop (`server.rs:1209-1230`) need ANY
    capture-awareness beyond the D-06 deny guard, or is deny-at-request-time fully sufficient?**
@@ -665,6 +674,11 @@ tracked here as planning-discretion items rather than provenance-tagged factual 
      only so the planner doesn't accidentally ALSO try to add buffering logic to this 4th loop
      (which would be scope creep beyond D-06's stated boundary).
    - Recommendation: explicitly confirm in the plan that this loop remains untouched.
+   - **RESOLVED: deny-at-request-time is fully sufficient; the 4th loop remains untouched — resolved
+     by Plan 114-07.** The `handle_forward_http` guard (mirroring the existing SPIFFE guard exactly)
+     denies a capture-declared route's upstream before the loop is ever reached; no capture-aware
+     buffering logic was added to `handle_forward_http`'s own relay loop, confirmed by Plan 114-06
+     Task 2's regression grep (`[0u8; 8192]` count stays exactly 3, not 4).
 
 ## Environment Availability
 
