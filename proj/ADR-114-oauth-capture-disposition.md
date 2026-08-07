@@ -82,10 +82,43 @@ during this plan (not inherited from a prior plan's line numbers):
 | Reverse-proxy — site 1 (static-credential path) | `reverse.rs::handle_reverse_proxy` (`:486`) | **Enforced.** `if let Some(capture) = &route.capture { return relay_response_with_capture(...).await; }` — unconditional `return` before the unbuffered `[0u8; 8192]` loop. Proven by Plan 114-05's Finding 1 (control-flow audit) and its behavior tests (`capture_rewrites_configured_fields`, `capture_fails_closed_on_unrewritten_token_field`, `capture_denies_content_encoded_response`, `capture_buffer_cap_exceeded_denies_response`). |
 | Reverse-proxy — site 2 (`handle_spiffe_route`, direct JWT-SVID bearer) | `reverse.rs::handle_spiffe_route` (`:791`) | **Enforced.** `if let Some(result) = relay_capture_if_declared(...).await { return result; }` immediately before the site's own `[0u8; 8192]` loop. Proven by Plan 114-06's `capture_rewrites_via_spiffe_route_site`. |
 | Reverse-proxy — site 3 (`handle_spiffe_assertion_credential`, RFC 7523 jwt-bearer exchange) | `reverse.rs::handle_spiffe_assertion_credential` (`:1078`) | **Enforced.** Same shared-guard shape as site 2, immediately before its own `[0u8; 8192]` loop. Proven by Plan 114-06's `capture_rewrites_via_spiffe_assertion_site`. |
-| CONNECT tunnel (bypass-route, non-bypass, and external-proxy-chain arms) | `server.rs::handle_connection`'s CONNECT dispatch (`:1343-1433`) | **Denied — fail-closed, no new deny surface.** The pre-existing, unconditional `is_route_upstream()` block (Phase 113's D-03 guard) already blocks CONNECT to every route upstream, and runs *before* `use_external` is even computed (`:1436`) — so the external-proxy-chain arm is unreachable for a capture-declared upstream by construction, not by a separate check. This plan's `114-07` only refines which `denial_category` the resulting 403 audit event carries (`CaptureUnsupportedPath` when `capture_declared_for_upstream()` matches, `:1396-1401`), mirroring the precedent `spiffe_declared_for_upstream` already established. Verified directly against the current `server.rs` this session — not merely cited from ADR-113 — because the plan's own interfaces block required confirming the external-proxy-chain claim live rather than inheriting it. |
+| CONNECT tunnel (bypass-route, non-bypass, and external-proxy-chain arms) | `server.rs::handle_connection`'s CONNECT dispatch | **Denied — fail-closed, and this arm DOES carry new deny surface.** The unconditional route-upstream block (Phase 113's D-03 guard) runs *before* `use_external` is even computed, so the external-proxy-chain arm is unreachable for a capture-declared upstream by construction, not by a separate check. The gate is an OR of three predicates evaluated before it: `is_route_upstream()` (exact `host:port`, unchanged), `spiffe_declared_for_upstream()` (also exact `host:port`, so it genuinely adds nothing and only refines `denial_category`), and `capture_declared_for_upstream()` (**host-only**, so it genuinely widens the deny). See the CR-03 correction below for what this row used to claim and why that was wrong. Proven by `connect_denies_capture_declared_route_upstream` (exact port, audit-category fidelity) and `connect_denies_capture_declared_route_upstream_on_different_port` (the widening), with `connect_non_capture_route_on_different_port_is_not_blocked_by_the_guard` as the negative control proving nothing was over-matched for plain routes. |
 | Plain-HTTP forward-proxy | `server.rs::handle_forward_http` (`:1096`) | **Denied — the phase's one genuinely new guard.** `if state.route_store.capture_declared_for_upstream(&host_port) { ... 403 ... }`, unconditional and explicitly **not** gated on `state.config.require_auth`, mirroring Phase 113's D-03 SPIFFE guard where that property was load-bearing (a guard that only fired when auth was enabled would fail open for `--no-auth` standalone proxies). Proven by Plan 114-07's `forward_http_denies_capture_declared_route_upstream` and, critically, by `forward_http_denies_capture_declared_route_upstream_on_different_port` — the **host-only** widening (deliberately broader than the SPIFFE sibling's exact `host:port` match, closing the same bypass class upstream's own `3c59c62e` hardening commit addressed) proven non-vacuous by an executed RED/GREEN: narrowing `capture_declared_for_upstream()` to `host_port_matches` broke only the different-port test, confirming the test discriminates the property it claims to. |
 
 No request-arrival path is left silently unauthenticated for capture-declared routes.
+
+#### CR-03 correction — the CONNECT row asserted the opposite of the code
+
+The CONNECT row above originally read "**Denied — fail-closed, no new deny surface**" and claimed
+"the external-proxy-chain arm is unreachable for a capture-declared upstream by construction",
+with `114-07` merely "refin[ing] which `denial_category` the resulting 403 audit event carries".
+The inline comment in `server.rs` said the same thing: "`is_route_upstream` above already blocks
+CONNECT to every route upstream unconditionally".
+
+Both were false, and 114-REVIEW.md's CR-03 caught it. `capture_declared_for_upstream()` was
+evaluated **inside** the exact-`host:port` `is_route_upstream()` gate, so D-06's deliberate
+host-only widening — the one carrying an explicit "do NOT narrow this" comment, because narrowing
+re-opens the bypass class upstream's `3c59c62e` closed — was **dead code on the CONNECT path**. It
+could only ever be true where the exact match had already fired, so it could only relabel the audit
+category, never widen the deny.
+
+The consequence was a live token-leak bypass, not a documentation defect: `CONNECT
+capture-host:8443` against a route declaring `capture-host:9443` fell through to
+`connect::handle_connect`, got a raw TLS tunnel, and the sandboxed agent completed the token
+exchange itself and received the **real** OAuth token unrewritten. This was the bypass that
+mattered most — a token endpoint is `https`, so CONNECT is how an agent actually reaches it, and
+the forward-HTTP guard (the one row below, which *did* apply the wide predicate) cannot reach an
+`https` upstream at all.
+
+The fix hoists all three predicates above the gate and makes the gate their OR. Nothing was
+narrowed: `is_route_upstream()` still denies every exact route upstream on its own, so the
+pre-existing deny surface is a strict subset of the corrected one, and the SPIFFE-first
+denial-category precedence is preserved. This row and the `server.rs` comment now describe what the
+code does.
+
+This is recorded here rather than silently patched because the record being wrong is itself the
+finding — a project twice burned by inaccurate records does not get to fix the code and quietly
+correct the prose.
 
 ### The sites-2/3 near-miss — recorded honestly, not smoothed over
 

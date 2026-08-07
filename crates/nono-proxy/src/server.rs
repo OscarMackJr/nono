@@ -1355,10 +1355,17 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
         // `parse_connect_target` would parse (`connect.rs::parse_connect_target`
         // — verified identical `parts[1]` derivation). A SPIFFE-declared
         // route's upstream is therefore already unreachable via any CONNECT
-        // arm by the time dispatch happens; the `spiffe_declared_for_upstream`
-        // sub-check below only refines the audit `denial_category` so a
-        // SPIFFE-route denial is distinguishable from a plain route-upstream
-        // CONNECT-bypass denial, it does not add new deny surface.
+        // arm by the time dispatch happens; `spiffe_declared_for_upstream`
+        // matches the same exact `host:port` as `is_route_upstream`, so it
+        // genuinely adds no deny surface and only refines the audit
+        // `denial_category` so a SPIFFE-route denial is distinguishable from
+        // a plain route-upstream CONNECT-bypass denial.
+        //
+        // `capture_declared_for_upstream` is DIFFERENT: it matches host-only
+        // and therefore DOES add deny surface (CR-03, 114-REVIEW.md — see the
+        // gate's own comment below). Do not restate the SPIFFE "no new deny
+        // surface" property for it; it was false, and the sandboxed agent
+        // could reach a capture-declared token endpoint on any other port.
         if !state.route_store.is_empty() {
             if let Some(authority) = first_line.split_whitespace().nth(1) {
                 // Normalise authority to host:port. Handle IPv6 brackets:
@@ -1375,26 +1382,45 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                 } else {
                     format!("{}:443", authority.to_lowercase())
                 };
-                if state.route_store.is_route_upstream(&host_port) {
+                // D-06 (114-CONTEXT.md), corrected by CR-03 (114-REVIEW.md):
+                // all three predicates are evaluated BEFORE the gate and the
+                // gate is their OR, so each one can actually DENY.
+                //
+                // `capture_declared_for_upstream` matches HOST-ONLY, by
+                // deliberate design (see its doc comment's "do NOT narrow
+                // this" note — narrowing re-opens the bypass class upstream's
+                // `3c59c62e` closed). It used to be evaluated INSIDE the
+                // exact-`host:port` `is_route_upstream` gate, so its widening
+                // was dead on this path: it could only ever be true where the
+                // exact match had already fired, and therefore only relabelled
+                // the audit `denial_category`. `CONNECT capture-host:8443`
+                // against a route declaring `capture-host:9443` tunnelled
+                // through to `connect::handle_connect`, got a raw TLS tunnel,
+                // and the sandboxed agent completed the token exchange itself
+                // and received the REAL OAuth token unrewritten. That is the
+                // bypass that matters most: a token endpoint is `https`, so
+                // CONNECT is how an agent actually reaches it, and the
+                // forward-HTTP guard (which does apply the wide predicate)
+                // cannot reach an https upstream at all.
+                //
+                // Nothing is narrowed: `is_route_upstream` still denies every
+                // exact route upstream on its own, so the pre-existing deny
+                // surface is a strict subset of this one.
+                //
+                // Precedence: SPIFFE checked first — a route declaring BOTH
+                // `spiffe` and `capture` should not happen given route config,
+                // but if it ever does, the SPIFFE category has the established
+                // precedent (Plan 113-05) and takes priority.
+                let is_spiffe_route = state.route_store.spiffe_declared_for_upstream(&host_port);
+                let is_capture_route = state.route_store.capture_declared_for_upstream(&host_port);
+                if state.route_store.is_route_upstream(&host_port)
+                    || is_spiffe_route
+                    || is_capture_route
+                {
                     let (host, port) = host_port
                         .rsplit_once(':')
                         .map(|(h, p)| (h, p.parse::<u16>().unwrap_or(443)))
                         .unwrap_or((&host_port, 443));
-                    let is_spiffe_route =
-                        state.route_store.spiffe_declared_for_upstream(&host_port);
-                    // D-06 (114-CONTEXT.md): 114-07 adds this parallel capture
-                    // check. NO new deny surface — `is_route_upstream` above
-                    // already blocks CONNECT to every route upstream
-                    // unconditionally; this only refines which
-                    // `denial_category`/`denial_reason` the resulting audit
-                    // event carries, so a capture-route CONNECT-bypass is
-                    // distinguishable from a plain one. Precedence: SPIFFE
-                    // checked first — a route declaring BOTH `spiffe` and
-                    // `capture` should not happen given route config, but if
-                    // it ever does, the SPIFFE category has the established
-                    // precedent (Plan 113-05) and takes priority.
-                    let is_capture_route =
-                        state.route_store.capture_declared_for_upstream(&host_port);
                     let denial_category = if is_spiffe_route {
                         nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath
                     } else if is_capture_route {
@@ -3559,12 +3585,15 @@ mod tests {
     }
 
     /// D-06: a CONNECT tunnel targeting a capture-declared route's upstream
-    /// is denied (403) — this is the PRE-EXISTING `is_route_upstream` block
-    /// (unchanged, no new deny surface), verified here as a regression test.
-    /// The obligation this test actually proves is audit fidelity: the
-    /// resulting denial's `denial_category` is `CaptureUnsupportedPath`, not
-    /// the generic `ConnectBypassesL7` a non-capture route upstream would
-    /// get — mirrors `d03_connect_denies_spiffe_declared_route_upstream`.
+    /// on its EXACT configured `host:port` is denied (403). This case is
+    /// covered by the pre-existing `is_route_upstream` block on its own; the
+    /// obligation this test proves is audit fidelity: the resulting denial's
+    /// `denial_category` is `CaptureUnsupportedPath`, not the generic
+    /// `ConnectBypassesL7` a non-capture route upstream would get — mirrors
+    /// `d03_connect_denies_spiffe_declared_route_upstream`.
+    ///
+    /// The DIFFERENT-port case — the one that was actually fail-open — is
+    /// `connect_denies_capture_declared_route_upstream_on_different_port`.
     #[tokio::test]
     async fn connect_denies_capture_declared_route_upstream() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -3607,6 +3636,141 @@ mod tests {
                         == Some(nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath)),
             "expected a Deny audit event with denial_category=CaptureUnsupportedPath, got: {:?}",
             events
+        );
+    }
+
+    /// CR-03 regression proof (114-REVIEW.md): the CONNECT arm's
+    /// capture guard must be able to DENY, not merely relabel.
+    ///
+    /// `capture_declared_for_upstream()` matches HOST-ONLY by deliberate
+    /// design (D-06), but it used to be evaluated INSIDE the exact-`host:port`
+    /// `is_route_upstream()` gate, so its widening was dead on this path: it
+    /// could only ever be true where the exact match had already fired. A
+    /// `CONNECT` to a capture-declared host on ANY OTHER PORT fell through to
+    /// `connect::handle_connect`, got a raw TLS tunnel, and the sandboxed
+    /// agent completed the token exchange itself and received the REAL OAuth
+    /// token with no rewrite.
+    ///
+    /// This is the bypass that mattered most: a token endpoint is `https`, so
+    /// CONNECT is how an agent actually reaches it, and the forward-HTTP
+    /// guard (`forward_http_denies_capture_declared_route_upstream_on_different_port`,
+    /// which DOES apply the wide predicate) cannot reach an `https` upstream
+    /// at all.
+    ///
+    /// `external_proxy` is configured and `require_auth: false`, so the guard
+    /// is proven unconditional across the CONNECT dispatch arms, mirroring
+    /// `connect_denies_capture_declared_route_upstream`.
+    #[tokio::test]
+    async fn connect_denies_capture_declared_route_upstream_on_different_port() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        // The route declares its upstream on :9443 ...
+        let declared_host_port = "capture-upstream.invalid:9443";
+        let route_store = capture_declared_route_store(declared_host_port);
+        let config = ProxyConfig {
+            require_auth: false,
+            external_proxy: Some(crate::config::ExternalProxyConfig {
+                address: "127.0.0.1:1".to_string(),
+                auth: None,
+                bypass_hosts: vec![],
+            }),
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        // ... but CONNECT targets the same host on :443. `is_route_upstream`
+        // (exact port) is FALSE here — only the host-only capture predicate
+        // can deny this, which is exactly the property under test.
+        let requested_host_port = "capture-upstream.invalid:443";
+        assert_ne!(
+            declared_host_port, requested_host_port,
+            "sanity: this test is meaningless unless the ports genuinely differ"
+        );
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        let request = format!(
+            "CONNECT {requested_host_port} HTTP/1.1\r\nHost: {requested_host_port}\r\n\r\n"
+        );
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+        assert!(
+            response_str.starts_with("HTTP/1.1 403"),
+            "CONNECT to a capture-declared route's HOST on a DIFFERENT port must be denied \
+             (403) — otherwise the agent gets a raw TLS tunnel to the token endpoint and \
+             receives the real OAuth token unrewritten; got: {}",
+            response_str
+        );
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.decision == nono::undo::NetworkAuditDecision::Deny
+                    && e.denial_category
+                        == Some(nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath)),
+            "expected a Deny audit event with denial_category=CaptureUnsupportedPath, got: {:?}",
+            events
+        );
+    }
+
+    /// CR-03 negative control: widening the CONNECT gate to an OR of the
+    /// three predicates must not over-match. A route declaring neither
+    /// `capture` nor `spiffe` must still be reachable by CONNECT on a port it
+    /// does NOT declare — `is_route_upstream` is exact-port and stays exact,
+    /// so nothing was narrowed and nothing new was blocked for plain routes.
+    #[tokio::test]
+    async fn connect_non_capture_route_on_different_port_is_not_blocked_by_the_guard() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        let mut routes = std::collections::HashMap::new();
+        routes.insert(
+            "plain-svc".to_string(),
+            route::LoadedRoute {
+                upstream: "https://plain-upstream.invalid:9443".to_string(),
+                upstream_host_port: Some("plain-upstream.invalid:9443".to_string()),
+                endpoint_rules: crate::config::CompiledEndpointRules::compile(&[]).unwrap(),
+                endpoint_policy: crate::config::CompiledEndpointPolicy::compile(None, &[]).unwrap(),
+                tls_connector: None,
+                tls_client_config: None,
+                tls_config_key: None,
+                managed_auth: None,
+                declares_spiffe: false,
+                declares_capture: false,
+                capture: None,
+            },
+        );
+        let route_store = RouteStore::from_loaded_routes(routes);
+        let config = ProxyConfig {
+            require_auth: false,
+            ..Default::default()
+        };
+        let (addr, audit_log) = spawn_state_for_d03_dispatch_test(config, route_store).await;
+
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        // Same host, DIFFERENT port from the declared :9443.
+        let request = "CONNECT plain-upstream.invalid:443 HTTP/1.1\r\n\
+                       Host: plain-upstream.invalid:443\r\n\r\n";
+        stream.write_all(request.as_bytes()).await.unwrap();
+
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        let response_str = String::from_utf8_lossy(&response);
+
+        let events = audit::drain_audit_events(&audit_log);
+        assert!(
+            !events.iter().any(|e| e.denial_category
+                == Some(nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath)
+                || e.denial_category
+                    == Some(nono::undo::NetworkAuditDenialCategory::ConnectBypassesL7)),
+            "a plain route's host on a non-declared port must not be caught by the \
+             route-upstream CONNECT guard (that guard stays exact-port); got: {:?} / {}",
+            events,
+            response_str
         );
     }
 }
