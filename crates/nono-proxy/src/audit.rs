@@ -5,7 +5,7 @@
 //! is never included in audit logs.
 
 use nono::undo::{
-    NetworkAuditAuthMechanism, NetworkAuditAuthOutcome, NetworkAuditDecision,
+    CaptureAuditContext, NetworkAuditAuthMechanism, NetworkAuditAuthOutcome, NetworkAuditDecision,
     NetworkAuditDenialCategory, NetworkAuditEvent, NetworkAuditInjectionMode, NetworkAuditMode,
     SpiffeAuditContext,
 };
@@ -46,6 +46,7 @@ pub struct EventContext<'a> {
     pub injection_mode: Option<NetworkAuditInjectionMode>,
     pub denial_category: Option<NetworkAuditDenialCategory>,
     pub spiffe_context: Option<SpiffeAuditContext>,
+    pub capture_context: Option<CaptureAuditContext>,
 }
 
 impl std::fmt::Display for ProxyMode {
@@ -165,6 +166,7 @@ pub fn log_allowed(
             injection_mode: ctx.injection_mode.clone(),
             denial_category: None,
             spiffe_context: ctx.spiffe_context.clone(),
+            capture_context: ctx.capture_context.clone(),
             target: host.to_string(),
             port: Some(port),
             method: Some(method.to_string()),
@@ -224,6 +226,7 @@ pub fn log_denied(
             injection_mode: ctx.injection_mode.clone(),
             denial_category: ctx.denial_category.clone(),
             spiffe_context: ctx.spiffe_context.clone(),
+            capture_context: ctx.capture_context.clone(),
             target: host.to_string(),
             port: Some(port),
             method: None,
@@ -287,6 +290,7 @@ pub fn log_l7_request(
             injection_mode: ctx.injection_mode.clone(),
             denial_category: None,
             spiffe_context: ctx.spiffe_context.clone(),
+            capture_context: ctx.capture_context.clone(),
             target: info.host.to_string(),
             port: Some(info.port),
             method: Some(info.method.to_string()),
@@ -328,6 +332,7 @@ pub fn log_reverse_proxy(
             injection_mode: None,
             denial_category: None,
             spiffe_context: None,
+            capture_context: None,
             target: service.to_string(),
             port: None,
             method: Some(method.to_string()),
