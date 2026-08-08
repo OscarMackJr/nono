@@ -10190,7 +10190,9 @@ mod platform_overrides_tests {
         );
     }
 
-    /// v3.6 milestone audit finding NEW-02 regression.
+    /// v3.6 milestone audit finding NEW-02 regression, split into two
+    /// complementary tests (D-03, Phase 115, closing ACC-04's missing
+    /// `spiffe` assertion).
     ///
     /// `custom_credentials` is a `HashMap`, so the old bare
     /// `merged.extend(child…)` was WHOLE-VALUE REPLACE PER KEY. A
@@ -10204,20 +10206,60 @@ mod platform_overrides_tests {
     /// It also contradicted this file's own D-08a invariant — an override
     /// "may tighten (add) but never silently loosen (disable/remove)".
     ///
-    /// This test pins the fail-secure merge for the two security-relevant
-    /// fields most likely to be lost this way (`capture`, `spiffe`) while
-    /// confirming the override's own stated change (`upstream`) still applies.
+    /// This test proves the same inheritance behavior through the real,
+    /// validation-routed pipeline (`override_for_current_platform` +
+    /// `finalize_profile`), for a profile shape that could actually ship:
+    /// only `credential_key` is populated among the four mutually-exclusive
+    /// auth fields (`credential_key`/`auth`/`aws_auth`/`spiffe`), so
+    /// `validate_custom_credential`'s exclusion rules never fire and
+    /// `finalize_profile(...).expect(...)` succeeds cleanly. The exhaustive,
+    /// validation-agnostic assertion over every field (including all four
+    /// mutually-exclusive fields populated simultaneously) lives in the
+    /// sibling test below,
+    /// `platform_overrides_custom_credential_merge_exhaustive_over_every_field`.
     #[test]
-    fn platform_overrides_custom_credential_collision_cannot_drop_capture_or_spiffe() {
-        use nono_proxy::config::{CaptureConfig, CaptureResponseField, CaptureResponseFieldKind};
+    fn platform_overrides_custom_credential_collision_inherits_via_pipeline() {
+        use nono_proxy::config::{
+            CaptureConfig, CaptureResponseField, CaptureResponseFieldKind, EndpointRule,
+        };
 
-        fn cred(upstream: &str, capture: Option<CaptureConfig>) -> CustomCredentialDef {
+        fn pipeline_base_cred(upstream: &str) -> CustomCredentialDef {
+            CustomCredentialDef {
+                upstream: upstream.to_string(),
+                credential_key: Some("test_credential_key_base".to_string()),
+                auth: None,
+                inject_mode: Some(InjectMode::Header),
+                inject_header: Some("X-Base-Auth".to_string()),
+                credential_format: Some("Bearer {}".to_string()),
+                path_pattern: Some("/base/{}/path".to_string()),
+                path_replacement: Some("/base/{}/replacement".to_string()),
+                query_param_name: Some("base_api_key".to_string()),
+                env_var: Some("BASE_ENV_VAR".to_string()),
+                endpoint_rules: vec![EndpointRule {
+                    method: "GET".to_string(),
+                    path: "/base/allowed".to_string(),
+                }],
+                tls_ca: Some("/base/ca.pem".to_string()),
+                aws_auth: None,
+                spiffe: None,
+                capture: Some(CaptureConfig {
+                    response_fields: vec![CaptureResponseField {
+                        path: "access_token".to_string(),
+                        kind: CaptureResponseFieldKind::Jwt,
+                    }],
+                    request_nonce_fields: vec!["code_verifier".to_string()],
+                    max_response_bytes: Some(65536),
+                }),
+            }
+        }
+
+        fn pipeline_override_cred(upstream: &str) -> CustomCredentialDef {
             CustomCredentialDef {
                 upstream: upstream.to_string(),
                 credential_key: None,
                 auth: None,
-                inject_mode: Some(InjectMode::default()),
-                inject_header: Some(default_inject_header()),
+                inject_mode: None,
+                inject_header: None,
                 credential_format: None,
                 path_pattern: None,
                 path_replacement: None,
@@ -10227,25 +10269,14 @@ mod platform_overrides_tests {
                 tls_ca: None,
                 aws_auth: None,
                 spiffe: None,
-                capture,
+                capture: None,
             }
         }
 
-        let base_def = cred(
-            "https://token.example.com",
-            Some(CaptureConfig {
-                response_fields: vec![CaptureResponseField {
-                    path: "access_token".to_string(),
-                    kind: CaptureResponseFieldKind::Jwt,
-                }],
-                request_nonce_fields: vec![],
-                max_response_bytes: None,
-            }),
-        );
-
+        let base_def = pipeline_base_cred("https://token.example.com");
         // The override redefines the SAME credential name, changing only
-        // `upstream`, and says nothing at all about `capture`.
-        let override_def = cred("https://token.windows.example.com", None);
+        // `upstream`, and says nothing at all about any other field.
+        let override_def = pipeline_override_cred("https://token.windows.example.com");
 
         let mut base_creds = std::collections::HashMap::new();
         base_creds.insert("tokensvc".to_string(), base_def);
@@ -10266,9 +10297,12 @@ mod platform_overrides_tests {
             },
             ..Profile::default()
         };
-        profile.meta.name = "po-new02-capture-preserved".to_string();
+        profile.meta.name = "po-new02-inherits-via-pipeline".to_string();
         profile.platform_overrides = Some(override_for_current_platform(patch));
 
+        // Routed through the real validation-gated pipeline — proves the
+        // inheritance fix does not merely satisfy the merge function in
+        // isolation, but survives `validate_custom_credential`'s rules too.
         let finalized = finalize_profile(profile).expect("finalize must succeed");
         let resolved = finalized
             .network
@@ -10276,6 +10310,64 @@ mod platform_overrides_tests {
             .get("tokensvc")
             .expect("the credential must survive the override merge");
 
+        assert_eq!(
+            resolved.upstream, "https://token.windows.example.com",
+            "the override's own explicitly-stated change must still apply — this fix must not \
+             turn the override into a no-op"
+        );
+        assert_eq!(
+            resolved.credential_key.as_deref(),
+            Some("test_credential_key_base"),
+            "an override that omits credential_key must inherit the base's value"
+        );
+        assert_eq!(
+            resolved.inject_mode,
+            Some(InjectMode::Header),
+            "D-01: an override that omits inject_mode must inherit the base's value, not reset \
+             to a hardcoded default"
+        );
+        assert_eq!(
+            resolved.inject_header.as_deref(),
+            Some("X-Base-Auth"),
+            "D-01 (closes NEW-05): an override that omits inject_header must inherit the base's \
+             value, not silently reset a non-Authorization header back to \"Authorization\""
+        );
+        assert_eq!(
+            resolved.credential_format.as_deref(),
+            Some("Bearer {}"),
+            "credential_format must inherit"
+        );
+        assert_eq!(
+            resolved.path_pattern.as_deref(),
+            Some("/base/{}/path"),
+            "path_pattern must inherit"
+        );
+        assert_eq!(
+            resolved.path_replacement.as_deref(),
+            Some("/base/{}/replacement"),
+            "path_replacement must inherit"
+        );
+        assert_eq!(
+            resolved.query_param_name.as_deref(),
+            Some("base_api_key"),
+            "query_param_name must inherit"
+        );
+        assert_eq!(
+            resolved.env_var.as_deref(),
+            Some("BASE_ENV_VAR"),
+            "env_var must inherit"
+        );
+        assert_eq!(
+            resolved.tls_ca.as_deref(),
+            Some("/base/ca.pem"),
+            "tls_ca must inherit"
+        );
+        assert_eq!(
+            resolved.endpoint_rules.len(),
+            1,
+            "endpoint_rules must inherit the base's non-empty rules, not silently clear (the \
+             Vec-is-empty inheritance arm, distinct from the .or(base) Option arms)"
+        );
         assert!(
             resolved.capture.is_some(),
             "NEW-02: a platform_overrides block that redefines a credential without mentioning \
@@ -10291,10 +10383,163 @@ mod platform_overrides_tests {
             1,
             "the inherited capture config must be the base's real one, not an empty placeholder"
         );
+    }
+
+    /// D-03 (Phase 115, closing ACC-04): the exhaustive merge-arm assertion
+    /// over every `CustomCredentialDef` field. ACC-04 flagged that the prior
+    /// version of this test asserted `capture` but never `spiffe` — one of
+    /// the 12 (now 14, post D-01) `.or(base)` arms in
+    /// `merge_custom_credential_def` went unverified.
+    ///
+    /// This test deliberately bypasses `validate_custom_credential` (and
+    /// therefore `override_for_current_platform`/`finalize_profile`) by
+    /// calling `merge_custom_credential_def` directly. That is what makes it
+    /// exhaustive: `credential_key`, `auth`, `aws_auth`, and `spiffe` are
+    /// mutually exclusive only at the *validation* layer — the merge
+    /// function itself performs the same `.or(base)` merge regardless of
+    /// which auth fields are simultaneously populated. Calling the merge
+    /// function directly lets `base_def` set all four at once, so this test
+    /// is immune to `validate_custom_credential` ever growing a new
+    /// mutual-exclusion rule (as Plan 115-03's D-13/D-14 are about to do) —
+    /// a future rule change can never silently narrow what this test
+    /// exercises. The companion test above,
+    /// `platform_overrides_custom_credential_collision_inherits_via_pipeline`,
+    /// proves the same inheritance behavior through the real pipeline for a
+    /// profile shape that could actually ship.
+    #[test]
+    fn platform_overrides_custom_credential_merge_exhaustive_over_every_field() {
+        use nono_proxy::config::{
+            AwsAuthConfig, CaptureConfig, CaptureResponseField, CaptureResponseFieldKind,
+            ClientAssertionConfig, EndpointRule, OAuth2Config, SpiffeAuthConfig,
+        };
+
+        let base_def = CustomCredentialDef {
+            upstream: "https://token.example.com".to_string(),
+            credential_key: Some("exhaustive-credential-key-base".to_string()),
+            auth: Some(OAuth2Config {
+                token_url: "https://auth.example.com/token".to_string(),
+                client_id: String::new(),
+                client_secret: String::new(),
+                scope: String::new(),
+                client_assertion: Some(ClientAssertionConfig::SpiffeJwt {
+                    workload_api_socket: "/tmp/base.sock".to_string(),
+                    audience: vec!["base-aud".to_string()],
+                    svid_hint: None,
+                }),
+                extra_params: std::collections::HashMap::new(),
+            }),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("X-Base-Exhaustive".to_string()),
+            credential_format: Some("Bearer {}".to_string()),
+            path_pattern: Some("/base-exhaustive/{}/path".to_string()),
+            path_replacement: Some("/base-exhaustive/{}/replacement".to_string()),
+            query_param_name: Some("base_exhaustive_api_key".to_string()),
+            env_var: Some("BASE_EXHAUSTIVE_ENV_VAR".to_string()),
+            endpoint_rules: vec![EndpointRule {
+                method: "POST".to_string(),
+                path: "/base-exhaustive/allowed".to_string(),
+            }],
+            tls_ca: Some("/base-exhaustive/ca.pem".to_string()),
+            aws_auth: Some(AwsAuthConfig {
+                profile: Some("base-aws-profile".to_string()),
+                region: Some("us-east-1".to_string()),
+                service: Some("execute-api".to_string()),
+            }),
+            spiffe: Some(SpiffeAuthConfig::Jwt {
+                workload_api_socket: "/tmp/base-spiffe.sock".to_string(),
+                audience: vec!["base-spiffe-aud".to_string()],
+                inject_header: "X-Spiffe".to_string(),
+                credential_format: None,
+                svid_hint: None,
+            }),
+            capture: Some(CaptureConfig {
+                response_fields: vec![CaptureResponseField {
+                    path: "access_token".to_string(),
+                    kind: CaptureResponseFieldKind::Jwt,
+                }],
+                request_nonce_fields: vec!["code_verifier".to_string()],
+                max_response_bytes: Some(65536),
+            }),
+        };
+
+        // The override redefines only `upstream` — everything else is
+        // `None`/empty, mirroring what a `platform_overrides.<os>` block
+        // that only wants a different upstream URL would actually write.
+        let override_def = CustomCredentialDef {
+            upstream: "https://token.windows.example.com".to_string(),
+            credential_key: None,
+            auth: None,
+            inject_mode: None,
+            inject_header: None,
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: Vec::new(),
+            tls_ca: None,
+            aws_auth: None,
+            spiffe: None,
+            capture: None,
+        };
+
+        let merged = merge_custom_credential_def(base_def.clone(), override_def);
+
         assert_eq!(
-            resolved.upstream, "https://token.windows.example.com",
-            "the override's own explicitly-stated change must still apply — this fix must not \
-             turn the override into a no-op"
+            merged.upstream, "https://token.windows.example.com",
+            "upstream is deliberately required-on-the-child (D-02) — it must take the \
+             override's value, never inherit"
+        );
+        assert_eq!(
+            merged.credential_key, base_def.credential_key,
+            "credential_key must inherit"
+        );
+        assert_eq!(merged.auth, base_def.auth, "auth must inherit");
+        assert_eq!(
+            merged.inject_mode, base_def.inject_mode,
+            "D-01: inject_mode must inherit, not reset to a hardcoded default"
+        );
+        assert_eq!(
+            merged.inject_header, base_def.inject_header,
+            "D-01 (closes NEW-05): inject_header must inherit, not silently reset a \
+             non-Authorization header back to \"Authorization\""
+        );
+        assert_eq!(
+            merged.credential_format, base_def.credential_format,
+            "credential_format must inherit"
+        );
+        assert_eq!(
+            merged.path_pattern, base_def.path_pattern,
+            "path_pattern must inherit"
+        );
+        assert_eq!(
+            merged.path_replacement, base_def.path_replacement,
+            "path_replacement must inherit"
+        );
+        assert_eq!(
+            merged.query_param_name, base_def.query_param_name,
+            "query_param_name must inherit"
+        );
+        assert_eq!(merged.env_var, base_def.env_var, "env_var must inherit");
+        assert_eq!(
+            merged.endpoint_rules, base_def.endpoint_rules,
+            "endpoint_rules must inherit the base's non-empty rules (the Vec-is-empty \
+             inheritance arm)"
+        );
+        assert_eq!(merged.tls_ca, base_def.tls_ca, "tls_ca must inherit");
+        assert_eq!(
+            merged.aws_auth, base_def.aws_auth,
+            "aws_auth must inherit — populated simultaneously with credential_key/auth/spiffe \
+             here, which only `validate_custom_credential` would reject, not this merge fn"
+        );
+        assert_eq!(
+            merged.spiffe, base_def.spiffe,
+            "ACC-04: spiffe must inherit — this is the assertion the prior version of this test \
+             omitted, closing the milestone-audit finding"
+        );
+        assert_eq!(
+            merged.capture, base_def.capture,
+            "capture must inherit (NEW-02's original regression)"
         );
     }
 
