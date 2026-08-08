@@ -3542,6 +3542,52 @@ fn merge_platform_override_slot(
     }
 }
 
+/// Merge two `CustomCredentialDef`s that share a name, fail-secure.
+///
+/// D-08a invariant (v3.6 milestone audit finding NEW-02): an override "may
+/// tighten (add) but never silently loosen (disable/remove)". Every optional
+/// field therefore falls back to the base when the child omits it, so a
+/// `platform_overrides.<os>` block that redefines a credential cannot silently
+/// strip `capture` (OAuth-token confinement), `spiffe` (workload-identity
+/// auth), `aws_auth`, or `endpoint_rules` off that route for one OS.
+///
+/// An override can still change any field — it just has to say so explicitly.
+/// Silence now means "inherit", never "remove".
+///
+/// `upstream` is required (always present on the child) and `inject_mode` /
+/// `inject_header` are `serde(default)`-populated presentation fields that
+/// remove no security control, so those three take the child's value.
+fn merge_custom_credential_def(
+    base: CustomCredentialDef,
+    child: CustomCredentialDef,
+) -> CustomCredentialDef {
+    CustomCredentialDef {
+        upstream: child.upstream,
+        inject_mode: child.inject_mode,
+        inject_header: child.inject_header,
+        credential_key: child.credential_key.or(base.credential_key),
+        auth: child.auth.or(base.auth),
+        credential_format: child.credential_format.or(base.credential_format),
+        path_pattern: child.path_pattern.or(base.path_pattern),
+        path_replacement: child.path_replacement.or(base.path_replacement),
+        query_param_name: child.query_param_name.or(base.query_param_name),
+        env_var: child.env_var.or(base.env_var),
+        tls_ca: child.tls_ca.or(base.tls_ca),
+        aws_auth: child.aws_auth.or(base.aws_auth),
+        spiffe: child.spiffe.or(base.spiffe),
+        capture: child.capture.or(base.capture),
+        // `endpoint_rules` is a Vec, so "omitted" is the empty vec. An
+        // override that states rules is deliberately configuring them; one
+        // that states none inherits, rather than silently clearing the
+        // base's endpoint restrictions.
+        endpoint_rules: if child.endpoint_rules.is_empty() {
+            base.endpoint_rules
+        } else {
+            child.endpoint_rules
+        },
+    }
+}
+
 fn merge_profiles(base: Profile, child: Profile) -> Profile {
     Profile {
         extends: None,
@@ -3681,8 +3727,41 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
                 None => base.network.credentials,
             },
             custom_credentials: {
+                // D-08a fail-secure merge (v3.6 milestone audit, NEW-02).
+                //
+                // This used to be a bare `merged.extend(child…)`, which on a
+                // `HashMap` is WHOLE-VALUE REPLACE PER KEY. Because
+                // `apply_platform_overrides` merges the per-OS block in as an
+                // ordinary `merge_profiles` child, a
+                // `platform_overrides.windows` block redefining an existing
+                // credential name WITHOUT `capture` silently removed that
+                // route's OAuth-capture rewrite on Windows only — the real
+                // token then reached the sandboxed agent unrewritten. The same
+                // channel dropped `spiffe` (route falls back to
+                // unauthenticated forwarding) and `endpoint_rules`.
+                //
+                // That directly contradicted this file's own D-08a invariant
+                // (see the comment above `apply_platform_overrides`): an
+                // override "may tighten (add) but never silently loosen
+                // (disable/remove)". It was also the odd one out among its
+                // neighbours here, which are all fail-secure-additive —
+                // `block` is OR, `deny_domain`/`no_proxy` are `dedup_append`.
+                //
+                // Now: a colliding key is merged FIELD-BY-FIELD, and every
+                // optional field falls back to the base when the child omits
+                // it. An override can still change any field by stating it
+                // explicitly; it can no longer remove one by silence.
                 let mut merged = base.network.custom_credentials;
-                merged.extend(child.network.custom_credentials);
+                for (name, child_def) in child.network.custom_credentials {
+                    match merged.remove(&name) {
+                        Some(base_def) => {
+                            merged.insert(name, merge_custom_credential_def(base_def, child_def));
+                        }
+                        None => {
+                            merged.insert(name, child_def);
+                        }
+                    }
+                }
                 merged
             },
             // Child overrides base upstream proxy; if child has None, inherit base
@@ -10067,6 +10146,114 @@ mod platform_overrides_tests {
             vec!["python.exe".to_string(), "node.exe".to_string()],
             "D-08a: windows_interpreters must be the union (dedup-append) of the \
              top-level list and the platform_overrides.<os> list, never a replace"
+        );
+    }
+
+    /// v3.6 milestone audit finding NEW-02 regression.
+    ///
+    /// `custom_credentials` is a `HashMap`, so the old bare
+    /// `merged.extend(child…)` was WHOLE-VALUE REPLACE PER KEY. A
+    /// `platform_overrides.<os>` block redefining an existing credential name
+    /// — a wholly ordinary thing to do, e.g. to point one OS at a different
+    /// `upstream` — therefore silently STRIPPED that route's `capture`,
+    /// leaving the OAuth-token rewrite off on that OS only. The real token
+    /// then reached the sandboxed agent unrewritten: the exact outcome Phase
+    /// 114's goal names as forbidden, reachable without any exotic config.
+    ///
+    /// It also contradicted this file's own D-08a invariant — an override
+    /// "may tighten (add) but never silently loosen (disable/remove)".
+    ///
+    /// This test pins the fail-secure merge for the two security-relevant
+    /// fields most likely to be lost this way (`capture`, `spiffe`) while
+    /// confirming the override's own stated change (`upstream`) still applies.
+    #[test]
+    fn platform_overrides_custom_credential_collision_cannot_drop_capture_or_spiffe() {
+        use nono_proxy::config::{CaptureConfig, CaptureResponseField, CaptureResponseFieldKind};
+
+        fn cred(upstream: &str, capture: Option<CaptureConfig>) -> CustomCredentialDef {
+            CustomCredentialDef {
+                upstream: upstream.to_string(),
+                credential_key: None,
+                auth: None,
+                inject_mode: InjectMode::default(),
+                inject_header: default_inject_header(),
+                credential_format: None,
+                path_pattern: None,
+                path_replacement: None,
+                query_param_name: None,
+                env_var: None,
+                endpoint_rules: Vec::new(),
+                tls_ca: None,
+                aws_auth: None,
+                spiffe: None,
+                capture,
+            }
+        }
+
+        let base_def = cred(
+            "https://token.example.com",
+            Some(CaptureConfig {
+                response_fields: vec![CaptureResponseField {
+                    path: "access_token".to_string(),
+                    kind: CaptureResponseFieldKind::Jwt,
+                }],
+                request_nonce_fields: vec![],
+                max_response_bytes: None,
+            }),
+        );
+
+        // The override redefines the SAME credential name, changing only
+        // `upstream`, and says nothing at all about `capture`.
+        let override_def = cred("https://token.windows.example.com", None);
+
+        let mut base_creds = std::collections::HashMap::new();
+        base_creds.insert("tokensvc".to_string(), base_def);
+        let mut override_creds = std::collections::HashMap::new();
+        override_creds.insert("tokensvc".to_string(), override_def);
+
+        let patch = Profile {
+            network: NetworkConfig {
+                custom_credentials: override_creds,
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        let mut profile = Profile {
+            network: NetworkConfig {
+                custom_credentials: base_creds,
+                ..NetworkConfig::default()
+            },
+            ..Profile::default()
+        };
+        profile.meta.name = "po-new02-capture-preserved".to_string();
+        profile.platform_overrides = Some(override_for_current_platform(patch));
+
+        let finalized = finalize_profile(profile).expect("finalize must succeed");
+        let resolved = finalized
+            .network
+            .custom_credentials
+            .get("tokensvc")
+            .expect("the credential must survive the override merge");
+
+        assert!(
+            resolved.capture.is_some(),
+            "NEW-02: a platform_overrides block that redefines a credential without mentioning \
+             `capture` must NOT strip it — silently dropping the OAuth-capture rewrite on one OS \
+             lets the real token reach the sandboxed agent (D-08a: tighten, never loosen)"
+        );
+        assert_eq!(
+            resolved
+                .capture
+                .as_ref()
+                .map(|c| c.response_fields.len())
+                .unwrap_or(0),
+            1,
+            "the inherited capture config must be the base's real one, not an empty placeholder"
+        );
+        assert_eq!(
+            resolved.upstream, "https://token.windows.example.com",
+            "the override's own explicitly-stated change must still apply — this fix must not \
+             turn the override into a no-op"
         );
     }
 
