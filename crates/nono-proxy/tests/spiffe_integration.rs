@@ -95,6 +95,88 @@ async fn test_spiffe_jwt_fails_closed_on_missing_socket() {
     );
 }
 
+// D-17/DRAIN-06 regression: the SPIFFE route dispatch's filter host-check
+// must run BEFORE `managed_auth.acquire()` (the live SPIRE Workload API
+// fetch), so a `deny_domain`-blocked upstream is denied without ever
+// triggering a mint attempt.
+//
+// Test-mechanism decision (115-CONTEXT.md D-17 / 115-VALIDATION.md "Open
+// Design Decision — DRAIN-06 test mechanism", locked option (c) —
+// structural): this asserts the property by control-flow position in the
+// shipped source, not by driving a live request through `server::start`.
+// Both alternatives were rejected explicitly by that decision:
+//   - a test double / spy on `SpiffeJwtSource::connect` (option a) needs a
+//     new production test-seam on security-relevant code;
+//   - an end-to-end integration test pointing `workload_api_socket` at a
+//     path (option b) cannot actually observe REQUEST-time ordering here:
+//     `RouteStore::load()` (`route.rs`) performs its OWN live connect to
+//     `workload_api_socket` at proxy STARTUP, before the filter is even
+//     built (`server.rs::start`, route load precedes `with_denied_hosts`)
+//     — an unreachable socket fails the WHOLE proxy at startup
+//     (see `test_spiffe_jwt_fails_closed_on_missing_socket` above), so a
+//     `server::start`-based test can never reach `handle_spiffe_route`'s
+//     request dispatch at all without a socket that a live SPIRE agent
+//     already answers. That is exactly the "needs no SPIRE agent" bar
+//     option (c) was chosen to clear.
+//
+// This test is load-bearing: reverting Task 1's reorder in `reverse.rs`
+// (moving `managed_auth.acquire().await` back above the host-check block)
+// was verified locally to flip the discovered ordering and fail this
+// assertion — see 115-04-SUMMARY.md for the transcript evidence.
+#[test]
+fn d17_spiffe_host_check_precedes_managed_auth_acquire_structurally() {
+    let src = include_str!("../src/reverse.rs");
+
+    let fn_marker = "async fn handle_spiffe_route(";
+    let fn_start = src.find(fn_marker).unwrap_or_else(|| {
+        panic!(
+            "'{}' not found in reverse.rs — re-grep, the function may have been renamed or moved",
+            fn_marker
+        )
+    });
+
+    // Top-level items in this rustfmt'd file have their closing brace alone
+    // on an unindented line ("\n}\n") — nested block closes are always
+    // indented ("    }\n"), so this marker reliably bounds the function body
+    // without needing a full brace-depth parser.
+    let body_search_start = fn_start + fn_marker.len();
+    let close_offset = src[body_search_start..]
+        .find("\n}\n")
+        .unwrap_or_else(|| panic!("could not find handle_spiffe_route's closing brace — function body scan is unreliable, re-check the source shape"));
+    let fn_body = &src[fn_start..body_search_start + close_offset];
+
+    let check_host_pos = fn_body.find("ctx.filter.check_host(").unwrap_or_else(|| {
+        panic!("'ctx.filter.check_host(' not found inside handle_spiffe_route's body — the host-check may have been removed or renamed")
+    });
+    let host_denied_pos = fn_body
+        .find("NetworkAuditDenialCategory::HostDenied")
+        .unwrap_or_else(|| {
+            panic!(
+                "'NetworkAuditDenialCategory::HostDenied' not found inside handle_spiffe_route's body — the deny-emission branch may have been removed or renamed"
+            )
+        });
+    let acquire_pos = fn_body.find("managed_auth.acquire(").unwrap_or_else(|| {
+        panic!("'managed_auth.acquire(' not found inside handle_spiffe_route's body — the credential-mint call may have been removed or renamed")
+    });
+
+    assert!(
+        check_host_pos < acquire_pos,
+        "D-17/DRAIN-06 regression: ctx.filter.check_host(...) (byte {}) must textually precede \
+         managed_auth.acquire() (byte {}) in handle_spiffe_route — a deny_domain-blocked SPIFFE \
+         route must never trigger a live SPIRE Workload API fetch before being denied",
+        check_host_pos,
+        acquire_pos
+    );
+    assert!(
+        host_denied_pos < acquire_pos,
+        "D-17/DRAIN-06 regression: the HostDenied deny-emission branch (byte {}) must textually \
+         precede managed_auth.acquire() (byte {}) in handle_spiffe_route — the whole deny path, \
+         not just the check call, must resolve before any mint is attempted",
+        host_denied_pos,
+        acquire_pos
+    );
+}
+
 // ─── Live tests (require SPIRE_AGENT_SOCKET) ────────────────────────────────
 
 #[tokio::test]

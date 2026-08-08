@@ -634,15 +634,15 @@ async fn handle_spiffe_route(
     let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
 
     // DNS resolve + host check via the filter — identical to the static_cred
-    // path, and — D-17/DRAIN-06 — deliberately ordered BEFORE
-    // `managed_auth.acquire()` below. The host-check's inputs (`upstream_url`
-    // from `route.upstream` + `upstream_path`, then `parse_upstream_url`) do
-    // not depend on the acquired credential material, so a deny_domain-
-    // blocked upstream is now rejected before any live SPIRE Workload API
-    // fetch is attempted — matching the check-first structure every other
-    // `HostDenied` site in this file already uses (re-grep `check_host` /
-    // `HostDenied` for the current sibling locations; do not trust line
-    // numbers).
+    // path, and — D-17/DRAIN-06 — deliberately ordered BEFORE the credential
+    // mint below (managed_auth's own acquire call). The host-check's inputs
+    // (`upstream_url` from `route.upstream` + `upstream_path`, then
+    // `parse_upstream_url`) do not depend on the acquired credential
+    // material, so a deny_domain-blocked upstream is now rejected before any
+    // live SPIRE Workload API fetch is attempted — matching the check-first
+    // structure every other `HostDenied` site in this file already uses
+    // (re-grep `check_host` / `HostDenied` for the current sibling
+    // locations; do not trust line numbers).
     let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
     if !check.result.is_allowed() {
         let reason = check.result.reason();
