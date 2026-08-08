@@ -2037,6 +2037,26 @@ pub struct HookConfig {
     pub script: String,
 }
 
+// D-04 (Phase 115): `merge_profiles`'s `hooks.hooks` merge (`HashMap::extend`,
+// whole-value replace per key) is safe today only because `HookConfig` has no
+// optional or defaulted field a future addition could silently drop. That
+// invariant was previously informal — the audit that produced NEW-02 named
+// this exact spot as "the place a future field addition would re-open NEW-02".
+//
+// IMPORTANT: exhaustive destructure — no `..` rest pattern — so the compiler
+// forces handling of every current and future `HookConfig` field. Adding a
+// field to `HookConfig` without updating this guard fails to compile.
+//
+// Counterexample (do not apply — this is the specific edit the guard exists
+// to catch): adding `pub timeout: Option<u64>` to `HookConfig` above must
+// break this destructuring (E0027, missing field `timeout`) — live-verified
+// 2026-08-08, see 115-01-SUMMARY.md for the transcript.
+const _: fn(HookConfig) = |HookConfig {
+                               event: _,
+                               matcher: _,
+                               script: _,
+                           }| {};
+
 /// Hooks configuration in a profile
 ///
 /// Maps target application names to their hook configurations.
@@ -3857,6 +3877,14 @@ fn merge_profiles(base: Profile, child: Profile) -> Profile {
         } else {
             base.workdir
         },
+        // D-04 (Phase 115): whole-value replace per key is CORRECT for hooks
+        // (a `platform_overrides.<os>` block that redefines a named hook
+        // fully replaces it — there is no partial-hook concept). This stays
+        // safe only because `HookConfig` (below `merge_profiles`, see the
+        // module-level compile-time guard on it) has no optional or
+        // defaulted field a future addition could silently drop from this
+        // `.extend()`. Do not field-merge this — see the guard's own comment
+        // for why.
         hooks: HooksConfig {
             hooks: {
                 let mut merged = base.hooks.hooks;
