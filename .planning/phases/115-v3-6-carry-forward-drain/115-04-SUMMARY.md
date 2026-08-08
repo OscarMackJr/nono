@@ -129,4 +129,17 @@ None - no external service configuration required.
 *Phase: 115-v3-6-carry-forward-drain*
 *Completed: 2026-08-08*
 
-## Self-Check: PENDING
+## Self-Check: PASSED
+
+Both modified files (`crates/nono-proxy/src/reverse.rs`,
+`crates/nono-proxy/tests/spiffe_integration.rs`) confirmed present on disk;
+all 3 commit hashes (`81e3288b`, `2c2ef71d`, `50a7935f`) confirmed present
+in `git log --oneline --all`. Full-plan verification gate re-run clean:
+`cargo build --workspace --all-targets` (0 warnings/errors), `cargo test -p
+nono-sandbox-proxy --lib` (301 passed), `cargo test -p nono-sandbox-proxy
+--test spiffe_integration` (6 passed, including the new structural
+regression test), `cargo fmt --all -- --check` (clean, no diff), `cargo
+clippy -p nono-sandbox-proxy --all-targets -- -D warnings -D
+clippy::unwrap_used` (clean). Confirmed `.planning/STATE.md`,
+`.planning/ROADMAP.md`, and `../nono-py` all unmodified (`git status
+--short` clean in both repos for those paths).
