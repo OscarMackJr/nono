@@ -622,6 +622,47 @@ async fn handle_spiffe_route(
         return Ok(());
     };
 
+    // No path transformation for SPIFFE bearer-token injection (unlike the
+    // url_path/query_param static-credential modes) — the token is always
+    // header-injected.
+    let upstream_url = format!("{}{}", route.upstream.trim_end_matches('/'), upstream_path);
+    debug!(
+        "Forwarding to upstream (SPIFFE): {} {}",
+        method, upstream_url
+    );
+
+    let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
+
+    // DNS resolve + host check via the filter — identical to the static_cred
+    // path, and — D-17/DRAIN-06 — deliberately ordered BEFORE
+    // `managed_auth.acquire()` below. The host-check's inputs (`upstream_url`
+    // from `route.upstream` + `upstream_path`, then `parse_upstream_url`) do
+    // not depend on the acquired credential material, so a deny_domain-
+    // blocked upstream is now rejected before any live SPIRE Workload API
+    // fetch is attempted — matching the check-first structure every other
+    // `HostDenied` site in this file already uses (re-grep `check_host` /
+    // `HostDenied` for the current sibling locations; do not trust line
+    // numbers).
+    let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
+    if !check.result.is_allowed() {
+        let reason = check.result.reason();
+        warn!("Upstream host denied by filter: {}", reason);
+        send_error(stream, 403, "Forbidden").await?;
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
+            &audit::EventContext {
+                route_id: Some(service),
+                ..Default::default()
+            },
+            service,
+            0,
+            &reason,
+        );
+        return Ok(());
+    }
+
     let material = match managed_auth.acquire().await {
         Ok(m) => m,
         Err(e) => {
@@ -656,38 +697,6 @@ async fn handle_spiffe_route(
         credential_format,
         ..
     } = &material;
-
-    // No path transformation for SPIFFE bearer-token injection (unlike the
-    // url_path/query_param static-credential modes) — the token is always
-    // header-injected.
-    let upstream_url = format!("{}{}", route.upstream.trim_end_matches('/'), upstream_path);
-    debug!(
-        "Forwarding to upstream (SPIFFE): {} {}",
-        method, upstream_url
-    );
-
-    let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
-
-    // DNS resolve + host check via the filter — identical to the static_cred path.
-    let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
-    if !check.result.is_allowed() {
-        let reason = check.result.reason();
-        warn!("Upstream host denied by filter: {}", reason);
-        send_error(stream, 403, "Forbidden").await?;
-        audit::log_denied(
-            ctx.audit_log,
-            audit::ProxyMode::Reverse,
-            nono::undo::NetworkAuditDenialCategory::HostDenied,
-            &audit::EventContext {
-                route_id: Some(service),
-                ..Default::default()
-            },
-            service,
-            0,
-            &reason,
-        );
-        return Ok(());
-    }
 
     // Strip the client's own copy of the injection header (if any) — the
     // real bearer token is injected fresh below and must never be shadowed
