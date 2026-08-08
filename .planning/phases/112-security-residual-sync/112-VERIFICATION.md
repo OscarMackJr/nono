@@ -79,7 +79,7 @@ human_verification:
 | SEC-03 | 112-02 | NVIDIA procfs mediation hardening | ✓ SATISFIED (adapted) | Live code (`apply_seccomp`, `/proc/self/task` Read-only) + tests |
 | SEC-04 | 112-03 | Trust-policy `predicate` discriminator | ✓ SATISFIED (adopt) | Live code + 67 passing trust tests (this session) |
 | SEC-05 | 112-05 | Landlock execute-restriction `Refer` grant | ✓ SATISFIED (adopt) | `112-05-SUMMARY.md`, symbol-level re-verified |
-| SEC-06 | 112-06 | Seccomp supervisor-ancestry orphan reaping | ✓ SATISFIED (adapted), coverage gap noted | Live code (`reap_reparented_orphans`, `PR_SET_CHILD_SUBREAPER`); behavioral test not yet exercised (python3 absent locally) — see human verification |
+| SEC-06 | 112-06 | Seccomp supervisor-ancestry orphan reaping | ✓ SATISFIED (adapted), coverage gap noted | Live code (`reap_reparented_orphans`, `PR_SET_CHILD_SUBREAPER`); behavioral test not yet exercised (no `python3` in the `cross` container where these `#[cfg(target_os = "linux")]` tests actually run — **not** a dev-host gap: the Windows host has `python` 3.12.10 on PATH) — see human verification |
 | SEC-07 | 112-07 | Standalone `nono proxy` command | ✓ SATISFIED (adapted) | Live code + 218/218 proxy tests + 5/5 proxy_command tests (this session) |
 | SEC-08 | 112-03 | `allow_vars` empty-list fix | ✓ SATISFIED (won't-sync/PRESERVE) | ADR-112, zero source diff confirmed |
 | SEC-09 | 112-08 | Credential-broker guard relaxation | ✓ SATISFIED (won't-sync + carry-forward) | Live grep confirms absent target; carry-forward note filed in ledger |
