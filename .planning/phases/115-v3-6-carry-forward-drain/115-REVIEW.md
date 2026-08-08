@@ -27,6 +27,8 @@ findings:
   info: 8
   total: 15
 status: issues_found
+remediated: [CR-01, WR-03]
+remediation_doc: 115-REVIEW-FIXES.md
 ---
 
 # Phase 115: Code Review Report
@@ -684,6 +686,44 @@ mechanism that cannot work."
 
 ---
 
+---
+
+## Resolution
+
+**CR-01 — RESOLVED** (`nono` `a53fda18`, `../nono-py` `d5ed3ab`)
+**WR-03 — RESOLVED** (same commits)
+
+Fixed via this report's own "stronger, durable fix" rather than the primary
+per-binding suggestion, on operator decision: validation moved into
+`nono-proxy` itself as `RouteConfig::validate()`, invoked from
+`RouteStore::load`, so every embedder — Python, TypeScript, or Rust — inherits
+it and `nono-cli`'s copy becomes defense-in-depth rather than the only gate.
+The `nono-cli` validators are retained unchanged.
+
+Also covered, as the same CR-01 primitive reachable through a sibling field:
+`RouteConfig`'s own `inject_header` / `credential_format`, which feed the
+identical raw `format!("{}: {}\r\n", ..)` wire write for static-credential
+routes via `credential.rs:281`.
+
+`_nono_py.pyi` documents the rules and that they surface as `RuntimeError` from
+`start_proxy` (not `ValueError` from `__init__` — constructor signatures were
+deliberately left unchanged, to avoid re-creating the second-copy-of-the-rules
+problem the fix exists to eliminate). The stub's parameter lists were NOT
+touched; the `tls_client_cert` / `tls_client_key` drift is WR-04, still open.
+
+Verified load-bearing: removing the single `route.validate()?` line fails
+exactly the 5 new gate tests and nothing else, and the review's own hostile
+literals (`"X-Svc\r\nX-Admin: true"`, `max_response_bytes=2**32`) were driven
+end-to-end through a freshly built wheel and real `nono_py.start_proxy`.
+
+Full detail, transcripts, and the one changed test fixture: `115-REVIEW-FIXES.md`.
+
+**All other findings — WR-01, WR-02, WR-04, WR-05, WR-06, and IN-01 … IN-08 —
+remain OPEN**, deferred by operator decision. Their status above is unmodified.
+
+---
+
 _Reviewed: 2026-08-08T22:30:46Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: deep_
+_Remediation: 2026-08-08 (CR-01, WR-03 only)_
