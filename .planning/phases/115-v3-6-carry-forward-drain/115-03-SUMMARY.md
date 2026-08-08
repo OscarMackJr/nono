@@ -111,3 +111,10 @@ None - no external service configuration required.
 ---
 *Phase: 115-v3-6-carry-forward-drain*
 *Completed: 2026-08-08*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/115-v3-6-carry-forward-drain/115-03-SUMMARY.md`
+- FOUND: `84d04bb1` (Task 1 commit)
+- FOUND: `4b40d82a` (Task 2 commit)
+- FOUND: `f73951a9` (this summary's own commit, verified after the fact)
