@@ -701,6 +701,7 @@ pub enum CaptureResponseFieldKind {
 /// response is buffered. `path` is a dot-separated JSON path into the
 /// response body (e.g. `"access_token"` or `"data.token"`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureResponseField {
     /// Dot-separated JSON path into the response body identifying the field
     /// carrying the real token that must be rewritten to a phantom.
@@ -716,6 +717,7 @@ pub struct CaptureResponseField {
 /// and rewrites `response_fields` from real tokens to sandbox-visible
 /// phantoms before the response reaches the sandboxed client.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureConfig {
     /// Which response JSON fields carry the real token and must be
     /// rewritten to phantoms before the response is released.
@@ -1262,6 +1264,63 @@ pub struct AwsAuthConfig {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// Phase 114 UAT Test 5 regression. An unknown key inside a `capture`
+    /// block must be REJECTED, not silently swallowed.
+    ///
+    /// `nono profile validate` never calls `validate_against_schema()` — its
+    /// only call sites are inside `profile/mod.rs`'s own `#[cfg(test)]`
+    /// module — so the shipped JSON Schema's `additionalProperties: false` on
+    /// `$defs.CaptureConfig` is documentation, not enforcement. In production
+    /// the real mechanism is serde's `deny_unknown_fields`, which every
+    /// sibling type in the custom-credential tree carries and which
+    /// `CaptureConfig`/`CaptureResponseField` originally omitted — making them
+    /// the only types there that accepted unknown keys.
+    ///
+    /// Why this matters beyond tidiness: the key an operator is most likely to
+    /// invent is one that sounds security-relevant. `persist_to_disk: true`
+    /// asserts the exact opposite of D-08 (real tokens are in-memory,
+    /// session-scoped, never persisted), and returning `Result: valid` for it
+    /// lets an operator hold a false belief about what their config does —
+    /// the same "advertises capability it does not have" shape D-13 exists to
+    /// prevent.
+    #[test]
+    fn capture_config_rejects_unknown_keys() {
+        let unknown_on_capture = r#"{
+            "response_fields": [{ "path": "access_token", "kind": "jwt" }],
+            "persist_to_disk": true
+        }"#;
+        let err = serde_json::from_str::<CaptureConfig>(unknown_on_capture)
+            .expect_err("an unknown key inside `capture` must be rejected, not swallowed");
+        assert!(
+            err.to_string().contains("persist_to_disk"),
+            "the error must name the offending key so the operator can find it, got: {err}"
+        );
+
+        let unknown_on_field = r#"{ "path": "access_token", "rewrite_mode": "opaque" }"#;
+        let err = serde_json::from_str::<CaptureResponseField>(unknown_on_field)
+            .expect_err("an unknown key on a capture response field must be rejected");
+        assert!(
+            err.to_string().contains("rewrite_mode"),
+            "the error must name the offending key, got: {err}"
+        );
+
+        // Negative control: the real shape still round-trips, so the guard
+        // rejects unknowns without over-rejecting valid config.
+        let valid = r#"{
+            "response_fields": [{ "path": "data.access_token", "kind": "opaque" }],
+            "request_nonce_fields": ["code_verifier"],
+            "max_response_bytes": 262144
+        }"#;
+        let parsed: CaptureConfig =
+            serde_json::from_str(valid).expect("a valid capture config must still parse");
+        assert_eq!(parsed.response_fields.len(), 1);
+        assert_eq!(
+            parsed.request_nonce_fields,
+            vec!["code_verifier".to_string()]
+        );
+        assert_eq!(parsed.max_response_bytes, Some(262144));
+    }
 
     #[test]
     fn test_default_config() {
