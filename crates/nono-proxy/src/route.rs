@@ -176,6 +176,28 @@ impl RouteStore {
                 normalized_prefix, route.upstream
             );
 
+            // ENFORCEMENT BOUNDARY (Phase 115 code review CR-01 / WR-03).
+            //
+            // Runs FIRST, before glob compilation, before any TLS CA file is
+            // read, and before the SPIFFE Workload API connect below — a route
+            // whose `inject_header` would smuggle CRLF onto the wire, or whose
+            // `capture.max_response_bytes` would defeat the D-05 1 MiB ceiling,
+            // must never get as far as acquiring a live credential source.
+            //
+            // This is the ONLY validation site every embedder traverses.
+            // `nono-cli` validates the same fields at profile-load time
+            // (`profile::validate_header_name` / `validate_header_mode` /
+            // `credential_provider::validate_capture_config`) and KEEPS doing
+            // so as defense-in-depth with better, credential-named messages —
+            // but a Rust/PyO3/napi embedder builds `RouteConfig` directly and
+            // never touches a profile, so profile validation alone was
+            // structurally unable to be the gate. See `RouteConfig::validate`.
+            //
+            // Fail-closed: `?` aborts the WHOLE load (and therefore the whole
+            // proxy start), never a per-route skip — same contract as the
+            // upstream-URL and SPIFFE-connect failures below.
+            route.validate()?;
+
             let endpoint_rules = CompiledEndpointRules::compile(&route.endpoint_rules)
                 .map_err(|e| ProxyError::Config(format!("route '{}': {}", normalized_prefix, e)))?;
 
@@ -1353,8 +1375,18 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             tls_ca: None,
             oauth2: None,
             aws_auth: None,
+            // Phase 115 code review WR-03: `response_fields` was `vec![]`
+            // here, which `RouteStore::load` now rejects. The empty vec was
+            // never expressing anything this test needed — the test is about
+            // `capture_declared_for_upstream`'s host-only (port-ignoring)
+            // matching, for which only `capture.is_some()` matters — it was
+            // merely the cheapest literal that compiled while nothing checked
+            // it. Replaced with a minimal REAL capture declaration.
             capture: Some(crate::config::CaptureConfig {
-                response_fields: vec![],
+                response_fields: vec![crate::config::CaptureResponseField {
+                    path: "access_token".to_string(),
+                    kind: crate::config::CaptureResponseFieldKind::Opaque,
+                }],
                 request_nonce_fields: vec![],
                 max_response_bytes: None,
             }),
@@ -1411,5 +1443,299 @@ AAAAAAAICAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         assert!(!store.capture_declared_for_upstream("api.openai.com:443"));
         // Unrelated host is also false.
         assert!(!store.capture_declared_for_upstream("github.com:443"));
+    }
+
+    // ====================================================================
+    // Phase 115 code review CR-01 / WR-03 — enforcement-boundary validation
+    //
+    // These drive `RouteStore::load` (NOT `RouteConfig::validate` directly)
+    // on purpose. The defect the review found was not "the rules are wrong",
+    // it was "the rules are not on the path a non-CLI embedder takes". A test
+    // that called `validate()` directly would still pass if someone removed
+    // the `route.validate()?` line from `load()` — i.e. it would re-open the
+    // exact hole. Driving `load()` proves the gate is WIRED, not merely
+    // present, at the one choke point both `nono-cli`'s
+    // `proxy_runtime.rs -> nono_proxy::server::start` and `nono-py`'s
+    // `start_proxy -> nono_proxy::start` traverse.
+    // ====================================================================
+
+    /// Minimal valid route, for mutating into each hostile shape below.
+    fn boundary_test_route() -> RouteConfig {
+        RouteConfig {
+            spiffe: None,
+            prefix: "svc".to_string(),
+            upstream: "https://api.example.com".to_string(),
+            credential_key: None,
+            inject_mode: Default::default(),
+            inject_header: "Authorization".to_string(),
+            credential_format: None,
+            path_pattern: None,
+            path_replacement: None,
+            query_param_name: None,
+            env_var: None,
+            endpoint_rules: vec![],
+            tls_ca: None,
+            oauth2: None,
+            aws_auth: None,
+            capture: None,
+            endpoint_policy: None,
+        }
+    }
+
+    fn spiffe_jwt(
+        inject_header: &str,
+        credential_format: Option<&str>,
+    ) -> crate::config::SpiffeAuthConfig {
+        crate::config::SpiffeAuthConfig::Jwt {
+            workload_api_socket: "/run/spire/sockets/agent.sock".to_string(),
+            audience: vec!["api.example.com".to_string()],
+            inject_header: inject_header.to_string(),
+            credential_format: credential_format.map(str::to_string),
+            svid_hint: None,
+        }
+    }
+
+    /// CR-01 (115-REVIEW.md): a CRLF-bearing `spiffe.inject_header` reaches
+    /// `reverse.rs:769`'s raw `format!("{}: {}\r\n", header, ...)` and
+    /// smuggles an attacker-chosen header onto a request that also carries a
+    /// live JWT-SVID. The hostile value is the review's own literal.
+    #[tokio::test]
+    async fn cr01_load_rejects_crlf_bearing_spiffe_inject_header() {
+        let routes = vec![RouteConfig {
+            spiffe: Some(spiffe_jwt("X-Svc\r\nX-Admin: true", None)),
+            ..boundary_test_route()
+        }];
+
+        let err = RouteStore::load(&routes)
+            .await
+            .expect_err("a CRLF-bearing spiffe.inject_header must fail the whole load closed")
+            .to_string();
+        assert!(
+            err.contains("spiffe.inject_header"),
+            "the error must name the offending field so an operator can find it, got: {err}"
+        );
+        assert!(
+            err.contains("HTTP token"),
+            "the error must state the RFC 7230 rule that was violated, got: {err}"
+        );
+        // Fail-closed ordering proof: rejection happened at validation, NOT
+        // at the SPIRE Workload API connect. The socket path above does not
+        // exist on any test host, so a "failed to connect" message here would
+        // mean validation ran too late (after the live connect) or not at all.
+        assert!(
+            !err.contains("failed to connect"),
+            "validation must run BEFORE the SPIFFE Workload API connect, got: {err}"
+        );
+    }
+
+    /// CR-01, value side: `credential_format="Bearer {}\r\nX-Admin: true"`
+    /// produces the identical header split through the value rather than the
+    /// name. `reverse.rs` interpolates the format string verbatim.
+    #[tokio::test]
+    async fn cr01_load_rejects_crlf_bearing_spiffe_credential_format() {
+        let routes = vec![RouteConfig {
+            spiffe: Some(spiffe_jwt(
+                "Authorization",
+                Some("Bearer {}\r\nX-Admin: true"),
+            )),
+            ..boundary_test_route()
+        }];
+
+        let err = RouteStore::load(&routes)
+            .await
+            .expect_err("a CRLF-bearing spiffe.credential_format must fail the whole load closed")
+            .to_string();
+        assert!(
+            err.contains("spiffe.credential_format"),
+            "the error must name the offending field, got: {err}"
+        );
+        assert!(
+            err.contains("CR or LF"),
+            "the error must state the CRLF rule that was violated, got: {err}"
+        );
+    }
+
+    /// CR-01, route-level twin: `RouteConfig.inject_header` feeds the SAME
+    /// raw wire write via `CredentialStore` -> `reverse.rs` for static
+    /// credential routes. Fixing only the `spiffe` field would leave the
+    /// identical primitive reachable through a sibling field of the same
+    /// struct, so the boundary gate covers both.
+    #[tokio::test]
+    async fn cr01_load_rejects_crlf_bearing_route_inject_header() {
+        let routes = vec![RouteConfig {
+            inject_header: "X-Svc\r\nX-Admin: true".to_string(),
+            ..boundary_test_route()
+        }];
+
+        let err = RouteStore::load(&routes)
+            .await
+            .expect_err("a CRLF-bearing inject_header must fail the whole load closed")
+            .to_string();
+        assert!(
+            err.contains("inject_header") && err.contains("HTTP token"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// WR-03 (115-REVIEW.md): the material bypass — `max_response_bytes`
+    /// above the D-05 1 MiB ceiling. `reverse.rs`'s
+    /// `relay_response_with_capture` consumes the value with NO clamp, so
+    /// 4 GiB of a hostile upstream's response gets buffered into process
+    /// memory. Uses the review's own `2**32` literal.
+    #[tokio::test]
+    async fn wr03_load_rejects_capture_max_response_bytes_above_ceiling() {
+        // Expressed via u64 + try_from so this also compiles on a 32-bit
+        // target, where 2**32 is simply unrepresentable as `usize` (and the
+        // hazard therefore cannot exist).
+        let four_gib = usize::try_from(4_294_967_296_u64)
+            .expect("test host must be 64-bit for the 2**32 case");
+
+        let routes = vec![RouteConfig {
+            capture: Some(crate::config::CaptureConfig {
+                response_fields: vec![crate::config::CaptureResponseField {
+                    path: "access_token".to_string(),
+                    kind: crate::config::CaptureResponseFieldKind::Opaque,
+                }],
+                request_nonce_fields: vec![],
+                max_response_bytes: Some(four_gib),
+            }),
+            ..boundary_test_route()
+        }];
+
+        let err = RouteStore::load(&routes)
+            .await
+            .expect_err("max_response_bytes above the D-05 ceiling must fail the whole load closed")
+            .to_string();
+        assert!(
+            err.contains("max_response_bytes") && err.contains("ceiling"),
+            "the error must name the field and the ceiling it breached, got: {err}"
+        );
+
+        // Boundary proof: exactly at the ceiling is ACCEPTED, one over is not.
+        // Without this, a validation that rejected every non-None value would
+        // also pass the assertion above.
+        let at_ceiling = vec![RouteConfig {
+            capture: Some(crate::config::CaptureConfig {
+                response_fields: vec![crate::config::CaptureResponseField {
+                    path: "access_token".to_string(),
+                    kind: crate::config::CaptureResponseFieldKind::Opaque,
+                }],
+                request_nonce_fields: vec![],
+                max_response_bytes: Some(crate::config::CAPTURE_MAX_RESPONSE_BYTES_CEILING),
+            }),
+            ..boundary_test_route()
+        }];
+        assert!(
+            RouteStore::load(&at_ceiling).await.is_ok(),
+            "exactly CAPTURE_MAX_RESPONSE_BYTES_CEILING must remain valid — the gate \
+             must not be an over-broad reject-everything"
+        );
+    }
+
+    /// WR-03, remaining three gates: empty `response_fields`, a zero cap, and
+    /// malformed field paths. All four are enforced by `nono-cli`'s
+    /// `validate_capture_config`; all four were skipped by any non-profile
+    /// construction path.
+    #[tokio::test]
+    async fn wr03_load_rejects_the_other_three_capture_gates() {
+        fn capture_route(capture: crate::config::CaptureConfig) -> Vec<RouteConfig> {
+            vec![RouteConfig {
+                capture: Some(capture),
+                ..boundary_test_route()
+            }]
+        }
+        fn field(path: &str) -> crate::config::CaptureResponseField {
+            crate::config::CaptureResponseField {
+                path: path.to_string(),
+                kind: crate::config::CaptureResponseFieldKind::Opaque,
+            }
+        }
+
+        // 1. response_fields empty — a capture config declaring nothing to
+        //    rewrite is a silently non-functional route.
+        let err = RouteStore::load(&capture_route(crate::config::CaptureConfig {
+            response_fields: vec![],
+            request_nonce_fields: vec![],
+            max_response_bytes: None,
+        }))
+        .await
+        .expect_err("empty capture.response_fields must fail the load closed")
+        .to_string();
+        assert!(err.contains("response_fields"), "unexpected error: {err}");
+
+        // 2. max_response_bytes == 0 — a zero cap cannot buffer any response.
+        let err = RouteStore::load(&capture_route(crate::config::CaptureConfig {
+            response_fields: vec![field("access_token")],
+            request_nonce_fields: vec![],
+            max_response_bytes: Some(0),
+        }))
+        .await
+        .expect_err("a zero capture.max_response_bytes must fail the load closed")
+        .to_string();
+        assert!(
+            err.contains("max_response_bytes") && err.contains("0"),
+            "unexpected error: {err}"
+        );
+
+        // 3. malformed field paths, on BOTH the response and the request side.
+        for bad in [".leading", "trailing.", "a..b", "has\0nul", ""] {
+            let err = RouteStore::load(&capture_route(crate::config::CaptureConfig {
+                response_fields: vec![field(bad)],
+                request_nonce_fields: vec![],
+                max_response_bytes: None,
+            }))
+            .await
+            .err()
+            .unwrap_or_else(|| {
+                panic!("capture.response_fields path {bad:?} must fail the load closed")
+            })
+            .to_string();
+            assert!(
+                err.contains("capture field path"),
+                "unexpected error for {bad:?}: {err}"
+            );
+
+            let err = RouteStore::load(&capture_route(crate::config::CaptureConfig {
+                response_fields: vec![field("access_token")],
+                request_nonce_fields: vec![bad.to_string()],
+                max_response_bytes: None,
+            }))
+            .await
+            .err()
+            .unwrap_or_else(|| {
+                panic!("capture.request_nonce_fields path {bad:?} must fail the load closed")
+            })
+            .to_string();
+            assert!(
+                err.contains("capture field path"),
+                "unexpected error for {bad:?}: {err}"
+            );
+        }
+    }
+
+    /// Negative control for the whole boundary gate: a fully valid route —
+    /// including a capture block at a legal size with legal paths — still
+    /// loads. Proves the additions above reject the hostile shapes without
+    /// over-rejecting the shapes production profiles actually use.
+    #[tokio::test]
+    async fn boundary_validation_does_not_over_reject_valid_routes() {
+        let routes = vec![RouteConfig {
+            inject_header: "x-api-key".to_string(),
+            credential_format: Some("{}".to_string()),
+            capture: Some(crate::config::CaptureConfig {
+                response_fields: vec![crate::config::CaptureResponseField {
+                    path: "data.access_token".to_string(),
+                    kind: crate::config::CaptureResponseFieldKind::Jwt,
+                }],
+                request_nonce_fields: vec!["code_verifier".to_string()],
+                max_response_bytes: Some(262_144),
+            }),
+            ..boundary_test_route()
+        }];
+
+        let store = RouteStore::load(&routes)
+            .await
+            .expect("a valid route must still load");
+        assert!(store.get("svc").is_some());
     }
 }

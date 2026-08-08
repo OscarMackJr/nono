@@ -679,9 +679,19 @@ pub enum SpiffeAuthConfig {
 pub const DEFAULT_CAPTURE_MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
 /// Hard ceiling (D-05) that `max_response_bytes` may not exceed: 1 MiB.
-/// Enforced at profile-validation time (Plan 114-08), not here. Exceeding
-/// the *effective* cap at buffer-read time must fail closed — deny the
-/// response rather than release it unrewritten (Plan 114-05).
+///
+/// Enforced at TWO layers, deliberately:
+/// 1. `nono-cli` profile-validation time (Plan 114-08,
+///    `profile::credential_provider::validate_capture_config`) — the
+///    early, human-readable gate for profile authors.
+/// 2. `CaptureConfig::validate()`, invoked from `RouteStore::load` — the
+///    ENFORCEMENT-boundary gate every embedder traverses (CLI, PyO3,
+///    napi, or any future `nono_proxy::start` caller). Phase 115 code
+///    review WR-03: layer 1 alone was bypassable by any binding that
+///    builds a `RouteConfig` in Rust instead of parsing a profile.
+///
+/// Exceeding the *effective* cap at buffer-read time must fail closed —
+/// deny the response rather than release it unrewritten (Plan 114-05).
 pub const CAPTURE_MAX_RESPONSE_BYTES_CEILING: usize = 1024 * 1024;
 
 /// How a captured response field's value should be interpreted when minting
@@ -739,6 +749,293 @@ pub struct CaptureConfig {
     /// time, Plan 114-08).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_response_bytes: Option<usize>,
+}
+
+// ============================================================================
+// Enforcement-boundary config validation (Phase 115 code review CR-01 / WR-03)
+//
+// WHY THIS LIVES IN `nono-proxy` AND NOT IN A FRONT-END
+//
+// `nono-cli` has always validated these same fields at profile-load time
+// (`profile::validate_header_name` / `validate_header_mode` /
+// `credential_provider::validate_capture_config`). Those checks remain — they
+// give profile authors an early, credential-named error message — but they are
+// NOT the enforcement boundary. A `RouteConfig` can be constructed directly in
+// Rust and handed to `nono_proxy::start()` without any profile ever existing:
+// the PyO3 bindings (`../nono-py/src/proxy.rs`) do exactly that, and a napi /
+// C / plain-Rust embedder can too.
+//
+// Phase 115's code review found the resulting asymmetry: `SpiffeAuthConfig`'s
+// `inject_header` reaching `reverse.rs`'s raw
+// `format!("{}: {}\r\n", header, ...)` unvalidated (CR-01, an upstream header
+// -injection / request-smuggling primitive riding an authenticated JWT-SVID
+// request), and `CaptureConfig` bypassing all four `validate_capture_config`
+// gates including the D-05 1 MiB `max_response_bytes` ceiling (WR-03).
+//
+// The rule Phase 115 exists to apply is "make the defect unrepresentable, not
+// tested-for". Validating in one binding's constructor leaves the hole open
+// for the next binding. Validating HERE — at the single choke point every
+// proxy start traverses (`server::start` -> `RouteStore::load` ->
+// `RouteConfig::validate`) — means every embedder inherits the gate and the
+// CLI's copy becomes defense-in-depth.
+//
+// FAIL-CLOSED: every check below returns `Err`, which `RouteStore::load`
+// `?`-propagates, aborting the WHOLE proxy startup. There is deliberately no
+// per-route skip and no clamping: a config that asks for something forbidden
+// is a misconfiguration to surface, not a value to silently rewrite.
+// ============================================================================
+
+/// `true` when `c` is a valid RFC 7230 `token` character — the character
+/// class an HTTP header NAME is restricted to.
+///
+/// Mirrors `nono-cli`'s `profile::is_http_token_char` exactly. Notably
+/// excludes CR, LF, space, and `:`, which is what makes a validated header
+/// name safe to interpolate into a raw `"{name}: {value}\r\n"` wire write.
+#[must_use]
+pub fn is_http_token_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(
+            c,
+            '!' | '#'
+                | '$'
+                | '%'
+                | '&'
+                | '\''
+                | '*'
+                | '+'
+                | '-'
+                | '.'
+                | '^'
+                | '_'
+                | '`'
+                | '|'
+                | '~'
+        )
+}
+
+fn route_config_error(message: impl Into<String>) -> crate::error::ProxyError {
+    crate::error::ProxyError::Config(message.into())
+}
+
+/// Reject a header name that is empty or contains any non-RFC-7230-token
+/// character (CR and LF among them).
+///
+/// `context` labels the owning route/field for the operator, e.g.
+/// `"route 'svc': spiffe.inject_header"`.
+fn validate_injected_header_name(context: &str, header: &str) -> crate::error::Result<()> {
+    if header.is_empty() {
+        return Err(route_config_error(format!("{context} must not be empty")));
+    }
+    if !header.chars().all(is_http_token_char) {
+        return Err(route_config_error(format!(
+            "{context} '{}' is not a valid HTTP token; header names must be \
+             alphanumeric plus !#$%&'*+-.^_`|~ (RFC 7230). A CR or LF here \
+             would smuggle attacker-chosen headers into an authenticated \
+             upstream request",
+            header.escape_debug()
+        )));
+    }
+    Ok(())
+}
+
+/// Reject a header VALUE template containing CR or LF.
+///
+/// The template is the string `{}` is substituted into before the result is
+/// written to the wire, so CRLF here splits the request just as effectively
+/// as CRLF in the header name.
+fn validate_injected_header_value_template(
+    context: &str,
+    template: &str,
+) -> crate::error::Result<()> {
+    if template.contains('\r') || template.contains('\n') {
+        return Err(route_config_error(format!(
+            "{context} must not contain CR or LF; this would enable HTTP \
+             header injection / request smuggling on an authenticated \
+             upstream request"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate a single dot-separated JSON field path used by
+/// `capture.response_fields[].path` or `capture.request_nonce_fields[]`.
+///
+/// Mirrors `nono-cli`'s `credential_provider::validate_capture_field_path`.
+fn validate_capture_field_path(context: &str, path: &str) -> crate::error::Result<()> {
+    if path.is_empty()
+        || path.starts_with('.')
+        || path.ends_with('.')
+        || path.contains("..")
+        || path.contains('\0')
+    {
+        return Err(route_config_error(format!(
+            "{context}: invalid capture field path '{}': must be non-empty, \
+             must not start or end with '.', must not contain '..', and must \
+             not contain NUL",
+            path.escape_debug()
+        )));
+    }
+    Ok(())
+}
+
+impl SpiffeAuthConfig {
+    /// Validate a SPIFFE auth block at the enforcement boundary.
+    ///
+    /// `route_label` is the owning route's prefix, for error messages.
+    ///
+    /// CR-01 (115-REVIEW.md): `inject_header` and the effective
+    /// `credential_format` are written verbatim into a raw wire request by
+    /// `reverse.rs`'s `format!("{}: {}\r\n", header, credential_format
+    /// .replace("{}", svid_token))`. A CRLF in either splits the request and
+    /// injects attacker-chosen headers onto a message that also carries a
+    /// live JWT-SVID — a privilege-escalation primitive against the upstream,
+    /// not merely a malformed request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ProxyError::Config`] if `inject_header` is
+    /// empty or not an RFC 7230 token, if the effective credential format
+    /// contains CR/LF, or if `workload_api_socket`/`audience` is empty
+    /// (a SPIFFE block that cannot fetch an SVID is not a valid route).
+    pub fn validate(&self, route_label: &str) -> crate::error::Result<()> {
+        let Self::Jwt {
+            workload_api_socket,
+            audience,
+            inject_header,
+            credential_format,
+            svid_hint: _,
+        } = self;
+
+        validate_injected_header_name(
+            &format!("route '{route_label}': spiffe.inject_header"),
+            inject_header,
+        )?;
+
+        // Validate the EFFECTIVE format (what actually reaches the wire),
+        // mirroring nono-cli's `validate_header_mode`. `resolved_credential_format`
+        // substitutes `Bearer {}` / `{}` when the field is omitted; both
+        // defaults are CRLF-free, so this is strictly >= checking the raw value.
+        let effective_format =
+            resolved_credential_format(inject_header, credential_format.as_deref());
+        validate_injected_header_value_template(
+            &format!("route '{route_label}': spiffe.credential_format"),
+            &effective_format,
+        )?;
+
+        if workload_api_socket.is_empty() {
+            return Err(route_config_error(format!(
+                "route '{route_label}': spiffe.workload_api_socket must not be empty"
+            )));
+        }
+        if audience.is_empty() {
+            return Err(route_config_error(format!(
+                "route '{route_label}': spiffe.audience must declare at least one \
+                 audience; an unscoped JWT-SVID request is not valid"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl CaptureConfig {
+    /// Validate a declarative OAuth-capture block at the enforcement boundary.
+    ///
+    /// `route_label` is the owning route's prefix, for error messages.
+    ///
+    /// WR-03 (115-REVIEW.md): mirrors the four gates `nono-cli`'s
+    /// `validate_capture_config` enforces, which any non-profile construction
+    /// path previously skipped entirely. The material one is the D-05
+    /// [`CAPTURE_MAX_RESPONSE_BYTES_CEILING`]: `reverse.rs`'s
+    /// `relay_response_with_capture` consumes `max_response_bytes` with no
+    /// clamp, so an unvalidated 4 GiB value buffers 4 GiB of a hostile
+    /// upstream's response into process memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ProxyError::Config`] if `response_fields` is
+    /// empty, if any field path is malformed, or if `max_response_bytes` is
+    /// `Some(0)` or exceeds [`CAPTURE_MAX_RESPONSE_BYTES_CEILING`].
+    pub fn validate(&self, route_label: &str) -> crate::error::Result<()> {
+        let context = format!("route '{route_label}'");
+
+        if self.response_fields.is_empty() {
+            return Err(route_config_error(format!(
+                "{context}: capture.response_fields must not be empty; a capture \
+                 config declaring nothing to rewrite is not valid"
+            )));
+        }
+
+        for field in &self.response_fields {
+            validate_capture_field_path(
+                &format!("{context}: capture.response_fields"),
+                &field.path,
+            )?;
+        }
+        for path in &self.request_nonce_fields {
+            validate_capture_field_path(&format!("{context}: capture.request_nonce_fields"), path)?;
+        }
+
+        if let Some(max_bytes) = self.max_response_bytes {
+            if max_bytes == 0 {
+                return Err(route_config_error(format!(
+                    "{context}: capture.max_response_bytes must not be 0; a \
+                     zero-byte cap cannot buffer any response"
+                )));
+            }
+            if max_bytes > CAPTURE_MAX_RESPONSE_BYTES_CEILING {
+                return Err(route_config_error(format!(
+                    "{context}: capture.max_response_bytes ({max_bytes}) exceeds \
+                     the hard ceiling of {CAPTURE_MAX_RESPONSE_BYTES_CEILING} bytes \
+                     (D-05)"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl RouteConfig {
+    /// Validate every security-relevant field on this route before it is
+    /// allowed to reach the request path.
+    ///
+    /// Called by [`crate::route::RouteStore::load`] for every configured
+    /// route, which is the single choke point on both the `nono-cli` proxy
+    /// start path (`proxy_runtime.rs` -> `nono_proxy::server::start`) and the
+    /// PyO3 embedder path (`nono_py.start_proxy` -> `nono_proxy::start`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::ProxyError::Config`] on the first violation,
+    /// which fails the whole proxy start closed.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        let route_label = self.prefix.trim_matches('/');
+
+        // The route's own static-credential header write goes through the
+        // same raw `format!("{}: {}\r\n", ..)` wire path as the SPIFFE one
+        // (`credential.rs` -> `CredentialStore` -> `reverse.rs`), so the
+        // identical CR-01 hazard applies here. `nono-cli` validates it at
+        // profile-load time; this is the boundary copy.
+        validate_injected_header_name(
+            &format!("route '{route_label}': inject_header"),
+            &self.inject_header,
+        )?;
+        let effective_format =
+            resolved_credential_format(&self.inject_header, self.credential_format.as_deref());
+        validate_injected_header_value_template(
+            &format!("route '{route_label}': credential_format"),
+            &effective_format,
+        )?;
+
+        if let Some(spiffe) = &self.spiffe {
+            spiffe.validate(route_label)?;
+        }
+        if let Some(capture) = &self.capture {
+            capture.validate(route_label)?;
+        }
+
+        Ok(())
+    }
 }
 
 /// An HTTP method+path access rule for reverse proxy endpoint filtering.
