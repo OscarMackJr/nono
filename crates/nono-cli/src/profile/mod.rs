@@ -1358,6 +1358,28 @@ fn validate_oauth2_auth(name: &str, auth: &OAuth2Config) -> Result<()> {
         return Ok(());
     }
 
+    // D-14 (Phase 115, DRAIN-04): plain OAuth2 client_credentials (no
+    // client_assertion) has no route-wiring implementation in this fork.
+    // RESEARCH Q2 traced this at source: CredentialStore::load's oauth2
+    // branch (credential.rs:296-384) only handles
+    // Some(ClientAssertionConfig::SpiffeJwt {..}) — a plain
+    // client_id/client_secret route is inserted into none of
+    // credentials/aws_routes/spiffe_assertion_routes, so dispatch falls
+    // through to the no-credential branch and forwards the request to
+    // upstream with ZERO token injection: worse than a 501, since it
+    // silently degrades rather than failing loudly. Reject at
+    // config-validation time on the same rule as D-13 rather than let a
+    // profile author believe a credential is configured when it is not.
+    if auth.client_assertion.is_none() {
+        return Err(NonoError::ProfileParse(format!(
+            "auth for custom credential '{}' declares plain OAuth2 client_credentials (no \
+             client_assertion), which has no route-wiring implementation in this fork and would \
+             silently forward requests with no token injection; configure client_assertion \
+             (SPIFFE JWT) or remove this credential",
+            name
+        )));
+    }
+
     if auth.client_id.is_empty() {
         return Err(NonoError::ProfileParse(format!(
             "auth.client_id for custom credential '{}' cannot be empty",
@@ -5521,8 +5543,16 @@ mod tests {
             extra_params: std::collections::HashMap::new(),
         });
         let result = validate_custom_credential("test", &cred);
-        let err = result.expect_err("no client_assertion and empty client_id should be rejected");
-        assert!(err.to_string().contains("client_id"));
+        // D-14 (Phase 115): client_assertion.is_none() is now rejected
+        // unconditionally, before client_id emptiness is ever inspected —
+        // this fixture (no client_assertion, empty client_id) is still
+        // correctly rejected, just for the D-14 reason (no route-wiring for
+        // plain client_credentials), not the old client_id-emptiness reason.
+        let err = result.expect_err("no client_assertion should be rejected (D-14)");
+        assert!(
+            err.to_string().contains("client_assertion"),
+            "must reject via D-14 (no route-wiring for plain client_credentials): {err}"
+        );
     }
 
     #[test]
@@ -8557,13 +8587,23 @@ mod tests {
 
     #[test]
     fn oauth2_http_loopback_token_url_allowed() {
-        // Loopback HTTP is the documented exception for local dev/test.
+        // Loopback HTTP is the documented exception for local dev/test. D-14
+        // (Phase 115) rejects plain client_credentials (no client_assertion)
+        // unconditionally, so this now exercises the loopback exception via
+        // the client_assertion (SPIFFE JWT) path instead — token_url's
+        // loopback check runs before the client_assertion branch and
+        // applies identically regardless of which auth mechanism is chosen
+        // below it, so this still proves the loopback exception works.
         let auth = OAuth2Config {
-            client_assertion: None,
+            client_assertion: Some(nono_proxy::config::ClientAssertionConfig::SpiffeJwt {
+                workload_api_socket: "/run/spire/sockets/agent.sock".to_string(),
+                audience: vec!["local".to_string()],
+                svid_hint: None,
+            }),
             extra_params: std::collections::HashMap::new(),
             token_url: "http://127.0.0.1:8080/oauth/token".to_string(),
-            client_id: "client".to_string(),
-            client_secret: "env://SECRET".to_string(),
+            client_id: String::new(),
+            client_secret: String::new(),
             scope: String::new(),
         };
         validate_oauth2_auth("local", &auth).expect("loopback http accepted");
@@ -8571,6 +8611,13 @@ mod tests {
 
     #[test]
     fn oauth2_empty_client_id_rejected() {
+        // D-14 (Phase 115): plain client_credentials (client_assertion:
+        // None) is now rejected unconditionally as unwired — this
+        // credential's empty client_id is moot, the D-14 rejection fires
+        // before client_id is ever inspected (RESEARCH Q2: plain
+        // client_credentials reaches upstream with zero token injection).
+        // The scenario (empty client_id, no assertion) is still correctly
+        // rejected, just for the D-14 reason.
         let auth = OAuth2Config {
             client_assertion: None,
             extra_params: std::collections::HashMap::new(),
@@ -8580,11 +8627,17 @@ mod tests {
             scope: String::new(),
         };
         let err = validate_oauth2_auth("v", &auth).expect_err("empty client_id rejected");
-        assert!(err.to_string().contains("client_id"));
+        assert!(
+            err.to_string().contains("client_assertion"),
+            "must reject via D-14 (no route-wiring for plain client_credentials): {err}"
+        );
     }
 
     #[test]
     fn oauth2_empty_client_secret_rejected() {
+        // D-14 (Phase 115): same reasoning as oauth2_empty_client_id_rejected
+        // above — client_assertion: None is rejected unconditionally before
+        // client_secret emptiness is ever inspected.
         let auth = OAuth2Config {
             client_assertion: None,
             extra_params: std::collections::HashMap::new(),
@@ -8594,7 +8647,63 @@ mod tests {
             scope: String::new(),
         };
         let err = validate_oauth2_auth("v", &auth).expect_err("empty client_secret rejected");
-        assert!(err.to_string().contains("client_secret"));
+        assert!(
+            err.to_string().contains("client_assertion"),
+            "must reject via D-14 (no route-wiring for plain client_credentials): {err}"
+        );
+    }
+
+    #[test]
+    fn oauth2_plain_client_credentials_no_client_assertion_rejected() {
+        // D-14 (Phase 115, DRAIN-04): plain OAuth2 client_credentials
+        // (client_id + client_secret, no client_assertion) has no
+        // route-wiring implementation in this fork (RESEARCH Q2, traced at
+        // credential.rs:296-384) — CredentialStore::load's oauth2 branch
+        // only handles Some(ClientAssertionConfig::SpiffeJwt {..}); the
+        // plain flow is inserted into none of
+        // credentials/aws_routes/spiffe_assertion_routes, so the route falls
+        // through to the no-credential dispatch branch and forwards to
+        // upstream with ZERO token injection — worse than a 501. Reject at
+        // validation time instead of silently degrading.
+        let auth = OAuth2Config {
+            client_assertion: None,
+            extra_params: std::collections::HashMap::new(),
+            token_url: "https://auth.example.com/oauth/token".to_string(),
+            client_id: "agent-1".to_string(),
+            client_secret: "env://SECRET".to_string(),
+            scope: String::new(),
+        };
+        let err = validate_oauth2_auth("vendor", &auth)
+            .expect_err("plain client_credentials with no client_assertion must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("client_assertion"),
+            "error must name the missing client_assertion / no-route-wiring reason: {msg}"
+        );
+        assert!(
+            msg.contains("route-wiring"),
+            "error should explain the mechanism is unwired, not merely 'invalid': {msg}"
+        );
+    }
+
+    #[test]
+    fn oauth2_client_assertion_spiffe_still_validates_regression() {
+        // Regression check (Task 2 companion to the rejection above): the
+        // SPIFFE jwt-bearer client_assertion path from Phase 113 must remain
+        // unaffected by D-14 — D-14 only gates on client_assertion.is_none().
+        let auth = OAuth2Config {
+            client_assertion: Some(nono_proxy::config::ClientAssertionConfig::SpiffeJwt {
+                workload_api_socket: "/run/spire/sockets/agent.sock".to_string(),
+                audience: vec!["auth.example.com".to_string()],
+                svid_hint: None,
+            }),
+            extra_params: std::collections::HashMap::new(),
+            token_url: "https://auth.example.com/oauth/token".to_string(),
+            client_id: String::new(),
+            client_secret: String::new(),
+            scope: String::new(),
+        };
+        validate_oauth2_auth("vendor", &auth).expect("SPIFFE client_assertion path still valid");
     }
 
     #[test]
