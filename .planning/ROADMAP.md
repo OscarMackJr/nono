@@ -1,19 +1,19 @@
 ---
-milestone: v3.6
-milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
-status: active
-parallel_milestone: v3.5
-parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
-parallel_milestone_status: held-on-external-azure-block
-updated: 2026-07-28
+milestone: v3.5
+milestone_name: Trusted Signing Go-Live + First Distributed Release
+status: paused-at-phase-104-on-operator-tag-push
+shipped_milestone: v3.6
+shipped_milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
+shipped_date: 2026-08-08
+updated: 2026-08-08
 ---
 
 # Roadmap: nono
 
 ## Milestones
 
-- 🔄 **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-114 (active 2026-07-28, parallel to v3.5)
-- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02, HELD on external Azure block)
+- ✅ **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-114 (shipped 2026-08-08) — [archive](milestones/v3.6-ROADMAP.md)
+- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02, PAUSED at Phase 104 on the operator tag-push decision)
 - ✅ **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (shipped 2026-07-02) — [archive](milestones/v3.4-ROADMAP.md)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
 - ✅ **v3.2 Signed Policy Overrides (ZT-Infra Attestation)** — Phases 91-93 (shipped 2026-06-23) — [archive](milestones/v3.2-ROADMAP.md)
@@ -25,8 +25,8 @@ updated: 2026-07-28
 
 ## Phases
 
-<details open>
-<summary>🔄 v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-114) — ACTIVE (parallel to v3.5)</summary>
+<details>
+<summary>✅ v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-114) — SHIPPED 2026-08-08</summary>
 
 Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parallel** with the operator-blocked v3.5. Absorb the cross-platform delta from `nolabs-ai/nono` `v0.66.0..v0.69.0` (v0.67.0/.1, v0.68.0, v0.69.0) — proxy/network (`deny_domain`, SPIFFE/SPIRE, SigV4 + sibling-route fixes), profile/policy (`platform_overrides` + migrate the fork's `windows_*` flags into it, `$VAR`/`@git` tokens, port-range schema with a WFP-native emitter, bun/mise presets), macOS Seatbelt carry, and resource-CLI alignment onto the existing Job Object impl — WITHOUT regressing the Windows security model or the ADR-86 boundary, then leapfrog all 6 crates + both binding repos to **`0.70.0`** (prepare-only). **Explicitly EXCLUDES** the `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed — a standing structural divergence deferred to the dedicated **v3.7 Windows Tool-Sandbox Parity** milestone). Scope source: quick `260727-jkn`.
 
@@ -41,7 +41,7 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 </details>
 
 <details open>
-<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — ACTIVE (HELD on external Azure block)</summary>
+<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — ACTIVE (PAUSED at Phase 104 on the operator tag-push decision)</summary>
 
 Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode verify-gate and resolve the Azure Trusted Signing `UnknownError`, rename the fork's published package identities to fork-owned `nono-sandbox` names, stand up ephemeral Azure Win11 VM IaC + new clean-host gates, cut the first publicly-trusted-signed `0.66.1` release, publish it live to crates.io/PyPI/npm, drain both host-gated clean-host UAT todos on the real VM, then retire the POC signing path. Hard dependency spine: verify-gate hardening (101) gates the release cut (104); the rename (102) and the Azure IaC+gates (103) are parallelizable with 101/104; live publish (105) needs both the rename and a real release; clean-host UAT (106) needs the real release (not the live publish); close-out (107) is strictly gated on clean-host UAT PASS, never merely on a green release.
 
@@ -211,160 +211,12 @@ Drain-then-sync upstream milestone: absorbed `always-further/nono` `v0.62.0..v0.
 - [ ] 105-04-PLAN.md — Verification tooling: pre-checkpoint registry-availability/scope re-check + SC4 isolated post-publish resolve wrapper
 - [ ] 105-05-PLAN.md — Operator checkpoint (Wave 2): pre-publish gate, live publish (crates.io/PyPI/npm), post-publish resolve verification
 
-### Phase 108: UPST12 Divergence Audit
-**Goal**: An authoritative per-commit divergence ledger for upstream `v0.66.0..v0.69.0` exists, so the absorb phases (109–111) have a classified, ADR-reviewed work-list — with the tool-sandbox subsystem's refinements provably fenced off to v3.7.
-**Depends on**: Nothing (first phase of v3.6; parallel to v3.5)
-**Requirements**: UPST12-01
-**Success Criteria** (what must be TRUE):
-  1. `108-DIVERGENCE-LEDGER.md` classifies every substantive commit in `v0.66.0..v0.69.0` (adopt / adapt / skip / split) with a `windows-touch` flag and an ADR-review verdict per cluster.
-  2. Re-export/public-surface diffs are inspected (not just `git diff --name-only`), per the "cluster isolation can be empirically false" lesson.
-  3. The 7 tool-sandbox refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) are explicitly recorded **DEFERRED→v3.7** with the reason (base subsystem absent).
-  4. **[CONTEXT.md D-19]** As originally written ("the ledger maps each will-sync cluster onto Phase 109/110/111"), this SC is unsatisfiable — live measurement found ~28 commits mapping to none of v3.6's 12 requirements. The corrected SC: the ledger surfaces this gap with an exact count, names the unmapped clusters, and proposes a **Phase 112 (Security + Residual Sync)** roadmap amendment — gated on explicit operator approval before Phase 109 planning begins.
-**Plans**: 5 plans
-- [x] 108-01-PLAN.md — Ledger reproduction, full 100-commit CODE/DEPS/CI/DOCS accounting, Cluster Summary taxonomy skeleton
-- [x] 108-02-PLAN.md — ADR-108: deny_domain (#1374) posture — settles ADAPT per D-12
-- [x] 108-03-PLAN.md — NET/PROF/CORE per-commit tables, hand-verified requirement mapping + re-export scans
-- [x] 108-04-PLAN.md — tool-sandbox 20-commit surface (pure/split residue accounting) + DEPS/CI/DOCS clusters
-- [x] 108-05-PLAN.md — Carve-out re-touch check, D-18/D-19 requirement-coverage gap + Phase 112 proposal, ledger completeness sweep
+### Phases 108–114 (v3.6 — SHIPPED 2026-08-08)
 
-### Phase 109: Proxy/Network Absorb
-**Goal**: The v0.67–v0.69 proxy/network features are absorbed into the fork's proxy without regressing its fork-divergent TLS-interception + allowlist model, with the bindings rebuilt.
-**Depends on**: Phase 108 (ledger dispositions)
-**Requirements**: NET-01, NET-03
-**Success Criteria** (what must be TRUE):
-  1. `deny_domain` (#1374) is wired into the proxy filter + profile schema and composes with `allow_domain` without weakening default-deny.
-  2. *(moved to Phase 113 — see below.)* ~~SPIFFE/SPIRE workload-identity auth for upstream routes (#1272)~~
-  3. The SigV4 encoded-URI fix (#1430) and sibling-route cross-deny fix (#1437) are confirmed non-applicable — both target upstream subsystems (`aws/sign.rs`, `tls_intercept/handle.rs`) absent from the fork's architecture, per `109-AWS-SIGV4-TLS-INTERCEPT-FINDING.md`; `no_proxy` bypass and `HTTP_PROXY` forward-proxy are verified non-regressed.
-  4. `maturin build` (nono-py) and `napi build` (nono-ts) are green after the nono-proxy struct changes.
-**Plans**: 5 plans
-- [x] 109-01-PLAN.md — deny_domain (NET-01): library deny-suffix mechanism, CLI plumbing, D-04/D-05 fail-closed guard at both entry points
-- [x] 109-02-PLAN.md — no_proxy (NET-03) proxy-crate mechanism: D-06 validators + D-07 localhost/127.0.0.1 regression proof
-- [x] 109-03-PLAN.md — no_proxy (NET-03) CLI-crate wiring: profile schema + validate_profile_no_proxy + launch-time/group-expanded conflict validators
-- [x] 109-04-PLAN.md — HTTP_PROXY forward-proxy (#1335, NET-03): classify_request_target/handle_forward_http absolute-form dispatch
-- [x] 109-05-PLAN.md — Verification: N/A finding for #1430/#1437 (target subsystems absent from fork), cross-target clippy confirmation, binding rebuild (D-09/SC4)
-
-### Phase 110: Profile/Policy Absorb + platform_overrides
-**Goal**: The fork gains upstream's per-OS profile-patch model and the v0.67–v0.68 profile/policy features, and retires its top-level `windows_*` flag sprawl into `platform_overrides.windows`.
-**Depends on**: Phase 108 (ledger dispositions)
-**Requirements**: PROF-01, PROF-02, PROF-03, PROF-04
-**Success Criteria** (what must be TRUE):
-  1. `platform_overrides` (#1371) is absorbed, preserved through `extends` resolution (#1380), and the fork's `windows_low_il_broker`/`windows_interpreters` flags are migrated into `platform_overrides.windows` with back-compat aliases (existing profiles still load).
-  2. `$VAR` (#1296) and `@git:*` (#1298) token expansion works in profile filesystem paths.
-  3. The port-range profile schema (#1398) is absorbed with a **WFP-native** remote-port-range emitter on Windows and discrete-`Vec<u16>` back-compat.
-  4. The `bun` (#1305) and `mise` (#1387) runtime presets are present and resolvable.
-
-**Plans**: 8 plans
-- [x] 110-01-PLAN.md — platform_overrides field + extends preservation + windows_low_il_broker/windows_interpreters back-compat proof (PROF-01)
-- [x] 110-02-PLAN.md — $VAR process-env expansion + ported @git:* dynamic tokens (PROF-02)
-- [x] 110-03-PLAN.md — CapabilitySet port-range mechanism + macOS/Linux Unix emitters (PROF-03 library+Unix)
-- [x] 110-04-PLAN.md — NetworkConfig open_port_range/listen_port_range + profile_runtime.rs validation (PROF-03 schema)
-- [x] 110-05-PLAN.md — capability_ext.rs profile-pathway wiring + manifest-pathway conversion (PROF-03 wiring)
-- [x] 110-06-PLAN.md — Windows WFP-native remote-port-range emitter, fork-original (PROF-03 Windows) — **COMPLETE 2026-08-04**: Tasks 1-2 (`ff10f52f`/`ca8b3f25`/`8fe69f43`) plus Task 3's `checkpoint:human-verify` (PROF-03e) resolved live on an Administrator-elevated session — 8 filters from a verified-zero baseline, 4 `FWP_MATCH_RANGE` conditions at `49200..49210`, torn down to 0 on exit. Verdict + limitations: `110-06-PROF-03e-VERDICT.md`; procedure: `110-06-CHECKPOINT-RUNBOOK.md`. Running the checkpoint surfaced 4 defects, all fixed (`7c7a189c`, `ea26b5b2`, `6d7ef719`, `4aec1944`), 3 proven live. Behavioural connect probe NOT RUN (`0xC0000142`) — closure accepted on the filter-table proof.
-- [x] 110-07-PLAN.md — bun/mise runtime presets + resolvability tests (PROF-04)
-- [x] 110-08-PLAN.md — Phase gate: cross-target clippy + make ci + binding rebuild + fork-invariant verify — both cross-target gates GREEN live, both sibling bindings green, SC3/ADR-86 confirmed, all 4 Wave-0 gaps closed; see `110-08-SUMMARY.md`. **Phase gate itself is GREEN, but the phase is still not closed — 110-06 Task 3's checkpoint remains pending.**
-
-### Phase 111: Core Carry + Resource CLI + Fork-Invariant Verify + Release Leapfrog
-**Goal**: The macOS/core carry and resource-CLI alignment land, the whole sync is proven non-regressing under both cross-target clippy gates, and the tree leapfrogs to a prepare-only `0.70.0`.
-**Depends on**: Phase 109 + Phase 110 (all absorb work landed)
-**Requirements**: CORE-01, CORE-02, VERIFY-01, RLS-14
-**Success Criteria** (what must be TRUE):
-  1. macOS/core carry lands as-is for cross-target parity — `~/.cache` (#1378) and `MAX_CRYPTO_THREADS`=12 (#1424). **(#1398's `macos.rs` port-range emitter REMOVED from this criterion 2026-07-30 — Phase 110 absorbs commit `d5803b99` whole, including both Unix emitters, so the port-range feature lands coherently in one place. Do not re-absorb it here.)**
-  2. The `--memory`/`--max-processes` CLI surface (#1269/#1403) is aligned onto the fork's existing Job Object impl with no new enforcement and no regression to `--cpu-percent`/`--timeout`.
-  3. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally; a fork-invariant pass confirms the Windows security model + ADR-86 boundary are unregressed.
-  4. All 6 workspace crates + path-dep pins + both binding repos leapfrog to `0.70.0` (collision-free above upstream 0.69.0), Cargo.lock shows zero unexpected drift, and the prepare-only release gate is GREEN (no operator push).
-
-**Plans**: 6 plans
-- [x] 111-01-PLAN.md — CORE-01: macOS `~/.cache` policy grant (#1378) + `MAX_CRYPTO_THREADS` 7→12 (#1424), each with a new Wave-0 by-value test
-- [x] 111-02-PLAN.md — CORE-02: correct the stale Unix resource-limit help text in `cli.rs` + `docs/cli/usage/flags.mdx` (D-04/D-05/D-06)
-- [x] 111-03-PLAN.md — D-01/D-02/D-03: `proj/ADR-111-resource-limits-boundary.md` + standing-divergence addendum in `108-DIVERGENCE-LEDGER.md`
-- [x] 111-04-PLAN.md — VERIFY-01: both cross-target clippy gates + `make ci` substitution + 24-name baseline diff + D-09 fork-invariant assertions + binding rebuild, over the combined 108-111 surface
-- [x] 111-05-PLAN.md — RLS-14 (in-repo half): bump the 6 workspace crates + path-dep pins to `0.70.0`, regenerate Cargo.lock, correct `release-readiness.ps1`/`release-dry-run.ps1`'s hardcoded version strings
-- [x] 111-06-PLAN.md — RLS-14 (sibling half): bump `../nono-py` + `../nono-ts` to `0.70.0`, rebuild both, confirm the prepare-only `release-dry-run.ps1` gate GREEN
-
-### Phase 112: Security + Residual Sync
-**Goal**: The security-relevant and residual commits from the `v0.66.0..v0.69.0` window that no other v3.6 phase covers are absorbed under a fork-invariant review kept separate from any release-cut phase — mirrors the v3.1 Phase 87 precedent.
-**Depends on**: Phase 108 (the ledger's `security-residual-and-misc` cluster + Requirement Coverage Gap section are the work-list)
-**Requirements**: SEC-01, SEC-03, SEC-04, SEC-05, SEC-06, SEC-07, SEC-08, SEC-09, RES-01, RES-02 *(SEC-02 carved out to Phase 114 — see Amendment below)*
-**Origin**: Added 2026-07-29 by operator approval of the Phase 108 ledger's D-18/D-19 coverage-gap amendment. Phase 108 measured 27 hand-verified CODE commits mapping to none of v3.6's original 12 requirements; ROADMAP SC4 for Phase 108 was unsatisfiable as written (D-19) and this phase is its resolution.
-**Amendment (2026-08-05, operator decision during `/gsd:plan-phase 112`)**: **SEC-02 (OAuth capture — `9b692e07` / `3c59c62e` / `d033c631`) is carved out of Phase 112 into its own Phase 114.** Phase 112's research pass established that ~9 of `9b692e07`'s 26 files depend on subsystems absent from the fork (`oauth_capture/` core, `tls_intercept/*`, and `forward.rs` from unabsorbed ancestor `149abde0`). `forward.rs` carries the response-rewrite hook that keeps real OAuth tokens out of the sandboxed client; a reduced-scope absorb without an equivalent enforcement point risks shipping a half-feature that leaks tokens. This exceeds the discretion `112-CONTEXT.md` D-04 granted the planner (which named SEC-02a as "own plan, own wave" and explicitly rejected a follow-on split), so it was escalated for operator adjudication and approved — mirroring the NET-02/SPIFFE → Phase 113 split, which was likewise an explicit operator decision rather than planner discretion. SC1 below is amended accordingly; the carve-out is recorded, not silently dropped.
-**Success Criteria** (what must be TRUE):
-  1. Eight of the nine security-relevant requirements (SEC-01, SEC-03..SEC-09) are absorbed with a fork-invariant review distinct from any release-cut phase, mirroring the v3.1 Phase 87 separation of security review from feature absorb. **SEC-02 is explicitly carved out to Phase 114 by the Amendment above** — Phase 112 must still record SEC-02's reality-check evidence and its deferred disposition in the D-05 ledger addendum, never silently drop it.
-  2. The registry/update-check header residual (RES-01) and the PTY-teardown/test-infra residual (RES-02) are each individually reviewed and either absorbed or explicitly skipped with recorded reasoning — never silently dropped.
-  3. `373a67ae` (#1369, `crossbeam-epoch` 0.9.18→0.9.20) is prioritized ahead of routine DEPS-cluster absorb — it is the direct fix for the live RUSTSEC-2026-0204 advisory the fork's `Cargo.lock` currently carries. *(If already closed by an out-of-band quick task, record that and confirm `cargo audit` is clean rather than re-absorbing.)*
-  4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) and `make ci` are GREEN locally after the absorb, consistent with VERIFY-01's framing in Phase 111.
-
-**Plans**: 8 plans
-- [x] 112-01-PLAN.md — Wave 1 reality-check finalization (D-02) + SEC-01 won't-sync finding + SEC-02a/b/c reality-check evidence + deferred-to-Phase-114 disposition (not a go/no-go decision, per the Amendment above) + RES-01 skip docs + D-07 confirmation
-- [x] 112-02-PLAN.md — SEC-03: NVIDIA procfs mediation hardening + Sandbox::apply_seccomp/apply_seccomp_with_abi Linux API refactor
-- [x] 112-03-PLAN.md — SEC-04: trust-policy predicate discriminator + SEC-08: ADR-112 preserving the fork's fail-closed allow_vars default
-- [x] 112-04-PLAN.md — RES-02: PTY late-CPR-reply teardown drain (adopt) + socket.rs /tmp switch (skip) + test-infra tightening (adopt)
-- [x] 112-05-PLAN.md — SEC-05: Landlock Refer grant in the execute-restriction layer
-- [x] 112-06-PLAN.md — SEC-06: seccomp-notify supervisor-ancestry orphan reaping (adapted)
-- [x] 112-07-PLAN.md — SEC-07: standalone `nono proxy` command, adapted to the fork's ProxyLaunchOptions API
-- [x] 112-08-PLAN.md — D-05 ledger addendum (all 18 dispositions) + SEC-09 carry-forward note + combined-surface verification + REQUIREMENTS/ROADMAP reconciliation
-
-
-### Phase 113: SPIFFE/SPIRE Workload Identity
-**Goal**: Upstream's SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed under its own ADR-gated review, without regressing the fork's divergent TLS-interception model or the ADR-86 policy-free-library boundary.
-**Depends on**: Phase 109 (shares `nono-proxy` files — `server.rs`, `route.rs`, `credential.rs`, `oauth2.rs`, `tls_intercept/*`; 109 lands first and 113 rebases onto it)
-**Requirements**: NET-02
-**Origin**: Split out of Phase 109 on 2026-07-29 by operator decision during `/gsd:discuss-phase 109`. Measurement: `c831dade` is **4354 insertions / 545 deletions / 33 files** — 57% of the original Phase 109 by volume — and is a refactor of fork-divergent code, not an addition.
-**Success Criteria** (what must be TRUE):
-  1. A standalone `proj/ADR-113-spiffe-disposition.md` settles adopt-vs-adapt-vs-defer, weighing: the ADR-86 core-library crossing, the 545-deletion rewrite of the fork's divergent `tls_intercept`/`reverse.rs`, and the ~633-line `Cargo.lock` dependency-surface expansion on a security tool.
-  2. SPIFFE/SPIRE workload-identity auth for upstream routes (#1272) is absorbed per the ADR's disposition and is configurable via profile.
-  3. The ADR-86 boundary is confirmed non-regressed: the core-library additions (`crates/nono/src/undo/types.rs`, `crates/nono/src/audit.rs`) are shown to be audit/telemetry data types carrying no policy or enforcement logic — the reading recorded in `109-CONTEXT.md` — or the absorb is adapted to make that true.
-  4. Cross-target clippy is GREEN (`c831dade` touches `crates/nono-cli/src/exec_strategy/supervisor_linux.rs`, a cfg-gated Unix surface — the gate is mandatory, no PARTIAL→CI), and `maturin build` + `napi build` are green after the `nono-proxy` struct changes.
-**Plans**: 8 plans
-- [x] 113-01-PLAN.md — Core SPIFFE audit vocabulary (D-08/SC3) + new spiffe.rs/auth.rs modules
-- [x] 113-02-PLAN.md — config.rs schema types + workspace literal fixup + SC2 profile/schema surface + socket isolation
-- [x] 113-03-PLAN.md — oauth2.rs + credential.rs: SPIFFE-scoped OAuth2 assertion machinery (OD-1)
-- [x] 113-04-PLAN.md — route.rs: managed_auth/has_spiffe_source, async RouteStore::load (D-04), OD-2 comment fix
-- [x] 113-05-PLAN.md — server.rs: async load call sites, D-03 fail-closed guard, stale comment rewrite
-- [x] 113-06-PLAN.md — reverse.rs: handle_spiffe_route + handle_spiffe_assertion_credential
-- [x] 113-07-PLAN.md — Test infrastructure: spiffe_integration.rs/spiffe_run.rs, D-07 skip reporting, spire.yml CI lane
-- [x] 113-08-PLAN.md — ADR-113 + D-02 ledger note + D-05 dependency review + binding rebuilds + cross-target gates
-
-### Phase 114: OAuth Capture Absorb (SEC-02)
-**Goal**: Upstream's OAuth-capture surface (`9b692e07` / `3c59c62e` / `d033c631`) is absorbed or formally declined under its own disposition review, with the guarantee that real OAuth tokens never reach the sandboxed client preserved as a hard precondition — no reduced-scope half-feature ships.
-**Depends on**: Phase 112 (SEC-07 creates `crates/nono-cli/src/proxy_command.rs`, which `9b692e07` edits — 112 lands first), and Phase 113 (shares the `nono-proxy` `oauth2.rs` / `credential.rs` / `tls_intercept` surface)
-**Requirements**: SEC-02
-**Origin**: Carved out of Phase 112 on 2026-08-05 by operator decision during `/gsd:plan-phase 112`, after the plan-checker escalated it as exceeding the discretion `112-CONTEXT.md` D-04 granted the planner. Measurement: `9b692e07` is **26 files / +4,425 insertions**; Phase 112's research pass found ~9 of those files depend on subsystems absent from the fork (`oauth_capture/` core, `tls_intercept/*`, `forward.rs` from unabsorbed ancestor `149abde0`). Mirrors the NET-02/SPIFFE → Phase 113 split.
-**Success Criteria** (what must be TRUE):
-  1. A disposition decision for all three SEC-02 SHAs (`9b692e07`, `3c59c62e`, `d033c631`) is recorded with cited evidence — adopt, adapt-down, or formally decline — and the `108-DIVERGENCE-LEDGER.md` addendum row written by Phase 112 is updated to the final disposition rather than left at "deferred".
-  2. The token-confinement property is proven, not assumed: either the `forward.rs` response-rewrite hook (or an equivalent fork-side enforcement point) is in place, or the absorb is declined with the reasoning recorded. **A reduced-scope absorb that drops the rewrite hook without an equivalent enforcement point is forbidden** — that is the specific failure this phase exists to prevent.
-  3. If absorbed, the ADR-86 / ADR-111 boundary is confirmed non-regressed — no policy or enforcement logic lands in the core `nono` crate.
-  4. Both cross-target clippy gates (`cross` linux-gnu + `cargo-zigbuild` apple-darwin) are GREEN locally, plus `cargo fmt --all --check` and the workspace test suite diffed against the documented inherited failing baseline.
-
-**Plans**: 11 plans across 6 waves
-
-**Wave 1** *(foundation — types and vocabulary; no dependencies)*
-- [x] 114-01-PLAN.md — Core audit vocabulary (CaptureAuditContext, CaptureUnsupportedPath) + audit.rs wiring
-- [x] 114-02-PLAN.md — CaptureConfig declarative types + RouteConfig.capture field + workspace-wide literal fixups
-
-**Wave 2** *(blocked on Wave 1)*
-- [x] 114-03-PLAN.md — route.rs declares_capture / has_capture_source / capture_declared_for_upstream (host-only match)
-- [x] 114-04-PLAN.md — capture.rs: CapturePhantomStore (mint/resolve/admit) + portable rewrite/JWT-phantom logic
-- [x] 114-08-PLAN.md — CLI declarative surface: profile/credential_provider.rs (D-12) + CustomCredentialDef.capture
-
-**Wave 3** *(blocked on Wave 2)*
-- [x] 114-05-PLAN.md — reverse.rs shared buffer-and-rewrite helper + site-1 wiring (D-01r/D-02r/D-05 enforcement point)
-- [x] 114-09-PLAN.md — nono-profile.schema.json CaptureConfig $defs + round-trip test (D-13)
-
-**Wave 4** *(blocked on Wave 3)*
-- [x] 114-06-PLAN.md — reverse.rs sites 2+3 wiring (handle_spiffe_route, handle_spiffe_assertion_credential) + WR-13 proof + **Task 3: close the mint→resolve loop**
-- [x] 114-07-PLAN.md — server.rs D-06 cross-path fail-closed guard (handle_forward_http + CONNECT audit refinement)
-
-**Wave 5** *(blocked on Wave 4 — reaches sibling repos via `..`, requires `use_worktrees=false`)*
-- [x] 114-10-PLAN.md — D-14: ../nono-py + ../nono-ts binding rebuild
-
-**Wave 6** *(blocked on Wave 5 — closure and combined verification)*
-- [x] 114-11-PLAN.md — ADR-114 + 108-DIVERGENCE-LEDGER.md carry-forward note + REQUIREMENTS.md checkbox + combined verification
-
-**Cross-cutting constraints** *(appear in 2+ plans' `must_haves`)*:
-- **D-06** (6 plans) — fail-closed on every arrival path; all three `reverse.rs` relay sites proven *independently* per the WR-13 lesson
-- **D-02r** (3 plans) — SC2 satisfied by construction; the mint→resolve loop must be closed end-to-end, not merely described
-- **D-07** (4 plans) — upstream logic ported as a *design reference*; plumbing rebuilt (`git apply` will not work)
-- **SC4 / D-09** — both cross-target clippy gates GREEN locally; no PARTIAL→CI fallback
+Full goals, success criteria, and per-plan detail archived to
+[`milestones/v3.6-ROADMAP.md`](milestones/v3.6-ROADMAP.md).
+Requirements: [`milestones/v3.6-REQUIREMENTS.md`](milestones/v3.6-REQUIREMENTS.md).
+Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md).
 
 ## Progress
 
