@@ -116,3 +116,14 @@ None - no external service configuration required.
 ---
 *Phase: 115-v3-6-carry-forward-drain*
 *Completed: 2026-08-08*
+
+## Self-Check: PASSED
+
+All 6 modified source files confirmed present on disk; all 4 commit hashes
+(`3fd95b8b`, `83b8c504`, `73617620`, `7afe1583`) confirmed present in
+`git log --oneline --all`. Full-plan verification gate re-run clean:
+`cargo build --workspace --all-targets` (0 warnings/errors),
+`cargo test -p nono-sandbox-proxy --lib` (301 passed), `cargo test -p
+nono-sandbox --lib` (826 passed, including the new
+`all_denial_categories_present_and_guard_covers_every_entry` test),
+`cargo fmt --all -- --check` (clean, no diff).
