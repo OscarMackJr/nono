@@ -239,6 +239,21 @@ pub enum NetworkAuditInjectionMode {
 }
 
 /// Structured category for denied proxy events.
+///
+/// D-09 (Phase 115-02, DRAIN-03/NEW-01): `InterceptHandshakeFailed` was
+/// REMOVED (not reserved) from this enum. It had zero production
+/// constructors anywhere in the workspace and can never gain one: the fork
+/// declines TLS interception by standing decision (ADR-113 D-01;
+/// `ProxyHandle::intercept_ca_path()` always returns `None`). A variant
+/// advertising an enforcement point the fork structurally does not have is
+/// the same over-claiming shape BOUND-01/BOUND-02 exist to close.
+/// **Precondition discharged, not assumed:** 115-RESEARCH.md Q1 confirmed
+/// zero persisted-ledger risk — no ledger, fixture, or golden anywhere in
+/// this repo contains the string `intercept_handshake_failed`, and the
+/// decode path (`serde_json::from_str::<AuditEventRecord>`,
+/// `crates/nono/src/audit.rs`) has no `#[serde(other)]` tolerance, so no
+/// historic data could ever have round-tripped this variant. No
+/// unknown-variant escape route was needed as a result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NetworkAuditDenialCategory {
@@ -246,7 +261,6 @@ pub enum NetworkAuditDenialCategory {
     EndpointPolicy,
     ManagedCredentialUnavailable,
     HostDenied,
-    InterceptHandshakeFailed,
     UpstreamConnectFailed,
     ConnectBypassesL7,
     ExternalProxyRejected,
@@ -272,6 +286,85 @@ pub enum NetworkAuditDenialCategory {
     /// implementation at all); this variant denies on the RIGHT path
     /// because the buffer/parse/rewrite step itself failed closed.
     CaptureBufferOrRewriteFailed,
+}
+
+impl NetworkAuditDenialCategory {
+    /// Every variant of this enum, in declaration order.
+    ///
+    /// D-11 (Phase 115-02, DRAIN-02): self-enumerating so the DRAIN-02
+    /// round-trip test (Plan 115-05, `../nono-py`) does not need its own
+    /// hand-written variant list — a hand-maintained list drifting from its
+    /// source of truth is exactly the class DRAIN-02/NEW-06 exist to close.
+    ///
+    /// **D-11 dependency choice, decided here:** the zero-new-dependency
+    /// fallback (`const ALL` + `assert_all_variants_covered` below), not
+    /// `strum::EnumIter`. `strum`/`strum_macros` are completely absent from
+    /// this workspace today (zero hits in the root `Cargo.lock` and every
+    /// workspace member `Cargo.toml` — verified, 115-RESEARCH.md Q3), so
+    /// adding it is a genuinely new dependency, not a feature-flag on
+    /// something already resolved. `thiserror` (`crates/nono/Cargo.toml`,
+    /// `thiserror.workspace = true`) is direct, load-bearing precedent that
+    /// a derive-only macro dependency in this core crate does not cross
+    /// ADR-86's policy-free-library boundary — ADR-86 constrains what the
+    /// library *decides* (security policy), not what it *derives* — so
+    /// `strum` would not have been contentious either. But the fallback
+    /// achieves the identical "fails to compile on a missing variant"
+    /// guarantee with zero new dependency surface and no
+    /// package-legitimacy review needed: strictly cheaper on pure
+    /// dependency-surface grounds with equal structural strength,
+    /// consistent with this phase's governing "make it unrepresentable at
+    /// the lowest cost" rule.
+    // Used only by this module's own `#[cfg(test)]` guard test today
+    // (`all_denial_categories_present_and_guard_covers_every_entry`) — the
+    // non-test `lib` target has no other production consumer yet, which
+    // rustc's per-target dead_code analysis flags. Precedent for this exact
+    // targeted allow: `crates/nono-cli/src/policy.rs`'s
+    // `expand_egress_preset_tokens`.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const ALL: &'static [NetworkAuditDenialCategory] = &[
+        NetworkAuditDenialCategory::AuthenticationFailed,
+        NetworkAuditDenialCategory::EndpointPolicy,
+        NetworkAuditDenialCategory::ManagedCredentialUnavailable,
+        NetworkAuditDenialCategory::HostDenied,
+        NetworkAuditDenialCategory::UpstreamConnectFailed,
+        NetworkAuditDenialCategory::ConnectBypassesL7,
+        NetworkAuditDenialCategory::ExternalProxyRejected,
+        NetworkAuditDenialCategory::SpiffeUnsupportedPath,
+        NetworkAuditDenialCategory::CaptureUnsupportedPath,
+        NetworkAuditDenialCategory::CaptureBufferOrRewriteFailed,
+    ];
+}
+
+// IMPORTANT: match is exhaustive (no wildcard arm) so the compiler forces
+// handling of every current and future NetworkAuditDenialCategory variant —
+// mirrors `reverse.rs`'s `EndpointPolicyOutcome` "exhaustive... forces the
+// compiler" guard style. Adding a variant to the enum above without adding
+// a corresponding arm here fails to compile with `error[E0004]:
+// non-exhaustive patterns: NetworkAuditDenialCategory::<Variant> not
+// covered`. This is `ALL`'s own compile-time drift guard: forgetting to
+// keep this match (and `ALL`, alongside it) in sync with the enum is caught
+// at build time, not left for a runtime test to discover.
+//
+// Counterexample (do not uncomment — kept for reviewers, live-verified
+// during Task 3 of 115-02-PLAN.md and reverted after confirming the
+// failure): adding `NewVariant,` to `NetworkAuditDenialCategory` above
+// without adding `NetworkAuditDenialCategory::NewVariant => {}` to the
+// match below fails `cargo build -p nono-sandbox` with the E0004 error
+// shown above.
+#[cfg_attr(not(test), allow(dead_code))]
+fn assert_all_variants_covered(category: &NetworkAuditDenialCategory) {
+    match category {
+        NetworkAuditDenialCategory::AuthenticationFailed
+        | NetworkAuditDenialCategory::EndpointPolicy
+        | NetworkAuditDenialCategory::ManagedCredentialUnavailable
+        | NetworkAuditDenialCategory::HostDenied
+        | NetworkAuditDenialCategory::UpstreamConnectFailed
+        | NetworkAuditDenialCategory::ConnectBypassesL7
+        | NetworkAuditDenialCategory::ExternalProxyRejected
+        | NetworkAuditDenialCategory::SpiffeUnsupportedPath
+        | NetworkAuditDenialCategory::CaptureUnsupportedPath
+        | NetworkAuditDenialCategory::CaptureBufferOrRewriteFailed => {}
+    }
 }
 
 /// SPIFFE delegation-chain context recovered from a JWT-SVID's `act` claim.
@@ -538,6 +631,26 @@ pub struct SnapshotManifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D-09/D-11 (Phase 115-02, DRAIN-02/DRAIN-03): `ALL` must list exactly
+    /// the 10 variants remaining after `InterceptHandshakeFailed`'s removal,
+    /// and every entry must pass the exhaustive-match guard (which itself
+    /// fails to compile, not just fails this assertion, if it has drifted
+    /// from the enum — see `assert_all_variants_covered`'s own doc comment).
+    #[test]
+    fn all_denial_categories_present_and_guard_covers_every_entry() {
+        assert_eq!(
+            NetworkAuditDenialCategory::ALL.len(),
+            10,
+            "NetworkAuditDenialCategory::ALL must list every variant \
+             (10, post-D-09 removal of InterceptHandshakeFailed) — update \
+             both ALL and assert_all_variants_covered together when a \
+             variant is added or removed"
+        );
+        for category in NetworkAuditDenialCategory::ALL {
+            assert_all_variants_covered(category);
+        }
+    }
 
     #[test]
     fn content_hash_hex_roundtrip() {
