@@ -296,6 +296,16 @@ impl NetworkAuditDenialCategory {
     /// hand-written variant list — a hand-maintained list drifting from its
     /// source of truth is exactly the class DRAIN-02/NEW-06 exist to close.
     ///
+    /// **Plan 115-05 visibility correction:** 115-02 shipped this as
+    /// `pub(crate)` per its own spec, which made it unreachable from
+    /// `../nono-py` (a separate crate reached via path-dep) — the exact
+    /// consumer D-12 names. Widened to `pub` here so nono-py's round-trip
+    /// test can iterate it directly instead of hand-writing a second variant
+    /// list, which would reproduce the exact drift class DRAIN-02 exists to
+    /// close. `undo` is already a `pub mod` (`lib.rs`) and this type is
+    /// already `pub`, so this is a pure visibility widening with no new
+    /// surface shape.
+    ///
     /// **D-11 dependency choice, decided here:** the zero-new-dependency
     /// fallback (`const ALL` + `assert_all_variants_covered` below), not
     /// `strum::EnumIter`. `strum`/`strum_macros` are completely absent from
@@ -314,14 +324,13 @@ impl NetworkAuditDenialCategory {
     /// dependency-surface grounds with equal structural strength,
     /// consistent with this phase's governing "make it unrepresentable at
     /// the lowest cost" rule.
-    // Used only by this module's own `#[cfg(test)]` guard test today
-    // (`all_denial_categories_present_and_guard_covers_every_entry`) — the
-    // non-test `lib` target has no other production consumer yet, which
-    // rustc's per-target dead_code analysis flags. Precedent for this exact
-    // targeted allow: `crates/nono-cli/src/policy.rs`'s
-    // `expand_egress_preset_tokens`.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) const ALL: &'static [NetworkAuditDenialCategory] = &[
+    // `pub` (not `pub(crate)`): consumed by `../nono-py`'s round-trip test
+    // (Plan 115-05) across the crate boundary via its path-dep on this
+    // crate. A `pub` item is reachable from the crate's public API, so
+    // rustc's dead_code analysis does not flag it even with no in-crate
+    // production consumer — no `#[allow(dead_code)]` needed here (verified
+    // empirically: `cargo build -p nono-sandbox` is warning-free without it).
+    pub const ALL: &'static [NetworkAuditDenialCategory] = &[
         NetworkAuditDenialCategory::AuthenticationFailed,
         NetworkAuditDenialCategory::EndpointPolicy,
         NetworkAuditDenialCategory::ManagedCredentialUnavailable,
