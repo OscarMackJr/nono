@@ -36,7 +36,7 @@ Make the fork's deny-by-*composition* Windows model **prove** it is enforcing, s
 
 Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cleans the denial/audit spine that the receipt work in 118 builds on, and because the drain is independent of everything else. **116** runs the tool-sandbox ledger + ADR *early* so its verdict — which may or may not imply substantial engineering — is known before the milestone's remaining capacity is committed; its execution (120) is deliberately last and sized by that verdict. **117 → 118 → 119** run in dependency order: the fail-direction contract enumerates every layer, the receipts attest that enumeration per session, and the boundary statement can only be truthful once the contract says what each layer actually does.
 
-- [ ] **Phase 115: v3.6 Carry-Forward Drain** — 0/? plans
+- [ ] **Phase 115: v3.6 Carry-Forward Drain** — 0/6 plans
 - [ ] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 0/? plans
 - [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/? plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
@@ -250,6 +250,13 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   3. No production `log_denied` call site passes a default `EventContext`; `connect.rs` — `deny_domain`'s HTTPS enforcement point — carries a real denial category, and no denial variant remains with zero production constructors.
   4. A profile declaring both `aws_auth` and `capture` on one route is rejected when the profile is validated, not accepted and then 501'd at request time.
   5. A Python embedder can set `capture` and `spiffe` on a `RouteConfig`, and a `deny_domain`-blocked SPIFFE route is denied before any JWT-SVID is minted.
+**Plans**: 6 plans
+- [ ] 115-01-PLAN.md — DRAIN-01: CustomCredentialDef inject_mode/inject_header -> Option<T>, exhaustive .or(base) merge, HookConfig compile-time guard
+- [ ] 115-02-PLAN.md — DRAIN-02/DRAIN-03: log_denied required-category signature, 28 call-site migration + HostDenied/ExternalProxyRejected wiring, InterceptHandshakeFailed removal + self-enumerating ALL const
+- [ ] 115-03-PLAN.md — DRAIN-04: reject aws_auth and plain OAuth2 client_credentials at profile-validation time
+- [ ] 115-04-PLAN.md — DRAIN-06: hoist deny_domain host-check above managed_auth.acquire() in the SPIFFE dispatch path
+- [ ] 115-05-PLAN.md — DRAIN-02: nono-py denial-category codec — delete hand-written matches, self-enumerating round-trip test, maturin build
+- [ ] 115-06-PLAN.md — DRAIN-05: nono-py RouteConfig exposes spiffe/capture/endpoint_policy, D-16 allowlist test, maturin build
 
 ### Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR
 **Goal**: The standing structural divergence — upstream's `tool-sandbox/` subsystem, never absorbed since v0.65.0 — stops being an unexamined gap and becomes a recorded decision, with the fork's own hook + Low-IL broker path weighed as a real alternative rather than assumed inferior. Run early so the verdict is known before the milestone's remaining capacity is committed.
@@ -336,7 +343,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
 | 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |
 | 114. OAuth Capture Absorb (SEC-02) | v3.6 | 11/11 | Complete | 2026-08-07 |
-| 115. v3.6 Carry-Forward Drain | v3.7 | 0/? | Not started | - |
+| 115. v3.6 Carry-Forward Drain | v3.7 | 0/6 | Planned | - |
 | 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 0/? | Not started | - |
 | 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 0/? | Not started | - |
 | 118. Per-Session Enforcement Receipts | v3.7 | 0/? | Not started | - |
