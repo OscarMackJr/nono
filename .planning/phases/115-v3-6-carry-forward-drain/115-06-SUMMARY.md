@@ -159,3 +159,18 @@ None - no external service configuration required.
 ---
 *Phase: 115-v3-6-carry-forward-drain*
 *Completed: 2026-08-08*
+
+## Self-Check: PASSED
+
+All modified/created files confirmed present on disk: `../nono-py/src/proxy.rs`,
+`../nono-py/src/lib.rs`, `../nono-py/python/nono_py/__init__.py`,
+`../nono-py/python/nono_py/_nono_py.pyi`, this SUMMARY.md,
+`.planning/phases/115-v3-6-carry-forward-drain/deferred-items.md`, and the built
+wheel `../nono-py/target/wheels/nono_sandbox-0.70.0-cp312-cp312-win_amd64.whl`.
+All commit hashes confirmed present in `git log --oneline --all`: `69f7148`,
+`5d348c3`, `8a45a1b` (`../nono-py` repo, branch `44-broker-ffi-lockstep`);
+`99271aeb` (`nono` repo, branch `milestone/v2.13-carryforward-closeout`).
+Plan-level verification gate re-run clean: `cargo test -p nono-py --lib`
+(71 passed), `maturin build` (wheel built), `cargo build --workspace
+--all-targets` (nono repo, 0 errors), `cargo fmt --all -- --check` (nono repo,
+clean).
