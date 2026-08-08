@@ -90,3 +90,106 @@ Phase numbering continues from Phase 100 → Phase 101+.
 > the milestone audit is at [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md).
 > This file remains live because **v3.5 (Phases 101–107) is still open** — the v3.5 requirements
 > above are active tracking, not history.
+
+---
+
+# Requirements: nono v3.7 — Composite Integrity + Tool-Sandbox Disposition
+
+**Defined:** 2026-08-08
+**Core Value:** Observation of enforcement must be as trustworthy as the enforcement. The fork's Windows guarantee is deny-by-*composition* — the intersection of integrity level, AppContainer profile, DACL, and WFP — not upstream's single deny-by-construction kernel gate. v3.7 makes that composite **prove** it is enforcing rather than adding another layer.
+
+**Scope:** three workstreams — (1) **Composite Integrity**: a system-wide fail-direction contract + startup self-attestation, per-session enforcement receipts, an explicit security-model boundary statement, and a written state-of-the-art decision log; (2) **Tool-Sandbox Disposition**: an ADR-gated, genuinely-open verdict on upstream's never-absorbed `tool-sandbox/` subsystem, then executing that verdict; (3) **v3.6 carry-forward drain**: the six findings the v3.6 milestone audit carried forward. **Milestone-marker only** — no crate leapfrog, no publish.
+
+> **Architecture invariants:**
+> - **ADR-65 stands.** The v2.10 go/no-go verdict on a production minifilter (**No-go/Conditional-go**) is not overturned. Design-review items G-WIN-3 (minifilter Phase 64 to production) and G-WIN-4 (driver lifecycle / fleet story) are OUT of scope. The load-bearing consequence is itself a deliverable (BOUND-02): integrity levels and DACLs cannot express "read `C:\project\src` but not `C:\project\.env`" — same directory, no integrity distinction — so **per-file read policy is explicitly NOT claimed as a shipped guarantee.**
+> - **A composite fails at its seams, has ambiguous fail-direction, and is harder to attest.** Those three properties are the source of every CINT/RCPT/BOUND requirement below. Upstream never has to answer them because a single kernel gate makes them unaskable.
+> - **The failure mode being closed is "reports enforcing while one layer is silently inert."** This is not hypothetical — the fork already closed one instance (the "honesty gap" where `Sandbox::apply()` returned `UnsupportedPlatform` while the CLI enforced via WFP). CINT-02 exists so the next instance cannot be silent.
+> - **Receipts are content-free.** An enforcement receipt records the containment a process ran under, never what the process did. No paths, no arguments, no payloads — same discipline as the existing redacted security events.
+> - **Symbol-level verification, not file presence.** TSBX-02's confidence ratings must be grounded in greps for the actual types/functions/fields, not in "the target files exist." Phase 112's disposition table was wrong in 3 of ~6 re-checked dispositions, every time for exactly this reason.
+> - **Executor self-check is not security evidence.** Phase 112's code-review gate caught 4 Critical fail-open defects that all 8 executor self-checks passed over; Phase 114 repeated it twice. Every code-touching phase in v3.7 runs `/gsd:code-review`.
+> - **Structural fixes over spot fixes for DRAIN-02/DRAIN-03.** Both findings exist *because* a hand-maintained list drifted from its source of truth. Patching the missing arms reproduces the class.
+> - **Milestone-marker only** — the tree stays at `0.70.0`; no crate leapfrog, no registry publish. Tag `v3.7` local. This keeps v3.5's paused go-live as the single release decision point.
+> - **Two milestones are open.** v3.5 owns Phases 101–107 and remains live; v3.7 owns 115+. `phases.clear` must not run; this file and `ROADMAP.md` are **appended to, never overwritten**; SDK STATE writers stay banned. All commits DCO-signed; repo stays PUBLIC (no `build_notes/`/`.gsd/` staged).
+> - **Cross-target clippy remains MUST** for any cfg-gated Unix edit — both local gates (`cross` linux-gnu, `cargo-zigbuild` apple-darwin) GREEN, no PARTIAL→CI.
+
+## v1 Requirements
+
+### Fail-Direction & Self-Attestation (CINT)
+
+- [ ] **CINT-01**: A single fail-direction contract states, for **every** layer the Windows backend composes — restricted token, mandatory integrity label, AppContainer profile + package SID, DACL grants, WFP egress filters, and the minifilter's *absence* — what happens when that layer cannot be established (fail closed / fail open / continue in reduced mode). Each entry is derived from the code and cites the enforcing call site, so the document is a description of behaviour rather than an assertion about it.
+- [ ] **CINT-02**: nono refuses to report "enforcing" when any expected layer is unconfirmed. A startup self-attestation pass checks each layer named in CINT-01 and either aborts or visibly downgrades its claim — it never proceeds while presenting a confinement guarantee it cannot substantiate.
+- [ ] **CINT-03**: Each layer's actual runtime fail-direction matches what CINT-01 claims, proven by a per-layer test that forces that layer unavailable and asserts the contracted outcome. A contract entry with no such test is not satisfied.
+
+### Enforcement Receipts (RCPT)
+
+- [ ] **RCPT-01**: Every confined session emits a per-session enforcement receipt naming which layers were confirmed active for that process. The receipt is content-free — no paths, no arguments, no payloads — recording the containment the process ran under, not what it did.
+- [ ] **RCPT-02**: The receipt is tamper-evident on the same terms as the existing audit chain (HMAC-chained `SecurityEventLayer`), so a downstream governance consumer can verify a receipt was not edited after the fact.
+- [ ] **RCPT-03**: A receipt distinguishes "layer confirmed active" from "layer not expected in this configuration" from "layer expected but unconfirmed". An unattested layer can never be read as an attested one, and a reader can tell the three cases apart without out-of-band knowledge.
+
+### Security-Model Boundary & Decision Log (BOUND)
+
+- [ ] **BOUND-01**: The security model documents what nono governs — destination, credential, containment — and what it does not: payload contents. It states explicitly that because the fork tunnels TLS transparently and filters at the host level, a prompt exfiltrating a secret to an **allowlisted** host is invisible to nono, so no downstream consumer can over-claim content control.
+- [ ] **BOUND-02**: The filesystem guarantee is stated in terms of the shipped mechanism. Per-file read policy within a single directory (`src/` readable, `.env` not) is explicitly named as **not enforced**, citing ADR-65's standing No-go/Conditional-go verdict as the reason — so the 1.0 guarantee describes what ships, not what the design intends.
+- [ ] **BOUND-03**: Each of the six state-of-the-art techniques is ruled in or out **in writing**, with reasoning: Windows Sandbox / Server Containers (HCS) as a strong-isolation tier; PPL / Restricted User Mode for protecting nono's **own supervisor** from the process it contains; WFP ALE layers beyond connect-time; ETW as an enforcement-adjacent escape-attempt signal; AppContainer capability profiles as declarative positive grants; and WDAC for exec gating. The output is a set of decisions, not a set of omissions.
+
+### Tool-Sandbox Disposition (TSBX)
+
+- [ ] **TSBX-01**: A per-commit divergence ledger covers upstream's `tool-sandbox/` subsystem (PR #1105, introduced v0.65.0, never absorbed) and the 7 refinement PRs Phase 108 fenced (#1280 / #1322 / #1325 / #1384 / #1394 / #1413 / #1417), with `windows-touch` flags and per-cluster dispositions — the Phase 108 / 98 / 94 / 85 ledger shape.
+- [ ] **TSBX-02**: An ADR records the adopt-vs-formalize verdict, evaluating the fork's own independently-built answer (PreToolUse hook → `nono run` + Low-IL primary-token broker, PR #4) as a genuine alternative rather than a fallback. Every confidence rating is grounded in symbol-level verification of what exists in the fork — the types, functions and fields actually greppable — not file presence.
+- [ ] **TSBX-03**: The verdict is executed. Either the subsystem is absorbed with a `platform/windows.rs` driver, or fork-native is formalized as a permanent, named scope boundary that a future absorb has something to reconcile against (ADR-111 / ADR-113 shape). Either way the divergence is closed by recorded decision and stops being a silent standing gap.
+
+### v3.6 Carry-Forward Drain (DRAIN)
+
+- [ ] **DRAIN-01** *(NEW-05)*: A `platform_overrides.<os>` block that redefines a custom credential and omits `inject_mode` / `inject_header` inherits the base values instead of silently resetting the route to header-mode `Authorization`. `merge_custom_credential_def` (`crates/nono-cli/src/profile/mod.rs:3564-3567`) merges them with `.or(base)`, pinned by a test; and the NEW-02 regression test's missing `spiffe` assertion (ACC-04, `mod.rs:10188`/`:10238-10252`) is added.
+- [ ] **DRAIN-02** *(NEW-06, blocker-class)*: `nono-py` round-trips every denial category its own encoder emits — `capture_unsupported_path` and `capture_buffer_or_rewrite_failed` no longer raise `ValueError` from `../nono-py/src/undo.rs`. Pinned by an exhaustiveness test over the encoder's own output, not by adding two arms to a hand-maintained match that will drift again.
+- [ ] **DRAIN-03** *(NEW-01)*: The three denial sites that pass `&audit::EventContext::default()` — `connect.rs:86` (which is `deny_domain`'s HTTPS enforcement point), `external.rs:136`, `external.rs:200` — emit a real denial category; and the two variants with zero production constructors (`InterceptHandshakeFailed`, `ExternalProxyRejected`, `crates/nono/src/undo/types.rs:249`/`:252`) are either wired to a real site or removed.
+- [ ] **DRAIN-04** *(NEW-03)*: A route declaring both `aws_auth` and `capture` either works or is rejected at config-validation time. It no longer validates successfully and then returns 501 at runtime (`reverse.rs:328-331` returning before the capture branch at `:427`).
+- [ ] **DRAIN-05** *(NEW-07)*: A Python embedder can configure `capture` and `spiffe` on a `RouteConfig` — `../nono-py/src/proxy.rs`'s constructor exposes both instead of hardcoding `None`, so a Python-configured OAuth token-endpoint route no longer silently gets pre-113 / pre-114 behaviour.
+- [ ] **DRAIN-06** *(NEW-08)*: A SPIFFE route blocked by `deny_domain` is denied **before** a JWT-SVID is minted — `managed_auth.acquire()` (`reverse.rs:634`) no longer runs ahead of the filter host check (`:684`), matching the ordering every other dispatch path uses.
+
+## v2 / Future Requirements
+
+Tracked, not in this milestone.
+
+- **FUT-08**: **UPST13** — the next upstream-sync cadence past `nolabs-ai/nono` v0.69.0. Offered as a fourth v3.7 workstream and deliberately declined to keep an already-three-workstream milestone bounded. Leading candidate for the milestone after v3.7.
+- **FUT-09**: `platform/windows.rs` tool-sandbox driver build-out — **conditional**: only exists as future work if TSBX-02 returns *adopt* and TSBX-03 cannot fully land inside v3.7. Sized from the verdict, never pre-committed.
+- **FUT-10**: Payload inspection / TLS interception. A large, CA-distribution-shaped project. BOUND-01 states the boundary rather than building it; if payload inspection is ever needed it is scoped as its own milestone, never retrofitted.
+
+## Out of Scope
+
+Explicit exclusions, documented to prevent scope creep.
+
+| Feature | Reason |
+|---------|--------|
+| Minifilter Phase 64 to production (G-WIN-3) | ADR-65 stands: No-go/Conditional-go. WFP + AppContainer/Low-IL already gives kernel-enforced isolation; the driver is incremental gain at high cert/maintenance cost. Its consequence is *documented* by BOUND-02, not built around. |
+| Driver lifecycle / fleet rollout story (G-WIN-4) | Follows the minifilter. With no production driver in scope, a signing/altitude/staged-rollout/kernel-crash-rollback document has no subject. |
+| Per-file read policy inside a single directory | Structurally unavailable without the minifilter — integrity levels and DACLs cannot distinguish `src/` from `.env` in the same directory. Explicitly not claimed (BOUND-02). |
+| TLS interception / payload inspection | The fork dropped it deliberately (no CA to distribute, no interception liability). BOUND-01 states the resulting boundary; building it is FUT-10. |
+| Crate version leapfrog and registry publish | Milestone-marker only. Stacking a second version bump behind v3.5's paused go-live would create two release decision points instead of one. |
+| Upstream sync past v0.69.0 | Out of this milestone's window (FUT-08). Offered and declined at milestone open. |
+| Overwriting `REQUIREMENTS.md` / `ROADMAP.md` wholesale | v3.5 is still open and its tracking lives in the same files; the stock archive/reset flow destroys it (caught and worked around at the v3.6 close, `1fd559bf`). |
+
+## Traceability
+
+Phase numbering continues from Phase 114 → Phase 115+ (v3.5 owns 101–107; no `--reset-phase-numbers`).
+
+| Requirement | Phase | Status |
+|-------------|-------|--------|
+| DRAIN-01 | Phase 115 | Pending |
+| DRAIN-02 | Phase 115 | Pending |
+| DRAIN-03 | Phase 115 | Pending |
+| DRAIN-04 | Phase 115 | Pending |
+| DRAIN-05 | Phase 115 | Pending |
+| DRAIN-06 | Phase 115 | Pending |
+| TSBX-01 | Phase 116 | Pending |
+| TSBX-02 | Phase 116 | Pending |
+| CINT-01 | Phase 117 | Pending |
+| CINT-02 | Phase 117 | Pending |
+| CINT-03 | Phase 117 | Pending |
+| RCPT-01 | Phase 118 | Pending |
+| RCPT-02 | Phase 118 | Pending |
+| RCPT-03 | Phase 118 | Pending |
+| BOUND-01 | Phase 119 | Pending |
+| BOUND-02 | Phase 119 | Pending |
+| BOUND-03 | Phase 119 | Pending |
+| TSBX-03 | Phase 120 | Pending |
