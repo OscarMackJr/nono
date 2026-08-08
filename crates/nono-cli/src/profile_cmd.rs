@@ -2455,15 +2455,17 @@ pub(crate) fn cmd_diff(args: ProfileDiffArgs) -> Result<()> {
                 );
             }
             if old.inject_header != new.inject_header {
+                let old_header = old.inject_header.as_deref().unwrap_or("<inherited>");
+                let new_header = new.inject_header.as_deref().unwrap_or("<inherited>");
                 println!(
                     "      {} inject_header: {}",
                     theme::fg("-", t.red),
-                    theme::fg(&old.inject_header, t.red)
+                    theme::fg(old_header, t.red)
                 );
                 println!(
                     "      {} inject_header: {}",
                     theme::fg("+", t.green),
-                    theme::fg(&new.inject_header, t.green)
+                    theme::fg(new_header, t.green)
                 );
             }
             if old.credential_format != new.credential_format {
@@ -3442,12 +3444,20 @@ fn resolve_to_manifest(
     // schema, so only static-key credentials are exported.
     let mut credentials = Vec::new();
     for (name, cred) in &prof.network.custom_credentials {
-        let inject_mode = match cred.inject_mode {
+        // D-01 (Phase 115): `cred.inject_mode` is now `Option<InjectMode>` — an
+        // omitted value inherits via `.or(base)` at profile-merge time; here
+        // (manifest export) it resolves the same way the production consumer
+        // (`network_policy.rs`) does.
+        let inject_mode = match cred.inject_mode.clone().unwrap_or_default() {
             profile::InjectMode::Header => manifest::InjectMode::Header,
             profile::InjectMode::UrlPath => manifest::InjectMode::UrlPath,
             profile::InjectMode::QueryParam => manifest::InjectMode::QueryParam,
             profile::InjectMode::BasicAuth => manifest::InjectMode::BasicAuth,
         };
+        let effective_inject_header = cred
+            .inject_header
+            .clone()
+            .unwrap_or_else(profile::default_inject_header);
 
         let endpoint_rules: Vec<manifest::EndpointRule> = cred
             .endpoint_rules
@@ -3482,9 +3492,9 @@ fn resolve_to_manifest(
             },
             inject: Some(manifest::CredentialInject {
                 mode: inject_mode,
-                header: cred.inject_header.clone(),
+                header: effective_inject_header.clone(),
                 format: nono_proxy::config::resolved_credential_format(
-                    &cred.inject_header,
+                    &effective_inject_header,
                     cred.credential_format.as_deref(),
                 ),
                 path_pattern: cred.path_pattern.clone(),

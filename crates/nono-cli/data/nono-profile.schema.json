@@ -657,14 +657,18 @@
           "description": "Declarative sandboxed OAuth capture (SEC-02, Phase 114, D-13). When present, the proxy buffers this route's response (up to `max_response_bytes`, fail closed on exceed) and rewrites `response_fields` from real tokens to sandbox-visible phantoms before the response reaches the sandboxed client. Unlike `credential_key`/`auth`/`aws_auth`/`spiffe` (request-direction: inject a credential into outbound requests), `capture` is response-direction — it composes with those fields rather than being mutually exclusive with them, and a route may declare ONLY `capture` with no other auth mechanism set. This schema entry hand-ports only the fields this fork actually implements (`response_fields`, `request_nonce_fields`, `max_response_bytes`); upstream's disk persistence, credential-store detection, and login-flow helper surface is deliberately NOT ported (fork scope decision — see ADR-114, D-13)."
         },
         "inject_mode": {
-          "$ref": "#/$defs/InjectMode",
-          "description": "Credential injection mode. Determines how the credential is inserted into outbound requests.",
-          "default": "header"
+          "oneOf": [
+            { "$ref": "#/$defs/InjectMode" },
+            { "type": "null" }
+          ],
+          "description": "Credential injection mode. Determines how the credential is inserted into outbound requests. Defaults to \"header\". If omitted on a `platform_overrides.<os>` block that redefines this credential, inherits the base credential's value rather than resetting to \"header\" (D-01, Phase 115, closing NEW-05)."
         },
         "inject_header": {
-          "type": "string",
-          "description": "HTTP header name to inject the credential into. Only used when inject_mode is \"header\".",
-          "default": "Authorization"
+          "oneOf": [
+            { "type": "string" },
+            { "type": "null" }
+          ],
+          "description": "HTTP header name to inject the credential into. Only used when inject_mode is \"header\". Defaults to \"Authorization\". If omitted on a `platform_overrides.<os>` block that redefines this credential, inherits the base credential's value rather than resetting to \"Authorization\" (D-01, Phase 115, closing NEW-05)."
         },
         "credential_format": {
           "oneOf": [

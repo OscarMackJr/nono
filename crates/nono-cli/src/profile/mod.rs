@@ -934,6 +934,18 @@ pub struct PolicyPatchConfig {
 /// - `url_path`: Replace pattern in URL path (e.g., Telegram Bot API `/bot{}/`)
 /// - `query_param`: Add/replace query parameter (e.g., `?api_key=...`)
 /// - `basic_auth`: HTTP Basic Authentication (credential as `username:password`)
+///
+/// D-01 compile-time guard: this struct deliberately has no `#[derive(Default)]`
+/// and no construction site anywhere in this codebase uses `..Default::default()`
+/// — every field is named individually at every literal. That means a field added
+/// here without updating every construction site fails to compile (`E0063`,
+/// missing field) rather than silently defaulting. This is what makes the
+/// `Option<T>` migration on `inject_mode`/`inject_header` (below) impossible to
+/// half-apply: a stray un-updated call site is a build break, not a silent bug.
+/// Live-verified 2026-08-08: temporarily adding `pub _bite_proof_probe: Option<bool>`
+/// here and running `cargo build -p nono-sandbox-cli` failed with `E0063` naming
+/// every un-updated `CustomCredentialDef { .. }` literal; removing the field
+/// restored a clean build. See 115-01-SUMMARY.md for the full transcript.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomCredentialDef {
@@ -961,15 +973,21 @@ pub struct CustomCredentialDef {
     /// The actual OAuth2 token-exchange client lands in Plan 22-04 (OAUTH).
     #[serde(default)]
     pub auth: Option<OAuth2Config>,
-    /// Injection mode (default: "header")
+    /// Injection mode (default: "header"). `None` means "not set on this
+    /// literal" — at merge time this is the signal that a `platform_overrides`
+    /// child block did not redefine injection mode and should inherit the
+    /// base's value (D-01); at the production consumer site it resolves via
+    /// `.unwrap_or_default()`.
     #[serde(default)]
-    pub inject_mode: InjectMode,
+    pub inject_mode: Option<InjectMode>,
 
     // --- Header mode fields ---
     /// HTTP header to inject the credential into (default: "Authorization")
-    /// Only used when inject_mode is "header".
-    #[serde(default = "default_inject_header")]
-    pub inject_header: String,
+    /// Only used when inject_mode is "header". `None` means "not set on this
+    /// literal" — same inheritance signal as `inject_mode` above; resolves via
+    /// `.unwrap_or_else(default_inject_header)` at the production consumer site.
+    #[serde(default)]
+    pub inject_header: Option<String>,
     /// How the injected header value is built (`{}` is replaced by the secret). Only when `inject_mode` is header.
     ///
     /// If you set this field, that whole string is used as-is — `Authorization` or any other header.
@@ -1050,7 +1068,7 @@ pub struct CustomCredentialDef {
     pub capture: Option<nono_proxy::config::CaptureConfig>,
 }
 
-fn default_inject_header() -> String {
+pub(crate) fn default_inject_header() -> String {
     "Authorization".to_string()
 }
 
@@ -1266,7 +1284,7 @@ fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<
     // Mode-specific validation only applies to credential_key-based routes.
     // OAuth2 routes always inject as Bearer header (no per-mode validation).
     if cred.credential_key.is_some() {
-        match cred.inject_mode {
+        match cred.inject_mode.clone().unwrap_or_default() {
             InjectMode::Header => {
                 validate_header_mode(name, cred)?;
             }
@@ -1432,12 +1450,20 @@ fn validate_header_name(cred_name: &str, header: &str) -> Result<()> {
 
 /// Validate header injection mode fields.
 fn validate_header_mode(name: &str, cred: &CustomCredentialDef) -> Result<()> {
+    // `inject_header` is `Option<String>` (D-01) — an omitted value inherits
+    // via `.or(base)` at merge time; at validation time it resolves the same
+    // way the production consumer (`network_policy.rs`) does.
+    let effective_header = cred
+        .inject_header
+        .clone()
+        .unwrap_or_else(default_inject_header);
+
     // Validate inject_header (RFC 7230 token)
-    validate_header_name(name, &cred.inject_header)?;
+    validate_header_name(name, &effective_header)?;
 
     // Validate effective credential_format (no CRLF injection)
     let effective_format = nono_proxy::config::resolved_credential_format(
-        cred.inject_header.as_str(),
+        effective_header.as_str(),
         cred.credential_format.as_deref(),
     );
     if effective_format.contains('\r') || effective_format.contains('\n') {
@@ -3554,17 +3580,32 @@ fn merge_platform_override_slot(
 /// An override can still change any field — it just has to say so explicitly.
 /// Silence now means "inherit", never "remove".
 ///
-/// `upstream` is required (always present on the child) and `inject_mode` /
-/// `inject_header` are `serde(default)`-populated presentation fields that
-/// remove no security control, so those three take the child's value.
+/// D-05 (this phase, closing NEW-05): where a credential is placed on the wire
+/// — which header, which URL segment, which query parameter — is not a
+/// presentation detail. It determines whether the credential actually reaches
+/// its intended destination or leaks somewhere else entirely, so `inject_mode`
+/// and `inject_header` merge exactly like every other optional field above:
+/// `.or(base)`, silence means inherit. A prior version of this comment called
+/// them "presentation fields that remove no security control" and let them
+/// take the child's bare value unconditionally — that framing was wrong and is
+/// what produced NEW-05 (an override that only redefines `upstream` silently
+/// reset a `url_path`/`query_param` route to header-mode `Authorization`).
+///
+/// `upstream` is the one field that stays required-on-the-child (D-02),
+/// deliberately and not by oversight: it identifies *what the credential
+/// targets*, and an override block that omits it is far more likely a typo
+/// than an inheritance intent. Requiring it keeps every override block
+/// self-describing about what it points at, even though every other field on
+/// it now inherits silently. This asymmetry is intentional — do not "fix" it
+/// by making `upstream` inherit too.
 fn merge_custom_credential_def(
     base: CustomCredentialDef,
     child: CustomCredentialDef,
 ) -> CustomCredentialDef {
     CustomCredentialDef {
         upstream: child.upstream,
-        inject_mode: child.inject_mode,
-        inject_header: child.inject_header,
+        inject_mode: child.inject_mode.or(base.inject_mode),
+        inject_header: child.inject_header.or(base.inject_header),
         credential_key: child.credential_key.or(base.credential_key),
         auth: child.auth.or(base.auth),
         credential_format: child.credential_format.or(base.credential_format),
@@ -5221,8 +5262,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("api_key".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -5432,7 +5473,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_invalid_header_rejected() {
         let mut cred = header_cred_builder();
-        cred.inject_header = "X-Header\r\nEvil: injected".to_string();
+        cred.inject_header = Some("X-Header\r\nEvil: injected".to_string());
         let result = validate_custom_credential("test", &cred);
         let err = result.expect_err("CRLF in header should be rejected");
         assert!(err.to_string().contains("invalid characters"));
@@ -5459,7 +5500,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_empty_header_rejected() {
         let mut cred = header_cred_builder();
-        cred.inject_header = "".to_string();
+        cred.inject_header = Some("".to_string());
         let result = validate_custom_credential("test", &cred);
         let err = result.expect_err("empty header should be rejected");
         assert!(err.to_string().contains("cannot be empty"));
@@ -5468,7 +5509,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_header_with_space_rejected() {
         let mut cred = header_cred_builder();
-        cred.inject_header = "X Header".to_string();
+        cred.inject_header = Some("X Header".to_string());
         let result = validate_custom_credential("test", &cred);
         let err = result.expect_err("space in header should be rejected");
         assert!(err.to_string().contains("invalid characters"));
@@ -5477,7 +5518,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_header_with_colon_rejected() {
         let mut cred = header_cred_builder();
-        cred.inject_header = "X-Header:".to_string();
+        cred.inject_header = Some("X-Header:".to_string());
         let result = validate_custom_credential("test", &cred);
         let err = result.expect_err("colon in header should be rejected");
         assert!(err.to_string().contains("invalid characters"));
@@ -5486,7 +5527,7 @@ mod tests {
     #[test]
     fn test_validate_custom_credential_valid_special_header_chars() {
         let mut cred = header_cred_builder();
-        cred.inject_header = "X-Header!".to_string(); // ! is valid tchar
+        cred.inject_header = Some("X-Header!".to_string()); // ! is valid tchar
         assert!(validate_custom_credential("test", &cred).is_ok());
     }
 
@@ -5573,8 +5614,8 @@ mod tests {
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
-            inject_mode: InjectMode::UrlPath,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::UrlPath),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: Some("/bot{}/".to_string()),
             path_replacement: None,
@@ -5595,8 +5636,8 @@ mod tests {
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
-            inject_mode: InjectMode::UrlPath,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::UrlPath),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None, // Missing required field
             path_replacement: None,
@@ -5619,8 +5660,8 @@ mod tests {
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
-            inject_mode: InjectMode::UrlPath,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::UrlPath),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: Some("/bot/token/".to_string()), // No {} placeholder
             path_replacement: None,
@@ -5643,8 +5684,8 @@ mod tests {
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
-            inject_mode: InjectMode::UrlPath,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::UrlPath),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: Some("/bot{}/".to_string()),
             path_replacement: Some("/v2/bot{}/".to_string()),
@@ -5665,8 +5706,8 @@ mod tests {
             upstream: "https://api.telegram.org".to_string(),
             credential_key: Some("telegram_token".to_string()),
             auth: None,
-            inject_mode: InjectMode::UrlPath,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::UrlPath),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: Some("/bot{}/".to_string()),
             path_replacement: Some("/v2/bot/fixed/".to_string()), // No {} placeholder
@@ -5689,8 +5730,8 @@ mod tests {
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
-            inject_mode: InjectMode::QueryParam,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::QueryParam),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -5711,8 +5752,8 @@ mod tests {
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
-            inject_mode: InjectMode::QueryParam,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::QueryParam),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -5735,8 +5776,8 @@ mod tests {
             upstream: "https://maps.googleapis.com".to_string(),
             credential_key: Some("google_maps_key".to_string()),
             auth: None,
-            inject_mode: InjectMode::QueryParam,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::QueryParam),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -5759,8 +5800,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("example_basic_auth".to_string()),
             auth: None,
-            inject_mode: InjectMode::BasicAuth,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::BasicAuth),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -6166,8 +6207,8 @@ mod tests {
                 upstream: "https://a.example.com".to_string(),
                 credential_key: Some("key_a".to_string()),
                 auth: None,
-                inject_mode: InjectMode::Header,
-                inject_header: "Authorization".to_string(),
+                inject_mode: Some(InjectMode::Header),
+                inject_header: Some("Authorization".to_string()),
                 credential_format: Some("Bearer {}".to_string()),
                 path_pattern: None,
                 path_replacement: None,
@@ -6188,8 +6229,8 @@ mod tests {
                 upstream: "https://b.example.com".to_string(),
                 credential_key: Some("key_b".to_string()),
                 auth: None,
-                inject_mode: InjectMode::Header,
-                inject_header: "Authorization".to_string(),
+                inject_mode: Some(InjectMode::Header),
+                inject_header: Some("Authorization".to_string()),
                 credential_format: Some("Token {}".to_string()),
                 path_pattern: None,
                 path_replacement: None,
@@ -6328,8 +6369,8 @@ mod tests {
                 upstream: "https://base.example.com".to_string(),
                 credential_key: Some("key_base".to_string()),
                 auth: None,
-                inject_mode: InjectMode::Header,
-                inject_header: "Authorization".to_string(),
+                inject_mode: Some(InjectMode::Header),
+                inject_header: Some("Authorization".to_string()),
                 credential_format: Some("Bearer {}".to_string()),
                 path_pattern: None,
                 path_replacement: None,
@@ -6350,8 +6391,8 @@ mod tests {
                 upstream: "https://child.example.com".to_string(),
                 credential_key: Some("key_child".to_string()),
                 auth: None,
-                inject_mode: InjectMode::Header,
-                inject_header: "Authorization".to_string(),
+                inject_mode: Some(InjectMode::Header),
+                inject_header: Some("Authorization".to_string()),
                 credential_format: Some("Token {}".to_string()),
                 path_pattern: None,
                 path_replacement: None,
@@ -7767,8 +7808,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/api-token".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -7792,8 +7833,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/api-token".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -7820,8 +7861,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file://relative/path".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -7848,8 +7889,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("file:///run/secrets/../../../etc/shadow".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -7908,8 +7949,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://MY_API_TOKEN".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -7930,8 +7971,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: Some("env://LD_PRELOAD".to_string()),
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -8499,8 +8540,8 @@ mod tests {
                 client_secret: "env://S".to_string(),
                 scope: String::new(),
             }),
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -8522,8 +8563,8 @@ mod tests {
             upstream: "https://api.example.com".to_string(),
             credential_key: None,
             auth: None,
-            inject_mode: InjectMode::Header,
-            inject_header: "Authorization".to_string(),
+            inject_mode: Some(InjectMode::Header),
+            inject_header: Some("Authorization".to_string()),
             credential_format: Some("Bearer {}".to_string()),
             path_pattern: None,
             path_replacement: None,
@@ -10175,8 +10216,8 @@ mod platform_overrides_tests {
                 upstream: upstream.to_string(),
                 credential_key: None,
                 auth: None,
-                inject_mode: InjectMode::default(),
-                inject_header: default_inject_header(),
+                inject_mode: Some(InjectMode::default()),
+                inject_header: Some(default_inject_header()),
                 credential_format: None,
                 path_pattern: None,
                 path_replacement: None,
