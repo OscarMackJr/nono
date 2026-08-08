@@ -56,12 +56,10 @@ pub async fn handle_connect(
             audit::log_denied(
                 audit_log,
                 audit::ProxyMode::Connect,
+                nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
                 &audit::EventContext {
                     auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
                     auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                    ),
                     ..Default::default()
                 },
                 &host,
@@ -83,6 +81,7 @@ pub async fn handle_connect(
         audit::log_denied(
             audit_log,
             audit::ProxyMode::Connect,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
             &audit::EventContext::default(),
             &host,
             port,
@@ -238,10 +237,8 @@ async fn write_upstream_failure<S: AsyncWrite + Unpin>(
     audit::log_denied(
         audit_log,
         audit::ProxyMode::Connect,
-        &audit::EventContext {
-            denial_category: Some(nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed),
-            ..audit::EventContext::default()
-        },
+        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
+        &audit::EventContext::default(),
         host,
         port,
         reason,

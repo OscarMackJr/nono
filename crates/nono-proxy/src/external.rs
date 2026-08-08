@@ -133,6 +133,7 @@ pub async fn handle_external_proxy(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::External,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
             &audit::EventContext::default(),
             &host,
             port,
@@ -197,6 +198,7 @@ pub async fn handle_external_proxy(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::External,
+            nono::undo::NetworkAuditDenialCategory::ExternalProxyRejected,
             &audit::EventContext::default(),
             &host,
             port,

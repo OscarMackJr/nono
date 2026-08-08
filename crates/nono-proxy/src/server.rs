@@ -1025,12 +1025,10 @@ async fn handle_forward_http(
             audit::log_denied(
                 Some(&state.audit_log),
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
                 &audit::EventContext {
                     auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
                     auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                    ),
                     ..audit::EventContext::default()
                 },
                 &host,
@@ -1067,12 +1065,8 @@ async fn handle_forward_http(
         audit::log_denied(
             Some(&state.audit_log),
             audit::ProxyMode::Reverse,
-            &audit::EventContext {
-                denial_category: Some(
-                    nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath,
-                ),
-                ..audit::EventContext::default()
-            },
+            nono::undo::NetworkAuditDenialCategory::SpiffeUnsupportedPath,
+            &audit::EventContext::default(),
             &host,
             port,
             "SPIFFE-declared route upstream: forward-HTTP path has no SPIFFE implementation",
@@ -1102,12 +1096,8 @@ async fn handle_forward_http(
         audit::log_denied(
             Some(&state.audit_log),
             audit::ProxyMode::Reverse,
-            &audit::EventContext {
-                denial_category: Some(
-                    nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath,
-                ),
-                ..audit::EventContext::default()
-            },
+            nono::undo::NetworkAuditDenialCategory::CaptureUnsupportedPath,
+            &audit::EventContext::default(),
             &host,
             port,
             "OAuth-capture-declared route upstream: forward-HTTP path has no buffer-and-rewrite \
@@ -1146,10 +1136,8 @@ async fn handle_forward_http(
         audit::log_denied(
             Some(&state.audit_log),
             audit::ProxyMode::Reverse,
-            &audit::EventContext {
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
-                ..audit::EventContext::default()
-            },
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
+            &audit::EventContext::default(),
             &host,
             port,
             &reason,
@@ -1226,12 +1214,8 @@ async fn handle_forward_http(
             audit::log_denied(
                 Some(&state.audit_log),
                 audit::ProxyMode::Reverse,
-                &audit::EventContext {
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
-                    ),
-                    ..audit::EventContext::default()
-                },
+                nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
+                &audit::EventContext::default(),
                 &host,
                 port,
                 &e.to_string(),
@@ -1443,10 +1427,8 @@ async fn handle_connection(mut stream: tokio::net::TcpStream, state: &ProxyState
                     audit::log_denied(
                         Some(&state.audit_log),
                         audit::ProxyMode::Connect,
-                        &audit::EventContext {
-                            denial_category: Some(denial_category),
-                            ..Default::default()
-                        },
+                        denial_category,
+                        &audit::EventContext::default(),
                         host,
                         port,
                         denial_reason,

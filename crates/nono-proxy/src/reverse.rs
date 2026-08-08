@@ -125,9 +125,9 @@ pub async fn handle_reverse_proxy(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::EndpointPolicy,
             &audit::EventContext {
                 route_id: Some(&service),
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
                 ..Default::default()
             },
             &service,
@@ -169,9 +169,9 @@ pub async fn handle_reverse_proxy(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::EndpointPolicy,
                 &audit::EventContext {
                     route_id: Some(&service),
-                    denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
                     ..Default::default()
                 },
                 &service,
@@ -193,9 +193,9 @@ pub async fn handle_reverse_proxy(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::EndpointPolicy,
                 &audit::EventContext {
                     route_id: Some(&service),
-                    denial_category: Some(nono::undo::NetworkAuditDenialCategory::EndpointPolicy),
                     ..Default::default()
                 },
                 &service,
@@ -274,13 +274,11 @@ pub async fn handle_reverse_proxy(
                 audit::log_denied(
                     ctx.audit_log,
                     audit::ProxyMode::Reverse,
+                    nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
                     &audit::EventContext {
                         route_id: Some(&service),
                         auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
                         managed_credential_active: Some(true),
-                        denial_category: Some(
-                            nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                        ),
                         ..Default::default()
                     },
                     &service,
@@ -298,6 +296,7 @@ pub async fn handle_reverse_proxy(
                 audit::log_denied(
                     ctx.audit_log,
                     audit::ProxyMode::Reverse,
+                    nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
                     &audit::EventContext {
                         route_id: Some(&service),
                         auth_mechanism: Some(
@@ -305,9 +304,6 @@ pub async fn handle_reverse_proxy(
                         ),
                         auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
                         managed_credential_active: Some(false),
-                        denial_category: Some(
-                            nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                        ),
                         ..Default::default()
                     },
                     &service,
@@ -365,9 +361,9 @@ pub async fn handle_reverse_proxy(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
             &audit::EventContext {
                 route_id: Some(&service),
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
                 ..Default::default()
             },
             &service,
@@ -446,11 +442,9 @@ pub async fn handle_reverse_proxy(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
                 &audit::EventContext {
                     route_id: Some(&service),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
-                    ),
                     ..Default::default()
                 },
                 &service,
@@ -582,14 +576,12 @@ async fn handle_spiffe_route(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
                 &audit::EventContext {
                     route_id: Some(service),
                     auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
                     auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
                     managed_credential_active: Some(false),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                    ),
                     ..Default::default()
                 },
                 service,
@@ -616,11 +608,9 @@ async fn handle_spiffe_route(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
             &audit::EventContext {
                 route_id: Some(service),
-                denial_category: Some(
-                    nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
-                ),
                 managed_credential_active: Some(false),
                 ..Default::default()
             },
@@ -644,12 +634,10 @@ async fn handle_spiffe_route(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
                 &audit::EventContext {
                     route_id: Some(service),
                     auth_mechanism: Some(managed_auth.audit_mechanism()),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
-                    ),
                     managed_credential_active: Some(false),
                     ..Default::default()
                 },
@@ -689,9 +677,9 @@ async fn handle_spiffe_route(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
             &audit::EventContext {
                 route_id: Some(service),
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
                 ..Default::default()
             },
             service,
@@ -746,11 +734,9 @@ async fn handle_spiffe_route(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
                 &audit::EventContext {
                     route_id: Some(service),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
-                    ),
                     ..Default::default()
                 },
                 service,
@@ -907,14 +893,12 @@ async fn handle_spiffe_assertion_credential(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
                 &audit::EventContext {
                     route_id: Some(service),
                     auth_mechanism: Some(nono::undo::NetworkAuditAuthMechanism::ProxyAuthorization),
                     auth_outcome: Some(nono::undo::NetworkAuditAuthOutcome::Failed),
                     managed_credential_active: Some(false),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::AuthenticationFailed,
-                    ),
                     ..Default::default()
                 },
                 service,
@@ -940,13 +924,11 @@ async fn handle_spiffe_assertion_credential(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
                 &audit::EventContext {
                     route_id: Some(service),
                     auth_mechanism: Some(
                         nono::undo::NetworkAuditAuthMechanism::SpiffeOAuthAssertion,
-                    ),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::ManagedCredentialUnavailable,
                     ),
                     managed_credential_active: Some(false),
                     ..Default::default()
@@ -982,9 +964,9 @@ async fn handle_spiffe_assertion_credential(
         audit::log_denied(
             ctx.audit_log,
             audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
             &audit::EventContext {
                 route_id: Some(service),
-                denial_category: Some(nono::undo::NetworkAuditDenialCategory::HostDenied),
                 ..Default::default()
             },
             service,
@@ -1035,11 +1017,9 @@ async fn handle_spiffe_assertion_credential(
             audit::log_denied(
                 ctx.audit_log,
                 audit::ProxyMode::Reverse,
+                nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
                 &audit::EventContext {
                     route_id: Some(service),
-                    denial_category: Some(
-                        nono::undo::NetworkAuditDenialCategory::UpstreamConnectFailed,
-                    ),
                     ..Default::default()
                 },
                 service,
@@ -1948,11 +1928,9 @@ pub async fn relay_response_with_capture<R: AsyncRead + Unpin>(
         audit::log_denied(
             audit_log,
             audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::CaptureBufferOrRewriteFailed,
             &audit::EventContext {
                 route_id: Some(route_id),
-                denial_category: Some(
-                    nono::undo::NetworkAuditDenialCategory::CaptureBufferOrRewriteFailed,
-                ),
                 ..Default::default()
             },
             route_id,
