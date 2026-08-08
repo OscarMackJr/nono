@@ -1,7 +1,10 @@
 ---
-milestone: v3.5
-milestone_name: Trusted Signing Go-Live + First Distributed Release
-status: paused-at-phase-104-on-operator-tag-push
+milestone: v3.7
+milestone_name: Composite Integrity + Tool-Sandbox Disposition
+status: planning
+parallel_milestone: v3.5
+parallel_milestone_name: Trusted Signing Go-Live + First Distributed Release
+parallel_milestone_status: paused-at-phase-104-on-operator-tag-push
 shipped_milestone: v3.6
 shipped_milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 shipped_date: 2026-08-08
@@ -12,8 +15,9 @@ updated: 2026-08-08
 
 ## Milestones
 
+- 🔄 **v3.7 Composite Integrity + Tool-Sandbox Disposition** — Phases 115-120 (active 2026-08-08)
 - ✅ **v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0)** — Phases 108-114 (shipped 2026-08-08) — [archive](milestones/v3.6-ROADMAP.md)
-- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (active 2026-07-02, PAUSED at Phase 104 on the operator tag-push decision)
+- 🔄 **v3.5 Trusted Signing Go-Live + First Distributed Release** — Phases 101-107 (open 2026-07-02, PAUSED at Phase 104 on the operator tag-push decision)
 - ✅ **v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile** — Phases 98-100 (shipped 2026-07-02) — [archive](milestones/v3.4-ROADMAP.md)
 - ✅ **v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release** — Phases 94-97 (shipped 2026-06-26) — [archive](milestones/v3.3-ROADMAP.md)
 - ✅ **v3.2 Signed Policy Overrides (ZT-Infra Attestation)** — Phases 91-93 (shipped 2026-06-23) — [archive](milestones/v3.2-ROADMAP.md)
@@ -24,6 +28,22 @@ updated: 2026-08-08
 > Earlier milestones (v2.5–v2.12) are archived under `.planning/milestones/`.
 
 ## Phases
+
+<details open>
+<summary>🔄 v3.7 Composite Integrity + Tool-Sandbox Disposition (Phases 115-120) — ACTIVE</summary>
+
+Make the fork's deny-by-*composition* Windows model **prove** it is enforcing, settle the standing tool-sandbox divergence by recorded decision, and drain v3.6's six carry-forward findings. No new confinement layers — higher trustworthiness in what already exists. **ADR-65 stands**, so the production minifilter (G-WIN-3) and driver lifecycle (G-WIN-4) are out, and per-file read policy is explicitly not claimed. **Milestone-marker only** — tree stays at `0.70.0`, no publish.
+
+Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cleans the denial/audit spine that the receipt work in 118 builds on, and because the drain is independent of everything else. **116** runs the tool-sandbox ledger + ADR *early* so its verdict — which may or may not imply substantial engineering — is known before the milestone's remaining capacity is committed; its execution (120) is deliberately last and sized by that verdict. **117 → 118 → 119** run in dependency order: the fail-direction contract enumerates every layer, the receipts attest that enumeration per session, and the boundary statement can only be truthful once the contract says what each layer actually does.
+
+- [ ] **Phase 115: v3.6 Carry-Forward Drain** — 0/? plans
+- [ ] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 0/? plans
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/? plans
+- [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
+- [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
+- [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
+
+</details>
 
 <details>
 <summary>✅ v3.6 UPST12 Upstream Sync v0.66.0→v0.69.0 (Phases 108-114) — SHIPPED 2026-08-08</summary>
@@ -40,8 +60,8 @@ Drain-then-sync upstream milestone (mirrors v3.1/v3.3/v3.4), running **in parall
 
 </details>
 
-<details open>
-<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — ACTIVE (PAUSED at Phase 104 on the operator tag-push decision)</summary>
+<details>
+<summary>🔄 v3.5 Trusted Signing Go-Live + First Distributed Release (Phases 101-107) — OPEN, PAUSED at Phase 104 on the operator tag-push decision</summary>
 
 Full go-live EXECUTE milestone (operator-in-loop): harden the CI Authenticode verify-gate and resolve the Azure Trusted Signing `UnknownError`, rename the fork's published package identities to fork-owned `nono-sandbox` names, stand up ephemeral Azure Win11 VM IaC + new clean-host gates, cut the first publicly-trusted-signed `0.66.1` release, publish it live to crates.io/PyPI/npm, drain both host-gated clean-host UAT todos on the real VM, then retire the POC signing path. Hard dependency spine: verify-gate hardening (101) gates the release cut (104); the rename (102) and the Azure IaC+gates (103) are parallelizable with 101/104; live publish (105) needs both the rename and a real release; clean-host UAT (106) needs the real release (not the live publish); close-out (107) is strictly gated on clean-host UAT PASS, never merely on a green release.
 
@@ -218,6 +238,70 @@ Full goals, success criteria, and per-plan detail archived to
 Requirements: [`milestones/v3.6-REQUIREMENTS.md`](milestones/v3.6-REQUIREMENTS.md).
 Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md).
 
+---
+
+### Phase 115: v3.6 Carry-Forward Drain
+**Goal**: The six findings the v3.6 audit carried forward are closed at the class level, not the symptom level — so the denial/audit spine the receipt work builds on is clean before it is built on, and neither hand-maintained-list drift (DRAIN-02/03) nor removal-by-silence (DRAIN-01) can silently recur.
+**Depends on**: Nothing — independent of both other workstreams
+**Requirements**: DRAIN-01, DRAIN-02, DRAIN-03, DRAIN-04, DRAIN-05, DRAIN-06
+**Success Criteria** (what must be TRUE):
+  1. A `platform_overrides.<os>` block that redefines a credential to change `upstream` and omits `inject_mode`/`inject_header` leaves a `url_path` or `query_param` route injecting where the base profile said — proven by a test that fails if the merge reverts to taking the child value unconditionally. The NEW-02 regression test also asserts its `spiffe` arm (ACC-04).
+  2. Every denial category `nono-py`'s encoder can emit decodes without raising — enforced by a test driven from the encoder's own output rather than a second hand-written list, so a future variant cannot reintroduce the gap.
+  3. No production `log_denied` call site passes a default `EventContext`; `connect.rs` — `deny_domain`'s HTTPS enforcement point — carries a real denial category, and no denial variant remains with zero production constructors.
+  4. A profile declaring both `aws_auth` and `capture` on one route is rejected when the profile is validated, not accepted and then 501'd at request time.
+  5. A Python embedder can set `capture` and `spiffe` on a `RouteConfig`, and a `deny_domain`-blocked SPIFFE route is denied before any JWT-SVID is minted.
+
+### Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR
+**Goal**: The standing structural divergence — upstream's `tool-sandbox/` subsystem, never absorbed since v0.65.0 — stops being an unexamined gap and becomes a recorded decision, with the fork's own hook + Low-IL broker path weighed as a real alternative rather than assumed inferior. Run early so the verdict is known before the milestone's remaining capacity is committed.
+**Depends on**: Nothing — the ADR needs targeted symbol-level knowledge of the fork's hook path, not the full fail-direction contract
+**Requirements**: TSBX-01, TSBX-02
+**Success Criteria** (what must be TRUE):
+  1. A per-commit ledger covers PR #1105 and all 7 fenced refinement PRs (#1280/#1322/#1325/#1384/#1394/#1413/#1417) with `windows-touch` flags and per-cluster dispositions, in the Phase 108/98/94/85 shape.
+  2. Every confidence rating in the ledger cites a grep for the actual type, function or field it depends on — a reviewer can re-run the evidence, and no rating rests on "the target files exist."
+  3. The ADR states an unambiguous verdict (adopt / formalize fork-native) and records what would have to change for the losing option to win, so a future absorb has a decision to reconcile against rather than silence.
+  4. The ADR evaluates PR #4's PreToolUse-hook + Low-IL-primary-token-broker path on its merits — including the durable finding that .NET/PowerShell CLR cannot start under `WRITE_RESTRICTED` — rather than treating it as a stopgap.
+  5. Phase 120's scope is sized from the verdict and written down, so the milestone's tail is no longer open-ended.
+
+### Phase 117: Fail-Direction Contract + Startup Self-Attestation
+**Goal**: The composite's fail-direction stops being decided per-layer-in-isolation and becomes one system-level answer — and nono can no longer report "enforcing" while a layer is silently inert, which is the failure mode this codebase has already hit once.
+**Depends on**: Phase 115 (clean audit/denial spine)
+**Requirements**: CINT-01, CINT-02, CINT-03
+**Success Criteria** (what must be TRUE):
+  1. One document names every layer the Windows backend composes — restricted token, mandatory integrity label, AppContainer profile + package SID, DACL grants, WFP egress filters, and the minifilter's absence — and states each one's behaviour when it cannot be established, citing the enforcing call site.
+  2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
+  3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
+  4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
+
+### Phase 118: Per-Session Enforcement Receipts
+**Goal**: The conjunction "restricted token AND low-integrity label AND AppContainer profile AND WFP coverage" stops being asserted at launch and becomes attested per session — turning "we configured enforcement" into "we can show enforcement held."
+**Depends on**: Phase 117 (the contract's layer enumeration is what a receipt attests), Phase 115 (audit event shape)
+**Requirements**: RCPT-01, RCPT-02, RCPT-03
+**Success Criteria** (what must be TRUE):
+  1. Every confined session emits a receipt naming which layers were confirmed active for that process.
+  2. A receipt contains no paths, no arguments, and no payload content — verified by a test that fails if a field capable of carrying process content is added, in the shape of the existing self-enforcing source scans.
+  3. A receipt's integrity is verifiable on the same terms as the existing HMAC-chained audit events, so an edited receipt is detectable.
+  4. A reader can distinguish "confirmed active" from "not expected in this configuration" from "expected but unconfirmed" without out-of-band knowledge — an unattested layer never renders as attested.
+
+### Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log
+**Goal**: What nono governs and what it does not is written down before anyone downstream can over-claim it — and the Windows isolation techniques the fork did *not* adopt become a set of recorded decisions rather than a set of omissions.
+**Depends on**: Phase 117 (the boundary statement can only be truthful once the contract says what each layer actually does)
+**Requirements**: BOUND-01, BOUND-02, BOUND-03
+**Success Criteria** (what must be TRUE):
+  1. The security model states that nono governs destination, credential and containment but not payload — naming explicitly that a prompt exfiltrating a secret to an **allowlisted** host is invisible to host-level filtering, so the limit is discoverable without reading the proxy source.
+  2. The filesystem guarantee is stated in terms of the shipped mechanism, with per-file read policy inside one directory (`src/` yes, `.env` no) explicitly named as not enforced and ADR-65 cited as the standing reason.
+  3. Each of the six §4 techniques — Windows Sandbox/HCS, PPL for protecting nono's own supervisor, WFP ALE layers beyond connect-time, ETW escape-attempt detection, AppContainer capability grants, WDAC exec gating — carries a written ruled-in or ruled-out decision with reasoning.
+  4. The PPL item specifically records the supervisor's own protection posture, since a contained process that can tamper with its supervisor is a containment escape.
+
+### Phase 120: Tool-Sandbox Verdict Execution
+**Goal**: Phase 116's verdict is carried out, so the tool-sandbox divergence is closed by decision — either absorbed, or formalized as a permanent named boundary a future absorb can reconcile against.
+**Depends on**: Phase 116 (scope is defined by its verdict — this phase is deliberately provisional until then)
+**Requirements**: TSBX-03
+**Success Criteria** (what must be TRUE):
+  1. The verdict is executed as written — if *adopt*, the subsystem is absorbed with a `platform/windows.rs` driver and the 7 refinement PRs dispositioned; if *formalize*, the fork-native path is named as a permanent scope boundary in the ADR-111/ADR-113 shape.
+  2. A future reader encountering upstream's `tool-sandbox/` finds a recorded decision explaining its absence or its adapted form — not silence.
+  3. The divergence ledger's tool-sandbox rows are all closed, with no row left in an open or deferred state without a named successor.
+  4. If the verdict cannot be fully executed inside v3.7, the remainder is recorded as FUT-09 with its scope sized from the verdict — never left as an implicit carry-forward.
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -252,3 +336,9 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 112. Security + Residual Sync | v3.6 | 8/8 | Complete (SEC-02 carved out to Phase 114) | 2026-08-05 |
 | 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |
 | 114. OAuth Capture Absorb (SEC-02) | v3.6 | 11/11 | Complete | 2026-08-07 |
+| 115. v3.6 Carry-Forward Drain | v3.7 | 0/? | Not started | - |
+| 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 0/? | Not started | - |
+| 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 0/? | Not started | - |
+| 118. Per-Session Enforcement Receipts | v3.7 | 0/? | Not started | - |
+| 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
+| 120. Tool-Sandbox Verdict Execution | v3.7 | 0/? | Not started | - |
