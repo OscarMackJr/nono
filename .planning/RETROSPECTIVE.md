@@ -461,6 +461,99 @@ Synced the fork to upstream `nolabs-ai/nono` **v0.66.0** and turned the v3.3 pre
 
 ---
 
+## Milestone: v3.6 — UPST12 Upstream Sync (v0.66.0 → v0.69.0)
+
+**Shipped:** 2026-08-08
+**Phases:** 7 (108-114) | **Plans:** 51 | **Commits:** 343 over 11 days
+
+### What Was Built
+
+A four-release upstream absorb — the largest UPST window this fork has taken — plus two substantial
+security subsystems landed under their own ADR-gated reviews. `deny_domain` defense-in-depth
+(109); `platform_overrides` + `$VAR`/`@git:*` + a fork-original WFP-native port-range emitter proven
+against the live kernel (110); macOS carry, ADR-111 resource-CLI ADAPT-not-adopt, `0.70.0` leapfrog
+(111); eight security absorbs plus RUSTSEC-2026-0204 closure (112); SPIFFE/SPIRE ADAPT-DOWN (113);
+a fork-native OAuth-capture enforcement point (114). Audit: `passed_with_accepted_risk`, 23/23
+requirements delivered.
+
+### What Worked
+
+- **Audit-first, ADR-per-hard-call.** Five ADRs (108, 111, 112, 113, 114) each settled a genuinely
+  contested disposition before code moved. ADR-112 is the standout: it decided *not* to absorb an
+  upstream security fix, because the fix reverses this fork's own fail-closed default. Zero source
+  change was the correct output, and only an explicit ADR makes "we deliberately didn't" legible.
+- **The ledger caught its own phase's unsatisfiable success criterion.** Phase 108 measured 27 CODE
+  commits mapping to no v3.6 requirement, which made its own ROADMAP SC4 impossible as written. It
+  surfaced the exact count and proposed Phase 112 rather than quietly redefining the SC.
+- **Escalating to the operator instead of stretching planner discretion.** Phases 113 and 114 both
+  exist because a split exceeded what the CONTEXT.md had granted, and both were escalated rather
+  than absorbed. Phase 114's carve-out is why SEC-02 got a real enforcement point instead of a
+  half-feature.
+- **The plan-checker caught a described-but-open loop before execution.** Iteration 1 found that
+  `CapturePhantomStore::resolve()` had zero production call sites — phantoms minted and never
+  redeemable. The plans *described* a closed loop while leaving it open, which is verbatim what the
+  phase goal forbids.
+- **The milestone audit earned its keep twice.** First pass found NEW-02 (a `platform_overrides`
+  block could silently drop a route's `capture`/`spiffe` on one OS, voiding Phase 114's whole
+  point) — a defect no single-phase review could see, confirmed independently by four passes and
+  then fixed. Second pass found four more defects plus three inaccuracies inside the audit document
+  itself, including a score line that undercounted the milestone's own requirements.
+
+### What Was Inefficient
+
+- **Executor self-checks were, again, worthless as security evidence** — this time at scale. Phase
+  112's code-review gate found 4 Critical fail-open defects the phase itself introduced that all 8
+  executor self-checks had passed over. Phase 114 repeated it twice.
+- **Two executors died mid-phase**, one at 163k tokens having written nothing. Committing after
+  every task is what made recovery cheap.
+- **A `git log -- '*name*'` glob produced a WRONG locked decision (D-06)** — the pattern is
+  substring-anywhere and matched docs paths, not the subsystem. Anchor subsystem globs to the real
+  directory prefix.
+- **Disposition confidence was assigned from file-presence, not symbols.** Three of ~6 re-checked
+  Phase 112 dispositions were wrong for exactly this reason.
+- **Host limits ate real time.** The 36-binary `-p nono-sandbox-cli --tests` sweep stalls ~25min and
+  had to be killed, leaving SC4's "`make ci` GREEN" only partially evidenced; the local `cross`
+  container has no python3, so three socket tests reported `ok` in 0.01s without running.
+- **The SPIFFE live path was exercised zero times, anywhere** — no SPIRE agent on this host, and
+  `spire.yml` has never run. Named as a residual rather than hidden, but it is still untested code.
+
+### Patterns Established
+
+- **Split a subsystem absorb into its own phase when the diff is a refactor of fork-divergent code,
+  not an addition.** Both 113 (4,354 insertions / 33 files) and 114 (26 files / +4,425) qualified on
+  measurement, not intuition.
+- **Build a fork-native enforcement point rather than importing an upstream one whose dependencies
+  you lack.** Phase 114's `relay_response_with_capture()` exists because ~9 of 26 upstream files
+  depend on subsystems this fork does not have — `git apply` was not merely unusable, it was
+  meaningless against a struct shape this fork never had.
+- **Record won't-sync decisions as deliverables.** SEC-01/08/09 and RES-01 shipped as findings and
+  carry-forward notes, reconciled at the phase gate under the skip-biased convention.
+
+### Key Lessons
+
+1. **Executor Self-Check is not security evidence.** Three independent gates (code review, hand
+   control-flow audit, milestone audit) each caught fail-open defects that every self-check passed.
+   This is now the fifth consecutive milestone where an independent layer caught what executors
+   masked.
+2. **Verifying a guard's placement is not verifying its predicate width.** Phase 114 CR-03: a
+   CONNECT guard signed off as "unconditional" had a host-only predicate sitting inside an exact
+   `host:port` gate, so it could only relabel the audit category and never deny.
+3. **Cross-phase defects are invisible to single-phase review by construction.** NEW-01 required
+   comparing 112's audit spine against 109's check sites; NEW-02 required crossing 110's merge code
+   with 114's security property. Neither appears in any `*-REVIEW.md`.
+4. **Audit your own audit.** The second pass found the first pass's score line said 20/20 when the
+   traceability table has 23 rows, and that an "Integration Verified WIRED" claim contradicted the
+   same document's tech-debt list.
+
+### Cost Observations
+
+- Not instrumented. Executor = sonnet, orchestrator = opus. The heaviest overhead was Phase 114's
+  six waves (11 plans, two executor deaths, three Criticals to fix) and the two retroactive
+  verifications the audit forced. Sequential/no-worktree throughout — required, since 114-10 reaches
+  `../nono-py` and `../nono-ts` via `..`.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -480,6 +573,7 @@ Synced the fork to upstream `nolabs-ai/nono` **v0.66.0** and turned the v3.3 pre
 | v3.2 Signed Policy Overrides (ZT-Infra Attestation) | 3 | 13 | Two-key AND gate (offline KMS-sig + live `POST /actions`) verified in the nono-py binding with policy-free Rust core; goal-backward verifier caught the milestone's headline blocker — `verify_override_production` built+tested but `#[allow(dead_code)]`/never wired to the production Python path, leaving VFY-03a inert behind 13 green SUMMARYs (3rd consecutive milestone the independent verify/audit layer caught what executors masked: v3.0 84-04, v3.1 flagship-fix, v3.2 VFY-03a); fail-secure beat a green gate (HKLM-only reader kept, gate seeds HKLM behind elevation+SKIP rather than an HKCU reader fallback); stream-idle-timeout (#2410) recovery = verify-via-git-then-resume-fresh-agent (SendMessage unavailable); cross-repo sequential/no-worktree again |
 | v3.3 UPST10 Upstream Sync (v0.64→v0.65.1) + First Real Release | 4 | 16 | Stood up a LOCAL cross-target clippy toolchain (Docker-`cross` linux-gnu + zig-`cargo-zigbuild` apple-darwin, both GREEN), retiring the chronic PARTIAL→CI default — and it caught a silently-dropped SEC-01 AF_UNIX filter on its first run, proving Windows-host clippy's structural blindness to cfg(linux) drift; first non-marker (prepare-only) release — crate leapfrog to 0.66.0 across 6 crates + both binding repos, signed-order MSI build + 3-registry dry-run orchestrator + auto-discovered readiness gate + operator runbook, all GREEN locally for a one-step operator push; layered verify caught 4 fork-invariant regressions from a cherry-pick conflict + a Critical fail-open in the fix itself (4th milestone the independent layer caught masked defects); cross-repo struct-mirror drift (nono-py RouteConfig `endpoint_policy`) surfaced 2 phases late at dry-run; SUMMARY `one_liner:` empty for the 5th milestone running (now a guaranteed manual close step) |
 | v3.4 UPST11 Upstream Sync to v0.66.0 + Release-Reconcile | 3 | 16 | Second sync through the local cross-target gate — caught a `let_chains` edition-2021 break in `linux.rs` + rustfmt drift the Windows host can't see; ADR-first for the high-conflict #1225 NetworkIntent (ADR-98 full-sync-adopt, actual-diff-grounded as CLI-side only → ADR-86 + WFP/AppContainer non-regressed) kept the absorb clean; first genuinely operator-push-ready release — leapfrog to `0.66.1` (collision-free above upstream's own 0.66.0) + ADR-100 ADAPT-not-adopt of upstream CI #1245/#1251; **binding-repo struct drift is grep-invisible** — the nono-py PyPI blocker was TWO fields (`endpoint_policy` + a hidden same-class `enable_h2`) only `maturin build` enumerates; re-running the release gate after the version bump caught two latent gate bugs (hardcoded `0.66.0` literal + twine false-positive); the v3.3 RouteConfig carry-forward should have closed in v3.3; both binding repos carried stale uncommitted 0.66.0 edits from a dropped session; SUMMARY `one_liner:` empty for the 6th milestone running |
+| v3.6 UPST12 Upstream Sync (v0.66.0→v0.69.0) | 7 | 51 | Largest UPST window to date (4 upstream releases, 100-commit ledger / 176 SHAs) and the first to spawn **three** phases mid-milestone — 112 from the ledger's own measured coverage gap, 113 and 114 by operator escalation when a split exceeded planner discretion; ADR-112 established that **declining an upstream security fix is a shippable deliverable** (adopting it would have reopened a closed env-var-leak class); Phase 114 built a **fork-native** enforcement point rather than importing an upstream one whose dependencies the fork lacks (`git apply` meaningless against a struct shape this fork never had); the milestone audit found a live security defect (NEW-02) that no single-phase review could see, and a **second audit pass found four more plus three inaccuracies in the audit document itself**; **executor self-check failed as security evidence at scale** — 4 Criticals in 112 and 3 in 114 passed every self-check and both cross-target gates; two executors died mid-phase (one at 163k tokens having written nothing), making commit-after-every-task the recovery mechanism |
 | v2.10 Kernel-Driver Spike + EDR UAT + macOS Parity | 4 | 13 | Spike-milestone shape (autonomous groundwork/audit/ADR-draft + explicitly host-gated validation); go/no-go ADR ships `Proposed`, human D-06 flip to `Accepted`; macOS CI green as HARD close gate surfaces a real enforcement defect; EDR-proxy (Sysmon+Defender) as MDE stand-in with explicit caveat; per-phase `.continue-here` checkpoints carry state across context exhaustions |
 
 ### Cumulative Quality
