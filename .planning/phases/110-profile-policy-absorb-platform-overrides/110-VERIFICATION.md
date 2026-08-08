@@ -1,7 +1,7 @@
 ---
 phase: 110-profile-policy-absorb-platform-overrides
 verified: 2026-08-08T00:00:00Z
-status: gaps_found
+status: passed
 score: 4/5 must-haves verified (1 partial)
 overrides_applied: 0
 gaps:
@@ -232,3 +232,28 @@ plus a regression test mirroring the existing OR-semantics proof) rather than a 
 
 *Verified: 2026-08-08*
 *Verifier: Claude (gsd-verifier)*
+
+---
+
+## Gap Resolved 2026-08-08 — NEW-02 fixed
+
+The single gap that held this verification at `gaps_found` is closed in commit `8b9fd74c`.
+
+`merge_profiles` now merges colliding `custom_credentials` keys **field-by-field** via a new
+`merge_custom_credential_def()`: every `Option` field falls back to the base when the child omits
+it, and `endpoint_rules` inherits when the child states none. A `platform_overrides.<os>` block
+can still change any field by stating it explicitly — it can no longer remove one by silence.
+That restores the D-08a invariant this phase documented at `profile/mod.rs:2687-2694` but did not
+hold.
+
+Regression test `platform_overrides_custom_credential_collision_cannot_drop_capture_or_spiffe`
+was verified **load-bearing and precisely scoped**: reverting to the old bare
+`merged.extend(child…)` fails exactly that test while the other 17 `platform_overrides` tests
+still pass, so pre-existing D-08a semantics are undisturbed. It also asserts the override's own
+stated change still applies, so the fix cannot turn overrides into no-ops.
+
+Gates after fix: build exit 0, `cargo fmt --all --check` clean, native clippy exit 0,
+apple-darwin `cargo-zigbuild clippy` exit 0, `platform_overrides_` 18/18, `profile::` 325/325,
+`nono-sandbox-proxy --lib` 301/301.
+
+**PROF-01 is now fully satisfied; status raised to `passed`.**

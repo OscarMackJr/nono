@@ -1,7 +1,7 @@
 ---
 phase: 114-oauth-capture-absorb-sec-02
 verified: 2026-08-08T06:10:00Z
-status: human_needed
+status: passed
 score: 4/4 roadmap success criteria verified; 1 human decision required on residual risk
 overrides_applied: 0
 human_verification:
@@ -181,3 +181,40 @@ verifier is not positioned to resolve unilaterally, so it is escalated rather th
 
 _Verified: 2026-08-08_
 _Verifier: Claude (gsd-verifier)_
+
+---
+
+## Escalation Resolved 2026-08-08 — operator risk acceptance + NEW-02 fixed
+
+This verification returned `human_needed` because all 4 ROADMAP success criteria verified, but
+**five documented mechanisms remained live** by which a real OAuth token could reach the sandboxed
+client — measured against a goal whose wording is absolute ("hard precondition", "no reduced-scope
+half-feature ships"). The verifier correctly declined to rule on that itself, since it is a
+risk-acceptance judgment rather than a code question.
+
+**Operator decision (2026-08-08): fix NEW-02, accept the remaining four.**
+
+**Fixed — NEW-02** (`8b9fd74c`): `platform_overrides` merging `custom_credentials` by whole-value
+replace could silently strip a route's `capture` on one OS. This was the only one of the five
+reachable through *ordinary* configuration — no unusual grant, no hostile upstream, no
+case-collision — and it silently voided the security property on a single platform, the worst
+shape for a failure to take. Now merged field-by-field; an override cannot remove a field by
+silence. Regression test verified load-bearing and precisely scoped.
+
+**Accepted as residual risk, tracked to v3.7:**
+
+| ID | Mechanism | Why acceptable for now |
+|----|-----------|------------------------|
+| WR-02 | `reject_unrewritten_token_fields` uses a case-sensitive `matches!`, so `accessToken` bypasses the backstop | The backstop is a defence-in-depth net behind the *configured* `response_fields` rewrite, not the primary control. Requires a provider using camelCase AND an operator who did not configure that field. |
+| WR-03 | Trailing-dot host bypass on the guard's authority normalisation | Requires the agent to deliberately construct a trailing-dot authority; the reverse-proxy relay path (the configured, supported path) is unaffected. |
+| WR-05 | Two routes sharing an upstream host with differing capture config is unvalidated | Requires an operator to author a genuinely ambiguous profile; no silent downgrade of a single well-formed route. |
+| NEW-04 | `direct_connect_ports` is a port-only OS grant, so `--allow-connect-port N` lets the agent bypass the proxy entirely for port N | Consistent with the declared scope limit — capture covers endpoints reached *as configured reverse-proxy routes*. Should be named explicitly in ADR-114's scope-limit wording rather than left implicit. |
+
+The common thread in the accepted four is that each requires either an unusual operator grant, a
+deliberately malformed request, or an ambiguous hand-authored profile — whereas NEW-02 required
+none of those. That asymmetry is the basis of the decision, and it is recorded here so a future
+reader can re-litigate it against the same reasoning rather than re-deriving it.
+
+**Status raised to `passed`** on that basis: all 4 success criteria verified at source, the one
+ordinary-config leak path closed, and the residual four consciously accepted and tracked rather
+than silently carried.
