@@ -1,10 +1,11 @@
 ---
 phase: 115
 slug: v3-6-carry-forward-drain
-status: draft
-nyquist_compliant: false
+status: ready
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-08
+verified: 2026-08-08
 ---
 
 # Phase 115 — Validation Strategy
@@ -135,14 +136,20 @@ second convention.
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an automated verify command or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without an automated verify
-- [ ] Wave 0 covers every ❌ reference above
-- [ ] Every compile-time guard (D-01/D-04/D-06/D-11) ships its bite-proof artifact
-- [ ] DRAIN-06 test mechanism chosen explicitly in the plan, not deferred to the executor
-- [ ] `maturin build` runs from `../nono-py` at the binding wave (`use_worktrees: false` confirmed already set)
-- [ ] No watch-mode flags
-- [ ] `/gsd:code-review` scheduled before phase close
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have an automated verify command or a Wave 0 dependency
+- [x] Sampling continuity: no 3 consecutive tasks without an automated verify
+- [x] Wave 0 covers every ❌ reference above
+- [x] Every compile-time guard (D-01/D-04/D-06/D-11) ships its bite-proof artifact
+      *(D-01: no `#[derive(Default)]` on `CustomCredentialDef` + live add-field/E0063/revert cycle;
+      D-04, D-06, D-11: live-verified counterexample steps in 115-01 T3 / 115-02 T1 / 115-02 T3)*
+- [x] DRAIN-06 test mechanism chosen explicitly in the plan, not deferred to the executor
+      *(115-04 locks option (c) — structural)*
+- [x] `maturin build` runs from `../nono-py` at the binding wave (`use_worktrees: false` confirmed already set)
+      *(retiered out of the per-task verify for latency; remains a hard acceptance criterion and
+      wave-merge gate on both 115-05 and 115-06)*
+- [x] No watch-mode flags
+- [ ] `/gsd:code-review` scheduled before phase close — **open, run at phase close**
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-08-08 — plan-checker `VERIFICATION PASSED` (iteration 2, 0 blockers).
+Remaining open item is `/gsd:code-review`, which by definition runs after execution.
