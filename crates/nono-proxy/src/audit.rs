@@ -44,7 +44,13 @@ pub struct EventContext<'a> {
     pub auth_outcome: Option<NetworkAuditAuthOutcome>,
     pub managed_credential_active: Option<bool>,
     pub injection_mode: Option<NetworkAuditInjectionMode>,
-    pub denial_category: Option<NetworkAuditDenialCategory>,
+    // `denial_category` deliberately removed (D-06, Phase 115-02, DRAIN-03/NEW-01):
+    // it lived here as an `Option<_>` on a `#[derive(Default)]` struct, which let a
+    // new `log_denied` call site silently default to uncategorised. It is now
+    // `log_denied`'s own required 3rd positional parameter below, so omitting a
+    // category is a compile error (E0061), not a silent default. `log_allowed`
+    // never read this field (confirmed by inspection), so its removal has no
+    // effect on that path.
     pub spiffe_context: Option<SpiffeAuditContext>,
     pub capture_context: Option<CaptureAuditContext>,
 }
@@ -178,9 +184,21 @@ pub fn log_allowed(
 }
 
 /// Log a denied proxy request.
+///
+/// `category` is a required, non-`Option` argument (D-06): a new call site
+/// that omits it fails to compile rather than silently emitting an
+/// uncategorised denial. Bite-proof, live-verified (see Task 1 of
+/// `115-02-PLAN.md`): temporarily removing this argument from a call site
+/// produces `error[E0061]: this function takes 6 arguments but 5 arguments
+/// were supplied`. Counterexample (do not uncomment — kept for reviewers):
+/// ```text
+/// // log_denied(audit_log, ProxyMode::Connect, &EventContext::default(), host, port, reason);
+/// // ^ missing `category` argument — E0061 missing-argument compile error.
+/// ```
 pub fn log_denied(
     audit_log: Option<&SharedAuditLog>,
     mode: ProxyMode,
+    category: NetworkAuditDenialCategory,
     ctx: &EventContext<'_>,
     host: &str,
     port: u16,
@@ -224,7 +242,7 @@ pub fn log_denied(
             auth_outcome: ctx.auth_outcome.clone(),
             managed_credential_active: ctx.managed_credential_active,
             injection_mode: ctx.injection_mode.clone(),
-            denial_category: ctx.denial_category.clone(),
+            denial_category: Some(category),
             spiffe_context: ctx.spiffe_context.clone(),
             capture_context: ctx.capture_context.clone(),
             target: host.to_string(),
@@ -381,6 +399,7 @@ mod tests {
         log_denied(
             Some(&log),
             ProxyMode::External,
+            NetworkAuditDenialCategory::HostDenied,
             &EventContext::default(),
             "169.254.169.254",
             80,
