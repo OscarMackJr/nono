@@ -121,3 +121,16 @@ None - no external service configuration required.
 ---
 *Phase: 115-v3-6-carry-forward-drain*
 *Completed: 2026-08-08*
+
+## Self-Check: PASSED
+
+All modified/created files confirmed present on disk: `crates/nono/src/undo/types.rs`
+(nono repo), `../nono-py/src/proxy.rs`, `../nono-py/src/undo.rs`, plus this SUMMARY.md,
+`deferred-items.md`, and the built wheel
+`../nono-py/target/wheels/nono_sandbox-0.70.0-cp312-cp312-win_amd64.whl`. All 4 commit
+hashes confirmed present in `git log --oneline --all`: `c293c0ee`, `06810191` (nono
+repo); `01ac02a`, `a37f872` (`../nono-py` repo, branch `44-broker-ffi-lockstep`).
+Plan-level verification gate re-run clean: `cargo test -p nono-py --lib` (70 passed),
+`maturin build` (wheel built), `cargo build --workspace --all-targets` (nono repo,
+0 errors), `cargo fmt --all -- --check` (nono repo, clean), `cargo test -p nono-sandbox
+--lib` (826 passed, matching the 115-02 baseline).
