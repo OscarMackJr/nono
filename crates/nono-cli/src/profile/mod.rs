@@ -1162,11 +1162,19 @@ fn validate_credential_key(context_name: &str, key: &str) -> Result<()> {
 ///   - `query_param`: query_param_name required, valid query param name
 ///   - `basic_auth`: no additional required fields
 fn validate_custom_credential(name: &str, cred: &CustomCredentialDef) -> Result<()> {
-    // Mutual exclusion: aws_auth is incompatible with credential_key and auth.
-    if cred.aws_auth.is_some() && (cred.credential_key.is_some() || cred.auth.is_some()) {
+    // D-13 (Phase 115, DRAIN-04): AWS SigV4 signing is not yet implemented in
+    // this fork — reverse.rs's aws_route branch unconditionally 501s at
+    // request time on every path, so accepting an aws_auth-bearing
+    // credential at load time and only discovering the 501 at request time
+    // is exactly the "validates but doesn't work" violation DRAIN-04 names.
+    // Reject unconditionally, regardless of what else is set on the
+    // credential — this supersedes (and makes moot) the mutual-exclusion
+    // check this arm used to be; a future UPST absorb of real SigV4 must
+    // un-reject this (see 108-DIVERGENCE-LEDGER.md).
+    if cred.aws_auth.is_some() {
         return Err(NonoError::ProfileParse(format!(
-            "custom credential '{}' has 'aws_auth' set together with 'credential_key' or 'auth'; \
-             aws_auth is mutually exclusive with both — remove the other auth field",
+            "custom credential '{}' declares 'aws_auth', but AWS SigV4 signing is not yet \
+             implemented in this fork; remove 'aws_auth' or use another credential mechanism",
             name
         )));
     }
@@ -5346,8 +5354,44 @@ mod tests {
         let mut cred = spiffe_cred_builder();
         cred.aws_auth = Some(nono_proxy::config::AwsAuthConfig::default());
         let result = validate_custom_credential("test", &cred);
+        // D-13 (Phase 115): aws_auth is now rejected unconditionally before
+        // the spiffe/aws_auth mutual-exclusion check is ever reached — the
+        // fixture still exercises "both spiffe and aws_auth set", but the
+        // rejection fires for the D-13 reason (SigV4 unimplemented), not the
+        // old mutual-exclusion message.
         let err = result.expect_err("spiffe + aws_auth should be rejected");
-        assert!(err.to_string().contains("mutually exclusive"));
+        assert!(
+            err.to_string().contains("aws_auth"),
+            "error must name aws_auth: {err}"
+        );
+    }
+
+    #[test]
+    fn custom_credential_aws_auth_rejected_unconditionally() {
+        // D-13 (Phase 115, DRAIN-04): AWS SigV4 signing is not yet
+        // implemented in this fork (reverse.rs's aws_route branch
+        // unconditionally 501s at request time). Reject any aws_auth-bearing
+        // credential at config-validation time instead of accepting it and
+        // discovering the 501 later — fail-secure means reject at load, not
+        // degrade at request. `credential_key` is deliberately ALSO set here
+        // (header_cred_builder's default) to prove the rejection fires
+        // regardless of what else is set, not just as a mutual-exclusion
+        // side effect.
+        let mut cred = header_cred_builder();
+        assert!(cred.credential_key.is_some());
+        cred.aws_auth = Some(nono_proxy::config::AwsAuthConfig {
+            profile: Some("my-profile".to_string()),
+            region: Some("us-east-1".to_string()),
+            service: Some("execute-api".to_string()),
+        });
+        let err = validate_custom_credential("test", &cred)
+            .expect_err("aws_auth-bearing credential must be rejected unconditionally");
+        let msg = err.to_string();
+        assert!(msg.contains("aws_auth"), "error must name aws_auth: {msg}");
+        assert!(
+            msg.to_lowercase().contains("sigv4") || msg.to_lowercase().contains("not yet"),
+            "error must name SigV4 as unimplemented: {msg}"
+        );
     }
 
     #[test]

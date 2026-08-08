@@ -1946,3 +1946,40 @@ future obligation — see "SEC-09 Carry-Forward Note" in the tool-sandbox-surfac
 above (not repeated here). **SEC-02a/b/c, originally deferred here pending Phase 114's verdict, is
 now itself resolved (ADAPTED-with-scope-limit) and closed out in the "SEC-02 Carry-Forward Note
 (Phase 114, D-10)" below** — the deferral this addendum recorded in 2026-08-05 is no longer open.
+
+### D-13 Carry-Forward Note (Phase 115, DRAIN-04)
+
+**Filed:** 2026-08-08 (Phase 115, Plan 115-03).
+
+This addendum's own `0ecc476b` (SEC-01) row above records the AWS SigV4 upstream commit as
+**won't-sync (target subsystem absent)** — Phase 112 found `aws/`/`tls_intercept/` absent from
+`crates/nono-proxy/src/` and left the fork's prior D-15 501-stub guard
+(`reverse.rs:328-331`, "AWS SigV4 signing is not yet implemented... Return 501 so the caller knows
+the route exists but is not functional") unchanged. Phase 115's DRAIN-04 milestone-audit finding
+(v3.6 NEW-03) named that 501-stub guard itself as a fail-secure gap: a profile declaring `aws_auth`
+validated successfully and only discovered the 501 at request time, rather than being rejected at
+load time.
+
+**Disposition (Phase 115, D-13): reject `aws_auth` unconditionally at config-validation time.**
+`validate_custom_credential` (`crates/nono-cli/src/profile/mod.rs`) now returns
+`NonoError::ProfileParse` for any `CustomCredentialDef` with `aws_auth.is_some()`, regardless of
+what else is set on the credential — superseding the prior `aws_auth`/`credential_key`/`auth`
+mutual-exclusion-only check. `crates/nono-cli/data/nono-profile.schema.json`'s `aws_auth`
+property descriptions (6 locations) were updated to document the rejection. No shipped profile or
+fixture declared `aws_auth` (verified during Phase 115 planning); existing unit tests that
+previously asserted an `aws_auth`-bearing credential validates were updated to assert the new
+rejection instead.
+
+**Obligation for whichever future plan absorbs real AWS SigV4 signing** (whether ported from a
+future upstream commit, once `aws/`/`tls_intercept/` land in `crates/nono-proxy/src/`, or built
+fork-natively): that plan MUST **un-reject** `aws_auth` in `validate_custom_credential` — removing
+or narrowing the unconditional `cred.aws_auth.is_some()` check this note describes — as part of
+wiring the real signing implementation. Absorbing SigV4 signing without revisiting this check would
+leave the new implementation permanently unreachable behind a validation-time rejection that no
+longer matches reality. A future planner reading this note should treat the D-13 rejection as a
+named line item requiring its own removal decision at that time, not something that silently stays
+in place once real SigV4 signing exists.
+
+**Disposition (Phase 115): mitigate — validation-time rejection added, real code shipped, with a
+named permanent un-reject obligation for a future SigV4 absorb — LOCKED per `115-CONTEXT.md` D-13,
+recorded here per that decision's own instruction to file the carry-forward note in this ledger.**

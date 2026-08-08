@@ -613,7 +613,7 @@
     },
     "CustomCredentialDef": {
       "type": "object",
-      "description": "Custom credential route definition for the reverse proxy. Defines how to route requests and inject credentials for a service. One of `credential_key` (keystore-backed static credential), `auth` (OAuth2 client_credentials flow), or `aws_auth` (AWS SigV4 signing) MUST be set; the three are mutually exclusive (PROF-03, Phase 22).",
+      "description": "Custom credential route definition for the reverse proxy. Defines how to route requests and inject credentials for a service. One of `credential_key` (keystore-backed static credential) or `auth` (OAuth2 client_credentials flow, with a client_assertion) MUST be set; `aws_auth` is documented for schema completeness but is REJECTED at validation time in this fork (D-13, Phase 115) — AWS SigV4 signing is not yet implemented; see the `aws_auth` property description below.",
       "additionalProperties": false,
       "required": ["upstream"],
       "properties": {
@@ -626,35 +626,35 @@
             { "type": "string" },
             { "type": "null" }
           ],
-          "description": "Keystore account name for the credential (e.g., \"telegram_bot_token\"), or a 1Password op:// URI, apple-password:// URI, file:// URI, or env:// URI (e.g., \"env://MY_TOKEN\"). PROF-03 (Phase 22): Optional — set `auth` instead for OAuth2 client_credentials flows, or `aws_auth` for AWS SigV4 signing. Mutually exclusive with `auth` and `aws_auth`."
+          "description": "Keystore account name for the credential (e.g., \"telegram_bot_token\"), or a 1Password op:// URI, apple-password:// URI, file:// URI, or env:// URI (e.g., \"env://MY_TOKEN\"). PROF-03 (Phase 22): Optional — set `auth` instead for OAuth2 client_credentials flows. Mutually exclusive with `auth` and `aws_auth`. NOTE: setting `aws_auth` at all (regardless of this field) is rejected at validation time (D-13, Phase 115) — AWS SigV4 signing is not yet implemented in this fork."
         },
         "auth": {
           "oneOf": [
             { "$ref": "#/$defs/OAuth2Config" },
             { "type": "null" }
           ],
-          "description": "PROF-03 (Phase 22) OAuth2 client_credentials configuration. When present, the proxy handles token exchange automatically instead of using a static keystore credential. Mutually exclusive with `credential_key` and `aws_auth`. The actual token-exchange client implementation lands in Plan 22-04 (OAUTH); Plan 22-01 lands the deserialize wiring + fail-closed validation only."
+          "description": "PROF-03 (Phase 22) OAuth2 client_credentials configuration. When present, the proxy handles token exchange automatically instead of using a static keystore credential. Mutually exclusive with `credential_key` and `aws_auth`. The actual token-exchange client implementation lands in Plan 22-04 (OAUTH); Plan 22-01 lands the deserialize wiring + fail-closed validation only. IMPORTANT (D-14, Phase 115): plain `client_credentials` (client_id/client_secret with no `client_assertion`) has no route-wiring implementation in this fork and is REJECTED at validation time — it would otherwise silently forward requests with zero token injection. Set `client_assertion` (SPIFFE JWT, NET-02/Phase 113) to use this field."
         },
         "aws_auth": {
           "oneOf": [
             { "$ref": "#/$defs/AwsAuthConfig" },
             { "type": "null" }
           ],
-          "description": "AWS SigV4 signing configuration. When present, the proxy signs outbound requests with AWS credentials. Mutually exclusive with `credential_key` and `auth`."
+          "description": "AWS SigV4 signing configuration. REJECTED AT VALIDATION TIME in this fork (D-13, Phase 115, DRAIN-04): AWS SigV4 signing is not yet implemented — the reverse proxy's aws_route branch unconditionally returns 501 at request time on every path, so a profile declaring `aws_auth` is now rejected at profile-load time instead of accepting it and only discovering the 501 later. Documented here for schema completeness and for a future UPST absorb of real SigV4 signing, which must un-reject this field (see 108-DIVERGENCE-LEDGER.md)."
         },
         "spiffe": {
           "oneOf": [
             { "$ref": "#/$defs/SpiffeAuthConfig" },
             { "type": "null" }
           ],
-          "description": "SPIFFE/SPIRE Workload API auth (NET-02, Phase 113). When present, the proxy fetches a JWT-SVID from the local SPIRE Workload API and injects it as a bearer token. Mutually exclusive with `credential_key`, `auth`, and `aws_auth`."
+          "description": "SPIFFE/SPIRE Workload API auth (NET-02, Phase 113). When present, the proxy fetches a JWT-SVID from the local SPIRE Workload API and injects it as a bearer token. Mutually exclusive with `credential_key`, `auth`, and `aws_auth`. NOTE: `aws_auth` is rejected at validation time regardless (D-13, Phase 115) — the mutual-exclusion wording here describes the schema shape, not a still-reachable code path."
         },
         "capture": {
           "oneOf": [
             { "$ref": "#/$defs/CaptureConfig" },
             { "type": "null" }
           ],
-          "description": "Declarative sandboxed OAuth capture (SEC-02, Phase 114, D-13). When present, the proxy buffers this route's response (up to `max_response_bytes`, fail closed on exceed) and rewrites `response_fields` from real tokens to sandbox-visible phantoms before the response reaches the sandboxed client. Unlike `credential_key`/`auth`/`aws_auth`/`spiffe` (request-direction: inject a credential into outbound requests), `capture` is response-direction — it composes with those fields rather than being mutually exclusive with them, and a route may declare ONLY `capture` with no other auth mechanism set. This schema entry hand-ports only the fields this fork actually implements (`response_fields`, `request_nonce_fields`, `max_response_bytes`); upstream's disk persistence, credential-store detection, and login-flow helper surface is deliberately NOT ported (fork scope decision — see ADR-114, D-13)."
+          "description": "Declarative sandboxed OAuth capture (SEC-02, Phase 114, D-13 [Phase 114's D-13, distinct from Phase 115's D-13 aws_auth-rejection decision below — same label reused across phases, not the same decision]). When present, the proxy buffers this route's response (up to `max_response_bytes`, fail closed on exceed) and rewrites `response_fields` from real tokens to sandbox-visible phantoms before the response reaches the sandboxed client. Unlike `credential_key`/`auth`/`aws_auth`/`spiffe` (request-direction: inject a credential into outbound requests), `capture` is response-direction — it composes with those fields rather than being mutually exclusive with them, and a route may declare ONLY `capture` with no other auth mechanism set. This schema entry hand-ports only the fields this fork actually implements (`response_fields`, `request_nonce_fields`, `max_response_bytes`); upstream's disk persistence, credential-store detection, and login-flow helper surface is deliberately NOT ported (fork scope decision — see ADR-114, D-13). Reminder: `aws_auth` itself is rejected at validation time in this fork (D-13, Phase 115, DRAIN-04) — see the `aws_auth` property description above."
         },
         "inject_mode": {
           "oneOf": [
