@@ -130,6 +130,51 @@ impl Default for TelemetryConfig {
     }
 }
 
+/// Required-layers sub-section of [`MachineEgressPolicy`] (D-26).
+///
+/// Read from `HKLM\SOFTWARE\Policies\nono\RequiredLayers` — a fleet-wide,
+/// admin-set list of confinement layer names that Windows startup
+/// self-attestation (CINT-02) must confirm active before it will report the
+/// session as enforcing.
+///
+/// # Read lifecycle: degrade, not abort (decision, D-26)
+///
+/// This file has two established, opposite-direction precedents for a
+/// present-but-broken registry value: the egress fields
+/// (`allowed_suffixes`/`allowed_hosts`/`preset_tokens`) **abort** the whole
+/// policy read (D-07, [`crate::NonoError::PolicyLoadFailed`]); `telemetry`
+/// instead **degrades** to [`TelemetryConfig::default()`] plus a stderr
+/// warning (D-14, [`crate::NonoError::TelemetryConfigInvalid`]).
+///
+/// **Decision: `required_layers` follows the telemetry (degrade-not-abort)
+/// lifecycle, not the egress (abort-on-unreadable) one.** A
+/// present-but-malformed `RequiredLayers` registry value falls back to an
+/// empty `Vec` (nothing additionally required) and surfaces a warning,
+/// rather than aborting the entire machine-policy read — a single admin
+/// typo in a layer name must not brick every confined launch fleet-wide.
+/// The CLI-flag half of D-26 ("can only tighten, never loosen" what machine
+/// policy requires) is enforced downstream, by the CLI-side attestation
+/// decision module (Plan 08) taking the *union* of machine-policy-required
+/// and CLI-flag-required layers — the flag can never remove a
+/// machine-policy requirement — so this type does not need to reconcile the
+/// two itself.
+///
+/// # Library boundary (ADR-86 / D-02)
+///
+/// `crates/nono` stays policy-free: this type carries raw layer-name
+/// strings only, with no notion of which names are valid. Parsing these
+/// strings against the CLI-side `LayerId` registry and fail-closed-rejecting
+/// an unrecognized name is Plan 08's responsibility — this module MUST NOT
+/// import `nono-cli`'s `LayerId` type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RequiredLayersPolicy {
+    /// Layer name strings (validated against the CLI-side `LayerId`
+    /// registry by Plan 08) that this machine's policy requires to be
+    /// confirmed active at startup attestation, fleet-wide.
+    #[serde(default)]
+    pub required: Vec<String>,
+}
+
 /// Platform-neutral representation of the machine-level egress policy.
 ///
 /// Populated by [`read_machine_egress_policy`] from `HKLM\SOFTWARE\Policies\nono`.
@@ -180,6 +225,21 @@ pub struct MachineEgressPolicy {
     /// egress (84-PATTERNS.md invariant 3 / CR-02).
     #[serde(default)]
     pub telemetry: TelemetryConfig,
+
+    /// Fleet-wide required-layers policy (Phase 117 D-26).
+    ///
+    /// Populated from `HKLM\SOFTWARE\Policies\nono\RequiredLayers`. An admin
+    /// can require specific composed Windows confinement layers be
+    /// confirmed active by startup self-attestation, fleet-wide; a local
+    /// CLI flag can only add to (never remove from) this set. See
+    /// [`RequiredLayersPolicy`]'s doc comment for the degrade-not-abort
+    /// read-lifecycle decision.
+    ///
+    /// **INVARIANT:** This field MUST NOT be counted in [`Self::is_unconfigured`].
+    /// An admin who has only set required-layers policy must not
+    /// accidentally flip the daemon to strict deny-all egress.
+    #[serde(default)]
+    pub required_layers: RequiredLayersPolicy,
 }
 
 impl MachineEgressPolicy {
@@ -424,7 +484,9 @@ pub fn expand_preset_tokens(tokens: &[String], network_policy_json: &str) -> Res
 
 #[cfg(target_os = "windows")]
 mod windows_reader {
-    use super::{MachineEgressPolicy, Result, TelemetryConfig, TelemetrySeverity};
+    use super::{
+        MachineEgressPolicy, RequiredLayersPolicy, Result, TelemetryConfig, TelemetrySeverity,
+    };
     use crate::NonoError;
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
     use winreg::{RegKey, RegValue};
@@ -593,11 +655,17 @@ mod windows_reader {
         // D-12: read telemetry sub-section in the same registry open.
         // D-14: malformed telemetry degrades; only egress errors abort (D-07).
         let telemetry = parse_telemetry_config(key);
+        // Phase 117 D-26: no RequiredLayers sub-key reader exists yet (Plan 08
+        // wires the CLI-side consumer); default to "nothing additionally
+        // required" until that lands, consistent with the degrade-not-abort
+        // lifecycle documented on `RequiredLayersPolicy`.
+        let required_layers = RequiredLayersPolicy::default();
         let policy = MachineEgressPolicy {
             allowed_suffixes,
             allowed_hosts,
             preset_tokens,
             telemetry,
+            required_layers,
         };
         // IN-01: validate structural sanity of all string fields after construction.
         // Any invalid entry returns Err(reason) which read_machine_egress_policy_impl
@@ -942,10 +1010,32 @@ mod tests {
                 channel: "Application".to_string(),
                 min_severity: TelemetrySeverity::Debug,
             },
+            required_layers: RequiredLayersPolicy::default(),
         };
         assert!(
             policy.is_unconfigured(),
             "is_unconfigured must ignore telemetry (invariant 3 / CR-02); policy: {policy:?}"
+        );
+    }
+
+    /// Phase 117 D-26: a policy that has ONLY `required_layers` set must still
+    /// return `is_unconfigured()=true` — an admin who sets only the
+    /// required-layers policy must not accidentally flip the daemon to
+    /// strict deny-all egress (mirrors the telemetry invariant above).
+    #[test]
+    fn is_unconfigured_ignores_required_layers_field() {
+        let policy = MachineEgressPolicy {
+            allowed_suffixes: vec![],
+            allowed_hosts: vec![],
+            preset_tokens: vec![],
+            telemetry: TelemetryConfig::default(),
+            required_layers: RequiredLayersPolicy {
+                required: vec!["AppContainerProfile".to_string()],
+            },
+        };
+        assert!(
+            policy.is_unconfigured(),
+            "is_unconfigured must ignore required_layers; policy: {policy:?}"
         );
     }
 
@@ -990,6 +1080,9 @@ mod tests {
                 enabled: false,
                 channel: "Security".to_string(),
                 min_severity: TelemetrySeverity::Error,
+            },
+            required_layers: RequiredLayersPolicy {
+                required: vec!["AppContainerProfile".to_string()],
             },
         };
         let json = serde_json::to_string(&original).unwrap();

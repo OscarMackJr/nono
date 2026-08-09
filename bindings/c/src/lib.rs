@@ -202,6 +202,13 @@ pub(crate) fn map_error(e: &nono::NonoError) -> types::NonoErrorCode {
         // consistent with the other config-error arms above.
         nono::NonoError::TelemetryUnavailable { .. } => NonoErrorCode::ErrIo,
         nono::NonoError::TelemetryConfigInvalid { .. } => NonoErrorCode::ErrConfigParse,
+        // Phase 117 (D-22): startup self-attestation failed to confirm a
+        // composed confinement layer took effect. Fail-closed sandbox-setup
+        // failure, structurally the same class as LabelApplyFailed /
+        // DaclApplyFailed / BrokerNotFound above -> ErrSandboxInit. FFI
+        // consumers read the specific failed layer via nono_last_error()'s
+        // Display string.
+        nono::NonoError::LayerAttestationFailed { .. } => NonoErrorCode::ErrSandboxInit,
     }
 }
 
