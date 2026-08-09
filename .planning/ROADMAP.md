@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/? plans
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/12 plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -288,6 +288,19 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
   3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
   4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
+**Plans**: 12 plans
+- [ ] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
+- [ ] 117-02-PLAN.md — Library surfaces: NonoDiagnosticCode::LayerAttestationFailed + machine_policy required_layers field
+- [ ] 117-03-PLAN.md — proj/SPEC-windows-fail-direction-contract.md + registry self-check/drift-check tests
+- [ ] 117-04-PLAN.md — layer-fault-injection Cargo feature + WFP toggle migration off NONO_TEST_HARNESS (SC4-4)
+- [ ] 117-05-PLAN.md — Shared crates/nono attestation primitive: LayerAttestationStatus (4-state) + raw OS probes
+- [ ] 117-06-PLAN.md — Per-layer fault-injection hooks: restricted token, mandatory label, DACL grants, Job Object
+- [ ] 117-07-PLAN.md — AppContainer fault-injection hooks: nono-shell-broker (new [features] block) + agent_daemon
+- [ ] 117-08-PLAN.md — CLI-side attestation decision module: attest_and_decide() + broker wire contract + Open Question 1 resolution
+- [ ] 117-09-PLAN.md — D-27 channels: coarse downgrade banner + HMAC-chained telemetry event
+- [ ] 117-10-PLAN.md — D-21 gate insertion: nono-cli direct spawn + daemon path + SC4-2 drop-order comment fix
+- [ ] 117-11-PLAN.md — D-21 gate insertion: nono-shell-broker's own suspended AppContainer child
+- [ ] 117-12-PLAN.md — Forced-unavailable tests + D-32 meta-test + D-31 loud-gap list + cross-target clippy + D-24 latency + SPEC close-out
 
 ### Phase 118: Per-Session Enforcement Receipts
 **Goal**: The conjunction "restricted token AND low-integrity label AND AppContainer profile AND WFP coverage" stops being asserted at launch and becomes attested per session — turning "we configured enforcement" into "we can show enforcement held."
