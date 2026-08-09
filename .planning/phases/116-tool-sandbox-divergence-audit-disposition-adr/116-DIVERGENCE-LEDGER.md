@@ -549,3 +549,502 @@ reviewer should not have to infer "no discrepancy" from silence.
 *Ledger status: Plan 116-01 (Task 1 + Task 2) complete. Full D-04 residue accounting for the 7
 `split`-flagged commits above, the carve-out re-touch check (D-19), and the completeness sweep
 are Plan 116-03/116-04's job — this ledger is not yet closed.*
+
+---
+
+## Split-Commit Residue Accounting (Pre-Fence + Post-Fence)
+
+**Plan 116-03, Task 1.** Every commit flagged `split` in the Pre-Fence and Post-Fence Commits
+tables above gets its own per-path residue table here, following the exact D-04/Phase-108-D-07
+convention (`absorb` / `defer` / `noise`, spot-checked row-count-equals-touched-path-count). The
+definitive touched-path list per commit is `git show --name-only --format='' <sha>` — **not**
+the summary column in the tables above, which is prose shorthand written for readability, not an
+authoritative count.
+
+**Reconciliation note (D-17 discipline — recorded in place, not silently corrected):** re-running
+`git show --name-only --format='' <sha> | wc -l` against the two pre-fence split commits finds
+**31** paths for `c808f000` (the Pre-Fence table's prose said "29 paths") and **91** paths for
+`11fd10e0` (the Pre-Fence table's prose said "90 paths"). Both deltas are explained by the prose
+summary's comma-separated file lists omitting a few genuinely-touched noise-bucket paths (e.g.
+`cliff.toml`, `crates/nono-cli/README.md`, and `crates/nono-cli/data/profile-authoring-guide.md`
+for `c808f000`; `Cargo.lock` and `crates/nono-cli/Cargo.toml` for `11fd10e0`) rather than any
+disagreement about which commits are `split` or a miscounted `git log`. The two full residue
+tables below are built from the live `git show --name-only` output (31 and 91 respectively), not
+the prose figures, and each table's own row count is spot-checked against that live count
+directly. All five post-fence split commits' live-measured touched-path counts (12/8/8/9/2) match
+the Post-Fence table's prose exactly — no discrepancy there.
+
+### Pre-Fence split commits
+
+#### `c808f000db582ad69a10c1a2a1b8221b020fff94` — #1235 chore: migrate GitHub org references from always-further to nolabs-ai (31 paths)
+
+**Finding:** structurally `split` (touches 7 production paths outside the module set:
+`migration.rs`, `profile/mod.rs`, `proxy_runtime.rs`, `setup.rs`, `test_env.rs`,
+`update_check.rs`, `crates/nono-proxy/src/route.rs`), but every one of those 7 files' diff is a
+single-line-or-few-line `always-further` → `nolabs-ai` GitHub-org URL/string substitution
+(diff-verified for all 7 — e.g. `migration.rs`'s only hunk is
+`- "https://github.com/always-further/nono/discussions/780"` →
+`+ "https://github.com/nolabs-ai/nono/discussions/780"`). Zero behavioral content, no requirement
+ID — the same "structurally split, cosmetic content" shape 108's own `a519ee62`/`72a98830` rows
+already established.
+
+| path | marker | note |
+|------|--------|------|
+| `.github/workflows/attest-release.yml` | noise | CI workflow config, non-source |
+| `.github/workflows/aur-publish.yml` | noise | CI workflow config, non-source |
+| `.github/workflows/docs-dispatch.yml` | noise | CI workflow config, non-source |
+| `.github/workflows/homebrew-bump.yml` | noise | CI workflow config, non-source |
+| `.github/workflows/image-build.yml` | noise | CI workflow config, non-source |
+| `.github/workflows/release.yml` | noise | CI workflow config, non-source |
+| `.github/workflows/sign-instruction-files.yml` | noise | CI workflow config, non-source |
+| `Cargo.toml` | noise | workspace manifest, not source under `crates/*/src/` |
+| `README.md` | noise | project readme |
+| `SECURITY.md` | noise | project doc |
+| `cliff.toml` | noise | changelog-generator config |
+| `crates/nono-cli/README.md` | noise | crate readme |
+| `crates/nono-cli/data/profile-authoring-guide.md` | noise | data/ |
+| `crates/nono-cli/src/command_policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/migration.rs` | absorb | production, outside module set — org-URL rename only (verified via diff: one doc-comment link, `always-further`→`nolabs-ai`); would land as a trivial fork-wide org-reference string substitution if ever absorbed, not routed to any feature area — no requirement ID |
+| `crates/nono-cli/src/profile/mod.rs` | absorb | production, outside module set — org-URL rename only (verified via diff: one embedded JSON-example string); same trivial-substitution note as above |
+| `crates/nono-cli/src/proxy_runtime.rs` | absorb | production, outside module set — org-URL rename only (verified via diff: two test-fixture request-path strings); same trivial-substitution note as above |
+| `crates/nono-cli/src/setup.rs` | absorb | production, outside module set — org-URL rename only (verified via diff: two doc/help-text URLs); same trivial-substitution note as above |
+| `crates/nono-cli/src/test_env.rs` | absorb | production, outside module set — org-URL rename only (verified via diff: one doc-comment link); same trivial-substitution note as above |
+| `crates/nono-cli/src/update_check.rs` | absorb | production, outside module set — org-URL rename only (verified via diff: one test-fixture JSON string); same trivial-substitution note as above |
+| `crates/nono-proxy/src/route.rs` | absorb | production, outside module set (different crate) — org-URL rename only (verified via diff: one comment + three test-fixture path strings); same trivial-substitution note as above |
+| `docs/docs.json` | noise | docs/ |
+| `docs/plans/2026-04-24-issue-594-phase-2-schema-design.md` | noise | docs/ |
+| `packaging/aur/README.md` | noise | packaging doc |
+| `packaging/rpm/README.md` | noise | packaging doc |
+| `scripts/build-rpm.sh` | noise | build script |
+| `scripts/downstream-workflows/bump-nono-go.yml` | noise | CI workflow config |
+| `scripts/downstream-workflows/bump-nono-py.yml` | noise | CI workflow config |
+| `scripts/downstream-workflows/bump-nono-registry.yml` | noise | CI workflow config |
+| `scripts/downstream-workflows/bump-nono-ts.yml` | noise | CI workflow config |
+| `scripts/push-downstream-workflows.sh` | noise | build/release script |
+
+Row count: 23 noise + 1 defer + 7 absorb = 31 = live-measured touched-path count (31). ✓
+
+---
+
+#### `11fd10e0c88e747b6d751fec9b38f207276b747c` — #1105 feat(sandbox): tool sandbox (91 paths)
+
+**Finding:** the subsystem's own introduction commit — the largest and highest-risk residue
+table in this ledger. 13 paths are module set (`command_policy.rs` + the 12
+`tool-sandbox/*.rs` files), 22 are non-production noise, and **56** are production paths outside
+the module set: 34 general `nono-cli` runtime files, 13 `nono-proxy` crate files, and **9 core
+library files** (`crates/nono/src/{audit.rs, keystore.rs, lib.rs, sandbox/linux.rs,
+sandbox/mod.rs, scrub.rs, supervisor/mod.rs, supervisor/types.rs, undo/types.rs}`) — the only
+pre-fence commit whose non-module residue reaches into the core library tier, directly relevant
+to ADR-86's policy-free-library-boundary criterion. Per-file sizes below are from
+`git show --stat`; core-library `pub` additions are from a targeted diff grep, both live-measured
+this task (D-16).
+
+| path | marker | note |
+|------|--------|------|
+| `Cargo.lock` | noise | lockfile, not source |
+| `crates/nono-cli/Cargo.toml` | noise | crate manifest, not source under `src/` |
+| `crates/nono-cli/data/nono-profile.schema.json` | noise | data/ |
+| `crates/nono-cli/data/profile-authoring-guide.md` | noise | data/ |
+| `crates/nono-cli/src/approval_runtime.rs` | absorb | production, outside module set — new file (+411 lines, `git show --stat`); terminal/webhook/chain approval-backend runtime for the new profile Approval Backends config surface; would land as general CLI approval-runtime infra if ever absorbed, not tool-sandbox-specific |
+| `crates/nono-cli/src/audit_commands.rs` | absorb | production, outside module set — new file (+109 lines); CLI-side audit command surface for the new sandbox-runtime/command-policy audit event types |
+| `crates/nono-cli/src/audit_event_reader.rs` | absorb | production, outside module set — new file (+83 lines); audit-log event-reader plumbing for the new event types |
+| `crates/nono-cli/src/audit_integrity.rs` | absorb | production, outside module set (+79 lines net); audit-ledger integrity checks extended for the new event types |
+| `crates/nono-cli/src/audit_ledger.rs` | absorb | production, outside module set (+17 lines); small audit-ledger wiring for the new event types |
+| `crates/nono-cli/src/cli.rs` | absorb | production, outside module set (+75 lines net); CLI arg surface extended for tool-sandbox-adjacent dispatch |
+| `crates/nono-cli/src/cli_bootstrap.rs` | absorb | production, outside module set (+41 lines); CLI bootstrap wiring |
+| `crates/nono-cli/src/command_policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/command_runtime.rs` | absorb | production, outside module set (+11 lines net); small command-dispatch wiring |
+| `crates/nono-cli/src/config/user.rs` | absorb | production, outside module set (+10 lines); small config-surface addition |
+| `crates/nono-cli/src/exec_strategy.rs` | absorb | production, outside module set — substantial (+574 lines net, largest `exec_strategy` delta in this commit); startup-timeout consolidation (`startup_timeout_should_terminate` helper replacing `wait_for_child_with_startup_timeout`/`CHILD_POLL_INTERVAL` per the commit message) plus tool-sandbox launch wiring; would land as general exec-strategy runtime infra if ever absorbed |
+| `crates/nono-cli/src/exec_strategy/supervisor_linux.rs` | absorb | production, outside module set (+31 lines net); Linux supervisor-loop wiring for the same startup-timeout consolidation |
+| `crates/nono-cli/src/execution_runtime.rs` | absorb | production, outside module set — substantial (+211 lines net); command-execution runtime wiring for tool-sandbox child dispatch |
+| `crates/nono-cli/src/launch_runtime.rs` | absorb | production, outside module set (+42 lines net); launch-runtime wiring for the brokered tool-sandbox child |
+| `crates/nono-cli/src/main.rs` | absorb | production, outside module set (+23 lines net); crate-root `mod`/dispatch registration for the new `tool_sandbox` module and siblings |
+| `crates/nono-cli/src/network_policy.rs` | absorb | production, outside module set (+17 lines); small network-policy addition — proxy env-var passthrough per the commit message's "allow proxy environment variables" entry |
+| `crates/nono-cli/src/package_cmd.rs` | absorb | production, outside module set (+15 lines net); small package-command wiring |
+| `crates/nono-cli/src/policy.rs` | absorb | production, outside module set (+4 lines); trivial general-policy addition |
+| `crates/nono-cli/src/profile/builtin.rs` | absorb | production, outside module set (+2 lines); trivial built-in-profile registration touch |
+| `crates/nono-cli/src/profile/mod.rs` | absorb | production, outside module set — substantial (+762 lines net, the single largest profile-schema delta in this commit); adds the Invocation Policies / Endpoint Policies / Approval Backends / Resource Limits / Stdio Limits / mTLS / `allow_all` network-control profile-schema fields the commit message describes |
+| `crates/nono-cli/src/profile_cmd.rs` | absorb | production, outside module set — new content (+123 lines); profile-command CLI surface for the new schema fields |
+| `crates/nono-cli/src/profile_runtime.rs` | absorb | production, outside module set (+204 lines net); profile-runtime wiring (validation, merge) for the new schema fields |
+| `crates/nono-cli/src/proxy_runtime.rs` | absorb | production, outside module set — **largest single-file delta in this entire commit** (+2,506 lines net, `git show --stat`); credential-capture command execution, endpoint-policy enforcement, and mTLS credential wiring per the commit message; would land as a substantial CLI proxy-orchestration feature if ever absorbed |
+| `crates/nono-cli/src/pty_proxy.rs` | absorb | production, outside module set (+11 lines net); small PTY-proxy wiring |
+| `crates/nono-cli/src/query_ext.rs` | absorb | production, outside module set (+23 lines); small query-extension addition |
+| `crates/nono-cli/src/rollback_runtime.rs` | absorb | production, outside module set (+53 lines net); rollback-runtime wiring touched by the shared-struct-field reconciliation the commit message's "reconcile fixtures" entry describes |
+| `crates/nono-cli/src/sandbox_prepare.rs` | absorb | production, outside module set (+25 lines net); sandbox-prepare wiring for tool-sandbox child launch |
+| `crates/nono-cli/src/supervised_runtime.rs` | absorb | production, outside module set (+41 lines net); supervised-runtime wiring for the brokered child |
+| `crates/nono-cli/src/terminal_approval.rs` | absorb | production, outside module set — substantial (+267 lines net); terminal approval-backend implementation for the new Approval Backends profile surface |
+| `crates/nono-cli/src/timeouts.rs` | absorb | production, outside module set (−3 lines, a pure removal); trivial cleanup tied to the startup-timeout consolidation |
+| `crates/nono-cli/src/tool-sandbox/audit_context.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/credentials.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/dynamic_providers.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/env.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/launch.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/mod.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/protocol.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/token_broker.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/url_shim.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/trust_intercept.rs` | absorb | production, outside module set (+16 lines net); trust-intercept wiring touched by the shared-struct-field reconciliation |
+| `crates/nono-cli/src/trust_keystore.rs` | absorb | production, outside module set (+12 lines net); trust-keystore wiring, same reconciliation |
+| `crates/nono-cli/src/url_open.rs` | absorb | production, outside module set — new file (+190 lines); "the single source of truth shared by the supervisor and tool-sandbox paths" per the commit message, for URL validation + browser launch (`open_urls`/`allow_launch_services` policy); general-purpose CLI helper despite being introduced alongside tool-sandbox |
+| `crates/nono-cli/src/why_runtime.rs` | absorb | production, outside module set — substantial (+335 lines net); CLI "why" diagnostic runtime extended to explain the new invocation-policy/approval/resource-limit denial reasons |
+| `crates/nono-cli/src/wiring.rs` | absorb | production, outside module set (+106 lines net); CLI command-wiring registration for the new `profile_cmd`/`audit_commands`/etc. surfaces |
+| `crates/nono-cli/tests/profile_cmd.rs` | noise | tests/ |
+| `crates/nono-cli/tests/schema_shape.rs` | noise | tests/ |
+| `crates/nono-proxy/src/approval.rs` | absorb | production, outside module set (different crate) — new file (+105 lines); proxy-side approval-request plumbing for endpoint policies |
+| `crates/nono-proxy/src/audit.rs` | absorb | production, outside module set — substantial (+261 lines); proxy audit record extended with endpoint-policy/credential-capture audit fields |
+| `crates/nono-proxy/src/capture.rs` | absorb | production, outside module set — new file (+91 lines); credential-capture command execution on the proxy side |
+| `crates/nono-proxy/src/config.rs` | absorb | production, outside module set — new file (+341 lines); proxy config for endpoint policies, approval backends, resource limits, credential capture |
+| `crates/nono-proxy/src/credential.rs` | absorb | production, outside module set (+179 lines net); proxy credential resolution extended for command-backed (`cmd://`) credentials |
+| `crates/nono-proxy/src/lib.rs` | absorb | production, outside module set (+3 lines); trivial module registration for the new proxy files above |
+| `crates/nono-proxy/src/reverse.rs` | absorb | production, outside module set — second-largest delta in the `nono-proxy` crate (+617 lines net); reverse-proxy path extended for endpoint-policy enforcement and credential-capture injection |
+| `crates/nono-proxy/src/route.rs` | absorb | production, outside module set (+44 lines net); route matching extended for the `endpoint_policy` field |
+| `crates/nono-proxy/src/server.rs` | absorb | production, outside module set (+106 lines net); proxy server wiring for the new approval/capture/config plumbing |
+| `crates/nono-proxy/src/tls_intercept/ca.rs` | absorb | production, outside module set (+2 lines net); trivial |
+| `crates/nono-proxy/src/tls_intercept/cert_cache.rs` | absorb | production, outside module set (+47 lines net); cert-cache extension for the new mTLS wiring |
+| `crates/nono-proxy/src/tls_intercept/handle.rs` | absorb | production, outside module set — third-largest delta in the `nono-proxy` crate (+593 lines net); TLS-intercept handle extended substantially for mTLS client-cert/key wiring |
+| `crates/nono-proxy/src/token.rs` | absorb | production, outside module set (+21 lines net); token handling extended |
+| `crates/nono/src/audit.rs` | absorb | **core library**, outside module set (+177/−4 lines); new `SandboxRuntimeAuditEvent`/`CommandPolicyAuditEvent`/`CommandPolicyEnvAuditEntry`/`CommandPolicyStdioAudit`/`CommandPolicyStdioStreamAudit` public structs + `record_sandbox_runtime_event()`/`record_command_policy_event()` methods (verified via targeted diff grep of the `pub` surface); ADR-86-boundary-relevant — genuine core-library audit-primitive additions, not CLI plumbing |
+| `crates/nono/src/keystore.rs` | absorb | **core library**, outside module set (+36/−1 lines); new `is_cmd_uri()`/`validate_cmd_uri()` public functions (verified via diff grep) recognizing `cmd://` credential-capture URIs; ADR-86-boundary-relevant |
+| `crates/nono/src/lib.rs` | absorb | **core library**, outside module set (+7/−3 lines); trivial re-export wiring for the two files above |
+| `crates/nono/src/sandbox/linux.rs` | absorb | **core library**, outside module set — new content (+104 lines); new `restrict_execute()` public function on the Landlock driver (verified via diff grep) — an execute-only capability restriction; ADR-86-boundary-relevant, genuine core sandbox primitive |
+| `crates/nono/src/sandbox/mod.rs` | absorb | **core library**, outside module set (+16/−1 lines); facade-level `restrict_execute()` plumbing matching the `linux.rs` addition above |
+| `crates/nono/src/scrub.rs` | absorb | **core library**, outside module set — substantial (+102/−2 lines); new `add_env_var()`/`remove_env_var()`/`scrub_env_name[_with_policy]()`/`scrub_env_value[_with_policy]()` public functions (verified via diff grep); ADR-86-boundary-relevant |
+| `crates/nono/src/supervisor/mod.rs` | absorb | **core library**, outside module set (+86/−20 lines); supervisor IPC trait extended with an `ApprovalRequest`-mediated `request_approval()` method (verified via diff grep) |
+| `crates/nono/src/supervisor/types.rs` | absorb | **core library**, outside module set — substantial (+132/−4 lines); new `ApprovalRequest` public enum + accessors (verified via diff grep) |
+| `crates/nono/src/undo/types.rs` | absorb | **core library**, outside module set — new content (+63 lines); new enum variants (`ApproveRequested`/`ApproveGranted`/`ApproveDenied`/`ApproveTimeout`/`ApproveError`) and struct fields (`endpoint_policy_action`, `endpoint_policy_rule`, `approval_backend`, `credential_capture_*`) on the audit-record types (verified via diff) |
+| `docs/cli/features/credential-injection.mdx` | noise | docs/ |
+| `docs/cli/features/dangerous-command-blocking.mdx` | noise | docs/ |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs/ |
+| `docs/cli/getting_started/quickstart.mdx` | noise | docs/ |
+| `docs/cli/usage/flags.mdx` | noise | docs/ |
+| `docs/docs.json` | noise | docs/ |
+| `qa-profiles/01-credential-with-rules.json` | noise | non-production fixture data |
+| `qa-profiles/02-rules-without-credential.json` | noise | non-production fixture data |
+| `qa-profiles/03-mixed-routes.json` | noise | non-production fixture data |
+| `tests/integration/test_audit.sh` | noise | integration test script |
+| `tests/integration/test_child_tool_boundaries.sh` | noise | integration test script |
+| `tests/integration/test_learn.sh` | noise | integration test script |
+| `tests/integration/test_network.sh` | noise | integration test script |
+| `tests/integration/test_pack_resolution.sh` | noise | integration test script |
+| `tests/integration/test_rollback.sh` | noise | integration test script |
+| `tests/run_integration_tests.sh` | noise | integration test runner script |
+
+Row count: 22 noise + 13 defer + 56 absorb = 91 = live-measured touched-path count (91). ✓
+
+---
+
+### Post-Fence split commits
+
+#### `ce3e510146b0b603970ff087700e25448987fbc1` — #1521 fix: allow non-UTF-8 command line arguments (12 paths)
+
+**Finding:** a general CLI-wide non-UTF-8 argument-handling fix; the tool-sandbox touch
+(`url_shim.rs`, +4/−2 lines) is incidental — the fix's substance is spread across 11 CLI-dispatch
+files (`git show --stat`: `cli_bootstrap.rs` +65/−, `exec_strategy.rs` +95/−, `command_display.rs`
++51/−, others smaller).
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/cli.rs` | absorb | production, outside module set — part of the general non-UTF-8 arg-handling fix (#1521); would land as a CLI-argument-handling fix if ever absorbed, not tool-sandbox-specific |
+| `crates/nono-cli/src/cli_bootstrap.rs` | absorb | production, outside module set — largest single-file delta in this commit (+65 lines net); same non-UTF-8 arg-handling fix |
+| `crates/nono-cli/src/command_display.rs` | absorb | production, outside module set (+51 lines net); same fix — non-UTF-8-safe command display formatting |
+| `crates/nono-cli/src/command_runtime.rs` | absorb | production, outside module set (+21 lines net); same fix |
+| `crates/nono-cli/src/exec_strategy.rs` | absorb | production, outside module set (+95 lines net); same fix |
+| `crates/nono-cli/src/execution_runtime.rs` | absorb | production, outside module set (+25 lines net); same fix |
+| `crates/nono-cli/src/learn.rs` | absorb | production, outside module set (+24 lines net); same fix |
+| `crates/nono-cli/src/learn_runtime.rs` | absorb | production, outside module set (+8 lines net); same fix |
+| `crates/nono-cli/src/main.rs` | absorb | production, outside module set (+5 lines net); same fix |
+| `crates/nono-cli/src/profile_save_runtime.rs` | absorb | production, outside module set (+59 lines net); same fix |
+| `crates/nono-cli/src/tool-sandbox/url_shim.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/why_runtime.rs` | absorb | production, outside module set (+19 lines net); same fix |
+
+Row count: 0 noise + 1 defer + 11 absorb = 12 = live-measured touched-path count (12). ✓
+
+---
+
+#### `65163c6a4e7ee4eef61d737b1e179a02d1ac257c` — #1476 feat: mediate vault login -method=oidc (custom inject header + per-command open_port) (8 paths)
+
+**Finding:** credential-provider/proxy plumbing for an OIDC-login OAuth capture flow, split from
+3 tool-sandbox platform files that consume the new per-command `open_port` mediation.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/profile/credential_provider.rs` | absorb | production, outside module set — largest delta in this commit (+163 lines net); credential-provider plumbing for the OIDC vault-login flow |
+| `crates/nono-cli/src/profile_runtime.rs` | absorb | production, outside module set (+4 lines); small profile-runtime wiring |
+| `crates/nono-cli/src/proxy_runtime.rs` | absorb | production, outside module set (+65 lines net); proxy-runtime wiring for the custom-inject-header mediation |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set — fork has no host module for this path |
+| `docs/cli/features/sandboxed-oauth-logins.mdx` | noise | docs/ — new file |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs/ |
+
+Row count: 2 noise + 3 defer + 3 absorb = 8 = live-measured touched-path count (8). ✓
+
+---
+
+#### `35af34175f603a4860b22666dc8a8fc075fe23c6` — #1364 fix(cli): add explicit intercept match predicates (8 paths)
+
+**Finding:** the module-set files (`command_policy.rs` +499/−, `tool-sandbox/policy.rs` +553/−)
+carry the bulk of this commit's substance; only one production file outside the module set
+(`profile_save_runtime.rs`, a 3-line delta) is touched.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/data/nono-profile.schema.json` | noise | data/ |
+| `crates/nono-cli/src/command_policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/profile_save_runtime.rs` | absorb | production, outside module set — trivial (+3 lines net); would land as a small profile-save-runtime touch if ever absorbed, not independently significant |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/tests/schema_shape.rs` | noise | tests/ |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs/ |
+
+Row count: 3 noise + 4 defer + 1 absorb = 8 = live-measured touched-path count (8). ✓
+
+---
+
+#### `6a63b42412999b1389a5d59bdca85b8ab2587105` — #1453 feat(tool-sandbox): add jwt-shaped nonce option for capture intercepts (9 paths)
+
+**Finding:** substantial `nono-proxy` OAuth-capture-phantom work (5 files, `jwt_phantom.rs` new
++73 lines) outside the module set, alongside the module-set `command_policy.rs`/platform-driver
+touches.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/command_policy.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/platform/linux.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-cli/src/tool-sandbox/platform/macos.rs` | defer | module set — fork has no host module for this path |
+| `crates/nono-proxy/src/jwt_phantom.rs` | absorb | production, outside module set (different crate) — new file (+73 lines); JWT-shaped phantom-token generation for capture intercepts |
+| `crates/nono-proxy/src/lib.rs` | absorb | production, outside module set (+1 line); trivial module registration |
+| `crates/nono-proxy/src/oauth_capture/jwt.rs` | absorb | production, outside module set (−19 lines, a pure removal — logic relocated into `jwt_phantom.rs`) |
+| `crates/nono-proxy/src/oauth_capture/mod.rs` | absorb | production, outside module set (−1 line); trivial |
+| `crates/nono-proxy/src/oauth_capture/rewrite.rs` | absorb | production, outside module set (+2/−1 lines); trivial wiring for the relocated JWT-phantom logic |
+| `docs/cli/features/tool-sandbox.mdx` | noise | docs/ |
+
+Row count: 1 noise + 3 defer + 5 absorb = 9 = live-measured touched-path count (9). ✓
+
+---
+
+#### `f76733f6f5fea49871b696bff19fb66ef6ab9ff9` — #1470 test(nono-cli): hermetic git test commit.gpgsign (2 paths)
+
+**Finding:** structurally `split` (touches `capability_ext.rs`, a production path outside the
+module set), but diff-verified test-only content in both files.
+
+| path | marker | note |
+|------|--------|------|
+| `crates/nono-cli/src/capability_ext.rs` | absorb | production, outside module set — but diff-verified the entire hunk is inside `#[cfg(test)] mod tests` (confirmed via `git show ... \| grep -n "mod tests"`, matches at the two hunk headers); a git-command test-hermeticity fix (`.output()`→`.status()` + explicit success assertions, `commit.gpgsign=false`), zero production behavior change; would land as a trivial test-infra touch if ever absorbed |
+| `crates/nono-cli/src/tool-sandbox/dynamic_providers.rs` | defer | module set — fork has no host module for this path |
+
+Row count: 0 noise + 1 defer + 1 absorb = 2 = live-measured touched-path count (2). ✓
+
+---
+
+### Split-Commit Residue Accounting — arithmetic summary
+
+7 split commits (2 pre-fence + 5 post-fence), 31 + 91 + 12 + 8 + 8 + 9 + 2 = **161** total
+touched-path rows across their residue tables, zero unbucketed paths — every commit's table row
+count spot-checked equal to its live `git show --name-only --format='' <sha> | wc -l` output
+directly above the table. Precise per-commit bucket breakdown:
+
+| commit | absorb | defer | noise | total |
+|--------|-------:|------:|------:|------:|
+| `c808f000` | 7 | 1 | 23 | 31 |
+| `11fd10e0` | 56 | 13 | 22 | 91 |
+| `ce3e5101` | 11 | 1 | 0 | 12 |
+| `65163c6a` | 3 | 3 | 2 | 8 |
+| `35af3417` | 1 | 4 | 3 | 8 |
+| `6a63b424` | 5 | 3 | 1 | 9 |
+| `f76733f6` | 1 | 1 | 0 | 2 |
+| **Total** | **84** | **26** | **51** | **161** |
+
+84 + 26 + 51 = 161. ✓ Matches the sum of the 7 individual row counts above exactly.
+
+Every `defer`-marked row across all 7 tables carries the literal phrase "fork has no host module
+for this path" (26 occurrences — one per module-set path across `command_policy.rs` and the
+`tool-sandbox/*.rs` files touched by these 7 commits, matching the table's `defer` column sum).
+The module-scoped half of every split commit always defers for exactly this reason: the fork has
+never absorbed any part of the `tool-sandbox`/`command_policy`/`lineage_cgroup` subsystem
+(D-06/108's standing finding, re-confirmed by this ledger's own D-03 re-derivation above).
+
+---
+
+## Fenced-Window Residue Reconciliation (grep-verified against fork HEAD)
+
+**Plan 116-03, Task 2.** Phase 108's `108-DIVERGENCE-LEDGER.md` § "tool-sandbox-split" recorded
+11 split commits; **7 of the 11 carry zero `absorb`-marked rows** (`a519ee62`, `72a98830`,
+`1f54f4ae`, `7c20dc75`, `eb2d61a7`, `5a7447d3`, `ebd51cbb` — every non-module path in each is
+wiring-only, per 108's own finding, quoted here rather than re-derived: *"7 of 11 do not [carry
+absorb content] ... every non-module path in those 7 is small wiring"*). Those 7 need no
+reconciliation table row (there is nothing to verify a landing for). The remaining **4 split
+commits carry all 31 of the fenced window's `absorb`-marked paths** — exactly the 4 D-05-named
+worked examples this plan's `interfaces` block names. Every one of the 31 is reconciled below by
+a live grep against fork HEAD (not by reading 108's routing-note phase-number citation as
+sufficient proof), per D-04/D-16.
+
+### `d5803b994b416ad07a73907143ca169c408917f3` — #1398 port-range support (PROF-03 claim)
+
+108's routing-note claim (quoted verbatim): *"ranges 'expand to individual rules on both
+platforms — Seatbelt rules on macOS, Landlock NetPort objects on Linux,' implemented entirely in
+`crates/nono/src/sandbox/linux.rs`/`sandbox/macos.rs` + `crates/nono/src/capability.rs` (the
+port-range `CapabilitySet` mechanism) + CLI plumbing (`profile/mod.rs`, `profile_cmd.rs`,
+`profile_runtime.rs`, `capability_ext.rs`, `exec_strategy.rs`,
+`exec_strategy/supervisor_linux.rs`, `output.rs`, `supervised_runtime.rs`, `manifest_convert.rs`,
+`capability-manifest.schema.json`)... (**PROF-03**)."
+
+| absorb path | grep command | hit count | verdict |
+|--------------|---------------|-----------|---------|
+| `crates/nono-cli/src/capability_ext.rs` | `grep -n "port_range" crates/nono-cli/src/capability_ext.rs` | 6 (`open_port_range` field reads + 1 test) | landed |
+| `crates/nono-cli/src/exec_strategy.rs` | `grep -n "port_range" crates/nono-cli/src/exec_strategy.rs` | 5 (`proxy_bind_port_ranges` field + uses) | landed |
+| `crates/nono-cli/src/exec_strategy/supervisor_linux.rs` | `grep -n "port_range" crates/nono-cli/src/exec_strategy/supervisor_linux.rs` | 5 | landed |
+| `crates/nono-cli/src/output.rs` | `grep -n "port_range" crates/nono-cli/src/output.rs` | 2 (`localhost_port_ranges()` display) | landed |
+| `crates/nono-cli/src/profile/mod.rs` | `grep -n "port_range" crates/nono-cli/src/profile/mod.rs` | 5+ (`open_port_range`/`listen_port_range` schema fields) | landed |
+| `crates/nono-cli/src/profile_cmd.rs` | `grep -n "port_range" crates/nono-cli/src/profile_cmd.rs` | 5+ | landed |
+| `crates/nono-cli/src/profile_runtime.rs` | `grep -n "port_range" crates/nono-cli/src/profile_runtime.rs` | 3+ (`validate_port_ranges()`, explicit `PROF-03 (110-04)` doc-comment citation) | landed |
+| `crates/nono-cli/src/supervised_runtime.rs` | `grep -n "port_range" crates/nono-cli/src/supervised_runtime.rs` | 1 (`proxy_bind_port_ranges`) | landed |
+| `crates/nono/schema/capability-manifest.schema.json` | `grep -n "localhost_range" crates/nono/schema/capability-manifest.schema.json` | 1 field def (`PortConfig.localhost_range`, `[start,end]` array-of-pairs shape) | landed — differently-named (`localhost_range`, not `localhost_port_ranges`), functionally equivalent inclusive-range shape, noted explicitly per Task 2's differently-named-symbol allowance |
+| `crates/nono/src/capability.rs` | `grep -n "port" crates/nono/src/capability.rs \| head` | 10+ (`NetworkMode::ProxyOnly{port,bind_ports}`, `MACOS_PORT_RANGE_LIMIT`, `merge_port_ranges`) | landed |
+| `crates/nono/src/manifest_convert.rs` | `grep -n "localhost_range" crates/nono/src/manifest_convert.rs` | 4 (reads `ports.localhost_range`, calls `caps.allow_localhost_port_range()`) | landed |
+| `crates/nono/src/sandbox/linux.rs` | `grep -n "NetPort" crates/nono/src/sandbox/linux.rs` | 7 (`NetPort::new(*port, AccessNet::ConnectTcp\|BindTcp)` — kernel-enforced Landlock NetPort objects) | landed |
+| `crates/nono/src/sandbox/macos.rs` | `grep -n "port_range\|remote tcp" crates/nono/src/sandbox/macos.rs` | 6+ (`(remote tcp "localhost:{}")` Seatbelt-rule emission, `localhost_port_ranges` unrolling, `MACOS_PORT_RANGE_LIMIT` cumulative cap) | landed |
+
+**All 13 of `d5803b99`'s `absorb`-marked paths verdict: `landed`.** Port-range support exists on
+both platforms, kernel-enforced on Linux (`NetPort`) and Seatbelt-rule-emitted on macOS, matching
+108's routing-note claim symbol-for-symbol (with one benign field-name difference,
+`localhost_range` vs. `localhost_port_ranges`, noted above).
+
+### `ea334d2bbdcb332c3a1c4164843667b0d2153cb1` — #1332 musl build fix (fs_type_unsupported u64) claim
+
+108's routing-note claim (quoted verbatim): *"the substantive fix is entirely in
+`crates/nono/src/sandbox/linux.rs` (`V9FS_MAGIC`/`fs_type_unsupported` retyped `libc::c_long` →
+`u64` to fix an Alpine/musl build break — musl defines `statfs::f_type` as `u64` vs glibc's
+`c_long`)."*
+
+| absorb path | grep command | hit count | verdict |
+|--------------|---------------|-----------|---------|
+| `crates/nono/src/sandbox/linux.rs` | `grep -n "V9FS_MAGIC\|fs_type_unsupported" crates/nono/src/sandbox/linux.rs` | 8 hits — **but** `const V9FS_MAGIC: libc::c_long` and `fn fs_type_unsupported(f_type: libc::c_long)` (types unchanged from the pre-fix upstream shape, not retyped to `u64`) | **not-landed — false-positive grep hit** |
+
+**Finding (this is the genuine Task-2 catch this plan exists to make):** the fork's
+`V9FS_MAGIC`/`fs_type_unsupported` symbols are a **coincidentally-identically-named, unrelated,
+fork-native feature** — 9P-filesystem (WSL2 host-path) Landlock-enforcement-limitation detection,
+introduced independently via `git log --oneline --all -- crates/nono/src/sandbox/linux.rs \|
+grep -i "wsl\|9p"` (finds `c786b063 feat(wsl2): add WSL2 detection...`, `5fe9d203
+fix(wsl2): security hardening from code review`, `345891fa`/`5b8e94da`/`4b0b6870 fix(sandbox):
+warn when capability path is on a 9P filesystem` — none reference the tool-sandbox split commit
+or a musl build target). The fork's `V9FS_MAGIC` const still uses `libc::c_long` (unchanged from
+the pre-fix upstream shape `ea334d2b` corrected), and `Cross.toml`/`.github/workflows/*.yml`
+contain no musl cross-compilation target (`grep -rn "musl" Cross.toml .github/workflows/*.yml`
+finds only one unrelated hit — a third-party SPIFFE binary tarball name in `spire.yml`, not a
+fork build target). **The musl-specific build-compatibility fix `ea334d2b` actually made has
+never landed in the fork — a naive grep for the symbol names alone would have reported `landed`
+and been wrong**, exactly the "file/symbol presence ≠ the actual fix" trap D-16 warns against.
+Verdict: **not-landed**, with the false-positive risk recorded explicitly so a future reader does
+not re-trip on the same symbol-name coincidence.
+
+### `d4927f95a37863cf0ba534b054e28f48f002ad21` — #1298 @git:* dynamic token expansion (PROF-02 claim)
+
+108's routing-note claim (quoted verbatim): *"`capability_ext.rs` is where the top-level
+`filesystem.allow`/`read`/`write` fields gain `@git:*` token expansion (**PROF-02**)... the fix
+works by calling `crate::tool_sandbox::dynamic_providers::expand_dynamic_tokens` — a function
+that lives in `tool-sandbox/dynamic_providers.rs`... PROF-02's absorb work in Phase 110 cannot be
+a clean lift of `capability_ext.rs` alone... Phase 110 must either port a minimal standalone
+`expand_dynamic_tokens`... or explicitly scope PROF-02 down."*
+
+| absorb path | grep command | hit count | verdict |
+|--------------|---------------|-----------|---------|
+| `crates/nono-cli/src/capability_ext.rs` | `grep -n "@git:\|expand_dynamic_tokens\|dynamic_providers" crates/nono-cli/src/capability_ext.rs` | 8 (`expand_dynamic_tokens()` called for `allow`/`read`/`write`/`allow_file`/`read_file`/`write_file`/`add_deny_access` fields) | landed |
+| — cross-dependency resolution check | `grep -n "@git:" crates/nono-cli/src/dynamic_tokens.rs` (108's flagged blocker: does the fork have its own standalone `expand_dynamic_tokens`, resolving 108's own open item?) | 10+ (`@git:config-files`, `@git:hooks-path`, `@git:common-dir`, `@git:worktree` token parsing/tests) | **resolved** — the fork built its own standalone `crates/nono-cli/src/dynamic_tokens.rs` (not a port of `tool-sandbox/dynamic_providers.rs`) rather than deferring per 108's proposed fallback; `capability_ext.rs:17` carries an explicit `// PROF-02b (Phase 110 Plan 02, D-01/D-02): @git:* dynamic-token expansion is` doc-comment confirming this was a deliberate, already-recorded Phase 110 decision |
+
+**Both of `d4927f95`'s tracked items verdict: `landed`.** 108's own flagged cross-dependency
+concern (that `capability_ext.rs` alone would not be a clean lift) was correctly anticipated and
+is confirmed resolved — Phase 110 built a standalone `dynamic_tokens.rs`, not a port of the
+deferred `tool-sandbox/dynamic_providers.rs` module.
+
+### `8a4237f2ee0dc33bc1e5afdd39c0db8ca6f5ed38` — #1283 SeccompPolicy struct refactor claim (16 absorb paths)
+
+108's routing-note claim (quoted verbatim): *"a general Linux seccomp/sandbox-enforcement-
+selection mechanism (`SeccompPolicy` struct, `apply_auto`/`apply_landlock`/`apply_external` entry
+points, new `--sandbox-policy` CLI flag)... filed as a CORE-cluster / Phase 111 residual item."*
+
+| absorb path | grep command | hit count | verdict |
+|--------------|---------------|-----------|---------|
+| `crates/nono/src/sandbox/linux.rs`, `sandbox/mod.rs` | `grep -rn "SeccompPolicy\|apply_auto\|apply_landlock" crates/nono/src/sandbox/mod.rs crates/nono/src/sandbox/linux.rs` | 0 hits for `SeccompPolicy`/`apply_auto`/`apply_landlock` (only `apply_external` exists, see next row) | **not-landed** |
+| `crates/nono/src/sandbox/linux.rs::apply_external` | `grep -n "fn apply_external" crates/nono/src/sandbox/linux.rs` + doc-comment read | 1 hit, but the fork's `apply_external()` is a no-op marker (`info!("TCP network enforcement delegated externally"); Ok(())`) documented as "exists only as an explicit marker for callers that have already applied the normal filesystem and process sandbox... It must not be used as the whole `nono run` sandbox on its own" | **not-landed** — same function name, structurally unrelated stub, not the SeccompPolicy dispatch mechanism |
+| `crates/nono-cli/src/cli.rs::--sandbox-policy` | `grep -n "sandbox.policy\|sandbox_policy" crates/nono-cli/src/cli.rs` | 0 hits | **not-landed** |
+| `bindings/c/src/sandbox.rs::apply_auto` | `grep -n "apply_auto\|Sandbox::apply" bindings/c/src/sandbox.rs` | 1 hit, `nono::Sandbox::apply` (not `apply_auto`) | **not-landed** |
+| — direct fork self-documentation (stronger than a fresh grep) | `sed -n '5658,5667p' crates/nono/src/sandbox/linux.rs` (an existing Phase-112 test comment) | literal text: *"this fork never absorbed the antecedent `LinuxSandboxPolicy`/`SeccompPolicy` refactor (fa21a004/8a4237f2, #1283)... the fork's equivalent of upstream's `apply_landlock()` is named `apply()`... no such function named `apply_landlock` exists in this fork"* | **not-landed — independently confirmed by the fork's own prior-recorded code comment, citing this exact SHA** |
+
+**All 16 of `8a4237f2`'s `absorb`-marked paths verdict: `not-landed`.** This is the strongest
+finding in this reconciliation: not only does a live grep fail to find the claimed symbols, but
+the fork's own code (from an unrelated earlier phase, Phase 112 SEC-03) already explicitly
+documents non-absorption of this exact SHA by name — independent corroboration that 108's
+`absorb` marking for this commit's 16 paths never executed. 108's own residue table already
+filed this as "Phase 111 residual" (a forward-pointing marker, not a landed-absorb claim) — this
+finding does not contradict 108, it confirms 108's own residual framing was accurate and the
+residual has not since been picked up by any subsequent phase (Phase 111 through 116 inclusive).
+
+### Fenced-Window Residue Reconciliation — summary
+
+| commit | absorb paths | landed | not-landed | partially-landed |
+|--------|-------------:|-------:|-----------:|------------------:|
+| `d5803b99` (#1398, PROF-03) | 13 | 13 | 0 | 0 |
+| `ea334d2b` (#1332, musl fix) | 1 | 0 | 1 | 0 |
+| `d4927f95` (#1298, PROF-02) | 1 | 1 | 0 | 0 |
+| `8a4237f2` (#1283, SeccompPolicy) | 16 | 0 | 16 | 0 |
+| **Total** | **31** | **14** | **17** | **0** |
+
+31 of 31 fenced-window `absorb`-marked paths reconciled by a recorded live grep (or, for
+`8a4237f2`, an even stronger existing-code-comment citation) — zero accepted on routing-note
+prose alone. **14 landed** (all of PROF-02's and PROF-03's claimed absorb work), **17 not-landed**
+(all of SeccompPolicy's claimed work, plus the musl fix's one path — the latter a genuine
+false-positive-symbol-collision finding this task's grep-not-prose discipline exists to catch).
+
+---
+
+## Post-Fence Residue Finding
+
+Per Task 1's post-fence split-commit residue tables above, every post-fence commit's
+`absorb`-marked path is checked the same way: grep fork HEAD for a matching symbol/feature, per
+D-04's requirement that post-fence residue mapping to no existing phase be named as an
+operator-gated finding.
+
+| absorb path (post-fence) | commit | grep command | hit count | verdict |
+|----------------------------|--------|---------------|-----------|---------|
+| `crates/nono-cli/src/cli.rs` (+ 10 sibling files) | `ce3e5101` (#1521, non-UTF-8 args) | `grep -n "OsStr\|from_encoded_bytes\|OsString" crates/nono-cli/src/cli_bootstrap.rs` | 3 (`OsString`/`OsStr` handling present) | landed — fork independently handles non-ASCII/OS-string args in its own CLI bootstrap path (pre-existing, not traced to this specific upstream commit, but the capability class exists) |
+| `crates/nono-cli/src/profile/credential_provider.rs` (+ 2 siblings) | `65163c6a` (#1476, OIDC vault-login) | `grep -n "oidc\|vault" crates/nono-cli/src/profile/credential_provider.rs` | 0 | **not-landed** — no OIDC/Vault-specific credential-provider mediation in the fork |
+| `crates/nono-cli/src/profile_save_runtime.rs` | `35af3417` (#1364, intercept predicates) | `grep -n "intercept" crates/nono-cli/src/profile_save_runtime.rs` | 0 | **not-landed** — no tool-sandbox intercept concept exists in the fork at all (module absent) |
+| `crates/nono-proxy/src/jwt_phantom.rs` (+ 4 siblings) | `6a63b424` (#1453, jwt-shaped nonce) | `grep -rn "jwt_phantom\|jwt.shaped" crates/nono-proxy/src/` | 0 | **not-landed** — no JWT-phantom capture-intercept mechanism in the fork's proxy |
+| `crates/nono-cli/src/capability_ext.rs` (test-only) | `f76733f6` (#1470, hermetic git test) | N/A — diff-verified test-only in the source commit itself; no fork-side landing question applies | N/A | not-applicable (test-infra content, not a feature to land) |
+
+**Of the 4 genuinely feature-bearing post-fence absorb paths, 3 map to no existing phase and no
+landed fork symbol** (`65163c6a`'s OIDC vault-login mediation, `35af3417`'s intercept-predicate
+refinement, `6a63b424`'s JWT-phantom capture nonce) — but **all 3 are module-scoped extensions of
+the tool-sandbox subsystem itself** (OIDC credential mediation for a tool-sandbox-brokered login
+flow; intercept-match predicates for the tool-sandbox `policy.rs` intercept action; JWT-shaped
+nonces for tool-sandbox capture intercepts), not standalone features severable from the deferred
+base subsystem. None of the 3 has independent value absent the tool-sandbox module itself landing
+first — the same "wiring/refinement for a deferred base" shape Task 1's residue tables already
+established for the bulk of the fenced-window's non-absorb split commits.
+
+**This finding: no post-fence residue maps to no phase in a way that needs a *new* successor
+phase.** The natural home for all 3 unresolved items (per CONTEXT.md's own framing) is a future
+absorb of the tool-sandbox subsystem itself (whatever phase executes this ADR's verdict if it is
+Pole A, or UPST13/FUT-08 if a future sync re-examines the window) — not a standalone new phase or
+FUT item for these 3 refinement commits individually. **This finding is a proposal; it is not
+applied to `.planning/ROADMAP.md` or `.planning/REQUIREMENTS.md` by this phase — successor phase
+or FUT-item creation requires operator approval.** `git diff --stat -- .planning/ROADMAP.md
+.planning/REQUIREMENTS.md` shows zero changes after this plan's tasks (verified below).
+
+---
+
+*Ledger status: Plan 116-03 (Task 1 + Task 2) complete. Split-commit residue accounting for all 7
+pre-fence/post-fence `split` commits is done (161 rows, zero unbucketed). The fenced window's 31
+`absorb`-marked paths are grep-verified against fork HEAD (14 landed, 17 not-landed — including
+one genuine false-positive-symbol-collision catch). Post-fence residue is disposed as "no new
+successor phase needed; 3 unresolved items are module-scoped extensions of the still-deferred
+tool-sandbox subsystem itself" — a proposal, not applied to ROADMAP.md/REQUIREMENTS.md. Remaining
+work for this ledger (per `116-01-PLAN.md`'s original scope split): the D-03-adjacent module-set
+candidate re-touch and any further completeness sweep are Plan 116-04's job, if named in that
+plan — this ledger is not yet closed.*
