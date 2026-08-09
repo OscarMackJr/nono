@@ -43,13 +43,45 @@ tool-sandbox entrypoint either. See "D-03: Module-Set Re-Derivation" below for t
 evidence and the broader 82-module main.rs sweep this task ran to avoid confirming only the four
 pre-named guesses (D-16's "discover, don't confirm" rule).
 
-**This plan's scope (Plans 116-01, Task 1+2 only):** Reproduction block, D-03 module-set
-re-derivation, and full pre-fence/post-fence per-commit disposition tables with `windows-touch`
-flags. **Full D-04 residue accounting for `split`-flagged commits, the carve-out re-touch check
-(D-19), and the completeness sweep are out of scope for this plan** — deferred to Plans
-116-03/116-04 per `116-01-PLAN.md`'s own objective statement. Disposition values below (adopt /
-adapt / skip / split) are the D-02 classification only; they do not yet carry per-path
-absorb/defer/noise buckets for the `split` rows (that is Plan 116-03's job).
+**D-01 hypothesis-vs-measurement reconciliation, restated (Plan 116-04 finalization — see
+Reproduction below for the full re-run):** every D-01 figure re-measured live during this ledger's
+execution matched `116-CONTEXT.md`'s discussion-time hypothesis exactly — **measured 38, hypothesis
+38, no delta** (same for the 7 pre-fence / 20 fenced / 11 post-fence sub-splits, and for all 6 named
+post-fence PRs). Stated here, in the Headline itself, so a reader sampling only this section is not
+misled into thinking the hypothesis was never re-tested.
+
+**Disposition tally (all 38 dispositioned commits, D-02 classification):** **adopt/pure — 20** (11
+new to this ledger's pre-fence/post-fence tables + 9 fenced-pure, cross-referenced from
+`108-DIVERGENCE-LEDGER.md`); **adapt — 0**; **skip — 0**; **split — 18** (7 new + 11 fenced,
+cross-referenced). 20 + 18 = 38.
+
+**windows-touch tally (all 38 dispositioned commits): 0 of 38.** All 18 new pre-fence/post-fence
+commits are `windows-touch: no` (Pre-Fence/Post-Fence Commits tables below); all 20 fenced commits
+are also `windows-touch: no` per `108-DIVERGENCE-LEDGER.md`'s own Plan 108-05 closing sweep
+("windows-touch: no for all 20 tool-sandbox-surface commits"). Consistent with D-01's own measured
+fact that upstream ships no `platform/windows.rs` for this subsystem at all.
+
+**Ledger closure, with two named exceptions (D-19/D-04, both proposals only — see the Carve-out
+Re-touch Check and Post-Fence Residue Finding below for full detail):** a 12-commit
+Uncovered-Window Finding (carve-out-file touches outside both this ledger's 38-commit surface and
+`108-DIVERGENCE-LEDGER.md`'s fenced window) and a 3-item Post-Fence Residue Finding
+(module-scoped tool-sandbox refinements with no independent absorb value). Neither is applied to
+`ROADMAP.md`/`REQUIREMENTS.md` by this phase; both require operator approval before becoming a new
+phase or FUT item.
+
+**Sibling documents:** `.planning/phases/108-upst12-divergence-audit/108-DIVERGENCE-LEDGER.md`
+(the fenced-window ledger this document cross-references, D-13); `116-FEASIBILITY-MATRIX.md`
+(the D-07 capability feasibility matrix, same directory); `proj/ADR-116-tool-sandbox-disposition.md`
+(the standalone disposition ADR this ledger's evidence feeds, D-05 through D-15).
+
+**This plan's original scope note (Plans 116-01, Task 1+2 — preserved for record):**
+Reproduction block, D-03 module-set re-derivation, and full pre-fence/post-fence per-commit
+disposition tables with `windows-touch` flags. Disposition values below (adopt / adapt / skip /
+split) are the D-02 classification only; per-path absorb/defer/noise buckets for the `split` rows
+were added by Plan 116-03, and the carve-out re-touch check, bucket-count reconciliation, and
+completeness sweep were added by Plan 116-04 (below) — all now complete.
+
+**Ledger closed except for named exceptions.**
 
 ---
 
@@ -1048,3 +1080,207 @@ tool-sandbox subsystem itself" — a proposal, not applied to ROADMAP.md/REQUIRE
 work for this ledger (per `116-01-PLAN.md`'s original scope split): the D-03-adjacent module-set
 candidate re-touch and any further completeness sweep are Plan 116-04's job, if named in that
 plan — this ledger is not yet closed.*
+
+---
+
+## Carve-out Re-touch Check (D-19)
+
+**Plan 116-04, Task 1.** Every accumulated fork-invariant carve-out surface — Phase 108's
+original 7 (`108-CONTEXT.md` D-22 / this plan's `interfaces` block) plus every new carve-out /
+permanent-boundary / rejected-absorb surface named in ADR-108, ADR-111, ADR-113, and ADR-114's
+own text (each read in full this task) — is re-checked against the **full 116 window**
+(`RANGE = 0551eba27ea53b0eda20f4f796f757dd168adb92..0055bf3c686de6fa665decd9831dc5686b282cb0`,
+i.e. `v0.64.1..v0.71.0`, not Phase 108's fenced `v0.66.0..v0.69.0`). Every command below uses an
+exact literal pathspec (directory paths trailing-slashed, file paths exact) — never a
+`*substring*` glob (Pitfall 1, live in this window per the Pathspec Hazard Reproduction above).
+
+**Method note carried forward from Task 1's own re-derivation:** because this check runs against
+the full window rather than the 38-commit tool-sandbox-scoped surface, several carve-out paths
+return HITs from commits that are *not* part of this ledger's dispositioned surface at all —
+general NET/CORE/proxy commits that happen to also touch a carve-out file. Every such HIT is
+routed to whichever existing document already classifies it (`108-DIVERGENCE-LEDGER.md`'s
+per-cluster tables, this ledger's own Pre-Fence/Post-Fence/residue tables, or the specific
+phase-numbered ADR that already analyzes it) — see the routing citations inline and the
+consolidated Uncovered-Window Finding below for the residual set that is not yet classified
+anywhere.
+
+### Phase 108's 7 original carve-out surfaces
+
+| carve-out | path(s) | source | git log command | result |
+|---|---|---|---|---|
+| CR-02 (audit bypass invariant) | `crates/nono/src/audit.rs` | Phase 108 original (`108-CONTEXT.md` D-22) | `git log --no-merges --oneline $RANGE -- 'crates/nono/src/audit.rs'` | HIT (3 commits): `c5c7f56e` (#1538) — post-fence, **not** part of this ledger's 38-commit tool-sandbox surface, **not** covered by `108-DIVERGENCE-LEDGER.md` (window ends `v0.69.0`) — see Uncovered-Window Finding below; `c831dade` (#1272, SPIFFE) — fenced window, covered by `108-DIVERGENCE-LEDGER.md` + `proj/ADR-113-spiffe-disposition.md` D-08/SC3; `11fd10e0` (#1105) — this ledger's own Pre-Fence table + Split-Commit Residue Accounting above (`crates/nono/src/audit.rs` row, marked `absorb`, new `SandboxRuntimeAuditEvent`/etc. structs) |
+| CR-01 (FFI `clear_last_call_state`) | `bindings/c/src/{lib,diagnostic,capability_set,fs_capability,sandbox,state,query}.rs` | Phase 108 original | `git log --no-merges --oneline $RANGE -- 'bindings/c/src/lib.rs' 'bindings/c/src/diagnostic.rs' 'bindings/c/src/capability_set.rs' 'bindings/c/src/fs_capability.rs' 'bindings/c/src/sandbox.rs' 'bindings/c/src/state.rs' 'bindings/c/src/query.rs'` | HIT (1 commit): `8a4237f2` (#1283, SeccompPolicy refactor) — fenced window, covered by `108-DIVERGENCE-LEDGER.md` CORE cluster **and** this ledger's own Fenced-Window Residue Reconciliation above (grep-verified `not-landed`; the fork's FFI surface was never touched by this refactor) |
+| Proxy fork-preserve surface | `crates/nono-proxy/src/{route,connect,reverse,server}.rs`, `crates/nono-cli/src/proxy_runtime.rs` | Phase 108 original | `git log --no-merges --oneline $RANGE -- 'crates/nono-proxy/src/route.rs' 'crates/nono-proxy/src/connect.rs' 'crates/nono-proxy/src/reverse.rs' 'crates/nono-proxy/src/server.rs' 'crates/nono-cli/src/proxy_runtime.rs'` | HIT (28 commits): 3 already covered by this ledger (`65163c6a` #1476 post-fence split, `c808f000` #1235 pre-fence split, `11fd10e0` #1105 pre-fence split); 18 covered by `108-DIVERGENCE-LEDGER.md` (fenced window: `1619275c`, `c831dade`, `ca888108`, `726ac1f1`, `1f54f4ae`, `3b207eeb`, `4192bfa5`, `7c20dc75`, `d033c631`, `9b692e07`, `2663e990`, `261bbd68`, `3672ea10`, `2cbaa9a0`, `a3243907`, `8255a27a`, `7d23bba6`, `8a4237f2` — several also carry a dedicated ADR: `3b207eeb`→ADR-108, `c831dade`→ADR-113, `d033c631`/`9b692e07`→ADR-114); 7 **not covered anywhere** — see Uncovered-Window Finding below (`e9c17607` #1497, `ebdbe4c9` #1428, `b3b048bf` #1392, `46bcfbb9` #1127, `cdeeb5b9` #983, `72bcfd66` #1225, `08ca19a8` #1243) |
+| Endpoint-policy surface (Phase 95) | `crates/nono-cli/src/network_policy.rs`, `crates/nono-proxy/src/{config,credential,route,server}.rs` | Phase 108 original | `git log --no-merges --oneline $RANGE -- 'crates/nono-cli/src/network_policy.rs' 'crates/nono-proxy/src/config.rs' 'crates/nono-proxy/src/credential.rs' 'crates/nono-proxy/src/route.rs' 'crates/nono-proxy/src/server.rs'` | HIT (14 commits): 2 covered by this ledger (`c808f000`, `11fd10e0`); 9 covered by `108-DIVERGENCE-LEDGER.md` (`1619275c`, `c831dade`, `ca888108`, `726ac1f1`, `3b207eeb`, `9b692e07`, `2663e990`, `0ecc476b`, `8255a27a`); 3 **not covered anywhere** — see Uncovered-Window Finding below (`ebdbe4c9` #1428, `cdeeb5b9` #983, `08ca19a8` #1243) |
+| `linux.rs` restored invariants | `crates/nono/src/sandbox/linux.rs` | Phase 108 original | `git log --no-merges --oneline $RANGE -- 'crates/nono/src/sandbox/linux.rs'` | HIT (8 commits): 1 covered by this ledger (`11fd10e0`); 5 covered by `108-DIVERGENCE-LEDGER.md` (`d5803b99`, `d84b4818`, `ea334d2b`, `a3243907`, `8a4237f2` — `d5803b99`/`ea334d2b`/`8a4237f2` also grep-reconciled directly in this ledger's Fenced-Window Residue Reconciliation above); 2 **not covered anywhere** — see Uncovered-Window Finding below (`5b8e94da` #1207, `9ce74e92` #1210) |
+| ADR-86 Windows denial-rendering carve-out | `crates/nono-cli/src/exec_strategy_windows/` | Phase 108 original | `git log --no-merges --oneline $RANGE -- 'crates/nono-cli/src/exec_strategy_windows/'` | **clean -- no re-touch in window; upstream has no Windows-specific exec-strategy directory at all** (RESEARCH.md §2i's stronger form — the zero-hit reason is upstream never having the surface, not merely not touching it) |
+| v3.2 signed-override surface | `crates/nono/src/audit.rs` (`PolicyOverrideApplied` + EventIDs 10006-10010) | Phase 108 original | same command and result as CR-02 above (identical path) | HIT (3 commits) — see CR-02 row above; the signed-override `PolicyOverrideApplied` variant itself is untouched by all 3 (verified via `git show <sha> -- crates/nono/src/audit.rs \| grep -c PolicyOverrideApplied` = 0 for all three) |
+
+### New carve-outs named in ADR-108 / ADR-111 / ADR-113 / ADR-114
+
+| carve-out | path(s) | source | git log command | result |
+|---|---|---|---|---|
+| ADR-108 deny_domain posture | — | `proj/ADR-108-deny-domain-posture.md` (read in full) | N/A | **no carve-out named** — ADR-108's Decision is **Adapt** (Option B), not a decline/permanent-boundary. Its Fork Touchpoint Map (`crates/nono/src/net_filter.rs`, `crates/nono-cli/src/network_policy.rs`, `crates/nono-cli/src/cli.rs`) names files Phase 109 is directed to *modify* going forward, not a divergence to protect via re-touch check — `network_policy.rs` is already covered under the Endpoint-policy surface row above. Recorded here explicitly per D-19's "every surface needs a stated result" rather than silently omitting ADR-108 from this table. |
+| ADR-111 rejected core-module absorb | `crates/nono/src/resource/`, `crates/nono/src/resource.rs` (upstream-only; does not exist in the fork) | `proj/ADR-111-resource-limits-boundary.md` §"Why the ADR-86 ... carve-out does NOT extend here" | `git log --no-merges --oneline $RANGE -- 'crates/nono/src/resource/' 'crates/nono/src/resource.rs'` | HIT (2 commits): `e6d26871` (#1269) and `34c2c975` (#1403) — both fenced window, both covered by `108-DIVERGENCE-LEDGER.md` CORE cluster **and** directly analyzed by ADR-111 itself (the ADR this check verifies) |
+| ADR-111 fork-native platform resource-enforcement | `crates/nono-cli/src/exec_strategy/supervisor_linux.rs` (`mod cgroup`), `crates/nono-cli/src/exec_strategy/supervisor_macos.rs` (`crates/nono-cli/src/exec_strategy_windows/launch.rs` already checked above, zero-hit) | `proj/ADR-111-resource-limits-boundary.md` Context section | `git log --no-merges --oneline $RANGE -- 'crates/nono-cli/src/exec_strategy/supervisor_linux.rs' 'crates/nono-cli/src/exec_strategy/supervisor_macos.rs'` | HIT (11 commits): 1 covered by this ledger (`11fd10e0`); 7 covered by `108-DIVERGENCE-LEDGER.md` (`a519ee62` — also one of the 7 named fenced refinement PRs, #1417 —, `c831dade`, `34c2c975`, `d5803b99`, `e6d26871`, `a3243907`, `8a4237f2`); 3 **not covered anywhere** — see Uncovered-Window Finding below (`062344a9` #1525, `46db3ffb` #1254, `9ce74e92` #1210 — the last shared with the `linux.rs` row above) |
+| ADR-113/ADR-114 TLS-interception boundary (`149abde0`/`forward.rs`, `b1ecbc02`-traced OAuth2 route-wiring) | `crates/nono-proxy/src/forward.rs`, `crates/nono-proxy/src/tls_intercept/` (upstream-only; does not exist in the fork — confirmed via `ls` and matching ADR-113's own `grep -rn 'mod tls_intercept\|struct.*TlsIntercept'` = 0 finding) | `proj/ADR-113-spiffe-disposition.md` D-01 + OD-1; `proj/ADR-114-oauth-capture-disposition.md` OD section | `git log --no-merges --oneline $RANGE -- 'crates/nono-proxy/src/forward.rs' 'crates/nono-proxy/src/tls_intercept/'` | HIT (11 commits): 1 covered by this ledger (`11fd10e0`); 8 covered by `108-DIVERGENCE-LEDGER.md` (`23d93fc9`, `1619275c`, `c831dade`, `ca888108`, `3c59c62e` — ADR-114's SEC-02b hardening commit —, `9b692e07` — ADR-114's SEC-02a —, `0ecc476b`, `8255a27a`); 2 **not covered anywhere**, both shared with the Proxy/Endpoint-policy rows above (`ebdbe4c9` #1428, `cdeeb5b9` #983) |
+
+Zero rows above use a `*substring*` glob form — every `git log` command's pathspec above is
+either a trailing-slashed directory or an exact single-quoted file path, confirmed by
+construction: every command was typed from the exact paths verified via `ls` above, never a
+wildcard (`grep -oE "'\*[A-Za-z]"` against every command string in this section returns zero
+matches).
+
+### Uncovered-Window Finding — 12 commits touching a carve-out surface, classified nowhere
+
+**This is a genuine byproduct finding of running the carve-out check against the full window
+rather than the 38-commit tool-sandbox surface, named honestly per D-19 rather than smoothed into
+an existing table it does not belong to.** `108-DIVERGENCE-LEDGER.md`'s comprehensive per-commit
+coverage is scoped to the fenced window (`v0.66.0..v0.69.0`) only; this ledger's own comprehensive
+coverage is scoped to the 38-commit tool-sandbox module-set surface only (across any window).
+Neither audit's scope was ever "every commit touching a named carve-out file, across the full
+`v0.64.1..v0.71.0` range" — so the 12 commits below, each touching at least one carve-out surface
+but neither part of the tool-sandbox module set nor inside the fenced window, have never been
+dispositioned by any audit to date. **This phase does not disposition them** (D-20: audit-only,
+zero code changes, and out of this phase's tool-sandbox-only charter) — they are named here as a
+proposed item for a future audit (natural home: UPST13/FUT-08, mirroring the Post-Fence Residue
+Finding's own proposal shape above), **not applied to `ROADMAP.md`/`REQUIREMENTS.md`; a new
+successor phase or FUT item requires operator approval.**
+
+| sha | PR# | date | subject | carve-out(s) hit |
+|-----|:---:|------|---------|------------------|
+| `c5c7f56e` | #1538 | 2026-07-30 | feat(cli): add platform enrollment and audit delivery | CR-02/v3.2 (`audit.rs`) |
+| `e9c17607` | #1497 | 2026-07-27 | fix(proxy): prevent credential from enabling host filter | Proxy fork-preserve |
+| `ebdbe4c9` | #1428 | 2026-07-27 | feat(proxy): add per-route request rate limiting (RouteRateLimiter) | Proxy fork-preserve, Endpoint-policy, ADR-113/114 TLS |
+| `b3b048bf` | #1392 | 2026-07-24 | fix(cli): reject upstream proxy with block net | Proxy fork-preserve |
+| `46bcfbb9` | #1127 | 2026-06-25 | fix(network): wire --allow-endpoint through to credential routes | Proxy fork-preserve |
+| `cdeeb5b9` | #983 | 2026-06-25 | feat(proxy): add HTTP/2 support for reverse proxy and credential injection | Proxy fork-preserve, Endpoint-policy, ADR-113/114 TLS |
+| `72bcfd66` | #1225 | 2026-06-24 | refactor(network): introduce NetworkIntent and remove ProxyOnly placeholders | Proxy fork-preserve |
+| `08ca19a8` | #1243 | 2026-06-24 | fix(proxy): match wildcard credential upstream routes | Proxy fork-preserve, Endpoint-policy |
+| `5b8e94da` | #1207 | 2026-06-25 | fix(sandbox): warn when capability path is on a 9P filesystem | `linux.rs` restored invariants |
+| `9ce74e92` | #1210 | 2026-06-23 | fix(sandbox): exempt IPC fd from sendmsg trapping to resolve af_unix_mediation deadlock | `linux.rs` restored invariants, ADR-111 fork-native |
+| `062344a9` | #1525 | 2026-07-30 | fix(audit): record and show seccomp capability decisions | ADR-111 fork-native |
+| `46db3ffb` | #1254 | 2026-07-27 | fix(pty): capability-elevation approval prompt PTY handoff | ADR-111 fork-native |
+
+6 pre-fence-window (`46bcfbb9`, `cdeeb5b9`, `72bcfd66`, `08ca19a8`, `5b8e94da`, `9ce74e92`), 6
+post-fence-window (`c5c7f56e`, `e9c17607`, `ebdbe4c9`, `b3b048bf`, `062344a9`, `46db3ffb`) — none
+touch the 3-path tool-sandbox module set (confirmed: none of the 12 appear in the Pre-Fence or
+Post-Fence Commits tables above), so none of them expand this ledger's own 38-commit dispositioned
+surface; they are a distinct, adjacent finding about carve-out-file traffic outside that surface.
+
+---
+
+## Bucket-Count Reconciliation (D-16)
+
+**Plan 116-04, Task 2.** Scope: **this ledger's own 7 pre-fence/post-fence split commits only**
+(161 rows total, Plan 116-03 Task 1). The fenced window's split-commit residue (Phase 108's own 11
+split commits — 7 with zero absorb rows plus the 4 D-05-named worked examples) is Phase 108's own
+already-reconciled arithmetic — cross-referenced via the Fenced-Window Residue Reconciliation
+section above, **not re-summed here.**
+
+Re-run fresh this session (not inherited from Plan 116-03's own table) — `git show --name-only
+--format='' <sha> | wc -l` for each of the 7 split commits, compared against the bucketed
+row-count (`absorb`+`defer`+`noise`) from each commit's own residue table above:
+
+```
+c808f000: 31 bucketed (7 absorb + 1 defer + 23 noise) / 31 touched (live re-run) — equal
+11fd10e0: 91 bucketed (56 absorb + 13 defer + 22 noise) / 91 touched (live re-run) — equal
+ce3e5101: 12 bucketed (11 absorb + 1 defer + 0 noise) / 12 touched (live re-run) — equal
+65163c6a: 8 bucketed (3 absorb + 3 defer + 2 noise) / 8 touched (live re-run) — equal
+35af3417: 8 bucketed (1 absorb + 4 defer + 3 noise) / 8 touched (live re-run) — equal
+6a63b424: 9 bucketed (5 absorb + 3 defer + 1 noise) / 9 touched (live re-run) — equal
+f76733f6: 2 bucketed (1 absorb + 1 defer + 0 noise) / 2 touched (live re-run) — equal
+
+Σ bucketed = 31 + 91 + 12 + 8 + 8 + 9 + 2 = 161
+Σ touched  = 31 + 91 + 12 + 8 + 8 + 9 + 2 = 161
+161 == 161
+```
+
+**Σ_bucketed = 161, Σ_touched = 161, 161 == 161.** Zero discrepancy, zero unbucketed paths, across
+all 7 pre-fence/post-fence split commits. This equality is expected by construction (each of the
+161 rows in Plan 116-03's residue tables was bucketed as exactly one of `absorb`/`defer`/`noise`,
+so the bucketed sum and the touched-path sum are the same count computed two ways) — the point of
+re-running it here is confirming that construction actually held for every commit, not merely
+asserting it (D-16): a bug in Plan 116-03's tables (e.g. a row silently dropped between the `git
+show` output and the written table) would surface here as an inequality, and none was found.
+
+---
+
+## Security-Relevant Rollup (D-17/D-18 discretion note)
+
+**Claude's Discretion applied:** `116-CONTEXT.md`'s "Claude's Discretion" section leans toward
+carrying Phase 108's `security-relevant` flag forward as a dedicated per-row column ("it made the
+D-18 security subset queryable rather than a judgment call") but does not require it, and this
+ledger's Pre-Fence/Post-Fence tables (Plan 116-01) were built without one. Rather than retrofit a
+column across already-committed tables, this section performs the equivalent pass as a
+**standalone rollup**: every one of the 18 pre-fence/post-fence commits' subject line (and, where
+ambiguous, its diff/commit body) was scanned for security-relevant themes — auth, credential,
+token, trust, permission, deny/escape-relevant behavior — making the D-18 security subset
+queryable here without a dedicated column.
+
+| sha | subject | reason |
+|-----|---------|--------|
+| `691e0f4f` | feat(tool-sandbox): simplify self-invocation policy (#1268) | Diff-read (`resolve_caller`, `has_explicit_self_edge`): changes policy-resolution logic that determines whether a self-invoked command inherits its launcher's effective policy — a permission/policy-inheritance mechanism |
+| `7011bc85` | feat(tool-sandbox): add @git:common-dir dynamic token (#1271) | Diff-read: expands the `fs_write` access-grant surface via a new dynamic path token (grants coverage of the git common directory) — permission-relevant despite "token" here meaning a template token, not a credential |
+| `853d5236` | fix(tool-sandbox): pass TLS trust bundle env vars to tool-sandbox children (#1249) | Subject line: "TLS trust bundle" — directly trust/credential-relevant |
+| `11fd10e0` | feat(sandbox): tool sandbox (#1105) | The subsystem's own introduction — per its residue table above, adds `ApprovalRequest`, `cmd://` credential-capture URI validation, endpoint-policy enforcement, and mTLS wiring across the majority of its 91 touched paths |
+| `65163c6a` | feat: mediate vault login -method=oidc (custom inject header + per-command open_port) (#1476) | Subject line: "vault", "oidc", custom inject header — directly credential/auth-relevant |
+| `35af3417` | fix(cli): add explicit intercept match predicates (#1364) | Diff-read: the bulk of this commit's substance is in `command_policy.rs`/`tool-sandbox/policy.rs` (499/553 line deltas) — intercept-match predicate evaluation is the deny/policy-interception surface itself |
+| `b4dbd4f6` | fix(tool-sandbox): grant command interpreter read of its script (#1467) | Subject line: "grant" — directly permission-relevant |
+| `6a63b424` | feat(tool-sandbox): add jwt-shaped nonce option for capture intercepts (#1453) | Subject line: "jwt", "capture" — directly token/credential-relevant |
+| `82aa2bc9` | fix(tool-sandbox): let allow_launch_services reach the open shim on macOS (#1464) | Subject line: `allow_launch_services` is itself a named permission/capability flag — permission-relevant |
+| `697be786` | fix(tool-sandbox): skip missing fs_write_file grants instead of denying (#1452) | Subject line: "grants", "denying" — directly permission/deny-relevant |
+| `53cd0580` | fix(tool-sandbox): drop trailing newline from captured credential phantoms (#1475) | Subject line: "credential" — directly credential-relevant |
+| `f76733f6` | test(nono-cli): hermetic git test commit.gpgsign (#1470) | Subject line: "gpgsign" (signing) — trust/signing-relevant; diff-verified test-only content (no production behavior change), noted for completeness rather than omitted |
+
+**13 of the 18 pre-fence/post-fence commits are security-relevant by this scan** (`691e0f4f`,
+`7011bc85`, `853d5236`, `11fd10e0` from pre-fence — 4 of 7; `65163c6a`, `35af3417`, `b4dbd4f6`,
+`6a63b424`, `82aa2bc9`, `697be786`, `53cd0580`, `f76733f6` from post-fence — 8 of 11). The
+remaining 6 (`c808f000` org-rename, `d2252225` fs-dir-missing skip, `137bb15c` glibc-linker
+workaround from pre-fence; `c2cb4061` warning-message collapsing, `ce3e5101` non-UTF-8 arg
+handling, `6dfcf277` runtime-dir cleanup from post-fence) carry no auth/credential/token/trust/
+permission/deny theme in either their subject or, where read, their diff.
+
+---
+
+## Completeness Verification (D-01)
+
+**Arithmetic (actual numbers, not variable names):** pre-fence (**7**) + fenced,
+cross-referenced (**20**) + post-fence (**11**) = **38**. Matches the live 3-path-union
+measurement in Reproduction above (**38**) exactly — reconfirms Plan 116-01 Task 2's own check
+with fresh arithmetic, not copied forward.
+
+**Unique primary-row SHA sweep:** every SHA appearing as a *primary row* in the Pre-Fence Commits
+table (7 rows) and the Post-Fence Commits table (11 rows) above — the fenced 20 are
+cross-referenced via `108-DIVERGENCE-LEDGER.md`, not primary rows in this ledger, per D-13, and are
+excluded from this sweep by design:
+
+```
+Pre-Fence primary rows (7):   691e0f4f 7011bc85 c808f000 d2252225 853d5236 137bb15c 11fd10e0
+Post-Fence primary rows (11): c2cb4061 ce3e5101 65163c6a 35af3417 6dfcf277 b4dbd4f6 6a63b424
+                               82aa2bc9 697be786 53cd0580 f76733f6
+
+sort | uniq -> 18 unique SHAs
+```
+
+**18 unique primary-row SHAs = 7 + 11 exactly.** Zero unexplained duplicates — in fact, zero
+duplicates of any kind (the pre-fence and post-fence date ranges do not overlap, so no SHA could
+appear in both tables). This does not contradict the several SHAs above that appear as *primary
+rows here* and *also* as HIT entries inside the Carve-out Re-touch Check's cross-references (e.g.
+`c808f000`, `11fd10e0`, `65163c6a`) — per this task's own acceptance criterion, a SHA appearing
+once as a primary row and again inside a carve-out HIT cross-reference is not a duplicate; only
+the same SHA as a primary row in two different tables would count as one, and none was found.
+
+---
+
+*Ledger status: Plan 116-04 (Task 1 + Task 2) complete. Every accumulated carve-out surface
+(Phase 108's 7 originals plus the new surfaces named in ADR-108/111/113/114) has an explicit
+clean/HIT result against the full `v0.64.1..v0.71.0` window, with a 12-commit Uncovered-Window
+Finding named honestly rather than smoothed into an existing table (proposal only, not applied to
+ROADMAP.md/REQUIREMENTS.md). The Bucket-Count Reconciliation shows 161 == 161 with the arithmetic
+shown per commit. The Security-Relevant Rollup substitutes for the (not-taken) dedicated column.
+The Completeness Verification proves 7 + 20 + 11 = 38 with 18 unique primary-row SHAs and zero
+unexplained duplicates. **Ledger closed except for named exceptions**: the Uncovered-Window Finding
+(12 commits, this plan) and the Post-Fence Residue Finding (3 module-scoped refinement items, Plan
+116-03) — both proposals only, both requiring operator approval before becoming a new phase or FUT
+item.*
