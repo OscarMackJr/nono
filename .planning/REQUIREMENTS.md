@@ -140,12 +140,12 @@ Phase numbering continues from Phase 100 → Phase 101+.
 
 ### v3.6 Carry-Forward Drain (DRAIN)
 
-- [ ] **DRAIN-01** *(NEW-05)*: A `platform_overrides.<os>` block that redefines a custom credential and omits `inject_mode` / `inject_header` inherits the base values instead of silently resetting the route to header-mode `Authorization`. `merge_custom_credential_def` (`crates/nono-cli/src/profile/mod.rs:3564-3567`) merges them with `.or(base)`, pinned by a test; and the NEW-02 regression test's missing `spiffe` assertion (ACC-04, `mod.rs:10188`/`:10238-10252`) is added.
-- [ ] **DRAIN-02** *(NEW-06, blocker-class)*: `nono-py` round-trips every denial category its own encoder emits — `capture_unsupported_path` and `capture_buffer_or_rewrite_failed` no longer raise `ValueError` from `../nono-py/src/undo.rs`. Pinned by an exhaustiveness test over the encoder's own output, not by adding two arms to a hand-maintained match that will drift again.
-- [ ] **DRAIN-03** *(NEW-01)*: The three denial sites that pass `&audit::EventContext::default()` — `connect.rs:86` (which is `deny_domain`'s HTTPS enforcement point), `external.rs:136`, `external.rs:200` — emit a real denial category; and the two variants with zero production constructors (`InterceptHandshakeFailed`, `ExternalProxyRejected`, `crates/nono/src/undo/types.rs:249`/`:252`) are either wired to a real site or removed.
-- [ ] **DRAIN-04** *(NEW-03)*: A route declaring both `aws_auth` and `capture` either works or is rejected at config-validation time. It no longer validates successfully and then returns 501 at runtime (`reverse.rs:328-331` returning before the capture branch at `:427`).
-- [ ] **DRAIN-05** *(NEW-07)*: A Python embedder can configure `capture` and `spiffe` on a `RouteConfig` — `../nono-py/src/proxy.rs`'s constructor exposes both instead of hardcoding `None`, so a Python-configured OAuth token-endpoint route no longer silently gets pre-113 / pre-114 behaviour.
-- [ ] **DRAIN-06** *(NEW-08)*: A SPIFFE route blocked by `deny_domain` is denied **before** a JWT-SVID is minted — `managed_auth.acquire()` (`reverse.rs:634`) no longer runs ahead of the filter host check (`:684`), matching the ordering every other dispatch path uses.
+- [x] **DRAIN-01** *(NEW-05)*: A `platform_overrides.<os>` block that redefines a custom credential and omits `inject_mode` / `inject_header` inherits the base values instead of silently resetting the route to header-mode `Authorization`. `merge_custom_credential_def` (`crates/nono-cli/src/profile/mod.rs:3564-3567`) merges them with `.or(base)`, pinned by a test; and the NEW-02 regression test's missing `spiffe` assertion (ACC-04, `mod.rs:10188`/`:10238-10252`) is added.
+- [x] **DRAIN-02** *(NEW-06, blocker-class)*: `nono-py` round-trips every denial category its own encoder emits — `capture_unsupported_path` and `capture_buffer_or_rewrite_failed` no longer raise `ValueError` from `../nono-py/src/undo.rs`. Pinned by an exhaustiveness test over the encoder's own output, not by adding two arms to a hand-maintained match that will drift again.
+- [x] **DRAIN-03** *(NEW-01)*: The three denial sites that pass `&audit::EventContext::default()` — `connect.rs:86` (which is `deny_domain`'s HTTPS enforcement point), `external.rs:136`, `external.rs:200` — emit a real denial category; and the two variants with zero production constructors (`InterceptHandshakeFailed`, `ExternalProxyRejected`, `crates/nono/src/undo/types.rs:249`/`:252`) are either wired to a real site or removed.
+- [x] **DRAIN-04** *(NEW-03)*: A route declaring both `aws_auth` and `capture` either works or is rejected at config-validation time. It no longer validates successfully and then returns 501 at runtime (`reverse.rs:328-331` returning before the capture branch at `:427`).
+- [x] **DRAIN-05** *(NEW-07)*: A Python embedder can configure `capture` and `spiffe` on a `RouteConfig` — `../nono-py/src/proxy.rs`'s constructor exposes both instead of hardcoding `None`, so a Python-configured OAuth token-endpoint route no longer silently gets pre-113 / pre-114 behaviour.
+- [x] **DRAIN-06** *(NEW-08)*: A SPIFFE route blocked by `deny_domain` is denied **before** a JWT-SVID is minted — `managed_auth.acquire()` (`reverse.rs:634`) no longer runs ahead of the filter host check (`:684`), matching the ordering every other dispatch path uses.
 
 ## v2 / Future Requirements
 
@@ -175,12 +175,12 @@ Phase numbering continues from Phase 114 → Phase 115+ (v3.5 owns 101–107; no
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| DRAIN-01 | Phase 115 | Pending |
-| DRAIN-02 | Phase 115 | Pending |
-| DRAIN-03 | Phase 115 | Pending |
-| DRAIN-04 | Phase 115 | Pending |
-| DRAIN-05 | Phase 115 | Pending |
-| DRAIN-06 | Phase 115 | Pending |
+| DRAIN-01 | Phase 115 | Complete |
+| DRAIN-02 | Phase 115 | Complete |
+| DRAIN-03 | Phase 115 | Complete |
+| DRAIN-04 | Phase 115 | Complete |
+| DRAIN-05 | Phase 115 | Complete |
+| DRAIN-06 | Phase 115 | Complete |
 | TSBX-01 | Phase 116 | Pending |
 | TSBX-02 | Phase 116 | Pending |
 | CINT-01 | Phase 117 | Pending |
