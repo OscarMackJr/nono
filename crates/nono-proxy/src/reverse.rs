@@ -639,10 +639,19 @@ async fn handle_spiffe_route(
     // (`upstream_url` from `route.upstream` + `upstream_path`, then
     // `parse_upstream_url`) do not depend on the acquired credential
     // material, so a deny_domain-blocked upstream is now rejected before any
-    // live SPIRE Workload API fetch is attempted — matching the check-first
-    // structure every other `HostDenied` site in this file already uses
-    // (re-grep `check_host` / `HostDenied` for the current sibling
-    // locations; do not trust line numbers).
+    // live SPIRE Workload API fetch is attempted.
+    //
+    // This check-first shape is shared by every `HostDenied` site in this file:
+    // the static-credential path, and — since the Phase 115 gap closure that
+    // followed this hoist — `handle_spiffe_assertion_credential`'s RFC 7523
+    // path too. (It was NOT true of the assertion path when this comment was
+    // first written: the hoist landed on this function only, leaving the
+    // sibling minting before its own check. Re-grep `check_host` / `HostDenied`
+    // for the current sibling locations; do not trust line numbers.) Both
+    // SPIFFE dispatch paths' ordering is now pinned structurally by
+    // `spiffe_integration.rs::d17_spiffe_dispatch_host_check_precedes_mint_structurally`,
+    // which enumerates the SPIFFE dispatch functions from this source rather
+    // than naming one.
     let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
     if !check.result.is_allowed() {
         let reason = check.result.reason();
@@ -870,15 +879,26 @@ async fn handle_spiffe_route(
 
 /// Handle a request to a route authenticated via the RFC 7523 jwt-bearer
 /// OAuth2 `client_assertion` flow (D-01/OD-1,
-/// `credential_store.spiffe_assertion_routes`, Plan 113-03). Mirrors
-/// `handle_spiffe_route`'s structure exactly, substituting credential
-/// acquisition with `spiffe_assertion.cache.get_or_refresh()` (an exchanged
-/// OAuth2 access token, not a raw JWT-SVID) and building its own SPIFFE
-/// audit context inline rather than via `UpstreamAuthMaterial::
-/// spiffe_audit_context()` — the assertion-cache path has no
+/// `credential_store.spiffe_assertion_routes`, Plan 113-03).
+///
+/// Shares `handle_spiffe_route`'s security-relevant control-flow ORDER —
+/// session-token auth gate, then the filter host-check and its `HostDenied`
+/// deny branch, and only then any credential acquisition (D-17/DRAIN-06; the
+/// two paths were brought back into agreement on this after the Phase 115
+/// hoist was initially applied to `handle_spiffe_route` alone, and the
+/// ordering is now pinned for BOTH by
+/// `spiffe_integration.rs::d17_spiffe_dispatch_host_check_precedes_mint_structurally`).
+///
+/// It deliberately DIFFERS from `handle_spiffe_route` elsewhere: credential
+/// acquisition is `spiffe_assertion.cache.get_or_refresh()` (an exchanged
+/// OAuth2 access token, not a raw JWT-SVID); the SPIFFE audit context is built
+/// inline rather than via `UpstreamAuthMaterial::spiffe_audit_context()`
+/// because the assertion-cache path has no
 /// `ManagedUpstreamAuth`/`UpstreamAuthMaterial` in its chain at all (Plan
 /// 113-03's design: it goes straight from `SpiffeAssertionTokenCache` to an
-/// injected header).
+/// injected header); it takes no `route: &LoadedRoute` (dispatching off
+/// `SpiffeAssertionRoute`, so `capture` is looked up via `ctx.route_store`);
+/// and it supports no per-route TLS connector.
 ///
 /// Fails closed (503 + `ManagedCredentialUnavailable`) on exchange failure —
 /// never forwards unauthenticated (T-113-17).
@@ -919,6 +939,50 @@ async fn handle_spiffe_assertion_credential(
         }
     }
 
+    // No path transformation — the exchanged access token is always
+    // header-injected (Bearer), mirroring the OAuth2 injection mode.
+    let upstream_url = format!(
+        "{}{}",
+        spiffe_assertion.upstream.trim_end_matches('/'),
+        upstream_path
+    );
+    debug!(
+        "Forwarding to upstream (SPIFFE OAuth2 assertion): {} {}",
+        method, upstream_url
+    );
+
+    let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
+
+    // DNS resolve + host check via the filter — D-17/DRAIN-06, second SPIFFE
+    // dispatch path. Deliberately ordered BEFORE the token exchange below, for
+    // the same reason and by the same mechanism as `handle_spiffe_route`: this
+    // path's exchange (SpiffeAssertionTokenCache::get_or_refresh ->
+    // exchange_jwt_assertion -> SpiffeJwtSource::fetch_token) mints a JWT-SVID
+    // from the SPIRE Workload API and presents it to the IdP token endpoint, so
+    // a deny_domain-blocked upstream must be rejected before it, not after.
+    // The check's inputs (`spiffe_assertion.upstream` + `upstream_path`, then
+    // parse_upstream_url) do not depend on the exchanged access token, so the
+    // ordering is free — no deny that fired before still fires, only earlier.
+    let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
+    if !check.result.is_allowed() {
+        let reason = check.result.reason();
+        warn!("Upstream host denied by filter: {}", reason);
+        send_error(stream, 403, "Forbidden").await?;
+        audit::log_denied(
+            ctx.audit_log,
+            audit::ProxyMode::Reverse,
+            nono::undo::NetworkAuditDenialCategory::HostDenied,
+            &audit::EventContext {
+                route_id: Some(service),
+                ..Default::default()
+            },
+            service,
+            0,
+            &reason,
+        );
+        return Ok(());
+    }
+
     // Acquire (or refresh) the exchanged OAuth2 access token. Fails closed
     // on an SVID-fetch failure (workload identity gone, T-113-10/T-113-17) —
     // `get_or_refresh()` only falls back to a stale token for a
@@ -950,40 +1014,6 @@ async fn handle_spiffe_assertion_credential(
             return Ok(());
         }
     };
-
-    // No path transformation — the exchanged access token is always
-    // header-injected (Bearer), mirroring the OAuth2 injection mode.
-    let upstream_url = format!(
-        "{}{}",
-        spiffe_assertion.upstream.trim_end_matches('/'),
-        upstream_path
-    );
-    debug!(
-        "Forwarding to upstream (SPIFFE OAuth2 assertion): {} {}",
-        method, upstream_url
-    );
-
-    let (upstream_host, upstream_port, upstream_path_full) = parse_upstream_url(&upstream_url)?;
-
-    let check = ctx.filter.check_host(&upstream_host, upstream_port).await?;
-    if !check.result.is_allowed() {
-        let reason = check.result.reason();
-        warn!("Upstream host denied by filter: {}", reason);
-        send_error(stream, 403, "Forbidden").await?;
-        audit::log_denied(
-            ctx.audit_log,
-            audit::ProxyMode::Reverse,
-            nono::undo::NetworkAuditDenialCategory::HostDenied,
-            &audit::EventContext {
-                route_id: Some(service),
-                ..Default::default()
-            },
-            service,
-            0,
-            &reason,
-        );
-        return Ok(());
-    }
 
     // Strip the client's own copy of the injection header — the exchanged
     // access token is injected fresh below.

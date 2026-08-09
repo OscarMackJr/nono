@@ -95,12 +95,45 @@ async fn test_spiffe_jwt_fails_closed_on_missing_socket() {
     );
 }
 
-// D-17/DRAIN-06 regression: the SPIFFE route dispatch's filter host-check
-// must run BEFORE `managed_auth.acquire()` (the live SPIRE Workload API
-// fetch), so a `deny_domain`-blocked upstream is denied without ever
-// triggering a mint attempt.
+// ─── D-17/DRAIN-06 structural ordering regression ───────────────────────────
 //
-// Test-mechanism decision (115-CONTEXT.md D-17 / 115-VALIDATION.md "Open
+// PROPERTY: in EVERY production dispatch function in `reverse.rs` that can
+// trigger a credential mint, the filter host-check and its `HostDenied` deny
+// branch must run BEFORE that mint — so a `deny_domain`-blocked upstream is
+// denied without ever reaching the SPIRE Workload API or an IdP token
+// endpoint.
+//
+// WHY THIS IS A CLASS TEST, NOT AN INSTANCE TEST. The first version of this
+// test (Phase 115 Plan 04) scanned `handle_spiffe_route`'s body only. Phase
+// 115's verification found that `reverse.rs` documents TWO independent,
+// mutually exclusive SPIFFE-backed auth sources per route — `route.spiffe`
+// (direct JWT-SVID bearer injection) and `route.oauth2.client_assertion`
+// (RFC 7523 jwt-bearer exchange) — and the hoist had landed on the first
+// only. The one-function scan was structurally incapable of observing that.
+// So this test now DISCOVERS its own subjects from the shipped source rather
+// than naming them: it enumerates every top-level `async fn` in `reverse.rs`'s
+// production section, and applies the ordering assertion to each one whose
+// body reaches any known mint primitive (`MINT_MARKERS`). A third dispatch
+// path added later is therefore covered automatically, with no edit here.
+//
+// TWO DELIBERATE MUST-ACKNOWLEDGE FAILURE MODES (not brittleness):
+//   1. A minting dispatch fn with no host-check at all fails loudly rather
+//      than being skipped — "no check to order" must never read as "ordered".
+//   2. `KNOWN_MINTING_DISPATCH_FNS` is asserted to be a SUBSET of what
+//      discovery found. If a mint primitive is renamed or replaced (so a known
+//      path stops matching `MINT_MARKERS`), discovery silently loses that
+//      path — this assertion converts that silent coverage loss into a failure.
+//
+// RESIDUAL, stated plainly: discovery is scoped to `reverse.rs`. A SPIFFE
+// dispatch added in another proxy path file would not be enumerated here.
+// That residual is bounded by D-03/ADR-113: the other proxy paths (CONNECT
+// tunnel, forward HTTP, external-proxy chain) fail closed on a SPIFFE-declared
+// route rather than implementing their own dispatch, which is itself covered
+// by `d03_connect_and_forward_http_deny_spiffe_declared_route_upstream_end_to_end`
+// below. Discovery is also blind to a mint reached only through a helper fn
+// this file calls (the marker set matches call syntax, not a call graph).
+//
+// TEST-MECHANISM DECISION (115-CONTEXT.md D-17 / 115-VALIDATION.md "Open
 // Design Decision — DRAIN-06 test mechanism", locked option (c) —
 // structural): this asserts the property by control-flow position in the
 // shipped source, not by driving a live request through `server::start`.
@@ -114,66 +147,150 @@ async fn test_spiffe_jwt_fails_closed_on_missing_socket() {
 //     built (`server.rs::start`, route load precedes `with_denied_hosts`)
 //     — an unreachable socket fails the WHOLE proxy at startup
 //     (see `test_spiffe_jwt_fails_closed_on_missing_socket` above), so a
-//     `server::start`-based test can never reach `handle_spiffe_route`'s
-//     request dispatch at all without a socket that a live SPIRE agent
-//     already answers. That is exactly the "needs no SPIRE agent" bar
+//     `server::start`-based test can never reach the SPIFFE dispatch
+//     functions' request handling at all without a socket that a live SPIRE
+//     agent already answers. That is exactly the "needs no SPIRE agent" bar
 //     option (c) was chosen to clear.
-//
-// This test is load-bearing: reverting Task 1's reorder in `reverse.rs`
-// (moving `managed_auth.acquire().await` back above the host-check block)
-// was verified locally to flip the discovered ordering and fail this
-// assertion — see 115-04-SUMMARY.md for the transcript evidence.
+
+/// Call-syntax markers for "this line reaches a credential mint".
+///
+/// `.get_or_refresh(` is `SpiffeAssertionTokenCache::get_or_refresh` ->
+/// `exchange_jwt_assertion` -> `SpiffeJwtSource::fetch_token` (a SPIRE
+/// Workload API JWT-SVID mint AND an outbound POST of that SVID to the IdP
+/// token endpoint). `managed_auth.acquire(` is the direct JWT-SVID path.
+/// The remaining two are the lower-level primitives, listed so a dispatch
+/// function that calls them directly is also caught.
+const MINT_MARKERS: &[&str] = &[
+    "managed_auth.acquire(",
+    ".get_or_refresh(",
+    ".fetch_token(",
+    "exchange_jwt_assertion(",
+];
+
+/// Dispatch functions that are KNOWN to mint. Asserted to be a subset of what
+/// discovery finds — see must-acknowledge failure mode 2 above. This list
+/// exists to detect coverage LOSS; it is not what drives the assertions.
+const KNOWN_MINTING_DISPATCH_FNS: &[&str] =
+    &["handle_spiffe_route", "handle_spiffe_assertion_credential"];
+
+/// Drops whole-line `//` and `///` comments.
+///
+/// Without this, prose in a doc comment that names a marker (e.g. a comment
+/// explaining the ordering, positioned above the code it describes) would be
+/// found instead of the real call site — a false positive that actually bit
+/// Plan 115-04 and forced a comment reword. Stripping comments removes that
+/// coupling, so ordering comments may name the real call syntax freely.
+fn strip_line_comments(body: &str) -> String {
+    body.lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
-fn d17_spiffe_host_check_precedes_managed_auth_acquire_structurally() {
-    let src = include_str!("../src/reverse.rs");
+fn d17_spiffe_dispatch_host_check_precedes_mint_structurally() {
+    let full = include_str!("../src/reverse.rs");
 
-    let fn_marker = "async fn handle_spiffe_route(";
-    let fn_start = src.find(fn_marker).unwrap_or_else(|| {
-        panic!(
-            "'{}' not found in reverse.rs — re-grep, the function may have been renamed or moved",
-            fn_marker
-        )
-    });
+    // Scan production code only — `reverse.rs`'s `#[cfg(test)] mod tests`
+    // legitimately contains mint-marker text in fixtures and assertions.
+    let production = match full.find("\n#[cfg(test)]") {
+        Some(i) => &full[..i],
+        None => full,
+    };
 
-    // Top-level items in this rustfmt'd file have their closing brace alone
-    // on an unindented line ("\n}\n") — nested block closes are always
-    // indented ("    }\n"), so this marker reliably bounds the function body
-    // without needing a full brace-depth parser.
-    let body_search_start = fn_start + fn_marker.len();
-    let close_offset = src[body_search_start..]
-        .find("\n}\n")
-        .unwrap_or_else(|| panic!("could not find handle_spiffe_route's closing brace — function body scan is unreliable, re-check the source shape"));
-    let fn_body = &src[fn_start..body_search_start + close_offset];
+    // Enumerate top-level `async fn` items. Top-level items in this rustfmt'd
+    // file start at column 0 and close with their brace alone on an unindented
+    // line ("\n}\n") — nested block closes are always indented — so this bounds
+    // each body without a full brace-depth parser.
+    let mut fn_starts: Vec<(String, usize)> = Vec::new();
+    let mut offset = 0usize;
+    for line in production.split_inclusive('\n') {
+        if line.starts_with("async fn ")
+            || line.starts_with("pub async fn ")
+            || line.starts_with("pub(crate) async fn ")
+        {
+            let name = line
+                .split("async fn ")
+                .nth(1)
+                .and_then(|rest| rest.split(['(', '<', ' ']).next())
+                .unwrap_or("<unparsed>")
+                .to_string();
+            fn_starts.push((name, offset));
+        }
+        offset += line.len();
+    }
+    assert!(
+        !fn_starts.is_empty(),
+        "no top-level `async fn` found in reverse.rs — the discovery scan is broken \
+         (file shape changed?), so this test would vacuously pass; fix the scan"
+    );
 
-    let check_host_pos = fn_body.find("ctx.filter.check_host(").unwrap_or_else(|| {
-        panic!("'ctx.filter.check_host(' not found inside handle_spiffe_route's body — the host-check may have been removed or renamed")
-    });
-    let host_denied_pos = fn_body
-        .find("NetworkAuditDenialCategory::HostDenied")
-        .unwrap_or_else(|| {
+    let mut minting_fns: Vec<String> = Vec::new();
+
+    for (name, start) in &fn_starts {
+        let body_end = production[*start..]
+            .find("\n}\n")
+            .map(|rel| start + rel)
+            .unwrap_or(production.len());
+        let body = strip_line_comments(&production[*start..body_end]);
+
+        let Some((mint_pos, mint_marker)) = MINT_MARKERS
+            .iter()
+            .filter_map(|m| body.find(m).map(|p| (p, *m)))
+            .min()
+        else {
+            continue; // this function performs no credential mint
+        };
+        minting_fns.push(name.clone());
+
+        let check_host_pos = body.find("ctx.filter.check_host(").unwrap_or_else(|| {
             panic!(
-                "'NetworkAuditDenialCategory::HostDenied' not found inside handle_spiffe_route's body — the deny-emission branch may have been removed or renamed"
+                "D-17/DRAIN-06: `{name}` reaches a credential mint (`{mint_marker}`) but contains \
+                 no `ctx.filter.check_host(` at all. A minting dispatch path with no host-check \
+                 cannot be 'correctly ordered' — it is unguarded. Add the check-then-deny block \
+                 above the mint, mirroring `handle_spiffe_route`."
             )
         });
-    let acquire_pos = fn_body.find("managed_auth.acquire(").unwrap_or_else(|| {
-        panic!("'managed_auth.acquire(' not found inside handle_spiffe_route's body — the credential-mint call may have been removed or renamed")
-    });
+        let host_denied_pos = body
+            .find("NetworkAuditDenialCategory::HostDenied")
+            .unwrap_or_else(|| {
+                panic!(
+                    "D-17/DRAIN-06: `{name}` reaches a credential mint (`{mint_marker}`) and has a \
+                     host-check, but no `NetworkAuditDenialCategory::HostDenied` deny-emission \
+                     branch — a check whose deny path is missing or uncategorised does not deny."
+                )
+            });
 
+        assert!(
+            check_host_pos < mint_pos,
+            "D-17/DRAIN-06 regression in `{name}`: ctx.filter.check_host(...) (byte \
+             {check_host_pos}) must textually precede the credential mint `{mint_marker}` (byte \
+             {mint_pos}) — a deny_domain-blocked SPIFFE route must never trigger a SPIRE Workload \
+             API fetch (or an IdP token-endpoint POST of a minted SVID) before being denied."
+        );
+        assert!(
+            host_denied_pos < mint_pos,
+            "D-17/DRAIN-06 regression in `{name}`: the HostDenied deny-emission branch (byte \
+             {host_denied_pos}) must textually precede the credential mint `{mint_marker}` (byte \
+             {mint_pos}) — the whole deny path, not just the check call, must resolve before any \
+             mint is attempted."
+        );
+    }
+
+    for known in KNOWN_MINTING_DISPATCH_FNS {
+        assert!(
+            minting_fns.iter().any(|f| f == known),
+            "D-17/DRAIN-06 coverage loss: `{known}` is a known minting SPIFFE dispatch function, \
+             but discovery did not classify it as minting. Either it was renamed/removed, or its \
+             mint primitive changed and is no longer in MINT_MARKERS ({MINT_MARKERS:?}). Until \
+             this is reconciled, that path's ordering is UNGUARDED. Discovered minting fns: \
+             {minting_fns:?}"
+        );
+    }
     assert!(
-        check_host_pos < acquire_pos,
-        "D-17/DRAIN-06 regression: ctx.filter.check_host(...) (byte {}) must textually precede \
-         managed_auth.acquire() (byte {}) in handle_spiffe_route — a deny_domain-blocked SPIFFE \
-         route must never trigger a live SPIRE Workload API fetch before being denied",
-        check_host_pos,
-        acquire_pos
-    );
-    assert!(
-        host_denied_pos < acquire_pos,
-        "D-17/DRAIN-06 regression: the HostDenied deny-emission branch (byte {}) must textually \
-         precede managed_auth.acquire() (byte {}) in handle_spiffe_route — the whole deny path, \
-         not just the check call, must resolve before any mint is attempted",
-        host_denied_pos,
-        acquire_pos
+        minting_fns.len() >= KNOWN_MINTING_DISPATCH_FNS.len(),
+        "discovered fewer minting dispatch fns ({minting_fns:?}) than the known set \
+         ({KNOWN_MINTING_DISPATCH_FNS:?})"
     );
 }
 
