@@ -100,3 +100,11 @@ None - no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-09*
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono-cli/Cargo.toml (grep -c "layer-fault-injection = \[\]" == 1)
+- FOUND: crates/nono-cli/src/exec_strategy_windows/mod.rs
+- FOUND: eee8bf50 (feat(117-04): add layer-fault-injection Cargo feature)
+- FOUND: b6f52386 (fix(117-04): compile out WFP force-ready toggle behind layer-fault-injection)
+- FOUND: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-04-SUMMARY.md
