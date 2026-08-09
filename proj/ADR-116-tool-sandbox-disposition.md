@@ -110,3 +110,55 @@ permanently-considered-and-rejected general OAuth2 `client_credentials` route-wi
 precedent shape for recording an option as named-and-rejected rather than silently dropped, so a
 future absorb proposal does not re-propose "just adopt the policy model" as though it had never
 been examined.
+
+---
+
+## D-09: Symmetric Scoring
+
+| Criterion | Pole A | Pole B |
+|---|---|---|
+| **Per-command granularity** | Upstream's drivers grant per-command, per-invocation filesystem access and exec shims — `platform/linux.rs:3721-3734` (`expand_dynamic_tokens(&policy.fs_read, ...)` etc.) resolves fs grants per command, and `platform/linux.rs:124,2934` (`shims_by_command`, `materialize_shim_source()`) installs a per-command trampoline (`116-FEASIBILITY-MATRIX.md` rows 1-2). | The fork grants per-*invocation* via `nono run --profile` dispatched from the PreToolUse hook (`claude_code_hook.rs::run()`) — each tool call spawns one `nono run` with the profile's grant set, giving per-tool-call rather than per-declared-command granularity; the granularity unit is "one hook-mediated tool invocation," not a pre-declared command table. |
+| **Engine-agnosticism** | Upstream's `tool-sandbox/` subsystem is engine-neutral by design — its entrypoint is the sandboxed process launch itself (`platform/linux.rs`/`platform/macos.rs` drivers), not any particular calling agent or IDE integration (`116-FEASIBILITY-MATRIX.md`, Engine-Agnosticism Grounding; `116-RESEARCH.md` §4). | This is the fork's named weak spot, stated plainly per the "primitive vs. entry point" distinction (`.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md`): the fork's underlying confinement primitive, `nono run --profile ... -- <engine.exe>`, is itself engine-neutral (Spike 003, VALIDATED — proven against `cmd.exe`, `powershell.exe`, and `python.exe` identically on Win11 26200.8390) — but its current ENTRY POINT is Claude Code's PreToolUse contract, wired through `claude_code_hook.rs::run()` and the shipped hook wrapper `nono-tool-hook.ps1`. Decoupling confinement from that one engine's hook contract is real, undone integration work, not a primitive-level limitation. |
+| **Enforcement depth** | Upstream's Unix drivers make no Windows kernel-enforcement claim at all today, because `platform/windows.rs` does not exist — a hypothetical Pole-A Windows driver's enforcement depth is unbuilt and unproven, an honest gap rather than a disqualifying one. | This is the fork's strongest claim, stated without softening: kernel-enforced confinement on Windows via AppContainer + WFP + Job Object, built on `exec_strategy_windows/` primitives — `RestrictedToken`/`create_restricted_token_with_sid()` (`restricted_token.rs`), `AppliedLabelsGuard::snapshot_and_apply()` (`labels_guard.rs`), `AppliedDaclGrantsGuard::snapshot_and_apply()` (`dacl_guard.rs`), and the WFP service/driver lifecycle in `network.rs` (`install_windows_wfp_service()`, `probe_windows_wfp_readiness()`) plus `JobObjectHandle::create()`/`create_process_containment()` (`launch.rs`) — all cited in `116-FEASIBILITY-MATRIX.md`'s Fork Primitive Inventory. |
+| **Fail-direction under layer failure** | Not yet built — no driver exists to test. A hypothetical Windows driver's fail-direction under partial-layer failure (e.g. WFP unavailable, AppContainer registration failure) is unproven either way. | Visible today in `execution_runtime.rs::execute_sandboxed()` and `exec_strategy_windows/launch.rs`: the `WindowsTokenArm::{WriteRestricted, BrokerLaunch, BrokerLaunchNoPty}` cascade (`launch.rs:1237-1278`, selected by `select_windows_token_arm()`) exists specifically to route around a kernel-loader OS behavior (`STATUS_DLL_INIT_FAILED`/`0xC0000142` under `WRITE_RESTRICTED` + `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`/`DETACHED_PROCESS`) by selecting a different token-construction mechanism rather than degrading permissions (`116-FEASIBILITY-MATRIX.md`, WRITE_RESTRICTED Worked Example); `WindowsSupervisorDenyAllApprovalBackend` (`exec_strategy_windows/mod.rs:259`) is a named fail-closed approval backend. |
+| **Platform coverage** | Linux and macOS proven upstream since v0.65.0 (PR #1105); Windows is net-new work — the ledger confirms `platform/windows.rs` does not exist upstream at `v0.71.0`, and `windows-touch: 0 of 38` across every dispositioned commit in the subsystem's history (`116-DIVERGENCE-LEDGER.md` Headline). | Windows is proven via PR #4 (shipped, `nono-tool-hook.ps1` + `claude_code_hook.rs`); Linux and macOS are untested for this specific hook-based model — the fork has no host module for `tool-sandbox/`, `command_policy.rs`, or `lineage_cgroup.rs` on any platform (`116-RESEARCH.md` §3c, confirmed absent from the fork). |
+| **ADR-86 library-vs-CLI boundary impact** | This is a wash between the two poles: both would live entirely in `nono-cli` (a new `crates/nono-cli/src/tool-sandbox/` or equivalent module tree), with the core `nono` library untouched either way, per `proj/ADR-86-library-boundary-convergence.md`'s Architectural Responsibility Map (policy, profiles, hooks, and UX are CLI-owned; the library applies only what clients place in `CapabilitySet`). | Also a wash on this criterion: the existing PreToolUse hook, `claude_code_hook.rs`, `hooks.rs`, and `exec_strategy_windows/` all already live in `nono-cli`; formalizing this path adds no new library-tier surface, per the same `proj/ADR-86-library-boundary-convergence.md` boundary. |
+| **Ongoing divergence + maintenance cost** | `116-DIVERGENCE-LEDGER.md`'s Headline records **38** dispositioned commits across the subsystem's `v0.64.1..v0.71.0` history — the rate a Pole-A-absorbed subsystem would need continued syncing against on every future upstream sync, on top of authoring and then maintaining the net-new `platform/windows.rs` driver alongside the absorbed Unix drivers. | Formalizing removes `tool-sandbox/` from future upstream-sync scope entirely — the fork would no longer need to disposition or absorb any of upstream's `tool-sandbox/`-surface commits going forward — but this leaves the fork's own Windows-specific hook + broker + `exec_strategy_windows/` code as its own, separately-maintained surface, independent of upstream's release cadence. |
+
+## Neutrality Self-Check
+
+**7 criteria x 2 poles = 14 populated cells.** Re-reading the table above row by row confirms
+every one of the 14 cells (7 rows, Pole A and Pole B columns each) is non-empty and phrased as a
+capability fact or a citation, not a comparison. Re-scanning the whole document (Context, both Pole
+sections, D-06, and the D-09 table) for comparative or recommending phrasing of any kind (a
+sentence declaring one pole superior, preferred, victorious, or the other's inverse) finds none —
+the engine-agnosticism row states the fork's weak spot plainly (per the "primitive vs.
+entry point" distinction) without softening, and the enforcement-depth row states the fork's
+kernel-enforced claim as its strongest claim without softening, while Pole A's corresponding gap is
+phrased as "unbuilt"/"unproven"/"no driver exists to test" rather than "impossible", "cannot", or
+"fails". No `## Decision` section, bolded verdict sentence, reversal triggers, Consequences
+section, or Phase 120 sizing appears anywhere in this document — those are Plan 116-06's job.
+
+---
+
+## References
+
+- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-DIVERGENCE-LEDGER.md` —
+  the finalized `## Headline` figures this Context section cites (38 dispositioned commits,
+  windows-touch 0/38, the 12-file/18,433-LOC/74%-Unix breakdown).
+- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-FEASIBILITY-MATRIX.md` —
+  the D-07 Fork Primitive Inventory and 11-row feasibility matrix this D-09 table's Pole A/Pole B
+  cells cite by symbol.
+- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-RESEARCH.md` §4 — the
+  12-file/18,433-LOC upstream surface inventory and the `platform/` cfg-gate no-op-stub finding.
+- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-CONTEXT.md` — D-05
+  (two-pole framing), D-06 (rejected intermediates), D-09 (criteria set), D-10 (open-verdict
+  posture), D-11 (Accepted-status gate, Plan 116-06's job).
+- `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` — the "primitive
+  vs. entry point" distinction and Spike 003's engine-neutrality validation.
+- `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` — Pole
+  B's design source.
+- `proj/ADR-86-library-boundary-convergence.md` — the library-vs-CLI boundary D-09's sixth
+  criterion cites.
+- `proj/ADR-113-spiffe-disposition.md` — header/OD-1 house-style precedent for D-06's
+  considered-and-rejected shape.
