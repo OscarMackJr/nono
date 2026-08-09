@@ -141,30 +141,6 @@ section, or Phase 120 sizing appears anywhere in this document — those are Pla
 
 ---
 
-## References
-
-- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-DIVERGENCE-LEDGER.md` —
-  the finalized `## Headline` figures this Context section cites (38 dispositioned commits,
-  windows-touch 0/38, the 12-file/18,433-LOC/74%-Unix breakdown).
-- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-FEASIBILITY-MATRIX.md` —
-  the D-07 Fork Primitive Inventory and 11-row feasibility matrix this D-09 table's Pole A/Pole B
-  cells cite by symbol.
-- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-RESEARCH.md` §4 — the
-  12-file/18,433-LOC upstream surface inventory and the `platform/` cfg-gate no-op-stub finding.
-- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-CONTEXT.md` — D-05
-  (two-pole framing), D-06 (rejected intermediates), D-09 (criteria set), D-10 (open-verdict
-  posture), D-11 (Accepted-status gate, Plan 116-06's job).
-- `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` — the "primitive
-  vs. entry point" distinction and Spike 003's engine-neutrality validation.
-- `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` — Pole
-  B's design source.
-- `proj/ADR-86-library-boundary-convergence.md` — the library-vs-CLI boundary D-09's sixth
-  criterion cites.
-- `proj/ADR-113-spiffe-disposition.md` — header/OD-1 house-style precedent for D-06's
-  considered-and-rejected shape.
-
----
-
 ## Decision
 
 **Formalize fork-native** (Pole B).
@@ -401,9 +377,17 @@ ratification and `.planning/ROADMAP.md` edits happen only after operator sign-of
   (OD-1).
 - `.planning/architecture/adr-65-minifilter-go-no-go.md` — the standing minifilter
   No-go/Conditional-go verdict D-08 and this Decision's D-07/D-08 summary cite.
-- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-CONTEXT.md` —
-  D-10/D-11/D-12/D-14/D-15, the locked decisions this Decision and Phase 120 Scope section satisfy.
-- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-RESEARCH.md` — the
-  underlying research this ADR's Context section draws its measured figures from.
+- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-CONTEXT.md` — D-05
+  (two-pole framing), D-06 (rejected intermediates), D-09 (criteria set), and
+  D-10/D-11/D-12/D-14/D-15, the locked decisions this ADR's framing, Decision, and Phase 120
+  Scope section satisfy.
+- `.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-RESEARCH.md` §4 — the
+  12-file/18,433-LOC upstream surface inventory and the `platform/` cfg-gate no-op-stub finding
+  this ADR's Context section draws its measured figures from.
+- `.claude/skills/spike-findings-nono/references/engine-agnostic-confinement.md` — the "primitive
+  vs. entry point" distinction and Spike 003's engine-neutrality validation, cited by the D-09
+  engine-agnosticism row.
+- `.planning/quick/260528-sch-spec-the-sandbox-the-tools-windows-tool-/260528-sch-SPEC.md` — Pole
+  B's design source.
 - `.planning/ROADMAP.md` — Phase 117's CINT-01 entry, cross-checked against this Decision's
   fail-direction row in Consequences item 6.
