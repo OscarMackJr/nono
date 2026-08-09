@@ -83,11 +83,12 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
         no_auto_pull: run_args.profile_resolver.no_auto_pull,
     };
 
-    // Phase 41 (REQ-CI-02): wire the --dangerous-force-wfp-ready flag to the
-    // Windows WFP test-force-ready runtime setter. Previously the flag was
-    // parsed by clap but never forwarded (the wiring was absent). The setter
-    // checks for NONO_TEST_HARNESS at runtime so production builds are guarded.
-    #[cfg(target_os = "windows")]
+    // D-30 (Phase 117-04): wire the --dangerous-force-wfp-ready flag to the
+    // Windows WFP test-force-ready runtime setter. Both the CLI field and
+    // the setter only exist when built with `--features layer-fault-injection`
+    // — a default (release) build has neither, so there is nothing to guard
+    // at runtime. This supersedes the prior Phase 41 NONO_TEST_HARNESS gate.
+    #[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
     if run_args.sandbox.dangerous_force_wfp_ready {
         exec_strategy::set_windows_wfp_test_force_ready(true);
     }

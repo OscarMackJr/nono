@@ -381,6 +381,11 @@ pub(super) fn build_wfp_probe_status(
 pub(super) fn probe_wfp_backend_status_with_config(
     config: &WfpProbeConfig,
 ) -> Result<WfpProbeStatus> {
+    // D-30 (Phase 117-04): the force-unavailable/force-ready seam only exists
+    // when built with `--features layer-fault-injection` — in a default
+    // build this branch, and the function it calls, are not compiled in at
+    // all, so there is no runtime toggle to read.
+    #[cfg(feature = "layer-fault-injection")]
     if windows_wfp_test_force_ready() {
         return Ok(build_wfp_probe_status(
             config.backend_binary_path.exists(),

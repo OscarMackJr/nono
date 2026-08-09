@@ -4,8 +4,9 @@
 //   * `WindowsSupervisorDenyAllApprovalBackend` — fallback approval backend
 //     for SC #4 callers that build a `SupervisorConfig` without an
 //     interactive backend.
-//   * `set_windows_wfp_test_force_ready` — debug-only WFP readiness toggle
-//     pair (the matching reader is wired in `network.rs`).
+//   * `set_windows_wfp_test_force_ready` — `layer-fault-injection`-feature-gated
+//     WFP readiness toggle pair (the matching reader is wired in `network.rs`);
+//     compiled out entirely in the default build (D-30, Phase 117-04).
 // Phase 25-01 removed `collect_unix_resource_limit_warnings` and
 // `warn_unix_resource_limits` (Phase 16 stubs, now dead since Unix enforcement
 // is kernel-level via cgroup v2 / setrlimit).
@@ -36,6 +37,7 @@ use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(feature = "layer-fault-injection")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::time::SystemTime;
@@ -552,9 +554,12 @@ struct WfpProbeConfig {
     backend_service_args: &'static [&'static str],
 }
 
-// Phase 41 (REQ-CI-02): ungated from #[cfg(debug_assertions)] so the flag is
-// available in all build profiles (release and debug). Runtime access is
-// guarded by set_windows_wfp_test_force_ready which checks NONO_TEST_HARNESS.
+// D-30 (Phase 117-04): compiled out of the default build entirely via the
+// `layer-fault-injection` feature — this supersedes the Phase 41 runtime
+// test-harness env-var gate, which was live attack surface (an attacker
+// with process-spawn control could set that env var on any release
+// binary). The feature gate IS the gate: no runtime check remains.
+#[cfg(feature = "layer-fault-injection")]
 static WINDOWS_WFP_TEST_FORCE_READY: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -576,26 +581,17 @@ enum WfpRuntimeActivationProbeStatus {
 
 /// Set the WFP test-force-ready flag for the integration test harness.
 ///
-/// Phase 41 (REQ-CI-02): promoted out of `#[cfg(debug_assertions)]` so the
-/// flag is respected in all build profiles (release and debug). A runtime
-/// guard (`NONO_TEST_HARNESS` env var) replaces the compile-time gate to
-/// mitigate threat T-41-04-01: the flag only takes effect when the test
-/// harness explicitly opts in via the environment, not on arbitrary invocations.
+/// D-30 (Phase 117-04): this function only exists when the crate is built
+/// with `--features layer-fault-injection`. There is deliberately no runtime
+/// guard (env var or otherwise) inside the function body — the compile-time
+/// feature gate is the entire mitigation for T-117-01. A production release
+/// build (default features) does not contain this symbol at all.
+#[cfg(feature = "layer-fault-injection")]
 pub(crate) fn set_windows_wfp_test_force_ready(force_ready: bool) {
-    // Runtime guard: only allow the test-force-ready flag when the process
-    // was launched inside the nono integration test harness. This prevents
-    // a curious user from invoking --dangerous-force-wfp-ready on a
-    // production binary and bypassing real WFP readiness checks.
-    if force_ready && std::env::var_os("NONO_TEST_HARNESS").is_none() {
-        tracing::warn!(
-            "--dangerous-force-wfp-ready has no effect outside the test harness \
-             (NONO_TEST_HARNESS env var not set)"
-        );
-        return;
-    }
     WINDOWS_WFP_TEST_FORCE_READY.store(force_ready, Ordering::Relaxed);
 }
 
+#[cfg(feature = "layer-fault-injection")]
 fn windows_wfp_test_force_ready() -> bool {
     WINDOWS_WFP_TEST_FORCE_READY.load(Ordering::Relaxed)
 }

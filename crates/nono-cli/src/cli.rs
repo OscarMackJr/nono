@@ -2205,11 +2205,16 @@ pub struct SandboxArgs {
 
     /// Internal: force WFP readiness for test-built Windows binaries.
     /// Hidden from --help (hide = true); intended only for the nono-cli
-    /// integration test harness. Phase 41 (REQ-CI-02): promoted out of
-    /// #[cfg(debug_assertions)] so the Windows Security CI job's block-net
-    /// probe tests can invoke the flag against any build profile. The runtime
-    /// path at exec_strategy_windows::set_windows_wfp_test_force_ready is
-    /// guarded by NONO_TEST_HARNESS at runtime (ungated in the same commit).
+    /// integration test harness. D-30 (Phase 117-04): this field, and the
+    /// runtime path it drives at
+    /// `exec_strategy_windows::set_windows_wfp_test_force_ready`, only exist
+    /// when the crate is built with `--features layer-fault-injection` — the
+    /// flag is entirely absent from default (release) builds, not merely
+    /// refused at runtime. This supersedes the prior Phase 41
+    /// `NONO_TEST_HARNESS` runtime env-var gate. A present-but-inert flag is
+    /// still discoverable attack-surface reconnaissance, so the field itself
+    /// is removed rather than left as a no-op.
+    #[cfg(feature = "layer-fault-injection")]
     #[arg(long, hide = true, help_heading = "OPTIONS")]
     pub dangerous_force_wfp_ready: bool,
 
@@ -2791,6 +2796,7 @@ impl From<WrapSandboxArgs> for SandboxArgs {
             allow_http2: false,
             config: args.config,
             verbose: args.verbose,
+            #[cfg(feature = "layer-fault-injection")]
             dangerous_force_wfp_ready: false,
             dry_run: args.dry_run,
             // WrapSandboxArgs does not expose --override-audit (internal flag).
