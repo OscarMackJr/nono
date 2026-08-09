@@ -8,7 +8,7 @@ parallel_milestone_status: paused-at-phase-104-on-operator-tag-push
 shipped_milestone: v3.6
 shipped_milestone_name: "UPST12: Upstream Sync v0.66.0 -> v0.69.0"
 shipped_date: 2026-08-08
-updated: 2026-08-08
+updated: 2026-08-09
 ---
 
 # Roadmap: nono
@@ -37,7 +37,7 @@ Make the fork's deny-by-*composition* Windows model **prove** it is enforcing, s
 Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cleans the denial/audit spine that the receipt work in 118 builds on, and because the drain is independent of everything else. **116** runs the tool-sandbox ledger + ADR *early* so its verdict — which may or may not imply substantial engineering — is known before the milestone's remaining capacity is committed; its execution (120) is deliberately last and sized by that verdict. **117 → 118 → 119** run in dependency order: the fail-direction contract enumerates every layer, the receipts attest that enumeration per session, and the boundary statement can only be truthful once the contract says what each layer actually does.
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
-- [ ] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 0/6 plans
+- [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
 - [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/? plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
@@ -269,12 +269,15 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   4. The ADR evaluates PR #4's PreToolUse-hook + Low-IL-primary-token-broker path on its merits — including the durable finding that .NET/PowerShell CLR cannot start under `WRITE_RESTRICTED` — rather than treating it as a stopgap.
   5. Phase 120's scope is sized from the verdict and written down, so the milestone's tail is no longer open-ended.
 **Plans**: 6 plans
-- [ ] 116-01-PLAN.md — Reproduction block + D-03 module-set re-derivation + pre-fence/post-fence per-commit disposition tables
-- [ ] 116-02-PLAN.md — Feasibility matrix appendix: fork Windows-confinement primitive inventory + upstream capability rating (D-07/D-08)
-- [ ] 116-03-PLAN.md — Split-commit residue accounting (D-04) + grep-verified fenced-window reconciliation + post-fence residue finding
-- [ ] 116-04-PLAN.md — Carve-out re-touch check (D-19) + bucket-count reconciliation + completeness verification + Headline finalization
-- [ ] 116-05-PLAN.md — ADR Part 1: Context + two-pole framing (D-05) + rejected intermediate shapes (D-06) + D-09 symmetric scoring table
-- [ ] 116-06-PLAN.md — ADR Part 2: Decision/verdict + D-07/D-08 summary + D-12 triggers/re-test point + D-14/D-15 Phase 120 sizing proposal
+- [x] 116-01-PLAN.md — Reproduction block + D-03 module-set re-derivation + pre-fence/post-fence per-commit disposition tables
+- [x] 116-02-PLAN.md — Feasibility matrix appendix: fork Windows-confinement primitive inventory + upstream capability rating (D-07/D-08)
+- [x] 116-03-PLAN.md — Split-commit residue accounting (D-04) + grep-verified fenced-window reconciliation + post-fence residue finding
+- [x] 116-04-PLAN.md — Carve-out re-touch check (D-19) + bucket-count reconciliation + completeness verification + Headline finalization
+- [x] 116-05-PLAN.md — ADR Part 1: Context + two-pole framing (D-05) + rejected intermediate shapes (D-06) + D-09 symmetric scoring table
+- [x] 116-06-PLAN.md — ADR Part 2: Decision/verdict + D-07/D-08 summary + D-12 triggers/re-test point + D-14/D-15 Phase 120 sizing proposal
+
+**Verdict**: **Formalize fork-native (Pole B)** — `proj/ADR-116-tool-sandbox-disposition.md`, Status: Accepted.
+**Operator-gated findings** (proposed in the ledger, deliberately NOT applied here): Uncovered-Window Finding — 12 commits touch a named fork-invariant carve-out surface but are dispositioned by no audit to date (proposed home: UPST13/FUT-08); Post-Fence Residue Finding — disposed "no new successor phase needed".
 
 ### Phase 117: Fail-Direction Contract + Startup Self-Attestation
 **Goal**: The composite's fail-direction stops being decided per-layer-in-isolation and becomes one system-level answer — and nono can no longer report "enforcing" while a layer is silently inert, which is the failure mode this codebase has already hit once.
@@ -351,7 +354,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 113. SPIFFE/SPIRE Workload Identity | v3.6 | 8/8 | Complete | 2026-08-06 |
 | 114. OAuth Capture Absorb (SEC-02) | v3.6 | 11/11 | Complete | 2026-08-07 |
 | 115. v3.6 Carry-Forward Drain | v3.7 | 6/6 | Complete | 2026-08-09 |
-| 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 0/? | Not started | - |
+| 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 6/6 | Complete (verdict: formalize fork-native) | 2026-08-09 |
 | 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 0/? | Not started | - |
 | 118. Per-Session Enforcement Receipts | v3.7 | 0/? | Not started | - |
 | 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
