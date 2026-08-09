@@ -35,6 +35,12 @@ pub enum NonoDiagnosticCode {
     IoError,
     Cancelled,
     Other,
+    /// A startup self-attestation probe failed to confirm that a composed
+    /// confinement layer (e.g. AppContainer profile, restricted token,
+    /// mandatory integrity label) took effect on the real spawned child.
+    /// Distinct from [`Self::ConfigurationError`] so operators can tell an
+    /// attestation failure from generic misconfiguration (D-22).
+    LayerAttestationFailed,
 }
 
 /// Remediation action; clients render this as flags or other UI text.

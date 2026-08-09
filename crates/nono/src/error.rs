@@ -372,6 +372,25 @@ pub enum NonoError {
         /// Human-readable description of the malformed value.
         reason: String,
     },
+
+    /// Startup self-attestation failed to confirm that a composed
+    /// confinement layer took effect on the real spawned child (D-22).
+    ///
+    /// Distinct from [`Self::LabelApplyFailed`]/[`Self::DaclApplyFailed`]
+    /// (which cover a failed *apply* of a path/ACE mutation): this variant
+    /// covers a failed *probe* of already-applied OS state (e.g.
+    /// `GetTokenInformation`/`IsProcessInJob` against the suspended child)
+    /// during the startup attestation pass. The operator learns which layer
+    /// failed, not that "something" failed — `layer` names the registry row
+    /// (e.g. `"AppContainerProfile"`), `reason` carries the probe failure
+    /// detail.
+    #[error("Startup self-attestation failed for layer {layer}: {reason}")]
+    LayerAttestationFailed {
+        /// The name of the layer whose attestation probe failed.
+        layer: String,
+        /// Human-readable description of why the probe failed.
+        reason: String,
+    },
 }
 
 /// Result type alias for nono operations
@@ -433,6 +452,10 @@ impl NonoError {
             | Self::PolicyLoadFailed { .. }
             | Self::TelemetryUnavailable { .. }
             | Self::TelemetryConfigInvalid { .. } => NonoDiagnosticCode::ConfigurationError,
+            // D-22: kept as its own arm, not folded into ConfigurationError,
+            // so the operator can distinguish an attestation failure from
+            // generic misconfiguration.
+            Self::LayerAttestationFailed { .. } => NonoDiagnosticCode::LayerAttestationFailed,
             Self::PathNotFound(_)
             | Self::ExpectedDirectory(_)
             | Self::ExpectedFile(_)
