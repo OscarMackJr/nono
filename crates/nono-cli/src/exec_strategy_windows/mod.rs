@@ -655,6 +655,7 @@ pub(crate) use nono::OwnedHandle;
 mod dacl_guard;
 mod labels_guard;
 mod launch;
+pub(crate) mod layer_registry;
 mod network;
 mod restricted_token;
 mod supervisor;

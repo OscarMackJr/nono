@@ -776,3 +776,202 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         probe: ProbeKind::NotApplicable,
     },
 ];
+
+/// Every `LayerId` variant, in declaration order. D-01/D-11: platform-
+/// neutral (no `#[cfg]`) so drift tests and Phase 118's receipt type can
+/// iterate it on any host. Mirrors the `NetworkAuditDenialCategory::ALL` +
+/// `assert_all_variants_covered` idiom (`crates/nono/src/undo/types.rs:333-345`,
+/// `:363-377`) exactly: this is the mechanism that fails the build when a
+/// `LayerId` variant is added without a corresponding `ALL` entry and match
+/// arm below.
+pub(crate) const ALL: &[LayerId] = &[
+    LayerId::RestrictedToken,
+    LayerId::MandatoryIntegrityLabel,
+    LayerId::AppContainerProfile,
+    LayerId::DaclSessionSidGrant,
+    LayerId::DaclPackageSidGrant,
+    LayerId::DaclAncestorTraverse,
+    LayerId::DaclAncestorReadAttrs,
+    LayerId::WfpEgressFilters,
+    LayerId::FirewallRulesEgress,
+    LayerId::MinifilterAbsence,
+    LayerId::JobObjectContainment,
+    LayerId::BrokerAuthenticodeTrustGate,
+    LayerId::InterpreterCoverageGate,
+];
+
+// IMPORTANT: match is exhaustive (no wildcard arm) so the compiler forces
+// handling of every current and future LayerId variant — mirrors
+// `undo/types.rs`'s `assert_all_variants_covered` guard style exactly.
+// Adding a variant to `LayerId` above without adding a corresponding arm
+// here fails to compile with `error[E0004]: non-exhaustive patterns:
+// LayerId::<Variant> not covered`. This is `ALL`'s own compile-time drift
+// guard: forgetting to keep this match (and `ALL`, alongside it) in sync
+// with the enum is caught at build time, not left for a runtime test to
+// discover — T-117-06's mitigation.
+#[cfg_attr(not(test), allow(dead_code))]
+fn assert_all_layer_ids_covered(id: &LayerId) {
+    match id {
+        LayerId::RestrictedToken
+        | LayerId::MandatoryIntegrityLabel
+        | LayerId::AppContainerProfile
+        | LayerId::DaclSessionSidGrant
+        | LayerId::DaclPackageSidGrant
+        | LayerId::DaclAncestorTraverse
+        | LayerId::DaclAncestorReadAttrs
+        | LayerId::WfpEgressFilters
+        | LayerId::FirewallRulesEgress
+        | LayerId::MinifilterAbsence
+        | LayerId::JobObjectContainment
+        | LayerId::BrokerAuthenticodeTrustGate
+        | LayerId::InterpreterCoverageGate => {}
+    }
+}
+
+/// The populated Windows layer registry (D-11: only the population, not the
+/// types above, is platform-gated).
+#[cfg(target_os = "windows")]
+pub(crate) fn all_entries() -> &'static [LayerRegistryEntry] {
+    &REGISTRY_ENTRIES
+}
+
+/// Non-Windows stub: matches the `read_machine_egress_policy` split
+/// (`crates/nono/src/machine_policy.rs:150-183`, `:696-705`) this plan's
+/// `<interfaces>` block cites as the pattern to copy for any Windows-only
+/// *population* function this file adds.
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn all_entries() -> &'static [LayerRegistryEntry] {
+    &[]
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    /// Item-1 fix (checker pass 3): every `EntryPath::Broker`-expected row
+    /// must carry `outcome: ContractOutcome::Abort`. Blocker-1's fix means
+    /// `required_layers_for_broker()` (Plan 08) filters registry rows to
+    /// those with an `ArmExpectancy` matching `(EntryPath::Broker, expected:
+    /// true)` AND `outcome: ContractOutcome::Abort` — a row expected at
+    /// `EntryPath::Broker` with a NON-`Abort` outcome would be silently
+    /// excluded from that filter AND already excluded from
+    /// `attest_and_decide`'s own dispatch (which never runs with
+    /// `EntryPath::Broker`), so it would go completely unattested on the
+    /// broker arm — the exact green-by-absence gap Blocker-1 closed,
+    /// re-armed for the next added row.
+    ///
+    /// D-32's discovery rule (Phase 115 V-01: "a test that names its
+    /// targets is blind by construction"): this test iterates
+    /// `all_entries()` and filters on `expectancy`/`probe` — it does NOT
+    /// hardcode `LayerId::AppContainerProfile` or any other specific
+    /// variant name. A future row added with `EntryPath::Broker` expectancy
+    /// and a non-`Abort` outcome must fail this test without the test
+    /// itself being touched.
+    ///
+    /// **Deviation (Rule 1, discovered running this test live):** the
+    /// invariant is scoped to rows with an attestable `probe` (anything
+    /// other than `ProbeKind::NotApplicable`). `MinifilterAbsence` is
+    /// `expected: true` at every `(entry_path, None)` cell including
+    /// `EntryPath::Broker` (Task 2, RESEARCH §A: "applies to every
+    /// (entry_path, None) uniformly") with the deliberate, ADR-65-justified
+    /// `FailOpen` outcome — running the unscoped invariant against it
+    /// produces a false positive: `MinifilterAbsence` is not a layer that
+    /// silently goes unattested on the broker arm, it is a row that
+    /// documents a layer which does not exist and therefore has nothing to
+    /// attest, on ANY arm (`probe: ProbeKind::NotApplicable`). The
+    /// green-by-absence failure mode Blocker-1/Item-1 close is specifically
+    /// "an attestable layer expected at the broker arm silently excluded
+    /// from `attest_and_decide`'s dispatch" — that failure mode requires
+    /// something attestable to begin with. Scoping on `probe` (a field
+    /// every row already carries, not a name) preserves D-32's discovery
+    /// requirement: a future row is exempted only if IT ALSO documents
+    /// `ProbeKind::NotApplicable`, which is itself a deliberate, reviewable
+    /// choice recorded on that row, not a name-based carve-out.
+    #[test]
+    fn broker_expected_rows_are_abort_only() {
+        for entry in all_entries() {
+            if entry.probe == ProbeKind::NotApplicable {
+                continue;
+            }
+            let expected_at_broker = entry.expectancy.iter().any(|arm| {
+                matches!(
+                    arm,
+                    ArmExpectancy {
+                        entry_path: EntryPath::Broker,
+                        expected: true,
+                        ..
+                    }
+                )
+            });
+            if expected_at_broker {
+                assert_eq!(
+                    entry.outcome,
+                    ContractOutcome::Abort,
+                    "{:?} is expected at EntryPath::Broker but its outcome is {:?}, not Abort — \
+                     a non-Abort broker-expected row is silently excluded from both \
+                     attest_and_decide (Blocker-1) and required_layers_for_broker (Plan 08), and \
+                     goes completely unattested on the broker arm",
+                    entry.id,
+                    entry.outcome
+                );
+            }
+        }
+    }
+
+    /// Sanity check that the registry actually has broker-expected rows to
+    /// exercise the invariant above (a vacuously-true loop over zero
+    /// matching rows would be a weaker test than it appears).
+    #[test]
+    fn at_least_one_row_is_broker_expected() {
+        let count = all_entries()
+            .iter()
+            .filter(|entry| {
+                entry.expectancy.iter().any(|arm| {
+                    matches!(
+                        arm,
+                        ArmExpectancy {
+                            entry_path: EntryPath::Broker,
+                            expected: true,
+                            ..
+                        }
+                    )
+                })
+            })
+            .count();
+        assert!(
+            count > 0,
+            "expected at least one EntryPath::Broker-expected row (e.g. AppContainerProfile, \
+             MandatoryIntegrityLabel, MinifilterAbsence) to exercise \
+             broker_expected_rows_are_abort_only"
+        );
+    }
+
+    #[test]
+    fn all_entries_covers_every_layer_id() {
+        let covered: Vec<LayerId> = all_entries().iter().map(|e| e.id).collect();
+        for id in ALL {
+            assert!(
+                covered.contains(id),
+                "{id:?} is in LayerId::ALL but has no corresponding row in all_entries()"
+            );
+        }
+        assert_eq!(
+            covered.len(),
+            ALL.len(),
+            "all_entries() row count must match LayerId::ALL length"
+        );
+    }
+
+    #[test]
+    fn every_call_site_string_names_a_line_number() {
+        for entry in all_entries() {
+            for site in entry.call_sites {
+                assert!(
+                    site.contains(".rs:"),
+                    "{:?}'s call_sites entry {site:?} does not look like a \"file:line\" citation",
+                    entry.id
+                );
+            }
+        }
+    }
+}
