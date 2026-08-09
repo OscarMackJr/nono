@@ -704,4 +704,19 @@ mod diagnostic_tests {
         ));
         Ok(())
     }
+
+    /// D-22: the abort path surfaces a typed `NonoError` naming the failed
+    /// layer, mapped to its own distinct `NonoDiagnosticCode` rather than
+    /// being folded into the generic `ConfigurationError` bucket.
+    #[test]
+    fn layer_attestation_failed_maps_to_own_diagnostic_code() {
+        let err = NonoError::LayerAttestationFailed {
+            layer: "AppContainerProfile".into(),
+            reason: "TokenAppContainerSid query failed".into(),
+        };
+        assert_eq!(
+            err.diagnostic_code(),
+            NonoDiagnosticCode::LayerAttestationFailed
+        );
+    }
 }
