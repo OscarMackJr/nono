@@ -447,6 +447,11 @@ CLAUDE.md's named `exec_strategy/` directory pattern.
      cleanly, OR explicitly document "confirmed-by-report-from-the-enforcing-component" as a
      sub-case of `confirmed` with a citation to this distinction, so a future reader doesn't conflate
      it with `IsProcessInJob`-style independent observation.
+   - **RESOLVED: Plan 117-08 (Task 1), checker pass 2 — WFP is classified `Confirmed` when the
+     pre-spawn `installed_filter_count` IPC check already passed, documented explicitly as the
+     `confirmed-by-report-from-the-enforcing-component` sub-case (defined in Plan 117-05's
+     `LayerAttestationStatus` doc comment, dispatched in Plan 117-08). Never silently promoted to a
+     plain `Confirmed` without this citation.**
 
 2. **Is `FirewallRulesNetworkBackend` (legacy AppID/firewall-rule fallback) still reachable in
    production, and if so, what is its own fail-direction?** (SC4-3, §G)
@@ -456,6 +461,10 @@ CLAUDE.md's named `exec_strategy/` directory pattern.
    - Recommendation: Wave-0 task — trace `WindowsNetworkBackend` backend selection before writing the
      WFP contract row, since this may be a second WFP-adjacent row entirely (or dead code worth
      removing, which would itself be a small SC4 fix).
+   - **RESOLVED: Plan 117-01 (Task 1), 2026-08-09 — `FirewallRulesNetworkBackend` IS reachable in
+     production (`network.rs:1500-1533` dispatch, confirmed live) and already fails closed. It
+     becomes its own registry row, `LayerId::FirewallRulesEgress`, distinct from `WfpEgressFilters`
+     — not dead code, not a WFP sub-case.**
 
 3. **Where does the daemon path (`nono-agentd`) fit the D-30 fault-injection seam and D-32 meta-test
    given `agent_daemon/launch.rs`'s explicit non-dependency on `exec_strategy_windows/`?**
@@ -468,6 +477,13 @@ CLAUDE.md's named `exec_strategy/` directory pattern.
      — the entry-path axis needs the same treatment as the token-arm axis).
    - Recommendation: extend the registry schema to carry (entry_path, call_site) pairs per layer,
      not a single call_site column, given the confirmed 3-independent-implementation reality (§Summary-1).
+   - **RESOLVED: Plan 117-01 (Task 2), checker pass 2 — layers present on both the DirectCli/Daemon
+     entry paths (`WfpEgressFilters`, `DaclPackageSidGrant`, `JobObjectContainment`) carry dual
+     `call_sites` citations (both the `exec_strategy_windows/` site and the `agent_daemon/launch.rs`
+     site) inside `LayerRegistryEntry.call_sites: &[&str]` rather than a new per-entry-path column —
+     a flat citation list, not a structural (entry_path, call_site) pair type. `AppContainerProfile`
+     is the one row that does NOT get a DirectCli citation at all (Blocker-1 fix): it cites only the
+     `nono-shell-broker`/`agent_daemon` attesting sites.**
 
 4. **Does the new `SecurityEvent` (or a reused `TelemetryDegraded` variant) need a new field to name
    the specific layer, and if so, does that violate D-28's "layer-specific downgrade detail stays off
@@ -483,10 +499,24 @@ CLAUDE.md's named `exec_strategy/` directory pattern.
      before deciding the telemetry channel can safely carry the specific layer name; if unverified,
      default to coarse wording on this channel too and reserve specifics for a channel confirmed
      operator-only (e.g. a local audit-events file the child cannot open).
+   - **RESOLVED (partially): Plans 117-09 + 117-12, checker pass 2 — `SecurityEvent` gained a
+     `downgraded_layers` field carrying specific `LayerId` names, on the documented-but-still-NOT-
+     empirically-verified assumption that ETW/Application Event Log is supervisor-only. The
+     verification itself remains open: Plan 117-12 Task 2/3 names it as a loud, non-`LayerId`-scoped
+     manual-verification item (`MANUAL_SECURITY_ASSUMPTIONS`, `wevtutil gl Application` SDDL check)
+     rather than leaving it as a bare mention (Blocker-3 fix) — the banner (Plan 117-09) stays coarse
+     regardless, so only the telemetry channel carries this residual, named risk.**
 
 5. **`sandbox/mod.rs`, `sandbox/windows.rs`, `machine_policy.rs`, and `telemetry/mod.rs`/`event.rs`
    cross-target cfg status** (§I) — several UNRESOLVED cells in the blast-radius table need a direct
    grep before the plan finalizes which cross-target gates apply to which new/touched files.
+   - **RESOLVED: Plan 117-01 (Task 1), direct grep 2026-08-09 — `sandbox/mod.rs`: YES (has literal
+     linux/macos cfg); `machine_policy.rs`: NO; `telemetry/mod.rs`+`event.rs`: NO;
+     `command_runtime.rs`: YES (not in the original 4-file list, discovered during the same pass);
+     `agent_daemon/launch.rs`: NO; `nono-shell-broker/src/main.rs`: NO;
+     `exec_strategy_windows/*.rs` (all files): NO. This phase never touches `sandbox/mod.rs` or
+     `sandbox/windows.rs` directly, so their YES/untouched status is moot for this phase's own
+     cross-target gate scope (Plan 117-12 Task 3 runs both gates workspace-wide regardless).**
 
 ## Sources
 
