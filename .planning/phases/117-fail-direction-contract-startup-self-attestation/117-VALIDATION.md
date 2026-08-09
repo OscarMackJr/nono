@@ -1,8 +1,8 @@
 ---
 phase: 117
 slug: fail-direction-contract-startup-self-attestation
-status: draft
-nyquist_compliant: false
+status: planned
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-08-09
 ---
@@ -144,13 +144,18 @@ forced-unavailable test, and cross-cutting security assumptions that are not tie
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or an Early-Wave dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Early-Wave items (Wave 1-2) cover all ❌ MISSING references above
-- [ ] No watch-mode flags
+**Plan-time boxes** — verifiable now, from the finished 12-plan set:
+
+- [x] All tasks have `<automated>` verify or an Early-Wave dependency
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Early-Wave items (Wave 1-2) cover all ❌ MISSING references above
+- [x] No watch-mode flags
+- [x] Feedback latency < 60s
+- [x] `nyquist_compliant: true` set in frontmatter
+
+**Execution-time boxes** — cannot be true before `/gsd:execute-phase` runs; leave open until then:
+
 - [ ] Featured suite (`--features layer-fault-injection`) proven to have RUN, not merely passed — see feature-flag hazard above
 - [ ] Both cross-target clippy gates run locally against the full workspace (no PARTIAL→CI)
-- [ ] Feedback latency < 60s
-- [ ] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** plan set verified 2026-08-09 (gsd-plan-checker pass 2 — 0 blockers). Execution sign-off pending.
