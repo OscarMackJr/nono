@@ -37,7 +37,7 @@ Make the fork's deny-by-*composition* Windows model **prove** it is enforcing, s
 Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cleans the denial/audit spine that the receipt work in 118 builds on, and because the drain is independent of everything else. **116** runs the tool-sandbox ledger + ADR *early* so its verdict — which may or may not imply substantial engineering — is known before the milestone's remaining capacity is committed; its execution (120) is deliberately last and sized by that verdict. **117 → 118 → 119** run in dependency order: the fail-direction contract enumerates every layer, the receipts attest that enumeration per session, and the boundary statement can only be truthful once the contract says what each layer actually does.
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
-- [ ] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 0/? plans
+- [ ] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 0/6 plans
 - [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/? plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
@@ -268,6 +268,13 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   3. The ADR states an unambiguous verdict (adopt / formalize fork-native) and records what would have to change for the losing option to win, so a future absorb has a decision to reconcile against rather than silence.
   4. The ADR evaluates PR #4's PreToolUse-hook + Low-IL-primary-token-broker path on its merits — including the durable finding that .NET/PowerShell CLR cannot start under `WRITE_RESTRICTED` — rather than treating it as a stopgap.
   5. Phase 120's scope is sized from the verdict and written down, so the milestone's tail is no longer open-ended.
+**Plans**: 6 plans
+- [ ] 116-01-PLAN.md — Reproduction block + D-03 module-set re-derivation + pre-fence/post-fence per-commit disposition tables
+- [ ] 116-02-PLAN.md — Feasibility matrix appendix: fork Windows-confinement primitive inventory + upstream capability rating (D-07/D-08)
+- [ ] 116-03-PLAN.md — Split-commit residue accounting (D-04) + grep-verified fenced-window reconciliation + post-fence residue finding
+- [ ] 116-04-PLAN.md — Carve-out re-touch check (D-19) + bucket-count reconciliation + completeness verification + Headline finalization
+- [ ] 116-05-PLAN.md — ADR Part 1: Context + two-pole framing (D-05) + rejected intermediate shapes (D-06) + D-09 symmetric scoring table
+- [ ] 116-06-PLAN.md — ADR Part 2: Decision/verdict + D-07/D-08 summary + D-12 triggers/re-test point + D-14/D-15 Phase 120 sizing proposal
 
 ### Phase 117: Fail-Direction Contract + Startup Self-Attestation
 **Goal**: The composite's fail-direction stops being decided per-layer-in-isolation and becomes one system-level answer — and nono can no longer report "enforcing" while a layer is silently inert, which is the failure mode this codebase has already hit once.
