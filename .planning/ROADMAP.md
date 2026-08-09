@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 0/12 plans
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 2/12 plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -291,8 +291,8 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 **Plans**: 12 plans in 5 waves
 
 **Wave 1** — the registry is the source of truth everything else derives from (D-01)
-- [ ] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
-- [ ] 117-02-PLAN.md — Library surfaces: NonoDiagnosticCode::LayerAttestationFailed + machine_policy required_layers field
+- [x] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
+- [x] 117-02-PLAN.md — Library surfaces: NonoDiagnosticCode::LayerAttestationFailed + machine_policy required_layers field
 
 **Wave 2** *(blocked on Wave 1)*
 - [ ] 117-03-PLAN.md — proj/SPEC-windows-fail-direction-contract.md + registry self-check/drift-check tests
