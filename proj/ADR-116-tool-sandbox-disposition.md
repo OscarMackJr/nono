@@ -1,12 +1,12 @@
 # ADR-116: Tool-Sandbox Divergence — Adopt vs. Formalize Fork-Native
 
-**Status: Proposed**
+**Status: Accepted**
 **Phase:** 116 — Tool-Sandbox Divergence Audit + Disposition ADR
 **Date:** 2026-08-09
 **Authors:** Phase 116 execution
 
-<!-- Status flips to Accepted only in Plan 116-06's Decision task, per D-11. This document is not
-final until then. -->
+<!-- Status: Accepted, set by Plan 116-06 per D-11, derived from the D-09 scoring table and the
+D-07 feasibility tally above. -->
 
 ---
 
@@ -162,3 +162,74 @@ section, or Phase 120 sizing appears anywhere in this document — those are Pla
   criterion cites.
 - `proj/ADR-113-spiffe-disposition.md` — header/OD-1 house-style precedent for D-06's
   considered-and-rejected shape.
+
+---
+
+## Decision
+
+**Formalize fork-native** (Pole B).
+
+This verdict falls out of the D-09 scoring table above, read in full, weighed against the D-07
+feasibility matrix's row-by-row tally computed in the section below (11 rows: 5 rated
+`implementable-on-fork-primitives`, 4 rated `implementable-but-new-work`, 2 rated
+`structurally-blocked` — 9 of 11 capabilities are buildable in principle, which rules out treating
+Pole A as infeasible, but does not by itself decide the verdict). Three of the D-09 table's seven
+criteria state a concrete, unsoftened advantage for Pole B rather than a wash. **Enforcement
+depth** states the fork's Windows kernel-enforced confinement (AppContainer + WFP + Job Object) as
+"the fork's strongest claim... stated without softening," against Pole A's Windows arm as "unbuilt
+and unproven, an honest gap rather than a disqualifying one" — no driver exists yet to score.
+**Fail-direction under layer failure** states the same asymmetry concretely: Pole B's
+`WindowsTokenArm` cascade is "visible today," "exists specifically to route around" a
+kernel-loader failure mode "rather than degrading permissions," while Pole A's hypothetical
+driver's fail-direction is, again, "not yet built — no driver exists to test." **Ongoing
+divergence + maintenance cost** states that formalizing "removes `tool-sandbox/` from future
+upstream-sync scope entirely," while adopting inherits the 38-commit-and-growing sync burden
+`116-DIVERGENCE-LEDGER.md` measured, on top of authoring and then maintaining a net-new driver
+alongside it. The one criterion that states an equally concrete disadvantage for Pole B is
+**Engine-agnosticism** — named plainly as "the fork's named weak spot," an "undone integration
+problem" in the PreToolUse hook contract rather than in the confinement primitive itself — and
+that gap is real and stays open regardless of this verdict (see Consequences below). The remaining
+three criteria (per-command granularity, platform coverage, ADR-86 boundary impact) are stated
+symmetrically in the table, with no comparative language in either cell, and do not move the
+needle either way. D-08's `structurally-blocked` rating additionally caps what Pole A could ever
+deliver beyond Pole B's existing model on the one capability class upstream's Landlock/Seatbelt
+drivers reach that DACL/mandatory-label enforcement cannot (dynamic, per-open file-policy
+decisions) — that capability is blocked by ADR-65's standing verdict for either pole, not unlocked
+by choosing Pole A, so it is not counted here as a Pole-A-favoring fact.
+
+---
+
+## D-07/D-08: Feasibility Matrix Summary
+
+Full detail lives in
+`.planning/phases/116-tool-sandbox-divergence-audit-disposition-adr/116-FEASIBILITY-MATRIX.md`'s
+`## D-07 Feasibility Matrix` (11 rows; not duplicated here). Its top-line tally: **5 of 11**
+capabilities rated `implementable-on-fork-primitives` (exec shims via the shell-broker's
+mediating-trampoline pattern, env scrubbing, the sealed-shim-runtime-dir analog via DACL guards,
+per-command open-port mediation via native WFP port ranges, and credential resolution via
+`keystore.rs`); **4 of 11** rated `implementable-but-new-work` (per-command filesystem-grant
+dispatch, `url_shim`, `token_broker`-style per-command credential scoping, and wiring
+`dynamic_providers`-equivalent expansion into the Windows capability-construction path); **2 of
+11** rated `structurally-blocked`.
+
+Both `structurally-blocked` rows apply to either pole identically, not to Pole A alone. The first
+cites ADR-65 directly: fine-grained per-file read-policy decided dynamically at file-open time is
+rated `structurally-blocked` because the only Windows mechanism capable of that class of dynamic,
+per-open interception is a minifilter driver, and
+`.planning/architecture/adr-65-minifilter-go-no-go.md` §6's standing verdict is **"lean No-go /
+Conditional-go"** for a production minifilter — a standing precondition this document does not
+revisit or presuppose changing.
+
+The second is the matrix's worked example, restated here for this document's own
+self-containment: a process holding a `WRITE_RESTRICTED` token combined with
+`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE` or `DETACHED_PROCESS` fails its loader initialization at
+`STATUS_DLL_INIT_FAILED` (`0xC0000142`) before the child's own code runs — reproducing for
+console-hosted .NET/PowerShell CLR runtimes. This is why the fork's
+`execution_runtime.rs::execute_sandboxed()` selects between the `BrokerLaunchNoPty` and
+`WriteRestricted` token arms rather than constructing a single arm for every launch (the two are
+mutually exclusive, `execution_runtime.rs:548-552`), and it is the reason `claude_code_hook.rs`'s
+PreToolUse dispatch path (`run()`) can rely on that split already existing underneath it rather
+than assuming one token strategy suffices for every tool invocation. No amount of engineering
+effort inside the `WriteRestricted` arm itself would avoid this — the fork routes around it via a
+different mechanism entirely, which is the structural distinction `structurally-blocked` means in
+this matrix, not a higher-cost variant of the same mechanism.
