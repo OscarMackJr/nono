@@ -122,3 +122,15 @@ None — no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
+
+## Self-Check: PASSED
+
+- FOUND: `crates/nono/src/error.rs`
+- FOUND: `crates/nono/src/diagnostic/codes.rs`
+- FOUND: `crates/nono/src/machine_policy.rs`
+- FOUND: `bindings/c/src/lib.rs`
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-02-SUMMARY.md`
+- FOUND commit: `441ab307` (Task 1 RED)
+- FOUND commit: `bf2a3ba7` (Task 1 GREEN)
+- FOUND commit: `5ef4f298` (Task 2)
+- FOUND commit: `18b04f11` (SUMMARY.md)
