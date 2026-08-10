@@ -117,7 +117,7 @@ Phase numbering continues from Phase 100 → Phase 101+.
 ### Fail-Direction & Self-Attestation (CINT)
 
 - [ ] **CINT-01**: A single fail-direction contract states, for **every** layer the Windows backend composes — restricted token, mandatory integrity label, AppContainer profile + package SID, DACL grants, WFP egress filters, and the minifilter's *absence* — what happens when that layer cannot be established (fail closed / fail open / continue in reduced mode). Each entry is derived from the code and cites the enforcing call site, so the document is a description of behaviour rather than an assertion about it.
-- [x] **CINT-02**: nono refuses to report "enforcing" when any expected layer is unconfirmed. A startup self-attestation pass checks each layer named in CINT-01 and either aborts or visibly downgrades its claim — it never proceeds while presenting a confinement guarantee it cannot substantiate.
+- [ ] **CINT-02**: nono refuses to report "enforcing" when any expected layer is unconfirmed. A startup self-attestation pass checks each layer named in CINT-01 and either aborts or visibly downgrades its claim — it never proceeds while presenting a confinement guarantee it cannot substantiate.
 - [ ] **CINT-03**: Each layer's actual runtime fail-direction matches what CINT-01 claims, proven by a per-layer test that forces that layer unavailable and asserts the contracted outcome. A contract entry with no such test is not satisfied.
 
 ### Enforcement Receipts (RCPT)
@@ -184,7 +184,7 @@ Phase numbering continues from Phase 114 → Phase 115+ (v3.5 owns 101–107; no
 | TSBX-01 | Phase 116 | Pending |
 | TSBX-02 | Phase 116 | Pending |
 | CINT-01 | Phase 117 | Pending |
-| CINT-02 | Phase 117 | Complete |
+| CINT-02 | Phase 117 | Pending |
 | CINT-03 | Phase 117 | Pending |
 | RCPT-01 | Phase 118 | Pending |
 | RCPT-02 | Phase 118 | Pending |

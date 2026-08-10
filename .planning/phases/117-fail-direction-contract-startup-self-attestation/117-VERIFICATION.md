@@ -2,92 +2,118 @@
 phase: 117-fail-direction-contract-startup-self-attestation
 verified: 2026-08-10T00:00:00Z
 status: gaps_found
-score: 1/4 must-haves verified (SC1 partial, SC2 partial, SC3 failed, SC4 partial)
+score: 0/4 truths fully verified (SC1 partial-unchanged, SC2 failed-differently, SC3 substantially-improved-but-partial, SC4 failed-freshly)
 overrides_applied: 0
+re_verification:
+  previous_status: gaps_found
+  previous_score: 1/4 must-haves verified (SC1 partial, SC2 partial, SC3 failed, SC4 partial) — 0/4 truths fully verified
+  gaps_closed:
+    - "NR3-01 (iter1's open BLOCKER): abnormal-exit/concurrent-session residue no longer hard-locks the operator out — confirmed live: labels_guard.rs:210-224 now recognizes exact-match residue, and NonoError::remediation() gained a ClearStaleLayerResidue arm (error.rs:505-509)."
+    - "NR3-02: dacl_ancestor_traverse / dacl_ancestor_read_attrs now derive LayerApplication from the guards' own coverage().application() accessors, not Option::is_some() on an unconditionally-Some field — confirmed at mod.rs:416-423."
+    - "NR3-03: layer_registry.rs's citation of a nonexistent test is fixed — dacl_session_sid_grant_is_not_claimed_anywhere now exists and is confirmed present at layer_registry.rs:1184."
+    - "SC3 test coverage: automated force-unavailable coverage grew from 2/13 to 10/13 rows (2 direct layer_force_unavailable.rs tests + 8 ALSO_AUTOMATED entries, all 8 target functions confirmed present in the cited files), with the remaining 3 rows (DaclSessionSidGrant, MinifilterAbsence, BrokerAuthenticodeTrustGate) individually named and justified rather than silently skipped."
+    - "SC4 iteration-2 backlog: SPEC-windows-fail-direction-contract.md now carries rows for NR-04, NR-05, NR-06, and NR3-01 through NR3-08 (confirmed present), and RF-14's row was rewritten to describe the shipped three-defense staging guard rather than the pre-NR-06 single-defense guard (confirmed by reading both the SPEC text and the intent of network.rs's cleanup_network_enforcement_staging)."
+  gaps_remaining:
+    - "SC1 / CINT-01 call-site citations: unchanged from iter1. Independently re-confirmed 2 of WR-08's 15 sampled citations (restricted_token.rs:55, launch.rs:1403) both point at unrelated code (D-29/D-30 comment; a doc comment, not the cited logic). 9 of 13 rows are still uncited-by-symbol."
+    - "SC3's literal wording ('a contract entry with no such test is not satisfied'): 3/13 rows remain untested by design, not by test-gap — a smaller, honestly-disclosed remainder than iter1's 11/13, but still short of the roadmap's un-hedged bar."
+  regressions:
+    - "SC2 / CINT-02 (NEW, confirmed independently, BLOCKER): the very fix that closed NR3-01's availability lockout (Plan 117-13) reopens CR-14's exact failure class through a narrower predicate. AlreadyAtRequiredLevel compares only (rid, mask); low_integrity_label_and_mask (crates/nono/src/sandbox/windows.rs) never reads header.AceFlags, so a structurally-ineffective INHERIT_ONLY_ACE is indistinguishable from an effective label and counts toward LabelCoverage::applied — a launch with zero effective mandatory-label ACEs can now report the layer Confirmed. Confirmed independently: `grep -c AceFlags crates/nono/src/sandbox/windows.rs` returns 0."
+    - "D-28 (NEW, confirmed independently, BLOCKER-adjacent, affects CINT-02/CINT-03 plans): Plan 117-16's unconditional tracing::warn! at launch.rs:1516-1533 carries specific downgraded LayerId names, justified by a comment claiming tracing never reaches the confined child's stderr. Confirmed false: cli_bootstrap.rs's default arm (no --log-file) and its file-open-failure fallback arm both build the fmt layer with .with_writer(std::io::stderr) (cli_bootstrap.rs:161-186), and this is the overwhelmingly common invocation path (nono run, the per-tool-call hook)."
 gaps:
-  - truth: "SC3 — every contract entry has a test that forces that layer unavailable and asserts the contracted outcome"
+  - truth: "SC2 / CINT-02 — no path on which nono presents a confinement guarantee it did not confirm; nono never proceeds while presenting a confinement guarantee it cannot substantiate"
     status: failed
     reason: >
-      Only 2 of the 13 `LayerId` rows (`MandatoryIntegrityLabel`, `DaclPackageSidGrant`) have an
-      automated `force_unavailable_*` test in `crates/nono-cli/tests/layer_force_unavailable.rs`.
-      The other 11 rows are entries in `MANUALLY_VERIFIED` — written justifications enforced-loud
-      by `host_gated_rows_are_loud`, but not tests that force the layer unavailable and assert the
-      contracted outcome. SC3's own wording, reproduced verbatim in CINT-03 and in the SPEC itself
-      ("a contract entry with no such test is not satisfied"), means 11/13 rows are explicitly not
-      satisfied by the phase's own stated bar.
+      Independently confirmed (code review CR-01, orchestrator-corroborated, and re-verified here
+      directly against source): `AppliedLabelsGuard::snapshot_and_apply`'s residue-equivalence
+      predicate (`labels_guard.rs:210-224`) treats a prior mandatory-label ACE as
+      `AlreadyAtRequiredLevel` — counted toward `LabelCoverage::applied` — whenever `(prior_rid,
+      prior_mask)` matches this launch's own wanted values. The reader it depends on,
+      `low_integrity_label_and_mask` in `crates/nono/src/sandbox/windows.rs`, never reads
+      `header.AceFlags` (confirmed: `grep -c AceFlags crates/nono/src/sandbox/windows.rs` → 0). An
+      `INHERIT_ONLY_ACE` — which the OS does not evaluate against the object it sits on — is
+      therefore indistinguishable from the effective ACE nono itself writes. A launch whose only
+      on-disk ACE is that structurally-ineffective one reports `MandatoryIntegrityLabel` fully
+      Confirmed, with zero effective mandatory-label enforcement in force. This is verbatim the
+      CR-14 defect this phase exists to close, reopened by the plan (117-13) that closed NR3-01.
+      Two compounding defects (WR-01, WR-02), also independently re-confirmed by direct code read:
+      the residue check runs BEFORE the ownership gate (`path_is_owned_by_current_user`,
+      `labels_guard.rs:258`), so it can fire on paths nono itself could never have labelled; and the
+      residue-adopting session's own `Drop` never reverts what it adopted, so the session that
+      first applied the label can tear it down (via its own `Drop`) while a second session that
+      adopted it is still relying on the attestation — first-session-out-restores, not
+      last-session-out-restores as the module doc and the new code comment both claim.
     artifacts:
-      - path: "crates/nono-cli/tests/layer_force_unavailable.rs"
-        issue: "Contains exactly 2 `fn force_unavailable_*` test functions (verified by grep: lines 160, 189) against 13 registry rows."
-      - path: "crates/nono-cli/tests/layer_registry_meta_test.rs"
-        issue: "MANUALLY_VERIFIED const lists 11 of 13 LayerId names (lines 151-273) — loud, but not a test."
-    missing:
-      - "Automated forced-unavailable tests (or a materially larger share of them) for the remaining 11 rows, or an explicit operator-accepted downgrade of SC3's bar for host-gated rows via an override entry per row."
-  - truth: "SC2 — there is no path on which nono presents a confinement guarantee it did not confirm"
-    status: failed
-    reason: >
-      True for the row iteration 3 traced end-to-end (MandatoryIntegrityLabel / CR-14: a
-      zero-ACE launch now hard-aborts, confirmed live by `labels_guard::tests::coverage_distinguishes_full_partial_and_zero_ace_launches`
-      and `guard_skips_path_not_owned_by_current_user`, both passing on this host). Not
-      universally true across the registry: (1) `dacl_ancestor_traverse` and
-      `dacl_ancestor_read_attrs` derive `LayerApplication` from `.is_some()` on an
-      unconditionally-`Some` field (`mod.rs:413-414`), so both rows are the constant `Applied`
-      and structurally cannot report a negative on a shipped `DirectCli` launch (NR3-02). (2)
-      `DaclSessionSidGrant`'s row is hardcoded `NotApplicable` in `AppliedLayers::status()`
-      while its doc comment cites a guard test — `dacl_session_sid_grant_is_not_claimed_anywhere`
-      — that does not exist anywhere in the tree (verified: `grep -rn` returns one hit, the
-      comment itself). If the row's expectancy is ever restored (an explicitly open operator
-      decision, RF-03), the row would silently drop out of every decision rather than aborting —
-      fail-open, unguarded (NR3-03). (3) A newly introduced availability defect (NR3-01, open
-      BLOCKER, unfixed as of the latest commit `ff4fc7af`) means nono's own abnormal-exit residue
-      — or a second concurrent session over the same workspace — now hard-aborts every subsequent
-      launch with no remediation arm on `NonoError::LayerAttestationFailed` (confirmed: grep of
-      `remediation()` shows no `LayerAttestationFailed` arm, falls to `_ => None`), no sweep, and
-      no CLI affordance. This is an availability regression, not a false-positive confinement
-      claim, but it is a direct, unresolved consequence of the CR-14 fix this criterion credits.
-    artifacts:
-      - path: "crates/nono-cli/src/exec_strategy_windows/mod.rs"
-        issue: "Lines 413-414: dacl_ancestor_traverse / dacl_ancestor_read_attrs derive Applied from Option::is_some() on a field that is unconditionally Some (execution_runtime.rs:608 sets package_sid: Some(..) unconditionally) — can never report a negative."
-      - path: "crates/nono-cli/src/exec_strategy_windows/layer_registry.rs"
-        issue: "Line 686 doc comment cites dacl_session_sid_grant_is_not_claimed_anywhere as build-failing; that test does not exist anywhere in crates/ (verified by grep)."
       - path: "crates/nono-cli/src/exec_strategy_windows/labels_guard.rs"
-        issue: "Lines 106-118: applied == 0 is a hard NotApplied -> Abort, but nono's own SkipPreExistingLabel residue from an abnormal exit (Drop does not run on Ctrl-C/kill/crash) reproduces applied == 0 on the NEXT launch of the same workspace, and on the second of two concurrent sessions."
-      - path: "crates/nono/src/error.rs"
-        issue: "No remediation() arm for LayerAttestationFailed (verified: falls through to catch-all _ => None at line 500) — operator has no CLI-surfaced recovery path for the NR3-01 lockout."
+        issue: "Lines 210-228: equivalence predicate compares (rid, mask) only, no AceFlags check. Lines 246-281: ownership gate runs AFTER the residue check, so residue is accepted on paths nono could not have labelled. Lines 331-342: AlreadyAtRequiredLevel's revert arm is a no-op, so the applying session's own Drop can remove a label an adopting session is relying on."
+      - path: "crates/nono/src/sandbox/windows.rs"
+        issue: "low_integrity_label_and_mask (~2114-2165) reads header.AceType to filter but never reads header.AceFlags, so INHERIT_ONLY_ACE (structurally inert on the object it sits on) is indistinguishable from an effective label at the predicate's input."
     missing:
-      - "A coverage accessor for AppliedAncestorTraverseGuard / AppliedAncestorReadAttributesGuard that reads guard effect rather than Option::is_some() (NR3-02 fix)."
-      - "The dacl_session_sid_grant_is_not_claimed_anywhere test the code comment already promises, or removal of the false citation (NR3-03)."
-      - "Self-healing recovery for nono's own stale-label residue plus a remediation() arm for LayerAttestationFailed (NR3-01 — the one open BLOCKER from iteration 3, unfixed as of HEAD)."
+      - "Widen the reader to also return AceFlags, and require the residue predicate to reject INHERIT_ONLY_ACE (masking out INHERITED_ACE, which IS effective) before counting toward applied."
+      - "Move the residue check to run after the ownership gate so it can only fire on a path nono itself could have labelled."
+      - "A negative-direction test: plant an inherit-only ACE via SetNamedSecurityInfoW and assert the guard records SkipPreExistingLabel, not AlreadyAtRequiredLevel."
+      - "Revert REQUIREMENTS.md's CINT-02 row from [x] Complete back to [ ] Pending until this is fixed and re-verified — the Complete marking (set by 117-17-SUMMARY.md's requirements-completed: [CINT-02]) predates this finding and is a plan (117-17) downstream of the plan (117-13) that introduced the regression; it does not account for CR-01."
+  - truth: "D-28 — layer-specific downgrade detail stays off channels the confined child can read (surfaced inside CINT-02/CINT-03 gap-closure plan 117-16)"
+    status: failed
+    reason: >
+      Independently confirmed (code review CR-02, re-verified here directly). The new unconditional
+      `tracing::warn!(downgraded_layers = %dedup_key, ...)` at `launch.rs:1516-1533` is justified by
+      an adjacent comment stating "tracing::warn! at the CLI routes to the log file / Event Log
+      subscriber, never to the confined child's stderr". Read directly: `init_tracing_with_security`
+      (`cli_bootstrap.rs:155-186`) has three arms; only the `--log-file` arm writes to a file. The
+      default arm (no `--log-file` — the common `nono run ...` / per-tool-call hook invocation) and
+      the file-open-failure fallback arm both call `.with_writer(std::io::stderr)`. The confined
+      child shares that console on the non-detached-stdio path. This makes every downgraded launch
+      print specific layer names to a console the confined process can read back — the exact
+      reconnaissance D-28 exists to prevent, undoing the coarseness `print_attestation_downgrade_banner`
+      (`output.rs:114-124`, same eprintln sink, count-only, two lines below) deliberately preserves.
+    artifacts:
+      - path: "crates/nono-cli/src/exec_strategy_windows/launch.rs"
+        issue: "Lines 1516-1533: unconditional tracing::warn! carrying downgraded_layers, justified by a comment that misstates where 2 of 3 init_tracing arms route."
+      - path: "crates/nono-cli/src/cli_bootstrap.rs"
+        issue: "Lines 161-186: default arm and file-open-failure fallback arm both use .with_writer(std::io::stderr) — the comment's premise is false for the majority invocation path."
+    missing:
+      - "Gate the layer-name-carrying warn behind a check that tracing is NOT routing to a channel the child can read (e.g. only when --log-file is set), or route the detail through ETW/ Event Log only; keep a count-only warn on the default path."
+      - "Correct the SPEC's NR3-04 row (proj/SPEC-windows-fail-direction-contract.md) to state the channel accurately, or explicitly amend D-28 in 117-CONTEXT.md if console exposure is an accepted risk."
   - truth: "SC4 — where the contract and the code disagree, the discrepancy is recorded rather than quietly reconciled"
     status: failed
     reason: >
-      Well executed for the iteration-1-era discrepancies (SC4-1 through SC4-5, RF-01 through
-      RF-13 all present in proj/SPEC-windows-fail-direction-contract.md's ledger with re-runnable
-      grep evidence). Not extended to the iteration-2 fix pass: verified directly that the SPEC's
-      "Contract vs. code discrepancies" and "Review-fix pass" tables contain rows for RF-15 (CR-14)
-      and RF-16 (NR-02) only — no row exists for NR-04, NR-05, or NR-06. Worse, the existing RF-14
-      row's own text, read verbatim from the SPEC, still describes the guard as it existed BEFORE
-      NR-06's fix ("refuses any path that is not a strict subdirectory of `%TEMP%/nono-net-block`,
-      compared by path components") when the shipped code now has three ordered defenses
-      (traversal-component rejection, the original component test, and canonicalize-both-sides).
-      This is a stale contract claim about shipped behavior that nothing catches — `spec_matches_registry`
-      only checks LayerId names, not prose accuracy — which is the "quietly reconciled" failure
-      mode SC4 exists to prevent, now reproduced one review cycle later.
+      The iter1-era gap (SPEC ledger missing NR-04/NR-05/NR-06 rows, RF-14 describing pre-fix
+      behaviour) is genuinely closed — confirmed by reading proj/SPEC-windows-fail-direction-contract.md
+      directly: rows for NR-04, NR-05, NR-06, and NR3-01 through NR3-08 are present with re-runnable
+      evidence, and RF-14 now describes the shipped three-defense staging guard. But the gap-closure
+      round that fixed this immediately produced two new BLOCKER-level contract/code discrepancies
+      (CR-01, CR-02, both independently re-confirmed above) plus 11 warnings, none of which are yet
+      recorded in the SPEC's discrepancy ledger as of the current HEAD — they exist only in
+      117-REVIEW.md, an ephemeral review artifact, not in the standing contract document SC4 names.
+      This reproduces, inside this same gap-closure round, the exact "quietly reconciled" failure
+      pattern SC4 exists to prevent — the phase is being submitted for closure with two known,
+      unrecorded, unfixed BLOCKER-level discrepancies between what the contract implies (a
+      MandatoryIntegrityLabel Confirmed status is trustworthy; a downgrade warn respects D-28) and
+      what the code does.
     artifacts:
       - path: "proj/SPEC-windows-fail-direction-contract.md"
-        issue: "Lines 240-266 (Review-fix pass table): no row for NR-04/NR-05/NR-06; RF-14 row's description is the pre-NR-06 single-defense guard, not the shipped three-defense guard."
-      - path: "crates/nono-cli/src/exec_strategy_windows/layer_registry.rs"
-        issue: "Registry call-site line citations (mod.rs, dacl_guard.rs, labels_guard.rs) drifted a further ~145 lines in the iteration-2 fix pass and were not re-run (NR3-08, third consecutive pass this has been deferred)."
+        issue: "No row exists yet for CR-01, CR-02, or any of WR-01 through WR-11 (117-REVIEW.md, iteration 4) — the ledger stops at NR3-08."
     missing:
-      - "SPEC rows for NR-04, NR-05, NR-06 documenting what changed and their honest-limits caveats (both already written up in 117-REVIEW-FIX.md; porting them into the SPEC's standing discrepancy ledger is the missing step)."
-      - "RF-14's description updated to match the shipped three-defense staging guard."
-      - "Registry call-site citations re-run against current line numbers, or converted to symbol citations as NR3-08 recommends."
+      - "SPEC rows for CR-01 and CR-02 (at minimum) recording the finding and its disposition — either the fix, or an explicit operator-accepted-risk entry — before the phase closes."
+  - truth: "SC1 / CINT-01 — every layer's contract entry cites the enforcing call site accurately"
+    status: failed
+    reason: >
+      Unchanged from iter1, independently re-confirmed (not merely taken from the review): read
+      restricted_token.rs:55 and launch.rs:1403 directly, both cited call sites for layer registry
+      rows, and both are comment/doc-comment lines unrelated to the enforcing logic the row claims —
+      matching WR-08's finding that 15/15 sampled remaining citations (of 9/13 uncited-by-symbol
+      rows) point at unrelated code. 4/13 rows were converted to content-verified symbol-form
+      citations by Plan 117-15; the remaining 9 were not addressed by this gap-closure round (no
+      117-1x plan targeted this beyond the 4 already done).
+    artifacts:
+      - path: "crates/nono-cli/src/exec_strategy_windows/layer_registry.rs"
+        issue: "9 of 13 rows still cite raw file:line pairs that have drifted from the code they describe (verified 2 independently, 15 more verified by the code review this session incorporates as established input)."
+    missing:
+      - "Convert the remaining 9 rows to content-verified file.rs::Symbol citations, matching the pattern Plan 117-15 already established for the other 4."
 human_verification:
-  - test: "Run the full nono-sandbox-cli bin test suite (--features layer-fault-injection, --test-threads=1) including exec_strategy:: on an elevated/real-console Windows host, and confirm the pre-existing-failure count is still 11, not more."
-    expected: "Same 11 known pre-existing Windows failures (documented in project memory nono_cli_windows_baseline_test_failures.md); no new regressions from this phase's changes."
-    why_human: "This verification session hit a hang in exec_strategy::dacl_guard::tests::ancestor_read_attributes_multi_target_covers_each_chain_and_stops_at_root when running the full labels_guard::/dacl_guard::/attestation:: slice together on this non-elevated dev host (isolated labels_guard:: subset ran clean, 7/7 pass). This matches known host/harness fragility documented in REVIEW-FIX.md (RestrictedToken/JobObjectContainment teardown stalls) rather than a code defect, but a full run on a clean host is needed to confirm the failure count has not grown."
-  - test: "Exercise the WfpEgressFilters and DaclSessionSidGrant/DaclPackageSidGrant manual-verification rows per the steps written in layer_registry_meta_test.rs's MANUALLY_VERIFIED entries (elevated nono-wfp-service + non-elevated daemon session; real PowerShell console for the broker arm)."
-    expected: "Each manually-verified row produces the contracted Abort outcome when forced unavailable, matching the written manual-verification steps."
-    why_human: "These 11 rows require elevated services, real (non-git-bash) console sessions, or signed production installs that this verification pass could not stand up. They are the exact rows SC3 counts as unsatisfied without an automated test — human execution of the documented manual steps is the only way to close that gap today, and doing so does not change the SC3 scoring (a manual pass is still not 'a test' per CINT-03's own wording), but it is needed before relying on those rows operationally."
+  - test: "Manually execute the 3 remaining MANUALLY_VERIFIED rows' documented steps (DaclSessionSidGrant code-read; MinifilterAbsence; BrokerAuthenticodeTrustGate — elevated/signed-install dependent) per crates/nono-cli/tests/layer_registry_meta_test.rs's MANUALLY_VERIFIED entries."
+    expected: "Each row's manual-verification steps produce the documented, contracted result."
+    why_human: "These are the genuinely host-gated/structural rows this gap-closure round named explicitly (down from 11 in iter1) — they require elevated services, signed production installs, or a code-read of an intentionally-empty layer, none of which this verification pass can execute. This does not change SC3/CINT-03 scoring (CINT-03 requires a test, not a manual pass) but is needed operationally."
 ---
 
 # Phase 117: Fail-Direction Contract + Startup Self-Attestation Verification Report
@@ -98,7 +124,11 @@ silently inert.
 
 **Verified:** 2026-08-10
 **Status:** gaps_found
-**Re-verification:** No — initial verification (this is the first VERIFICATION.md for phase 117)
+**Re-verification:** Yes — this is the second full verification pass (117-VERIFICATION.iter1.md
+preserved). Plans 117-13..117-19 closed the majority of iter1's structural gaps, but the code
+review this pass treats as established input (`117-REVIEW.md`, iteration 4) found 2 new BLOCKERs
+that this report independently re-confirmed against the current source tree rather than accepting
+on the review's word.
 
 ## Goal Achievement
 
@@ -106,121 +136,136 @@ silently inert.
 
 | # | Truth | Status | Evidence |
 |---|---|---|---|
-| SC1 | One document names every layer, states behaviour on failure, citing the enforcing call site | ⚠ PARTIAL | `layer_registry.rs` (13-row `LayerId` enum, code-resident, compiles clean) + `proj/SPEC-windows-fail-direction-contract.md` (313 lines) both exist and are substantive — every layer named, every row has an outcome. But call-site citations have drifted ~145 lines in the current tree (NR3-08, confirmed unfixed) and the SPEC's own review-fix ledger is stale for 3 of the 5 iteration-2 fixes (see SC4). "Citing the enforcing call site" is degraded, not absent. |
-| SC2 | Forcing a layer unavailable produces abort or visible downgrade; no path presents an unconfirmed guarantee | ✗ FAILED | Resolved and test-verified for the row iteration 3 traced end-to-end (`MandatoryIntegrityLabel`/CR-14 — confirmed live by re-running `labels_guard::` tests, 7/7 pass). NOT universal: two DACL-ancestor rows are a constant `Applied` and cannot deny (NR3-02, confirmed by source read); `DaclSessionSidGrant`'s row is fail-open if its expectancy is ever restored, and the guard test its own comment cites does not exist (NR3-03, confirmed by grep — zero hits besides the comment); and the CR-14 fix itself introduced an unresolved availability BLOCKER (NR3-01, open, confirmed unfixed as of `ff4fc7af`) with no remediation arm (confirmed: `NonoError::remediation()` has no `LayerAttestationFailed` arm). |
-| SC3 | Every contract entry has a test forcing that layer unavailable, asserting the contracted outcome | ✗ FAILED | Confirmed by direct source count: 2 of 13 `LayerId` rows have an automated `force_unavailable_*` test (`crates/nono-cli/tests/layer_force_unavailable.rs`, functions at lines 160 and 189). The remaining 11 are `MANUALLY_VERIFIED` entries — loud, written, and mechanically enforced to stay loud, but not tests. Per SC3's own wording ("a contract row without a test is not counted as satisfied"), 11/13 = 85% of rows are not satisfied. |
-| SC4 | Contract/code disagreements are fixed or recorded in-phase, never quietly reconciled | ✗ FAILED | Well executed for the iteration-1-era discrepancies (SC4-1..SC4-5, RF-01..RF-13, all present with re-runnable grep evidence — verified present in the SPEC). Not extended to iteration-2 (NR-04/NR-05/NR-06 have no SPEC row) and RF-14's existing row description is now stale — it describes the pre-NR-06 single-defense guard while the shipped code has three ordered defenses (confirmed by reading both the SPEC text and `network.rs`'s current `cleanup_network_enforcement_staging`). This is the exact "quietly reconciled" failure mode SC4 exists to prevent, reproduced one cycle later and not yet caught by any test (`spec_matches_registry` only checks `LayerId` names). |
+| SC1 | One document names every layer, states behaviour on failure, citing the enforcing call site | ✗ FAILED (unchanged from iter1) | Registry + SPEC exist, every layer named, every row has an outcome. But 9/13 rows still cite call sites that have drifted from the code they describe. Independently re-confirmed 2 of the review's 15 sampled citations directly: `restricted_token.rs:55` and `launch.rs:1403` both land on unrelated comment lines. |
+| SC2 | Forcing a layer unavailable produces abort or visible downgrade; no path presents an unconfirmed guarantee | ✗ FAILED (regressed in kind, not merely unresolved) | iter1's headline row (MandatoryIntegrityLabel / CR-14) was fixed for the true-zero-coverage case, but the SAME fix (Plan 117-13) reopens the identical failure class through a narrower door: `AlreadyAtRequiredLevel` counts a structurally-ineffective `INHERIT_ONLY_ACE` as coverage because `low_integrity_label_and_mask` never reads `AceFlags` (confirmed: 0 hits for `AceFlags` in `crates/nono/src/sandbox/windows.rs`). A zero-effective-enforcement launch can again report Confirmed. |
+| SC3 | Every contract entry has a test forcing that layer unavailable, asserting the contracted outcome | ⚠ PARTIAL (substantially improved) | Automated coverage grew from 2/13 (iter1) to 10/13, confirmed by reading both `layer_force_unavailable.rs` (2 direct `fn force_unavailable_*`) and `layer_registry_meta_test.rs`'s `ALSO_AUTOMATED` list (8 entries, all 8 target functions confirmed present at their cited paths — spot-checked `ancestor_traverse_snapshot_and_apply_fails_when_forced_unavailable` and its RA twin, both genuinely force the guard unavailable and assert `LayerAttestationFailed`). 3/13 rows remain named-and-justified manual entries (down from 11), which is real progress but still short of SC3's un-hedged "a contract row without a test is not counted as satisfied." |
+| SC4 | Contract/code disagreements are fixed or recorded in-phase, never quietly reconciled | ✗ FAILED (closed old debt, opened new debt in the same round) | iter1's specific gap (missing NR-04/05/06 rows, stale RF-14) is genuinely closed — confirmed by reading the SPEC directly, all rows present, RF-14 rewritten to match the shipped three-defense guard. But this same gap-closure round's own code review (iteration 4) found 2 new BLOCKER-level discrepancies (CR-01, CR-02) that are not yet recorded anywhere in the standing SPEC ledger — reproducing the exact pattern SC4 exists to prevent, one cycle later, inside the very round meant to close it. |
 
-**Score:** 0/4 truths fully verified (SC1 partial-with-real-defects, SC2/SC3/SC4 failed against their own literal wording).
+**Score:** 0/4 truths fully verified (unchanged from iter1's headline number, though the underlying
+composition improved substantially for SC3 and for iter1's specific SC4/SC2 line items — offset by
+2 new BLOCKER-level regressions this pass independently confirmed).
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |---|---|---|---|
-| `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs` | Code-resident 13-layer registry, source of truth (D-01) | ✓ VERIFIED (exists, substantive, wired) | 1274 lines; compiles clean (`cargo check -p nono-sandbox-cli --all-targets --features layer-fault-injection` succeeded); `LayerId` enum has exactly 13 variants; consumed by `attestation.rs`, `mod.rs`, both meta-test files. |
-| `proj/SPEC-windows-fail-direction-contract.md` | Human-readable, drift-checked contract | ⚠ ORPHANED CONTENT (stale sections) | 313 lines, tracked despite `proj/` gitignore per repo convention; `spec_matches_registry` test passes (names only); prose for RF-14 and the missing NR-04/05/06 rows is stale (see SC4). |
-| `crates/nono-cli/tests/layer_force_unavailable.rs` | Per-layer forced-unavailable tests (CINT-03) | ✗ STUB relative to CINT-03's bar | File exists, both its 2 tests pass on this host, but covers 2/13 rows — the file's own scope is far short of "every registry row" (see SC3). |
-| `crates/nono-cli/tests/layer_registry_meta_test.rs` | D-32 discovery-based meta-test | ✓ VERIFIED, but its own scope is honest-not-satisfying | 5/5 tests pass on this host (`every_registry_row_has_a_test`, `host_gated_rows_are_loud`, etc.) — it correctly enforces that every row has EITHER a test or a loud manual-verification entry, which is a weaker bar than CINT-03's literal wording. The test suite is internally consistent; the bar it enforces is not the bar the roadmap states. |
-| `crates/nono-cli/src/exec_strategy_windows/attestation.rs` | Startup self-attestation gate (CINT-02) | ✓ VERIFIED core logic, ⚠ gaps in coverage | `classify_row`/`decide_from_entries`/`RowVerdict::from_application` all present, wired, and covered by passing unit tests (`attestation::tests::*`, confirmed passing on this host). Structural gaps (NR3-02, NR3-03) are in the DATA the gate consumes, not in the gate's decision logic itself. |
-| `crates/nono-cli/src/exec_strategy_windows/labels_guard.rs` | CR-14 fix: report guard effect not construction | ✓ VERIFIED | `LabelCoverage::application()` (lines 106-118) confirmed present and matches the described 4-state contract; `coverage_distinguishes_full_partial_and_zero_ace_launches` and `guard_skips_path_not_owned_by_current_user` both pass live on this host. |
-| `crates/nono/src/error.rs` | `LayerAttestationFailed` + remediation | ⚠ HOLLOW | `LayerAttestationFailed` variant exists and is used (`:388`, `:458`, `:736`), but `remediation()` has no arm for it — confirmed by reading the full match arm list, falls to `_ => None`. Operator gets a diagnostic but no recovery path, which is the direct mechanism behind the open NR3-01 blocker. |
+| `crates/nono-cli/src/exec_strategy_windows/labels_guard.rs` | CR-14 fix, now also NR3-01's residue self-heal | ✗ REGRESSED | `coverage()`/`application()` shape (CR-14) is sound. But the NR3-01 residue predicate added in this round (`:210-228`) reopens CR-14's exact class via a narrower door (CR-01, independently confirmed). |
+| `crates/nono/src/sandbox/windows.rs` | ACE reader used by the residue predicate | ⚠ INCOMPLETE | `low_integrity_label_and_mask` reads `AceType`+`rid`+`mask` but never `AceFlags` — confirmed via `grep -c AceFlags` → 0. This is the root cause of CR-01. |
+| `crates/nono/src/error.rs` | `LayerAttestationFailed` remediation arm (NR3-01) | ⚠ PARTIAL | `ClearStaleLayerResidue` arm now exists (`:505-509`, confirmed present) — closes the "no remediation at all" half of iter1's SC2 gap. But `main.rs`'s error-printing path (`:204-223`) never calls `e.remediation()` for non-`ActionRequired` errors — confirmed by reading `main.rs` directly — so the new arm is still not operator-visible on the primary CLI path (WR-04, unresolved). |
+| `crates/nono-cli/src/exec_strategy_windows/mod.rs` | NR3-02 real coverage accessors | ✓ VERIFIED | `applied_layers()` (`:391-423`) now derives `dacl_ancestor_traverse`/`dacl_ancestor_read_attrs` from `AppliedAncestorTraverseGuard::application`/`AppliedAncestorReadAttributesGuard::application`, not `Option::is_some()` — confirmed by direct read. |
+| `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs` | NR3-03 landmine fix + NR3-08 citation conversion | ⚠ PARTIAL | `dacl_session_sid_grant_is_not_claimed_anywhere` test confirmed present (`:1184`); the previously-nonexistent citation is fixed. But 9/13 rows' call-site citations remain uncited-by-symbol and drifted (SC1, unresolved this round). |
+| `crates/nono-cli/tests/layer_force_unavailable.rs` + `layer_registry_meta_test.rs` (`ALSO_AUTOMATED`) | Per-layer forced-unavailable tests (CINT-03) | ⚠ PARTIAL, substantially improved | 10/13 rows automated (confirmed: 2 direct + 8 ALSO_AUTOMATED functions all present at cited locations), 3/13 named-manual. `contains_fn_exact`'s documented `!`-boundary rule is not implemented (WR-10, not independently re-verified in this pass but accepted as established review input; classified as a warning on the verification mechanism, not on row coverage). |
+| `crates/nono-cli/src/exec_strategy_windows/launch.rs` | D-27/D-28 downgrade channel (NR3-04) | ✗ REGRESSED against D-28 | The banner's "see diagnostic output for details" claim is now backed by a real unconditional warn (closes iter1's NR3-04) — but that warn violates D-28 by carrying layer names onto the shared console on the majority invocation path (CR-02, independently confirmed). |
+| `crates/nono-cli/src/agent_daemon/launch.rs` | NR3-05 daemon dead-state removal | ✓ VERIFIED (with a documented honest limit) | `DaemonAttestationDecision` shrunk to `Proceed`/`Abort`; discovery test confirmed to exist. WR-06 (the stated premise for deletion is technically false — passes 1/3 do have skip arms) is accepted as established review input; the deletion's *outcome* (fail direction is safe) is not disputed. |
+| `proj/SPEC-windows-fail-direction-contract.md` | Drift-checked contract, discrepancy ledger | ⚠ PARTIAL | iter1's specific debt (NR-04/05/06, stale RF-14) confirmed closed. This round's own new findings (CR-01, CR-02, WR-01..WR-11) are not yet recorded (SC4 gap). |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |---|---|---|---|---|
-| `AppliedLabelsGuard::snapshot_and_apply` | `LayerApplication` (registry) | `LabelCoverage::application()` | ✓ WIRED, confirmed correct | Traced the full chain per the review and re-confirmed by running the tests live: `AppliedLabel::{Skip*, Applied}` → `coverage()` → `application()` → `AppliedLayers::mandatory_integrity_label` → `classify_row` → `decide_from_entries` → `Abort` on zero coverage. |
-| `mod.rs::applied_layers()` (dacl_ancestor_traverse/read_attrs) | `LayerApplication` | `Option::is_some()` | ✗ NOT_WIRED to real guard effect | Confirmed by direct source read (`mod.rs:413-414`): derives from an `Option` that is unconditionally `Some` (`execution_runtime.rs:608`), not from the guard's own coverage accessor — the same shape CR-14 fixed for the other two fields, un-fixed here. |
-| `layer_registry.rs` `DaclSessionSidGrant` row | `AppliedLayers::status()` | hardcoded match arm | ✗ FAIL-OPEN landmine, confirmed | `status()` hardcodes `NotApplicable` for this row regardless of expectancy; the cited guard test (`dacl_session_sid_grant_is_not_claimed_anywhere`) does not exist (`grep -rn` returns exactly the doc-comment hit, zero test hits). |
-| `daemon_attest_and_decide` | `DaemonAttestationDecision::ProceedDowngraded` | constructor call | ✗ NEVER CONSTRUCTED, confirmed | `grep -n "ProceedDowngraded" agent_daemon/launch.rs` shows the variant declared (`:1304`) and matched in a dead arm (`:915`) but no production call site constructs it — daemon path is abort-or-proceed only, divergent from the CLI's three-state model (NR3-05, unfixed). |
-| D-27 downgrade banner | operator-visible diagnostic detail | `tracing::warn!` | ✗ NOT WIRED on success path, confirmed | Read `launch.rs:1480-1524` directly: the `downgraded_layers=` field is only logged inside the `None`/`Err` arms of audit emission (failure paths), never unconditionally. The banner text ("see diagnostic output for details") points at a channel that carries nothing on the success path (NR3-04, unfixed). |
+| `AppliedLabelsGuard::snapshot_and_apply` residue predicate | `LabelCoverage::applied` | `(prior_rid, prior_mask)` equality only | ✗ UNSOUND, confirmed | No `AceFlags` check anywhere in the read path — an inherit-only, structurally-ineffective ACE is wired into `applied` exactly like an effective one. |
+| `mod.rs::applied_layers()` (ancestor rows) | `LayerApplication` | `AppliedAncestorTraverseGuard::application` / `...ReadAttributesGuard::application` | ✓ WIRED, confirmed fixed | Direct read confirms real coverage accessors replace `Option::is_some()` — NR3-02 genuinely closed. |
+| `layer_registry.rs`'s `DaclSessionSidGrant` doc comment | guard test | `dacl_session_sid_grant_is_not_claimed_anywhere` | ✓ WIRED, confirmed fixed | Test confirmed present at `layer_registry.rs:1184` — NR3-03's citation-lie is closed. |
+| `apply_startup_attestation_gate`'s `ProceedDowngraded` arm | operator-visible detail | unconditional `tracing::warn!` | ⚠ WIRED BUT LEAKY | The warn now fires unconditionally (closes NR3-04's dead-channel gap) but routes layer names to the confined child's shared console on the default arm (D-28 violation, CR-02). |
+| `main.rs` error path | `NonoError::remediation()` | `e.remediation()` call | ✗ NOT WIRED, confirmed | `main.rs:204-223` prints only `Display`; `remediation()` is never called for `LayerAttestationFailed`, so the new `ClearStaleLayerResidue` arm is unreachable from the CLI (WR-04, unresolved). |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |---|---|---|---|---|
-| `AppliedLayers::mandatory_integrity_label` | `LabelCoverage` | `AppliedLabelsGuard::snapshot_and_apply` against real filesystem ACEs | Yes | ✓ FLOWING (confirmed by live test run) |
-| `AppliedLayers::dacl_ancestor_traverse` / `dacl_ancestor_read_attrs` | `Option<Vec<PathBuf>>.is_some()` | `execution_runtime.rs:608`, unconditional `Some` | No — constant, not conditioned on the walk's actual outcome | ✗ STATIC (NR3-02) |
-| `NetworkEnforcementGuard::WfpServiceManaged.installed_filter_count` | `u32` | `network.rs`, elevated service IPC report | Yes, but gated earlier by `assert_wfp_activation_installed_filters` so the negative value is production-unreachable | ⚠ FLOWING BUT UNREACHABLE NEGATIVE (NR-04 partial, confirmed via review + code read) |
-| Daemon `dacl_guard_applied` / `wfp_filters_installed` | `bool` | `DaemonDaclGuard::granted_write_access()`, `wfp_filter_add` result | Yes, but both remain dynamically identical to the gate condition on every reachable path because earlier gates already fail-closed | ⚠ FLOWING BUT UNREACHABLE NEGATIVE (NR-05 partial, confirmed via review) |
+| `AppliedLayers::mandatory_integrity_label` | `LabelCoverage` | Real filesystem ACE reads, now including a residue-equivalence branch | Yes, but the residue branch accepts a broader ACE-state set than it should | ⚠ FLOWING BUT OVER-BROAD (CR-01) |
+| `AppliedLayers::dacl_ancestor_traverse` / `dacl_ancestor_read_attrs` | `LayerApplication` | Guards' own `application()` accessor over real walk state | Yes | ✓ FLOWING (NR3-02 fix confirmed) |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |---|---|---|---|
-| Registry + meta-test compile and pass | `cargo check -p nono-sandbox-cli --all-targets --features layer-fault-injection` | `Finished dev profile`, clean | ✓ PASS |
-| D-32 discovery gate + drift check run and pass | `cargo test -p nono-sandbox-cli --test layer_registry_meta_test --test layer_registry_selfcheck -- --test-threads=1` | 5/5 + 3/3 pass | ✓ PASS |
-| CR-14 fix behaves as claimed (zero-coverage aborts) | `cargo test -p nono-sandbox-cli --bin nono --features layer-fault-injection -- --test-threads=1 labels_guard::` | 7/7 pass | ✓ PASS |
-| Full `exec_strategy::` unit slice (labels_guard/dacl_guard/attestation together) | `cargo test -p nono-sandbox-cli --bin nono --features layer-fault-injection -- --test-threads=1 labels_guard:: dacl_guard:: attestation::` | Hung/timed out inside `dacl_guard::tests::ancestor_read_attributes_multi_target_covers_each_chain_and_stops_at_root` (exit 143 on 180s timeout) | ? SKIP — routed to human verification (host/harness fragility documented in REVIEW-FIX.md for other DACL/token tests on this same class of host) |
-| `NonoError::remediation()` has no arm for `LayerAttestationFailed` | `grep -n "fn remediation" -A 40 crates/nono/src/error.rs` | Confirmed: falls to `_ => None`, no `LayerAttestationFailed` arm | ✓ PASS (confirms the NR3-01 gap, not a positive result) |
-| CI job runs the fault-injection suites with no pre-built broker / no WFP env (NR-08) | Read `.github/workflows/ci.yml:311-346` | Confirmed: `windows-layer-fault-injection` job runs `cargo test -p nono-sandbox-cli --features layer-fault-injection` with no `NONO_CI_HAS_WFP` and no `cargo build -p nono-shell-broker` step | ✓ PASS (confirms NR-08 is still open) |
+| `AceFlags` is read anywhere in the ACE reader used by the residue predicate | `grep -c AceFlags crates/nono/src/sandbox/windows.rs` | `0` | ✓ PASS (confirms CR-01) |
+| `init_tracing` writer arms | Read `cli_bootstrap.rs:155-186` directly | Default arm and error-fallback arm both use `.with_writer(std::io::stderr)`; only the `--log-file` arm does not | ✓ PASS (confirms CR-02) |
+| Registry citation spot-check #1 | Read `restricted_token.rs:55` | `// D-29/D-30 (Phase 117-06): generalizes the shipped WFP force-unavailable...` — a comment, not the cited enforcing logic | ✓ PASS (confirms WR-08 sample) |
+| Registry citation spot-check #2 | Read `launch.rs:1403` | `/// Phase 117 D-21 (CINT-02): apply the startup self-attestation gate...` — a doc comment | ✓ PASS (confirms WR-08 sample) |
+| `main.rs` calls `remediation()` for `LayerAttestationFailed` | Read `main.rs:204-223` | Only `ActionRequired` is special-cased; all other errors print `Display` only | ✓ PASS (confirms WR-04) |
+| SPEC ledger has rows for CR-01/CR-02 | `grep -n "CR-01\|CR-02" proj/SPEC-windows-fail-direction-contract.md` | No hits | ✓ PASS (confirms SC4 gap) |
+| SPEC ledger has rows for NR-04/NR-05/NR-06/NR3-01..08 | Read `proj/SPEC-windows-fail-direction-contract.md:265-274` | All present with re-runnable evidence | ✓ PASS (confirms iter1 SC4 gap closed) |
+| `dacl_session_sid_grant_is_not_claimed_anywhere` exists | `grep -rn` in `crates/nono-cli/` | Present at `layer_registry.rs:1184` | ✓ PASS (confirms NR3-03 closed) |
+| ALSO_AUTOMATED target functions exist | Read `dacl_guard.rs:1063`, `:1205` | Both `..._fails_when_forced_unavailable` functions present, force the guard unavailable via `force_dacl_grant_unavailable(true)`, and assert `NonoError::LayerAttestationFailed` | ✓ PASS (confirms SC3 progress is real for these 2 rows) |
+| Debt markers (TBD/FIXME/XXX) in the 13 review-scoped files | `grep -n "TBD\|FIXME\|XXX"` across all 13 files | No hits | ✓ PASS (no debt-marker blocker) |
+| Workspace build/clippy/fmt | Given as established fact for this session (`known_environment_facts`) | Clean with and without `--features layer-fault-injection`; 1611 tests pass; 11 pre-existing Windows-host baseline failures (sanctioned, documented) | ✓ PASS (not re-run this pass; accepted per task framing) |
 
 ### Requirements Coverage
 
 | Requirement | Source Plans | Description | Status | Evidence |
 |---|---|---|---|---|
-| CINT-01 | 117-01, 117-03 | Single fail-direction contract naming every layer, derived from code, citing call sites | ⚠ PARTIAL | Registry + SPEC exist and are substantive (13/13 layers named, each with an outcome), but call-site citations are stale by ~145 lines (NR3-08, unfixed) and the SPEC's discrepancy ledger itself has drifted from the shipped code (see CINT-01's dependency on SC4 below). |
-| CINT-02 | 117-02, 05, 08, 09, 10, 11 | Startup self-attestation; never presents an unconfirmed guarantee | ✗ BLOCKED | Core decision logic (`classify_row`, `decide_from_entries`) is correct and tested. Blocked by: NR3-01 (open BLOCKER — CR-14's fix causes self-lockout after abnormal exit / concurrent session, no remediation); NR3-02 (2 rows structurally cannot deny); NR3-03 (fail-open landmine on `DaclSessionSidGrant` guarded by a test that does not exist); NR3-05 (daemon mirror has no downgrade state at all, diverging from the CLI's three-state model). |
-| CINT-03 | 117-04, 06, 07, 12 | Per-layer forced-unavailable test for every row; untested row = unsatisfied | ✗ BLOCKED | 2/13 rows have an automated test; 11/13 rely on written manual-verification steps enforced loud but not executed automatically. By CINT-03's own literal wording this requirement is not met for 85% of rows. |
+| CINT-01 | 117-01, 03, 15 (partial), 19 | Single fail-direction contract, derived from code, citing call sites | ✗ BLOCKED | 9/13 rows still cite drifted call sites (SC1). REQUIREMENTS.md correctly shows this as Pending — no change needed. |
+| CINT-02 | 117-02, 05, 08, 09, 10, 11, 13, 14, 15, 16, 17 | Startup self-attestation; never presents an unconfirmed guarantee | ✗ BLOCKED — **REQUIREMENTS.md marking not defensible** | REQUIREMENTS.md currently shows `[x] Complete`, set by Plan 117-17's `requirements-completed: [CINT-02]`. CR-01 (independently confirmed, see gaps) is a direct violation of this requirement's own text, introduced by Plan 117-13 — which is itself inside CINT-02's declared span. The Complete marking predates and does not account for this finding. **Recommend reverting to `[ ]` Pending** until CR-01 (and ideally CR-02, which affects the same plan wave's downgrade-channel half of CINT-02) is fixed and re-verified. |
+| CINT-03 | 117-04, 06, 07, 12, 16, 18 | Per-layer forced-unavailable test for every row; untested row = unsatisfied | ✗ BLOCKED (substantially closer) | 10/13 rows now automated (up from 2/13); 3/13 remain named-manual. By CINT-03's own literal wording ("a contract entry with no such test is not satisfied") this is still not fully met, but the gap has shrunk from 85% of rows to 23% of rows. |
 
-**Orphaned requirements check:** `grep -n "Phase 117" .planning/REQUIREMENTS.md` returns no rows beyond CINT-01/02/03 already covered above — no orphaned requirements.
+**Orphaned requirements check:** `grep -n "Phase 117" .planning/REQUIREMENTS.md` returns no rows beyond CINT-01/02/03 — no orphaned requirements. All 19 plans' `requirements:` frontmatter fields resolve to CINT-01/02/03 only.
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
-| `crates/nono-cli/src/exec_strategy_windows/attestation.rs` | 1558 | `TBD` in a comment | ℹ️ INFO | Benign — refers to the SPEC's now-filled-in latency placeholder that this exact test replaced (D-24 measurements are present in the SPEC, confirmed read). Not a debt marker. |
-| (none found) | — | `FIXME` / `XXX` | — | Grep across the 9 phase-touched files under `exec_strategy_windows/`, `agent_daemon/launch.rs`, `output.rs`, `crates/nono/src/error.rs` returned zero hits. |
+| (none found) | — | `TBD`/`FIXME`/`XXX` | — | Grepped all 13 files the iteration-4 code review scoped (labels_guard.rs, dacl_guard.rs, layer_registry.rs, launch.rs, mod.rs, attestation_downgrade_event.rs, agent_daemon/launch.rs, telemetry/mod.rs, query_ext.rs, diagnostic/codes.rs, error.rs, layer_registry_selfcheck.rs, layer_registry_meta_test.rs) — zero hits. No debt-marker blocker. |
 
-No blocking debt markers found in the files this phase touched.
+The material defects in this phase are not debt markers but a fail-open predicate (CR-01) and a
+confidentiality-channel violation (CR-02) — both classified under Gaps, not here.
 
 ### Human Verification Required
 
-See `human_verification` in frontmatter — two items:
-1. Full-suite re-run on a clean/elevated host to confirm the pre-existing-11-Windows-failures baseline has not grown (this session's own run hit a host-specific hang unrelated to the phase's logic, isolated `labels_guard::` subset ran clean).
-2. Manual execution of the 11 `MANUALLY_VERIFIED` rows' documented steps (elevated WFP service, real console, signed install) — needed operationally, but does not change the SC3 scoring since CINT-03 explicitly requires a *test*, not a manual pass.
+See `human_verification` in frontmatter. One item (down from two in iter1 — the full-suite-hang
+item is resolved per this session's `known_environment_facts`, which confirms 1611 passed / 11
+sanctioned pre-existing failures, i.e. a full clean run occurred):
+
+1. Manual execution of the 3 remaining `MANUALLY_VERIFIED` rows' documented steps
+   (`DaclSessionSidGrant`, `MinifilterAbsence`, `BrokerAuthenticodeTrustGate`) — needed
+   operationally, does not change SC3/CINT-03 scoring.
 
 ### Gaps Summary
 
-Phase 117 shipped substantial, genuinely-verified value: a 13-row code-resident registry that
-compiles and is consumed by the attestation gate; a resolved BLOCKER (CR-14) proven by tests that
-drive real filesystem state, not synthetic values; a reachable downgrade channel (NR-02) proven by
-a real suspended child; independently-sourced network facts (NR-04) and a real daemon predicate
-fix (NR-05) that are honestly documented as defense-in-depth rather than exercised negatives; and a
-traversal-and-symlink-safe cleanup guard (NR-06) proven by a counterfactual that actually deleted a
-victim directory before the fix.
+Plans 117-13 through 117-19 closed the majority of what iter1 flagged: NR3-01's lockout is fixed
+with a real remediation arm; NR3-02's two constant-`Applied` rows now derive from real guard
+coverage; NR3-03's fail-open landmine is closed by a test that actually exists; SC3's automated
+test coverage nearly quintupled (2/13 → 10/13); and SC4's specific iter1 debt (missing NR-04/05/06
+rows, a stale RF-14 description) is genuinely recorded in the SPEC now. This is real, verified
+progress — confirmed by direct source reads in this pass, not taken from SUMMARY.md claims.
 
-But the phase does not clear its own bar. Three of the four roadmap Success Criteria fail when
-measured against their own literal wording, not against SUMMARY.md's narrative:
+But the round does not clear the roadmap's bar, for two independent reasons:
 
-- **SC3 is failed outright** — 2 of 13 rows have an automated forced-unavailable test; CINT-03's
-  own text says an untested row is not satisfied, so 11/13 rows are, by the requirement's own
-  definition, unsatisfied. This is not a close call.
-- **SC2 is failed as a universal claim**, though resolved for the one row (mandatory integrity
-  label) that was the review's headline concern. Two DACL-ancestor rows structurally cannot deny
-  (NR3-02); one row (`DaclSessionSidGrant`) is a live fail-open landmine guarded by a test that
-  does not exist anywhere in the tree (NR3-03) — this is the single most concerning finding in
-  this verification pass, because it means the contract's own self-defense claim is fictional; and
-  the fix that resolved the review's headline concern introduced an **open, unfixed BLOCKER**
-  (NR3-01) with no remediation path, confirmed still open at the current HEAD commit
-  (`ff4fc7af`, 2026-08-10, iteration-3 review — no fix commits follow it in `git log`).
-- **SC4 is failed on inspection** — the SPEC's own discrepancy ledger, which exists specifically to
-  prevent "quietly reconciled" drift, was itself not updated for 3 of the 5 iteration-2 fixes, and
-  one existing row (RF-14) now describes behavior the code no longer has. This is the exact failure
-  mode SC4 was written to close, reproduced one review cycle later, inside the very artifact meant
-  to catch it.
-- **SC1 is partial** — the document exists and names every layer, but "citing the enforcing call
-  site" is degraded by a ~145-line citation drift that has now been deferred across three
-  consecutive review passes (NR3-08 / WR-06-R).
+1. **A new BLOCKER (CR-01) reopens CR-14's exact class of defect.** The residue predicate that
+   fixes NR3-01's availability problem is unsound: it cannot distinguish a structurally-ineffective
+   inherit-only ACE from the effective ACE nono itself writes, because the ACE reader it depends on
+   never inspects `AceFlags` — confirmed by direct grep (`0` hits) and by reading the predicate at
+   `labels_guard.rs:210-228`. This means SC2 and CINT-02, both of which this phase exists to
+   satisfy, are violated in a new way even though the row iter1 traced end-to-end (the pure
+   zero-ACE case) is fixed. CINT-02's `[x] Complete` marking in `REQUIREMENTS.md` — set by Plan
+   117-17, a plan downstream of and blind to this finding — is not defensible until CR-01 is fixed.
 
-None of this was invented by this verification pass — every finding above was independently
-re-confirmed against the current source tree (grep hit counts, live test runs, direct line reads)
-rather than taken from the review documents' word. The review documents' own iteration-3 verdict
-(1 Blocker + 9 Warning, `status: issues_found`) is consistent with what this pass found, and no fix
-commits have landed since that review was written. The phase should not be marked passed; the gap
-closure plan should prioritize NR3-01 (the open blocker — an availability regression with no
-recovery path), then the SC3 test-coverage shortfall (the requirement's own explicit bar), then the
-SC4 SPEC-ledger and NR3-02/NR3-03 residuals.
+2. **A second BLOCKER-adjacent finding (CR-02) violates D-28**, the decision this same gap-closure
+   wave's NR3-04 fix was supposed to satisfy without leaking layer names to the confined child's
+   shared console. Confirmed directly: 2 of `init_tracing`'s 3 arms — including the default,
+   overwhelmingly common path — route `tracing::warn!` to stderr, contradicting the new warn's own
+   justifying comment.
+
+3. **SC4, the criterion meant to prevent exactly this kind of unrecorded drift, itself has an open
+   instance**: neither CR-01 nor CR-02 (nor the 11 accompanying warnings) is yet recorded in
+   `proj/SPEC-windows-fail-direction-contract.md`'s discrepancy ledger. The phase is being submitted
+   for closure with two known, independently-confirmed, unfixed BLOCKER-level discrepancies between
+   contract and code.
+
+4. **SC1/CINT-01's citation drift is unchanged** — independently re-confirmed on 2 of the review's
+   15 sampled citations (both land on unrelated comment lines) — no plan in this gap-closure round
+   targeted the remaining 9/13 rows.
+
+None of this was taken on the review documents' word alone: `AceFlags` absence, the `cli_bootstrap.rs`
+writer arms, 2 of the stale citations, the SPEC ledger's current contents, the `main.rs` remediation
+gap, and the `mod.rs`/`layer_registry.rs` fixes were each independently re-read against the current
+source tree in this verification pass. The phase should not be marked passed. Priority for the next
+gap-closure round: (1) fix CR-01 (the predicate's ACE-flags blindness — this is the security-relevant
+one, since it converts an integrity claim into a false positive, not merely an availability problem);
+(2) fix or gate CR-02 (the D-28 leak); (3) record both in the SPEC ledger regardless of fix status;
+(4) finish the remaining 9/13 SC1 citation conversions; (5) resolve WR-04 (wire `main.rs` to call
+`remediation()`) so NR3-01's fix is actually operator-visible.
 
 ---
 
