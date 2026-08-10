@@ -19,6 +19,7 @@ impl Drop for NetworkEnforcementGuard {
                 target_program,
                 inbound_rule,
                 outbound_rule,
+                ..
             } => {
                 let _ = cleanup_wfp_service_managed_enforcement_with_runner(
                     policy,
@@ -1592,6 +1593,12 @@ impl WindowsNetworkBackend for FirewallRulesNetworkBackend {
         let outbound_rule = format!("nono-win-block-out-{suffix}");
         let program_arg = format!("program={}", staged_program.display());
 
+        // Phase 117 review NR-04: count the rules `netsh` actually accepted,
+        // at the point it accepted them, so `AppliedLayers::firewall_rules_
+        // egress` reports installation evidence rather than the fact that a
+        // `FirewallRules` guard exists.
+        let mut installed_rule_count: u8 = 0;
+
         if let Err(err) = run_netsh_firewall(&[
             "advfirewall",
             "firewall",
@@ -1607,6 +1614,7 @@ impl WindowsNetworkBackend for FirewallRulesNetworkBackend {
             cleanup_network_enforcement_staging(&staged_dir);
             return Err(err);
         }
+        installed_rule_count = installed_rule_count.saturating_add(1);
 
         if let Err(err) = run_netsh_firewall(&[
             "advfirewall",
@@ -1624,12 +1632,14 @@ impl WindowsNetworkBackend for FirewallRulesNetworkBackend {
             cleanup_network_enforcement_staging(&staged_dir);
             return Err(err);
         }
+        installed_rule_count = installed_rule_count.saturating_add(1);
 
         Ok(Some(NetworkEnforcementGuard::FirewallRules {
             staged_program,
             staged_dir,
             inbound_rule,
             outbound_rule,
+            installed_rule_count,
         }))
     }
 }
@@ -1777,6 +1787,21 @@ where
                             target_program: config.resolved_program.to_path_buf(),
                             inbound_rule,
                             outbound_rule,
+                            // Phase 117 review NR-04: carry the enforcing
+                            // component's ACTUAL reported count onto the
+                            // guard so the attestation gate re-reads the
+                            // evidence instead of re-deriving "confirmed"
+                            // from the fact that a WFP guard exists.
+                            // `unwrap_or(0)` is the restrictive default: an
+                            // absent count means "no evidence", which the
+                            // gate treats as unconfirmed. (The assertion
+                            // above already rejects both `None` and
+                            // `Some(0)` fail-closed; this is the second,
+                            // independent read.)
+                            installed_filter_count: probe_output
+                                .response
+                                .installed_filter_count
+                                .unwrap_or(0),
                         }))
                     }
                     WfpRuntimeActivationProbeStatus::CleanupSucceeded => Err(

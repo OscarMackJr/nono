@@ -285,6 +285,13 @@ enum NetworkEnforcementGuard {
         staged_dir: PathBuf,
         inbound_rule: String,
         outbound_rule: String,
+        /// Phase 117 review NR-04: how many `netsh advfirewall` block rules
+        /// this guard actually installed, recorded at the point the `netsh`
+        /// calls returned rather than inferred from the enum discriminant at
+        /// a distance. `FIREWALL_RULES_REQUIRED` is the number the layer's
+        /// claim depends on (one inbound + one outbound). See
+        /// `firewall_rules_report`.
+        installed_rule_count: u8,
     },
     WfpServiceManaged {
         policy: Box<nono::WindowsNetworkPolicy>,
@@ -292,8 +299,24 @@ enum NetworkEnforcementGuard {
         target_program: PathBuf,
         inbound_rule: String,
         outbound_rule: String,
+        /// Phase 117 review NR-04: the filter count the elevated
+        /// `nono-wfp-service` reported over its pre-spawn IPC — the actual
+        /// evidence, recorded where `assert_wfp_activation_installed_filters`
+        /// reads it. `derive_wfp_preconfirmed` evaluates THIS, so the
+        /// attestation gate is a second, independent read of the enforcing
+        /// component's report rather than a restatement of "a WFP guard
+        /// exists". A construction site that ever produced a guard without a
+        /// positive count (a new early return, a loosened assertion, a stale
+        /// service the assertion is later taught to tolerate) is caught at
+        /// the gate instead of silently claiming enforcement.
+        installed_filter_count: u32,
     },
 }
+
+/// Phase 117 review NR-04: the number of `netsh` block rules a
+/// `FirewallRules` guard must have installed for the `FirewallRulesEgress`
+/// layer's claim to hold — one outbound, one inbound.
+const FIREWALL_RULES_REQUIRED: u8 = 2;
 
 struct PreparedWindowsLaunch {
     // Phase 21: applied-labels guard reverts mandatory-label ACEs on drop.
@@ -391,14 +414,10 @@ impl PreparedWindowsLaunch {
             dacl_ancestor_read_attrs: application_of(self._applied_ancestor_read_attrs.is_some()),
             // CR-04: tri-state. `None` means this backend is not part of
             // this launch's composition — not applicable, not degraded.
-            firewall_rules_egress: match self._network_enforcement {
-                Some(NetworkEnforcementGuard::FirewallRules { .. }) => Some(true),
-                _ => None,
-            },
-            wfp_egress_filters: match self._network_enforcement {
-                Some(NetworkEnforcementGuard::WfpServiceManaged { .. }) => Some(true),
-                _ => None,
-            },
+            // NR-04: the inner `bool` is now the guard's recorded
+            // installation evidence, not a restatement of the discriminant.
+            firewall_rules_egress: firewall_rules_report(self._network_enforcement.as_ref()),
+            wfp_egress_filters: wfp_composition_report(self._network_enforcement.as_ref()),
             // Recorded by `spawn_windows_child`, which is where the
             // broker-arm decision and the Authenticode comparison live.
             broker_authenticode_trust_gate: None,
@@ -422,6 +441,39 @@ fn application_of(ran: bool) -> layer_registry::LayerApplication {
         layer_registry::LayerApplication::Applied
     } else {
         layer_registry::LayerApplication::NotApplied
+    }
+}
+
+/// Phase 117 review NR-04: `FirewallRulesEgress`'s per-launch report.
+///
+/// `None` — the `netsh` backend is not part of this launch's composition.
+/// `Some(true)` — it is, and the guard records both block rules installed.
+/// `Some(false)` — it is, and it does NOT. That combination classifies
+/// `Unconfirmed` and aborts; it was unreachable while the report was
+/// `matches!(guard, FirewallRules { .. })`.
+fn firewall_rules_report(guard: Option<&NetworkEnforcementGuard>) -> Option<bool> {
+    match guard {
+        Some(NetworkEnforcementGuard::FirewallRules {
+            installed_rule_count,
+            ..
+        }) => Some(*installed_rule_count >= FIREWALL_RULES_REQUIRED),
+        _ => None,
+    }
+}
+
+/// Phase 117 review NR-04: `WfpEgressFilters`'s per-launch COMPOSITION
+/// report — "was the WFP backend the one this launch selected".
+///
+/// Deliberately NOT the enforcement evidence: that is
+/// `launch::derive_wfp_preconfirmed`, which reads the guard's recorded
+/// `installed_filter_count`. The two used to be derived from the same enum
+/// discriminant, so `(applied = Some(_), preconfirmed = false)` — "the
+/// backend WAS selected and did not confirm", the row's whole deny direction
+/// — was unreachable outside a hand-written test value.
+fn wfp_composition_report(guard: Option<&NetworkEnforcementGuard>) -> Option<bool> {
+    match guard {
+        Some(NetworkEnforcementGuard::WfpServiceManaged { .. }) => Some(true),
+        _ => None,
     }
 }
 

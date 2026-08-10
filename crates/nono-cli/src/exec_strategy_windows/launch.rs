@@ -1535,10 +1535,23 @@ fn apply_startup_attestation_gate(
 /// `expected: true` for the current arm. Factored into its own pure
 /// function (no OS calls) so this mapping is unit-testable independent of a
 /// real spawn.
+///
+/// Phase 117 review NR-04: this now reads the guard's recorded
+/// `installed_filter_count` — the actual number the elevated
+/// `nono-wfp-service` reported over its pre-spawn IPC — rather than the enum
+/// discriminant. `AppliedLayers::wfp_egress_filters` reports COMPOSITION
+/// (`mod.rs::wfp_composition_report`), this reports ENFORCEMENT EVIDENCE, and
+/// the two are now sourced independently. While both were `matches!(guard,
+/// WfpServiceManaged { .. })` the `(selected, not confirmed)` cell — the
+/// row's entire deny direction — was unreachable from any value
+/// `spawn_windows_child` could construct.
 fn derive_wfp_preconfirmed(network_enforcement: Option<&NetworkEnforcementGuard>) -> bool {
     matches!(
         network_enforcement,
-        Some(NetworkEnforcementGuard::WfpServiceManaged { .. })
+        Some(NetworkEnforcementGuard::WfpServiceManaged {
+            installed_filter_count,
+            ..
+        }) if *installed_filter_count > 0
     )
 }
 
@@ -3580,6 +3593,12 @@ mod attestation_gate_tests {
     }
 
     fn wfp_service_managed_guard() -> NetworkEnforcementGuard {
+        wfp_service_managed_guard_with_filter_count(8)
+    }
+
+    fn wfp_service_managed_guard_with_filter_count(
+        installed_filter_count: u32,
+    ) -> NetworkEnforcementGuard {
         NetworkEnforcementGuard::WfpServiceManaged {
             policy: Box::new(nono::WindowsNetworkPolicy {
                 mode: nono::WindowsNetworkPolicyMode::Blocked,
@@ -3602,6 +3621,7 @@ mod attestation_gate_tests {
             target_program: PathBuf::from("test.exe"),
             inbound_rule: "test-inbound".to_string(),
             outbound_rule: "test-outbound".to_string(),
+            installed_filter_count,
         }
     }
 
@@ -3613,6 +3633,10 @@ mod attestation_gate_tests {
     /// enforcement_staging` now also refuses any path outside the staging
     /// root, so this is belt-and-braces.
     fn firewall_rules_guard() -> NetworkEnforcementGuard {
+        firewall_rules_guard_with_rule_count(2)
+    }
+
+    fn firewall_rules_guard_with_rule_count(installed_rule_count: u8) -> NetworkEnforcementGuard {
         let staged_dir = std::env::temp_dir()
             .join("nono-net-block")
             .join("attestation-gate-test-fixture-never-created");
@@ -3621,7 +3645,108 @@ mod attestation_gate_tests {
             staged_dir,
             inbound_rule: "test-inbound".to_string(),
             outbound_rule: "test-outbound".to_string(),
+            installed_rule_count,
         }
+    }
+
+    /// Phase 117 review NR-04, non-vacuity proof: the WFP row's two facts
+    /// are sourced INDEPENDENTLY, so `(backend selected, enforcement not
+    /// confirmed)` is a representable state produced from the same
+    /// `NetworkEnforcementGuard` type the production caller passes — not
+    /// from a hand-written `AppliedLayers` value no caller can produce.
+    ///
+    /// Both `AppliedLayers::wfp_egress_filters` and `wfp_preconfirmed` used
+    /// to be `matches!(guard, WfpServiceManaged { .. })`, so they moved in
+    /// lockstep and the `Unconfirmed` cell was unreachable.
+    #[test]
+    fn wfp_row_can_be_selected_and_unconfirmed_from_a_real_guard_value() {
+        // A guard whose enforcing component reported ZERO installed filters.
+        let regressed = wfp_service_managed_guard_with_filter_count(0);
+        assert_eq!(
+            super::super::wfp_composition_report(Some(&regressed)),
+            Some(true),
+            "the WFP backend IS this launch's composition"
+        );
+        assert!(
+            !derive_wfp_preconfirmed(Some(&regressed)),
+            "zero installed filters is not enforcement evidence"
+        );
+
+        // Same guard type, real reported count: both facts positive.
+        let healthy = wfp_service_managed_guard_with_filter_count(8);
+        assert_eq!(
+            super::super::wfp_composition_report(Some(&healthy)),
+            Some(true)
+        );
+        assert!(derive_wfp_preconfirmed(Some(&healthy)));
+
+        // The (selected, unconfirmed) pair aborts at the real gate.
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.wfp_egress_filters = super::super::wfp_composition_report(Some(&regressed));
+
+        let result = apply_startup_attestation_gate(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            derive_wfp_preconfirmed(Some(&regressed)),
+            applied,
+            None,
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "WfpEgressFilters");
+                assert_eq!(reason, "Unconfirmed");
+            }
+            other => panic!(
+                "a launch whose WFP backend was selected but reported zero installed filters \
+                 must be refused, got {other:?}"
+            ),
+        }
+    }
+
+    /// Phase 117 review NR-04, the `netsh` half: `FirewallRulesEgress`'s
+    /// report is the recorded rule count, so a guard that installed fewer
+    /// than both block rules classifies `Unconfirmed` instead of being
+    /// indistinguishable from a healthy one.
+    #[test]
+    fn firewall_rules_row_reports_installation_evidence_not_the_discriminant() {
+        assert_eq!(
+            super::super::firewall_rules_report(Some(&firewall_rules_guard_with_rule_count(2))),
+            Some(true)
+        );
+        assert_eq!(
+            super::super::firewall_rules_report(Some(&firewall_rules_guard_with_rule_count(1))),
+            Some(false),
+            "one of two block rules installed is not the FirewallRulesEgress claim"
+        );
+        assert_eq!(
+            super::super::firewall_rules_report(Some(&firewall_rules_guard_with_rule_count(0))),
+            Some(false)
+        );
+        assert_eq!(
+            super::super::firewall_rules_report(Some(&wfp_service_managed_guard())),
+            None,
+            "a different backend is not part of this row's composition"
+        );
+        assert_eq!(super::super::firewall_rules_report(None), None);
     }
 
     /// Behavior 3: `WfpServiceManaged` yields `wfp_preconfirmed: true`.
