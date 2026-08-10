@@ -869,7 +869,19 @@ mod windows_impl {
         // `HANDLE` is `Copy`) was already moved into `tenant` above — this
         // probes the real suspended child before its first instruction ever
         // runs (D-21), exactly like step 6/6.5/6.6's fail-secure gates.
-        match daemon_attest_and_decide(process_handle_raw, job_raw_owned) {
+        match daemon_attest_and_decide(
+            process_handle_raw,
+            job_raw_owned,
+            &package_sid,
+            // `dacl_guard` exists, so `DaemonDaclGuard::apply` ran and
+            // returned Ok at step 6.6 (its Err path terminates and returns
+            // above).
+            true,
+            network_scoping_required,
+            // Reached only if `wfp_filter_add` succeeded when scoping was
+            // required — its Err path terminates and returns above (WR-02).
+            network_scoping_required,
+        ) {
             DaemonAttestationDecision::Proceed => {}
             DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
                 let mut names: Vec<String> = downgraded.iter().map(|s| (*s).to_string()).collect();
@@ -938,11 +950,22 @@ mod windows_impl {
                     "launch_agent: startup self-attestation failed; refusing to resume \
                      (fail-secure)"
                 );
+                // Phase 117 review WR-07: terminate EXPLICITLY, matching
+                // the adjacent steps 6/6.5/6.6 idiom, rather than relying on
+                // `cleanup_failed_agent`'s job-close cascade. That cascade
+                // works by closing the job handle so KILL_ON_JOB_CLOSE fires
+                // — which cannot work when the abort reason IS
+                // `JobObjectContainment` unconfirmed, because by hypothesis
+                // the process is not in that job. The same Drop also closes
+                // the process handle, leaving an orphaned suspended process
+                // with no owner. Fail-secure either way (it never resumes),
+                // but it leaked a process.
+                // SAFETY: process_handle_raw is still valid and un-closed here.
+                unsafe { TerminateProcess(process_handle_raw, 1) };
                 // SAFETY: thread_handle_raw is still valid and un-closed here.
                 unsafe { CloseHandle(thread_handle_raw) };
                 // Removes tenant from state — Drops AgentTenant → closes
-                // job_handle → KILL_ON_JOB_CLOSE terminates the still-
-                // suspended process (D-22: never resumed).
+                // job_handle and the process handle.
                 cleanup_failed_agent(&daemon_state, &tenant_id, &package_sid);
                 return Err(NonoError::LayerAttestationFailed {
                     layer: layer.to_string(),
@@ -1286,36 +1309,59 @@ mod windows_impl {
     ///   so this is the first INDEPENDENT post-hoc confirmation.
     /// - `JobObjectContainment` (`LiveTokenOrJobQuery`, `Abort`) —
     ///   [`nono::attestation::probe_in_job`]; independently reconfirms step 6.
-    /// - `DaclPackageSidGrant` / `DaclAncestorTraverse` /
-    ///   `DaclAncestorReadAttrs` (`ProbeKind::ConfiguredOnly`, `Abort`) —
-    ///   `DaemonDaclGuard::apply` already succeeded fail-closed at step 6.6
-    ///   before this function ever runs, so per Plan 08's module-doc
-    ///   Deviation 2, reaching this point means "established, not
-    ///   independently observable" — always downgrades, never aborts.
+    /// - `DaclPackageSidGrant` / `DaclAncestorTraverse`
+    ///   (`ProbeKind::ConfiguredOnly`, `Abort`) — attested from
+    ///   `dacl_guard_applied`, the caller's report of whether
+    ///   `DaemonDaclGuard::apply` actually ran and succeeded at step 6.6.
+    /// - `WfpEgressFilters` (`ConfirmedByEnforcingComponentReport`, `Abort`)
+    ///   — `NotApplicable` when this profile did not request network
+    ///   scoping, otherwise attested from the caller's report that
+    ///   `wfp_filter_add` succeeded (WR-02).
     ///
-    /// `WfpEgressFilters` is deliberately NOT modeled here: by this
-    /// function's own call site (step 6.7, after step 6.5), the WFP concern
-    /// is already fully resolved one way or the other by existing fail-
-    /// closed code — either network scoping was not required for this
-    /// profile (nothing to attest), or it was required and `wfp_filter_add`
-    /// already succeeded (the function would have already returned `Err`
-    /// and never reached step 6.7 otherwise). Re-modeling it here would
-    /// check a condition this call site has already made structurally
-    /// impossible to fail. (Discrepancy note, SC4/D-13: the SHARED
-    /// `layer_registry.rs` registry's `WfpEgressFilters` row expectancy is
-    /// unconditional for `(EntryPath::Daemon, None)` — it does not carry the
-    /// "only when this profile needs scoping" distinction this function
-    /// applies. Calling `exec_strategy_windows::attestation::
-    /// attest_and_decide` literally against that row would abort every
-    /// daemon-launched agent whose profile does not request network
-    /// scoping. This function does not reproduce that behavior — flagged
-    /// here as a follow-up candidate for `layer_registry.rs`'s own
-    /// expectancy matrix, not fixed in this plan, which does not modify
-    /// that file.)
-    fn daemon_attest_and_decide(process: HANDLE, job: HANDLE) -> DaemonAttestationDecision {
+    /// # Phase 117 review CR-06 / WR-02 / WR-08 / WR-01
+    ///
+    /// This function used to return a HARDCODED
+    /// `ProceedDowngraded { downgraded: ["DaclPackageSidGrant",
+    /// "DaclAncestorTraverse", "DaclAncestorReadAttrs"] }` on every
+    /// successful launch:
+    ///
+    /// - **CR-06:** `DaclAncestorReadAttrs` was in that list although
+    ///   `DaemonDaclGuard::apply` performs exactly three operations —
+    ///   `grant_sid_traverse_on_path` on read-only rules,
+    ///   `grant_sid_write_on_path` on the workspace, and
+    ///   `grant_sid_traverse_on_path` on workspace ancestors. It never calls
+    ///   `grant_sid_read_attributes_on_path`. The daemon was reporting a
+    ///   layer as "established, cannot re-observe" when no apply ever
+    ///   occurred on that path. The row is dropped here and its
+    ///   `(Daemon, None)` expectancy cell is dropped from
+    ///   `layer_registry.rs`.
+    /// - **WR-02:** `network_scoping_required` was captured into a local
+    ///   with the comment "so step 6.7's attestation gate can reuse this
+    ///   exact result" — and step 6.7 never read it. It is now a parameter,
+    ///   alongside whether the filter-add succeeded.
+    /// - **WR-08:** `DaemonAttestationDecision::Proceed` was matched but
+    ///   never constructed. It is now the outcome of a launch where every
+    ///   modelled layer holds.
+    /// - **WR-01:** the AppContainer SID probe discarded the SID it
+    ///   returned, so a child in a *different* AppContainer — one the WFP
+    ///   `ALE_USER_ID` filter is not scoped to — attested identically to the
+    ///   correct one. It is now compared to this tenant's own package SID.
+    fn daemon_attest_and_decide(
+        process: HANDLE,
+        job: HANDLE,
+        expected_package_sid: &str,
+        dacl_guard_applied: bool,
+        network_scoping_required: bool,
+        wfp_filters_installed: bool,
+    ) -> DaemonAttestationDecision {
         use nono::attestation::{probe_app_container_sid, probe_in_job, LayerAttestationStatus};
 
-        let app_container_confirmed = matches!(probe_app_container_sid(process), Ok(Some(_)));
+        // WR-01: presence is not enough — it must be THIS tenant's package
+        // SID, the one the WFP ALE_USER_ID filter is scoped to.
+        let app_container_confirmed = match probe_app_container_sid(process) {
+            Ok(Some(sid)) => sid.eq_ignore_ascii_case(expected_package_sid),
+            Ok(None) | Err(_) => false,
+        };
         if !app_container_confirmed {
             return DaemonAttestationDecision::Abort {
                 layer: "AppContainerProfile",
@@ -1334,15 +1380,26 @@ mod windows_impl {
             };
         }
 
-        // DaclPackageSidGrant / DaclAncestorTraverse / DaclAncestorReadAttrs:
-        // always downgrades once reached (see doc comment above).
-        DaemonAttestationDecision::ProceedDowngraded {
-            downgraded: vec![
-                "DaclPackageSidGrant",
-                "DaclAncestorTraverse",
-                "DaclAncestorReadAttrs",
-            ],
+        // WR-02: only attested when this profile actually asked for network
+        // scoping. A profile that did not is NotApplicable, not degraded.
+        if network_scoping_required && !wfp_filters_installed {
+            return DaemonAttestationDecision::Abort {
+                layer: "WfpEgressFilters",
+                status: LayerAttestationStatus::Unconfirmed,
+            };
         }
+
+        // CR-06/CR-09: the ConfiguredOnly DACL rows are attested from what
+        // the caller actually applied, not assumed.
+        if !dacl_guard_applied {
+            return DaemonAttestationDecision::Abort {
+                layer: "DaclPackageSidGrant",
+                status: LayerAttestationStatus::Unconfirmed,
+            };
+        }
+
+        // WR-08: every modelled layer holds. `Proceed` is reachable.
+        DaemonAttestationDecision::Proceed
     }
 
     /// Remove state for a failed agent launch. If `AgentTenant` was already
@@ -1745,7 +1802,14 @@ mod windows_impl {
                 CreateJobObjectW(std::ptr::null(), std::ptr::null())
             };
             assert!(!job.is_null(), "CreateJobObjectW failed");
-            let decision = daemon_attest_and_decide(std::ptr::null_mut(), job);
+            let decision = daemon_attest_and_decide(
+                std::ptr::null_mut(),
+                job,
+                "S-1-15-2-1",
+                true,
+                false,
+                false,
+            );
             // SAFETY: `job` is a valid HANDLE this test owns.
             unsafe { CloseHandle(job) };
             match decision {
@@ -1766,7 +1830,7 @@ mod windows_impl {
         /// isolated test does not itself run — already succeeded fail-closed
         /// in the real `launch_agent` flow this test exercises a slice of).
         #[test]
-        fn real_appcontainer_job_process_proceeds_downgraded() {
+        fn real_appcontainer_job_process_proceeds_and_the_negatives_are_reachable() {
             let tenant_id = generate_tenant_id().expect("generate_tenant_id");
             let profile_name = format!("nono.gatetest.{}", &tenant_id[..16]);
             let profile = nono::create_app_container_profile(&profile_name)
@@ -1795,7 +1859,23 @@ mod windows_impl {
             };
             assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
 
-            let decision = daemon_attest_and_decide(process, job);
+            let expected_sid =
+                nono::package_sid_to_string(&owned_sid).expect("package_sid_to_string");
+            let decision =
+                daemon_attest_and_decide(process, job, &expected_sid, true, false, false);
+            // Phase 117 review CR-06/CR-09/WR-01 non-vacuity: the SAME live
+            // child, this time with the caller reporting that
+            // DaemonDaclGuard::apply did NOT run, must abort. Before the fix
+            // the DACL rows were a hardcoded literal no input could change.
+            let unapplied_dacl_decision =
+                daemon_attest_and_decide(process, job, &expected_sid, false, false, false);
+            // ...and with network scoping required but the filters not
+            // installed (WR-02: the daemon did not model this row at all).
+            let unscoped_decision =
+                daemon_attest_and_decide(process, job, &expected_sid, true, true, false);
+            // ...and against a package SID that is not this child's (WR-01).
+            let foreign_sid_decision =
+                daemon_attest_and_decide(process, job, "S-1-15-2-9-9-9", true, false, false);
 
             // SAFETY: `process`/`thread`/`job` are all valid HANDLEs this test
             // owns; the suspended process is never resumed, only probed then
@@ -1811,14 +1891,27 @@ mod windows_impl {
             // and defers deletion to `AgentTenant::Drop`).
             drop(profile);
 
-            match decision {
-                DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
-                    assert!(
-                        downgraded.contains(&"DaclPackageSidGrant"),
-                        "expected DaclPackageSidGrant among downgraded layers, got {downgraded:?}"
-                    );
+            assert!(
+                matches!(decision, DaemonAttestationDecision::Proceed),
+                "a fully-applied daemon launch must reach Proceed (WR-08), got {decision:?}"
+            );
+            match unapplied_dacl_decision {
+                DaemonAttestationDecision::Abort { layer, .. } => {
+                    assert_eq!(layer, "DaclPackageSidGrant");
                 }
-                other => panic!("expected ProceedDowngraded, got {other:?}"),
+                other => panic!("expected Abort{{DaclPackageSidGrant}}, got {other:?}"),
+            }
+            match unscoped_decision {
+                DaemonAttestationDecision::Abort { layer, .. } => {
+                    assert_eq!(layer, "WfpEgressFilters");
+                }
+                other => panic!("expected Abort{{WfpEgressFilters}}, got {other:?}"),
+            }
+            match foreign_sid_decision {
+                DaemonAttestationDecision::Abort { layer, .. } => {
+                    assert_eq!(layer, "AppContainerProfile");
+                }
+                other => panic!("expected Abort{{AppContainerProfile}}, got {other:?}"),
             }
         }
 
@@ -1855,7 +1948,10 @@ mod windows_impl {
             assert!(!job.is_null(), "CreateJobObjectW failed");
             // NOTE: deliberately NOT calling AssignProcessToJobObject.
 
-            let decision = daemon_attest_and_decide(process, job);
+            let expected_sid =
+                nono::package_sid_to_string(&owned_sid).expect("package_sid_to_string");
+            let decision =
+                daemon_attest_and_decide(process, job, &expected_sid, true, false, false);
 
             // SAFETY: all three are valid HANDLEs this test owns; the
             // suspended process is never resumed, only probed then torn down.
@@ -1904,7 +2000,8 @@ mod windows_impl {
             };
             assert!(!real_job.is_null(), "CreateJobObjectW failed");
             let start = std::time::Instant::now();
-            let _ = daemon_attest_and_decide(real_process, real_job);
+            let _ =
+                daemon_attest_and_decide(real_process, real_job, "S-1-15-2-1", true, false, false);
             let elapsed = start.elapsed();
             // SAFETY: `real_job` is a valid HANDLE this test owns.
             unsafe { CloseHandle(real_job) };
