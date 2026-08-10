@@ -195,8 +195,63 @@ fn network_enforcement_staging_root() -> PathBuf {
 /// `starts_with` — CLAUDE.md footgun #1), and the staging root itself is
 /// refused too: only a subdirectory of it is ever removed. Anything else is
 /// logged and left alone.
+///
+/// # NR-06: `Path::starts_with` alone is not enough
+///
+/// `Path::starts_with` compares components LITERALLY; it does not resolve
+/// `..`. `%TEMP%\nono-net-block\..\..\Windows` has components
+/// `[C:\, Users, …, Temp, nono-net-block, .., .., Windows]`, which
+/// `starts_with(%TEMP%\nono-net-block)` accepts — and `remove_dir_all` then
+/// resolves the `..` and recurses OUTSIDE the staging root. The equality
+/// check is literal too, so `%TEMP%\nono-net-block\.` slipped past it and
+/// deleted the root. Three defences now apply, in order:
+///
+/// 1. **Reject traversal components outright.** Any `..` or `.` in the input
+///    is refused before anything else runs. This is the check that closes
+///    the class; canonicalization alone would not, because a non-existent
+///    path cannot be canonicalized and would fall through.
+/// 2. **Canonicalize both sides and re-compare.** This resolves symlinks and
+///    Windows directory junctions, so a junction planted under the staging
+///    root by anything with write access to `%TEMP%` cannot redirect the
+///    delete. `std::fs::canonicalize` also rejects a vanished path, which is
+///    fine: nothing to delete.
+/// 3. **Re-apply the strict-subdirectory test to the canonical forms.**
+///
+/// ## Residual risk, stated plainly
+///
+/// This is a check-then-act sequence, so a TOCTOU window remains between
+/// canonicalization and `remove_dir_all`: an attacker who can write inside
+/// `%TEMP%` could swap a real directory for a junction in that window.
+/// Closing it properly needs a handle-based delete
+/// (`CreateFileW` with `FILE_FLAG_OPEN_REPARSE_POINT` +
+/// `FILE_DISPOSITION_INFO`, walking by handle rather than by path), which is
+/// a larger change than this finding warrants. The exposure is bounded by
+/// `%TEMP%` being per-user; an attacker who can write there as this user
+/// already has this user's privileges. Recorded rather than silently
+/// accepted.
 pub(super) fn cleanup_network_enforcement_staging(staged_dir: &Path) {
+    use std::path::Component;
+
     let root = network_enforcement_staging_root();
+
+    // Defence 1: traversal components. `Path::starts_with` and `==` are both
+    // literal component comparisons, so `..`/`.` must be rejected up front —
+    // `remove_dir_all` resolves them and would escape the staging root.
+    if staged_dir
+        .components()
+        .any(|c| matches!(c, Component::ParentDir | Component::CurDir))
+    {
+        tracing::warn!(
+            staged_dir = %staged_dir.display(),
+            staging_root = %root.display(),
+            "refusing to recursively delete a network-enforcement staging directory whose path \
+             contains a traversal component (`..` or `.`) — such a path passes a literal \
+             component prefix test but resolves outside the staging root (fail-secure)"
+        );
+        return;
+    }
+
+    // Literal component test on the raw input, kept as the cheap first pass.
     if staged_dir == root || !staged_dir.starts_with(&root) {
         tracing::warn!(
             staged_dir = %staged_dir.display(),
@@ -206,7 +261,31 @@ pub(super) fn cleanup_network_enforcement_staging(staged_dir: &Path) {
         );
         return;
     }
-    let _ = std::fs::remove_dir_all(staged_dir);
+
+    // Defence 2+3: resolve symlinks and directory junctions on BOTH sides and
+    // re-apply the strict-subdirectory test. A canonicalization failure is
+    // fail-secure: an unresolvable path is one we refuse to delete.
+    let (Ok(real_root), Ok(real_dir)) = (root.canonicalize(), staged_dir.canonicalize()) else {
+        tracing::warn!(
+            staged_dir = %staged_dir.display(),
+            staging_root = %root.display(),
+            "refusing to recursively delete a network-enforcement staging directory that could \
+             not be canonicalized (already gone, or unresolvable — fail-secure)"
+        );
+        return;
+    };
+    if real_dir == real_root || !real_dir.starts_with(&real_root) {
+        tracing::warn!(
+            staged_dir = %staged_dir.display(),
+            resolved = %real_dir.display(),
+            staging_root = %real_root.display(),
+            "refusing to recursively delete a network-enforcement staging directory that \
+             RESOLVES outside the staging root (symlink or directory junction — fail-secure)"
+        );
+        return;
+    }
+
+    let _ = std::fs::remove_dir_all(&real_dir);
 }
 
 pub(super) fn cleanup_stale_network_enforcement_artifacts() {
@@ -1909,6 +1988,89 @@ pub(super) fn prepare_network_enforcement(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    /// Phase 117 review NR-06 — the guard's stated property, pinned.
+    ///
+    /// `NetworkEnforcementGuard::Drop` calls
+    /// `cleanup_network_enforcement_staging` with whatever `staged_dir` the
+    /// guard was constructed with, so this function is the only thing
+    /// standing between a mis-constructed guard and an arbitrary recursive
+    /// delete. It deleted the whole `crates/nono-cli` tree three times during
+    /// this phase. Nothing pinned its behaviour until now.
+    ///
+    /// Every refusal below is asserted by SURVIVAL of a real on-disk victim
+    /// directory, not by the absence of a log line.
+    #[test]
+    fn cleanup_refuses_traversal_the_root_and_paths_outside_the_root() {
+        let root = network_enforcement_staging_root();
+        std::fs::create_dir_all(&root).expect("create staging root");
+
+        // A real victim tree OUTSIDE the staging root, reachable from inside
+        // it via `..`. This is the exact shape `Path::starts_with` accepts
+        // literally and `remove_dir_all` then resolves.
+        let victim = std::env::temp_dir().join("nono-nr06-victim");
+        std::fs::create_dir_all(victim.join("keep-me")).expect("create victim");
+        let victim_name = victim
+            .file_name()
+            .and_then(|n| n.to_str())
+            .expect("victim dir name");
+
+        let traversal = root.join("..").join(victim_name);
+        assert!(
+            traversal.starts_with(&root),
+            "test precondition: the literal component prefix test must ACCEPT this path — \
+             otherwise the test is not exercising the NR-06 hole"
+        );
+        cleanup_network_enforcement_staging(&traversal);
+        assert!(
+            victim.join("keep-me").exists(),
+            "a `..` traversal out of the staging root must be refused; {} was deleted",
+            victim.display()
+        );
+
+        // `.` — cargo runs tests with the package root as CWD, which is what
+        // the original defect deleted.
+        cleanup_network_enforcement_staging(Path::new("."));
+        assert!(
+            Path::new("Cargo.toml").exists(),
+            "cleanup_network_enforcement_staging(\".\") must not delete the CWD"
+        );
+
+        // `<root>/.` — passes the literal `staged_dir == root` equality test.
+        let root_dot = root.join(".");
+        cleanup_network_enforcement_staging(&root_dot);
+        assert!(
+            root.exists(),
+            "`<staging root>/.` must not delete the staging root"
+        );
+
+        // The staging root itself.
+        cleanup_network_enforcement_staging(&root);
+        assert!(
+            root.exists(),
+            "the staging root itself must never be deleted"
+        );
+
+        // A path outside the root entirely.
+        cleanup_network_enforcement_staging(&victim);
+        assert!(
+            victim.join("keep-me").exists(),
+            "a path outside the staging root must be refused"
+        );
+
+        // Positive direction — otherwise "refuse everything" would pass every
+        // assertion above and the guard would be vacuously safe and useless.
+        let legit = root.join("nono-nr06-legit-staging");
+        std::fs::create_dir_all(legit.join("nested")).expect("create legit staging dir");
+        cleanup_network_enforcement_staging(&legit);
+        assert!(
+            !legit.exists(),
+            "a genuine staging subdirectory must still be removed; {} survived",
+            legit.display()
+        );
+
+        let _ = std::fs::remove_dir_all(&victim);
+    }
 
     fn make_blocked_policy() -> nono::WindowsNetworkPolicy {
         nono::WindowsNetworkPolicy {
