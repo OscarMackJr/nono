@@ -190,6 +190,17 @@ pub(crate) struct AttestationInput<'a> {
     /// `NotApplied`, which on an `expected: true` row classifies
     /// `Unconfirmed`.
     pub applied: layer_registry::AppliedLayers,
+    /// Phase 117 review WR-01: the synthetic per-session restricting SID
+    /// this launch built its `WRITE_RESTRICTED` token with
+    /// (`config.session_sid`), so `LayerId::RestrictedToken` can check that
+    /// THAT SID is among the child token's restricting SIDs rather than
+    /// accepting any non-empty list. A token restricted by some other SID is
+    /// not the token this session's confinement claim describes.
+    ///
+    /// `None` means "no session SID for this launch" — the row is only
+    /// expected on the `WriteRestricted` arm, which by construction has one,
+    /// so `None` there is a fail-closed `Unconfirmed`.
+    pub expected_session_sid: Option<&'a str>,
     /// CLI-flag-required layer names (`LayerId` `Debug`-format strings).
     /// D-26: unions with `machine_required_layers`, tighten-only.
     pub required_layers_override: &'a [String],
@@ -277,7 +288,24 @@ fn classify_live_probe(
 
     let process = input.child_process;
     match id {
-        LayerId::RestrictedToken => classify_probe_outcome(probe_restricted_sids(process)),
+        // WR-01: presence of *some* restricting SID is not the claim. The
+        // claim is that THIS launch's synthetic per-session SID is the
+        // restricting SID, which is what makes the WRITE_RESTRICTED
+        // double-check mean anything for this session.
+        LayerId::RestrictedToken => {
+            match (probe_restricted_sids(process), input.expected_session_sid) {
+                (Ok(sids), Some(expected)) => {
+                    if sids.iter().any(|sid| sid.eq_ignore_ascii_case(expected)) {
+                        LayerAttestationStatus::Confirmed
+                    } else {
+                        LayerAttestationStatus::Unconfirmed
+                    }
+                }
+                // No expected value to compare against, or the probe failed:
+                // fail closed.
+                (Ok(_), None) | (Err(_), _) => LayerAttestationStatus::Unconfirmed,
+            }
+        }
         // CR-02: probed against the supervisor's OWN containment job, not
         // the vacuous "in ANY job" query a null handle would ask.
         LayerId::JobObjectContainment => {
@@ -712,6 +740,7 @@ mod tests {
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
             applied,
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &[],
         }
@@ -956,6 +985,7 @@ mod tests {
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
             applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
             required_layers_override: &overrides,
             machine_required_layers: &[],
         };
@@ -978,6 +1008,7 @@ mod tests {
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
             applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &machine_required,
         };
@@ -998,6 +1029,7 @@ mod tests {
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
             applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
             required_layers_override: &overrides,
             machine_required_layers: &[],
         };
@@ -1040,6 +1072,7 @@ mod registry_tests {
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
             applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1072,6 +1105,7 @@ mod registry_tests {
                 token_arm: Some(arm),
                 wfp_preconfirmed: false,
                 applied: layer_registry::AppliedLayers::default(),
+                expected_session_sid: None,
                 required_layers_override: &[],
                 machine_required_layers: &[],
             };
@@ -1081,6 +1115,48 @@ mod registry_tests {
                 "AppContainerProfile must be NotApplicable at (DirectCli, {arm:?})"
             );
         }
+    }
+
+    /// Phase 117 review WR-01 non-vacuity: `RestrictedToken` must confirm
+    /// only when THIS launch's synthetic per-session SID is among the
+    /// child token's restricting SIDs.
+    ///
+    /// Before WR-01 the classifier accepted ANY non-empty restricting-SID
+    /// list, so a token restricted by an unrelated SID — not the one the
+    /// session's WRITE_RESTRICTED double-check is built on — attested
+    /// identically to the correct one.
+    #[test]
+    fn restricted_token_requires_this_launch_own_session_sid() {
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let entries = layer_registry::all_entries();
+        let row = entries
+            .iter()
+            .find(|e| e.id == LayerId::RestrictedToken)
+            .expect("RestrictedToken row must exist");
+        // SAFETY: GetCurrentProcess returns an always-valid pseudo-handle.
+        let unrestricted: ProcessHandle = unsafe { GetCurrentProcess() };
+        let mut input = AttestationInput {
+            child_process: unrestricted,
+            containment_job: dummy_job(),
+            entry_path: EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::WriteRestricted),
+            wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: Some("S-1-5-117-1-2-3-4"),
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        };
+        assert_eq!(
+            classify_row(row, &input),
+            LayerAttestationStatus::Unconfirmed,
+            "the test runner's own unrestricted token does not carry this launch's session              SID and must not confirm RestrictedToken"
+        );
+        // No expected value at all is also fail-closed.
+        input.expected_session_sid = None;
+        assert_eq!(
+            classify_row(row, &input),
+            LayerAttestationStatus::Unconfirmed
+        );
     }
 
     /// Phase 117 review CR-01 non-vacuity guard: `MandatoryIntegrityLabel`
@@ -1111,6 +1187,7 @@ mod registry_tests {
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
             applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1144,6 +1221,7 @@ mod registry_tests {
                 wfp_egress_filters: Some(true),
                 ..Default::default()
             },
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1162,6 +1240,7 @@ mod registry_tests {
                 wfp_egress_filters: Some(false),
                 ..Default::default()
             },
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1192,6 +1271,7 @@ mod registry_tests {
                 token_arm,
                 wfp_preconfirmed: false,
                 applied: layer_registry::AppliedLayers::default(),
+                expected_session_sid: None,
                 required_layers_override: &[],
                 machine_required_layers: &[],
             };
@@ -1379,6 +1459,7 @@ mod latency_measurement {
             token_arm: Some(WindowsTokenArm::WriteRestricted),
             wfp_preconfirmed: false,
             applied: layer_registry::AppliedLayers::default(),
+            expected_session_sid: None,
             required_layers_override: &[],
             machine_required_layers: &[],
         };

@@ -1440,6 +1440,7 @@ fn apply_startup_attestation_gate(
     token_arm: Option<WindowsTokenArm>,
     wfp_preconfirmed: bool,
     applied: layer_registry::AppliedLayers,
+    expected_session_sid: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<()> {
     let input = attestation::AttestationInput {
@@ -1455,6 +1456,9 @@ fn apply_startup_attestation_gate(
         // applied for THIS launch, instead of this module assuming every
         // `ConfiguredOnly` row was established.
         applied,
+        // Phase 117 review WR-01: the synthetic per-session restricting SID
+        // this launch's WRITE_RESTRICTED token was built with.
+        expected_session_sid,
         // D-26 tighten-only union: not yet wired at this gate (no CLI flag
         // or machine-policy-required-layers plumbing lands in this plan —
         // see 117-10-SUMMARY.md). Passing empty slices means no ADDITIONAL
@@ -2399,6 +2403,7 @@ pub(super) fn spawn_windows_child(
         Some(arm),
         wfp_preconfirmed,
         applied_layers,
+        config.session_sid.as_deref(),
         session_id,
     ) {
         terminate_suspended_process(
@@ -3331,6 +3336,7 @@ mod attestation_gate_tests {
             false,
             fully_applied_layers(),
             None,
+            None,
         );
         unsafe {
             // SAFETY: `job` is a valid HANDLE this test owns.
@@ -3369,6 +3375,7 @@ mod attestation_gate_tests {
             Some(WindowsTokenArm::Null),
             false,
             fully_applied_layers(),
+            None,
             None,
         );
         unsafe {
@@ -3429,6 +3436,7 @@ mod attestation_gate_tests {
             Some(WindowsTokenArm::Null),
             false,
             fully_applied_layers(),
+            None,
             Some("117-10-attestation-gate-test-session"),
         );
         assert!(
@@ -3473,6 +3481,7 @@ mod attestation_gate_tests {
             Some(WindowsTokenArm::Null),
             false,
             applied,
+            None,
             None,
         );
         unsafe {
