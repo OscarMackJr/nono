@@ -23,6 +23,7 @@ use nono::{
     label_mask_for_access_mode, low_integrity_label_and_mask, path_is_owned_by_current_user,
     try_set_mandatory_label, NonoError, Result, WindowsFilesystemPolicy,
 };
+use windows_sys::Win32::System::SystemServices::SECURITY_MANDATORY_LOW_RID;
 
 use super::layer_registry;
 
@@ -47,6 +48,23 @@ enum AppliedLabel {
     /// mask this launch's policy asked for. The guard already warns that the
     /// grant "may have no observable enforcement effect".
     SkipPreExistingLabel,
+    /// NR3-01 (Phase 117 iteration 3 review): the pre-existing mandatory-label
+    /// ACE on this path is at `SECURITY_MANDATORY_LOW_RID` with EXACTLY the
+    /// mask this launch's own `label_mask_for_access_mode(rule.access)` would
+    /// have applied. This is nono's own steady-state residue: either a PRIOR
+    /// launch over the same workspace that never reached `Drop` (Ctrl-C,
+    /// kill, crash — so `revert_all` never ran and the ACE it wrote is still
+    /// on disk), or an identical concurrent session sharing the same path.
+    ///
+    /// This is NOT a coverage gap: the contract this launch requires (a
+    /// Low-IL label with this exact mask) is already satisfied on disk, so it
+    /// counts toward `LabelCoverage.applied`. It is also NEVER reverted by
+    /// this guard's Drop — we did not apply it this session, and a
+    /// concurrent session sharing the path may still depend on it (preserves
+    /// the module doc's "concurrent sessions sharing the same path: last
+    /// session out restores" contract rather than tearing down state this
+    /// guard does not own).
+    AlreadyAtRequiredLevel,
     /// Path is not owned by the current user (system paths like
     /// `C:\Windows` granted read via built-in policy groups). Unprivileged
     /// users do not hold `WRITE_OWNER` on system paths, so
@@ -191,9 +209,29 @@ impl AppliedLabelsGuard {
         for rule in &policy.rules {
             let prior = low_integrity_label_and_mask(&rule.path);
             if let Some((prior_rid, prior_mask)) = prior {
-                // D-02 skip-on-any-prior-label: a file with ANY existing
-                // mandatory-label ACE is NOT touched. This preserves the
-                // contract that nono never mutates a pre-existing label.
+                // NR3-01: before treating any pre-existing ACE as a coverage
+                // gap, check whether it is nono's own residue — a prior label
+                // at Low IL with EXACTLY the mask this launch would apply.
+                // That residue is not a third-party label; it is what THIS
+                // launch's own contract requires, already satisfied on disk.
+                let wanted = label_mask_for_access_mode(rule.access);
+                if prior_rid == SECURITY_MANDATORY_LOW_RID as u32 && prior_mask == wanted {
+                    tracing::debug!(
+                        path = %rule.path.display(),
+                        mask = format!("0x{wanted:X}"),
+                        "label guard: path already carries the exact mandatory-label ACE this launch \
+                         would apply (self-healing residue from a prior abnormal exit or a concurrent \
+                         session over the same path); treating as already covered"
+                    );
+                    guard.entries.push(AppliedLabel::AlreadyAtRequiredLevel);
+                    continue;
+                }
+
+                // D-02 skip-on-any-prior-label: a file with a mismatched (or
+                // non-Low) mandatory-label ACE is NOT touched. This preserves
+                // the contract that nono never mutates a pre-existing label.
+                // This IS a genuine coverage gap (Test C): the label present
+                // does not match what this launch's policy requires.
                 tracing::warn!(
                     path = %rule.path.display(),
                     prior_rid = format!("0x{prior_rid:X}"),
@@ -273,7 +311,9 @@ impl AppliedLabelsGuard {
         };
         for entry in &self.entries {
             match entry {
-                AppliedLabel::Applied { .. } => coverage.applied += 1,
+                AppliedLabel::Applied { .. } | AppliedLabel::AlreadyAtRequiredLevel => {
+                    coverage.applied += 1;
+                }
                 AppliedLabel::SkipPreExistingLabel => {
                     coverage.skipped_pre_existing_label += 1;
                 }
@@ -290,8 +330,15 @@ impl AppliedLabelsGuard {
         // get reverted first. Mirrors the Phase 04 WFP orphan-sweep discipline.
         while let Some(entry) = self.entries.pop() {
             match entry {
-                AppliedLabel::SkipPreExistingLabel | AppliedLabel::SkipNotOwned => {
+                AppliedLabel::SkipPreExistingLabel
+                | AppliedLabel::SkipNotOwned
+                | AppliedLabel::AlreadyAtRequiredLevel => {
                     // No-op: we never applied, so there is nothing to revert.
+                    // `AlreadyAtRequiredLevel` is deliberately included here —
+                    // the ACE present is nono's own residue from a PRIOR
+                    // launch (or a concurrent session sharing the path), not
+                    // something this guard instance applied; it is not ours
+                    // to tear down.
                 }
                 AppliedLabel::Applied { path } => {
                     Self::best_effort_revert(&path);
@@ -559,9 +606,22 @@ mod tests {
         // (b) One fresh path + one path carrying a third-party label →
         //     PartiallyApplied. This is the D-27 downgrade's live production
         //     source (NR-02): a workspace file somebody else already hardened.
+        //
+        //     NR3-01: the pre-existing label's mask must genuinely MISMATCH
+        //     this test's `file_rule` (which requests `AccessMode::Read`) so
+        //     this stays a real third-party label rather than colliding with
+        //     the self-healing residue path added in this plan — hence
+        //     `AccessMode::Write`'s mask, not a hand-picked constant that
+        //     might accidentally equal Read's own wanted mask.
         let prelabeled = dir.path().join("prelabeled.txt");
         std::fs::write(&prelabeled, "x").expect("write");
-        try_set_mandatory_label(&prelabeled, 0x5).expect("pre-label");
+        let third_party_mask = label_mask_for_access_mode(AccessMode::Write);
+        assert_ne!(
+            third_party_mask,
+            label_mask_for_access_mode(AccessMode::Read),
+            "test precondition: third-party mask must differ from this test's Read rule mask"
+        );
+        try_set_mandatory_label(&prelabeled, third_party_mask).expect("pre-label");
         let fresh_c = dir.path().join("fresh-c.txt");
         std::fs::write(&fresh_c, "x").expect("write");
         let mixed_policy = WindowsFilesystemPolicy {
@@ -642,6 +702,87 @@ mod tests {
             post.0, 0x1000,
             "guard must not revert a label it did not apply"
         );
+    }
+
+    /// NR3-01 (Phase 117 review, iteration 3 BLOCKER): the core self-healing
+    /// regression. A guard that is never `Drop`ped (simulating Ctrl-C, kill,
+    /// or a crash between apply and cleanup) leaves its Low-IL ACE on disk.
+    /// The NEXT launch of the SAME policy over the SAME path must recognize
+    /// that residue as already covering its own contract, not report
+    /// `NotApplied` and hard-abort the operator out of their own workspace.
+    #[test]
+    fn stale_residue_from_an_abnormal_exit_does_not_self_lock_out_the_next_launch() {
+        use layer_registry::LayerApplication;
+
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let policy = single_file_read_rule(file.clone());
+
+        // First "launch": apply, then simulate an abnormal exit by forgetting
+        // the guard instead of letting it Drop. The ACE it wrote stays on
+        // disk — exactly the residue an abrupt Ctrl-C/kill/crash leaves.
+        let first = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("first apply");
+        std::mem::forget(first);
+
+        let residue = low_integrity_label_and_mask(&file).expect("residue label must be present");
+        assert_eq!(residue.0, 0x1000, "residue must be at Low IL");
+
+        // Second "launch": identical policy, over the same now-labeled path.
+        let second = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("second apply");
+        let coverage = second.coverage();
+        assert_eq!(
+            coverage.application(),
+            LayerApplication::Applied,
+            "residue matching this launch's own mode-derived mask must be recognized as \
+             already covered, not reported NotApplied: {coverage:?}"
+        );
+        drop(second);
+
+        // Cleanup only — not part of the assertion. Directly clear the
+        // leaked label so the tempdir does not leave a labeled file behind
+        // (neither guard instance will revert `AlreadyAtRequiredLevel`,
+        // which is the whole point of the fix under test).
+        clear_mandatory_label(&file).expect("test cleanup: clear residual label");
+    }
+
+    /// NR3-01 negative-direction, mask-mismatch: a pre-existing label at a
+    /// DIFFERENT mask than this launch's own rule would produce is a genuine
+    /// coverage gap, not residue. Confirms the fix compares against the
+    /// wanted mask, not merely "any Low-IL label present".
+    #[test]
+    fn mismatched_prior_mask_still_records_a_coverage_gap() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "x").expect("write file");
+
+        // Pre-label at Low IL with the Write-class mask
+        // (`NO_READ_UP | NO_EXECUTE_UP`). This launch's rule is
+        // `AccessMode::Read`, whose `label_mask_for_access_mode` output is
+        // `NO_WRITE_UP | NO_EXECUTE_UP` — a genuinely different bit pattern,
+        // computed rather than hand-picked so this test cannot silently
+        // collide with the self-healing residue path the way a bare literal
+        // did (see the (b) case in `coverage_distinguishes_full_partial_and_zero_ace_launches`).
+        let prior_mask = label_mask_for_access_mode(AccessMode::Write);
+        try_set_mandatory_label(&file, prior_mask).expect("pre-label apply");
+        let wanted = label_mask_for_access_mode(AccessMode::Read);
+        assert_ne!(
+            wanted, prior_mask,
+            "test precondition: this launch's wanted mask must differ from the pre-labeled mask"
+        );
+
+        let policy = single_file_read_rule(file.clone());
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
+        assert_eq!(guard.entries.len(), 1);
+        assert!(
+            matches!(guard.entries[0], AppliedLabel::SkipPreExistingLabel),
+            "a mask mismatch must still record SkipPreExistingLabel (a genuine coverage gap), \
+             got {:?}",
+            guard.entries[0]
+        );
+        let coverage = guard.coverage();
+        assert_eq!(coverage.applied, 0, "{coverage:?}");
+        assert_eq!(coverage.skipped_pre_existing_label, 1, "{coverage:?}");
     }
 
     #[test]
