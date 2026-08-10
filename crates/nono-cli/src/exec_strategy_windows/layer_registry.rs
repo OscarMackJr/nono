@@ -868,8 +868,8 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::MandatoryIntegrityLabel,
         name: "mandatory-integrity-label",
         call_sites: &[
-            "labels_guard.rs:83",
-            "mod.rs:425",
+            "labels_guard.rs::AppliedLabelsGuard::snapshot_and_apply",
+            "mod.rs::prepare_live_windows_launch",
             "nono-shell-broker/src/main.rs:615-644",
         ],
         expectancy: &MANDATORY_INTEGRITY_LABEL_EXPECTANCY,
@@ -939,8 +939,8 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::DaclPackageSidGrant,
         name: "dacl-package-sid-grant",
         call_sites: &[
-            "dacl_guard.rs:92",
-            "mod.rs:436-440",
+            "dacl_guard.rs::AppliedDaclGrantsGuard::snapshot_and_apply",
+            "mod.rs::prepare_live_windows_launch",
             "agent_daemon/launch.rs:133",
             "agent_daemon/launch.rs:764",
         ],
@@ -951,7 +951,10 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
     LayerRegistryEntry {
         id: LayerId::DaclAncestorTraverse,
         name: "dacl-ancestor-traverse",
-        call_sites: &["dacl_guard.rs:236", "mod.rs:449-455"],
+        call_sites: &[
+            "dacl_guard.rs::AppliedAncestorTraverseGuard::snapshot_and_apply",
+            "mod.rs::prepare_live_windows_launch",
+        ],
         expectancy: &DACL_PACKAGE_SID_SCOPED_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
@@ -959,7 +962,10 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
     LayerRegistryEntry {
         id: LayerId::DaclAncestorReadAttrs,
         name: "dacl-ancestor-read-attrs",
-        call_sites: &["dacl_guard.rs:401", "mod.rs:473-482"],
+        call_sites: &[
+            "dacl_guard.rs::AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets",
+            "mod.rs::prepare_live_windows_launch",
+        ],
         expectancy: &DACL_ANCESTOR_READ_ATTRS_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
