@@ -16,6 +16,12 @@ categories = ["os::windows-apis"]
 name = "nono-shell-broker"
 path = "src/main.rs"
 
+[features]
+# Enables per-layer force-unavailable hooks for CINT-03 forced-unavailable
+# tests. NEVER enable in a release build — D-30: this must be compiled out,
+# not merely refused at runtime.
+layer-fault-injection = []
+
 [dependencies]
 nono = { version = "0.70.0", path = "../nono", package = "nono-sandbox" }
 thiserror.workspace = true
