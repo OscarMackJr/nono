@@ -95,7 +95,7 @@
 use super::launch::WindowsTokenArm;
 use super::layer_registry;
 use nono::attestation::{
-    probe_app_container_sid, probe_in_job, probe_integrity_level, probe_restricted_sids, JobHandle,
+    probe_app_container_sid, probe_in_job, probe_restricted_sids, JobHandle,
     LayerAttestationStatus, ProcessHandle,
 };
 use nono::NonoError;
@@ -271,16 +271,17 @@ fn classify_live_probe(
             classify_probe_outcome(probe_in_job(process, input.containment_job))
         }
         LayerId::AppContainerProfile => classify_probe_outcome(probe_app_container_sid(process)),
-        LayerId::MandatoryIntegrityLabel => match probe_integrity_level(process) {
-            // The integrity-level RID has no "successful-but-negative"
-            // shape the way bool/Option/Vec probes do — any successfully
-            // read RID is the positive confirmation that the token's own
-            // mandatory label was queryable and present; only the OS call
-            // itself failing is a negative result.
-            Ok(_rid) => LayerAttestationStatus::Confirmed,
-            Err(_) => LayerAttestationStatus::Unconfirmed,
-        },
-        LayerId::DaclSessionSidGrant
+        // Phase 117 review CR-01: `MandatoryIntegrityLabel` no longer
+        // dispatches here. It used to call `probe_integrity_level` on the
+        // child token — the wrong kernel object for a row that describes an
+        // ACE on filesystem paths, and a call that succeeds for every
+        // Windows token, so its deny branch was unreachable. The row is now
+        // `ProbeKind::ConfiguredOnly` (see `layer_registry.rs`) and never
+        // reaches this dispatch; it is grouped into the defensive
+        // fail-secure fallback below alongside the other non-live-probed
+        // IDs, so a future registry/dispatch drift lands on `Unconfirmed`.
+        LayerId::MandatoryIntegrityLabel
+        | LayerId::DaclSessionSidGrant
         | LayerId::DaclPackageSidGrant
         | LayerId::DaclAncestorTraverse
         | LayerId::DaclAncestorReadAttrs
@@ -977,6 +978,43 @@ mod registry_tests {
                 "AppContainerProfile must be NotApplicable at (DirectCli, {arm:?})"
             );
         }
+    }
+
+    /// Phase 117 review CR-01 non-vacuity guard: `MandatoryIntegrityLabel`
+    /// must not be able to reach `Confirmed` from a live token query against
+    /// an ordinary, unconfined Medium-IL process.
+    ///
+    /// Before CR-01 this row was `ProbeKind::LiveTokenOrJobQuery` dispatching
+    /// to `probe_integrity_level`, which succeeds for EVERY Windows token
+    /// (every process has a mandatory label, Medium by default) and whose
+    /// classifier discarded the RID — so the test runner's own fully
+    /// unconfined process classified `Confirmed`. Asserting the row is NOT
+    /// `Confirmed` here fails immediately if that dispatch is ever restored.
+    #[test]
+    fn mandatory_integrity_label_cannot_confirm_from_an_unconfined_medium_il_token() {
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        let entries = layer_registry::all_entries();
+        let row = entries
+            .iter()
+            .find(|e| e.id == LayerId::MandatoryIntegrityLabel)
+            .expect("MandatoryIntegrityLabel row must exist");
+        // SAFETY: GetCurrentProcess returns an always-valid pseudo-handle for
+        // this fully unconfined, Medium-IL test-runner process.
+        let unconfined: ProcessHandle = unsafe { GetCurrentProcess() };
+        let input = AttestationInput {
+            child_process: unconfined,
+            containment_job: dummy_job(),
+            entry_path: EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::Null),
+            wfp_preconfirmed: false,
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        };
+        assert_ne!(
+            classify_row(row, &input),
+            LayerAttestationStatus::Confirmed,
+            "an unconfined Medium-IL process must never confirm MandatoryIntegrityLabel —              the pre-CR-01 token-integrity-level probe did exactly that"
+        );
     }
 
     /// Behavior 4: `WfpEgressFilters` (`ConfirmedByEnforcingComponentReport`)

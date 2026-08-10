@@ -634,7 +634,33 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         ],
         expectancy: &MANDATORY_INTEGRITY_LABEL_EXPECTANCY,
         outcome: ContractOutcome::Abort,
-        probe: ProbeKind::LiveTokenOrJobQuery,
+        // Phase 117 review CR-01: was `LiveTokenOrJobQuery`, dispatched to
+        // `probe_integrity_level` against the CHILD TOKEN. Two defects:
+        //
+        // 1. Wrong object. This row is the mandatory-label ACE that
+        //    `AppliedLabelsGuard::snapshot_and_apply` writes onto the
+        //    compiled filesystem-policy PATHS (see `call_sites` above). The
+        //    child token's own integrity level is a different kernel object
+        //    entirely; confirming it would not attest what this row claims.
+        // 2. The deny branch was unreachable. `GetTokenInformation(
+        //    TokenIntegrityLevel)` succeeds for EVERY Windows token — every
+        //    process has a mandatory label, Medium by default — and the
+        //    classifier discarded the RID, so a fully unconfined Medium-IL
+        //    child classified `Confirmed`. The guard could only say yes.
+        //
+        // The file-label ACE has no independent post-hoc kernel query worth
+        // re-running (re-reading the ACE we just wrote tells us nothing the
+        // apply `Result` did not), so `ConfiguredOnly` is the honest probe
+        // kind. Per CR-09 the caller now supplies whether the apply actually
+        // happened for THIS launch, so `ConfiguredOnly` is no longer a
+        // free pass either.
+        //
+        // A genuine token-integrity-level observation IS performed, but on
+        // the arm where it means something and by the binary that can see
+        // the right process: `nono-shell-broker` re-reads its own
+        // AppContainer grandchild's token RID and requires it to be
+        // <= SECURITY_MANDATORY_LOW_RID before resuming it (CR-03).
+        probe: ProbeKind::ConfiguredOnly,
     },
     LayerRegistryEntry {
         id: LayerId::AppContainerProfile,

@@ -3262,11 +3262,14 @@ mod attestation_gate_tests {
     /// Behavior 1: an `Abort`-outcome layer that cannot be independently
     /// confirmed causes `apply_startup_attestation_gate` to return
     /// `Err(NonoError::LayerAttestationFailed)` naming
-    /// `MandatoryIntegrityLabel`, the first `LiveTokenOrJobQuery`-probed
+    /// `JobObjectContainment`, the first `LiveTokenOrJobQuery`-probed
     /// `Abort`-outcome row `decide_from_entries` reaches for `(DirectCli,
     /// Null)` — the caller terminates the suspended child on `Err`,
     /// mirroring the existing containment/resource-limit gate idiom this
     /// function is inserted alongside.
+    ///
+    /// (Phase 117 review CR-01 moved `MandatoryIntegrityLabel` off the live
+    /// probe, so `JobObjectContainment` is now the first such row.)
     ///
     /// Deterministic (not host-dependent): a null process handle, exactly
     /// like `crates/nono/src/attestation.rs`'s own
@@ -3294,7 +3297,7 @@ mod attestation_gate_tests {
         }
         match result {
             Err(NonoError::LayerAttestationFailed { layer, .. }) => {
-                assert_eq!(layer, "MandatoryIntegrityLabel");
+                assert_eq!(layer, "JobObjectContainment");
             }
             other => panic!("expected Err(LayerAttestationFailed), got {other:?}"),
         }
