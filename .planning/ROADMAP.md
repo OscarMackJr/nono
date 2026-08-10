@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 12/12 plans
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 12/19 plans (gap closure: 7 plans added 2026-08-10 from 117-VERIFICATION.md gaps_found)
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -288,7 +288,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
   3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
   4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
-**Plans**: 12 plans in 5 waves
+**Plans**: 19 plans in 8 waves (12 executed; 7 gap-closure plans added 2026-08-10 closing 117-VERIFICATION.md's gaps_found - NR3-01 BLOCKER, SC3 test-coverage shortfall, NR3-02/03/04/05 structural fail-open residuals, SC4 SPEC-ledger drift, NR3-08 citation drift, NR-08 CI gap)
 
 **Wave 1** — the registry is the source of truth everything else derives from (D-01)
 - [x] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
@@ -311,6 +311,21 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 
 **Wave 5** *(blocked on Wave 4)*
 - [x] 117-12-PLAN.md — Forced-unavailable tests + D-32 meta-test + D-31 loud-gap list + cross-target clippy + D-24 latency + SPEC close-out
+
+**Gap closure (2026-08-10, from `117-VERIFICATION.md`, status: gaps_found, 0/4 truths fully verified)** — see `117-REVIEW.md` iteration 3 (1 Blocker + 9 Warning) and `117-REVIEW-FIX.md` for the findings these plans close.
+
+**Wave 6** *(blocked on Wave 5 — parallel, disjoint files)*
+- [ ] 117-13-PLAN.md — NR3-01 BLOCKER: self-healing mandatory-label residue detection + NonoError::remediation() arm for LayerAttestationFailed
+- [ ] 117-14-PLAN.md — NR3-02: real coverage accessor for DaclAncestorTraverse/DaclAncestorReadAttrs (was a constant Applied, structurally could not deny)
+- [ ] 117-15-PLAN.md — NR3-03 + NR3-08: close the DaclSessionSidGrant fail-open landmine (false test citation) + convert 4 rows' call-site citations to symbol form
+- [ ] 117-16-PLAN.md — NR3-04: unconditional downgrade-banner diagnostic log line + new FirewallRulesEgress forced-unavailable test (SC3)
+- [ ] 117-17-PLAN.md — NR3-05: delete the daemon's dead ProceedDowngraded decision state; document abort-or-proceed by design
+
+**Wave 7** *(blocked on Wave 6 — reads dacl_guard.rs/launch.rs/layer_registry.rs)*
+- [ ] 117-18-PLAN.md — SC3: broaden layer_registry_meta_test.rs discovery (ALSO_AUTOMATED, 8 rows) + CI fix (NR-08, build nono-shell-broker + NONO_CI_HAS_WFP)
+
+**Wave 8** *(blocked on Wave 7 — documents the final state of every gap-closure plan)*
+- [ ] 117-19-PLAN.md — SC4: port NR-04/NR-05/NR-06 + NR3-* rows into the SPEC's Review-fix pass ledger, fix stale RF-14, update registry-table citations, reduce manual-verification section to 3 operator-accepted rows
 
 **Cross-cutting constraints** (phase-wide invariants cited across multiple plans):
 - **D-19** — the supervisor attests; the confined process is never the source of a claim about its own containment.
