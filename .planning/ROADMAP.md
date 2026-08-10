@@ -288,7 +288,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
   3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
   4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
-**Plans**: 19 plans in 8 waves (18 executed — wave 7 of 8 now fully complete; 7 gap-closure plans added 2026-08-10 closing 117-VERIFICATION.md's gaps_found - NR3-01 BLOCKER, SC3 test-coverage shortfall, NR3-02/03/04/05 structural fail-open residuals, SC4 SPEC-ledger drift, NR3-08 citation drift, NR-08 CI gap; 117-13 executed 2026-08-10 closing NR3-01, 117-14 executed 2026-08-10 closing NR3-02, 117-15 executed 2026-08-10 closing NR3-03 + NR3-08, 117-16 executed 2026-08-10 closing NR3-04 + SC3's FirewallRulesEgress row, 117-17 executed 2026-08-10 closing NR3-05, 117-18 executed 2026-08-10 broadening SC3 discovery to 10/13 rows + closing NR-08)
+**Plans**: 26 plans in 11 waves (19 executed across waves 1-8; second gap-closure round added 2026-08-10 from the re-verification pass in `117-VERIFICATION.md` — status gaps_found, 0/4 truths fully verified — closing CR-01 BLOCKER, CR-02 BLOCKER-adjacent/D-28, WR-01..WR-11, and the remaining 9/13 SC1 citation gap; see `117-REVIEW.md` iteration 4)
 
 **Wave 1** — the registry is the source of truth everything else derives from (D-01)
 - [x] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
@@ -326,6 +326,21 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 
 **Wave 8** *(blocked on Wave 7 — documents the final state of every gap-closure plan)*
 - [x] 117-19-PLAN.md — SC4: port NR-04/NR-05/NR-06 + NR3-* rows into the SPEC's Review-fix pass ledger, fix stale RF-14, update registry-table citations, reduce manual-verification section to 3 operator-accepted rows
+
+**Gap closure round 2 (2026-08-10, from `117-VERIFICATION.md` re-verification pass, status: gaps_found, 0/4 truths fully verified)** — the first gap-closure round (waves 6-8) closed NR3-01..NR3-08 but its own fixes reopened CR-14's class as CR-01 and introduced a D-28 violation as CR-02; see `117-REVIEW.md` iteration 4 (2 Critical + 11 Warning) for the findings these plans close.
+
+**Wave 9** *(blocked on Wave 8 — parallel, disjoint files)*
+- [ ] 117-20-PLAN.md — CR-01 BLOCKER: ACE-flags-aware residue predicate (rejects INHERIT_ONLY_ACE), ownership-gate reorder (WR-01), corrected revert-semantics doc comment (WR-02), restored/added test coverage (WR-03)
+- [ ] 117-21-PLAN.md — CR-02 BLOCKER-adjacent/D-28: gate the downgrade warn's layer-name detail behind a private-log-channel check; wire NonoError::remediation() into main.rs's error path (WR-04)
+- [ ] 117-22-PLAN.md — WR-06: correct DaemonAttestationDecision's false "no partial-success return" premise + cross-mirror subset test; WR-11: anchor-marker-hardened two-state discovery test + exhaustive-match behavioral test
+- [ ] 117-24-PLAN.md — SC1/CINT-01: convert the remaining 9/13 registry rows to verified symbol-form citations; WR-08: definition-site-aware content check; WR-10: contains_fn_exact's documented `!` boundary + definition-line-prefix requirement
+- [ ] 117-25-PLAN.md — WR-05: remove dead NONO_CI_HAS_WFP CI config; WR-09: revert SecurityEventLayerInner's fields to private behind an advance_and_snapshot accessor
+
+**Wave 10** *(blocked on Wave 9 — 117-23 shares launch.rs with 117-21)*
+- [ ] 117-23-PLAN.md — WR-07: 3-state application() (walked/PartiallyApplied/Applied) for AppliedAncestorTraverseGuard and AppliedAncestorReadAttributesGuard, closing the expected:true-row-silently-drops predicate-width gap; gate-level regression test
+
+**Wave 11** *(blocked on Wave 10 — documents the final state of every gap-closure-round-2 plan, alone per SC4)*
+- [ ] 117-26-PLAN.md — SC4: record CR-01, CR-02, WR-01..WR-11 in the SPEC's Review-fix pass ledger with re-runnable evidence; sync the registry-table citations to the post-117-24 code; correct the now-stale NR3-01/NR3-04/NR3-05 rows
 
 **Cross-cutting constraints** (phase-wide invariants cited across multiple plans):
 - **D-19** — the supervisor attests; the confined process is never the source of a claim about its own containment.
