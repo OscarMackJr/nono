@@ -162,40 +162,31 @@ fn force_unavailable_mandatory_integrity_label() {
     assert_layer_attestation_abort(&output, "MandatoryIntegrityLabel");
 }
 
-/// `LayerId::DaclSessionSidGrant` — `dacl_guard.rs`'s ONE shared
+/// `LayerId::DaclPackageSidGrant` — `dacl_guard.rs`'s ONE shared
 /// `DACL_GRANT_FORCE_UNAVAILABLE` seam (Plan 06), fired via
-/// `AppliedDaclGrantsGuard::snapshot_and_apply` (`mod.rs:449-453`), the FIRST
-/// DACL guard `prepare_live_windows_launch` constructs. This is this row's
-/// OWN enforcement call site (`layer_registry.rs` cites `dacl_guard.rs:92`
-/// for `DaclSessionSidGrant`).
+/// `AppliedDaclGrantsGuard::snapshot_and_apply` (`mod.rs`), the FIRST DACL
+/// guard `prepare_live_windows_launch` constructs. That guard is passed
+/// `config.package_sid`, so this IS this row's own enforcement call site.
+///
+/// # Phase 117 review WR-05
+///
+/// There used to be TWO tests here — `force_unavailable_dacl_session_sid_grant`
+/// and `force_unavailable_dacl_package_sid_grant` — with byte-identical
+/// bodies, both arming `NONO_FORCE_UNAVAILABLE_DACL_GRANT` and both
+/// asserting the string `"DaclSessionSidGrant"`. The package-SID test
+/// therefore proved nothing about its own row and was counted as automated
+/// coverage by `every_registry_row_has_a_test` purely because a function
+/// with the right name existed. CR-05 established that the guard only ever
+/// grants the PACKAGE SID, so the seam now reports `DaclPackageSidGrant` —
+/// the layer it actually implements — and this is the one, correctly
+/// labelled test. `DaclSessionSidGrant` no longer has (or needs) a test:
+/// its registry expectancy is empty because no shipped call site applies it.
 ///
 /// Non-vacuous: without the env var, the identical command exits 0 with
 /// "hello" in stdout (`windows_run_executes_basic_command`, `env_vars.rs`) —
 /// disarming the seam changes the outcome, proving this assertion can fail.
 #[test]
-fn force_unavailable_dacl_session_sid_grant() {
-    let output = run_minimal_with_forced_unavailable("NONO_FORCE_UNAVAILABLE_DACL_GRANT");
-    assert_layer_attestation_abort(&output, "DaclSessionSidGrant");
-}
-
-/// `LayerId::DaclPackageSidGrant` — shares the IDENTICAL call site and the
-/// SAME `DACL_GRANT_FORCE_UNAVAILABLE` flag as `DaclSessionSidGrant` above
-/// (117-06 SUMMARY key-decision: "One shared DACL_GRANT_FORCE_UNAVAILABLE
-/// flag covers all three DACL apply functions... naming the shared
-/// `AppliedDaclGrantsGuard::snapshot_and_apply` hook's layer
-/// \"DaclSessionSidGrant\" since it is the sole call site cited for both
-/// DaclSessionSidGrant and DaclPackageSidGrant registry rows" —
-/// `layer_registry.rs` itself cites `dacl_guard.rs:92` for BOTH rows). The
-/// runtime `NonoError::LayerAttestationFailed` message therefore ALWAYS
-/// names the layer `"DaclSessionSidGrant"`, never `"DaclPackageSidGrant"` —
-/// asserting the row's own name here would be asserting a string that can
-/// never appear, which is not what this test claims. This test instead
-/// documents, and asserts against, the ACTUAL shared-mechanism behavior:
-/// arming the ONE shared seam and observing the SAME call site fail closed
-/// is the genuine, non-mislabeled evidence available for this row given the
-/// production code's own (Plan-06-sanctioned) shared-flag design.
-#[test]
 fn force_unavailable_dacl_package_sid_grant() {
     let output = run_minimal_with_forced_unavailable("NONO_FORCE_UNAVAILABLE_DACL_GRANT");
-    assert_layer_attestation_abort(&output, "DaclSessionSidGrant");
+    assert_layer_attestation_abort(&output, "DaclPackageSidGrant");
 }

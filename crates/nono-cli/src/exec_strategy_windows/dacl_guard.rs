@@ -139,7 +139,14 @@ impl AppliedDaclGrantsGuard {
         #[cfg(feature = "layer-fault-injection")]
         if dacl_grant_force_unavailable() {
             return Err(NonoError::LayerAttestationFailed {
-                layer: "DaclSessionSidGrant".into(),
+                // Phase 117 review CR-05/WR-05: this guard is constructed
+                // with `config.package_sid`, so the layer it implements is
+                // `DaclPackageSidGrant`. It used to report
+                // `DaclSessionSidGrant`, a layer no shipped call site
+                // applies — which also made the two force-unavailable
+                // integration tests byte-identical, with the package-SID one
+                // asserting the session-SID name.
+                layer: "DaclPackageSidGrant".into(),
                 reason: "forced unavailable by test seam".into(),
             });
         }
@@ -706,7 +713,7 @@ mod tests {
 
         match result {
             Err(NonoError::LayerAttestationFailed { layer, reason }) => {
-                assert_eq!(layer, "DaclSessionSidGrant");
+                assert_eq!(layer, "DaclPackageSidGrant");
                 assert!(
                     reason.contains("forced unavailable"),
                     "reason must explain the forced-unavailable seam: {reason}"

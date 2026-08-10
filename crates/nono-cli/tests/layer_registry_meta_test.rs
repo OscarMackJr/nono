@@ -150,6 +150,18 @@ fn pascal_to_snake_case(name: &str) -> String {
 /// investigation writeup).
 const MANUALLY_VERIFIED: &[(&str, &str)] = &[
     (
+        "DaclSessionSidGrant",
+        "Phase 117 review CR-05: this layer does not exist in the shipped tree. The only \
+         production construction of `AppliedDaclGrantsGuard` is passed `config.package_sid`, \
+         not `config.session_sid`, and the synthetic per-session restricting SID is granted on \
+         no DACL anywhere — so the row's expectancy is empty and there is nothing to force \
+         unavailable. Manual verification is therefore a CODE READ, not a run: confirm \
+         `grep -rn \"session_sid\" crates/nono-cli/src` still shows no DACL grant of \
+         `config.session_sid`. If that ever changes, the registry expectancy must be restored \
+         in the same commit. See the RF-03 open operator decision in \
+         `proj/SPEC-windows-fail-direction-contract.md`.",
+    ),
+    (
         "WfpEgressFilters",
         "Requires a live, elevated nono-wfp-service and a non-elevated daemon session \
          (per-SID WFP is daemon-path only, `nono agent launch`, not direct `nono run`) — not \
