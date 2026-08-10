@@ -10,6 +10,34 @@ use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
+/// Phase 117-21 CR-02: tracks whether `init_tracing_with_security` selected
+/// the private (file-log-succeeded) arm rather than one of the two arms that
+/// route to `std::io::stderr` (the default no-`--log-file` arm and the
+/// file-open-failure fallback arm) — both of which the confined child can
+/// read back on the non-detached-stdio path (D-28). Defaults to `false`
+/// (conservative: assume shared/readable unless proven private) so that any
+/// caller running before `init_tracing`/`init_tracing_with_security` sees
+/// the safe answer.
+static TRACING_LOG_TARGET_IS_PRIVATE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Returns `true` only after `init_tracing_with_security` has selected the
+/// `Some(path) => Ok(writer)` arm (the file-log target opened successfully).
+/// Callers deciding whether a message may carry specific layer/mechanism
+/// names should gate on this (D-28) rather than assume `tracing::warn!`
+/// never reaches a channel the confined child can read.
+pub(crate) fn log_target_is_private() -> bool {
+    TRACING_LOG_TARGET_IS_PRIVATE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Test-only seam (Phase 117-21 Task 2) to drive both branches of
+/// `log_target_is_private()` deterministically without going through a real
+/// `init_tracing_with_security` call.
+#[cfg(test)]
+pub(crate) fn set_log_target_is_private_for_test(private: bool) {
+    TRACING_LOG_TARGET_IS_PRIVATE.store(private, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) fn normalize_legacy_flag_env_vars() {
     copy_legacy_env_var("NONO_NET_BLOCK", "NONO_BLOCK_NET");
     copy_legacy_env_var("NONO_NET_ALLOW", "NONO_ALLOW_NET");
@@ -161,6 +189,9 @@ fn init_tracing_with_security(cli: &Cli, security_layer: SecurityEventLayer) {
     match cli.log_file.as_deref() {
         Some(path) => match SharedFileMakeWriter::new(path) {
             Ok(writer) => {
+                // Phase 117-21 CR-02: only this arm's target is private to
+                // the operator (a file the confined child does not share).
+                TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
                 let fmt_layer = tracing_subscriber::fmt::layer()
                     .with_target(false)
                     .with_ansi(false)
