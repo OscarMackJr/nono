@@ -313,6 +313,8 @@ jobs:
     needs: changes
     if: ${{ !startsWith(github.head_ref, 'dependabot/github_actions/') && needs.changes.outputs.run_code_jobs == 'true' }}
     runs-on: windows-latest
+    env:
+      NONO_CI_HAS_WFP: true   # windows-latest runners run as Administrator
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
@@ -331,6 +333,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
+
+      # Plan 117-18 (NR-08): several nono-sandbox-cli tests spawn the real
+      # broker binary (e.g. broker_dispatch_tests::*, the broker-arm paths
+      # in apply_startup_attestation_gate) and panic! with an explicit
+      # "pre-build with `cargo build -p nono-shell-broker --release`"
+      # message when it is absent (launch.rs). Building it here turns that
+      # panic into the CI job actually exercising the real broker-dependent
+      # path instead of depending on incidental artifact presence.
+      - name: Build nono-shell-broker (release)
+        run: cargo build -p nono-shell-broker --release
 
       # Phase 117 review CR-10. Without this job the CINT-03
       # forced-unavailable suites, the eight in-crate seam regression tests,
