@@ -123,8 +123,11 @@ pub(crate) const BROKER_REQUIRED_LAYERS_ENV_VAR: &str = "NONO_BROKER_REQUIRED_LA
 /// routing it correctly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AttestationDecision {
-    /// Every expected row for this (entry_path, token_arm) classified
-    /// `Confirmed`. The session's confinement claim is fully attested.
+    /// Every expected row for this (entry_path, token_arm) either
+    /// classified `Confirmed` or is a `ProbeKind::ConfiguredOnly` row the
+    /// caller reported as applied (CR-09: that is the expected baseline for
+    /// such a row, not a degradation). The session's confinement claim
+    /// holds.
     Proceed,
     /// At least one expected row did not classify `Confirmed`, but its
     /// contracted outcome (or its status being
@@ -177,6 +180,16 @@ pub(crate) struct AttestationInput<'a> {
     /// reads it for `LayerId::WfpEgressFilters`'s
     /// `ProbeKind::ConfirmedByEnforcingComponentReport` classification.
     pub wfp_preconfirmed: bool,
+    /// Phase 117 review CR-09: which layers the caller actually applied for
+    /// THIS launch. `ProbeKind::ConfiguredOnly` rows used to classify
+    /// `EstablishedNotIndependentlyObservable` unconditionally — a free pass
+    /// that (a) made `AttestationDecision::Proceed` unreachable on every
+    /// production path, so the D-27 downgrade banner fired on every session
+    /// forever, and (b) reported layers as "established" on paths where no
+    /// apply ever happened. Defaults are fail-secure: an unreported layer is
+    /// `NotApplied`, which on an `expected: true` row classifies
+    /// `Unconfirmed`.
+    pub applied: layer_registry::AppliedLayers,
     /// CLI-flag-required layer names (`LayerId` `Debug`-format strings).
     /// D-26: unions with `machine_required_layers`, tighten-only.
     pub required_layers_override: &'a [String],
@@ -329,23 +342,47 @@ fn classify_row(
     match entry.probe {
         layer_registry::ProbeKind::LiveTokenOrJobQuery => classify_live_probe(entry.id, input),
         layer_registry::ProbeKind::ConfirmedByEnforcingComponentReport => {
-            // Open Question 1's resolution: a report FROM the enforcing
-            // component (already fail-closed pre-spawn), never re-probed
-            // here — this function never calls any of the four
-            // `crates/nono` probe functions for this row.
-            if input.wfp_preconfirmed {
-                LayerAttestationStatus::Confirmed
-            } else {
-                LayerAttestationStatus::Unconfirmed
+            // CR-04: a row whose enforcing component was not part of this
+            // launch's composition at all (the WFP backend was not the one
+            // selected) is NOT applicable — it is not degraded, and it must
+            // not abort the launch.
+            match input.applied.status(entry.id) {
+                layer_registry::LayerApplication::NotApplicable => {
+                    LayerAttestationStatus::NotApplicable
+                }
+                // Open Question 1's resolution: a report FROM the enforcing
+                // component (already fail-closed pre-spawn), never re-probed
+                // here — this function never calls any of the four
+                // `crates/nono` probe functions for this row.
+                _ => {
+                    if input.wfp_preconfirmed {
+                        LayerAttestationStatus::Confirmed
+                    } else {
+                        LayerAttestationStatus::Unconfirmed
+                    }
+                }
             }
         }
         layer_registry::ProbeKind::ConfiguredOnly => {
-            // The apply-time Result already happened before this function
-            // runs; reaching here at all means the honest label is
-            // "established, not independently observable" — never
-            // `Confirmed` (see Deviation 2 in the module doc for how the
-            // outcome-application step treats this).
-            LayerAttestationStatus::EstablishedNotIndependentlyObservable
+            // CR-09: "the apply-time Result already happened before this
+            // function runs" is only true for a layer the caller actually
+            // applied. The caller now says so per launch instead of this
+            // function assuming it.
+            match input.applied.status(entry.id) {
+                // The apply ran and succeeded fail-closed. There is no
+                // independent post-hoc query for this layer, so the honest
+                // label is "established, not independently observable" —
+                // never `Confirmed`.
+                layer_registry::LayerApplication::Applied => {
+                    LayerAttestationStatus::EstablishedNotIndependentlyObservable
+                }
+                // Expected on this arm, but the supervisor did not apply it.
+                // This is the negative the whole contract exists to catch.
+                layer_registry::LayerApplication::NotApplied => LayerAttestationStatus::Unconfirmed,
+                layer_registry::LayerApplication::NotApplicable => {
+                    LayerAttestationStatus::NotApplicable
+                }
+            }
         }
         layer_registry::ProbeKind::NotApplicable => LayerAttestationStatus::NotApplicable,
     }
@@ -382,10 +419,16 @@ fn decide_from_entries(
                     };
                 }
                 // status == EstablishedNotIndependentlyObservable, not
-                // tightened — module doc Deviation 2: downgrade, don't
-                // abort. The row's own apply-time gate already ran
-                // fail-closed before this function was ever invoked.
-                downgraded.push(entry.id);
+                // tightened. CR-09: this is now the EXPECTED baseline for a
+                // layer the caller reported as applied — the apply ran and
+                // succeeded fail-closed, and no independent re-observation
+                // exists by design. It is therefore NOT a downgrade. Before
+                // this fix every such row was pushed into `downgraded`,
+                // which made `Proceed` unreachable and fired the
+                // non-silenceable D-27 banner on every Windows session
+                // forever — destroying exactly the signal it exists to
+                // carry. A row the caller did NOT apply now classifies
+                // `Unconfirmed` and aborts on the branch above.
             }
             layer_registry::ContractOutcome::DegradeWithVisibleClaim
             | layer_registry::ContractOutcome::FailOpenDefect { .. } => {
@@ -655,72 +698,150 @@ mod tests {
 
     // ---- decide_from_entries policy application (synthetic registry rows) ----
 
-    #[test]
-    fn established_not_independently_observable_downgrades_but_does_not_abort() {
-        const EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
-        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
-            id: LayerId::DaclSessionSidGrant,
-            name: "synthetic-configured-only-abort",
-            call_sites: &[],
-            expectancy: &EXPECTANCY,
-            outcome: ContractOutcome::Abort,
-            probe: ProbeKind::ConfiguredOnly,
-        }];
-        let input = AttestationInput {
+    const NULL_ARM_EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
+        entry_path: EntryPath::DirectCli,
+        token_arm: Some("Null"),
+        expected: true,
+    }];
+
+    fn null_arm_input(applied: layer_registry::AppliedLayers) -> AttestationInput<'static> {
+        AttestationInput {
             child_process: dummy_process(),
             containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
+            applied,
             required_layers_override: &[],
             machine_required_layers: &[],
+        }
+    }
+
+    /// Phase 117 review CR-09, half 1: a `ConfiguredOnly` row the caller
+    /// REPORTED AS APPLIED is the expected baseline, so the decision is
+    /// `Proceed` — not a permanent downgrade.
+    ///
+    /// Before this fix every `ConfiguredOnly` row was pushed into
+    /// `downgraded` unconditionally, so `Proceed` was unreachable on every
+    /// production path and the non-silenceable D-27 banner printed on every
+    /// Windows session forever.
+    #[test]
+    fn applied_configured_only_row_proceeds_without_a_downgrade() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::MandatoryIntegrityLabel,
+            name: "synthetic-configured-only-abort",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::Abort,
+            probe: ProbeKind::ConfiguredOnly,
+        }];
+        let applied = layer_registry::AppliedLayers {
+            mandatory_integrity_label: true,
+            ..Default::default()
         };
-        let decision = decide_from_entries(&ENTRIES, &input, &HashSet::new());
+        let input = null_arm_input(applied);
         assert_eq!(
-            decision,
-            AttestationDecision::ProceedDowngraded {
-                downgraded: vec![LayerId::DaclSessionSidGrant]
+            decide_from_entries(&ENTRIES, &input, &HashSet::new()),
+            AttestationDecision::Proceed
+        );
+    }
+
+    /// Phase 117 review CR-09, half 2 — THE non-vacuity proof: the SAME row,
+    /// on the SAME arm, with the caller reporting it as NOT applied, aborts.
+    ///
+    /// The pre-fix classifier returned
+    /// `EstablishedNotIndependentlyObservable` for this row unconditionally,
+    /// so this deny was structurally unreachable no matter what the
+    /// supervisor had (or had not) done.
+    #[test]
+    fn unapplied_configured_only_row_aborts() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::MandatoryIntegrityLabel,
+            name: "synthetic-configured-only-abort",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::Abort,
+            probe: ProbeKind::ConfiguredOnly,
+        }];
+        // mandatory_integrity_label: false (the fail-secure default).
+        let input = null_arm_input(layer_registry::AppliedLayers::default());
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &HashSet::new()),
+            AttestationDecision::Abort {
+                layer: LayerId::MandatoryIntegrityLabel,
+                status: LayerAttestationStatus::Unconfirmed,
+            }
+        );
+    }
+
+    /// Phase 117 review CR-04: a network row whose backend was NOT the one
+    /// this launch selected is `NotApplicable` — not applicable, not
+    /// degraded, and never a reason to refuse the launch.
+    ///
+    /// Before this fix `WfpEgressFilters` was `expected: true`
+    /// unconditionally at `(DirectCli, BrokerLaunchNoPty)` and derived its
+    /// status solely from `wfp_preconfirmed`, so every launch that chose the
+    /// `FirewallRules` backend (or requested no network restriction) was
+    /// refused with `LayerAttestationFailed { layer: "WfpEgressFilters" }`.
+    #[test]
+    fn network_row_for_an_unselected_backend_is_not_applicable() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::WfpEgressFilters,
+            name: "synthetic-wfp",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::Abort,
+            probe: ProbeKind::ConfirmedByEnforcingComponentReport,
+        }];
+        // wfp_egress_filters: None — a different backend was selected.
+        let not_selected = null_arm_input(layer_registry::AppliedLayers::default());
+        assert_eq!(
+            classify_row(&ENTRIES[0], &not_selected),
+            LayerAttestationStatus::NotApplicable
+        );
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &not_selected, &HashSet::new()),
+            AttestationDecision::Proceed
+        );
+
+        // ...but when WFP *was* the selected backend and its pre-spawn IPC
+        // report did NOT confirm, the row still aborts.
+        let mut selected = null_arm_input(layer_registry::AppliedLayers {
+            wfp_egress_filters: Some(false),
+            ..Default::default()
+        });
+        selected.wfp_preconfirmed = false;
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &selected, &HashSet::new()),
+            AttestationDecision::Abort {
+                layer: LayerId::WfpEgressFilters,
+                status: LayerAttestationStatus::Unconfirmed,
             }
         );
     }
 
     #[test]
     fn tightened_required_layer_aborts_even_when_default_outcome_is_fail_open() {
-        const EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
         const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
-            id: LayerId::MinifilterAbsence,
+            id: LayerId::MandatoryIntegrityLabel,
             name: "synthetic-fail-open",
             call_sites: &[],
-            expectancy: &EXPECTANCY,
+            expectancy: &NULL_ARM_EXPECTANCY,
             outcome: ContractOutcome::FailOpen {
                 justification: "test fixture",
             },
             probe: ProbeKind::ConfiguredOnly,
         }];
-        let input = AttestationInput {
-            child_process: dummy_process(),
-            containment_job: dummy_job(),
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some(WindowsTokenArm::Null),
-            wfp_preconfirmed: false,
-            required_layers_override: &[],
-            machine_required_layers: &[],
-        };
+        let input = null_arm_input(layer_registry::AppliedLayers {
+            mandatory_integrity_label: true,
+            ..Default::default()
+        });
         let mut required = HashSet::new();
-        required.insert(format!("{:?}", LayerId::MinifilterAbsence));
-        let decision = decide_from_entries(&ENTRIES, &input, &required);
+        required.insert(format!("{:?}", LayerId::MandatoryIntegrityLabel));
         assert_eq!(
-            decision,
+            decide_from_entries(&ENTRIES, &input, &required),
             AttestationDecision::Abort {
-                layer: LayerId::MinifilterAbsence,
+                layer: LayerId::MandatoryIntegrityLabel,
                 status: LayerAttestationStatus::EstablishedNotIndependentlyObservable,
             }
         );
@@ -728,80 +849,57 @@ mod tests {
 
     #[test]
     fn untightened_fail_open_row_never_downgrades() {
-        const EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
         const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
-            id: LayerId::MinifilterAbsence,
+            id: LayerId::MandatoryIntegrityLabel,
             name: "synthetic-fail-open",
             call_sites: &[],
-            expectancy: &EXPECTANCY,
+            expectancy: &NULL_ARM_EXPECTANCY,
             outcome: ContractOutcome::FailOpen {
                 justification: "test fixture",
             },
             probe: ProbeKind::ConfiguredOnly,
         }];
-        let input = AttestationInput {
-            child_process: dummy_process(),
-            containment_job: dummy_job(),
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some(WindowsTokenArm::Null),
-            wfp_preconfirmed: false,
-            required_layers_override: &[],
-            machine_required_layers: &[],
-        };
-        let decision = decide_from_entries(&ENTRIES, &input, &HashSet::new());
-        assert_eq!(decision, AttestationDecision::Proceed);
+        // D-06: hardening-only, and NOT applied — its absence must still
+        // never widen (or downgrade) the claim.
+        let input = null_arm_input(layer_registry::AppliedLayers::default());
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &HashSet::new()),
+            AttestationDecision::Proceed
+        );
     }
 
     #[test]
     fn substitute_equivalent_mechanism_falls_through_to_abort_when_alternate_unconfirmed() {
-        const PRIMARY_EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
-        const ALT_EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
         const ENTRIES: [LayerRegistryEntry; 2] = [
             LayerRegistryEntry {
-                id: LayerId::RestrictedToken,
+                id: LayerId::MandatoryIntegrityLabel,
                 name: "primary",
                 call_sites: &[],
-                expectancy: &PRIMARY_EXPECTANCY,
+                expectancy: &NULL_ARM_EXPECTANCY,
                 outcome: ContractOutcome::SubstituteEquivalentMechanism {
                     alternate: "alternate-mechanism",
                 },
                 probe: ProbeKind::ConfiguredOnly,
             },
             LayerRegistryEntry {
-                id: LayerId::MandatoryIntegrityLabel,
+                id: LayerId::DaclPackageSidGrant,
                 name: "alternate-mechanism",
                 call_sites: &[],
-                expectancy: &ALT_EXPECTANCY,
+                expectancy: &NULL_ARM_EXPECTANCY,
                 outcome: ContractOutcome::Abort,
                 probe: ProbeKind::ConfiguredOnly,
             },
         ];
-        let input = AttestationInput {
-            child_process: dummy_process(),
-            containment_job: dummy_job(),
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some(WindowsTokenArm::Null),
-            wfp_preconfirmed: false,
-            required_layers_override: &[],
-            machine_required_layers: &[],
-        };
-        let decision = decide_from_entries(&ENTRIES, &input, &HashSet::new());
+        // The primary was applied (so it reaches the substitute logic with
+        // `Established`), the alternate was not (so it cannot be Confirmed).
+        let input = null_arm_input(layer_registry::AppliedLayers {
+            mandatory_integrity_label: true,
+            ..Default::default()
+        });
         assert_eq!(
-            decision,
+            decide_from_entries(&ENTRIES, &input, &HashSet::new()),
             AttestationDecision::Abort {
-                layer: LayerId::RestrictedToken,
+                layer: LayerId::MandatoryIntegrityLabel,
                 status: LayerAttestationStatus::EstablishedNotIndependentlyObservable,
             }
         );
@@ -809,27 +907,17 @@ mod tests {
 
     #[test]
     fn substitute_equivalent_mechanism_proceeds_when_alternate_confirmed() {
-        const PRIMARY_EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
         // The alternate uses `ConfirmedByEnforcingComponentReport` (driven
-        // purely by `input.wfp_preconfirmed`) rather than a live-probed
-        // LayerId, so the "alternate confirmed" branch is exercised
-        // deterministically without depending on real OS probe behavior
-        // against `dummy_process()`'s null handle.
-        const ALT_EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some("Null"),
-            expected: true,
-        }];
+        // by `wfp_preconfirmed` once its backend is the selected one) rather
+        // than a live-probed LayerId, so the "alternate confirmed" branch is
+        // exercised deterministically without depending on real OS probe
+        // behavior against `dummy_process()`'s null handle.
         const ENTRIES: [LayerRegistryEntry; 2] = [
             LayerRegistryEntry {
-                id: LayerId::RestrictedToken,
+                id: LayerId::MandatoryIntegrityLabel,
                 name: "primary",
                 call_sites: &[],
-                expectancy: &PRIMARY_EXPECTANCY,
+                expectancy: &NULL_ARM_EXPECTANCY,
                 outcome: ContractOutcome::SubstituteEquivalentMechanism {
                     alternate: "alternate-mechanism",
                 },
@@ -839,22 +927,21 @@ mod tests {
                 id: LayerId::WfpEgressFilters,
                 name: "alternate-mechanism",
                 call_sites: &[],
-                expectancy: &ALT_EXPECTANCY,
+                expectancy: &NULL_ARM_EXPECTANCY,
                 outcome: ContractOutcome::Abort,
                 probe: ProbeKind::ConfirmedByEnforcingComponentReport,
             },
         ];
-        let input = AttestationInput {
-            child_process: dummy_process(),
-            containment_job: dummy_job(),
-            entry_path: EntryPath::DirectCli,
-            token_arm: Some(WindowsTokenArm::Null),
-            wfp_preconfirmed: true,
-            required_layers_override: &[],
-            machine_required_layers: &[],
-        };
-        let decision = decide_from_entries(&ENTRIES, &input, &HashSet::new());
-        assert_eq!(decision, AttestationDecision::Proceed);
+        let mut input = null_arm_input(layer_registry::AppliedLayers {
+            mandatory_integrity_label: true,
+            wfp_egress_filters: Some(true),
+            ..Default::default()
+        });
+        input.wfp_preconfirmed = true;
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &HashSet::new()),
+            AttestationDecision::Proceed
+        );
     }
 
     // ---- attest_and_decide: fail-closed unrecognized-name validation ----
@@ -868,6 +955,7 @@ mod tests {
             entry_path: layer_registry::EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
             required_layers_override: &overrides,
             machine_required_layers: &[],
         };
@@ -889,6 +977,7 @@ mod tests {
             entry_path: layer_registry::EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
             required_layers_override: &[],
             machine_required_layers: &machine_required,
         };
@@ -908,6 +997,7 @@ mod tests {
             entry_path: layer_registry::EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
             required_layers_override: &overrides,
             machine_required_layers: &[],
         };
@@ -949,6 +1039,7 @@ mod registry_tests {
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -980,6 +1071,7 @@ mod registry_tests {
                 entry_path: EntryPath::DirectCli,
                 token_arm: Some(arm),
                 wfp_preconfirmed: false,
+                applied: layer_registry::AppliedLayers::default(),
                 required_layers_override: &[],
                 machine_required_layers: &[],
             };
@@ -1018,6 +1110,7 @@ mod registry_tests {
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1045,6 +1138,12 @@ mod registry_tests {
             entry_path: EntryPath::Daemon,
             token_arm: None,
             wfp_preconfirmed: true,
+            // CR-04: the WFP backend must be the one this launch selected,
+            // else the row is NotApplicable rather than Confirmed.
+            applied: layer_registry::AppliedLayers {
+                wfp_egress_filters: Some(true),
+                ..Default::default()
+            },
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1059,6 +1158,10 @@ mod registry_tests {
             entry_path: EntryPath::Daemon,
             token_arm: None,
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers {
+                wfp_egress_filters: Some(false),
+                ..Default::default()
+            },
             required_layers_override: &[],
             machine_required_layers: &[],
         };
@@ -1088,6 +1191,7 @@ mod registry_tests {
                 entry_path,
                 token_arm,
                 wfp_preconfirmed: false,
+                applied: layer_registry::AppliedLayers::default(),
                 required_layers_override: &[],
                 machine_required_layers: &[],
             };
@@ -1274,6 +1378,7 @@ mod latency_measurement {
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::WriteRestricted),
             wfp_preconfirmed: false,
+            applied: layer_registry::AppliedLayers::default(),
             required_layers_override: &[],
             machine_required_layers: &[],
         };

@@ -345,6 +345,47 @@ struct PreparedWindowsLaunch {
     launch_program: PathBuf,
 }
 
+impl PreparedWindowsLaunch {
+    /// Phase 117 review CR-09: the per-launch layer-application facts this
+    /// struct's own guards already encode, handed to the startup
+    /// self-attestation gate so `ProbeKind::ConfiguredOnly` rows are
+    /// classified from what actually happened rather than from an
+    /// unconditional assumption.
+    ///
+    /// Derived on demand (never stored) so it cannot drift from the guards.
+    fn applied_layers(&self) -> layer_registry::AppliedLayers {
+        layer_registry::AppliedLayers {
+            // `AppliedLabelsGuard::snapshot_and_apply` is fail-closed (`?`
+            // at its call site) — the existence of this struct means the
+            // apply call ran and returned `Ok`. Per-path skips
+            // (pre-existing label / non-user-owned system path) are logged
+            // by the guard itself and are a deliberate part of its
+            // contract, not an apply failure.
+            mandatory_integrity_label: true,
+            dacl_package_sid_grant: self._applied_dacls.is_some(),
+            dacl_ancestor_traverse: self._applied_ancestor_traverse.is_some(),
+            dacl_ancestor_read_attrs: self._applied_ancestor_read_attrs.is_some(),
+            // CR-04: tri-state. `None` means this backend is not part of
+            // this launch's composition — not applicable, not degraded.
+            firewall_rules_egress: match self._network_enforcement {
+                Some(NetworkEnforcementGuard::FirewallRules { .. }) => Some(true),
+                _ => None,
+            },
+            wfp_egress_filters: match self._network_enforcement {
+                Some(NetworkEnforcementGuard::WfpServiceManaged { .. }) => Some(true),
+                _ => None,
+            },
+            // Recorded by `spawn_windows_child`, which is where the
+            // broker-arm decision and the Authenticode comparison live.
+            broker_authenticode_trust_gate: None,
+            // `Sandbox::validate_windows_launch_paths` ran fail-closed at
+            // the top of `prepare_live_windows_launch`, before any guard was
+            // constructed.
+            interpreter_coverage_gate: true,
+        }
+    }
+}
+
 impl NetworkEnforcementGuard {
     fn launch_program(&self) -> &Path {
         match self {
@@ -913,6 +954,8 @@ pub fn execute_direct(
         limits,
         session_id,
         prepared._network_enforcement.as_ref(),
+        // Phase 117 review CR-09: per-launch layer-application facts.
+        prepared.applied_layers(),
     )?;
     loop {
         if let Some(exit_code) = child.poll_exit_code()? {
@@ -1037,6 +1080,8 @@ pub fn execute_supervised(
         limits,
         session_id,
         prepared._network_enforcement.as_ref(),
+        // Phase 117 review CR-09: per-launch layer-application facts.
+        prepared.applied_layers(),
     )
     .map_err(|err| runtime.startup_failure(err.to_string()))?;
 

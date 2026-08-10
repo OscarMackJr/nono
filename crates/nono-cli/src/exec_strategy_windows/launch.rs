@@ -1432,12 +1432,14 @@ pub(super) fn select_windows_token_arm(
 /// `if let Err(err) = ... { terminate_suspended_process(...); return
 /// Err(err); }` idiom as the adjacent containment/resource-limit gates this
 /// function is inserted alongside.
+#[allow(clippy::too_many_arguments)]
 fn apply_startup_attestation_gate(
     process: HANDLE,
     containment_job: HANDLE,
     entry_path: layer_registry::EntryPath,
     token_arm: Option<WindowsTokenArm>,
     wfp_preconfirmed: bool,
+    applied: layer_registry::AppliedLayers,
     session_id: Option<&str>,
 ) -> Result<()> {
     let input = attestation::AttestationInput {
@@ -1449,6 +1451,10 @@ fn apply_startup_attestation_gate(
         entry_path,
         token_arm,
         wfp_preconfirmed,
+        // Phase 117 review CR-09: the caller states which layers it actually
+        // applied for THIS launch, instead of this module assuming every
+        // `ConfiguredOnly` row was established.
+        applied,
         // D-26 tighten-only union: not yet wired at this gate (no CLI flag
         // or machine-policy-required-layers plumbing lands in this plan —
         // see 117-10-SUMMARY.md). Passing empty slices means no ADDITIONAL
@@ -1551,7 +1557,14 @@ pub(super) fn spawn_windows_child(
     // `mod.rs` call sites (`execute_direct`, `execute_supervised`) pass
     // `prepared._network_enforcement.as_ref()`. Never re-derived here.
     network_enforcement: Option<&NetworkEnforcementGuard>,
+    // Phase 117 review CR-09: the per-launch layer-application facts
+    // `prepare_live_windows_launch` already knows (which guards it
+    // constructed, which network backend it resolved). Made `mut` here so
+    // the broker-Authenticode row — decided inside this function, after the
+    // arm is known — can be recorded on the same value.
+    applied_layers: layer_registry::AppliedLayers,
 ) -> Result<(WindowsSupervisedChild, Option<DetachedStdioPipes>)> {
+    let mut applied_layers = applied_layers;
     let env_pairs = build_child_env(config);
     let mut environment_block = build_windows_environment_block(&env_pairs);
 
@@ -1728,6 +1741,12 @@ pub(super) fn spawn_windows_child(
             // #[cfg(debug_assertions)] would false-trigger under cargo test --release).
             if !is_dev_build_layout(&nono_exe) {
                 verify_broker_authenticode(&nono_exe, &broker_path)?;
+                // CR-09: the gate ran fail-closed and passed. Under the
+                // compile-time-baked dev-build-layout detector it stays
+                // `None` (NotApplicable) — the layer is deliberately not
+                // part of a dev-layout composition, which is a different
+                // statement from "it should have run and did not".
+                applied_layers.broker_authenticode_trust_gate = Some(true);
             } else {
                 tracing::info!(
                     target: "broker_authenticode",
@@ -2051,6 +2070,8 @@ pub(super) fn spawn_windows_child(
         // skip keys off the compile-time-baked Cargo target root (R-B4 fix).
         if !is_dev_build_layout(&nono_exe) {
             verify_broker_authenticode(&nono_exe, &broker_path)?;
+            // CR-09: see the PTY branch above.
+            applied_layers.broker_authenticode_trust_gate = Some(true);
         } else {
             tracing::info!(
                 target: "broker_authenticode",
@@ -2377,6 +2398,7 @@ pub(super) fn spawn_windows_child(
         layer_registry::EntryPath::DirectCli,
         Some(arm),
         wfp_preconfirmed,
+        applied_layers,
         session_id,
     ) {
         terminate_suspended_process(
@@ -3212,6 +3234,22 @@ mod attestation_gate_tests {
         }
     }
 
+    /// Phase 117 review CR-09: what `prepare_live_windows_launch` reports on
+    /// a real `(DirectCli, Null)` launch — every guard constructed, no
+    /// network backend selected, non-broker arm.
+    fn fully_applied_layers() -> layer_registry::AppliedLayers {
+        layer_registry::AppliedLayers {
+            mandatory_integrity_label: true,
+            dacl_package_sid_grant: true,
+            dacl_ancestor_traverse: true,
+            dacl_ancestor_read_attrs: true,
+            firewall_rules_egress: None,
+            wfp_egress_filters: None,
+            broker_authenticode_trust_gate: None,
+            interpreter_coverage_gate: true,
+        }
+    }
+
     fn spawn_suspended_cmd() -> SuspendedTestProcess {
         let mut cmd_buf: Vec<u16> = std::ffi::OsStr::new("cmd.exe /c exit 0")
             .encode_wide()
@@ -3291,6 +3329,7 @@ mod attestation_gate_tests {
             layer_registry::EntryPath::DirectCli,
             Some(WindowsTokenArm::Null),
             false,
+            fully_applied_layers(),
             None,
         );
         unsafe {
@@ -3329,6 +3368,7 @@ mod attestation_gate_tests {
             layer_registry::EntryPath::DirectCli,
             Some(WindowsTokenArm::Null),
             false,
+            fully_applied_layers(),
             None,
         );
         unsafe {
@@ -3349,15 +3389,17 @@ mod attestation_gate_tests {
         }
     }
 
-    /// Behavior 2: once every `LiveTokenOrJobQuery`-probed row for this arm
-    /// classifies `Confirmed` (a real process assigned to a real Job
-    /// Object), the `ConfiguredOnly`-probed `FirewallRulesEgress` row —
-    /// expected on every `DirectCli` arm — can only ever reach
-    /// `EstablishedNotIndependentlyObservable` (`attestation.rs` module doc
-    /// Deviation 2), so the gate proceeds with a downgraded claim rather
-    /// than aborting: `apply_startup_attestation_gate` returns `Ok(())`.
+    /// Behavior 2, rewritten for Phase 117 review CR-09: a real process
+    /// assigned to the real containment job, with every expected
+    /// `ConfiguredOnly` row reported as applied, passes the gate.
+    ///
+    /// The point of the rewrite is what the companion test below proves:
+    /// this `Ok` is now *earned*. Before CR-09 the same call returned `Ok`
+    /// with a permanently non-empty `downgraded` set no matter what the
+    /// supervisor had actually applied — `Proceed` was unreachable and the
+    /// D-27 banner fired on every session.
     #[test]
-    fn confirmed_live_probes_with_configured_only_row_downgrades_without_aborting() {
+    fn fully_applied_launch_passes_the_gate() {
         let child = spawn_suspended_cmd();
         let job: HANDLE = unsafe {
             // SAFETY: CreateJobObjectW with null name + null security
@@ -3386,16 +3428,66 @@ mod attestation_gate_tests {
             layer_registry::EntryPath::DirectCli,
             Some(WindowsTokenArm::Null),
             false,
+            fully_applied_layers(),
             Some("117-10-attestation-gate-test-session"),
         );
         assert!(
             result.is_ok(),
-            "expected Ok (ProceedDowngraded via FirewallRulesEgress), got {result:?}"
+            "a fully-applied, job-contained launch must pass the gate, got {result:?}"
         );
 
         unsafe {
             // SAFETY: `job` is a valid HANDLE this test owns.
             CloseHandle(job);
+        }
+    }
+
+    /// Phase 117 review CR-09 non-vacuity proof at the GATE level: the SAME
+    /// real, job-contained child, with the caller reporting that it did NOT
+    /// apply the mandatory-label layer, is refused.
+    ///
+    /// Before CR-09 `ProbeKind::ConfiguredOnly` rows classified
+    /// `EstablishedNotIndependentlyObservable` unconditionally, so no
+    /// caller-side state could ever make this gate say no.
+    #[test]
+    fn launch_missing_an_expected_configured_only_layer_is_refused() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.mandatory_integrity_label = false;
+
+        let result = apply_startup_attestation_gate(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            applied,
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "MandatoryIntegrityLabel");
+                assert_eq!(reason, "Unconfirmed");
+            }
+            other => panic!(
+                "a launch that did not apply an expected ConfiguredOnly layer must be refused, \
+                 got {other:?}"
+            ),
         }
     }
 

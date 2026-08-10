@@ -369,6 +369,113 @@ pub(crate) enum ProbeKind {
     NotApplicable,
 }
 
+/// Phase 117 review CR-09: whether the supervisor actually applied a given
+/// layer for THIS launch.
+///
+/// `ProbeKind::ConfiguredOnly` rows used to classify
+/// `EstablishedNotIndependentlyObservable` *unconditionally*, on the
+/// reasoning that "reaching the attestation gate at all means the apply-time
+/// gate already succeeded fail-closed". That reasoning is only sound for a
+/// layer the supervisor genuinely tried to apply on this launch — it was
+/// being applied to rows where NO apply ever happened (the daemon's
+/// `DaclAncestorReadAttrs`, the never-granted `DaclSessionSidGrant`), which
+/// turned the honest label "established" into a false claim, and it made
+/// `AttestationDecision::Proceed` unreachable because every launch carried a
+/// permanent "downgraded" baseline. The caller now states, per launch, which
+/// layers it applied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LayerApplication {
+    /// The supervisor ran this layer's apply/enforce call for this launch
+    /// and it succeeded (its own `Result` was `Ok`, fail-closed).
+    Applied,
+    /// The supervisor did NOT apply this layer on this launch. For a row
+    /// that is `expected: true` on this arm, that is exactly the negative
+    /// the fail-direction contract exists to catch.
+    NotApplied,
+    /// This layer is not part of this launch's composition at all — e.g. a
+    /// network row whose backend was not the one selected, or the broker
+    /// Authenticode gate on a non-broker arm.
+    NotApplicable,
+}
+
+/// Per-launch application facts for every `ProbeKind::ConfiguredOnly` /
+/// `ConfirmedByEnforcingComponentReport` row, supplied by the caller that
+/// owns the guards (CR-09). Rows probed live (`LiveTokenOrJobQuery`) or not
+/// probed at all (`ProbeKind::NotApplicable`) never consult this.
+///
+/// Defaults to `NotApplied` for every field, NOT `Applied` — a caller that
+/// forgets to report a layer fails secure.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct AppliedLayers {
+    pub mandatory_integrity_label: bool,
+    pub dacl_package_sid_grant: bool,
+    pub dacl_ancestor_traverse: bool,
+    pub dacl_ancestor_read_attrs: bool,
+    /// `Some(true)` when the `netsh advfirewall` backend was selected AND
+    /// its rules installed; `Some(false)` when it was selected and did not
+    /// install; `None` when a different backend (or none) was selected, so
+    /// the row is not part of this launch's composition.
+    pub firewall_rules_egress: Option<bool>,
+    /// Same tri-state shape for the WFP backend.
+    pub wfp_egress_filters: Option<bool>,
+    /// `Some(true)` when the Authenticode comparison ran and passed;
+    /// `Some(false)` when it should have run and did not; `None` on a
+    /// non-broker arm, or under the compile-time-baked dev-build-layout
+    /// detector where the gate is deliberately not part of the composition.
+    pub broker_authenticode_trust_gate: Option<bool>,
+    /// The pre-spawn interpreter/program coverage gate
+    /// (`validate_windows_launch_paths`). Always run on the direct-CLI path
+    /// before any guard is constructed.
+    pub interpreter_coverage_gate: bool,
+}
+
+fn from_bool(applied: bool) -> LayerApplication {
+    if applied {
+        LayerApplication::Applied
+    } else {
+        LayerApplication::NotApplied
+    }
+}
+
+fn from_tristate(applied: Option<bool>) -> LayerApplication {
+    match applied {
+        None => LayerApplication::NotApplicable,
+        Some(v) => from_bool(v),
+    }
+}
+
+impl AppliedLayers {
+    /// Exhaustive over every `LayerId` (no wildcard arm — T-117-06 mirror),
+    /// so a new variant forces an explicit decision here rather than
+    /// silently inheriting a permissive default.
+    pub(crate) fn status(&self, id: LayerId) -> LayerApplication {
+        match id {
+            LayerId::MandatoryIntegrityLabel => from_bool(self.mandatory_integrity_label),
+            LayerId::DaclPackageSidGrant => from_bool(self.dacl_package_sid_grant),
+            LayerId::DaclAncestorTraverse => from_bool(self.dacl_ancestor_traverse),
+            LayerId::DaclAncestorReadAttrs => from_bool(self.dacl_ancestor_read_attrs),
+            LayerId::FirewallRulesEgress => from_tristate(self.firewall_rules_egress),
+            LayerId::WfpEgressFilters => from_tristate(self.wfp_egress_filters),
+            LayerId::BrokerAuthenticodeTrustGate => {
+                from_tristate(self.broker_authenticode_trust_gate)
+            }
+            LayerId::InterpreterCoverageGate => from_bool(self.interpreter_coverage_gate),
+            // CR-05: `DaclSessionSidGrant` is not applied by any shipped
+            // call site (see its registry row) — its expectancy is empty, so
+            // `classify_row` returns `NotApplicable` before ever reaching
+            // here.
+            LayerId::DaclSessionSidGrant
+            // Live-probed rows: their status comes from the kernel, not
+            // from the caller's own report.
+            | LayerId::RestrictedToken
+            | LayerId::AppContainerProfile
+            | LayerId::JobObjectContainment
+            // Structural-absence row (ADR-65).
+            | LayerId::MinifilterAbsence => LayerApplication::NotApplicable,
+        }
+    }
+}
+
 /// One row of the Windows fail-direction layer registry.
 #[derive(Debug)]
 pub(crate) struct LayerRegistryEntry {
@@ -505,21 +612,72 @@ const APP_CONTAINER_PROFILE_EXPECTANCY: [ArmExpectancy; 2] = [
     },
 ];
 
-/// D-08 / `_applied_dacls` comment (`mod.rs:296-312`): the synthetic
-/// per-session SID grant is OPERATIVE on the `WriteRestricted` arm only —
-/// inert but harmless elsewhere.
-const DACL_SESSION_SID_GRANT_EXPECTANCY: [ArmExpectancy; 1] = [ArmExpectancy {
-    entry_path: EntryPath::DirectCli,
-    token_arm: Some(token_arm_names::WRITE_RESTRICTED),
-    expected: true,
-}];
+/// Phase 117 review CR-05: **empty on purpose — this layer does not exist in
+/// the shipped tree.**
+///
+/// The row previously claimed `expected: true` at `(DirectCli,
+/// WriteRestricted)`, citing `dacl_guard.rs` / `mod.rs`'s
+/// `AppliedDaclGrantsGuard::snapshot_and_apply` call. That call is the ONLY
+/// production construction of the guard, and it is passed
+/// `config.package_sid`, not `config.session_sid`. The synthetic per-session
+/// restricting SID (`S-1-5-117-*`) is used solely to build the
+/// `WRITE_RESTRICTED` token (`create_restricted_token_with_sid`) and is
+/// granted on no DACL anywhere. Reporting the row
+/// `EstablishedNotIndependentlyObservable` — whose documented meaning is
+/// "the apply-time `Result` already happened and succeeded" — was a false
+/// claim of an active confinement layer, emitted by the module whose entire
+/// purpose is truthful layer accounting.
+///
+/// An empty expectancy makes `classify_row` return `NotApplicable` on every
+/// arm, so the session claim no longer includes a layer that was never
+/// applied. The `LayerId` variant is retained (Phase 118 receipts share this
+/// vocabulary) and `dacl_session_sid_grant_is_not_claimed_anywhere` below
+/// fails the build if anyone re-adds an expectancy cell without also making
+/// the grant real.
+///
+/// **Open operator decision, deliberately NOT guessed here:** whether the
+/// `WriteRestricted` arm SHOULD also grant `config.session_sid` write on the
+/// writable grant set. `mod.rs`'s own `_applied_dacls` comment still
+/// describes that as the mechanism ("so confined writes under
+/// WRITE_RESTRICTED pass the restricting-SID double check"), and the grantee
+/// was changed to the package SID in Plan 62-12. Restoring it would WIDEN
+/// DACLs on user-owned paths, so it is a functional/security change for an
+/// operator to make deliberately, not a review-fix side effect.
+const DACL_SESSION_SID_GRANT_EXPECTANCY: [ArmExpectancy; 0] = [];
 
-/// Package-SID DACL variants apply on any arm where `config.package_sid`
-/// is `Some(..)` — `BrokerLaunchNoPty` on the `DirectCli` entry path (the
-/// nono-cli side prepares these grants BEFORE spawning the broker), and
-/// the daemon path (`DaemonDaclGuard`, `agent_daemon/launch.rs:133`,
-/// applied `:764`, a structurally independent reimplementation).
-const PACKAGE_SID_SCOPED_EXPECTANCY: [ArmExpectancy; 2] = [
+/// Phase 117 review WR-09: `execution_runtime.rs` sets
+/// `package_sid: Some(..)` **unconditionally** for every Windows launch, so
+/// `prepare_live_windows_launch` constructs the package-SID DACL guard, the
+/// ancestor-traverse guard and the ancestor-read-attrs guard on EVERY
+/// `DirectCli` arm — not just `BrokerLaunchNoPty`. Scoping the expectancy to
+/// that one arm made three genuinely-applied layers classify
+/// `NotApplicable` on the other four, silently omitting them from the
+/// session's attested claim. The expectancy now matches the code.
+///
+/// Split from the WFP row's expectancy (which they used to share) because
+/// CR-04 makes the network rows conditional on the resolved backend, a
+/// distinction that does not apply to the DACL rows.
+const DACL_PACKAGE_SID_SCOPED_EXPECTANCY: [ArmExpectancy; 6] = [
+    ArmExpectancy {
+        entry_path: EntryPath::DirectCli,
+        token_arm: Some(token_arm_names::NULL),
+        expected: true,
+    },
+    ArmExpectancy {
+        entry_path: EntryPath::DirectCli,
+        token_arm: Some(token_arm_names::WRITE_RESTRICTED),
+        expected: true,
+    },
+    ArmExpectancy {
+        entry_path: EntryPath::DirectCli,
+        token_arm: Some(token_arm_names::LOW_IL_PRIMARY),
+        expected: true,
+    },
+    ArmExpectancy {
+        entry_path: EntryPath::DirectCli,
+        token_arm: Some(token_arm_names::BROKER_LAUNCH),
+        expected: true,
+    },
     ArmExpectancy {
         entry_path: EntryPath::DirectCli,
         token_arm: Some(token_arm_names::BROKER_LAUNCH_NO_PTY),
@@ -532,14 +690,31 @@ const PACKAGE_SID_SCOPED_EXPECTANCY: [ArmExpectancy; 2] = [
     },
 ];
 
-/// WFP egress: per-SID scoping applies on the daemon path and the
-/// `BrokerLaunchNoPty` arm (RESEARCH §A WFP row). Program-path-scoped WFP
-/// (selected without a package SID, `network.rs:1501-1503`'s
-/// `AllowAll`+port-rules branch) can also apply on other arms — recorded
-/// here as a known simplification (D-10: every exclusion reasoned on the
-/// record) rather than modeled as a separate row; Plan 08's dispatch
-/// carries the full nuance.
-const WFP_EGRESS_FILTERS_EXPECTANCY: [ArmExpectancy; 2] = PACKAGE_SID_SCOPED_EXPECTANCY;
+/// Phase 117 review CR-06: the DAEMON never grants `FILE_READ_ATTRIBUTES`.
+/// `DaemonDaclGuard::apply` performs exactly three operations —
+/// `grant_sid_traverse_on_path` on read-only rules,
+/// `grant_sid_write_on_path` on the workspace, and
+/// `grant_sid_traverse_on_path` on workspace ancestors. The
+/// `grant_sid_read_attributes_on_path` call sites this row cites
+/// (`dacl_guard.rs`, `mod.rs`) are CLI-side files the daemon binary does not
+/// even link. The `(Daemon, None)` cell is therefore dropped.
+const DACL_ANCESTOR_READ_ATTRS_EXPECTANCY: [ArmExpectancy; 5] = ALL_DIRECT_CLI_ARMS_EXPECTANCY;
+
+/// Phase 117 review CR-04: the row used to be `expected: true`
+/// **unconditionally** at `(DirectCli, BrokerLaunchNoPty)` while its status
+/// came solely from `wfp_preconfirmed`, which is `true` only for
+/// `NetworkEnforcementGuard::WfpServiceManaged`. Two legitimate,
+/// non-degraded configurations produced `false` — the `FirewallRules`
+/// backend and "no network restriction requested" — and `Unconfirmed` on an
+/// `Abort` row refused the launch. `BrokerLaunchNoPty` is the primary
+/// supervised Windows arm, so that broke legitimate runs.
+///
+/// The expectancy now covers every arm on which WFP *can* be selected, and
+/// applicability is decided by the RESOLVED network backend the caller
+/// reports (`AppliedLayers::wfp_egress_filters`): a launch that did not
+/// select the WFP backend classifies this row `NotApplicable`, not
+/// `Unconfirmed`. The row is not applicable, not degraded.
+const WFP_EGRESS_FILTERS_EXPECTANCY: [ArmExpectancy; 6] = DACL_PACKAGE_SID_SCOPED_EXPECTANCY;
 
 /// `netsh advfirewall` block rules are program-path-scoped, not
 /// session-scoped, and network enforcement is prepared inside
@@ -708,7 +883,7 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
             "agent_daemon/launch.rs:133",
             "agent_daemon/launch.rs:764",
         ],
-        expectancy: &PACKAGE_SID_SCOPED_EXPECTANCY,
+        expectancy: &DACL_PACKAGE_SID_SCOPED_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
     },
@@ -716,7 +891,7 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::DaclAncestorTraverse,
         name: "dacl-ancestor-traverse",
         call_sites: &["dacl_guard.rs:236", "mod.rs:449-455"],
-        expectancy: &PACKAGE_SID_SCOPED_EXPECTANCY,
+        expectancy: &DACL_PACKAGE_SID_SCOPED_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
     },
@@ -724,7 +899,7 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::DaclAncestorReadAttrs,
         name: "dacl-ancestor-read-attrs",
         call_sites: &["dacl_guard.rs:401", "mod.rs:473-482"],
-        expectancy: &PACKAGE_SID_SCOPED_EXPECTANCY,
+        expectancy: &DACL_ANCESTOR_READ_ATTRS_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
     },
