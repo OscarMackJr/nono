@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 19/19 plans executed, phase NOT complete (117-VERIFICATION.md iteration 2 = gaps_found: 0/4 success criteria; 117-REVIEW.md iteration 4 = 2 BLOCKERS incl. CR-01 fail-open)
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 19/26 plans executed, phase NOT complete (117-VERIFICATION.md iteration 2 = gaps_found: 0/4 success criteria; 117-REVIEW.md iteration 4 = 2 BLOCKERS incl. CR-01 fail-open). Gap-closure round 2 PLANNED 2026-08-10: 7 new plans 117-20..117-26 in waves 9-11, ready to execute
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
