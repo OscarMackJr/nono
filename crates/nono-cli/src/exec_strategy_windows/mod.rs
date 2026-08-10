@@ -820,6 +820,13 @@ pub(crate) struct ProcessContainment {
 pub(crate) use nono::OwnedHandle;
 
 pub(crate) mod attestation;
+// Phase 117 Plan 17 (NR3-05 follow-up): `SecurityEventLayer::
+// emit_attestation_event`'s impl, relocated from `telemetry/mod.rs` — see
+// that file's module doc for why. Declared here (not `#[cfg(...)]`-gated
+// itself) because this entire `exec_strategy_windows` tree is only
+// `#[path]`-included on `target_os = "windows"` (main.rs) and is never
+// included by `nono-agentd.rs`.
+mod attestation_downgrade_event;
 mod dacl_guard;
 mod labels_guard;
 mod launch;

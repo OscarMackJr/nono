@@ -886,8 +886,9 @@ mod windows_impl {
         // `#[path]`-includes only `agent_daemon/`, `telemetry/`, and
         // `agent_daemon/telemetry_init.rs` — never `exec_strategy_windows/`),
         // so that function is structurally unreachable from here. This
-        // mirrors its decision shape (Proceed / ProceedDowngraded / Abort)
-        // using the shared, policy-free `nono::attestation` probes — see
+        // mirrors a deliberately NARROWER two-state slice of that decision
+        // shape (Proceed / Abort — no ProceedDowngraded) using the shared,
+        // policy-free `nono::attestation` probes — see
         // `daemon_attest_and_decide`'s doc comment for the exact row-by-row
         // mapping to `layer_registry.rs`'s `(EntryPath::Daemon, None)` rows.
         //
@@ -912,65 +913,6 @@ mod windows_impl {
             wfp_filters_installed,
         ) {
             DaemonAttestationDecision::Proceed => {}
-            DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
-                let mut names: Vec<String> = downgraded.iter().map(|s| (*s).to_string()).collect();
-                names.sort();
-                let dedup_key = names.join(",");
-                let downgraded_refs: Vec<&str> = names.iter().map(String::as_str).collect();
-
-                // D-27 audit-event channel: same `SECURITY_LAYER.get()` access
-                // idiom as `execution_runtime.rs:267` / `exec_strategy_windows`'s
-                // own D-21 gate (Warning-5 fix) — `telemetry` is `#[path]`-
-                // included at the `nono-agentd` crate root (unlike `output`),
-                // so `crate::telemetry::SECURITY_LAYER` resolves unchanged here.
-                //
-                // Per `emit_attestation_event`'s own AUD-04 contract
-                // (`telemetry/mod.rs`), a failure to commit the audit record
-                // is logged but NEVER blocks the launch — this session was
-                // already proceeding with a downgraded claim; failing here
-                // for an unrelated audit-plumbing reason would trade an
-                // honesty gap for an availability regression. The Event Log
-                // warning below still fires unconditionally.
-                match crate::telemetry::SECURITY_LAYER.get() {
-                    None => {
-                        tracing::warn!(
-                            tenant_id = %tenant_id,
-                            "launch_agent: attestation downgrade audit emission unavailable \
-                             (AUD-04: SecurityEventLayer not initialized) — proceeding per \
-                             AUD-04's non-fatal contract"
-                        );
-                    }
-                    Some(security_layer) => {
-                        if let Err(e) = security_layer.emit_attestation_event(&downgraded_refs) {
-                            tracing::warn!(
-                                tenant_id = %tenant_id,
-                                error = %e,
-                                "launch_agent: attestation downgrade audit emission failed \
-                                 (AUD-04) — proceeding per AUD-04's non-fatal contract"
-                            );
-                        }
-                    }
-                }
-
-                // D-27 human-visible channel: this binary has no
-                // `exec_strategy_windows::output` (module-independence
-                // invariant above) and, running as a
-                // `SERVICE_USER_OWN_PROCESS` service, has no attached console
-                // for an stderr banner to reach anyway — the Windows Event
-                // Log via `tracing::warn!` (already this file's own
-                // operator-visible channel for every other degraded/fail-
-                // secure condition above) is the equivalent surface here.
-                // D-28: only the coarse count reaches this event; per-layer
-                // detail stays on the audit-event channel above.
-                tracing::warn!(
-                    tenant_id = %tenant_id,
-                    downgraded_count = downgraded.len(),
-                    downgraded_layers = %dedup_key,
-                    "launch_agent: {} confinement layer(s) could not be fully confirmed at \
-                     startup — proceeding with a downgraded confinement claim",
-                    downgraded.len()
-                );
-            }
             DaemonAttestationDecision::Abort { layer, status } => {
                 tracing::warn!(
                     tenant_id = %tenant_id,
@@ -1291,17 +1233,31 @@ mod windows_impl {
     /// `Debug`-format vocabulary the CLI-side gate uses, so operator-facing
     /// text and `NonoDiagnosticCode` classification stay consistent across
     /// both binaries even though the decision logic itself is duplicated.
+    ///
+    /// # Phase 117 review NR3-05 (deliberately two-state, not three)
+    ///
+    /// Unlike the CLI-side `exec_strategy_windows::attestation::
+    /// AttestationDecision`, this daemon-side mirror has NO `ProceedDowngraded`
+    /// variant. Every layer `daemon_attest_and_decide` models
+    /// (`AppContainerProfile`, `JobObjectContainment`, `WfpEgressFilters`,
+    /// `DaclPackageSidGrant`) is fail-closed end-to-end in the daemon's own
+    /// guards today — `DaemonDaclGuard`'s three-pass apply has no
+    /// partial-success return, and `wfp_filter_add`'s `Err` path terminates
+    /// before this gate is ever reached — so there is no partial-coverage
+    /// state for a downgrade arm to represent. A prior revision declared
+    /// `ProceedDowngraded` anyway and matched it in `launch_agent` with a
+    /// full audit-event-emission + Event Log warning arm, but
+    /// `daemon_attest_and_decide` had no return site that ever constructed
+    /// it — dead code that looked like a supported state. If a future
+    /// daemon-side guard gains a genuine partial-coverage state,
+    /// `ProceedDowngraded` should be reintroduced alongside a real coverage
+    /// accessor on that guard (mirroring `DaclGrantCoverage`/`LabelCoverage`
+    /// on the CLI side), not restored as a hardcoded/unreachable literal.
     #[derive(Debug)]
     enum DaemonAttestationDecision {
         /// Every row this function checks classified `Confirmed` (or was not
         /// applicable). The session's confinement claim is fully attested.
         Proceed,
-        /// At least one row could not be independently confirmed, but its
-        /// contract permits proceeding with a visibly downgraded claim
-        /// (D-14/D-25). `downgraded` names the `LayerId` `Debug`-format
-        /// strings (D-28: layer-specific detail stays on the audit-event
-        /// channel, never the coarse operator-visible one).
-        ProceedDowngraded { downgraded: Vec<&'static str> },
         /// A required layer could not be confirmed. D-22: the caller
         /// terminates the still-suspended process (via
         /// `cleanup_failed_agent`'s job-close cascade) and surfaces a typed
@@ -1853,11 +1809,13 @@ mod windows_impl {
         /// process — mirroring `launch_agent`'s own steps 2-6 (minus the DACL
         /// grants and registry bookkeeping this isolated test doesn't need) —
         /// classifies `AppContainerProfile` and `JobObjectContainment` as
-        /// independently `Confirmed`, and the gate proceeds with a downgraded
-        /// claim for the `ConfiguredOnly` DACL rows (Plan 08 Deviation 2:
-        /// reaching this point at all means the apply-time gate — which this
-        /// isolated test does not itself run — already succeeded fail-closed
-        /// in the real `launch_agent` flow this test exercises a slice of).
+        /// independently `Confirmed`, and (with every other row's inputs also
+        /// reported as applied) the gate reaches `Proceed` (Plan 08 Deviation
+        /// 2 / Plan 17 NR3-05: reaching this point at all means the
+        /// apply-time gate — which this isolated test does not itself run —
+        /// already succeeded fail-closed in the real `launch_agent` flow this
+        /// test exercises a slice of; the daemon's decision shape has no
+        /// downgraded-but-proceeding state to reach instead).
         #[test]
         fn real_appcontainer_job_process_proceeds_and_the_negatives_are_reachable() {
             let tenant_id = generate_tenant_id().expect("generate_tenant_id");
@@ -2109,6 +2067,76 @@ mod tests {
             "wfp_filters_installed and network_scoping_required must be independent values — \
              passing the same expression for both makes the row's abort predicate `x && !x`, a \
              compile-time constant false (NR-05)"
+        );
+    }
+
+    /// Phase 117 Plan 17 (NR3-05): `DaemonAttestationDecision` is deliberately
+    /// two-state (`Proceed` / `Abort`) — see the enum's own doc comment for
+    /// why a `ProceedDowngraded` variant was removed rather than wired up.
+    /// This test is discovery-based, not a hardcoded assumption baked into a
+    /// second place: it parses the variant names straight out of THIS file's
+    /// own source text (the `super::super::` `include_str!` idiom already
+    /// established by `daemon_attestation_gate_is_wired_to_real_outcomes_not_
+    /// the_gate_condition` above), so it fails the build the moment the enum
+    /// regains a third variant the module doc doesn't account for — whether
+    /// that's a reintroduced `ProceedDowngraded` or something else entirely.
+    ///
+    /// Non-vacuity: verified manually per the plan's acceptance criteria by
+    /// temporarily re-adding `ProceedDowngraded { downgraded: Vec<&'static
+    /// str> },` to the enum (without updating this test's expected list) and
+    /// confirming the assertion below fails naming the mismatch, then
+    /// reverting — see 117-17-SUMMARY.md.
+    #[test]
+    fn daemon_attestation_decision_is_deliberately_two_state() {
+        let src = include_str!("launch.rs");
+        let enum_block = src
+            .split("enum DaemonAttestationDecision {")
+            .nth(1)
+            .expect("the DaemonAttestationDecision enum must exist in this file")
+            .split("\n    }\n")
+            .next()
+            .expect("the enum's closing brace must exist");
+
+        // Variant declaration lines sit at exactly one indent level below the
+        // enum body (8 spaces here) — struct-variant FIELD lines (like
+        // `Abort`'s `layer`/`status`) sit one level deeper (12 spaces) and
+        // must be excluded, or a struct-like variant's fields would be
+        // miscounted as extra variants. Skip doc comments/attributes at the
+        // variant level too, then take the identifier up to the first `,`,
+        // `{`, or `(` — matches unit variants (`Proceed`) and struct-like
+        // variants (`Abort { .. }`) alike.
+        const VARIANT_INDENT: usize = 8;
+        let variants: Vec<&str> = enum_block
+            .lines()
+            .filter(|line| {
+                let indent = line.len() - line.trim_start().len();
+                let trimmed = line.trim_start();
+                indent == VARIANT_INDENT
+                    && !trimmed.is_empty()
+                    && !trimmed.starts_with("///")
+                    && !trimmed.starts_with('#')
+                    && !trimmed.starts_with('}')
+            })
+            .map(|line| {
+                line.trim_start()
+                    .split([',', '{', '('])
+                    .next()
+                    .unwrap_or(line)
+                    .trim()
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert_eq!(
+            variants,
+            vec!["Proceed", "Abort"],
+            "DaemonAttestationDecision must stay a genuine two-state enum (Proceed / Abort). \
+             If this assertion fails because a new variant was added, \
+             daemon_attest_and_decide's own return sites AND launch_agent's match on the \
+             decision must both be updated in the SAME commit — and if the new variant is a \
+             downgrade state, it must be backed by a real coverage accessor on the guard that \
+             produces it, not a hardcoded value (the exact class NR3-05 found and Plan 17 \
+             closed): got {variants:?}"
         );
     }
 
