@@ -607,6 +607,38 @@ fn windows_wfp_test_force_ready() -> bool {
     WINDOWS_WFP_TEST_FORCE_READY.load(Ordering::Relaxed)
 }
 
+// Phase 117-12 (CINT-03): thin, crate-visible bridges onto Plan 06's
+// pub(crate)-only per-layer force-unavailable setters
+// (`restricted_token::force_restricted_token_unavailable`,
+// `labels_guard::force_mandatory_label_unavailable`,
+// `dacl_guard::force_dacl_grant_unavailable`,
+// `launch::force_job_object_unavailable`). Those setters live in private
+// child modules of `exec_strategy_windows` and are therefore reachable from
+// `command_runtime.rs` (a sibling top-level module) only through a
+// re-export at this module's own level — mirroring
+// `set_windows_wfp_test_force_ready`'s existing shape exactly. Only exist
+// when built with `--features layer-fault-injection` (D-30); a default
+// release binary contains none of these symbols.
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_restricted_token_test_unavailable(unavailable: bool) {
+    restricted_token::force_restricted_token_unavailable(unavailable);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_mandatory_label_test_unavailable(unavailable: bool) {
+    labels_guard::force_mandatory_label_unavailable(unavailable);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_dacl_grant_test_unavailable(unavailable: bool) {
+    dacl_guard::force_dacl_grant_unavailable(unavailable);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_job_object_test_unavailable(unavailable: bool) {
+    launch::force_job_object_unavailable(unavailable);
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowsWfpReadinessReport {
     pub status_label: &'static str,

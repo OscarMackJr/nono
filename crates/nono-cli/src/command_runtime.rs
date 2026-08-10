@@ -93,6 +93,36 @@ pub(crate) fn run_sandbox(run_args: RunArgs, silent: bool) -> Result<()> {
         exec_strategy::set_windows_wfp_test_force_ready(true);
     }
 
+    // Phase 117-12 (CINT-03): env-var-driven bridges so an external,
+    // subprocess-spawning integration test
+    // (crates/nono-cli/tests/layer_force_unavailable.rs) can arm each
+    // layer's pub(crate)-only force-unavailable seam (117-06) without
+    // crate-internal access — tests/*.rs files are a separate compilation
+    // unit with no visibility into main.rs internals (nono-cli has no
+    // [lib] target), so before this only WFP had a CLI-flag bridge. Each
+    // check and the wrapper function it calls only exist when built with
+    // `--features layer-fault-injection`; a default release binary reads
+    // none of these env vars and contains none of the underlying
+    // static/setter symbols (D-30). `NONO_` is not a stripped prefix in
+    // `env_sanitization::is_dangerous_env_var`, so these are also
+    // forwarded to any spawned child (relevant for the broker/daemon
+    // arms) via the existing denylist-based `build_child_env`.
+    #[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
+    {
+        if std::env::var_os("NONO_FORCE_UNAVAILABLE_RESTRICTED_TOKEN").is_some() {
+            exec_strategy::force_restricted_token_test_unavailable(true);
+        }
+        if std::env::var_os("NONO_FORCE_UNAVAILABLE_MANDATORY_LABEL").is_some() {
+            exec_strategy::force_mandatory_label_test_unavailable(true);
+        }
+        if std::env::var_os("NONO_FORCE_UNAVAILABLE_DACL_GRANT").is_some() {
+            exec_strategy::force_dacl_grant_test_unavailable(true);
+        }
+        if std::env::var_os("NONO_FORCE_UNAVAILABLE_JOB_OBJECT").is_some() {
+            exec_strategy::force_job_object_test_unavailable(true);
+        }
+    }
+
     // Load profile once and reuse for binary resolution and command_args.
     // Phase 37 D-12: resolve through `resolve_ctx` so `--no-auto-pull` is honored
     // on the real run path too. Using the context-free `load_profile` here made
