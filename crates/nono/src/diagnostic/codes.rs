@@ -68,6 +68,18 @@ pub enum NonoRemediation {
     },
     AllowCwd,
     DisableRollback,
+    /// Recovery guidance for a startup self-attestation failure
+    /// ([`crate::NonoError::LayerAttestationFailed`]). Names the layer that
+    /// failed so the operator/embedder can distinguish which one. Deliberately
+    /// generic prose rather than a single CLI flag: there is no one flag that
+    /// clears an arbitrary layer's stale state, and the exact remedy is
+    /// layer-specific (e.g. `icacls <path> /setintegritylevel Medium` for
+    /// `MandatoryIntegrityLabel`). Self-healing for the common case (a prior
+    /// launch's own residue matching this launch's own mode-derived mask) is
+    /// handled automatically before this remediation would ever surface.
+    ClearStaleLayerResidue {
+        layer: String,
+    },
 }
 
 /// Map structured remediation to the legacy CLI flag string shape.
@@ -104,7 +116,8 @@ pub fn suggested_flag_for_remediation(rem: &NonoRemediation) -> Option<String> {
         NonoRemediation::RunDiscovery
         | NonoRemediation::CheckPolicy
         | NonoRemediation::AuthenticateCredentialProvider { .. }
-        | NonoRemediation::AdjustRollbackBudget { .. } => None,
+        | NonoRemediation::AdjustRollbackBudget { .. }
+        | NonoRemediation::ClearStaleLayerResidue { .. } => None,
     }
 }
 

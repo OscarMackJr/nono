@@ -652,7 +652,8 @@ pub(crate) fn suggested_flag_for_remediation(rem: &nono::NonoRemediation) -> Opt
         nono::NonoRemediation::RunDiscovery
         | nono::NonoRemediation::CheckPolicy
         | nono::NonoRemediation::AuthenticateCredentialProvider { .. }
-        | nono::NonoRemediation::AdjustRollbackBudget { .. } => None,
+        | nono::NonoRemediation::AdjustRollbackBudget { .. }
+        | nono::NonoRemediation::ClearStaleLayerResidue { .. } => None,
     }
 }
 
