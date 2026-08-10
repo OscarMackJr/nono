@@ -1273,8 +1273,17 @@ pub(super) fn should_use_low_integrity_windows_launch(caps: &CapabilitySet) -> b
 /// (2) precedes (3) because `config.session_sid` is unconditionally `Some(...)`
 /// for Windows supervised launches (`execution_runtime.rs:334`); the new arm
 /// is reached *because* it short-circuits before the WRITE_RESTRICTED arm.
+///
+/// Phase 117 Plan 08 (CINT-02) widened this from `pub(super)` to
+/// `pub(crate)`: `attestation::AttestationInput.token_arm` is
+/// `Option<WindowsTokenArm>` and `AttestationInput` itself must be
+/// `pub(crate)` so gate-insertion sites outside `exec_strategy_windows`
+/// (`agent_daemon/launch.rs`, the `EntryPath::Daemon` caller, Plan 10) can
+/// construct it — a `pub(crate)` field may not name a less-visible type
+/// (`private_interfaces` lint, `-D warnings`). `WindowsTokenArm` stays
+/// crate-internal (never crosses the crate boundary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WindowsTokenArm {
+pub(crate) enum WindowsTokenArm {
     /// Caller's identity (CreateProcessW with null token). Phase 15 detached
     /// path or final fallback.
     Null,

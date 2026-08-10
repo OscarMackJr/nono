@@ -648,6 +648,7 @@ pub(crate) struct ProcessContainment {
 // `_token_guard.0` field access. The lifted struct is `pub struct OwnedHandle(pub HANDLE)`.
 pub(crate) use nono::OwnedHandle;
 
+pub(crate) mod attestation;
 mod dacl_guard;
 mod labels_guard;
 mod launch;
