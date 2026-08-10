@@ -1513,25 +1513,46 @@ fn apply_startup_attestation_gate(
                 }
             }
 
-            // Phase 117 NR3-04: the banner below tells the operator to "see
-            // diagnostic output for details" — this is the call that
-            // actually populates that channel. Unlike the audit-emission
-            // warns above (which only fire on FAILURE to commit the audit
-            // record), this one fires unconditionally on every
-            // `ProceedDowngraded` occurrence, so the banner's claim is true
-            // on the common success path too. `tracing::warn!` at the CLI
-            // routes to the log file / Event Log subscriber, never to the
-            // confined child's stderr — D-28 is not implicated, this is not
-            // a channel the child shares. Mirrors the daemon's own
+            // Phase 117 NR3-04: this warn is the call that populates the
+            // operator diagnostic channel the banner below points at. Unlike
+            // the audit-emission warns above (which only fire on FAILURE to
+            // commit the audit record), this one fires unconditionally on
+            // every `ProceedDowngraded` occurrence, so the banner's claim is
+            // true on the common success path too. Mirrors the daemon's own
             // equivalent (`agent_daemon/launch.rs:965-972`), minus
             // `tenant_id` (no tenant concept on the direct-CLI path).
-            tracing::warn!(
-                downgraded_count = downgraded.len(),
-                downgraded_layers = %dedup_key,
-                "startup self-attestation: {} confinement layer(s) could not be fully \
-                 confirmed at startup — proceeding with a downgraded confinement claim",
-                downgraded.len()
-            );
+            //
+            // Phase 117-21 CR-02: `tracing::warn!` at the CLI does NOT
+            // uniformly route away from the confined child. Of
+            // `init_tracing_with_security`'s three arms, only the
+            // file-log-succeeded arm (`Some(path) => Ok(writer)`) writes to
+            // a channel private to the operator; the file-open-failure
+            // fallback arm and the default no-`--log-file` arm both route to
+            // `std::io::stderr`, which the confined child shares on the
+            // non-detached-stdio path — the exact reconnaissance D-28 exists
+            // to prevent. So the specific `downgraded_layers` field (naming
+            // real `LayerId`s) is only emitted when
+            // `cli_bootstrap::log_target_is_private()` confirms the private
+            // arm was selected; otherwise only a count is logged and the
+            // operator is pointed at the audit ledger for detail.
+            if crate::cli_bootstrap::log_target_is_private() {
+                tracing::warn!(
+                    downgraded_count = downgraded.len(),
+                    downgraded_layers = %dedup_key,
+                    "startup self-attestation: {} confinement layer(s) could not be fully \
+                     confirmed at startup — proceeding with a downgraded confinement claim",
+                    downgraded.len()
+                );
+            } else {
+                tracing::warn!(
+                    downgraded_count = downgraded.len(),
+                    "startup self-attestation: {} confinement layer(s) could not be fully \
+                     confirmed at startup — proceeding with a downgraded confinement claim \
+                     (layer detail withheld from the shared console per D-28; see the audit \
+                     ledger)",
+                    downgraded.len()
+                );
+            }
 
             // D-27 human-visible banner channel (Item-2 fix: session_id +
             // dedup_key are threaded through so Plan 09's per-session dedup
@@ -3664,25 +3685,34 @@ mod attestation_gate_tests {
         fn exit(&self, _span: &tracing::span::Id) {}
     }
 
-    /// Phase 117 NR3-04: the D-27 banner tells the operator to "see
-    /// diagnostic output for details" on a downgraded launch. This test
-    /// proves that claim is actually true on the SUCCESS path (not only
-    /// when audit-event emission itself fails) by capturing every
-    /// `tracing` event emitted while driving `apply_startup_attestation_gate`
-    /// through the REAL registry with a `PartiallyApplied` layer (same
-    /// scenario as `partially_applied_launch_is_downgraded_not_silently_
-    /// passed` above), and asserting a captured event carries a
-    /// STRUCTURED field literally named `downgraded_layers`.
+    /// Phase 117 NR3-04, gated by Phase 117-21 CR-02: the D-27 banner tells
+    /// the operator to consult the audit ledger for layer-level detail on a
+    /// downgraded launch. This test proves that claim is actually true on
+    /// the SUCCESS path (not only when audit-event emission itself fails)
+    /// by capturing every `tracing` event emitted while driving
+    /// `apply_startup_attestation_gate` through the REAL registry with a
+    /// `PartiallyApplied` layer (same scenario as
+    /// `partially_applied_launch_is_downgraded_not_silently_passed` above),
+    /// and asserting a captured event carries a STRUCTURED field literally
+    /// named `downgraded_layers` — but only when the private (file-log)
+    /// channel is active (`log_target_is_private() == true`); the sibling
+    /// test below proves the opposite on the shared-console arms.
     ///
     /// This is deliberately NOT satisfied by the pre-existing conditional
     /// warns inside the `SECURITY_LAYER.get()` match: those interpolate
     /// `downgraded_layers={dedup_key}` as plain text inside their `message`
     /// field, they do not record it as its own field — so a regression that
-    /// deletes the new unconditional `tracing::warn!` (moving the field back
-    /// to text-only) makes this assertion fail even though the surrounding
+    /// deletes the gated `tracing::warn!` (moving the field back to
+    /// text-only) makes this assertion fail even though the surrounding
     /// text still mentions the words "downgraded_layers".
     #[test]
-    fn proceed_downgraded_success_path_logs_downgraded_layers_field_unconditionally() {
+    fn proceed_downgraded_success_path_logs_downgraded_layers_field_on_private_log_channel() {
+        // Held for the whole test: serializes against the sibling
+        // withholds-layer-names test below, which also mutates the same
+        // process-global `TRACING_LOG_TARGET_IS_PRIVATE` static.
+        let _test_lock = crate::cli_bootstrap::lock_log_target_is_private_test();
+        crate::cli_bootstrap::set_log_target_is_private_for_test(true);
+
         let child = spawn_suspended_cmd();
         let job: HANDLE = unsafe {
             // SAFETY: see above.
@@ -3721,6 +3751,15 @@ mod attestation_gate_tests {
             CloseHandle(job);
         }
 
+        // Reset the shared test seam immediately after driving the gate and
+        // BEFORE any assertion, mirroring `labels_guard.rs`'s
+        // `snapshot_and_apply_fails_when_forced_unavailable` pattern — all
+        // subsequent panics operate only on already-captured local data
+        // (`gate`, `events`), never on the shared static, so a failing
+        // assertion below cannot leak `true` into other tests in this
+        // binary.
+        crate::cli_bootstrap::set_log_target_is_private_for_test(false);
+
         assert!(
             gate.is_ok(),
             "downgraded launch must still proceed, got {gate:?}"
@@ -3735,10 +3774,90 @@ mod attestation_gate_tests {
         assert!(
             found,
             "the ProceedDowngraded success path must log a STRUCTURED \
-             `downgraded_layers` field unconditionally (not only inside the \
-             audit-emission-failure arms), so the D-27 banner's \"see \
-             diagnostic output for details\" claim is truthful; captured \
-             events: {events:?}"
+             `downgraded_layers` field when the private log channel is active \
+             (not only inside the audit-emission-failure arms), so the D-27 \
+             banner's operator-detail claim is truthful; captured events: \
+             {events:?}"
+        );
+    }
+
+    /// Sibling to the test above (Phase 117-21 CR-02): with
+    /// `log_target_is_private() == false` (the default no-`--log-file` arm
+    /// and the file-open-failure fallback arm both leave it false — the
+    /// common case), the downgrade warn must NEVER carry a `downgraded_layers`
+    /// field naming specific `LayerId`s on the channel the confined child can
+    /// read back (D-28). Only `downgraded_count` may appear.
+    #[test]
+    fn proceed_downgraded_success_path_withholds_layer_names_on_the_shared_console_channel() {
+        // Held for the whole test: serializes against the sibling
+        // private-channel test above, which also mutates the same
+        // process-global `TRACING_LOG_TARGET_IS_PRIVATE` static.
+        let _test_lock = crate::cli_bootstrap::lock_log_target_is_private_test();
+        // Explicit, not relying on the module default: proves the withheld
+        // behavior under test isolation regardless of test execution order.
+        crate::cli_bootstrap::set_log_target_is_private_for_test(false);
+
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.mandatory_integrity_label = layer_registry::LayerApplication::PartiallyApplied;
+
+        let subscriber = std::sync::Arc::new(CapturingSubscriber::default());
+        let dispatch = tracing::Dispatch::from(std::sync::Arc::clone(&subscriber));
+        let gate = tracing::dispatcher::with_default(&dispatch, || {
+            apply_startup_attestation_gate(
+                child.process,
+                job,
+                layer_registry::EntryPath::DirectCli,
+                Some(WindowsTokenArm::Null),
+                false,
+                applied,
+                None,
+                Some("117-21-cr-02-withheld-test-session"),
+            )
+        });
+
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+
+        // Static is already `false` and this test never set it `true`, so no
+        // reset is required before asserting — but the assignment above
+        // keeps the precondition explicit rather than order-dependent.
+
+        assert!(
+            gate.is_ok(),
+            "downgraded launch must still proceed, got {gate:?}"
+        );
+
+        let events = subscriber.events.lock().expect("capture mutex poisoned");
+        let leaked_layer_name = events
+            .iter()
+            .any(|fields| fields.iter().any(|(name, _)| name == "downgraded_layers"));
+        assert!(
+            !leaked_layer_name,
+            "on the shared-console (non-private) channel, no captured event may carry a \
+             `downgraded_layers` field naming specific LayerIds (D-28) — captured events: \
+             {events:?}"
+        );
+        let has_count = events
+            .iter()
+            .any(|fields| fields.iter().any(|(name, _)| name == "downgraded_count"));
+        assert!(
+            has_count,
+            "the shared-console warn must still carry a `downgraded_count` field — \
+             captured events: {events:?}"
         );
     }
 

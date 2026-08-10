@@ -38,6 +38,27 @@ pub(crate) fn set_log_target_is_private_for_test(private: bool) {
     TRACING_LOG_TARGET_IS_PRIVATE.store(private, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Process-global lock serializing tests that drive
+/// `TRACING_LOG_TARGET_IS_PRIVATE` via [`set_log_target_is_private_for_test`].
+///
+/// Rust unit tests run in parallel within the same process (same hazard
+/// class as `test_env::ENV_LOCK`, documented there): without this lock two
+/// tests setting opposite values race on the shared `AtomicBool` and observe
+/// each other's state mid-assertion.
+#[cfg(test)]
+pub(crate) static LOG_TARGET_IS_PRIVATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Acquire [`LOG_TARGET_IS_PRIVATE_TEST_LOCK`], recovering from poisoning the
+/// same way `test_env::lock_env` does (a prior panicking test must not
+/// permanently deadlock every subsequent test in this binary).
+#[cfg(test)]
+pub(crate) fn lock_log_target_is_private_test() -> std::sync::MutexGuard<'static, ()> {
+    match LOG_TARGET_IS_PRIVATE_TEST_LOCK.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 pub(crate) fn normalize_legacy_flag_env_vars() {
     copy_legacy_env_var("NONO_NET_BLOCK", "NONO_BLOCK_NET");
     copy_legacy_env_var("NONO_NET_ALLOW", "NONO_ALLOW_NET");

@@ -117,7 +117,7 @@ pub fn print_attestation_downgrade_banner(
         theme::fg(
             &format!(
                 "{downgraded_count} confinement layer(s) could not be fully confirmed at \
-                 startup — see diagnostic output for details"
+                 startup — see the audit ledger for layer-level detail"
             ),
             attestation_downgrade_color(downgraded_count, t),
         )

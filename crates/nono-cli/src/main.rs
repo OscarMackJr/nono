@@ -218,9 +218,42 @@ fn main() {
             }
             std::process::exit(2);
         }
-        eprintln!("nono: {}", e);
+        for line in render_error_for_operator(&e) {
+            eprintln!("{line}");
+        }
         std::process::exit(1);
     }
+}
+
+/// Renders the lines printed to the operator for any `NonoError` that is not
+/// `ActionRequired` (that variant has its own dedicated multi-line branch in
+/// `main` above and never reaches this function).
+///
+/// Phase 117-21 WR-04: previously `main`'s generic fallback only ever printed
+/// the bare `Display` line, even though `NonoError::remediation()` (Plan
+/// 117-13, NR3-01) already computes a structured, operator-actionable
+/// `ClearStaleLayerResidue { layer }` remediation for
+/// `LayerAttestationFailed` — that guidance was invisible to an operator who
+/// hit a genuine startup self-attestation failure. This function is factored
+/// out of the inline `eprintln!` calls specifically so it is unit-testable
+/// without a real `run_cli` invocation (no live process/CLI parse needed).
+///
+/// Always includes the `Display` line first; appends an additional
+/// remediation line only when `e.remediation()` resolves to
+/// `ClearStaleLayerResidue`. Other remediation variants are intentionally
+/// left unrendered here — WR-04 scopes only the `LayerAttestationFailed`
+/// case, and this function must not print a spurious line for errors whose
+/// remediation this plan does not cover.
+fn render_error_for_operator(e: &nono::NonoError) -> Vec<String> {
+    let mut lines = vec![format!("nono: {e}")];
+    if let Some(nono::NonoRemediation::ClearStaleLayerResidue { layer }) = e.remediation() {
+        lines.push(format!(
+            "nono:   layer {layer} could not be confirmed. If a prior nono session exited \
+             abnormally, its residual confinement state may remain — run `nono setup \
+             --check-only` to diagnose."
+        ));
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -241,6 +274,37 @@ mod tests {
 
     fn sandbox_args() -> SandboxArgs {
         SandboxArgs::default()
+    }
+
+    /// Phase 117-21 WR-04: `LayerAttestationFailed` must render both the
+    /// existing `Display` line AND a remediation line naming the failed
+    /// layer and the real `nono setup --check-only` subcommand.
+    #[test]
+    fn render_error_for_operator_adds_remediation_for_layer_attestation_failed() {
+        let e = nono::NonoError::LayerAttestationFailed {
+            layer: "MandatoryIntegrityLabel".to_string(),
+            reason: "residual ACE present".to_string(),
+        };
+        let lines = render_error_for_operator(&e);
+        assert_eq!(
+            lines.len(),
+            2,
+            "expected Display + remediation lines: {lines:?}"
+        );
+        assert!(lines[0].contains("MandatoryIntegrityLabel"));
+        assert!(lines[0].contains("residual ACE present"));
+        assert!(lines[1].contains("MandatoryIntegrityLabel"));
+        assert!(lines[1].contains("nono setup --check-only"));
+    }
+
+    /// Any other error variant renders unchanged from today — only the
+    /// `Display` line, no spurious remediation line.
+    #[test]
+    fn render_error_for_operator_is_unchanged_for_other_variants() {
+        let e = nono::NonoError::NoCapabilities;
+        let lines = render_error_for_operator(&e);
+        assert_eq!(lines.len(), 1, "no remediation line expected: {lines:?}");
+        assert!(lines[0].starts_with("nono: "));
     }
 
     #[test]
