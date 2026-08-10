@@ -1,13 +1,10 @@
 ---
 phase: 117-fail-direction-contract-startup-self-attestation
 reviewed: 2026-08-10T00:00:00Z
-iteration: 2
+iteration: 3
 depth: deep
-files_reviewed: 22
+files_reviewed: 16
 files_reviewed_list:
-  - .github/workflows/ci.yml
-  - Makefile
-  - crates/nono-cli/Cargo.toml
   - crates/nono-cli/src/agent_daemon/launch.rs
   - crates/nono-cli/src/exec_strategy_windows/attestation.rs
   - crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs
@@ -17,635 +14,573 @@ files_reviewed_list:
   - crates/nono-cli/src/exec_strategy_windows/mod.rs
   - crates/nono-cli/src/exec_strategy_windows/network.rs
   - crates/nono-cli/src/exec_strategy_windows/restricted_token.rs
-  - crates/nono-cli/src/execution_runtime.rs
   - crates/nono-cli/src/output.rs
-  - crates/nono-cli/tests/env_vars.rs
   - crates/nono-cli/tests/layer_force_unavailable.rs
   - crates/nono-cli/tests/layer_registry_meta_test.rs
   - crates/nono-cli/tests/layer_registry_selfcheck.rs
-  - crates/nono-shell-broker/Cargo.toml
   - crates/nono-shell-broker/src/main.rs
-  - crates/nono/src/attestation.rs
-  - crates/nono/src/machine_policy.rs
+  - crates/nono/src/error.rs
+  - proj/SPEC-windows-fail-direction-contract.md
 findings:
   critical: 1
-  warning: 12
+  warning: 9
   info: 0
-  total: 13
+  total: 10
 status: issues_found
 ---
 
-# Phase 117: Code Review Report (iteration 2 — re-review after fix pass)
+# Phase 117: Code Review Report (iteration 3 — verification re-review of the 5-finding fix pass)
 
 **Reviewed:** 2026-08-10
 **Depth:** deep
-**Files Reviewed:** 22 (the `936d1ddb..HEAD` fix delta plus the call sites it depends on)
+**Files Reviewed:** 16 (the `d70b4658..HEAD` delta plus every call site and consumer it depends on)
 **Status:** issues_found
 
 ## Summary
 
-The fix pass is substantially real. Three of the four findings that broke the
-phase's central claim are genuinely closed and I verified them independently
-rather than by reading the fix report:
+This pass is materially better than the previous one. The decisive claim of
+CR-14 — *"a launch that wrote zero NO_WRITE_UP ACEs is reported fully
+attested"* — is genuinely dead. I traced the whole data path
+(`AppliedLabel::{SkipPreExistingLabel,SkipNotOwned,Applied}` →
+`AppliedLabelsGuard::coverage()` → `LabelCoverage::application()` →
+`AppliedLayers::mandatory_integrity_label` → `AppliedLayers::status()` →
+`classify_row`'s `ConfiguredOnly` arm → `RowVerdict::from_application` →
+`decide_from_entries`) and the all-skip case now lands on
+`LayerApplication::NotApplied` → `LayerAttestationStatus::Unconfirmed` →
+`AttestationDecision::Abort`. It is proven by a test that drives **real
+filesystem state** (`labels_guard.rs:534`) rather than a synthetic
+`AppliedLayers` value, and by a real-registry gate test against a live
+`CREATE_SUSPENDED` job-contained child (`launch.rs:3530`). NR-02's
+`ProceedDowngraded` is reachable from that same real production condition, and
+it was made reachable by *detecting a real partial state*, not by lowering what
+counts as confirmed and not by firing unconditionally. NR-06's staging guard
+now rejects `..`/`.` **before** the literal test, keeps `Path::starts_with`
+(never string `starts_with`), canonicalizes both sides, fails secure when
+canonicalization fails, and is pinned by a test that asserts refusal via
+survival of a real on-disk victim tree plus the positive direction.
 
-- **CR-02 is fully fixed.** `probe_in_job` now takes a mandatory `JobHandle`
-  and rejects null/`INVALID_HANDLE_VALUE` fail-closed
-  (`crates/nono/src/attestation.rs:280-287`), so the vacuous "in ANY job" form
-  is unreachable by accident. Both mirrors pass a real job handle. The
-  both-polarity test against a live suspended child is a genuine non-vacuity
-  proof.
-- **CR-03 is fully fixed.** The broker gate is hoisted out of
-  `if is_app_container` (`nono-shell-broker/src/main.rs:857`), the legacy/PTY
-  arm now spawns `CREATE_SUSPENDED` (`:785`), and I traced the spawn lifecycle:
-  the gate sits strictly between spawn and the single `ResumeThread` (`:948`),
-  every failure path — env-var absent, gate refusal, resume failure — calls
-  `TerminateProcess` first, and there is no code path that resumes before the
-  gate or that leaves a suspended child un-terminated. `unwrap_or_default()` is
-  gone; unknown/empty required-layer names refuse resume; `MandatoryIntegrityLabel`
-  is genuinely RID-checked; the AppContainer SID is compared to the expected
-  per-run value. 34/34 broker tests pass locally.
-- **CR-10 is fully fixed and I confirmed it executes.**
-  `cargo test -p nono-sandbox-cli --test layer_registry_meta_test` runs 5 tests
-  in a **default** build (it previously compiled to zero), and the feature
-  appears in no default-feature set and no release build path — only in the new
-  `make` target, the new CI job, and `--all-features` clippy.
-- **NEW-01 no longer deletes the tree.** I ran the touched suites; `git status`
-  stayed clean.
+The "guard construction relabelled as guard effect" move I was asked to watch
+for **did not repeat wholesale — but it survives in two of four fields.**
+`dacl_ancestor_traverse` and `dacl_ancestor_read_attrs` are still
+`self._applied_ancestor_*.is_some()` (`mod.rs:413-414`), and
+`execution_runtime.rs:608` sets `package_sid: Some(..)` unconditionally, so
+both are the constant `Applied` on every shipped `DirectCli` launch and neither
+row can ever deny. The reasoning is written next to the code and is defensible
+on the merits; it is still the same shape CR-14 named, and it is recorded here
+rather than accepted silently (NR3-02).
 
-What does not hold up is the *shape* of the CR-01/CR-09 fix. Both were closed
-by replacing a probe that could only say yes with a caller-supplied
-`AppliedLayers` report — but `PreparedWindowsLaunch::applied_layers()`
-(`mod.rs:356-386`) derives that report from **guard construction**, not guard
-**effect**, and hardcodes `mandatory_integrity_label: true` and
-`interpreter_coverage_gate: true` as literals. `AppliedLabelsGuard::snapshot_and_apply`
-returns `Ok` when it recorded `AppliedLabel::Skip` for **every** path
-(`labels_guard.rs:135`, `:159`; its own test at `:540` asserts "Skip is not an
-error"). So a direct-CLI launch that applied zero mandatory-label ACEs still
-reports the layer as established, classifies it
-`EstablishedNotIndependentlyObservable`, is *not* counted as a downgrade after
-the CR-09 change, and reaches `Proceed`. That is the phase's stated goal —
-"nono can no longer report enforcing while a confinement layer is silently
-inert" — unmet on the primary path, with the failure mode relabelled rather
-than removed.
+What the fix pass did *not* consider is the operational consequence of making
+`applied == 0` a hard abort. `AppliedLabelsGuard` reverts labels in `Drop`, and
+`Drop` does not run on a console Ctrl-C, a hard kill, or a crash. The labels
+nono itself wrote then persist, so on the **next** launch every user-owned
+policy path returns `Some(..)` from `low_integrity_label_and_mask`, records
+`SkipPreExistingLabel`, and yields `applied == 0` → `NotApplied` → `Abort`. The
+same thing happens to the second of two concurrent sessions over one workspace
+(the per-tool-call hook path can run tools in parallel). There is no stale-label
+sweep, no remediation on the error variant, and no CLI affordance to clear the
+ACEs. nono locks itself out of its own workspace after its own abnormal exit.
+That is NR3-01, and it is the one blocker.
 
-The CR-09 fix also inverted rather than corrected the D-27 signal: because no
-registry row carries `DegradeWithVisibleClaim` or `FailOpenDefect`, and
-`FailOpen` rows are deliberately never pushed into `downgraded`
-(`attestation.rs:474-483`), `AttestationDecision::ProceedDowngraded` is now
-**unreachable on every production path**. The banner, the dedup marker, the
-`LayerAttestationDowngraded` audit event and the WR-11 path validator are all
-dead code in the shipped build. Iteration 1 said the signal fired always;
-it now fires never.
+Two of the five claimed fixes are **PARTIAL** for the same reason: NR-04 and
+NR-05 both made the two facts independent *expressions*, but on every reachable
+production control flow the negative still cannot occur, because an earlier and
+harder gate has already aborted. The fix report says so plainly in its "honest
+limits" sections and argues defence-in-depth, which is a reasonable position —
+but the review's question was whether the deny direction is reachable in a
+shipped build, and the answer is still no.
 
-Beyond that, four of the fix pass's new "deny" branches are only reachable from
-synthetic test inputs the production callers cannot construct (NR-04, NR-05),
-one new fail-secure claim is not actually fail-secure (NR-03), and the NEW-01
-staging guard's "cannot be defeated" claim does not survive a `..` component
-(NR-06).
+Separately, iteration 2 (and I, at first) accepted a claim from a source
+comment that turns out to be fictional: `layer_registry.rs:686` says
+`dacl_session_sid_grant_is_not_claimed_anywhere` "fails the build if anyone
+re-adds an expectancy cell." That test does not exist anywhere in the tree, and
+`AppliedLayers::status()` hardcodes `NotApplicable` for that `ConfiguredOnly`
+row — so re-adding an expectancy cell would silently drop the row from every
+decision, fail-open, with nothing to catch it (NR3-03).
 
-CR-05 and CR-07 are legitimately `ACCEPTED_OPEN`: both record a named operator
-decision in the SPEC (RF-03, RF-13), the registry/doc no longer make a false
-claim, and CR-07 now emits a loud `RequiredLayersNotEnforced` warning. Neither
-was closed by deleting a real capability — `DaclSessionSidGrant`'s deletion is
-of a claim that was never backed by a call site, which I re-verified by grep.
+I did not re-run the build or test suites; the verdicts below are from source
+analysis of the delta and its consumers.
 
-## Iteration 1 Disposition
+## Iteration 2 Fix Disposition
 
 | ID | Verdict | Evidence |
 |---|---|---|
-| CR-01 `MandatoryIntegrityLabel` vacuous probe | **PARTIAL** | Wrong-object half fixed (row is `ConfiguredOnly`, `layer_registry.rs:847`) and a real RID check landed in the broker (`main.rs:159-175`). But on `DirectCli` the row's status comes from `applied_layers()`'s literal `mandatory_integrity_label: true` (`mod.rs:364`) — still cannot deny. See NR-01. |
-| CR-02 `probe_in_job` null job | **RESOLVED** | `attestation.rs:274-304`: `job` mandatory, null/`INVALID_HANDLE_VALUE` rejected fail-closed; `launch.rs:2401` passes `containment.job`, `agent_daemon/launch.rs:874` passes `job_raw_owned`. Both-polarity live test at `attestation.rs:833`. |
-| CR-03 broker gate nesting / coverage / fail-open | **RESOLVED** | Gate hoisted (`main.rs:857`), legacy arm `CREATE_SUSPENDED` (`:785`), single `ResumeThread` after the gate (`:948`), all error paths terminate. `BROKER_ATTESTABLE_LAYERS` refusal (`:112-119`), empty-list refusal (`:99-105`), env-absent refusal (`:886-892`). 34/34 broker tests pass. Human PTY verification still outstanding per the fix report. |
-| CR-04 `WfpEgressFilters` aborts legit launches | **RESOLVED** | Tri-state `AppliedLayers::wfp_egress_filters`; `classify_row` returns `NotApplicable` for an unselected backend (`attestation.rs:377-380`). Availability defect gone. (Its *deny* direction is production-unreachable — NR-04.) |
-| CR-05 `DaclSessionSidGrant` unbacked claim | **ACCEPTED_OPEN** | Expectancy emptied (`layer_registry.rs:646`), `call_sites: &[]`, seam relabelled to `DaclPackageSidGrant`, SPEC row + `MANUALLY_VERIFIED` entry + RF-03 operator decision. Re-verified by grep: no DACL grant of `config.session_sid` anywhere. |
-| CR-06 daemon `DaclAncestorReadAttrs` | **RESOLVED** | Dropped from the daemon decision core and from `DACL_ANCESTOR_READ_ATTRS_EXPECTANCY` (`layer_registry.rs:701`, DirectCli-only); SPEC row 58 states the reason. |
-| CR-07 `HKLM\...\RequiredLayers` no-op | **ACCEPTED_OPEN** | `warn_if_required_layers_configured` (`machine_policy.rs:676-707`) emits a named warning; type doc carries a NOT-YET-ENFORCED section; RF-13 records the three open decisions. Enforcement genuinely still absent, and now says so. |
-| CR-08 four Windows block-net tests | **RESOLVED** | All four + the helper gated on `all(target_os="windows", feature="layer-fault-injection")`; stale `NONO_TEST_HARNESS` comments and `.env` calls removed; a runner exists (CR-10). Runner reliability is a separate new finding (NR-08). |
-| CR-09 `Proceed` unreachable / permanent downgrade | **PARTIAL** | `Proceed` is reachable and proven at the real gate (`launch.rs:fully_applied_launch_passes_the_gate`). But the fix inverted the defect: `ProceedDowngraded` is now unreachable in production (NR-02), and the new deny direction is unreachable for every `DirectCli` `ConfiguredOnly` row (NR-01). |
-| CR-10 fault-injection feature nothing enables | **RESOLVED** | Verified live: `layer_registry_meta_test` runs 5 tests in a default build; `layer_registry_selfcheck` 3/3. `make test-layer-fault-injection` + `windows-layer-fault-injection` CI job added. Feature absent from `default`, present only in `--all-features` clippy — no release-build leak. |
-| WR-01 probes accept any value | **RESOLVED** | Broker (`main.rs:130-145`), daemon (`agent_daemon/launch.rs:1362-1366`), CLI `RestrictedToken` (`attestation.rs:295-308`) all compare against the expected value. Positive-direction coverage gap is NR-07. |
-| WR-02 daemon drops `WfpEgressFilters` | **PARTIAL** | Parameterised and abortable in the unit test, but the only shipped call site passes `network_scoping_required` for **both** parameters (`agent_daemon/launch.rs:880-883`), making the predicate a constant `false`. See NR-05. |
-| WR-03 `host_gated_rows_are_loud` cannot fail | **RESOLVED** | `manual_verification_section` slices at the heading; both loudness tests use it; `manual_verification_section_excludes_the_registry_table` is a real non-vacuity guard. All pass in a default build. (Minor ordering nit: NR-10.) |
-| WR-04 meta-test accepts a function name; `MANUALLY_VERIFIED` unbounded | **NOT_RESOLVED** | Skipped by the fixer. The check is still `test_src.contains("fn force_unavailable_…")`, and the allow-list **grew** from 10 to 11 of 13 rows (`layer_registry_meta_test.rs:151-273`). |
-| WR-05 duplicate DACL test | **RESOLVED** | One correctly-labelled `force_unavailable_dacl_package_sid_grant`; the shared seam now reports `DaclPackageSidGrant` (`dacl_guard.rs:148`) and its in-crate test asserts that name. |
-| WR-06 stale call-site citations | **NOT_RESOLVED (worsened)** | Skipped. Actual positions today: `AppliedLabelsGuard` `mod.rs:479` (cited `:425`), `AppliedDaclGrantsGuard` `mod.rs:493` (cited `:436-440`), `AppliedAncestorTraverseGuard` `mod.rs:507` (cited `:449-455`), `AppliedAncestorReadAttributesGuard` `mod.rs:531` (cited `:473-482`) — every citation drifted a further ~54 lines, and the SPEC table repeats them. |
-| WR-07 daemon `KILL_ON_JOB_CLOSE` abort path | **RESOLVED** | Explicit `TerminateProcess(process_handle_raw, 1)` before `cleanup_failed_agent` (`agent_daemon/launch.rs:962`). |
-| WR-08 `DaemonAttestationDecision::Proceed` never constructed | **RESOLVED** | Returned at `agent_daemon/launch.rs:1401`; asserted by `real_appcontainer_job_process_proceeds_and_the_negatives_are_reachable`. |
-| WR-09 expectancy under-models DACL rows | **RESOLVED** | `DACL_PACKAGE_SID_SCOPED_EXPECTANCY` covers all five `DirectCli` arms + `Daemon` (`layer_registry.rs:660-691`), matching `execution_runtime.rs:608`'s unconditional `package_sid: Some(..)` (re-verified). |
-| WR-10 SPEC self-contradictions | **RESOLVED** | Structural-constraints paragraph reconciled with the `MinifilterAbsence` carve-out (SPEC:157-162); SC4-2/SC4-4 moved to RESOLVED with the historical Finding text preserved; `spec_matches_registry` + `host_gated_rows_are_loud` pass. No real capability was deleted to silence the finding. |
-| WR-11 unvalidated `session_id` in a path | **RESOLVED** | `session_id_is_safe_path_component` is an ASCII allow-list (`output.rs:214-221`); `rejects_traversal_and_separator_shapes` drives 13 hostile shapes and asserts `None` from the marker helper. Verified passing. |
-| WR-12 three cores, no conformance test | **PARTIAL** | Assertion (b) landed (`every_emitted_broker_required_layer_is_attestable_by_the_broker`); (c) is moot. Assertion (a) — the broker's `"NONO_BROKER_REQUIRED_LAYERS"` literal vs `BROKER_REQUIRED_LAYERS_ENV_VAR` — is still unasserted; a rename on either side still silently disconnects the wire contract (now producing a hard refusal rather than an unattested launch). |
-| NEW-01 `Drop` deleting `crates/nono-cli/` | **PARTIAL** | The recursive delete is contained (`network.rs:197-209`, `Path::starts_with`, root itself refused) and I confirmed the tree stays clean across the suites. But the guard does not reject `..` components or canonicalize, so its stated "cannot be turned into an arbitrary recursive delete" property does not hold. See NR-06. |
+| **CR-14** (BLOCKER) | **RESOLVED** (2 residuals → NR3-01, NR3-02) | The all-`Skip` path is now a hard deny: `labels_guard.rs:112-113` returns `NotApplied` when `applied == 0`, `attestation.rs:395-397` maps it to `Unconfirmed`, `attestation.rs:501-507` aborts. `guard_skips_path_not_owned_by_current_user` (`labels_guard.rs:735-742`) asserts the exact CR-14 scenario against `%SystemRoot%`. Residual: `mod.rs:413-414` still reports `is_some()` for the two ancestor-DACL rows. |
+| **NR-02** | **RESOLVED** (residuals → NR3-04, NR3-06) | `attestation.rs:527-529` pushes a `partially_established` `Abort`-outcome row into `downgraded`; `LabelCoverage::application()` produces `PartiallyApplied` from a real, occurring condition (one policy path already carrying a third-party label), proven by `coverage_distinguishes_full_partial_and_zero_ace_launches` and by `partially_applied_launch_is_downgraded_not_silently_passed` against the REAL registry. The bar for `Confirmed`/`Applied` was not lowered and the banner is not unconditional. |
+| **NR-04** | **PARTIAL** | The two facts *are* independent now — composition from the discriminant (`mod.rs:473-478`), evidence from `installed_filter_count` / `installed_rule_count` recorded where `netsh`/the WFP IPC returned (`network.rs:1696`, `:1714`, `:1880-1883`), consumed by `derive_wfp_preconfirmed` (`launch.rs:1548-1556`). But `assert_wfp_activation_installed_filters` (`network.rs:1859`) rejects `None`/`Some(0)` **before** the guard is constructed, and both `netsh` `Err` paths `return Err` before construction — so no production site can produce `(selected, unconfirmed)`. The deny input is a real guard *type*, but not a value any production caller emits. |
+| **NR-05** | **PARTIAL** | `x && !x` is gone: `wfp_filters_installed` is a distinct local initialised to `false` and set only where `wfp_filter_add` returned `Ok` (`agent_daemon/launch.rs:728`, `:775`), and `dacl_guard_applied` reads `DaemonDaclGuard::granted_write_access()` (`:810`, `:122`). But `wfp_filter_add`'s `Err` path terminates and returns, and `DaemonDaclGuard::apply` pass 2 is fail-closed (`:212-225`), so both values remain dynamically identical to the gate condition on every reachable path — the daemon mirror's `WfpEgressFilters`/`DaclPackageSidGrant` deny direction is still production-unreachable. The new guard is a source-text test (see NR3-07). |
+| **NR-06** | **RESOLVED** (residual → NR3-09) | `network.rs:240-252` rejects `Component::ParentDir`/`CurDir` first; `:255` keeps the literal `Path::starts_with` component test (no string ops — CLAUDE.md footgun #1 respected); `:268-276` canonicalizes BOTH sides and fails secure on error; `:277-286` re-applies the strict-subdirectory test to the canonical forms; `:288` deletes the canonical path. Symlinks/junctions are covered by canonicalization; the TOCTOU window is named in the doc comment (`:220-231`) rather than silently accepted. `cleanup_refuses_traversal_the_root_and_paths_outside_the_root` asserts every refusal by survival of a real victim tree **and** asserts the positive direction, so "refuse everything" cannot pass. |
+
+## Still Open From Iteration 2 (routed to gap closure)
+
+- **NR-03** — `AppliedLayers`'s three `Option<bool>` fields still default to `None` → `from_tristate(None)` → `NotApplicable` → the row is dropped from the decision. Not widened by this pass, and the type's doc comment was corrected to stop claiming otherwise (`layer_registry.rs:445-448`). The type-level fix (`NetworkBackendReport::{Unreported, NotSelected, Selected}`) is not done. Live consequence today: `broker_authenticode_trust_gate` stays `None` under `is_dev_build_layout()` (`launch.rs:1767`, `:2092`), which drops `BrokerAuthenticodeTrustGate` from the decision entirely on the two broker arms.
+- **NR-07** — `RestrictedToken`'s `generate_session_sid()` → `ConvertStringSidToSidW` → token → `ConvertSidToStringSidW` round-trip still has **no** positive-direction test. `restricted_token_requires_this_launch_own_session_sid` (`attestation.rs:1275-1306`) asserts only the two negatives. A formatting divergence still refuses every default supervised Windows launch.
+- **NR-08** — `.github/workflows/ci.yml` untouched. The `windows-layer-fault-injection` job still runs the whole `-p nono-sandbox-cli` suite with no `NONO_CI_HAS_WFP` and no pre-built `nono-shell-broker.exe`.
+- **NR-09** — `crates/nono-shell-broker/src/main.rs` untouched. Both broker spawn shapes still pass `lpEnvironment: null` and the broker's own environment still carries `NONO_BROKER_REQUIRED_LAYERS`, so the confined grandchild can read the required-layer list (D-28 counterexample).
+- **NR-10** — `manual_verification_section` (`layer_registry_meta_test.rs:337-341`) still builds its line-start iterator as `match_indices('\n').map(|(i,_)| i+1).chain(once(0))`, so index `0` is visited last and the iterator is not ascending.
+- **WR-04-R** — `every_registry_row_has_a_test` still accepts a bare function name (`layer_registry_meta_test.rs:311-314`), and `MANUALLY_VERIFIED` is still 11 of 13 rows (`:151-273`). No cap was added.
+- **WR-06-R** — **worsened again.** This pass added ~145 lines to `mod.rs` above the guard block. Registry citations vs. actual positions today: `labels_guard.rs:83` → `:176`; `mod.rs:425` → `:570`; `dacl_guard.rs:92` → `:182`; `mod.rs:436-440` → `:581-585`; `dacl_guard.rs:236` → `:364`; `mod.rs:449-455` → `:594-600`; `dacl_guard.rs:401` → `:540`; `mod.rs:473-482` → `:618-627`. `registry_call_sites_exist` only checks that the *file* exists. The SPEC repeats the stale numbers.
+- **WR-12-R** — no test asserts that `nono-shell-broker`'s `"NONO_BROKER_REQUIRED_LAYERS"` literal (`main.rs:886`) equals `BROKER_REQUIRED_LAYERS_ENV_VAR` (`attestation.rs:117`). Verified absent from `layer_registry_selfcheck.rs`.
 
 ## Critical Issues
 
-### CR-14 (BLOCKER): `AppliedLayers` reports guard *construction*, not guard *effect* — the DirectCli attestation still cannot deny, and a launch with zero mandatory-label ACEs is reported as fully attested
+### NR3-01 (BLOCKER): stale mandatory labels from nono's own abnormal exit — or from a concurrent session — now hard-abort every subsequent launch, with no remediation and no way out
 
-**File:** `crates/nono-cli/src/exec_strategy_windows/mod.rs:356-386`,
-`crates/nono-cli/src/exec_strategy_windows/labels_guard.rs:107-165`, `:200`,
-`crates/nono-cli/src/exec_strategy_windows/attestation.rs:394-414`, `:441-460`
+**File:** `crates/nono-cli/src/exec_strategy_windows/labels_guard.rs:106-118`,
+`:190-206`, `:318-322`,
+`crates/nono-cli/src/exec_strategy_windows/attestation.rs:395-397`, `:501-507`,
+`crates/nono/src/error.rs:387-393`
 
-**Issue:** CR-01 and CR-09 were both closed by moving `ProbeKind::ConfiguredOnly`
-rows off an unconditional free pass and onto a caller-supplied
-`layer_registry::AppliedLayers` report. The report is produced here:
+**Issue:** CR-14's fix makes `applied == 0` on a non-empty policy a hard
+`Abort`:
 
 ```rust
-// mod.rs:356
-fn applied_layers(&self) -> layer_registry::AppliedLayers {
-    layer_registry::AppliedLayers {
-        mandatory_integrity_label: true,          // <-- literal
-        dacl_package_sid_grant: self._applied_dacls.is_some(),
-        dacl_ancestor_traverse: self._applied_ancestor_traverse.is_some(),
-        dacl_ancestor_read_attrs: self._applied_ancestor_read_attrs.is_some(),
-        ...
-        interpreter_coverage_gate: true,          // <-- literal
-    }
+// labels_guard.rs:106
+pub(crate) fn application(self) -> layer_registry::LayerApplication {
+    if self.policy_paths == 0 { return LayerApplication::NotApplicable; }
+    if self.applied == 0 { return LayerApplication::NotApplied; }   // <-- Abort
+    ...
 }
 ```
 
-Every field is a function of *whether a guard object exists*, never of what the
-guard achieved. Trace each one on a production `DirectCli` launch:
+That is the right answer for the case the review demanded. But `applied == 0`
+is not an exotic state — it is nono's own steady-state residue:
 
-- `mandatory_integrity_label` is the constant `true`.
-- `interpreter_coverage_gate` is the constant `true`.
-- the three DACL fields are `config.package_sid.is_some()` — and
-  `execution_runtime.rs:608` sets `package_sid: Some(windows_package_sid)`
-  **unconditionally** (the same fact WR-09's fix relies on), so all three are
-  always `true` whenever `prepare_live_windows_launch` returns `Ok`.
-- the two network fields and the Authenticode field mirror the
-  `_network_enforcement` discriminant (see NR-04).
+1. `snapshot_and_apply` records `SkipPreExistingLabel` for **any** path that
+   already carries **any** mandatory-label ACE (`:193-206`), and
+   `low_integrity_label_and_mask` returns `Some(..)` for exactly the Low-IL ACE
+   nono itself writes via `try_set_mandatory_label` — this is asserted by
+   `guard_apply_then_drop_reverts_label_for_fresh_file` (`:514`).
+2. The only thing that clears those ACEs is `AppliedLabelsGuard::drop` →
+   `revert_all` (`:318-322`). `Drop` does not run when the console delivers
+   `CTRL_C_EVENT`, when the process is killed, or on a crash.
+3. So after any abnormal exit, **every** user-owned path in the compiled policy
+   carries a label nono wrote. On the next launch each of those records
+   `SkipPreExistingLabel`; the remaining system paths record `SkipNotOwned`;
+   `applied == 0`; `NotApplied` → `Unconfirmed` → `AttestationDecision::Abort`.
+4. The same mechanism refuses the **second of two concurrent sessions** over one
+   workspace. The module's own doc comment (`:17-18`) explicitly supports
+   concurrent sessions ("last session out restores"); this change silently
+   revokes that support. The Windows sandbox-the-tools hook path runs one
+   `nono run` per tool call and Claude Code dispatches tool calls in parallel.
 
-So on every shipped `DirectCli` launch, **every** `ConfiguredOnly` row
-classifies `Applied` → `EstablishedNotIndependentlyObservable`, which
-`decide_from_entries` now treats as the expected baseline and `continue`s past
-(`attestation.rs:449-459`). The `Unconfirmed` → `Abort` branch that CR-09's fix
-exists to create is unreachable outside `#[cfg(test)]` fixtures; the two tests
-that prove it (`unapplied_configured_only_row_aborts`,
-`launch_missing_an_expected_configured_only_layer_is_refused`) construct an
-`AppliedLayers` value that no production caller can produce.
+The operator sees `Startup self-attestation failed for layer
+MandatoryIntegrityLabel: Unconfirmed` (`error.rs:387`). `NonoError::remediation()`
+has **no arm** for `LayerAttestationFailed` (verified by grep), there is no
+`nono` subcommand that clears mandatory labels (`clear_mandatory_label` is
+private and reachable only from `best_effort_revert`), and there is no
+stale-label sweep analogous to `cleanup_stale_network_enforcement_artifacts`.
+The user's only recourse is to discover `icacls /setintegritylevel` themselves.
 
-The `mandatory_integrity_label: true` literal is worse than "merely
-unreachable", because the guard it stands for is documented to succeed while
-doing nothing:
+The fix report's "honest limits" section discloses the all-`SkipNotOwned`
+variant of this and calls the availability edge "small". It does not consider
+the pre-existing-label variant, which is the common one, is self-inflicted, and
+is sticky.
 
-```rust
-// labels_guard.rs (snapshot_and_apply)
-guard.entries.push(AppliedLabel::Skip);   // :135  pre-existing label
-...
-guard.entries.push(AppliedLabel::Skip);   // :159  non-user-owned system path
-```
+**Fix:** three parts, all cheap.
 
-and its own test asserts `snapshot_and_apply must succeed (Skip is not an
-error)` (`labels_guard.rs:540`). A workspace where every compiled
-filesystem-policy path already carries a label, or is not user-owned, produces
-a guard with an all-`Skip` entry list, `Ok(...)`, and therefore
-`mandatory_integrity_label: true`. The gate then returns
-`AttestationDecision::Proceed`, the banner does not print (NR-02), and the
-session reports as fully attested — **while not a single NO_WRITE_UP ACE was
-applied.** That is verbatim the failure mode the phase exists to eliminate, and
-it is the same "the guard can only ever say yes" defect iteration 1 raised as
-CR-01, relabelled from a live probe to a hardcoded application report.
-
-**Fix:** make the report a fact about the applied state, not about object
-existence, and let the guards own that fact:
+1. Make nono's own residue self-healing rather than fatal. Record enough at
+   apply time to recognise a label nono wrote (the mode-derived mask is already
+   deterministic per `AccessMode`), and treat a matching pre-existing label as
+   `Applied` — the ACE the layer's contract requires **is** present:
 
 ```rust
-// labels_guard.rs
-impl AppliedLabelsGuard {
-    /// True only when at least one mandatory-label ACE was actually written.
-    pub(crate) fn applied_any(&self) -> bool {
-        self.entries.iter().any(|e| !matches!(e, AppliedLabel::Skip))
+// labels_guard.rs, in the prior.is_some() arm
+if let Some((prior_rid, prior_mask)) = prior {
+    let wanted = label_mask_for_access_mode(rule.access);
+    if prior_rid == LOW_INTEGRITY_RID && prior_mask == wanted {
+        // The contracted ACE is already in place (our own residue, or an
+        // identical concurrent session's). Covered, and NOT ours to revert.
+        guard.entries.push(AppliedLabel::AlreadyAtRequiredLevel);
+        continue;
     }
-    /// True when every policy path is either labelled by us or was already
-    /// labelled at or below the required level.
-    pub(crate) fn covers_every_policy_path(&self) -> bool { /* ... */ }
+    guard.entries.push(AppliedLabel::SkipPreExistingLabel);
+    continue;
 }
-
-// mod.rs
-mandatory_integrity_label: self._applied_labels.covers_every_policy_path(),
-interpreter_coverage_gate: self.coverage_gate_ran,   // set from the real call
-dacl_package_sid_grant: self._applied_dacls
-    .as_ref()
-    .is_some_and(dacl_guard::AppliedDaclGrantsGuard::granted_every_writable_path),
 ```
+   and count `AlreadyAtRequiredLevel` toward `applied` in `LabelCoverage`.
 
-Then add a gate-level test that drives a real launch whose label guard recorded
-only `Skip` and asserts `Err(LayerAttestationFailed { layer:
-"MandatoryIntegrityLabel", .. })`. Without such a test the row's deny direction
-remains unproven against production inputs. If an all-`Skip` label set is
-*deliberately* acceptable, the row must not be reported as established —
-`DegradeWithVisibleClaim` is the honest outcome, and it would also make NR-02's
-channel live.
+2. Add a `NonoError::remediation()` arm for
+   `LayerAttestationFailed { layer: "MandatoryIntegrityLabel", .. }` naming the
+   stale-label cause and the concrete `icacls`/`nono setup` command.
+
+3. Add a regression test that pins the recovery: apply a guard, `mem::forget`
+   it (simulating a killed process), then construct a second guard over the same
+   policy and assert `application() != LayerApplication::NotApplied`.
 
 ## Warnings
 
-### NR-02 (WARNING): `ProceedDowngraded` — and with it the entire D-27 banner/telemetry channel — is now unreachable on every production path
+### NR3-02 (WARNING): CR-14's defect survives for two of four `LayerApplication` fields — `dacl_ancestor_traverse` and `dacl_ancestor_read_attrs` are a constant `Applied` and can never deny
 
-**File:** `crates/nono-cli/src/exec_strategy_windows/attestation.rs:428-515`,
-`crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:802-993`,
-`crates/nono-cli/src/exec_strategy_windows/launch.rs:1480-1525`,
-`crates/nono-cli/src/output.rs:159-221`
+**File:** `crates/nono-cli/src/exec_strategy_windows/mod.rs:404-414`, `:439-445`,
+`crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs:385-421`, `:561-609`
 
-**Issue:** `downgraded` is pushed to from exactly two arms:
-`ContractOutcome::DegradeWithVisibleClaim` and
-`ContractOutcome::FailOpenDefect` (`attestation.rs:461-473`). No row in
-`REGISTRY_ENTRIES` uses either value — the registry's own doc comment says so
-twice (`layer_registry.rs:322-325`, `:340-342`). The one `FailOpen` row
-(`MinifilterAbsence`) is explicitly **not** added to `downgraded`
-(`attestation.rs:474-483`), and its expectancy cell is `(DirectCli, None)`
-which `token_arm_matches(Some(arm), None)` never matches anyway, so it
-classifies `NotApplicable` before reaching the outcome match.
+**Issue:** `applied_layers()` derives these two from `is_some()`:
 
-Therefore `downgraded.is_empty()` is always true and
-`AttestationDecision::ProceedDowngraded` is never constructed in a shipped
-build. Everything hanging off it is dead code on every production path:
-`print_attestation_downgrade_banner`, the per-session dedup marker (and the
-WR-11 validator that guards it), `emit_attestation_event`, and the
-`LayerAttestationDowngraded` audit record. Iteration 1's CR-09 said the signal
-fired on every launch; it now fires on none. Combined with CR-14, the only two
-outcomes a shipped `DirectCli` launch can produce are `Proceed` and `Abort` —
-there is no state in which nono tells an operator "this session is running with
-a partially confirmed confinement claim", which is the D-27 deliverable.
+```rust
+dacl_ancestor_traverse: application_of(self._applied_ancestor_traverse.is_some()),
+dacl_ancestor_read_attrs: application_of(self._applied_ancestor_read_attrs.is_some()),
+```
 
-**Fix:** either give at least one row an outcome that can produce a downgrade
-(the honest home for a `ConfiguredOnly` row whose apply was a no-op — see
-CR-14), or, if the design is genuinely "abort or fully attested", delete
-`ProceedDowngraded`, the banner, the dedup marker and the telemetry event
-rather than shipping an operator channel that structurally cannot fire. Add a
-test that asserts the chosen answer:
+Both `Option`s are `config.package_sid.as_deref().map(..).transpose()?`
+(`mod.rs:594-627`), and `execution_runtime.rs:608` sets
+`package_sid: Some(windows_package_sid)` unconditionally — the same fact WR-09's
+fix leans on. So on every shipped `DirectCli` launch both fields are the literal
+`Applied`. Both rows are `expected: true` on all five `DirectCli` arms
+(`DACL_PACKAGE_SID_SCOPED_EXPECTANCY` / `DACL_ANCESTOR_READ_ATTRS_EXPECTANCY`)
+with `outcome: Abort`, and neither can ever produce a negative in a shipped
+build. Ask the iteration-3 question directly — *what input makes this row report
+NOT established?* — and the answer is "none".
+
+The written justification (`mod.rs:404-412`) is that these guards have no skip
+arm, so an empty grant set is legitimate full coverage. That is true of the walk
+itself, but it is an argument about the guard, not about the report: the report
+still reads object existence, and it would keep reading `Applied` if the walk
+were later given a skip arm. The two guards *do* already distinguish outcomes
+internally (`applied: Vec<PathBuf>` plus the "stopped at first non-owned
+ancestor" break), so a real coverage accessor costs nothing.
+
+**Fix:** give both guards the same accessor shape the other two now have, so the
+report is a fact rather than an existence check:
+
+```rust
+// dacl_guard.rs
+impl AppliedAncestorTraverseGuard {
+    /// `NotApplicable` when the walk had nothing owned to grant (the
+    /// documented bypass-traverse case), `Applied` otherwise.
+    pub(crate) fn application(&self) -> layer_registry::LayerApplication {
+        if self.applied.is_empty() {
+            layer_registry::LayerApplication::NotApplicable
+        } else {
+            layer_registry::LayerApplication::Applied
+        }
+    }
+}
+// mod.rs
+dacl_ancestor_traverse: self._applied_ancestor_traverse
+    .as_ref()
+    .map_or(layer_registry::LayerApplication::NotApplied,
+            dacl_guard::AppliedAncestorTraverseGuard::application),
+```
+
+and delete `application_of`, whose only two callers are these lines.
+
+---
+
+### NR3-03 (WARNING): `layer_registry.rs` cites a build-failing guard test that does not exist, and the invariant it claims to protect is genuinely unguarded and fail-open
+
+**File:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:685-698`,
+`:511-527`, `:1129-1161`
+
+**Issue:** The `DACL_SESSION_SID_GRANT_EXPECTANCY` doc comment states:
+
+> The `LayerId` variant is retained (Phase 118 receipts share this vocabulary)
+> and `dacl_session_sid_grant_is_not_claimed_anywhere` below fails the build if
+> anyone re-adds an expectancy cell without also making the grant real.
+
+`grep -rn dacl_session_sid_grant_is_not_claimed_anywhere crates/` returns
+exactly one hit: that comment. **The test does not exist.** Iteration 2's
+disposition table cited this same non-existent test as part of accepting CR-05
+as `ACCEPTED_OPEN`.
+
+The gap is not cosmetic. `DaclSessionSidGrant`'s row carries
+`probe: ProbeKind::ConfiguredOnly` and `outcome: Abort`, but
+`AppliedLayers::status()` hardcodes it to `LayerApplication::NotApplicable`
+(`:514-526`). `classify_row`'s `ConfiguredOnly` arm feeds that straight into
+`RowVerdict::from_application`, which returns
+`plain(LayerAttestationStatus::NotApplicable)` — and `decide_from_entries`
+`continue`s past it (`attestation.rs:491-495`). So if anyone re-adds an
+expectancy cell (the RF-03 open operator decision explicitly contemplates
+restoring this grant), the row is silently **dropped from every decision**
+rather than aborting — a fail-open, in the module whose purpose is truthful
+layer accounting.
+
+The new `every_reported_layer_is_actually_consulted` test only covers the
+forward direction (reported ⇒ consulted). The dangerous direction is the
+converse: a `ConfiguredOnly` / `ConfirmedByEnforcingComponentReport` row that
+`status()` maps to a hardcoded `NotApplicable` while carrying a non-empty
+expectancy. Nothing checks it.
+
+**Fix:** write the test the comment already promises, plus its converse, both
+discovery-style:
 
 ```rust
 #[test]
-fn some_production_configuration_can_produce_a_downgrade() {
-    let downgradable = layer_registry::all_entries().iter().any(|e| matches!(
-        e.outcome,
-        ContractOutcome::DegradeWithVisibleClaim | ContractOutcome::FailOpenDefect { .. }
-    ));
-    assert!(downgradable, "no row can ever downgrade — the D-27 channel is dead code");
+fn dacl_session_sid_grant_is_not_claimed_anywhere() {
+    let row = all_entries().iter().find(|e| e.id == LayerId::DaclSessionSidGrant)
+        .expect("row exists");
+    assert!(row.expectancy.is_empty(),
+            "DaclSessionSidGrant expectancy was re-added, but AppliedLayers::status() still \
+             hardcodes NotApplicable — the row would be silently dropped (fail-open). Add a \
+             reported field in the same commit.");
+}
+
+#[test]
+fn every_consulting_row_with_an_expectancy_has_a_reported_field() {
+    let all_applied = AppliedLayers { /* everything positive */ };
+    for entry in all_entries() {
+        let consults = matches!(entry.probe,
+            ProbeKind::ConfiguredOnly | ProbeKind::ConfirmedByEnforcingComponentReport);
+        let expected_somewhere = entry.expectancy.iter().any(|a| a.expected);
+        if consults && expected_somewhere {
+            assert_ne!(all_applied.status(entry.id), LayerApplication::NotApplicable,
+                "{:?} is expected somewhere and its probe consults AppliedLayers, but status() \
+                 can only ever return NotApplicable — the row is unattestable by construction",
+                entry.id);
+        }
+    }
 }
 ```
 
 ---
 
-### NR-03 (WARNING): `AppliedLayers`'s documented fail-secure default is false for its three tri-state fields
+### NR3-04 (WARNING): the now-live D-27 banner points the operator at diagnostic output that the CLI gate never produces
 
-**File:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:401-445`
+**File:** `crates/nono-cli/src/output.rs:115-124`,
+`crates/nono-cli/src/exec_strategy_windows/launch.rs:1480-1524`,
+`crates/nono-cli/src/agent_daemon/launch.rs:965-972`
 
-**Issue:** The type's doc comment states plainly:
+**Issue:** NR-02 made this channel fire for the first time, so its wording is
+now load-bearing. The banner reads:
 
-> Defaults to `NotApplied` for every field, NOT `Applied` — a caller that
-> forgets to report a layer fails secure.
+> `{n} confinement layer(s) could not be fully confirmed at startup — see diagnostic output for details`
 
-That is true for the five `bool` fields, but `firewall_rules_egress`,
-`wfp_egress_filters` and `broker_authenticode_trust_gate` are `Option<bool>`,
-whose `Default` is `None`, and `from_tristate(None)` maps to
-`LayerApplication::NotApplicable` (`:440-445`) — which `classify_row` turns
-into `LayerAttestationStatus::NotApplicable`, i.e. the row is dropped from the
-decision entirely. A caller that forgets to report the resolved network backend
-does not fail secure; it silently removes `WfpEgressFilters` and
-`FirewallRulesEgress` from the session's attestation. This is the same
-"unreported means fine" default the CR-09 fix was written to eliminate,
-reintroduced for three of eight fields, with a doc comment asserting the
-opposite.
+but `apply_startup_attestation_gate`'s `ProceedDowngraded` arm emits **no**
+operator-visible diagnostic naming the layers. It emits the audit event via
+`SECURITY_LAYER.emit_attestation_event(&downgraded_refs)` and then the banner —
+and the only `tracing::warn!` carrying `downgraded_layers={dedup_key}` fires on
+the *failure* paths (`:1498`, `:1507`), i.e. the detail is visible only when the
+audit emission breaks. An operator who follows the banner's instruction finds
+nothing.
 
-**Fix:** make "not reported" distinguishable from "not part of this
-composition" at the type level, so the compiler forces the caller to say which:
+The daemon mirror does the opposite: `agent_daemon/launch.rs:965-972` emits
+`tracing::warn!(downgraded_layers = %dedup_key, ...)` unconditionally. Two
+mirrors, two different operator surfaces for the same state.
 
-```rust
-pub(crate) enum NetworkBackendReport {
-    Unreported,                 // -> NotApplied (fail-secure)
-    NotSelected,                // -> NotApplicable
-    Selected { installed: bool },
-}
-```
+This is not a D-28 conflict: D-28 forbids layer detail on channels the confined
+process can read (stderr, which the child shares), and `tracing` at the CLI
+routes to the log file / Event Log, not to the child's stderr — which is exactly
+why the daemon can do it.
 
-and default the field to `Unreported`. At minimum, correct the doc comment so
-it does not claim a property the type does not have.
-
----
-
-### NR-04 (WARNING): the network rows can never classify `Unconfirmed` in production — CR-04's deny test uses an input `spawn_windows_child` cannot construct
-
-**File:** `crates/nono-cli/src/exec_strategy_windows/mod.rs:370-377`,
-`crates/nono-cli/src/exec_strategy_windows/launch.rs:1538-1543`,
-`crates/nono-cli/src/exec_strategy_windows/attestation.rs:372-393`, `:816-850`
-
-**Issue:** `applied_layers()` derives `wfp_egress_filters` from the
-`_network_enforcement` discriminant, and `derive_wfp_preconfirmed`
-(`launch.rs:1538`) derives `wfp_preconfirmed` from the **same** discriminant.
-They are structurally in lockstep at the only production call site:
-
-| `_network_enforcement` | `applied.wfp_egress_filters` | `wfp_preconfirmed` | classification |
-|---|---|---|---|
-| `Some(WfpServiceManaged)` | `Some(true)` | `true` | `Confirmed` |
-| `Some(FirewallRules)` | `None` | `false` | `NotApplicable` |
-| `None` | `None` | `false` | `NotApplicable` |
-
-The `Unconfirmed` cell — `applied = Some(_)` **and** `wfp_preconfirmed = false`
-— is unreachable. `network_row_for_an_unselected_backend_is_not_applicable`
-(`attestation.rs:838-849`) reaches it only by hand-setting
-`wfp_egress_filters: Some(false)` alongside `wfp_preconfirmed: false`, a pair
-no caller produces. `FirewallRulesEgress` has the identical shape
-(`Some(true)`/`None`, never `Some(false)`), so it too can only ever be
-`Applied` or `NotApplicable`.
-
-The availability half of CR-04 is genuinely fixed. The claim that the row "can
-still abort when the backend WAS selected and did not confirm" is test-only.
-
-**Fix:** report the two facts independently — thread the actual
-`assert_wfp_activation_installed_filters` result (and the `netsh` rule-add
-result) into `AppliedLayers` rather than re-deriving both from the same enum
-discriminant, so "backend selected but enforcement not confirmed" becomes a
-representable production state.
-
----
-
-### NR-05 (WARNING): the daemon's new `WfpEgressFilters` abort predicate is a compile-time constant `false` at its only call site
-
-**File:** `crates/nono-cli/src/agent_daemon/launch.rs:874-884`, `:1385-1390`
-
-**Issue:** WR-02's fix added
+**Fix:** emit the detail on the channel the banner points at, matching the
+daemon:
 
 ```rust
-if network_scoping_required && !wfp_filters_installed { /* Abort */ }
+tracing::warn!(
+    downgraded_layers = %dedup_key,
+    downgraded_count = downgraded.len(),
+    "startup self-attestation: proceeding with a downgraded confinement claim"
+);
+crate::output::print_attestation_downgrade_banner(downgraded.len(), session_id, &dedup_key);
 ```
 
-but the single production call site passes the same local for both parameters:
+or, if that is deliberately withheld, change the banner text to name where the
+detail actually lives (the audit ledger) instead of a channel that carries
+nothing.
+
+---
+
+### NR3-05 (WARNING): the daemon mirror has no downgrade state at all — `DaemonAttestationDecision::ProceedDowngraded` is never constructed, and its DACL fact is a bool that cannot express partial coverage
+
+**File:** `crates/nono-cli/src/agent_daemon/launch.rs:1378-1432`, `:915-973`,
+`:110-124`, `:158-195`
+
+**Issue:** `daemon_attest_and_decide` returns only `Abort` (four sites) or
+`Proceed` (one site). `DaemonAttestationDecision::ProceedDowngraded` has **no
+constructor anywhere** (verified by grep), so the ~60-line arm at `:915-973` —
+its audit emission, its dedup key, its Event Log warning — is dead code in the
+shipped daemon binary. This is exactly the NR-02 defect, in the mirror NR-02 did
+not touch: the CLI core now has three outcomes and the daemon has two.
+
+It is also a coverage divergence, not just a plumbing one.
+`DaemonDaclGuard::apply` pass 1 *skips* non-owned read-only paths with a warning
+(`:177-183`) and pass 3 *stops* at the first non-owned ancestor (`:242-250`) —
+the same conditions that CR-14 taught the CLI to report as `PartiallyApplied`.
+The daemon collapses all of it into `granted_write_access() -> bool`
+(`:120-123`), which only inspects `write_applied` and is `true` whenever pass 2
+succeeded. Review priority #4 asks for the three mirrors' fail directions to
+match; they do not.
+
+**Fix:** either give `DaemonDaclGuard` a coverage accessor and route it into a
+real `ProceedDowngraded`, mirroring `DaclGrantCoverage::application()`, or
+delete the `ProceedDowngraded` variant and its arm and state in the daemon's doc
+comment that the daemon path is abort-or-proceed by design. Add a discovery-style
+conformance test that fails when one mirror gains a decision state the other
+lacks.
+
+---
+
+### NR3-06 (WARNING): `some_production_row_can_still_produce_a_downgrade` cannot fail for the reason it names
+
+**File:** `crates/nono-cli/src/exec_strategy_windows/attestation.rs:936-950`
+
+**Issue:** The test's message claims it guards against "no registry row can ever
+reach `ProceedDowngraded`", but its predicate inspects only registry *data*:
 
 ```rust
-daemon_attest_and_decide(
-    process_handle_raw,
-    job_raw_owned,
-    &package_sid,
-    true,                       // dacl_guard_applied — literal
-    network_scoping_required,
-    network_scoping_required,   // wfp_filters_installed
-)
+matches!(e.outcome, DegradeWithVisibleClaim | FailOpenDefect { .. })
+  || (matches!(e.probe, ProbeKind::ConfiguredOnly)
+      && e.expectancy.iter().any(|arm| arm.expected))
 ```
 
-`x && !x` is always `false`, so the row can never abort in production. The same
-applies to `dacl_guard_applied`, passed as a literal `true`. The justification
-comments ("reached only if `wfp_filter_add` succeeded", "`dacl_guard` exists, so
-apply ran") are correct about *why* the value is `true` today, but they make the
-new parameters documentation rather than checks — the daemon mirror's deny
-direction is, like CR-14's, unreachable outside the unit test.
+Seven rows carry `ProbeKind::ConfiguredOnly` with a non-empty expectancy, so the
+disjunct is satisfied regardless of the mapping under test. Collapse
+`RowVerdict::from_application`'s `PartiallyApplied` arm into
+`Self::plain(confirmed_status)` — the exact pre-fix behaviour the fix report
+used as its own counterfactual — and this test still passes. It also cannot see
+that two of those seven rows (`FirewallRulesEgress`,
+`BrokerAuthenticodeTrustGate`) are `Option<bool>`-sourced and therefore
+*structurally incapable* of reporting `PartiallyApplied`.
 
-**Fix:** capture the real outcomes rather than re-deriving them from the gate
-condition:
+The two behavioural tests are genuine; this one is a tripwire that is not
+connected to anything.
 
-```rust
-let wfp_filters_installed = if network_scoping_required {
-    match wfp_filter_add(&package_sid, &tenant_id, proxy_port) { Ok(()) => true, Err(e) => { /* ... */ false } }
-} else { false };
-```
-
-so the two values can diverge, then pass `dacl_guard.is_some()` (or an
-`applied_any()`-style accessor) instead of `true`.
-
----
-
-### NR-06 (WARNING): the NEW-01 staging-root guard does not reject `..` or canonicalize, so its stated property does not hold
-
-**File:** `crates/nono-cli/src/exec_strategy_windows/network.rs:174-209`, `:211-222`
-
-**Issue:** The guard is correct about the thing CLAUDE.md footgun #1 warns
-about — it uses `Path::starts_with` (component comparison), not string
-`starts_with`. But `Path::starts_with` compares components **literally**,
-without resolving `..`. A `staged_dir` of
-`%TEMP%\nono-net-block\..\..\Windows` has components
-`[C:\, Users, …, Temp, nono-net-block, .., .., Windows]`, which
-`starts_with(%TEMP%\nono-net-block)` accepts — and `remove_dir_all` then
-resolves the `..` and recurses outside the staging root. The equality check
-`staged_dir == root` is likewise literal, so `%TEMP%\nono-net-block\.` passes it
-and deletes the root. The doc comment's claim — "A `Drop` impl must never be
-able to turn a mis-constructed guard into an arbitrary recursive delete" — is
-therefore not achieved for exactly the class of mis-constructed value the
-finding was about.
-
-`cleanup_stale_network_enforcement_artifacts` (`:211-222`) additionally feeds
-`read_dir` entry paths straight into the same function, so a directory junction
-placed under the staging root by anything with write access to `%TEMP%` is
-worth considering as well.
-
-**Fix:** reject traversal components explicitly and prefer the canonicalized
-form when it exists:
-
-```rust
-use std::path::Component;
-if staged_dir.components().any(|c| matches!(c, Component::ParentDir | Component::CurDir)) {
-    tracing::warn!(...); return;
-}
-let root = network_enforcement_staging_root();
-let (Ok(real_root), Ok(real_dir)) = (root.canonicalize(), staged_dir.canonicalize()) else { return; };
-if real_dir == real_root || !real_dir.starts_with(&real_root) { tracing::warn!(...); return; }
-```
-
-Also assert the refusal in a test (`cleanup_network_enforcement_staging(Path::new("."))`
-must leave `.` intact) — nothing currently pins the guard's behaviour.
-
----
-
-### NR-07 (WARNING): `RestrictedToken`'s new SID-equality check has no positive-direction test, and a mismatch aborts every `WriteRestricted` launch
-
-**File:** `crates/nono-cli/src/exec_strategy_windows/attestation.rs:295-308`,
-`crates/nono-cli/src/exec_strategy_windows/restricted_token.rs:21-32`, `:205-254`
-
-**Issue:** WR-01 changed the row from "any non-empty restricting-SID list
-confirms" to "this launch's `config.session_sid` must appear among them,
-compared with `eq_ignore_ascii_case`". Correct in direction, but the comparison
-now depends on an untested string round-trip:
-`generate_session_sid()` → `ConvertStringSidToSidW` → the token →
-`ConvertSidToStringSidW` → the probe's `String`. The only new test
-(`restricted_token_requires_this_launch_own_session_sid`) asserts the **negative**
-directions (unrestricted token; no expected value). `create_restricted_token_with_sid_applies_write_restricted_flag`
-asserts `GroupCount == 1` but never compares the rendered SID string.
-
-`WriteRestricted` is `select_windows_token_arm`'s default non-PTY supervised arm
-(no PTY, `prefers_low_il_broker == false`, session SID present), and the row's
-outcome is `Abort`. If the round-trip ever differs — a formatting difference, a
-future change to `generate_session_sid`'s field widths — every default
-supervised Windows launch is refused. The fix report states this arm could not
-be exercised on the fix host, so the positive direction is unvalidated in both
-tests and manual runs.
-
-**Fix:** add the paired positive assertion to the existing token test, which
-already has the token in hand:
-
-```rust
-let sids = nono::attestation::probe_restricted_sids(unsafe { GetCurrentProcess() })?; // or via a spawned child
-assert!(sids.iter().any(|s| s.eq_ignore_ascii_case(&sid)),
-        "the restricting SID must render back to the exact string the launch was built with: {sids:?}");
-```
-
----
-
-### NR-08 (WARNING): the new `windows-layer-fault-injection` CI job runs the whole crate's suite unverified and is likely red on first run
-
-**File:** `.github/workflows/ci.yml:308-346`, `Makefile:70-83`
-
-**Issue:** The job runs the *entire* `-p nono-sandbox-cli` test set with the
-feature enabled, not a scoped selection. Three concrete risks, none of which was
-exercised before the job was added:
-
-1. The fix report itself records "the known 11 pre-existing `nono-sandbox-cli`
-   Windows failures were not re-swept end-to-end". Any of those that reproduce
-   on `windows-latest` make this job red for reasons unrelated to the phase.
-2. The sibling `windows-security` job sets `NONO_CI_HAS_WFP: true` for
-   `windows-latest`; the new job sets no env at all. The four block-net tests
-   CR-08 moved into this job depend on WFP behaviour on the runner.
-3. Two in-crate tests spawn a pre-built `nono-shell-broker.exe` from
-   `target/{release,x86_64-pc-windows-msvc/release}` and `panic!` when it is
-   absent (`launch.rs:3776`, `:4588`). The job never builds it, and the other
-   Windows jobs provision artefacts via `scripts/windows-test-harness.ps1`,
-   which this job does not use.
-
-A gate that is red from day one gets marked non-required or removed, which
-restores exactly the CR-10 state it was added to fix.
-
-**Fix:** scope the job to what CR-10 actually needs and provision its
-preconditions, e.g.
-
-```yaml
-- name: Pre-build the broker (two in-crate tests require it)
-  run: cargo build -p nono-shell-broker --release
-- name: Run layer-fault-injection suites
-  env:
-    NONO_CI_HAS_WFP: true
-  run: |
-    cargo test -p nono-sandbox-cli --features layer-fault-injection --test layer_force_unavailable --test layer_registry_meta_test -- --test-threads=1
-    cargo test -p nono-sandbox-cli --features layer-fault-injection --bin nono exec_strategy -- --test-threads=1
-    cargo test -p nono-shell-broker --features layer-fault-injection -- --test-threads=1
-```
-
-and widen it once the job is green.
-
----
-
-### NR-09 (WARNING): the broker's required-layers contract travels on an environment variable the confined grandchild inherits
-
-**File:** `crates/nono-shell-broker/src/main.rs:754`, `:786`,
-`crates/nono-cli/src/exec_strategy_windows/launch.rs:1614-1628`
-
-**Issue:** Both broker spawn shapes pass `lpEnvironment: std::ptr::null()`
-("inherit broker env"), and the broker's own environment carries
-`NONO_BROKER_REQUIRED_LAYERS`. The confined AppContainer/Low-IL grandchild can
-therefore read the exact list of confinement layers the supervisor requires.
-D-28's stated property is that layer-specific detail stays off channels the
-confined process can read (it is why the D-27 banner carries only a count), and
-`telemetry/event.rs` carries a manual-verification item asserting the same
-property for the Application Event Log. The wire contract is a straightforward
-counterexample, and CR-03's fix made this variable the gate's sole input, so it
-is now load-bearing rather than incidental.
-
-**Fix:** strip the variable from the grandchild's environment before spawning —
-build an explicit environment block for the grandchild rather than inheriting,
-or `std::env::remove_var(BROKER_REQUIRED_LAYERS_ENV_VAR)` in the broker
-immediately after the read at `main.rs:886` and before the two `CreateProcess*`
-calls. Add a test that the spawned grandchild's environment does not contain the
-name.
-
----
-
-### NR-10 (WARNING): `manual_verification_section` can select the wrong heading
-
-**File:** `crates/nono-cli/tests/layer_registry_meta_test.rs:335-346`
-
-**Issue:** The line-start iterator is built as
-`match_indices('\n').map(|(i,_)| i+1).chain(std::iter::once(0))` — index `0` is
-appended **after** every other line start, so the iterator is not in ascending
-order. If the SPEC's very first line were ever a `## ` heading containing
-"manual" or "host-gated", `find` would return a later heading instead, silently
-narrowing (or widening) the searched section. Harmless against today's document,
-but the helper is the load-bearing part of WR-03's fix.
-
-**Fix:** `std::iter::once(0).chain(spec.match_indices('\n').map(|(i, _)| i + 1))`.
-
----
-
-### WR-04-R (WARNING, carry-forward): `every_registry_row_has_a_test` still accepts a function name, and `MANUALLY_VERIFIED` grew
-
-**File:** `crates/nono-cli/tests/layer_registry_meta_test.rs:151-273`, `:293-324`
-
-**Issue:** Unchanged from iteration 1 (the fixer skipped it), but the blast
-radius grew rather than shrank: the allow-list went from 10 to 11 of 13 rows
-with the addition of `DaclSessionSidGrant`, so 85% of the registry is now
-"covered" by prose. The remaining check is still
-`test_src.contains("fn force_unavailable_<snake>")` — an empty stub body
-satisfies it. Now that the gate actually executes (CR-10), strengthening it is
-cheap and the payoff is real.
-
-**Fix:** as iteration 1 — additionally assert the row's env-var bridge name
-appears in `command_runtime.rs`, and add a hard cap so the allow-list cannot
-keep growing silently:
-
-```rust
-assert!(MANUALLY_VERIFIED.len() <= 11,
-        "MANUALLY_VERIFIED must not grow without an explicit decision — {} entries",
-        MANUALLY_VERIFIED.len());
-```
-
----
-
-### WR-06-R (WARNING, carry-forward): every registry call-site citation drifted a further ~54 lines, and the SPEC repeats the stale numbers
-
-**File:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:814-818`,
-`:885-890`, `:898`, `:906`, `proj/SPEC-windows-fail-direction-contract.md:53`,
-`:56-58`, `crates/nono-cli/tests/layer_registry_selfcheck.rs:134-138`
-
-**Issue:** The fix pass added ~45 lines to `mod.rs` above the guard block.
-Measured against the current tree:
-
-| Cited | Actual |
-|---|---|
-| `mod.rs:425` (`AppliedLabelsGuard::snapshot_and_apply`) | `mod.rs:479` |
-| `mod.rs:436-440` (`AppliedDaclGrantsGuard`) | `mod.rs:490-494` |
-| `mod.rs:449-455` (`AppliedAncestorTraverseGuard`) | `mod.rs:503-509` |
-| `mod.rs:473-482` (`AppliedAncestorReadAttributesGuard`) | `mod.rs:527-536` |
-
-`registry_call_sites_exist` only asserts the *file* exists, and its
-`// TODO(117-12)` acknowledging line drift is still open. The SPEC table and the
-`MANUALLY_VERIFIED` reasons now repeat the same stale numbers, so the drift is
-in three places for a document that declares itself "the source of truth".
-
-**Fix:** as iteration 1 — cite stable symbols
-(`"mod.rs::prepare_live_windows_launch/AppliedLabelsGuard"`) and have
-`registry_call_sites_exist` assert the file contains the symbol. If the format
-change is deferred again, at minimum re-run the numbers so the citations are
-correct on the day they ship.
-
----
-
-### WR-12-R (WARNING, carry-forward): nothing asserts the broker's env-var literal equals `BROKER_REQUIRED_LAYERS_ENV_VAR`
-
-**File:** `crates/nono-cli/src/exec_strategy_windows/attestation.rs:117`,
-`crates/nono-shell-broker/src/main.rs:886`
-
-**Issue:** The two sides are still paired only by a comment and by the string
-matching. The failure direction improved (a rename now produces a hard refusal
-rather than an unattested launch, because the broker fail-closes on an absent
-variable), so this is no longer a fail-open. It is now an availability
-landmine: renaming the constant on the nono-cli side silently breaks every
-broker-arm launch with a message that names the *variable*, not the rename.
-
-**Fix:** a source-text conformance test is enough and needs no shared crate —
-`layer_registry_selfcheck.rs` already reads sibling sources:
+**Fix:** assert on the mapping, not on the data:
 
 ```rust
 #[test]
-fn broker_env_var_literal_matches_the_cli_constant() {
-    let broker_src = std::fs::read_to_string(
-        workspace_root().join("crates/nono-shell-broker/src/main.rs")).unwrap();
-    let cli_src = std::fs::read_to_string(
-        manifest_dir().join("src/exec_strategy_windows/attestation.rs")).unwrap();
-    let name = cli_src.split("BROKER_REQUIRED_LAYERS_ENV_VAR: &str = \"")
-        .nth(1).and_then(|s| s.split('"').next()).expect("constant");
-    assert!(broker_src.contains(&format!("std::env::var(\"{name}\")")),
-            "nono-shell-broker does not read {name} — the wire contract is disconnected");
+fn some_production_row_can_still_produce_a_downgrade() {
+    let downgradable = layer_registry::all_entries().iter().any(|e| {
+        let arm = e.expectancy.iter().find(|a| a.expected);
+        arm.is_some() && {
+            let v = RowVerdict::from_application(
+                layer_registry::LayerApplication::PartiallyApplied,
+                LayerAttestationStatus::EstablishedNotIndependentlyObservable);
+            v.partially_established
+        }
+    });
+    assert!(downgradable, "…");
 }
 ```
+
+or, better, drive `decide_from_entries` over `all_entries()` with a
+`PartiallyApplied` report and assert the result is `ProceedDowngraded`.
+
+---
+
+### NR3-07 (WARNING): the NR-05 wiring test parses the first textual occurrence of its own search string and pins a textual, not semantic, invariant
+
+**File:** `crates/nono-cli/src/agent_daemon/launch.rs:2074-2113`
+
+**Issue:** The test does `include_str!("launch.rs").split("match daemon_attest_and_decide(").nth(1)`.
+That literal occurs **twice** in the file: once at the real call site (`:899`)
+and once inside the test itself (`:2078`). It works today only because the call
+site happens to appear first. Move the test module above the `windows_impl`
+module, add a doc-comment example containing the same phrase, or introduce a
+second gate call site, and the parse silently re-targets — `args.len() == 6`
+would then fail with "unexpected call shape", which is at least loud, but the
+test is one edit away from testing the wrong text.
+
+Second, the invariant is purely lexical. `assert_ne!(wfp_filters_installed,
+network_scoping_required)` compares *identifier strings*. A future edit to
+`let wfp_filters_installed = network_scoping_required;` restores the exact
+`x && !x` defect and this test passes green — the two argument tokens differ.
+
+**Fix:** anchor the split on a stable, unique marker the test itself cannot
+contain, and add the semantic half as a behavioural assertion:
+
+```rust
+// at the call site
+// ATTESTATION-GATE-CALL (NR-05 wiring anchor — do not remove)
+let call = src.split("ATTESTATION-GATE-CALL").nth(2).expect("anchor comment + call");
+```
+
+plus a test that drives `daemon_attest_and_decide(.., true, true, false)` and
+asserts `Abort { layer: "WfpEgressFilters", .. }`, so the predicate's deny
+direction is pinned behaviourally rather than by token comparison.
+
+---
+
+### NR3-08 (WARNING): registry call-site citations drifted a further ~145 lines in this pass, and the SPEC — which declares itself the source of truth — was not updated for NR-04/NR-05/NR-06 and still describes the pre-NR-06 staging guard
+
+**File:** `crates/nono-cli/src/exec_strategy_windows/layer_registry.rs:866-870`,
+`:937-942`, `:950`, `:958`, `:966-971`,
+`proj/SPEC-windows-fail-direction-contract.md:263`
+
+**Issue:** Two related drifts, both created by this pass.
+
+1. `mod.rs` grew from ~380 to ~525 lines above the guard block, so every
+   `mod.rs:NNN` citation moved again. Measured against the current tree:
+   `labels_guard.rs:83` → actual `:176`; `mod.rs:425` → `:570`;
+   `dacl_guard.rs:92` → `:182`; `mod.rs:436-440` → `:581-585`;
+   `dacl_guard.rs:236` → `:364`; `mod.rs:449-455` → `:594-600`;
+   `dacl_guard.rs:401` → `:540`; `mod.rs:473-482` → `:618-627`. This is the
+   third consecutive pass in which WR-06 has been deferred and the numbers have
+   moved further from truth.
+
+2. The SPEC gained RF-15/RF-16 (CR-14, NR-02) but **no** row for NR-04, NR-05 or
+   NR-06, and its existing RF-14 row still says the guard "refuses any path that
+   is not a strict subdirectory of `%TEMP%/nono-net-block`, compared by path
+   components" — which is the pre-NR-06 description. D-01 says the SPEC is
+   drift-checked against the registry; `spec_matches_registry` only checks
+   `LayerId` names, so none of this is caught.
+
+**Fix:** cite stable symbols instead of lines
+(`"mod.rs::prepare_live_windows_launch/AppliedLabelsGuard::snapshot_and_apply"`)
+and make `registry_call_sites_exist` assert the file *contains the symbol*; if
+that is deferred again, re-run the numbers before shipping. Add the three
+missing SPEC rows and update RF-14 to describe the three-defence guard.
+
+---
+
+### NR3-09 (WARNING): the NR-06 test mutates shared, real `%TEMP%` state and depends on the process CWD, so it is parallel-unsafe and its strongest assertion is environment-dependent
+
+**File:** `crates/nono-cli/src/exec_strategy_windows/network.rs:1993-2065`
+
+**Issue:** The test creates and writes into the **real**
+`network_enforcement_staging_root()` (`%TEMP%\nono-net-block`) and a real
+`%TEMP%\nono-nr06-victim`, both shared process-wide. `cargo test` runs the
+`nono` bin's unit tests in parallel threads, and
+`cleanup_stale_network_enforcement_artifacts` (`:291-304`) enumerates that same
+root and calls `cleanup_network_enforcement_staging` on every entry — so a
+concurrent test or a concurrent real `nono` session on the same host can delete
+`nono-nr06-legit-staging` before or after this test's own call, making the
+positive-direction assertion (`!legit.exists()`) pass or fail for the wrong
+reason. The test also leaves the staging root behind on exit.
+
+`assert!(Path::new("Cargo.toml").exists())` (`:2011`) additionally depends on
+cargo running the test with the package root as CWD; under a different runner it
+asserts nothing.
+
+Separately, the two new coverage accumulators use unchecked `+=`
+(`labels_guard.rs:276-280`, `dacl_guard.rs:277-282`) while
+`DaclGrantCoverage::writable_rules` correctly uses `saturating_add`
+(`dacl_guard.rs:132`) — an inconsistency with CLAUDE.md's arithmetic rule inside
+one struct.
+
+**Fix:** point the test at an isolated root. Extract
+`cleanup_network_enforcement_staging_under(root, staged_dir)` and have the
+production wrapper pass `network_enforcement_staging_root()`, so the test can
+drive a `tempdir()` root with no shared state and no CWD dependency. Use
+`saturating_add(1)` for the two accumulators.
+
+---
+
+### NR3-10 (WARNING): `attestation.rs`'s module doc still asserts a claim that fix pass 1 invalidated
+
+**File:** `crates/nono-cli/src/exec_strategy_windows/attestation.rs:62-72`
+
+**Issue:** Deviation 2's justification reads:
+
+> a literal reading … would abort **every** ordinary Windows launch that expects
+> any `ProbeKind::ConfiguredOnly` row with `outcome: Abort` (`DaclSessionSidGrant`,
+> `DaclPackageSidGrant`, …) … That is not a per-row edge case;
+> `DaclSessionSidGrant` alone is expected on every `WriteRestricted`-arm launch,
+> nono-cli's default supervised path.
+
+`DaclSessionSidGrant`'s expectancy has been empty since CR-05's fix
+(`layer_registry.rs:698`), so it is expected on **no** arm. The paragraph is the
+load-bearing rationale for the one place this module deliberately does *not*
+abort, and its central example is now false — a reader auditing the
+downgrade-instead-of-abort decision is handed a premise that no longer holds.
+
+**Fix:** re-derive the example from the rows that are actually expected today
+(`DaclPackageSidGrant` on all five `DirectCli` arms is the correct
+substitute), and add a note that CR-14 narrowed the deviation: it now applies
+only to `LayerApplication::Applied`, since `NotApplied` aborts and
+`PartiallyApplied` downgrades.
 
 ---
 
 _Reviewed: 2026-08-10_
 _Reviewer: Claude (gsd-code-reviewer)_
-_Depth: deep — iteration 2 (re-review)_
+_Depth: deep — iteration 3 (verification re-review)_
