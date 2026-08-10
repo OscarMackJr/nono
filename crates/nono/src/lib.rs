@@ -46,6 +46,7 @@
 //! - **Other platforms**: Returns `UnsupportedPlatform` error
 
 pub mod agent;
+pub mod attestation;
 pub mod audit;
 pub mod capability;
 pub mod diagnostic;
@@ -65,6 +66,7 @@ pub mod trust;
 pub mod undo;
 
 // Re-exports for convenience
+pub use attestation::{LayerAttestationStatus, ProcessHandle};
 pub use capability::{
     AccessMode, CapabilitySet, CapabilitySource, FsCapability, IpcMode, NetworkMode,
     ProcessInfoMode, SignalMode, SocketScope, UnixSocketCapability, UnixSocketMode, UnixSocketOp,
