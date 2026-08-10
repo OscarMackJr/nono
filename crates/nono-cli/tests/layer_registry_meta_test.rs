@@ -311,28 +311,44 @@ fn every_registry_row_has_a_test() {
     );
 }
 
+/// Phase 117 review WR-03: locate the SPEC's manual-verification section and
+/// return only the text FROM that heading onward.
+///
+/// The whole point of `host_gated_rows_are_loud` is "the row is documented in
+/// the manual-verification section". Searching the whole document cannot
+/// check that: every `LayerId` name already appears in the SPEC's registry
+/// table, so the assertion was true for any row that exists at all and the
+/// test could not detect the precise failure it advertises — a row added to
+/// `MANUALLY_VERIFIED` with no manual-verification entry.
+fn manual_verification_section(spec: &str) -> &str {
+    let lower = spec.to_ascii_lowercase();
+    let idx = lower
+        .match_indices('\n')
+        .map(|(i, _)| i + 1)
+        .chain(std::iter::once(0))
+        .filter(|&start| lower[start..].starts_with("## "))
+        .find(|&start| {
+            let line_end = lower[start..].find('\n').map_or(lower.len(), |e| start + e);
+            let heading = &lower[start..line_end];
+            heading.contains("manual") || heading.contains("host-gated")
+        })
+        .expect(
+            "proj/SPEC-windows-fail-direction-contract.md has no `## ` heading containing \
+             \"manual\" or \"host-gated\" — D-31 requires a loud, named manual-verification home",
+        );
+    &spec[idx..]
+}
+
 /// D-31: every `MANUALLY_VERIFIED` row must be LOUD — a non-empty reason,
 /// AND the row's name must appear in the SPEC's manual-verification
-/// section, not merely in this test file. This is what makes a host-gated
-/// row visible to a reader of the SPEC, not just to a reader of this Rust
-/// source.
+/// SECTION, not merely somewhere in the document and not merely in this test
+/// file. This is what makes a host-gated row visible to a reader of the
+/// SPEC, not just to a reader of this Rust source.
 #[test]
 fn host_gated_rows_are_loud() {
     let spec = read_spec();
-    let spec_lower = spec.to_ascii_lowercase();
-
-    // Locate a heading whose text contains "manual" or "host-gated"
-    // (case-insensitive), then confirm every MANUALLY_VERIFIED row name
-    // appears somewhere at or after that heading's start — this test does
-    // not require rows to appear literally under a markdown "##" heading
-    // syntactically, only that a section introducing manual verification
-    // exists and named rows appear in the document.
-    let has_manual_heading = spec_lower.contains("manual") || spec_lower.contains("host-gated");
-    assert!(
-        has_manual_heading,
-        "proj/SPEC-windows-fail-direction-contract.md has no section heading containing \
-         \"manual\" or \"host-gated\" — D-31 requires a loud, named manual-verification home"
-    );
+    // WR-03: scoped to the section, not the whole document.
+    let section = manual_verification_section(&spec);
 
     let mut missing = Vec::new();
     for (name, reason) in MANUALLY_VERIFIED {
@@ -341,16 +357,37 @@ fn host_gated_rows_are_loud() {
             "MANUALLY_VERIFIED entry {name:?} has an empty reason string — D-31 requires a \
              named reason, never a bare skip"
         );
-        if !spec.contains(name) {
+        if !section.contains(name) {
             missing.push(*name);
         }
     }
 
     assert!(
         missing.is_empty(),
-        "the following MANUALLY_VERIFIED LayerId row(s) do not appear anywhere in \
-         proj/SPEC-windows-fail-direction-contract.md — a host-gated row must be documented in \
-         the SPEC, not only in this test file's source (D-31 \"loud, never silent\"):\n{missing:?}"
+        "the following MANUALLY_VERIFIED LayerId row(s) do not appear in the \
+         manual-verification SECTION of proj/SPEC-windows-fail-direction-contract.md — a \
+         host-gated row must be documented there, not only in the registry table above it or \
+         in this test file's source (D-31 \"loud, never silent\"):\n{missing:?}"
+    );
+}
+
+/// WR-03 non-vacuity guard: the scoping helper must actually exclude the
+/// registry table, where every `LayerId` name appears. If
+/// `manual_verification_section` regressed to returning the whole document,
+/// this fails.
+#[test]
+fn manual_verification_section_excludes_the_registry_table() {
+    let spec = read_spec();
+    let section = manual_verification_section(&spec);
+    assert!(
+        section.len() < spec.len(),
+        "the manual-verification section must be a strict suffix of the SPEC, not the whole \
+         document — otherwise host_gated_rows_are_loud cannot fail"
+    );
+    assert!(
+        !section.contains("## Layer registry"),
+        "the manual-verification section must start AFTER the registry table, which names \
+         every LayerId and would make the loudness assertion vacuous"
     );
 }
 
@@ -359,7 +396,9 @@ fn host_gated_rows_are_loud() {
 /// per-`LayerId` rows.
 #[test]
 fn security_assumptions_are_loud() {
-    let spec = read_spec();
+    let spec_full = read_spec();
+    // WR-03: same scoping as `host_gated_rows_are_loud`.
+    let spec = manual_verification_section(&spec_full);
     for (name, reason) in MANUAL_SECURITY_ASSUMPTIONS {
         assert!(
             !reason.trim().is_empty(),
