@@ -705,7 +705,13 @@ mod windows_impl {
         // The proxy port is threaded from DaemonState::machine_egress_proxy_port, which
         // is set once at daemon startup from the single read_machine_egress_policy()
         // call (D-04 no-drift; WFP service never reads HKLM for egress policy).
-        if profile_needs_network_scoping(&engine_profile) {
+        //
+        // Phase 117 D-21 (Task 2): captured into a local so step 6.7's
+        // attestation gate can reuse this exact result — if `true`, the WFP
+        // filter-add call below already ran and (by the time step 6.7 is
+        // reached) already succeeded fail-closed; never re-derived.
+        let network_scoping_required = profile_needs_network_scoping(&engine_profile);
+        if network_scoping_required {
             // Resolve the proxy port for this launch.  `machine_egress_proxy_port`
             // is `Some(port)` when a machine egress policy was loaded at startup;
             // it is `None` when no policy is present (legacy blocked-mode path).
@@ -841,6 +847,108 @@ mod windows_impl {
                 NonoError::SandboxInit("launch_agent: DaemonState::tenants mutex poisoned".into())
             })?;
             tenants.insert(tenant_id.clone(), tenant);
+        }
+
+        // Step 6.7 — Phase 117 D-21 (CINT-02): startup self-attestation gate.
+        //
+        // Independent implementation, NOT a call into
+        // `exec_strategy_windows::attestation::attest_and_decide` — this
+        // module's own doc comment (lines 26-30) states the daemon does not
+        // depend on `exec_strategy_windows/`, and `nono-agentd` is compiled
+        // as a wholly separate binary crate (`src/bin/nono-agentd.rs`
+        // `#[path]`-includes only `agent_daemon/`, `telemetry/`, and
+        // `agent_daemon/telemetry_init.rs` — never `exec_strategy_windows/`),
+        // so that function is structurally unreachable from here. This
+        // mirrors its decision shape (Proceed / ProceedDowngraded / Abort)
+        // using the shared, policy-free `nono::attestation` probes — see
+        // `daemon_attest_and_decide`'s doc comment for the exact row-by-row
+        // mapping to `layer_registry.rs`'s `(EntryPath::Daemon, None)` rows.
+        //
+        // `process_handle_raw` is still a valid, readable handle here even
+        // though `process_owned` (a second wrapper over the SAME raw value,
+        // `HANDLE` is `Copy`) was already moved into `tenant` above — this
+        // probes the real suspended child before its first instruction ever
+        // runs (D-21), exactly like step 6/6.5/6.6's fail-secure gates.
+        match daemon_attest_and_decide(process_handle_raw) {
+            DaemonAttestationDecision::Proceed => {}
+            DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
+                let mut names: Vec<String> = downgraded.iter().map(|s| (*s).to_string()).collect();
+                names.sort();
+                let dedup_key = names.join(",");
+                let downgraded_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+
+                // D-27 audit-event channel: same `SECURITY_LAYER.get()` access
+                // idiom as `execution_runtime.rs:267` / `exec_strategy_windows`'s
+                // own D-21 gate (Warning-5 fix) — `telemetry` is `#[path]`-
+                // included at the `nono-agentd` crate root (unlike `output`),
+                // so `crate::telemetry::SECURITY_LAYER` resolves unchanged here.
+                //
+                // Per `emit_attestation_event`'s own AUD-04 contract
+                // (`telemetry/mod.rs`), a failure to commit the audit record
+                // is logged but NEVER blocks the launch — this session was
+                // already proceeding with a downgraded claim; failing here
+                // for an unrelated audit-plumbing reason would trade an
+                // honesty gap for an availability regression. The Event Log
+                // warning below still fires unconditionally.
+                match crate::telemetry::SECURITY_LAYER.get() {
+                    None => {
+                        tracing::warn!(
+                            tenant_id = %tenant_id,
+                            "launch_agent: attestation downgrade audit emission unavailable \
+                             (AUD-04: SecurityEventLayer not initialized) — proceeding per \
+                             AUD-04's non-fatal contract"
+                        );
+                    }
+                    Some(security_layer) => {
+                        if let Err(e) = security_layer.emit_attestation_event(&downgraded_refs) {
+                            tracing::warn!(
+                                tenant_id = %tenant_id,
+                                error = %e,
+                                "launch_agent: attestation downgrade audit emission failed \
+                                 (AUD-04) — proceeding per AUD-04's non-fatal contract"
+                            );
+                        }
+                    }
+                }
+
+                // D-27 human-visible channel: this binary has no
+                // `exec_strategy_windows::output` (module-independence
+                // invariant above) and, running as a
+                // `SERVICE_USER_OWN_PROCESS` service, has no attached console
+                // for an stderr banner to reach anyway — the Windows Event
+                // Log via `tracing::warn!` (already this file's own
+                // operator-visible channel for every other degraded/fail-
+                // secure condition above) is the equivalent surface here.
+                // D-28: only the coarse count reaches this event; per-layer
+                // detail stays on the audit-event channel above.
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    downgraded_count = downgraded.len(),
+                    downgraded_layers = %dedup_key,
+                    "launch_agent: {} confinement layer(s) could not be fully confirmed at \
+                     startup — proceeding with a downgraded confinement claim",
+                    downgraded.len()
+                );
+            }
+            DaemonAttestationDecision::Abort { layer, status } => {
+                tracing::warn!(
+                    tenant_id = %tenant_id,
+                    layer = layer,
+                    status = ?status,
+                    "launch_agent: startup self-attestation failed; refusing to resume \
+                     (fail-secure)"
+                );
+                // SAFETY: thread_handle_raw is still valid and un-closed here.
+                unsafe { CloseHandle(thread_handle_raw) };
+                // Removes tenant from state — Drops AgentTenant → closes
+                // job_handle → KILL_ON_JOB_CLOSE terminates the still-
+                // suspended process (D-22: never resumed).
+                cleanup_failed_agent(&daemon_state, &tenant_id, &package_sid);
+                return Err(NonoError::LayerAttestationFailed {
+                    layer: layer.to_string(),
+                    reason: format!("{status:?}"),
+                });
+            }
         }
 
         // Step 8: Resume the suspended process.
@@ -1121,6 +1229,117 @@ mod windows_impl {
             return None;
         }
         Some(dup_raw)
+    }
+
+    /// Phase 117 D-21 (CINT-02) / step 6.7's decision shape — this daemon's
+    /// own independent mirror of `exec_strategy_windows::attestation::
+    /// AttestationDecision` (structurally unreachable from this binary; see
+    /// `daemon_attest_and_decide`'s doc comment). `layer`/`status` values
+    /// intentionally use the same `LayerId`/`LayerAttestationStatus`
+    /// `Debug`-format vocabulary the CLI-side gate uses, so operator-facing
+    /// text and `NonoDiagnosticCode` classification stay consistent across
+    /// both binaries even though the decision logic itself is duplicated.
+    #[derive(Debug)]
+    enum DaemonAttestationDecision {
+        /// Every row this function checks classified `Confirmed` (or was not
+        /// applicable). The session's confinement claim is fully attested.
+        Proceed,
+        /// At least one row could not be independently confirmed, but its
+        /// contract permits proceeding with a visibly downgraded claim
+        /// (D-14/D-25). `downgraded` names the `LayerId` `Debug`-format
+        /// strings (D-28: layer-specific detail stays on the audit-event
+        /// channel, never the coarse operator-visible one).
+        ProceedDowngraded { downgraded: Vec<&'static str> },
+        /// A required layer could not be confirmed. D-22: the caller
+        /// terminates the still-suspended process (via
+        /// `cleanup_failed_agent`'s job-close cascade) and surfaces a typed
+        /// `NonoError` naming `layer`.
+        Abort {
+            layer: &'static str,
+            status: nono::attestation::LayerAttestationStatus,
+        },
+    }
+
+    /// Phase 117 D-21 (CINT-02) — the daemon's own startup self-attestation
+    /// decision, checked against the real suspended child's process handle
+    /// (`process`) at step 6.7, before `ResumeThread` ever runs.
+    ///
+    /// # Why this is a separate implementation, not a shared call
+    ///
+    /// This module's own doc comment (lines 26-30) states it intentionally
+    /// does NOT depend on `exec_strategy_windows/` — `nono-agentd` is a
+    /// wholly separate binary crate (`src/bin/nono-agentd.rs` `#[path]`-
+    /// includes only `agent_daemon/mod.rs`, `telemetry/mod.rs`, and
+    /// `agent_daemon/telemetry_init.rs`; it never declares
+    /// `exec_strategy_windows`), so
+    /// `exec_strategy_windows::attestation::attest_and_decide` and
+    /// `exec_strategy_windows::layer_registry` are not reachable symbols
+    /// from here. This function mirrors `attest_and_decide`'s decision
+    /// shape using the shared, policy-free `nono::attestation` probes (the
+    /// one dependency both binaries genuinely share, via the `nono` library
+    /// crate) for the subset of `layer_registry.rs` rows expected at
+    /// `(EntryPath::Daemon, None)`:
+    ///
+    /// - `AppContainerProfile` (`LiveTokenOrJobQuery`, `Abort`) —
+    ///   [`nono::attestation::probe_app_container_sid`]; the apply-time
+    ///   `create_app_container_profile`/spawn already succeeded (steps 2-5),
+    ///   so this is the first INDEPENDENT post-hoc confirmation.
+    /// - `JobObjectContainment` (`LiveTokenOrJobQuery`, `Abort`) —
+    ///   [`nono::attestation::probe_in_job`]; independently reconfirms step 6.
+    /// - `DaclPackageSidGrant` / `DaclAncestorTraverse` /
+    ///   `DaclAncestorReadAttrs` (`ProbeKind::ConfiguredOnly`, `Abort`) —
+    ///   `DaemonDaclGuard::apply` already succeeded fail-closed at step 6.6
+    ///   before this function ever runs, so per Plan 08's module-doc
+    ///   Deviation 2, reaching this point means "established, not
+    ///   independently observable" — always downgrades, never aborts.
+    ///
+    /// `WfpEgressFilters` is deliberately NOT modeled here: by this
+    /// function's own call site (step 6.7, after step 6.5), the WFP concern
+    /// is already fully resolved one way or the other by existing fail-
+    /// closed code — either network scoping was not required for this
+    /// profile (nothing to attest), or it was required and `wfp_filter_add`
+    /// already succeeded (the function would have already returned `Err`
+    /// and never reached step 6.7 otherwise). Re-modeling it here would
+    /// check a condition this call site has already made structurally
+    /// impossible to fail. (Discrepancy note, SC4/D-13: the SHARED
+    /// `layer_registry.rs` registry's `WfpEgressFilters` row expectancy is
+    /// unconditional for `(EntryPath::Daemon, None)` — it does not carry the
+    /// "only when this profile needs scoping" distinction this function
+    /// applies. Calling `exec_strategy_windows::attestation::
+    /// attest_and_decide` literally against that row would abort every
+    /// daemon-launched agent whose profile does not request network
+    /// scoping. This function does not reproduce that behavior — flagged
+    /// here as a follow-up candidate for `layer_registry.rs`'s own
+    /// expectancy matrix, not fixed in this plan, which does not modify
+    /// that file.)
+    fn daemon_attest_and_decide(process: HANDLE) -> DaemonAttestationDecision {
+        use nono::attestation::{probe_app_container_sid, probe_in_job, LayerAttestationStatus};
+
+        let app_container_confirmed = matches!(probe_app_container_sid(process), Ok(Some(_)));
+        if !app_container_confirmed {
+            return DaemonAttestationDecision::Abort {
+                layer: "AppContainerProfile",
+                status: LayerAttestationStatus::Unconfirmed,
+            };
+        }
+
+        let job_confirmed = matches!(probe_in_job(process), Ok(true));
+        if !job_confirmed {
+            return DaemonAttestationDecision::Abort {
+                layer: "JobObjectContainment",
+                status: LayerAttestationStatus::Unconfirmed,
+            };
+        }
+
+        // DaclPackageSidGrant / DaclAncestorTraverse / DaclAncestorReadAttrs:
+        // always downgrades once reached (see doc comment above).
+        DaemonAttestationDecision::ProceedDowngraded {
+            downgraded: vec![
+                "DaclPackageSidGrant",
+                "DaclAncestorTraverse",
+                "DaclAncestorReadAttrs",
+            ],
+        }
     }
 
     /// Remove state for a failed agent launch. If `AgentTenant` was already
@@ -1498,6 +1717,97 @@ mod windows_impl {
                 Ok(_) => panic!(
                     "expected NonoError::LayerAttestationFailed while forced unavailable, got Ok"
                 ),
+            }
+        }
+    }
+
+    /// Phase 117 Plan 10 (CINT-02) — step 6.7's `daemon_attest_and_decide`
+    /// decision function, tested in isolation from the full async
+    /// `launch_agent` (which needs a live `DaemonState`/tokio runtime this
+    /// unit-test module does not construct).
+    #[cfg(test)]
+    mod attestation_gate_tests {
+        use super::*;
+
+        /// Behavior 1: an `Abort`-outcome layer that cannot be confirmed — no
+        /// AppContainer SID present at all — causes `daemon_attest_and_decide`
+        /// to return `Abort { layer: "AppContainerProfile", .. }` without ever
+        /// reaching `JobObjectContainment`. Deterministic: `OpenProcessToken`
+        /// always fails against an invalid process handle.
+        #[test]
+        fn null_handle_aborts_on_app_container_profile() {
+            let decision = daemon_attest_and_decide(std::ptr::null_mut());
+            match decision {
+                DaemonAttestationDecision::Abort { layer, .. } => {
+                    assert_eq!(layer, "AppContainerProfile");
+                }
+                other => panic!("expected Abort, got {other:?}"),
+            }
+        }
+
+        /// Behavior 2: a real AppContainer-confined, job-assigned suspended
+        /// process — mirroring `launch_agent`'s own steps 2-6 (minus the DACL
+        /// grants and registry bookkeeping this isolated test doesn't need) —
+        /// classifies `AppContainerProfile` and `JobObjectContainment` as
+        /// independently `Confirmed`, and the gate proceeds with a downgraded
+        /// claim for the `ConfiguredOnly` DACL rows (Plan 08 Deviation 2:
+        /// reaching this point at all means the apply-time gate — which this
+        /// isolated test does not itself run — already succeeded fail-closed
+        /// in the real `launch_agent` flow this test exercises a slice of).
+        #[test]
+        fn real_appcontainer_job_process_proceeds_downgraded() {
+            let tenant_id = generate_tenant_id().expect("generate_tenant_id");
+            let profile_name = format!("nono.gatetest.{}", &tenant_id[..16]);
+            let profile = nono::create_app_container_profile(&profile_name)
+                .expect("create_app_container_profile");
+            let owned_sid =
+                nono::derive_app_container_sid(&profile_name).expect("derive_app_container_sid");
+            let psid: PSID = owned_sid.as_psid();
+
+            let (process, thread) = spawn_appcontainer_process_suspended(
+                std::path::Path::new(r"C:\Windows\System32\cmd.exe"),
+                &["/c".to_string(), "exit".to_string(), "0".to_string()],
+                psid,
+            )
+            .expect("spawn_appcontainer_process_suspended");
+
+            let job: HANDLE = unsafe {
+                // SAFETY: CreateJobObjectW with null name + null security
+                // attributes is documented to succeed unless out-of-memory.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+            let assigned = unsafe {
+                // SAFETY: both `job` and `process` are valid HANDLEs owned by
+                // this test for the duration of this call.
+                AssignProcessToJobObject(job, process)
+            };
+            assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+            let decision = daemon_attest_and_decide(process);
+
+            // SAFETY: `process`/`thread`/`job` are all valid HANDLEs this test
+            // owns; the suspended process is never resumed, only probed then
+            // torn down.
+            unsafe {
+                let _ = TerminateProcess(process, 1);
+                CloseHandle(process);
+                CloseHandle(thread);
+                CloseHandle(job);
+            }
+            // Explicit drop deletes the AppContainer profile (mirrors
+            // production cleanup; production instead `std::mem::forget`s it
+            // and defers deletion to `AgentTenant::Drop`).
+            drop(profile);
+
+            match decision {
+                DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
+                    assert!(
+                        downgraded.contains(&"DaclPackageSidGrant"),
+                        "expected DaclPackageSidGrant among downgraded layers, got {downgraded:?}"
+                    );
+                }
+                other => panic!("expected ProceedDowngraded, got {other:?}"),
             }
         }
     }
