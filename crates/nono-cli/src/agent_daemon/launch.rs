@@ -108,6 +108,20 @@ mod windows_impl {
     }
 
     impl DaemonDaclGuard {
+        /// Phase 117 review NR-05: whether this guard actually wrote a
+        /// package-SID write ACE, for the step 6.7 attestation gate.
+        ///
+        /// The gate used to be handed a literal `true` justified by "the
+        /// guard exists, so apply ran" — the same guard-construction-instead-
+        /// of-guard-effect defect CR-14 found on the direct-CLI path. Pass 2
+        /// is fail-closed today, so this is `true` on every launch that
+        /// reaches the gate; the point is that the gate now READS the fact
+        /// instead of restating an invariant a future edit could break
+        /// silently.
+        pub(crate) fn granted_write_access(&self) -> bool {
+            !self.write_applied.is_empty()
+        }
+
         /// Apply package-SID DACL grants for a daemon-launched agent.
         ///
         /// Three passes:
@@ -711,6 +725,14 @@ mod windows_impl {
         // filter-add call below already ran and (by the time step 6.7 is
         // reached) already succeeded fail-closed; never re-derived.
         let network_scoping_required = profile_needs_network_scoping(&engine_profile);
+        // Phase 117 review NR-05: the ACTUAL outcome of the filter-add call,
+        // recorded where the call returns. Step 6.7's gate used to be handed
+        // `network_scoping_required` for BOTH its `network_scoping_required`
+        // and `wfp_filters_installed` parameters, making its abort predicate
+        // `x && !x` — a compile-time constant `false`, so the daemon
+        // mirror's deny direction was unreachable outside a unit test.
+        // Initialised to the restrictive value.
+        let mut wfp_filters_installed = false;
         if network_scoping_required {
             // Resolve the proxy port for this launch.  `machine_egress_proxy_port`
             // is `Some(port)` when a machine egress policy was loaded at startup;
@@ -750,6 +772,7 @@ mod windows_impl {
                      (Suspended process terminated, fail-secure.) Cause: {e}"
                 )));
             }
+            wfp_filters_installed = true;
             tracing::info!(
                 tenant_id = %tenant_id,
                 package_sid = %package_sid,
@@ -784,6 +807,10 @@ mod windows_impl {
                 )));
             }
         };
+        // Phase 117 review NR-05: capture the guard's ACTUAL effect before it
+        // is moved into `tenant` below, so step 6.7's gate reads a fact
+        // rather than the literal `true` it used to be handed.
+        let dacl_guard_applied = dacl_guard.granted_write_access();
         tracing::info!(
             tenant_id = %tenant_id,
             package_sid = %package_sid,
@@ -873,14 +900,16 @@ mod windows_impl {
             process_handle_raw,
             job_raw_owned,
             &package_sid,
-            // `dacl_guard` exists, so `DaemonDaclGuard::apply` ran and
-            // returned Ok at step 6.6 (its Err path terminates and returns
-            // above).
-            true,
+            // NR-05: the guard's own report of what it granted, captured at
+            // step 6.6. Was a literal `true` justified by "the guard exists".
+            dacl_guard_applied,
             network_scoping_required,
-            // Reached only if `wfp_filter_add` succeeded when scoping was
-            // required — its Err path terminates and returns above (WR-02).
-            network_scoping_required,
+            // NR-05: the ACTUAL filter-add outcome, set where
+            // `wfp_filter_add` returned. Was `network_scoping_required`
+            // again, which made the row's abort predicate
+            // `network_scoping_required && !network_scoping_required` — a
+            // compile-time constant `false`.
+            wfp_filters_installed,
         ) {
             DaemonAttestationDecision::Proceed => {}
             DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
@@ -2028,6 +2057,59 @@ mod tests {
 
     fn empty_state() -> Arc<DaemonState> {
         Arc::new(DaemonState::new())
+    }
+
+    /// Phase 117 review NR-05: the step 6.7 gate's abort predicate is
+    /// `network_scoping_required && !wfp_filters_installed`. The shipped call
+    /// site passed the SAME local for both parameters, so the predicate was
+    /// `x && !x` — a compile-time constant `false` — and `dacl_guard_applied`
+    /// was a literal `true`. Every parameter the fix added was documentation
+    /// rather than a check, and the daemon mirror's deny direction was
+    /// unreachable outside a unit test.
+    ///
+    /// A behavioural test cannot catch this: `daemon_attest_and_decide`
+    /// itself is correct, and the unit tests that drive it pass distinct
+    /// values. The defect lives entirely in how the production call site
+    /// wires it up, so this asserts on that wiring directly.
+    #[test]
+    fn daemon_attestation_gate_is_wired_to_real_outcomes_not_the_gate_condition() {
+        let src = include_str!("launch.rs");
+        let call = src
+            .split("match daemon_attest_and_decide(")
+            .nth(1)
+            .expect("the step 6.7 attestation gate call site must exist");
+        let args_block = call.split(") {").next().expect("argument list");
+        let args: Vec<&str> = args_block
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with("//"))
+            .map(|line| line.trim_end_matches(','))
+            .collect();
+        assert_eq!(
+            args.len(),
+            6,
+            "unexpected daemon_attest_and_decide call shape: {args:?}"
+        );
+
+        let dacl_guard_applied = args[3];
+        let network_scoping_required = args[4];
+        let wfp_filters_installed = args[5];
+
+        assert!(
+            !matches!(dacl_guard_applied, "true" | "false"),
+            "dacl_guard_applied must be the guard's own report, not a literal: {dacl_guard_applied}"
+        );
+        assert!(
+            !matches!(wfp_filters_installed, "true" | "false"),
+            "wfp_filters_installed must be the real filter-add outcome, not a literal: \
+             {wfp_filters_installed}"
+        );
+        assert_ne!(
+            wfp_filters_installed, network_scoping_required,
+            "wfp_filters_installed and network_scoping_required must be independent values — \
+             passing the same expression for both makes the row's abort predicate `x && !x`, a \
+             compile-time constant false (NR-05)"
+        );
     }
 
     // ── Task 2 (75-07-T2): DaemonDaclGuard unit tests ────────────────────────

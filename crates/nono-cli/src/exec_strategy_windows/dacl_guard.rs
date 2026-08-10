@@ -52,6 +52,8 @@ use nono::{
 #[cfg(feature = "layer-fault-injection")]
 use nono::NonoError;
 
+use super::layer_registry;
+
 // D-29/D-30 (Phase 117-06): generalizes the shipped WFP force-unavailable
 // seam (`exec_strategy_windows/mod.rs::WINDOWS_WFP_TEST_FORCE_READY`) to the
 // DACL-grant layer family for CINT-03's per-layer forced-unavailable tests.
@@ -84,20 +86,71 @@ fn dacl_grant_force_unavailable() -> bool {
 }
 
 /// Per-rule state recorded at snapshot time.
-#[derive(Debug)]
+///
+/// Phase 117 review CR-14: the two skip reasons were one `Skip` variant.
+/// They mean opposite things for the fail-direction contract — a read-only
+/// rule needs no ACE at all (contract-exempt), while a WRITABLE rule on a
+/// non-owned path is a path the confined child was promised write access to
+/// and will be denied (a coverage gap the guard itself warns about).
+#[derive(Debug, PartialEq, Eq)]
 enum AppliedDaclGrant {
-    /// Rule was skipped — no DACL edit performed, nothing to revert. Either:
-    /// 1. The rule is read-only (`WRITE_RESTRICTED` only double-checks
-    ///    WRITE-class access, so read-only grants need no SID ACE), OR
-    /// 2. The path is not owned by the current user. Editing the DACL needs
-    ///    `WRITE_DAC`, which path owners hold implicitly; for non-owned paths
-    ///    (system paths granted read via policy groups) we skip rather than
-    ///    explode. Non-owned writable paths are exotic and also skipped with a
-    ///    warning.
-    Skip,
+    /// The rule is read-only. `WRITE_RESTRICTED` only double-checks
+    /// WRITE-class access, so read-only grants need no SID ACE.
+    /// CR-14: contract-exempt, not a coverage gap.
+    SkipReadOnly,
+    /// The rule is WRITABLE but the path is not owned by the current user.
+    /// Editing the DACL needs `WRITE_DAC`, which path owners hold
+    /// implicitly; for non-owned paths we skip rather than explode.
+    /// CR-14: a coverage gap — confined writes here will be denied on the
+    /// `WriteRestricted` arm (the guard's own warning says so).
+    SkipWritableNotOwned,
     /// We added the session-SID write-class allow-ACE to this path's DACL. On
     /// Drop, revoke it.
     Applied { path: PathBuf },
+}
+
+/// Phase 117 review CR-14: what [`AppliedDaclGrantsGuard::snapshot_and_apply`]
+/// ACTUALLY granted, as opposed to the mere fact that the guard exists.
+///
+/// The attestation gate used to report this layer as
+/// `config.package_sid.is_some()`, and `execution_runtime.rs` sets
+/// `package_sid: Some(..)` unconditionally — so the report was a constant
+/// `true` on every shipped launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct DaclGrantCoverage {
+    /// Writable rules where the ACE was actually added.
+    pub applied: usize,
+    /// Writable rules skipped because the path is not owned (coverage gap).
+    pub skipped_writable_not_owned: usize,
+    /// Read-only rules, which need no ACE (contract-exempt).
+    pub skipped_read_only: usize,
+}
+
+impl DaclGrantCoverage {
+    /// Rules that the layer's contract requires an ACE on.
+    fn writable_rules(self) -> usize {
+        self.applied.saturating_add(self.skipped_writable_not_owned)
+    }
+
+    /// Map the observed coverage onto the fail-direction contract's
+    /// per-layer application vocabulary. Same shape as
+    /// `labels_guard::LabelCoverage::application`.
+    pub(crate) fn application(self) -> layer_registry::LayerApplication {
+        use layer_registry::LayerApplication;
+        if self.writable_rules() == 0 {
+            // No writable grant in this launch's policy, so this layer has
+            // nothing to establish. Not applicable — neither claimed nor
+            // denied.
+            return LayerApplication::NotApplicable;
+        }
+        if self.applied == 0 {
+            return LayerApplication::NotApplied;
+        }
+        if self.skipped_writable_not_owned > 0 {
+            return LayerApplication::PartiallyApplied;
+        }
+        LayerApplication::Applied
+    }
 }
 
 /// RAII guard that revokes the session-SID DACL grants when dropped.
@@ -160,7 +213,7 @@ impl AppliedDaclGrantsGuard {
             // Read-only rules: WRITE_RESTRICTED only double-checks WRITE-class
             // access, so no SID ACE is needed. Skip (no revert).
             if !rule.access.contains(AccessMode::Write) {
-                guard.entries.push(AppliedDaclGrant::Skip);
+                guard.entries.push(AppliedDaclGrant::SkipReadOnly);
                 continue;
             }
 
@@ -177,7 +230,7 @@ impl AppliedDaclGrantsGuard {
                          DACL grant (cannot edit DACL without WRITE_DAC — confined writes here will \
                          be denied on the WriteRestricted arm)"
                     );
-                    guard.entries.push(AppliedDaclGrant::Skip);
+                    guard.entries.push(AppliedDaclGrant::SkipWritableNotOwned);
                     continue;
                 }
                 Err(err) => {
@@ -214,12 +267,29 @@ impl AppliedDaclGrantsGuard {
         Ok(guard)
     }
 
+    /// Phase 117 review CR-14: the guard's ACTUAL effect, for the startup
+    /// self-attestation gate. Computed from `self.entries`, which
+    /// `revert_all` drains on Drop — call it while the guard is live.
+    pub(crate) fn coverage(&self) -> DaclGrantCoverage {
+        let mut coverage = DaclGrantCoverage::default();
+        for entry in &self.entries {
+            match entry {
+                AppliedDaclGrant::Applied { .. } => coverage.applied += 1,
+                AppliedDaclGrant::SkipWritableNotOwned => {
+                    coverage.skipped_writable_not_owned += 1;
+                }
+                AppliedDaclGrant::SkipReadOnly => coverage.skipped_read_only += 1,
+            }
+        }
+        coverage
+    }
+
     /// Best-effort revert of every applied entry, LIFO. Drop-safe: errors are
     /// logged, never panic. Mirrors `labels_guard::AppliedLabelsGuard`.
     fn revert_all(&mut self) {
         while let Some(entry) = self.entries.pop() {
             match entry {
-                AppliedDaclGrant::Skip => {
+                AppliedDaclGrant::SkipReadOnly | AppliedDaclGrant::SkipWritableNotOwned => {
                     // No-op: we never applied, so there is nothing to revert.
                 }
                 AppliedDaclGrant::Applied { path } => {
@@ -753,6 +823,14 @@ mod tests {
                 dacl_contains_sid(&path, TEST_SESSION_SID),
                 "during guard lifetime the SID's ACE must be present on the DACL"
             );
+            // CR-14 paired positive: the SAME accessor that reports
+            // NotApplicable for a read-only-only policy reports Applied here.
+            assert_eq!(
+                guard.coverage().application(),
+                layer_registry::LayerApplication::Applied,
+                "{:?}",
+                guard.coverage()
+            );
         } // guard drops here → revert
 
         assert!(
@@ -780,13 +858,22 @@ mod tests {
             AppliedDaclGrantsGuard::snapshot_and_apply(&policy, TEST_SESSION_SID).expect("apply");
         assert_eq!(guard.entries.len(), 1, "one rule → one guard entry");
         assert!(
-            matches!(guard.entries[0], AppliedDaclGrant::Skip),
-            "read-only rule must record Skip; got {:?}",
+            matches!(guard.entries[0], AppliedDaclGrant::SkipReadOnly),
+            "read-only rule must record SkipReadOnly; got {:?}",
             guard.entries[0]
         );
         assert!(
             !dacl_contains_sid(&file, TEST_SESSION_SID),
             "read-only rule must not add the SID to the DACL"
+        );
+        // CR-14: a read-only-only policy asks this layer to do nothing, so
+        // the honest report is "not part of this launch's composition" —
+        // not a fabricated Applied and not a spurious abort.
+        assert_eq!(
+            guard.coverage().application(),
+            layer_registry::LayerApplication::NotApplicable,
+            "{:?}",
+            guard.coverage()
         );
         drop(guard);
     }

@@ -350,10 +350,62 @@ fn classify_live_probe(
 /// input this always falls through to the `NotApplicable` early return
 /// below without ever reaching the `match entry.probe` dispatch — no probe
 /// function is called.
+/// Phase 117 review CR-14/NR-02: a row's classification plus whether the
+/// layer was only PARTIALLY established.
+///
+/// `LayerAttestationStatus` (the `crates/nono` vocabulary, deliberately
+/// unchanged here — ADR-86 keeps that crate policy-free) has no value between
+/// "established, not independently observable" and "unconfirmed". A layer
+/// whose apply covered some but not all of its contracted targets is neither:
+/// aborting would be wrong (it IS partly in effect), and folding it into the
+/// full baseline is the "reported enforcing while partially inert" claim this
+/// phase exists to eliminate. This CLI-side flag carries that third fact into
+/// [`decide_from_entries`], where it routes to
+/// [`AttestationDecision::ProceedDowngraded`] and the D-27 operator channel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowVerdict {
+    status: LayerAttestationStatus,
+    partially_established: bool,
+}
+
+impl RowVerdict {
+    fn plain(status: LayerAttestationStatus) -> Self {
+        Self {
+            status,
+            partially_established: false,
+        }
+    }
+
+    /// Map a caller-reported [`layer_registry::LayerApplication`] onto a
+    /// verdict. Shared by the `ConfiguredOnly` and
+    /// `ConfirmedByEnforcingComponentReport` arms so the two cannot drift.
+    fn from_application(
+        application: layer_registry::LayerApplication,
+        confirmed_status: LayerAttestationStatus,
+    ) -> Self {
+        match application {
+            layer_registry::LayerApplication::Applied => Self::plain(confirmed_status),
+            // CR-14: partially established. Never `Unconfirmed` (that would
+            // abort a launch whose layer IS partly in effect), never silently
+            // the full baseline.
+            layer_registry::LayerApplication::PartiallyApplied => Self {
+                status: confirmed_status,
+                partially_established: true,
+            },
+            layer_registry::LayerApplication::NotApplied => {
+                Self::plain(LayerAttestationStatus::Unconfirmed)
+            }
+            layer_registry::LayerApplication::NotApplicable => {
+                Self::plain(LayerAttestationStatus::NotApplicable)
+            }
+        }
+    }
+}
+
 fn classify_row(
     entry: &layer_registry::LayerRegistryEntry,
     input: &AttestationInput,
-) -> LayerAttestationStatus {
+) -> RowVerdict {
     let expected = entry
         .expectancy
         .iter()
@@ -364,11 +416,13 @@ fn classify_row(
         .unwrap_or(false);
 
     if !expected {
-        return LayerAttestationStatus::NotApplicable;
+        return RowVerdict::plain(LayerAttestationStatus::NotApplicable);
     }
 
     match entry.probe {
-        layer_registry::ProbeKind::LiveTokenOrJobQuery => classify_live_probe(entry.id, input),
+        layer_registry::ProbeKind::LiveTokenOrJobQuery => {
+            RowVerdict::plain(classify_live_probe(entry.id, input))
+        }
         layer_registry::ProbeKind::ConfirmedByEnforcingComponentReport => {
             // CR-04: a row whose enforcing component was not part of this
             // launch's composition at all (the WFP backend was not the one
@@ -376,17 +430,23 @@ fn classify_row(
             // not abort the launch.
             match input.applied.status(entry.id) {
                 layer_registry::LayerApplication::NotApplicable => {
-                    LayerAttestationStatus::NotApplicable
+                    RowVerdict::plain(LayerAttestationStatus::NotApplicable)
                 }
                 // Open Question 1's resolution: a report FROM the enforcing
                 // component (already fail-closed pre-spawn), never re-probed
                 // here — this function never calls any of the four
                 // `crates/nono` probe functions for this row.
-                _ => {
+                //
+                // NR-04: `applied` and `wfp_preconfirmed` are now supplied
+                // independently by the caller (the real
+                // `assert_wfp_activation_installed_filters` /`netsh` results),
+                // so "backend selected but enforcement not confirmed" is a
+                // representable production state, not a test-only input.
+                application => {
                     if input.wfp_preconfirmed {
-                        LayerAttestationStatus::Confirmed
+                        RowVerdict::from_application(application, LayerAttestationStatus::Confirmed)
                     } else {
-                        LayerAttestationStatus::Unconfirmed
+                        RowVerdict::plain(LayerAttestationStatus::Unconfirmed)
                     }
                 }
             }
@@ -394,25 +454,23 @@ fn classify_row(
         layer_registry::ProbeKind::ConfiguredOnly => {
             // CR-09: "the apply-time Result already happened before this
             // function runs" is only true for a layer the caller actually
-            // applied. The caller now says so per launch instead of this
-            // function assuming it.
-            match input.applied.status(entry.id) {
-                // The apply ran and succeeded fail-closed. There is no
-                // independent post-hoc query for this layer, so the honest
-                // label is "established, not independently observable" —
-                // never `Confirmed`.
-                layer_registry::LayerApplication::Applied => {
-                    LayerAttestationStatus::EstablishedNotIndependentlyObservable
-                }
-                // Expected on this arm, but the supervisor did not apply it.
-                // This is the negative the whole contract exists to catch.
-                layer_registry::LayerApplication::NotApplied => LayerAttestationStatus::Unconfirmed,
-                layer_registry::LayerApplication::NotApplicable => {
-                    LayerAttestationStatus::NotApplicable
-                }
-            }
+            // applied. CR-14: and only for a layer whose apply actually took
+            // effect — the caller reports coverage, not object existence.
+            //
+            // `Applied` maps to "established, not independently observable"
+            // (never `Confirmed` — there IS no independent observation for
+            // these rows by design); `PartiallyApplied` maps to the same
+            // status but flags the verdict so the claim is downgraded;
+            // `NotApplied` is the negative the whole contract exists to
+            // catch.
+            RowVerdict::from_application(
+                input.applied.status(entry.id),
+                LayerAttestationStatus::EstablishedNotIndependentlyObservable,
+            )
         }
-        layer_registry::ProbeKind::NotApplicable => LayerAttestationStatus::NotApplicable,
+        layer_registry::ProbeKind::NotApplicable => {
+            RowVerdict::plain(LayerAttestationStatus::NotApplicable)
+        }
     }
 }
 
@@ -428,9 +486,10 @@ fn decide_from_entries(
     let mut downgraded: Vec<layer_registry::LayerId> = Vec::new();
 
     for entry in entries {
-        let status = classify_row(entry, input);
+        let verdict = classify_row(entry, input);
+        let status = verdict.status;
         if status == LayerAttestationStatus::NotApplicable
-            || status == LayerAttestationStatus::Confirmed
+            || (status == LayerAttestationStatus::Confirmed && !verdict.partially_established)
         {
             continue;
         }
@@ -447,16 +506,27 @@ fn decide_from_entries(
                     };
                 }
                 // status == EstablishedNotIndependentlyObservable, not
-                // tightened. CR-09: this is now the EXPECTED baseline for a
-                // layer the caller reported as applied — the apply ran and
-                // succeeded fail-closed, and no independent re-observation
-                // exists by design. It is therefore NOT a downgrade. Before
-                // this fix every such row was pushed into `downgraded`,
-                // which made `Proceed` unreachable and fired the
-                // non-silenceable D-27 banner on every Windows session
+                // tightened. CR-09: this is the EXPECTED baseline for a
+                // layer the caller reported as FULLY applied — the apply ran
+                // and succeeded fail-closed, and no independent
+                // re-observation exists by design. It is therefore NOT a
+                // downgrade. Before that fix every such row was pushed into
+                // `downgraded`, which made `Proceed` unreachable and fired
+                // the non-silenceable D-27 banner on every Windows session
                 // forever — destroying exactly the signal it exists to
-                // carry. A row the caller did NOT apply now classifies
+                // carry. A row the caller did NOT apply classifies
                 // `Unconfirmed` and aborts on the branch above.
+                //
+                // CR-14/NR-02: a row the caller applied only PARTIALLY is
+                // neither. It proceeds — the layer is genuinely in effect on
+                // some of its targets — but the operator-visible claim is
+                // downgraded. This is the production path that makes
+                // `ProceedDowngraded` (and with it the D-27 banner, the
+                // dedup marker and the `LayerAttestationDowngraded` audit
+                // event) reachable in a shipped build.
+                if verdict.partially_established {
+                    downgraded.push(entry.id);
+                }
             }
             layer_registry::ContractOutcome::DegradeWithVisibleClaim
             | layer_registry::ContractOutcome::FailOpenDefect { .. } => {
@@ -490,7 +560,9 @@ fn decide_from_entries(
                     .iter()
                     .find(|e| e.name == *alternate)
                     .map(|alt_entry| {
-                        classify_row(alt_entry, input) == LayerAttestationStatus::Confirmed
+                        let alt = classify_row(alt_entry, input);
+                        alt.status == LayerAttestationStatus::Confirmed
+                            && !alt.partially_established
                     })
                     .unwrap_or(false);
                 if alt_confirmed && !tightened {
@@ -765,7 +837,7 @@ mod tests {
             probe: ProbeKind::ConfiguredOnly,
         }];
         let applied = layer_registry::AppliedLayers {
-            mandatory_integrity_label: true,
+            mandatory_integrity_label: layer_registry::LayerApplication::Applied,
             ..Default::default()
         };
         let input = null_arm_input(applied);
@@ -792,7 +864,7 @@ mod tests {
             outcome: ContractOutcome::Abort,
             probe: ProbeKind::ConfiguredOnly,
         }];
-        // mandatory_integrity_label: false (the fail-secure default).
+        // mandatory_integrity_label: NotApplied (the fail-secure default).
         let input = null_arm_input(layer_registry::AppliedLayers::default());
         assert_eq!(
             decide_from_entries(&ENTRIES, &input, &HashSet::new()),
@@ -800,6 +872,80 @@ mod tests {
                 layer: LayerId::MandatoryIntegrityLabel,
                 status: LayerAttestationStatus::Unconfirmed,
             }
+        );
+    }
+
+    /// Phase 117 review CR-14 / NR-02 — the third outcome, and the ONLY
+    /// production source of `AttestationDecision::ProceedDowngraded`.
+    ///
+    /// After the CR-09 fix, `downgraded` was pushed to from exactly two
+    /// arms (`DegradeWithVisibleClaim`, `FailOpenDefect`) that no registry
+    /// row uses, and the one `FailOpen` row is deliberately excluded — so
+    /// `ProceedDowngraded` was unreachable in a shipped build and the whole
+    /// D-27 channel (banner, dedup marker, `LayerAttestationDowngraded`
+    /// audit event) was dead code. Iteration 1's defect was "the signal
+    /// always fires"; the fix inverted it to "the signal never fires".
+    ///
+    /// A layer the supervisor established on SOME but not all of its
+    /// contracted targets is the honest middle state, and it is reachable
+    /// from a real launch: `labels_guard` reports `PartiallyApplied` whenever
+    /// a compiled-policy path already carried a mandatory label somebody else
+    /// wrote (see `coverage_distinguishes_full_partial_and_zero_ace_launches`).
+    #[test]
+    fn partially_applied_configured_only_row_proceeds_downgraded() {
+        const ENTRIES: [LayerRegistryEntry; 1] = [LayerRegistryEntry {
+            id: LayerId::MandatoryIntegrityLabel,
+            name: "synthetic-configured-only-abort",
+            call_sites: &[],
+            expectancy: &NULL_ARM_EXPECTANCY,
+            outcome: ContractOutcome::Abort,
+            probe: ProbeKind::ConfiguredOnly,
+        }];
+        let input = null_arm_input(layer_registry::AppliedLayers {
+            mandatory_integrity_label: layer_registry::LayerApplication::PartiallyApplied,
+            ..Default::default()
+        });
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &HashSet::new()),
+            AttestationDecision::ProceedDowngraded {
+                downgraded: vec![LayerId::MandatoryIntegrityLabel],
+            },
+            "a partially established layer must downgrade the visible claim, not silently \
+             pass as the full baseline (CR-14) and not abort (the layer IS partly in effect)"
+        );
+
+        // Same row, same arm, D-26-tightened: an explicit "must be
+        // Confirmed" requirement can never be satisfied by a partially
+        // established layer, so tightening still aborts.
+        let mut required = HashSet::new();
+        required.insert(format!("{:?}", LayerId::MandatoryIntegrityLabel));
+        assert_eq!(
+            decide_from_entries(&ENTRIES, &input, &required),
+            AttestationDecision::Abort {
+                layer: LayerId::MandatoryIntegrityLabel,
+                status: LayerAttestationStatus::EstablishedNotIndependentlyObservable,
+            }
+        );
+    }
+
+    /// Phase 117 review NR-02, discovery-style companion: the D-27 channel
+    /// must be reachable through the REAL registry, not only through a
+    /// synthetic row. Scans `all_entries()` for any row that a caller-supplied
+    /// `PartiallyApplied` (or a `DegradeWithVisibleClaim`/`FailOpenDefect`
+    /// outcome) can route into `downgraded`. Names no `LayerId`.
+    #[test]
+    fn some_production_row_can_still_produce_a_downgrade() {
+        let downgradable = layer_registry::all_entries().iter().any(|e| {
+            matches!(
+                e.outcome,
+                ContractOutcome::DegradeWithVisibleClaim | ContractOutcome::FailOpenDefect { .. }
+            ) || (matches!(e.probe, ProbeKind::ConfiguredOnly)
+                && e.expectancy.iter().any(|arm| arm.expected))
+        });
+        assert!(
+            downgradable,
+            "no registry row can ever reach ProceedDowngraded — the D-27 banner, dedup \
+             marker and LayerAttestationDowngraded audit event would be dead code"
         );
     }
 
@@ -825,7 +971,7 @@ mod tests {
         // wfp_egress_filters: None — a different backend was selected.
         let not_selected = null_arm_input(layer_registry::AppliedLayers::default());
         assert_eq!(
-            classify_row(&ENTRIES[0], &not_selected),
+            classify_row(&ENTRIES[0], &not_selected).status,
             LayerAttestationStatus::NotApplicable
         );
         assert_eq!(
@@ -862,7 +1008,7 @@ mod tests {
             probe: ProbeKind::ConfiguredOnly,
         }];
         let input = null_arm_input(layer_registry::AppliedLayers {
-            mandatory_integrity_label: true,
+            mandatory_integrity_label: layer_registry::LayerApplication::Applied,
             ..Default::default()
         });
         let mut required = HashSet::new();
@@ -922,7 +1068,7 @@ mod tests {
         // The primary was applied (so it reaches the substitute logic with
         // `Established`), the alternate was not (so it cannot be Confirmed).
         let input = null_arm_input(layer_registry::AppliedLayers {
-            mandatory_integrity_label: true,
+            mandatory_integrity_label: layer_registry::LayerApplication::Applied,
             ..Default::default()
         });
         assert_eq!(
@@ -962,7 +1108,7 @@ mod tests {
             },
         ];
         let mut input = null_arm_input(layer_registry::AppliedLayers {
-            mandatory_integrity_label: true,
+            mandatory_integrity_label: layer_registry::LayerApplication::Applied,
             wfp_egress_filters: Some(true),
             ..Default::default()
         });
@@ -1077,7 +1223,7 @@ mod registry_tests {
             machine_required_layers: &[],
         };
         assert_eq!(
-            classify_row(restricted_token, &input),
+            classify_row(restricted_token, &input).status,
             LayerAttestationStatus::NotApplicable
         );
     }
@@ -1110,7 +1256,7 @@ mod registry_tests {
                 machine_required_layers: &[],
             };
             assert_eq!(
-                classify_row(app_container, &input),
+                classify_row(app_container, &input).status,
                 LayerAttestationStatus::NotApplicable,
                 "AppContainerProfile must be NotApplicable at (DirectCli, {arm:?})"
             );
@@ -1147,14 +1293,14 @@ mod registry_tests {
             machine_required_layers: &[],
         };
         assert_eq!(
-            classify_row(row, &input),
+            classify_row(row, &input).status,
             LayerAttestationStatus::Unconfirmed,
             "the test runner's own unrestricted token does not carry this launch's session              SID and must not confirm RestrictedToken"
         );
         // No expected value at all is also fail-closed.
         input.expected_session_sid = None;
         assert_eq!(
-            classify_row(row, &input),
+            classify_row(row, &input).status,
             LayerAttestationStatus::Unconfirmed
         );
     }
@@ -1192,7 +1338,7 @@ mod registry_tests {
             machine_required_layers: &[],
         };
         assert_ne!(
-            classify_row(row, &input),
+            classify_row(row, &input).status,
             LayerAttestationStatus::Confirmed,
             "an unconfined Medium-IL process must never confirm MandatoryIntegrityLabel —              the pre-CR-01 token-integrity-level probe did exactly that"
         );
@@ -1226,7 +1372,7 @@ mod registry_tests {
             machine_required_layers: &[],
         };
         assert_eq!(
-            classify_row(wfp, &confirmed_input),
+            classify_row(wfp, &confirmed_input).status,
             LayerAttestationStatus::Confirmed
         );
 
@@ -1245,7 +1391,7 @@ mod registry_tests {
             machine_required_layers: &[],
         };
         assert_eq!(
-            classify_row(wfp, &unconfirmed_input),
+            classify_row(wfp, &unconfirmed_input).status,
             LayerAttestationStatus::Unconfirmed
         );
     }
@@ -1276,7 +1422,7 @@ mod registry_tests {
                 machine_required_layers: &[],
             };
             assert_eq!(
-                classify_row(minifilter, &input),
+                classify_row(minifilter, &input).status,
                 LayerAttestationStatus::NotApplicable
             );
         }

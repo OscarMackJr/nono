@@ -200,6 +200,43 @@ never be reported as fully attested — the state this phase exists to be able t
 is expected on this arm and was **not** applied now classifies `Unconfirmed` and hits its own
 per-row outcome (overwhelmingly `Abort`).
 
+**RF-15 (iteration 2): "applied" means the apply took EFFECT, and there is a third state.**
+RF-06's caller-supplied report was derived from *guard construction* — `mandatory_integrity_label`
+was the literal `true`, and the DACL fields were `config.package_sid.is_some()`, which
+`execution_runtime.rs` sets unconditionally. `AppliedLabelsGuard::snapshot_and_apply` returns
+`Ok` when it recorded a skip for **every** path, so a launch that wrote zero mandatory-label ACEs
+was still reported established and reached `Proceed`. Each guard now reports its own coverage
+(`labels_guard::LabelCoverage`, `dacl_guard::DaclGrantCoverage`), and the contract carries three
+application states rather than two:
+
+| Guard coverage | `LayerApplication` | Decision |
+|---|---|---|
+| Nothing in this launch's policy for the layer to act on | `NotApplicable` | Row dropped |
+| The apply ran and covered every non-exempt target | `Applied` | `EstablishedNotIndependentlyObservable`, the expected baseline — not a downgrade |
+| Covered some targets, not all (a path already carried a third-party mandatory label; a writable path is not owned so its DACL cannot be edited) | `PartiallyApplied` | `ProceedDowngraded` — the D-27 banner and audit event fire |
+| Zero targets covered, on a non-empty policy | `NotApplied` | `Unconfirmed` → `Abort` |
+
+**RF-16 (iteration 2): the downgrade channel must be reachable.** No registry row carries
+`DegradeWithVisibleClaim` or `FailOpenDefect`, and the single `FailOpen` row
+(`MinifilterAbsence`) is deliberately excluded from `downgraded` — so after RF-06,
+`AttestationDecision::ProceedDowngraded` was unreachable on every production path and the D-27
+banner, the per-session dedup marker, the `LayerAttestationDowngraded` audit event and the
+`session_id` path validator guarding the marker were all dead code in the shipped build.
+Iteration 1's defect was "the signal always fires"; RF-06 inverted it to "the signal never
+fires". `LayerApplication::PartiallyApplied` (RF-15) is the live production route into that
+channel. Two tests pin it — `attestation.rs`'s
+`partially_applied_configured_only_row_proceeds_downgraded` (decision core) and `launch.rs`'s
+`partially_applied_launch_is_downgraded_not_silently_passed` (real registry, real job-contained
+suspended child). A D-26-tightened requirement on a partially established layer still aborts.
+
+**Contract-exempt skips are NOT downgrades.** A mandatory-label skip on a path nono does not own
+(`C:\Windows`, granted read by the `system_read_windows` policy group) is a documented D-02
+exemption, not a coverage gap — labelling it is structurally impossible for an unprivileged user
+and unnecessary on the merits. Counting it would fire the banner on essentially every profile,
+recreating the permanently-on warning RF-06 removed. Likewise a read-only rule needs no
+package-SID DACL ACE. Only genuine gaps downgrade: a path carrying a label nono did not write,
+and a WRITABLE path whose DACL nono cannot edit.
+
 ## Review-fix pass (code review 2026-08-10)
 
 A deep code review of this phase found that several probes and guards in the shipped pass could
@@ -223,6 +260,8 @@ from the registry table and the sections above. Full per-finding evidence is in
 | RF-11 | `--dangerous-force-wfp-ready` is compiled out of default builds, but four Windows block-net integration tests still passed it and were gated only on `target_os`. Two failed; two passed for the wrong reason (a clap parse error satisfies `!status.success()`). | The four tests are gated on `feature = "layer-fault-injection"`, and `make test-layer-fault-injection` plus a `Windows Layer Fault Injection` CI job now run that build. |
 | RF-12 | The CINT-03 forced-unavailable suites, the eight in-crate seam regression tests and the D-32 `every_registry_row_has_a_test` drift gate were behind a feature no build, `make` target or CI job enabled — so none of this phase's own evidence executed, and adding a 14th `LayerId` failed nothing. | `layer_registry_meta_test.rs` (pure source-text scanning) drops the feature gate entirely; the `make` target and CI job above run the rest. |
 | RF-13 | `HKLM\SOFTWARE\Policies\nono\RequiredLayers` is documented as a fleet control but is never read and never enforced — a silently ignored security control. | The reader now DETECTS a configured sub-key and emits a loud `RequiredLayersNotEnforced` warning; the type's doc comment states plainly that it is not enforced. **Open operator decision:** where the already-read machine policy is carried to the Windows launch path, and acceptance that a fleet registry key can then refuse launches. Enforcement is NOT implemented. |
+| RF-15 | *(Iteration 2, CR-14.)* `AppliedLayers` reported guard **construction**, not guard **effect**: `mandatory_integrity_label` and `interpreter_coverage_gate` were literal `true`s and the DACL fields were the unconditionally-`Some` `config.package_sid`. A launch that wrote zero mandatory-label ACEs was reported fully attested. | Each guard reports its own coverage; `LayerApplication` gains `PartiallyApplied` and a fail-secure `#[default]` of `NotApplied`; the dead `interpreter_coverage_gate` field is removed (its row's `ProbeKind::NotApplicable` meant `classify_row` never consulted it). See RF-15 above. |
+| RF-16 | *(Iteration 2, NR-02.)* `AttestationDecision::ProceedDowngraded` was unreachable on every production path, making the D-27 banner, dedup marker and `LayerAttestationDowngraded` audit event dead code. | `LayerApplication::PartiallyApplied` routes an `Abort`-outcome row into `downgraded`. See RF-16 above. |
 | RF-14 | *(Found during the fix pass, not in the review.)* A Plan 117-10 unit-test fixture constructed `NetworkEnforcementGuard::FirewallRules { staged_dir: PathBuf::from("."), .. }`; the guard's `Drop` ran an unconditional `remove_dir_all` on that field, deleting the whole `crates/nono-cli` package tree (cargo's test CWD) every time the test ran. | `cleanup_network_enforcement_staging` refuses any path that is not a strict subdirectory of `%TEMP%/nono-net-block`, compared by path components; the fixture points at a never-created path under that root. |
 
 ## Manual verification (D-31)

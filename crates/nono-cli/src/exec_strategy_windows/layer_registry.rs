@@ -322,6 +322,25 @@ pub(crate) enum ContractOutcome {
     /// uses this value; reserved for a future row whose absence narrows
     /// (rather than eliminates) the confinement claim without warranting a
     /// full abort.
+    ///
+    /// # Phase 117 review NR-02: this is NOT the only route to a downgrade
+    ///
+    /// Because no row carries this outcome (nor `FailOpenDefect`), and the
+    /// single `FailOpen` row is deliberately excluded from `downgraded`,
+    /// `AttestationDecision::ProceedDowngraded` would be unreachable in a
+    /// shipped build if this value were the only path to it — the D-27
+    /// banner, the per-session dedup marker and the
+    /// `LayerAttestationDowngraded` audit event would all be dead code.
+    ///
+    /// The live production route is
+    /// [`LayerApplication::PartiallyApplied`]: an `Abort`-outcome row whose
+    /// apply took effect on some but not all of its contracted targets
+    /// proceeds with a downgraded claim rather than aborting or passing as
+    /// the full baseline. `attestation.rs`'s
+    /// `partially_applied_configured_only_row_proceeds_downgraded` and
+    /// `launch.rs`'s
+    /// `partially_applied_launch_is_downgraded_not_silently_passed` pin that
+    /// route against the real registry.
     DegradeWithVisibleClaim,
     /// The `WindowsTokenArm` cascade (`select_windows_token_arm`) resolves
     /// a DIFFERENT token-construction mechanism that preserves the same
@@ -383,15 +402,35 @@ pub(crate) enum ProbeKind {
 /// `AttestationDecision::Proceed` unreachable because every launch carried a
 /// permanent "downgraded" baseline. The caller now states, per launch, which
 /// layers it applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum LayerApplication {
-    /// The supervisor ran this layer's apply/enforce call for this launch
-    /// and it succeeded (its own `Result` was `Ok`, fail-closed).
+    /// The supervisor ran this layer's apply/enforce call for this launch,
+    /// it succeeded (its own `Result` was `Ok`, fail-closed), AND it took
+    /// effect on every target its contract requires it to cover.
     Applied,
-    /// The supervisor did NOT apply this layer on this launch. For a row
-    /// that is `expected: true` on this arm, that is exactly the negative
-    /// the fail-direction contract exists to catch.
+    /// The supervisor did NOT apply this layer on this launch — including
+    /// the case where the apply call returned `Ok` after doing nothing at
+    /// all (Phase 117 review CR-14: `AppliedLabelsGuard::snapshot_and_apply`
+    /// returns `Ok` with an all-skip entry list). For a row that is
+    /// `expected: true` on this arm, that is exactly the negative the
+    /// fail-direction contract exists to catch.
+    ///
+    /// This is the `Default` — a caller that forgets to report a layer fails
+    /// secure rather than inheriting `Applied` or, worse, `NotApplicable`
+    /// (which drops the row from the decision entirely).
+    #[default]
     NotApplied,
+    /// Phase 117 review CR-14/NR-02: the apply ran and took effect on SOME
+    /// but not all of the targets its contract covers (e.g. the mandatory
+    /// label was written on two of three policy paths because the third
+    /// already carried a third-party label). The layer is genuinely
+    /// established in part, so aborting would be wrong — but reporting it as
+    /// the full baseline would be the exact "reported enforcing while
+    /// partially inert" claim this phase exists to eliminate. This value is
+    /// what makes [`ContractOutcome::DegradeWithVisibleClaim`]'s operator
+    /// channel (`AttestationDecision::ProceedDowngraded`, the D-27 banner and
+    /// audit event) reachable from a production launch.
+    PartiallyApplied,
     /// This layer is not part of this launch's composition at all — e.g. a
     /// network row whose backend was not the one selected, or the broker
     /// Authenticode gate on a non-broker arm.
@@ -403,14 +442,25 @@ pub(crate) enum LayerApplication {
 /// owns the guards (CR-09). Rows probed live (`LiveTokenOrJobQuery`) or not
 /// probed at all (`ProbeKind::NotApplicable`) never consult this.
 ///
-/// Defaults to `NotApplied` for every field, NOT `Applied` — a caller that
-/// forgets to report a layer fails secure.
+/// Defaults to `NotApplied` for every `LayerApplication` field, NOT
+/// `Applied` — a caller that forgets to report a layer fails secure. (The
+/// three `Option<bool>` fields default to `None`/`NotApplicable`; see NR-03,
+/// tracked separately.)
+///
+/// # CR-14: these are EFFECT facts, not construction facts
+///
+/// Every `LayerApplication` field below must be derived from what the
+/// layer's guard actually achieved (`labels_guard::LabelCoverage`,
+/// `dacl_guard::DaclGrantCoverage`), never from whether a guard object
+/// exists. `AppliedLabelsGuard::snapshot_and_apply` returns `Ok` when it
+/// recorded a skip for EVERY path, so "the guard exists" and "the layer is
+/// in effect" are genuinely different propositions.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct AppliedLayers {
-    pub mandatory_integrity_label: bool,
-    pub dacl_package_sid_grant: bool,
-    pub dacl_ancestor_traverse: bool,
-    pub dacl_ancestor_read_attrs: bool,
+    pub mandatory_integrity_label: LayerApplication,
+    pub dacl_package_sid_grant: LayerApplication,
+    pub dacl_ancestor_traverse: LayerApplication,
+    pub dacl_ancestor_read_attrs: LayerApplication,
     /// `Some(true)` when the `netsh advfirewall` backend was selected AND
     /// its rules installed; `Some(false)` when it was selected and did not
     /// install; `None` when a different backend (or none) was selected, so
@@ -423,24 +473,23 @@ pub(crate) struct AppliedLayers {
     /// non-broker arm, or under the compile-time-baked dev-build-layout
     /// detector where the gate is deliberately not part of the composition.
     pub broker_authenticode_trust_gate: Option<bool>,
-    /// The pre-spawn interpreter/program coverage gate
-    /// (`validate_windows_launch_paths`). Always run on the direct-CLI path
-    /// before any guard is constructed.
-    pub interpreter_coverage_gate: bool,
-}
-
-fn from_bool(applied: bool) -> LayerApplication {
-    if applied {
-        LayerApplication::Applied
-    } else {
-        LayerApplication::NotApplied
-    }
+    // CR-14: there is deliberately NO `interpreter_coverage_gate` field.
+    // `LayerId::InterpreterCoverageGate`'s registry row declares
+    // `ProbeKind::NotApplicable` (it is a pre-flight, pre-spawn gate with
+    // nothing to re-observe against a live child), so `classify_row` returns
+    // `NotApplicable` for it WITHOUT ever consulting this struct. The field
+    // that used to live here was a hardcoded `true` that no decision could
+    // read — a report that looked like a fact and was neither read nor
+    // checkable. `every_reported_layer_is_actually_consulted` pins the
+    // invariant that a reported field must belong to a row whose probe kind
+    // consults it.
 }
 
 fn from_tristate(applied: Option<bool>) -> LayerApplication {
     match applied {
         None => LayerApplication::NotApplicable,
-        Some(v) => from_bool(v),
+        Some(true) => LayerApplication::Applied,
+        Some(false) => LayerApplication::NotApplied,
     }
 }
 
@@ -450,21 +499,24 @@ impl AppliedLayers {
     /// silently inheriting a permissive default.
     pub(crate) fn status(&self, id: LayerId) -> LayerApplication {
         match id {
-            LayerId::MandatoryIntegrityLabel => from_bool(self.mandatory_integrity_label),
-            LayerId::DaclPackageSidGrant => from_bool(self.dacl_package_sid_grant),
-            LayerId::DaclAncestorTraverse => from_bool(self.dacl_ancestor_traverse),
-            LayerId::DaclAncestorReadAttrs => from_bool(self.dacl_ancestor_read_attrs),
+            LayerId::MandatoryIntegrityLabel => self.mandatory_integrity_label,
+            LayerId::DaclPackageSidGrant => self.dacl_package_sid_grant,
+            LayerId::DaclAncestorTraverse => self.dacl_ancestor_traverse,
+            LayerId::DaclAncestorReadAttrs => self.dacl_ancestor_read_attrs,
             LayerId::FirewallRulesEgress => from_tristate(self.firewall_rules_egress),
             LayerId::WfpEgressFilters => from_tristate(self.wfp_egress_filters),
             LayerId::BrokerAuthenticodeTrustGate => {
                 from_tristate(self.broker_authenticode_trust_gate)
             }
-            LayerId::InterpreterCoverageGate => from_bool(self.interpreter_coverage_gate),
+            // CR-14: pre-flight gate, `ProbeKind::NotApplicable` — never
+            // consulted by `classify_row`, so there is nothing honest to
+            // report here.
+            LayerId::InterpreterCoverageGate
             // CR-05: `DaclSessionSidGrant` is not applied by any shipped
             // call site (see its registry row) — its expectancy is empty, so
             // `classify_row` returns `NotApplicable` before ever reaching
             // here.
-            LayerId::DaclSessionSidGrant
+            | LayerId::DaclSessionSidGrant
             // Live-probed rows: their status comes from the kernel, not
             // from the caller's own report.
             | LayerId::RestrictedToken
@@ -1062,6 +1114,73 @@ pub(crate) fn all_entries() -> &'static [LayerRegistryEntry] {
 #[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
+
+    /// Phase 117 review CR-14, structural non-vacuity guard: a layer whose
+    /// application `AppliedLayers` *reports* must belong to a row whose
+    /// `ProbeKind` actually *consults* that report. Otherwise the field is a
+    /// value that looks like a fact and can never influence a decision —
+    /// which is exactly what `interpreter_coverage_gate: true` was (its row's
+    /// probe is `ProbeKind::NotApplicable`, so `classify_row` returns before
+    /// ever calling `status()`).
+    ///
+    /// D-32 discovery rule: iterates `ALL` and `all_entries()`; it names no
+    /// specific `LayerId`, so re-adding a reported field for a
+    /// non-consulting row fails this test without the test being touched.
+    #[test]
+    fn every_reported_layer_is_actually_consulted() {
+        // Everything reported as positively as the type allows.
+        let everything = AppliedLayers {
+            mandatory_integrity_label: LayerApplication::Applied,
+            dacl_package_sid_grant: LayerApplication::Applied,
+            dacl_ancestor_traverse: LayerApplication::Applied,
+            dacl_ancestor_read_attrs: LayerApplication::Applied,
+            firewall_rules_egress: Some(true),
+            wfp_egress_filters: Some(true),
+            broker_authenticode_trust_gate: Some(true),
+        };
+
+        for id in ALL {
+            if everything.status(*id) == LayerApplication::NotApplicable {
+                continue;
+            }
+            let entry = all_entries()
+                .iter()
+                .find(|e| e.id == *id)
+                .expect("every LayerId has a registry row");
+            assert!(
+                matches!(
+                    entry.probe,
+                    ProbeKind::ConfiguredOnly | ProbeKind::ConfirmedByEnforcingComponentReport
+                ),
+                "{id:?} is reported by AppliedLayers but its row's probe is {:?}, which \
+                 classify_row resolves without ever consulting the report — the reported \
+                 value can never influence a decision (CR-14)",
+                entry.probe
+            );
+        }
+    }
+
+    /// Phase 117 review CR-14: the fail-secure default. A caller that
+    /// forgets a layer must land on `NotApplied` (which classifies
+    /// `Unconfirmed` on an expected row and aborts), NEVER `Applied` and
+    /// never `NotApplicable` (which would drop the row from the decision).
+    #[test]
+    fn unreported_layer_application_defaults_to_not_applied() {
+        assert_eq!(LayerApplication::default(), LayerApplication::NotApplied);
+        let none_reported = AppliedLayers::default();
+        for id in [
+            LayerId::MandatoryIntegrityLabel,
+            LayerId::DaclPackageSidGrant,
+            LayerId::DaclAncestorTraverse,
+            LayerId::DaclAncestorReadAttrs,
+        ] {
+            assert_eq!(
+                none_reported.status(id),
+                LayerApplication::NotApplied,
+                "{id:?} must fail secure when unreported"
+            );
+        }
+    }
 
     /// Item-1 fix (checker pass 3): every `EntryPath::Broker`-expected row
     /// must carry `outcome: ContractOutcome::Abort`. Blocker-1's fix means

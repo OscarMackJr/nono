@@ -24,29 +24,98 @@ use nono::{
     try_set_mandatory_label, NonoError, Result, WindowsFilesystemPolicy,
 };
 
+use super::layer_registry;
+
 /// Per-path state recorded at snapshot time.
-#[derive(Debug)]
+///
+/// Phase 117 review CR-14: the two skip reasons used to share one `Skip`
+/// variant. They are NOT equivalent for the fail-direction contract, so they
+/// are now distinct: a pre-existing third-party label is a path this guard
+/// did NOT establish (a coverage gap in nono's own claim), whereas a
+/// non-user-owned system path is a documented, on-the-merits exemption from
+/// the D-02 contract. Collapsing the two made
+/// [`AppliedLabelsGuard::coverage`] impossible to write honestly.
+#[derive(Debug, PartialEq, Eq)]
 enum AppliedLabel {
-    /// Path was skipped for labeling. Either:
-    /// 1. Path had a pre-existing mandatory-label ACE of some kind (D-02
-    ///    skip-on-any-prior-label arm — preserves the contract that nono
-    ///    NEVER mutates a pre-existing mandatory label), OR
-    /// 2. Path is not owned by the current user (system paths like
-    ///    `C:\Windows` granted read via built-in policy groups). Unprivileged
-    ///    users do not hold `WRITE_OWNER` on system paths, so
-    ///    `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` would fail
-    ///    with `ERROR_ACCESS_DENIED` (HRESULT 0x5). Skipping is correct on
-    ///    the merits: Low-IL is a subtractive model and system paths are
-    ///    already readable by Low-IL subjects through the Medium-IL default.
+    /// Path had a pre-existing mandatory-label ACE of some kind (D-02
+    /// skip-on-any-prior-label arm — preserves the contract that nono
+    /// NEVER mutates a pre-existing mandatory label).
     ///
-    /// In both cases: we did not apply a new label and will not revert at
-    /// Drop time.
-    Skip,
+    /// CR-14: this is a **coverage gap**. nono did not write this ACE and
+    /// cannot claim to have established the layer here; whatever label is
+    /// present came from somewhere else and may not match the mode-derived
+    /// mask this launch's policy asked for. The guard already warns that the
+    /// grant "may have no observable enforcement effect".
+    SkipPreExistingLabel,
+    /// Path is not owned by the current user (system paths like
+    /// `C:\Windows` granted read via built-in policy groups). Unprivileged
+    /// users do not hold `WRITE_OWNER` on system paths, so
+    /// `SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)` would fail
+    /// with `ERROR_ACCESS_DENIED` (HRESULT 0x5).
+    ///
+    /// CR-14: this is **contract-exempt**, not a coverage gap. Skipping is
+    /// correct on the merits: Low-IL is a subtractive model and system paths
+    /// are already readable by Low-IL subjects through the Medium-IL
+    /// default, and nono structurally cannot label a path it does not own.
+    SkipNotOwned,
     /// Path had NO pre-existing mandatory-label ACE. We applied a
     /// mode-derived mandatory-label ACE at Low IL via
     /// `nono::try_set_mandatory_label`. On Drop, clear the ACE to restore
     /// the Medium-IL default.
     Applied { path: PathBuf },
+}
+
+/// Phase 117 review CR-14: what [`AppliedLabelsGuard::snapshot_and_apply`]
+/// ACTUALLY achieved, as opposed to the mere fact that it returned `Ok`.
+///
+/// The startup self-attestation gate used to report this layer with a
+/// hardcoded `mandatory_integrity_label: true` on the reasoning that
+/// "`snapshot_and_apply` is fail-closed, so reaching the gate means it
+/// succeeded". That reasoning is unsound for this guard specifically,
+/// because `Ok` is also the return value when EVERY path was skipped — a
+/// launch that wrote zero mandatory-label ACEs was reported fully attested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct LabelCoverage {
+    /// Number of compiled filesystem-policy paths the guard walked.
+    pub policy_paths: usize,
+    /// Paths where a mandatory-label ACE was actually written.
+    pub applied: usize,
+    /// Coverage gaps: paths carrying a label nono did not write.
+    pub skipped_pre_existing_label: usize,
+    /// Contract-exempt: paths nono cannot label (not owned).
+    pub skipped_not_owned: usize,
+}
+
+impl LabelCoverage {
+    /// Map the observed coverage onto the fail-direction contract's
+    /// per-layer application vocabulary.
+    ///
+    /// - No policy paths at all → `NotApplicable`. There was nothing for the
+    ///   layer to act on; claiming it established anything would be a
+    ///   fabrication, and denying the launch would punish a configuration
+    ///   the layer does not describe.
+    /// - Zero ACEs written on a non-empty policy → `NotApplied`. This is
+    ///   exactly the CR-14 scenario: the guard returned `Ok` having done
+    ///   nothing. On an `expected: true` row this classifies `Unconfirmed`
+    ///   and aborts the launch.
+    /// - At least one ACE written, but at least one path carried a
+    ///   third-party label → `PartiallyApplied`. The layer is established in
+    ///   part; the operator-visible claim is downgraded (D-27), never
+    ///   silently accepted as the full baseline.
+    /// - Every non-exempt path labelled → `Applied`.
+    pub(crate) fn application(self) -> layer_registry::LayerApplication {
+        use layer_registry::LayerApplication;
+        if self.policy_paths == 0 {
+            return LayerApplication::NotApplicable;
+        }
+        if self.applied == 0 {
+            return LayerApplication::NotApplied;
+        }
+        if self.skipped_pre_existing_label > 0 {
+            return LayerApplication::PartiallyApplied;
+        }
+        LayerApplication::Applied
+    }
 }
 
 /// RAII guard that reverts applied mandatory labels when dropped.
@@ -132,7 +201,7 @@ impl AppliedLabelsGuard {
                     "label guard: path has pre-existing mandatory-label ACE; skipping apply + revert \
                      (grant may have no observable enforcement effect depending on pre-existing label)"
                 );
-                guard.entries.push(AppliedLabel::Skip);
+                guard.entries.push(AppliedLabel::SkipPreExistingLabel);
                 continue;
             }
 
@@ -156,7 +225,7 @@ impl AppliedLabelsGuard {
                         "label guard: path not owned by current user; skipping mandatory label apply \
                          (system paths are Medium-IL by default and already readable by Low-IL subjects)"
                     );
-                    guard.entries.push(AppliedLabel::Skip);
+                    guard.entries.push(AppliedLabel::SkipNotOwned);
                     continue;
                 }
                 Err(err) => {
@@ -190,6 +259,30 @@ impl AppliedLabelsGuard {
         Ok(guard)
     }
 
+    /// Phase 117 review CR-14: the guard's ACTUAL effect, for the startup
+    /// self-attestation gate. Reports what happened per path, never merely
+    /// that this guard object exists.
+    ///
+    /// Note this is deliberately computed from `self.entries`, which
+    /// `revert_all` DRAINS on Drop — call it while the guard is live (the
+    /// gate runs inside the guard's lifetime, before the launch returns).
+    pub(crate) fn coverage(&self) -> LabelCoverage {
+        let mut coverage = LabelCoverage {
+            policy_paths: self.entries.len(),
+            ..LabelCoverage::default()
+        };
+        for entry in &self.entries {
+            match entry {
+                AppliedLabel::Applied { .. } => coverage.applied += 1,
+                AppliedLabel::SkipPreExistingLabel => {
+                    coverage.skipped_pre_existing_label += 1;
+                }
+                AppliedLabel::SkipNotOwned => coverage.skipped_not_owned += 1,
+            }
+        }
+        coverage
+    }
+
     /// Best-effort revert of every applied entry. Drop-safe: errors logged,
     /// never panic.
     fn revert_all(&mut self) {
@@ -197,7 +290,7 @@ impl AppliedLabelsGuard {
         // get reverted first. Mirrors the Phase 04 WFP orphan-sweep discipline.
         while let Some(entry) = self.entries.pop() {
             match entry {
-                AppliedLabel::Skip => {
+                AppliedLabel::SkipPreExistingLabel | AppliedLabel::SkipNotOwned => {
                     // No-op: we never applied, so there is nothing to revert.
                 }
                 AppliedLabel::Applied { path } => {
@@ -345,14 +438,18 @@ mod tests {
     use nono::{AccessMode, CapabilitySource, WindowsFilesystemRule};
     use tempfile::tempdir;
 
+    fn file_rule(path: std::path::PathBuf) -> WindowsFilesystemRule {
+        WindowsFilesystemRule {
+            path,
+            access: AccessMode::Read,
+            is_file: true,
+            source: CapabilitySource::User,
+        }
+    }
+
     fn single_file_read_rule(path: std::path::PathBuf) -> WindowsFilesystemPolicy {
         WindowsFilesystemPolicy {
-            rules: vec![WindowsFilesystemRule {
-                path,
-                access: AccessMode::Read,
-                is_file: true,
-                source: CapabilitySource::User,
-            }],
+            rules: vec![file_rule(path)],
             unsupported: vec![],
         }
     }
@@ -429,6 +526,91 @@ mod tests {
         );
     }
 
+    /// Phase 117 review CR-14, non-vacuity proof for
+    /// [`LabelCoverage::application`]: the SAME guard type reports three
+    /// DIFFERENT application values depending on what it actually did, driven
+    /// entirely by real filesystem state (no test seam, no synthetic input).
+    #[test]
+    fn coverage_distinguishes_full_partial_and_zero_ace_launches() {
+        use layer_registry::LayerApplication;
+
+        let dir = tempdir().expect("tempdir");
+
+        // (a) Every path fresh and owned → every ACE written → Applied.
+        let fresh_a = dir.path().join("fresh-a.txt");
+        let fresh_b = dir.path().join("fresh-b.txt");
+        std::fs::write(&fresh_a, "x").expect("write");
+        std::fs::write(&fresh_b, "x").expect("write");
+        let full_policy = WindowsFilesystemPolicy {
+            rules: vec![file_rule(fresh_a.clone()), file_rule(fresh_b.clone())],
+            unsupported: vec![],
+        };
+        {
+            let guard = AppliedLabelsGuard::snapshot_and_apply(&full_policy).expect("apply");
+            let coverage = guard.coverage();
+            assert_eq!(coverage.applied, 2, "{coverage:?}");
+            assert_eq!(
+                coverage.application(),
+                LayerApplication::Applied,
+                "{coverage:?}"
+            );
+        }
+
+        // (b) One fresh path + one path carrying a third-party label →
+        //     PartiallyApplied. This is the D-27 downgrade's live production
+        //     source (NR-02): a workspace file somebody else already hardened.
+        let prelabeled = dir.path().join("prelabeled.txt");
+        std::fs::write(&prelabeled, "x").expect("write");
+        try_set_mandatory_label(&prelabeled, 0x5).expect("pre-label");
+        let fresh_c = dir.path().join("fresh-c.txt");
+        std::fs::write(&fresh_c, "x").expect("write");
+        let mixed_policy = WindowsFilesystemPolicy {
+            rules: vec![file_rule(fresh_c.clone()), file_rule(prelabeled.clone())],
+            unsupported: vec![],
+        };
+        {
+            let guard = AppliedLabelsGuard::snapshot_and_apply(&mixed_policy).expect("apply");
+            let coverage = guard.coverage();
+            assert_eq!(coverage.applied, 1, "{coverage:?}");
+            assert_eq!(coverage.skipped_pre_existing_label, 1, "{coverage:?}");
+            assert_eq!(
+                coverage.application(),
+                LayerApplication::PartiallyApplied,
+                "{coverage:?}"
+            );
+        }
+
+        // (c) EVERY path already labelled → zero ACEs written → NotApplied.
+        //     This is verbatim the CR-14 scenario: `snapshot_and_apply`
+        //     returns Ok, the guard object exists, and nothing happened.
+        let prelabeled_only = WindowsFilesystemPolicy {
+            rules: vec![file_rule(prelabeled.clone())],
+            unsupported: vec![],
+        };
+        {
+            let guard = AppliedLabelsGuard::snapshot_and_apply(&prelabeled_only).expect("apply");
+            let coverage = guard.coverage();
+            assert_eq!(coverage.applied, 0, "{coverage:?}");
+            assert_eq!(
+                coverage.application(),
+                LayerApplication::NotApplied,
+                "a guard that wrote zero ACEs must never report the layer established: {coverage:?}"
+            );
+        }
+
+        // (d) Empty policy → NotApplicable (nothing to establish, nothing to
+        //     deny) rather than a fabricated Applied.
+        let empty = WindowsFilesystemPolicy {
+            rules: vec![],
+            unsupported: vec![],
+        };
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&empty).expect("apply");
+        assert_eq!(
+            guard.coverage().application(),
+            LayerApplication::NotApplicable
+        );
+    }
+
     #[test]
     fn guard_skips_apply_and_revert_when_path_already_has_any_mandatory_label() {
         // Pre-label a file Low IL via the raw primitive (simulating a prior
@@ -450,8 +632,8 @@ mod tests {
             // D-02 skip-on-any-prior-label: we did not touch the label.
             let during = low_integrity_label_and_mask(&file).expect("still labeled");
             assert_eq!(during.0, 0x1000);
-            // Sanity: the Skip variant is exercised.
-            let _skip_variant_reference = AppliedLabel::Skip;
+            // Sanity: the pre-existing-label skip variant is exercised.
+            let _skip_variant_reference = AppliedLabel::SkipPreExistingLabel;
         } // guard drops
 
         // D-02 "skip revert on any pre-existing label" — label persists.
@@ -542,10 +724,21 @@ mod tests {
         // The sole entry must be a Skip — we must not have applied a label
         // we don't own.
         assert!(
-            matches!(guard.entries[0], AppliedLabel::Skip),
-            "guard entry for {} must be AppliedLabel::Skip; got {:?}",
+            matches!(guard.entries[0], AppliedLabel::SkipNotOwned),
+            "guard entry for {} must be AppliedLabel::SkipNotOwned; got {:?}",
             system_root.display(),
             guard.entries[0]
+        );
+
+        // CR-14: an all-skip guard wrote ZERO mandatory-label ACEs. It must
+        // NOT report the layer as established.
+        let coverage = guard.coverage();
+        assert_eq!(coverage.applied, 0);
+        assert_eq!(coverage.skipped_not_owned, 1);
+        assert_eq!(
+            coverage.application(),
+            layer_registry::LayerApplication::NotApplied,
+            "a guard that wrote zero ACEs must report NotApplied, not Applied: {coverage:?}"
         );
 
         drop(guard);
