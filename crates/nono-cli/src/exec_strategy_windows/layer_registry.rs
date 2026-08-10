@@ -869,7 +869,12 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
     LayerRegistryEntry {
         id: LayerId::DaclSessionSidGrant,
         name: "dacl-session-sid-grant",
-        call_sites: &["dacl_guard.rs:92", "mod.rs:436-440"],
+        // Phase 117 review CR-05: no call site. The previously cited
+        // `dacl_guard.rs`/`mod.rs` sites construct `AppliedDaclGrantsGuard`
+        // with `config.package_sid` — that is `DaclPackageSidGrant`'s call
+        // site, not this row's. Citing them here was the citation half of
+        // the same false claim the emptied expectancy fixes.
+        call_sites: &[],
         expectancy: &DACL_SESSION_SID_GRANT_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
