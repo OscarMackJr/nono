@@ -288,7 +288,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
   3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
   4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
-**Plans**: 19 plans in 8 waves (12 executed; 7 gap-closure plans added 2026-08-10 closing 117-VERIFICATION.md's gaps_found - NR3-01 BLOCKER, SC3 test-coverage shortfall, NR3-02/03/04/05 structural fail-open residuals, SC4 SPEC-ledger drift, NR3-08 citation drift, NR-08 CI gap)
+**Plans**: 19 plans in 8 waves (13 executed; 7 gap-closure plans added 2026-08-10 closing 117-VERIFICATION.md's gaps_found - NR3-01 BLOCKER, SC3 test-coverage shortfall, NR3-02/03/04/05 structural fail-open residuals, SC4 SPEC-ledger drift, NR3-08 citation drift, NR-08 CI gap; 117-13 executed 2026-08-10, closing NR3-01)
 
 **Wave 1** — the registry is the source of truth everything else derives from (D-01)
 - [x] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
@@ -315,7 +315,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 **Gap closure (2026-08-10, from `117-VERIFICATION.md`, status: gaps_found, 0/4 truths fully verified)** — see `117-REVIEW.md` iteration 3 (1 Blocker + 9 Warning) and `117-REVIEW-FIX.md` for the findings these plans close.
 
 **Wave 6** *(blocked on Wave 5 — parallel, disjoint files)*
-- [ ] 117-13-PLAN.md — NR3-01 BLOCKER: self-healing mandatory-label residue detection + NonoError::remediation() arm for LayerAttestationFailed
+- [x] 117-13-PLAN.md — NR3-01 BLOCKER: self-healing mandatory-label residue detection + NonoError::remediation() arm for LayerAttestationFailed
 - [ ] 117-14-PLAN.md — NR3-02: real coverage accessor for DaclAncestorTraverse/DaclAncestorReadAttrs (was a constant Applied, structurally could not deny)
 - [ ] 117-15-PLAN.md — NR3-03 + NR3-08: close the DaclSessionSidGrant fail-open landmine (false test citation) + convert 4 rows' call-site citations to symbol form
 - [ ] 117-16-PLAN.md — NR3-04: unconditional downgrade-banner diagnostic log line + new FirewallRulesEgress forced-unavailable test (SC3)
