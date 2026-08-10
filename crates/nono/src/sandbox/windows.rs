@@ -2069,13 +2069,18 @@ fn low_integrity_label_rid(path: &Path) -> Option<u32> {
     None
 }
 
-/// Reads back the mandatory-label ACE on `path`, returning `Some((rid, mask))`
-/// if a label is present. Returns `None` if the path has no SACL, no
-/// mandatory-label ACE, or the FFI fails.
+/// Reads back the mandatory-label ACE on `path`, returning
+/// `Some((rid, mask, flags))` if a label is present, where `flags` is the
+/// literal `header.AceFlags` byte (e.g. `INHERIT_ONLY_ACE`, `INHERITED_ACE`).
+/// Returns `None` if the path has no SACL, no mandatory-label ACE, or the
+/// FFI fails.
 ///
-/// Companion to `try_set_mandatory_label` for verification in tests.
+/// Companion to `try_set_mandatory_label` for verification in tests and for
+/// the CLI's residue-equivalence predicate (`AppliedLabelsGuard`), which
+/// needs `AceFlags` to distinguish a structurally-inert `INHERIT_ONLY_ACE`
+/// from an effective one the OS actually evaluates.
 #[must_use]
-pub fn low_integrity_label_and_mask(path: &Path) -> Option<(u32, u32)> {
+pub fn low_integrity_label_ace(path: &Path) -> Option<(u32, u32, u8)> {
     let wide_path: Vec<u16> = path
         .as_os_str()
         .encode_wide()
@@ -2160,9 +2165,22 @@ pub fn low_integrity_label_and_mask(path: &Path) -> Option<(u32, u32)> {
                 *rid
             },
             mask,
+            header.AceFlags,
         ));
     }
     None
+}
+
+/// Reads back the mandatory-label ACE on `path`, returning `Some((rid, mask))`
+/// if a label is present. Returns `None` if the path has no SACL, no
+/// mandatory-label ACE, or the FFI fails.
+///
+/// Thin wrapper over [`low_integrity_label_ace`] that drops the `AceFlags`
+/// byte for callers that only need `(rid, mask)`. Companion to
+/// `try_set_mandatory_label` for verification in tests.
+#[must_use]
+pub fn low_integrity_label_and_mask(path: &Path) -> Option<(u32, u32)> {
+    low_integrity_label_ace(path).map(|(rid, mask, _flags)| (rid, mask))
 }
 
 #[must_use]
@@ -3294,6 +3312,34 @@ mod tests {
         assert_eq!(
             mask, SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP,
             "ReadWrite mode mask must be NO_EXECUTE_UP only per D-01; got 0x{mask:X}"
+        );
+    }
+
+    #[test]
+    fn low_integrity_label_ace_reports_zero_flags_for_a_freshly_applied_label() {
+        // CR-01 root-cause fix (Task 1): try_set_mandatory_label writes an SDDL
+        // ACE with an EMPTY ACE-flags field (AceFlags == 0). This test plants
+        // a label with try_set_mandatory_label and asserts the widened reader
+        // reports flags == 0 for it, pinning the "nono's own ACE shape" baseline
+        // the CLI residue-equivalence predicate (labels_guard.rs) relies on.
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("plant-and-read.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let mask = SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_EXECUTE_UP;
+        try_set_mandatory_label(&file, mask).expect("try_set_mandatory_label must succeed");
+        let (rid, read_mask, flags) = low_integrity_label_ace(&file)
+            .expect("low_integrity_label_ace must find the just-planted label");
+        assert_eq!(rid, SECURITY_MANDATORY_LOW_RID as u32);
+        assert_eq!(read_mask, mask);
+        assert_eq!(
+            flags, 0,
+            "try_set_mandatory_label's SDDL has an empty ACE-flags field; got 0x{flags:X}"
+        );
+        // The 2-tuple wrapper must agree with the 3-tuple reader (thin-wrapper contract).
+        assert_eq!(
+            low_integrity_label_and_mask(&file),
+            Some((rid, read_mask)),
+            "low_integrity_label_and_mask must be a thin wrapper over low_integrity_label_ace"
         );
     }
 
