@@ -325,7 +325,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 - [x] 117-18-PLAN.md — SC3: broaden layer_registry_meta_test.rs discovery (ALSO_AUTOMATED, 8 rows) + CI fix (NR-08, build nono-shell-broker + NONO_CI_HAS_WFP)
 
 **Wave 8** *(blocked on Wave 7 — documents the final state of every gap-closure plan)*
-- [ ] 117-19-PLAN.md — SC4: port NR-04/NR-05/NR-06 + NR3-* rows into the SPEC's Review-fix pass ledger, fix stale RF-14, update registry-table citations, reduce manual-verification section to 3 operator-accepted rows
+- [x] 117-19-PLAN.md — SC4: port NR-04/NR-05/NR-06 + NR3-* rows into the SPEC's Review-fix pass ledger, fix stale RF-14, update registry-table citations, reduce manual-verification section to 3 operator-accepted rows
 
 **Cross-cutting constraints** (phase-wide invariants cited across multiple plans):
 - **D-19** — the supervisor attests; the confined process is never the source of a claim about its own containment.
