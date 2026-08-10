@@ -353,18 +353,42 @@ impl PreparedWindowsLaunch {
     /// unconditional assumption.
     ///
     /// Derived on demand (never stored) so it cannot drift from the guards.
+    ///
+    /// # CR-14: effect, not construction
+    ///
+    /// Every field below is a fact about what a guard ACHIEVED, obtained
+    /// from that guard's own coverage accessor. The previous version derived
+    /// the whole report from object existence — `mandatory_integrity_label`
+    /// and `interpreter_coverage_gate` were literal `true`s and the three
+    /// DACL fields were `config.package_sid.is_some()`, which
+    /// `execution_runtime.rs` sets unconditionally. Since
+    /// `AppliedLabelsGuard::snapshot_and_apply` returns `Ok` after skipping
+    /// EVERY path, a launch that wrote zero mandatory-label ACEs was
+    /// reported fully attested and reached `Proceed`.
     fn applied_layers(&self) -> layer_registry::AppliedLayers {
         layer_registry::AppliedLayers {
-            // `AppliedLabelsGuard::snapshot_and_apply` is fail-closed (`?`
-            // at its call site) — the existence of this struct means the
-            // apply call ran and returned `Ok`. Per-path skips
-            // (pre-existing label / non-user-owned system path) are logged
-            // by the guard itself and are a deliberate part of its
-            // contract, not an apply failure.
-            mandatory_integrity_label: true,
-            dacl_package_sid_grant: self._applied_dacls.is_some(),
-            dacl_ancestor_traverse: self._applied_ancestor_traverse.is_some(),
-            dacl_ancestor_read_attrs: self._applied_ancestor_read_attrs.is_some(),
+            // What the label guard actually wrote — `NotApplied` when every
+            // policy path was skipped, `PartiallyApplied` when some path
+            // carried a third-party label we did not establish.
+            mandatory_integrity_label: self._applied_labels.coverage().application(),
+            // What the package-SID DACL guard actually granted.
+            dacl_package_sid_grant: self
+                ._applied_dacls
+                .as_ref()
+                .map_or(layer_registry::LayerApplication::NotApplied, |guard| {
+                    guard.coverage().application()
+                }),
+            // The two ancestor guards' apply loops are fail-closed with no
+            // skip arm: they grant on every OWNED ancestor and STOP at the
+            // first non-owned one, which is the documented contract outcome
+            // (reaching the cwd from there up relies on the lowbox's
+            // bypass-traverse), not a coverage gap. An empty grant set is
+            // therefore a legitimate full-coverage result, so guard
+            // existence IS the effect fact for these two rows — unlike the
+            // label and package-SID guards above. `None` means the guard
+            // never ran, which stays fail-secure `NotApplied`.
+            dacl_ancestor_traverse: application_of(self._applied_ancestor_traverse.is_some()),
+            dacl_ancestor_read_attrs: application_of(self._applied_ancestor_read_attrs.is_some()),
             // CR-04: tri-state. `None` means this backend is not part of
             // this launch's composition — not applicable, not degraded.
             firewall_rules_egress: match self._network_enforcement {
@@ -378,11 +402,26 @@ impl PreparedWindowsLaunch {
             // Recorded by `spawn_windows_child`, which is where the
             // broker-arm decision and the Authenticode comparison live.
             broker_authenticode_trust_gate: None,
-            // `Sandbox::validate_windows_launch_paths` ran fail-closed at
-            // the top of `prepare_live_windows_launch`, before any guard was
-            // constructed.
-            interpreter_coverage_gate: true,
+            // CR-14: no `interpreter_coverage_gate` field exists any more.
+            // `Sandbox::validate_windows_launch_paths` ran fail-closed at the
+            // top of `prepare_live_windows_launch`, but that row's probe kind
+            // is `ProbeKind::NotApplicable`, so `classify_row` never consults
+            // the report — the field was a hardcoded `true` no decision could
+            // read. See `layer_registry::AppliedLayers`.
         }
+    }
+}
+
+/// CR-14 helper: the honest two-way mapping for a layer whose guard has no
+/// skip arm, so "the apply ran" and "the apply took effect" coincide.
+/// Deliberately NOT a blanket `bool -> LayerApplication` conversion on
+/// `AppliedLayers` — the whole point of CR-14 is that most layers do not
+/// have that property and must report real coverage instead.
+fn application_of(ran: bool) -> layer_registry::LayerApplication {
+    if ran {
+        layer_registry::LayerApplication::Applied
+    } else {
+        layer_registry::LayerApplication::NotApplied
     }
 }
 

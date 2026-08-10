@@ -3243,15 +3243,15 @@ mod attestation_gate_tests {
     /// a real `(DirectCli, Null)` launch — every guard constructed, no
     /// network backend selected, non-broker arm.
     fn fully_applied_layers() -> layer_registry::AppliedLayers {
+        use layer_registry::LayerApplication::Applied;
         layer_registry::AppliedLayers {
-            mandatory_integrity_label: true,
-            dacl_package_sid_grant: true,
-            dacl_ancestor_traverse: true,
-            dacl_ancestor_read_attrs: true,
+            mandatory_integrity_label: Applied,
+            dacl_package_sid_grant: Applied,
+            dacl_ancestor_traverse: Applied,
+            dacl_ancestor_read_attrs: Applied,
             firewall_rules_egress: None,
             wfp_egress_filters: None,
             broker_authenticode_trust_gate: None,
-            interpreter_coverage_gate: true,
         }
     }
 
@@ -3472,7 +3472,7 @@ mod attestation_gate_tests {
         assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
 
         let mut applied = fully_applied_layers();
-        applied.mandatory_integrity_label = false;
+        applied.mandatory_integrity_label = layer_registry::LayerApplication::NotApplied;
 
         let result = apply_startup_attestation_gate(
             child.process,
