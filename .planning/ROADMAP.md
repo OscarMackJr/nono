@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 11/12 plans
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 12/12 plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -310,7 +310,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 - [x] 117-11-PLAN.md — D-21 gate insertion: nono-shell-broker's own suspended AppContainer child
 
 **Wave 5** *(blocked on Wave 4)*
-- [ ] 117-12-PLAN.md — Forced-unavailable tests + D-32 meta-test + D-31 loud-gap list + cross-target clippy + D-24 latency + SPEC close-out
+- [x] 117-12-PLAN.md — Forced-unavailable tests + D-32 meta-test + D-31 loud-gap list + cross-target clippy + D-24 latency + SPEC close-out
 
 **Cross-cutting constraints** (phase-wide invariants cited across multiple plans):
 - **D-19** — the supervisor attests; the confined process is never the source of a claim about its own containment.
