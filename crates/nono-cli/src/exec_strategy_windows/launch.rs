@@ -3500,6 +3500,85 @@ mod attestation_gate_tests {
         }
     }
 
+    /// Phase 117 review NR-02 at the GATE level, against the REAL registry:
+    /// a launch that established the mandatory-label layer on only some of
+    /// its policy paths reaches `AttestationDecision::ProceedDowngraded` —
+    /// the state that drives the D-27 banner, the per-session dedup marker
+    /// and the `LayerAttestationDowngraded` audit event.
+    ///
+    /// After the CR-09 fix, `downgraded` was pushed to only from
+    /// `DegradeWithVisibleClaim` / `FailOpenDefect`, which no registry row
+    /// uses, and the single `FailOpen` row is deliberately excluded — so
+    /// `ProceedDowngraded` was unreachable in a shipped build and every
+    /// operator-visible downgrade channel was dead code. This test pins the
+    /// live path; `labels_guard::coverage_distinguishes_full_partial_and_
+    /// zero_ace_launches` pins that a real guard produces the input.
+    #[test]
+    fn partially_applied_launch_is_downgraded_not_silently_passed() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.mandatory_integrity_label = layer_registry::LayerApplication::PartiallyApplied;
+
+        let decision = attestation::attest_and_decide(attestation::AttestationInput {
+            child_process: child.process,
+            containment_job: job,
+            entry_path: layer_registry::EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::Null),
+            wfp_preconfirmed: false,
+            applied,
+            expected_session_sid: None,
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        });
+
+        // The gate itself must still proceed — the layer IS partly in
+        // effect, so refusing the launch would be wrong.
+        let gate = apply_startup_attestation_gate(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            applied,
+            None,
+            Some("117-nr02-downgrade-test-session"),
+        );
+
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+
+        match decision {
+            Ok(attestation::AttestationDecision::ProceedDowngraded { downgraded }) => {
+                assert_eq!(
+                    downgraded,
+                    vec![layer_registry::LayerId::MandatoryIntegrityLabel]
+                );
+            }
+            other => panic!(
+                "a partially established layer must reach ProceedDowngraded through the REAL \
+                 registry — otherwise the D-27 banner, dedup marker and audit event are dead \
+                 code; got {other:?}"
+            ),
+        }
+        assert!(
+            gate.is_ok(),
+            "a partially established layer must not refuse the launch, got {gate:?}"
+        );
+    }
+
     fn wfp_service_managed_guard() -> NetworkEnforcementGuard {
         NetworkEnforcementGuard::WfpServiceManaged {
             policy: Box::new(nono::WindowsNetworkPolicy {

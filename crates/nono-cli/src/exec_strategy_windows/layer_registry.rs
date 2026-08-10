@@ -322,6 +322,25 @@ pub(crate) enum ContractOutcome {
     /// uses this value; reserved for a future row whose absence narrows
     /// (rather than eliminates) the confinement claim without warranting a
     /// full abort.
+    ///
+    /// # Phase 117 review NR-02: this is NOT the only route to a downgrade
+    ///
+    /// Because no row carries this outcome (nor `FailOpenDefect`), and the
+    /// single `FailOpen` row is deliberately excluded from `downgraded`,
+    /// `AttestationDecision::ProceedDowngraded` would be unreachable in a
+    /// shipped build if this value were the only path to it — the D-27
+    /// banner, the per-session dedup marker and the
+    /// `LayerAttestationDowngraded` audit event would all be dead code.
+    ///
+    /// The live production route is
+    /// [`LayerApplication::PartiallyApplied`]: an `Abort`-outcome row whose
+    /// apply took effect on some but not all of its contracted targets
+    /// proceeds with a downgraded claim rather than aborting or passing as
+    /// the full baseline. `attestation.rs`'s
+    /// `partially_applied_configured_only_row_proceeds_downgraded` and
+    /// `launch.rs`'s
+    /// `partially_applied_launch_is_downgraded_not_silently_passed` pin that
+    /// route against the real registry.
     DegradeWithVisibleClaim,
     /// The `WindowsTokenArm` cascade (`select_windows_token_arm`) resolves
     /// a DIFFERENT token-construction mechanism that preserves the same
