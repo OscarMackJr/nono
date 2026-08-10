@@ -409,12 +409,11 @@ impl SecurityEventLayer {
     /// When `inner.config.enabled` is `false`, the HMAC chain still advances
     /// (for sequence correctness and audit ordering) but no ETW/AppLog emit
     /// occurs — mirrors [`Self::emit_override_event`]'s policy.
-    // This plan (117-09) lands the function itself; its callers are Plans
-    // 10/11's gate points (later in this same wave). Until those land, the
-    // method has no call site in either `nono` or `nono-agentd` — same
-    // multi-binary-compilation-artifact situation `emit_override_event`
-    // documents above, not actual dead code.
-    #[allow(dead_code)]
+    // Called from `exec_strategy_windows::attestation`'s callers
+    // (`exec_strategy_windows/launch.rs`'s `apply_startup_attestation_gate`)
+    // and independently from `agent_daemon::launch`'s own step 6.7 (Plan 10)
+    // — two call sites in two separate binary crates (`nono`/`nono-agentd`),
+    // both reaching this same `nono-sandbox-cli`-crate method.
     #[must_use = "AUD-04: Err means the audit record was not committed — callers MUST \
                   surface the downgrade to the operator through the banner even if this \
                   call fails, never silently proceed"]

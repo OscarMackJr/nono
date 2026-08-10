@@ -14,6 +14,11 @@ use windows_sys::Win32::Security::{PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES};
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::STARTF_USESTDHANDLES;
 
+// Phase 117 D-21 (CINT-02): the startup self-attestation gate this file
+// wires in at `spawn_windows_child`'s suspended-child window (Plan 10).
+use super::attestation;
+use super::layer_registry;
+
 // Phase 31 D-06: `OwnedHandle` and its `raw()` / `Drop` impls were lifted into
 // the `nono` crate (`nono::OwnedHandle`); both `nono-cli` and
 // `nono-shell-broker` consume the same RAII wrapper. The local impls were
@@ -1392,6 +1397,142 @@ pub(super) fn select_windows_token_arm(
 // and `nono-shell-broker` consume the same source-of-truth implementation.
 // The local definition was removed; callsites here use the re-exported symbol.
 
+/// Phase 117 D-21 (CINT-02): apply the startup self-attestation gate against
+/// the real suspended child's process handle, deciding whether the launch
+/// may proceed (optionally with a visibly downgraded claim, D-25) or must
+/// abort (D-22). Factored out of `spawn_windows_child` so the decision logic
+/// is unit-testable against a real (never-resumed) suspended child without
+/// exercising the full `spawn_windows_child` cascade end-to-end.
+///
+/// Returns `Ok(())` on `AttestationDecision::Proceed` or
+/// `AttestationDecision::ProceedDowngraded` — the D-27 audit event and D-27
+/// banner are both emitted from inside this function, before returning `Ok`,
+/// on the downgraded path (D-28: only the coarse count reaches the banner;
+/// layer-specific detail stays on the audit-event channel).
+///
+/// Returns `Err` on `AttestationDecision::Abort` or on `attest_and_decide`'s
+/// own `Err` (an unrecognized required-layer name — fail-closed, D-26).
+///
+/// # AUD-04 contract (per `SecurityEventLayer::emit_attestation_event`'s own
+/// doc comment)
+///
+/// A failure to commit the D-27 audit event (mutex poisoned, or
+/// `SecurityEventLayer` not yet initialized) is deliberately treated as
+/// **non-fatal to the launch decision** — this is the OPPOSITE posture from
+/// `execution_runtime.rs:267`'s `PolicyOverrideVerified` emission, which DOES
+/// abort on `Err`. That call site guards an override REQUEST (nothing to
+/// lose by refusing); this one guards an ALREADY-DOWNGRADED session whose
+/// launch was already going to proceed — blocking here would trade an
+/// honesty gap for an availability regression (the launch would fail for a
+/// reason unrelated to the actual confinement claim). The banner still
+/// prints, and the emission failure itself is logged, on this path.
+///
+/// This function never calls `TerminateProcess` itself: D-22 termination
+/// stays at the call site, using the exact same
+/// `if let Err(err) = ... { terminate_suspended_process(...); return
+/// Err(err); }` idiom as the adjacent containment/resource-limit gates this
+/// function is inserted alongside.
+fn apply_startup_attestation_gate(
+    process: HANDLE,
+    entry_path: layer_registry::EntryPath,
+    token_arm: Option<WindowsTokenArm>,
+    wfp_preconfirmed: bool,
+    session_id: Option<&str>,
+) -> Result<()> {
+    let input = attestation::AttestationInput {
+        child_process: process,
+        entry_path,
+        token_arm,
+        wfp_preconfirmed,
+        // D-26 tighten-only union: not yet wired at this gate (no CLI flag
+        // or machine-policy-required-layers plumbing lands in this plan —
+        // see 117-10-SUMMARY.md). Passing empty slices means no ADDITIONAL
+        // tightening is applied; every row's own per-row default outcome
+        // (D-25, overwhelmingly `Abort`) still governs the decision, so this
+        // is not a fail-open gap — only the "can force MORE rows to abort"
+        // feature is deferred.
+        required_layers_override: &[],
+        machine_required_layers: &[],
+    };
+    match attestation::attest_and_decide(input)? {
+        attestation::AttestationDecision::Proceed => Ok(()),
+        attestation::AttestationDecision::Abort { layer, status } => {
+            Err(NonoError::LayerAttestationFailed {
+                layer: format!("{layer:?}"),
+                reason: format!("{status:?}"),
+            })
+        }
+        attestation::AttestationDecision::ProceedDowngraded { downgraded } => {
+            // Item-2 fix (checker pass 3): sorted, comma-joined `Debug`-format
+            // `LayerId` names — the same SET of downgraded layers always
+            // produces the same dedup key regardless of iteration order.
+            let mut names: Vec<String> = downgraded.iter().map(|id| format!("{id:?}")).collect();
+            names.sort();
+            let dedup_key = names.join(",");
+            let downgraded_refs: Vec<&str> = names.iter().map(String::as_str).collect();
+
+            // D-27 audit-event channel. Access idiom mirrors
+            // `execution_runtime.rs:267`'s `SECURITY_LAYER.get()` (Warning-5
+            // fix — no parameter threading needed or added). Per
+            // `emit_attestation_event`'s own AUD-04 contract (this function's
+            // doc comment above), a failure to commit the audit record is
+            // logged but NEVER blocks the launch — the banner below still
+            // prints unconditionally.
+            match crate::telemetry::SECURITY_LAYER.get() {
+                None => {
+                    tracing::warn!(
+                        "attestation downgrade audit emission unavailable \
+                         (AUD-04: SecurityEventLayer not initialized) — \
+                         proceeding per AUD-04's non-fatal contract; \
+                         downgraded_layers={dedup_key}"
+                    );
+                }
+                Some(security_layer) => {
+                    if let Err(e) = security_layer.emit_attestation_event(&downgraded_refs) {
+                        tracing::warn!(
+                            "attestation downgrade audit emission failed (AUD-04) — \
+                             proceeding per AUD-04's non-fatal contract: {e}; \
+                             downgraded_layers={dedup_key}"
+                        );
+                    }
+                }
+            }
+
+            // D-27 human-visible banner channel (Item-2 fix: session_id +
+            // dedup_key are threaded through so Plan 09's per-session dedup
+            // is actually exercised at this call site).
+            crate::output::print_attestation_downgrade_banner(
+                downgraded.len(),
+                session_id,
+                &dedup_key,
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Phase 117 D-21 Warning-5 fix: derive `AttestationInput::wfp_preconfirmed`
+/// from the already-computed pre-spawn WFP readiness result — `true` only
+/// for `NetworkEnforcementGuard::WfpServiceManaged`. Both the
+/// `FirewallRules` variant and `None` (no network restriction requested)
+/// correctly fall through to `false`, which `attest_and_decide` only
+/// escalates to `Abort` when the `WfpEgressFilters` row is actually
+/// `expected: true` for the current arm. Factored into its own pure
+/// function (no OS calls) so this mapping is unit-testable independent of a
+/// real spawn.
+fn derive_wfp_preconfirmed(network_enforcement: Option<&NetworkEnforcementGuard>) -> bool {
+    matches!(
+        network_enforcement,
+        Some(NetworkEnforcementGuard::WfpServiceManaged { .. })
+    )
+}
+
+// Phase 117 Plan 10 added the `network_enforcement` parameter (Warning-5
+// fix), pushing this function's arity to 8 — matches the existing
+// `execute_supervised` precedent (`mod.rs`) for a Windows launch-path
+// function whose parameter count is inherent to how much per-launch state
+// the suspended-spawn cascade genuinely needs.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_windows_child(
     config: &ExecConfig<'_>,
     launch_program: &Path,
@@ -1399,7 +1540,12 @@ pub(super) fn spawn_windows_child(
     cmd_args: &[String],
     pty: Option<&pty_proxy::PtyPair>,
     limits: &crate::launch_runtime::ResourceLimits,
-    _session_id: Option<&str>,
+    session_id: Option<&str>,
+    // Phase 117 D-21 Warning-5 fix: the already-computed pre-spawn WFP
+    // readiness result (`prepare_network_enforcement`, `mod.rs:484`) — both
+    // `mod.rs` call sites (`execute_direct`, `execute_supervised`) pass
+    // `prepared._network_enforcement.as_ref()`. Never re-derived here.
+    network_enforcement: Option<&NetworkEnforcementGuard>,
 ) -> Result<(WindowsSupervisedChild, Option<DetachedStdioPipes>)> {
     let env_pairs = build_child_env(config);
     let mut environment_block = build_windows_environment_block(&env_pairs);
@@ -1435,6 +1581,28 @@ pub(super) fn spawn_windows_child(
         should_use_low_integrity_windows_launch(config.caps),
         config.prefers_low_il_broker,
     );
+
+    // Phase 117 D-21 (Blocker-1 resolution, Task 2): tell nono-shell-broker.exe
+    // which layers it must itself confirm active before resuming its own
+    // suspended grandchild. This is the ONLY code path through which a
+    // `(EntryPath::Broker, ...)` row's expectancy reaches a decision —
+    // `attest_and_decide` is never called with `EntryPath::Broker` (the
+    // broker is a separate binary with no access to `layer_registry`). Only
+    // set for the two arms that actually spawn the broker.
+    if matches!(
+        arm,
+        WindowsTokenArm::BrokerLaunch | WindowsTokenArm::BrokerLaunchNoPty
+    ) {
+        let broker_required_layers =
+            attestation::required_layers_for_broker(layer_registry::all_entries());
+        let mut broker_env_pairs = env_pairs.clone();
+        broker_env_pairs.push((
+            attestation::BROKER_REQUIRED_LAYERS_ENV_VAR.to_string(),
+            broker_required_layers,
+        ));
+        environment_block = build_windows_environment_block(&broker_env_pairs);
+    }
+
     let h_token: HANDLE = match arm {
         WindowsTokenArm::Null => {
             _restricted_holder = None;
@@ -2191,6 +2359,25 @@ pub(super) fn spawn_windows_child(
         terminate_suspended_process(process.raw(), "apply_resource_limits failed");
         return Err(err);
     }
+
+    // Phase 117 D-21 (CINT-02): startup self-attestation gate — attest the
+    // real suspended child's token/job state before it ever resumes. Same
+    // idiom as the two gates immediately above.
+    let wfp_preconfirmed = derive_wfp_preconfirmed(network_enforcement);
+    if let Err(err) = apply_startup_attestation_gate(
+        process.raw(),
+        layer_registry::EntryPath::DirectCli,
+        Some(arm),
+        wfp_preconfirmed,
+        session_id,
+    ) {
+        terminate_suspended_process(
+            process.raw(),
+            &format!("startup self-attestation failed: {err}"),
+        );
+        return Err(err);
+    }
+
     resume_contained_process(process.raw(), thread.raw())?;
 
     Ok((
@@ -2985,6 +3172,227 @@ mod job_hardening_tests {
         create_process_containment(None, Some(synthetic_sid)).expect(
             "create_process_containment with package-SID deny ACE must succeed with a valid SID",
         );
+    }
+}
+
+/// Phase 117 Plan 10 (CINT-02) — `apply_startup_attestation_gate`, tested
+/// against the real (Windows-populated) registry with a real suspended
+/// child, isolated from the full `spawn_windows_child` cascade.
+#[cfg(all(test, target_os = "windows"))]
+#[allow(clippy::unwrap_used)]
+mod attestation_gate_tests {
+    use super::*;
+    use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+
+    /// RAII helper: a suspended `cmd.exe /c exit 0` this test never resumes,
+    /// only probes then tears down.
+    struct SuspendedTestProcess {
+        process: HANDLE,
+        thread: HANDLE,
+    }
+
+    impl Drop for SuspendedTestProcess {
+        fn drop(&mut self) {
+            unsafe {
+                // SAFETY: `process`/`thread` are valid HANDLEs this struct
+                // exclusively owns for the duration of the test; the process
+                // is never resumed, only terminated.
+                let _ = TerminateProcess(self.process, 1);
+                CloseHandle(self.process);
+                CloseHandle(self.thread);
+            }
+        }
+    }
+
+    fn spawn_suspended_cmd() -> SuspendedTestProcess {
+        let mut cmd_buf: Vec<u16> = std::ffi::OsStr::new("cmd.exe /c exit 0")
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut si: STARTUPINFOW = unsafe {
+            // SAFETY: STARTUPINFOW is a plain Win32 struct safe to
+            // zero-initialize; `cb` is set immediately below.
+            std::mem::zeroed()
+        };
+        si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut pi: PROCESS_INFORMATION = unsafe {
+            // SAFETY: PROCESS_INFORMATION is a plain Win32 struct safe to
+            // zero-initialize; populated by CreateProcessW on success.
+            std::mem::zeroed()
+        };
+        let created = unsafe {
+            // SAFETY: `cmd_buf` is null-terminated UTF-16; `si`/`pi` are
+            // valid mutable references. CREATE_SUSPENDED means no
+            // instruction runs before this test explicitly probes/terminates.
+            CreateProcessW(
+                std::ptr::null(),
+                cmd_buf.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                CREATE_SUSPENDED,
+                std::ptr::null(),
+                std::ptr::null(),
+                &si,
+                &mut pi,
+            )
+        };
+        assert_ne!(
+            created,
+            0,
+            "CreateProcessW(cmd.exe) failed; GetLastError={}",
+            unsafe {
+                // SAFETY: GetLastError is a thread-local lookup with no
+                // safety preconditions.
+                GetLastError()
+            }
+        );
+        SuspendedTestProcess {
+            process: pi.hProcess,
+            thread: pi.hThread,
+        }
+    }
+
+    /// Behavior 1: an `Abort`-outcome layer that cannot be independently
+    /// confirmed causes `apply_startup_attestation_gate` to return
+    /// `Err(NonoError::LayerAttestationFailed)` naming
+    /// `MandatoryIntegrityLabel`, the first `LiveTokenOrJobQuery`-probed
+    /// `Abort`-outcome row `decide_from_entries` reaches for `(DirectCli,
+    /// Null)` — the caller terminates the suspended child on `Err`,
+    /// mirroring the existing containment/resource-limit gate idiom this
+    /// function is inserted alongside.
+    ///
+    /// Deterministic (not host-dependent): a null process handle, exactly
+    /// like `crates/nono/src/attestation.rs`'s own
+    /// `integrity_level_probe_on_invalid_handle_returns_layer_attestation_failed`
+    /// test — `OpenProcessToken` always fails against an invalid handle,
+    /// regardless of whether this host's test-runner process happens to
+    /// already be inside a Job Object (Win8+ nested-job hosts are common;
+    /// see `nono::attestation`'s own `in_job_probe_on_current_process_returns_ok`
+    /// finding — a REAL spawned-but-unassigned process is NOT a reliable way
+    /// to force `JobObjectContainment` unconfirmed, since it may silently
+    /// inherit the test runner's own job membership).
+    #[test]
+    fn unconfirmed_abort_outcome_layer_returns_layer_attestation_failed() {
+        let result = apply_startup_attestation_gate(
+            std::ptr::null_mut(),
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            None,
+        );
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, .. }) => {
+                assert_eq!(layer, "MandatoryIntegrityLabel");
+            }
+            other => panic!("expected Err(LayerAttestationFailed), got {other:?}"),
+        }
+    }
+
+    /// Behavior 2: once every `LiveTokenOrJobQuery`-probed row for this arm
+    /// classifies `Confirmed` (a real process assigned to a real Job
+    /// Object), the `ConfiguredOnly`-probed `FirewallRulesEgress` row —
+    /// expected on every `DirectCli` arm — can only ever reach
+    /// `EstablishedNotIndependentlyObservable` (`attestation.rs` module doc
+    /// Deviation 2), so the gate proceeds with a downgraded claim rather
+    /// than aborting: `apply_startup_attestation_gate` returns `Ok(())`.
+    #[test]
+    fn confirmed_live_probes_with_configured_only_row_downgrades_without_aborting() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: CreateJobObjectW with null name + null security
+            // attributes is documented to succeed unless out-of-memory.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both `job` and `child.process` are valid HANDLEs owned
+            // by this test for the duration of this call.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(
+            assigned,
+            0,
+            "AssignProcessToJobObject failed; GetLastError={}",
+            unsafe {
+                // SAFETY: GetLastError is a thread-local lookup.
+                GetLastError()
+            }
+        );
+
+        let result = apply_startup_attestation_gate(
+            child.process,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            Some("117-10-attestation-gate-test-session"),
+        );
+        assert!(
+            result.is_ok(),
+            "expected Ok (ProceedDowngraded via FirewallRulesEgress), got {result:?}"
+        );
+
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+    }
+
+    fn wfp_service_managed_guard() -> NetworkEnforcementGuard {
+        NetworkEnforcementGuard::WfpServiceManaged {
+            policy: Box::new(nono::WindowsNetworkPolicy {
+                mode: nono::WindowsNetworkPolicyMode::Blocked,
+                tcp_connect_ports: vec![],
+                tcp_bind_ports: vec![],
+                localhost_ports: vec![],
+                localhost_port_ranges: vec![],
+                unsupported: vec![],
+                preferred_backend: nono::WindowsNetworkBackendKind::Wfp,
+                active_backend: nono::WindowsNetworkBackendKind::Wfp,
+            }),
+            probe_config: WfpProbeConfig {
+                platform_service: "test-platform-service",
+                backend_service: "test-backend-service",
+                backend_driver: "test-backend-driver",
+                backend_binary_path: PathBuf::from("test-backend.exe"),
+                backend_driver_binary_path: PathBuf::from("test-backend-driver.sys"),
+                backend_service_args: &[],
+            },
+            target_program: PathBuf::from("test.exe"),
+            inbound_rule: "test-inbound".to_string(),
+            outbound_rule: "test-outbound".to_string(),
+        }
+    }
+
+    fn firewall_rules_guard() -> NetworkEnforcementGuard {
+        NetworkEnforcementGuard::FirewallRules {
+            staged_program: PathBuf::from("test.exe"),
+            staged_dir: PathBuf::from("."),
+            inbound_rule: "test-inbound".to_string(),
+            outbound_rule: "test-outbound".to_string(),
+        }
+    }
+
+    /// Behavior 3: `WfpServiceManaged` yields `wfp_preconfirmed: true`.
+    #[test]
+    fn wfp_service_managed_yields_preconfirmed_true() {
+        let guard = wfp_service_managed_guard();
+        assert!(derive_wfp_preconfirmed(Some(&guard)));
+    }
+
+    /// Behavior 3: `FirewallRules` — a different network backend, not a WFP
+    /// enforcing-component report — yields `wfp_preconfirmed: false`.
+    #[test]
+    fn firewall_rules_guard_yields_preconfirmed_false() {
+        let guard = firewall_rules_guard();
+        assert!(!derive_wfp_preconfirmed(Some(&guard)));
+    }
+
+    /// Behavior 3: `None` (no network restriction requested) yields
+    /// `wfp_preconfirmed: false`.
+    #[test]
+    fn no_network_enforcement_yields_preconfirmed_false() {
+        assert!(!derive_wfp_preconfirmed(None));
     }
 }
 

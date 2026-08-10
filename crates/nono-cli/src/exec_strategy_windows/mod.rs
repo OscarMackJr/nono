@@ -297,28 +297,38 @@ enum NetworkEnforcementGuard {
 
 struct PreparedWindowsLaunch {
     // Phase 21: applied-labels guard reverts mandatory-label ACEs on drop.
-    // Declared BEFORE _network_enforcement so Rust's reverse-of-declaration
-    // drop order reverts labels first, then tears down network enforcement.
-    // This matches the Phase 16-02 drop-order discipline (containment_job
-    // outliving the supervisor runtime).
+    //
+    // SC4-2 fix (Phase 117 Plan 10): Rust struct fields drop in FORWARD
+    // declaration order, not last-declared-first as earlier comments in this
+    // struct incorrectly claimed — that rule applies to local variables in a
+    // function body, not struct fields; there is no reverse-drop rule for
+    // struct fields. This struct's fields are declared
+    // labels → dacls → ancestor-traverse → ancestor-read-attrs → network
+    // specifically BECAUSE that ordering already IS the desired drop order:
+    // labels revert first, network enforcement tears down last. Any future
+    // field addition must preserve the desired drop order by placing the new
+    // field top-to-bottom where it should drop, not by relying on a reverse
+    // rule that does not exist for struct fields.
     _applied_labels: labels_guard::AppliedLabelsGuard,
     // WriteRestricted token-arm fix: adds the synthetic per-session SID
     // (config.session_sid) to the DACL of every WRITABLE filesystem grant so
     // confined writes under WRITE_RESTRICTED pass the restricting-SID double
     // check. Declared AFTER _applied_labels but BEFORE _network_enforcement so
-    // reverse-of-declaration drop order revokes the DACL grants together with
-    // the label revert and before network teardown — same lifetime as the
-    // labels guard. `None` when no session SID is set (the grant is only
-    // OPERATIVE on the WriteRestricted arm; inert but harmless elsewhere, and
-    // always reverted on Drop). See dacl_guard.rs for the full rationale.
+    // forward-declaration drop order (see the SC4-2 note above) revokes the
+    // DACL grants together with the label revert and before network teardown
+    // — same lifetime as the labels guard. `None` when no session SID is set
+    // (the grant is only OPERATIVE on the WriteRestricted arm; inert but
+    // harmless elsewhere, and always reverted on Drop). See dacl_guard.rs for
+    // the full rationale.
     _applied_dacls: Option<dacl_guard::AppliedDaclGrantsGuard>,
     // Plan 62-13: grants the per-run package SID FILE_TRAVERSE on the USER-OWNED
     // ancestors of the cwd so the AppContainer child (a different principal) can
     // traverse INTO a profile-deep cwd. The cwd LEAF is covered by _applied_dacls
     // (0x1301BF). `None` when no package SID is set (non-AppContainer arm). Same
     // lifetime as _applied_dacls; reverted on Drop. Declared AFTER _applied_dacls
-    // but BEFORE _network_enforcement so reverse-of-declaration drop order revokes
-    // the ancestor grants together with the leaf grants and before network teardown.
+    // but BEFORE _network_enforcement so forward-declaration drop order (see the
+    // SC4-2 note above) revokes the ancestor grants together with the leaf grants
+    // and before network teardown.
     _applied_ancestor_traverse: Option<dacl_guard::AppliedAncestorTraverseGuard>,
     // Plan 77-01 (CPLT-01): grants the per-run package SID FILE_READ_ATTRIBUTES
     // (0x80) on the USER-OWNED ancestors of the confined TARGET BINARY's resolution
@@ -327,8 +337,9 @@ struct PreparedWindowsLaunch {
     // set (non-AppContainer arm). Walk target is `config.resolved_program` (the
     // confined binary), NOT the cwd — this is the load-bearing distinction from the
     // traverse guard above. Declared AFTER _applied_ancestor_traverse but BEFORE
-    // _network_enforcement so reverse-of-declaration drop order keeps all ancestor
-    // grants in the same lifetime group, all reverted before network teardown.
+    // _network_enforcement so forward-declaration drop order (see the SC4-2 note
+    // above) keeps all ancestor grants in the same lifetime group, all reverted
+    // before network teardown.
     _applied_ancestor_read_attrs: Option<dacl_guard::AppliedAncestorReadAttributesGuard>,
     _network_enforcement: Option<NetworkEnforcementGuard>,
     launch_program: PathBuf,
@@ -869,6 +880,7 @@ pub fn execute_direct(
         None,
         limits,
         session_id,
+        prepared._network_enforcement.as_ref(),
     )?;
     loop {
         if let Some(exit_code) = child.poll_exit_code()? {
@@ -915,10 +927,12 @@ pub fn execute_supervised(
     // Plan 16-02 Step 5 reorders this block so `containment` is created BEFORE
     // `WindowsSupervisorRuntime::initialize`. The runtime borrows
     // `containment.job` for the `--timeout` expiry path; `ProcessContainment`
-    // owns the close-on-drop and must outlive the runtime. Rust drop order is
-    // reverse-of-declaration: with `containment` declared first, the runtime
-    // drops first (its `Drop` does not touch `containment_job`), then
-    // `containment` drops last and calls `CloseHandle` exactly once.
+    // owns the close-on-drop and must outlive the runtime. Unlike struct
+    // fields (see the SC4-2 note on `PreparedWindowsLaunch` above — struct
+    // fields drop in forward declaration order), Rust LOCAL VARIABLES drop
+    // in last-declared-first order: with `containment` declared first, the
+    // runtime drops first (its `Drop` does not touch `containment_job`),
+    // then `containment` drops last and calls `CloseHandle` exactly once.
     let prepared = prepare_live_windows_launch(config, session_id)?;
     let launch_program = prepared.launch_program.as_path();
 
@@ -990,6 +1004,7 @@ pub fn execute_supervised(
         runtime.pty(),
         limits,
         session_id,
+        prepared._network_enforcement.as_ref(),
     )
     .map_err(|err| runtime.startup_failure(err.to_string()))?;
 
