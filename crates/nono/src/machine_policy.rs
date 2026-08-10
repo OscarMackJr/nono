@@ -166,11 +166,37 @@ impl Default for TelemetryConfig {
 /// strings against the CLI-side `LayerId` registry and fail-closed-rejecting
 /// an unrecognized name is Plan 08's responsibility — this module MUST NOT
 /// import `nono-cli`'s `LayerId` type.
+///
+/// # ⚠ NOT YET ENFORCED (Phase 117 review CR-07)
+///
+/// **This control is inert in the shipped build.** No code path populates
+/// this struct from the registry, and both halves of the D-26 tighten-only
+/// union at the one gate call site
+/// (`exec_strategy_windows/launch.rs`'s `apply_startup_attestation_gate`)
+/// are passed empty slices. There is also no `--required-layers` CLI flag.
+/// An administrator who sets `HKLM\SOFTWARE\Policies\nono\RequiredLayers`
+/// therefore gets **no enforcement**.
+///
+/// What DOES exist and is exercised: `attest_and_decide`'s tighten-only
+/// union and its fail-closed rejection of an unrecognized layer name. Only
+/// the plumbing that feeds it real values is missing.
+///
+/// Since this review pass, `parse_policy` at least DETECTS a configured
+/// `RequiredLayers` sub-key and emits a loud
+/// `RequiredLayersNotEnforced` warning naming every layer it found, so the
+/// control is no longer *silently* ignored. Wiring it through to the gate is
+/// deliberately left open: it needs an operator decision on where the
+/// already-read machine policy is carried to the Windows launch path
+/// (`ExecConfig`? a new parameter on `execute_direct`/`execute_supervised`?)
+/// and an acceptance that a fleet registry key can then refuse launches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RequiredLayersPolicy {
     /// Layer name strings (validated against the CLI-side `LayerId`
     /// registry by Plan 08) that this machine's policy requires to be
     /// confirmed active at startup attestation, fleet-wide.
+    ///
+    /// **Always empty in the shipped build** — see the type-level
+    /// NOT-YET-ENFORCED note above.
     #[serde(default)]
     pub required: Vec<String>,
 }
@@ -647,6 +673,40 @@ mod windows_reader {
         }
     }
 
+    /// Phase 117 review CR-07: detect a configured `RequiredLayers` sub-key
+    /// and warn loudly that it is not enforced by this build.
+    ///
+    /// Returns `RequiredLayersPolicy::default()` unconditionally — populating
+    /// it would be a second kind of silent drop, because nothing downstream
+    /// reads it and `read_machine_egress_policy`'s "configured content" gate
+    /// keys on egress entries only. The point of this function is the
+    /// warning, not the value.
+    fn warn_if_required_layers_configured(key: &RegKey) -> RequiredLayersPolicy {
+        match read_list_subkey(key, "RequiredLayers") {
+            Ok(names) if names.is_empty() => {}
+            Ok(names) => {
+                eprintln!(
+                    "[nono] RequiredLayersNotEnforced: HKLM\\SOFTWARE\\Policies\\nono\\\
+                     RequiredLayers configures {} layer(s) ({}) but THIS BUILD DOES NOT \
+                     ENFORCE THEM. Startup self-attestation still applies every layer's own \
+                     per-row contract; the machine-policy tighten-only union is not wired to \
+                     the launch gate. Do not rely on this key for fleet enforcement.",
+                    names.len(),
+                    names.join(", ")
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "[nono] RequiredLayersNotEnforced: HKLM\\SOFTWARE\\Policies\\nono\\\
+                     RequiredLayers is present but unreadable ({e}); treating as absent \
+                     (degrade-not-abort, D-26). Note that this key is NOT ENFORCED by this \
+                     build in any case."
+                );
+            }
+        }
+        RequiredLayersPolicy::default()
+    }
+
     /// Inner parser: read all sub-keys from an already-opened policy `RegKey`.
     pub(super) fn parse_policy(key: &RegKey) -> std::result::Result<MachineEgressPolicy, String> {
         let allowed_suffixes = read_list_subkey(key, "AllowedSuffixes")?;
@@ -655,11 +715,18 @@ mod windows_reader {
         // D-12: read telemetry sub-section in the same registry open.
         // D-14: malformed telemetry degrades; only egress errors abort (D-07).
         let telemetry = parse_telemetry_config(key);
-        // Phase 117 D-26: no RequiredLayers sub-key reader exists yet (Plan 08
-        // wires the CLI-side consumer); default to "nothing additionally
-        // required" until that lands, consistent with the degrade-not-abort
-        // lifecycle documented on `RequiredLayersPolicy`.
-        let required_layers = RequiredLayersPolicy::default();
+        // Phase 117 review CR-07: the `RequiredLayers` sub-key is still not
+        // ENFORCED (nothing consumes `required_layers` — see the
+        // NOT-YET-ENFORCED note on `RequiredLayersPolicy`), but it is no
+        // longer *silently* ignored. An administrator who configures the
+        // documented fleet control now gets a loud warning naming exactly
+        // what was found and stating plainly that it is not applied, instead
+        // of a control that reads as working and does nothing.
+        //
+        // Degrade-not-abort (D-26, mirroring `parse_telemetry_config`): an
+        // unreadable/malformed sub-key warns and is treated as absent — a
+        // single admin typo must not brick every confined launch fleet-wide.
+        let required_layers = warn_if_required_layers_configured(key);
         let policy = MachineEgressPolicy {
             allowed_suffixes,
             allowed_hosts,
