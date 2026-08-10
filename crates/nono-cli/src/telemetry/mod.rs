@@ -418,7 +418,10 @@ impl SecurityEventLayer {
     #[must_use = "AUD-04: Err means the audit record was not committed — callers MUST \
                   surface the downgrade to the operator through the banner even if this \
                   call fails, never silently proceed"]
-    pub fn emit_attestation_event(&self, downgraded_layers: &[&str]) -> Result<String, &'static str> {
+    pub fn emit_attestation_event(
+        &self,
+        downgraded_layers: &[&str],
+    ) -> Result<String, &'static str> {
         let mut inner = self.inner.lock().map_err(|_| "mutex poisoned")?;
 
         let timestamp_unix_ms = SystemTime::now()

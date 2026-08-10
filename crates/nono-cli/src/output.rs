@@ -5,6 +5,8 @@
 //! All colors are drawn from the active theme via `theme::current()`.
 
 use crate::command_display::format_command_line;
+#[cfg(target_os = "windows")]
+use crate::state_paths;
 use crate::theme::{self, badge, fg, Rgb};
 use colored::Colorize;
 use nono::{AccessMode, CapabilitySet, NetworkMode, NonoError, Result};
@@ -43,6 +45,154 @@ pub fn print_banner(silent: bool) {
         theme::fg("nono", t.brand).bold(),
         theme::fg(&format!("v{version}"), t.subtext),
     );
+}
+
+// ---------------------------------------------------------------------------
+// Startup self-attestation downgrade banner (Phase 117 CINT-02, D-27)
+// ---------------------------------------------------------------------------
+
+/// Print a coarse, arm-independent notice that a startup self-attestation
+/// pass could not fully confirm one or more confinement layers (D-27's
+/// human-visible channel; the other two channels — a typed
+/// `NonoDiagnosticCode` and a `SecurityEventLayer` event — are Plans 02/09's
+/// other artifacts, wired at the Plan 10/11 gate points).
+///
+/// Deliberately takes no `silent` parameter — a downgraded confinement claim
+/// must reach the operator unconditionally (Warning-8, checker pass 2).
+/// `--silent` suppresses routine/informational output (the version banner,
+/// capability summaries); it must NOT suppress a security-relevant notice
+/// that a confinement guarantee was not fully confirmed.
+///
+/// Deduplicates per session, not per spawn — the FIRST occurrence of a given
+/// `dedup_key` for a given `session_id` always prints; only an identical
+/// repeat within the same session is suppressed, closing the per-tool-call
+/// noise the hook path (`claude_code_hook.rs` re-enters the direct spawn
+/// path on every tool call) would otherwise produce (Item-2, checker pass
+/// 3). This is a content-addressed marker, not a silence switch — a
+/// marker-write failure defaults to printing again next time, never to
+/// silently suppressing more than intended.
+///
+/// `dedup_key` is an opaque `&str` this function never parses or displays,
+/// only hashes — the caller (which already has the layer identity type in
+/// scope) computes the sorted, comma-joined dedup key string and passes it
+/// in; this module deliberately never imports that type (mechanically
+/// verifiable — see the acceptance criterion this doc comment must not
+/// itself trip).
+///
+/// This wording is identical on every entry path/token arm — deliberately
+/// not special-cased per-arm, because verifying per-arm console-sharing
+/// safety (whether the confined child shares this console) has not been
+/// independently verified — see `117-VALIDATION.md`'s D-31 list. No
+/// per-layer identifier or specific mechanism name ever appears in this
+/// function's output (D-28); that detail is reserved for the operator's
+/// diagnostic and audit-event channels.
+///
+/// `#[cfg(target_os = "windows")]`: CINT-02 is a Windows-only self-attestation
+/// pass (D-09); mirrors `format_scope_status`'s Linux-only gating shape
+/// (`crates/nono-cli/src/output.rs`, this file) rather than compiling a
+/// perpetually-uncalled function on platforms with no attestation caller.
+#[cfg(target_os = "windows")]
+pub fn print_attestation_downgrade_banner(
+    downgraded_count: usize,
+    session_id: Option<&str>,
+    dedup_key: &str,
+) {
+    if downgraded_count == 0 {
+        return;
+    }
+
+    let marker_path = session_id.and_then(|id| attestation_downgrade_marker_path(id, dedup_key));
+
+    if let Some(path) = &marker_path {
+        if path.exists() {
+            // Already announced this exact downgraded-layer-set this
+            // session — an identical repeat, not a first occurrence.
+            return;
+        }
+    }
+
+    let t = theme::current();
+    eprintln!(
+        "  {}",
+        theme::fg(
+            &format!(
+                "{downgraded_count} confinement layer(s) could not be fully confirmed at \
+                 startup — see diagnostic output for details"
+            ),
+            attestation_downgrade_color(downgraded_count, t),
+        )
+    );
+
+    // Best-effort "already announced" marker (Item-2 dedup). Any I/O failure
+    // here is logged and otherwise ignored — it can only cause an extra
+    // repeat print next time, never a suppressed first occurrence, and it
+    // must never prevent or undo the print that already happened above.
+    if let Some(path) = marker_path {
+        if let Some(parent) = path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::debug!(
+                    "attestation-downgrade dedup marker directory create failed \
+                     (non-fatal, banner will re-print next time): {e}"
+                );
+                return;
+            }
+        }
+        if let Err(e) = std::fs::write(&path, []) {
+            tracing::debug!(
+                "attestation-downgrade dedup marker write failed \
+                 (non-fatal, banner will re-print next time): {e}"
+            );
+        }
+    }
+}
+
+/// Compute the per-session, content-addressed dedup marker path for
+/// [`print_attestation_downgrade_banner`], or `None` when the session
+/// directory root cannot be resolved (defaults to "not yet announced" —
+/// erring toward MORE visibility, never less, per this function's own
+/// doc comment).
+///
+/// `dedup_key` is hashed via `std::hash::DefaultHasher` (std-only, no new
+/// dependency) rather than stored verbatim — this function, like its
+/// caller, never inspects or displays the key's contents.
+#[cfg(target_os = "windows")]
+fn attestation_downgrade_marker_path(
+    session_id: &str,
+    dedup_key: &str,
+) -> Option<std::path::PathBuf> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    dedup_key.hash(&mut hasher);
+    let key_hex = format!("{:016x}", hasher.finish());
+
+    match state_paths::sessions_dir() {
+        Ok(dir) => Some(
+            dir.join(session_id)
+                .join("attestation-downgrade")
+                .join(key_hex),
+        ),
+        Err(e) => {
+            tracing::debug!(
+                "attestation-downgrade dedup: sessions_dir unavailable, \
+                 defaulting to always-print: {e}"
+            );
+            None
+        }
+    }
+}
+
+/// Color for [`print_attestation_downgrade_banner`]'s line — yellow/warning
+/// when `downgraded_count > 0`, else the neutral subtext color (mirrors
+/// `scope_status_color`'s shape, `crates/nono-cli/src/output.rs:503`).
+#[cfg(target_os = "windows")]
+#[must_use]
+pub fn attestation_downgrade_color(downgraded_count: usize, t: &theme::Theme) -> Rgb {
+    if downgraded_count > 0 {
+        t.yellow
+    } else {
+        t.subtext
+    }
 }
 
 // ---------------------------------------------------------------------------
