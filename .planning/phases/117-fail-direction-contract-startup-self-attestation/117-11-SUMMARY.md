@@ -127,6 +127,14 @@ None. The gate is fully wired: real env-var read, real `nono::attestation::probe
 - `proj/SPEC-windows-fail-direction-contract.md`'s existing `nono-shell-broker/src/main.rs` line citations (e.g. `:615-644`, `:322-336`, `:536-556`) have shifted due to this plan's ~260 added lines; this is expected and out of this plan's scope (`files_modified` is `main.rs` only) — the SPEC's own Broker-arm latency row is already explicitly marked `TBD — measured in Plan 117-12`, so Plan 12 is the intended place to refresh these citations alongside the latency measurement. `layer_registry_selfcheck.rs`'s `registry_call_sites_exist` test only validates file existence, not line-range accuracy, so this does not fail CI in the interim.
 - Ready for Plan 12 (latency budget measurement, D-24) and for the phase's overall SC2 (every confined-child path gated) sign-off.
 
+## Self-Check: PASSED
+
+- FOUND: `crates/nono-shell-broker/src/main.rs`
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-11-SUMMARY.md`
+- FOUND: commit `47017085` (Task 1: feat)
+- FOUND: commit `24479817` (docs: SUMMARY)
+- CONFIRMED: `.planning/STATE.md` and `.planning/ROADMAP.md` untouched by this plan's commits
+
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
