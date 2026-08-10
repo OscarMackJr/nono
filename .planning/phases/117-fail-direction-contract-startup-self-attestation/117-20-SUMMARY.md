@@ -125,3 +125,13 @@ None - no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono/src/sandbox/windows.rs
+- FOUND: crates/nono/src/lib.rs
+- FOUND: crates/nono-cli/src/exec_strategy_windows/labels_guard.rs
+- FOUND: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-20-SUMMARY.md
+- FOUND commit: bf7157b9 (Task 1)
+- FOUND commit: 59d83e52 (Task 2)
+- FOUND commit: e1ecf890 (docs: complete plan)
