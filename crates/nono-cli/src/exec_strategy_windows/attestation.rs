@@ -95,7 +95,7 @@
 use super::launch::WindowsTokenArm;
 use super::layer_registry;
 use nono::attestation::{
-    probe_app_container_sid, probe_in_job, probe_integrity_level, probe_restricted_sids,
+    probe_app_container_sid, probe_in_job, probe_integrity_level, probe_restricted_sids, JobHandle,
     LayerAttestationStatus, ProcessHandle,
 };
 use nono::NonoError;
@@ -151,6 +151,13 @@ pub(crate) struct AttestationInput<'a> {
     /// D-21: the real suspended child's process handle, opened by the
     /// caller. This module never opens its own handle (D-19).
     pub child_process: ProcessHandle,
+    /// Phase 117 review CR-02: the supervisor's OWN containment Job Object
+    /// handle (`ProcessContainment::job`), so `LayerId::JobObjectContainment`
+    /// asks "is the child in THIS job" rather than the vacuous "is it in ANY
+    /// job". A null handle is rejected fail-closed inside
+    /// [`nono::attestation::probe_in_job`], never silently downgraded to the
+    /// ANY-job query.
+    pub containment_job: JobHandle,
     /// Which binary is spawning the process being attested.
     ///
     /// **This function is never called with `EntryPath::Broker`.** Rows
@@ -251,13 +258,18 @@ fn classify_probe_outcome<T: ProbePositivity>(result: nono::Result<T>) -> LayerA
 /// panicking or silently mis-classifying.
 fn classify_live_probe(
     id: layer_registry::LayerId,
-    process: ProcessHandle,
+    input: &AttestationInput,
 ) -> LayerAttestationStatus {
     use layer_registry::LayerId;
 
+    let process = input.child_process;
     match id {
         LayerId::RestrictedToken => classify_probe_outcome(probe_restricted_sids(process)),
-        LayerId::JobObjectContainment => classify_probe_outcome(probe_in_job(process)),
+        // CR-02: probed against the supervisor's OWN containment job, not
+        // the vacuous "in ANY job" query a null handle would ask.
+        LayerId::JobObjectContainment => {
+            classify_probe_outcome(probe_in_job(process, input.containment_job))
+        }
         LayerId::AppContainerProfile => classify_probe_outcome(probe_app_container_sid(process)),
         LayerId::MandatoryIntegrityLabel => match probe_integrity_level(process) {
             // The integrity-level RID has no "successful-but-negative"
@@ -314,9 +326,7 @@ fn classify_row(
     }
 
     match entry.probe {
-        layer_registry::ProbeKind::LiveTokenOrJobQuery => {
-            classify_live_probe(entry.id, input.child_process)
-        }
+        layer_registry::ProbeKind::LiveTokenOrJobQuery => classify_live_probe(entry.id, input),
         layer_registry::ProbeKind::ConfirmedByEnforcingComponentReport => {
             // Open Question 1's resolution: a report FROM the enforcing
             // component (already fail-closed pre-spawn), never re-probed
@@ -525,6 +535,16 @@ fn dummy_process() -> ProcessHandle {
     std::ptr::null_mut()
 }
 
+/// CR-02: the synthetic-registry policy tests never exercise a live probe
+/// (their rows are `ConfiguredOnly`/`ConfirmedByEnforcingComponentReport`),
+/// so a null job handle is correct here — and if a future edit accidentally
+/// routes one of them through `probe_in_job`, the null handle now fails
+/// CLOSED (`Unconfirmed`) rather than silently confirming.
+#[cfg(test)]
+fn dummy_job() -> JobHandle {
+    std::ptr::null_mut()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -640,6 +660,7 @@ mod tests {
         }];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -674,6 +695,7 @@ mod tests {
         }];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -711,6 +733,7 @@ mod tests {
         }];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -755,6 +778,7 @@ mod tests {
         ];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -810,6 +834,7 @@ mod tests {
         ];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: true,
@@ -827,6 +852,7 @@ mod tests {
         let overrides = vec!["NotARealLayer".to_string()];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: layer_registry::EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -847,6 +873,7 @@ mod tests {
         let machine_required = vec!["AlsoNotReal".to_string()];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: layer_registry::EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -865,6 +892,7 @@ mod tests {
         let overrides = vec![format!("{:?}", LayerId::RestrictedToken)];
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: layer_registry::EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -905,6 +933,7 @@ mod registry_tests {
             .expect("RestrictedToken row must exist");
         let input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::Null),
             wfp_preconfirmed: false,
@@ -935,6 +964,7 @@ mod registry_tests {
         ] {
             let input = AttestationInput {
                 child_process: dummy_process(),
+                containment_job: dummy_job(),
                 entry_path: EntryPath::DirectCli,
                 token_arm: Some(arm),
                 wfp_preconfirmed: false,
@@ -962,6 +992,7 @@ mod registry_tests {
         // (Daemon, None) per PACKAGE_SID_SCOPED_EXPECTANCY.
         let confirmed_input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::Daemon,
             token_arm: None,
             wfp_preconfirmed: true,
@@ -975,6 +1006,7 @@ mod registry_tests {
 
         let unconfirmed_input = AttestationInput {
             child_process: dummy_process(),
+            containment_job: dummy_job(),
             entry_path: EntryPath::Daemon,
             token_arm: None,
             wfp_preconfirmed: false,
@@ -1003,6 +1035,7 @@ mod registry_tests {
         ] {
             let input = AttestationInput {
                 child_process: dummy_process(),
+                containment_job: dummy_job(),
                 entry_path,
                 token_arm,
                 wfp_preconfirmed: false,
@@ -1115,8 +1148,21 @@ mod latency_measurement {
         // valid pseudo-handle for the calling process; safe to call
         // unconditionally.
         let real_process: ProcessHandle = unsafe { GetCurrentProcess() };
+        // CR-02: a REAL job handle, so the measurement covers the real
+        // `IsProcessInJob(process, job)` call rather than the null-job
+        // fail-closed early return.
+        let real_job: JobHandle = unsafe {
+            // SAFETY: null security attributes + null name creates an
+            // unnamed job object owned by this process.
+            windows_sys::Win32::System::JobObjects::CreateJobObjectW(
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        assert!(!real_job.is_null(), "CreateJobObjectW failed in test setup");
         let input = AttestationInput {
             child_process: real_process,
+            containment_job: real_job,
             entry_path: EntryPath::DirectCli,
             token_arm: Some(WindowsTokenArm::WriteRestricted),
             wfp_preconfirmed: false,
@@ -1126,6 +1172,11 @@ mod latency_measurement {
         let start = std::time::Instant::now();
         let _ = attest_and_decide(input);
         let elapsed = start.elapsed();
+        unsafe {
+            // SAFETY: `real_job` is the live handle created above and is not
+            // referenced after this point.
+            windows_sys::Win32::Foundation::CloseHandle(real_job);
+        }
         eprintln!(
             "D-24 measured attest_and_decide cost (EntryPath::DirectCli, \
              WindowsTokenArm::WriteRestricted, real GetCurrentProcess() handle): {elapsed:?}"

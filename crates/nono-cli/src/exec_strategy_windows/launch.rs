@@ -1434,6 +1434,7 @@ pub(super) fn select_windows_token_arm(
 /// function is inserted alongside.
 fn apply_startup_attestation_gate(
     process: HANDLE,
+    containment_job: HANDLE,
     entry_path: layer_registry::EntryPath,
     token_arm: Option<WindowsTokenArm>,
     wfp_preconfirmed: bool,
@@ -1441,6 +1442,10 @@ fn apply_startup_attestation_gate(
 ) -> Result<()> {
     let input = attestation::AttestationInput {
         child_process: process,
+        // Phase 117 review CR-02: the supervisor's own containment job, so
+        // `JobObjectContainment` asks "is the child in THIS job" rather than
+        // the vacuous "in ANY job" a null handle would ask.
+        containment_job,
         entry_path,
         token_arm,
         wfp_preconfirmed,
@@ -2366,6 +2371,7 @@ pub(super) fn spawn_windows_child(
     let wfp_preconfirmed = derive_wfp_preconfirmed(network_enforcement);
     if let Err(err) = apply_startup_attestation_gate(
         process.raw(),
+        containment.job,
         layer_registry::EntryPath::DirectCli,
         Some(arm),
         wfp_preconfirmed,
@@ -3265,27 +3271,76 @@ mod attestation_gate_tests {
     /// Deterministic (not host-dependent): a null process handle, exactly
     /// like `crates/nono/src/attestation.rs`'s own
     /// `integrity_level_probe_on_invalid_handle_returns_layer_attestation_failed`
-    /// test — `OpenProcessToken` always fails against an invalid handle,
-    /// regardless of whether this host's test-runner process happens to
-    /// already be inside a Job Object (Win8+ nested-job hosts are common;
-    /// see `nono::attestation`'s own `in_job_probe_on_current_process_returns_ok`
-    /// finding — a REAL spawned-but-unassigned process is NOT a reliable way
-    /// to force `JobObjectContainment` unconfirmed, since it may silently
-    /// inherit the test runner's own job membership).
+    /// test — `OpenProcessToken` always fails against an invalid handle.
     #[test]
     fn unconfirmed_abort_outcome_layer_returns_layer_attestation_failed() {
+        let job: HANDLE = unsafe {
+            // SAFETY: CreateJobObjectW with null name + null security
+            // attributes is documented to succeed unless out-of-memory.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
         let result = apply_startup_attestation_gate(
             std::ptr::null_mut(),
+            job,
             layer_registry::EntryPath::DirectCli,
             Some(WindowsTokenArm::Null),
             false,
             None,
         );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
         match result {
             Err(NonoError::LayerAttestationFailed { layer, .. }) => {
                 assert_eq!(layer, "MandatoryIntegrityLabel");
             }
             other => panic!("expected Err(LayerAttestationFailed), got {other:?}"),
+        }
+    }
+
+    /// Phase 117 review CR-02 non-vacuity proof at the GATE level: a real,
+    /// live suspended child that was never assigned to the supervisor's
+    /// containment job must abort naming `JobObjectContainment`.
+    ///
+    /// The pre-fix probe passed a null job handle ("is this process in ANY
+    /// job") and — as the executor's own removed comment recorded — a
+    /// spawned-but-unassigned child silently inherits the test runner's job
+    /// membership on Win8+ nested-job hosts, so this abort was structurally
+    /// unreachable. It is reachable now because the probe names the job.
+    #[test]
+    fn live_child_not_in_the_containment_job_aborts_naming_job_object_containment() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        // NOTE: deliberately NOT calling AssignProcessToJobObject.
+        let result = apply_startup_attestation_gate(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, .. }) => {
+                assert_eq!(
+                    layer, "JobObjectContainment",
+                    "a live child outside the named containment job must fail THIS layer"
+                );
+            }
+            other => panic!(
+                "expected Err(LayerAttestationFailed{{JobObjectContainment}}) for a child that \
+                 was never assigned to the named job, got {other:?}"
+            ),
         }
     }
 
@@ -3322,6 +3377,7 @@ mod attestation_gate_tests {
 
         let result = apply_startup_attestation_gate(
             child.process,
+            job,
             layer_registry::EntryPath::DirectCli,
             Some(WindowsTokenArm::Null),
             false,

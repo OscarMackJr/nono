@@ -869,7 +869,7 @@ mod windows_impl {
         // `HANDLE` is `Copy`) was already moved into `tenant` above — this
         // probes the real suspended child before its first instruction ever
         // runs (D-21), exactly like step 6/6.5/6.6's fail-secure gates.
-        match daemon_attest_and_decide(process_handle_raw) {
+        match daemon_attest_and_decide(process_handle_raw, job_raw_owned) {
             DaemonAttestationDecision::Proceed => {}
             DaemonAttestationDecision::ProceedDowngraded { downgraded } => {
                 let mut names: Vec<String> = downgraded.iter().map(|s| (*s).to_string()).collect();
@@ -1312,7 +1312,7 @@ mod windows_impl {
     /// here as a follow-up candidate for `layer_registry.rs`'s own
     /// expectancy matrix, not fixed in this plan, which does not modify
     /// that file.)
-    fn daemon_attest_and_decide(process: HANDLE) -> DaemonAttestationDecision {
+    fn daemon_attest_and_decide(process: HANDLE, job: HANDLE) -> DaemonAttestationDecision {
         use nono::attestation::{probe_app_container_sid, probe_in_job, LayerAttestationStatus};
 
         let app_container_confirmed = matches!(probe_app_container_sid(process), Ok(Some(_)));
@@ -1323,7 +1323,10 @@ mod windows_impl {
             };
         }
 
-        let job_confirmed = matches!(probe_in_job(process), Ok(true));
+        // Phase 117 review CR-02: probed against the daemon's OWN agent job
+        // handle, not the vacuous "is this process in ANY job" query a null
+        // handle would ask (a Win8+ nested-job host makes that always true).
+        let job_confirmed = matches!(probe_in_job(process, job), Ok(true));
         if !job_confirmed {
             return DaemonAttestationDecision::Abort {
                 layer: "JobObjectContainment",
@@ -1736,7 +1739,15 @@ mod windows_impl {
         /// always fails against an invalid process handle.
         #[test]
         fn null_handle_aborts_on_app_container_profile() {
-            let decision = daemon_attest_and_decide(std::ptr::null_mut());
+            let job: HANDLE = unsafe {
+                // SAFETY: CreateJobObjectW with null name + null security
+                // attributes is documented to succeed unless out-of-memory.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+            let decision = daemon_attest_and_decide(std::ptr::null_mut(), job);
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            unsafe { CloseHandle(job) };
             match decision {
                 DaemonAttestationDecision::Abort { layer, .. } => {
                     assert_eq!(layer, "AppContainerProfile");
@@ -1784,7 +1795,7 @@ mod windows_impl {
             };
             assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
 
-            let decision = daemon_attest_and_decide(process);
+            let decision = daemon_attest_and_decide(process, job);
 
             // SAFETY: `process`/`thread`/`job` are all valid HANDLEs this test
             // owns; the suspended process is never resumed, only probed then
@@ -1811,6 +1822,65 @@ mod windows_impl {
             }
         }
 
+        /// Phase 117 review CR-02 non-vacuity proof on the DAEMON mirror: the
+        /// same real AppContainer-confined suspended child, this time NEVER
+        /// assigned to the job handle passed to the gate, must abort naming
+        /// `JobObjectContainment`.
+        ///
+        /// Before CR-02 the daemon probed with a null job handle ("in ANY
+        /// job"), which on a Win8+ nested-job host answers `true` for a child
+        /// that inherited the test runner's own job — this abort was
+        /// structurally unreachable.
+        #[test]
+        fn real_appcontainer_process_outside_the_named_job_aborts_on_job_containment() {
+            let tenant_id = generate_tenant_id().expect("generate_tenant_id");
+            let profile_name = format!("nono.gatetestnojob.{}", &tenant_id[..16]);
+            let profile = nono::create_app_container_profile(&profile_name)
+                .expect("create_app_container_profile");
+            let owned_sid =
+                nono::derive_app_container_sid(&profile_name).expect("derive_app_container_sid");
+            let psid: PSID = owned_sid.as_psid();
+
+            let (process, thread) = spawn_appcontainer_process_suspended(
+                std::path::Path::new(r"C:\Windows\System32\cmd.exe"),
+                &["/c".to_string(), "exit".to_string(), "0".to_string()],
+                psid,
+            )
+            .expect("spawn_appcontainer_process_suspended");
+
+            let job: HANDLE = unsafe {
+                // SAFETY: see above.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!job.is_null(), "CreateJobObjectW failed");
+            // NOTE: deliberately NOT calling AssignProcessToJobObject.
+
+            let decision = daemon_attest_and_decide(process, job);
+
+            // SAFETY: all three are valid HANDLEs this test owns; the
+            // suspended process is never resumed, only probed then torn down.
+            unsafe {
+                let _ = TerminateProcess(process, 1);
+                CloseHandle(process);
+                CloseHandle(thread);
+                CloseHandle(job);
+            }
+            drop(profile);
+
+            match decision {
+                DaemonAttestationDecision::Abort { layer, .. } => {
+                    assert_eq!(
+                        layer, "JobObjectContainment",
+                        "a child outside the named job must fail THIS layer"
+                    );
+                }
+                other => panic!(
+                    "expected Abort{{JobObjectContainment}} for a child never assigned to the \
+                     named job, got {other:?}"
+                ),
+            }
+        }
+
         /// Phase 117-12 (D-24): measures `daemon_attest_and_decide`'s real
         /// wall-clock cost against a real process handle (`GetCurrentProcess()`
         /// — a valid pseudo-handle, not `real_appcontainer_job_process_
@@ -1825,9 +1895,19 @@ mod windows_impl {
         #[test]
         fn daemon_attest_and_decide_latency() {
             let real_process: HANDLE = unsafe { GetCurrentProcess() };
+            // CR-02: a REAL job handle, so the measurement covers the real
+            // `IsProcessInJob(process, job)` call rather than the null-job
+            // fail-closed early return.
+            let real_job: HANDLE = unsafe {
+                // SAFETY: see above.
+                CreateJobObjectW(std::ptr::null(), std::ptr::null())
+            };
+            assert!(!real_job.is_null(), "CreateJobObjectW failed");
             let start = std::time::Instant::now();
-            let _ = daemon_attest_and_decide(real_process);
+            let _ = daemon_attest_and_decide(real_process, real_job);
             let elapsed = start.elapsed();
+            // SAFETY: `real_job` is a valid HANDLE this test owns.
+            unsafe { CloseHandle(real_job) };
             eprintln!(
                 "D-24 measured daemon_attest_and_decide cost (real GetCurrentProcess() handle): \
                  {elapsed:?}"

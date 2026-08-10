@@ -52,6 +52,17 @@ pub type ProcessHandle = windows_sys::Win32::Foundation::HANDLE;
 #[cfg(not(target_os = "windows"))]
 pub type ProcessHandle = ();
 
+/// Handle to a specific Job Object, passed to [`probe_in_job`] so the probe
+/// asks "is this process in **THIS** job" rather than the vacuous "is this
+/// process in ANY job" (Phase 117 review CR-02). Same platform-neutrality
+/// rationale as [`ProcessHandle`].
+#[cfg(target_os = "windows")]
+pub type JobHandle = windows_sys::Win32::Foundation::HANDLE;
+
+/// Non-Windows stub (D-11).
+#[cfg(not(target_os = "windows"))]
+pub type JobHandle = ();
+
 /// Result of attesting one confinement layer against a real spawned child
 /// (D-18).
 ///
@@ -228,36 +239,60 @@ pub fn probe_integrity_level(process: ProcessHandle) -> Result<u32> {
     }
 }
 
-/// Queries whether the target process is a member of any Job Object via
-/// `IsProcessInJob` — promotes the call from test-only usage
-/// (`exec_strategy_windows/launch.rs`'s `broker_dispatch_tests`) to
-/// production, generalized to accept any external process handle (D-17,
-/// D-19). No job handle argument is required: a null job handle queries "is
-/// this process in ANY job", which is what the D-21 attestation gate needs.
+/// Queries whether the target process is a member of the **specific** Job
+/// Object named by `job`, via `IsProcessInJob` — promotes the call from
+/// test-only usage (`exec_strategy_windows/launch.rs`'s
+/// `broker_dispatch_tests`) to production, generalized to accept any
+/// external process handle (D-17, D-19).
+///
+/// # Why `job` is mandatory (Phase 117 review CR-02)
+///
+/// The original signature passed a **null** job handle, which asks Windows
+/// "is this process in ANY job". On Windows 8+ nested-job hosts (shells,
+/// terminals, CI harnesses) a child inherits its parent's job membership, so
+/// a process that was never assigned to the supervisor's containment job
+/// still answered `true`. The probe could therefore only ever say yes, and
+/// its `Confirmed` classification carried no information. Requiring the
+/// caller to name the job it actually created makes the negative answer
+/// reachable: a process the supervisor failed to assign is NOT in that job
+/// and the probe returns `Ok(false)`.
+///
+/// A null/invalid `job` is rejected as an error rather than silently
+/// restoring the "ANY job" behaviour — fail-closed, so the vacuous form is
+/// not reachable by accident.
 ///
 /// # Errors
 ///
-/// Returns [`NonoError::LayerAttestationFailed`] if the `IsProcessInJob`
-/// call itself fails — fail-closed.
+/// Returns [`NonoError::LayerAttestationFailed`] if `job` is null, or if the
+/// `IsProcessInJob` call itself fails — fail-closed.
 ///
-/// The function is `safe` because `process` is only ever passed to
+/// The function is `safe` because `process`/`job` are only ever passed to
 /// `IsProcessInJob`, whose own unsafe contract is documented at its call
-/// site inside this function; the caller-owned handle is never dereferenced
-/// as a Rust reference or pointer arithmetic target.
+/// site inside this function; the caller-owned handles are never
+/// dereferenced as a Rust reference or pointer arithmetic target.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn probe_in_job(process: ProcessHandle) -> Result<bool> {
+pub fn probe_in_job(process: ProcessHandle, job: JobHandle) -> Result<bool> {
     #[cfg(target_os = "windows")]
     {
-        use windows_sys::Win32::Foundation::{GetLastError, BOOL};
+        use windows_sys::Win32::Foundation::{GetLastError, BOOL, INVALID_HANDLE_VALUE};
         use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+
+        if job.is_null() || job == INVALID_HANDLE_VALUE {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "JobObjectContainment".to_string(),
+                reason: "no containment job handle supplied — refusing to fall back to the \
+                         vacuous \"is this process in ANY job\" query (fail-closed)"
+                    .to_string(),
+            });
+        }
 
         let mut in_job: BOOL = 0;
         let ok = unsafe {
-            // SAFETY: `process` is a caller-owned, already-open process
-            // handle; a null job handle queries "in ANY job" per the
-            // documented `IsProcessInJob` contract; `in_job` is a valid
-            // out-pointer.
-            IsProcessInJob(process, std::ptr::null_mut(), &mut in_job)
+            // SAFETY: `process` and `job` are caller-owned, already-open
+            // handles; `in_job` is a valid out-pointer. Naming a concrete
+            // job asks "is this process in THIS job", per the documented
+            // `IsProcessInJob` contract.
+            IsProcessInJob(process, job, &mut in_job)
         };
         if ok == 0 {
             let gle = unsafe { GetLastError() };
@@ -271,11 +306,13 @@ pub fn probe_in_job(process: ProcessHandle) -> Result<bool> {
 
     #[cfg(not(target_os = "windows"))]
     {
-        // `process` is unit (`()`) off Windows (D-11); this binding exists
-        // solely to mark the parameter as used, since it is a genuine,
-        // referenced argument on the Windows branch above.
+        // `process`/`job` are unit (`()`) off Windows (D-11); these bindings
+        // exist solely to mark the parameters as used, since they are
+        // genuine, referenced arguments on the Windows branch above.
         #[allow(clippy::let_unit_value)]
         let _ = process;
+        #[allow(clippy::let_unit_value)]
+        let _ = job;
         Err(NonoError::UnsupportedPlatform(
             "attestation probes are Windows-only".to_string(),
         ))
@@ -624,7 +661,96 @@ mod tests {
 #[cfg(all(test, target_os = "windows"))]
 mod windows_probe_tests {
     use super::*;
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    /// RAII wrapper over a real, unnamed Job Object created for one test.
+    struct TestJob(HANDLE);
+
+    impl TestJob {
+        fn create() -> Self {
+            use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
+            // SAFETY: null security attributes + null name creates an
+            // unnamed job object owned by this process.
+            let h = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            assert!(!h.is_null(), "CreateJobObjectW failed in test setup");
+            Self(h)
+        }
+
+        fn raw(&self) -> HANDLE {
+            self.0
+        }
+    }
+
+    impl Drop for TestJob {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is a live handle this struct owns.
+            unsafe { CloseHandle(self.0) };
+        }
+    }
+
+    /// RAII wrapper over a real `CREATE_SUSPENDED` child that is terminated
+    /// (never resumed) on drop — the same shape the D-21 gate observes.
+    struct SuspendedChild {
+        process: HANDLE,
+        thread: HANDLE,
+    }
+
+    impl SuspendedChild {
+        fn spawn() -> Self {
+            use windows_sys::Win32::System::Threading::{
+                CreateProcessW, CREATE_SUSPENDED, PROCESS_INFORMATION, STARTUPINFOW,
+            };
+
+            let mut command_line: Vec<u16> = "cmd.exe /c exit 0".encode_utf16().collect();
+            command_line.push(0);
+            // SAFETY: zeroed POD structs are the documented initial state.
+            let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
+            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+            let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
+            let ok = unsafe {
+                // SAFETY: `command_line` is a mutable, NUL-terminated UTF-16
+                // buffer; every other pointer argument is null (defaults).
+                CreateProcessW(
+                    std::ptr::null(),
+                    command_line.as_mut_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    CREATE_SUSPENDED,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &si,
+                    &mut pi,
+                )
+            };
+            assert!(
+                ok != 0,
+                "CreateProcessW(CREATE_SUSPENDED) failed in test setup"
+            );
+            Self {
+                process: pi.hProcess,
+                thread: pi.hThread,
+            }
+        }
+
+        fn process(&self) -> HANDLE {
+            self.process
+        }
+    }
+
+    impl Drop for SuspendedChild {
+        fn drop(&mut self) {
+            use windows_sys::Win32::System::Threading::TerminateProcess;
+            // SAFETY: both handles are live and owned by this struct; the
+            // child is still suspended and has executed no user code.
+            unsafe {
+                TerminateProcess(self.process, 1);
+                CloseHandle(self.thread);
+                CloseHandle(self.process);
+            }
+        }
+    }
 
     #[test]
     fn integrity_level_probe_on_invalid_handle_returns_layer_attestation_failed() {
@@ -639,12 +765,35 @@ mod windows_probe_tests {
 
     #[test]
     fn in_job_probe_on_invalid_handle_returns_layer_attestation_failed() {
-        let result = probe_in_job(std::ptr::null_mut());
+        // A real (non-null) job handle is supplied so the failure under test
+        // is the invalid PROCESS handle, not the null-job fail-closed guard.
+        let job = TestJob::create();
+        let result = probe_in_job(std::ptr::null_mut(), job.raw());
         match result {
             Err(NonoError::LayerAttestationFailed { .. }) => {}
             other => panic!(
                 "expected Err(LayerAttestationFailed) for a null process handle, got {other:?}"
             ),
+        }
+    }
+
+    /// CR-02 fail-closed guard: a null job handle must be rejected outright
+    /// rather than silently restoring the vacuous "is this process in ANY
+    /// job" query.
+    #[test]
+    fn in_job_probe_with_null_job_handle_is_rejected_fail_closed() {
+        // SAFETY: GetCurrentProcess returns an always-valid pseudo-handle.
+        let current = unsafe { GetCurrentProcess() };
+        match probe_in_job(current, std::ptr::null_mut()) {
+            Err(NonoError::LayerAttestationFailed { reason, .. }) => {
+                assert!(
+                    reason.contains("no containment job handle"),
+                    "expected the fail-closed null-job reason, got {reason:?}"
+                );
+            }
+            other => {
+                panic!("expected Err(LayerAttestationFailed) for a null job handle, got {other:?}")
+            }
         }
     }
 
@@ -670,30 +819,40 @@ mod windows_probe_tests {
         }
     }
 
+    /// CR-02 non-vacuity proof, BOTH polarities, on a real spawned child.
+    ///
+    /// The pre-fix probe passed a null job handle ("is this process in ANY
+    /// job") and could not return a negative on this host: the executor's own
+    /// comment recorded that a spawned-but-unassigned process silently
+    /// inherits the test runner's job membership and still answers `true`.
+    /// Naming a concrete job makes the negative reachable — this test asserts
+    /// the SAME child answers `true` for the job it was assigned to and
+    /// `false` for a different, live job it was never assigned to. If the
+    /// null-job form were restored, the `false` assertion below would fail.
     #[test]
-    fn in_job_probe_on_current_process_returns_ok() {
-        // Empirical finding (verified live on this host, 2026-08-09): the
-        // plan's original expectation that a test runner's own process is
-        // "not normally in a job" does not hold universally — Windows 8+
-        // supports nested Job Objects, and many hosts (this one included;
-        // reproduced via `cargo test -p nono-sandbox --lib attestation`)
-        // already run every process inside a job created by the shell,
-        // terminal, or CI harness. Asserting a specific `true`/`false`
-        // value here would be host-environment-dependent, not a property of
-        // this function. The actually meaningful sanity check — per this
-        // test's stated purpose — is that the FFI call shape compiles and
-        // succeeds against a real, always-available handle without
-        // requiring a live spawned child; the boolean payload is exercised
-        // by the D-21 launch-path integration coverage, not here.
-        //
-        // SAFETY: GetCurrentProcess returns a pseudo-handle that is always
-        // valid; no cleanup is required (it is not a real handle to close).
-        let current = unsafe { GetCurrentProcess() };
-        let result = probe_in_job(current);
-        assert!(
-            result.is_ok(),
-            "probe_in_job must succeed against the test runner's own, always-valid process \
-             handle; got {result:?}"
+    fn in_job_probe_distinguishes_the_assigned_job_from_another_job() {
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+
+        let assigned_job = TestJob::create();
+        let other_job = TestJob::create();
+        let child = SuspendedChild::spawn();
+
+        let ok = unsafe {
+            // SAFETY: both handles are live and owned by this test.
+            AssignProcessToJobObject(assigned_job.raw(), child.process())
+        };
+        assert!(ok != 0, "AssignProcessToJobObject failed in test setup");
+
+        assert_eq!(
+            probe_in_job(child.process(), assigned_job.raw()).ok(),
+            Some(true),
+            "the child WAS assigned to `assigned_job`, so the probe must confirm it"
+        );
+        assert_eq!(
+            probe_in_job(child.process(), other_job.raw()).ok(),
+            Some(false),
+            "the child was NEVER assigned to `other_job` — the probe MUST be able to return \
+             this negative, which the pre-CR-02 null-job form structurally could not"
         );
     }
 
@@ -726,7 +885,7 @@ mod non_windows_stub_tests {
     #[test]
     fn in_job_probe_off_windows_returns_unsupported_platform() {
         assert!(matches!(
-            probe_in_job(()),
+            probe_in_job((), ()),
             Err(NonoError::UnsupportedPlatform(_))
         ));
     }
