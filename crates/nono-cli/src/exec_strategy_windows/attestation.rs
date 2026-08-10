@@ -101,6 +101,21 @@ use nono::attestation::{
 use nono::NonoError;
 use std::collections::HashSet;
 
+/// The wire contract nono-cli uses to tell `nono-shell-broker.exe` which
+/// layers it must itself confirm active before resuming its own suspended
+/// grandchild (Blocker-1's resolution, Task 2).
+///
+/// Value shape: a comma-separated list of `LayerId` `Debug`-format names
+/// (e.g. `"AppContainerProfile"`), naming exactly the registry rows whose
+/// `(EntryPath::Broker, ...)` expectancy is `expected: true` AND whose
+/// `outcome` is `ContractOutcome::Abort` — see [`required_layers_for_broker`].
+/// The broker (Plan 11) has no access to [`layer_registry`] itself; it reads
+/// this env var and treats every named layer as must-be-`Confirmed`-or-
+/// terminate. Layers not named in the list are the broker's own business to
+/// leave unattested (D-02: the broker never invents its own policy, it only
+/// enforces what nono-cli tells it).
+pub(crate) const BROKER_REQUIRED_LAYERS_ENV_VAR: &str = "NONO_BROKER_REQUIRED_LAYERS";
+
 /// D-27/T-117-21: layer-specific detail (which layer, why) belongs on the
 /// operator's channel and the audit event, never on a channel the confined
 /// process can read (D-28) — enforced by Plan 09's rendering, not this type.
@@ -461,6 +476,46 @@ pub(crate) fn attest_and_decide(input: AttestationInput) -> nono::Result<Attesta
         &input,
         &required_names,
     ))
+}
+
+/// Task 2 / Blocker-1 resolution: filters `entries` to the rows expected at
+/// `(EntryPath::Broker, expected: true)` with `outcome: ContractOutcome::Abort`,
+/// joining their `Debug`-format `LayerId` names with commas — the exact
+/// [`BROKER_REQUIRED_LAYERS_ENV_VAR`] wire-contract value. This is the ONLY
+/// code path through which a `(EntryPath::Broker, ...)` row's expectancy
+/// reaches a decision; [`attest_and_decide`] never dispatches on
+/// `EntryPath::Broker` itself (see [`AttestationInput::entry_path`]'s doc
+/// comment), so this helper is what makes those rows genuinely attested
+/// rather than merely unclaimed. Plan 10 calls this to build the env var
+/// value it sets when spawning `nono-shell-broker.exe`; Plan 11 (inside
+/// `nono-shell-broker`, a separate binary with no access to
+/// [`layer_registry`]) reads the resulting env var and treats every named
+/// layer as must-be-`Confirmed`-or-terminate.
+///
+/// A row expected at `EntryPath::Broker` with a non-`Abort` outcome is
+/// deliberately excluded here (Item-1, `layer_registry.rs`'s
+/// `broker_expected_rows_are_abort_only` test enforces that no such row
+/// exists in the registry today) — that combination would otherwise go
+/// completely unattested on the broker arm.
+pub(crate) fn required_layers_for_broker(entries: &[layer_registry::LayerRegistryEntry]) -> String {
+    entries
+        .iter()
+        .filter(|entry| {
+            entry.outcome == layer_registry::ContractOutcome::Abort
+                && entry.expectancy.iter().any(|arm| {
+                    matches!(
+                        arm,
+                        layer_registry::ArmExpectancy {
+                            entry_path: layer_registry::EntryPath::Broker,
+                            expected: true,
+                            ..
+                        }
+                    )
+                })
+        })
+        .map(|entry| format!("{:?}", entry.id))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -958,6 +1013,72 @@ mod registry_tests {
                 classify_row(minifilter, &input),
                 LayerAttestationStatus::NotApplicable
             );
+        }
+    }
+}
+
+/// Task 2 broker wire-contract tests, against the real registry.
+#[cfg(all(test, target_os = "windows"))]
+mod broker_wire_contract_tests {
+    use super::*;
+
+    #[test]
+    fn required_layers_for_broker_includes_only_broker_expected_abort_rows() {
+        let entries = layer_registry::all_entries();
+        let value = required_layers_for_broker(entries);
+        let got: HashSet<String> = value
+            .split(',')
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+
+        let expected: HashSet<String> = entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome == layer_registry::ContractOutcome::Abort
+                    && entry.expectancy.iter().any(|arm| {
+                        matches!(
+                            arm,
+                            layer_registry::ArmExpectancy {
+                                entry_path: layer_registry::EntryPath::Broker,
+                                expected: true,
+                                ..
+                            }
+                        )
+                    })
+            })
+            .map(|entry| format!("{:?}", entry.id))
+            .collect();
+
+        assert_eq!(got, expected);
+        assert!(
+            !expected.is_empty(),
+            "expected at least one Broker-expected Abort row to exercise this test"
+        );
+    }
+
+    #[test]
+    fn required_layers_for_broker_never_includes_non_broker_only_rows() {
+        let entries = layer_registry::all_entries();
+        let value = required_layers_for_broker(entries);
+        for entry in entries {
+            let is_broker_expected = entry.expectancy.iter().any(|arm| {
+                matches!(
+                    arm,
+                    layer_registry::ArmExpectancy {
+                        entry_path: layer_registry::EntryPath::Broker,
+                        expected: true,
+                        ..
+                    }
+                )
+            });
+            if !is_broker_expected {
+                let name = format!("{:?}", entry.id);
+                assert!(
+                    !value.split(',').any(|s| s == name),
+                    "{name} is not Broker-expected but appeared in required_layers_for_broker output"
+                );
+            }
         }
     }
 }
