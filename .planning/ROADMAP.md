@@ -288,7 +288,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
   3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
   4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
-**Plans**: 19 plans in 8 waves (15 executed; 7 gap-closure plans added 2026-08-10 closing 117-VERIFICATION.md's gaps_found - NR3-01 BLOCKER, SC3 test-coverage shortfall, NR3-02/03/04/05 structural fail-open residuals, SC4 SPEC-ledger drift, NR3-08 citation drift, NR-08 CI gap; 117-13 executed 2026-08-10 closing NR3-01, 117-14 executed 2026-08-10 closing NR3-02, 117-15 executed 2026-08-10 closing NR3-03 + NR3-08)
+**Plans**: 19 plans in 8 waves (17 executed — wave 6 of 8 now fully complete; 7 gap-closure plans added 2026-08-10 closing 117-VERIFICATION.md's gaps_found - NR3-01 BLOCKER, SC3 test-coverage shortfall, NR3-02/03/04/05 structural fail-open residuals, SC4 SPEC-ledger drift, NR3-08 citation drift, NR-08 CI gap; 117-13 executed 2026-08-10 closing NR3-01, 117-14 executed 2026-08-10 closing NR3-02, 117-15 executed 2026-08-10 closing NR3-03 + NR3-08, 117-16 executed 2026-08-10 closing NR3-04 + SC3's FirewallRulesEgress row, 117-17 executed 2026-08-10 closing NR3-05)
 
 **Wave 1** — the registry is the source of truth everything else derives from (D-01)
 - [x] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
@@ -318,8 +318,8 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 - [x] 117-13-PLAN.md — NR3-01 BLOCKER: self-healing mandatory-label residue detection + NonoError::remediation() arm for LayerAttestationFailed
 - [x] 117-14-PLAN.md — NR3-02: real coverage accessor for DaclAncestorTraverse/DaclAncestorReadAttrs (was a constant Applied, structurally could not deny)
 - [x] 117-15-PLAN.md — NR3-03 + NR3-08: close the DaclSessionSidGrant fail-open landmine (false test citation) + convert 4 rows' call-site citations to symbol form
-- [ ] 117-16-PLAN.md — NR3-04: unconditional downgrade-banner diagnostic log line + new FirewallRulesEgress forced-unavailable test (SC3)
-- [ ] 117-17-PLAN.md — NR3-05: delete the daemon's dead ProceedDowngraded decision state; document abort-or-proceed by design
+- [x] 117-16-PLAN.md — NR3-04: unconditional downgrade-banner diagnostic log line + new FirewallRulesEgress forced-unavailable test (SC3)
+- [x] 117-17-PLAN.md — NR3-05: delete the daemon's dead ProceedDowngraded decision state; document abort-or-proceed by design
 
 **Wave 7** *(blocked on Wave 6 — reads dacl_guard.rs/launch.rs/layer_registry.rs)*
 - [ ] 117-18-PLAN.md — SC3: broaden layer_registry_meta_test.rs discovery (ALSO_AUTOMATED, 8 rows) + CI fix (NR-08, build nono-shell-broker + NONO_CI_HAS_WFP)
