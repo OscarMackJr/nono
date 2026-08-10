@@ -102,3 +102,7 @@ None - no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
+
+## Self-Check: PASSED
+
+All 4 modified source files and the SUMMARY.md itself confirmed present on disk; commits `6adc8b90`, `53dc7fbd`, and `78655c37` confirmed in `git log --oneline --all`.
