@@ -18,6 +18,15 @@ use tracing_subscriber::EnvFilter;
 /// (conservative: assume shared/readable unless proven private) so that any
 /// caller running before `init_tracing`/`init_tracing_with_security` sees
 /// the safe answer.
+///
+/// `#[cfg(target_os = "windows")]`: the only consumer,
+/// `exec_strategy_windows::launch::apply_startup_attestation_gate`, is
+/// itself Windows-only — this mirrors `output::print_attestation_downgrade_
+/// banner`'s own Windows-only gating (CINT-02 is a Windows-only
+/// self-attestation pass, D-09). Un-gating this item makes it dead code on
+/// Linux/macOS builds under `-D warnings` (verified via the cross-target
+/// clippy gate, D-35/D-11).
+#[cfg(target_os = "windows")]
 static TRACING_LOG_TARGET_IS_PRIVATE: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -26,6 +35,7 @@ static TRACING_LOG_TARGET_IS_PRIVATE: std::sync::atomic::AtomicBool =
 /// Callers deciding whether a message may carry specific layer/mechanism
 /// names should gate on this (D-28) rather than assume `tracing::warn!`
 /// never reaches a channel the confined child can read.
+#[cfg(target_os = "windows")]
 pub(crate) fn log_target_is_private() -> bool {
     TRACING_LOG_TARGET_IS_PRIVATE.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -33,7 +43,7 @@ pub(crate) fn log_target_is_private() -> bool {
 /// Test-only seam (Phase 117-21 Task 2) to drive both branches of
 /// `log_target_is_private()` deterministically without going through a real
 /// `init_tracing_with_security` call.
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 pub(crate) fn set_log_target_is_private_for_test(private: bool) {
     TRACING_LOG_TARGET_IS_PRIVATE.store(private, std::sync::atomic::Ordering::Relaxed);
 }
@@ -45,13 +55,13 @@ pub(crate) fn set_log_target_is_private_for_test(private: bool) {
 /// class as `test_env::ENV_LOCK`, documented there): without this lock two
 /// tests setting opposite values race on the shared `AtomicBool` and observe
 /// each other's state mid-assertion.
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 pub(crate) static LOG_TARGET_IS_PRIVATE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Acquire [`LOG_TARGET_IS_PRIVATE_TEST_LOCK`], recovering from poisoning the
 /// same way `test_env::lock_env` does (a prior panicking test must not
 /// permanently deadlock every subsequent test in this binary).
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 pub(crate) fn lock_log_target_is_private_test() -> std::sync::MutexGuard<'static, ()> {
     match LOG_TARGET_IS_PRIVATE_TEST_LOCK.lock() {
         Ok(guard) => guard,
@@ -212,6 +222,9 @@ fn init_tracing_with_security(cli: &Cli, security_layer: SecurityEventLayer) {
             Ok(writer) => {
                 // Phase 117-21 CR-02: only this arm's target is private to
                 // the operator (a file the confined child does not share).
+                // cfg-gated with the static's own definition above (Windows-
+                // only consumer).
+                #[cfg(target_os = "windows")]
                 TRACING_LOG_TARGET_IS_PRIVATE.store(true, std::sync::atomic::Ordering::Relaxed);
                 let fmt_layer = tracing_subscriber::fmt::layer()
                     .with_target(false)
