@@ -68,7 +68,8 @@ fn try_set_low_integrity_label(path: &std::path::Path) -> bool {
     }
 }
 
-#[cfg(target_os = "windows")]
+// CR-08: only used by the feature-gated block-net tests below.
+#[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
 fn try_add_and_remove_windows_firewall_rule(program: &std::path::Path) -> bool {
     let suffix = format!(
         "{}",
@@ -824,7 +825,22 @@ fn windows_run_allow_all_network_probe_connects() {
     handle.join().expect("listener thread");
 }
 
-#[cfg(target_os = "windows")]
+// Phase 117 review CR-08: `--dangerous-force-wfp-ready` is compiled out of
+// default builds (`cli.rs`, gated on `feature = "layer-fault-injection"`), so
+// on a default `cargo test -p nono-sandbox-cli` clap rejects the unknown
+// argument and `nono.exe` exits non-zero before doing any work. Two of these
+// four tests then FAILED; the other two PASSED FOR THE WRONG REASON —
+// asserting only `!status.success()` (a clap parse error satisfies that) and
+// a listener-accept negative that is trivially true when no child ever ran.
+// Two of the project's four Windows block-net enforcement tests were green
+// without exercising network enforcement at all: the exact "test that cannot
+// fail" failure mode this phase exists to eliminate.
+//
+// Gating them on the feature makes them run only in a build where the flag
+// exists. `make test-layer-fault-injection` (Makefile) and the
+// `layer-fault-injection (windows)` CI job run that build — without an
+// executing gate this would silently DROP the coverage rather than fix it.
+#[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
 #[test]
 fn windows_run_block_net_blocks_probe_connection() {
     let probe = windows_net_probe_bin();
@@ -843,10 +859,6 @@ fn windows_run_block_net_blocks_probe_connection() {
     let workdir = probe_dir.to_string_lossy().into_owned();
 
     let output = nono_bin()
-        // NONO_TEST_HARNESS: required by set_windows_wfp_test_force_ready runtime
-        // guard (Phase 41 REQ-CI-02) — enables --dangerous-force-wfp-ready to set
-        // the WFP test-force-ready atomic from integration tests.
-        .env("NONO_TEST_HARNESS", "1")
         .args([
             "run",
             "--allow",
@@ -884,7 +896,22 @@ fn windows_run_block_net_blocks_probe_connection() {
     );
 }
 
-#[cfg(target_os = "windows")]
+// Phase 117 review CR-08: `--dangerous-force-wfp-ready` is compiled out of
+// default builds (`cli.rs`, gated on `feature = "layer-fault-injection"`), so
+// on a default `cargo test -p nono-sandbox-cli` clap rejects the unknown
+// argument and `nono.exe` exits non-zero before doing any work. Two of these
+// four tests then FAILED; the other two PASSED FOR THE WRONG REASON —
+// asserting only `!status.success()` (a clap parse error satisfies that) and
+// a listener-accept negative that is trivially true when no child ever ran.
+// Two of the project's four Windows block-net enforcement tests were green
+// without exercising network enforcement at all: the exact "test that cannot
+// fail" failure mode this phase exists to eliminate.
+//
+// Gating them on the feature makes them run only in a build where the flag
+// exists. `make test-layer-fault-injection` (Makefile) and the
+// `layer-fault-injection (windows)` CI job run that build — without an
+// executing gate this would silently DROP the coverage rather than fix it.
+#[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
 #[test]
 fn windows_run_block_net_cleans_up_promoted_wfp_filters_after_exit() {
     let probe = windows_net_probe_bin();
@@ -903,9 +930,6 @@ fn windows_run_block_net_cleans_up_promoted_wfp_filters_after_exit() {
     let workdir = probe_dir.to_string_lossy().into_owned();
 
     let blocked_output = nono_bin()
-        // NONO_TEST_HARNESS: required by set_windows_wfp_test_force_ready runtime
-        // guard (Phase 41 REQ-CI-02).
-        .env("NONO_TEST_HARNESS", "1")
         .args([
             "run",
             "--allow",
@@ -974,7 +998,22 @@ fn windows_run_block_net_cleans_up_promoted_wfp_filters_after_exit() {
     cleanup_handle.join().expect("cleanup listener thread");
 }
 
-#[cfg(target_os = "windows")]
+// Phase 117 review CR-08: `--dangerous-force-wfp-ready` is compiled out of
+// default builds (`cli.rs`, gated on `feature = "layer-fault-injection"`), so
+// on a default `cargo test -p nono-sandbox-cli` clap rejects the unknown
+// argument and `nono.exe` exits non-zero before doing any work. Two of these
+// four tests then FAILED; the other two PASSED FOR THE WRONG REASON —
+// asserting only `!status.success()` (a clap parse error satisfies that) and
+// a listener-accept negative that is trivially true when no child ever ran.
+// Two of the project's four Windows block-net enforcement tests were green
+// without exercising network enforcement at all: the exact "test that cannot
+// fail" failure mode this phase exists to eliminate.
+//
+// Gating them on the feature makes them run only in a build where the flag
+// exists. `make test-layer-fault-injection` (Makefile) and the
+// `layer-fault-injection (windows)` CI job run that build — without an
+// executing gate this would silently DROP the coverage rather than fix it.
+#[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
 #[test]
 fn windows_run_block_net_blocks_probe_connection_through_cmd_host() {
     let probe = windows_net_probe_bin();
@@ -994,9 +1033,6 @@ fn windows_run_block_net_blocks_probe_connection_through_cmd_host() {
     let probe_text = probe.to_string_lossy().into_owned();
 
     let output = nono_bin()
-        // NONO_TEST_HARNESS: required by set_windows_wfp_test_force_ready runtime
-        // guard (Phase 41 REQ-CI-02).
-        .env("NONO_TEST_HARNESS", "1")
         .args([
             "run",
             "--allow",
@@ -3019,7 +3055,22 @@ fn windows_run_supervised_rollback_executes_command() {
     );
 }
 
-#[cfg(target_os = "windows")]
+// Phase 117 review CR-08: `--dangerous-force-wfp-ready` is compiled out of
+// default builds (`cli.rs`, gated on `feature = "layer-fault-injection"`), so
+// on a default `cargo test -p nono-sandbox-cli` clap rejects the unknown
+// argument and `nono.exe` exits non-zero before doing any work. Two of these
+// four tests then FAILED; the other two PASSED FOR THE WRONG REASON —
+// asserting only `!status.success()` (a clap parse error satisfies that) and
+// a listener-accept negative that is trivially true when no child ever ran.
+// Two of the project's four Windows block-net enforcement tests were green
+// without exercising network enforcement at all: the exact "test that cannot
+// fail" failure mode this phase exists to eliminate.
+//
+// Gating them on the feature makes them run only in a build where the flag
+// exists. `make test-layer-fault-injection` (Makefile) and the
+// `layer-fault-injection (windows)` CI job run that build — without an
+// executing gate this would silently DROP the coverage rather than fix it.
+#[cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
 #[test]
 fn windows_run_supervised_rollback_block_net_uses_promoted_wfp_backend() {
     let probe = windows_net_probe_bin();
@@ -3048,9 +3099,6 @@ fn windows_run_supervised_rollback_block_net_uses_promoted_wfp_backend() {
     let probe = probe.to_string_lossy().into_owned();
 
     let output = nono_bin()
-        // NONO_TEST_HARNESS: required by set_windows_wfp_test_force_ready runtime
-        // guard (Phase 41 REQ-CI-02).
-        .env("NONO_TEST_HARNESS", "1")
         .args([
             "run",
             "--rollback",
