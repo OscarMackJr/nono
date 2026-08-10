@@ -683,9 +683,13 @@ const APP_CONTAINER_PROFILE_EXPECTANCY: [ArmExpectancy; 2] = [
 /// An empty expectancy makes `classify_row` return `NotApplicable` on every
 /// arm, so the session claim no longer includes a layer that was never
 /// applied. The `LayerId` variant is retained (Phase 118 receipts share this
-/// vocabulary) and `dacl_session_sid_grant_is_not_claimed_anywhere` below
-/// fails the build if anyone re-adds an expectancy cell without also making
-/// the grant real.
+/// vocabulary). Phase 117 gap closure (NR3-03) adds two tests in this file's
+/// `#[cfg(test)] mod tests`: `dacl_session_sid_grant_is_not_claimed_anywhere`
+/// fails the build if anyone re-adds an expectancy cell here without also
+/// making the grant real in `AppliedLayers::status()`, and its converse
+/// `every_consulting_row_with_an_expectancy_has_a_reported_field` protects
+/// every OTHER `ConfiguredOnly`/`ConfirmedByEnforcingComponentReport` row
+/// from the same fail-open shape.
 ///
 /// **Open operator decision, deliberately NOT guessed here:** whether the
 /// `WriteRestricted` arm SHOULD also grant `config.session_sid` write on the
@@ -1155,6 +1159,82 @@ mod tests {
                 "{id:?} is reported by AppliedLayers but its row's probe is {:?}, which \
                  classify_row resolves without ever consulting the report — the reported \
                  value can never influence a decision (CR-14)",
+                entry.probe
+            );
+        }
+    }
+
+    /// Phase 117 gap closure (NR3-03): the canary the
+    /// `DACL_SESSION_SID_GRANT_EXPECTANCY` doc comment promises.
+    /// `DaclSessionSidGrant`'s row is hardcoded `NotApplicable` in
+    /// `AppliedLayers::status()` (CR-05) — if its expectancy is ever widened
+    /// without also making the grant real there, the row would silently
+    /// drop out of every decision while still being counted as expected, a
+    /// fail-open in the module whose entire purpose is truthful layer
+    /// accounting. RF-03's operator decision (whether `WriteRestricted`
+    /// should also grant `config.session_sid`) stays open — this test does
+    /// not resolve it, it makes resolving it loud instead of silent.
+    #[test]
+    fn dacl_session_sid_grant_is_not_claimed_anywhere() {
+        let entry = all_entries()
+            .iter()
+            .find(|e| e.id == LayerId::DaclSessionSidGrant)
+            .expect("DaclSessionSidGrant has a registry row");
+        assert!(
+            entry.expectancy.is_empty(),
+            "DaclSessionSidGrant's expectancy is no longer empty, but \
+             AppliedLayers::status() still hardcodes NotApplicable for it (CR-05) — \
+             the row would silently drop out of every decision while still being \
+             counted as expected. Either revert the expectancy, or make status() \
+             report a real field for this row (RF-03's open operator decision) \
+             before widening the expectancy."
+        );
+    }
+
+    /// Phase 117 gap closure (NR3-03), converse of
+    /// `dacl_session_sid_grant_is_not_claimed_anywhere`: protects every OTHER
+    /// row whose probe kind actually consults `AppliedLayers` from silently
+    /// becoming unattestable the same way `DaclSessionSidGrant` was before
+    /// CR-05. Discovery-based (D-32/Phase 115 V-01): iterates
+    /// `all_entries()`, names no specific `LayerId`, so a future row added
+    /// with this shape fails here without the test being touched.
+    #[test]
+    fn every_consulting_row_with_an_expectancy_has_a_reported_field() {
+        // Every field maximally positive — if a row still reports
+        // `NotApplicable` here, no possible caller report could ever make it
+        // attestable.
+        let all_positive = AppliedLayers {
+            mandatory_integrity_label: LayerApplication::Applied,
+            dacl_package_sid_grant: LayerApplication::Applied,
+            dacl_ancestor_traverse: LayerApplication::Applied,
+            dacl_ancestor_read_attrs: LayerApplication::Applied,
+            firewall_rules_egress: Some(true),
+            wfp_egress_filters: Some(true),
+            broker_authenticode_trust_gate: Some(true),
+        };
+
+        for entry in all_entries() {
+            let consults_report = matches!(
+                entry.probe,
+                ProbeKind::ConfiguredOnly | ProbeKind::ConfirmedByEnforcingComponentReport
+            );
+            if !consults_report {
+                continue;
+            }
+            let has_expected_cell = entry.expectancy.iter().any(|arm| arm.expected);
+            if !has_expected_cell {
+                continue;
+            }
+            assert_ne!(
+                all_positive.status(entry.id),
+                LayerApplication::NotApplicable,
+                "{:?}'s probe ({:?}) consults AppliedLayers and its expectancy has an \
+                 `expected: true` cell, but AppliedLayers::status() reports \
+                 NotApplicable even when every field is maximally positive — this row \
+                 would silently drop out of every decision no matter what actually \
+                 happened at launch (the exact fail-open DaclSessionSidGrant had \
+                 before CR-05/NR3-03)",
+                entry.id,
                 entry.probe
             );
         }
