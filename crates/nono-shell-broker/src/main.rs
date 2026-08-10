@@ -310,6 +310,53 @@ mod broker {
         seen
     }
 
+    /// Plan 117-11 (D-21/D-23): pure decision logic for the broker's own
+    /// AppContainer resume gate — the third and final D-21 gate insertion
+    /// site (RESEARCH finding 2: the real Low-IL/AppContainer child is
+    /// spawned INSIDE this process, a site `nono-cli`'s own
+    /// `attest_and_decide` structurally cannot see). Factored out of
+    /// [`run`] so the policy is unit-testable against a synthetic probe
+    /// result without a live spawned child — mirrors
+    /// `crates/nono-cli/src/exec_strategy_windows/attestation.rs`'s
+    /// `decide_from_entries` testing pattern.
+    ///
+    /// `required_layers_raw` is the raw `NONO_BROKER_REQUIRED_LAYERS` wire
+    /// contract value (comma-separated `LayerId` `Debug`-format names,
+    /// `crates/nono-cli/src/exec_strategy_windows/attestation.rs`'s
+    /// `BROKER_REQUIRED_LAYERS_ENV_VAR`). `probe_result` is the real
+    /// `nono::attestation::probe_app_container_sid` call's output against
+    /// the broker's own suspended child (D-19: the supervisor attests, the
+    /// confined process never does).
+    ///
+    /// Returns `Ok(())` when resume is permitted: either the wire contract
+    /// does not name `"AppContainerProfile"` (D-02: the broker has no
+    /// policy authority to require a layer nono-cli did not ask it to
+    /// require — an absent or unrelated env var value never aborts) or the
+    /// probe positively confirmed the child's AppContainer SID. Returns
+    /// `Err(reason)` when the layer is required and unconfirmed (D-22: the
+    /// caller terminates the child and surfaces a typed error naming the
+    /// reason).
+    fn app_container_resume_gate(
+        required_layers_raw: &str,
+        probe_result: NonoResult<Option<String>>,
+    ) -> std::result::Result<(), String> {
+        let required_layers: Vec<&str> = required_layers_raw
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !required_layers.contains(&"AppContainerProfile") {
+            return Ok(());
+        }
+        match probe_result {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(
+                "probe succeeded but found no AppContainer SID on the child's token".to_string(),
+            ),
+            Err(e) => Err(format!("probe failed: {e}")),
+        }
+    }
+
     /// 8-step sequence. Mechanism MUST stay byte-equivalent to the validated
     /// PoC at `.planning/quick/260508-m99-.../poc-broker/src/main.rs:36-186`,
     /// with token construction unified through `nono::create_low_integrity_primary_token`
@@ -704,6 +751,36 @@ mod broker {
                 }
                 return Err(e);
             }
+
+            // Plan 117-11 (D-21/D-23, D-02): the broker's own attestation
+            // gate. The real Low-IL/AppContainer child is spawned INSIDE
+            // this process — a site `nono-cli`'s own `attest_and_decide`
+            // (Plan 08/10) structurally cannot see (see that module's
+            // Blocker-1 doc comment,
+            // `crates/nono-cli/src/exec_strategy_windows/attestation.rs`).
+            // This reads the wire-contract env var
+            // `NONO_BROKER_REQUIRED_LAYERS` — the SAME string literal as
+            // that module's `BROKER_REQUIRED_LAYERS_ENV_VAR` constant; this
+            // crate cannot import that constant directly (separate binary,
+            // no dependency on `nono-sandbox-cli`), so the two are paired
+            // only by this comment and by the literal string matching.
+            // D-19: the supervisor (the broker, here) attests; the confined
+            // process never does — probe the real child's own token from
+            // outside via the shared `crates/nono` probe.
+            let required_layers_raw =
+                std::env::var("NONO_BROKER_REQUIRED_LAYERS").unwrap_or_default();
+            let probe_result = nono::attestation::probe_app_container_sid(child_process.raw());
+            if let Err(reason) = app_container_resume_gate(&required_layers_raw, probe_result) {
+                unsafe {
+                    // SAFETY: fail closed — terminate rather than resume an
+                    // unattested child (D-22).
+                    windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
+                }
+                return Err(NonoError::SandboxInit(format!(
+                    "AppContainer attestation failed for the broker's suspended child: {reason}"
+                )));
+            }
+
             let resumed = unsafe {
                 // SAFETY: child_thread.raw() is the valid main-thread handle of
                 // the suspended child. ResumeThread returns the previous suspend
@@ -1203,6 +1280,192 @@ mod broker {
             let raw = vec![h(0x42)];
             let deduped = dedup_handles_preserve_order(&raw);
             assert_eq!(deduped, vec![h(0x42)]);
+        }
+    }
+
+    /// Plan 117-11 (D-21/D-23/D-02, T-117-05/T-117-02/T-117-21): pins the
+    /// pure `app_container_resume_gate` decision logic — the third and
+    /// final D-21 gate insertion site — against synthetic probe results, no
+    /// live spawned child required. Mirrors `decide_from_entries`'s testing
+    /// pattern in `crates/nono-cli/src/exec_strategy_windows/attestation.rs`.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod app_container_resume_gate_tests {
+        use super::*;
+        use nono::NonoError;
+
+        /// D-02: the broker never invents its own required-layers policy.
+        /// When the wire contract does not name `AppContainerProfile`, an
+        /// unconfirmed (or failed) probe must NOT refuse resume.
+        #[test]
+        fn untightened_unconfirmed_probe_permits_resume() {
+            assert!(
+                app_container_resume_gate("", Ok(None)).is_ok(),
+                "an empty required-layers list must never refuse resume"
+            );
+            assert!(
+                app_container_resume_gate(
+                    "SomeOtherLayer",
+                    Err(NonoError::LayerAttestationFailed {
+                        layer: "AppContainerProfile".into(),
+                        reason: "synthetic".into(),
+                    })
+                )
+                .is_ok(),
+                "a required-layers list that omits AppContainerProfile must never refuse resume"
+            );
+        }
+
+        /// D-21/D-22: when the wire contract requires `AppContainerProfile`
+        /// and the probe is unconfirmed — either an authoritative "no SID
+        /// present" (`Ok(None)`) or the probe call itself failing (`Err`) —
+        /// resume must be refused.
+        #[test]
+        fn tightened_unconfirmed_probe_refuses_resume() {
+            assert!(app_container_resume_gate("AppContainerProfile", Ok(None)).is_err());
+            assert!(app_container_resume_gate(
+                "AppContainerProfile",
+                Err(NonoError::LayerAttestationFailed {
+                    layer: "AppContainerProfile".into(),
+                    reason: "synthetic".into(),
+                })
+            )
+            .is_err());
+        }
+
+        /// T-117-21: a probe that positively confirms the AppContainer SID
+        /// always permits resume — this is the genuine attestation this
+        /// plan closes (Blocker-1), on the real process.
+        #[test]
+        fn tightened_confirmed_probe_permits_resume() {
+            assert!(app_container_resume_gate(
+                "AppContainerProfile",
+                Ok(Some("S-1-15-2-1".to_string()))
+            )
+            .is_ok());
+        }
+
+        /// The env var value is comma-separated and whitespace-tolerant, so
+        /// `required_layers_for_broker`'s `join(",")` output (no spaces) and
+        /// a hand-edited multi-value list (with spaces) both parse
+        /// correctly.
+        #[test]
+        fn required_layers_list_is_comma_split_and_trimmed() {
+            assert!(
+                app_container_resume_gate(
+                    "RestrictedToken, AppContainerProfile ,JobObjectContainment",
+                    Ok(None)
+                )
+                .is_err(),
+                "AppContainerProfile embedded in a multi-value, whitespace-padded list must \
+                 still be recognized"
+            );
+        }
+    }
+
+    /// Plan 117-11 Warning-10 fix: RAII guard that saves
+    /// `NONO_BROKER_REQUIRED_LAYERS`'s prior value on construction and
+    /// restores it (or removes the var if it was previously absent) in
+    /// `Drop`, so test env-var mutation cannot leak across the shared
+    /// `--test-threads=1` process even on a panicking assertion — per
+    /// CLAUDE.md's "Environment variables in tests" save/restore rule
+    /// (T-117-23).
+    #[cfg(test)]
+    struct EnvVarGuard {
+        key: &'static str,
+        prior: Option<String>,
+    }
+
+    // `clippy.toml`'s workspace-wide `disallowed-methods` entry for
+    // `std::env::{set_var,remove_var}` points callers at
+    // `crate::test_env::EnvVarGuard` (`crates/nono-cli/src/test_env.rs`) —
+    // unusable here: `nono-cli` is a binary-only crate with no `[lib]`
+    // target, so `nono-shell-broker` cannot depend on it (same crate-
+    // boundary constraint the module-level doc comment on
+    // `app_container_resume_gate` describes for `BROKER_REQUIRED_LAYERS_ENV_VAR`).
+    // This `EnvVarGuard` IS this crate's own local equivalent safe wrapper
+    // (mirrors `nono-cli`'s `#[allow(clippy::disallowed_methods)]` idiom on
+    // its own guard's impl blocks) — save/restore-disciplined per CLAUDE.md's
+    // "Environment variables in tests" rule (T-117-23, Warning-10 fix).
+    #[cfg(test)]
+    #[allow(clippy::disallowed_methods)]
+    impl EnvVarGuard {
+        /// Sets `key` to `value`, saving whatever was previously there
+        /// (including "nothing") so `Drop` can restore it exactly.
+        fn set(key: &'static str, value: &str) -> Self {
+            let prior = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, prior }
+        }
+
+        /// Removes `key`, saving whatever was previously there so `Drop`
+        /// can restore it exactly (a no-op restore if it was already
+        /// absent).
+        fn unset(key: &'static str) -> Self {
+            let prior = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self { key, prior }
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::disallowed_methods)]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // Restores on every exit path, including panic (Warning-10 fix).
+            match &self.prior {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// Plan 117-11 Behavior 1/2: exercises the real
+    /// `NONO_BROKER_REQUIRED_LAYERS` env-var read path (the exact call
+    /// `run()` makes) via the Drop-restoring [`EnvVarGuard`], feeding the
+    /// result into [`app_container_resume_gate`] alongside a synthetic
+    /// probe result — no live spawned child required, but the env-var
+    /// plumbing itself is real, not mocked.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod env_wire_contract_tests {
+        use super::*;
+
+        const ENV_VAR: &str = "NONO_BROKER_REQUIRED_LAYERS";
+
+        /// Behavior 1: with `NONO_BROKER_REQUIRED_LAYERS` set to
+        /// `"AppContainerProfile"` and an unconfirmed probe, the gate
+        /// refuses resume — the broker terminates the suspended child and
+        /// returns `Err` before `ResumeThread` (verified at the `run()`
+        /// call site: `app_container_resume_gate`'s `Err` is the exact and
+        /// only condition under which `run()` terminates the child instead
+        /// of resuming it).
+        #[test]
+        fn required_layers_env_var_tightens_the_gate() {
+            let _guard = EnvVarGuard::set(ENV_VAR, "AppContainerProfile");
+            let raw = std::env::var(ENV_VAR).unwrap_or_default();
+            assert_eq!(raw, "AppContainerProfile");
+            assert!(
+                app_container_resume_gate(&raw, Ok(None)).is_err(),
+                "an unconfirmed probe must refuse resume when the env var requires \
+                 AppContainerProfile"
+            );
+        }
+
+        /// Behavior 2 (D-02): with `NONO_BROKER_REQUIRED_LAYERS` unset, an
+        /// unconfirmed probe does not refuse resume — the broker has no
+        /// policy authority to require a layer nono-cli did not ask it to
+        /// require.
+        #[test]
+        fn absent_required_layers_env_var_does_not_tighten_the_gate() {
+            let _guard = EnvVarGuard::unset(ENV_VAR);
+            let raw = std::env::var(ENV_VAR).unwrap_or_default();
+            assert_eq!(raw, "");
+            assert!(
+                app_container_resume_gate(&raw, Ok(None)).is_ok(),
+                "an absent required-layers env var must never refuse resume \
+                 (D-02: no invented policy)"
+            );
         }
     }
 
