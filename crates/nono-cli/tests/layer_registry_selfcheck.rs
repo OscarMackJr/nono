@@ -4,20 +4,25 @@
 //! human-readable contract (`proj/SPEC-windows-fail-direction-contract.md`)
 //! honest against each other and against the tree they cite.
 //!
-//! Two tests, both source-scan based (no `regex`, no `include_str!` — the
-//! house pattern is `env!("CARGO_MANIFEST_DIR")` + `std::fs::read_to_string`,
-//! confirmed by `crates/nono-cli/tests/resl_supervisor_drain.rs`):
+//! Source-scan based (no `regex`, no `include_str!` — the house pattern is
+//! `env!("CARGO_MANIFEST_DIR")` + `std::fs::read_to_string`, confirmed by
+//! `crates/nono-cli/tests/resl_supervisor_drain.rs`):
 //!
 //! - `registry_call_sites_exist`: every `"file:line"` string literal cited
 //!   in `layer_registry.rs`'s `call_sites` arrays names a file that actually
-//!   exists in this tree. Catches stale citations as the code moves.
+//!   exists in this tree. Catches stale citations as the code moves. Phase
+//!   117 gap closure (NR3-08) extended this test: every `"file.rs::Symbol"`
+//!   citation additionally must resolve to a file whose CONTENT contains the
+//!   cited symbol — content-verified, not merely existence-verified, so a
+//!   renamed or removed enforcing function fails the build instead of
+//!   silently invalidating the citation.
 //! - `spec_matches_registry`: every `LayerId` variant named in the
 //!   registry's `ALL` const also appears, by name, somewhere in the SPEC
 //!   document's text. This is the drift gate D-01 requires: a `LayerId`
 //!   variant added to the registry without a corresponding SPEC row fails
 //!   this test — the registry wins, and drift fails a build, not a review.
 //!
-//! Both tests are discovery-based (Phase 115 V-01 lesson: "a test that names
+//! All tests are discovery-based (Phase 115 V-01 lesson: "a test that names
 //! its targets is blind by construction") — neither hardcodes the list of 13
 //! `LayerId` variants; both parse it fresh out of `layer_registry.rs` on
 //! every run.
@@ -98,19 +103,18 @@ fn extract_call_site_citations(src: &str) -> Vec<String> {
     citations
 }
 
-/// Resolve a `"file:line"` or `"file:line-line"` citation string to the
-/// workspace-relative source file it names, applying the same path
-/// conventions `layer_registry.rs`'s own citations use (documented on
-/// `LayerRegistryEntry::call_sites`): a bare filename (e.g. `"mod.rs:425"`)
-/// is relative to `exec_strategy_windows/`; a `"crates/..."`-prefixed
-/// citation is workspace-root-relative; a `"nono-shell-broker/..."` citation
-/// is relative to `crates/`; an `"agent_daemon/..."` citation is relative to
-/// `crates/nono-cli/src/`.
-fn resolve_citation_path(citation: &str) -> PathBuf {
-    let (file_part, _line_part) = citation
-        .rsplit_once(':')
-        .unwrap_or_else(|| panic!("citation {citation:?} has no ':' separating file from line"));
-
+/// Resolve a bare `file_part` (e.g. `"mod.rs"`, `"crates/nono/src/sandbox/
+/// windows.rs"`, `"nono-shell-broker/src/main.rs"`,
+/// `"agent_daemon/launch.rs"`) to the workspace-relative source file it
+/// names, applying the path conventions `layer_registry.rs`'s own citations
+/// use (documented on `LayerRegistryEntry::call_sites`): a bare filename is
+/// relative to `exec_strategy_windows/`; a `"crates/..."`-prefixed part is
+/// workspace-root-relative; a `"nono-shell-broker/..."` part is relative to
+/// `crates/`; an `"agent_daemon/..."` part is relative to
+/// `crates/nono-cli/src/`. Shared by both the line-form
+/// (`resolve_citation_path`) and symbol-form (`registry_call_sites_exist`)
+/// citation resolvers so the four-way prefix match is not duplicated.
+fn resolve_file_part(file_part: &str) -> PathBuf {
     if let Some(rest) = file_part.strip_prefix("crates/") {
         workspace_root().join("crates").join(rest)
     } else if let Some(rest) = file_part.strip_prefix("nono-shell-broker/") {
@@ -126,6 +130,50 @@ fn resolve_citation_path(citation: &str) -> PathBuf {
             .join("exec_strategy_windows")
             .join(file_part)
     }
+}
+
+/// Resolve a `"file:line"` or `"file:line-line"` citation string to the
+/// workspace-relative source file it names.
+fn resolve_citation_path(citation: &str) -> PathBuf {
+    let (file_part, _line_part) = citation
+        .rsplit_once(':')
+        .unwrap_or_else(|| panic!("citation {citation:?} has no ':' separating file from line"));
+    resolve_file_part(file_part)
+}
+
+/// Extract every `"file.rs::Symbol"`-shaped double-quoted Rust string
+/// literal from `layer_registry.rs`'s source text (Phase 117 gap closure,
+/// NR3-08). A citation is symbol-form if it contains the literal substring
+/// `".rs::"` — the double-colon distinguishes it from the line-form
+/// `".rs:<digit>"` citations `extract_call_site_citations` finds. Same
+/// plain-substring-scan shape as that function, not a full parser.
+fn extract_symbol_citations(src: &str) -> Vec<String> {
+    let mut citations = Vec::new();
+    let mut rest = src;
+    while let Some(start) = rest.find('"') {
+        let after_open = &rest[start + 1..];
+        let Some(end) = after_open.find('"') else {
+            break;
+        };
+        let literal = &after_open[..end];
+        if literal.contains(".rs::") {
+            citations.push(literal.to_string());
+        }
+        rest = &after_open[end + 1..];
+    }
+    citations
+}
+
+/// Split a `"file.rs::Symbol"` citation into its file and symbol halves at
+/// the FIRST `"::"` — not the last, since the symbol half may itself
+/// contain further `::` for `Type::method` notation (e.g.
+/// `"dacl_guard.rs::AppliedDaclGrantsGuard::snapshot_and_apply"` must split
+/// into `("dacl_guard.rs", "AppliedDaclGrantsGuard::snapshot_and_apply")`,
+/// not split again on the method's own `::`).
+fn split_symbol_citation(citation: &str) -> (&str, &str) {
+    citation.split_once("::").unwrap_or_else(|| {
+        panic!("symbol citation {citation:?} has no '::' separating file from symbol")
+    })
 }
 
 /// CINT-01: every `call_sites` citation in the registry names a file that
@@ -163,6 +211,54 @@ fn registry_call_sites_exist() {
         "layer_registry.rs cites call_sites naming files that do not exist in this tree \
          (stale citation — the code moved and the registry row was not updated):\n{}",
         missing.join("\n")
+    );
+
+    // Phase 117 gap closure (NR3-08): symbol-form ("file.rs::Symbol")
+    // citations must resolve to a file whose CONTENT contains the cited
+    // symbol — content-verified, not merely existence-verified, so a
+    // renamed or removed enforcing function fails the build instead of
+    // silently invalidating the citation.
+    let symbol_citations = extract_symbol_citations(&src);
+    let mut missing_symbols = Vec::new();
+    for citation in &symbol_citations {
+        let (file_part, symbol) = split_symbol_citation(citation);
+        let resolved = resolve_file_part(file_part);
+        match std::fs::read_to_string(&resolved) {
+            Ok(content) if content.contains(symbol) => {}
+            Ok(_) => missing_symbols.push(format!(
+                "{citation:?} -> resolved to {}, but its content does not contain {symbol:?}",
+                resolved.display()
+            )),
+            Err(e) => missing_symbols.push(format!(
+                "{citation:?} -> resolved to {} (unreadable: {e})",
+                resolved.display()
+            )),
+        }
+    }
+
+    assert!(
+        missing_symbols.is_empty(),
+        "layer_registry.rs cites symbol-form call_sites naming a symbol that no longer \
+         exists in the cited file (renamed or removed — the citation is stale):\n{}",
+        missing_symbols.join("\n")
+    );
+}
+
+/// Non-vacuity proof (Phase 117 gap closure, NR3-08): after Task 2's
+/// conversion, at least 8 symbol-form citations are discoverable in
+/// `layer_registry.rs`'s source text — proves `extract_symbol_citations`
+/// actually finds real data, not zero matches passing vacuously. A floor,
+/// not an exact count, so a future symbol-form citation does not force this
+/// test to be edited every time one is added.
+#[test]
+fn symbol_citation_extraction_finds_the_eight_converted_citations() {
+    let src = read_layer_registry();
+    let symbol_citations = extract_symbol_citations(&src);
+    assert!(
+        symbol_citations.len() >= 8,
+        "expected at least 8 symbol-form (\"file.rs::Symbol\") call_sites citations in \
+         layer_registry.rs (NR3-08 converted 8) — found {}: {symbol_citations:?}",
+        symbol_citations.len()
     );
 }
 
