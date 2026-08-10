@@ -3872,6 +3872,114 @@ mod attestation_gate_tests {
         }
     }
 
+    /// Phase 117 NR3-04 / SC3: `FirewallRulesEgress`'s gate-level analog of
+    /// `wfp_row_can_be_selected_and_unconfirmed_from_a_real_guard_value`
+    /// above. Previously this row was `MANUALLY_VERIFIED` on the (invalid)
+    /// premise that "no force-unavailable seam was shipped for this row" —
+    /// but `firewall_rules_guard_with_rule_count()` and
+    /// `firewall_rules_report()` already provide exactly that seam, with no
+    /// new production code and no live `netsh` call required. Drives the
+    /// REAL registry + `apply_startup_attestation_gate` in both directions:
+    /// 1-of-2 required block rules installed aborts naming
+    /// `FirewallRulesEgress`/`Unconfirmed`; 2-of-2 proceeds `Ok`, proving the
+    /// abort assertion is non-vacuous.
+    #[test]
+    fn firewall_rules_row_can_be_selected_and_unconfirmed_from_a_real_gate() {
+        // One of the two required block rules installed — not the claim.
+        let regressed = firewall_rules_guard_with_rule_count(1);
+        assert_eq!(
+            super::super::firewall_rules_report(Some(&regressed)),
+            Some(false),
+            "one of two required block rules is not the FirewallRulesEgress claim"
+        );
+
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.firewall_rules_egress = super::super::firewall_rules_report(Some(&regressed));
+        // The `FirewallRules` backend was selected for this launch, not
+        // WFP — that row stays `NotApplicable` (`None`), never a reason to
+        // abort a launch that did not select WFP.
+        applied.wfp_egress_filters = None;
+
+        let result = apply_startup_attestation_gate(
+            child.process,
+            job,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false, // wfp_preconfirmed is irrelevant — WFP row is NotApplicable here
+            applied,
+            None,
+            None,
+        );
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "FirewallRulesEgress");
+                assert_eq!(reason, "Unconfirmed");
+            }
+            other => panic!(
+                "a launch whose FirewallRules backend was selected but reported only 1 of 2 \
+                 required block rules must be refused, got {other:?}"
+            ),
+        }
+
+        // Non-vacuity companion: both required rules installed proceeds Ok.
+        let healthy = firewall_rules_guard_with_rule_count(2);
+        assert_eq!(
+            super::super::firewall_rules_report(Some(&healthy)),
+            Some(true)
+        );
+
+        let child2 = spawn_suspended_cmd();
+        let job2: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job2.is_null(), "CreateJobObjectW failed");
+        let assigned2 = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job2, child2.process)
+        };
+        assert_ne!(assigned2, 0, "AssignProcessToJobObject failed");
+
+        let mut applied2 = fully_applied_layers();
+        applied2.firewall_rules_egress = super::super::firewall_rules_report(Some(&healthy));
+        applied2.wfp_egress_filters = None;
+
+        let result2 = apply_startup_attestation_gate(
+            child2.process,
+            job2,
+            layer_registry::EntryPath::DirectCli,
+            Some(WindowsTokenArm::Null),
+            false,
+            applied2,
+            None,
+            None,
+        );
+        unsafe {
+            // SAFETY: `job2` is a valid HANDLE this test owns.
+            CloseHandle(job2);
+        }
+        assert!(
+            result2.is_ok(),
+            "both required block rules installed must proceed, got {result2:?}"
+        );
+    }
+
     /// Phase 117 review NR-04, the `netsh` half: `FirewallRulesEgress`'s
     /// report is the recorded rule count, so a guard that installed fewer
     /// than both block rules classifies `Unconfirmed` instead of being
