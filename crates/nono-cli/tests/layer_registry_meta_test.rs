@@ -162,30 +162,11 @@ const MANUALLY_VERIFIED: &[(&str, &str)] = &[
          `proj/SPEC-windows-fail-direction-contract.md`.",
     ),
     (
-        "WfpEgressFilters",
-        "Requires a live, elevated nono-wfp-service and a non-elevated daemon session \
-         (per-SID WFP is daemon-path only, `nono agent launch`, not direct `nono run`) — not \
-         reproducible on an ordinary, non-elevated dev/CI host. Manual steps: install/start \
-         nono-wfp-service as admin, run a confined daemon session from a non-elevated shell \
-         with the WFP layer forced unavailable, assert the contracted Abort outcome.",
-    ),
-    (
         "MinifilterAbsence",
         "Structurally untestable: no minifilter driver exists in this tree (ADR-65 stands). \
          The row documents a deliberate structural absence, not a probeable mechanism — there \
          is nothing to force unavailable. Record as absent, citing ADR-65, per Phase 116 D-08's \
          structurally-blocked row form.",
-    ),
-    (
-        "FirewallRulesEgress",
-        "No force-unavailable seam was shipped for this row (Plans 04/06/07 covered the WFP \
-         and CLI-side token/label/DACL/JobObject/AppContainer layers only). Forcing \
-         `run_netsh_firewall` to fail closed would need either live `netsh` manipulation or a \
-         new production seam, both out of this plan's file-scoped remit (test files + SPEC \
-         only). Manual steps: temporarily block `netsh advfirewall` (e.g. via a conflicting \
-         firewall rule or a restricted execution policy) and confirm `nono run` with the \
-         FirewallRules backend selected aborts with the partial-rule-rollback behavior \
-         documented in `network.rs:1567-1586`.",
     ),
     (
         "BrokerAuthenticodeTrustGate",
@@ -198,77 +179,60 @@ const MANUALLY_VERIFIED: &[(&str, &str)] = &[
          underlying `verify_broker_authenticode` logic directly; this item is the live-install \
          end-to-end round-trip).",
     ),
-    (
-        "InterpreterCoverageGate",
-        "A pre-flight, build-time-of-the-launch-plan check (`probe: ProbeKind::NotApplicable`) \
-         — not a D-21 post-spawn attestation, so it has no force-unavailable seam to arm. The \
-         fail-closed mechanism is already proven at the library-unit level by \
-         `crates/nono/src/sandbox/windows.rs::validate_launch_paths_refuses_uncovered_interpreter`. \
-         A full CLI-level round-trip additionally requires reconstructing \
-         `resolve_interpreter_paths`'s shebang/PATH interpreter-resolution shape end-to-end, \
-         deferred as a follow-up rather than staged un-reviewed in this plan.",
-    ),
-    (
-        "AppContainerProfile",
-        "The real AppContainer-confined child is spawned INSIDE a separate \
-         `nono-shell-broker.exe` process (Blocker-1) — nono-cli's own gate never attests this \
-         layer. Driving the `BrokerLaunchNoPty` arm externally requires a real console session \
-         (broker spawn fails with GLE=87 under git-bash/MSYS, per project memory \
-         `feedback_windows_supervised_needs_real_console.md`) and was found, during this plan's \
-         own execution, to be console-fragile even from a PowerShell-wrapped `cargo test` \
-         harness. The underlying seam has real, passing in-crate coverage \
-         (`nono-shell-broker/src/main.rs::run_fails_when_app_container_forced_unavailable`, \
-         Plan 07, 24/24 passing). Manual steps: from a real (non-git-bash) PowerShell console, \
-         run `nono run --profile claude-code` with `NONO_FORCE_UNAVAILABLE_APP_CONTAINER=1` set \
-         and confirm the broker-arm spawn refuses.",
-    ),
-    (
-        "DaclAncestorTraverse",
-        "Shares `dacl_guard.rs`'s ONE `DACL_GRANT_FORCE_UNAVAILABLE` flag with \
-         `DaclSessionSidGrant`/`DaclPackageSidGrant`, but `AppliedAncestorTraverseGuard::\
-         snapshot_and_apply` is constructed STRICTLY AFTER `AppliedDaclGrantsGuard::\
-         snapshot_and_apply` in `prepare_live_windows_launch` (`mod.rs:449` then `mod.rs:462`) \
-         — arming the shared flag always aborts the launch at the FIRST guard via its `?`, so \
-         this row's own apply function is never reached by any external, black-box subprocess \
-         test. Direct evidence is the in-crate unit test in `dacl_guard.rs`'s `#[cfg(test)]` \
-         module (117-06: '8 feature-gated regression tests proving each hook short-circuits \
-         before its real OS call'), which calls `AppliedAncestorTraverseGuard::snapshot_and_apply` \
-         directly.",
-    ),
-    (
-        "DaclAncestorReadAttrs",
-        "Identical reasoning to `DaclAncestorTraverse` immediately above: shares the same \
-         shared flag, and `AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets` is \
-         constructed even later in `prepare_live_windows_launch` (`mod.rs:486`), strictly after \
-         `applied_dacls`'s `?` would already have returned. Direct evidence is the in-crate \
-         unit test in `dacl_guard.rs`'s `#[cfg(test)]` module (117-06).",
-    ),
+];
+
+/// Phase 117 Plan 18 (SC3 gap closure): `LayerId` rows that have a real,
+/// ordinary-host-runnable force-unavailable or negative test SOMEWHERE in
+/// the tree, but not under `layer_force_unavailable.rs`'s
+/// `fn force_unavailable_<snake>` external-subprocess-spawn convention —
+/// that convention is specifically for the black-box, whole-process
+/// force-unavailable shape; these 8 rows instead have a direct, in-process
+/// unit test that calls the guarded function or the real attestation gate
+/// directly. Each entry is (LayerId name, workspace-root-relative file
+/// path, function name); `also_automated_entries_are_non_vacuous` below
+/// existence-checks every entry's file+function on every run, so a renamed
+/// or removed test function fails the build rather than silently continuing
+/// to count as coverage (T-117-18-01).
+const ALSO_AUTOMATED: &[(&str, &str, &str)] = &[
     (
         "RestrictedToken",
-        "The seam is checked LATE — inside `spawn_windows_child` (`launch.rs:1620`), AFTER the \
-         Windows Supervised-strategy session file + capability-pipe event loop has already \
-         started (unlike the three rows this plan automates, which all abort during \
-         `prepare_live_windows_launch`, before that machinery starts). Empirically, on this \
-         plan's development host, killing/unwinding a piped-stdio `nono.exe` child spawned from \
-         a `cargo test` harness process AFTER that event loop starts reproducibly stalls the \
-         child's own teardown — even across a bounded-wait-and-kill retry loop (4 attempts x \
-         45s). This is a host/harness characteristic, not a defect: two independent, isolated \
-         single-invocation reproductions via PowerShell's `Start-Process` (outside `cargo \
-         test`'s own subprocess management) completed correctly in well under a second each, \
-         producing the exact expected diagnostic (`Startup self-attestation failed for layer \
-         RestrictedToken: forced unavailable by test seam`). Manual steps: from a real \
-         PowerShell console, run `target\\debug\\nono.exe run -- cmd /c echo hello` with \
-         `NONO_FORCE_UNAVAILABLE_RESTRICTED_TOKEN=1` set and confirm the diagnostic above.",
+        "crates/nono-cli/src/exec_strategy_windows/restricted_token.rs",
+        "create_restricted_token_with_sid_fails_when_forced_unavailable",
     ),
     (
         "JobObjectContainment",
-        "Same late-checked, event-loop-already-started class as `RestrictedToken` immediately \
-         above (`apply_process_handle_to_containment`, `launch.rs:404-422`, called from within \
-         `spawn_windows_child` after the session/capability-pipe machinery is up) and the same \
-         empirically-observed host/harness teardown-stall characteristic. Manual steps: from a \
-         real PowerShell console, run `target\\debug\\nono.exe run -- cmd /c echo hello` with \
-         `NONO_FORCE_UNAVAILABLE_JOB_OBJECT=1` set and confirm the `JobObjectContainment` \
-         diagnostic.",
+        "crates/nono-cli/src/exec_strategy_windows/launch.rs",
+        "apply_process_handle_to_containment_fails_when_forced_unavailable",
+    ),
+    (
+        "DaclAncestorTraverse",
+        "crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs",
+        "ancestor_traverse_snapshot_and_apply_fails_when_forced_unavailable",
+    ),
+    (
+        "DaclAncestorReadAttrs",
+        "crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs",
+        "ancestor_read_attributes_snapshot_and_apply_fails_when_forced_unavailable",
+    ),
+    (
+        "WfpEgressFilters",
+        "crates/nono-cli/src/exec_strategy_windows/launch.rs",
+        "wfp_row_can_be_selected_and_unconfirmed_from_a_real_guard_value",
+    ),
+    (
+        "FirewallRulesEgress",
+        "crates/nono-cli/src/exec_strategy_windows/launch.rs",
+        "firewall_rules_row_can_be_selected_and_unconfirmed_from_a_real_gate",
+    ),
+    (
+        "AppContainerProfile",
+        "crates/nono-shell-broker/src/main.rs",
+        "run_fails_when_app_container_forced_unavailable",
+    ),
+    (
+        "InterpreterCoverageGate",
+        "crates/nono/src/sandbox/windows.rs",
+        "validate_launch_paths_refuses_uncovered_interpreter",
     ),
 ];
 
@@ -283,13 +247,44 @@ const MANUAL_SECURITY_ASSUMPTIONS: &[(&str, &str)] = &[(
      as operator-only — see telemetry/event.rs doc comment",
 )];
 
-/// D-32: for every `LayerId` NOT on `MANUALLY_VERIFIED`, a
+/// Word-boundary-exact `fn {name}` search: plain `str::contains` would
+/// false-POSITIVE if `{name}` is a prefix of a different, unrelated function
+/// (e.g. renaming `foo` to `foo_v2` still contains the substring `fn foo`).
+/// Confirmed empirically during this plan's own execution: renaming
+/// `firewall_rules_row_can_be_selected_and_unconfirmed_from_a_real_gate` to
+/// `..._RENAMED` still satisfied a plain substring check, which would have
+/// made `also_automated_entries_are_non_vacuous` vacuous — the exact class
+/// of bug T-117-18-01 exists to prevent. Requires the character
+/// immediately after the name to be neither an identifier character nor
+/// `!` (so `fn foo` matches `fn foo(` and `fn foo<T>` but not `fn foo2` or
+/// `fn foobar`).
+fn contains_fn_exact(src: &str, fn_name: &str) -> bool {
+    let needle = format!("fn {fn_name}");
+    let mut search_start = 0;
+    while let Some(rel_idx) = src[search_start..].find(&needle) {
+        let match_start = search_start + rel_idx;
+        let after = match_start + needle.len();
+        let boundary_ok = match src[after..].chars().next() {
+            None => true,
+            Some(c) => !(c.is_ascii_alphanumeric() || c == '_'),
+        };
+        if boundary_ok {
+            return true;
+        }
+        search_start = match_start + 1;
+    }
+    false
+}
+
+/// D-32: for every `LayerId` NOT on `MANUALLY_VERIFIED`, either a
 /// `force_unavailable_<snake_case_name>` function must exist in
-/// `layer_force_unavailable.rs`'s source text. Discovery-based: this test
-/// reads `LayerId::ALL` fresh from `layer_registry.rs` on every run — it
-/// does NOT hardcode the 13 current names. Adding a 14th `LayerId` variant
-/// without a corresponding test function (or a `MANUALLY_VERIFIED` entry)
-/// fails here.
+/// `layer_force_unavailable.rs`'s source text, OR the row must have a valid
+/// `ALSO_AUTOMATED` entry whose cited file (read fresh from disk) contains
+/// its cited function (Plan 18 broadening — see `ALSO_AUTOMATED`'s doc
+/// comment). Discovery-based: this test reads `LayerId::ALL` fresh from
+/// `layer_registry.rs` on every run — it does NOT hardcode the 13 current
+/// names. Adding a 14th `LayerId` variant without a corresponding test
+/// function (or a `MANUALLY_VERIFIED`/`ALSO_AUTOMATED` entry) fails here.
 #[test]
 fn every_registry_row_has_a_test() {
     let registry_src = read_layer_registry();
@@ -302,24 +297,96 @@ fn every_registry_row_has_a_test() {
 
     let test_src = read_force_unavailable_tests();
     let manual_names: Vec<&str> = MANUALLY_VERIFIED.iter().map(|(name, _)| *name).collect();
+    let workspace_root = workspace_root();
 
     let mut missing = Vec::new();
     for name in &variant_names {
         if manual_names.contains(&name.as_str()) {
             continue;
         }
-        let expected_fn = format!("fn force_unavailable_{}", pascal_to_snake_case(name));
-        if !test_src.contains(&expected_fn) {
-            missing.push(format!("{name} (expected `{expected_fn}`)"));
+        let force_unavailable_fn = pascal_to_snake_case(name);
+        if contains_fn_exact(
+            &test_src,
+            &format!("force_unavailable_{force_unavailable_fn}"),
+        ) {
+            continue;
         }
+        let expected_fn = format!("fn force_unavailable_{force_unavailable_fn}");
+        // Broadened discovery (Plan 18, SC3 gap closure): a row not covered
+        // by the force_unavailable_* convention may still be covered by an
+        // ALSO_AUTOMATED entry — a real, in-process test living outside
+        // layer_force_unavailable.rs's external-subprocess convention. Read
+        // the cited file FRESH on every run (not cached) so a stale
+        // citation is caught here, not silently trusted.
+        if let Some((_, file_path, fn_name)) = ALSO_AUTOMATED.iter().find(|(n, _, _)| n == name) {
+            let full_path = workspace_root.join(file_path);
+            let expected_fn = format!("fn {fn_name}");
+            match std::fs::read_to_string(&full_path) {
+                Ok(src) if contains_fn_exact(&src, fn_name) => continue,
+                Ok(_) => missing.push(format!(
+                    "{name} (ALSO_AUTOMATED entry exists but `{expected_fn}` was not found in \
+                     {})",
+                    full_path.display()
+                )),
+                Err(e) => missing.push(format!(
+                    "{name} (ALSO_AUTOMATED entry cites {} which failed to read: {e})",
+                    full_path.display()
+                )),
+            }
+            continue;
+        }
+        missing.push(format!(
+            "{name} (expected `{expected_fn}` in layer_force_unavailable.rs, and no \
+             ALSO_AUTOMATED entry)"
+        ));
     }
 
     assert!(
         missing.is_empty(),
-        "the following LayerId row(s) have neither a force_unavailable_* test in \
-         layer_force_unavailable.rs nor a MANUALLY_VERIFIED entry in this file — CINT-03: \
-         \"a contract entry with no such test is not satisfied\":\n{}",
+        "the following LayerId row(s) have no force_unavailable_* test in \
+         layer_force_unavailable.rs, no valid ALSO_AUTOMATED entry, and no MANUALLY_VERIFIED \
+         entry in this file — CINT-03: \"a contract entry with no such test is not \
+         satisfied\":\n{}",
         missing.join("\n")
+    );
+}
+
+/// Plan 18 (T-117-18-01): every `ALSO_AUTOMATED` entry's cited file must
+/// exist and must contain its cited function name, checked fresh from disk
+/// on every run. Without this test, `ALSO_AUTOMATED` would be a second,
+/// unchecked `MANUALLY_VERIFIED`-shaped escape hatch — a renamed or removed
+/// test function would silently keep passing `every_registry_row_has_a_test`
+/// on stale trust instead of failing the build.
+#[test]
+fn also_automated_entries_are_non_vacuous() {
+    let workspace_root = workspace_root();
+    let mut failures = Vec::new();
+
+    for (layer_name, file_path, fn_name) in ALSO_AUTOMATED {
+        let full_path = workspace_root.join(file_path);
+        match std::fs::read_to_string(&full_path) {
+            Ok(src) => {
+                let expected_fn = format!("fn {fn_name}");
+                if !contains_fn_exact(&src, fn_name) {
+                    failures.push(format!(
+                        "{layer_name}: {} does not contain `{expected_fn}` — the ALSO_AUTOMATED \
+                         citation is stale (function renamed or removed)",
+                        full_path.display()
+                    ));
+                }
+            }
+            Err(e) => failures.push(format!(
+                "{layer_name}: failed to read cited file {}: {e}",
+                full_path.display()
+            )),
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "ALSO_AUTOMATED entries with a stale or unreadable citation (fix the citation or the \
+         source file, do not silently drop coverage):\n{}",
+        failures.join("\n")
     );
 }
 
