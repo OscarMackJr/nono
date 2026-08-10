@@ -14,15 +14,27 @@
 //! - If a path has NO label pre-grant (the common case for user files),
 //!   we apply the Plan 21-02 mode-derived mask and record `Applied { path }`.
 //!   On Drop we clear the ACE (restoring the Medium-IL default).
-//! - Concurrent sessions sharing the same path: "last session out restores" —
-//!   accepted trade-off versus refcount/lease plumbing.
+//! - Concurrent sessions sharing the same path (WR-02, Phase 117-20 CR-01
+//!   gap-closure round — corrects a claim the code never implemented): the
+//!   session that APPLIED the label reverts it at its own Drop; a session
+//!   that only ADOPTED a pre-existing exact-match ACE (`AlreadyAtRequiredLevel`)
+//!   never reverts it. If the applying session exits first, an adopting
+//!   session's attested claim can outlive the ACE it attested to (accepted
+//!   under D-20: mid-session state changes by another actor, including
+//!   another nono session, are outside this startup-only claim).
 
 use std::path::{Path, PathBuf};
 
 use nono::{
-    label_mask_for_access_mode, low_integrity_label_and_mask, path_is_owned_by_current_user,
+    label_mask_for_access_mode, low_integrity_label_ace, path_is_owned_by_current_user,
     try_set_mandatory_label, NonoError, Result, WindowsFilesystemPolicy,
 };
+// Only the test module still needs the 2-tuple wrapper (production code
+// switched to the 3-tuple `low_integrity_label_ace` for CR-01's AceFlags
+// check); gate the import so a non-test build does not warn on it.
+#[cfg(test)]
+use nono::low_integrity_label_and_mask;
+use windows_sys::Win32::Security::INHERIT_ONLY_ACE;
 use windows_sys::Win32::System::SystemServices::SECURITY_MANDATORY_LOW_RID;
 
 use super::layer_registry;
@@ -60,10 +72,18 @@ enum AppliedLabel {
     /// Low-IL label with this exact mask) is already satisfied on disk, so it
     /// counts toward `LabelCoverage.applied`. It is also NEVER reverted by
     /// this guard's Drop — we did not apply it this session, and a
-    /// concurrent session sharing the path may still depend on it (preserves
-    /// the module doc's "concurrent sessions sharing the same path: last
-    /// session out restores" contract rather than tearing down state this
-    /// guard does not own).
+    /// concurrent session sharing the path may still depend on it (WR-02:
+    /// per the module doc, the session that APPLIED the ACE reverts it at
+    /// its own Drop; a session that only ADOPTED it as residue never does,
+    /// so this guard does not tear down state it does not own).
+    ///
+    /// CR-01 (Phase 117-20): only recorded when the on-disk ACE's `AceFlags`
+    /// excludes `INHERIT_ONLY_ACE` — an inherit-only ACE is structurally
+    /// inert on the object it sits on (the OS never evaluates it against the
+    /// object itself, only against children created under it), so it cannot
+    /// be mistaken for the effective ACE nono's own `try_set_mandatory_label`
+    /// writes. `INHERITED_ACE` (an OS-propagated inherited ACE, which the OS
+    /// DOES evaluate) is not excluded by this check.
     AlreadyAtRequiredLevel,
     /// Path is not owned by the current user (system paths like
     /// `C:\Windows` granted read via built-in policy groups). Unprivileged
@@ -171,20 +191,31 @@ fn mandatory_label_force_unavailable() -> bool {
 
 impl AppliedLabelsGuard {
     /// For every rule in `policy.rules`:
-    /// 1. Snapshot prior label state via `nono::low_integrity_label_and_mask`.
-    /// 2. If `prior.is_some()` (ANY pre-existing mandatory-label ACE),
-    ///    record `Skip` and log a warning. Do NOT apply.
-    /// 3. Check ownership via `nono::path_is_owned_by_current_user`:
+    /// 1. Check ownership via `nono::path_is_owned_by_current_user` FIRST
+    ///    (WR-01, Phase 117-20: the residue-equivalence check below can only
+    ///    ever fire on a path nono itself could have labelled):
     ///    - `Ok(false)` (e.g. `C:\Windows` granted read via the
-    ///      `system_read_windows` policy group): record `Skip` and log a
-    ///      warning. Do NOT apply. Labeling is unnecessary on system paths —
-    ///      the Low-IL model is subtractive and Medium-IL defaults are
-    ///      already readable by Low-IL subjects.
+    ///      `system_read_windows` policy group): record `SkipNotOwned` and
+    ///      log a warning. Do NOT apply, do NOT even inspect any prior label.
+    ///      Labeling is unnecessary on system paths — the Low-IL model is
+    ///      subtractive and Medium-IL defaults are already readable by
+    ///      Low-IL subjects.
     ///    - `Err(_)`: propagate immediately. Ownership-check errors are
     ///      NEVER silently swallowed; this is fail-closed (Rule 1 invariant).
-    ///    - `Ok(true)`: proceed to step 4.
-    /// 4. Call `nono::try_set_mandatory_label` with the mode-derived mask.
-    ///    Record `Applied { path }`.
+    ///    - `Ok(true)`: proceed to step 2.
+    /// 2. Snapshot prior label state via `nono::low_integrity_label_ace`
+    ///    (rid, mask, AND `AceFlags`).
+    /// 3. If a prior label is present at `SECURITY_MANDATORY_LOW_RID` with
+    ///    EXACTLY this launch's mode-derived mask AND its `AceFlags` does
+    ///    NOT include `INHERIT_ONLY_ACE` (CR-01: an inherit-only ACE is
+    ///    structurally inert on the object itself, so it must never be
+    ///    mistaken for nono's own effective ACE), record
+    ///    `AlreadyAtRequiredLevel` — this is residue, not a coverage gap.
+    ///    Otherwise, ANY other pre-existing mandatory-label ACE records
+    ///    `SkipPreExistingLabel` and logs a warning. Do NOT apply in either
+    ///    case.
+    /// 4. If no prior label: call `nono::try_set_mandatory_label` with the
+    ///    mode-derived mask. Record `Applied { path }`.
     /// 5. If `try_set_mandatory_label` fails at step 4, best-effort-revert
     ///    any `Applied` entries already added to `self.entries`, then return
     ///    the original Err.
@@ -207,43 +238,8 @@ impl AppliedLabelsGuard {
 
         let mut guard = Self::default();
         for rule in &policy.rules {
-            let prior = low_integrity_label_and_mask(&rule.path);
-            if let Some((prior_rid, prior_mask)) = prior {
-                // NR3-01: before treating any pre-existing ACE as a coverage
-                // gap, check whether it is nono's own residue — a prior label
-                // at Low IL with EXACTLY the mask this launch would apply.
-                // That residue is not a third-party label; it is what THIS
-                // launch's own contract requires, already satisfied on disk.
-                let wanted = label_mask_for_access_mode(rule.access);
-                if prior_rid == SECURITY_MANDATORY_LOW_RID as u32 && prior_mask == wanted {
-                    tracing::debug!(
-                        path = %rule.path.display(),
-                        mask = format!("0x{wanted:X}"),
-                        "label guard: path already carries the exact mandatory-label ACE this launch \
-                         would apply (self-healing residue from a prior abnormal exit or a concurrent \
-                         session over the same path); treating as already covered"
-                    );
-                    guard.entries.push(AppliedLabel::AlreadyAtRequiredLevel);
-                    continue;
-                }
-
-                // D-02 skip-on-any-prior-label: a file with a mismatched (or
-                // non-Low) mandatory-label ACE is NOT touched. This preserves
-                // the contract that nono never mutates a pre-existing label.
-                // This IS a genuine coverage gap (Test C): the label present
-                // does not match what this launch's policy requires.
-                tracing::warn!(
-                    path = %rule.path.display(),
-                    prior_rid = format!("0x{prior_rid:X}"),
-                    prior_mask = format!("0x{prior_mask:X}"),
-                    "label guard: path has pre-existing mandatory-label ACE; skipping apply + revert \
-                     (grant may have no observable enforcement effect depending on pre-existing label)"
-                );
-                guard.entries.push(AppliedLabel::SkipPreExistingLabel);
-                continue;
-            }
-
-            // Ownership pre-check: SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)
+            // WR-01 (Phase 117-20): ownership pre-check runs FIRST, before we
+            // even look at any prior label. SetNamedSecurityInfoW(LABEL_SECURITY_INFORMATION)
             // requires WRITE_OWNER on the target. System paths like
             // C:\Windows are owned by TrustedInstaller and unprivileged
             // users do not hold WRITE_OWNER — the label apply would fail
@@ -251,6 +247,10 @@ impl AppliedLabelsGuard {
             // sandbox setup. Skipping is correct on the merits: system
             // paths are Medium-IL by default, already readable by Low-IL
             // subjects via existing OS ACLs, so labeling is unnecessary.
+            // Reordering past this gate also closes WR-01: the
+            // residue-equivalence check below can only ever fire on a path
+            // nono itself could have labelled, never on a path merely
+            // carrying a Low-IL ACE whose mask happens to match by chance.
             //
             // Fail-closed on Err: if the ownership query itself fails we do
             // NOT silently skip — propagate the error so operators can
@@ -276,8 +276,61 @@ impl AppliedLabelsGuard {
                     return Err(err);
                 }
                 Ok(true) => {
-                    // Current user owns the path — proceed to apply.
+                    // Current user owns the path — proceed to inspect any
+                    // prior label.
                 }
+            }
+
+            let prior = low_integrity_label_ace(&rule.path);
+            if let Some((prior_rid, prior_mask, prior_flags)) = prior {
+                // NR3-01: before treating any pre-existing ACE as a coverage
+                // gap, check whether it is nono's own residue — a prior label
+                // at Low IL with EXACTLY the mask this launch would apply.
+                // That residue is not a third-party label; it is what THIS
+                // launch's own contract requires, already satisfied on disk.
+                //
+                // CR-01 (Phase 117-20): (rid, mask) equivalence alone is not
+                // enough — a structurally-inert INHERIT_ONLY_ACE mandatory
+                // label ACE (the OS never evaluates it against the object it
+                // sits on, only against children created under it) would
+                // otherwise be indistinguishable from the effective ACE nono
+                // itself writes (AceFlags == 0). Reject when the
+                // INHERIT_ONLY_ACE bit is set. INHERITED_ACE (an
+                // OS-propagated inherited ACE, which the OS DOES evaluate
+                // against the object) is deliberately NOT excluded here.
+                let wanted = label_mask_for_access_mode(rule.access);
+                if prior_rid == SECURITY_MANDATORY_LOW_RID as u32
+                    && prior_mask == wanted
+                    && (u32::from(prior_flags) & INHERIT_ONLY_ACE) == 0
+                {
+                    tracing::debug!(
+                        path = %rule.path.display(),
+                        mask = format!("0x{wanted:X}"),
+                        flags = format!("0x{prior_flags:X}"),
+                        "label guard: path already carries the exact mandatory-label ACE this launch \
+                         would apply (self-healing residue from a prior abnormal exit or a concurrent \
+                         session over the same path); treating as already covered"
+                    );
+                    guard.entries.push(AppliedLabel::AlreadyAtRequiredLevel);
+                    continue;
+                }
+
+                // D-02 skip-on-any-prior-label: a file with a mismatched (or
+                // non-Low, or structurally-inert inherit-only) mandatory-label
+                // ACE is NOT touched. This preserves the contract that nono
+                // never mutates a pre-existing label. This IS a genuine
+                // coverage gap (Test C): the label present does not satisfy
+                // what this launch's policy requires.
+                tracing::warn!(
+                    path = %rule.path.display(),
+                    prior_rid = format!("0x{prior_rid:X}"),
+                    prior_mask = format!("0x{prior_mask:X}"),
+                    prior_flags = format!("0x{prior_flags:X}"),
+                    "label guard: path has pre-existing mandatory-label ACE; skipping apply + revert \
+                     (grant may have no observable enforcement effect depending on pre-existing label)"
+                );
+                guard.entries.push(AppliedLabel::SkipPreExistingLabel);
+                continue;
             }
 
             let mask = label_mask_for_access_mode(rule.access);
@@ -677,23 +730,41 @@ mod tests {
         // session's residue OR a third-party tool that hardened the file).
         // Then construct a guard over the same path and verify Drop does NOT
         // clear the label.
+        //
+        // WR-03 (Phase 117-20): the pre-label mask must be a genuine
+        // third-party mismatch against this test's own `AccessMode::Read`
+        // rule, not the hand-picked literal `0x5` — after NR3-01 shipped,
+        // `0x5` (NO_WRITE_UP | NO_EXECUTE_UP) accidentally collided with
+        // `AccessMode::Read`'s own wanted mask, silently rerouting this test
+        // onto the `AlreadyAtRequiredLevel` residue path instead of the
+        // `SkipPreExistingLabel` path it names and is meant to exercise.
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("note.txt");
         std::fs::write(&file, "x").expect("write file");
+        let third_party_mask = label_mask_for_access_mode(AccessMode::Write);
+        assert_ne!(
+            third_party_mask,
+            label_mask_for_access_mode(AccessMode::Read),
+            "test precondition: third-party mask must differ from this test's Read rule mask"
+        );
         // Use nono's raw primitive to mandatorily-label the file externally.
-        try_set_mandatory_label(&file, 0x5) // NO_WRITE_UP | NO_EXECUTE_UP
-            .expect("pre-label apply");
+        try_set_mandatory_label(&file, third_party_mask).expect("pre-label apply");
         let pre = low_integrity_label_and_mask(&file).expect("pre-label present");
         assert_eq!(pre.0, 0x1000);
 
         let policy = single_file_read_rule(file.clone());
         {
-            let _guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
+            let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
             // D-02 skip-on-any-prior-label: we did not touch the label.
             let during = low_integrity_label_and_mask(&file).expect("still labeled");
             assert_eq!(during.0, 0x1000);
-            // Sanity: the pre-existing-label skip variant is exercised.
-            let _skip_variant_reference = AppliedLabel::SkipPreExistingLabel;
+            // WR-03: this test must again drive SkipPreExistingLabel, the
+            // path its name promises.
+            assert!(
+                matches!(guard.entries[0], AppliedLabel::SkipPreExistingLabel),
+                "expected SkipPreExistingLabel, got {:?}",
+                guard.entries[0]
+            );
         } // guard drops
 
         // D-02 "skip revert on any pre-existing label" — label persists.
@@ -743,6 +814,164 @@ mod tests {
         // leaked label so the tempdir does not leave a labeled file behind
         // (neither guard instance will revert `AlreadyAtRequiredLevel`,
         // which is the whole point of the fix under test).
+        clear_mandatory_label(&file).expect("test cleanup: clear residual label");
+    }
+
+    /// Test-only helper (CR-01 regression coverage, Phase 117-20): plants a
+    /// `SYSTEM_MANDATORY_LABEL_ACE` on `path` with a caller-supplied SDDL
+    /// ace-flags string (e.g. `"OICIIO"` for `INHERIT_ONLY_ACE` plus
+    /// object/container inherit, `"ID"` for `INHERITED_ACE`), bypassing
+    /// `try_set_mandatory_label` (which always writes an EMPTY ace-flags
+    /// field). Mirrors `clear_mandatory_label`'s SDDL-construction pattern
+    /// and exact Win32 call sequence in this same file.
+    fn plant_mandatory_label_with_flags(path: &Path, mask: u32, ace_flags_sddl: &str) {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertStringSecurityDescriptorToSecurityDescriptorW, SetNamedSecurityInfoW,
+            SDDL_REVISION_1, SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::{
+            GetSecurityDescriptorSacl, ACL, LABEL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+        };
+
+        let wide_path: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let sddl = format!("S:(ML;{ace_flags_sddl};0x{mask:X};;;LW)");
+        let wide_sddl: Vec<u16> = sddl.encode_utf16().chain(std::iter::once(0)).collect();
+
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        let ok = unsafe {
+            // SAFETY: `wide_sddl` is a valid nul-terminated UTF-16 buffer;
+            // `sd` is a valid mutable out-pointer. On success the callee
+            // allocates an SD which we free below via LocalFree.
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                wide_sddl.as_ptr(),
+                SDDL_REVISION_1,
+                &mut sd,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(
+            ok,
+            0,
+            "test setup: ConvertStringSecurityDescriptorToSecurityDescriptorW must succeed for \
+             SDDL {sddl:?} (GetLastError=0x{:08X})",
+            unsafe {
+                // SAFETY: thread-local read with no preconditions.
+                GetLastError()
+            }
+        );
+
+        let mut sacl: *mut ACL = std::ptr::null_mut();
+        let mut sacl_present: i32 = 0;
+        let mut sacl_defaulted: i32 = 0;
+        let _ = unsafe {
+            // SAFETY: `sd` is a valid SD pointer returned by
+            // ConvertStringSecurityDescriptorToSecurityDescriptorW above; the
+            // three out-parameters refer to live local storage for the
+            // duration of the call.
+            GetSecurityDescriptorSacl(sd, &mut sacl_present, &mut sacl, &mut sacl_defaulted)
+        };
+
+        let status = unsafe {
+            // SAFETY: `wide_path` is a valid nul-terminated UTF-16 buffer;
+            // `sacl` points into `sd`, which is kept alive until the
+            // LocalFree call below.
+            SetNamedSecurityInfoW(
+                wide_path.as_ptr(),
+                SE_FILE_OBJECT,
+                LABEL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                sacl,
+            )
+        };
+
+        unsafe {
+            // SAFETY: `sd` was allocated by
+            // ConvertStringSecurityDescriptorToSecurityDescriptorW and must
+            // be freed with LocalFree per the Win32 contract.
+            LocalFree(sd as _);
+        }
+
+        assert_eq!(
+            status, 0,
+            "test setup: SetNamedSecurityInfoW(LABEL_) must succeed for SDDL {sddl:?} \
+             (status=0x{status:08X})"
+        );
+    }
+
+    /// CR-01 regression test (Phase 117-20, the core fix under test): plants
+    /// an ACE whose `(rid, mask)` matches EXACTLY what this launch would
+    /// apply, but whose `AceFlags` carries `INHERIT_ONLY_ACE` — structurally
+    /// inert on the object it sits on (the OS only evaluates it against
+    /// children created under the object, never the object itself). The
+    /// pre-fix predicate compared only `(rid, mask)` and would have accepted
+    /// this as `AlreadyAtRequiredLevel`; the fix must reject it as
+    /// `SkipPreExistingLabel` and must never let the layer report `Applied`.
+    #[test]
+    fn inherit_only_residue_is_not_treated_as_already_covered() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let wanted = label_mask_for_access_mode(AccessMode::Read);
+
+        // "OICIIO" = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE.
+        plant_mandatory_label_with_flags(&file, wanted, "OICIIO");
+
+        let policy = single_file_read_rule(file.clone());
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
+        assert!(
+            matches!(guard.entries[0], AppliedLabel::SkipPreExistingLabel),
+            "an INHERIT_ONLY_ACE mandatory-label ACE, even with a matching mask, must never be \
+             treated as already-covered residue (CR-01): got {:?}",
+            guard.entries[0]
+        );
+        assert_ne!(
+            guard.coverage().application(),
+            layer_registry::LayerApplication::Applied,
+            "an inherit-only residue ACE must not let the layer report Applied"
+        );
+    }
+
+    /// WR-02 pinning test: an `AlreadyAtRequiredLevel` residue ACE is
+    /// adopted, never reverted, even across guard `Drop` — this is the
+    /// accepted property the corrected module/variant doc comments now
+    /// state (a session that only ADOPTED a pre-existing exact-match ACE
+    /// never reverts it).
+    #[test]
+    fn residue_is_not_reverted_on_drop() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let wanted = label_mask_for_access_mode(AccessMode::Read);
+        try_set_mandatory_label(&file, wanted).expect("pre-label apply");
+
+        let policy = single_file_read_rule(file.clone());
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&policy).expect("apply");
+        assert!(
+            matches!(guard.entries[0], AppliedLabel::AlreadyAtRequiredLevel),
+            "expected AlreadyAtRequiredLevel residue, got {:?}",
+            guard.entries[0]
+        );
+        drop(guard);
+
+        let post = low_integrity_label_and_mask(&file);
+        assert_eq!(
+            post,
+            Some((SECURITY_MANDATORY_LOW_RID as u32, wanted)),
+            "AlreadyAtRequiredLevel residue must persist across guard Drop; got {post:?}"
+        );
+
+        // Cleanup only — not part of the assertion. Neither guard instance
+        // reverts `AlreadyAtRequiredLevel`, which is the whole point of the
+        // property under test.
         clear_mandatory_label(&file).expect("test cleanup: clear residual label");
     }
 
