@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 2/12 plans
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 5/12 plans
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -295,9 +295,9 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 - [x] 117-02-PLAN.md — Library surfaces: NonoDiagnosticCode::LayerAttestationFailed + machine_policy required_layers field
 
 **Wave 2** *(blocked on Wave 1)*
-- [ ] 117-03-PLAN.md — proj/SPEC-windows-fail-direction-contract.md + registry self-check/drift-check tests
-- [ ] 117-04-PLAN.md — layer-fault-injection Cargo feature + WFP toggle migration off NONO_TEST_HARNESS (SC4-4)
-- [ ] 117-05-PLAN.md — Shared crates/nono attestation primitive: LayerAttestationStatus (4-state) + raw OS probes
+- [x] 117-03-PLAN.md — proj/SPEC-windows-fail-direction-contract.md + registry self-check/drift-check tests
+- [x] 117-04-PLAN.md — layer-fault-injection Cargo feature + WFP toggle migration off NONO_TEST_HARNESS (SC4-4)
+- [x] 117-05-PLAN.md — Shared crates/nono attestation primitive: LayerAttestationStatus (4-state) + raw OS probes
 
 **Wave 3** *(blocked on Wave 2)*
 - [ ] 117-06-PLAN.md — Per-layer fault-injection hooks: restricted token, mandatory label, DACL grants, Job Object
