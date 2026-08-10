@@ -146,3 +146,10 @@ None. This plan removes dead code that misrepresented the daemon's decision-stat
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
+
+## Self-Check: PASSED
+
+- FOUND: `crates/nono-cli/src/exec_strategy_windows/attestation_downgrade_event.rs`
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-17-SUMMARY.md`
+- FOUND commit `f5f9587f` (fix)
+- FOUND commit `feae9ede` (docs)
