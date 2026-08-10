@@ -128,3 +128,12 @@ None - no external service configuration required.
 
 - SC3's remaining gap after this plan: 3 of 13 `LayerId` rows (`DaclSessionSidGrant`, `MinifilterAbsence`, `BrokerAuthenticodeTrustGate`) still have no automated test, each with an accurate, already-loud, per-row reason recorded in `MANUALLY_VERIFIED` and cross-referenced in the SPEC's manual-verification section (enforced by `host_gated_rows_are_loud`, still green). This is the intended, plan-scoped remainder — the plan's objective explicitly targets 10/13, not 13/13.
 - This plan did not touch NR3-01 (open BLOCKER, availability regression), NR3-02/NR3-03 (fail-open landmine risk), SC4's stale SPEC ledger rows, or NR3-08's citation drift — those remain open per `117-VERIFICATION.md` and are presumably addressed by sibling gap-closure plans 117-13 through 117-17 (already merged per `prior_work`) or later plans in this wave.
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono-cli/tests/layer_registry_meta_test.rs
+- FOUND: .github/workflows/ci.yml
+- FOUND: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-18-SUMMARY.md
+- FOUND commit: 16826a99 (Task 1)
+- FOUND commit: 693dab46 (Task 2)
+- FOUND commit: ec08f559 (docs: plan summary)
