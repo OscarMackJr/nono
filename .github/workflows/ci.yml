@@ -308,6 +308,40 @@ jobs:
           path: ci-logs\windows-regression.log
           if-no-files-found: warn
 
+  windows-layer-fault-injection:
+    name: Windows Layer Fault Injection
+    needs: changes
+    if: ${{ !startsWith(github.head_ref, 'dependabot/github_actions/') && needs.changes.outputs.run_code_jobs == 'true' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
+        with:
+          toolchain: stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Phase 117 review CR-10. Without this job the CINT-03
+      # forced-unavailable suites, the eight in-crate seam regression tests,
+      # the D-32 `every_registry_row_has_a_test` discovery gate and the four
+      # Windows block-net enforcement tests (CR-08) execute in NO gate at
+      # all. The SPEC claims these "fail the build"; this is the build.
+      - name: Run layer-fault-injection suites
+        run: |
+          cargo test -p nono-sandbox-cli --features layer-fault-injection
+          cargo test -p nono-shell-broker --features layer-fault-injection
+
   windows-packaging:
     name: Windows Packaging
     needs: changes

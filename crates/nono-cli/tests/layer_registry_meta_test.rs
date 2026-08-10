@@ -1,4 +1,14 @@
-#![cfg(all(target_os = "windows", feature = "layer-fault-injection"))]
+// Phase 117 review CR-10: the `feature = "layer-fault-injection"` gate is
+// REMOVED. These three tests read `layer_registry.rs`,
+// `layer_force_unavailable.rs` and the SPEC as TEXT — they touch no
+// fault-injection seam and never spawn anything, so the feature was
+// gratuitous. With it, the D-32 discovery gate ran in no build, no `make`
+// target and no CI job: adding a 14th `LayerId` failed nothing, which
+// directly falsified the SPEC's "or that test fails the build" claim.
+//
+// The `target_os = "windows"` gate stays: `layer_registry::all_entries()` is
+// Windows-only and the SPEC documents a Windows-only contract.
+#![cfg(target_os = "windows")]
 #![allow(clippy::unwrap_used)]
 //! Phase 117 Plan 12 (CINT-03/D-32): the discovery-based meta-test that makes
 //! "a contract entry with no such test is not satisfied" mechanically true.

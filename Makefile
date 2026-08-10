@@ -6,7 +6,7 @@
 #   make check        Run clippy and format check
 #   make release      Build release binaries
 
-.PHONY: all build build-lib build-cli build-ffi build-arm64 test test-lib test-cli test-ffi check clippy fmt clean install audit help test-windows-harness test-windows-smoke test-windows-integration test-windows-security check-upstream-drift test-spiffe
+.PHONY: all build build-lib build-cli build-ffi build-arm64 test test-lib test-cli test-ffi check clippy fmt clean install audit help test-windows-harness test-windows-smoke test-windows-integration test-windows-security check-upstream-drift test-spiffe test-layer-fault-injection
 
 # Default target
 all: build
@@ -66,6 +66,16 @@ test-windows-security:
 
 test-doc:
 	cargo test --doc
+
+# Phase 117 review CR-10: the CINT-03 forced-unavailable suites and every
+# in-crate `#[cfg(feature = "layer-fault-injection")]` seam regression test
+# only compile under this feature. Before this target existed, no `make`
+# target, no CI job and no default `cargo test` enabled it — so none of the
+# phase's own fail-direction evidence ever executed. Windows-only (every
+# gated test is `#[cfg(target_os = "windows")]`).
+test-layer-fault-injection:
+	cargo test -p nono-sandbox-cli --features layer-fault-injection
+	cargo test -p nono-shell-broker --features layer-fault-injection
 
 # SPIFFE/SPIRE workload-identity live integration suite (NET-02, Phase 113).
 # Downloads SPIRE 1.9.6 if needed, stands up a local server+agent, registers
