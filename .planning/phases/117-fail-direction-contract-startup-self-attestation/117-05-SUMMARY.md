@@ -120,3 +120,11 @@ None - no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono/src/attestation.rs
+- FOUND: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-05-SUMMARY.md
+- FOUND: 106911e1 (Task 1 commit)
+- FOUND: fa102a76 (Task 2 commit)
+- FOUND: 4a024158 (SUMMARY commit)
