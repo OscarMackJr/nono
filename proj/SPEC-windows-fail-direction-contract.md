@@ -95,12 +95,25 @@ backend must maintain zero startup latency. The actual measured cost of the star
 self-attestation pass (Plan 08/09/10) is recorded per gated path below. Placeholders are filled
 in by Plan 117-12, which owns the measurement:
 
-| Gated path (D-23) | Attestation cost |
-|---|---|
-| Direct `nono run` (`DirectCli`, `launch.rs` gate point) | TBD — measured in Plan 117-12 |
-| Daemon `nono agent launch` (`Daemon`, `agent_daemon/launch.rs` gate point) | TBD — measured in Plan 117-12 |
-| Broker arm (`Broker`, `nono-shell-broker/src/main.rs` gate point) | TBD — measured in Plan 117-12 |
-| Per-tool-call hook (`claude_code_hook.rs`, re-enters the `DirectCli` gate point) | TBD — measured in Plan 117-12. This figure includes the downgrade-banner per-session dedup check's own cost (see "Downgrade banner behavior" below), not only the attestation probes themselves — the hook path re-enters the direct spawn path on every tool call, so both costs are paid on every invocation. |
+Measured 2026-08-10 on the development host via dedicated `std::time::Instant`-wrapped unit
+tests (real Win32 calls against a real `GetCurrentProcess()` pseudo-handle, not a null/mock
+handle — a null handle short-circuits every probe on its own `Err` before reaching the real
+`GetTokenInformation`/`IsProcessInJob`/`TokenAppContainerSid` calls, which would measure
+error-path cost, not the real probe cost this table needs). None of these are asserted as strict
+pass/fail bounds beyond a generous 250ms sanity guard — the numbers below are what the project's
+"zero startup latency" constraint (CLAUDE.md) actually costs today, not a benchmark target.
+
+| Gated path (D-23) | Attestation cost | Measurement |
+|---|---|---|
+| Direct `nono run` (`DirectCli`, `launch.rs` gate point) | **394.4µs** | `exec_strategy_windows::attestation::latency_measurement::attest_and_decide_direct_cli_write_restricted_write_restricted_latency` — `attest_and_decide()` called with `EntryPath::DirectCli`/`WindowsTokenArm::WriteRestricted` against a real `GetCurrentProcess()` handle. |
+| Daemon `nono agent launch` (`Daemon`, `agent_daemon/launch.rs` gate point) | **35.7µs** | `agent_daemon::launch::windows_impl::attestation_gate_tests::daemon_attest_and_decide_latency` — `daemon_attest_and_decide()` against a real `GetCurrentProcess()` handle. |
+| Broker arm (`Broker`, `nono-shell-broker/src/main.rs` gate point) | **82.8µs** | `nono-shell-broker`'s `broker::app_container_resume_gate_tests::app_container_resume_gate_latency_with_real_probe` — `nono::attestation::probe_app_container_sid()` (the real Win32 call) plus `app_container_resume_gate()`'s own pure decision logic, against a real `GetCurrentProcess()` handle. |
+| Per-tool-call hook (`claude_code_hook.rs`, re-enters the `DirectCli` gate point) | **394.4µs attestation + 1.6962ms cold / 74.8µs warm dedup marker** (see below) | Direct-path attestation cost (row 1 above) plus `output::tests::attestation_downgrade_banner_cold_vs_warm_dedup_marker_latency`, which measures `print_attestation_downgrade_banner`'s per-session dedup marker check SEPARATELY cold (first occurrence this session: `create_dir_all` + `write`, **1.6962ms**) versus warm (an identical repeat: `path.exists()` stat only, **74.8µs**) — the hook path re-enters the direct spawn path on every tool call, so the WARM figure is the steady-state per-invocation cost for a long-running session; the COLD figure is paid once per session per distinct downgraded-layer-set. |
+
+**Broker-arm note:** `app_container_resume_gate` itself (the pure decision function, excluding
+the probe call) is allocation-only string/slice comparison with no OS calls — its own cost is not
+separable from the measured 82.8µs figure above with `std::time::Instant`'s resolution on this
+host; the probe call dominates.
 
 ## Contract vs. code discrepancies
 
@@ -167,3 +180,50 @@ banner per tool call.
 This is a contract-visible behavior — an operator can rely on "one banner per session" as the
 observable shape of a persistent downgrade, not an implementation detail buried in code
 comments.
+
+## Manual verification (D-31)
+
+Per D-31, a row that cannot be tested on an ordinary host is a **loud, named gap** — never a
+silent `#[ignore]`. CINT-03's own wording is "a contract entry with no such test is not
+satisfied"; the entries below are the rows for which this plan's automated
+`crates/nono-cli/tests/layer_force_unavailable.rs` cannot itself provide that test on an ordinary
+(non-elevated, non-domain-joined, non-production-signed) development host, mechanically enforced
+loud by `crates/nono-cli/tests/layer_registry_meta_test.rs`'s `host_gated_rows_are_loud` test
+(every entry below must appear, by name, in this section, or that test fails the build).
+
+### `LayerId`-scoped rows
+
+| `LayerId` | Why manual | Manual verification steps |
+|---|---|---|
+| `WfpEgressFilters` | Requires a live, elevated `nono-wfp-service` and a non-elevated daemon session (per-SID WFP is daemon-path only, `nono agent launch`, not direct `nono run`). | Install/start `nono-wfp-service` as admin; from a **non-elevated** shell run a confined daemon session with the WFP layer forced unavailable; assert the contracted `Abort` outcome. |
+| `MinifilterAbsence` | Structurally untestable — no minifilter driver exists in this tree (ADR-65 stands). The row documents a deliberate structural absence, not a probeable mechanism. | Not a skip: recorded here as an explicit "structurally absent / not applicable" entry citing ADR-65, per Phase 116 D-08's `structurally-blocked` row form. |
+| `FirewallRulesEgress` | No force-unavailable seam was shipped for this row (Plans 04/06/07 covered WFP + the CLI-side token/label/DACL/JobObject/AppContainer layers only); adding one is a new production-code seam outside this plan's test-file-scoped remit. | Temporarily block `netsh advfirewall` (e.g. a conflicting rule, or a restricted execution policy) and confirm a `nono run` with the `FirewallRules` backend selected aborts with the partial-rule-rollback behavior at `network.rs:1567-1586`. |
+| `BrokerAuthenticodeTrustGate` | The gate is skipped entirely under `is_dev_build_layout()` (`launch.rs:2190`/`:2194`) — active only in a signed, production (non-dev-layout) install. | From a signed release install outside `target/...`, stage a `nono-shell-broker.exe` signed by a different identity than `nono.exe` and confirm the broker-arm spawn refuses (`broker_authenticode.rs::broker_signature_mismatch_refuses_spawn` already covers `verify_broker_authenticode` directly; this item is the live-install end-to-end round-trip). |
+| `InterpreterCoverageGate` | A pre-flight, build-time-of-the-launch-plan check (`probe: ProbeKind::NotApplicable`), not a D-21 post-spawn attestation — no force-unavailable seam applies. | The fail-closed mechanism is already proven at the library-unit level: `crates/nono/src/sandbox/windows.rs::validate_launch_paths_refuses_uncovered_interpreter`. A full CLI-level round-trip additionally requires reconstructing `resolve_interpreter_paths`'s shebang/PATH resolution shape end-to-end — deferred as a follow-up. |
+| `AppContainerProfile` | The real AppContainer-confined child is spawned INSIDE a separate `nono-shell-broker.exe` process (Blocker-1); nono-cli's own gate never attests this layer. Driving the `BrokerLaunchNoPty` arm externally requires a real console session — found, during this plan's own execution, to be console-fragile even from a PowerShell-wrapped `cargo test` harness (broker spawn fails with GLE=87 under git-bash/MSYS per project memory). | The underlying seam has real, passing in-crate coverage (`nono-shell-broker/src/main.rs::run_fails_when_app_container_forced_unavailable`, Plan 07, 24/24 passing). Manual steps: from a real (non-git-bash) PowerShell console, run `nono run --profile claude-code` with `NONO_FORCE_UNAVAILABLE_APP_CONTAINER=1` set and confirm the broker-arm spawn refuses. |
+| `DaclAncestorTraverse` | Shares `dacl_guard.rs`'s ONE `DACL_GRANT_FORCE_UNAVAILABLE` flag with `DaclSessionSidGrant`/`DaclPackageSidGrant`, but `AppliedAncestorTraverseGuard::snapshot_and_apply` is constructed STRICTLY AFTER `AppliedDaclGrantsGuard::snapshot_and_apply` in `prepare_live_windows_launch` (`mod.rs:449` then `:462`) — arming the shared flag always aborts the launch at the FIRST guard via its `?`, so this row's own apply function is never reached by any external, black-box subprocess test. | Direct evidence is the in-crate unit test in `dacl_guard.rs`'s `#[cfg(test)]` module (117-06: "8 feature-gated regression tests proving each hook short-circuits before its real OS call"), which calls `AppliedAncestorTraverseGuard::snapshot_and_apply` directly. |
+| `DaclAncestorReadAttrs` | Identical reasoning to `DaclAncestorTraverse` — same shared flag; `AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets` is constructed even later (`mod.rs:486`), strictly after `applied_dacls`'s `?` would already have returned. | Direct evidence is the in-crate unit test in `dacl_guard.rs`'s `#[cfg(test)]` module (117-06). |
+| `RestrictedToken` | The seam is checked LATE — inside `spawn_windows_child` (`launch.rs:1620`), AFTER the Windows `Supervised`-strategy session file + capability-pipe event loop has already started. Empirically, on this plan's development host, killing/unwinding a piped-stdio `nono.exe` child spawned from a `cargo test` harness process AFTER that event loop starts reproducibly stalls the child's own teardown — even across a bounded-wait-and-kill retry loop (4 attempts × 45s). This is a host/harness characteristic, not a defect: two independent, isolated single-invocation reproductions via PowerShell's `Start-Process` (outside `cargo test`'s own subprocess management) completed correctly in well under a second each, producing the exact expected diagnostic. | From a real PowerShell console, run `target\debug\nono.exe run -- cmd /c echo hello` with `NONO_FORCE_UNAVAILABLE_RESTRICTED_TOKEN=1` set; confirm stderr contains `Startup self-attestation failed for layer RestrictedToken: forced unavailable by test seam`. |
+| `JobObjectContainment` | Same late-checked, event-loop-already-started class as `RestrictedToken` (`apply_process_handle_to_containment`, `launch.rs:404-422`) and the same empirically-observed host/harness teardown-stall characteristic. | From a real PowerShell console, run `target\debug\nono.exe run -- cmd /c echo hello` with `NONO_FORCE_UNAVAILABLE_JOB_OBJECT=1` set; confirm the `JobObjectContainment` diagnostic. |
+
+Both `RestrictedToken` and `JobObjectContainment` have a shipped, compiled-out (D-30)
+`layer-fault-injection`-gated force-unavailable seam AND this plan's env-var bridge
+(`NONO_FORCE_UNAVAILABLE_RESTRICTED_TOKEN`/`NONO_FORCE_UNAVAILABLE_JOB_OBJECT`,
+`crates/nono-cli/src/command_runtime.rs`) — the mechanism is proven correct (see the manual
+reproduction evidence above); what is not reliably automatable from THIS harness is the
+subprocess-management/teardown timing, not the seam itself.
+
+### Cross-cutting security assumptions
+
+Distinct from the `LayerId`-scoped rows above: a cross-cutting security assumption not tied to
+one registry row (Blocker-3, checker pass 2 — the concrete pickup Plan 09's flagged assumption
+needed and did not get in the prior pass).
+
+| Assumption | Why manual | Manual verification steps |
+|---|---|---|
+| `etw-applog-child-readability` | Plan 09 added `SecurityEvent.downgraded_layers` on the documented-but-unverified assumption that ETW/Application Event Log is unreadable by a Low-IL/AppContainer child (D-28's "layer-specific detail stays off channels the confined process can read"). A static SDDL parse could be added as a follow-up, but asserting a specific SDDL shape from memory without live verification risks baking in a wrong "safe" claim — worse than a named, loud manual gap. | Run `wevtutil gl Application` (or the equivalent `EvtOpenChannelConfig`/`EvtGetChannelConfigProperty` Win32 call for `EvtChannelConfigPropertyAccess`) and inspect the returned `channelAccess` SDDL string for any ACE granting read (`0x1`, generic-read) to a SID broader than the expected administrative/eventlog-reader set — in particular check whether `S-1-1-0` (Everyone) or any low-integrity/AppContainer-relevant SID is present. If such a SID is present, `SecurityEvent.downgraded_layers` is NOT operator-only and D-28's channel-separation property is violated; escalate as a new SC4 discrepancy. |
+
+**Enforced by:** `crates/nono-cli/tests/layer_registry_meta_test.rs`'s `every_registry_row_has_a_test`
+(D-32 discovery), `host_gated_rows_are_loud`, and `security_assumptions_are_loud` — all three fail
+the build if a row is added to `MANUALLY_VERIFIED`/`MANUAL_SECURITY_ASSUMPTIONS` without a
+non-empty reason, or if a listed entry stops appearing in this section.
