@@ -337,10 +337,13 @@ jobs:
       # the D-32 `every_registry_row_has_a_test` discovery gate and the four
       # Windows block-net enforcement tests (CR-08) execute in NO gate at
       # all. The SPEC claims these "fail the build"; this is the build.
+      # `--test-threads=1` is load-bearing: every force-unavailable seam is a
+      # process-global AtomicBool, so parallel execution lets one test's armed
+      # flag leak into another test's real apply call.
       - name: Run layer-fault-injection suites
         run: |
-          cargo test -p nono-sandbox-cli --features layer-fault-injection
-          cargo test -p nono-shell-broker --features layer-fault-injection
+          cargo test -p nono-sandbox-cli --features layer-fault-injection -- --test-threads=1
+          cargo test -p nono-shell-broker --features layer-fault-injection -- --test-threads=1
 
   windows-packaging:
     name: Windows Packaging

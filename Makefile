@@ -73,9 +73,14 @@ test-doc:
 # target, no CI job and no default `cargo test` enabled it — so none of the
 # phase's own fail-direction evidence ever executed. Windows-only (every
 # gated test is `#[cfg(target_os = "windows")]`).
+# `--test-threads=1` is load-bearing, not caution: every force-unavailable
+# seam is a process-global `AtomicBool`, so running these suites in parallel
+# lets one test's armed flag leak into another's real apply call (observed:
+# dacl_guard::tests::ancestor_traverse_grants_owned_ancestors_and_reverts_on_drop
+# failing under the default harness, passing at --test-threads=1).
 test-layer-fault-injection:
-	cargo test -p nono-sandbox-cli --features layer-fault-injection
-	cargo test -p nono-shell-broker --features layer-fault-injection
+	cargo test -p nono-sandbox-cli --features layer-fault-injection -- --test-threads=1
+	cargo test -p nono-shell-broker --features layer-fault-injection -- --test-threads=1
 
 # SPIFFE/SPIRE workload-identity live integration suite (NET-02, Phase 113).
 # Downloads SPIRE 1.9.6 if needed, stands up a local server+agent, registers
