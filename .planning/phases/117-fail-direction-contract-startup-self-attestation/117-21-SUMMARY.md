@@ -131,3 +131,11 @@ None - no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-10*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-21-SUMMARY.md`
+- FOUND commit `5fa52bc7` (Task 1)
+- FOUND commit `751ab7af` (Task 2)
+- FOUND commit `e082745d` (cross-target cfg fix)
+- FOUND commit `a009f5c4` (this SUMMARY)
