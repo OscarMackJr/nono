@@ -259,6 +259,7 @@ mod tests {
             chain_head: "0000000000000000000000000000000000000000000000000000000000000000"
                 .to_string(),
             timestamp_unix_ms: 0,
+            downgraded_layers: None,
         };
         // Must not panic.
         emit_security_event(&event);

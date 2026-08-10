@@ -27,6 +27,7 @@
 //! | 10008   | `PolicyOverrideRejected`     |
 //! | 10009   | `PolicyOverrideExpired`      |
 //! | 10010   | `PolicyOverrideRevoked`      |
+//! | 10011   | `LayerAttestationDowngraded` |
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -54,6 +55,8 @@ pub const EVENT_ID_POLICY_OVERRIDE_REJECTED: u32 = 10008;
 pub const EVENT_ID_POLICY_OVERRIDE_EXPIRED: u32 = 10009;
 /// EventID for a policy-override token rejected due to replay (jti already consumed).
 pub const EVENT_ID_POLICY_OVERRIDE_REVOKED: u32 = 10010;
+/// EventID for a startup self-attestation downgrade (Phase 117 CINT-02, D-27).
+pub const EVENT_ID_LAYER_ATTESTATION_DOWNGRADED: u32 = 10011;
 
 // ── SecurityEventType ─────────────────────────────────────────────────────────
 
@@ -87,6 +90,14 @@ pub enum SecurityEventType {
     PolicyOverrideExpired,
     /// Signed override token rejected as already-consumed/revoked (EventID 10010).
     PolicyOverrideRevoked,
+    // ── Phase 117 (CINT-02): startup self-attestation downgrade (EventID 10011) ─
+    /// A startup self-attestation pass classified at least one expected layer
+    /// as not `Confirmed` and the session proceeded with a visibly downgraded
+    /// claim (D-14/D-25/D-27, EventID 10011). Carries the specific downgraded
+    /// layer names on [`SecurityEvent::downgraded_layers`] — this event
+    /// channel is written only by the supervisor's own process, distinct from
+    /// the coarse, layer-name-free console banner (D-28).
+    LayerAttestationDowngraded,
 }
 
 /// Return the Windows Application Event Log EventID for a [`SecurityEventType`].
@@ -107,6 +118,8 @@ pub fn event_id_for(t: &SecurityEventType) -> u32 {
         SecurityEventType::PolicyOverrideRejected => EVENT_ID_POLICY_OVERRIDE_REJECTED,
         SecurityEventType::PolicyOverrideExpired => EVENT_ID_POLICY_OVERRIDE_EXPIRED,
         SecurityEventType::PolicyOverrideRevoked => EVENT_ID_POLICY_OVERRIDE_REVOKED,
+        // Phase 117 addition:
+        SecurityEventType::LayerAttestationDowngraded => EVENT_ID_LAYER_ATTESTATION_DOWNGRADED,
     }
 }
 
@@ -271,6 +284,28 @@ pub struct SecurityEvent {
     pub chain_head: String,
     /// Unix timestamp in milliseconds (UTC).
     pub timestamp_unix_ms: u64,
+    /// Comma-separated `LayerId` `Debug`-format names of the layers a
+    /// startup self-attestation pass could not confirm (Phase 117 CINT-02,
+    /// D-27/D-28). `None` for every event type except
+    /// [`SecurityEventType::LayerAttestationDowngraded`].
+    ///
+    /// # D-28: why specific layer names are safe HERE but not on the banner
+    ///
+    /// This field deliberately carries the exact degraded-layer identities —
+    /// a departure from `print_attestation_downgrade_banner`'s coarse,
+    /// arm-independent wording (`crates/nono-cli/src/output.rs`). That
+    /// departure is justified because this event is written only via
+    /// `windows::emit_security_event` to ETW / the Application Event Log
+    /// from the supervisor's own process — code the confined child never
+    /// executes or calls into (D-19). **This assumption is NOT yet
+    /// empirically verified on this host**: whether a Low-IL/AppContainer
+    /// child could itself read the Application Event Log via its own
+    /// ETW/EventLog API calls is an open question. Plan 12 Task 2 adds a
+    /// concrete, loud, named manual-verification item for this exact
+    /// assumption, using `wevtutil gl Application` to inspect the channel's
+    /// access SDDL — see `117-VALIDATION.md`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downgraded_layers: Option<String>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -314,6 +349,63 @@ mod tests {
         assert_eq!(
             event_id_for(&SecurityEventType::PolicyOverrideRevoked),
             10010
+        );
+    }
+
+    // ── Phase 117 (CINT-02): LayerAttestationDowngraded EventID + field ──────
+
+    #[test]
+    fn layer_attestation_downgraded_event_id_is_10011() {
+        assert_eq!(
+            event_id_for(&SecurityEventType::LayerAttestationDowngraded),
+            EVENT_ID_LAYER_ATTESTATION_DOWNGRADED
+        );
+        assert_eq!(EVENT_ID_LAYER_ATTESTATION_DOWNGRADED, 10011);
+    }
+
+    #[test]
+    fn downgraded_layers_field_round_trips_through_serde() {
+        let event = SecurityEvent {
+            event_type: SecurityEventType::LayerAttestationDowngraded,
+            agent_pid: 4321,
+            path_hash: None,
+            path_category: None,
+            host: None,
+            session_id: "sess-attest".to_string(),
+            chain_head: "aabbccdd".to_string(),
+            timestamp_unix_ms: 1_800_000_000_000,
+            downgraded_layers: Some("AppContainerProfile,DaclPackageSidGrant".to_string()),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(
+            json.contains("\"DowngradedLayers\""),
+            "missing DowngradedLayers: {json}"
+        );
+        let restored: SecurityEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            restored.downgraded_layers,
+            Some("AppContainerProfile,DaclPackageSidGrant".to_string()),
+            "downgraded_layers must round-trip unchanged through serde"
+        );
+    }
+
+    #[test]
+    fn downgraded_layers_omitted_when_none() {
+        let event = SecurityEvent {
+            event_type: SecurityEventType::PathDeny,
+            agent_pid: 1,
+            path_hash: None,
+            path_category: None,
+            host: None,
+            session_id: "sess".to_string(),
+            chain_head: "00".to_string(),
+            timestamp_unix_ms: 0,
+            downgraded_layers: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(
+            !json.contains("DowngradedLayers"),
+            "downgraded_layers: None must be omitted (skip_serializing_if): {json}"
         );
     }
 
@@ -473,6 +565,7 @@ mod tests {
             session_id: "sess-abc".to_string(),
             chain_head: "00112233445566778899aabbccddeeff".to_string(),
             timestamp_unix_ms: 1_700_000_000_000,
+            downgraded_layers: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         // SC-1 named fields must appear in PascalCase.

@@ -178,6 +178,10 @@ fn severity_for(t: &SecurityEventType) -> nono::TelemetrySeverity {
         | SecurityEventType::PolicyOverrideRejected
         | SecurityEventType::PolicyOverrideExpired
         | SecurityEventType::PolicyOverrideRevoked => TelemetrySeverity::Warning,
+        // Phase 117: a downgraded confinement claim is Warning-level — it is
+        // an honesty-preserving degrade (D-14), not itself an active denial,
+        // but must never be filtered below the default Warning threshold.
+        SecurityEventType::LayerAttestationDowngraded => TelemetrySeverity::Warning,
     }
 }
 
@@ -357,6 +361,97 @@ impl SecurityEventLayer {
                 session_id: inner.session_id.clone(),
                 chain_head: chain_head.clone(),
                 timestamp_unix_ms,
+                downgraded_layers: None,
+            };
+            windows::emit_security_event(&security_event);
+        }
+
+        Ok(chain_head)
+    }
+
+    /// Emit a `LayerAttestationDowngraded` event directly into the HMAC chain
+    /// (Phase 117 CINT-02 / D-27's structured-telemetry channel).
+    ///
+    /// Bypasses the tracing-intercept path (`on_event`) for the same reason
+    /// [`Self::emit_override_event`] does — this event carries a
+    /// `downgraded_layers` field, not `path`/`host`. Called from
+    /// `exec_strategy_windows::attestation::attest_and_decide`'s callers
+    /// (Plans 10/11's gate points) once per attestation decision, i.e. once
+    /// per spawn — this event is **never deduplicated**, unlike
+    /// `output::print_attestation_downgrade_banner`'s per-session dedup: the
+    /// HMAC-chained audit record intentionally keeps a complete history of
+    /// every downgraded spawn (the operator-forensics channel), while the
+    /// banner is the noise-sensitive human channel.
+    ///
+    /// `downgraded_layers` carries specific `LayerId` `Debug`-format names
+    /// (e.g. `"AppContainerProfile,DaclPackageSidGrant"`) — see
+    /// [`SecurityEvent::downgraded_layers`]'s doc comment for the D-28
+    /// justification of why this channel, unlike the banner, is allowed to
+    /// name specific layers.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(chain_head_hex)` when the event was committed to the chain.
+    /// `Err(&'static str)` if the mutex is poisoned.
+    ///
+    /// # AUD-04 contract
+    ///
+    /// Callers MUST treat `Err` as non-fatal for the *launch* decision — an
+    /// audit-record failure must never itself block a downgraded session
+    /// from proceeding, since blocking here would trade an honesty gap for
+    /// an availability regression. Callers MUST still surface the downgrade
+    /// to the operator through the banner (Task 2) even if this call fails,
+    /// per the `#[must_use]` contract below — silently discarding the `Err`
+    /// is the one thing never permitted.
+    ///
+    /// # Telemetry-disabled behaviour (D-14 degrade-not-abort)
+    ///
+    /// When `inner.config.enabled` is `false`, the HMAC chain still advances
+    /// (for sequence correctness and audit ordering) but no ETW/AppLog emit
+    /// occurs — mirrors [`Self::emit_override_event`]'s policy.
+    // This plan (117-09) lands the function itself; its callers are Plans
+    // 10/11's gate points (later in this same wave). Until those land, the
+    // method has no call site in either `nono` or `nono-agentd` — same
+    // multi-binary-compilation-artifact situation `emit_override_event`
+    // documents above, not actual dead code.
+    #[allow(dead_code)]
+    #[must_use = "AUD-04: Err means the audit record was not committed — callers MUST \
+                  surface the downgrade to the operator through the banner even if this \
+                  call fails, never silently proceed"]
+    pub fn emit_attestation_event(&self, downgraded_layers: &[&str]) -> Result<String, &'static str> {
+        let mut inner = self.inner.lock().map_err(|_| "mutex poisoned")?;
+
+        let timestamp_unix_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let downgraded_layers_value = downgraded_layers.join(",");
+
+        // Build canonical event bytes for chain advancement (same shape as
+        // emit_override_event / on_event).
+        let pre_chain_bytes = format!(
+            "{event_type:?}|{downgraded}|{session_id}|{ts}",
+            event_type = SecurityEventType::LayerAttestationDowngraded,
+            downgraded = downgraded_layers_value,
+            session_id = inner.session_id,
+            ts = timestamp_unix_ms,
+        );
+
+        advance_chain(&mut inner.chain, pre_chain_bytes.as_bytes());
+        let chain_head = chain_head_hex(&inner.chain.head);
+
+        if inner.config.enabled {
+            let security_event = SecurityEvent {
+                event_type: SecurityEventType::LayerAttestationDowngraded,
+                agent_pid: std::process::id(),
+                path_hash: None,
+                path_category: None,
+                host: None,
+                session_id: inner.session_id.clone(),
+                chain_head: chain_head.clone(),
+                timestamp_unix_ms,
+                downgraded_layers: Some(downgraded_layers_value),
             };
             windows::emit_security_event(&security_event);
         }
@@ -451,6 +546,7 @@ impl<S: Subscriber> Layer<S> for SecurityEventLayer {
             session_id: inner.session_id.clone(),
             chain_head,
             timestamp_unix_ms,
+            downgraded_layers: None,
         };
 
         // Emit to Windows Application log + ETW (dual-emit, D-01).
@@ -852,6 +948,75 @@ mod tests {
         assert!(
             result.is_ok(),
             "None zt_audit_hash must return Ok (CAF v0.1 pre-ZT tokens allowed)"
+        );
+    }
+
+    // ── emit_attestation_event (Phase 117 CINT-02 / D-27 telemetry channel) ──
+
+    /// Behavior test: chain advances by exactly one call, regardless of
+    /// `config.enabled` (mirrors `emit_override_event_advances_chain_by_one`).
+    #[test]
+    fn emit_attestation_event_advances_chain_by_one_enabled() {
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig {
+                enabled: true,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Warning,
+            },
+            "test-attestation-session".to_string(),
+        );
+        assert_eq!(layer.chain_sequence(), 0, "genesis must be 0");
+        let result = layer.emit_attestation_event(&["AppContainerProfile"]);
+        assert!(result.is_ok(), "emit_attestation_event must succeed");
+        assert_eq!(
+            layer.chain_sequence(),
+            1,
+            "chain must advance by exactly 1 (enabled=true)"
+        );
+    }
+
+    #[test]
+    fn emit_attestation_event_advances_chain_by_one_disabled() {
+        let layer = SecurityEventLayer::new(
+            TelemetryConfig {
+                enabled: false,
+                channel: "Application".to_string(),
+                min_severity: TelemetrySeverity::Warning,
+            },
+            "test-attestation-session-disabled".to_string(),
+        );
+        assert_eq!(layer.chain_sequence(), 0, "genesis must be 0");
+        let result = layer.emit_attestation_event(&["WfpEgressFilters"]);
+        assert!(
+            result.is_ok(),
+            "emit_attestation_event must succeed even when telemetry is disabled (D-14)"
+        );
+        assert_eq!(
+            layer.chain_sequence(),
+            1,
+            "chain must still advance by exactly 1 (enabled=false, D-14 degrade-not-abort)"
+        );
+    }
+
+    #[test]
+    fn emit_attestation_event_err_on_poisoned_mutex() {
+        use std::sync::Arc;
+
+        let layer = Arc::new(SecurityEventLayer::new(
+            TelemetryConfig::default(),
+            "test-attestation-poison".to_string(),
+        ));
+
+        let layer_clone = Arc::clone(&layer);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = layer_clone.inner.lock().unwrap();
+            panic!("intentionally poison the mutex");
+        });
+
+        let result = layer.emit_attestation_event(&["RestrictedToken"]);
+        assert!(
+            result.is_err(),
+            "poisoned mutex must return Err (AUD-04 fail-closed)"
         );
     }
 }
