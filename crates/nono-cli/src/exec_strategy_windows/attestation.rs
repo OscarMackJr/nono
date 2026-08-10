@@ -508,20 +508,31 @@ pub(crate) fn attest_and_decide(input: AttestationInput) -> nono::Result<Attesta
 /// `broker_expected_rows_are_abort_only` test enforces that no such row
 /// exists in the registry today) — that combination would otherwise go
 /// completely unattested on the broker arm.
-pub(crate) fn required_layers_for_broker(entries: &[layer_registry::LayerRegistryEntry]) -> String {
+/// # Phase 117 review CR-03.1 — arm scoping
+///
+/// `spawn_arm` is the `WindowsTokenArm` nono-cli selected for THIS launch
+/// (`BrokerLaunch` for the PTY shape, `BrokerLaunchNoPty` for the
+/// AppContainer shape). A `(EntryPath::Broker, token_arm: None)` cell means
+/// "applies to every broker spawn shape"; a `(EntryPath::Broker,
+/// Some(arm))` cell applies only to that shape. Without this, the wire
+/// contract demanded `AppContainerProfile` on the PTY shape, where the
+/// broker creates no AppContainer at all — an unsatisfiable requirement the
+/// broker used to paper over by ignoring it.
+pub(crate) fn required_layers_for_broker(
+    entries: &[layer_registry::LayerRegistryEntry],
+    spawn_arm: WindowsTokenArm,
+) -> String {
     entries
         .iter()
         .filter(|entry| {
             entry.outcome == layer_registry::ContractOutcome::Abort
                 && entry.expectancy.iter().any(|arm| {
-                    matches!(
-                        arm,
-                        layer_registry::ArmExpectancy {
-                            entry_path: layer_registry::EntryPath::Broker,
-                            expected: true,
-                            ..
+                    arm.entry_path == layer_registry::EntryPath::Broker
+                        && arm.expected
+                        && match arm.token_arm {
+                            None => true,
+                            Some(name) => format!("{spawn_arm:?}") == name,
                         }
-                    )
                 })
         })
         .map(|entry| format!("{:?}", entry.id))
@@ -1093,45 +1104,104 @@ mod registry_tests {
 mod broker_wire_contract_tests {
     use super::*;
 
+    /// Discovery-based (D-32): recomputes the expected set from the registry
+    /// rather than naming rows, for BOTH broker spawn shapes.
     #[test]
-    fn required_layers_for_broker_includes_only_broker_expected_abort_rows() {
+    fn required_layers_for_broker_includes_only_broker_expected_abort_rows_for_the_arm() {
         let entries = layer_registry::all_entries();
-        let value = required_layers_for_broker(entries);
-        let got: HashSet<String> = value
-            .split(',')
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect();
+        for spawn_arm in [
+            WindowsTokenArm::BrokerLaunch,
+            WindowsTokenArm::BrokerLaunchNoPty,
+        ] {
+            let value = required_layers_for_broker(entries, spawn_arm);
+            let got: HashSet<String> = value
+                .split(',')
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
 
-        let expected: HashSet<String> = entries
-            .iter()
-            .filter(|entry| {
-                entry.outcome == layer_registry::ContractOutcome::Abort
-                    && entry.expectancy.iter().any(|arm| {
-                        matches!(
-                            arm,
-                            layer_registry::ArmExpectancy {
-                                entry_path: layer_registry::EntryPath::Broker,
-                                expected: true,
-                                ..
-                            }
-                        )
-                    })
-            })
-            .map(|entry| format!("{:?}", entry.id))
-            .collect();
+            let expected: HashSet<String> = entries
+                .iter()
+                .filter(|entry| {
+                    entry.outcome == layer_registry::ContractOutcome::Abort
+                        && entry.expectancy.iter().any(|arm| {
+                            arm.entry_path == layer_registry::EntryPath::Broker
+                                && arm.expected
+                                && match arm.token_arm {
+                                    None => true,
+                                    Some(name) => format!("{spawn_arm:?}") == name,
+                                }
+                        })
+                })
+                .map(|entry| format!("{:?}", entry.id))
+                .collect();
 
-        assert_eq!(got, expected);
+            assert_eq!(got, expected, "mismatch for {spawn_arm:?}");
+            assert!(
+                !expected.is_empty(),
+                "expected at least one Broker-expected Abort row for {spawn_arm:?}"
+            );
+        }
+    }
+
+    /// Phase 117 review CR-03.1: the PTY broker shape creates no
+    /// AppContainer, so the wire contract must NOT demand one there. The
+    /// pre-fix code sent `AppContainerProfile` on both shapes, an
+    /// unsatisfiable requirement on the PTY arm.
+    #[test]
+    fn pty_broker_arm_is_not_asked_to_attest_app_container_profile() {
+        let entries = layer_registry::all_entries();
+        let pty = required_layers_for_broker(entries, WindowsTokenArm::BrokerLaunch);
         assert!(
-            !expected.is_empty(),
-            "expected at least one Broker-expected Abort row to exercise this test"
+            !pty.split(',').any(|s| s == "AppContainerProfile"),
+            "the PTY broker arm has no AppContainer; requiring it is unsatisfiable: {pty:?}"
         );
+        assert!(
+            pty.split(',').any(|s| s == "MandatoryIntegrityLabel"),
+            "the PTY broker arm still applies a Low-IL mandatory label and must attest it: \
+             {pty:?}"
+        );
+        let no_pty = required_layers_for_broker(entries, WindowsTokenArm::BrokerLaunchNoPty);
+        assert!(
+            no_pty.split(',').any(|s| s == "AppContainerProfile"),
+            "the no-PTY broker arm DOES create an AppContainer and must attest it: {no_pty:?}"
+        );
+    }
+
+    /// WR-12: every name the wire contract can emit must be one the broker
+    /// binary is actually able to attest. `nono-shell-broker`'s
+    /// `BROKER_ATTESTABLE_LAYERS` is duplicated here by necessity (separate
+    /// binary, no shared lib target) — this test is what keeps the two in
+    /// step, and it fails the build if a new Broker-expected Abort row is
+    /// added without teaching the broker to probe it.
+    #[test]
+    fn every_emitted_broker_required_layer_is_attestable_by_the_broker() {
+        // Mirror of `nono-shell-broker/src/main.rs`'s BROKER_ATTESTABLE_LAYERS.
+        const BROKER_ATTESTABLE_LAYERS: &[&str] =
+            &["AppContainerProfile", "MandatoryIntegrityLabel"];
+        let entries = layer_registry::all_entries();
+        for spawn_arm in [
+            WindowsTokenArm::BrokerLaunch,
+            WindowsTokenArm::BrokerLaunchNoPty,
+        ] {
+            for name in required_layers_for_broker(entries, spawn_arm)
+                .split(',')
+                .filter(|s| !s.is_empty())
+            {
+                assert!(
+                    BROKER_ATTESTABLE_LAYERS.contains(&name),
+                    "{name} is emitted on the {spawn_arm:?} wire contract but \
+                     nono-shell-broker cannot attest it — the broker fails closed on \
+                     unrecognized names, so this would refuse every launch on that arm"
+                );
+            }
+        }
     }
 
     #[test]
     fn required_layers_for_broker_never_includes_non_broker_only_rows() {
         let entries = layer_registry::all_entries();
-        let value = required_layers_for_broker(entries);
+        let value = required_layers_for_broker(entries, WindowsTokenArm::BrokerLaunchNoPty);
         for entry in entries {
             let is_broker_expected = entry.expectancy.iter().any(|arm| {
                 matches!(

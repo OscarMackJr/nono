@@ -483,10 +483,19 @@ const MANDATORY_INTEGRITY_LABEL_EXPECTANCY: [ArmExpectancy; 6] = [
 /// `Some("BrokerLaunchNoPty")`. `nono-cli`'s own `spawn_windows_child` gate
 /// observes `nono-shell-broker.exe` itself on that arm, never the real
 /// AppContainer-confined grandchild.
+/// Phase 117 review CR-03.1: the `EntryPath::Broker` cell is scoped to the
+/// `BrokerLaunchNoPty` shape. `nono-shell-broker` only creates an
+/// AppContainer when nono-cli passes `--app-container-name`, which only the
+/// `BrokerLaunchNoPty` arm does (`launch.rs`'s broker-arg builder; the
+/// broker's own `parse_args` additionally rejects `--no-pty` without it).
+/// The legacy/PTY broker shape has no AppContainer at all, so an
+/// unqualified `(Broker, None)` cell made `required_layers_for_broker()`
+/// demand a layer that structurally cannot exist there — and the broker,
+/// which ignored every name but this one, silently never checked it either.
 const APP_CONTAINER_PROFILE_EXPECTANCY: [ArmExpectancy; 2] = [
     ArmExpectancy {
         entry_path: EntryPath::Broker,
-        token_arm: None,
+        token_arm: Some(token_arm_names::BROKER_LAUNCH_NO_PTY),
         expected: true,
     },
     ArmExpectancy {

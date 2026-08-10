@@ -310,51 +310,146 @@ mod broker {
         seen
     }
 
+    /// The layer names THIS binary is able to attest against its own
+    /// suspended child. Phase 117 review CR-03.2: the previous gate matched
+    /// only the literal `"AppContainerProfile"` and **silently ignored every
+    /// other name**, so `MandatoryIntegrityLabel` — the other layer
+    /// `required_layers_for_broker()` emits — went completely unattested.
+    /// An unrecognized required layer is now a fail-closed refusal, matching
+    /// `attest_and_decide`'s own unrecognized-name rejection rather than
+    /// diverging from it (WR-12).
+    const BROKER_ATTESTABLE_LAYERS: &[&str] = &["AppContainerProfile", "MandatoryIntegrityLabel"];
+
+    /// `SECURITY_MANDATORY_LOW_RID`. A confined broker grandchild's token
+    /// must sit at or below Low integrity; Medium (0x2000) or above means
+    /// the mandatory label this row claims was never lowered.
+    const SECURITY_MANDATORY_LOW_RID: u32 = 0x0000_1000;
+
     /// Plan 117-11 (D-21/D-23): pure decision logic for the broker's own
-    /// AppContainer resume gate — the third and final D-21 gate insertion
-    /// site (RESEARCH finding 2: the real Low-IL/AppContainer child is
-    /// spawned INSIDE this process, a site `nono-cli`'s own
-    /// `attest_and_decide` structurally cannot see). Factored out of
-    /// [`run`] so the policy is unit-testable against a synthetic probe
-    /// result without a live spawned child — mirrors
-    /// `crates/nono-cli/src/exec_strategy_windows/attestation.rs`'s
+    /// resume gate — the third and final D-21 gate insertion site (RESEARCH
+    /// finding 2: the real Low-IL/AppContainer child is spawned INSIDE this
+    /// process, a site `nono-cli`'s own `attest_and_decide` structurally
+    /// cannot see). Factored out of [`run`] so the policy is unit-testable
+    /// against synthetic probe results without a live spawned child —
+    /// mirrors `crates/nono-cli/src/exec_strategy_windows/attestation.rs`'s
     /// `decide_from_entries` testing pattern.
     ///
     /// `required_layers_raw` is the raw `NONO_BROKER_REQUIRED_LAYERS` wire
     /// contract value (comma-separated `LayerId` `Debug`-format names,
     /// `crates/nono-cli/src/exec_strategy_windows/attestation.rs`'s
-    /// `BROKER_REQUIRED_LAYERS_ENV_VAR`). `probe_result` is the real
-    /// `nono::attestation::probe_app_container_sid` call's output against
-    /// the broker's own suspended child (D-19: the supervisor attests, the
-    /// confined process never does).
+    /// `BROKER_REQUIRED_LAYERS_ENV_VAR`). The probes are the real
+    /// `nono::attestation` calls against the broker's own suspended child
+    /// (D-19: the supervisor attests, the confined process never does).
     ///
-    /// Returns `Ok(())` when resume is permitted: either the wire contract
-    /// does not name `"AppContainerProfile"` (D-02: the broker has no
-    /// policy authority to require a layer nono-cli did not ask it to
-    /// require — an absent or unrelated env var value never aborts) or the
-    /// probe positively confirmed the child's AppContainer SID. Returns
-    /// `Err(reason)` when the layer is required and unconfirmed (D-22: the
-    /// caller terminates the child and surfaces a typed error naming the
-    /// reason).
-    fn app_container_resume_gate(
+    /// # Phase 117 review CR-03 — what changed and why
+    ///
+    /// 1. **Fail-closed on an empty contract.** The caller now propagates a
+    ///    missing env var as an error; an empty/blank value reaching here is
+    ///    a misconfiguration, not "require nothing". The previous
+    ///    `unwrap_or_default()` + "empty list means require-nothing" pairing
+    ///    turned an absent variable into a silent no-op gate (CLAUDE.md
+    ///    footgun #2).
+    /// 2. **Every required name is dispatched or refused.** Names outside
+    ///    [`BROKER_ATTESTABLE_LAYERS`] refuse resume instead of being
+    ///    ignored.
+    /// 3. **`MandatoryIntegrityLabel` is genuinely attested** by re-reading
+    ///    the child token's integrity RID and requiring it to be at or below
+    ///    `SECURITY_MANDATORY_LOW_RID`. This is the token-level observation
+    ///    CR-01 removed from the CLI core, relocated to the one gate that
+    ///    observes the right process.
+    /// 4. **The AppContainer SID is compared to the expected per-run value**
+    ///    (WR-01), not merely tested for presence — a child in a *different*
+    ///    AppContainer is not the one the WFP `ALE_USER_ID` filters are
+    ///    scoped to.
+    ///
+    /// `app_container_probe` is `None` on a broker spawn shape that creates
+    /// no AppContainer (the legacy/PTY arm). Requiring `AppContainerProfile`
+    /// on such a shape is a contract violation and refuses resume rather
+    /// than passing vacuously.
+    fn broker_resume_gate(
         required_layers_raw: &str,
-        probe_result: NonoResult<Option<String>>,
+        app_container_probe: Option<NonoResult<Option<String>>>,
+        expected_app_container_sid: Option<&str>,
+        integrity_probe: NonoResult<u32>,
     ) -> std::result::Result<(), String> {
         let required_layers: Vec<&str> = required_layers_raw
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .collect();
-        if !required_layers.contains(&"AppContainerProfile") {
-            return Ok(());
+        if required_layers.is_empty() {
+            return Err(
+                "NONO_BROKER_REQUIRED_LAYERS named no layers — refusing to resume an \
+                 unattested child (fail-closed)"
+                    .to_string(),
+            );
         }
-        match probe_result {
-            Ok(Some(_)) => Ok(()),
-            Ok(None) => Err(
-                "probe succeeded but found no AppContainer SID on the child's token".to_string(),
-            ),
-            Err(e) => Err(format!("probe failed: {e}")),
+        for name in &required_layers {
+            if !BROKER_ATTESTABLE_LAYERS.contains(name) {
+                return Err(format!(
+                    "required layer {name:?} cannot be attested by nono-shell-broker — \
+                     refusing to resume (fail-closed)"
+                ));
+            }
         }
+
+        if required_layers.contains(&"AppContainerProfile") {
+            match app_container_probe {
+                None => {
+                    return Err(
+                        "AppContainerProfile is required but this broker spawn shape creates \
+                         no AppContainer — refusing to resume (fail-closed)"
+                            .to_string(),
+                    )
+                }
+                Some(Ok(Some(sid))) => match expected_app_container_sid {
+                    Some(expected) if sid.eq_ignore_ascii_case(expected) => {}
+                    Some(expected) => {
+                        return Err(format!(
+                            "AppContainerProfile required: the child package SID {sid} is not \
+                             the per-run SID {expected} this broker registered"
+                        ))
+                    }
+                    None => {
+                        return Err(
+                            "AppContainerProfile required but the broker has no expected \
+                             package SID to compare against — refusing to resume (fail-closed)"
+                                .to_string(),
+                        )
+                    }
+                },
+                Some(Ok(None)) => {
+                    return Err(
+                        "AppContainerProfile required: probe succeeded but found no \
+                         AppContainer SID on the child token"
+                            .to_string(),
+                    )
+                }
+                Some(Err(e)) => {
+                    return Err(format!("AppContainerProfile required: probe failed: {e}"))
+                }
+            }
+        }
+
+        if required_layers.contains(&"MandatoryIntegrityLabel") {
+            match integrity_probe {
+                Ok(rid) if rid <= SECURITY_MANDATORY_LOW_RID => {}
+                Ok(rid) => {
+                    return Err(format!(
+                        "MandatoryIntegrityLabel required: the child token integrity RID is \
+                         0x{rid:X}, above SECURITY_MANDATORY_LOW_RID \
+                         (0x{SECURITY_MANDATORY_LOW_RID:X}) — the child is not Low-IL"
+                    ))
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "MandatoryIntegrityLabel required: integrity-level probe failed: {e}"
+                    ))
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// 8-step sequence. Mechanism MUST stay byte-equivalent to the validated
@@ -680,9 +775,15 @@ mod broker {
                     command_line.as_mut_ptr(),
                     std::ptr::null(),
                     std::ptr::null(),
-                    1,                            // bInheritHandles=TRUE (HANDLE_LIST gates)
-                    EXTENDED_STARTUPINFO_PRESENT, // dwCreationFlags (D-01: no new-console flag)
-                    std::ptr::null(),             // lpEnvironment: inherit broker env
+                    1, // bInheritHandles=TRUE (HANDLE_LIST gates)
+                    // Phase 117 review CR-03.1: CREATE_SUSPENDED added so the
+                    // legacy/PTY arm has the SAME pre-first-instruction window
+                    // the AppContainer arm already had. Without it this arm had
+                    // no resume point at all, which is why the D-21 gate ended up
+                    // nested inside `if is_app_container` and never ran here.
+                    // Still no new-console flag (D-01).
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
+                    std::ptr::null(), // lpEnvironment: inherit broker env
                     cwd_wide.as_ptr(),
                     lp_startup_info,
                     &mut process_info,
@@ -751,52 +852,114 @@ mod broker {
                 }
                 return Err(e);
             }
+        }
 
-            // Plan 117-11 (D-21/D-23, D-02): the broker's own attestation
-            // gate. The real Low-IL/AppContainer child is spawned INSIDE
-            // this process — a site `nono-cli`'s own `attest_and_decide`
-            // (Plan 08/10) structurally cannot see (see that module's
-            // Blocker-1 doc comment,
-            // `crates/nono-cli/src/exec_strategy_windows/attestation.rs`).
-            // This reads the wire-contract env var
-            // `NONO_BROKER_REQUIRED_LAYERS` — the SAME string literal as
-            // that module's `BROKER_REQUIRED_LAYERS_ENV_VAR` constant; this
-            // crate cannot import that constant directly (separate binary,
-            // no dependency on `nono-sandbox-cli`), so the two are paired
-            // only by this comment and by the literal string matching.
-            // D-19: the supervisor (the broker, here) attests; the confined
-            // process never does — probe the real child's own token from
-            // outside via the shared `crates/nono` probe.
-            let required_layers_raw =
-                std::env::var("NONO_BROKER_REQUIRED_LAYERS").unwrap_or_default();
-            let probe_result = nono::attestation::probe_app_container_sid(child_process.raw());
-            if let Err(reason) = app_container_resume_gate(&required_layers_raw, probe_result) {
+        // Plan 117-11 (D-21/D-23, D-02): the broker's own attestation gate.
+        // The real Low-IL/AppContainer child is spawned INSIDE this process —
+        // a site `nono-cli`'s own `attest_and_decide` (Plan 08/10)
+        // structurally cannot see (see that module's Blocker-1 doc comment,
+        // `crates/nono-cli/src/exec_strategy_windows/attestation.rs`).
+        //
+        // Phase 117 review CR-03.1 (class coverage): this block used to sit
+        // INSIDE `if is_app_container`, so the legacy/PTY broker arm — which
+        // nono-cli nevertheless sends `NONO_BROKER_REQUIRED_LAYERS` on — was
+        // never gated at all. It is now hoisted to cover BOTH spawn shapes,
+        // and both are spawned `CREATE_SUSPENDED` so the gate always runs
+        // before the child executes its first instruction.
+        //
+        // This reads the wire-contract env var `NONO_BROKER_REQUIRED_LAYERS`
+        // — the SAME string literal as that module's
+        // `BROKER_REQUIRED_LAYERS_ENV_VAR` constant; this crate cannot import
+        // that constant directly (separate binary, no dependency on
+        // `nono-sandbox-cli`), so the two are paired by this comment, by the
+        // literal string matching, and by `nono-cli`'s
+        // `broker_wire_contract_conformance` test (WR-12).
+        //
+        // CR-03.3: an absent/unreadable variable is fail-CLOSED. The previous
+        // `unwrap_or_default()` turned it into `""`, which the gate read as
+        // "require nothing" — CLAUDE.md footgun #2 applied to the gate's sole
+        // input.
+        //
+        // D-19: the supervisor (the broker, here) attests; the confined
+        // process never does — every probe reads the real child token from
+        // outside via the shared `crates/nono` primitives.
+        let required_layers_raw = std::env::var("NONO_BROKER_REQUIRED_LAYERS").map_err(|_| {
+            NonoError::SandboxInit(
+                "NONO_BROKER_REQUIRED_LAYERS absent or unreadable — refusing to resume an \
+                 unattested child (fail-closed)"
+                    .into(),
+            )
+        });
+        let gate_result = match required_layers_raw {
+            Err(e) => {
                 unsafe {
                     // SAFETY: fail closed — terminate rather than resume an
                     // unattested child (D-22).
                     windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
                 }
-                return Err(NonoError::SandboxInit(format!(
-                    "AppContainer attestation failed for the broker's suspended child: {reason}"
-                )));
+                return Err(e);
             }
+            Ok(raw) => {
+                let app_container_probe = if is_app_container {
+                    Some(nono::attestation::probe_app_container_sid(
+                        child_process.raw(),
+                    ))
+                } else {
+                    None
+                };
+                let expected_sid: Option<String> = match app_container_sid.as_ref() {
+                    Some(owned) => match nono::package_sid_to_string(owned) {
+                        Ok(s) => Some(s),
+                        // A failure to render the SID we ourselves derived is
+                        // an attestation failure, not a reason to skip the
+                        // comparison: leaving it `None` makes the gate refuse.
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "broker: could not render the per-run package SID for comparison"
+                            );
+                            None
+                        }
+                    },
+                    None => None,
+                };
+                let integrity_probe = nono::attestation::probe_integrity_level(child_process.raw());
+                broker_resume_gate(
+                    &raw,
+                    app_container_probe,
+                    expected_sid.as_deref(),
+                    integrity_probe,
+                )
+            }
+        };
+        if let Err(reason) = gate_result {
+            unsafe {
+                // SAFETY: fail closed — terminate rather than resume an
+                // unattested child (D-22).
+                windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
+            }
+            return Err(NonoError::SandboxInit(format!(
+                "startup self-attestation failed for the broker suspended child: {reason}"
+            )));
+        }
 
-            let resumed = unsafe {
-                // SAFETY: child_thread.raw() is the valid main-thread handle of
-                // the suspended child. ResumeThread returns the previous suspend
-                // count, or u32::MAX (-1) on error.
-                ResumeThread(child_thread.raw())
-            };
-            if resumed == u32::MAX {
-                let err = unsafe { GetLastError() };
-                unsafe {
-                    // SAFETY: fail closed — terminate rather than leave suspended.
-                    windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
-                }
-                return Err(NonoError::SandboxInit(format!(
-                    "ResumeThread on AppContainer child failed (GetLastError={err})"
-                )));
+        // CR-03.1: resume on BOTH arms — the legacy/PTY arm is now spawned
+        // suspended too, so it needs the same resume.
+        let resumed = unsafe {
+            // SAFETY: child_thread.raw() is the valid main-thread handle of
+            // the suspended child. ResumeThread returns the previous suspend
+            // count, or u32::MAX (-1) on error.
+            ResumeThread(child_thread.raw())
+        };
+        if resumed == u32::MAX {
+            let err = unsafe { GetLastError() };
+            unsafe {
+                // SAFETY: fail closed — terminate rather than leave suspended.
+                windows_sys::Win32::System::Threading::TerminateProcess(child_process.raw(), 1);
             }
+            return Err(NonoError::SandboxInit(format!(
+                "ResumeThread on the broker child failed (GetLastError={err})"
+            )));
         }
         let _child_thread = child_thread;
         tracing::info!(
@@ -1283,36 +1446,82 @@ mod broker {
         }
     }
 
-    /// Plan 117-11 (D-21/D-23/D-02, T-117-05/T-117-02/T-117-21): pins the
-    /// pure `app_container_resume_gate` decision logic — the third and
-    /// final D-21 gate insertion site — against synthetic probe results, no
-    /// live spawned child required. Mirrors `decide_from_entries`'s testing
-    /// pattern in `crates/nono-cli/src/exec_strategy_windows/attestation.rs`.
+    /// Plan 117-11 (D-21/D-23/D-02, T-117-05/T-117-02/T-117-21) + Phase 117
+    /// review CR-03: pins the pure `broker_resume_gate` decision logic — the
+    /// third and final D-21 gate insertion site — against synthetic probe
+    /// results, no live spawned child required. Mirrors
+    /// `decide_from_entries`'s testing pattern in
+    /// `crates/nono-cli/src/exec_strategy_windows/attestation.rs`.
     #[cfg(test)]
     #[allow(clippy::unwrap_used)]
-    mod app_container_resume_gate_tests {
+    mod broker_resume_gate_tests {
         use super::*;
         use nono::NonoError;
 
-        /// D-02: the broker never invents its own required-layers policy.
-        /// When the wire contract does not name `AppContainerProfile`, an
-        /// unconfirmed (or failed) probe must NOT refuse resume.
+        const EXPECTED_SID: &str = "S-1-15-2-1-2-3";
+
+        fn low_il() -> NonoResult<u32> {
+            Ok(SECURITY_MANDATORY_LOW_RID)
+        }
+
+        fn medium_il() -> NonoResult<u32> {
+            Ok(0x0000_2000)
+        }
+
+        fn probe_err() -> NonoError {
+            NonoError::LayerAttestationFailed {
+                layer: "synthetic".into(),
+                reason: "synthetic".into(),
+            }
+        }
+
+        /// CR-03.3: an empty wire contract is a MISCONFIGURATION, not
+        /// "require nothing". The pre-fix pairing of `unwrap_or_default()`
+        /// with an "empty list permits resume" gate turned an absent
+        /// environment variable into a no-op gate (CLAUDE.md footgun #2).
         #[test]
-        fn untightened_unconfirmed_probe_permits_resume() {
+        fn empty_required_layers_refuses_resume() {
+            let decision = broker_resume_gate("", None, None, low_il());
             assert!(
-                app_container_resume_gate("", Ok(None)).is_ok(),
-                "an empty required-layers list must never refuse resume"
+                decision.is_err(),
+                "an empty required-layers list must refuse resume (fail-closed), got {decision:?}"
+            );
+            assert!(broker_resume_gate("  ,  ", None, None, low_il()).is_err());
+        }
+
+        /// CR-03.2: a required layer this binary cannot attest must refuse
+        /// resume rather than being silently ignored. The pre-fix gate
+        /// matched only the literal `"AppContainerProfile"` and dropped
+        /// every other name on the floor.
+        #[test]
+        fn unattestable_required_layer_refuses_resume() {
+            let decision = broker_resume_gate("RestrictedToken", None, None, low_il());
+            assert!(
+                decision.is_err(),
+                "a required layer outside BROKER_ATTESTABLE_LAYERS must refuse resume, \
+                 got {decision:?}"
+            );
+        }
+
+        /// CR-03.2: `MandatoryIntegrityLabel` — the layer
+        /// `required_layers_for_broker()` emits on BOTH broker arms and the
+        /// pre-fix gate ignored entirely — is now genuinely attested against
+        /// the child token's integrity RID, and CAN return the negative.
+        #[test]
+        fn mandatory_integrity_label_is_attested_and_can_fail() {
+            assert!(
+                broker_resume_gate("MandatoryIntegrityLabel", None, None, low_il()).is_ok(),
+                "a Low-IL child token must satisfy MandatoryIntegrityLabel"
             );
             assert!(
-                app_container_resume_gate(
-                    "SomeOtherLayer",
-                    Err(NonoError::LayerAttestationFailed {
-                        layer: "AppContainerProfile".into(),
-                        reason: "synthetic".into(),
-                    })
-                )
-                .is_ok(),
-                "a required-layers list that omits AppContainerProfile must never refuse resume"
+                broker_resume_gate("MandatoryIntegrityLabel", None, None, medium_il()).is_err(),
+                "a Medium-IL child token must NOT satisfy MandatoryIntegrityLabel — this is \
+                 the negative the pre-CR-01/CR-03 code could never produce"
+            );
+            assert!(
+                broker_resume_gate("MandatoryIntegrityLabel", None, None, Err(probe_err()))
+                    .is_err(),
+                "a failed integrity probe must refuse resume (fail-closed)"
             );
         }
 
@@ -1321,28 +1530,69 @@ mod broker {
         /// present" (`Ok(None)`) or the probe call itself failing (`Err`) —
         /// resume must be refused.
         #[test]
-        fn tightened_unconfirmed_probe_refuses_resume() {
-            assert!(app_container_resume_gate("AppContainerProfile", Ok(None)).is_err());
-            assert!(app_container_resume_gate(
+        fn tightened_unconfirmed_app_container_probe_refuses_resume() {
+            assert!(broker_resume_gate(
                 "AppContainerProfile",
-                Err(NonoError::LayerAttestationFailed {
-                    layer: "AppContainerProfile".into(),
-                    reason: "synthetic".into(),
-                })
+                Some(Ok(None)),
+                Some(EXPECTED_SID),
+                low_il()
+            )
+            .is_err());
+            assert!(broker_resume_gate(
+                "AppContainerProfile",
+                Some(Err(probe_err())),
+                Some(EXPECTED_SID),
+                low_il()
             )
             .is_err());
         }
 
-        /// T-117-21: a probe that positively confirms the AppContainer SID
-        /// always permits resume — this is the genuine attestation this
-        /// plan closes (Blocker-1), on the real process.
+        /// T-117-21: a probe that positively confirms THE EXPECTED
+        /// AppContainer SID permits resume — the genuine attestation
+        /// Blocker-1 closes, on the real process.
         #[test]
-        fn tightened_confirmed_probe_permits_resume() {
-            assert!(app_container_resume_gate(
+        fn tightened_confirmed_app_container_probe_permits_resume() {
+            assert!(broker_resume_gate(
                 "AppContainerProfile",
-                Ok(Some("S-1-15-2-1".to_string()))
+                Some(Ok(Some(EXPECTED_SID.to_string()))),
+                Some(EXPECTED_SID),
+                low_il()
             )
             .is_ok());
+        }
+
+        /// WR-01: a child in a DIFFERENT AppContainer — one the WFP
+        /// `ALE_USER_ID` filters are not scoped to — must not attest
+        /// identically to the correct one.
+        #[test]
+        fn app_container_sid_must_match_the_expected_per_run_value() {
+            let decision = broker_resume_gate(
+                "AppContainerProfile",
+                Some(Ok(Some("S-1-15-2-9-9-9".to_string()))),
+                Some(EXPECTED_SID),
+                low_il(),
+            );
+            assert!(
+                decision.is_err(),
+                "a foreign AppContainer SID must refuse resume, got {decision:?}"
+            );
+            // No expected value to compare against is also fail-closed.
+            assert!(broker_resume_gate(
+                "AppContainerProfile",
+                Some(Ok(Some(EXPECTED_SID.to_string()))),
+                None,
+                low_il()
+            )
+            .is_err());
+        }
+
+        /// CR-03.1: requiring `AppContainerProfile` on a broker spawn shape
+        /// that creates no AppContainer (the legacy/PTY arm, where
+        /// `app_container_probe` is `None`) is a contract violation and
+        /// refuses resume rather than passing vacuously.
+        #[test]
+        fn app_container_required_on_a_non_app_container_shape_refuses_resume() {
+            assert!(broker_resume_gate("AppContainerProfile", None, None, low_il()).is_err());
         }
 
         /// The env var value is comma-separated and whitespace-tolerant, so
@@ -1352,37 +1602,56 @@ mod broker {
         #[test]
         fn required_layers_list_is_comma_split_and_trimmed() {
             assert!(
-                app_container_resume_gate(
-                    "RestrictedToken, AppContainerProfile ,JobObjectContainment",
-                    Ok(None)
+                broker_resume_gate(
+                    "MandatoryIntegrityLabel, AppContainerProfile ",
+                    Some(Ok(Some(EXPECTED_SID.to_string()))),
+                    Some(EXPECTED_SID),
+                    low_il()
+                )
+                .is_ok(),
+                "a whitespace-padded multi-value list must parse"
+            );
+            assert!(
+                broker_resume_gate(
+                    "MandatoryIntegrityLabel, AppContainerProfile ",
+                    Some(Ok(None)),
+                    Some(EXPECTED_SID),
+                    low_il()
                 )
                 .is_err(),
-                "AppContainerProfile embedded in a multi-value, whitespace-padded list must \
-                 still be recognized"
+                "AppContainerProfile embedded in a whitespace-padded list must still be \
+                 recognized"
             );
         }
 
         /// Phase 117-12 (D-24): measures the broker-arm gate's real
-        /// wall-clock cost — `nono::attestation::probe_app_container_sid`'s
-        /// real Win32 call against a real process handle
-        /// (`GetCurrentProcess()`) plus `app_container_resume_gate`'s own
-        /// pure decision logic. Not a bound-asserting benchmark (see
+        /// wall-clock cost — the real `nono::attestation` Win32 calls against
+        /// a real process handle (`GetCurrentProcess()`) plus
+        /// `broker_resume_gate`'s own pure decision logic. Not a
+        /// bound-asserting benchmark (see
         /// `exec_strategy_windows/attestation.rs`'s identical D-24 timing
         /// test for the same reasoning) — produces a real number for the
         /// SPEC's Latency budget table's Broker-arm row.
         #[test]
-        fn app_container_resume_gate_latency_with_real_probe() {
-            use nono::attestation::probe_app_container_sid;
+        fn broker_resume_gate_latency_with_real_probes() {
+            use nono::attestation::{probe_app_container_sid, probe_integrity_level};
             use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
             let real_process = unsafe { GetCurrentProcess() };
             let start = std::time::Instant::now();
             let probe_result = probe_app_container_sid(real_process);
-            let _ = app_container_resume_gate("AppContainerProfile", probe_result);
+            let integrity = probe_integrity_level(real_process);
+            let _ = broker_resume_gate(
+                "AppContainerProfile,MandatoryIntegrityLabel",
+                Some(probe_result),
+                Some(EXPECTED_SID),
+                integrity,
+            );
             let elapsed = start.elapsed();
             eprintln!(
                 "D-24 measured broker-arm gate cost (probe_app_container_sid + \
-                 app_container_resume_gate, real GetCurrentProcess() handle): {elapsed:?}"
+                 probe_integrity_level + broker_resume_gate, real GetCurrentProcess() \
+                 handle): {elapsed:?}"
             );
             assert!(
                 elapsed < std::time::Duration::from_millis(250),
@@ -1465,34 +1734,37 @@ mod broker {
         /// `"AppContainerProfile"` and an unconfirmed probe, the gate
         /// refuses resume — the broker terminates the suspended child and
         /// returns `Err` before `ResumeThread` (verified at the `run()`
-        /// call site: `app_container_resume_gate`'s `Err` is the exact and
-        /// only condition under which `run()` terminates the child instead
-        /// of resuming it).
+        /// call site: `broker_resume_gate`'s `Err` is the exact and only
+        /// condition under which `run()` terminates the child instead of
+        /// resuming it).
         #[test]
         fn required_layers_env_var_tightens_the_gate() {
             let _guard = EnvVarGuard::set(ENV_VAR, "AppContainerProfile");
-            let raw = std::env::var(ENV_VAR).unwrap_or_default();
+            let raw = std::env::var(ENV_VAR).expect("guard just set it");
             assert_eq!(raw, "AppContainerProfile");
             assert!(
-                app_container_resume_gate(&raw, Ok(None)).is_err(),
+                broker_resume_gate(&raw, Some(Ok(None)), Some("S-1-15-2-1"), Ok(0x1000)).is_err(),
                 "an unconfirmed probe must refuse resume when the env var requires \
                  AppContainerProfile"
             );
         }
 
-        /// Behavior 2 (D-02): with `NONO_BROKER_REQUIRED_LAYERS` unset, an
-        /// unconfirmed probe does not refuse resume — the broker has no
-        /// policy authority to require a layer nono-cli did not ask it to
-        /// require.
+        /// Phase 117 review CR-03.3: with `NONO_BROKER_REQUIRED_LAYERS`
+        /// unset, `run()` refuses to resume at all — an absent wire contract
+        /// is a misconfiguration, not permission to skip attestation. The
+        /// pre-fix `unwrap_or_default()` turned the absent variable into
+        /// `""`, which the gate read as "require nothing".
         #[test]
-        fn absent_required_layers_env_var_does_not_tighten_the_gate() {
+        fn absent_required_layers_env_var_is_fail_closed() {
             let _guard = EnvVarGuard::unset(ENV_VAR);
-            let raw = std::env::var(ENV_VAR).unwrap_or_default();
-            assert_eq!(raw, "");
+            let raw = std::env::var(ENV_VAR);
+            assert!(raw.is_err(), "the guard must have removed the variable");
+            // This is the exact shape `run()` uses: the read itself is the
+            // fail-closed point, and the empty string a lenient read would
+            // have produced is ALSO refused by the gate.
             assert!(
-                app_container_resume_gate(&raw, Ok(None)).is_ok(),
-                "an absent required-layers env var must never refuse resume \
-                 (D-02: no invented policy)"
+                broker_resume_gate("", None, None, Ok(0x1000)).is_err(),
+                "an absent/empty required-layers env var must refuse resume (fail-closed)"
             );
         }
     }

@@ -1598,8 +1598,10 @@ pub(super) fn spawn_windows_child(
         arm,
         WindowsTokenArm::BrokerLaunch | WindowsTokenArm::BrokerLaunchNoPty
     ) {
+        // Phase 117 review CR-03.1: arm-scoped — the PTY shape creates no
+        // AppContainer, so it must not be asked to attest one.
         let broker_required_layers =
-            attestation::required_layers_for_broker(layer_registry::all_entries());
+            attestation::required_layers_for_broker(layer_registry::all_entries(), arm);
         let mut broker_env_pairs = env_pairs.clone();
         broker_env_pairs.push((
             attestation::BROKER_REQUIRED_LAYERS_ENV_VAR.to_string(),
