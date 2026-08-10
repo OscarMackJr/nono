@@ -401,17 +401,26 @@ impl PreparedWindowsLaunch {
                 .map_or(layer_registry::LayerApplication::NotApplied, |guard| {
                     guard.coverage().application()
                 }),
-            // The two ancestor guards' apply loops are fail-closed with no
-            // skip arm: they grant on every OWNED ancestor and STOP at the
-            // first non-owned one, which is the documented contract outcome
-            // (reaching the cwd from there up relies on the lowbox's
-            // bypass-traverse), not a coverage gap. An empty grant set is
-            // therefore a legitimate full-coverage result, so guard
-            // existence IS the effect fact for these two rows — unlike the
-            // label and package-SID guards above. `None` means the guard
-            // never ran, which stays fail-secure `NotApplied`.
-            dacl_ancestor_traverse: application_of(self._applied_ancestor_traverse.is_some()),
-            dacl_ancestor_read_attrs: application_of(self._applied_ancestor_read_attrs.is_some()),
+            // Phase 117-14 (NR3-02): what each ancestor guard's own walk
+            // ACTUALLY granted, read via its `application()` coverage
+            // accessor — the same "effect, not construction" shape as
+            // `mandatory_integrity_label` and `dacl_package_sid_grant`
+            // above. Both walks are fail-closed with no skip arm distinct
+            // from "nothing owned to grant": they grant on every OWNED
+            // ancestor and STOP at the first non-owned one (reaching the cwd
+            // from there up relies on the lowbox's bypass-traverse), so an
+            // empty grant set from a legitimately-empty walk is full
+            // coverage of an empty contract (`NotApplicable`) — a different
+            // proposition from "the guard never ran" (`None`, which stays
+            // fail-secure `NotApplied` via `map_or`'s default arm).
+            dacl_ancestor_traverse: self._applied_ancestor_traverse.as_ref().map_or(
+                layer_registry::LayerApplication::NotApplied,
+                dacl_guard::AppliedAncestorTraverseGuard::application,
+            ),
+            dacl_ancestor_read_attrs: self._applied_ancestor_read_attrs.as_ref().map_or(
+                layer_registry::LayerApplication::NotApplied,
+                dacl_guard::AppliedAncestorReadAttributesGuard::application,
+            ),
             // CR-04: tri-state. `None` means this backend is not part of
             // this launch's composition — not applicable, not degraded.
             // NR-04: the inner `bool` is now the guard's recorded
@@ -428,19 +437,6 @@ impl PreparedWindowsLaunch {
             // the report — the field was a hardcoded `true` no decision could
             // read. See `layer_registry::AppliedLayers`.
         }
-    }
-}
-
-/// CR-14 helper: the honest two-way mapping for a layer whose guard has no
-/// skip arm, so "the apply ran" and "the apply took effect" coincide.
-/// Deliberately NOT a blanket `bool -> LayerApplication` conversion on
-/// `AppliedLayers` — the whole point of CR-14 is that most layers do not
-/// have that property and must report real coverage instead.
-fn application_of(ran: bool) -> layer_registry::LayerApplication {
-    if ran {
-        layer_registry::LayerApplication::Applied
-    } else {
-        layer_registry::LayerApplication::NotApplied
     }
 }
 
