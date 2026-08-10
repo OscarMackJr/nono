@@ -497,6 +497,16 @@ impl NonoError {
             | Self::ProfileParse(_)
             | Self::NoCapabilities
             | Self::ConfigParse(_) => Some(NonoRemediation::CheckPolicy),
+            // NR3-01 (Phase 117 review, iteration 3 BLOCKER): a startup
+            // self-attestation failure used to fall through to `None` here,
+            // leaving the operator/embedder with no structured remediation —
+            // just the raw `reason` string. Thread the real `layer` field
+            // through so the caller can tell which layer failed.
+            Self::LayerAttestationFailed { layer, .. } => {
+                Some(NonoRemediation::ClearStaleLayerResidue {
+                    layer: layer.clone(),
+                })
+            }
             _ => None,
         }
     }
@@ -740,6 +750,24 @@ mod diagnostic_tests {
         assert_eq!(
             err.diagnostic_code(),
             NonoDiagnosticCode::LayerAttestationFailed
+        );
+    }
+
+    /// NR3-01 (Phase 117 review, iteration 3 BLOCKER): `remediation()` must
+    /// no longer fall through to `None` for `LayerAttestationFailed` — and
+    /// must thread the REAL `layer` field through, not a hardcoded
+    /// placeholder string.
+    #[test]
+    fn layer_attestation_failed_maps_to_clear_stale_layer_residue_remediation() {
+        let err = NonoError::LayerAttestationFailed {
+            layer: "MandatoryIntegrityLabel".into(),
+            reason: "Unconfirmed".into(),
+        };
+        assert_eq!(
+            err.remediation(),
+            Some(NonoRemediation::ClearStaleLayerResidue {
+                layer: "MandatoryIntegrityLabel".to_string(),
+            })
         );
     }
 }
