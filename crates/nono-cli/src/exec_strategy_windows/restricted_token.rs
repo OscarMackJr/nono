@@ -52,7 +52,43 @@ pub(crate) fn generate_app_container_name() -> String {
     format!("nono.session.{}", Uuid::new_v4().simple())
 }
 
+// D-29/D-30 (Phase 117-06): generalizes the shipped WFP force-unavailable
+// seam (`exec_strategy_windows/mod.rs::WINDOWS_WFP_TEST_FORCE_READY`) to the
+// restricted-token layer for CINT-03's per-layer forced-unavailable tests.
+// Compiled out of the default build entirely via `layer-fault-injection` —
+// there is no runtime (env var or otherwise) toggle; a default release
+// binary does not contain either the static or the setter symbol.
+#[cfg(feature = "layer-fault-injection")]
+static RESTRICTED_TOKEN_FORCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set the restricted-token test-force-unavailable flag for the CINT-03
+/// per-layer forced-unavailable test harness. Only exists when built with
+/// `--features layer-fault-injection`.
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_restricted_token_unavailable(unavailable: bool) {
+    RESTRICTED_TOKEN_FORCE_UNAVAILABLE.store(unavailable, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+fn restricted_token_force_unavailable() -> bool {
+    RESTRICTED_TOKEN_FORCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(super) fn create_restricted_token_with_sid(session_sid_str: &str) -> Result<RestrictedToken> {
+    // D-30: the force-unavailable seam only exists when built with
+    // `--features layer-fault-injection` — in a default build this branch
+    // and the function it calls are not compiled in at all, so there is no
+    // runtime toggle to read. Short-circuits before the real
+    // `CreateRestrictedToken` call so no partial token state exists.
+    #[cfg(feature = "layer-fault-injection")]
+    if restricted_token_force_unavailable() {
+        return Err(NonoError::LayerAttestationFailed {
+            layer: "RestrictedToken".into(),
+            reason: "forced unavailable by test seam".into(),
+        });
+    }
+
     let mut h_current_token: HANDLE = std::ptr::null_mut();
     let ok = unsafe {
         OpenProcessToken(
@@ -278,6 +314,37 @@ mod tests {
                 suffix.chars().all(|c| c.is_ascii_hexdigit()),
                 "the suffix must be ASCII hex (valid AppContainer moniker): {name}"
             );
+        }
+    }
+
+    /// CINT-03 forced-unavailable regression: with the seam armed,
+    /// `create_restricted_token_with_sid` returns `Err` before the real
+    /// `CreateRestrictedToken` call, even though the call would otherwise
+    /// succeed for a freshly-generated SID.
+    #[cfg(feature = "layer-fault-injection")]
+    #[test]
+    fn create_restricted_token_with_sid_fails_when_forced_unavailable() {
+        force_restricted_token_unavailable(true);
+        let sid = generate_session_sid();
+        let result = create_restricted_token_with_sid(&sid);
+        // Always reset the flag, even on assertion failure, so this test
+        // cannot leak state into other tests in the same binary.
+        force_restricted_token_unavailable(false);
+
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "RestrictedToken");
+                assert!(
+                    reason.contains("forced unavailable"),
+                    "reason must explain the forced-unavailable seam: {reason}"
+                );
+            }
+            Err(other) => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got Err({other})"
+            ),
+            Ok(_) => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got Ok"
+            ),
         }
     }
 

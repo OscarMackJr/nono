@@ -58,6 +58,30 @@ pub(crate) struct AppliedLabelsGuard {
     entries: Vec<AppliedLabel>,
 }
 
+// D-29/D-30 (Phase 117-06): generalizes the shipped WFP force-unavailable
+// seam (`exec_strategy_windows/mod.rs::WINDOWS_WFP_TEST_FORCE_READY`) to the
+// mandatory-integrity-label layer for CINT-03's per-layer forced-unavailable
+// tests. Compiled out of the default build entirely via
+// `layer-fault-injection` — there is no runtime (env var or otherwise)
+// toggle; a default release binary does not contain either the static or
+// the setter symbol.
+#[cfg(feature = "layer-fault-injection")]
+static MANDATORY_LABEL_FORCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set the mandatory-label test-force-unavailable flag for the CINT-03
+/// per-layer forced-unavailable test harness. Only exists when built with
+/// `--features layer-fault-injection`.
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_mandatory_label_unavailable(unavailable: bool) {
+    MANDATORY_LABEL_FORCE_UNAVAILABLE.store(unavailable, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+fn mandatory_label_force_unavailable() -> bool {
+    MANDATORY_LABEL_FORCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 impl AppliedLabelsGuard {
     /// For every rule in `policy.rules`:
     /// 1. Snapshot prior label state via `nono::low_integrity_label_and_mask`.
@@ -81,6 +105,19 @@ impl AppliedLabelsGuard {
     /// Fail-closed: returns Err(LabelApplyFailed) on any apply failure OR
     /// ownership-check failure; no partial-success state returned.
     pub(crate) fn snapshot_and_apply(policy: &WindowsFilesystemPolicy) -> Result<Self> {
+        // D-30: the force-unavailable seam only exists when built with
+        // `--features layer-fault-injection` — in a default build this
+        // branch and the function it calls are not compiled in at all, so
+        // there is no runtime toggle to read. Short-circuits before any
+        // `SetNamedSecurityInfoW` call, so no partial guard state exists.
+        #[cfg(feature = "layer-fault-injection")]
+        if mandatory_label_force_unavailable() {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "MandatoryIntegrityLabel".into(),
+                reason: "forced unavailable by test seam".into(),
+            });
+        }
+
         let mut guard = Self::default();
         for rule in &policy.rules {
             let prior = low_integrity_label_and_mask(&rule.path);
@@ -318,6 +355,46 @@ mod tests {
             }],
             unsupported: vec![],
         }
+    }
+
+    /// CINT-03 forced-unavailable regression: with the seam armed,
+    /// `snapshot_and_apply` returns `Err` before any `SetNamedSecurityInfoW`
+    /// call is attempted, even though the apply would otherwise succeed for
+    /// a fresh, unlabeled file.
+    #[cfg(feature = "layer-fault-injection")]
+    #[test]
+    fn snapshot_and_apply_fails_when_forced_unavailable() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("note.txt");
+        std::fs::write(&file, "x").expect("write file");
+        let policy = single_file_read_rule(file.clone());
+
+        force_mandatory_label_unavailable(true);
+        let result = AppliedLabelsGuard::snapshot_and_apply(&policy);
+        // Always reset the flag, even on assertion failure, so this test
+        // cannot leak state into other tests in the same binary.
+        force_mandatory_label_unavailable(false);
+
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "MandatoryIntegrityLabel");
+                assert!(
+                    reason.contains("forced unavailable"),
+                    "reason must explain the forced-unavailable seam: {reason}"
+                );
+            }
+            other => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got {other:?}"
+            ),
+        }
+
+        // No label must have been applied — the short-circuit runs before
+        // any real SetNamedSecurityInfoW call.
+        let post = low_integrity_label_and_mask(&file);
+        assert!(
+            post.is_none(),
+            "no label should be applied when forced unavailable; got {post:?}"
+        );
     }
 
     #[test]
