@@ -45,6 +45,43 @@ use nono::{
     grant_sid_read_attributes_on_path, grant_sid_traverse_on_path, grant_sid_write_on_path,
     path_is_owned_by_current_user, revoke_sid_on_path, AccessMode, Result, WindowsFilesystemPolicy,
 };
+// D-30: only referenced inside the `layer-fault-injection`-gated
+// short-circuit blocks below; a default build never constructs this variant
+// here, so the import itself is feature-gated to avoid an unused-import
+// warning under `-D warnings`.
+#[cfg(feature = "layer-fault-injection")]
+use nono::NonoError;
+
+// D-29/D-30 (Phase 117-06): generalizes the shipped WFP force-unavailable
+// seam (`exec_strategy_windows/mod.rs::WINDOWS_WFP_TEST_FORCE_READY`) to the
+// DACL-grant layer family for CINT-03's per-layer forced-unavailable tests.
+// One shared flag covers all three apply functions in this file
+// (`AppliedDaclGrantsGuard::snapshot_and_apply`,
+// `AppliedAncestorTraverseGuard::snapshot_and_apply`,
+// `AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets`) — they
+// share one `LayerId` family in the registry (`DaclSessionSidGrant` /
+// `DaclPackageSidGrant` / `DaclAncestorTraverse` / `DaclAncestorReadAttrs`),
+// and CINT-03's per-layer test for each still asserts a distinct outcome by
+// calling the specific apply function directly. Compiled out of the default
+// build entirely via `layer-fault-injection` — there is no runtime (env var
+// or otherwise) toggle; a default release binary does not contain either the
+// static or the setter symbol.
+#[cfg(feature = "layer-fault-injection")]
+static DACL_GRANT_FORCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set the DACL-grant test-force-unavailable flag for the CINT-03 per-layer
+/// forced-unavailable test harness. Only exists when built with
+/// `--features layer-fault-injection`.
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_dacl_grant_unavailable(unavailable: bool) {
+    DACL_GRANT_FORCE_UNAVAILABLE.store(unavailable, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+fn dacl_grant_force_unavailable() -> bool {
+    DACL_GRANT_FORCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Per-rule state recorded at snapshot time.
 #[derive(Debug)]
@@ -93,6 +130,20 @@ impl AppliedDaclGrantsGuard {
         policy: &WindowsFilesystemPolicy,
         session_sid: &str,
     ) -> Result<Self> {
+        // D-30: the force-unavailable seam only exists when built with
+        // `--features layer-fault-injection` — in a default build this
+        // branch and the function it calls are not compiled in at all, so
+        // there is no runtime toggle to read. Short-circuits before any
+        // real `SetNamedSecurityInfoW` call, so no partial guard state
+        // exists.
+        #[cfg(feature = "layer-fault-injection")]
+        if dacl_grant_force_unavailable() {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "DaclSessionSidGrant".into(),
+                reason: "forced unavailable by test seam".into(),
+            });
+        }
+
         let mut guard = Self {
             entries: Vec::new(),
             session_sid: session_sid.to_string(),
@@ -234,6 +285,17 @@ impl AppliedAncestorTraverseGuard {
     /// Fail-closed: returns `Err` (after reverting already-applied grants) on any
     /// ownership-check error or grant failure on an owned ancestor.
     pub(crate) fn snapshot_and_apply(current_dir: &Path, package_sid: &str) -> Result<Self> {
+        // D-30: see `AppliedDaclGrantsGuard::snapshot_and_apply` for the
+        // full rationale — same shared seam, same fail-secure short-circuit
+        // before any real grant call.
+        #[cfg(feature = "layer-fault-injection")]
+        if dacl_grant_force_unavailable() {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "DaclAncestorTraverse".into(),
+                reason: "forced unavailable by test seam".into(),
+            });
+        }
+
         let mut guard = Self {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
@@ -402,6 +464,18 @@ impl AppliedAncestorReadAttributesGuard {
         walk_targets: &[&Path],
         package_sid: &str,
     ) -> Result<Self> {
+        // D-30: see `AppliedDaclGrantsGuard::snapshot_and_apply` for the
+        // full rationale — same shared seam, same fail-secure short-circuit
+        // before any real grant call. Covers both the single-target
+        // `snapshot_and_apply` wrapper and this multi-target entry point.
+        #[cfg(feature = "layer-fault-injection")]
+        if dacl_grant_force_unavailable() {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "DaclAncestorReadAttrs".into(),
+                reason: "forced unavailable by test seam".into(),
+            });
+        }
+
         let mut guard = Self {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
@@ -615,6 +689,39 @@ mod tests {
         }
     }
 
+    /// CINT-03 forced-unavailable regression: with the shared DACL seam
+    /// armed, `AppliedDaclGrantsGuard::snapshot_and_apply` returns `Err`
+    /// before any real `SetNamedSecurityInfoW` call, even though the apply
+    /// would otherwise succeed for a fresh, owned, writable directory.
+    #[cfg(feature = "layer-fault-injection")]
+    #[test]
+    fn dacl_grants_snapshot_and_apply_fails_when_forced_unavailable() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        let policy = writable_dir_rule(path.clone());
+
+        force_dacl_grant_unavailable(true);
+        let result = AppliedDaclGrantsGuard::snapshot_and_apply(&policy, TEST_SESSION_SID);
+        force_dacl_grant_unavailable(false);
+
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "DaclSessionSidGrant");
+                assert!(
+                    reason.contains("forced unavailable"),
+                    "reason must explain the forced-unavailable seam: {reason}"
+                );
+            }
+            other => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got {other:?}"
+            ),
+        }
+        assert!(
+            !dacl_contains_sid(&path, TEST_SESSION_SID),
+            "no ACE should be applied when forced unavailable"
+        );
+    }
+
     #[test]
     fn writable_rule_applies_sid_ace_and_reverts_on_drop() {
         let dir = tempdir().expect("tempdir");
@@ -771,6 +878,39 @@ mod tests {
         );
     }
 
+    /// CINT-03 forced-unavailable regression: with the shared DACL seam
+    /// armed, `AppliedAncestorTraverseGuard::snapshot_and_apply` returns
+    /// `Err` before any real grant call is attempted.
+    #[cfg(feature = "layer-fault-injection")]
+    #[test]
+    fn ancestor_traverse_snapshot_and_apply_fails_when_forced_unavailable() {
+        let dir = tempdir().expect("tempdir");
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+        let parent = dir.path().to_path_buf();
+
+        force_dacl_grant_unavailable(true);
+        let result = AppliedAncestorTraverseGuard::snapshot_and_apply(&leaf, TEST_PACKAGE_SID);
+        force_dacl_grant_unavailable(false);
+
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "DaclAncestorTraverse");
+                assert!(
+                    reason.contains("forced unavailable"),
+                    "reason must explain the forced-unavailable seam: {reason}"
+                );
+            }
+            other => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got {other:?}"
+            ),
+        }
+        assert!(
+            !dacl_contains_sid(&parent, TEST_PACKAGE_SID),
+            "no ACE should be applied when forced unavailable"
+        );
+    }
+
     /// The walk STOPS at the first non-owned ancestor (e.g. `C:\Users`, `C:\`):
     /// those are never granted, and reaching them relies on lowbox bypass-traverse.
     #[test]
@@ -837,6 +977,42 @@ mod tests {
         assert!(
             !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
             "after guard drop, the package SID's ancestor RA ACE must be revoked"
+        );
+    }
+
+    /// CINT-03 forced-unavailable regression: with the shared DACL seam
+    /// armed, `AppliedAncestorReadAttributesGuard::snapshot_and_apply_targets`
+    /// (and its `snapshot_and_apply` single-target wrapper) returns `Err`
+    /// before any real grant call is attempted.
+    #[cfg(feature = "layer-fault-injection")]
+    #[test]
+    fn ancestor_read_attributes_snapshot_and_apply_fails_when_forced_unavailable() {
+        let dir = tempdir().expect("tempdir");
+        let leaf = dir.path().join("leaf");
+        std::fs::create_dir(&leaf).expect("create leaf");
+        let parent = dir.path().to_path_buf();
+        take_ownership_for_current_user(&parent);
+
+        force_dacl_grant_unavailable(true);
+        let result =
+            AppliedAncestorReadAttributesGuard::snapshot_and_apply(&leaf, TEST_RA_PACKAGE_SID);
+        force_dacl_grant_unavailable(false);
+
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "DaclAncestorReadAttrs");
+                assert!(
+                    reason.contains("forced unavailable"),
+                    "reason must explain the forced-unavailable seam: {reason}"
+                );
+            }
+            other => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got {other:?}"
+            ),
+        }
+        assert!(
+            !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
+            "no ACE should be applied when forced unavailable"
         );
     }
 

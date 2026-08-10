@@ -372,10 +372,50 @@ pub(super) fn assign_failure_message(gle: u32) -> String {
     }
 }
 
+// D-29/D-30 (Phase 117-06): generalizes the shipped WFP force-unavailable
+// seam (`exec_strategy_windows/mod.rs::WINDOWS_WFP_TEST_FORCE_READY`) to the
+// Job Object containment layer for CINT-03's per-layer forced-unavailable
+// tests. Compiled out of the default build entirely via
+// `layer-fault-injection` — there is no runtime (env var or otherwise)
+// toggle; a default release binary does not contain either the static or
+// the setter symbol.
+#[cfg(feature = "layer-fault-injection")]
+static JOB_OBJECT_FORCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set the Job Object test-force-unavailable flag for the CINT-03 per-layer
+/// forced-unavailable test harness. Only exists when built with
+/// `--features layer-fault-injection`.
+#[cfg(feature = "layer-fault-injection")]
+pub(crate) fn force_job_object_unavailable(unavailable: bool) {
+    JOB_OBJECT_FORCE_UNAVAILABLE.store(unavailable, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(feature = "layer-fault-injection")]
+fn job_object_force_unavailable() -> bool {
+    JOB_OBJECT_FORCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn apply_process_handle_to_containment(
     containment: &ProcessContainment,
     process: HANDLE,
 ) -> Result<()> {
+    // D-30: the force-unavailable seam only exists when built with
+    // `--features layer-fault-injection` — in a default build this branch
+    // and the function it calls are not compiled in at all, so there is no
+    // runtime toggle to read. Short-circuits before the real
+    // `AssignProcessToJobObject` call — the existing
+    // terminate_suspended_process + Err-propagation idiom at the call site
+    // (launch.rs:2134) is unchanged; only what makes this function return
+    // `Err` changes.
+    #[cfg(feature = "layer-fault-injection")]
+    if job_object_force_unavailable() {
+        return Err(NonoError::LayerAttestationFailed {
+            layer: "JobObjectContainment".into(),
+            reason: "forced unavailable by test seam".into(),
+        });
+    }
+
     let ok = unsafe {
         // SAFETY: `containment.job` is a live job handle owned by the current
         // process, and `process` is a live process handle returned by
@@ -4222,5 +4262,37 @@ mod assign_failure_tests {
             "apply_process_handle_to_containment must return Err on an invalid job handle \
              (fail-secure — never silently continue with uncontained child)"
         );
+    }
+
+    /// CINT-03 forced-unavailable regression: with the seam armed,
+    /// `apply_process_handle_to_containment` returns
+    /// `NonoError::LayerAttestationFailed` before any real
+    /// `AssignProcessToJobObject` call is attempted — verified by passing an
+    /// otherwise-valid-shaped (non-invalid) job/process pair and confirming
+    /// the returned error is the layer-attestation variant, not the generic
+    /// `SandboxInit` GLE message the real call path would produce.
+    #[cfg(feature = "layer-fault-injection")]
+    #[test]
+    fn apply_process_handle_to_containment_fails_when_forced_unavailable() {
+        let bad_containment = ProcessContainment {
+            job: INVALID_HANDLE_VALUE,
+        };
+
+        force_job_object_unavailable(true);
+        let result = apply_process_handle_to_containment(&bad_containment, INVALID_HANDLE_VALUE);
+        force_job_object_unavailable(false);
+
+        match result {
+            Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                assert_eq!(layer, "JobObjectContainment");
+                assert!(
+                    reason.contains("forced unavailable"),
+                    "reason must explain the forced-unavailable seam: {reason}"
+                );
+            }
+            other => panic!(
+                "expected NonoError::LayerAttestationFailed while forced unavailable, got {other:?}"
+            ),
+        }
     }
 }
