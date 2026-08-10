@@ -169,7 +169,42 @@ fn copy_program_siblings(
     Ok(())
 }
 
+/// The one directory tree under which blocked-network program staging is
+/// allowed to live, and therefore the only tree
+/// [`cleanup_network_enforcement_staging`] will ever recursively delete.
+fn network_enforcement_staging_root() -> PathBuf {
+    std::env::temp_dir().join("nono-net-block")
+}
+
+/// Recursively deletes a blocked-network staging directory.
+///
+/// # Refuses to delete anything outside the staging root (fail-secure)
+///
+/// This function is reached from `NetworkEnforcementGuard::Drop`, i.e. from
+/// a `Drop` impl whose field values are whatever the guard was constructed
+/// with. An unconditional `remove_dir_all(staged_dir)` therefore turns any
+/// mis-constructed guard into an arbitrary recursive delete. That is not
+/// hypothetical: a Phase 117 Plan 10 unit-test fixture constructed the guard
+/// with `staged_dir: PathBuf::from(".")`, and dropping it deleted the whole
+/// `crates/nono-cli` package directory (cargo runs tests with the package
+/// root as CWD) — repeatedly, during this very phase.
+///
+/// The path is compared by COMPONENTS against
+/// [`network_enforcement_staging_root`] (`Path::starts_with`, never string
+/// `starts_with` — CLAUDE.md footgun #1), and the staging root itself is
+/// refused too: only a subdirectory of it is ever removed. Anything else is
+/// logged and left alone.
 pub(super) fn cleanup_network_enforcement_staging(staged_dir: &Path) {
+    let root = network_enforcement_staging_root();
+    if staged_dir == root || !staged_dir.starts_with(&root) {
+        tracing::warn!(
+            staged_dir = %staged_dir.display(),
+            staging_root = %root.display(),
+            "refusing to recursively delete a network-enforcement staging directory that is \
+             not a subdirectory of the staging root (fail-secure)"
+        );
+        return;
+    }
     let _ = std::fs::remove_dir_all(staged_dir);
 }
 

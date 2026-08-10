@@ -3425,10 +3425,20 @@ mod attestation_gate_tests {
         }
     }
 
+    /// NOTE: `staged_dir` must NEVER be a real directory this process cares
+    /// about. `NetworkEnforcementGuard::Drop` recursively deletes it. This
+    /// fixture used to pass `PathBuf::from(".")`, which deleted the whole
+    /// `crates/nono-cli` package directory every time the test ran (cargo
+    /// runs tests with the package root as CWD). `cleanup_network_
+    /// enforcement_staging` now also refuses any path outside the staging
+    /// root, so this is belt-and-braces.
     fn firewall_rules_guard() -> NetworkEnforcementGuard {
+        let staged_dir = std::env::temp_dir()
+            .join("nono-net-block")
+            .join("attestation-gate-test-fixture-never-created");
         NetworkEnforcementGuard::FirewallRules {
-            staged_program: PathBuf::from("test.exe"),
-            staged_dir: PathBuf::from("."),
+            staged_program: staged_dir.join("test.exe"),
+            staged_dir,
             inbound_rule: "test-inbound".to_string(),
             outbound_rule: "test-outbound".to_string(),
         }
