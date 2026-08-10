@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 13/19 plans (gap closure: 7 plans added 2026-08-10 from 117-VERIFICATION.md gaps_found)
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 19/19 plans executed, phase NOT complete (117-VERIFICATION.md iteration 2 = gaps_found: 0/4 success criteria; 117-REVIEW.md iteration 4 = 2 BLOCKERS incl. CR-01 fail-open)
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -401,7 +401,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 | 114. OAuth Capture Absorb (SEC-02) | v3.6 | 11/11 | Complete | 2026-08-07 |
 | 115. v3.6 Carry-Forward Drain | v3.7 | 6/6 | Complete | 2026-08-09 |
 | 116. Tool-Sandbox Divergence Audit + Disposition ADR | v3.7 | 6/6 | Complete (verdict: formalize fork-native) | 2026-08-09 |
-| 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 0/? | Not started | - |
+| 117. Fail-Direction Contract + Startup Self-Attestation | v3.7 | 19/19 | Gaps found | - |
 | 118. Per-Session Enforcement Receipts | v3.7 | 0/? | Not started | - |
 | 119. Security-Model Boundary Statement + State-of-the-Art Decision Log | v3.7 | 0/? | Not started | - |
 | 120. Tool-Sandbox Verdict Execution | v3.7 | 0/? | Not started | - |
