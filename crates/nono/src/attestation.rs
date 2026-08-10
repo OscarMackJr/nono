@@ -33,6 +33,8 @@
 //! probe surface minimal and testable against handles the caller controls
 //! (including the calling process's own handle, in this module's tests).
 
+use crate::{NonoError, Result};
+
 /// Platform-neutral process handle passed to every probe function.
 ///
 /// D-11 (Warning-6 fix, checker pass 2): `crates/nono/Cargo.toml` only
@@ -99,6 +101,481 @@ pub enum LayerAttestationStatus {
     NotApplicable,
 }
 
+/// Queries the target process's mandatory integrity level via
+/// `GetTokenInformation(TokenIntegrityLevel)` and returns the RID (e.g.
+/// `SECURITY_MANDATORY_LOW_RID`) — the same call shape already used by this
+/// crate's supervisor for its own token (`exec_strategy_windows/mod.rs`'s
+/// `probe_integrity_level_support`), generalized here to query an arbitrary
+/// external process handle (D-17, D-19).
+///
+/// # Errors
+///
+/// Returns [`NonoError::LayerAttestationFailed`] if opening the token or
+/// either `GetTokenInformation` call fails. Never returns a default RID on
+/// failure — fail-closed (T-117-12).
+///
+/// The function is `safe` because `process` is only ever passed to
+/// `OpenProcessToken`, whose own unsafe contract is documented at its call
+/// site inside this function; the caller-owned handle is never dereferenced
+/// as a Rust reference or pointer arithmetic target.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn probe_integrity_level(process: ProcessHandle) -> Result<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::sandbox::windows::OwnedHandle;
+        use std::mem::size_of;
+        use std::ptr::null_mut;
+        use windows_sys::Win32::Foundation::GetLastError;
+        use windows_sys::Win32::Security::{
+            GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel,
+            TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+        let mut h_token_raw = null_mut();
+        let ok = unsafe {
+            // SAFETY: `process` is a caller-owned, already-open process
+            // handle (D-19: this module never calls `OpenProcess` itself);
+            // `h_token_raw` is a valid out-pointer. Requests TOKEN_QUERY
+            // only.
+            OpenProcessToken(process, TOKEN_QUERY, &mut h_token_raw)
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "IntegrityLevel".to_string(),
+                reason: format!("OpenProcessToken failed (GetLastError={gle})"),
+            });
+        }
+        let h_token = OwnedHandle(h_token_raw);
+
+        // Two-call GetTokenInformation pattern: first probe with a null
+        // buffer to discover the required size.
+        let mut needed: u32 = 0;
+        unsafe {
+            // SAFETY: null buffer + 0 length is the documented size-probe
+            // call; the required size is written into `needed`.
+            GetTokenInformation(
+                h_token.raw(),
+                TokenIntegrityLevel,
+                null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        if (needed as usize) < size_of::<TOKEN_MANDATORY_LABEL>() {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "IntegrityLevel".to_string(),
+                reason: format!(
+                    "GetTokenInformation(TokenIntegrityLevel) size probe returned an \
+                     undersized buffer ({needed} bytes)"
+                ),
+            });
+        }
+
+        let mut buf = vec![0u8; needed as usize];
+        let ok = unsafe {
+            // SAFETY: `buf` is sized by the probe call above; `h_token` is a
+            // valid open token handle owned by this function.
+            GetTokenInformation(
+                h_token.raw(),
+                TokenIntegrityLevel,
+                buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+                needed,
+                &mut needed,
+            )
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "IntegrityLevel".to_string(),
+                reason: format!(
+                    "GetTokenInformation(TokenIntegrityLevel) failed (GetLastError={gle})"
+                ),
+            });
+        }
+
+        // SAFETY: `buf` was filled by the successful GetTokenInformation
+        // call above with a TOKEN_MANDATORY_LABEL prefix; layout is
+        // documented in the Win32 SDK.
+        let label = unsafe { &*(buf.as_ptr().cast::<TOKEN_MANDATORY_LABEL>()) };
+        // SAFETY: `label.Label.Sid` is a valid SID pointer for `buf`'s
+        // lifetime; `GetSidSubAuthorityCount` returns a pointer to a u8
+        // within that SID structure.
+        let sub_authority_count = unsafe { *GetSidSubAuthorityCount(label.Label.Sid) };
+        if sub_authority_count == 0 {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "IntegrityLevel".to_string(),
+                reason: "integrity-label SID has zero sub-authorities".to_string(),
+            });
+        }
+        // SAFETY: same SID pointer is still valid; `(count - 1)` is
+        // in-range given the check above.
+        let rid = unsafe { *GetSidSubAuthority(label.Label.Sid, (sub_authority_count - 1) as u32) };
+        Ok(rid)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // `process` is unit (`()`) off Windows (D-11); this binding exists
+        // solely to mark the parameter as used, since it is a genuine,
+        // referenced argument on the Windows branch above.
+        #[allow(clippy::let_unit_value)]
+        let _ = process;
+        Err(NonoError::UnsupportedPlatform(
+            "attestation probes are Windows-only".to_string(),
+        ))
+    }
+}
+
+/// Queries whether the target process is a member of any Job Object via
+/// `IsProcessInJob` — promotes the call from test-only usage
+/// (`exec_strategy_windows/launch.rs`'s `broker_dispatch_tests`) to
+/// production, generalized to accept any external process handle (D-17,
+/// D-19). No job handle argument is required: a null job handle queries "is
+/// this process in ANY job", which is what the D-21 attestation gate needs.
+///
+/// # Errors
+///
+/// Returns [`NonoError::LayerAttestationFailed`] if the `IsProcessInJob`
+/// call itself fails — fail-closed.
+///
+/// The function is `safe` because `process` is only ever passed to
+/// `IsProcessInJob`, whose own unsafe contract is documented at its call
+/// site inside this function; the caller-owned handle is never dereferenced
+/// as a Rust reference or pointer arithmetic target.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn probe_in_job(process: ProcessHandle) -> Result<bool> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::{GetLastError, BOOL};
+        use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+
+        let mut in_job: BOOL = 0;
+        let ok = unsafe {
+            // SAFETY: `process` is a caller-owned, already-open process
+            // handle; a null job handle queries "in ANY job" per the
+            // documented `IsProcessInJob` contract; `in_job` is a valid
+            // out-pointer.
+            IsProcessInJob(process, std::ptr::null_mut(), &mut in_job)
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "JobObjectContainment".to_string(),
+                reason: format!("IsProcessInJob failed (GetLastError={gle})"),
+            });
+        }
+        Ok(in_job != 0)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // `process` is unit (`()`) off Windows (D-11); this binding exists
+        // solely to mark the parameter as used, since it is a genuine,
+        // referenced argument on the Windows branch above.
+        #[allow(clippy::let_unit_value)]
+        let _ = process;
+        Err(NonoError::UnsupportedPlatform(
+            "attestation probes are Windows-only".to_string(),
+        ))
+    }
+}
+
+/// Queries the target process's token for an AppContainer package SID via
+/// `TokenAppContainerSid` — genuinely new production FFI surface (this exact
+/// `TOKEN_INFORMATION_CLASS` value has zero production hits elsewhere in the
+/// crate), generalized to accept any external process handle (D-17, D-19).
+///
+/// Returns `Ok(None)` if the token carries no AppContainer SID — a
+/// successful probe with a negative result, never conflated with a probe
+/// failure. Returns `Ok(Some(sid_string))` (SDDL form, `S-1-15-2-*`) if
+/// present.
+///
+/// # Errors
+///
+/// Returns [`NonoError::LayerAttestationFailed`] only when an OS call itself
+/// fails (opening the token, or `ConvertSidToStringSidW`) — never when the
+/// probe succeeds and simply finds no AppContainer SID.
+///
+/// The function is `safe` because `process` is only ever passed to
+/// `OpenProcessToken`, whose own unsafe contract is documented at its call
+/// site inside this function; the caller-owned handle is never dereferenced
+/// as a Rust reference or pointer arithmetic target.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn probe_app_container_sid(process: ProcessHandle) -> Result<Option<String>> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::sandbox::windows::OwnedHandle;
+        use std::mem::size_of;
+        use std::ptr::null_mut;
+        use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+        use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TokenAppContainerSid, TOKEN_APPCONTAINER_INFORMATION, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+        let mut h_token_raw = null_mut();
+        let ok = unsafe {
+            // SAFETY: `process` is caller-owned and already open (D-19);
+            // this module never calls `OpenProcess` itself.
+            OpenProcessToken(process, TOKEN_QUERY, &mut h_token_raw)
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "AppContainerProfile".to_string(),
+                reason: format!("OpenProcessToken failed (GetLastError={gle})"),
+            });
+        }
+        let h_token = OwnedHandle(h_token_raw);
+
+        let mut needed: u32 = 0;
+        unsafe {
+            // SAFETY: null-buffer size probe; `needed` receives the
+            // required size. For non-AppContainer tokens `needed` stays 0.
+            GetTokenInformation(
+                h_token.raw(),
+                TokenAppContainerSid,
+                null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        // needed == 0, or an undersized non-zero value (some Windows builds
+        // return a short size for a non-AppContainer token), means the token
+        // carries no AppContainer SID — a successful probe with a negative
+        // result, NOT a probe failure.
+        if needed == 0 || (needed as usize) < size_of::<TOKEN_APPCONTAINER_INFORMATION>() {
+            return Ok(None);
+        }
+
+        let mut buf = vec![0u8; needed as usize];
+        let ok = unsafe {
+            // SAFETY: `buf` is sized by the probe call above; `h_token` is a
+            // valid open token handle owned by this function.
+            GetTokenInformation(
+                h_token.raw(),
+                TokenAppContainerSid,
+                buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+                needed,
+                &mut needed,
+            )
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "AppContainerProfile".to_string(),
+                reason: format!(
+                    "GetTokenInformation(TokenAppContainerSid) failed (GetLastError={gle})"
+                ),
+            });
+        }
+
+        // SAFETY: `buf` is at least size_of::<TOKEN_APPCONTAINER_INFORMATION>()
+        // bytes, filled by the successful GetTokenInformation call above.
+        let info = unsafe { &*(buf.as_ptr().cast::<TOKEN_APPCONTAINER_INFORMATION>()) };
+        // Some Windows builds return the struct with a null SID pointer
+        // instead of needed==0 — treat that as "no AppContainer SID" too.
+        if info.TokenAppContainer.is_null() {
+            return Ok(None);
+        }
+
+        // Convert the PSID to SDDL string form while `buf` (and therefore
+        // the PSID it owns) is still alive.
+        let mut str_ptr: windows_sys::core::PWSTR = null_mut();
+        let ok = unsafe {
+            // SAFETY: `info.TokenAppContainer` is a valid PSID owned by
+            // `buf` (kept alive in this scope); `str_ptr` is a valid
+            // out-pointer.
+            ConvertSidToStringSidW(info.TokenAppContainer, &mut str_ptr)
+        };
+        if ok == 0 || str_ptr.is_null() {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "AppContainerProfile".to_string(),
+                reason: format!("ConvertSidToStringSidW failed (GetLastError={gle})"),
+            });
+        }
+        let sid_str = unsafe {
+            // SAFETY: `str_ptr` points to a nul-terminated UTF-16 string
+            // allocated by ConvertSidToStringSidW; scan for the terminator
+            // to size it before copying.
+            let mut len = 0usize;
+            while *str_ptr.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(str_ptr, len);
+            String::from_utf16_lossy(slice)
+        };
+        unsafe {
+            // SAFETY: `str_ptr` was allocated by ConvertSidToStringSidW and
+            // is freed exactly once here via LocalFree as documented.
+            let _ = LocalFree(str_ptr.cast::<std::ffi::c_void>());
+        }
+        // `buf` drops here — the PSID inside it is no longer referenced.
+        Ok(Some(sid_str))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // `process` is unit (`()`) off Windows (D-11); this binding exists
+        // solely to mark the parameter as used, since it is a genuine,
+        // referenced argument on the Windows branch above.
+        #[allow(clippy::let_unit_value)]
+        let _ = process;
+        Err(NonoError::UnsupportedPlatform(
+            "attestation probes are Windows-only".to_string(),
+        ))
+    }
+}
+
+/// Queries the target process's token for its restricting SIDs via
+/// `TokenRestrictedSids` — promotes the call from test-only usage
+/// (`exec_strategy_windows/restricted_token.rs`'s test module) to production,
+/// generalized to accept any external process handle (D-17, D-19).
+///
+/// Returns the SDDL string form of every restricting SID. An unrestricted
+/// token legitimately reports zero restricting SIDs — an empty `Vec`, not an
+/// error.
+///
+/// # Errors
+///
+/// Returns [`NonoError::LayerAttestationFailed`] if opening the token, the
+/// `GetTokenInformation` fill call, or any per-SID `ConvertSidToStringSidW`
+/// call fails.
+///
+/// The function is `safe` because `process` is only ever passed to
+/// `OpenProcessToken`, whose own unsafe contract is documented at its call
+/// site inside this function; the caller-owned handle is never dereferenced
+/// as a Rust reference or pointer arithmetic target.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn probe_restricted_sids(process: ProcessHandle) -> Result<Vec<String>> {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::sandbox::windows::OwnedHandle;
+        use std::ptr::null_mut;
+        use windows_sys::Win32::Foundation::{GetLastError, LocalFree};
+        use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+        use windows_sys::Win32::Security::{
+            GetTokenInformation, TokenRestrictedSids, TOKEN_GROUPS, TOKEN_QUERY,
+        };
+        use windows_sys::Win32::System::Threading::OpenProcessToken;
+
+        let mut h_token_raw = null_mut();
+        let ok = unsafe {
+            // SAFETY: `process` is caller-owned and already open (D-19).
+            OpenProcessToken(process, TOKEN_QUERY, &mut h_token_raw)
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "RestrictedSids".to_string(),
+                reason: format!("OpenProcessToken failed (GetLastError={gle})"),
+            });
+        }
+        let h_token = OwnedHandle(h_token_raw);
+
+        let mut needed: u32 = 0;
+        unsafe {
+            // SAFETY: null-buffer size probe.
+            GetTokenInformation(
+                h_token.raw(),
+                TokenRestrictedSids,
+                null_mut(),
+                0,
+                &mut needed,
+            );
+        }
+        if (needed as usize) < std::mem::size_of::<TOKEN_GROUPS>() {
+            // An unrestricted token legitimately reports zero restricting
+            // SIDs (GroupCount == 0) — an empty Vec, not an error.
+            return Ok(Vec::new());
+        }
+
+        let mut buf = vec![0u8; needed as usize];
+        let ok = unsafe {
+            // SAFETY: `buf` is sized by the probe call above; `h_token` is a
+            // valid open token handle owned by this function.
+            GetTokenInformation(
+                h_token.raw(),
+                TokenRestrictedSids,
+                buf.as_mut_ptr().cast::<std::ffi::c_void>(),
+                needed,
+                &mut needed,
+            )
+        };
+        if ok == 0 {
+            let gle = unsafe { GetLastError() };
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "RestrictedSids".to_string(),
+                reason: format!(
+                    "GetTokenInformation(TokenRestrictedSids) failed (GetLastError={gle})"
+                ),
+            });
+        }
+
+        // SAFETY: `buf` is at least size_of::<TOKEN_GROUPS>() bytes, filled
+        // by the successful GetTokenInformation call above.
+        let token_groups = unsafe { &*(buf.as_ptr().cast::<TOKEN_GROUPS>()) };
+        let group_count = token_groups.GroupCount as usize;
+        let groups_ptr = token_groups.Groups.as_ptr();
+
+        let mut result = Vec::with_capacity(group_count);
+        for i in 0..group_count {
+            // SAFETY: `groups_ptr` points into `buf`, which the OS
+            // populated with exactly `GroupCount` `SID_AND_ATTRIBUTES`
+            // entries; `i` is in-range.
+            let entry = unsafe { &*groups_ptr.add(i) };
+            let mut str_ptr: windows_sys::core::PWSTR = null_mut();
+            let ok = unsafe {
+                // SAFETY: `entry.Sid` is a valid PSID owned by `buf` (alive
+                // for this scope); `str_ptr` is a valid out-pointer.
+                ConvertSidToStringSidW(entry.Sid, &mut str_ptr)
+            };
+            if ok == 0 || str_ptr.is_null() {
+                let gle = unsafe { GetLastError() };
+                return Err(NonoError::LayerAttestationFailed {
+                    layer: "RestrictedSids".to_string(),
+                    reason: format!(
+                        "ConvertSidToStringSidW failed for restricting SID #{i} \
+                         (GetLastError={gle})"
+                    ),
+                });
+            }
+            let sid_str = unsafe {
+                // SAFETY: `str_ptr` is nul-terminated UTF-16 allocated by
+                // ConvertSidToStringSidW; scan for the terminator to size it.
+                let mut len = 0usize;
+                while *str_ptr.add(len) != 0 {
+                    len += 1;
+                }
+                let slice = std::slice::from_raw_parts(str_ptr, len);
+                String::from_utf16_lossy(slice)
+            };
+            unsafe {
+                // SAFETY: freed exactly once here via LocalFree.
+                let _ = LocalFree(str_ptr.cast::<std::ffi::c_void>());
+            }
+            result.push(sid_str);
+        }
+        Ok(result)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // `process` is unit (`()`) off Windows (D-11); this binding exists
+        // solely to mark the parameter as used, since it is a genuine,
+        // referenced argument on the Windows branch above.
+        #[allow(clippy::let_unit_value)]
+        let _ = process;
+        Err(NonoError::UnsupportedPlatform(
+            "attestation probes are Windows-only".to_string(),
+        ))
+    }
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -141,5 +618,132 @@ mod tests {
         let handle: ProcessHandle = ();
 
         accepts_process_handle(handle);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_probe_tests {
+    use super::*;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    #[test]
+    fn integrity_level_probe_on_invalid_handle_returns_layer_attestation_failed() {
+        let result = probe_integrity_level(std::ptr::null_mut());
+        match result {
+            Err(NonoError::LayerAttestationFailed { .. }) => {}
+            other => panic!(
+                "expected Err(LayerAttestationFailed) for a null process handle, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn in_job_probe_on_invalid_handle_returns_layer_attestation_failed() {
+        let result = probe_in_job(std::ptr::null_mut());
+        match result {
+            Err(NonoError::LayerAttestationFailed { .. }) => {}
+            other => panic!(
+                "expected Err(LayerAttestationFailed) for a null process handle, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn app_container_sid_probe_on_invalid_handle_returns_layer_attestation_failed() {
+        let result = probe_app_container_sid(std::ptr::null_mut());
+        match result {
+            Err(NonoError::LayerAttestationFailed { .. }) => {}
+            other => panic!(
+                "expected Err(LayerAttestationFailed) for a null process handle, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn restricted_sids_probe_on_invalid_handle_returns_layer_attestation_failed() {
+        let result = probe_restricted_sids(std::ptr::null_mut());
+        match result {
+            Err(NonoError::LayerAttestationFailed { .. }) => {}
+            other => panic!(
+                "expected Err(LayerAttestationFailed) for a null process handle, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn in_job_probe_on_current_process_returns_ok() {
+        // Empirical finding (verified live on this host, 2026-08-09): the
+        // plan's original expectation that a test runner's own process is
+        // "not normally in a job" does not hold universally — Windows 8+
+        // supports nested Job Objects, and many hosts (this one included;
+        // reproduced via `cargo test -p nono-sandbox --lib attestation`)
+        // already run every process inside a job created by the shell,
+        // terminal, or CI harness. Asserting a specific `true`/`false`
+        // value here would be host-environment-dependent, not a property of
+        // this function. The actually meaningful sanity check — per this
+        // test's stated purpose — is that the FFI call shape compiles and
+        // succeeds against a real, always-available handle without
+        // requiring a live spawned child; the boolean payload is exercised
+        // by the D-21 launch-path integration coverage, not here.
+        //
+        // SAFETY: GetCurrentProcess returns a pseudo-handle that is always
+        // valid; no cleanup is required (it is not a real handle to close).
+        let current = unsafe { GetCurrentProcess() };
+        let result = probe_in_job(current);
+        assert!(
+            result.is_ok(),
+            "probe_in_job must succeed against the test runner's own, always-valid process \
+             handle; got {result:?}"
+        );
+    }
+
+    #[test]
+    fn app_container_sid_probe_on_current_process_returns_ok_none() {
+        // SAFETY: GetCurrentProcess returns a pseudo-handle that is always
+        // valid; no cleanup is required (it is not a real handle to close).
+        let current = unsafe { GetCurrentProcess() };
+        let result = probe_app_container_sid(current);
+        assert_eq!(
+            result.ok(),
+            Some(None),
+            "the test runner's own token carries no AppContainer SID"
+        );
+    }
+}
+
+#[cfg(all(test, not(target_os = "windows")))]
+mod non_windows_stub_tests {
+    use super::*;
+
+    #[test]
+    fn integrity_level_probe_off_windows_returns_unsupported_platform() {
+        assert!(matches!(
+            probe_integrity_level(()),
+            Err(NonoError::UnsupportedPlatform(_))
+        ));
+    }
+
+    #[test]
+    fn in_job_probe_off_windows_returns_unsupported_platform() {
+        assert!(matches!(
+            probe_in_job(()),
+            Err(NonoError::UnsupportedPlatform(_))
+        ));
+    }
+
+    #[test]
+    fn app_container_sid_probe_off_windows_returns_unsupported_platform() {
+        assert!(matches!(
+            probe_app_container_sid(()),
+            Err(NonoError::UnsupportedPlatform(_))
+        ));
+    }
+
+    #[test]
+    fn restricted_sids_probe_off_windows_returns_unsupported_platform() {
+        assert!(matches!(
+            probe_restricted_sids(()),
+            Err(NonoError::UnsupportedPlatform(_))
+        ));
     }
 }
