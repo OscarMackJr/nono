@@ -1082,3 +1082,59 @@ mod broker_wire_contract_tests {
         }
     }
 }
+
+/// Phase 117-12 (D-24): measures `attest_and_decide()`'s real wall-clock
+/// cost for a representative launch, replacing the SPEC's `TBD` latency
+/// placeholder for the direct `nono run` (`EntryPath::DirectCli`) gate
+/// point. Uses a REAL process handle (`GetCurrentProcess()`, a pseudo-handle
+/// always valid within this process) rather than `dummy_process()`'s null
+/// handle — `dummy_process()` short-circuits every live probe on an
+/// invalid-handle `Err` without ever reaching the real
+/// `GetTokenInformation`/`IsProcessInJob` Win32 calls, which would measure
+/// error-path cost, not the real probe cost D-24 asks for.
+#[cfg(all(test, target_os = "windows"))]
+mod latency_measurement {
+    use super::*;
+    use layer_registry::EntryPath;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    /// D-24: "state the measured number rather than asserting 'negligible'."
+    /// This test does not assert a specific micro-timing bound (real Win32
+    /// call latency varies host-to-host and is not itself a security
+    /// property) — it exists to PRODUCE a real number for the SPEC's
+    /// Latency budget table via its own eprintln output, captured by this
+    /// plan's execution and hand-transcribed into
+    /// `proj/SPEC-windows-fail-direction-contract.md`. It still asserts a
+    /// generous upper bound (`< 250ms`) as a basic sanity/regression guard —
+    /// the project's stated constraint is "zero startup latency," so a
+    /// measurement in the hundreds-of-milliseconds range would itself be a
+    /// finding worth a follow-up, not a passing baseline to silently accept.
+    #[test]
+    fn attest_and_decide_direct_cli_write_restricted_write_restricted_latency() {
+        // SAFETY: GetCurrentProcess takes no arguments and always returns a
+        // valid pseudo-handle for the calling process; safe to call
+        // unconditionally.
+        let real_process: ProcessHandle = unsafe { GetCurrentProcess() };
+        let input = AttestationInput {
+            child_process: real_process,
+            entry_path: EntryPath::DirectCli,
+            token_arm: Some(WindowsTokenArm::WriteRestricted),
+            wfp_preconfirmed: false,
+            required_layers_override: &[],
+            machine_required_layers: &[],
+        };
+        let start = std::time::Instant::now();
+        let _ = attest_and_decide(input);
+        let elapsed = start.elapsed();
+        eprintln!(
+            "D-24 measured attest_and_decide cost (EntryPath::DirectCli, \
+             WindowsTokenArm::WriteRestricted, real GetCurrentProcess() handle): {elapsed:?}"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(250),
+            "attest_and_decide took {elapsed:?}, exceeding the generous 250ms sanity bound — \
+             the project's D-24 constraint is zero startup latency, so this is worth \
+             investigating rather than silently accepting"
+        );
+    }
+}

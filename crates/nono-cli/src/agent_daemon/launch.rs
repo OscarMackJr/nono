@@ -1810,6 +1810,34 @@ mod windows_impl {
                 other => panic!("expected ProceedDowngraded, got {other:?}"),
             }
         }
+
+        /// Phase 117-12 (D-24): measures `daemon_attest_and_decide`'s real
+        /// wall-clock cost against a real process handle (`GetCurrentProcess()`
+        /// — a valid pseudo-handle, not `real_appcontainer_job_process_
+        /// proceeds_downgraded`'s heavier full AppContainer+Job spawn, which
+        /// this timing probe does not need: the cost being measured is the
+        /// `probe_app_container_sid`/`probe_in_job` Win32 call overhead, which
+        /// is paid identically regardless of what the handle points at). Not a
+        /// bound-asserting benchmark (see `attest_and_decide`'s own D-24
+        /// timing test in `exec_strategy_windows/attestation.rs` for the
+        /// identical reasoning) — its purpose is to produce a real number for
+        /// the SPEC's Latency budget table.
+        #[test]
+        fn daemon_attest_and_decide_latency() {
+            let real_process: HANDLE = unsafe { GetCurrentProcess() };
+            let start = std::time::Instant::now();
+            let _ = daemon_attest_and_decide(real_process);
+            let elapsed = start.elapsed();
+            eprintln!(
+                "D-24 measured daemon_attest_and_decide cost (real GetCurrentProcess() handle): \
+                 {elapsed:?}"
+            );
+            assert!(
+                elapsed < std::time::Duration::from_millis(250),
+                "daemon_attest_and_decide took {elapsed:?}, exceeding the generous 250ms \
+                 sanity bound"
+            );
+        }
     }
 }
 

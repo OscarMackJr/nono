@@ -414,6 +414,19 @@ impl SecurityEventLayer {
     // and independently from `agent_daemon::launch`'s own step 6.7 (Plan 10)
     // — two call sites in two separate binary crates (`nono`/`nono-agentd`),
     // both reaching this same `nono-sandbox-cli`-crate method.
+    //
+    // `#[cfg(target_os = "windows")]` (117-12, cross-target clippy gate
+    // finding): CINT-02's startup self-attestation is Windows-only (D-09),
+    // and both real call sites above live in Windows-only files
+    // (`exec_strategy_windows/`, `agent_daemon/`) — this method itself
+    // carries no Unix cfg, so on a non-Windows clippy target it becomes
+    // genuinely dead code (`-D dead-code` under `-D warnings`). Gating it to
+    // match its true current usage is the structural fix (CLAUDE.md forbids
+    // `#[allow(dead_code)]` silencing); its own chain-advancing/event-
+    // construction logic has no OTHER platform dependency beyond the final
+    // `windows::emit_security_event` call, so if a future phase adds a
+    // non-Windows attestation caller, this cfg is the one line to remove.
+    #[cfg(target_os = "windows")]
     #[must_use = "AUD-04: Err means the audit record was not committed — callers MUST \
                   surface the downgrade to the operator through the banner even if this \
                   call fails, never silently proceed"]
@@ -954,9 +967,13 @@ mod tests {
     }
 
     // ── emit_attestation_event (Phase 117 CINT-02 / D-27 telemetry channel) ──
+    // `#[cfg(target_os = "windows")]` on all three tests below, matching the
+    // method's own new cfg gate (117-12 cross-target clippy fix) — CINT-02
+    // is Windows-only (D-09).
 
     /// Behavior test: chain advances by exactly one call, regardless of
     /// `config.enabled` (mirrors `emit_override_event_advances_chain_by_one`).
+    #[cfg(target_os = "windows")]
     #[test]
     fn emit_attestation_event_advances_chain_by_one_enabled() {
         let layer = SecurityEventLayer::new(
@@ -977,6 +994,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn emit_attestation_event_advances_chain_by_one_disabled() {
         let layer = SecurityEventLayer::new(
@@ -1000,6 +1018,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn emit_attestation_event_err_on_poisoned_mutex() {
         use std::sync::Arc;

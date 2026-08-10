@@ -1342,4 +1342,65 @@ mod tests {
         print_blocked_grants(&blocked, 1, t);
         print_blocked_grants(&[], 0, t);
     }
+
+    /// Phase 117-12, Item-2 (checker pass 3): measures
+    /// `print_attestation_downgrade_banner`'s per-session dedup marker cost
+    /// COLD (marker absent — first occurrence, does the `create_dir_all` +
+    /// `write`) versus WARM (marker present — repeat occurrence, only the
+    /// `path.exists()` stat) separately, per the plan's explicit instruction
+    /// that these two figures must not be folded into one blended number —
+    /// the hook path (`claude_code_hook.rs`) re-enters this exact call on
+    /// every tool call, so the warm case is the steady-state cost for a
+    /// long-running session. Uses a unique, process-scoped `session_id` so
+    /// this test never collides with real session state and cleans up its
+    /// own marker directory afterward.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn attestation_downgrade_banner_cold_vs_warm_dedup_marker_latency() {
+        use super::{attestation_downgrade_marker_path, print_attestation_downgrade_banner};
+
+        let session_id = format!(
+            "test-latency-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("unix epoch")
+                .as_nanos()
+        );
+        let dedup_key = "TestLayer";
+
+        let cold_start = std::time::Instant::now();
+        print_attestation_downgrade_banner(1, Some(&session_id), dedup_key);
+        let cold_elapsed = cold_start.elapsed();
+
+        let warm_start = std::time::Instant::now();
+        print_attestation_downgrade_banner(1, Some(&session_id), dedup_key);
+        let warm_elapsed = warm_start.elapsed();
+
+        eprintln!(
+            "D-24/Item-2 measured downgrade-banner dedup marker cost: cold (first occurrence, \
+             create_dir_all + write) = {cold_elapsed:?}; warm (repeat, path.exists() stat only) \
+             = {warm_elapsed:?}"
+        );
+
+        // Best-effort cleanup: remove the marker this test created so repeat
+        // runs do not accumulate stale directories under the real sessions
+        // root. Non-fatal if the session-dir resolution differs.
+        if let Some(marker) = attestation_downgrade_marker_path(&session_id, dedup_key) {
+            if let Some(session_dir) = marker.parent().and_then(|p| p.parent()) {
+                let _ = std::fs::remove_dir_all(session_dir);
+            }
+        }
+
+        assert!(
+            cold_elapsed < std::time::Duration::from_millis(250),
+            "cold dedup marker write took {cold_elapsed:?}, exceeding the generous 250ms \
+             sanity bound"
+        );
+        assert!(
+            warm_elapsed < std::time::Duration::from_millis(100),
+            "warm dedup marker stat took {warm_elapsed:?}, exceeding the generous 100ms \
+             sanity bound"
+        );
+    }
 }

@@ -1361,6 +1361,34 @@ mod broker {
                  still be recognized"
             );
         }
+
+        /// Phase 117-12 (D-24): measures the broker-arm gate's real
+        /// wall-clock cost — `nono::attestation::probe_app_container_sid`'s
+        /// real Win32 call against a real process handle
+        /// (`GetCurrentProcess()`) plus `app_container_resume_gate`'s own
+        /// pure decision logic. Not a bound-asserting benchmark (see
+        /// `exec_strategy_windows/attestation.rs`'s identical D-24 timing
+        /// test for the same reasoning) — produces a real number for the
+        /// SPEC's Latency budget table's Broker-arm row.
+        #[test]
+        fn app_container_resume_gate_latency_with_real_probe() {
+            use nono::attestation::probe_app_container_sid;
+            use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+            let real_process = unsafe { GetCurrentProcess() };
+            let start = std::time::Instant::now();
+            let probe_result = probe_app_container_sid(real_process);
+            let _ = app_container_resume_gate("AppContainerProfile", probe_result);
+            let elapsed = start.elapsed();
+            eprintln!(
+                "D-24 measured broker-arm gate cost (probe_app_container_sid + \
+                 app_container_resume_gate, real GetCurrentProcess() handle): {elapsed:?}"
+            );
+            assert!(
+                elapsed < std::time::Duration::from_millis(250),
+                "broker-arm gate took {elapsed:?}, exceeding the generous 250ms sanity bound"
+            );
+        }
     }
 
     /// Plan 117-11 Warning-10 fix: RAII guard that saves
