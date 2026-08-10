@@ -1513,6 +1513,26 @@ fn apply_startup_attestation_gate(
                 }
             }
 
+            // Phase 117 NR3-04: the banner below tells the operator to "see
+            // diagnostic output for details" — this is the call that
+            // actually populates that channel. Unlike the audit-emission
+            // warns above (which only fire on FAILURE to commit the audit
+            // record), this one fires unconditionally on every
+            // `ProceedDowngraded` occurrence, so the banner's claim is true
+            // on the common success path too. `tracing::warn!` at the CLI
+            // routes to the log file / Event Log subscriber, never to the
+            // confined child's stderr — D-28 is not implicated, this is not
+            // a channel the child shares. Mirrors the daemon's own
+            // equivalent (`agent_daemon/launch.rs:965-972`), minus
+            // `tenant_id` (no tenant concept on the direct-CLI path).
+            tracing::warn!(
+                downgraded_count = downgraded.len(),
+                downgraded_layers = %dedup_key,
+                "startup self-attestation: {} confinement layer(s) could not be fully \
+                 confirmed at startup — proceeding with a downgraded confinement claim",
+                downgraded.len()
+            );
+
             // D-27 human-visible banner channel (Item-2 fix: session_id +
             // dedup_key are threaded through so Plan 09's per-session dedup
             // is actually exercised at this call site).
@@ -3589,6 +3609,136 @@ mod attestation_gate_tests {
         assert!(
             gate.is_ok(),
             "a partially established layer must not refuse the launch, got {gate:?}"
+        );
+    }
+
+    /// Minimal capturing `tracing::Subscriber` — mirrors the field-visiting
+    /// idiom of `telemetry::mod.rs`'s `SecurityEventLayer` `on_event`, but
+    /// captures every event's structured fields as `(name, value)` pairs
+    /// instead of forwarding to Windows Event Log.
+    #[derive(Default)]
+    struct CapturingSubscriber {
+        events: std::sync::Mutex<Vec<Vec<(String, String)>>>,
+    }
+
+    #[derive(Default)]
+    struct FieldCapture {
+        fields: Vec<(String, String)>,
+    }
+
+    impl tracing::field::Visit for FieldCapture {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            self.fields
+                .push((field.name().to_string(), value.to_string()));
+        }
+
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.fields
+                .push((field.name().to_string(), format!("{value:?}")));
+        }
+    }
+
+    impl tracing::Subscriber for CapturingSubscriber {
+        fn enabled(&self, _metadata: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &tracing::span::Id, _values: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &tracing::span::Id, _follows: &tracing::span::Id) {}
+
+        fn event(&self, event: &tracing::Event<'_>) {
+            let mut visitor = FieldCapture::default();
+            event.record(&mut visitor);
+            if let Ok(mut events) = self.events.lock() {
+                events.push(visitor.fields);
+            }
+        }
+
+        fn enter(&self, _span: &tracing::span::Id) {}
+
+        fn exit(&self, _span: &tracing::span::Id) {}
+    }
+
+    /// Phase 117 NR3-04: the D-27 banner tells the operator to "see
+    /// diagnostic output for details" on a downgraded launch. This test
+    /// proves that claim is actually true on the SUCCESS path (not only
+    /// when audit-event emission itself fails) by capturing every
+    /// `tracing` event emitted while driving `apply_startup_attestation_gate`
+    /// through the REAL registry with a `PartiallyApplied` layer (same
+    /// scenario as `partially_applied_launch_is_downgraded_not_silently_
+    /// passed` above), and asserting a captured event carries a
+    /// STRUCTURED field literally named `downgraded_layers`.
+    ///
+    /// This is deliberately NOT satisfied by the pre-existing conditional
+    /// warns inside the `SECURITY_LAYER.get()` match: those interpolate
+    /// `downgraded_layers={dedup_key}` as plain text inside their `message`
+    /// field, they do not record it as its own field — so a regression that
+    /// deletes the new unconditional `tracing::warn!` (moving the field back
+    /// to text-only) makes this assertion fail even though the surrounding
+    /// text still mentions the words "downgraded_layers".
+    #[test]
+    fn proceed_downgraded_success_path_logs_downgraded_layers_field_unconditionally() {
+        let child = spawn_suspended_cmd();
+        let job: HANDLE = unsafe {
+            // SAFETY: see above.
+            CreateJobObjectW(std::ptr::null(), std::ptr::null())
+        };
+        assert!(!job.is_null(), "CreateJobObjectW failed");
+        let assigned = unsafe {
+            // SAFETY: both handles are owned by this test.
+            AssignProcessToJobObject(job, child.process)
+        };
+        assert_ne!(assigned, 0, "AssignProcessToJobObject failed");
+
+        let mut applied = fully_applied_layers();
+        applied.mandatory_integrity_label = layer_registry::LayerApplication::PartiallyApplied;
+
+        // `with_default` takes ownership of the subscriber for the closure's
+        // duration; wrap in `Arc` so a handle survives to inspect captures
+        // after the closure returns.
+        let subscriber = std::sync::Arc::new(CapturingSubscriber::default());
+        let dispatch = tracing::Dispatch::from(std::sync::Arc::clone(&subscriber));
+        let gate = tracing::dispatcher::with_default(&dispatch, || {
+            apply_startup_attestation_gate(
+                child.process,
+                job,
+                layer_registry::EntryPath::DirectCli,
+                Some(WindowsTokenArm::Null),
+                false,
+                applied,
+                None,
+                Some("117-nr3-04-unconditional-warn-test-session"),
+            )
+        });
+
+        unsafe {
+            // SAFETY: `job` is a valid HANDLE this test owns.
+            CloseHandle(job);
+        }
+
+        assert!(
+            gate.is_ok(),
+            "downgraded launch must still proceed, got {gate:?}"
+        );
+
+        let events = subscriber.events.lock().expect("capture mutex poisoned");
+        let found = events.iter().any(|fields| {
+            fields.iter().any(|(name, value)| {
+                name == "downgraded_layers" && value == "MandatoryIntegrityLabel"
+            })
+        });
+        assert!(
+            found,
+            "the ProceedDowngraded success path must log a STRUCTURED \
+             `downgraded_layers` field unconditionally (not only inside the \
+             audit-emission-failure arms), so the D-27 banner's \"see \
+             diagnostic output for details\" claim is truthful; captured \
+             events: {events:?}"
         );
     }
 
