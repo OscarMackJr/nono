@@ -155,12 +155,34 @@ pub fn print_attestation_downgrade_banner(
 /// `dedup_key` is hashed via `std::hash::DefaultHasher` (std-only, no new
 /// dependency) rather than stored verbatim — this function, like its
 /// caller, never inspects or displays the key's contents.
+///
+/// # Phase 117 review WR-11: `session_id` is validated before it is joined
+///
+/// The returned path is passed straight to `create_dir_all` + `write`, so
+/// joining an unvalidated `&str` here is a write-boundary path-traversal
+/// surface: on Windows a value containing `..`, a separator, or a
+/// drive-relative prefix (`C:`) escapes the sessions root and creates
+/// directories/files elsewhere. Today's callers pass an internally-generated
+/// id, so this is defence in depth — but CLAUDE.md's "validate and
+/// canonicalize all paths" rule applies at the boundary, not at the caller.
+///
+/// Rejection (returning `None`) errs toward MORE visibility, never less:
+/// `None` means "no dedup marker", which makes the banner re-print rather
+/// than be suppressed.
 #[cfg(target_os = "windows")]
 fn attestation_downgrade_marker_path(
     session_id: &str,
     dedup_key: &str,
 ) -> Option<std::path::PathBuf> {
     use std::hash::{DefaultHasher, Hash, Hasher};
+
+    if !session_id_is_safe_path_component(session_id) {
+        tracing::debug!(
+            "attestation-downgrade dedup: session id is not a safe single path component, \
+             defaulting to always-print"
+        );
+        return None;
+    }
 
     let mut hasher = DefaultHasher::new();
     dedup_key.hash(&mut hasher);
@@ -180,6 +202,23 @@ fn attestation_downgrade_marker_path(
             None
         }
     }
+}
+
+/// WR-11: is `session_id` a single, inert path component safe to `join` onto
+/// the sessions root?
+///
+/// Allow-list, not deny-list: ASCII alphanumerics plus `-` and `_`. That
+/// covers every id `nono` generates (uuid-simple / hex session tokens) and
+/// structurally excludes separators, `..`, drive prefixes, ADS colons,
+/// reserved-device names with extensions, trailing dots/spaces, and every
+/// non-ASCII homoglyph trick — none of which can appear at all.
+#[cfg(target_os = "windows")]
+fn session_id_is_safe_path_component(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 128
+        && session_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Color for [`print_attestation_downgrade_banner`]'s line — yellow/warning
@@ -1204,6 +1243,52 @@ pub fn print_profile_hint(program: &str, profile: &str, silent: bool) {
         )
     );
     eprintln!();
+}
+
+/// Phase 117 review WR-11 non-vacuity: the session-id validator must reject
+/// every traversal shape, and the marker-path helper must return `None`
+/// (always-print) rather than a path outside the sessions root.
+#[cfg(all(test, target_os = "windows"))]
+mod attestation_marker_path_tests {
+    use super::{attestation_downgrade_marker_path, session_id_is_safe_path_component};
+
+    #[test]
+    fn accepts_the_generated_session_id_shapes() {
+        assert!(session_id_is_safe_path_component(
+            "0f8b2c1d4e5a6b7c8d9e0f1a2b3c4d5e"
+        ));
+        assert!(session_id_is_safe_path_component(
+            "117-10-gate-test_session"
+        ));
+    }
+
+    #[test]
+    fn rejects_traversal_and_separator_shapes() {
+        for hostile in [
+            "",
+            "..",
+            "../..",
+            r"..\..",
+            "a/b",
+            r"a\b",
+            "C:",
+            r"C:\Windows",
+            r"\\server\share",
+            "name:stream",
+            "trailing.",
+            "trailing ",
+            "sess\u{00ad}id",
+        ] {
+            assert!(
+                !session_id_is_safe_path_component(hostile),
+                "{hostile:?} must be rejected as a session id"
+            );
+            assert!(
+                attestation_downgrade_marker_path(hostile, "k").is_none(),
+                "{hostile:?} must yield no marker path (always-print), never an escaped one"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
