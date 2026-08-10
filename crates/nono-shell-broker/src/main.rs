@@ -88,6 +88,43 @@ mod broker {
         pub app_container_name: Option<String>,
     }
 
+    // D-29/D-30 (Phase 117-07): a per-layer force-unavailable seam for the
+    // broker's OWN AppContainer/SECURITY_CAPABILITIES construction (RESEARCH
+    // finding 2 — the real AppContainer child is spawned INSIDE the broker's
+    // own process; nono-cli's suspended-spawn window on the direct/daemon arm
+    // never sees it, so a hook there alone cannot exercise this layer's real
+    // fail-direction). Compiled out of the default build entirely via
+    // `layer-fault-injection` — there is no runtime (env var or otherwise)
+    // toggle; a default release binary does not contain either the static or
+    // the setter symbol. Mirrors `restricted_token.rs`'s
+    // `RESTRICTED_TOKEN_FORCE_UNAVAILABLE` idiom exactly (Plan 06).
+    #[cfg(feature = "layer-fault-injection")]
+    static APP_CONTAINER_FORCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Set the broker's AppContainer test-force-unavailable flag for the
+    /// CINT-03 per-layer forced-unavailable test harness. Only exists when
+    /// built with `--features layer-fault-injection`.
+    ///
+    /// `#[allow(dead_code)]`: this crate has no `[lib]` target and no
+    /// blanket `#![allow(dead_code)]` (unlike `exec_strategy_windows/mod.rs`,
+    /// which shields the sibling setters this idiom mirrors — Plan 06). The
+    /// setter's only caller is the `#[cfg(test)]`-gated regression test below
+    /// it, which `cargo clippy`/`cargo build` without `--tests` never
+    /// compiles, so dead-code analysis cannot see that usage — a lint false
+    /// positive, not genuinely-unused code (CLAUDE.md's "write tests that use
+    /// it" is satisfied by `run_fails_when_app_container_forced_unavailable`).
+    #[cfg(feature = "layer-fault-injection")]
+    #[allow(dead_code)]
+    pub(crate) fn force_app_container_unavailable(unavailable: bool) {
+        APP_CONTAINER_FORCE_UNAVAILABLE.store(unavailable, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "layer-fault-injection")]
+    fn app_container_force_unavailable() -> bool {
+        APP_CONTAINER_FORCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Manual argv loop. No `clap` — RESEARCH §4a: broker attack surface MUST
     /// be minimal. Parse errors fail fast; no positional args, every arg is
     /// flag-prefixed.
@@ -413,6 +450,31 @@ mod broker {
             return Err(NonoError::SandboxInit(format!(
                 "UpdateProcThreadAttribute(HANDLE_LIST) failed (GetLastError={err})"
             )));
+        }
+
+        // D-30 (Phase 117-07): the force-unavailable seam only exists when
+        // built with `--features layer-fault-injection` — in a default build
+        // this branch and the function it calls are not compiled in at all,
+        // so there is no runtime toggle to read. Short-circuits BEFORE the
+        // real SECURITY_CAPABILITIES/PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+        // construction so a forced-unavailable AppContainer never silently
+        // spawns the child with a different (unconfined) attribute set — it
+        // refuses to launch at all (T-117-14), matching the crate's existing
+        // fail-closed doc comment (`main.rs:84-88`). Only meaningful on the
+        // AppContainer path (`app_container_sid.is_some()`) — the legacy/PTY
+        // path never constructs `SECURITY_CAPABILITIES` at all.
+        #[cfg(feature = "layer-fault-injection")]
+        if app_container_sid.is_some() && app_container_force_unavailable() {
+            unsafe {
+                // SAFETY: attr_list was initialized successfully above (the
+                // InitializeProcThreadAttributeList + HANDLE_LIST update both
+                // succeeded to reach this point); must be freed before bailing.
+                DeleteProcThreadAttributeList(attr_list);
+            }
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "AppContainerProfile".into(),
+                reason: "forced unavailable by test seam".into(),
+            });
         }
 
         // Plan 62-12: when spawning a per-run AppContainer, add the second
@@ -1244,6 +1306,82 @@ mod broker {
                 Some(&0),
                 "command line buffer must be null-terminated UTF-16"
             );
+        }
+    }
+
+    /// CINT-03 forced-unavailable regression (Phase 117-07). Only compiled
+    /// with `--features layer-fault-injection`; a default build contains
+    /// neither `force_app_container_unavailable` nor this test.
+    #[cfg(feature = "layer-fault-injection")]
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    mod app_container_force_unavailable_tests {
+        use super::*;
+        use nono::NonoError;
+
+        /// With the broker's AppContainer force-unavailable seam armed,
+        /// `run()` refuses to construct `SECURITY_CAPABILITIES` and returns
+        /// `NonoError::LayerAttestationFailed` before ever calling
+        /// `CreateProcessW` with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`.
+        /// RESEARCH finding 2: this is the ONLY place the real AppContainer
+        /// construction can be exercised — the actual lowbox child is
+        /// spawned inside the broker's own process, never visible to a hook
+        /// on nono-cli's side alone.
+        ///
+        /// `create_app_container_profile`/`derive_app_container_sid` run for
+        /// real before our check (matching the plan's exact insertion point,
+        /// mirroring `nono::sandbox::windows::create_app_container_profile_round_trips`'s
+        /// environment-sensitivity discipline): if THIS specific environment
+        /// rejects AppContainer profile registration, that is reported loudly
+        /// (D-31) rather than silently skipped, and is distinguishable from an
+        /// actual seam failure by error variant.
+        #[test]
+        fn run_fails_when_app_container_forced_unavailable() {
+            let name = format!("nono.test.117-07.{}", std::process::id());
+            let args = BrokerArgs {
+                shell_path: PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+                shell_args: vec![],
+                // Fake-but-nonzero/non-MAX handle values: UpdateProcThreadAttribute
+                // does not dereference or validate handles when building the
+                // attribute list (only CreateProcess does), and our
+                // force-unavailable check fires before CreateProcessW is ever
+                // reached.
+                inherit_handles: vec![0x100 as HANDLE, 0x200 as HANDLE, 0x300 as HANDLE],
+                cwd: PathBuf::from(r"C:\"),
+                no_pty: true,
+                app_container_name: Some(name),
+            };
+
+            force_app_container_unavailable(true);
+            let result = run(args);
+            // Always reset the flag, even on assertion failure, so this test
+            // cannot leak state into other tests in the same binary.
+            force_app_container_unavailable(false);
+
+            match result {
+                Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                    assert_eq!(layer, "AppContainerProfile");
+                    assert!(
+                        reason.contains("forced unavailable"),
+                        "reason must explain the forced-unavailable seam: {reason}"
+                    );
+                }
+                Err(NonoError::SandboxInit(msg)) => {
+                    eprintln!(
+                        "skipping strict assertion for run_fails_when_app_container_forced_unavailable: \
+                         this environment rejected AppContainer profile registration/derivation \
+                         BEFORE the force-unavailable check could fire: {msg} \
+                         (D-31: reported, not silently skipped; the live UAT run is the proof)"
+                    );
+                }
+                Err(other) => panic!(
+                    "expected NonoError::LayerAttestationFailed (or environment-limited \
+                     SandboxInit before the seam) while forced unavailable, got Err({other})"
+                ),
+                Ok(_) => panic!(
+                    "expected an Err while the AppContainer force-unavailable seam is armed, got Ok"
+                ),
+            }
         }
     }
 }

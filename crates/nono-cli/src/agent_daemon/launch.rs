@@ -1240,6 +1240,36 @@ mod windows_impl {
         Ok(resolved)
     }
 
+    // D-29/D-30 (Phase 117-07): a per-layer force-unavailable seam for the
+    // daemon's OWN, structurally-separate AppContainer/SECURITY_CAPABILITIES
+    // construction (module doc lines 25-30 — this module intentionally does
+    // NOT depend on `exec_strategy_windows/`, so it needs its own hook rather
+    // than reusing `restricted_token.rs`'s). Compiled out of the default
+    // build entirely via `layer-fault-injection` — there is no runtime (env
+    // var or otherwise) toggle; a default release binary does not contain
+    // either the static or the setter symbol. Mirrors
+    // `restricted_token.rs`'s `RESTRICTED_TOKEN_FORCE_UNAVAILABLE` idiom
+    // exactly (Plan 06); shares the same feature declaration in
+    // `nono-sandbox-cli`'s `Cargo.toml` (Plan 04) since this file is part of
+    // that crate.
+    #[cfg(feature = "layer-fault-injection")]
+    static DAEMON_APP_CONTAINER_FORCE_UNAVAILABLE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Set the daemon's AppContainer test-force-unavailable flag for the
+    /// CINT-03 per-layer forced-unavailable test harness. Only exists when
+    /// built with `--features layer-fault-injection`.
+    #[cfg(feature = "layer-fault-injection")]
+    pub(crate) fn force_daemon_app_container_unavailable(unavailable: bool) {
+        DAEMON_APP_CONTAINER_FORCE_UNAVAILABLE
+            .store(unavailable, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(feature = "layer-fault-injection")]
+    fn daemon_app_container_force_unavailable() -> bool {
+        DAEMON_APP_CONTAINER_FORCE_UNAVAILABLE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Spawn a process in the AppContainer with `CREATE_SUSPENDED`.
     ///
     /// Returns `(process_handle, thread_handle)`. Caller owns both and must
@@ -1253,6 +1283,22 @@ mod windows_impl {
         args: &[String],
         package_sid_psid: PSID,
     ) -> nono::Result<(HANDLE, HANDLE)> {
+        // D-30: the force-unavailable seam only exists when built with
+        // `--features layer-fault-injection` — in a default build this
+        // branch and the function it calls are not compiled in at all, so
+        // there is no runtime toggle to read. Short-circuits before the real
+        // SECURITY_CAPABILITIES/PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES
+        // construction so a forced-unavailable AppContainer never silently
+        // spawns the agent with a different (unconfined) attribute set — it
+        // refuses to launch at all (T-117-14 analog for the daemon path).
+        #[cfg(feature = "layer-fault-injection")]
+        if daemon_app_container_force_unavailable() {
+            return Err(NonoError::LayerAttestationFailed {
+                layer: "AppContainerProfile".into(),
+                reason: "forced unavailable by test seam".into(),
+            });
+        }
+
         // Build SECURITY_CAPABILITIES for the AppContainer token.
         let sec_caps = SECURITY_CAPABILITIES {
             AppContainerSid: package_sid_psid,
@@ -1408,6 +1454,52 @@ mod windows_impl {
             NonoError::SandboxInit(format!("generate_tenant_id: getrandom::fill failed: {e}"))
         })?;
         Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+    }
+
+    /// CINT-03 forced-unavailable regression (Phase 117-07). Only compiled
+    /// with `--features layer-fault-injection`; a default build contains
+    /// neither `force_daemon_app_container_unavailable` nor this test.
+    #[cfg(feature = "layer-fault-injection")]
+    #[cfg(test)]
+    mod app_container_force_unavailable_tests {
+        use super::*;
+
+        /// With the daemon's AppContainer force-unavailable seam armed,
+        /// `spawn_appcontainer_process_suspended` refuses to construct
+        /// `SECURITY_CAPABILITIES` and returns
+        /// `NonoError::LayerAttestationFailed` before ever calling
+        /// `CreateProcessW` with `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`
+        /// — the check fires before `package_sid_psid` (a null PSID here) is
+        /// ever dereferenced, so this is safe to exercise without a real
+        /// AppContainer profile.
+        #[test]
+        fn spawn_appcontainer_process_suspended_fails_when_forced_unavailable() {
+            force_daemon_app_container_unavailable(true);
+            let result = spawn_appcontainer_process_suspended(
+                std::path::Path::new(r"C:\Windows\System32\cmd.exe"),
+                &[],
+                std::ptr::null_mut(),
+            );
+            // Always reset the flag, even on assertion failure, so this test
+            // cannot leak state into other tests in the same binary.
+            force_daemon_app_container_unavailable(false);
+
+            match result {
+                Err(NonoError::LayerAttestationFailed { layer, reason }) => {
+                    assert_eq!(layer, "AppContainerProfile");
+                    assert!(
+                        reason.contains("forced unavailable"),
+                        "reason must explain the forced-unavailable seam: {reason}"
+                    );
+                }
+                Err(other) => panic!(
+                    "expected NonoError::LayerAttestationFailed while forced unavailable, got Err({other})"
+                ),
+                Ok(_) => panic!(
+                    "expected NonoError::LayerAttestationFailed while forced unavailable, got Ok"
+                ),
+            }
+        }
     }
 }
 
