@@ -423,6 +423,26 @@ impl AppliedAncestorTraverseGuard {
         Ok(guard)
     }
 
+    /// Phase 117-14 (NR3-02): this guard's ACTUAL effect, for the startup
+    /// self-attestation gate — mirrors [`DaclGrantCoverage::application`]'s
+    /// shape exactly.
+    ///
+    /// This walk has no skip arm distinct from "nothing owned to grant": it
+    /// grants on every OWNED ancestor and STOPS at the first non-owned one,
+    /// which is the documented contract outcome (reaching the cwd from there
+    /// up relies on the lowbox's bypass-traverse), not a coverage gap. An
+    /// empty grant set from a walk that legitimately found nothing
+    /// user-owned to grant is therefore full coverage of an EMPTY contract
+    /// (`NotApplicable`) — a different proposition than "the guard never
+    /// ran" (`mod.rs`'s `None` case, which stays `NotApplied`).
+    pub(crate) fn application(&self) -> layer_registry::LayerApplication {
+        if self.applied.is_empty() {
+            layer_registry::LayerApplication::NotApplicable
+        } else {
+            layer_registry::LayerApplication::Applied
+        }
+    }
+
     /// Best-effort revert of every applied grant, LIFO. Drop-safe: errors are
     /// logged, never panic.
     fn revert_all(&mut self) {
@@ -610,6 +630,26 @@ impl AppliedAncestorReadAttributesGuard {
         }
 
         Ok(guard)
+    }
+
+    /// Phase 117-14 (NR3-02): this guard's ACTUAL effect, for the startup
+    /// self-attestation gate — mirrors [`DaclGrantCoverage::application`] and
+    /// [`AppliedAncestorTraverseGuard::application`] exactly.
+    ///
+    /// This walk has no skip arm distinct from "nothing owned to grant": it
+    /// grants on every OWNED ancestor of every walk target and STOPS per
+    /// chain at the first non-owned ancestor, which is the documented D-04
+    /// contract outcome, not a coverage gap. An empty grant set from a walk
+    /// that legitimately found nothing user-owned to grant is therefore full
+    /// coverage of an EMPTY contract (`NotApplicable`) — a different
+    /// proposition than "the guard never ran" (`mod.rs`'s `None` case, which
+    /// stays `NotApplied`).
+    pub(crate) fn application(&self) -> layer_registry::LayerApplication {
+        if self.applied.is_empty() {
+            layer_registry::LayerApplication::NotApplicable
+        } else {
+            layer_registry::LayerApplication::Applied
+        }
     }
 
     /// Best-effort revert of every applied grant, LIFO. Drop-safe: errors are
@@ -964,12 +1004,55 @@ mod tests {
                 dacl_contains_sid(&parent, TEST_PACKAGE_SID),
                 "during the guard lifetime the package SID's traverse ACE must be on the parent DACL"
             );
+            // Phase 117-14 (NR3-02) positive: a walk that granted at least
+            // one ancestor must report Applied via the new coverage
+            // accessor, mirroring DaclGrantCoverage::application()'s shape.
+            assert_eq!(
+                guard.application(),
+                layer_registry::LayerApplication::Applied,
+                "a walk that granted at least one ancestor must report Applied; applied = {:?}",
+                guard.applied
+            );
         } // guard drops → revert all
 
         assert!(
             !dacl_contains_sid(&parent, TEST_PACKAGE_SID),
             "after guard drop, the package SID's ancestor ACE must be revoked"
         );
+    }
+
+    /// Phase 117-14 (NR3-02) negative/non-vacuous: a walk whose IMMEDIATE
+    /// parent is already non-owned (SYSTEM/TrustedInstaller — `System32`)
+    /// stops before granting anything, so `applied` stays empty, and
+    /// `.application()` must report `NotApplicable`, NOT the constant
+    /// `Applied` the pre-fix `Option::is_some()` shape in `mod.rs` would
+    /// have reported for this exact scenario.
+    #[test]
+    fn ancestor_traverse_application_reports_not_applicable_when_nothing_owned_to_grant() {
+        let system_root = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        // The leaf itself is never touched — the walk skips index 0 — so it
+        // need not exist. Its IMMEDIATE parent (`System32`) is owned by
+        // TrustedInstaller/SYSTEM, never the current unprivileged user.
+        let leaf = system_root
+            .join("System32")
+            .join("nono-test-nonexistent-leaf-117-14");
+
+        let guard = AppliedAncestorTraverseGuard::snapshot_and_apply(&leaf, TEST_PACKAGE_SID)
+            .expect("apply ancestor traverse");
+
+        assert!(
+            guard.applied.is_empty(),
+            "the walk must grant nothing when the immediate parent is non-owned; applied = {:?}",
+            guard.applied
+        );
+        assert_eq!(
+            guard.application(),
+            layer_registry::LayerApplication::NotApplicable,
+            "an empty grant set from a legitimately-empty walk must report NotApplicable, not Applied"
+        );
+        drop(guard);
     }
 
     /// CINT-03 forced-unavailable regression: with the shared DACL seam
@@ -1066,12 +1149,51 @@ mod tests {
                 dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
                 "during the guard lifetime the package SID's RA ACE must be on the parent DACL"
             );
+            // Phase 117-14 (NR3-02) positive: mirrors
+            // AppliedAncestorTraverseGuard's positive assertion above.
+            assert_eq!(
+                guard.application(),
+                layer_registry::LayerApplication::Applied,
+                "a walk that granted at least one ancestor must report Applied; applied = {:?}",
+                guard.applied
+            );
         } // guard drops → revert all
 
         assert!(
             !dacl_contains_sid(&parent, TEST_RA_PACKAGE_SID),
             "after guard drop, the package SID's ancestor RA ACE must be revoked"
         );
+    }
+
+    /// Phase 117-14 (NR3-02) negative/non-vacuous: mirrors
+    /// `ancestor_traverse_application_reports_not_applicable_when_nothing_owned_to_grant`
+    /// for the read-attributes guard. A walk whose IMMEDIATE parent is
+    /// already non-owned stops before granting anything, so `applied` stays
+    /// empty, and `.application()` must report `NotApplicable`.
+    #[test]
+    fn ancestor_read_attrs_application_reports_not_applicable_when_nothing_owned_to_grant() {
+        let system_root = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let leaf = system_root
+            .join("System32")
+            .join("nono-test-nonexistent-leaf-ra-117-14");
+
+        let guard =
+            AppliedAncestorReadAttributesGuard::snapshot_and_apply(&leaf, TEST_RA_PACKAGE_SID)
+                .expect("apply ancestor read-attributes");
+
+        assert!(
+            guard.applied.is_empty(),
+            "the walk must grant nothing when the immediate parent is non-owned; applied = {:?}",
+            guard.applied
+        );
+        assert_eq!(
+            guard.application(),
+            layer_registry::LayerApplication::NotApplicable,
+            "an empty grant set from a legitimately-empty walk must report NotApplicable, not Applied"
+        );
+        drop(guard);
     }
 
     /// CINT-03 forced-unavailable regression: with the shared DACL seam
