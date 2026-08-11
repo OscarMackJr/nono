@@ -261,6 +261,28 @@ work (ADR-65 stands).
 - **D-36: SDK STATE/ROADMAP writers stay banned** (five consecutive phases now); two milestones are
   open, so `REQUIREMENTS.md` and `ROADMAP.md` are appended to, never overwritten, and `phases.clear`
   must not run. All commits DCO-signed.
+- **D-37 (LOCKED 2026-08-11, operator call at gap-closure round 3): an ancestor walk that stops at
+  the first non-owned ancestor is CONTRACT-EXEMPT, not a downgrade.** Gap-closure round 2 landed two
+  contradictory rules for one physical condition — plan 117-22 argued the daemon's pass-3 `break` at
+  a non-owned ancestor is under-*granting* (never under-*confining*) and therefore carries no
+  operator-facing signal, while plan 117-23, in the same round, made the byte-for-byte identical CLI
+  walk report `PartiallyApplied` → `ProceedDowngraded` → D-27 banner (`117-REVIEW.md` iteration 5,
+  WR-12). **117-22's reading wins.** It is the reading the SPEC's own standing rule already states
+  ("Contract-exempt skips are NOT downgrades", `proj/SPEC-windows-fail-direction-contract.md:232-238`)
+  and the one RF-06 exists to protect: under 117-23's rule the non-silenceable banner fires on every
+  session for any workspace whose immediate parent is not user-owned (`C:\proj`, a repo under an
+  admin-created `C:\dev`, anything one level under a drive root), and a permanently-on warning is
+  functionally identical to no warning. Consequences, all three required:
+  1. The CLI guards must *distinguish* the two states rather than collapse them — a walk that ended
+     by hitting a non-owned ancestor (D-04 contract outcome) is `NotApplicable`; a walk that ran,
+     granted nothing, and did **not** end that way is a real gap. Do not simply revert 117-23: the
+     `walked` flag it added is correct and load-bearing; what is wrong is the two-way collapse.
+  2. The daemon mirror keeps its two-state shape — no `ProceedDowngraded` reintroduction.
+  3. The cross-mirror test must be extended from comparing variant *name sets* to comparing the
+     *classification rule* (e.g. a shared `(condition, LayerApplication)` table both mirrors are
+     asserted against). Name-set comparison is what let two opposite rationales ship in one round.
+  The self-contradicting `mod.rs` `applied_layers()` comment and the `dacl_guard.rs` struct doc must
+  be reconciled in the same change.
 
 ### Claude's Discretion
 
