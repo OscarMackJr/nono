@@ -352,6 +352,13 @@ pub(crate) struct AppliedAncestorTraverseGuard {
     applied: Vec<PathBuf>,
     /// The package SID stored so Drop can `revoke_sid_on_path` each entry.
     package_sid: String,
+    /// WR-07: set on the FIRST loop iteration (regardless of which branch is
+    /// taken), i.e. true iff `current_dir.ancestors().skip(1)` yielded at
+    /// least one ancestor to consider. Distinguishes "the walk had nothing to
+    /// walk at all" (`current_dir` is itself a filesystem root — genuinely
+    /// `NotApplicable`) from "the walk ran and granted zero owned ancestors"
+    /// (a real coverage gap — `PartiallyApplied`).
+    walked: bool,
 }
 
 impl AppliedAncestorTraverseGuard {
@@ -376,6 +383,7 @@ impl AppliedAncestorTraverseGuard {
         let mut guard = Self {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
+            walked: false,
         };
 
         // Walk ancestors from the immediate parent upward. `Path::ancestors`
@@ -383,6 +391,7 @@ impl AppliedAncestorTraverseGuard {
         // the leaf (index 0 — already granted read+write+traverse by the writable
         // DACL guard).
         for ancestor in current_dir.ancestors().skip(1) {
+            guard.walked = true;
             match path_is_owned_by_current_user(ancestor) {
                 Ok(true) => {
                     if let Err(err) = grant_sid_traverse_on_path(ancestor, package_sid) {
@@ -423,21 +432,24 @@ impl AppliedAncestorTraverseGuard {
         Ok(guard)
     }
 
-    /// Phase 117-14 (NR3-02): this guard's ACTUAL effect, for the startup
-    /// self-attestation gate — mirrors [`DaclGrantCoverage::application`]'s
-    /// shape exactly.
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23): this guard's ACTUAL
+    /// effect, for the startup self-attestation gate — mirrors
+    /// [`DaclGrantCoverage::application`]'s shape, now genuinely three-valued.
     ///
-    /// This walk has no skip arm distinct from "nothing owned to grant": it
-    /// grants on every OWNED ancestor and STOPS at the first non-owned one,
-    /// which is the documented contract outcome (reaching the cwd from there
-    /// up relies on the lowbox's bypass-traverse), not a coverage gap. An
-    /// empty grant set from a walk that legitimately found nothing
-    /// user-owned to grant is therefore full coverage of an EMPTY contract
-    /// (`NotApplicable`) — a different proposition than "the guard never
-    /// ran" (`mod.rs`'s `None` case, which stays `NotApplied`).
+    /// A walk that ran (had at least one ancestor to consider) but granted
+    /// nothing owned is a REAL coverage gap: it must visibly downgrade the
+    /// session's attestation claim (`PartiallyApplied`), not silently vanish
+    /// as `NotApplicable`. Only a walk with literally no ancestors to
+    /// consider at all — `current_dir` is itself a filesystem root — is
+    /// `NotApplicable` (there was no contract to cover in the first place).
+    /// A walk that granted at least one ancestor remains `Applied`,
+    /// unchanged. "The guard never ran" stays a distinct case, handled by
+    /// `mod.rs`'s `None`-guard `NotApplied` path, not by this method.
     pub(crate) fn application(&self) -> layer_registry::LayerApplication {
-        if self.applied.is_empty() {
+        if !self.walked {
             layer_registry::LayerApplication::NotApplicable
+        } else if self.applied.is_empty() {
+            layer_registry::LayerApplication::PartiallyApplied
         } else {
             layer_registry::LayerApplication::Applied
         }
@@ -521,6 +533,12 @@ pub(crate) struct AppliedAncestorReadAttributesGuard {
     applied: Vec<PathBuf>,
     /// The package SID stored so Drop can `revoke_sid_on_path` each entry.
     package_sid: String,
+    /// WR-07: set on the FIRST inner-loop iteration across ALL walk targets
+    /// (regardless of which branch is taken), i.e. true iff at least one
+    /// `walk_target.ancestors().skip(1)` yielded at least one ancestor to
+    /// consider across the whole multi-target walk. See
+    /// `AppliedAncestorTraverseGuard::walked` for the same distinction.
+    walked: bool,
 }
 
 impl AppliedAncestorReadAttributesGuard {
@@ -576,6 +594,7 @@ impl AppliedAncestorReadAttributesGuard {
         let mut guard = Self {
             applied: Vec::new(),
             package_sid: package_sid.to_string(),
+            walked: false,
         };
 
         for walk_target in walk_targets {
@@ -583,6 +602,7 @@ impl AppliedAncestorReadAttributesGuard {
             // yields `walk_target` first (the leaf itself), so skip index 0. The
             // RA grant is on ancestor DIRECTORIES, not on the leaf.
             for ancestor in walk_target.ancestors().skip(1) {
+                guard.walked = true;
                 // Dedup across walk targets: a shared ancestor already granted by
                 // a prior target must not be re-granted/re-recorded. Skip the
                 // grant but keep walking up — higher ancestors are shared too and
@@ -632,21 +652,26 @@ impl AppliedAncestorReadAttributesGuard {
         Ok(guard)
     }
 
-    /// Phase 117-14 (NR3-02): this guard's ACTUAL effect, for the startup
-    /// self-attestation gate — mirrors [`DaclGrantCoverage::application`] and
-    /// [`AppliedAncestorTraverseGuard::application`] exactly.
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23): this guard's ACTUAL
+    /// effect, for the startup self-attestation gate — mirrors
+    /// [`DaclGrantCoverage::application`] and
+    /// [`AppliedAncestorTraverseGuard::application`], now genuinely
+    /// three-valued.
     ///
-    /// This walk has no skip arm distinct from "nothing owned to grant": it
-    /// grants on every OWNED ancestor of every walk target and STOPS per
-    /// chain at the first non-owned ancestor, which is the documented D-04
-    /// contract outcome, not a coverage gap. An empty grant set from a walk
-    /// that legitimately found nothing user-owned to grant is therefore full
-    /// coverage of an EMPTY contract (`NotApplicable`) — a different
-    /// proposition than "the guard never ran" (`mod.rs`'s `None` case, which
-    /// stays `NotApplied`).
+    /// A walk that ran (had at least one ancestor to consider across ANY
+    /// walk target) but granted nothing owned is a REAL coverage gap: it
+    /// must visibly downgrade the session's attestation claim
+    /// (`PartiallyApplied`), not silently vanish as `NotApplicable`. Only a
+    /// walk whose every target has literally no ancestors to consider at
+    /// all is `NotApplicable`. A walk that granted at least one ancestor
+    /// remains `Applied`, unchanged. "The guard never ran" stays a distinct
+    /// case, handled by `mod.rs`'s `None`-guard `NotApplied` path, not by
+    /// this method.
     pub(crate) fn application(&self) -> layer_registry::LayerApplication {
-        if self.applied.is_empty() {
+        if !self.walked {
             layer_registry::LayerApplication::NotApplicable
+        } else if self.applied.is_empty() {
+            layer_registry::LayerApplication::PartiallyApplied
         } else {
             layer_registry::LayerApplication::Applied
         }
@@ -1021,14 +1046,16 @@ mod tests {
         );
     }
 
-    /// Phase 117-14 (NR3-02) negative/non-vacuous: a walk whose IMMEDIATE
-    /// parent is already non-owned (SYSTEM/TrustedInstaller — `System32`)
-    /// stops before granting anything, so `applied` stays empty, and
-    /// `.application()` must report `NotApplicable`, NOT the constant
-    /// `Applied` the pre-fix `Option::is_some()` shape in `mod.rs` would
-    /// have reported for this exact scenario.
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) negative/non-vacuous: a
+    /// walk whose IMMEDIATE parent is already non-owned
+    /// (SYSTEM/TrustedInstaller — `System32`) stops before granting
+    /// anything, so `applied` stays empty — but the walk DID run (it
+    /// considered at least one ancestor), so `.application()` must report
+    /// `PartiallyApplied` (a real coverage gap that downgrades the claim),
+    /// NOT `NotApplicable` (which would silently drop this `expected: true`
+    /// row from the attestation decision — the WR-07 finding).
     #[test]
-    fn ancestor_traverse_application_reports_not_applicable_when_nothing_owned_to_grant() {
+    fn ancestor_traverse_application_reports_partially_applied_when_nothing_owned_to_grant() {
         let system_root = std::env::var_os("SystemRoot")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
@@ -1047,10 +1074,48 @@ mod tests {
             "the walk must grant nothing when the immediate parent is non-owned; applied = {:?}",
             guard.applied
         );
+        assert!(
+            guard.walked,
+            "the walk considered at least one ancestor (System32's parent chain)"
+        );
+        assert_eq!(
+            guard.application(),
+            layer_registry::LayerApplication::PartiallyApplied,
+            "a walk that ran but granted nothing owned must report PartiallyApplied, not NotApplicable \
+             (WR-07 — this must downgrade the claim, not silently vanish from the decision)"
+        );
+        drop(guard);
+    }
+
+    /// WR-07 (Phase 117-23): a walk with genuinely NO ancestors to consider
+    /// at all — `current_dir` is itself a filesystem root — must still
+    /// report `NotApplicable`. This is the narrower, correct condition for
+    /// `NotApplicable` after this fix: it does not turn a structurally-empty
+    /// walk into a false downgrade.
+    #[test]
+    fn ancestor_traverse_application_reports_not_applicable_for_a_rootless_walk() {
+        let drive_root = PathBuf::from(format!(
+            "{}\\",
+            std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into())
+        ));
+        assert_eq!(
+            drive_root.ancestors().skip(1).count(),
+            0,
+            "test precondition: a drive root must have zero ancestors to walk"
+        );
+
+        let guard = AppliedAncestorTraverseGuard::snapshot_and_apply(&drive_root, TEST_PACKAGE_SID)
+            .expect("apply ancestor traverse");
+
+        assert!(
+            !guard.walked,
+            "a drive root has no ancestors to consider; the walk loop must never execute"
+        );
+        assert!(guard.applied.is_empty());
         assert_eq!(
             guard.application(),
             layer_registry::LayerApplication::NotApplicable,
-            "an empty grant set from a legitimately-empty walk must report NotApplicable, not Applied"
+            "a walk with no ancestors to consider at all must report NotApplicable"
         );
         drop(guard);
     }
@@ -1165,13 +1230,15 @@ mod tests {
         );
     }
 
-    /// Phase 117-14 (NR3-02) negative/non-vacuous: mirrors
-    /// `ancestor_traverse_application_reports_not_applicable_when_nothing_owned_to_grant`
+    /// Phase 117-14 (NR3-02) / WR-07 (Phase 117-23) negative/non-vacuous:
+    /// mirrors
+    /// `ancestor_traverse_application_reports_partially_applied_when_nothing_owned_to_grant`
     /// for the read-attributes guard. A walk whose IMMEDIATE parent is
     /// already non-owned stops before granting anything, so `applied` stays
-    /// empty, and `.application()` must report `NotApplicable`.
+    /// empty — but the walk DID run, so `.application()` must report
+    /// `PartiallyApplied`, not `NotApplicable`.
     #[test]
-    fn ancestor_read_attrs_application_reports_not_applicable_when_nothing_owned_to_grant() {
+    fn ancestor_read_attrs_application_reports_partially_applied_when_nothing_owned_to_grant() {
         let system_root = std::env::var_os("SystemRoot")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
@@ -1188,10 +1255,50 @@ mod tests {
             "the walk must grant nothing when the immediate parent is non-owned; applied = {:?}",
             guard.applied
         );
+        assert!(
+            guard.walked,
+            "the walk considered at least one ancestor (System32's parent chain)"
+        );
+        assert_eq!(
+            guard.application(),
+            layer_registry::LayerApplication::PartiallyApplied,
+            "a walk that ran but granted nothing owned must report PartiallyApplied, not NotApplicable \
+             (WR-07 — this must downgrade the claim, not silently vanish from the decision)"
+        );
+        drop(guard);
+    }
+
+    /// WR-07 (Phase 117-23): mirrors
+    /// `ancestor_traverse_application_reports_not_applicable_for_a_rootless_walk`
+    /// for the read-attributes guard. A walk target with genuinely NO
+    /// ancestors to consider at all must still report `NotApplicable`.
+    #[test]
+    fn ancestor_read_attrs_application_reports_not_applicable_for_a_rootless_walk() {
+        let drive_root = PathBuf::from(format!(
+            "{}\\",
+            std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into())
+        ));
+        assert_eq!(
+            drive_root.ancestors().skip(1).count(),
+            0,
+            "test precondition: a drive root must have zero ancestors to walk"
+        );
+
+        let guard = AppliedAncestorReadAttributesGuard::snapshot_and_apply(
+            &drive_root,
+            TEST_RA_PACKAGE_SID,
+        )
+        .expect("apply ancestor read-attributes");
+
+        assert!(
+            !guard.walked,
+            "a drive root has no ancestors to consider; the walk loop must never execute"
+        );
+        assert!(guard.applied.is_empty());
         assert_eq!(
             guard.application(),
             layer_registry::LayerApplication::NotApplicable,
-            "an empty grant set from a legitimately-empty walk must report NotApplicable, not Applied"
+            "a walk with no ancestors to consider at all must report NotApplicable"
         );
         drop(guard);
     }
