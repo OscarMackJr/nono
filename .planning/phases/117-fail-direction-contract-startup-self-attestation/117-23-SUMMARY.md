@@ -105,3 +105,10 @@ WR-07 is closed: both ancestor guards' `application()` methods are genuinely thr
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-23-SUMMARY.md`
+- FOUND: `cbd30c8b` (Task 1 commit)
+- FOUND: `f2f816e2` (Task 2 commit)
+- FOUND: `49c1c3dd` (SUMMARY commit)
