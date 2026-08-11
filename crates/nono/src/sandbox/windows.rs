@@ -3303,7 +3303,8 @@ mod tests {
             )
         };
         assert_ne!(
-            ok, 0,
+            ok,
+            0,
             "test setup: ConvertStringSecurityDescriptorToSecurityDescriptorW must succeed for \
              SDDL {sddl:?} (GetLastError=0x{:08X})",
             unsafe {
@@ -3368,11 +3369,7 @@ mod tests {
         let dir = tempdir().expect("tempdir");
 
         // "OICIIO" = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE.
-        plant_mandatory_label_with_flags(
-            dir.path(),
-            SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
-            "OICIIO",
-        );
+        plant_mandatory_label_with_flags(dir.path(), SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, "OICIIO");
 
         assert_eq!(
             low_integrity_label_rid(dir.path()),
