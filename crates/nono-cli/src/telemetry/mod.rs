@@ -187,21 +187,25 @@ fn severity_for(t: &SecurityEventType) -> nono::TelemetrySeverity {
 
 // ── SecurityEventLayerInner ───────────────────────────────────────────────────
 
-// Phase 117 Plan 17 (NR3-05 follow-up): `chain`/`session_id`/`config` are
-// `pub(crate)` (crate-wide, not published outside this package — nono-cli
-// has no `[lib]` target, only binaries) so `exec_strategy_windows::
-// attestation_downgrade_event`'s `impl SecurityEventLayer` block — moved
-// there specifically so `nono-agentd`'s independent #[path]-copy of this
-// file never compiles `emit_attestation_event`, which had zero non-test
-// callers in the daemon binary after this plan deleted its only call site
-// (`DaemonAttestationDecision::ProceedDowngraded`, now removed) — can read
-// them without leaving `emit_attestation_event`'s doc-commented, D-27/AUD-04
-// contract-carrying implementation duplicated in two places.
+// Phase 117 Plan 25 (WR-09): `chain`/`session_id`/`config` are private again.
+// Plan 17 (NR3-05 follow-up) had widened them to `pub(crate)` so
+// `exec_strategy_windows::attestation_downgrade_event`'s `impl
+// SecurityEventLayer` block — moved there specifically so `nono-agentd`'s
+// independent #[path]-copy of this file never compiles
+// `emit_attestation_event`, which had zero non-test callers in the daemon
+// binary after that plan deleted its only call site
+// (`DaemonAttestationDecision::ProceedDowngraded`, now removed) — could read
+// them directly. That gave every module in the binary unmediated mutable
+// access to the tamper-evident HMAC chain, with no accessor discipline and
+// no test guarding the boundary. `advance_and_snapshot` below is the sole
+// cross-module accessor: it locks once, always routes the mutation through
+// `advance_chain`, and returns a snapshot of the fields callers need instead
+// of exposing the fields themselves.
 pub(crate) struct SecurityEventLayerInner {
-    pub(crate) chain: ChainState,
-    pub(crate) session_id: String,
+    chain: ChainState,
+    session_id: String,
     session_salt: [u8; 32],
-    pub(crate) config: TelemetryConfig,
+    config: TelemetryConfig,
 }
 
 // ── SecurityEventLayer ────────────────────────────────────────────────────────
@@ -380,6 +384,49 @@ impl SecurityEventLayer {
         Ok(chain_head)
     }
 
+    /// Advance the HMAC chain by exactly one event and return a snapshot of
+    /// the fields external callers need (Phase 117 Plan 25 / WR-09).
+    ///
+    /// This is the sole cross-module accessor for the tamper-evident chain:
+    /// every module outside `telemetry::mod` that needs to advance the chain
+    /// (currently `exec_strategy_windows::attestation_downgrade_event`'s
+    /// `emit_attestation_event`) MUST go through this method instead of
+    /// reaching into `SecurityEventLayerInner`'s fields directly — those
+    /// fields are private again as of this plan.
+    ///
+    /// Locks `inner` exactly once. `build_event_bytes` receives the current
+    /// `session_id` (so the caller never needs a separate lock just to read
+    /// it before building the bytes to chain), and its return value is
+    /// passed to [`advance_chain`].
+    ///
+    /// # Returns
+    ///
+    /// `Ok((session_id, chain_head_hex, telemetry_enabled))` on success —
+    /// a snapshot the caller can use to build its own `SecurityEvent`
+    /// without ever touching `inner` again. `Err("mutex poisoned")` if the
+    /// lock is poisoned (AUD-04 fail-closed — callers must treat this per
+    /// their own event's contract).
+    // This method's only caller is `exec_strategy_windows::
+    // attestation_downgrade_event::emit_attestation_event`, a file compiled
+    // only into the `nono` binary (not `nono-agentd` — see that module's
+    // doc comment) and exercised by that file's own unit tests. Same
+    // multi-binary compilation artifact as `emit_override_event` above
+    // (`nono-cli` has no `[lib]` target, so `telemetry/mod.rs` is
+    // `#[path]`-included wholesale into both binaries): the method IS used
+    // in production (`nono` binary) but has zero reachable callers within
+    // `nono-agentd`'s independent compilation unit. Not actual dead code.
+    #[allow(dead_code)]
+    pub(crate) fn advance_and_snapshot(
+        &self,
+        build_event_bytes: impl FnOnce(&str) -> Vec<u8>,
+    ) -> Result<(String, String, bool), &'static str> {
+        let mut inner = self.inner.lock().map_err(|_| "mutex poisoned")?;
+        let event_bytes = build_event_bytes(&inner.session_id);
+        advance_chain(&mut inner.chain, &event_bytes);
+        let chain_head = chain_head_hex(&inner.chain.head);
+        Ok((inner.session_id.clone(), chain_head, inner.config.enabled))
+    }
+
     // `emit_attestation_event` (Phase 117 CINT-02 / D-27's structured-telemetry
     // channel for `LayerAttestationDowngraded` events) moved to
     // `exec_strategy_windows::attestation_downgrade_event` in Plan 17
@@ -394,10 +441,10 @@ impl SecurityEventLayer {
     // `exec_strategy_windows::attestation`'s callers
     // (`exec_strategy_windows/launch.rs`'s `apply_startup_attestation_gate`)
     // — a module tree `nono-agentd.rs` never `#[path]`-includes — so moving
-    // the method there (as a second `impl SecurityEventLayer` block, made
-    // possible by `inner`/`SecurityEventLayerInner`'s `pub(crate)` fields
-    // above) makes its compiled-into-one-binary-only reality match its real
-    // usage, instead of silencing the mismatch with an attribute.
+    // the method there (as a second `impl SecurityEventLayer` block) makes
+    // its compiled-into-one-binary-only reality match its real usage,
+    // instead of silencing the mismatch with an attribute. It reaches the
+    // chain exclusively through `advance_and_snapshot` above (Plan 25).
 }
 
 impl<S: Subscriber> Layer<S> for SecurityEventLayer {

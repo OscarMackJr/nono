@@ -42,17 +42,19 @@
 //! unchanged; this move required no edit to that call site).
 //!
 //! A second `impl SecurityEventLayer` block in a different file is ordinary
-//! Rust (inherent impls may split across files within one crate). It needs
-//! field-level access to `SecurityEventLayer::inner` /
-//! `SecurityEventLayerInner::{chain, session_id, config}`, which
-//! `telemetry/mod.rs` now declares `pub(crate)` for exactly this reason —
-//! visible everywhere within this package (which has no `[lib]` target, so
-//! `pub(crate)` never crosses an external API boundary), not published
-//! narrower-than-crate the way it was before this move.
+//! Rust (inherent impls may split across files within one crate). Plan 17
+//! originally widened `SecurityEventLayerInner`'s `chain`/`session_id`/
+//! `config` fields to `pub(crate)` so this block could read them directly —
+//! but that gave every module in the binary unmediated mutable access to
+//! the tamper-evident HMAC chain, with no accessor discipline and no test
+//! guarding the boundary (WR-09). Phase 117 Plan 25 reverted those fields to
+//! private and added `SecurityEventLayer::advance_and_snapshot`, the sole
+//! cross-module chain-advancement accessor; `emit_attestation_event` below
+//! calls it instead of touching `inner`'s fields directly.
 
 use crate::telemetry::event::{SecurityEvent, SecurityEventType};
 use crate::telemetry::windows::emit_security_event;
-use crate::telemetry::{advance_chain, chain_head_hex, SecurityEventLayer};
+use crate::telemetry::SecurityEventLayer;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl SecurityEventLayer {
@@ -91,7 +93,7 @@ impl SecurityEventLayer {
     ///
     /// # Telemetry-disabled behaviour (D-14 degrade-not-abort)
     ///
-    /// When `inner.config.enabled` is `false`, the HMAC chain still advances
+    /// When telemetry is configured disabled, the HMAC chain still advances
     /// (for sequence correctness and audit ordering) but no ETW/AppLog emit
     /// occurs — mirrors `emit_override_event`'s policy.
     #[must_use = "AUD-04: Err means the audit record was not committed — callers MUST \
@@ -101,8 +103,6 @@ impl SecurityEventLayer {
         &self,
         downgraded_layers: &[&str],
     ) -> Result<String, &'static str> {
-        let mut inner = self.inner.lock().map_err(|_| "mutex poisoned")?;
-
         let timestamp_unix_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
@@ -111,26 +111,27 @@ impl SecurityEventLayer {
         let downgraded_layers_value = downgraded_layers.join(",");
 
         // Build canonical event bytes for chain advancement (same shape as
-        // emit_override_event / on_event).
-        let pre_chain_bytes = format!(
-            "{event_type:?}|{downgraded}|{session_id}|{ts}",
-            event_type = SecurityEventType::LayerAttestationDowngraded,
-            downgraded = downgraded_layers_value,
-            session_id = inner.session_id,
-            ts = timestamp_unix_ms,
-        );
+        // emit_override_event / on_event) via the sole cross-module
+        // chain-advancement accessor (WR-09) — locks `inner` once and
+        // returns a snapshot instead of exposing its fields.
+        let (session_id, chain_head, enabled) = self.advance_and_snapshot(|session_id| {
+            format!(
+                "{event_type:?}|{downgraded}|{session_id}|{ts}",
+                event_type = SecurityEventType::LayerAttestationDowngraded,
+                downgraded = downgraded_layers_value,
+                ts = timestamp_unix_ms,
+            )
+            .into_bytes()
+        })?;
 
-        advance_chain(&mut inner.chain, pre_chain_bytes.as_bytes());
-        let chain_head = chain_head_hex(&inner.chain.head);
-
-        if inner.config.enabled {
+        if enabled {
             let security_event = SecurityEvent {
                 event_type: SecurityEventType::LayerAttestationDowngraded,
                 agent_pid: std::process::id(),
                 path_hash: None,
                 path_category: None,
                 host: None,
-                session_id: inner.session_id.clone(),
+                session_id,
                 chain_head: chain_head.clone(),
                 timestamp_unix_ms,
                 downgraded_layers: Some(downgraded_layers_value),
