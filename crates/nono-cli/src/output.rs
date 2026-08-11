@@ -117,7 +117,8 @@ pub fn print_attestation_downgrade_banner(
         theme::fg(
             &format!(
                 "{downgraded_count} confinement layer(s) could not be fully confirmed at \
-                 startup — see the audit ledger for layer-level detail"
+                 startup — layer detail is in the Windows Application event log (source \
+                 `nono`, event id 10011); re-run with --log-file <path> to capture it locally"
             ),
             attestation_downgrade_color(downgraded_count, t),
         )
