@@ -194,3 +194,12 @@ WR-21 is closed: both sibling chain emitters (`emit_override_event`, `emit_attes
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+- FOUND: crates/nono-cli/src/telemetry/mod.rs
+- FOUND: crates/nono-cli/src/exec_strategy_windows/attestation_downgrade_event.rs
+- FOUND: .planning/phases/117-fail-direction-contract-startup-self-attestation/117-33-SUMMARY.md
+- FOUND: 072d324a (Task 1 commit)
+- FOUND: 526f4ed5 (Task 2 commit)
+- FOUND: 2146932c (SUMMARY commit)
