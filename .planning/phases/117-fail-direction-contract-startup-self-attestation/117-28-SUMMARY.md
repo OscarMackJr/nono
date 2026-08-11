@@ -415,3 +415,15 @@ access patterns, or schema changes at a trust boundary were introduced.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+All files verified present, all commit hashes verified present in `git log --oneline --all`:
+- `crates/nono-cli/src/exec_strategy_windows/dacl_guard.rs` — FOUND
+- `crates/nono-cli/src/exec_strategy_windows/mod.rs` — FOUND
+- `crates/nono-cli/src/agent_daemon/launch.rs` — FOUND
+- `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-28-SUMMARY.md` — FOUND
+- `.planning/phases/117-fail-direction-contract-startup-self-attestation/deferred-items.md` — FOUND
+- `25abcf92` (Task 1) — FOUND
+- `9ae2dbd1` (Tasks 2+3) — FOUND
+- `043aa008` (this SUMMARY) — FOUND
