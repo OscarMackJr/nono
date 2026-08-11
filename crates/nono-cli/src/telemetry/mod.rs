@@ -234,8 +234,7 @@ pub(crate) struct SecurityEventLayerInner {
 /// concurrent access across all clones.
 #[derive(Clone)]
 pub struct SecurityEventLayer {
-    // `pub(crate)` — see the NR3-05 follow-up comment on `SecurityEventLayerInner`.
-    pub(crate) inner: std::sync::Arc<Mutex<SecurityEventLayerInner>>,
+    inner: std::sync::Arc<Mutex<SecurityEventLayerInner>>,
 }
 
 impl SecurityEventLayer {
@@ -261,6 +260,46 @@ impl SecurityEventLayer {
             Ok(guard) => guard.chain.sequence,
             Err(_) => 0, // Mutex poisoned — return genesis value, never panic
         }
+    }
+
+    /// Poison this layer's internal chain mutex (test-only helper, Phase 117
+    /// Plan 33 / WR-21 point 2).
+    ///
+    /// Deliberately panics while holding `inner`'s lock, then swallows the
+    /// panic via `catch_unwind` so the poisoning itself never propagates to
+    /// the caller. After this returns, every lock-taking method on this
+    /// layer (or any of its clones — they share the same `Arc<Mutex<...>>`)
+    /// returns `Err("mutex poisoned")` (AUD-04 fail-closed).
+    ///
+    /// # Test accessor
+    ///
+    /// This is the ONLY cross-module access point for poisoning
+    /// `SecurityEventLayer`'s mutex from a test in a different module (e.g.
+    /// `exec_strategy_windows::attestation_downgrade_event`'s
+    /// `emit_attestation_event_err_on_poisoned_mutex`). Before this plan,
+    /// that test reached `inner` directly via a `pub(crate)` field; `inner`
+    /// is private again as of this plan, so this named, documented method
+    /// is now the sole substitute (WR-21 point 2 — narrows `inner`'s
+    /// visibility to what production code actually needs).
+    ///
+    /// # `clippy::unwrap_used` justification
+    ///
+    /// This function is `#[cfg(test)]` but lives in the production `impl
+    /// SecurityEventLayer` block above, NOT inside `mod tests` — so it is
+    /// not covered by this file's `mod tests`-scoped `#[allow(clippy::
+    /// unwrap_used)]` (see the bottom of this file). `cargo clippy
+    /// --all-targets` compiles `#[cfg(test)]` items outside `mod tests`
+    /// too, so this function carries its OWN scoped allow below, matching
+    /// the identical precedent in `attestation_downgrade_event.rs`'s
+    /// own test-only poisoning code.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)]
+    pub(crate) fn poison_for_test(&self) {
+        let this = self.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _guard = this.inner.lock().unwrap();
+            panic!("intentionally poison the mutex (poison_for_test)");
+        }));
     }
 
     /// Construct a new `SecurityEventLayer` with a freshly generated ephemeral
@@ -927,6 +966,33 @@ mod tests {
         assert!(
             result.is_err(),
             "poisoned mutex must return Err (AUD-04 fail-closed)"
+        );
+    }
+
+    /// `poison_for_test` (Phase 117 Plan 33 / WR-21 point 2) must leave the
+    /// layer's mutex poisoned exactly like the manual `catch_unwind` dance
+    /// above — this is the accessor that replaced direct `.inner.lock()`
+    /// field access from `exec_strategy_windows::attestation_downgrade_event`.
+    /// Exercised here (module-locally) so the method has a real caller in
+    /// BOTH `nono` and `nono-agentd`'s independent `#[path]`-copies of this
+    /// file's `mod tests` — its cross-module caller in
+    /// `attestation_downgrade_event.rs` only compiles into the `nono` binary.
+    #[test]
+    fn poison_for_test_poisons_mutex_for_emit_override_event() {
+        let layer =
+            SecurityEventLayer::new(TelemetryConfig::default(), "test-poison-helper".to_string());
+
+        layer.poison_for_test();
+
+        let result = layer.emit_override_event(
+            &SecurityEventType::PolicyOverrideRejected,
+            "jti",
+            "kms_key_id",
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "poison_for_test must leave the mutex poisoned (AUD-04 fail-closed)"
         );
     }
 

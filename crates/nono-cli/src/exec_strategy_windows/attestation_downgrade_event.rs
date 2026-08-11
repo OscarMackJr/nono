@@ -50,7 +50,13 @@
 //! guarding the boundary (WR-09). Phase 117 Plan 25 reverted those fields to
 //! private and added `SecurityEventLayer::advance_and_snapshot`, the sole
 //! cross-module chain-advancement accessor; `emit_attestation_event` below
-//! calls it instead of touching `inner`'s fields directly.
+//! called it instead of touching `inner`'s fields directly. Plan 33 replaced
+//! `advance_and_snapshot` with `advance_and_emit` (WR-21 point 1: holds the
+//! chain mutex across the full build+advance+emit sequence, not just
+//! build+advance) and narrowed `SecurityEventLayer::inner` itself back to
+//! private — this module's `#[cfg(test)]` poisoning helper (below) now goes
+//! through `SecurityEventLayer::poison_for_test` instead of locking `inner`
+//! directly (WR-21 point 2).
 
 use crate::telemetry::event::{SecurityEvent, SecurityEventType};
 use crate::telemetry::windows::emit_security_event;
@@ -200,18 +206,15 @@ mod tests {
 
     #[test]
     fn emit_attestation_event_err_on_poisoned_mutex() {
-        use std::sync::Arc;
-
-        let layer = Arc::new(SecurityEventLayer::new(
+        let layer = SecurityEventLayer::new(
             TelemetryConfig::default(),
             "test-attestation-poison".to_string(),
-        ));
+        );
 
-        let layer_clone = Arc::clone(&layer);
-        let _ = std::panic::catch_unwind(move || {
-            let _guard = layer_clone.inner.lock().unwrap();
-            panic!("intentionally poison the mutex");
-        });
+        // Poison via the sole cross-module poisoning accessor (WR-21 point
+        // 2) — `SecurityEventLayer::inner` is private again, so this test
+        // can no longer reach the chain mutex by field access.
+        layer.poison_for_test();
 
         let result = layer.emit_attestation_event(&["RestrictedToken"]);
         assert!(
