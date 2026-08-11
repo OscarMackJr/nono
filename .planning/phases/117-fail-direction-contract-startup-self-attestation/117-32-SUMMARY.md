@@ -235,3 +235,12 @@ WR-19 is closed: the stale `BrokerAuthenticodeTrustGate` citation is fixed, and 
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-32-SUMMARY.md`
+- FOUND: `proj/SPEC-windows-fail-direction-contract.md`
+- FOUND: `crates/nono-cli/tests/layer_registry_selfcheck.rs`
+- FOUND: commit `49151c0e` (Task 1)
+- FOUND: commit `ca982654` (Task 2)
+- FOUND: commit `bbae0235` (SUMMARY.md)
