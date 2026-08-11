@@ -859,7 +859,10 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
     LayerRegistryEntry {
         id: LayerId::RestrictedToken,
         name: "restricted-token",
-        call_sites: &["restricted_token.rs:55", "launch.rs:1403"],
+        call_sites: &[
+            "restricted_token.rs::create_restricted_token_with_sid",
+            "launch.rs::spawn_windows_child",
+        ],
         expectancy: &RESTRICTED_TOKEN_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::LiveTokenOrJobQuery,
@@ -870,7 +873,7 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         call_sites: &[
             "labels_guard.rs::AppliedLabelsGuard::snapshot_and_apply",
             "mod.rs::prepare_live_windows_launch",
-            "nono-shell-broker/src/main.rs:615-644",
+            "nono-shell-broker/src/main.rs::broker_resume_gate",
         ],
         expectancy: &MANDATORY_INTEGRITY_LABEL_EXPECTANCY,
         outcome: ContractOutcome::Abort,
@@ -914,9 +917,9 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         // which enforces this mechanically.
         name: "app-container-profile",
         call_sites: &[
-            "nono-shell-broker/src/main.rs:322-336",
-            "nono-shell-broker/src/main.rs:536-556",
-            "agent_daemon/launch.rs:636-650",
+            "nono-shell-broker/src/main.rs::run",
+            "nono-shell-broker/src/main.rs::broker_resume_gate",
+            "agent_daemon/launch.rs::launch_agent",
         ],
         expectancy: &APP_CONTAINER_PROFILE_EXPECTANCY,
         outcome: ContractOutcome::Abort,
@@ -941,8 +944,8 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         call_sites: &[
             "dacl_guard.rs::AppliedDaclGrantsGuard::snapshot_and_apply",
             "mod.rs::prepare_live_windows_launch",
-            "agent_daemon/launch.rs:133",
-            "agent_daemon/launch.rs:764",
+            "agent_daemon/launch.rs::DaemonDaclGuard::apply",
+            "agent_daemon/launch.rs::launch_agent",
         ],
         expectancy: &DACL_PACKAGE_SID_SCOPED_EXPECTANCY,
         outcome: ContractOutcome::Abort,
@@ -974,10 +977,9 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::WfpEgressFilters,
         name: "wfp-egress-filters",
         call_sites: &[
-            "network.rs:1602-1610",
-            "network.rs:1730",
-            "network.rs:1775-1800",
-            "agent_daemon/launch.rs:444",
+            "network.rs::WfpNetworkBackend::install",
+            "network.rs::assert_wfp_activation_installed_filters",
+            "agent_daemon/launch.rs::wfp_filter_add",
         ],
         expectancy: &WFP_EGRESS_FILTERS_EXPECTANCY,
         // Open Question 1 (RESEARCH), resolved 117-08 Task 1: the
@@ -994,7 +996,10 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         // SC4-3 resolution (Task 1, above): reachable in production,
         // fails closed via run_netsh_firewall Err propagation with
         // partial-rule rollback.
-        call_sites: &["network.rs:1500-1533", "network.rs:1535-1594"],
+        call_sites: &[
+            "network.rs::FirewallRulesNetworkBackend::install",
+            "network.rs::run_netsh_firewall",
+        ],
         expectancy: &FIREWALL_RULES_EGRESS_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
@@ -1016,10 +1021,10 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::JobObjectContainment,
         name: "job-object-containment",
         call_sites: &[
-            "launch.rs:375",
-            "launch.rs:2134-2137",
-            "agent_daemon/launch.rs:959",
-            "agent_daemon/launch.rs:1049",
+            "launch.rs::create_process_containment",
+            "launch.rs::apply_process_handle_to_containment",
+            "agent_daemon/launch.rs::create_agent_job",
+            "agent_daemon/launch.rs::assign_process_to_agent_job",
         ],
         expectancy: &JOB_OBJECT_CONTAINMENT_EXPECTANCY,
         outcome: ContractOutcome::Abort,
@@ -1028,12 +1033,7 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
     LayerRegistryEntry {
         id: LayerId::BrokerAuthenticodeTrustGate,
         name: "broker-authenticode-trust-gate",
-        call_sites: &[
-            "launch.rs:1505-1506",
-            "launch.rs:1828-1829",
-            "launch.rs:2190",
-            "launch.rs:2236",
-        ],
+        call_sites: &["launch.rs::verify_broker_authenticode", "launch.rs::spawn_windows_child"],
         expectancy: &BROKER_AUTHENTICODE_TRUST_GATE_EXPECTANCY,
         outcome: ContractOutcome::Abort,
         probe: ProbeKind::ConfiguredOnly,
@@ -1042,9 +1042,9 @@ const REGISTRY_ENTRIES: [LayerRegistryEntry; 13] = [
         id: LayerId::InterpreterCoverageGate,
         name: "interpreter-coverage-gate",
         call_sites: &[
-            "crates/nono/src/sandbox/windows.rs:2247",
-            "crates/nono/src/sandbox/mod.rs:925",
-            "mod.rs:357-362",
+            "crates/nono/src/sandbox/windows.rs::validate_launch_paths",
+            "crates/nono/src/sandbox/mod.rs::Sandbox::validate_windows_launch_paths",
+            "mod.rs::prepare_live_windows_launch",
         ],
         expectancy: &ALL_DIRECT_CLI_ARMS_EXPECTANCY,
         outcome: ContractOutcome::Abort,
