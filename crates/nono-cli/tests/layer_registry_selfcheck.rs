@@ -176,6 +176,54 @@ fn split_symbol_citation(citation: &str) -> (&str, &str) {
     })
 }
 
+/// Phase 117 Plan 24 (WR-08): does `content` define `symbol` at a real
+/// definition site, not merely mention it somewhere (a doc comment, a
+/// string/macro literal, a commented-out line)?
+///
+/// Takes the symbol's last `::`-separated segment (so `Type::method`
+/// citations check the method name, matching how a `fn` or `impl` block
+/// actually reads in source). Searches for both `"fn {last}"` and
+/// `"impl {last}"` needles. For each occurrence, walks back to the start of
+/// that line and takes the trimmed text before the match. The match is
+/// accepted only if that prefix is empty or consists entirely of
+/// whitespace-separated words drawn from the qualifier-keyword set
+/// (`pub`, `pub(crate)`, `pub(super)`, `async`, `unsafe`, `const`, or any
+/// word starting with `pub(` to cover `pub(in path)` forms) — i.e. the kind
+/// of text that only appears immediately before a real item declaration.
+/// Rejected matches are skipped, not treated as failures, so scanning
+/// continues to a later genuine match in the same file.
+fn content_defines_symbol(content: &str, symbol: &str) -> bool {
+    let last = symbol.rsplit("::").next().unwrap_or(symbol);
+    let needles = [format!("fn {last}"), format!("impl {last}")];
+
+    for needle in &needles {
+        let mut search_start = 0usize;
+        while let Some(rel_pos) = content[search_start..].find(needle.as_str()) {
+            let match_pos = search_start + rel_pos;
+            let line_start = content[..match_pos]
+                .rfind('\n')
+                .map_or(0, |newline_pos| newline_pos + 1);
+            let prefix = content[line_start..match_pos].trim();
+            let is_definition_prefix = prefix.is_empty()
+                || prefix.split_whitespace().all(|word| {
+                    matches!(
+                        word,
+                        "pub" | "pub(crate)" | "pub(super)" | "async" | "unsafe" | "const"
+                    ) || word.starts_with("pub(")
+                });
+            if is_definition_prefix {
+                return true;
+            }
+            // Not a real definition line (doc comment / string / macro
+            // literal) — keep scanning past this rejected match instead of
+            // giving up on the whole needle.
+            search_start = match_pos + 1;
+        }
+    }
+
+    false
+}
+
 /// CINT-01: every `call_sites` citation in the registry names a file that
 /// actually exists in this tree.
 ///
@@ -188,11 +236,17 @@ fn split_symbol_citation(citation: &str) -> (&str, &str) {
 fn registry_call_sites_exist() {
     let src = read_layer_registry();
     let citations = extract_call_site_citations(&src);
+    let symbol_citations = extract_symbol_citations(&src);
 
+    // Phase 117 Plan 24 converted every remaining raw "file:line" citation
+    // to symbol form (SC1 / CINT-01's 9-of-13 gap), so `citations` alone is
+    // now expected to be empty — the extraction-is-broken sanity check must
+    // look at the combined total instead of raw-form citations specifically.
     assert!(
-        !citations.is_empty(),
-        "expected at least one \"file:line\" call_sites citation in layer_registry.rs — \
-         found zero; the extraction scan may be broken, or the registry lost its citations"
+        !citations.is_empty() || !symbol_citations.is_empty(),
+        "expected at least one call_sites citation (\"file:line\" or \"file.rs::Symbol\") in \
+         layer_registry.rs — found zero of either shape; the extraction scan may be broken, or \
+         the registry lost its citations"
     );
 
     let mut missing = Vec::new();
@@ -218,15 +272,15 @@ fn registry_call_sites_exist() {
     // symbol — content-verified, not merely existence-verified, so a
     // renamed or removed enforcing function fails the build instead of
     // silently invalidating the citation.
-    let symbol_citations = extract_symbol_citations(&src);
     let mut missing_symbols = Vec::new();
     for citation in &symbol_citations {
         let (file_part, symbol) = split_symbol_citation(citation);
         let resolved = resolve_file_part(file_part);
         match std::fs::read_to_string(&resolved) {
-            Ok(content) if content.contains(symbol) => {}
+            Ok(content) if content_defines_symbol(&content, symbol) => {}
             Ok(_) => missing_symbols.push(format!(
-                "{citation:?} -> resolved to {}, but its content does not contain {symbol:?}",
+                "{citation:?} -> resolved to {}, but its content does not define {symbol:?} at a \
+                 real definition site (only a comment, string, or macro literal mention, if any)",
                 resolved.display()
             )),
             Err(e) => missing_symbols.push(format!(
@@ -348,5 +402,27 @@ fn call_site_extraction_ignores_backtick_doc_comment_citations() {
         ],
         "extraction picked up a backtick doc-comment citation, or missed a real \
          double-quoted call_sites entry: {citations:?}"
+    );
+}
+
+/// WR-08: a doc-comment mention of a symbol must not satisfy
+/// `content_defines_symbol` — only a real `fn`/`impl` definition line does.
+#[test]
+fn content_defines_symbol_rejects_a_doc_comment_mention() {
+    let src = "/// see `fn foo(...)` for details\n";
+    assert!(
+        !content_defines_symbol(src, "foo"),
+        "a doc-comment mention of `fn foo` must not satisfy content_defines_symbol"
+    );
+}
+
+/// WR-08: a real, qualifier-prefixed definition line must satisfy
+/// `content_defines_symbol`.
+#[test]
+fn content_defines_symbol_accepts_a_real_definition() {
+    let src = "pub(crate) fn foo(x: u32) -> u32 {\n    x\n}\n";
+    assert!(
+        content_defines_symbol(src, "foo"),
+        "a real `pub(crate) fn foo(` definition line must satisfy content_defines_symbol"
     );
 }
