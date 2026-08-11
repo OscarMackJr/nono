@@ -35,6 +35,8 @@
 //!   cross-cutting assumptions like the ETW/AppLog child-readability item
 //!   (Blocker-3, checker pass 2).
 
+mod common;
+
 use std::path::PathBuf;
 
 fn manifest_dir() -> PathBuf {
@@ -271,16 +273,20 @@ const MANUAL_SECURITY_ASSUMPTIONS: &[(&str, &str)] = &[(
 /// ..."]` attribute) cannot satisfy this check. A rejected match does not
 /// return `false` immediately — scanning continues so a later genuine
 /// definition in the same file is still found.
+///
+/// Phase 117 Plan 31 (WR-13): the trailing-boundary check above is now
+/// `common::is_ident_boundary` — the SAME predicate
+/// `layer_registry_selfcheck.rs::content_defines_symbol` uses, extracted to
+/// `tests/common/mod.rs` so the two matchers cannot drift apart again the
+/// way they did between Plan 24 (this file) and the still-unguarded
+/// `content_defines_symbol` (closed by this same plan).
 fn contains_fn_exact(src: &str, fn_name: &str) -> bool {
     let needle = format!("fn {fn_name}");
     let mut search_start = 0;
     while let Some(rel_idx) = src[search_start..].find(&needle) {
         let match_start = search_start + rel_idx;
         let after = match_start + needle.len();
-        let boundary_ok = match src[after..].chars().next() {
-            None => true,
-            Some(c) => !(c.is_ascii_alphanumeric() || c == '_' || c == '!'),
-        };
+        let boundary_ok = common::is_ident_boundary(src[after..].chars().next());
         let line_start = src[..match_start]
             .rfind('\n')
             .map_or(0, |newline_pos| newline_pos + 1);
