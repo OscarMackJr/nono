@@ -38,7 +38,7 @@ Sequencing rationale: **115** drains the v3.6 findings first because DRAIN-03 cl
 
 - [x] **Phase 115: v3.6 Carry-Forward Drain** — 6/6 plans (2026-08-09)
 - [x] **Phase 116: Tool-Sandbox Divergence Audit + Disposition ADR** — 6/6 plans (2026-08-09)
-- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 26/34 plans executed. Gap-closure round 2 EXECUTED 2026-08-11 (waves 9-11); code review iteration 5 then found 1 BLOCKER (CR-03) + 10 warnings, so **gap-closure round 3 is PLANNED 2026-08-11**: 8 new plans 117-27..117-34 in waves 12-14, plan-checker PASSED, ready to execute. D-37 locked to settle the WR-12 contradiction
+- [ ] **Phase 117: Fail-Direction Contract + Startup Self-Attestation** — 34/34 plans executed. Gap-closure round 3 EXECUTED 2026-08-11 (waves 12-14), closing CR-03 (BLOCKER) and WR-12..WR-21; D-37 implemented as the three-arm ancestor classification. Full suite 1624 passed / 12 failed = the 11 documented Windows-host baseline + **one intentional host-blocked test** (117-30's WR-20 pin needs an elevated/CI runner — `SeTakeOwnershipPrivilege` absent here, so WR-20 is authored-but-unverified). Awaiting code review iteration 6 + re-verification
 - [ ] **Phase 118: Per-Session Enforcement Receipts** — 0/? plans
 - [ ] **Phase 119: Security-Model Boundary Statement + State-of-the-Art Decision Log** — 0/? plans
 - [ ] **Phase 120: Tool-Sandbox Verdict Execution** — 0/? plans
@@ -288,7 +288,7 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
   2. Starting a confined session with a layer forced unavailable produces either an abort or a visibly downgraded claim; there is no path on which nono presents a confinement guarantee it did not confirm.
   3. Every entry in the contract has a test that forces that layer unavailable and asserts the contracted outcome — a contract row without a test is not counted as satisfied.
   4. Where the contract and the code disagree, the code is changed or the contract is corrected in the same phase, with the discrepancy recorded rather than quietly reconciled.
-**Plans**: 34 plans in 14 waves (26 executed: waves 1-8 in the first two rounds, waves 9-11 on 2026-08-11; waves 12-14 planned 2026-08-11 and unexecuted; second gap-closure round added 2026-08-10 from the re-verification pass in `117-VERIFICATION.md` — status gaps_found, 0/4 truths fully verified — closing CR-01 BLOCKER, CR-02 BLOCKER-adjacent/D-28, WR-01..WR-11, and the remaining 9/13 SC1 citation gap; see `117-REVIEW.md` iteration 4)
+**Plans**: 34 plans in 14 waves (all 34 executed: waves 1-8 in the first two rounds, waves 9-11 on 2026-08-11, waves 12-14 on 2026-08-11; second gap-closure round added 2026-08-10 from the re-verification pass in `117-VERIFICATION.md` — status gaps_found, 0/4 truths fully verified — closing CR-01 BLOCKER, CR-02 BLOCKER-adjacent/D-28, WR-01..WR-11, and the remaining 9/13 SC1 citation gap; see `117-REVIEW.md` iteration 4)
 
 **Wave 1** — the registry is the source of truth everything else derives from (D-01)
 - [x] 117-01-PLAN.md — Layer registry core: LayerId enum, per-row expectancy matrix, D-10 derivation + Open Question 2/5 resolution
@@ -345,18 +345,18 @@ Audit: [`milestones/v3.6-MILESTONE-AUDIT.md`](milestones/v3.6-MILESTONE-AUDIT.md
 **Gap closure round 3 (2026-08-11, from `117-REVIEW.md` iteration 5)** — round 2 closed 7 of iteration 4's 13 findings outright but left 6 partial, and its own fixes produced the next blocker for the third consecutive round: CR-02's D-28 gate landed on 1 of 3 leak sites (CR-03), and plans 117-22 and 117-23 shipped **contradictory rules for the same physical condition** (WR-12). The recurring mechanism is one class: a guard fixed at one call site, paired with a test that NAMES its target instead of DISCOVERING it. Round 3 therefore plans by CLASS, not by site — every plan that closes a one-site finding must first enumerate every site of that class, and every test must discover its targets and carry a perturbation proof that it can actually fail. **D-37 was LOCKED by the operator before planning** to settle WR-12: an ancestor walk that stops at the first non-owned ancestor is contract-exempt, not a downgrade. Plan-checker: 4 warnings -> 1 blocker -> **VERIFICATION PASSED** at revision iteration 2.
 
 **Wave 12** *(blocked on Wave 11 — 6 plans, disjoint files)*
-- [ ] 117-27-PLAN.md — CR-03 BLOCKER: gate ALL 3 `LayerId`-name-to-console sites (field AND message text) behind one shared D-28 gate, and widen the withholding test to scan text; WR-15 (banner names a channel the event never reaches); WR-16 (`log_target_is_private()` does not validate the log path against the child's own granted policy)
-- [ ] 117-28-PLAN.md — WR-12/**D-37**: distinguish "walked, stopped at non-owned ancestor" (contract-exempt) from "walked, granted nothing, not exempt" (real gap) on both CLI ancestor guards, keep the daemon two-state, and extend the cross-mirror test from variant NAME SETS to the CLASSIFICATION RULE; WR-14 (anchor hardening applied to 1 of 2 tests)
-- [ ] 117-29-PLAN.md — WR-18: CR-01's class-coverage gap — `low_integrity_label_rid` still ignores `AceFlags`; WR-17: remediation names a command that cannot diagnose the cause it names
-- [ ] 117-30-PLAN.md — WR-20: the WR-01 reordering silently loosened the coverage claim for non-owned paths carrying a third-party mandatory label, with no test and no ledger entry
-- [ ] 117-31-PLAN.md — WR-13: `content_defines_symbol` lacks the trailing word-boundary check its sibling got in the same plan, so the SPEC's "a renamed enforcing function fails the build" claim is false
-- [ ] 117-33-PLAN.md — WR-21: `emit_attestation_event` emits outside the chain mutex while `emit_override_event` emits inside it; `SecurityEventLayer::inner` visibility comment no longer explains itself
+- [x] 117-27-PLAN.md — CR-03 BLOCKER: gate ALL 3 `LayerId`-name-to-console sites (field AND message text) behind one shared D-28 gate, and widen the withholding test to scan text; WR-15 (banner names a channel the event never reaches); WR-16 (`log_target_is_private()` does not validate the log path against the child's own granted policy)
+- [x] 117-28-PLAN.md — WR-12/**D-37**: distinguish "walked, stopped at non-owned ancestor" (contract-exempt) from "walked, granted nothing, not exempt" (real gap) on both CLI ancestor guards, keep the daemon two-state, and extend the cross-mirror test from variant NAME SETS to the CLASSIFICATION RULE; WR-14 (anchor hardening applied to 1 of 2 tests)
+- [x] 117-29-PLAN.md — WR-18: CR-01's class-coverage gap — `low_integrity_label_rid` still ignores `AceFlags`; WR-17: remediation names a command that cannot diagnose the cause it names
+- [x] 117-30-PLAN.md — WR-20: the WR-01 reordering silently loosened the coverage claim for non-owned paths carrying a third-party mandatory label, with no test and no ledger entry
+- [x] 117-31-PLAN.md — WR-13: `content_defines_symbol` lacks the trailing word-boundary check its sibling got in the same plan, so the SPEC's "a renamed enforcing function fails the build" claim is false
+- [x] 117-33-PLAN.md — WR-21: `emit_attestation_event` emits outside the chain mutex while `emit_override_event` emits inside it; `SecurityEventLayer::inner` visibility comment no longer explains itself
 
 **Wave 13** *(blocked on Wave 12 — 117-32 consumes the matcher 117-31 produces)*
-- [ ] 117-32-PLAN.md — WR-19: stale `launch.rs:2190`/`:2194` citation in the SPEC's Manual verification table, outside `spec_matches_registry`'s coverage
+- [x] 117-32-PLAN.md — WR-19: stale `launch.rs:2190`/`:2194` citation in the SPEC's Manual verification table, outside `spec_matches_registry`'s coverage
 
 **Wave 14** *(blocked on Waves 12-13 — records the whole round, alone per SC4)*
-- [ ] 117-34-PLAN.md — SC4: record CR-03 + WR-12..WR-21 in the SPEC's Review-fix pass ledger (11 new rows) and add iteration-5 addenda to the 9 continuing prior rows (CR-01, CR-02, WR-01, WR-04, WR-06, WR-07, WR-08, WR-09, WR-11)
+- [x] 117-34-PLAN.md — SC4: record CR-03 + WR-12..WR-21 in the SPEC's Review-fix pass ledger (11 new rows) and add iteration-5 addenda to the 9 continuing prior rows (CR-01, CR-02, WR-01, WR-04, WR-06, WR-07, WR-08, WR-09, WR-11)
 
 **Cross-cutting constraints** (phase-wide invariants cited across multiple plans):
 - **D-19** — the supervisor attests; the confined process is never the source of a claim about its own containment.
