@@ -2164,6 +2164,7 @@ mod tests {
             let trimmed = line.trim_start();
             if trimmed.is_empty()
                 || trimmed.starts_with("///")
+                || trimmed.starts_with("//")
                 || trimmed.starts_with('#')
                 || trimmed.starts_with('}')
             {
@@ -2193,6 +2194,34 @@ mod tests {
             .collect()
     }
 
+    /// D-37 gap-closure (Phase 117-28, WR-14): shared anchor-resolution
+    /// helper for both of the gap-closure-anchored discovery tests below
+    /// (`daemon_attestation_decision_is_deliberately_two_state` and
+    /// `every_daemon_variant_is_in_the_cli_variant_set_or_a_documented_divergence`),
+    /// so neither test parses the raw, unanchored `include_str!` output
+    /// directly — a mistake that would leave that test vulnerable to the
+    /// exact first-textual-occurrence mis-targeting WR-11 already fixed on
+    /// its sibling.
+    ///
+    /// Asserts the anchor marker's occurrence count is EXACTLY 3: the
+    /// declaration-site comment above the real enum, plus the two literal
+    /// references below (the count check, and the split). A future edit that
+    /// duplicates or removes the marker fails loudly here, for BOTH callers,
+    /// rather than silently mis-targeting a different segment of the file.
+    fn daemon_enum_segment(src: &str) -> &str {
+        let occurrences = src.matches("DAEMON-DECISION-ENUM").count();
+        assert_eq!(
+            occurrences, 3,
+            "expected exactly 3 occurrences of the gap-closure anchor marking the real enum \
+             declaration; found {occurrences} — the anchor was duplicated or removed, and \
+             neither discovery test can trust which occurrence is the real declaration"
+        );
+
+        src.split("DAEMON-DECISION-ENUM")
+            .nth(1)
+            .expect("the gap-closure anchor must precede the real enum declaration")
+    }
+
     /// Phase 117 Plan 17 (NR3-05): `DaemonAttestationDecision` is deliberately
     /// two-state (`Proceed` / `Abort`) — see the enum's own doc comment for
     /// why a `ProceedDowngraded` variant was removed rather than wired up.
@@ -2210,13 +2239,20 @@ mod tests {
     /// appears inside this test's OWN source text (the string this test
     /// passes to the parser below) — the same first-match fragility NR3-07
     /// already flagged for a sibling test. Rather than search for the enum
-    /// declaration literal directly, this test anchors on a dedicated marker
-    /// comment placed immediately above the real declaration and asserts
-    /// that marker's occurrence count is EXACTLY 2 (the declaration-site
-    /// comment + this test's own reference below) before trusting which
-    /// segment of the file holds the real enum — so a future edit that
-    /// duplicates or removes the marker fails loudly here, not silently
-    /// mis-targets a different segment.
+    /// declaration literal directly, this test resolves the real declaration
+    /// through the shared `daemon_enum_segment` anchor helper above, so a
+    /// future edit that duplicates or removes the marker fails loudly here,
+    /// not silently mis-targets a different segment.
+    ///
+    /// # Gap-closure (WR-14, Phase 117-28)
+    ///
+    /// Previously this test owned its own inline anchor-count-and-split
+    /// logic, independent of its sibling test below
+    /// (`every_daemon_variant_is_in_the_cli_variant_set_or_a_documented_divergence`),
+    /// which parsed the raw `include_str!` output directly and so was NOT
+    /// immune to first-textual-occurrence mis-targeting. Both tests now
+    /// route through `daemon_enum_segment` so a broken anchor fails both,
+    /// not only this one.
     ///
     /// Non-vacuity: verified manually per the plan's acceptance criteria by
     /// temporarily re-adding `ProceedDowngraded { downgraded: Vec<&'static
@@ -2227,26 +2263,8 @@ mod tests {
     fn daemon_attestation_decision_is_deliberately_two_state() {
         let src = include_str!("launch.rs");
 
-        // Held once and reused for both the occurrence-count check and the
-        // split below, so this literal appears in this file's own source
-        // exactly twice total: here, and as the marker comment immediately
-        // above `enum DaemonAttestationDecision`.
-        let anchor = "DAEMON-DECISION-ENUM";
-        let occurrences = src.matches(anchor).count();
-        assert_eq!(
-            occurrences, 2,
-            "expected exactly 2 occurrences of the gap-closure anchor marking the real enum \
-             declaration (the declaration-site comment + this test's own reference); found \
-             {occurrences} — the anchor was duplicated or removed, and this test can no longer \
-             trust which occurrence is the real declaration"
-        );
-
-        let after_anchor = src
-            .split(anchor)
-            .nth(1)
-            .expect("the gap-closure anchor must precede the real enum declaration");
-
-        let variants = parse_enum_variant_names(after_anchor, "enum DaemonAttestationDecision {");
+        let segment = daemon_enum_segment(src);
+        let variants = parse_enum_variant_names(segment, "enum DaemonAttestationDecision {");
 
         assert_eq!(
             variants,
@@ -2283,11 +2301,23 @@ mod tests {
     /// daemon side or explicitly named in `documented_divergence` — an
     /// undocumented 4th variant on either side fails this test by name, not
     /// with a bare `false`.
+    ///
+    /// # Gap-closure (WR-14, Phase 117-28)
+    ///
+    /// Previously this test parsed the raw `include_str!` output directly
+    /// (`parse_enum_variant_names(daemon_src, "enum DaemonAttestationDecision
+    /// {")`), relying on the real declaration happening to be the first
+    /// textual occurrence of that string — the exact fragility WR-11 already
+    /// closed on the sibling test above. Now resolves through the same
+    /// `daemon_enum_segment` anchor helper that sibling test uses, so both
+    /// tests are immune to first-textual-occurrence mis-targeting together.
     #[test]
     fn every_daemon_variant_is_in_the_cli_variant_set_or_a_documented_divergence() {
         let daemon_src = include_str!("launch.rs");
-        let daemon_variants =
-            parse_enum_variant_names(daemon_src, "enum DaemonAttestationDecision {");
+        let daemon_variants = parse_enum_variant_names(
+            daemon_enum_segment(daemon_src),
+            "enum DaemonAttestationDecision {",
+        );
 
         let cli_src = include_str!("../exec_strategy_windows/attestation.rs");
         let cli_variants = parse_enum_variant_names(cli_src, "enum AttestationDecision {");
@@ -2580,6 +2610,203 @@ mod tests {
         assert!(
             !dacl_contains_sid(&outer, TEST_PACKAGE_SID),
             "outer dir traverse grant must be revoked after guard drop (reap revocation)"
+        );
+    }
+
+    /// **D-37** (Phase 117-28, `117-CONTEXT.md`, WR-12) PRIMARY behavioral
+    /// proof: the daemon's real `DaemonDaclGuard::apply` (pass 3) does NOT
+    /// abort/downgrade the launch when the workspace's immediate ancestor is
+    /// non-owned — the identical physical condition the CLI mirror
+    /// (`AppliedAncestorTraverseGuard`/`AppliedAncestorReadAttributesGuard`)
+    /// now classifies `NotApplicable` (non-downgrading) per D-37.
+    ///
+    /// # Type asymmetry, stated explicitly (not worked around)
+    ///
+    /// The daemon has NO `LayerApplication`-typed outcome for this
+    /// condition: `DaemonDaclGuard::apply` returns `nono::Result<Self>`
+    /// (`Ok`/`Err`) only, and `daemon_attest_and_decide` only ever sees a
+    /// caller-supplied `dacl_guard_applied: bool`. A shared
+    /// `(condition, LayerApplication)` table (as built for the CLI mirror in
+    /// `dacl_guard.rs`'s `D37_CLASSIFICATION_TABLE`) cannot be asserted
+    /// against this side as written. This test is the substitute: it
+    /// independently confirms the D-37 physical condition genuinely holds
+    /// (the workspace's immediate parent is NOT owned by the current user),
+    /// then drives the real `apply()` code path and asserts it still
+    /// returns `Ok` — proving pass 3's non-owned-ancestor `break` does not
+    /// abort the launch, matching the CLI's non-downgrading classification
+    /// for the same condition.
+    ///
+    /// # Environment assumption
+    ///
+    /// `%PUBLIC%` (`C:\Users\Public`) is owned by `NT AUTHORITY\SYSTEM` but is
+    /// world-writable (`NT AUTHORITY\INTERACTIVE` holds write-data/append-data)
+    /// — a subdirectory THIS TEST creates under it is owned by the creating
+    /// process (the test), giving a real, reproducible "workspace owned,
+    /// immediate parent not" instance without requiring admin rights. The
+    /// precondition assertion below fails loudly, naming this exact
+    /// assumption, if an unusual host makes it not hold — it does NOT
+    /// silently skip past an unexercised scenario.
+    ///
+    /// `%SystemRoot%\Temp` — the plan's original candidate, and the
+    /// world-writable system directory the CLI mirror's own doc comments
+    /// cite for the analogous scenario — was tried first and empirically
+    /// denies `READ_CONTROL` to this host's unprivileged test principal
+    /// (`GetNamedSecurityInfoW(OWNER_SECURITY_INFORMATION)` returns
+    /// `ERROR_ACCESS_DENIED`, confirmed independently via `icacls`), so the
+    /// ownership *query* itself fails before the D-37 condition can even be
+    /// established. `%PUBLIC%` does not have this restriction on this host
+    /// (`icacls` succeeds) while satisfying the same "owned by SYSTEM,
+    /// writable by the interactive user" shape.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn daemon_dacl_guard_apply_succeeds_when_immediate_ancestor_is_non_owned() {
+        use super::windows_impl::DaemonDaclGuard;
+        use nono::WindowsFilesystemPolicy;
+        use std::path::PathBuf;
+
+        let parent = std::env::var_os("PUBLIC")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Users\Public"));
+        let workspace = parent.join(format!(
+            "nono-test-d37-daemon-dacl-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&workspace).expect(
+            "create a test-owned workspace under %PUBLIC% (world-writable; the created \
+             subdirectory is owned by this test process, not by NT AUTHORITY\\SYSTEM)",
+        );
+
+        // Explicit precondition: the workspace's IMMEDIATE PARENT (%PUBLIC%
+        // itself) must NOT be owned by the current user — this is the exact D-37
+        // physical condition. Do not proceed to apply() if this does not hold; fail
+        // loudly naming the environment assumption that broke, rather than silently
+        // passing an unexercised scenario.
+        match nono::path_is_owned_by_current_user(&parent) {
+            Ok(false) => {}
+            Ok(true) => {
+                let _ = std::fs::remove_dir_all(&workspace);
+                panic!(
+                    "environment assumption broken: %PUBLIC% ({}) is owned by the current user \
+                     on this host, so this test cannot exercise the D-37 \
+                     non-owned-immediate-ancestor condition. This test must fail loudly here \
+                     rather than silently skip past an unexercised scenario.",
+                    parent.display()
+                );
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&workspace);
+                panic!(
+                    "environment assumption broken: ownership check on %PUBLIC% ({}) itself \
+                     failed ({e}); cannot establish the D-37 precondition",
+                    parent.display()
+                );
+            }
+        }
+
+        // Empty-rules policy isolates pass 3 (the ancestor walk) — pass 1 has
+        // nothing to iterate, pass 2 grants write on the workspace itself (which
+        // IS owned by this test process, so it succeeds), leaving pass 3's
+        // non-owned-ancestor stop as the only thing under test.
+        let policy = WindowsFilesystemPolicy {
+            rules: vec![],
+            unsupported: vec![],
+        };
+
+        let result = DaemonDaclGuard::apply(&policy, &workspace, TEST_PACKAGE_SID);
+
+        let cleanup = || {
+            let _ = std::fs::remove_dir_all(&workspace);
+        };
+
+        match result {
+            Ok(guard) => {
+                drop(guard); // reverts any ACEs applied (workspace write grant).
+                cleanup();
+            }
+            Err(e) => {
+                cleanup();
+                panic!(
+                    "D-37: DaemonDaclGuard::apply must still return Ok when the workspace's \
+                     immediate ancestor is non-owned (pass 3's contract-exempt skip, not a \
+                     downgrade) — got Err({e}). This is the exact class of regression D-37 \
+                     exists to prevent: pass 3's non-owned-ancestor stop changing from a skip \
+                     to a fail-closed abort."
+                );
+            }
+        }
+    }
+
+    /// **D-37** (Phase 117-28, `117-CONTEXT.md`, WR-12) SECONDARY guard —
+    /// NOT sufficient proof on its own (prose can drift from code without a
+    /// build failure); `daemon_dacl_guard_apply_succeeds_when_immediate_
+    /// ancestor_is_non_owned` above is the primary behavioral proof that
+    /// actually drives `DaemonDaclGuard::apply`'s real code.
+    ///
+    /// Reads `DaemonAttestationDecision`'s own doc comment and asserts it
+    /// still states the under-granting/never-under-confining rationale for
+    /// the ancestor-traverse (and read-only-rule) skip arms: the same
+    /// physical condition D-37 classifies `NotApplicable` (non-downgrading)
+    /// on the CLI mirror.
+    ///
+    /// Scoped by a heading phrase unique to this doc comment's own opening
+    /// line, deliberately NOT the gap-closure enum-declaration anchor
+    /// `daemon_attestation_decision_is_deliberately_two_state` hardens (and
+    /// Task 3 further hardens) — that anchor's occurrence count is asserted
+    /// exactly by that sibling test, and adding another textual reference to
+    /// it here would perturb that count without adding scoping value (the
+    /// doc comment text this test reads PRECEDES that anchor, so splitting
+    /// on it would not usefully bound this search anyway).
+    ///
+    /// # Self-reference (same class WR-11 flagged elsewhere)
+    ///
+    /// `include_str!("launch.rs")` embeds this test's OWN source, and this
+    /// test's own `heading` literal below necessarily re-states the phrase
+    /// it searches for — so the phrase occurs twice in the file's text: once
+    /// at the real doc comment (`DaemonAttestationDecision`'s own heading,
+    /// which textually precedes this test) and once here, inside this test's
+    /// literal. The occurrence-count assertion expects exactly 2 for that
+    /// reason, not 1; `.split(heading).nth(1)` then correctly extracts the
+    /// segment strictly BETWEEN the two occurrences — which is exactly the
+    /// real doc comment's body, since the real heading (occurrence 1) sits
+    /// above this test in the file and this test's own literal (occurrence
+    /// 2) sits below it.
+    #[test]
+    fn daemon_ancestor_skip_rationale_agrees_with_cli_notapplicable_classification() {
+        let src = include_str!("launch.rs");
+        let heading = "Phase 117 D-21 (CINT-02) / step 6.7's decision shape";
+        let occurrences = src.matches(heading).count();
+        assert_eq!(
+            occurrences, 2,
+            "expected exactly 2 occurrences of DaemonAttestationDecision's doc-comment heading \
+             ({heading:?}): the real doc-comment heading plus this test's own literal reference \
+             to it (include_str! embeds this test's own source too); found {occurrences} — \
+             cannot reliably scope the rationale search"
+        );
+        let from_heading = src
+            .split(heading)
+            .nth(1)
+            .expect("the heading must precede the doc comment body");
+        // Bound the search to this doc comment's own body: up to the enum's
+        // opening brace, so a coincidental match elsewhere later in the file
+        // cannot satisfy this assertion.
+        let doc_comment_body = from_heading
+            .split("enum DaemonAttestationDecision {")
+            .next()
+            .expect("the doc comment must precede the enum declaration");
+
+        assert!(
+            doc_comment_body.contains("under-granting")
+                && doc_comment_body.contains("never under-confining"),
+            "DaemonAttestationDecision's doc comment must still state the under-granting/never-\
+             under-confining rationale for the ancestor-traverse and read-only-rule skip arms — \
+             if this assertion fails, the doc comment was edited to remove or reword the \
+             rationale D-37 (117-CONTEXT.md, WR-12) relies on to justify NotApplicable/non-\
+             downgrading treatment; re-add the rationale or update this test in the same change \
+             with a recorded reason"
         );
     }
 

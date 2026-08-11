@@ -468,7 +468,11 @@ impl AppliedAncestorTraverseGuard {
     /// "The guard never ran" stays a distinct case, handled by `mod.rs`'s
     /// `None`-guard `NotApplied` path, not by this method.
     pub(crate) fn application(&self) -> layer_registry::LayerApplication {
-        match (self.walked, self.applied.is_empty(), self.stopped_at_non_owned) {
+        match (
+            self.walked,
+            self.applied.is_empty(),
+            self.stopped_at_non_owned,
+        ) {
             (false, _, _) => layer_registry::LayerApplication::NotApplicable,
             (true, true, true) => layer_registry::LayerApplication::NotApplicable,
             (true, true, false) => layer_registry::LayerApplication::NotApplied,
@@ -709,7 +713,11 @@ impl AppliedAncestorReadAttributesGuard {
     /// "The guard never ran" stays a distinct case, handled by `mod.rs`'s
     /// `None`-guard `NotApplied` path, not by this method.
     pub(crate) fn application(&self) -> layer_registry::LayerApplication {
-        match (self.walked, self.applied.is_empty(), self.stopped_at_non_owned) {
+        match (
+            self.walked,
+            self.applied.is_empty(),
+            self.stopped_at_non_owned,
+        ) {
             (false, _, _) => layer_registry::LayerApplication::NotApplicable,
             (true, true, true) => layer_registry::LayerApplication::NotApplicable,
             (true, true, false) => layer_registry::LayerApplication::NotApplied,
@@ -1189,6 +1197,95 @@ mod tests {
             "a walk with no ancestors to consider at all must report NotApplicable"
         );
         drop(guard);
+    }
+
+    /// D-37 (Phase 117-28, `117-CONTEXT.md`, WR-12) authoritative
+    /// classification-rule table: enumerates every scenario reachable via
+    /// `AppliedAncestorTraverseGuard::snapshot_and_apply` today and its
+    /// REQUIRED `LayerApplication`, so the rule is asserted from ONE source
+    /// rather than three independently-worded tests that could drift apart.
+    /// This is the CLI-mirror half of the cross-mirror classification-rule
+    /// proof D-37 requires (WR-12 condition 3). The daemon mirror has NO
+    /// equivalent `LayerApplication`-typed table — see
+    /// `daemon_dacl_guard_apply_succeeds_when_immediate_ancestor_is_non_owned`'s
+    /// doc comment in `agent_daemon/launch.rs` for the type-asymmetry proof
+    /// used there instead (a concrete behavioral assertion, not a table).
+    const D37_CLASSIFICATION_TABLE: [(&str, layer_registry::LayerApplication); 3] = [
+        (
+            "no-ancestors-at-all (drive root)",
+            layer_registry::LayerApplication::NotApplicable,
+        ),
+        (
+            "immediate-parent-non-owned (System32 leaf, stopped-at-non-owned)",
+            layer_registry::LayerApplication::NotApplicable,
+        ),
+        (
+            "at-least-one-owned-ancestor-granted (tempdir leaf)",
+            layer_registry::LayerApplication::Applied,
+        ),
+    ];
+
+    /// D-37 (Phase 117-28, WR-12): drives
+    /// `AppliedAncestorTraverseGuard::snapshot_and_apply` through a REAL
+    /// scenario for each `D37_CLASSIFICATION_TABLE` row (not a direct struct
+    /// construction) and asserts the resulting `.application()` matches the
+    /// table. Centralizes what
+    /// `ancestor_traverse_application_reports_not_applicable_when_stopped_at_non_owned`,
+    /// `ancestor_traverse_application_reports_not_applicable_for_a_rootless_walk`,
+    /// and `ancestor_traverse_grants_owned_ancestors_and_reverts_on_drop`'s
+    /// positive assertion already prove individually — this test is the
+    /// authoritative, single-source version; the individual tests remain as
+    /// documented per-scenario cases the table also covers.
+    #[test]
+    fn ancestor_guard_classification_matches_the_d37_table() {
+        // Row 0: no ancestors at all (drive root).
+        let drive_root = PathBuf::from(format!(
+            "{}\\",
+            std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into())
+        ));
+        let no_ancestors_guard =
+            AppliedAncestorTraverseGuard::snapshot_and_apply(&drive_root, TEST_PACKAGE_SID)
+                .expect("apply ancestor traverse (drive root)");
+
+        // Row 1: immediate parent non-owned (System32 leaf) — stops at the
+        // first ancestor considered.
+        let system_root = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+        let system32_leaf = system_root
+            .join("System32")
+            .join("nono-test-d37-table-leaf");
+        let non_owned_parent_guard =
+            AppliedAncestorTraverseGuard::snapshot_and_apply(&system32_leaf, TEST_PACKAGE_SID)
+                .expect("apply ancestor traverse (System32 leaf)");
+
+        // Row 2: at least one owned ancestor granted (tempdir leaf).
+        let dir = tempdir().expect("tempdir");
+        let owned_leaf = dir.path().join("leaf");
+        std::fs::create_dir(&owned_leaf).expect("create leaf");
+        take_ownership_for_current_user(dir.path());
+        let owned_ancestor_guard =
+            AppliedAncestorTraverseGuard::snapshot_and_apply(&owned_leaf, TEST_PACKAGE_SID)
+                .expect("apply ancestor traverse (tempdir leaf)");
+
+        let results = [
+            no_ancestors_guard.application(),
+            non_owned_parent_guard.application(),
+            owned_ancestor_guard.application(),
+        ];
+
+        for (index, (description, expected)) in D37_CLASSIFICATION_TABLE.iter().enumerate() {
+            assert_eq!(
+                results[index], *expected,
+                "D-37 classification-rule table mismatch for scenario '{description}': expected \
+                 {expected:?}, got {:?}",
+                results[index]
+            );
+        }
+
+        drop(no_ancestors_guard);
+        drop(non_owned_parent_guard);
+        drop(owned_ancestor_guard);
     }
 
     /// CINT-03 forced-unavailable regression: with the shared DACL seam
