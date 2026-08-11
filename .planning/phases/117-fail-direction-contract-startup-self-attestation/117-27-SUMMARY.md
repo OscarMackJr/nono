@@ -177,3 +177,9 @@ None — no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+All modified files confirmed present on disk (`launch.rs`, `output.rs`, `cli_bootstrap.rs`,
+this SUMMARY.md). All four commit hashes (`70787446`, `0f52c948`, `97ab295e`, `a89a5ead`)
+confirmed present in `git log --oneline --all`.
