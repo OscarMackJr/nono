@@ -1125,6 +1125,161 @@ mod tests {
         );
     }
 
+    /// WR-20 (Phase 117 gap-closure round 3): closes the coverage-arithmetic
+    /// side effect of WR-01's reorder that `guard_skips_path_not_owned_by_
+    /// current_user` above does NOT pin — that test uses `C:\Windows`, whose
+    /// label state on a given host is incidental (may or may not carry a
+    /// label depending on host/domain policy), so it controls only ONE of
+    /// the two variables. This test constructs a real path that is
+    /// deterministically BOTH non-owned by the current user AND carrying a
+    /// genuine foreign mandatory-label ACE, confirms each condition
+    /// independently, and asserts the ownership gate decides first:
+    /// `SkipNotOwned`, never `SkipPreExistingLabel`, and the path does not
+    /// count toward `skipped_pre_existing_label`.
+    #[test]
+    fn non_owned_path_with_a_foreign_label_is_exempt_not_a_coverage_gap() {
+        let dir = tempdir().expect("tempdir");
+        let file = dir.path().join("foreign-labeled.txt");
+        std::fs::write(&file, "x").expect("write file");
+
+        // Step 1: file is owned by the current user by construction. Plant a
+        // genuine, non-inherit-only mandatory-label ACE now, while
+        // WRITE_OWNER is still held (SetNamedSecurityInfoW(LABEL_...)
+        // requires it, and only the current owner reliably holds it without
+        // elevation). The mask deliberately MISMATCHES this test's own
+        // `AccessMode::Read` rule (mirrors the NR3-01 precedent in
+        // `coverage_distinguishes_full_partial_and_zero_ace_launches` above)
+        // so that, were the ownership gate not first, this ACE would
+        // classify as `SkipPreExistingLabel` — never `AlreadyAtRequiredLevel`
+        // — keeping the perturbation proof (see SUMMARY) unambiguous.
+        let foreign_mask = label_mask_for_access_mode(AccessMode::Write);
+        assert_ne!(
+            foreign_mask,
+            label_mask_for_access_mode(AccessMode::Read),
+            "test precondition: foreign mask must differ from this test's Read rule mask"
+        );
+        plant_mandatory_label_with_flags(&file, foreign_mask, "");
+
+        // Confirm the plant actually landed, and that the ACE is a genuine
+        // (non-inherit-only) label — not the structurally-inert CR-01 shape
+        // — BEFORE giving ownership away. If either check fails here, the
+        // rest of the test would otherwise silently exercise nothing.
+        let (planted_rid, planted_mask, planted_flags) = low_integrity_label_ace(&file)
+            .expect("mandatory label must be present on disk immediately after planting");
+        assert_eq!(
+            (planted_rid, planted_mask),
+            (SECURITY_MANDATORY_LOW_RID as u32, foreign_mask),
+            "test setup: planted label must be at Low RID carrying the foreign mask"
+        );
+        assert_eq!(
+            u32::from(planted_flags) & INHERIT_ONLY_ACE,
+            0,
+            "test setup: planted label must be genuine (non-inherit-only), not the CR-01 inert shape"
+        );
+
+        // Step 2: reassign ownership AWAY from the current user.
+        // `NT AUTHORITY\SYSTEM` is tried first since it does not depend on
+        // the test account's group memberships (mirrors dacl_guard.rs's
+        // inverse-direction helper `take_ownership_for_current_user` — same
+        // icacls technique, opposite direction); `BUILTIN\Administrators` is
+        // tried second in case this host's non-elevated token can assign
+        // ownership to the local admin group but not to SYSTEM. If BOTH
+        // fail, this is a LOUD test-setup failure (D-31), not a silent skip
+        // — assigning ownership to a foreign account requires
+        // SeRestorePrivilege, which a non-elevated / non-admin session does
+        // not hold, and the combined condition this test exists to pin
+        // cannot be constructed at all without it. The panic names exactly
+        // what was tried and why, so this reads as a documented host
+        // limitation, not a mysterious failure.
+        let try_setowner = |owner: &str| -> std::process::Output {
+            std::process::Command::new("icacls")
+                .arg(&file)
+                .arg("/setowner")
+                .arg(owner)
+                .arg("/Q")
+                .output()
+                .expect("run icacls /setowner")
+        };
+        let system_out = try_setowner("NT AUTHORITY\\SYSTEM");
+        let reassigned = if system_out.status.success() {
+            Ok(system_out)
+        } else {
+            let admin_out = try_setowner("BUILTIN\\Administrators");
+            if admin_out.status.success() {
+                Ok(admin_out)
+            } else {
+                Err((system_out, admin_out))
+            }
+        };
+        if let Err((system_out, admin_out)) = reassigned {
+            panic!(
+                "test setup: could not reassign ownership of {} away from the current user — \
+                 icacls /setowner \"NT AUTHORITY\\SYSTEM\" failed ({}), and the \
+                 \"BUILTIN\\Administrators\" fallback also failed ({}). This host's session \
+                 almost certainly lacks SeRestorePrivilege (non-elevated / non-admin token) and \
+                 cannot construct the non-owned + foreign-labeled combined condition this test \
+                 pins. This is a documented, loud test-setup failure (D-31), not a silent skip — \
+                 see 117-30-SUMMARY.md for the host-behavior record.",
+                file.display(),
+                String::from_utf8_lossy(&system_out.stderr).trim(),
+                String::from_utf8_lossy(&admin_out.stderr).trim()
+            );
+        }
+
+        // Step 3: confirm the precondition holds — ownership actually moved
+        // away from the current user — before trusting the guard's behavior
+        // to mean anything. A host-specific reassignment quirk (e.g. icacls
+        // reporting success while effective ownership silently stays
+        // unchanged) fails loudly HERE, naming exactly what was expected vs.
+        // observed, not several assertions downstream.
+        assert!(
+            !path_is_owned_by_current_user(&file).expect("ownership check"),
+            "test precondition failed: expected {} to no longer be owned by the current user \
+             after icacls /setowner reported success — got Ok(true)",
+            file.display()
+        );
+
+        // The combined condition is now real and independently confirmed:
+        // non-owned (Step 3) AND carrying a genuine foreign mandatory label
+        // (Step 1). Exercise the guard under test.
+        let policy = single_file_read_rule(file.clone());
+        let guard = AppliedLabelsGuard::snapshot_and_apply(&policy)
+            .expect("snapshot_and_apply must succeed (Skip is not an error)");
+        assert_eq!(guard.entries.len(), 1, "one rule → one guard entry");
+        assert!(
+            matches!(guard.entries[0], AppliedLabel::SkipNotOwned),
+            "a path that is BOTH non-owned AND foreign-labeled must record SkipNotOwned, never \
+             SkipPreExistingLabel — the ownership gate must decide before the label is ever \
+             inspected: got {:?}",
+            guard.entries[0]
+        );
+
+        let coverage = guard.coverage();
+        assert_eq!(
+            coverage.skipped_pre_existing_label, 0,
+            "the combined non-owned + foreign-labeled condition must NOT count toward the \
+             coverage-gap tally: {coverage:?}"
+        );
+        assert_eq!(coverage.skipped_not_owned, 1, "{coverage:?}");
+
+        drop(guard);
+
+        // Cleanup only — not part of the assertion under test. Reassign
+        // ownership back to the current user so the tempdir's Drop can
+        // delete the file without relying solely on the leftover DACL from
+        // creation.
+        let who = std::process::Command::new("whoami")
+            .output()
+            .expect("run whoami");
+        let user = String::from_utf8_lossy(&who.stdout).trim().to_string();
+        let _ = std::process::Command::new("icacls")
+            .arg(&file)
+            .arg("/setowner")
+            .arg(&user)
+            .arg("/Q")
+            .output();
+    }
+
     /// Plan 22-05b Task 6 — formal `audit_flush_before_drop` regression
     /// (VALIDATION 22-05-V3). Mitigates T-22-05-05 (Tampering: Phase 21
     /// AppliedLabelsGuard Drop happens BEFORE ledger flush, events lost
