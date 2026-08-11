@@ -4,7 +4,9 @@ use crate::{config, theme};
 use nono::TelemetryConfig;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::fmt::writer::MakeWriter;
 use tracing_subscriber::prelude::*;
