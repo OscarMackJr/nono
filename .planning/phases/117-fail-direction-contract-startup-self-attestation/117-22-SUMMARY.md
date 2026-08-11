@@ -102,3 +102,11 @@ None - no external service configuration required.
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-22-SUMMARY.md`
+- FOUND commit: `7c23886e` (Task 1)
+- FOUND commit: `2d84196f` (Task 2)
+- FOUND commit: `b1438a52` (this SUMMARY.md)
+- Working tree clean for `crates/nono-cli/src/agent_daemon/launch.rs`
