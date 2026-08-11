@@ -233,3 +233,13 @@ WR-13 is closed: both discovery matchers now share one boundary rule (`common::i
 ---
 *Phase: 117-fail-direction-contract-startup-self-attestation*
 *Completed: 2026-08-11*
+
+## Self-Check: PASSED
+
+- FOUND: `.planning/phases/117-fail-direction-contract-startup-self-attestation/117-31-SUMMARY.md`
+- FOUND: `crates/nono-cli/tests/common/mod.rs`
+- FOUND: `crates/nono-cli/tests/layer_registry_meta_test.rs`
+- FOUND: `crates/nono-cli/tests/layer_registry_selfcheck.rs`
+- FOUND: commit `39a1bcf4` (Task 1)
+- FOUND: commit `c0846f95` (Task 2)
+- FOUND: commit `d923635e` (SUMMARY.md)
