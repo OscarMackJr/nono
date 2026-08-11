@@ -454,6 +454,284 @@ fn spec_matches_registry() {
     );
 }
 
+/// Phase 117 Plan 32 (WR-19 gap closure): does `span` — a single Markdown
+/// backtick-delimited span pulled from the SPEC document's text — have the
+/// `word(/word)*.rs::Word(::Word)?` shape of a real `file.rs::Symbol`
+/// citation, as opposed to:
+/// - an illustrative example of the citation FORMAT itself, which this
+///   document always wraps in an extra pair of literal double quotes (e.g.
+///   `` `"file.rs::Symbol"` ``) — the same convention
+///   `extract_call_site_citations`'s doc comment above already establishes
+///   for the line-form illustrative example `` `"file:line"` ``; or
+/// - an English-prose mention with trailing call-parens (`` `apply()` ``,
+///   not a `file.rs::Symbol` citation at all — a real citation names a bare
+///   symbol, never `Symbol()`).
+///
+/// `span` qualifies only if the file part (everything up to and including
+/// `.rs`) consists of `/`-separated path segments of identifier/hyphen/dot
+/// characters only, AND the symbol part (everything after `.rs::`) is one
+/// or two `::`-separated identifier segments (`Word` or `Word::Word`) with
+/// no other characters — either malformed half (a stray quote, unmatched
+/// parens, more than one `::` in the symbol) disqualifies the whole span.
+fn looks_like_a_spec_citation(span: &str) -> bool {
+    let Some(idx) = span.find(".rs::") else {
+        return false;
+    };
+    let file_part = &span[..idx + 3];
+    let symbol_part = &span[idx + 5..];
+
+    let file_ok = !file_part.is_empty()
+        && file_part.split('/').all(|seg| {
+            !seg.is_empty()
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.')
+        });
+
+    let symbol_segments: Vec<&str> = symbol_part.split("::").collect();
+    let symbol_ok = !symbol_part.is_empty()
+        && symbol_segments.len() <= 2
+        && symbol_segments.iter().all(|seg| {
+            !seg.is_empty() && seg.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        });
+
+    file_ok && symbol_ok
+}
+
+/// Extract every backtick-delimited span from `text` that satisfies
+/// `looks_like_a_spec_citation` — the SPEC-document equivalent of
+/// `extract_symbol_citations`'s registry-source-text scan, generalized to
+/// scan Markdown backtick spans instead of Rust double-quoted string
+/// literals. Phase 117 Plan 32 (WR-19): the only prior drift gate,
+/// `spec_matches_registry`, compared `LayerId` NAMES, never citations, so
+/// nothing in the test suite could see a citation drift anywhere in this
+/// document — this scans the WHOLE document text, not only the Layer
+/// registry table, so a stale citation in the Manual verification section
+/// or the discrepancy ledger fails the build too.
+fn extract_spec_citations(text: &str) -> Vec<String> {
+    let mut citations = Vec::new();
+    let mut rest = text;
+    while let Some(start) = rest.find('`') {
+        let after_open = &rest[start + 1..];
+        let Some(end) = after_open.find('`') else {
+            break;
+        };
+        let literal = &after_open[..end];
+        if looks_like_a_spec_citation(literal) {
+            citations.push(literal.to_string());
+        }
+        rest = &after_open[end + 1..];
+    }
+    citations
+}
+
+/// Segment `layer_registry.rs`'s source text into one slice per
+/// `LayerRegistryEntry`, split on `"id: LayerId::"` occurrences (each of the
+/// 13 entries has exactly one), and extract each entry's OWN
+/// `call_sites: &[...]` array content from ITS OWN narrowed slice — not the
+/// whole file — so a citation belonging to one row is never attributed to
+/// another. Returns `(LayerId name, this entry's own citations)` pairs, in
+/// declaration order. Reuses `extract_symbol_citations` /
+/// `extract_call_site_citations` on the narrowed `call_sites: &[...]` slice
+/// rather than duplicating their per-literal parsing logic.
+fn registry_citations_by_layer_id(registry_src: &str) -> Vec<(String, Vec<String>)> {
+    let marker = "id: LayerId::";
+    let mut entries = Vec::new();
+    let mut rest = registry_src;
+    while let Some(start) = rest.find(marker) {
+        let after_marker = &rest[start + marker.len()..];
+        let name_end = after_marker
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after_marker.len());
+        let name = after_marker[..name_end].to_string();
+
+        let entry_slice_end = rest[start + marker.len()..]
+            .find(marker)
+            .map_or(rest.len(), |next_rel| start + marker.len() + next_rel);
+        let entry_slice = &rest[start..entry_slice_end];
+
+        let citations = match entry_slice.find("call_sites: &[") {
+            Some(cs_start) => {
+                let after_open = &entry_slice[cs_start + "call_sites: &[".len()..];
+                let array_body = after_open
+                    .find(']')
+                    .map_or("", |cs_end| &after_open[..cs_end]);
+                let mut c = extract_symbol_citations(array_body);
+                c.extend(extract_call_site_citations(array_body));
+                c
+            }
+            None => Vec::new(),
+        };
+
+        entries.push((name, citations));
+        rest = &rest[entry_slice_end..];
+    }
+    entries
+}
+
+/// Parse the SPEC's `## Layer registry` Markdown table: locate the table by
+/// its header row, then for each data row (skipping the `|---|...`
+/// separator), split on `|` and read the `LayerId` name cell and the
+/// "Enforcing call site(s)" cell. `str::split('|')` on a row that starts and
+/// ends with `|` produces an empty leading element, so the row's own first
+/// DATA cell is `cells[1]` (the backtick-wrapped `LayerId` name) and its
+/// third DATA cell is `cells[3]` (the citations column) — matching the
+/// table's `| LayerId | Name | Enforcing call site(s) | Expected on |
+/// Outcome | Probe |` column order. Returns `(LayerId name, this row's own
+/// citation-shaped backtick spans)` pairs, in table order. Terminates at the
+/// first line that does not start with `|` — no hardcoded row count.
+fn spec_layer_registry_table_citations(spec_text: &str) -> Vec<(String, Vec<String>)> {
+    let header_marker = "| `LayerId` | Name | Enforcing call site(s) |";
+    let header_start = spec_text.find(header_marker).unwrap_or_else(|| {
+        panic!(
+            "expected to find the Layer registry table header `{header_marker}` in the SPEC — \
+             the table was renamed, reformatted, or removed; update this test's marker to match"
+        )
+    });
+    let after_header = &spec_text[header_start..];
+
+    let mut lines = after_header.lines();
+    lines.next(); // the header row itself (already matched by header_marker)
+    lines.next(); // the `|---|---|...` separator row
+
+    let mut rows = Vec::new();
+    for line in lines {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            break;
+        }
+        let cells: Vec<&str> = trimmed.split('|').collect();
+        let (Some(name_cell), Some(call_sites_cell)) = (cells.get(1), cells.get(3)) else {
+            continue;
+        };
+        let name = name_cell.trim().trim_matches('`').to_string();
+        if name.is_empty() {
+            continue;
+        }
+        rows.push((name, extract_spec_citations(call_sites_cell)));
+    }
+    rows
+}
+
+/// CINT-01/WR-19: the call-site drift gate `spec_matches_registry` could
+/// never be — it compared `LayerId` NAMES only. For every `LayerId` row,
+/// asserts the SPEC's `## Layer registry` table's "Enforcing call site(s)"
+/// cell equals, AS A SET, that row's own `call_sites` array in
+/// `layer_registry.rs` — a stale, added, or removed citation in either the
+/// SPEC or the registry fails this test, naming the specific `LayerId`.
+/// `DaclSessionSidGrant` and `MinifilterAbsence` (RF-03/D-33: `call_sites`
+/// is empty per the shipped tree) are not special-cased — an empty registry
+/// set is asserted equal to the SPEC cell's own (also empty) parsed set,
+/// same as every other row.
+#[test]
+fn spec_call_site_cells_match_registry_call_sites() {
+    let registry_src = read_layer_registry();
+    let spec_text = read_spec();
+
+    let registry_map = registry_citations_by_layer_id(&registry_src);
+    let spec_map = spec_layer_registry_table_citations(&spec_text);
+
+    assert!(
+        registry_map.len() >= 13,
+        "expected at least 13 entries parsed from layer_registry.rs's REGISTRY_ENTRIES (one per \
+         `id: LayerId::` occurrence), found {}: {registry_map:?} — the segmentation marker may \
+         have gone stale",
+        registry_map.len()
+    );
+    assert_eq!(
+        spec_map.len(),
+        registry_map.len(),
+        "SPEC Layer registry table row count ({}) does not match the entry count ({}) parsed \
+         from layer_registry.rs — a row was added or removed in only one of the two places",
+        spec_map.len(),
+        registry_map.len()
+    );
+
+    let mut mismatches = Vec::new();
+    for (name, registry_citations) in &registry_map {
+        let Some((_, spec_citations)) = spec_map.iter().find(|(n, _)| n == name) else {
+            mismatches.push(format!(
+                "{name}: present in layer_registry.rs but has no row in the SPEC's Layer \
+                 registry table"
+            ));
+            continue;
+        };
+
+        let mut registry_set: Vec<&String> = registry_citations.iter().collect();
+        registry_set.sort();
+        let mut spec_set: Vec<&String> = spec_citations.iter().collect();
+        spec_set.sort();
+
+        if registry_set != spec_set {
+            mismatches.push(format!(
+                "{name}: registry call_sites {registry_citations:?} does not match the SPEC's \
+                 Enforcing call site(s) cell {spec_citations:?}"
+            ));
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "SPEC Layer registry table citations have drifted from layer_registry.rs's own \
+         call_sites (WR-19's structural fix — the prior spec_matches_registry test compared \
+         LayerId names only and could never have caught this):\n{}",
+        mismatches.join("\n")
+    );
+}
+
+/// CINT-01/WR-19: every `` `file.rs::Symbol` ``-shaped citation ANYWHERE in
+/// the SPEC document's text — not only inside the Layer registry table —
+/// resolves to a real definition in the file it names. Proves this test
+/// would have caught WR-19's stale
+/// `` `BrokerAuthenticodeTrustGate` `` Manual-verification citation (fixed
+/// by this same plan's Task 1) before it was fixed; see the perturbation
+/// proof recorded in this plan's SUMMARY.md.
+#[test]
+fn every_spec_symbol_citation_resolves_to_a_real_definition() {
+    let spec_text = read_spec();
+    let citations = extract_spec_citations(&spec_text);
+
+    // Non-vacuity floor (Phase 115 V-01 lesson): the Layer registry table
+    // alone contributes ~31 citations, plus several more from the Manual
+    // verification section and the discrepancy ledger — a floor, not an
+    // exact count, so a future citation addition or removal does not force
+    // this test to be edited every time.
+    assert!(
+        citations.len() >= 30,
+        "expected at least 30 file.rs::Symbol-shaped citations across the whole SPEC document \
+         (the Layer registry table alone has ~31) — found {}: extraction may be broken: \
+         {citations:?}",
+        citations.len()
+    );
+
+    let mut missing = Vec::new();
+    for citation in &citations {
+        let (file_part, symbol) = split_symbol_citation(citation);
+        let resolved = resolve_file_part(file_part);
+        match std::fs::read_to_string(&resolved) {
+            Ok(content) if content_defines_symbol(&content, symbol) => {}
+            Ok(_) => missing.push(format!(
+                "{citation:?} -> resolved to {}, but its content does not define {symbol:?} at \
+                 a real definition site (only a comment, string, or macro literal mention, if \
+                 any)",
+                resolved.display()
+            )),
+            Err(e) => missing.push(format!(
+                "{citation:?} -> resolved to {} (unreadable: {e})",
+                resolved.display()
+            )),
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "proj/SPEC-windows-fail-direction-contract.md cites a file.rs::Symbol that does not \
+         resolve to a real definition anywhere in the document (Manual verification section, \
+         discrepancy ledger, or any other section — not only the Layer registry table):\n{}",
+        missing.join("\n")
+    );
+}
+
 /// Sanity check on the extraction helper itself: confirms
 /// `extract_call_site_citations` does not also pick up backtick code-span
 /// citations from doc comments (which would make `registry_call_sites_exist`
